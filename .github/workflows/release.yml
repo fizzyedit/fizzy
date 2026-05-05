@@ -1,58 +1,154 @@
-name: Release build
+name: Release
+
+# Triggered when a tag like v0.0.4 is pushed. The job runs on macos-latest
+# (the only runner that can cross-compile to *every* target — macOS in
+# particular requires running on macOS to build).
+#
+# Flow:
+#   1. Operator edits VERSION on a branch, commits, tags v<VERSION>, pushes the tag.
+#   2. This workflow runs scripts/release.sh on macos-latest.
+#   3. The script runs `zig build packageall -Doptimize=ReleaseFast -Dfetch-msvc`.
+#      .NET 8 is installed for `vpk`; `-Dfetch-msvc` downloads MSVC + Windows SDK
+#      into .velopack-msvc/ on first use (needs network; can take several minutes).
+#   4. The script uploads installers, nupkgs, and manifests to a *draft* GitHub
+#      release named v<VERSION>.
+#   5. Operator reviews the draft release in the browser and clicks Publish.
+#      Auto-update only sees the release after it's published.
+#
+# Signing (optional — falls back to unsigned macOS builds when secrets aren't set):
+#   Required secrets to enable macOS signing + notarization in CI:
+#     PIXI_MACOS_CERT_P12_BASE64   - base64-encoded .p12 with Developer ID Application
+#                                    AND Developer ID Installer certs (combined)
+#     PIXI_MACOS_CERT_PASSWORD     - the password for that .p12
+#     PIXI_MACOS_SIGN_APP          - "Developer ID Application: NAME (TEAMID)"
+#     PIXI_MACOS_SIGN_INSTALLER    - "Developer ID Installer: NAME (TEAMID)"
+#     PIXI_APPLE_ID                - Apple ID email used for notarization
+#     PIXI_APPLE_APP_PASSWORD      - app-specific password (appleid.apple.com)
+#     PIXI_APPLE_TEAM_ID           - 10-char team ID
+#
+# GITHUB_TOKEN is provided automatically by Actions; the job sets GH_TOKEN so
+# `gh` in scripts/release.sh is authenticated without a separate login step.
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
+  # Also expose a manual trigger so we can re-run a release without retagging.
+  # The release tag must already exist on the repo when running this manually.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v0.0.4)"
+        required: true
 
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   ZIG_VERSION: "0.16.0"
 
 jobs:
-  x86_64-linux:
-    runs-on: ubuntu-latest
+  release:
+    runs-on: macos-latest
+    # Secrets for signing/notarization live in Settings → Environments → pixi_release
+    # (repository-level Actions secrets work too if you prefer).
+    environment: pixi_release
+    permissions:
+      contents: write # required for `gh release create`
+
     env:
-      DISPLAY: ":99.0"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-          cache-key: ${{ hashFiles('build.zig.zon') }}
-      - run: zig build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: x86_64-linux
-          path: zig-out/bin
-      - run: zig build -Dtarget=x86_64-windows-gnu
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  x86_64-windows:
-    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          version: ${{ env.ZIG_VERSION }}
-          cache-key: ${{ hashFiles('build.zig.zon') }}
-      - run: zig build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: x86_64-windows
-          path: zig-out/bin
+          # If triggered manually, check out the tag passed via input. For tag
+          # pushes, the default ref already points at the tag commit.
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # The release script verifies the tag exists locally and points at
+          # HEAD, so we need the tag refs in the shallow clone.
+          fetch-tags: true
+          fetch-depth: 0
 
-  arm64-macos:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
+      - name: Pre-create Zig global cache tmp/
+        shell: bash
+        run: mkdir -p "$GITHUB_WORKSPACE/zig-global-cache/tmp"
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
           cache-key: ${{ hashFiles('build.zig.zon') }}
-      - run: zig build
-      - uses: actions/upload-artifact@v4
+
+      - name: Setup .NET (for Velopack vpk)
+        uses: actions/setup-dotnet@v4
         with:
-          name: arm64-macos
-          path: zig-out/bin
+          dotnet-version: "8.0"
+
+      # ----- macOS signing setup (optional) ------------------------------
+      # If the cert secrets are configured, import them into a temporary
+      # keychain that lives only for this job. If not, skip — the script
+      # detects unset PIXI_MACOS_SIGN_APP and produces unsigned builds.
+
+      - name: Import signing certificate
+        if: ${{ secrets.PIXI_MACOS_CERT_P12_BASE64 != '' }}
+        env:
+          CERT_B64: ${{ secrets.PIXI_MACOS_CERT_P12_BASE64 }}
+          CERT_PASS: ${{ secrets.PIXI_MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PASS="$(openssl rand -base64 24)"
+          KEYCHAIN_PATH="$RUNNER_TEMP/pixi-release.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/pixi-release.p12"
+
+          echo "$CERT_B64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+
+          security import "$CERT_PATH" \
+            -P "$CERT_PASS" \
+            -A -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
+          # Make codesign able to use the imported cert without a UI prompt.
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASS" \
+            "$KEYCHAIN_PATH" >/dev/null
+
+          # Put our keychain ahead of the default in the search list so
+          # `codesign` / `xcrun productsign` find the cert.
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+          rm -f "$CERT_PATH"
+
+      - name: Configure notarytool credentials
+        if: ${{ secrets.PIXI_APPLE_ID != '' }}
+        env:
+          APPLE_ID: ${{ secrets.PIXI_APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.PIXI_APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.PIXI_APPLE_TEAM_ID }}
+        run: |
+          # Store the notarytool credentials under the same profile name we
+          # pass to vpk via PIXI_MACOS_NOTARY_PROFILE in the next step.
+          xcrun notarytool store-credentials "pixi-ci-notary" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
+      # ----- run the release ---------------------------------------------
+
+      - name: Run release script
+        env:
+          PIXI_MACOS_SIGN_APP: ${{ secrets.PIXI_MACOS_SIGN_APP }}
+          PIXI_MACOS_SIGN_INSTALLER: ${{ secrets.PIXI_MACOS_SIGN_INSTALLER }}
+          PIXI_MACOS_NOTARY_PROFILE: ${{ secrets.PIXI_APPLE_ID != '' && 'pixi-ci-notary' || '' }}
+          # Leave the release as a draft so the operator publishes manually.
+          # Set PIXI_RELEASE_PUBLISH=1 here once you trust the pipeline end-to-end.
+          PIXI_RELEASE_PUBLISH: "0"
+        run: ./scripts/release.sh

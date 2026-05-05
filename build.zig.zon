@@ -7,30 +7,29 @@
     },
     .fingerprint = 0xdef5a52d63bd43b9,
     .name = .pixi,
-    .version = "0.0.3",
+    .version = "0.0.4",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zig_objc = .{
-            .url = "git+https://github.com/foxnne/zig-objc#c8de82ff80281215ad92900866dab7103a8efa8b",
+            .url = "https://github.com/foxnne/zig-objc/archive/c8de82ff80281215ad92900866dab7103a8efa8b.tar.gz",
             .hash = "zig_objc-0.0.0-Ir_Sp9gsAQCPAJc0oF5xoWePHWP6Y6tCphDeyNUThJoi",
             .lazy = true,
         },
         .zigwin32 = .{
-            .url = "git+https://github.com/kristoff-it/zigwin32#1102e9b82e8bd50913b6a78035bfb399ebd8cf97",
+            .url = "https://github.com/kristoff-it/zigwin32/archive/1102e9b82e8bd50913b6a78035bfb399ebd8cf97.tar.gz",
             .hash = "zigwin32-25.0.28-preview-6BfVhYKN5AOvXPVJq4bGZ7C5dM3PbUra4xhKAKOFJGcF",
             .lazy = true,
         },
         .icons = .{
-            .url = "git+https://github.com/foxnne/zig-lib-icons#db034786a1286ab28dc35aba534c098aa4f1a3aa",
+            .url = "https://github.com/foxnne/zig-lib-icons/archive/db034786a1286ab28dc35aba534c098aa4f1a3aa.tar.gz",
             .hash = "icons-0.0.0-iJxA-VvGMwAgiKSXRe_Y0O7RpasdtEJhBfVx8IGGEBl_",
             .lazy = true,
         },
         .dvui = .{
+            .url = "https://github.com/foxnne/dvui-dev/archive/0948ee4fcdb6b56a3b5a67552fe6b5d6e7923741.tar.gz",
+            .hash = "dvui-0.5.0-dev-AQFJma8T3wDPYIg-487pwJrOxP27Fz39FbNbeAVvEqth",
             //.path = "../dvui-dev",
-            .url = "git+https://github.com/foxnne/dvui-dev#3fea718de58591ed5df9372e6d1b30c9ef4feeef",
-            .hash = "dvui-0.5.0-dev-AQFJmSsK3wDLFqpi9tQ9xVC-xkAtQE0JAY1B4-o1Ey0M",
         },
-        // Tarball pinned to this SHA (not git+#branch): reproducible trees across Linux/Windows/macOS.
         .assetpack = .{
             .url = "https://github.com/foxnne/assetpack/archive/0230aa72d7c4930e7275f5bbbe02dc6a12d7154d.tar.gz",
             .hash = "assetpack-0.1.0-5DA2d2xjAAB5iotA8oy2GOkcsUGZlhGUBh0CRTgI6Qs5",
@@ -38,6 +37,11 @@
         .known_folders = .{
             .url = "https://github.com/ziglibs/known-folders/archive/d6d03830968cca6b7b9f24fd97ee348346a6905d.tar.gz",
             .hash = "known_folders-0.0.0-Fy-PJk3KAACzUg2us_0JvQQmod1ZA8jBt7MuoKCihq88",
+        },
+        .velopack_zig = .{
+            .url = "https://github.com/graphl-tech/velopack-zig/archive/2ca1ecccd0a3286620c30eaec29cbc1bba981a31.tar.gz",
+            .hash = "velopack_zig-0.0.1-LzeGccHTAAAYj2eidbi80qHljonogPnwU-uHCMYBa1ag",
+            //.path = "../velopack-zig",
         },
     },
 }

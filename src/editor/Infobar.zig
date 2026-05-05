@@ -2,8 +2,7 @@ const std = @import("std");
 const pixi = @import("../pixi.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
-const App = pixi.App;
-const Editor = pixi.Editor;
+const Dialogs = pixi.Editor.Dialogs;
 
 pub const Infobar = @This();
 
@@ -39,9 +38,9 @@ pub fn draw(_: Infobar) !void {
     {
         var button: dvui.ButtonWidget = undefined;
         button.init(@src(), .{}, .{ .gravity_y = 0.5, .margin = .all(0), .padding = .all(0) });
-        button.processEvents();
-        //button.drawBackground();
         defer button.deinit();
+        button.processEvents();
+        button.drawBackground();
 
         var box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .all(0), .padding = .all(0) });
         defer box.deinit();
@@ -56,6 +55,10 @@ pub fn draw(_: Infobar) !void {
             } },
         );
         dvui.label(@src(), "Pixi", .{}, .{ .font = font, .gravity_y = 0.5, .margin = .all(0) });
+
+        if (button.clicked()) {
+            Dialogs.AboutPixi.request();
+        }
     }
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 12 } });

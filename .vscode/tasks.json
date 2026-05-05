@@ -79,7 +79,7 @@
             "label": "Test Project",
             "type": "shell",
             "command": "zig build test",
-            "group": "build",
+            "group": {"kind": "build", "isDefault": true},
             "presentation": {
                 "clear": true,
             },
@@ -91,7 +91,7 @@
             "presentation": {
                 "clear": true
             },
-            "group": "build",
+            "group": {"kind": "build", "isDefault": true},
         },
         {
             "label": "Process Assets",
@@ -113,6 +113,106 @@
                 "kind": "build",
                 "isDefault": true
             },
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "MSVC SDK (msvcup-setup, macOS/Linux/Windows)",
+            "type": "shell",
+            "command": "zig build msvcup-setup",
+            "group": "build",
+            "presentation": {
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Install (release-fast)",
+            "type": "shell",
+            "command": "zig build install -Doptimize=ReleaseFast",
+            "group": "build",
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "Package (Velopack)",
+            "type": "shell",
+            "command": "[ -f .env.local ] && set -a && . ./.env.local && set +a; zig build package -Doptimize=ReleaseFast",
+            "group": {"kind": "build", "isDefault": true},      
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "Run Release Script",
+            "type": "shell",
+            "command": "[ -f .env.local ] && set -a && . ./.env.local && set +a; tools/release.sh",
+            "group": {"kind": "build", "isDefault": true},      
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "Package (Velopack): Linux x86_64",
+            "type": "shell",
+            "command": "zig build package -Doptimize=ReleaseFast -Dtarget=x86_64-linux-gnu",
+            "group": {"kind": "build", "isDefault": true},
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "Package (Velopack): Linux aarch64",
+            "type": "shell",
+            "command": "zig build package -Doptimize=ReleaseFast -Dtarget=aarch64-linux-gnu",
+            "group": {"kind": "build", "isDefault": true},
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "Package (Velopack): macOS x86_64",
+            "type": "shell",
+            "command": "[ -f .env.local ] && set -a && . ./.env.local && set +a; && zig build package -Doptimize=ReleaseFast -Dtarget=x86_64-macos",
+            "group": {"kind": "build", "isDefault": true},
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "Package (Velopack): macOS aarch64",
+            "type": "shell",
+            "command": "[ -f .env.local ] && set -a && . ./.env.local && set +a; zig build package -Doptimize=ReleaseFast -Dtarget=aarch64-macos",
+            "group": {"kind": "build", "isDefault": true},
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "Package (Velopack): Windows x86_64 (MSVC)",
+            "type": "shell",
+            "command": "zig build package -Doptimize=ReleaseFast -Dtarget=x86_64-windows-msvc -Dfetch-msvc",
+            "group": {"kind": "build", "isDefault": true},
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "Package (Velopack): Windows aarch64 (MSVC)",
+            "type": "shell",
+            "command": "zig build package -Doptimize=ReleaseFast -Dtarget=aarch64-windows-msvc -Dfetch-msvc",
+            "group": {"kind": "build", "isDefault": true},
+            "presentation": {
+                "clear": true
+            }
+        },
+        {
+            "label": "Package (Velopack): all 6 targets",
+            "type": "shell",
+            "command": "[ -f .env.local ] && set -a && . ./.env.local && set +a; zig build packageall -Doptimize=ReleaseFast",
+            "group": {"kind": "build", "isDefault": true},
             "presentation": {
                 "clear": true
             }
