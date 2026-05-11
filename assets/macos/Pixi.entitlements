@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Hardened-runtime entitlements for notarization. Required keys per
+      https://docs.microsoft.com/dotnet/core/install/macos-notarization-issues
+      because Velopack's UpdateMac binary is .NET-compiled and needs
+      JIT + unsigned-executable-memory + library-validation relaxed.
+      Pixi itself (Zig + SDL3 + Metal) only needs library-validation off
+      so frameworks loaded at runtime aren't blocked.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

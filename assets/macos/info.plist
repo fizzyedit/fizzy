@@ -2,30 +2,50 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-<key>CFBundleName</key>
-<string>Pixi</string>
-<key>CFBundleIdentifier</key>
-<string>com.foxnne.pixi</string>
-<key>CFBundleVersion</key>
-<string>0.0.1</string> Note: Follow Semantic versioning
-<key>CFBundleIconFile</key>
-<string>pixi.icns</string>
-<key>CFBundleDocumentTypes</key>
-<array>
-	<dict>
-		<key>CFBundleTypeExtensions</key>
-		<array>
-			<string>pixi</string>
-            <string>png</string>
-            <string>jpg</string>
-		</array>
-		<key>CFBundleTypeIconFile</key>
-		<string>pixi.icns</string>
-		<key>CFBundleTypeName</key>
-		<string>Pixi art files</string>
-		<key>CFBundleTypeRole</key>
-		<string>Editor</string>
-	</dict>
-</array>
+	<key>CFBundleName</key>
+	<string>Pixi</string>
+	<key>CFBundleDisplayName</key>
+	<string>Pixi</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.foxnne.pixi</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.4</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.4</string>
+	<key>CFBundleIconFile</key>
+	<string>pixi.icns</string>
+	<!--
+	  Required for Gatekeeper / `spctl --assess` to recognise the bundle as an
+	  application after notarisation. Without `CFBundlePackageType=APPL` +
+	  `CFBundleExecutable`, vpk's post-notarise spctl check fails with
+	  "the code is valid but does not seem to be an app".
+	-->
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleExecutable</key>
+	<string>Pixi</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>pixi</string>
+				<string>png</string>
+				<string>jpg</string>
+			</array>
+			<key>CFBundleTypeIconFile</key>
+			<string>pixi.icns</string>
+			<key>CFBundleTypeName</key>
+			<string>Pixi art files</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+		</dict>
+	</array>
 </dict>
 </plist>

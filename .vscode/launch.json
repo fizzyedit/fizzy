@@ -1,15 +1,23 @@
 {
     // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
+    // Hover to view descriptions for existing attributes.
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug",
+            "name": "Debug (arm64 macOS)",
             "type": "lldb-mi",
             "request": "launch",
-            "target": "./zig-out/bin/pixi",
-            "cwd": "${workspaceRoot}",
+            "target": "${workspaceFolder}/zig-out/arm64-macos/Pixi",
+            "cwd": "${workspaceFolder}",
+            "valuesFormatting": "parseText"
+        },
+        {
+            "name": "Debug (x86_64 macOS)",
+            "type": "lldb-mi",
+            "request": "launch",
+            "target": "${workspaceFolder}/zig-out/x86-64-macos/Pixi",
+            "cwd": "${workspaceFolder}",
             "valuesFormatting": "parseText"
         }
     ]
