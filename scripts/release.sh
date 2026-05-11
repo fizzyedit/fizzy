@@ -151,30 +151,21 @@ declare -a channels=(
 
 # Map channel -> (os, arch, installer-extension) used to build the public
 # installer name: pixi_<os>_<arch>.<ext>
-declare -A channel_os=(
-    [x86-64-linux]=linux
-    [arm64-linux]=linux
-    [x86-64-macos]=macos
-    [arm64-macos]=macos
-    [x86-64-windows]=windows
-    [arm64-windows]=windows
-)
-declare -A channel_arch=(
-    [x86-64-linux]=x86_64
-    [arm64-linux]=arm64
-    [x86-64-macos]=x86_64
-    [arm64-macos]=arm64
-    [x86-64-windows]=x86_64
-    [arm64-windows]=arm64
-)
-declare -A channel_ext=(
-    [x86-64-linux]=AppImage
-    [arm64-linux]=AppImage
-    [x86-64-macos]=pkg
-    [arm64-macos]=pkg
-    [x86-64-windows]=exe
-    [arm64-windows]=exe
-)
+#
+# Implemented as a function rather than `declare -A` because the release runs
+# on macOS, where /bin/bash is 3.2 and lacks associative arrays. The channel
+# string is already <arch>-<os> (e.g. `x86-64-linux`), so we just split it.
+channel_parts() {
+    case "$1" in
+        x86-64-linux)    os=linux   arch=x86_64 ext=AppImage ;;
+        arm64-linux)     os=linux   arch=arm64  ext=AppImage ;;
+        x86-64-macos)    os=macos   arch=x86_64 ext=pkg ;;
+        arm64-macos)     os=macos   arch=arm64  ext=pkg ;;
+        x86-64-windows)  os=windows arch=x86_64 ext=exe ;;
+        arm64-windows)   os=windows arch=arm64  ext=exe ;;
+        *) echo "error: unknown channel $1" >&2; exit 1 ;;
+    esac
+}
 
 staging="$repo_root/zig-out/release-staging"
 rm -rf "$staging"
@@ -220,7 +211,7 @@ for ch in "${channels[@]}"; do
         exit 1
     fi
 
-    ext="${channel_ext[$ch]}"
+    channel_parts "$ch"
     installer="$(find_installer "$out" "$ext")"
     if [[ -z "$installer" ]]; then
         echo "error: no *.${ext} installer found in $out for channel $ch" >&2
@@ -232,7 +223,7 @@ for ch in "${channels[@]}"; do
     # Renamed installer: staged under the public name. This name is intentional
     # and stable; users will link to it. The Velopack runtime never looks for
     # this filename — it queries the GitHub API for the nupkg.
-    public_name="pixi_${channel_os[$ch]}_${channel_arch[$ch]}.${ext}"
+    public_name="pixi_${os}_${arch}.${ext}"
     if [[ -e "$staging/$public_name" ]]; then
         echo "error: two channels would produce $public_name (table misconfigured)" >&2
         exit 1
