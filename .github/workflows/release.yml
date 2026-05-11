@@ -58,7 +58,15 @@ jobs:
       contents: write # required for `gh release create`
 
     env:
-      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
+      # Both Zig cache dirs are pinned to per-run paths (including
+      # github.run_id) so nothing carries over between release runs even
+      # if the action layer caches something. Combined with `use-cache:
+      # false` on setup-zig below, this guarantees a cold cache on every
+      # release. mlugg/setup-zig sets these env vars itself, but listing
+      # them at job scope makes the intent explicit and overrides any
+      # action-level default that might point at a stable shared path.
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-${{ github.run_id }}
+      ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache-${{ github.run_id }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
@@ -77,7 +85,17 @@ jobs:
         uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
-          cache-key: ${{ hashFiles('build.zig.zon') }}
+          # Caching is intentionally OFF for release runs. The release
+          # pipeline runs rarely (only on tag pushes) and the seconds saved
+          # by a cache hit aren't worth the failure surface: stale package
+          # extractions in `.zig-cache/p/` can carry hash prefixes that no
+          # longer match what a fresh fetch from the same URL produces,
+          # leading to intermittent `hash mismatch` errors that flake half
+          # the time depending on what the previous run happened to cache.
+          # Disabling the action cache forces every release to compute
+          # hashes from scratch — slower but deterministic. CI test
+          # workflows still cache (they iterate constantly).
+          use-cache: false
 
       # mlugg/setup-zig overrides ZIG_GLOBAL_CACHE_DIR / ZIG_LOCAL_CACHE_DIR
       # to `.zig-cache` for its caching layer, so the tmp/ pre-create has to
