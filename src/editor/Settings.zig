@@ -1,11 +1,11 @@
 const builtin = @import("builtin");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 
 const Settings = @This();
 
-pub const default_theme = "Pixi Dark";
+pub const default_theme = "Fizzy Dark";
 
 /// Duration after the last edit before autosave runs (during normal operation).
 pub const autosave_timeout_ns: i128 = 500 * 1_000_000;
@@ -105,7 +105,7 @@ pub fn setThemeName(settings: *Settings, allocator: std.mem.Allocator, name: []c
 
 /// Loads settings (`theme` is always heap-owned after successful return — see `setThemeName` / `deinit`).
 pub fn load(allocator: std.mem.Allocator, path: []const u8) !Settings {
-    const maybe_data = pixi.fs.read(allocator, dvui.io, path) catch null;
+    const maybe_data = fizzy.fs.read(allocator, dvui.io, path) catch null;
     const data = maybe_data orelse return default(allocator);
     defer allocator.free(data);
 

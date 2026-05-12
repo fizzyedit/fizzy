@@ -17,14 +17,14 @@ name: Release
 #
 # Signing (optional — falls back to unsigned macOS builds when secrets aren't set):
 #   Required secrets to enable macOS signing + notarization in CI:
-#     PIXI_MACOS_CERT_P12_BASE64   - base64-encoded .p12 with Developer ID Application
+#     FIZZY_MACOS_CERT_P12_BASE64   - base64-encoded .p12 with Developer ID Application
 #                                    AND Developer ID Installer certs (combined)
-#     PIXI_MACOS_CERT_PASSWORD     - the password for that .p12
-#     PIXI_MACOS_SIGN_APP          - "Developer ID Application: NAME (TEAMID)"
-#     PIXI_MACOS_SIGN_INSTALLER    - "Developer ID Installer: NAME (TEAMID)"
-#     PIXI_APPLE_ID                - Apple ID email used for notarization
-#     PIXI_APPLE_APP_PASSWORD      - app-specific password (appleid.apple.com)
-#     PIXI_APPLE_TEAM_ID           - 10-char team ID
+#     FIZZY_MACOS_CERT_PASSWORD     - the password for that .p12
+#     FIZZY_MACOS_SIGN_APP          - "Developer ID Application: NAME (TEAMID)"
+#     FIZZY_MACOS_SIGN_INSTALLER    - "Developer ID Installer: NAME (TEAMID)"
+#     FIZZY_APPLE_ID                - Apple ID email used for notarization
+#     FIZZY_APPLE_APP_PASSWORD      - app-specific password (appleid.apple.com)
+#     FIZZY_APPLE_TEAM_ID           - 10-char team ID
 #
 # GITHUB_TOKEN is provided automatically by Actions; the job sets GH_TOKEN so
 # `gh` in scripts/release.sh is authenticated without a separate login step.
@@ -51,9 +51,9 @@ env:
 jobs:
   release:
     runs-on: macos-latest
-    # Secrets for signing/notarization live in Settings → Environments → pixi_release
+    # Secrets for signing/notarization live in Settings → Environments → fizzy_release
     # (repository-level Actions secrets work too if you prefer).
-    environment: pixi_release
+    environment: fizzy_release
     permissions:
       contents: write # required for `gh release create`
 
@@ -142,7 +142,7 @@ jobs:
       # ----- macOS signing setup (optional) ------------------------------
       # If the cert secrets are configured, import them into a temporary
       # keychain that lives only for this job. If not, skip — release.sh
-      # detects unset PIXI_MACOS_SIGN_APP and produces unsigned builds.
+      # detects unset FIZZY_MACOS_SIGN_APP and produces unsigned builds.
       #
       # Why the indirection via `signing_config` outputs instead of just
       # `if: ${{ secrets.X != '' }}`: workflow validation fails with
@@ -165,41 +165,41 @@ jobs:
       - name: Check signing config
         id: signing_config
         env:
-          HAS_CERT: ${{ secrets.PIXI_MACOS_CERT_P12_BASE64 != '' }}
-          HAS_NOTARY: ${{ secrets.PIXI_APPLE_ID != '' }}
+          HAS_CERT: ${{ secrets.FIZZY_MACOS_CERT_P12_BASE64 != '' }}
+          HAS_NOTARY: ${{ secrets.FIZZY_APPLE_ID != '' }}
         run: |
           echo "cert=$HAS_CERT" >> "$GITHUB_OUTPUT"
           echo "notary=$HAS_NOTARY" >> "$GITHUB_OUTPUT"
           if [[ "$HAS_CERT" == "true" ]]; then
             echo "macOS signing: ENABLED"
           else
-            echo "macOS signing: disabled (PIXI_MACOS_CERT_P12_BASE64 not set)"
+            echo "macOS signing: disabled (FIZZY_MACOS_CERT_P12_BASE64 not set)"
           fi
           if [[ "$HAS_NOTARY" == "true" ]]; then
             echo "Notarization:  ENABLED"
           else
-            echo "Notarization:  disabled (PIXI_APPLE_ID not set)"
+            echo "Notarization:  disabled (FIZZY_APPLE_ID not set)"
           fi
 
       - name: Import signing certificate
         if: steps.signing_config.outputs.cert == 'true'
         uses: apple-actions/import-codesign-certs@v3
         with:
-          p12-file-base64: ${{ secrets.PIXI_MACOS_CERT_P12_BASE64 }}
-          p12-password: ${{ secrets.PIXI_MACOS_CERT_PASSWORD }}
+          p12-file-base64: ${{ secrets.FIZZY_MACOS_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.FIZZY_MACOS_CERT_PASSWORD }}
           # One-shot keychain unique to this job; torn down at job end.
-          keychain: pixi-release
+          keychain: fizzy-release
           create-keychain: true
 
       - name: Configure notarytool credentials
         if: steps.signing_config.outputs.notary == 'true'
         env:
-          APPLE_ID: ${{ secrets.PIXI_APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.PIXI_APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.PIXI_APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.FIZZY_APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.FIZZY_APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.FIZZY_APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          xcrun notarytool store-credentials "pixi-ci-notary" \
+          xcrun notarytool store-credentials "fizzy-ci-notary" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID"
@@ -209,18 +209,18 @@ jobs:
           # `secrets.*` expression, which fails validation under
           # `environment:`. This way the env var only exists when the
           # profile was actually created, which is what release.sh expects.
-          echo "PIXI_MACOS_NOTARY_PROFILE=pixi-ci-notary" >> "$GITHUB_ENV"
+          echo "FIZZY_MACOS_NOTARY_PROFILE=fizzy-ci-notary" >> "$GITHUB_ENV"
 
       # ----- run the release ---------------------------------------------
 
       - name: Run release script
         env:
-          PIXI_MACOS_SIGN_APP: ${{ secrets.PIXI_MACOS_SIGN_APP }}
-          PIXI_MACOS_SIGN_INSTALLER: ${{ secrets.PIXI_MACOS_SIGN_INSTALLER }}
-          # PIXI_MACOS_NOTARY_PROFILE is set by the notarytool step via
+          FIZZY_MACOS_SIGN_APP: ${{ secrets.FIZZY_MACOS_SIGN_APP }}
+          FIZZY_MACOS_SIGN_INSTALLER: ${{ secrets.FIZZY_MACOS_SIGN_INSTALLER }}
+          # FIZZY_MACOS_NOTARY_PROFILE is set by the notarytool step via
           # $GITHUB_ENV when notarization is enabled, otherwise it stays
           # unset and release.sh skips the --notaryProfile vpk flag.
           # Leave the release as a draft so the operator publishes manually.
-          # Set PIXI_RELEASE_PUBLISH=1 here once you trust the pipeline end-to-end.
-          PIXI_RELEASE_PUBLISH: "0"
+          # Set FIZZY_RELEASE_PUBLISH=1 here once you trust the pipeline end-to-end.
+          FIZZY_RELEASE_PUBLISH: "0"
         run: ./scripts/release.sh

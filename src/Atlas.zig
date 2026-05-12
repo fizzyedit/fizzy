@@ -1,6 +1,6 @@
 const std = @import("std");
 const fs = @import("tools/fs.zig");
-const pixi = @import("pixi.zig");
+const fizzy = @import("fizzy.zig");
 
 const Atlas = @This();
 

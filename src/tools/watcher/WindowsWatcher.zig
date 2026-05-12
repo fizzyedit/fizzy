@@ -1,7 +1,7 @@
 const WindowsWatcher = @This();
 
 const std = @import("std");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const windows = std.os.windows;
 const Assets = @import("../../Assets.zig");
 

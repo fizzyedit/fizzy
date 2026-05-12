@@ -1,6 +1,6 @@
-# pixi tests
+# fizzy tests
 
-This directory contains pixi's test scaffolding. If you've never written
+This directory contains fizzy's test scaffolding. If you've never written
 tests in a Zig project before, start here.
 
 ## Running the tests
@@ -41,9 +41,9 @@ There is no separate framework. The standard library has assertions in
 `std.testing`: `expect`, `expectEqual`, `expectEqualSlices`,
 `expectEqualStrings`, `expectError`, `expectApproxEqAbs`.
 
-## How pixi tests are organized
+## How fizzy tests are organized
 
-pixi has both pure logic (math, palette parsing, layer reorder) and a
+fizzy has both pure logic (math, palette parsing, layer reorder) and a
 GUI on top. Tests are split into two targets, cheapest first, so most
 code gets fast unit-level coverage and only the parts that genuinely
 need a window pay the integration cost. Both run under a single
@@ -52,14 +52,14 @@ need a window pay the integration cost. Both run under a single
 
 | Target                   | What it tests                                                              | Needs a window? | Source root             |
 | ------------------------ | -------------------------------------------------------------------------- | --------------- | ----------------------- |
-| `pixi-unit-tests`        | Pure logic: math helpers, easing, palette parser, layer-reorder algorithm  | No              | `tests/root.zig`        |
-| `pixi-integration-tests` | Real pixi drawing / file functions against dvui's headless testing backend | Yes (no GPU)    | `tests/integration.zig` |
+| `fizzy-unit-tests`        | Pure logic: math helpers, easing, palette parser, layer-reorder algorithm  | No              | `tests/root.zig`        |
+| `fizzy-integration-tests` | Real fizzy drawing / file functions against dvui's headless testing backend | Yes (no GPU)    | `tests/integration.zig` |
 
 
 ### Unit tests (pure logic)
 
 `tests/root.zig` `@import`s a small set of source files that depend
-only on `std` — no dvui, no pixi globals, no SDL. Every `test "..."`
+only on `std` — no dvui, no fizzy globals, no SDL. Every `test "..."`
 block in those files becomes part of the test binary. Currently
 covered:
 
@@ -75,17 +75,17 @@ input, CRLF).
 
 The `_ = @import("...")` lines in `tests/root.zig` exist purely so
 their `test` blocks are reachable from the test binary. Each module is
-exposed as a named import (e.g. `pixi-direction`) by `build.zig`,
+exposed as a named import (e.g. `fizzy-direction`) by `build.zig`,
 because Zig 0.15 modules cannot import source files outside their own
 directory via `../`.
 
 ### Integration tests (headless)
 
-`tests/integration.zig` exercises real pixi code that needs a live
-`dvui.Window` and `pixi.app` / `pixi.editor` globals. dvui ships a
+`tests/integration.zig` exercises real fizzy code that needs a live
+`dvui.Window` and `fizzy.app` / `fizzy.editor` globals. dvui ships a
 `testing` backend that creates a real `dvui.Window` with no GPU and no
-SDL window; `tests/pixi_shim.zig` heap-allocates `pixi.app` and a
-mostly-zeroed `pixi.editor`, setting only the fields tests actually
+SDL window; `tests/fizzy_shim.zig` heap-allocates `fizzy.app` and a
+mostly-zeroed `fizzy.editor`, setting only the fields tests actually
 read. The shim is deliberately minimal — when a new test needs a field
 the shim doesn't set, set just that field at the top of that test
 rather than expanding the shim.
@@ -103,10 +103,10 @@ inverse case (filling the temporary layer) leaves the cache alone.
 into two solid color regions, flooding from one region selects
 exactly those pixels and stops at the color boundary; out-of-bounds
 seeds are no-ops.
-- `pixi.File` JSON parser — current-format parse + round-trip via
+- `fizzy.File` JSON parser — current-format parse + round-trip via
 `std.json.Stringify.valueAlloc`, plus small fixtures for `FileV1`,
 `FileV2`, and `FileV3` so that the legacy fallback chain in
-`Internal.File.fromPathPixi` keeps working as the public types
+`Internal.File.fromPathFizzy` keeps working as the public types
 evolve.
 
 What's intentionally **not** here yet:
@@ -126,7 +126,7 @@ and a way to dismiss startup dialogs.
 
 ### Pure-logic (preferred — fastest, no window)
 
-1. Find a source file that has no dvui / pixi imports, or extract the
+1. Find a source file that has no dvui / fizzy imports, or extract the
   pure piece you want to test into one (look at how
    `src/math/easing.zig` was extracted from `src/math/math.zig` for a
    minimal example).
@@ -143,7 +143,7 @@ and a way to dismiss startup dialogs.
    target) and add an `_ = @import("...")` line to `tests/root.zig`.
 4. Run `zig build test`.
 
-### Integration (when a test needs `dvui.currentWindow()` or pixi globals)
+### Integration (when a test needs `dvui.currentWindow()` or fizzy globals)
 
 1. Add the test to `tests/integration.zig`.
 2. Bring up the shim at the top of the test:
@@ -156,7 +156,7 @@ and a way to dismiss startup dialogs.
    see the comment on `deinitFile` for why).
 4. Drive the function under test directly (`fillPoint`, `drawPoint`,
   etc.) and assert on the resulting state.
-5. If the code under test reads a `pixi.editor` field the shim hasn't
+5. If the code under test reads a `fizzy.editor` field the shim hasn't
   set, set it at the top of your test instead of broadening the shim.
 
 ## CI

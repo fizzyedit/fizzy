@@ -8,7 +8,7 @@
             "name": "Debug (arm64 macOS)",
             "type": "lldb-mi",
             "request": "launch",
-            "target": "${workspaceFolder}/zig-out/arm64-macos/Pixi",
+            "target": "${workspaceFolder}/zig-out/arm64-macos/Fizzy",
             "cwd": "${workspaceFolder}",
             "valuesFormatting": "parseText"
         },
@@ -16,7 +16,7 @@
             "name": "Debug (x86_64 macOS)",
             "type": "lldb-mi",
             "request": "launch",
-            "target": "${workspaceFolder}/zig-out/x86-64-macos/Pixi",
+            "target": "${workspaceFolder}/zig-out/x86-64-macos/Fizzy",
             "cwd": "${workspaceFolder}",
             "valuesFormatting": "parseText"
         }

@@ -1,12 +1,12 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const zip = @import("zip");
 
 pub fn init(width: u32, height: u32, default_color: dvui.Color.PMA, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
     const num_pixels = width * height;
     if (num_pixels == 0) return error.InvalidImageSize;
-    const p = pixi.app.allocator.alloc(dvui.Color.PMA, num_pixels) catch return error.MemoryAllocationFailed;
+    const p = fizzy.app.allocator.alloc(dvui.Color.PMA, num_pixels) catch return error.MemoryAllocationFailed;
 
     @memset(p, default_color);
 
@@ -34,7 +34,7 @@ pub fn fromImageFileBytes(name: []const u8, file_bytes: []const u8, invalidation
 
     return .{
         .pixelsPMA = .{
-            .rgba = dvui.Color.PMA.sliceFromRGBA(pixi.app.allocator.dupe(u8, data[0..@intCast(w * h * @sizeOf(dvui.Color.PMA))]) catch return error.MemoryAllocationFailed),
+            .rgba = dvui.Color.PMA.sliceFromRGBA(fizzy.app.allocator.dupe(u8, data[0..@intCast(w * h * @sizeOf(dvui.Color.PMA))]) catch return error.MemoryAllocationFailed),
             .width = @as(u32, @intCast(w)),
             .height = @as(u32, @intCast(h)),
             .interpolation = .nearest,
@@ -44,15 +44,15 @@ pub fn fromImageFileBytes(name: []const u8, file_bytes: []const u8, invalidation
 }
 
 pub fn fromImageFilePath(name: []const u8, path: []const u8, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
-    const file_byes = try pixi.fs.read(pixi.app.allocator, dvui.io, path);
-    defer pixi.app.allocator.free(file_byes);
+    const file_byes = try fizzy.fs.read(fizzy.app.allocator, dvui.io, path);
+    defer fizzy.app.allocator.free(file_byes);
     return fromImageFileBytes(name, file_byes, invalidation);
 }
 
 pub fn fromPixelsPMA(pixel_data: []dvui.Color.PMA, width: u32, height: u32, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
     return .{
         .pixelsPMA = .{
-            .rgba = pixi.app.allocator.dupe(dvui.Color.PMA, pixel_data) catch return error.MemoryAllocationFailed,
+            .rgba = fizzy.app.allocator.dupe(dvui.Color.PMA, pixel_data) catch return error.MemoryAllocationFailed,
             .interpolation = .nearest,
             .invalidation = invalidation,
             .width = width,
@@ -64,7 +64,7 @@ pub fn fromPixelsPMA(pixel_data: []dvui.Color.PMA, width: u32, height: u32, inva
 pub fn fromPixels(pixel_data: []u8, width: u32, height: u32, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
     return .{
         .pixels = .{
-            .rgba = pixi.app.allocator.dupe(u8, pixel_data) catch return error.MemoryAllocationFailed,
+            .rgba = fizzy.app.allocator.dupe(u8, pixel_data) catch return error.MemoryAllocationFailed,
             .interpolation = .nearest,
             .invalidation = invalidation,
             .width = width,
@@ -75,7 +75,7 @@ pub fn fromPixels(pixel_data: []u8, width: u32, height: u32, invalidation: dvui.
 
 pub fn fromTexture(name: []const u8, texture: dvui.Texture, invalidation: dvui.ImageSource.InvalidationStrategy) dvui.ImageSource {
     return .{
-        .name = pixi.app.allocator.dupe(u8, name) catch name,
+        .name = fizzy.app.allocator.dupe(u8, name) catch name,
         .texture = texture,
         .invalidation = invalidation,
         .interpolation = .nearest,
@@ -287,7 +287,7 @@ pub fn blitData(src_pixels: [][4]u8, src_width: usize, src_height: usize, dst_pi
                 const bot_c = dvui.Color{ .r = bot_px[0], .g = bot_px[1], .b = bot_px[2], .a = bot_px[3] };
                 const tpm = dvui.Color.PMA.fromColor(top_c);
                 const bpm = dvui.Color.PMA.fromColor(bot_c);
-                const out_pma = pixi.Internal.Layer.blendPmaSrcOver(@bitCast(tpm), @bitCast(bpm));
+                const out_pma = fizzy.Internal.Layer.blendPmaSrcOver(@bitCast(tpm), @bitCast(bpm));
                 top_px.* = @as(dvui.Color.PMA, @bitCast(out_pma)).toColor().toRGBA();
             }
         }
@@ -314,9 +314,9 @@ pub fn writeToZip(
     const w = @as(c_int, @intFromFloat(s.w));
     const h = @as(c_int, @intFromFloat(s.h));
 
-    var writer = std.Io.Writer.Allocating.init(pixi.editor.arena.allocator());
+    var writer = std.Io.Writer.Allocating.init(fizzy.editor.arena.allocator());
 
-    try dvui.PNGEncoder.writeWithResolution(&writer.writer, pixi.image.bytes(source), @intCast(w), @intCast(h), resolution);
+    try dvui.PNGEncoder.writeWithResolution(&writer.writer, fizzy.image.bytes(source), @intCast(w), @intCast(h), resolution);
 
     if (@as(?*zip.struct_zip_t, @ptrCast(zip_file))) |z| {
         _ = zip.zip_entry_write(z, writer.written().ptr, @as(usize, writer.written().len));

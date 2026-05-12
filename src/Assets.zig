@@ -2,7 +2,7 @@ const std = @import("std");
 const zstbi = @import("zstbi");
 const mach = @import("mach");
 const builtin = @import("builtin");
-const pixi = @import("pixi.zig");
+const fizzy = @import("fizzy.zig");
 
 const Assets = @This();
 
@@ -27,8 +27,8 @@ const Watcher = switch (builtin.target.os.tag) {
 };
 
 paths: mach.Objects(.{ .track_fields = false }, struct { value: [:0]const u8 }),
-textures: mach.Objects(.{ .track_fields = false }, pixi.gfx.Texture),
-atlases: mach.Objects(.{ .track_fields = false }, pixi.Atlas),
+textures: mach.Objects(.{ .track_fields = false }, fizzy.gfx.Texture),
+atlases: mach.Objects(.{ .track_fields = false }, fizzy.Atlas),
 
 allocator: std.mem.Allocator,
 watcher: Watcher = undefined,
@@ -49,13 +49,13 @@ pub fn init(assets: *Assets) !void {
     };
 }
 
-pub fn loadTexture(assets: *Assets, path: []const u8, options: pixi.gfx.Texture.SamplerOptions) !?mach.ObjectID {
+pub fn loadTexture(assets: *Assets, path: []const u8, options: fizzy.gfx.Texture.SamplerOptions) !?mach.ObjectID {
     assets.textures.lock();
     defer assets.textures.unlock();
 
     const term_path = try assets.allocator.dupeZ(u8, path);
 
-    if (pixi.gfx.Texture.loadFromFile(term_path, options) catch null) |texture| {
+    if (fizzy.gfx.Texture.loadFromFile(term_path, options) catch null) |texture| {
         const texture_id = try assets.textures.new(texture);
         const path_id = try assets.paths.new(.{ .value = term_path });
 
@@ -73,7 +73,7 @@ pub fn loadAtlas(assets: *Assets, path: []const u8) !?mach.ObjectID {
 
     const term_path = try assets.allocator.dupeZ(u8, path);
 
-    if (pixi.Atlas.loadFromFile(assets.allocator, term_path) catch null) |atlas| {
+    if (fizzy.Atlas.loadFromFile(assets.allocator, term_path) catch null) |atlas| {
         const atlas_id = try assets.atlases.new(atlas);
         const path_id = try assets.paths.new(.{ .value = term_path });
 
@@ -93,7 +93,7 @@ pub fn reload(assets: *Assets, id: mach.ObjectID) !void {
         if (assets.textures.getTag(id, Assets, .path)) |path_id| {
             const path = assets.paths.get(path_id, .value);
 
-            if (pixi.gfx.Texture.loadFromFile(path, .{
+            if (fizzy.gfx.Texture.loadFromFile(path, .{
                 .address_mode = old_texture.address_mode,
                 .copy_dst = old_texture.copy_dst,
                 .copy_src = old_texture.copy_src,
@@ -113,18 +113,18 @@ pub fn reload(assets: *Assets, id: mach.ObjectID) !void {
         if (assets.atlases.getTag(id, Assets, .path)) |path_id| {
             const path = assets.paths.get(path_id, .value);
 
-            if (pixi.Atlas.loadFromFile(assets.allocator, path) catch null) |atlas| {
+            if (fizzy.Atlas.loadFromFile(assets.allocator, path) catch null) |atlas| {
                 assets.atlases.setValueRaw(id, atlas);
             }
         }
     }
 }
 
-pub fn getTexture(assets: *Assets, id: mach.ObjectID) pixi.gfx.Texture {
+pub fn getTexture(assets: *Assets, id: mach.ObjectID) fizzy.gfx.Texture {
     return assets.textures.getValue(id);
 }
 
-pub fn getAtlas(assets: *Assets, id: mach.ObjectID) pixi.Atlas {
+pub fn getAtlas(assets: *Assets, id: mach.ObjectID) fizzy.Atlas {
     return assets.atlases.getValue(id);
 }
 
@@ -200,8 +200,8 @@ pub fn listen(assets: *Assets) !void {
 }
 
 fn comparePaths(allocator: std.mem.Allocator, path1: []const u8, path2: []const u8) !bool {
-    const rel_1 = try std.fs.path.relative(allocator, pixi.app.root_path, path1);
-    const rel_2 = try std.fs.path.relative(allocator, pixi.app.root_path, path2);
+    const rel_1 = try std.fs.path.relative(allocator, fizzy.app.root_path, path1);
+    const rel_2 = try std.fs.path.relative(allocator, fizzy.app.root_path, path2);
 
     defer allocator.free(rel_1);
     defer allocator.free(rel_2);

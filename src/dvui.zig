@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("pixi.zig");
+const fizzy = @import("fizzy.zig");
 const dvui = @import("dvui");
 const builtin = @import("builtin");
 const icons = @import("icons");
@@ -96,9 +96,9 @@ pub fn defaultDialogDisplay(id: dvui.Id) anyerror!bool {
 
     _ = id;
 
-    _ = pixi.dvui.sprite(@src(), .{
-        .source = pixi.editor.atlas.source,
-        .sprite = pixi.editor.atlas.data.sprites[pixi.atlas.sprites.fox_default],
+    _ = fizzy.dvui.sprite(@src(), .{
+        .source = fizzy.editor.atlas.source,
+        .sprite = fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.fox_default],
         .scale = 2.0,
     }, .{ .gravity_y = 0.5, .gravity_x = 0.5, .background = false });
 
@@ -161,7 +161,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
     };
 
     if (modal) {
-        pixi.editor.dim_titlebar = true;
+        fizzy.editor.dim_titlebar = true;
     }
 
     const title = dvui.dataGetSlice(null, id, "_title", []u8) orelse {
@@ -189,7 +189,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
     const maxSize = dvui.dataGet(null, id, "_max_size", dvui.Options.MaxSize);
     const hide_footer = dvui.dataGet(null, id, "_hide_footer", bool) orelse false;
 
-    var win = pixi.dvui.floatingWindow(@src(), .{
+    var win = fizzy.dvui.floatingWindow(@src(), .{
         .modal = modal,
         .center_on = center_on,
         .window_avoid = .nudge,
@@ -213,12 +213,12 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
 
     if (dvui.animationGet(win.data().id, "_close_x")) |a| {
         if (a.done()) {
-            pixi.Editor.Explorer.files.new_file_close_rect = null;
+            fizzy.Editor.Explorer.files.new_file_close_rect = null;
             dvui.dialogRemove(id);
         }
-    } else if (pixi.Editor.Explorer.files.new_file_close_rect) |close_rect| {
+    } else if (fizzy.Editor.Explorer.files.new_file_close_rect) |close_rect| {
         dvui.dataSet(null, win.data().id, "_close_rect", close_rect);
-        pixi.Editor.Explorer.files.new_file_close_rect = null;
+        fizzy.Editor.Explorer.files.new_file_close_rect = null;
     } else {
         win.autoSize();
     }
@@ -236,7 +236,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
         };
 
         var header_openflag = true;
-        win.dragAreaSet(pixi.dvui.windowHeader(title, "", &header_openflag, header_kind));
+        win.dragAreaSet(fizzy.dvui.windowHeader(title, "", &header_openflag, header_kind));
         if (!header_openflag) {
             if (callafter) |ca| {
                 ca(id, .cancel) catch {
@@ -614,9 +614,9 @@ pub fn toastDisplay(id: dvui.Id) !void {
 
 pub const SpriteInitOptions = struct {
     source: dvui.ImageSource,
-    file: ?*pixi.Internal.File = null,
+    file: ?*fizzy.Internal.File = null,
     alpha_source: ?dvui.ImageSource = null,
-    sprite: pixi.Atlas.Sprite,
+    sprite: fizzy.Atlas.Sprite,
     scale: f32 = 1.0,
     depth: f32 = 0.0, // -1.0 is front, 1.0 is back
     reflection: bool = false,
@@ -747,7 +747,7 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
             };
 
             if (init_opts.file) |file| {
-                const preview_opts = pixi.render.RenderFileOptions{
+                const preview_opts = fizzy.render.RenderFileOptions{
                     .file = file,
                     .rs = .{
                         .r = wd.contentRectScale().r,
@@ -756,7 +756,7 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
                     .uv = uv,
                     .corner_radius = .all(0),
                 };
-                pixi.render.renderReflectionLayerStack(preview_opts, reflection_triangles_layers, reflection_triangles_layers_dimmed) catch |err| {
+                fizzy.render.renderReflectionLayerStack(preview_opts, reflection_triangles_layers, reflection_triangles_layers_dimmed) catch |err| {
                     dvui.log.err("Failed to render reflection layer stack: {any}", .{err});
                 };
 
@@ -800,7 +800,7 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
     }
 
     if (init_opts.file) |file| {
-        pixi.render.renderLayers(.{
+        fizzy.render.renderLayers(.{
             .file = file,
             .rs = .{
                 .r = wd.contentRectScale().r,
@@ -924,7 +924,7 @@ pub fn pathToSubdividedQuad(path: dvui.Path, allocator: std.mem.Allocator, optio
     return builder.build();
 }
 
-pub fn renderSprite(source: dvui.ImageSource, s: pixi.Sprite, data_point: dvui.Point, scale: f32, opts: dvui.RenderTextureOptions) !void {
+pub fn renderSprite(source: dvui.ImageSource, s: fizzy.Sprite, data_point: dvui.Point, scale: f32, opts: dvui.RenderTextureOptions) !void {
     const atlas_size = dvui.imageSize(source) catch {
         std.log.err("Failed to get atlas size", .{});
         return;

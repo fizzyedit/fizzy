@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 
 /// When `pending_mode == .save_and_close`, resume `Editor.advanceSaveAllQuit` after flat save.
@@ -17,10 +17,10 @@ pub fn request(file_id: u64, mode: Mode) void {
     if (mode == .editor_save) {
         pending_from_save_all_quit = false;
     }
-    var mutex = pixi.dvui.dialog(@src(), .{
+    var mutex = fizzy.dvui.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
-        .title = "Save as .pixi or current extension?",
+        .title = "Save as .fiz or current extension?",
         .ok_label = "",
         .cancel_label = "",
         .resizeable = false,
@@ -33,8 +33,8 @@ pub fn request(file_id: u64, mode: Mode) void {
     mutex.mutex.unlock(dvui.io);
 }
 
-fn fileRef(file_id: u64) ?*pixi.Internal.File {
-    return pixi.editor.open_files.getPtr(file_id);
+fn fileRef(file_id: u64) ?*fizzy.Internal.File {
+    return fizzy.editor.open_files.getPtr(file_id);
 }
 
 fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
@@ -60,10 +60,10 @@ fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: 
 }
 
 /// Same routing as `UnsavedClose.saveSynchronously` — must not use `saveAsync` before tab close.
-fn saveSynchronously(file: *pixi.Internal.File) !void {
+fn saveSynchronously(file: *fizzy.Internal.File) !void {
     const ext = std.fs.path.extension(file.path);
     const win = dvui.currentWindow();
-    if (std.mem.eql(u8, ext, ".pixi")) {
+    if (fizzy.Internal.File.isFizzyExtension(ext)) {
         try file.saveZip(win);
     } else if (std.mem.eql(u8, ext, ".png")) {
         try file.savePng(win);
@@ -97,9 +97,9 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
             .background = false,
         });
         tl.addText("File contains data only compatible with the ", .{ .font = dvui.Font.theme(.body) });
-        tl.addText(".pixi", .{ .font = bold_hi, .color_text = hi_fill });
+        tl.addText(".fiz", .{ .font = bold_hi, .color_text = hi_fill });
         tl.addText(" extension. Would you like to save a copy of your file as a ", .{ .font = dvui.Font.theme(.body) });
-        tl.addText(".pixi", .{ .font = bold_hi, .color_text = hi_fill });
+        tl.addText(".fiz", .{ .font = bold_hi, .color_text = hi_fill });
         tl.format(" extension or proceed saving as a {s}?", .{ext_disp}, .{ .font = dvui.Font.theme(.body) });
         tl.deinit();
     }
@@ -112,8 +112,8 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     var btn_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .none, .gravity_x = 0.5 });
     defer btn_row.deinit();
 
-    if (dialogButton(@src(), ".pixi", .highlight, 1, 0)) {
-        try onChoosePixi(file_id);
+    if (dialogButton(@src(), ".fiz", .highlight, 1, 0)) {
+        try onChooseFizzy(file_id);
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
     if (dialogButton(@src(), ext_disp, .control, 2, 1)) {
@@ -127,14 +127,14 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     return true;
 }
 
-fn onChoosePixi(file_id: u64) !void {
-    const idx = pixi.editor.open_files.getIndex(file_id) orelse return;
-    pixi.editor.setActiveFile(idx);
+fn onChooseFizzy(file_id: u64) !void {
+    const idx = fizzy.editor.open_files.getIndex(file_id) orelse return;
+    fizzy.editor.setActiveFile(idx);
     if (pending_mode == .save_and_close) {
-        pixi.editor.pending_close_file_id = file_id;
+        fizzy.editor.pending_close_file_id = file_id;
     }
-    pixi.dvui.closeFloatingDialogAnchored();
-    pixi.editor.requestSaveAs();
+    fizzy.dvui.closeFloatingDialogAnchored();
+    fizzy.editor.requestSaveAs();
 }
 
 fn onChooseFlatRaster(file_id: u64) !void {
@@ -142,17 +142,17 @@ fn onChooseFlatRaster(file_id: u64) !void {
     switch (pending_mode) {
         .editor_save => {
             try f.saveAsync();
-            pixi.dvui.closeFloatingDialogAnchored();
+            fizzy.dvui.closeFloatingDialogAnchored();
         },
         .save_and_close => {
             saveSynchronously(f) catch |err| {
                 dvui.log.err("Save failed: {s}", .{@errorName(err)});
                 return;
             };
-            try pixi.editor.rawCloseFileID(file_id);
-            pixi.dvui.closeFloatingDialogAnchored();
+            try fizzy.editor.rawCloseFileID(file_id);
+            fizzy.dvui.closeFloatingDialogAnchored();
             if (pending_from_save_all_quit) {
-                pixi.editor.pending_quit_continue = true;
+                fizzy.editor.pending_quit_continue = true;
             }
         },
     }
@@ -160,16 +160,16 @@ fn onChooseFlatRaster(file_id: u64) !void {
 
 fn onCancel() void {
     if (pending_mode == .save_and_close and pending_from_save_all_quit) {
-        pixi.editor.abortSaveAllQuit();
+        fizzy.editor.abortSaveAllQuit();
     }
-    pixi.dvui.closeFloatingDialogAnchored();
+    fizzy.dvui.closeFloatingDialogAnchored();
 }
 
 pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) !void {
     switch (response) {
         .cancel => {
             if (pending_mode == .save_and_close and pending_from_save_all_quit) {
-                pixi.editor.abortSaveAllQuit();
+                fizzy.editor.abortSaveAllQuit();
             }
         },
         else => {},

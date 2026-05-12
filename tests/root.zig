@@ -7,12 +7,12 @@
 
 comptime {
     // Phase 1: pure-logic unit tests.
-    _ = @import("pixi-direction");
-    _ = @import("pixi-easing");
-    _ = @import("pixi-layer-order");
-    _ = @import("pixi-palette-parse");
-    _ = @import("pixi-layout-anchor");
-    _ = @import("pixi-reduce");
-    _ = @import("pixi-grid-validate");
-    _ = @import("pixi-animation");
+    _ = @import("fizzy-direction");
+    _ = @import("fizzy-easing");
+    _ = @import("fizzy-layer-order");
+    _ = @import("fizzy-palette-parse");
+    _ = @import("fizzy-layout-anchor");
+    _ = @import("fizzy-reduce");
+    _ = @import("fizzy-grid-validate");
+    _ = @import("fizzy-animation");
 }

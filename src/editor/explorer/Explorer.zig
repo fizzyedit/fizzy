@@ -1,12 +1,12 @@
 const std = @import("std");
 
 const dvui = @import("dvui");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 
 const Core = @import("mach").Core;
-const App = pixi.App;
-const Editor = pixi.Editor;
-const Packer = pixi.Packer;
+const App = fizzy.App;
+const Editor = fizzy.Editor;
+const Packer = fizzy.Packer;
 
 const nfd = @import("nfd");
 
@@ -23,7 +23,7 @@ pub const settings = @import("settings.zig");
 sprites: Sprites = .{},
 tools: Tools = .{},
 pane: Pane = .files,
-paned: *pixi.dvui.PanedWidget = undefined,
+paned: *fizzy.dvui.PanedWidget = undefined,
 scroll_info: dvui.ScrollInfo = .{
     .horizontal = .auto,
 },
@@ -46,7 +46,7 @@ pub const Pane = enum(u32) {
 
 pub fn init() Explorer {
     return .{
-        .open_branches = .init(pixi.app.allocator),
+        .open_branches = .init(fizzy.app.allocator),
     };
 }
 
@@ -75,8 +75,8 @@ pub fn close(explorer: *Explorer) void {
 pub fn open(explorer: *Explorer) void {
     if (explorer.paned.collapsed()) return;
 
-    if (pixi.editor.settings.explorer_ratio > 0.0) {
-        explorer.paned.animateSplit(pixi.editor.settings.explorer_ratio, dvui.easing.outBack);
+    if (fizzy.editor.settings.explorer_ratio > 0.0) {
+        explorer.paned.animateSplit(fizzy.editor.settings.explorer_ratio, dvui.easing.outBack);
     } else {
         explorer.paned.animateSplit(0.2, dvui.easing.outBack);
     }
@@ -108,10 +108,10 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
     });
 
     if (explorer.pane != .files) {
-        pixi.editor.file_tree_data_id = null;
-        if (pixi.editor.tab_drag_from_tree_path) |p| {
-            pixi.app.allocator.free(p);
-            pixi.editor.tab_drag_from_tree_path = null;
+        fizzy.editor.file_tree_data_id = null;
+        if (fizzy.editor.tab_drag_from_tree_path) |p| {
+            fizzy.app.allocator.free(p);
+            fizzy.editor.tab_drag_from_tree_path = null;
         }
     }
 
@@ -130,28 +130,28 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
     scroll.deinit();
 
     if (vertical_scroll > 0.0) {
-        pixi.dvui.drawEdgeShadow(pane_vbox.data().contentRectScale(), .top, .{});
+        fizzy.dvui.drawEdgeShadow(pane_vbox.data().contentRectScale(), .top, .{});
     }
 
     if (explorer.scroll_info.virtual_size.h > explorer.scroll_info.viewport.h) {
-        pixi.dvui.drawEdgeShadow(pane_vbox.data().contentRectScale(), .bottom, .{});
+        fizzy.dvui.drawEdgeShadow(pane_vbox.data().contentRectScale(), .bottom, .{});
     }
 
     pane_vbox.deinit();
 
     if (explorer.scroll_info.virtual_size.w > explorer.scroll_info.viewport.w) {
-        pixi.dvui.drawEdgeShadow(vbox.data().contentRectScale(), .right, .{});
+        fizzy.dvui.drawEdgeShadow(vbox.data().contentRectScale(), .right, .{});
     }
 
     if (horizontal_scroll > 0.0) {
-        pixi.dvui.drawEdgeShadow(vbox.data().contentRectScale(), .left, .{});
+        fizzy.dvui.drawEdgeShadow(vbox.data().contentRectScale(), .left, .{});
     }
 
     return .ok;
 }
 
 pub fn hovered(explorer: *Explorer) bool {
-    return pixi.dvui.hovered(explorer.paned.data());
+    return fizzy.dvui.hovered(explorer.paned.data());
 }
 
 pub fn drawHeader(explorer: *Explorer) !void {

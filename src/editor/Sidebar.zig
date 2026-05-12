@@ -1,9 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
-const App = pixi.App;
-const Editor = pixi.Editor;
+const App = fizzy.App;
+const Editor = fizzy.Editor;
 
 const Pane = @import("explorer/Explorer.zig").Pane;
 
@@ -47,7 +47,7 @@ pub fn draw(_: Sidebar) !bool {
 }
 
 fn drawOption(option: Pane, icon: []const u8, size: f32) !bool {
-    const selected = option == pixi.editor.explorer.pane;
+    const selected = option == fizzy.editor.explorer.pane;
     var ret: bool = false;
 
     const theme = dvui.themeGet();
@@ -66,8 +66,8 @@ fn drawOption(option: Pane, icon: []const u8, size: f32) !bool {
     // sit inside the strip — anything below is registered harmlessly (no overlap with drag rect).
     if (builtin.os.tag == .windows) {
         const r = bw.data().rectScale().r;
-        const strip_h = (pixi.editor.settings.titlebar_top_buffer + pixi.editor.settings.titlebar_height) * dvui.windowNaturalScale();
-        if (r.y < strip_h) pixi.backend.pushTitleBarInteractiveRect(r);
+        const strip_h = (fizzy.editor.settings.titlebar_top_buffer + fizzy.editor.settings.titlebar_height) * dvui.windowNaturalScale();
+        if (r.y < strip_h) fizzy.backend.pushTitleBarInteractiveRect(r);
     }
 
     const color: dvui.Color = if (selected) theme.color(.highlight, .fill) else if (bw.hovered()) theme.color(.window, .text) else theme.color(.window, .fill);
@@ -83,7 +83,7 @@ fn drawOption(option: Pane, icon: []const u8, size: f32) !bool {
     );
 
     if (bw.clicked()) {
-        pixi.editor.explorer.pane = option;
+        fizzy.editor.explorer.pane = option;
         dvui.refresh(null, @src(), null);
         ret = true;
     }
@@ -128,7 +128,7 @@ fn drawOption(option: Pane, icon: []const u8, size: f32) !bool {
                 .background = false,
                 .padding = dvui.Rect.all(4),
             });
-            tl2.format("{s}", .{pixi.Editor.Explorer.title(option, true)}, .{
+            tl2.format("{s}", .{fizzy.Editor.Explorer.title(option, true)}, .{
                 .font = dvui.Font.theme(.heading),
             });
             tl2.deinit();

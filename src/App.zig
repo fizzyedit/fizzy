@@ -7,13 +7,13 @@ const assets = @import("assets");
 
 const icon = assets.files.@"icon.png";
 
-const pixi = @import("pixi.zig");
+const fizzy = @import("fizzy.zig");
 const auto_update = @import("auto_update.zig");
 
 const App = @This();
-const Editor = pixi.Editor;
-const Packer = pixi.Packer;
-//const Assets = pixi.Assets;
+const Editor = fizzy.Editor;
+const Packer = fizzy.Packer;
+//const Assets = fizzy.Assets;
 
 // App fields
 allocator: std.mem.Allocator = undefined,
@@ -35,7 +35,7 @@ pub const dvui_app: dvui.App = .{
         .options = .{
             .size = .{ .w = 1200.0, .h = 800.0 },
             .min_size = .{ .w = 640.0, .h = 480.0 },
-            .title = "Pixi",
+            .title = "Fizzy",
             .icon = icon,
             .transparent = if (builtin.os.tag == .macos or builtin.os.tag == .windows) true else false,
             // macOS: Cancel-leading dialog/footer order; other platforms: OK-leading (matches dialog header close vs icon).
@@ -50,7 +50,7 @@ pub const dvui_app: dvui.App = .{
 };
 
 pub fn main(main_init: std.process.Init) !u8 {
-    std.log.info("Pixi version {s}", .{build_opts.app_version});
+    std.log.info("Fizzy version {s}", .{build_opts.app_version});
 
     if (comptime auto_update.impl) {
         // appRunHook handles Velopack's install/uninstall/firstrun CLI flags and
@@ -88,28 +88,28 @@ pub fn AppInit(win: *dvui.Window) !void {
         }
     }
 
-    pixi.app = try allocator.create(App);
-    pixi.app.* = .{
+    fizzy.app = try allocator.create(App);
+    fizzy.app.* = .{
         .allocator = allocator,
         .window = win,
         .root_path = allocator.dupeZ(u8, path) catch ".",
     };
 
-    pixi.editor = try allocator.create(Editor);
-    pixi.editor.* = Editor.init(pixi.app) catch unreachable;
+    fizzy.editor = try allocator.create(Editor);
+    fizzy.editor.* = Editor.init(fizzy.app) catch unreachable;
 
-    pixi.packer = try allocator.create(Packer);
-    pixi.packer.* = Packer.init(allocator) catch unreachable;
+    fizzy.packer = try allocator.create(Packer);
+    fizzy.packer.* = Packer.init(allocator) catch unreachable;
 
-    pixi.backend.setupMacOSMenuBar();
+    fizzy.backend.setupMacOSMenuBar();
 }
 
 // Run as app is shutting down before dvui.Window.deinit()
 pub fn AppDeinit() void {
-    pixi.editor.deinit() catch unreachable;
+    fizzy.editor.deinit() catch unreachable;
 }
 
 // Run each frame to do normal UI
 pub fn AppFrame() !dvui.App.Result {
-    return try pixi.editor.tick();
+    return try fizzy.editor.tick();
 }

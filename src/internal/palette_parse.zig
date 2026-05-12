@@ -1,7 +1,7 @@
 //! Pure parser for `.hex` palette files.
 //!
 //! Extracted from `internal/Palette.zig` so `zig build test` can
-//! exercise it without pulling in dvui / pixi globals.
+//! exercise it without pulling in dvui / fizzy globals.
 //!
 //! The `.hex` format is one 6-digit RRGGBB hex color per line. Empty
 //! lines and lines beginning with `#` (comments) are ignored. The
@@ -73,7 +73,7 @@ test "parseHexBytes parses 4 valid hex lines" {
 
 test "parseHexBytes ignores blank lines and comments" {
     const bytes =
-        \\# pixi default palette
+        \\# fizzy default palette
         \\
         \\112233
         \\# another comment

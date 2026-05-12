@@ -124,22 +124,22 @@ pub fn processSample(self: *ImageWidget) void {
 fn sample(self: *ImageWidget, point: dvui.Point) void {
     var color: [4]u8 = .{ 0, 0, 0, 0 };
 
-    if (pixi.image.pixelIndex(self.init_options.source, point)) |index| {
-        const c = pixi.image.pixels(self.init_options.source)[index];
+    if (fizzy.image.pixelIndex(self.init_options.source, point)) |index| {
+        const c = fizzy.image.pixels(self.init_options.source)[index];
         if (c[3] > 0) {
             color = c;
         }
     }
 
-    pixi.editor.colors.primary = color;
+    fizzy.editor.colors.primary = color;
     self.sample_data_point = point;
 
     if (color[3] == 0) {
-        if (pixi.editor.tools.current != .eraser) {
-            pixi.editor.tools.set(.eraser);
+        if (fizzy.editor.tools.current != .eraser) {
+            fizzy.editor.tools.set(.eraser);
         }
     } else {
-        pixi.editor.tools.set(pixi.editor.tools.previous_drawing_tool);
+        fizzy.editor.tools.set(fizzy.editor.tools.previous_drawing_tool);
     }
 }
 
@@ -236,7 +236,7 @@ pub fn drawSample(self: *ImageWidget) void {
         });
         defer box.deinit();
 
-        const size = pixi.image.size(self.init_options.source);
+        const size = fizzy.image.size(self.init_options.source);
 
         // Compute UVs for the region to sample, normalized to [0,1]
         const uv_rect = dvui.Rect{
@@ -297,7 +297,7 @@ fn drawPackedAtlasCheckerboardBackground(canvas: *CanvasWidget, data_rect: dvui.
     }
     bg_screen.fill(.all(0), .{ .color = dvui.themeGet().color(.content, .fill), .fade = 1.5 });
 
-    const files = pixi.editor.open_files.values();
+    const files = fizzy.editor.open_files.values();
     const tex = if (files.len > 0)
         files[0].editor.checkerboard_tile.getTexture() catch null
     else
@@ -411,10 +411,10 @@ pub fn processEvents(self: *ImageWidget) void {
 
     self.drawImage();
 
-    pixi.dvui.drawEdgeShadow(self.init_options.canvas.scroll_container.data().rectScale(), .top, .{});
-    pixi.dvui.drawEdgeShadow(self.init_options.canvas.scroll_container.data().rectScale(), .bottom, .{ .opacity = 0.15 });
-    pixi.dvui.drawEdgeShadow(self.init_options.canvas.scroll_container.data().rectScale(), .left, .{});
-    pixi.dvui.drawEdgeShadow(self.init_options.canvas.scroll_container.data().rectScale(), .right, .{ .opacity = 0.15 });
+    fizzy.dvui.drawEdgeShadow(self.init_options.canvas.scroll_container.data().rectScale(), .top, .{});
+    fizzy.dvui.drawEdgeShadow(self.init_options.canvas.scroll_container.data().rectScale(), .bottom, .{ .opacity = 0.15 });
+    fizzy.dvui.drawEdgeShadow(self.init_options.canvas.scroll_container.data().rectScale(), .left, .{});
+    fizzy.dvui.drawEdgeShadow(self.init_options.canvas.scroll_container.data().rectScale(), .right, .{ .opacity = 0.15 });
 
     self.drawCursor();
     self.drawSample();
@@ -446,7 +446,7 @@ const ScaleWidget = dvui.ScaleWidget;
 const std = @import("std");
 const math = std.math;
 const dvui = @import("dvui");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const builtin = @import("builtin");
 
 test {

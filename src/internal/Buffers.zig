@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 
 const History = @import("History.zig");
 const Buffers = @This();
@@ -12,7 +12,7 @@ pub const Stroke = struct {
     //values: std.ArrayList([4]u8),
 
     pixels: std.AutoHashMap(usize, [4]u8),
-    //canvas: pixi.Internal.file.gui.canvas = .primary,
+    //canvas: fizzy.Internal.file.gui.canvas = .primary,
 
     pub fn init(allocator: std.mem.Allocator) Stroke {
         return .{
@@ -24,9 +24,9 @@ pub const Stroke = struct {
 
     pub fn append(stroke: *Stroke, index: usize, value: [4]u8) !void {
         const ptr = try stroke.pixels.getOrPut(index);
-        if (pixi.perf.record) {
-            pixi.perf.stroke_append_calls += 1;
-            if (!ptr.found_existing) pixi.perf.stroke_append_new_keys += 1;
+        if (fizzy.perf.record) {
+            fizzy.perf.stroke_append_calls += 1;
+            if (!ptr.found_existing) fizzy.perf.stroke_append_new_keys += 1;
         }
         if (!ptr.found_existing)
             ptr.value_ptr.* = value;
@@ -48,9 +48,9 @@ pub const Stroke = struct {
     /// Like `append` but the map must already have capacity for new keys (see `clearAndReserveCapacity`).
     pub fn appendAssumeCapacity(stroke: *Stroke, index: usize, value: [4]u8) void {
         const gop = stroke.pixels.getOrPutAssumeCapacity(index);
-        if (pixi.perf.record) {
-            pixi.perf.stroke_append_calls += 1;
-            if (!gop.found_existing) pixi.perf.stroke_append_new_keys += 1;
+        if (fizzy.perf.record) {
+            fizzy.perf.stroke_append_calls += 1;
+            if (!gop.found_existing) fizzy.perf.stroke_append_new_keys += 1;
         }
         if (!gop.found_existing)
             gop.value_ptr.* = value;
@@ -67,14 +67,14 @@ pub const Stroke = struct {
     }
 
     pub fn toChange(stroke: *Stroke, layer_id: u64) !History.Change {
-        const t0: i128 = if (pixi.perf.record) pixi.perf.nanoTimestamp() else 0;
+        const t0: i128 = if (fizzy.perf.record) fizzy.perf.nanoTimestamp() else 0;
         const n = stroke.pixels.count();
 
         // Exact-size allocations; transform accept pre-reserves the hash map to avoid rehash during fills.
-        var indices = pixi.app.allocator.alloc(usize, n) catch return error.MemoryAllocationFailed;
-        errdefer pixi.app.allocator.free(indices);
-        var values = pixi.app.allocator.alloc([4]u8, n) catch return error.MemoryAllocationFailed;
-        errdefer pixi.app.allocator.free(values);
+        var indices = fizzy.app.allocator.alloc(usize, n) catch return error.MemoryAllocationFailed;
+        errdefer fizzy.app.allocator.free(indices);
+        var values = fizzy.app.allocator.alloc([4]u8, n) catch return error.MemoryAllocationFailed;
+        errdefer fizzy.app.allocator.free(values);
 
         var it = stroke.pixels.iterator();
 
@@ -87,10 +87,10 @@ pub const Stroke = struct {
 
         stroke.pixels.clearAndFree();
 
-        if (pixi.perf.record) {
-            pixi.perf.stroke_to_change_ns +%= @intCast(pixi.perf.nanoTimestamp() - t0);
-            pixi.perf.stroke_to_change_calls += 1;
-            pixi.perf.stroke_to_change_pixels_out +%= n;
+        if (fizzy.perf.record) {
+            fizzy.perf.stroke_to_change_ns +%= @intCast(fizzy.perf.nanoTimestamp() - t0);
+            fizzy.perf.stroke_to_change_calls += 1;
+            fizzy.perf.stroke_to_change_pixels_out +%= n;
         }
 
         return .{ .pixels = .{

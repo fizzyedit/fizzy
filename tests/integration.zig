@@ -1,8 +1,8 @@
 //! Layer 2 (headless integration) test target.
 //!
-//! These tests run real pixi drawing functions against a *headless*
+//! These tests run real fizzy drawing functions against a *headless*
 //! `dvui.Window` provided by dvui's testing backend. The shim in
-//! `pixi_shim.zig` brings up just enough of `pixi.app` / `pixi.editor`
+//! `fizzy_shim.zig` brings up just enough of `fizzy.app` / `fizzy.editor`
 //! for the code paths exercised here to read the globals they need
 //! without booting the full editor (no assets, no themes, no SDL).
 //!
@@ -10,14 +10,14 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
-const pixi = @import("pixi");
-const shim = @import("pixi_shim.zig");
+const fizzy = @import("fizzy");
+const shim = @import("fizzy_shim.zig");
 
-const Internal = pixi.Internal;
+const Internal = fizzy.Internal;
 
 /// Create a small in-memory `Internal.File` suitable for tests. The
-/// caller must already have a live shim context (so `pixi.app` /
-/// `pixi.editor` / `dvui.currentWindow()` are valid). The returned
+/// caller must already have a live shim context (so `fizzy.app` /
+/// `fizzy.editor` / `dvui.currentWindow()` are valid). The returned
 /// file must be torn down with `deinitFile` (not `file.deinit()`).
 fn makeBlankFile(width_: u32, height_: u32) !Internal.File {
     return Internal.File.init("untitled-test", .{
@@ -42,20 +42,20 @@ fn deinitFile(file: *Internal.File) void {
     while (i < file.layers.len) : (i += 1) {
         var layer = file.layers.get(i);
         switch (layer.source) {
-            .imageFile => |image| pixi.app.allocator.free(image.bytes),
-            .pixels => |p| pixi.app.allocator.free(p.rgba),
-            .pixelsPMA => |p| pixi.app.allocator.free(p.rgba),
+            .imageFile => |image| fizzy.app.allocator.free(image.bytes),
+            .pixels => |p| fizzy.app.allocator.free(p.rgba),
+            .pixelsPMA => |p| fizzy.app.allocator.free(p.rgba),
             .texture => |t| dvui.textureDestroyLater(t),
         }
         layer.mask.deinit();
     }
     file.editor.selected_sprites.deinit();
     file.editor.checkerboard.deinit();
-    pixi.app.allocator.free(file.editor.checkerboard_tile.pixelsPMA.rgba);
+    fizzy.app.allocator.free(file.editor.checkerboard_tile.pixelsPMA.rgba);
     file.deinit();
 }
 
-test "shim brings up a dvui.testing window with usable pixi globals" {
+test "shim brings up a dvui.testing window with usable fizzy globals" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
@@ -63,8 +63,8 @@ test "shim brings up a dvui.testing window with usable pixi globals" {
     const buf = try arena.alloc(u8, 16);
     @memset(buf, 0);
 
-    try std.testing.expect(pixi.app == ctx.app);
-    try std.testing.expect(pixi.editor == ctx.editor);
+    try std.testing.expect(fizzy.app == ctx.app);
+    try std.testing.expect(fizzy.editor == ctx.editor);
 }
 
 test "Internal.File.init constructs a usable blank file" {
@@ -205,15 +205,15 @@ test "selectColorFloodFromPoint out-of-bounds is a no-op" {
 
 // -------------------------------------------------------------------
 // `.pixi` JSON parser fallbacks. The on-disk format has been bumped
-// three times. `fromPathPixi` first tries the current `pixi.File`
+// three times. `fromPathFizzy` first tries the current `fizzy.File`
 // shape and, on failure, retries against `FileV3`, `FileV2`, and
 // `FileV1`. This test exercises just the JSON layer (no zip, no
 // `Internal.File` materialization) by parsing a small in-memory
 // fixture for each version. It catches the kind of bug where someone
-// renames or retypes a field on the public `pixi.File` types and
+// renames or retypes a field on the public `fizzy.File` types and
 // silently breaks loading older saves.
 // -------------------------------------------------------------------
-test "pixi.File parses current-format JSON and round-trips" {
+test "fizzy.File parses current-format JSON and round-trips" {
     const json =
         \\{
         \\  "version": { "major": 1, "minor": 0, "patch": 0, "pre": null, "build": null },
@@ -233,7 +233,7 @@ test "pixi.File parses current-format JSON and round-trips" {
     ;
 
     const parsed = try std.json.parseFromSlice(
-        pixi.File,
+        fizzy.File,
         std.testing.allocator,
         json,
         .{ .ignore_unknown_fields = true },
@@ -257,7 +257,7 @@ test "pixi.File parses current-format JSON and round-trips" {
     defer std.testing.allocator.free(round_tripped);
 
     const reparsed = try std.json.parseFromSlice(
-        pixi.File,
+        fizzy.File,
         std.testing.allocator,
         round_tripped,
         .{ .ignore_unknown_fields = true },
@@ -274,7 +274,7 @@ test "pixi.File parses current-format JSON and round-trips" {
     try std.testing.expectEqual(parsed.value.animations[0].frames[0].ms, reparsed.value.animations[0].frames[0].ms);
 }
 
-test "pixi.File.FileV3 fixture parses" {
+test "fizzy.File.FileV3 fixture parses" {
     // V3 keeps the columns/rows shape but uses the older `AnimationV2`
     // (frame indices + fps) form.
     const json =
@@ -294,7 +294,7 @@ test "pixi.File.FileV3 fixture parses" {
     ;
 
     const parsed = try std.json.parseFromSlice(
-        pixi.File.FileV3,
+        fizzy.File.FileV3,
         std.testing.allocator,
         json,
         .{ .ignore_unknown_fields = true },
@@ -306,7 +306,7 @@ test "pixi.File.FileV3 fixture parses" {
     try std.testing.expectEqual(@as(f32, 10.0), parsed.value.animations[0].fps);
 }
 
-test "pixi.File.FileV2 fixture parses (width/height + tile_size shape)" {
+test "fizzy.File.FileV2 fixture parses (width/height + tile_size shape)" {
     const json =
         \\{
         \\  "version": { "major": 0, "minor": 5, "patch": 0, "pre": null, "build": null },
@@ -324,7 +324,7 @@ test "pixi.File.FileV2 fixture parses (width/height + tile_size shape)" {
     ;
 
     const parsed = try std.json.parseFromSlice(
-        pixi.File.FileV2,
+        fizzy.File.FileV2,
         std.testing.allocator,
         json,
         .{ .ignore_unknown_fields = true },
@@ -335,7 +335,7 @@ test "pixi.File.FileV2 fixture parses (width/height + tile_size shape)" {
     try std.testing.expectEqual(@as(u32, 8), parsed.value.tile_width);
 }
 
-test "pixi.File.FileV1 fixture parses (start/length animation shape)" {
+test "fizzy.File.FileV1 fixture parses (start/length animation shape)" {
     const json =
         \\{
         \\  "version": { "major": 0, "minor": 1, "patch": 0, "pre": null, "build": null },
@@ -353,7 +353,7 @@ test "pixi.File.FileV1 fixture parses (start/length animation shape)" {
     ;
 
     const parsed = try std.json.parseFromSlice(
-        pixi.File.FileV1,
+        fizzy.File.FileV1,
         std.testing.allocator,
         json,
         .{ .ignore_unknown_fields = true },
@@ -366,7 +366,7 @@ test "pixi.File.FileV1 fixture parses (start/length animation shape)" {
 }
 
 // -------------------------------------------------------------------
-// `Layer.reduce`: thin wrapper over `pixi.algorithms.reduce.reduce`. The pure module has its
+// `Layer.reduce`: thin wrapper over `fizzy.algorithms.reduce.reduce`. The pure module has its
 // own exhaustive tests; this test pins the wrapper conversion (dvui.Rect ↔ u32 rect).
 // -------------------------------------------------------------------
 test "Layer.reduce tightens a painted rectangle and returns the bounding rect" {
@@ -440,7 +440,7 @@ test "Layer.blit copies the bottom row when the destination spans full layer hei
 //
 // This is exactly the pipeline the user called out: "make sure we can reduce sprites
 // accurately" + "origin math as it gets packed tightly is accurate". Together with the
-// pure-module tests on `pixi.algorithms.reduce`, regressions in either layer fail loudly.
+// pure-module tests on `fizzy.algorithms.reduce`, regressions in either layer fail loudly.
 // -------------------------------------------------------------------
 test "Packer.append reduces painted sprite and offsets origin to keep anchor aligned" {
     var ctx = try shim.init(std.testing.allocator);
@@ -468,7 +468,7 @@ test "Packer.append reduces painted sprite and offsets origin to keep anchor ali
     px[3 * 16 + 3] = .{ 255, 0, 0, 255 };
     // Cell 1: leave fully transparent so the packer skips the bitmap (image == null).
 
-    var packer = try pixi.Packer.init(std.testing.allocator);
+    var packer = try fizzy.Packer.init(std.testing.allocator);
     defer packer.deinit();
 
     try packer.append(&file);
@@ -516,7 +516,7 @@ test "Packer.append: tighten preserves world-space anchor across cells" {
         }
     }
 
-    var packer = try pixi.Packer.init(std.testing.allocator);
+    var packer = try fizzy.Packer.init(std.testing.allocator);
     defer packer.deinit();
     try packer.append(&file);
 
@@ -551,7 +551,7 @@ test "Packer.append: tightened bitmap content matches the source pixels" {
     px[5 * 8 + 3] = .{ 21, 22, 23, 255 };
     px[5 * 8 + 4] = .{ 31, 32, 33, 255 };
 
-    var packer = try pixi.Packer.init(std.testing.allocator);
+    var packer = try fizzy.Packer.init(std.testing.allocator);
     defer packer.deinit();
     try packer.append(&file);
 
@@ -589,7 +589,7 @@ test "Packer.append skips invisible layers" {
         .dirty = layer.dirty,
     });
 
-    var packer = try pixi.Packer.init(std.testing.allocator);
+    var packer = try fizzy.Packer.init(std.testing.allocator);
     defer packer.deinit();
     try packer.append(&file);
 
@@ -632,7 +632,7 @@ test "Packer.packRects: produced rects fit inside the texture and never overlap"
         }
     }
 
-    var packer = try pixi.Packer.init(std.testing.allocator);
+    var packer = try fizzy.Packer.init(std.testing.allocator);
     defer packer.deinit();
     try packer.append(&file);
 
@@ -810,7 +810,7 @@ test "fillPoint on temporary layer leaves selected-layer mask cache alone" {
 test "Internal.Animation appendFrame, insertFrame, removeFrame" {
     const alloc = std.testing.allocator;
 
-    var initial_frames = [_]pixi.Animation.Frame{.{
+    var initial_frames = [_]fizzy.Animation.Frame{.{
         .sprite_index = 0,
         .ms = 100,
     }};
@@ -818,14 +818,14 @@ test "Internal.Animation appendFrame, insertFrame, removeFrame" {
     defer anim.deinit(alloc);
 
     try anim.appendFrame(alloc, .{ .sprite_index = 1, .ms = 50 });
-    var expect_two = [_]pixi.Animation.Frame{
+    var expect_two = [_]fizzy.Animation.Frame{
         .{ .sprite_index = 0, .ms = 100 },
         .{ .sprite_index = 1, .ms = 50 },
     };
     try std.testing.expect(anim.eqlFrames(expect_two[0..]));
 
     try anim.insertFrame(alloc, 1, .{ .sprite_index = 9, .ms = 12 });
-    var expect_three = [_]pixi.Animation.Frame{
+    var expect_three = [_]fizzy.Animation.Frame{
         .{ .sprite_index = 0, .ms = 100 },
         .{ .sprite_index = 9, .ms = 12 },
         .{ .sprite_index = 1, .ms = 50 },
@@ -833,7 +833,7 @@ test "Internal.Animation appendFrame, insertFrame, removeFrame" {
     try std.testing.expect(anim.eqlFrames(expect_three[0..]));
 
     anim.removeFrame(alloc, 0);
-    var expect_after_remove = [_]pixi.Animation.Frame{
+    var expect_after_remove = [_]fizzy.Animation.Frame{
         .{ .sprite_index = 9, .ms = 12 },
         .{ .sprite_index = 1, .ms = 50 },
     };
@@ -915,7 +915,7 @@ test "applyGridLayout history: undo and redo restore grid and pixels" {
     try std.testing.expectEqual(@as([4]u8, .{ 7, 8, 9, 255 }), redone[2 * 8 + 2]);
 }
 
-test "saveZip / fromPathPixi round-trip preserves grid metadata and layer pixels" {
+test "saveZip / fromPathFizzy round-trip preserves grid metadata and layer pixels" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
@@ -930,12 +930,12 @@ test "saveZip / fromPathPixi round-trip preserves grid metadata and layer pixels
     const px = file.layers.get(0).pixels();
     px[3 * 16 + 3] = .{ 11, 22, 33, 255 };
 
-    pixi.app.allocator.free(file.path);
-    file.path = try pixi.app.allocator.dupe(u8, ".zig-cache/pixi_integration_zip_rt.pixi");
+    fizzy.app.allocator.free(file.path);
+    file.path = try fizzy.app.allocator.dupe(u8, ".zig-cache/fizzy_integration_zip_rt.pixi");
 
     try file.saveZip(ctx.app.window);
 
-    const loaded_opt = try Internal.File.fromPathPixi(file.path);
+    const loaded_opt = try Internal.File.fromPathFizzy(file.path);
     var loaded = loaded_opt orelse return error.TestUnexpectedNull;
     defer deinitFile(&loaded);
 
@@ -972,7 +972,7 @@ test "Packer.append merges collapsed layer stack before reducing sprites" {
         .{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .ptr,
     );
-    try file.layers.append(pixi.app.allocator, layer2);
+    try file.layers.append(fizzy.app.allocator, layer2);
 
     file.layers.items(.collapse)[1] = false;
 
@@ -982,7 +982,7 @@ test "Packer.append merges collapsed layer stack before reducing sprites" {
     file.layers.get(0).pixels()[0] = .{ 255, 0, 0, 255 };
     file.layers.get(1).pixels()[7 * 8 + 7] = .{ 0, 255, 0, 255 };
 
-    var packer = try pixi.Packer.init(std.testing.allocator);
+    var packer = try fizzy.Packer.init(std.testing.allocator);
     defer packer.deinit();
 
     try packer.append(&file);
@@ -1005,10 +1005,10 @@ test "drawPoint with to_change records history; undo restores pixels" {
 
     file.editor.canvas.id = .zero;
 
-    // `drawPoint` reads `pixi.editor.tools.stroke_size` for stamps smaller than `min_full_stroke_size`;
+    // `drawPoint` reads `fizzy.editor.tools.stroke_size` for stamps smaller than `min_full_stroke_size`;
     // the shim zero-fills the editor, so brush size must be set explicitly.
-    pixi.editor.tools.stroke_size = 1;
-    pixi.editor.tools.pencil_stroke_size = 1;
+    fizzy.editor.tools.stroke_size = 1;
+    fizzy.editor.tools.pencil_stroke_size = 1;
 
     const idx: usize = 3 * 8 + 4;
 

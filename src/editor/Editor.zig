@@ -15,10 +15,10 @@ const comfortaa_bold_ttf = assets.files.fonts.@"Comfortaa-Bold.ttf";
 const noto_sans_ttf = assets.files.fonts.@"NotoSans-Light.ttf";
 const noto_sans_bold_ttf = assets.files.fonts.@"NotoSans-Bold.ttf";
 
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 
-const App = pixi.App;
+const App = fizzy.App;
 const Editor = @This();
 
 pub const Colors = @import("Colors.zig");
@@ -46,7 +46,7 @@ arena: std.heap.ArenaAllocator,
 config_folder: []const u8,
 palette_folder: []const u8,
 
-atlas: pixi.Internal.Atlas,
+atlas: fizzy.Internal.Atlas,
 
 settings: Settings = undefined,
 recents: Recents = undefined,
@@ -62,15 +62,15 @@ workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
 sidebar: Sidebar,
 infobar: Infobar,
 
-/// The root folder that will be searched for files and a .pixiproject file
+/// The root folder that will be searched for files and a .fizproject file
 folder: ?[]const u8 = null,
 project: ?Project = null,
-/// From `.pixiignore` (preferred) or `.gitignore` at the project root; used by the Files explorer.
+/// From `.fizignore` (preferred) or `.gitignore` at the project root; used by the Files explorer.
 ignore: IgnoreRules = .{},
 
 themes: std.ArrayList(dvui.Theme) = .empty,
 
-open_files: std.AutoArrayHashMapUnmanaged(u64, pixi.Internal.File) = .empty,
+open_files: std.AutoArrayHashMapUnmanaged(u64, fizzy.Internal.File) = .empty,
 
 // The actively focused workspace grouping ID
 // This will contain tabs for all open files with a matching grouping ID
@@ -91,7 +91,7 @@ sprite_clipboard: ?SpriteClipboard = null,
 
 window_opacity: f32 = 1.0,
 
-pending_native_menu_actions: [16]pixi.backend.NativeMenuAction = undefined,
+pending_native_menu_actions: [16]fizzy.backend.NativeMenuAction = undefined,
 pending_native_menu_actions_len: u8 = 0,
 
 /// When set, next `tick` runs `warmupDrawingComposites` on the active file (after open or drawing-tool select).
@@ -161,13 +161,13 @@ pub fn init(
     app: *App,
 ) !Editor {
     const arena = dvui.currentWindow().arena();
-    var environ_map = try pixi.processEnviron().createMap(arena);
+    var environ_map = try fizzy.processEnviron().createMap(arena);
     defer environ_map.deinit();
-    const config_folder = std.fs.path.join(pixi.app.allocator, &.{
+    const config_folder = std.fs.path.join(fizzy.app.allocator, &.{
         try known_folders.getPath(dvui.io, arena, environ_map, .local_configuration) orelse app.root_path,
-        "Pixi",
+        "Fizzy",
     }) catch app.root_path;
-    const palette_folder = std.fs.path.join(pixi.app.allocator, &.{ config_folder, "Palettes" }) catch config_folder;
+    const palette_folder = std.fs.path.join(fizzy.app.allocator, &.{ config_folder, "Palettes" }) catch config_folder;
 
     var editor: Editor = .{
         .config_folder = config_folder,
@@ -179,8 +179,8 @@ pub fn init(
         .arena = .init(std.heap.page_allocator),
         .last_titlebar_color = dvui.themeGet().color(.control, .fill),
         .atlas = .{
-            .data = try .loadFromBytes(app.allocator, assets.files.@"pixi.atlas"),
-            .source = try pixi.image.fromImageFileBytes("pixi.png", assets.files.@"pixi.png", .ptr),
+            .data = try .loadFromBytes(app.allocator, assets.files.@"fizzy.atlas"),
+            .source = try fizzy.image.fromImageFileBytes("fizzy.png", assets.files.@"fizzy.png", .ptr),
         },
         .tools = try .init(app.allocator),
         .themes = .empty,
@@ -189,44 +189,44 @@ pub fn init(
     editor.settings = try Settings.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.config_folder, "settings.json" }));
 
     { // Setup themes
-        var pixi_dark = dvui.themeGet();
-        pixi_dark.embedded_fonts = embedded_fonts;
+        var fizzy_dark = dvui.themeGet();
+        fizzy_dark.embedded_fonts = embedded_fonts;
 
-        pixi_dark.window = .{
+        fizzy_dark.window = .{
             .fill = .{ .r = 28, .g = 29, .b = 36, .a = 255 },
             .border = .{ .r = 34, .g = 35, .b = 42, .a = 255 },
             .text = .{ .r = 206, .g = 163, .b = 127, .a = 255 },
         };
 
-        pixi_dark.control = .{
+        fizzy_dark.control = .{
             .fill = .{ .r = 28, .g = 29, .b = 36, .a = 255 },
             .border = .{ .r = 34, .g = 35, .b = 42, .a = 255 },
             .text = .{ .r = 134, .g = 138, .b = 148, .a = 255 },
         };
 
-        pixi_dark.highlight = .{
+        fizzy_dark.highlight = .{
             .fill = .{ .r = 47, .g = 179, .b = 135, .a = 255 },
             .border = .{ .r = 47, .g = 179, .b = 135, .a = 255 },
-            .text = pixi_dark.window.fill,
+            .text = fizzy_dark.window.fill,
         };
 
-        pixi_dark.err = .{
+        fizzy_dark.err = .{
             .fill = .{ .r = 109, .g = 35, .b = 54, .a = 255 },
         };
 
         // theme.content
-        pixi_dark.fill = .{ .r = 42, .g = 44, .b = 54, .a = 255 };
-        pixi_dark.text = pixi_dark.window.text.?;
-        pixi_dark.focus = pixi_dark.highlight.fill.?;
+        fizzy_dark.fill = .{ .r = 42, .g = 44, .b = 54, .a = 255 };
+        fizzy_dark.text = fizzy_dark.window.text.?;
+        fizzy_dark.focus = fizzy_dark.highlight.fill.?;
 
-        pixi_dark.dark = true;
-        pixi_dark.name = "Pixi Dark";
-        pixi_dark.font_body = .find(.{ .family = "Comfortaa", .size = editor.settings.font_body_size, .weight = .bold });
-        pixi_dark.font_title = .find(.{ .family = "NotoSans", .size = editor.settings.font_title_size, .weight = .bold });
-        pixi_dark.font_heading = .find(.{ .family = "NotoSans", .size = editor.settings.font_heading_size, .weight = .bold });
-        pixi_dark.font_mono = .find(.{ .family = "CozetteVector", .size = editor.settings.font_mono_size });
+        fizzy_dark.dark = true;
+        fizzy_dark.name = "Fizzy Dark";
+        fizzy_dark.font_body = .find(.{ .family = "Comfortaa", .size = editor.settings.font_body_size, .weight = .bold });
+        fizzy_dark.font_title = .find(.{ .family = "NotoSans", .size = editor.settings.font_title_size, .weight = .bold });
+        fizzy_dark.font_heading = .find(.{ .family = "NotoSans", .size = editor.settings.font_heading_size, .weight = .bold });
+        fizzy_dark.font_mono = .find(.{ .family = "CozetteVector", .size = editor.settings.font_mono_size });
 
-        var moi: dvui.Theme = pixi_dark;
+        var moi: dvui.Theme = fizzy_dark;
         moi.name = "Moi";
         moi.window = .{
             .fill = .{ .r = 84, .g = 12, .b = 26, .a = 255 },
@@ -247,37 +247,37 @@ pub fn init(
         moi.text = moi.window.text.?;
         moi.focus = moi.highlight.fill.?;
 
-        var pixi_light = pixi_dark;
-        pixi_light.dark = false;
-        pixi_light.name = "Pixi Light";
+        var fizzy_light = fizzy_dark;
+        fizzy_light.dark = false;
+        fizzy_light.name = "Fizzy Light";
 
-        pixi_light.window = .{
+        fizzy_light.window = .{
             .fill = .{ .r = 240, .g = 240, .b = 245, .a = 255 },
             .border = dvui.Theme.builtin.adwaita_light.window.border,
             .text = .{ .r = 120, .g = 70, .b = 65, .a = 255 },
         };
 
-        pixi_light.control = dvui.Theme.builtin.adwaita_light.control;
+        fizzy_light.control = dvui.Theme.builtin.adwaita_light.control;
 
-        pixi_light.highlight = .{
+        fizzy_light.highlight = .{
             .fill = .{ .r = 170, .g = 130, .b = 140, .a = 255 },
-            .text = pixi_light.window.fill,
+            .text = fizzy_light.window.fill,
         };
 
-        pixi_light.err = .{
+        fizzy_light.err = .{
             .fill = .{ .r = 109, .g = 35, .b = 54, .a = 255 },
         };
 
         // theme.content
-        pixi_light.fill = .{ .r = 200, .g = 200, .b = 205, .a = 255 };
-        pixi_light.text = .{ .r = 40, .g = 40, .b = 45, .a = 255 };
-        pixi_light.focus = pixi_light.highlight.fill.?;
+        fizzy_light.fill = .{ .r = 200, .g = 200, .b = 205, .a = 255 };
+        fizzy_light.text = .{ .r = 40, .g = 40, .b = 45, .a = 255 };
+        fizzy_light.focus = fizzy_light.highlight.fill.?;
 
         appendUserThemes(app.allocator, &editor) catch |err| {
             dvui.log.err("Failed to prepare user themes folder: {s}", .{@errorName(err)});
         };
 
-        editor.themes.append(app.allocator, pixi_dark) catch {
+        editor.themes.append(app.allocator, fizzy_dark) catch {
             dvui.log.err("Failed to append theme", .{});
             return error.FailedToAppendTheme;
         };
@@ -287,9 +287,9 @@ pub fn init(
             return error.FailedToAppendMoiTheme;
         };
 
-        editor.themes.append(app.allocator, pixi_light) catch {
-            dvui.log.err("Failed to append pixi light theme", .{});
-            return error.FailedToAppendPixiLightTheme;
+        editor.themes.append(app.allocator, fizzy_light) catch {
+            dvui.log.err("Failed to append fizzy light theme", .{});
+            return error.FailedToAppendFizzyLightTheme;
         };
 
         for (dvui.Theme.builtins) |b| {
@@ -324,34 +324,34 @@ pub fn init(
         }
     }
 
-    pixi.perf.console_logging_enabled = editor.settings.perf_logging;
+    fizzy.perf.console_logging_enabled = editor.settings.perf_logging;
     editor.recents = Recents.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.config_folder, "recents.json" })) catch .{
         .folders = .init(app.allocator),
     };
 
-    pixi.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) editor.settings.window_opacity_dark else editor.settings.window_opacity_light));
+    fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) editor.settings.window_opacity_dark else editor.settings.window_opacity_light));
 
     editor.explorer.* = .init();
     editor.panel.* = .init();
     editor.open_files = .empty;
     editor.workspaces = .empty;
-    editor.workspaces.put(pixi.app.allocator, 0, .init(0)) catch |err| {
+    editor.workspaces.put(fizzy.app.allocator, 0, .init(0)) catch |err| {
         std.log.err("Failed to create workspace: {s}", .{@errorName(err)});
         return err;
     };
 
-    editor.colors.file_tree_palette = pixi.Internal.Palette.loadFromBytes(app.allocator, "pixi.hex", assets.files.palettes.@"pixi.hex") catch null;
-    editor.colors.palette = pixi.Internal.Palette.loadFromBytes(app.allocator, "pixi.hex", assets.files.palettes.@"pixi.hex") catch null;
+    editor.colors.file_tree_palette = fizzy.Internal.Palette.loadFromBytes(app.allocator, "fizzy.hex", assets.files.palettes.@"fizzy.hex") catch null;
+    editor.colors.palette = fizzy.Internal.Palette.loadFromBytes(app.allocator, "fizzy.hex", assets.files.palettes.@"fizzy.hex") catch null;
 
     try Keybinds.register();
 
     // Collect the initial settings json
-    editor.settings_last_saved_json = try std.json.Stringify.valueAlloc(pixi.app.allocator, &editor.settings, .{});
+    editor.settings_last_saved_json = try std.json.Stringify.valueAlloc(fizzy.app.allocator, &editor.settings, .{});
 
     return editor;
 }
 
-/// Ensures `{config}/Themes` exists and scans `*.json` for future user themes (loaded entries are prepended before Pixi themes).
+/// Ensures `{config}/Themes` exists and scans `*.json` for future user themes (loaded entries are prepended before Fizzy themes).
 fn appendUserThemes(gpa: std.mem.Allocator, editor: *Editor) !void {
     const themes_dir = try std.fs.path.join(gpa, &.{ editor.config_folder, "Themes" });
 
@@ -372,7 +372,7 @@ fn appendUserThemes(gpa: std.mem.Allocator, editor: *Editor) !void {
     while (try iter.next(dvui.io)) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".json")) continue;
-        // Future: parse Theme JSON and append before Pixi themes so folder overrides builtins by list order.
+        // Future: parse Theme JSON and append before Fizzy themes so folder overrides builtins by list order.
     }
 }
 
@@ -412,8 +412,8 @@ pub fn applyFontSizesFromSettings(editor: *Editor) void {
 
 fn themeFilenameToName(trimmed: []const u8) ?[]const u8 {
     const pairs = [_]struct { stub: []const u8, canonical: []const u8 }{
-        .{ .stub = "pixi_dark.json", .canonical = "Pixi Dark" },
-        .{ .stub = "pixi_light.json", .canonical = "Pixi Light" },
+        .{ .stub = "fizzy_dark.json", .canonical = "Fizzy Dark" },
+        .{ .stub = "fizzy_light.json", .canonical = "Fizzy Light" },
     };
     for (pairs) |p| {
         if (std.mem.eql(u8, trimmed, p.stub)) return p.canonical;
@@ -446,7 +446,7 @@ fn resolveSettingsTheme(editor: *Editor) *dvui.Theme {
 pub fn applySettingsTheme(editor: *Editor) !void {
     const t = resolveSettingsTheme(editor);
     if (!std.mem.eql(u8, editor.settings.theme, t.name)) {
-        try Settings.setThemeName(&editor.settings, pixi.app.allocator, t.name);
+        try Settings.setThemeName(&editor.settings, fizzy.app.allocator, t.name);
     }
     dvui.themeSet(t.*);
     editor.applyFontSizesFromSettings();
@@ -468,7 +468,7 @@ pub fn newFileID(editor: *Editor) u64 {
 
 pub fn markSettingsDirty(editor: *Editor) void {
     editor.settings_dirty = true;
-    editor.settings_save_deadline_ns = pixi.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
+    editor.settings_save_deadline_ns = fizzy.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
 }
 
 fn activelyDrawing(editor: *Editor) bool {
@@ -482,14 +482,14 @@ fn activelyDrawing(editor: *Editor) bool {
 fn saveSettingsGuarded(editor: *Editor) !void {
     if (!editor.settings_dirty) return;
 
-    const now = pixi.perf.nanoTimestamp();
+    const now = fizzy.perf.nanoTimestamp();
     if (now < editor.settings_save_deadline_ns) return;
 
     if (editor.activelyDrawing())
         return;
 
-    const serialized = try std.json.Stringify.valueAlloc(pixi.app.allocator, &editor.settings, .{});
-    defer pixi.app.allocator.free(serialized);
+    const serialized = try std.json.Stringify.valueAlloc(fizzy.app.allocator, &editor.settings, .{});
+    defer fizzy.app.allocator.free(serialized);
 
     if (editor.settings_last_saved_json) |old| {
         if (std.mem.eql(u8, old, serialized)) {
@@ -498,23 +498,23 @@ fn saveSettingsGuarded(editor: *Editor) !void {
         }
     }
 
-    const settings_path = try std.fs.path.join(pixi.app.allocator, &.{ editor.config_folder, "settings.json" });
-    defer pixi.app.allocator.free(settings_path);
+    const settings_path = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.json" });
+    defer fizzy.app.allocator.free(settings_path);
 
-    try Settings.save(&editor.settings, pixi.app.allocator, settings_path);
+    try Settings.save(&editor.settings, fizzy.app.allocator, settings_path);
 
     if (editor.settings_last_saved_json) |blob| {
-        pixi.app.allocator.free(blob);
+        fizzy.app.allocator.free(blob);
         editor.settings_last_saved_json = null;
     }
-    editor.settings_last_saved_json = try pixi.app.allocator.dupe(u8, serialized);
+    editor.settings_last_saved_json = try fizzy.app.allocator.dupe(u8, serialized);
     editor.settings_dirty = false;
 }
 
 /// Flush to disk regardless of idle/drawing deferral — used during shutdown only.
 fn saveSettingsRaw(editor: *Editor) !void {
-    const serialized = try std.json.Stringify.valueAlloc(pixi.app.allocator, &editor.settings, .{});
-    defer pixi.app.allocator.free(serialized);
+    const serialized = try std.json.Stringify.valueAlloc(fizzy.app.allocator, &editor.settings, .{});
+    defer fizzy.app.allocator.free(serialized);
 
     const need_disk = blk: {
         if (editor.settings_last_saved_json) |old| {
@@ -523,18 +523,18 @@ fn saveSettingsRaw(editor: *Editor) !void {
         break :blk true;
     };
 
-    const settings_path = try std.fs.path.join(pixi.app.allocator, &.{ editor.config_folder, "settings.json" });
-    defer pixi.app.allocator.free(settings_path);
+    const settings_path = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.json" });
+    defer fizzy.app.allocator.free(settings_path);
 
     if (need_disk)
-        try Settings.save(&editor.settings, pixi.app.allocator, settings_path);
+        try Settings.save(&editor.settings, fizzy.app.allocator, settings_path);
 
     if (need_disk) {
         if (editor.settings_last_saved_json) |blob| {
-            pixi.app.allocator.free(blob);
+            fizzy.app.allocator.free(blob);
             editor.settings_last_saved_json = null;
         }
-        editor.settings_last_saved_json = try pixi.app.allocator.dupe(u8, serialized);
+        editor.settings_last_saved_json = try fizzy.app.allocator.dupe(u8, serialized);
     }
     editor.settings_dirty = false;
 }
@@ -570,7 +570,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
     }
 
-    if (pixi.backend.pollPendingNativeMenuAction()) |action| {
+    if (fizzy.backend.pollPendingNativeMenuAction()) |action| {
         editor.queueNativeMenuAction(action);
     }
 
@@ -582,9 +582,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         dvui.log.err("Failed to rebuild workspaces", .{});
     };
 
-    pixi.render.frame_index +%= 1;
-    if (pixi.perf.record) pixi.perf.beginFrame();
-    defer if (pixi.perf.record) pixi.perf.endFrameAndMaybeLog();
+    fizzy.render.frame_index +%= 1;
+    if (fizzy.perf.record) fizzy.perf.beginFrame();
+    defer if (fizzy.perf.record) fizzy.perf.endFrameAndMaybeLog();
 
     if (editor.pending_composite_warmup) {
         editor.pending_composite_warmup = false;
@@ -595,7 +595,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 const area = @as(u64, w) * @as(u64, h);
                 // Skip tiny canvases; large docs benefit most from moving split-target work off the first stroke.
                 if (area >= 512 * 512) {
-                    pixi.render.warmupDrawingComposites(file) catch |err| {
+                    fizzy.render.warmupDrawingComposites(file) catch |err| {
                         dvui.log.err("Composite warmup failed: {any}", .{err});
                     };
                 }
@@ -605,17 +605,17 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
     {
         var any_drawing = false;
-        pixi.perf.draw_stroke_buf_count = 0; // no active stroke → 0; else first active file's map size
+        fizzy.perf.draw_stroke_buf_count = 0; // no active stroke → 0; else first active file's map size
         for (editor.open_files.values()) |*file| {
             if (file.editor.active_drawing) {
                 any_drawing = true;
-                pixi.perf.draw_stroke_buf_count = file.buffers.stroke.pixels.count();
+                fizzy.perf.draw_stroke_buf_count = file.buffers.stroke.pixels.count();
                 break;
             }
         }
-        pixi.perf.drawFrameBegin(any_drawing);
+        fizzy.perf.drawFrameBegin(any_drawing);
     }
-    defer pixi.perf.drawFrameEnd();
+    defer fizzy.perf.drawFrameEnd();
 
     // TODO: Does this need to be here for touchscreen zooming? Or does that belong in canvas?
     // var scaler = dvui.scale(
@@ -632,10 +632,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
         switch (builtin.os.tag) {
             .macos => {
-                window_color = if (!pixi.backend.isMaximized(dvui.currentWindow())) window_color.opacity(editor.window_opacity).lighten((1.0 - editor.window_opacity) * 4.0) else window_color;
+                window_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) window_color.opacity(editor.window_opacity).lighten((1.0 - editor.window_opacity) * 4.0) else window_color;
             },
             .windows => {
-                window_color = if (!pixi.backend.isMaximized(dvui.currentWindow())) window_color.opacity(editor.window_opacity).lighten((1.0 - editor.window_opacity) * 4.0) else window_color;
+                window_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) window_color.opacity(editor.window_opacity).lighten((1.0 - editor.window_opacity) * 4.0) else window_color;
             },
             else => {},
         }
@@ -660,8 +660,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 .{
                     .expand = .horizontal,
                     .background = false,
-                    .min_size_content = .{ .w = 1, .h = pixi.editor.settings.titlebar_top_buffer },
-                    .max_size_content = .{ .w = std.math.floatMax(f32), .h = pixi.editor.settings.titlebar_top_buffer },
+                    .min_size_content = .{ .w = 1, .h = fizzy.editor.settings.titlebar_top_buffer },
+                    .max_size_content = .{ .w = std.math.floatMax(f32), .h = fizzy.editor.settings.titlebar_top_buffer },
                 },
             );
             defer top_inset.deinit();
@@ -675,26 +675,26 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         //    empty space (gaps between widgets) drags the window. Menu items and sidebar buttons push
         //    themselves as interactive rects so clicks on them still reach DVUI.
         if (builtin.os.tag == .windows) {
-            pixi.backend.resetTitleBarHints();
+            fizzy.backend.resetTitleBarHints();
 
             const window_rect_natural = dvui.windowRect();
             const scale = dvui.windowNaturalScale();
-            const title_strip_h = pixi.editor.settings.titlebar_top_buffer + pixi.editor.settings.titlebar_height;
-            pixi.backend.pushTitleBarDragRect(.{
+            const title_strip_h = fizzy.editor.settings.titlebar_top_buffer + fizzy.editor.settings.titlebar_height;
+            fizzy.backend.pushTitleBarDragRect(.{
                 .x = 0,
                 .y = 0,
                 .w = window_rect_natural.w * scale,
                 .h = title_strip_h * scale,
             });
-        } else if (builtin.os.tag == .macos and !pixi.backend.isMaximized(dvui.currentWindow())) {
+        } else if (builtin.os.tag == .macos and !fizzy.backend.isMaximized(dvui.currentWindow())) {
             var titlebar_box = dvui.box(
                 @src(),
                 .{ .dir = .horizontal },
                 .{
                     .expand = .horizontal,
                     .background = false,
-                    .min_size_content = .{ .w = 1, .h = pixi.editor.settings.titlebar_height },
-                    .max_size_content = .{ .w = std.math.floatMax(f32), .h = pixi.editor.settings.titlebar_height },
+                    .min_size_content = .{ .w = 1, .h = fizzy.editor.settings.titlebar_height },
+                    .max_size_content = .{ .w = std.math.floatMax(f32), .h = fizzy.editor.settings.titlebar_height },
                 },
             );
             defer titlebar_box.deinit();
@@ -706,7 +706,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // WM_NCHITTEST returns HTMINBUTTON/HTMAXBUTTON/HTCLOSE for them (snap-layouts + click).
         if (builtin.os.tag == .windows) {
             const button_w: f32 = 46;
-            const button_h = pixi.editor.settings.titlebar_height;
+            const button_h = fizzy.editor.settings.titlebar_height;
             const overlay_w: f32 = button_w * 3;
             const win_rect = dvui.windowRect();
 
@@ -719,7 +719,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
             defer row.deinit();
 
-            const hovered = pixi.backend.getHoveredTitleBarButton();
+            const hovered = fizzy.backend.getHoveredTitleBarButton();
             const stroke = dvui.themeGet().color(.control, .text);
             const hover_fill = dvui.themeGet().color(.control, .fill_hover).lighten(if (dvui.themeGet().dark) 3 else -3);
             const close_hover_fill = dvui.Color{ .r = 232, .g = 17, .b = 35, .a = 255 };
@@ -735,7 +735,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     .color_fill = hover_fill,
                 });
                 defer b.deinit();
-                pixi.backend.setTitleBarCaptionButtonRect(.minimize, b.data().rectScale().r);
+                fizzy.backend.setTitleBarCaptionButtonRect(.minimize, b.data().rectScale().r);
                 dvui.icon(@src(), "win_min", icons.tvg.feather.minus, .{ .stroke_color = stroke }, .{
                     .expand = .ratio,
                     .padding = .all(7),
@@ -753,7 +753,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     .color_fill = hover_fill,
                 });
                 defer b.deinit();
-                pixi.backend.setTitleBarCaptionButtonRect(.maximize, b.data().rectScale().r);
+                fizzy.backend.setTitleBarCaptionButtonRect(.maximize, b.data().rectScale().r);
                 dvui.icon(@src(), "win_max", icons.tvg.lucide.square, .{ .stroke_color = stroke }, .{
                     .expand = .ratio,
                     .padding = .all(9),
@@ -771,7 +771,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     .color_fill = close_hover_fill.opacity(0.5),
                 });
                 defer b.deinit();
-                pixi.backend.setTitleBarCaptionButtonRect(.close, b.data().rectScale().r);
+                fizzy.backend.setTitleBarCaptionButtonRect(.close, b.data().rectScale().r);
                 dvui.icon(@src(), "win_close", icons.tvg.heroicons.outline.@"x-mark", .{
                     .stroke_color = if (is_hover) close_hover_stroke else stroke,
                 }, .{
@@ -850,15 +850,15 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
 
         // Draw the explorer paned widget, which will recursively draw the workspaces in the second pane
-        editor.explorer.paned = pixi.dvui.paned(@src(), .{
+        editor.explorer.paned = fizzy.dvui.paned(@src(), .{
             .direction = .horizontal,
-            .collapsed_size = pixi.editor.settings.min_window_size[0] + 1,
+            .collapsed_size = fizzy.editor.settings.min_window_size[0] + 1,
             .handle_size = handle_size,
             .handle_dynamic = .{
                 .handle_size_max = handle_size,
                 .distance_max = handle_dist,
             },
-            .uncollapse_ratio = pixi.editor.settings.explorer_ratio,
+            .uncollapse_ratio = fizzy.editor.settings.explorer_ratio,
         }, .{
             .expand = .both,
             .background = false,
@@ -870,9 +870,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
         if (dvui.firstFrame(editor.explorer.paned.wd.id)) {
             editor.explorer.paned.split_ratio.* = 0.0;
-            editor.explorer.paned.animateSplit(pixi.editor.settings.explorer_ratio, dvui.easing.outBack);
+            editor.explorer.paned.animateSplit(fizzy.editor.settings.explorer_ratio, dvui.easing.outBack);
 
-            if (pixi.editor.settings.explorer_ratio < 0.01) {
+            if (fizzy.editor.settings.explorer_ratio < 0.01) {
                 editor.explorer.closed = true;
             }
         } else if (editor.explorer.paned.dragging) {
@@ -910,9 +910,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             const workspace_vbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false, .padding = .{ .w = handle_size } });
             defer workspace_vbox.deinit();
 
-            editor.panel.paned = pixi.dvui.paned(@src(), .{
+            editor.panel.paned = fizzy.dvui.paned(@src(), .{
                 .direction = .vertical,
-                .collapsed_size = pixi.editor.settings.min_window_size[1] + 1,
+                .collapsed_size = fizzy.editor.settings.min_window_size[1] + 1,
                 .handle_size = handle_size,
                 .handle_dynamic = .{ .handle_size_max = handle_size, .distance_max = handle_dist },
                 .uncollapse_ratio = 1.0,
@@ -924,8 +924,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
             if (!editor.panel.paned.dragging) {
                 if (editor.activeFile()) |_| {
-                    if ((editor.panel.paned.split_ratio.* == 1.0 and !editor.panel.paned.collapsed()) and pixi.editor.settings.panel_ratio > 0.0) {
-                        editor.panel.paned.animateSplit(1.0 - pixi.editor.settings.panel_ratio, dvui.easing.outQuint);
+                    if ((editor.panel.paned.split_ratio.* == 1.0 and !editor.panel.paned.collapsed()) and fizzy.editor.settings.panel_ratio > 0.0) {
+                        editor.panel.paned.animateSplit(1.0 - fizzy.editor.settings.panel_ratio, dvui.easing.outQuint);
                     }
                 } else {
                     if (!editor.panel.paned.animating and editor.panel.paned.split_ratio.* < 1.0) {
@@ -933,8 +933,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     }
                 }
             } else {
-                pixi.editor.settings.panel_ratio = 1.0 - editor.panel.paned.split_ratio.*;
-                pixi.editor.markSettingsDirty();
+                fizzy.editor.settings.panel_ratio = 1.0 - editor.panel.paned.split_ratio.*;
+                fizzy.editor.markSettingsDirty();
             }
 
             if (editor.panel.paned.showSecond()) {
@@ -999,7 +999,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     return .ok;
 }
 
-fn queueNativeMenuAction(editor: *Editor, action: pixi.backend.NativeMenuAction) void {
+fn queueNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuAction) void {
     if (editor.pending_native_menu_actions_len >= editor.pending_native_menu_actions.len) {
         // If we ever overflow, drop the action rather than crashing.
         return;
@@ -1021,7 +1021,7 @@ fn flushQueuedNativeMenuActions(editor: *Editor) void {
     }
 }
 
-pub fn handleNativeMenuAction(editor: *Editor, action: pixi.backend.NativeMenuAction) !void {
+pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuAction) !void {
     switch (action) {
         .open_folder => {
             if (try dvui.dialogNativeFolderSelect(dvui.currentWindow().arena(), .{ .title = "Open Project Folder" })) |folder| {
@@ -1031,8 +1031,8 @@ pub fn handleNativeMenuAction(editor: *Editor, action: pixi.backend.NativeMenuAc
         .open_files => {
             if (try dvui.dialogNativeFileOpenMultiple(dvui.currentWindow().arena(), .{
                 .title = "Open Files...",
-                .filter_description = ".pixi, .png, .jpg, .jpeg",
-                .filters = &.{ "*.pixi", "*.png", "*.jpg", "*.jpeg" },
+                .filter_description = ".fiz, .pixi, .png, .jpg, .jpeg",
+                .filters = &.{ "*.fiz", "*.pixi", "*.png", "*.jpg", "*.jpeg" },
             })) |files| {
                 for (files) |file| {
                     _ = editor.openFilePath(file, editor.open_workspace_grouping) catch {
@@ -1113,12 +1113,12 @@ pub fn setTitlebarColor(editor: *Editor) void {
 
     if (!std.mem.eql(u8, &editor.last_titlebar_color.toRGBA(), &color.toRGBA())) {
         editor.last_titlebar_color = color;
-        pixi.backend.setTitlebarColor(dvui.currentWindow(), color.opacity(if (dvui.themeGet().dark) editor.settings.window_opacity_dark else editor.settings.window_opacity_light));
+        fizzy.backend.setTitlebarColor(dvui.currentWindow(), color.opacity(if (dvui.themeGet().dark) editor.settings.window_opacity_dark else editor.settings.window_opacity_light));
     }
 }
 
 pub fn setWindowStyle(_: *Editor) void {
-    pixi.backend.setWindowStyle(dvui.currentWindow());
+    fizzy.backend.setWindowStyle(dvui.currentWindow());
 }
 
 pub fn drawRadialMenu(editor: *Editor) !void {
@@ -1185,7 +1185,7 @@ pub fn drawRadialMenu(editor: *Editor) !void {
         }
 
         var color = dvui.themeGet().color(.control, .fill_hover);
-        if (pixi.editor.colors.file_tree_palette) |*palette| {
+        if (fizzy.editor.colors.file_tree_palette) |*palette| {
             color = palette.getDVUIColor(i);
         }
 
@@ -1237,19 +1237,19 @@ pub fn drawRadialMenu(editor: *Editor) !void {
         }
 
         const selection_sprite = switch (editor.tools.selection_mode) {
-            .box => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.box_selection_default],
-            .pixel => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.pixel_selection_default],
-            .color => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.color_selection_default],
+            .box => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_default],
+            .pixel => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_default],
+            .color => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_default],
         };
 
         const sprite = switch (@as(Editor.Tools.Tool, @enumFromInt(i))) {
-            .pointer => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.cursor_default],
-            .pencil => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.pencil_default],
-            .eraser => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.eraser_default],
-            .bucket => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.bucket_default],
+            .pointer => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.cursor_default],
+            .pencil => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pencil_default],
+            .eraser => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.eraser_default],
+            .bucket => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.bucket_default],
             .selection => selection_sprite,
         };
-        const size: dvui.Size = dvui.imageSize(pixi.editor.atlas.source) catch .{ .w = 0, .h = 0 };
+        const size: dvui.Size = dvui.imageSize(fizzy.editor.atlas.source) catch .{ .w = 0, .h = 0 };
 
         const uv = dvui.Rect{
             .x = @as(f32, @floatFromInt(sprite.source[0])) / size.w,
@@ -1271,7 +1271,7 @@ pub fn drawRadialMenu(editor: *Editor) !void {
         rs.r.w = w;
         rs.r.h = h;
 
-        dvui.renderImage(pixi.editor.atlas.source, rs, .{
+        dvui.renderImage(fizzy.editor.atlas.source, rs, .{
             .uv = uv,
             .fade = 0.0,
         }) catch {
@@ -1327,14 +1327,14 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
     // Create workspaces for each grouping ID
     for (editor.open_files.values()) |*file| {
         if (!editor.workspaces.contains(file.editor.grouping)) {
-            var workspace: pixi.Editor.Workspace = .init(file.editor.grouping);
+            var workspace: fizzy.Editor.Workspace = .init(file.editor.grouping);
             for (editor.open_files.values()) |*f| {
                 if (f.editor.grouping == file.editor.grouping) {
                     workspace.open_file_index = editor.open_files.getIndex(f.id) orelse 0;
                 }
             }
 
-            editor.workspaces.put(pixi.app.allocator, file.editor.grouping, workspace) catch |err| {
+            editor.workspaces.put(fizzy.app.allocator, file.editor.grouping, workspace) catch |err| {
                 std.log.err("Failed to create workspace: {s}", .{@errorName(err)});
                 return err;
             };
@@ -1395,7 +1395,7 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
 pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
     if (index >= editor.workspaces.count()) return .ok;
 
-    var s = pixi.dvui.paned(@src(), .{
+    var s = fizzy.dvui.paned(@src(), .{
         .direction = .horizontal,
         .collapsed_size = if (index == editor.workspaces.count() - 1) std.math.floatMax(f32) else 0,
         .handle_size = handle_size,
@@ -1453,7 +1453,7 @@ pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
 
 pub fn abortSaveAllQuit(editor: *Editor) void {
     Dialogs.FlatRasterSaveWarning.pending_from_save_all_quit = false;
-    editor.quit_save_all_ids.clearAndFree(pixi.app.allocator);
+    editor.quit_save_all_ids.clearAndFree(fizzy.app.allocator);
     editor.quit_in_progress = false;
     editor.pending_close_file_id = null;
     editor.pending_quit_continue = false;
@@ -1477,7 +1477,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
             editor.setActiveFile(idx);
         }
 
-        if (!pixi.Internal.File.hasRecognizedSaveExtension(file_ptr.path)) {
+        if (!fizzy.Internal.File.hasRecognizedSaveExtension(file_ptr.path)) {
             editor.pending_close_file_id = id;
             editor.quit_in_progress = true;
             editor.requestSaveAs();
@@ -1525,20 +1525,20 @@ pub fn close(app: *App, editor: *Editor) void {
 
 pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     if (editor.folder) |folder| {
-        editor.ignore.deinit(pixi.app.allocator);
+        editor.ignore.deinit(fizzy.app.allocator);
         if (editor.project) |*project| {
             project.save() catch {
                 dvui.log.err("Failed to save project", .{});
             };
         }
-        pixi.app.allocator.free(folder);
+        fizzy.app.allocator.free(folder);
     }
-    editor.folder = try pixi.app.allocator.dupe(u8, path);
-    try editor.recents.appendFolder(try pixi.app.allocator.dupe(u8, path));
+    editor.folder = try fizzy.app.allocator.dupe(u8, path);
+    try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
     editor.explorer.pane = .files;
 
-    editor.project = Project.load(pixi.app.allocator) catch null;
-    editor.ignore = try IgnoreRules.load(pixi.app.allocator, path);
+    editor.project = Project.load(fizzy.app.allocator) catch null;
+    editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);
 }
 
 pub fn saving(editor: *Editor) bool {
@@ -1566,7 +1566,7 @@ pub fn openOrFocusFileAtGrouping(editor: *Editor, path: []const u8, grouping: u6
 /// After a workspace drop from the Files tree or when `tab_drag` ends; frees path and clears tree reorder stash.
 pub fn clearFileTreeTabDragDropState(editor: *Editor) void {
     if (editor.tab_drag_from_tree_path) |p| {
-        pixi.app.allocator.free(p);
+        fizzy.app.allocator.free(p);
         editor.tab_drag_from_tree_path = null;
     }
     if (editor.file_tree_data_id) |id| {
@@ -1584,8 +1584,8 @@ pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
         }
     }
 
-    if (pixi.Internal.File.fromPath(path) catch null) |file| {
-        try editor.open_files.put(pixi.app.allocator, file.id, file);
+    if (fizzy.Internal.File.fromPath(path) catch null) |file| {
+        try editor.open_files.put(fizzy.app.allocator, file.id, file);
         if (editor.open_files.getPtr(file.id)) |f| {
             f.editor.grouping = grouping;
         }
@@ -1606,17 +1606,17 @@ pub fn requestCompositeWarmup(editor: *Editor) void {
     editor.pending_composite_warmup = true;
 }
 
-pub fn newFile(editor: *Editor, path: []const u8, options: pixi.Internal.File.InitOptions) !*pixi.Internal.File {
+pub fn newFile(editor: *Editor, path: []const u8, options: fizzy.Internal.File.InitOptions) !*fizzy.Internal.File {
     if (editor.getFileFromPath(path)) |_| {
         return error.FileAlreadyExists;
     }
 
-    const file = pixi.Internal.File.init(path, options) catch {
+    const file = fizzy.Internal.File.init(path, options) catch {
         dvui.log.err("Failed to create file: {s}", .{path});
         return error.FailedToCreateFile;
     };
 
-    try editor.open_files.put(pixi.app.allocator, file.id, file);
+    try editor.open_files.put(fizzy.app.allocator, file.id, file);
     editor.setActiveFile(editor.open_files.count() - 1);
     editor.pending_composite_warmup = true;
 
@@ -1636,20 +1636,20 @@ pub fn allocNextUntitledPath(editor: *Editor) ![]u8 {
             max_n = @max(max_n, 1);
         }
     }
-    return std.fmt.allocPrint(pixi.app.allocator, "untitled-{d}", .{max_n + 1});
+    return std.fmt.allocPrint(fizzy.app.allocator, "untitled-{d}", .{max_n + 1});
 }
 
 /// Opens the Grid Layout dialog for the active file. Uses a custom `windowFn` that matches
 /// `dialogWindow`'s open animation while capping the window to half the main window size; the
 /// dialog can still be resized afterward.
 /// The dialog rebinds the active file via the `_grid_layout_file_id` data slot so the form and
-/// preview can survive frames where `pixi.editor.activeFile()` momentarily returns null.
+/// preview can survive frames where `fizzy.editor.activeFile()` momentarily returns null.
 pub fn requestGridLayoutDialog(editor: *Editor) void {
     const file = editor.activeFile() orelse return;
 
     Dialogs.GridLayout.presetFromFile(file);
 
-    var mutex = pixi.dvui.dialog(@src(), .{
+    var mutex = fizzy.dvui.dialog(@src(), .{
         .displayFn = Dialogs.GridLayout.dialog,
         .callafterFn = Dialogs.GridLayout.callAfter,
         .windowFn = Dialogs.GridLayout.windowFn,
@@ -1669,7 +1669,7 @@ pub fn requestGridLayoutDialog(editor: *Editor) void {
 
 /// Opens the New File dimensions dialog; on confirm, creates an in-memory `untitled-n` document (or on-disk from explorer when `_parent_path` is set).
 pub fn requestNewFileDialog(_: *Editor) void {
-    var mutex = pixi.dvui.dialog(@src(), .{
+    var mutex = fizzy.dvui.dialog(@src(), .{
         .displayFn = Dialogs.NewFile.dialog,
         .callafterFn = Dialogs.NewFile.callAfter,
         .title = "New File...",
@@ -1694,7 +1694,7 @@ pub fn setActiveFile(editor: *Editor, index: usize) void {
 }
 
 /// Returns the actively focused file, through workspace grouping.
-pub fn activeFile(editor: *Editor) ?*pixi.Internal.File {
+pub fn activeFile(editor: *Editor) ?*fizzy.Internal.File {
     if (editor.workspaces.get(editor.open_workspace_grouping)) |workspace| {
         return editor.getFile(workspace.open_file_index);
     }
@@ -1702,14 +1702,14 @@ pub fn activeFile(editor: *Editor) ?*pixi.Internal.File {
     return null;
 }
 
-pub fn getFile(editor: *Editor, index: usize) ?*pixi.Internal.File {
+pub fn getFile(editor: *Editor, index: usize) ?*fizzy.Internal.File {
     if (editor.open_files.values().len == 0) return null;
     if (index >= editor.open_files.values().len) return null;
 
     return &editor.open_files.values()[index];
 }
 
-pub fn getFileFromPath(editor: *Editor, path: []const u8) ?*pixi.Internal.File {
+pub fn getFileFromPath(editor: *Editor, path: []const u8) ?*fizzy.Internal.File {
     if (editor.open_files.values().len == 0) return null;
 
     for (editor.open_files.values()) |*file| {
@@ -1756,7 +1756,7 @@ pub fn copy(editor: *Editor) !void {
         if (file.editor.transform != null) return;
 
         if (editor.sprite_clipboard) |*clipboard| {
-            pixi.app.allocator.free(pixi.image.bytes(clipboard.source));
+            fizzy.app.allocator.free(fizzy.image.bytes(clipboard.source));
             editor.sprite_clipboard = null;
         }
 
@@ -1829,8 +1829,8 @@ pub fn copy(editor: *Editor) !void {
             const sprite_tl = file.spritePoint(reduced_data_rect.topLeft());
 
             editor.sprite_clipboard = .{
-                .source = pixi.image.fromPixelsPMA(
-                    @ptrCast(file.editor.transform_layer.pixelsFromRect(pixi.app.allocator, reduced_data_rect)),
+                .source = fizzy.image.fromPixelsPMA(
+                    @ptrCast(file.editor.transform_layer.pixelsFromRect(fizzy.app.allocator, reduced_data_rect)),
                     @intFromFloat(reduced_data_rect.w),
                     @intFromFloat(reduced_data_rect.h),
                     .ptr,
@@ -1840,7 +1840,7 @@ pub fn copy(editor: *Editor) !void {
 
             // Show a toast so its evident a copy action was completed
             {
-                const id_mutex = dvui.toastAdd(dvui.currentWindow(), @src(), 0, file.editor.canvas.id, pixi.dvui.toastDisplay, 2_000_000);
+                const id_mutex = dvui.toastAdd(dvui.currentWindow(), @src(), 0, file.editor.canvas.id, fizzy.dvui.toastDisplay, 2_000_000);
                 const id = id_mutex.id;
                 const message = std.fmt.allocPrint(dvui.currentWindow().arena(), "Copied selection", .{}) catch "Copied selection.";
                 dvui.dataSetSlice(dvui.currentWindow(), id, "_message", message);
@@ -1855,7 +1855,7 @@ pub fn paste(editor: *Editor) !void {
         if (editor.activeFile()) |file| {
             const active_layer = file.layers.get(file.selected_layer_index);
 
-            var dst_rect: dvui.Rect = .fromSize(pixi.image.size(clipboard.source));
+            var dst_rect: dvui.Rect = .fromSize(fizzy.image.size(clipboard.source));
 
             var sprite_iterator = file.editor.selected_sprites.iterator(.{ .kind = .set, .direction = .forward });
             while (sprite_iterator.next()) |sprite_index| {
@@ -2072,8 +2072,8 @@ pub fn transform(editor: *Editor) !void {
                     reduced_data_rect.center(),
                     reduced_data_rect.center(), // This point constantly moves
                 },
-                .source = pixi.image.fromPixelsPMA(
-                    @ptrCast(file.editor.transform_layer.pixelsFromRect(pixi.app.allocator, reduced_data_rect)),
+                .source = fizzy.image.fromPixelsPMA(
+                    @ptrCast(file.editor.transform_layer.pixelsFromRect(fizzy.app.allocator, reduced_data_rect)),
                     @intFromFloat(reduced_data_rect.w),
                     @intFromFloat(reduced_data_rect.h),
                     .ptr,
@@ -2094,7 +2094,7 @@ pub fn transform(editor: *Editor) !void {
 /// Paths without a recognized on-disk extension (e.g. in-memory `untitled-n`) open Save As instead.
 pub fn save(editor: *Editor) !void {
     const file = editor.activeFile() orelse return;
-    if (!pixi.Internal.File.hasRecognizedSaveExtension(file.path)) {
+    if (!fizzy.Internal.File.hasRecognizedSaveExtension(file.path)) {
         editor.requestSaveAs();
         return;
     }
@@ -2106,30 +2106,30 @@ pub fn save(editor: *Editor) !void {
 }
 
 const save_as_dialog_filters: [3]sdl3.SDL_DialogFileFilter = .{
-    .{ .name = "Pixi", .pattern = "pixi" },
+    .{ .name = "Fizzy", .pattern = "fiz;pixi" },
     .{ .name = "PNG", .pattern = "png" },
     .{ .name = "JPEG", .pattern = "jpg;jpeg" },
 };
 
-/// Opens a Save As dialog: `.pixi` (all layers) or flat `.png` / `.jpg` / `.jpeg` (visible layers composited).
+/// Opens a Save As dialog: `.fiz` (all layers; `.pixi` also accepted for legacy) or flat `.png` / `.jpg` / `.jpeg` (visible layers composited).
 pub fn requestSaveAs(_: *Editor) void {
-    const active = pixi.editor.activeFile() orelse return;
-    const def = pixi.Internal.File.defaultSaveAsFilename(pixi.app.allocator, active.path) catch {
+    const active = fizzy.editor.activeFile() orelse return;
+    const def = fizzy.Internal.File.defaultSaveAsFilename(fizzy.app.allocator, active.path) catch {
         std.log.err("Failed to build default save-as name", .{});
         return;
     };
-    defer pixi.app.allocator.free(def);
+    defer fizzy.app.allocator.free(def);
     const current_file_dir: ?[]const u8 = std.fs.path.dirname(active.path);
-    pixi.backend.showSaveFileDialog(saveAsDialogCallback, &save_as_dialog_filters, def, current_file_dir);
+    fizzy.backend.showSaveFileDialog(saveAsDialogCallback, &save_as_dialog_filters, def, current_file_dir);
 }
 
 /// Save dialog may invoke this from AppKit outside `Window.begin` / `end`; do not use `currentWindow` here.
 pub fn saveAsDialogCallback(paths: ?[][:0]const u8) void {
     if (paths == null) {
-        if (pixi.editor.pending_close_file_id) |_| {
-            pixi.editor.pending_close_file_id = null;
-            if (pixi.editor.quit_save_all_ids.items.len > 0) {
-                pixi.editor.abortSaveAllQuit();
+        if (fizzy.editor.pending_close_file_id) |_| {
+            fizzy.editor.pending_close_file_id = null;
+            if (fizzy.editor.quit_save_all_ids.items.len > 0) {
+                fizzy.editor.abortSaveAllQuit();
             }
         }
         return;
@@ -2138,10 +2138,10 @@ pub fn saveAsDialogCallback(paths: ?[][:0]const u8) void {
     if (p.len == 0) return;
     const path0 = p[0];
     if (path0.len == 0) return;
-    if (pixi.editor.pending_save_as_path) |old| {
-        pixi.app.allocator.free(old);
+    if (fizzy.editor.pending_save_as_path) |old| {
+        fizzy.app.allocator.free(old);
     }
-    pixi.editor.pending_save_as_path = pixi.app.allocator.dupe(u8, path0[0..path0.len]) catch {
+    fizzy.editor.pending_save_as_path = fizzy.app.allocator.dupe(u8, path0[0..path0.len]) catch {
         dvui.log.err("Save As: out of memory queuing path", .{});
         return;
     };
@@ -2150,7 +2150,7 @@ pub fn saveAsDialogCallback(paths: ?[][:0]const u8) void {
 fn processPendingSaveAs(editor: *Editor) void {
     const path = editor.pending_save_as_path orelse return;
     editor.pending_save_as_path = null;
-    defer pixi.app.allocator.free(path);
+    defer fizzy.app.allocator.free(path);
 
     const ext = std.fs.path.extension(path);
     const file = editor.activeFile() orelse {
@@ -2159,8 +2159,8 @@ fn processPendingSaveAs(editor: *Editor) void {
     };
 
     const saved: bool = blk: {
-        if (std.mem.eql(u8, ext, ".pixi")) {
-            file.saveAsPixi(path, dvui.currentWindow()) catch |err| {
+        if (fizzy.Internal.File.isFizzyExtension(ext)) {
+            file.saveAsFizzy(path, dvui.currentWindow()) catch |err| {
                 dvui.log.err("Save As: {any}", .{err});
                 break :blk false;
             };
@@ -2173,7 +2173,7 @@ fn processPendingSaveAs(editor: *Editor) void {
                 break :blk false;
             };
         } else {
-            dvui.log.err("Save As: choose extension .pixi, .png, .jpg, or .jpeg (got {s})", .{ext});
+            dvui.log.err("Save As: choose extension .fiz, .png, .jpg, or .jpeg (got {s})", .{ext});
             break :blk false;
         }
         break :blk true;
@@ -2210,7 +2210,7 @@ pub fn redo(editor: *Editor) !void {
 
 pub fn openInFileBrowser(_: *Editor, path: []const u8) !void {
     const cmd = if (builtin.os.tag == .macos) "open" else if (builtin.os.tag == .linux) "xdg-open" else "start";
-    _ = std.process.run(pixi.app.allocator, dvui.io, .{ .argv = &.{ cmd, path } }) catch {
+    _ = std.process.run(fizzy.app.allocator, dvui.io, .{ .argv = &.{ cmd, path } }) catch {
         dvui.log.err("Failed to open file browser", .{});
         return;
     };
@@ -2236,8 +2236,8 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     var file = editor.open_files.values()[index];
 
     if (editor.workspaces.getPtr(file.editor.grouping)) |workspace| {
-        if (workspace.open_file_index == pixi.editor.open_files.getIndex(file.id)) {
-            for (pixi.editor.open_files.values(), 0..) |f, i| {
+        if (workspace.open_file_index == fizzy.editor.open_files.getIndex(file.id)) {
+            for (fizzy.editor.open_files.values(), 0..) |f, i| {
                 if (f.grouping == workspace.grouping and f.id != file.id) {
                     workspace.open_file_index = i;
                     break;
@@ -2255,8 +2255,8 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
 
         //editor.open_file_index = 0;
         if (editor.workspaces.getPtr(file.editor.grouping)) |workspace| {
-            if (workspace.open_file_index == pixi.editor.open_files.getIndex(file.id)) {
-                for (pixi.editor.open_files.values(), 0..) |f, i| {
+            if (workspace.open_file_index == fizzy.editor.open_files.getIndex(file.id)) {
+                for (fizzy.editor.open_files.values(), 0..) |f, i| {
                     if (f.editor.grouping == workspace.grouping and f.id != file.id) {
                         workspace.open_file_index = i;
                         break;
@@ -2271,51 +2271,51 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
 
 pub fn closeReference(editor: *Editor, index: usize) !void {
     editor.open_reference_index = 0;
-    var reference: pixi.Internal.Reference = editor.open_references.orderedRemove(index);
+    var reference: fizzy.Internal.Reference = editor.open_references.orderedRemove(index);
     reference.deinit();
 }
 
 pub fn deinit(editor: *Editor) !void {
     if (editor.tab_drag_from_tree_path) |p| {
-        pixi.app.allocator.free(p);
+        fizzy.app.allocator.free(p);
         editor.tab_drag_from_tree_path = null;
     }
 
     if (editor.pending_save_as_path) |p| {
-        pixi.app.allocator.free(p);
+        fizzy.app.allocator.free(p);
         editor.pending_save_as_path = null;
     }
 
-    editor.quit_save_all_ids.deinit(pixi.app.allocator);
+    editor.quit_save_all_ids.deinit(fizzy.app.allocator);
 
     if (editor.colors.palette) |*palette| palette.deinit();
     if (editor.colors.file_tree_palette) |*palette| palette.deinit();
 
-    editor.recents.save(pixi.app.allocator, try std.fs.path.join(pixi.app.allocator, &.{ editor.config_folder, "recents.json" })) catch {
+    editor.recents.save(fizzy.app.allocator, try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "recents.json" })) catch {
         dvui.log.err("Failed to save recents", .{});
     };
-    editor.recents.deinit(pixi.app.allocator);
+    editor.recents.deinit(fizzy.app.allocator);
 
     try saveSettingsRaw(editor);
     if (editor.settings_last_saved_json) |blob| {
-        pixi.app.allocator.free(blob);
+        fizzy.app.allocator.free(blob);
         editor.settings_last_saved_json = null;
     }
-    editor.settings.deinit(pixi.app.allocator);
+    editor.settings.deinit(fizzy.app.allocator);
 
     if (editor.project) |*project| {
         project.save() catch {
             dvui.log.err("Failed to save project file", .{});
         };
-        project.deinit(pixi.app.allocator);
+        project.deinit(fizzy.app.allocator);
     }
 
     editor.explorer.deinit();
 
-    editor.tools.deinit(pixi.app.allocator);
+    editor.tools.deinit(fizzy.app.allocator);
 
-    editor.ignore.deinit(pixi.app.allocator);
+    editor.ignore.deinit(fizzy.app.allocator);
 
-    if (editor.folder) |folder| pixi.app.allocator.free(folder);
+    if (editor.folder) |folder| fizzy.app.allocator.free(folder);
     editor.arena.deinit();
 }

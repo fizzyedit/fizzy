@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 
 pub const Widgets = @This();

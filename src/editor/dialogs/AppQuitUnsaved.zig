@@ -1,12 +1,12 @@
 const std = @import("std");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 
 /// True if the app-quit confirmation is already queued or showing (see `request` de-dupe).
 pub fn active(win: *dvui.Window) bool {
     var it = win.dialogs.iterator(null);
     while (it.next()) |d| {
-        const df = dvui.dataGet(null, d.id, "_displayFn", pixi.dvui.DisplayFn) orelse continue;
+        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dvui.DisplayFn) orelse continue;
         if (df == dialog) return true;
     }
     return false;
@@ -14,10 +14,10 @@ pub fn active(win: *dvui.Window) bool {
 
 pub fn request() void {
     if (active(dvui.currentWindow())) return;
-    var mutex = pixi.dvui.dialog(@src(), .{
+    var mutex = fizzy.dvui.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
-        .title = "Quit Pixi?",
+        .title = "Quit Fizzy?",
         .ok_label = "",
         .cancel_label = "",
         .resizeable = false,
@@ -31,7 +31,7 @@ pub fn request() void {
 
 fn dirtyCount() usize {
     var n: usize = 0;
-    for (pixi.editor.open_files.values()) |f| {
+    for (fizzy.editor.open_files.values()) |f| {
         if (f.dirty()) n += 1;
     }
     return n;
@@ -96,42 +96,42 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
 }
 
 fn onQuitWithoutSaving() !void {
-    pixi.dvui.closeFloatingDialogAnchored();
+    fizzy.dvui.closeFloatingDialogAnchored();
 
-    const alloc = pixi.app.allocator;
-    const keys = try alloc.alloc(u64, pixi.editor.open_files.count());
+    const alloc = fizzy.app.allocator;
+    const keys = try alloc.alloc(u64, fizzy.editor.open_files.count());
     defer alloc.free(keys);
-    for (pixi.editor.open_files.keys(), 0..) |k, i| keys[i] = k;
+    for (fizzy.editor.open_files.keys(), 0..) |k, i| keys[i] = k;
     for (keys) |id| {
-        try pixi.editor.rawCloseFileID(id);
+        try fizzy.editor.rawCloseFileID(id);
     }
-    pixi.editor.pending_app_close = true;
+    fizzy.editor.pending_app_close = true;
 }
 
 fn onSaveAllAndQuit() !void {
-    pixi.dvui.closeFloatingDialogAnchored();
+    fizzy.dvui.closeFloatingDialogAnchored();
 
-    pixi.editor.quit_save_all_ids.clearRetainingCapacity();
-    for (pixi.editor.open_files.values()) |f| {
-        if (f.dirty()) try pixi.editor.quit_save_all_ids.append(pixi.app.allocator, f.id);
+    fizzy.editor.quit_save_all_ids.clearRetainingCapacity();
+    for (fizzy.editor.open_files.values()) |f| {
+        if (f.dirty()) try fizzy.editor.quit_save_all_ids.append(fizzy.app.allocator, f.id);
     }
-    if (pixi.editor.quit_save_all_ids.items.len == 0) {
-        pixi.editor.pending_app_close = true;
+    if (fizzy.editor.quit_save_all_ids.items.len == 0) {
+        fizzy.editor.pending_app_close = true;
         return;
     }
-    pixi.editor.quit_in_progress = true;
-    pixi.editor.pending_quit_continue = true;
+    fizzy.editor.quit_in_progress = true;
+    fizzy.editor.pending_quit_continue = true;
 }
 
 fn onCancel() void {
-    pixi.editor.quit_in_progress = false;
-    pixi.dvui.closeFloatingDialogAnchored();
+    fizzy.editor.quit_in_progress = false;
+    fizzy.dvui.closeFloatingDialogAnchored();
 }
 
 pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) !void {
     switch (response) {
         .cancel => {
-            pixi.editor.quit_in_progress = false;
+            fizzy.editor.quit_in_progress = false;
         },
         else => {},
     }

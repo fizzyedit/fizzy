@@ -1,8 +1,8 @@
-//! Gitignore-style patterns for the file explorer. Loaded from `.pixiignore` if present,
+//! Gitignore-style patterns for the file explorer. Loaded from `.fizignore` if present,
 //! otherwise `.gitignore` at the project root.
 
 const std = @import("std");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 
 pub const IgnoreRules = @This();
@@ -24,18 +24,18 @@ fn fileExistsAbs(path: []const u8) bool {
     return true;
 }
 
-/// Prefer `.pixiignore`, else `.gitignore`.
+/// Prefer `.fizignore`, else `.gitignore`.
 pub fn load(gpa: std.mem.Allocator, project_root_abs: []const u8) !IgnoreRules {
     var out: IgnoreRules = .{};
     errdefer out.deinit(gpa);
 
-    const path_pixi = try std.fs.path.join(gpa, &.{ project_root_abs, ".pixiignore" });
-    defer gpa.free(path_pixi);
+    const path_fizzy = try std.fs.path.join(gpa, &.{ project_root_abs, ".fizignore" });
+    defer gpa.free(path_fizzy);
     const path_git = try std.fs.path.join(gpa, &.{ project_root_abs, ".gitignore" });
     defer gpa.free(path_git);
 
-    const chosen: ?[]const u8 = if (fileExistsAbs(path_pixi))
-        path_pixi
+    const chosen: ?[]const u8 = if (fileExistsAbs(path_fizzy))
+        path_fizzy
     else if (fileExistsAbs(path_git))
         path_git
     else
@@ -43,7 +43,7 @@ pub fn load(gpa: std.mem.Allocator, project_root_abs: []const u8) !IgnoreRules {
 
     const path = chosen orelse return out;
 
-    const data = pixi.fs.read(gpa, dvui.io, path) catch return out;
+    const data = fizzy.fs.read(gpa, dvui.io, path) catch return out;
     out.blob = data;
 
     var i: usize = 0;

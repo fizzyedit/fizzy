@@ -1,26 +1,26 @@
 const std = @import("std");
 const icons = @import("icons");
 
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 
 pub fn draw() !void {
-    if (pixi.editor.folder) |folder| {
+    if (fizzy.editor.folder) |folder| {
         if (dvui.button(@src(), "Pack Project", .{ .draw_focus = false }, .{
             .expand = .horizontal,
             .style = .highlight,
         })) {
-            pixi.packer.appendProject() catch {
+            fizzy.packer.appendProject() catch {
                 dvui.log.err("Failed to append project", .{});
             };
 
-            pixi.packer.packAndClear() catch {
+            fizzy.packer.packAndClear() catch {
                 dvui.log.err("Failed to pack project", .{});
             };
         }
 
-        if (pixi.editor.project) |project| {
-            if (pixi.packer.atlas) |atlas| {
+        if (fizzy.editor.project) |project| {
+            if (fizzy.packer.atlas) |atlas| {
                 if (dvui.button(@src(), "Export Project", .{ .draw_focus = false }, .{
                     .expand = .horizontal,
                     .style = .highlight,
@@ -46,7 +46,7 @@ pub fn draw() !void {
             });
             defer tl.deinit();
 
-            const project_path = std.fs.path.join(dvui.currentWindow().lifo(), &.{ folder, ".pixiproject" }) catch {
+            const project_path = std.fs.path.join(dvui.currentWindow().lifo(), &.{ folder, ".fizproject" }) catch {
                 dvui.log.err("Failed to join project path", .{});
                 return;
             };
@@ -56,7 +56,7 @@ pub fn draw() !void {
         } else {
             var box = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .expand = .horizontal,
-                .max_size_content = .{ .w = pixi.editor.explorer.scroll_info.virtual_size.w, .h = std.math.floatMax(f32) },
+                .max_size_content = .{ .w = fizzy.editor.explorer.scroll_info.virtual_size.w, .h = std.math.floatMax(f32) },
             });
             defer box.deinit();
 
@@ -66,7 +66,7 @@ pub fn draw() !void {
             tl.deinit();
 
             if (dvui.button(@src(), "Create Project", .{}, .{ .expand = .horizontal })) {
-                pixi.editor.project = .{};
+                fizzy.editor.project = .{};
             }
             return;
         }
@@ -118,13 +118,13 @@ pub fn draw() !void {
     //             break :blk true;
     //         };
 
-    //         if (dvui.dialogNativeFileSave(pixi.app.allocator, .{
+    //         if (dvui.dialogNativeFileSave(fizzy.app.allocator, .{
     //             .title = "Select Atlas Data Output",
     //             .filters = &.{".atlas"},
     //             .filter_description = "Atlas file",
     //             .path = if (valid_path) project.packed_atlas_output else null,
     //         }) catch null) |path| {
-    //             project.packed_atlas_output = pixi.app.allocator.dupe(u8, path[0..]) catch null;
+    //             project.packed_atlas_output = fizzy.app.allocator.dupe(u8, path[0..]) catch null;
     //             set_text = true;
     //         } else {
     //             dvui.log.err("Project failed to copy new path", .{});
@@ -151,7 +151,7 @@ pub fn draw() !void {
     //     if (te.text_changed) {
     //         const t = te.getText();
     //         if (t.len > 0) {
-    //             project.packed_atlas_output = pixi.app.allocator.dupe(u8, t) catch null;
+    //             project.packed_atlas_output = fizzy.app.allocator.dupe(u8, t) catch null;
     //         } else {
     //             project.packed_atlas_output = null;
     //         }
@@ -199,13 +199,13 @@ pub fn draw() !void {
     //             break :blk true;
     //         };
 
-    //         if (dvui.dialogNativeFileSave(pixi.app.allocator, .{
+    //         if (dvui.dialogNativeFileSave(fizzy.app.allocator, .{
     //             .title = "Select Atlas Image Output",
     //             .filters = &.{".png"},
     //             .filter_description = "Image file",
     //             .path = if (valid_path) project.packed_image_output else null,
     //         }) catch null) |path| {
-    //             project.packed_image_output = pixi.app.allocator.dupe(u8, path[0..]) catch null;
+    //             project.packed_image_output = fizzy.app.allocator.dupe(u8, path[0..]) catch null;
     //             set_text = true;
     //         } else {
     //             dvui.log.err("Project failed to copy new path", .{});
@@ -232,7 +232,7 @@ pub fn draw() !void {
     //     if (te.text_changed) {
     //         const t = te.getText();
     //         if (t.len > 0) {
-    //             project.packed_image_output = pixi.app.allocator.dupe(u8, t) catch null;
+    //             project.packed_image_output = fizzy.app.allocator.dupe(u8, t) catch null;
     //         } else {
     //             project.packed_image_output = null;
     //         }
@@ -247,7 +247,7 @@ const PathType = enum {
 };
 
 fn pathTextEntry(path_type: PathType) !void {
-    if (pixi.editor.project) |*project| {
+    if (fizzy.editor.project) |*project| {
         const output_path = switch (path_type) {
             .atlas => &project.packed_atlas_output,
             .image => &project.packed_image_output,
@@ -304,7 +304,7 @@ fn pathTextEntry(path_type: PathType) !void {
                 break :blk true;
             };
 
-            pixi.backend.showSaveFileDialog(if (path_type == .atlas) packedAtlasOutputCallback else packedImageOutputCallback, &.{
+            fizzy.backend.showSaveFileDialog(if (path_type == .atlas) packedAtlasOutputCallback else packedImageOutputCallback, &.{
                 if (path_type == .atlas) .{ .name = "Atlas Data", .pattern = "atlas" } else .{ .name = "Atlas Image", .pattern = "png;jpg;jpeg" },
             }, "", if (valid_path) output_path.* else null);
             set_text = true;
@@ -331,7 +331,7 @@ fn pathTextEntry(path_type: PathType) !void {
         if (te.text_changed) {
             const t = te.getText();
             if (t.len > 0) {
-                output_path.* = pixi.app.allocator.dupe(u8, t) catch null;
+                output_path.* = fizzy.app.allocator.dupe(u8, t) catch null;
             } else {
                 output_path.* = null;
             }
@@ -340,24 +340,24 @@ fn pathTextEntry(path_type: PathType) !void {
 }
 
 pub fn packedAtlasOutputCallback(paths: ?[][:0]const u8) void {
-    if (pixi.editor.project) |*project| {
+    if (fizzy.editor.project) |*project| {
         const output_path = &project.packed_atlas_output;
 
         if (paths) |paths_| {
             for (paths_) |path| {
-                output_path.* = pixi.app.allocator.dupe(u8, path) catch null;
+                output_path.* = fizzy.app.allocator.dupe(u8, path) catch null;
             }
         }
     }
 }
 
 pub fn packedImageOutputCallback(paths: ?[][:0]const u8) void {
-    if (pixi.editor.project) |*project| {
+    if (fizzy.editor.project) |*project| {
         const output_path = &project.packed_image_output;
 
         if (paths) |paths_| {
             for (paths_) |path| {
-                output_path.* = pixi.app.allocator.dupe(u8, path) catch null;
+                output_path.* = fizzy.app.allocator.dupe(u8, path) catch null;
             }
         }
     }

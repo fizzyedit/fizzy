@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 
 pub const Transform = @This();
@@ -34,24 +34,24 @@ pub fn point(self: *Transform, transform_point: TransformPoint) *dvui.Point {
 /// Note: `textureReadTarget` reads the full render target; the dominant cost is often GPU→CPU
 /// bandwidth rather than the merge loops below.
 pub fn accept(self: *Transform) void {
-    if (pixi.editor.open_files.getPtr(self.file_id)) |file| {
+    if (fizzy.editor.open_files.getPtr(self.file_id)) |file| {
         var layer = file.getLayer(self.layer_id) orelse return;
 
-        const t_all: i128 = if (pixi.perf.record) pixi.perf.nanoTimestamp() else 0;
+        const t_all: i128 = if (fizzy.perf.record) fizzy.perf.nanoTimestamp() else 0;
         const layer_px: u64 = @as(u64, file.width()) * @as(u64, file.height());
 
         const pix = dvui.textureReadTarget(dvui.currentWindow().arena(), self.target_texture) catch {
             dvui.log.err("Failed to read target texture", .{});
             return;
         };
-        const t_after_gpu: i128 = if (pixi.perf.record) pixi.perf.nanoTimestamp() else 0;
+        const t_after_gpu: i128 = if (fizzy.perf.record) fizzy.perf.nanoTimestamp() else 0;
 
         file.buffers.stroke.clearAndReserveCapacity(@intCast(layer_px)) catch {
             dvui.log.err("Failed to reserve stroke map for transform accept", .{});
             return;
         };
 
-        const t_loop: i128 = if (pixi.perf.record) pixi.perf.nanoTimestamp() else 0;
+        const t_loop: i128 = if (fizzy.perf.record) fizzy.perf.nanoTimestamp() else 0;
         // Two passes: undo keys use the pre-write layer; writes are independent per index, so order
         // matches the original interleaved loop without mutating layer between undo decisions.
         for (pix, file.editor.transform_layer.pixels(), layer.pixels(), 0..) |temp_pixel, transform_pixel, layer_pixel, pixel_index| {
@@ -70,7 +70,7 @@ pub fn accept(self: *Transform) void {
         // Paste / transform accept writes new pixels but does not go through `processSelection`; the
         // overlay uses `selection_layer.mask ∩ active_layer.mask`. Keep the mask aligned with the
         // committed transform so copied/pasted (and moved) pixels show the selection outline.
-        if (pixi.editor.tools.current == .selection) {
+        if (fizzy.editor.tools.current == .selection) {
             file.editor.selection_layer.clearMask();
             for (pix, 0..) |temp_pixel, pixel_index| {
                 if (temp_pixel.a != 0) {
@@ -79,28 +79,28 @@ pub fn accept(self: *Transform) void {
             }
         }
 
-        const t_after_loop: i128 = if (pixi.perf.record) pixi.perf.nanoTimestamp() else 0;
+        const t_after_loop: i128 = if (fizzy.perf.record) fizzy.perf.nanoTimestamp() else 0;
 
-        const t_to_change: i128 = if (pixi.perf.record) pixi.perf.nanoTimestamp() else 0;
+        const t_to_change: i128 = if (fizzy.perf.record) fizzy.perf.nanoTimestamp() else 0;
         const change = file.buffers.stroke.toChange(self.layer_id) catch null;
-        const t_after_to_change: i128 = if (pixi.perf.record) pixi.perf.nanoTimestamp() else 0;
+        const t_after_to_change: i128 = if (fizzy.perf.record) fizzy.perf.nanoTimestamp() else 0;
 
-        const t_hist: i128 = if (pixi.perf.record) pixi.perf.nanoTimestamp() else 0;
+        const t_hist: i128 = if (fizzy.perf.record) fizzy.perf.nanoTimestamp() else 0;
         if (change) |c| {
             file.history.append(c) catch {
                 dvui.log.err("Failed to append stroke change to history", .{});
             };
         }
-        const t_end: i128 = if (pixi.perf.record) pixi.perf.nanoTimestamp() else 0;
+        const t_end: i128 = if (fizzy.perf.record) fizzy.perf.nanoTimestamp() else 0;
 
-        if (pixi.perf.record) {
-            pixi.perf.transform_accept_last_total_ns = @intCast(t_end - t_all);
-            pixi.perf.transform_accept_last_gpu_read_ns = @intCast(t_after_gpu - t_all);
-            pixi.perf.transform_accept_last_merge_loop_ns = @intCast(t_after_loop - t_loop);
-            pixi.perf.transform_accept_last_to_change_ns = @intCast(t_after_to_change - t_to_change);
-            pixi.perf.transform_accept_last_history_append_ns = @intCast(t_end - t_hist);
-            pixi.perf.transform_accept_last_layer_pixels = layer_px;
-            pixi.perf.logTransformAcceptIf();
+        if (fizzy.perf.record) {
+            fizzy.perf.transform_accept_last_total_ns = @intCast(t_end - t_all);
+            fizzy.perf.transform_accept_last_gpu_read_ns = @intCast(t_after_gpu - t_all);
+            fizzy.perf.transform_accept_last_merge_loop_ns = @intCast(t_after_loop - t_loop);
+            fizzy.perf.transform_accept_last_to_change_ns = @intCast(t_after_to_change - t_to_change);
+            fizzy.perf.transform_accept_last_history_append_ns = @intCast(t_end - t_hist);
+            fizzy.perf.transform_accept_last_layer_pixels = layer_px;
+            fizzy.perf.logTransformAcceptIf();
         }
 
         layer.invalidate();
@@ -109,14 +109,14 @@ pub fn accept(self: *Transform) void {
         file.editor.transform_layer.clearMask();
         file.editor.transform_layer.invalidate();
         file.editor.transform = null;
-        pixi.app.allocator.free(pixi.image.bytes(self.source));
+        fizzy.app.allocator.free(fizzy.image.bytes(self.source));
         self.* = undefined;
     }
 }
 
 /// Cancels the transform and restores the layer to its original state
 pub fn cancel(self: *Transform) void {
-    if (pixi.editor.open_files.getPtr(self.file_id)) |file| {
+    if (fizzy.editor.open_files.getPtr(self.file_id)) |file| {
         var layer = file.getLayer(self.layer_id) orelse return;
         var iterator = file.editor.transform_layer.mask.iterator(.{ .kind = .set, .direction = .forward });
         while (iterator.next()) |pixel_index| {
@@ -129,7 +129,7 @@ pub fn cancel(self: *Transform) void {
         file.editor.transform_layer.clearMask();
         file.editor.transform_layer.invalidate();
         file.editor.transform = null;
-        pixi.app.allocator.free(pixi.image.bytes(self.source));
+        fizzy.app.allocator.free(fizzy.image.bytes(self.source));
         self.* = undefined;
     }
 }

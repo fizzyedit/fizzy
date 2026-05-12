@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 
 const Project = @This();
@@ -20,10 +20,10 @@ packed_atlas_output: ?[]const u8 = null,
 pack_on_save: bool = false,
 
 pub fn load(allocator: std.mem.Allocator) !?Project {
-    if (pixi.editor.folder) |folder| {
-        const file = try std.fs.path.join(pixi.editor.arena.allocator(), &.{ folder, ".pixiproject" });
+    if (fizzy.editor.folder) |folder| {
+        const file = try std.fs.path.join(fizzy.editor.arena.allocator(), &.{ folder, ".fizproject" });
 
-        if (pixi.fs.read(allocator, dvui.io, file) catch null) |r| {
+        if (fizzy.fs.read(allocator, dvui.io, file) catch null) |r| {
             read = r;
 
             const options = std.json.ParseOptions{ .duplicate_field_behavior = .use_first, .ignore_unknown_fields = true };
@@ -31,15 +31,15 @@ pub fn load(allocator: std.mem.Allocator) !?Project {
                 parsed = p;
 
                 // if (p.value.packed_atlas_output) |packed_atlas_output| {
-                //     @memcpy(pixi.editor.buffers.atlas_path[0..packed_atlas_output.len], packed_atlas_output);
+                //     @memcpy(fizzy.editor.buffers.atlas_path[0..packed_atlas_output.len], packed_atlas_output);
                 // }
 
                 // if (p.value.packed_image_output) |packed_image_output| {
-                //     @memcpy(pixi.editor.buffers.texture_path[0..packed_image_output.len], packed_image_output);
+                //     @memcpy(fizzy.editor.buffers.texture_path[0..packed_image_output.len], packed_image_output);
                 // }
 
                 // if (p.value.packed_heightmap_output) |packed_heightmap_output| {
-                //     @memcpy(pixi.editor.buffers.heightmap_path[0..packed_heightmap_output.len], packed_heightmap_output);
+                //     @memcpy(fizzy.editor.buffers.heightmap_path[0..packed_heightmap_output.len], packed_heightmap_output);
                 // }
 
                 return .{
@@ -57,11 +57,11 @@ pub fn load(allocator: std.mem.Allocator) !?Project {
 }
 
 pub fn save(project: *Project) !void {
-    if (pixi.editor.folder) |folder| {
-        const file = try std.fs.path.join(pixi.editor.arena.allocator(), &.{ folder, ".pixiproject" });
+    if (fizzy.editor.folder) |folder| {
+        const file = try std.fs.path.join(fizzy.editor.arena.allocator(), &.{ folder, ".fizproject" });
         const options = std.json.Stringify.Options{};
 
-        const str = try std.json.Stringify.valueAlloc(pixi.app.allocator, Project{
+        const str = try std.json.Stringify.valueAlloc(fizzy.app.allocator, Project{
             .packed_atlas_output = project.packed_atlas_output,
             .packed_image_output = project.packed_image_output,
             //.packed_heightmap_output = project.packed_heightmap_output,
@@ -79,16 +79,16 @@ pub fn save(project: *Project) !void {
 /// Project output assets will be exported to a join of parent_folder and the individual output paths for each asset
 pub fn exportAssets(project: *Project) !void {
     if (project.packed_atlas_output) |packed_atlas_output| {
-        try pixi.editor.atlas.save(packed_atlas_output, .data);
+        try fizzy.editor.atlas.save(packed_atlas_output, .data);
     }
 
     if (project.packed_image_output) |packed_image_output| {
-        try pixi.editor.atlas.save(packed_image_output, .source);
+        try fizzy.editor.atlas.save(packed_image_output, .source);
     }
 
     // if (project.packed_heightmap_output) |packed_heightmap_output| {
-    //     const path = try std.fs.path.joinZ(pixi.editor.arena.allocator(), &.{ parent_folder, packed_heightmap_output });
-    //     try pixi.editor.atlas.save(path, .heightmap);
+    //     const path = try std.fs.path.joinZ(fizzy.editor.arena.allocator(), &.{ parent_folder, packed_heightmap_output });
+    //     try fizzy.editor.atlas.save(path, .heightmap);
     // }
 }
 

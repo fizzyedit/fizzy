@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Pixi</string>
+	<string>Fizzy</string>
 	<key>CFBundleDisplayName</key>
-	<string>Pixi</string>
+	<string>Fizzy</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.foxnne.pixi</string>
 	<key>CFBundleShortVersionString</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleVersion</key>
 	<string>0.0.4</string>
 	<key>CFBundleIconFile</key>
-	<string>pixi.icns</string>
+	<string>fizzy.icns</string>
 	<!--
 	  Required for Gatekeeper / `spctl --assess` to recognise the bundle as an
 	  application after notarisation. Without `CFBundlePackageType=APPL` +
@@ -23,7 +23,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleExecutable</key>
-	<string>Pixi</string>
+	<string>Fizzy</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>LSMinimumSystemVersion</key>
@@ -35,14 +35,14 @@
 		<dict>
 			<key>CFBundleTypeExtensions</key>
 			<array>
-				<string>pixi</string>
+				<string>fizzy</string>
 				<string>png</string>
 				<string>jpg</string>
 			</array>
 			<key>CFBundleTypeIconFile</key>
-			<string>pixi.icns</string>
+			<string>fizzy.icns</string>
 			<key>CFBundleTypeName</key>
-			<string>Pixi art files</string>
+			<string>Fizzy art files</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 		</dict>

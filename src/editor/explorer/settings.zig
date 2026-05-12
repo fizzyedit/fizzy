@@ -1,10 +1,10 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 // const Core = @import("mach").Core;
-const Editor = pixi.Editor;
+const Editor = fizzy.Editor;
 
 const nfd = @import("nfd");
 // const imgui = @import("zig-imgui");
@@ -47,13 +47,13 @@ pub fn draw() !void {
             hbox.deinit();
 
             if (dropdown.dropped()) {
-                for (pixi.editor.themes.items) |theme| {
+                for (fizzy.editor.themes.items) |theme| {
                     if (dropdown.addChoiceLabel(theme.name)) {
-                        try Editor.Settings.setThemeName(&pixi.editor.settings, pixi.app.allocator, theme.name);
-                        pixi.editor.applySettingsTheme() catch {
+                        try Editor.Settings.setThemeName(&fizzy.editor.settings, fizzy.app.allocator, theme.name);
+                        fizzy.editor.applySettingsTheme() catch {
                             dvui.log.err("Failed to apply theme", .{});
                         };
-                        pixi.editor.markSettingsDirty();
+                        fizzy.editor.markSettingsDirty();
                         dvui.refresh(null, @src(), vbox.data().id);
                         break;
                     }
@@ -70,81 +70,81 @@ pub fn draw() !void {
             defer font_group.deinit();
 
             if (dvui.sliderEntry(@src(), "Body: {d:0.0}", .{
-                .value = &pixi.editor.settings.font_body_size,
+                .value = &fizzy.editor.settings.font_body_size,
                 .interval = 1.0,
                 .max = 20.0,
                 .min = 6.0,
             }, .{
                 .expand = .horizontal,
             })) {
-                pixi.editor.applyFontSizesFromSettings();
-                pixi.editor.markSettingsDirty();
+                fizzy.editor.applyFontSizesFromSettings();
+                fizzy.editor.markSettingsDirty();
                 dvui.refresh(null, @src(), vbox.data().id);
             }
 
             if (dvui.sliderEntry(@src(), "Heading: {d:0.0}", .{
-                .value = &pixi.editor.settings.font_heading_size,
+                .value = &fizzy.editor.settings.font_heading_size,
                 .interval = 1.0,
                 .max = 20.0,
                 .min = 6.0,
             }, .{
                 .expand = .horizontal,
             })) {
-                pixi.editor.applyFontSizesFromSettings();
-                pixi.editor.markSettingsDirty();
+                fizzy.editor.applyFontSizesFromSettings();
+                fizzy.editor.markSettingsDirty();
                 dvui.refresh(null, @src(), vbox.data().id);
             }
 
             if (dvui.sliderEntry(@src(), "Title: {d:0.0}", .{
-                .value = &pixi.editor.settings.font_title_size,
+                .value = &fizzy.editor.settings.font_title_size,
                 .interval = 1.0,
                 .max = 20.0,
                 .min = 6.0,
             }, .{
                 .expand = .horizontal,
             })) {
-                pixi.editor.applyFontSizesFromSettings();
-                pixi.editor.markSettingsDirty();
+                fizzy.editor.applyFontSizesFromSettings();
+                fizzy.editor.markSettingsDirty();
                 dvui.refresh(null, @src(), vbox.data().id);
             }
 
             if (dvui.sliderEntry(@src(), "Monospace: {d:0.0}", .{
-                .value = &pixi.editor.settings.font_mono_size,
+                .value = &fizzy.editor.settings.font_mono_size,
                 .interval = 1.0,
                 .max = 20.0,
                 .min = 6.0,
             }, .{
                 .expand = .horizontal,
             })) {
-                pixi.editor.applyFontSizesFromSettings();
-                pixi.editor.markSettingsDirty();
+                fizzy.editor.applyFontSizesFromSettings();
+                fizzy.editor.markSettingsDirty();
                 dvui.refresh(null, @src(), vbox.data().id);
             }
         }
 
         if (dvui.sliderEntry(@src(), "Window Opacity: {d:0.01}", .{
-            .value = &if (dvui.themeGet().dark) pixi.editor.settings.window_opacity_dark else pixi.editor.settings.window_opacity_light,
+            .value = &if (dvui.themeGet().dark) fizzy.editor.settings.window_opacity_dark else fizzy.editor.settings.window_opacity_light,
             .interval = 0.01,
             .max = 1.0,
             .min = 0.0,
         }, .{
             .expand = .horizontal,
         })) {
-            pixi.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) pixi.editor.settings.window_opacity_dark else pixi.editor.settings.window_opacity_light));
-            pixi.editor.markSettingsDirty();
+            fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) fizzy.editor.settings.window_opacity_dark else fizzy.editor.settings.window_opacity_light));
+            fizzy.editor.markSettingsDirty();
             dvui.refresh(null, @src(), vbox.data().id);
         }
 
         if (dvui.sliderEntry(@src(), "Content Opacity: {d:0.01}", .{
-            .value = &pixi.editor.settings.content_opacity,
+            .value = &fizzy.editor.settings.content_opacity,
             .interval = 0.01,
             .max = 1.0,
             .min = 0.0,
         }, .{
             .expand = .horizontal,
         })) {
-            pixi.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(pixi.editor.settings.content_opacity));
-            pixi.editor.markSettingsDirty();
+            fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(fizzy.editor.settings.content_opacity));
+            fizzy.editor.markSettingsDirty();
             dvui.refresh(null, @src(), vbox.data().id);
         }
 
@@ -161,7 +161,7 @@ pub fn draw() !void {
                 .gravity_x = 1.0,
             });
 
-            const label_text = switch (pixi.editor.settings.transparency_effect) {
+            const label_text = switch (fizzy.editor.settings.transparency_effect) {
                 .none => "None",
                 .rainbow => "Rainbow",
                 .animation => "Animation",
@@ -180,18 +180,18 @@ pub fn draw() !void {
 
             if (dropdown.dropped()) {
                 if (dropdown.addChoiceLabel("None")) {
-                    pixi.editor.settings.transparency_effect = .none;
-                    pixi.editor.markSettingsDirty();
+                    fizzy.editor.settings.transparency_effect = .none;
+                    fizzy.editor.markSettingsDirty();
                     dvui.refresh(null, @src(), vbox.data().id);
                 }
                 if (dropdown.addChoiceLabel("Rainbow")) {
-                    pixi.editor.settings.transparency_effect = .rainbow;
-                    pixi.editor.markSettingsDirty();
+                    fizzy.editor.settings.transparency_effect = .rainbow;
+                    fizzy.editor.markSettingsDirty();
                     dvui.refresh(null, @src(), vbox.data().id);
                 }
                 if (dropdown.addChoiceLabel("Animation")) {
-                    pixi.editor.settings.transparency_effect = .animation;
-                    pixi.editor.markSettingsDirty();
+                    fizzy.editor.settings.transparency_effect = .animation;
+                    fizzy.editor.markSettingsDirty();
                     dvui.refresh(null, @src(), vbox.data().id);
                 }
             }
@@ -199,10 +199,10 @@ pub fn draw() !void {
             _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 10 } });
         }
 
-        if (dvui.checkbox(@src(), &pixi.editor.settings.show_rulers, "Show Rulers", .{
+        if (dvui.checkbox(@src(), &fizzy.editor.settings.show_rulers, "Show Rulers", .{
             .expand = .none,
         })) {
-            pixi.editor.markSettingsDirty();
+            fizzy.editor.markSettingsDirty();
         }
     }
 
@@ -212,11 +212,11 @@ pub fn draw() !void {
         });
         defer box.deinit();
 
-        if (dvui.checkbox(@src(), &pixi.editor.settings.perf_logging, "Console perf logging", .{
+        if (dvui.checkbox(@src(), &fizzy.editor.settings.perf_logging, "Console perf logging", .{
             .expand = .none,
         })) {
-            pixi.perf.console_logging_enabled = pixi.editor.settings.perf_logging;
-            pixi.editor.markSettingsDirty();
+            fizzy.perf.console_logging_enabled = fizzy.editor.settings.perf_logging;
+            fizzy.editor.markSettingsDirty();
         }
 
         dvui.label(@src(), "{d:0>3.0} fps", .{dvui.FPS()}, .{});

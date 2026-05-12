@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 
 const Tools = @This();
@@ -109,7 +109,7 @@ pub fn deinit(self: *Tools, allocator: std.mem.Allocator) void {
 
 pub fn set(self: *Tools, tool: Tool) void {
     if (self.current != tool) {
-        // if (pixi.editor.getFile(pixi.editor.open_file_index)) |file| {
+        // if (fizzy.editor.getFile(fizzy.editor.open_file_index)) |file| {
         //     // if (file.transform_texture != null and tool != .pointer)
         //     //     return;
 
@@ -136,7 +136,7 @@ pub fn set(self: *Tools, tool: Tool) void {
         self.current = tool;
         self.setStrokeSize(self.strokeSizeFor(tool));
         if (tool == .pencil or tool == .eraser) {
-            pixi.editor.requestCompositeWarmup();
+            fizzy.editor.requestCompositeWarmup();
         }
     }
 }
@@ -168,8 +168,8 @@ pub fn getIndex(_: *Tools, point: dvui.Point) ?usize {
 /// Only used for handling getting the pixels surrounding the origin
 /// for stroke sizes larger than 1
 pub fn getIndexShapeOffset(self: *Tools, origin: dvui.Point, current_index: usize) ?usize {
-    const shape = pixi.editor.tools.stroke_shape;
-    const s: i32 = @intCast(pixi.editor.tools.stroke_size);
+    const shape = fizzy.editor.tools.stroke_shape;
+    const s: i32 = @intCast(fizzy.editor.tools.stroke_size);
 
     if (s == 1) {
         if (current_index != 0)
@@ -272,7 +272,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
         }));
         defer vbox2.deinit();
 
-        pixi.dvui.labelWithKeybind(
+        fizzy.dvui.labelWithKeybind(
             tool_name,
             switch (tool) {
                 .pointer => dvui.currentWindow().keybinds.get("pointer") orelse .{},
@@ -308,10 +308,10 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
             });
             defer mode_row.deinit();
 
-            const atlas_size: dvui.Size = dvui.imageSize(pixi.editor.atlas.source) catch .{ .w = 0, .h = 0 };
+            const atlas_size: dvui.Size = dvui.imageSize(fizzy.editor.atlas.source) catch .{ .w = 0, .h = 0 };
 
             var mode_color = dvui.themeGet().color(.control, .fill_hover);
-            if (pixi.editor.colors.file_tree_palette) |*palette| {
+            if (fizzy.editor.colors.file_tree_palette) |*palette| {
                 mode_color = palette.getDVUIColor(4);
             }
 
@@ -341,7 +341,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
                         2 => "COLOR",
                         else => unreachable,
                     };
-                    const selected = pixi.editor.tools.selection_mode == mode;
+                    const selected = fizzy.editor.tools.selection_mode == mode;
 
                     var mode_col = dvui.box(@src(), .{ .dir = .vertical }, .{
                         .expand = .none,
@@ -351,9 +351,9 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
                     defer mode_col.deinit();
 
                     const sprite = switch (mode) {
-                        .box => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.box_selection_default],
-                        .pixel => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.pixel_selection_default],
-                        .color => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.color_selection_default],
+                        .box => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_default],
+                        .pixel => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_default],
+                        .color => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_default],
                     };
                     const uv = dvui.Rect{
                         .x = @as(f32, @floatFromInt(sprite.source[0])) / atlas_size.w,
@@ -404,7 +404,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
                     rs.r.w = width;
                     rs.r.h = height;
 
-                    dvui.renderImage(pixi.editor.atlas.source, rs, .{
+                    dvui.renderImage(fizzy.editor.atlas.source, rs, .{
                         .uv = uv,
                         .fade = 0.0,
                     }) catch {
@@ -412,7 +412,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
                     };
 
                     if (mode_button.clicked()) {
-                        pixi.editor.tools.selection_mode = mode;
+                        fizzy.editor.tools.selection_mode = mode;
                     }
                 }
             }

@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 
 pub const Keybinds = @This();
@@ -71,24 +71,24 @@ pub fn tick() !void {
 
         switch (e.evt) {
             .key => |ke| {
-                // macOS: NSMenu key equivalents already call `PixiNativeMenuAction` (see Editor.flushQueuedNativeMenuActions).
+                // macOS: NSMenu key equivalents already call `FizzyNativeMenuAction` (see Editor.flushQueuedNativeMenuActions).
                 // SDL still delivers the same key events, so handling them here too would run the action twice.
                 if (builtin.os.tag != .macos) {
                     if (ke.matchBind("open_folder") and ke.action == .down) {
                         if (try dvui.dialogNativeFolderSelect(dvui.currentWindow().arena(), .{
                             .title = "Open Project Folder",
                         })) |folder| {
-                            try pixi.editor.setProjectFolder(folder);
+                            try fizzy.editor.setProjectFolder(folder);
                         }
                     }
 
                     if (ke.matchBind("open_files") and ke.action == .down) {
                         if (try dvui.dialogNativeFileOpenMultiple(
                             dvui.currentWindow().arena(),
-                            .{ .title = "Open Files...", .filter_description = ".pixi, .png, .jpg, .jpeg", .filters = &.{ "*.pixi", "*.png", "*.jpg", "*.jpeg" } },
+                            .{ .title = "Open Files...", .filter_description = ".fiz, .pixi, .png, .jpg, .jpeg", .filters = &.{ "*.fiz", "*.pixi", "*.png", "*.jpg", "*.jpeg" } },
                         )) |files| {
                             for (files) |file| {
-                                _ = pixi.editor.openFilePath(file, pixi.editor.open_workspace_grouping) catch {
+                                _ = fizzy.editor.openFilePath(file, fizzy.editor.open_workspace_grouping) catch {
                                     std.log.err("Failed to open file: {s}", .{file});
                                 };
                             }
@@ -97,7 +97,7 @@ pub fn tick() !void {
                 }
 
                 if (ke.matchBind("quick_tools")) {
-                    pixi.editor.tools.radial_menu.visible = switch (ke.action) {
+                    fizzy.editor.tools.radial_menu.visible = switch (ke.action) {
                         .down, .repeat => true,
                         .up => false,
                     };
@@ -106,24 +106,24 @@ pub fn tick() !void {
                 }
 
                 if (ke.matchBind("increase_stroke_size") and (ke.action == .down or ke.action == .repeat)) {
-                    if (pixi.editor.tools.current != .selection or pixi.editor.tools.selection_mode == .pixel) {
-                        if (pixi.editor.tools.stroke_size < pixi.Editor.Tools.max_brush_size - 1)
-                            pixi.editor.tools.stroke_size += 1;
+                    if (fizzy.editor.tools.current != .selection or fizzy.editor.tools.selection_mode == .pixel) {
+                        if (fizzy.editor.tools.stroke_size < fizzy.Editor.Tools.max_brush_size - 1)
+                            fizzy.editor.tools.stroke_size += 1;
 
-                        pixi.editor.tools.setStrokeSize(pixi.editor.tools.stroke_size);
+                        fizzy.editor.tools.setStrokeSize(fizzy.editor.tools.stroke_size);
                     }
                 }
 
                 if (ke.matchBind("save_as") and ke.action == .down) {
-                    pixi.editor.requestSaveAs();
+                    fizzy.editor.requestSaveAs();
                 }
 
                 if (ke.matchBind("export") and ke.action == .down) {
                     // Create a generic dialog that contains typical okay and cancel buttons and header
                     // The displayFn will be called during the drawing of the dialog, prior to ok and cancel buttons
-                    var mutex = pixi.dvui.dialog(@src(), .{
-                        .displayFn = pixi.Editor.Dialogs.Export.dialog,
-                        .callafterFn = pixi.Editor.Dialogs.Export.callAfter,
+                    var mutex = fizzy.dvui.dialog(@src(), .{
+                        .displayFn = fizzy.Editor.Dialogs.Export.dialog,
+                        .callafterFn = fizzy.Editor.Dialogs.Export.callAfter,
                         .title = "Export...",
                         .ok_label = "Export",
                         .cancel_label = "Cancel",
@@ -136,104 +136,104 @@ pub fn tick() !void {
                 }
 
                 if (ke.matchBind("decrease_stroke_size") and (ke.action == .down or ke.action == .repeat)) {
-                    if (pixi.editor.tools.current != .selection or pixi.editor.tools.selection_mode == .pixel) {
-                        if (pixi.editor.tools.stroke_size > 1)
-                            pixi.editor.tools.stroke_size -= 1;
+                    if (fizzy.editor.tools.current != .selection or fizzy.editor.tools.selection_mode == .pixel) {
+                        if (fizzy.editor.tools.stroke_size > 1)
+                            fizzy.editor.tools.stroke_size -= 1;
 
-                        pixi.editor.tools.setStrokeSize(pixi.editor.tools.stroke_size);
+                        fizzy.editor.tools.setStrokeSize(fizzy.editor.tools.stroke_size);
                     }
                 }
 
                 if (ke.matchBind("delete_selection_contents")) {
                     if (ke.action == .down) {
-                        pixi.editor.deleteSelectedContents();
+                        fizzy.editor.deleteSelectedContents();
                     }
                 }
 
                 if (builtin.os.tag != .macos) {
                     if (ke.matchBind("explorer") and ke.action == .down) {
-                        if (pixi.editor.explorer.closed) {
-                            pixi.editor.explorer.open();
+                        if (fizzy.editor.explorer.closed) {
+                            fizzy.editor.explorer.open();
                         } else {
-                            pixi.editor.explorer.close();
+                            fizzy.editor.explorer.close();
                         }
                     }
                 }
 
                 if (ke.matchBind("activate") and ke.action == .down) {
-                    pixi.editor.accept() catch {
+                    fizzy.editor.accept() catch {
                         std.log.err("Failed to accept", .{});
                     };
                 }
 
                 if (ke.matchBind("cancel") and ke.action == .down) {
-                    pixi.editor.cancel() catch {
+                    fizzy.editor.cancel() catch {
                         std.log.err("Failed to cancel", .{});
                     };
                 }
 
                 if (builtin.os.tag != .macos) {
                     if (ke.matchBind("undo") and (ke.action == .down or ke.action == .repeat)) {
-                        pixi.editor.undo() catch {
+                        fizzy.editor.undo() catch {
                             std.log.err("Failed to undo", .{});
                         };
                     }
 
                     if (ke.matchBind("copy") and ke.action == .down) {
-                        pixi.editor.copy() catch {
+                        fizzy.editor.copy() catch {
                             std.log.err("Failed to copy", .{});
                         };
                     }
 
                     if (ke.matchBind("paste") and ke.action == .down) {
-                        pixi.editor.paste() catch {
+                        fizzy.editor.paste() catch {
                             std.log.err("Failed to paste", .{});
                         };
                     }
 
                     if (ke.matchBind("redo") and (ke.action == .down or ke.action == .repeat)) {
-                        pixi.editor.redo() catch {
+                        fizzy.editor.redo() catch {
                             std.log.err("Failed to redo", .{});
                         };
                     }
 
                     if (ke.matchBind("save") and ke.action == .down) {
-                        pixi.editor.save() catch {
+                        fizzy.editor.save() catch {
                             std.log.err("Failed to save", .{});
                         };
                     }
 
                     if (ke.matchBind("new_file") and ke.action == .down) {
-                        pixi.editor.requestNewFileDialog();
+                        fizzy.editor.requestNewFileDialog();
                     }
 
                     if (ke.matchBind("transform") and ke.action == .down) {
-                        pixi.editor.transform() catch {
+                        fizzy.editor.transform() catch {
                             std.log.err("Failed to transform", .{});
                         };
                     }
 
                     if (ke.matchBind("grid_layout") and ke.action == .down) {
-                        if (pixi.editor.activeFile() != null) {
-                            pixi.editor.requestGridLayoutDialog();
+                        if (fizzy.editor.activeFile() != null) {
+                            fizzy.editor.requestGridLayoutDialog();
                         }
                     }
                 }
 
                 if (ke.matchBind("pencil") and ke.action == .down) {
-                    pixi.editor.tools.set(.pencil);
+                    fizzy.editor.tools.set(.pencil);
                 }
                 if (ke.matchBind("eraser") and ke.action == .down) {
-                    pixi.editor.tools.set(.eraser);
+                    fizzy.editor.tools.set(.eraser);
                 }
                 if (ke.matchBind("bucket") and ke.action == .down) {
-                    pixi.editor.tools.set(.bucket);
+                    fizzy.editor.tools.set(.bucket);
                 }
                 if (ke.matchBind("pointer") and ke.action == .down) {
-                    pixi.editor.tools.set(.pointer);
+                    fizzy.editor.tools.set(.pointer);
                 }
                 if (ke.matchBind("selection") and ke.action == .down) {
-                    pixi.editor.tools.set(.selection);
+                    fizzy.editor.tools.set(.selection);
                 }
             },
             else => {},

@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 
 const palette_parse = @import("palette_parse.zig");
@@ -18,8 +18,8 @@ pub fn loadFromFile(allocator: std.mem.Allocator, file: []const u8) !Palette {
     const ext = std.fs.path.extension(file);
 
     if (std.mem.eql(u8, ext, ".hex")) {
-        if (pixi.fs.read(pixi.app.allocator, dvui.io, file) catch null) |read| {
-            defer pixi.app.allocator.free(read);
+        if (fizzy.fs.read(fizzy.app.allocator, dvui.io, file) catch null) |read| {
+            defer fizzy.app.allocator.free(read);
 
             return loadFromBytes(allocator, std.fs.path.basename(file), read);
         }
@@ -45,6 +45,6 @@ pub fn loadFromBytes(allocator: std.mem.Allocator, name: []const u8, bytes: []co
 }
 
 pub fn deinit(self: *Palette) void {
-    pixi.app.allocator.free(self.name);
-    pixi.app.allocator.free(self.colors);
+    fizzy.app.allocator.free(self.name);
+    fizzy.app.allocator.free(self.colors);
 }

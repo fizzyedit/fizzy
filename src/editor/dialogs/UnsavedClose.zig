@@ -1,10 +1,10 @@
 const std = @import("std");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const FlatRasterSaveWarning = @import("FlatRasterSaveWarning.zig");
 
 pub fn request(file_id: u64) void {
-    var mutex = pixi.dvui.dialog(@src(), .{
+    var mutex = fizzy.dvui.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
         .title = "Unsaved changes",
@@ -21,7 +21,7 @@ pub fn request(file_id: u64) void {
 }
 
 fn fileBasename(file_id: u64) []const u8 {
-    const file = pixi.editor.open_files.get(file_id) orelse return "?";
+    const file = fizzy.editor.open_files.get(file_id) orelse return "?";
     return std.fs.path.basename(file.path);
 }
 
@@ -85,19 +85,19 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
 }
 
 fn onDiscard(file_id: u64) !void {
-    try pixi.editor.rawCloseFileID(file_id);
-    pixi.dvui.closeFloatingDialogAnchored();
+    try fizzy.editor.rawCloseFileID(file_id);
+    fizzy.dvui.closeFloatingDialogAnchored();
 }
 
 fn onCancel() void {
-    pixi.dvui.closeFloatingDialogAnchored();
+    fizzy.dvui.closeFloatingDialogAnchored();
 }
 
 /// Must complete before the file is closed — `saveAsync` runs on another thread and races with `deinit`.
-pub fn saveSynchronously(file: *pixi.Internal.File) !void {
+pub fn saveSynchronously(file: *fizzy.Internal.File) !void {
     const ext = std.fs.path.extension(file.path);
     const win = dvui.currentWindow();
-    if (std.mem.eql(u8, ext, ".pixi")) {
+    if (fizzy.Internal.File.isFizzyExtension(ext)) {
         try file.saveZip(win);
     } else if (std.mem.eql(u8, ext, ".png")) {
         try file.savePng(win);
@@ -109,18 +109,18 @@ pub fn saveSynchronously(file: *pixi.Internal.File) !void {
 }
 
 fn onSaveAndClose(file_id: u64) !void {
-    const file = pixi.editor.open_files.getPtr(file_id) orelse return;
-    if (!pixi.Internal.File.hasRecognizedSaveExtension(file.path)) {
-        const idx = pixi.editor.open_files.getIndex(file_id) orelse return;
-        pixi.editor.setActiveFile(idx);
-        pixi.editor.pending_close_file_id = file_id;
-        pixi.dvui.closeFloatingDialogAnchored();
-        pixi.editor.requestSaveAs();
+    const file = fizzy.editor.open_files.getPtr(file_id) orelse return;
+    if (!fizzy.Internal.File.hasRecognizedSaveExtension(file.path)) {
+        const idx = fizzy.editor.open_files.getIndex(file_id) orelse return;
+        fizzy.editor.setActiveFile(idx);
+        fizzy.editor.pending_close_file_id = file_id;
+        fizzy.dvui.closeFloatingDialogAnchored();
+        fizzy.editor.requestSaveAs();
         return;
     }
     if (file.shouldConfirmFlatRasterSave()) {
         FlatRasterSaveWarning.pending_from_save_all_quit = false;
-        pixi.dvui.closeFloatingDialogAnchored();
+        fizzy.dvui.closeFloatingDialogAnchored();
         FlatRasterSaveWarning.request(file_id, .save_and_close);
         return;
     }
@@ -128,8 +128,8 @@ fn onSaveAndClose(file_id: u64) !void {
         dvui.log.err("Save and Close failed: {s}", .{@errorName(err)});
         return;
     };
-    try pixi.editor.rawCloseFileID(file_id);
-    pixi.dvui.closeFloatingDialogAnchored();
+    try fizzy.editor.rawCloseFileID(file_id);
+    fizzy.dvui.closeFloatingDialogAnchored();
 }
 
 pub fn callAfter(_: dvui.Id, _: dvui.enums.DialogResponse) !void {}

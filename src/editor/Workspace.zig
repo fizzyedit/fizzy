@@ -2,11 +2,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const dvui = @import("dvui");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const icons = @import("icons");
 
-const App = pixi.App;
-const Editor = pixi.Editor;
+const App = fizzy.App;
+const Editor = fizzy.Editor;
 
 /// Workspaces are drawn recursively inside of the explorer paned widget
 /// second pane, and contains drag/drop enabled tabs. Tabs can freely be dragged to
@@ -46,8 +46,8 @@ vertical_ruler_width: f32 = 0.0,
 pub fn init(grouping: u64) Workspace {
     return .{
         .grouping = grouping,
-        .columns_drag_name = std.fmt.allocPrint(pixi.app.allocator, "column_drag_{d}", .{grouping}) catch "column_drag",
-        .rows_drag_name = std.fmt.allocPrint(pixi.app.allocator, "row_drag_{d}", .{grouping}) catch "row_drag",
+        .columns_drag_name = std.fmt.allocPrint(fizzy.app.allocator, "column_drag_{d}", .{grouping}) catch "column_drag",
+        .rows_drag_name = std.fmt.allocPrint(fizzy.app.allocator, "row_drag_{d}", .{grouping}) catch "row_drag",
     };
 }
 
@@ -56,18 +56,17 @@ const handle_dist = 60;
 
 const opacity = 60;
 
-const color_0 = pixi.math.Color.initBytes(0, 0, 0, 0);
-const color_1 = pixi.math.Color.initBytes(230, 175, 137, opacity);
-const color_2 = pixi.math.Color.initBytes(216, 145, 115, opacity);
-const color_3 = pixi.math.Color.initBytes(41, 23, 41, opacity);
-const color_4 = pixi.math.Color.initBytes(194, 109, 92, opacity);
-const color_5 = pixi.math.Color.initBytes(180, 89, 76, opacity);
+const color_0 = fizzy.math.Color.initBytes(0, 0, 0, 0);
+const color_1 = fizzy.math.Color.initBytes(230, 175, 137, opacity);
+const color_2 = fizzy.math.Color.initBytes(216, 145, 115, opacity);
+const color_3 = fizzy.math.Color.initBytes(41, 23, 41, opacity);
+const color_4 = fizzy.math.Color.initBytes(194, 109, 92, opacity);
+const color_5 = fizzy.math.Color.initBytes(180, 89, 76, opacity);
 
-const logo_colors: [15]pixi.math.Color = [_]pixi.math.Color{
-    color_0, color_1, color_1,
-    color_2, color_3, color_2,
-    color_4, color_4, color_4,
-    color_5, color_3, color_3,
+const logo_colors: [12]fizzy.math.Color = [_]fizzy.math.Color{
+    color_1, color_1, color_1,
+    color_2, color_2, color_3,
+    color_4, color_3, color_0,
     color_3, color_0, color_0,
 };
 
@@ -97,12 +96,12 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
 
         if (e.evt == .mouse) {
             if (e.evt.mouse.action == .press or (e.evt.mouse.action == .position and e.evt.mouse.mod.matchBind("ctrl/cmd"))) {
-                pixi.editor.open_workspace_grouping = self.grouping;
+                fizzy.editor.open_workspace_grouping = self.grouping;
             }
         }
     }
 
-    if (pixi.editor.explorer.pane == .project) {
+    if (fizzy.editor.explorer.pane == .project) {
         self.drawProject();
     } else {
         self.drawTabs();
@@ -141,15 +140,15 @@ fn drawProject(self: *Workspace) void {
 
     switch (builtin.os.tag) {
         .macos => {
-            content_color = if (!pixi.backend.isMaximized(dvui.currentWindow())) content_color.opacity(pixi.editor.settings.content_opacity) else content_color;
+            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
         },
         .windows => {
-            content_color = if (!pixi.backend.isMaximized(dvui.currentWindow())) content_color.opacity(pixi.editor.settings.content_opacity) else content_color;
+            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
         },
         else => {},
     }
 
-    const show_packed_atlas = pixi.editor.folder != null and pixi.packer.atlas != null;
+    const show_packed_atlas = fizzy.editor.folder != null and fizzy.packer.atlas != null;
 
     // Match `drawCanvas`: no outer fill when showing centered card (transparency shows through like homepage).
     var canvas_vbox = workspaceMainCanvasVbox(content_color, show_packed_atlas, self.grouping);
@@ -159,8 +158,8 @@ fn drawProject(self: *Workspace) void {
     }
 
     if (show_packed_atlas) {
-        const atlas = &pixi.packer.atlas.?;
-        var image_widget = pixi.dvui.ImageWidget.init(@src(), .{
+        const atlas = &fizzy.packer.atlas.?;
+        var image_widget = fizzy.dvui.ImageWidget.init(@src(), .{
             .source = atlas.source,
             .canvas = &atlas.canvas,
         }, .{
@@ -180,7 +179,7 @@ fn drawProject(self: *Workspace) void {
         dvui.alphaSet(1.0);
         defer dvui.alphaSet(alpha);
 
-        const hint: []const u8 = if (pixi.editor.folder == null)
+        const hint: []const u8 = if (fizzy.editor.folder == null)
             "Open a project folder, then pack to see the preview."
         else
             "Pack the project to see the preview.";
@@ -200,7 +199,7 @@ fn drawProject(self: *Workspace) void {
 }
 
 fn drawTabs(self: *Workspace) void {
-    if (pixi.editor.open_files.values().len == 0) return;
+    if (fizzy.editor.open_files.values().len == 0) return;
 
     // Handle dragging of tabs between workspace reorderables (tab bars)
     defer self.processTabsDrag();
@@ -236,7 +235,7 @@ fn drawTabs(self: *Workspace) void {
             });
             defer tabs_hbox.deinit();
 
-            const files = pixi.editor.open_files.values();
+            const files = fizzy.editor.open_files.values();
             const files_len = files.len;
 
             // Find the neighbouring tabs (within this workspace grouping) of the active tab.
@@ -244,7 +243,7 @@ fn drawTabs(self: *Workspace) void {
             var next_same_group_index: ?usize = null;
 
             const active_in_this_group = blk: {
-                if (pixi.editor.open_workspace_grouping != self.grouping) break :blk false;
+                if (fizzy.editor.open_workspace_grouping != self.grouping) break :blk false;
                 if (self.open_file_index >= files_len) break :blk false;
                 if (files[self.open_file_index].editor.grouping != self.grouping) break :blk false;
                 break :blk true;
@@ -274,7 +273,7 @@ fn drawTabs(self: *Workspace) void {
             }
 
             for (files, 0..) |file, i| {
-                const is_pixi_file = std.mem.endsWith(u8, file.path, ".pixi");
+                const is_fizzy_file = fizzy.Internal.File.isFizzyExtension(std.fs.path.extension(file.path));
 
                 if (file.editor.grouping != self.grouping) continue;
 
@@ -286,7 +285,7 @@ fn drawTabs(self: *Workspace) void {
                 });
                 defer reorderable.deinit();
 
-                const selected = self.open_file_index == i and pixi.editor.open_workspace_grouping == self.grouping;
+                const selected = self.open_file_index == i and fizzy.editor.open_workspace_grouping == self.grouping;
 
                 var anim = dvui.animate(@src(), .{ .duration = 400_000, .kind = .horizontal, .easing = dvui.easing.outBack }, .{});
                 defer anim.deinit();
@@ -295,7 +294,7 @@ fn drawTabs(self: *Workspace) void {
                 hbox.init(@src(), .{ .dir = .horizontal }, .{
                     .expand = .none,
                     .border = .all(0),
-                    .color_fill = if (selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(pixi.editor.settings.content_opacity),
+                    .color_fill = if (selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(fizzy.editor.settings.content_opacity),
                     .background = true,
                     .id_extra = i,
                     .padding = dvui.Rect.all(2),
@@ -304,7 +303,7 @@ fn drawTabs(self: *Workspace) void {
 
                 defer hbox.deinit();
 
-                const tab_hovered = pixi.dvui.hovered(hbox.data());
+                const tab_hovered = fizzy.dvui.hovered(hbox.data());
 
                 if (selected) {
                     if (!reorderable.floating()) {
@@ -331,14 +330,14 @@ fn drawTabs(self: *Workspace) void {
                     if (prev_same_group_index) |prev_index| {
                         if (i == prev_index) {
                             // This tab is directly to the left of the active tab.
-                            pixi.dvui.drawEdgeShadow(hbox.data().rectScale(), .right, .{});
+                            fizzy.dvui.drawEdgeShadow(hbox.data().rectScale(), .right, .{});
                         }
                     }
 
                     if (next_same_group_index) |next_index| {
                         if (i == next_index) {
                             // This tab is directly to the right of the active tab.
-                            pixi.dvui.drawEdgeShadow(hbox.data().rectScale(), .left, .{});
+                            fizzy.dvui.drawEdgeShadow(hbox.data().rectScale(), .left, .{});
                         }
                     }
                 }
@@ -349,10 +348,10 @@ fn drawTabs(self: *Workspace) void {
                     self.tabs_insert_before_index = i;
                 }
 
-                if (is_pixi_file) {
-                    _ = pixi.dvui.sprite(@src(), .{
-                        .source = pixi.editor.atlas.source,
-                        .sprite = pixi.editor.atlas.data.sprites[pixi.atlas.sprites.logo_default],
+                if (is_fizzy_file) {
+                    _ = fizzy.dvui.sprite(@src(), .{
+                        .source = fizzy.editor.atlas.source,
+                        .sprite = fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.logo_default],
                         .scale = 2.0,
                     }, .{
                         .gravity_y = 0.5,
@@ -360,7 +359,7 @@ fn drawTabs(self: *Workspace) void {
                     });
                 } else {
                     dvui.icon(@src(), "file_icon", icons.tvg.lucide.file, .{
-                        .stroke_color = if (is_pixi_file) .transparent else dvui.themeGet().color(.control, .text),
+                        .stroke_color = if (is_fizzy_file) .transparent else dvui.themeGet().color(.control, .text),
                     }, .{
                         .gravity_y = 0.5,
                         .padding = dvui.Rect.all(4),
@@ -373,8 +372,8 @@ fn drawTabs(self: *Workspace) void {
                     .gravity_y = 0.5,
                 });
 
-                const close_inner = pixi.dvui.windowHeaderCloseInnerSide();
-                const close_pad = pixi.dvui.window_header_close_margin;
+                const close_inner = fizzy.dvui.windowHeaderCloseInnerSide();
+                const close_pad = fizzy.dvui.window_header_close_margin;
                 const tab_status_slot = close_inner + close_pad.x + close_pad.w;
 
                 const status_close_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -386,7 +385,7 @@ fn drawTabs(self: *Workspace) void {
 
                 if (tab_hovered) {
                     var tab_close_button: dvui.ButtonWidget = undefined;
-                    tab_close_button.init(@src(), .{ .draw_focus = false }, pixi.dvui.windowHeaderCloseButtonOptions(.{
+                    tab_close_button.init(@src(), .{ .draw_focus = false }, fizzy.dvui.windowHeaderCloseButtonOptions(.{
                         .expand = .none,
                         .min_size_content = .{ .w = close_inner, .h = close_inner },
                         .id_extra = i *% 16 + 1,
@@ -410,7 +409,7 @@ fn drawTabs(self: *Workspace) void {
                     }
 
                     if (tab_close_button.clicked()) {
-                        pixi.editor.closeFileID(file.id) catch |err| {
+                        fizzy.editor.closeFileID(file.id) catch |err| {
                             dvui.log.err("closeFile: {d} failed: {s}", .{ i, @errorName(err) });
                         };
                         break;
@@ -418,7 +417,7 @@ fn drawTabs(self: *Workspace) void {
                 } else if (selected and !file.dirty()) {
                     const tab_text = dvui.themeGet().color(.window, .text);
                     var ghost_close: dvui.ButtonWidget = undefined;
-                    ghost_close.init(@src(), .{ .draw_focus = false }, pixi.dvui.windowHeaderCloseButtonOptions(.{
+                    ghost_close.init(@src(), .{ .draw_focus = false }, fizzy.dvui.windowHeaderCloseButtonOptions(.{
                         .expand = .none,
                         .min_size_content = .{ .w = close_inner, .h = close_inner },
                         .id_extra = i *% 16 + 3,
@@ -455,7 +454,7 @@ fn drawTabs(self: *Workspace) void {
                     });
 
                     if (ghost_close.clicked()) {
-                        pixi.editor.closeFileID(file.id) catch |err| {
+                        fizzy.editor.closeFileID(file.id) catch |err| {
                             dvui.log.err("closeFile: {d} failed: {s}", .{ i, @errorName(err) });
                         };
                         break;
@@ -479,7 +478,7 @@ fn drawTabs(self: *Workspace) void {
                     switch (e.evt) {
                         .mouse => |me| {
                             if (me.action == .press and me.button.pointer()) {
-                                pixi.editor.setActiveFile(i);
+                                fizzy.editor.setActiveFile(i);
                                 dvui.refresh(null, @src(), hbox.data().id);
 
                                 e.handle(@src(), hbox.data());
@@ -504,7 +503,7 @@ fn drawTabs(self: *Workspace) void {
                 }
             }
             if (tabs.finalSlot()) {
-                self.tabs_insert_before_index = pixi.editor.open_files.values().len;
+                self.tabs_insert_before_index = fizzy.editor.open_files.values().len;
             }
         }
     }
@@ -514,45 +513,45 @@ pub fn processTabsDrag(self: *Workspace) void {
     if (self.tabs_insert_before_index) |insert_before| {
         if (self.tabs_removed_index) |removed| { // Dragging from this workspace
 
-            if (removed > pixi.editor.open_files.count()) return;
+            if (removed > fizzy.editor.open_files.count()) return;
             if (removed > insert_before) {
-                std.mem.swap(pixi.Internal.File, &pixi.editor.open_files.values()[removed], &pixi.editor.open_files.values()[insert_before]);
-                std.mem.swap(u64, &pixi.editor.open_files.keys()[removed], &pixi.editor.open_files.keys()[insert_before]);
-                pixi.editor.setActiveFile(insert_before);
+                std.mem.swap(fizzy.Internal.File, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before]);
+                std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before]);
+                fizzy.editor.setActiveFile(insert_before);
             } else {
                 if (insert_before > 0) {
-                    std.mem.swap(pixi.Internal.File, &pixi.editor.open_files.values()[removed], &pixi.editor.open_files.values()[insert_before - 1]);
-                    std.mem.swap(u64, &pixi.editor.open_files.keys()[removed], &pixi.editor.open_files.keys()[insert_before - 1]);
-                    pixi.editor.setActiveFile(insert_before - 1);
+                    std.mem.swap(fizzy.Internal.File, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before - 1]);
+                    std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before - 1]);
+                    fizzy.editor.setActiveFile(insert_before - 1);
                 } else {
-                    std.mem.swap(pixi.Internal.File, &pixi.editor.open_files.values()[removed], &pixi.editor.open_files.values()[insert_before]);
-                    std.mem.swap(u64, &pixi.editor.open_files.keys()[removed], &pixi.editor.open_files.keys()[insert_before]);
-                    pixi.editor.setActiveFile(insert_before);
+                    std.mem.swap(fizzy.Internal.File, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before]);
+                    std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before]);
+                    fizzy.editor.setActiveFile(insert_before);
                 }
             }
 
             self.tabs_removed_index = null;
             self.tabs_insert_before_index = null;
         } else { // Dragging from another workspace
-            for (pixi.editor.workspaces.values()) |*workspace| {
+            for (fizzy.editor.workspaces.values()) |*workspace| {
                 if (workspace.tabs_removed_index) |removed| {
                     if (removed > insert_before) {
-                        std.mem.swap(pixi.Internal.File, &pixi.editor.open_files.values()[removed], &pixi.editor.open_files.values()[insert_before]);
-                        std.mem.swap(u64, &pixi.editor.open_files.keys()[removed], &pixi.editor.open_files.keys()[insert_before]);
+                        std.mem.swap(fizzy.Internal.File, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before]);
+                        std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before]);
 
-                        pixi.editor.open_files.values()[insert_before].editor.grouping = self.grouping;
-                        pixi.editor.setActiveFile(insert_before);
+                        fizzy.editor.open_files.values()[insert_before].editor.grouping = self.grouping;
+                        fizzy.editor.setActiveFile(insert_before);
                     } else {
                         if (insert_before > 0) {
-                            std.mem.swap(pixi.Internal.File, &pixi.editor.open_files.values()[removed], &pixi.editor.open_files.values()[insert_before - 1]);
-                            std.mem.swap(u64, &pixi.editor.open_files.keys()[removed], &pixi.editor.open_files.keys()[insert_before - 1]);
-                            pixi.editor.open_files.values()[insert_before - 1].editor.grouping = self.grouping;
-                            pixi.editor.setActiveFile(insert_before - 1);
+                            std.mem.swap(fizzy.Internal.File, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before - 1]);
+                            std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before - 1]);
+                            fizzy.editor.open_files.values()[insert_before - 1].editor.grouping = self.grouping;
+                            fizzy.editor.setActiveFile(insert_before - 1);
                         } else {
-                            std.mem.swap(pixi.Internal.File, &pixi.editor.open_files.values()[removed], &pixi.editor.open_files.values()[insert_before]);
-                            std.mem.swap(u64, &pixi.editor.open_files.keys()[removed], &pixi.editor.open_files.keys()[insert_before]);
-                            pixi.editor.open_files.values()[insert_before].editor.grouping = self.grouping;
-                            pixi.editor.setActiveFile(insert_before);
+                            std.mem.swap(fizzy.Internal.File, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before]);
+                            std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before]);
+                            fizzy.editor.open_files.values()[insert_before].editor.grouping = self.grouping;
+                            fizzy.editor.setActiveFile(insert_before);
                         }
                     }
 
@@ -618,11 +617,11 @@ const WorkspaceTabDragSrc = union(enum) {
 /// Also handles the same `tab_drag` from the Files tree (see `files.zig` + DVUI reorder_tree cross-widget pattern).
 pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
     if (!dvui.dragName("tab_drag")) {
-        pixi.editor.clearFileTreeTabDragDropState();
+        fizzy.editor.clearFileTreeTabDragDropState();
         return;
     }
 
-    const drag_src = WorkspaceTabDragSrc.resolve(pixi.editor);
+    const drag_src = WorkspaceTabDragSrc.resolve(fizzy.editor);
     switch (drag_src) {
         .none => return,
         else => {},
@@ -641,7 +640,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                 right_side.w /= 2;
                 right_side.x += right_side.w;
 
-                if (right_side.contains(e.evt.mouse.p) and pixi.editor.workspaces.keys()[pixi.editor.workspaces.keys().len - 1] == self.grouping) {
+                if (right_side.contains(e.evt.mouse.p) and fizzy.editor.workspaces.keys()[fizzy.editor.workspaces.keys().len - 1] == self.grouping) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
                         right_side.fill(dvui.Rect.Physical.all(right_side.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
@@ -653,12 +652,12 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        pixi.editor.clearFileTreeTabDragDropState();
+                        fizzy.editor.clearFileTreeTabDragDropState();
 
-                        repointWorkspacesAfterTabDrag(pixi.editor, workspace, drag_index);
-                        var dragged_file = &pixi.editor.open_files.values()[drag_index];
-                        dragged_file.editor.grouping = pixi.editor.newGroupingID();
-                        pixi.editor.open_workspace_grouping = dragged_file.editor.grouping;
+                        repointWorkspacesAfterTabDrag(fizzy.editor, workspace, drag_index);
+                        var dragged_file = &fizzy.editor.open_files.values()[drag_index];
+                        dragged_file.editor.grouping = fizzy.editor.newGroupingID();
+                        fizzy.editor.open_workspace_grouping = dragged_file.editor.grouping;
                     }
                 } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
@@ -672,13 +671,13 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        pixi.editor.clearFileTreeTabDragDropState();
+                        fizzy.editor.clearFileTreeTabDragDropState();
 
-                        repointWorkspacesAfterTabDrag(pixi.editor, workspace, drag_index);
-                        var dragged_file = &pixi.editor.open_files.values()[drag_index];
+                        repointWorkspacesAfterTabDrag(fizzy.editor, workspace, drag_index);
+                        var dragged_file = &fizzy.editor.open_files.values()[drag_index];
                         dragged_file.editor.grouping = self.grouping;
-                        pixi.editor.open_workspace_grouping = dragged_file.editor.grouping;
-                        self.open_file_index = pixi.editor.open_files.getIndex(dragged_file.id) orelse 0;
+                        fizzy.editor.open_workspace_grouping = dragged_file.editor.grouping;
+                        self.open_file_index = fizzy.editor.open_files.getIndex(dragged_file.id) orelse 0;
                     }
                 }
             },
@@ -687,7 +686,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                 right_side.w /= 2;
                 right_side.x += right_side.w;
 
-                if (right_side.contains(e.evt.mouse.p) and pixi.editor.workspaces.keys()[pixi.editor.workspaces.keys().len - 1] == self.grouping) {
+                if (right_side.contains(e.evt.mouse.p) and fizzy.editor.workspaces.keys()[fizzy.editor.workspaces.keys().len - 1] == self.grouping) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
                         right_side.fill(dvui.Rect.Physical.all(right_side.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
@@ -698,12 +697,12 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        pixi.editor.clearFileTreeTabDragDropState();
+                        fizzy.editor.clearFileTreeTabDragDropState();
 
-                        repointWorkspacesAfterTabDrag(pixi.editor, null, drag_index);
-                        var dragged_file = &pixi.editor.open_files.values()[drag_index];
-                        dragged_file.editor.grouping = pixi.editor.newGroupingID();
-                        pixi.editor.open_workspace_grouping = dragged_file.editor.grouping;
+                        repointWorkspacesAfterTabDrag(fizzy.editor, null, drag_index);
+                        var dragged_file = &fizzy.editor.open_files.values()[drag_index];
+                        dragged_file.editor.grouping = fizzy.editor.newGroupingID();
+                        fizzy.editor.open_workspace_grouping = dragged_file.editor.grouping;
                     }
                 } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
@@ -716,13 +715,13 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        pixi.editor.clearFileTreeTabDragDropState();
+                        fizzy.editor.clearFileTreeTabDragDropState();
 
-                        repointWorkspacesAfterTabDrag(pixi.editor, null, drag_index);
-                        var dragged_file = &pixi.editor.open_files.values()[drag_index];
+                        repointWorkspacesAfterTabDrag(fizzy.editor, null, drag_index);
+                        var dragged_file = &fizzy.editor.open_files.values()[drag_index];
                         dragged_file.editor.grouping = self.grouping;
-                        pixi.editor.open_workspace_grouping = dragged_file.editor.grouping;
-                        self.open_file_index = pixi.editor.open_files.getIndex(dragged_file.id) orelse 0;
+                        fizzy.editor.open_workspace_grouping = dragged_file.editor.grouping;
+                        self.open_file_index = fizzy.editor.open_files.getIndex(dragged_file.id) orelse 0;
                     }
                 }
             },
@@ -731,7 +730,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                 right_side.w /= 2;
                 right_side.x += right_side.w;
 
-                if (right_side.contains(e.evt.mouse.p) and pixi.editor.workspaces.keys()[pixi.editor.workspaces.keys().len - 1] == self.grouping) {
+                if (right_side.contains(e.evt.mouse.p) and fizzy.editor.workspaces.keys()[fizzy.editor.workspaces.keys().len - 1] == self.grouping) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
                         right_side.fill(dvui.Rect.Physical.all(right_side.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
@@ -742,15 +741,15 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        const new_g = pixi.editor.newGroupingID();
-                        const idx = pixi.editor.openOrFocusFileAtGrouping(path, new_g) catch {
-                            pixi.editor.clearFileTreeTabDragDropState();
+                        const new_g = fizzy.editor.newGroupingID();
+                        const idx = fizzy.editor.openOrFocusFileAtGrouping(path, new_g) catch {
+                            fizzy.editor.clearFileTreeTabDragDropState();
                             continue :events_loop;
                         };
-                        repointWorkspacesAfterTabDrag(pixi.editor, null, idx);
+                        repointWorkspacesAfterTabDrag(fizzy.editor, null, idx);
                         // Same as tab strip: new grouping may not have a workspace ptr yet this frame.
-                        pixi.editor.open_workspace_grouping = new_g;
-                        pixi.editor.clearFileTreeTabDragDropState();
+                        fizzy.editor.open_workspace_grouping = new_g;
+                        fizzy.editor.clearFileTreeTabDragDropState();
                     }
                 } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
@@ -763,13 +762,13 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        const idx = pixi.editor.openOrFocusFileAtGrouping(path, self.grouping) catch {
-                            pixi.editor.clearFileTreeTabDragDropState();
+                        const idx = fizzy.editor.openOrFocusFileAtGrouping(path, self.grouping) catch {
+                            fizzy.editor.clearFileTreeTabDragDropState();
                             continue :events_loop;
                         };
-                        repointWorkspacesAfterTabDrag(pixi.editor, null, idx);
+                        repointWorkspacesAfterTabDrag(fizzy.editor, null, idx);
                         self.open_file_index = idx;
-                        pixi.editor.clearFileTreeTabDragDropState();
+                        fizzy.editor.clearFileTreeTabDragDropState();
                     }
                 }
             },
@@ -782,15 +781,15 @@ pub fn drawCanvas(self: *Workspace) !void {
 
     switch (builtin.os.tag) {
         .macos => {
-            content_color = if (!pixi.backend.isMaximized(dvui.currentWindow())) content_color.opacity(pixi.editor.settings.content_opacity) else content_color;
+            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
         },
         .windows => {
-            content_color = if (!pixi.backend.isMaximized(dvui.currentWindow())) content_color.opacity(pixi.editor.settings.content_opacity) else content_color;
+            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
         },
         else => {},
     }
 
-    const has_files = pixi.editor.open_files.values().len > 0;
+    const has_files = fizzy.editor.open_files.values().len > 0;
 
     var canvas_vbox = workspaceMainCanvasVbox(content_color, has_files, self.grouping);
     defer {
@@ -800,24 +799,24 @@ pub fn drawCanvas(self: *Workspace) !void {
     defer self.processTabDrag(canvas_vbox.data());
 
     if (has_files) {
-        if (self.open_file_index >= pixi.editor.open_files.values().len) {
-            self.open_file_index = pixi.editor.open_files.values().len - 1;
+        if (self.open_file_index >= fizzy.editor.open_files.values().len) {
+            self.open_file_index = fizzy.editor.open_files.values().len - 1;
         }
 
-        const file = &pixi.editor.open_files.values()[self.open_file_index];
+        const file = &fizzy.editor.open_files.values()[self.open_file_index];
         file.editor.canvas.id = canvas_vbox.data().id;
         file.editor.workspace = self;
 
-        if (pixi.editor.settings.show_rulers and !dvui.firstFrame(canvas_vbox.data().id)) {
-            defer pixi.dvui.drawEdgeShadow(canvas_vbox.data().rectScale(), .top, .{});
+        if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(canvas_vbox.data().id)) {
+            defer fizzy.dvui.drawEdgeShadow(canvas_vbox.data().rectScale(), .top, .{});
             self.drawRuler(.horizontal);
         }
 
         var canvas_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
         defer canvas_hbox.deinit();
 
-        if (pixi.editor.settings.show_rulers and !dvui.firstFrame(canvas_vbox.data().id)) {
-            defer pixi.dvui.drawEdgeShadow(canvas_vbox.data().rectScale(), .left, .{});
+        if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(canvas_vbox.data().id)) {
+            defer fizzy.dvui.drawEdgeShadow(canvas_vbox.data().rectScale(), .left, .{});
             self.drawRuler(.vertical);
         }
 
@@ -825,9 +824,9 @@ pub fn drawCanvas(self: *Workspace) !void {
 
         if (self.grouping != file.editor.grouping) return;
 
-        pixi.perf.canvasPaneDrawn();
+        fizzy.perf.canvasPaneDrawn();
 
-        var file_widget = pixi.dvui.FileWidget.init(@src(), .{
+        var file_widget = fizzy.dvui.FileWidget.init(@src(), .{
             .file = file,
             .center = self.center,
         }, .{
@@ -857,7 +856,7 @@ pub const RulerOrientation = enum {
 };
 
 pub fn drawRuler(self: *Workspace, orientation: RulerOrientation) void {
-    const file = &pixi.editor.open_files.values()[self.open_file_index];
+    const file = &fizzy.editor.open_files.values()[self.open_file_index];
     const font = dvui.Font.theme(.body).larger(-1);
 
     const largest_label = std.fmt.allocPrint(dvui.currentWindow().arena(), "{d}", .{file.rows - 1}) catch {
@@ -867,15 +866,15 @@ pub fn drawRuler(self: *Workspace, orientation: RulerOrientation) void {
     const largest_label_size = font.textSize(largest_label);
     const natural_scale = dvui.currentWindow().natural_scale;
     const largest_label_phys = largest_label_size.scale(natural_scale, dvui.Size.Physical);
-    const base_ruler_size = largest_label_size.w + pixi.editor.settings.ruler_padding;
+    const base_ruler_size = largest_label_size.w + fizzy.editor.settings.ruler_padding;
 
     const ruler_thickness: f32 = switch (orientation) {
         .horizontal => blk: {
-            self.horizontal_ruler_height = font.textSize("M").h + pixi.editor.settings.ruler_padding;
+            self.horizontal_ruler_height = font.textSize("M").h + fizzy.editor.settings.ruler_padding;
             break :blk self.horizontal_ruler_height;
         },
         .vertical => blk: {
-            self.vertical_ruler_width = @max(base_ruler_size, font.textSize("M").h + pixi.editor.settings.ruler_padding);
+            self.vertical_ruler_width = @max(base_ruler_size, font.textSize("M").h + fizzy.editor.settings.ruler_padding);
             break :blk self.vertical_ruler_width;
         },
     };
@@ -922,7 +921,7 @@ pub fn drawRuler(self: *Workspace, orientation: RulerOrientation) void {
 /// `largest_row_index_*` come from `drawRuler` (widest row index string and its measured size in physical pixels).
 fn drawRulerContent(
     self: *Workspace,
-    file: *pixi.Internal.File,
+    file: *fizzy.Internal.File,
     font: dvui.Font,
     orientation: RulerOrientation,
     ruler_size: f32,
@@ -996,7 +995,7 @@ fn drawRulerContent(
         .vertical => self.rows_drag_name,
     };
 
-    var reorder = pixi.dvui.reorder(@src(), .{ .drag_name = drag_name }, .{
+    var reorder = fizzy.dvui.reorder(@src(), .{ .drag_name = drag_name }, .{
         .expand = .both,
         .margin = dvui.Rect.all(0),
         .padding = dvui.Rect.all(0),
@@ -1046,7 +1045,7 @@ fn drawRulerContent(
         .horizontal => .{ .w = @as(f32, @floatFromInt(file.column_width)), .h = 1.0 },
         .vertical => .{ .w = 1.0, .h = @as(f32, @floatFromInt(file.row_height)) },
     };
-    const reorder_mode: pixi.dvui.ReorderWidget.Reorderable.Mode = switch (orientation) {
+    const reorder_mode: fizzy.dvui.ReorderWidget.Reorderable.Mode = switch (orientation) {
         .horizontal => .any_y,
         .vertical => .any_x,
     };
@@ -1084,7 +1083,7 @@ fn drawRulerContent(
 
         var button_color = if (reorder.drag_point != null) dvui.themeGet().color(.control, .fill).opacity(0.85) else dvui.themeGet().color(.window, .fill);
 
-        if (pixi.dvui.hovered(reorderable.data())) {
+        if (fizzy.dvui.hovered(reorderable.data())) {
             button_color = dvui.themeGet().color(.control, .fill_hover);
             dvui.cursorSet(.hand);
         }
@@ -1359,7 +1358,7 @@ pub fn drawRulerLabel(_: *Workspace, options: TextLabelOptions) void {
     else
         font.textSize(label).scale(natural, dvui.Size.Physical);
 
-    const padding = pixi.editor.settings.ruler_padding * natural;
+    const padding = fizzy.editor.settings.ruler_padding * natural;
 
     var label_rect = rect;
 
@@ -1406,7 +1405,7 @@ pub fn processColumnReorder(self: *Workspace) void {
 
             if (columns_removed_index == columns_insert_before_index or columns_removed_index + 1 == columns_insert_before_index) return;
 
-            const file = &pixi.editor.open_files.values()[self.open_file_index];
+            const file = &fizzy.editor.open_files.values()[self.open_file_index];
 
             file.reorderColumns(columns_removed_index, columns_insert_before_index) catch {
                 dvui.log.err("Failed to reorder columns", .{});
@@ -1449,7 +1448,7 @@ pub fn processRowReorder(self: *Workspace) void {
             defer self.rows_insert_before_index = null;
             if (rows_removed_index == rows_insert_before_index or rows_removed_index + 1 == rows_insert_before_index) return;
 
-            const file = &pixi.editor.open_files.values()[self.open_file_index];
+            const file = &fizzy.editor.open_files.values()[self.open_file_index];
 
             file.reorderRows(rows_removed_index, rows_insert_before_index) catch {
                 dvui.log.err("Failed to reorder rows", .{});
@@ -1486,7 +1485,7 @@ pub fn processRowReorder(self: *Workspace) void {
 }
 
 pub fn drawTransformDialog(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
-    const file = &pixi.editor.open_files.values()[self.open_file_index];
+    const file = &fizzy.editor.open_files.values()[self.open_file_index];
     if (file.editor.transform) |*transform| {
         var rect = canvas_vbox.data().rect;
         rect.w = 0;
@@ -1560,12 +1559,12 @@ pub fn drawTransformDialog(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void 
             });
             defer box.deinit();
             if (dvui.buttonIcon(@src(), "transform_cancel", icons.tvg.lucide.@"trash-2", .{}, .{ .stroke_color = dvui.themeGet().color(.window, .fill) }, .{ .style = .err, .expand = .horizontal })) {
-                pixi.editor.cancel() catch {
+                fizzy.editor.cancel() catch {
                     dvui.log.err("Failed to cancel transform", .{});
                 };
             }
             if (dvui.buttonIcon(@src(), "transform_accept", icons.tvg.lucide.check, .{}, .{ .stroke_color = dvui.themeGet().color(.window, .fill) }, .{ .style = .highlight, .expand = .horizontal })) {
-                pixi.editor.accept() catch {
+                fizzy.editor.accept() catch {
                     dvui.log.err("Failed to accept transform", .{});
                 };
             }
@@ -1597,7 +1596,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         });
         defer vbox2.deinit();
 
-        for (0..5) |i| {
+        for (0..4) |i| {
             const hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .none,
                 .min_size_content = .{ .w = logo_pixel_size * logo_width, .h = logo_pixel_size },
@@ -1609,15 +1608,15 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
 
             for (0..3) |j| {
                 const index = i * logo_width + j;
-                var pixi_color = logo_colors[index];
+                var fizzy_color = logo_colors[index];
 
-                if (pixi_color.value[3] < 1.0 and pixi_color.value[3] > 0.0) {
+                if (fizzy_color.value[3] < 1.0 and fizzy_color.value[3] > 0.0) {
                     const theme_bg = dvui.themeGet().color(.window, .fill);
-                    pixi_color = pixi_color.lerp(pixi.math.Color.initBytes(theme_bg.r, theme_bg.g, theme_bg.b, 255), pixi_color.value[3]);
-                    pixi_color.value[3] = 1.0;
+                    fizzy_color = fizzy_color.lerp(fizzy.math.Color.initBytes(theme_bg.r, theme_bg.g, theme_bg.b, 255), fizzy_color.value[3]);
+                    fizzy_color.value[3] = 1.0;
                 }
 
-                const color = pixi_color.bytes();
+                const color = fizzy_color.bytes();
 
                 const pixel = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .none,
@@ -1633,7 +1632,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
                 const rs = pixel.data().rectScale();
                 pixel.deinit();
 
-                if (pixi_color.value[3] <= 0.0) continue;
+                if (fizzy_color.value[3] <= 0.0) continue;
 
                 try drawBubble(rect, rs, color, index);
             }
@@ -1660,7 +1659,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         button.processEvents();
         button.drawBackground();
 
-        pixi.dvui.labelWithKeybind(
+        fizzy.dvui.labelWithKeybind(
             "New File",
             dvui.currentWindow().keybinds.get("new_file") orelse .{},
             true,
@@ -1669,7 +1668,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         );
 
         if (button.clicked()) {
-            pixi.editor.requestNewFileDialog();
+            fizzy.editor.requestNewFileDialog();
         }
     }
     {
@@ -1687,7 +1686,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         button.processEvents();
         button.drawBackground();
 
-        pixi.dvui.labelWithKeybind(
+        fizzy.dvui.labelWithKeybind(
             "Open Folder",
             dvui.currentWindow().keybinds.get("open_folder") orelse .{},
             true,
@@ -1696,7 +1695,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         );
 
         if (button.clicked()) {
-            pixi.backend.showOpenFolderDialog(setProjectFolderCallback, null);
+            fizzy.backend.showOpenFolderDialog(setProjectFolderCallback, null);
         }
     }
 
@@ -1715,7 +1714,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         button.processEvents();
         button.drawBackground();
 
-        pixi.dvui.labelWithKeybind(
+        fizzy.dvui.labelWithKeybind(
             "Open Files",
             dvui.currentWindow().keybinds.get("open_files") orelse .{},
             true,
@@ -1730,14 +1729,14 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
             //     .filters = &.{ "*.pixi", "*.png" },
             // })) |files| {
             //     for (files) |file| {
-            //         _ = pixi.editor.openFilePath(file, pixi.editor.open_workspace_grouping) catch {
+            //         _ = fizzy.editor.openFilePath(file, fizzy.editor.open_workspace_grouping) catch {
             //             std.log.err("Failed to open file: {s}", .{file});
             //         };
             //     }
             // }
 
-            pixi.backend.showOpenFileDialog(openFilesCallback, &.{
-                .{ .name = "Image Files", .pattern = "pixi;png;jpg;jpeg" },
+            fizzy.backend.showOpenFileDialog(openFilesCallback, &.{
+                .{ .name = "Image Files", .pattern = "fizzy;png;jpg;jpeg" },
             }, "", null);
         }
     }
@@ -1761,7 +1760,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         });
         defer scroll_area.deinit();
 
-        var i: usize = pixi.editor.recents.folders.items.len;
+        var i: usize = fizzy.editor.recents.folders.items.len;
         while (i > 0) : (i -= 1) {
             var anim = dvui.animate(@src(), .{
                 .kind = .horizontal,
@@ -1773,7 +1772,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
             });
             defer anim.deinit();
 
-            const folder = pixi.editor.recents.folders.items[i - 1];
+            const folder = fizzy.editor.recents.folders.items[i - 1];
             if (dvui.button(@src(), folder, .{
                 .draw_focus = false,
             }, .{
@@ -1787,7 +1786,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
                 .color_fill_press = dvui.themeGet().color(.window, .fill_press),
                 .color_text = dvui.themeGet().color(.control, .text).opacity(0.5),
             })) {
-                try pixi.editor.setProjectFolder(folder);
+                try fizzy.editor.setProjectFolder(folder);
             }
         }
     }
@@ -1858,7 +1857,7 @@ pub fn drawBubble(rect: dvui.Rect, rs: dvui.RectScale, color: [4]u8, id_extra: u
 // This should never be able to return more than one folder
 pub fn setProjectFolderCallback(folder: ?[][:0]const u8) void {
     if (folder) |f| {
-        pixi.editor.setProjectFolder(f[0]) catch {
+        fizzy.editor.setProjectFolder(f[0]) catch {
             dvui.log.err("Failed to set project folder: {s}", .{f[0]});
         };
     }
@@ -1867,7 +1866,7 @@ pub fn setProjectFolderCallback(folder: ?[][:0]const u8) void {
 pub fn openFilesCallback(files: ?[][:0]const u8) void {
     if (files) |f| {
         for (f) |file| {
-            _ = pixi.editor.openFilePath(file, pixi.editor.open_workspace_grouping) catch {
+            _ = fizzy.editor.openFilePath(file, fizzy.editor.open_workspace_grouping) catch {
                 dvui.log.err("Failed to open file: {s}", .{file});
             };
         }

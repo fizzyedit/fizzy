@@ -132,11 +132,11 @@ pub fn build(b: *std.Build) !void {
     // macOS `vpk pack` codesigning / notarization. Optional: when omitted, packaging produces an
     // unsigned bundle. Set all three to sign + notarize a release build.
     const macos_sign_app_identity = b.option([]const u8, "macos-sign-app", "macOS codesign identity for the app bundle (e.g. 'Developer ID Application: NAME (TEAMID)')") orelse
-        b.graph.environ_map.get("PIXI_MACOS_SIGN_APP");
+        b.graph.environ_map.get("FIZZY_MACOS_SIGN_APP");
     const macos_sign_install_identity = b.option([]const u8, "macos-sign-installer", "macOS codesign identity for the installer pkg (e.g. 'Developer ID Installer: NAME (TEAMID)')") orelse
-        b.graph.environ_map.get("PIXI_MACOS_SIGN_INSTALLER");
+        b.graph.environ_map.get("FIZZY_MACOS_SIGN_INSTALLER");
     const macos_notary_profile = b.option([]const u8, "macos-notary-profile", "notarytool keychain profile name (run `xcrun notarytool store-credentials <name>` first)") orelse
-        b.graph.environ_map.get("PIXI_MACOS_NOTARY_PROFILE");
+        b.graph.environ_map.get("FIZZY_MACOS_NOTARY_PROFILE");
 
     const target = b.standardTargetOptions(.{});
     // Artifacts install to `zig-out/<arch>-<os>/` (e.g. arm64-macos, x86-64-windows). Pass `-Dtarget=…` as usual.
@@ -196,8 +196,8 @@ pub fn build(b: *std.Build) !void {
     // GitHub repo URL baked into the binary so Velopack's auto-update can find
     // the latest release via the GitHub Releases API. Override at build time
     // with `-Drepo-url=...` (e.g. when shipping a fork). At runtime, the env
-    // var `PIXI_AUTOUPDATE_URL` still overrides this for local feed testing.
-    const app_repo_url = b.option([]const u8, "repo-url", "GitHub repo URL used by Velopack auto-update (e.g. https://github.com/foxnne/pixi)") orelse "https://github.com/foxnne/pixi";
+    // var `FIZZY_AUTOUPDATE_URL` still overrides this for local feed testing.
+    const app_repo_url = b.option([]const u8, "repo-url", "GitHub repo URL used by Velopack auto-update (e.g. https://github.com/foxnne/fizzy)") orelse "https://github.com/foxnne/fizzy";
 
     var version_owned: ?[]u8 = null;
     defer if (version_owned) |buf| b.allocator.free(buf);
@@ -228,18 +228,18 @@ pub fn build(b: *std.Build) !void {
     const assets_module = assetpack.pack(b, b.path("assets"), .{});
 
     // Generated atlas / asset stubs (`src/generated/*.zig`) are imported
-    // unconditionally by `pixi.zig`, so the process-assets step has to
-    // run before any target that touches pixi.zig — exe, integration
+    // unconditionally by `fizzy.zig`, so the process-assets step has to
+    // run before any target that touches fizzy.zig — exe, integration
     // tests, etc.
     const assets_processing = try ProcessAssetsStep.init(b, "assets", "src/generated/");
     const process_assets_step = b.step("process-assets", "generates struct for all assets");
     process_assets_step.dependOn(&assets_processing.step);
 
-    const main_pixi = try addPixiExecutableForTarget(b, target, optimize, accesskit, build_opts, zip_pkg, assets_module, process_assets_step, macos_sdl_paths, velopack_enabled);
-    const exe = main_pixi.exe;
-    const zstbi_module = main_pixi.zstbi_module;
-    const msf_gif_module = main_pixi.msf_gif_module;
-    const known_folders = main_pixi.known_folders;
+    const main_fizzy = try addFizzyExecutableForTarget(b, target, optimize, accesskit, build_opts, zip_pkg, assets_module, process_assets_step, macos_sdl_paths, velopack_enabled);
+    const exe = main_fizzy.exe;
+    const zstbi_module = main_fizzy.zstbi_module;
+    const msf_gif_module = main_fizzy.msf_gif_module;
+    const known_folders = main_fizzy.known_folders;
 
     const exe_for_package: *std.Build.Step.Compile = package_blk: {
         if (velopack_enabled) break :package_blk exe;
@@ -248,8 +248,8 @@ pub fn build(b: *std.Build) !void {
         pack_opts.addOption([]const u8, "app_version", app_version);
         pack_opts.addOption([]const u8, "app_repo_url", app_repo_url);
         pack_opts.addOption(bool, "velopack_enabled", true);
-        const pack_pixi = try addPixiExecutableForTarget(b, target, optimize, accesskit, pack_opts, zip_pkg, assets_module, process_assets_step, macos_sdl_paths, true);
-        break :package_blk pack_pixi.exe;
+        const pack_fizzy = try addFizzyExecutableForTarget(b, target, optimize, accesskit, pack_opts, zip_pkg, assets_module, process_assets_step, macos_sdl_paths, true);
+        break :package_blk pack_fizzy.exe;
     };
 
     if (no_emit) {
@@ -300,7 +300,7 @@ pub fn build(b: *std.Build) !void {
             }
             vpk_pkg_sh.addArg("pack");
             vpk_pkg_sh.addArg("--packId");
-            vpk_pkg_sh.addArg("pixi");
+            vpk_pkg_sh.addArg("fizzy");
             vpk_pkg_sh.addArg("--packVersion");
             vpk_pkg_sh.addArg(app_version);
             // Channel = zig-out subdir (`<arch>-<os>`, NuGet-safe — no underscores). Baked into
@@ -310,8 +310,8 @@ pub fn build(b: *std.Build) !void {
             vpk_pkg_sh.addArg(zig_out_subdir);
             vpk_pkg_sh.addArg("--mainExe");
             vpk_pkg_sh.addArg(switch (target.result.os.tag) {
-                .windows => "Pixi.exe",
-                else => "Pixi",
+                .windows => "Fizzy.exe",
+                else => "Fizzy",
             });
 
             vpk_pkg_sh.addArg("--delta");
@@ -325,13 +325,13 @@ pub fn build(b: *std.Build) !void {
             switch (target.result.os.tag) {
                 .macos => {
                     vpk_pkg_sh.addArg("--packTitle");
-                    vpk_pkg_sh.addArg("Pixi");
+                    vpk_pkg_sh.addArg("Fizzy");
                     // Bundle id / document types / versions: assets/macos/info.plist (vpk rejects --bundleId with --plist).
                     vpk_pkg_sh.addArg("--plist");
                     const plist_path = b.path("assets/macos/info.plist").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("plist path: {}", .{e});
                     vpk_pkg_sh.addArg(plist_path);
                     vpk_pkg_sh.addArg("--icon");
-                    const icns_path = b.path("assets/macos/pixi.icns").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("icns path: {}", .{e});
+                    const icns_path = b.path("assets/macos/fizzy.icns").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("icns path: {}", .{e});
                     vpk_pkg_sh.addArg(icns_path);
 
                     if (macos_sign_app_identity) |id| {
@@ -342,7 +342,7 @@ pub fn build(b: *std.Build) !void {
                         // Without this, Apple's notary service rejects with "signature does not
                         // include a secure timestamp" / "hardened runtime not enabled".
                         vpk_pkg_sh.addArg("--signEntitlements");
-                        const entitlements_path = b.path("assets/macos/Pixi.entitlements").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("entitlements path: {}", .{e});
+                        const entitlements_path = b.path("assets/macos/Fizzy.entitlements").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("entitlements path: {}", .{e});
                         vpk_pkg_sh.addArg(entitlements_path);
                     }
                     if (macos_sign_install_identity) |id| {
@@ -432,7 +432,7 @@ pub fn build(b: *std.Build) !void {
     // Tests
     // ---------------------------------------------------------------
     //
-    // Pixi has two test layers (see tests/README.md):
+    // Fizzy has two test layers (see tests/README.md):
     //
     //   1. Unit tests — pure-logic only (math, palette parsing, layer
     //      order). The test root imports nothing but std + the pure
@@ -440,7 +440,7 @@ pub fn build(b: *std.Build) !void {
     //      and never needs dvui/SDL/assets.
     //
     //   2. Integration tests (added in Phase 2 of the testing plan)
-    //      will use dvui's testing backend and exercise real pixi
+    //      will use dvui's testing backend and exercise real fizzy
     //      drawing functions in a headless Window.
     //
     // Both share the same `zig build test` and `zig build check`
@@ -452,7 +452,7 @@ pub fn build(b: *std.Build) !void {
         "Skip tests that do not match any filter",
     ) orelse &[0][]const u8{};
 
-    const tests_module = b.addModule("pixi-tests", .{
+    const tests_module = b.addModule("fizzy-tests", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("tests/root.zig"),
@@ -464,14 +464,14 @@ pub fn build(b: *std.Build) !void {
     // name. Each of these files imports only `std`, so they remain free
     // of dvui / SDL / globals.
     inline for (.{
-        .{ "pixi-direction", "src/math/direction.zig" },
-        .{ "pixi-easing", "src/math/easing.zig" },
-        .{ "pixi-layer-order", "src/internal/layer_order.zig" },
-        .{ "pixi-palette-parse", "src/internal/palette_parse.zig" },
-        .{ "pixi-layout-anchor", "src/math/layout_anchor.zig" },
-        .{ "pixi-reduce", "src/algorithms/reduce.zig" },
-        .{ "pixi-grid-validate", "src/internal/grid_layout_validate.zig" },
-        .{ "pixi-animation", "src/Animation.zig" },
+        .{ "fizzy-direction", "src/math/direction.zig" },
+        .{ "fizzy-easing", "src/math/easing.zig" },
+        .{ "fizzy-layer-order", "src/internal/layer_order.zig" },
+        .{ "fizzy-palette-parse", "src/internal/palette_parse.zig" },
+        .{ "fizzy-layout-anchor", "src/math/layout_anchor.zig" },
+        .{ "fizzy-reduce", "src/algorithms/reduce.zig" },
+        .{ "fizzy-grid-validate", "src/internal/grid_layout_validate.zig" },
+        .{ "fizzy-animation", "src/Animation.zig" },
     }) |entry| {
         tests_module.addAnonymousImport(entry[0], .{
             .root_source_file = b.path(entry[1]),
@@ -481,7 +481,7 @@ pub fn build(b: *std.Build) !void {
     }
 
     const unit_tests = b.addTest(.{
-        .name = "pixi-unit-tests",
+        .name = "fizzy-unit-tests",
         .root_module = tests_module,
         .filters = test_filters,
     });
@@ -490,11 +490,11 @@ pub fn build(b: *std.Build) !void {
     // unit tests only, no dvui/SDL/Velopack/MSVC. Integration tests live under
     // `zig build test-integration` (Velopack + dvui-testing + comctl32 on Windows
     // → needs MSVC SDK on Windows hosts). `zig build test-all` runs both.
-    const test_step = b.step("test", "Run pixi unit tests (pure-logic only, no dvui/SDL/Velopack)");
+    const test_step = b.step("test", "Run fizzy unit tests (pure-logic only, no dvui/SDL/Velopack)");
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
 
     // `check` mirrors the split so editor compile-error checking matches CI.
-    const check_step = b.step("check", "Compile pixi unit tests without running them");
+    const check_step = b.step("check", "Compile fizzy unit tests without running them");
     check_step.dependOn(&unit_tests.step);
 
     // ---------------------------------------------------------------
@@ -503,8 +503,8 @@ pub fn build(b: *std.Build) !void {
     // steps so `zig build test` stays MSVC-free on Windows CI runners. Skipped
     // when cross-compiling to *-windows-msvc without an MSVC libc INI.
     // ---------------------------------------------------------------
-    const test_integration_step = b.step("test-integration", "Run pixi headless integration tests (dvui-testing; needs MSVC on Windows)");
-    const check_integration_step = b.step("check-integration", "Compile pixi integration tests without running them");
+    const test_integration_step = b.step("test-integration", "Run fizzy headless integration tests (dvui-testing; needs MSVC on Windows)");
+    const check_integration_step = b.step("check-integration", "Compile fizzy integration tests without running them");
     const test_all_step = b.step("test-all", "Run unit + integration tests");
     test_all_step.dependOn(test_step);
     test_all_step.dependOn(test_integration_step);
@@ -522,48 +522,48 @@ pub fn build(b: *std.Build) !void {
         .accesskit = accesskit,
     });
 
-    // Build a module rooted at `src/pixi.zig` carrying all the same
-    // imports the production exe carries. Because pixi.zig's transitive
+    // Build a module rooted at `src/fizzy.zig` carrying all the same
+    // imports the production exe carries. Because fizzy.zig's transitive
     // imports (App.zig, Editor.zig, …) reference `dvui`, `assets`,
     // `known-folders`, etc. by name, those names must be wired here.
     // We point dvui at the *testing* backend so calling drawing
     // functions doesn't try to open a real OS window.
-    const pixi_test_module = b.createModule(.{
+    const fizzy_test_module = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/pixi.zig"),
+        .root_source_file = b.path("src/fizzy.zig"),
     });
-    pixi_test_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
-    pixi_test_module.addImport("backend", dvui_testing_dep.module("testing"));
-    pixi_test_module.addImport("assets", assets_module);
-    pixi_test_module.addImport("known-folders", known_folders);
-    pixi_test_module.addOptions("build_opts", build_opts);
-    pixi_test_module.addImport("zstbi", zstbi_module);
-    pixi_test_module.addImport("msf_gif", msf_gif_module);
-    pixi_test_module.addImport("zip", zip_pkg.module);
+    fizzy_test_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+    fizzy_test_module.addImport("backend", dvui_testing_dep.module("testing"));
+    fizzy_test_module.addImport("assets", assets_module);
+    fizzy_test_module.addImport("known-folders", known_folders);
+    fizzy_test_module.addOptions("build_opts", build_opts);
+    fizzy_test_module.addImport("zstbi", zstbi_module);
+    fizzy_test_module.addImport("msf_gif", msf_gif_module);
+    fizzy_test_module.addImport("zip", zip_pkg.module);
     if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| {
-        pixi_test_module.addImport("icons", dep.module("icons"));
+        fizzy_test_module.addImport("icons", dep.module("icons"));
     }
     if (target.result.os.tag == .macos) {
         if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |dep| {
-            pixi_test_module.addImport("objc", dep.module("objc"));
+            fizzy_test_module.addImport("objc", dep.module("objc"));
         }
     } else if (target.result.os.tag == .windows) {
         if (b.lazyDependency("zigwin32", .{})) |dep| {
-            pixi_test_module.addImport("win32", dep.module("win32"));
+            fizzy_test_module.addImport("win32", dep.module("win32"));
         }
     }
 
-    const integration_module = b.addModule("pixi-integration-tests", .{
+    const integration_module = b.addModule("fizzy-integration-tests", .{
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("tests/integration.zig"),
     });
-    integration_module.addImport("pixi", pixi_test_module);
+    integration_module.addImport("fizzy", fizzy_test_module);
     integration_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
 
     const integration_tests = b.addTest(.{
-        .name = "pixi-integration-tests",
+        .name = "fizzy-integration-tests",
         .root_module = integration_module,
         .filters = test_filters,
     });
@@ -616,14 +616,14 @@ pub fn build(b: *std.Build) !void {
     }
 }
 
-const PixiExecutable = struct {
+const FizzyExecutable = struct {
     exe: *std.Build.Step.Compile,
     zstbi_module: *std.Build.Module,
     msf_gif_module: *std.Build.Module,
     known_folders: *std.Build.Module,
 };
 
-fn addPixiExecutableForTarget(
+fn addFizzyExecutableForTarget(
     b: *std.Build,
     resolved_target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -634,7 +634,7 @@ fn addPixiExecutableForTarget(
     process_assets_step: *std.Build.Step,
     macos_sdl_paths: ?MacosSdlPaths,
     velopack_enabled: bool,
-) !PixiExecutable {
+) !FizzyExecutable {
     const dvui_dep = if (macos_sdl_paths) |p|
         b.dependency("dvui", .{
             .target = resolved_target,
@@ -671,7 +671,7 @@ fn addPixiExecutableForTarget(
     msf_gif_module.addCSourceFile(.{ .file = std.Build.path(b, "src/deps/msf_gif/msf_gif.c") });
 
     const exe = b.addExecutable(.{
-        .name = "Pixi",
+        .name = "Fizzy",
         .root_module = b.addModule("App", .{
             .target = resolved_target,
             .optimize = optimize,
@@ -694,7 +694,7 @@ fn addPixiExecutableForTarget(
             .windows => {
                 exe.subsystem = .Windows;
                 // MSVC's libcmt links `WinMainCRTStartup` (needs `WinMain`) for /SUBSYSTEM:WINDOWS.
-                // Pixi exposes `main`, so force the C `main` entry which works for either subsystem.
+                // Fizzy exposes `main`, so force the C `main` entry which works for either subsystem.
                 if (resolved_target.result.abi == .msvc) {
                     exe.entry = .{ .symbol_name = "mainCRTStartup" };
                 }
@@ -728,8 +728,8 @@ fn addPixiExecutableForTarget(
         })) |dep| {
             exe.root_module.addImport("objc", dep.module("objc"));
         }
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/PixiVisualEffectView.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/PixiMenuTarget.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/FizzyVisualEffectView.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/FizzyMenuTarget.m") });
     } else if (resolved_target.result.os.tag == .windows) {
         if (b.lazyDependency("zigwin32", .{})) |dep| {
             exe.root_module.addImport("win32", dep.module("win32"));

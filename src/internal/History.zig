@@ -1,8 +1,8 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const zgui = @import("zgui");
 const History = @This();
-const Editor = pixi.Editor;
+const Editor = fizzy.Editor;
 const dvui = @import("dvui");
 const Layer = @import("Layer.zig");
 
@@ -57,7 +57,7 @@ pub const Change = union(ChangeType) {
 
     pub const AnimationFrames = struct {
         index: usize,
-        frames: []pixi.Animation.Frame,
+        frames: []fizzy.Animation.Frame,
     };
 
     pub const AnimationRestoreDelete = struct {
@@ -197,25 +197,25 @@ pub const Change = union(ChangeType) {
     pub fn deinit(self: *Change) void {
         switch (self.*) {
             .pixels => |*pixels| {
-                pixi.app.allocator.free(pixels.indices);
-                pixi.app.allocator.free(pixels.values);
+                fizzy.app.allocator.free(pixels.indices);
+                fizzy.app.allocator.free(pixels.values);
             },
             .origins => |*origins| {
-                pixi.app.allocator.free(origins.indices);
-                pixi.app.allocator.free(origins.values);
+                fizzy.app.allocator.free(origins.indices);
+                fizzy.app.allocator.free(origins.values);
             },
             .layers_order => |*layers_order| {
-                pixi.app.allocator.free(layers_order.order);
+                fizzy.app.allocator.free(layers_order.order);
             },
             .layer_merge => |*layer_merge| {
-                pixi.app.allocator.free(layer_merge.dest_pixels_before);
+                fizzy.app.allocator.free(layer_merge.dest_pixels_before);
                 layer_merge.dest_mask_before.deinit();
             },
             .grid_layout => |*gl| {
-                for (gl.layer_pixels) |buf| pixi.app.allocator.free(buf);
-                pixi.app.allocator.free(gl.layer_pixels);
-                pixi.app.allocator.free(gl.layer_ids);
-                pixi.app.allocator.free(gl.sprite_origins);
+                for (gl.layer_pixels) |buf| fizzy.app.allocator.free(buf);
+                fizzy.app.allocator.free(gl.layer_pixels);
+                fizzy.app.allocator.free(gl.layer_ids);
+                fizzy.app.allocator.free(gl.sprite_origins);
             },
             else => {},
         }
@@ -229,8 +229,8 @@ redo_stack: std.array_list.Managed(Change),
 undo_layer_data_stack: std.array_list.Managed([][][4]u8),
 redo_layer_data_stack: std.array_list.Managed([][][4]u8),
 
-undo_animation_data_stack: std.array_list.Managed([][]pixi.Animation.Frame),
-redo_animation_data_stack: std.array_list.Managed([][]pixi.Animation.Frame),
+undo_animation_data_stack: std.array_list.Managed([][]fizzy.Animation.Frame),
+redo_animation_data_stack: std.array_list.Managed([][]fizzy.Animation.Frame),
 
 undo_sprite_data_stack: std.array_list.Managed([][2]f32),
 redo_sprite_data_stack: std.array_list.Managed([][2]f32),
@@ -243,8 +243,8 @@ pub fn init(allocator: std.mem.Allocator) History {
         .undo_layer_data_stack = std.array_list.Managed([][][4]u8).init(allocator),
         .redo_layer_data_stack = std.array_list.Managed([][][4]u8).init(allocator),
 
-        .undo_animation_data_stack = std.array_list.Managed([][]pixi.Animation.Frame).init(allocator),
-        .redo_animation_data_stack = std.array_list.Managed([][]pixi.Animation.Frame).init(allocator),
+        .undo_animation_data_stack = std.array_list.Managed([][]fizzy.Animation.Frame).init(allocator),
+        .redo_animation_data_stack = std.array_list.Managed([][]fizzy.Animation.Frame).init(allocator),
 
         .undo_sprite_data_stack = std.array_list.Managed([][2]f32).init(allocator),
         .redo_sprite_data_stack = std.array_list.Managed([][2]f32).init(allocator),
@@ -252,12 +252,12 @@ pub fn init(allocator: std.mem.Allocator) History {
 }
 
 pub fn append(self: *History, change: Change) !void {
-    const track_pixels = pixi.perf.record and std.meta.activeTag(change) == .pixels;
+    const track_pixels = fizzy.perf.record and std.meta.activeTag(change) == .pixels;
     const pixel_slots: usize = if (track_pixels) switch (change) {
         .pixels => |p| p.indices.len,
         else => 0,
     } else 0;
-    const t_hist: i128 = if (track_pixels) pixi.perf.nanoTimestamp() else 0;
+    const t_hist: i128 = if (track_pixels) fizzy.perf.nanoTimestamp() else 0;
 
     if (self.redo_stack.items.len > 0) {
         for (self.redo_stack.items) |*c| {
@@ -269,9 +269,9 @@ pub fn append(self: *History, change: Change) !void {
     if (self.redo_layer_data_stack.items.len > 0) {
         for (self.redo_layer_data_stack.items) |data| {
             for (data) |layer| {
-                pixi.app.allocator.free(layer);
+                fizzy.app.allocator.free(layer);
             }
-            pixi.app.allocator.free(data);
+            fizzy.app.allocator.free(data);
         }
         self.redo_layer_data_stack.clearRetainingCapacity();
     }
@@ -363,13 +363,13 @@ pub fn append(self: *History, change: Change) !void {
     }
 
     if (track_pixels and t_hist != 0) {
-        pixi.perf.history_append_pixels_ns +%= @intCast(pixi.perf.nanoTimestamp() - t_hist);
-        pixi.perf.history_append_pixels_calls += 1;
-        pixi.perf.history_append_pixels_slots +%= pixel_slots;
+        fizzy.perf.history_append_pixels_ns +%= @intCast(fizzy.perf.nanoTimestamp() - t_hist);
+        fizzy.perf.history_append_pixels_calls += 1;
+        fizzy.perf.history_append_pixels_slots +%= pixel_slots;
     }
 }
 
-fn layerMergeUndo(file: *pixi.Internal.File, lm: *Change.LayerMerge) !void {
+fn layerMergeUndo(file: *fizzy.Internal.File, lm: *Change.LayerMerge) !void {
     const dest_i = for (file.layers.items(.id), 0..) |id, i| {
         if (id == lm.dest_layer_id) break i;
     } else return error.InvalidLayerMerge;
@@ -377,21 +377,21 @@ fn layerMergeUndo(file: *pixi.Internal.File, lm: *Change.LayerMerge) !void {
     var dest = file.layers.get(dest_i);
     @memcpy(dest.pixels(), lm.dest_pixels_before);
     dest.mask.deinit();
-    dest.mask = try lm.dest_mask_before.clone(pixi.app.allocator);
+    dest.mask = try lm.dest_mask_before.clone(fizzy.app.allocator);
     dest.invalidate();
     file.layers.set(dest_i, dest);
 
     const restored = file.deleted_layers.pop() orelse return error.InvalidLayerMerge;
-    try file.layers.insert(pixi.app.allocator, lm.source_index, restored);
+    try file.layers.insert(fizzy.app.allocator, lm.source_index, restored);
 
     file.editor.layer_composite_dirty = true;
     file.editor.split_composite_dirty = true;
     file.selected_layer_index = lm.source_index;
-    pixi.editor.explorer.pane = .tools;
+    fizzy.editor.explorer.pane = .tools;
     file.invalidateActiveLayerTransparencyMaskCache();
 }
 
-fn layerMergeRedo(file: *pixi.Internal.File, lm: *Change.LayerMerge) !void {
+fn layerMergeRedo(file: *fizzy.Internal.File, lm: *Change.LayerMerge) !void {
     const src_i = for (file.layers.items(.id), 0..) |id, i| {
         if (id == lm.source_layer_id) break i;
     } else return error.InvalidLayerMerge;
@@ -419,7 +419,7 @@ fn layerMergeRedo(file: *pixi.Internal.File, lm: *Change.LayerMerge) !void {
     dest.invalidate();
     file.layers.set(dest_i, dest);
 
-    try file.deleted_layers.append(pixi.app.allocator, file.layers.slice().get(src_i));
+    try file.deleted_layers.append(fizzy.app.allocator, file.layers.slice().get(src_i));
     file.layers.orderedRemove(src_i);
 
     file.editor.layer_composite_dirty = true;
@@ -429,13 +429,13 @@ fn layerMergeRedo(file: *pixi.Internal.File, lm: *Change.LayerMerge) !void {
         .up => dest_i,
         .down => dest_i - 1,
     };
-    pixi.editor.explorer.pane = .tools;
+    fizzy.editor.explorer.pane = .tools;
     file.invalidateActiveLayerTransparencyMaskCache();
 }
 
 // Handling cases in this function details how an undo/redo action works, and must be symmetrical.
 // This means that `change` needs to be modified to contain the active state prior to changing the active state
-pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void {
+pub fn undoRedo(self: *History, file: *fizzy.Internal.File, action: Action) !void {
     var active_stack = switch (action) {
         .undo => &self.undo_stack,
         .redo => &self.redo_stack,
@@ -454,7 +454,7 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
     var change = active_stack.pop().?;
 
     defer {
-        const id_mutex = dvui.toastAdd(dvui.currentWindow(), @src(), @intCast(@divTrunc(pixi.perf.nanoTimestamp(), 1000)), file.editor.canvas.id, pixi.dvui.toastDisplay, 2_000_000);
+        const id_mutex = dvui.toastAdd(dvui.currentWindow(), @src(), @intCast(@divTrunc(fizzy.perf.nanoTimestamp(), 1000)), file.editor.canvas.id, fizzy.dvui.toastDisplay, 2_000_000);
         const id = id_mutex.id;
         const action_text = switch (action) {
             .undo => "Undo:",
@@ -613,12 +613,12 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
 
                 //try file.editor.selected_sprites.append(sprite_index);
             }
-            pixi.editor.explorer.pane = .sprites;
+            fizzy.editor.explorer.pane = .sprites;
         },
         .layers_order => |*layers_order| {
             file.editor.layer_composite_dirty = true;
             file.editor.split_composite_dirty = true;
-            var new_order = try pixi.app.allocator.alloc(usize, layers_order.order.len);
+            var new_order = try fizzy.app.allocator.alloc(usize, layers_order.order.len);
             for (0..file.layers.len) |layer_index| {
                 new_order[layer_index] = file.layers.items(.id)[layer_index];
             }
@@ -648,7 +648,7 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
             }
 
             @memcpy(layers_order.order, new_order);
-            pixi.app.allocator.free(new_order);
+            fizzy.app.allocator.free(new_order);
             file.invalidateActiveLayerTransparencyMaskCache();
         },
         .layer_restore_delete => |*layer_restore_delete| {
@@ -657,24 +657,24 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
             const a = layer_restore_delete.action;
             switch (a) {
                 .restore => {
-                    try file.layers.insert(pixi.app.allocator, layer_restore_delete.index, file.deleted_layers.pop().?);
+                    try file.layers.insert(fizzy.app.allocator, layer_restore_delete.index, file.deleted_layers.pop().?);
                     layer_restore_delete.action = .delete;
                 },
                 .delete => {
-                    try file.deleted_layers.append(pixi.app.allocator, file.layers.slice().get(layer_restore_delete.index));
+                    try file.deleted_layers.append(fizzy.app.allocator, file.layers.slice().get(layer_restore_delete.index));
                     file.layers.orderedRemove(layer_restore_delete.index);
                     layer_restore_delete.action = .restore;
                 },
             }
-            pixi.editor.explorer.pane = .tools;
+            fizzy.editor.explorer.pane = .tools;
             file.invalidateActiveLayerTransparencyMaskCache();
         },
         .layer_name => |*layer_name| {
-            const name = try pixi.app.allocator.dupe(u8, file.layers.items(.name)[layer_name.index]);
-            pixi.app.allocator.free(file.layers.items(.name)[layer_name.index]);
-            file.layers.items(.name)[layer_name.index] = try pixi.app.allocator.dupe(u8, layer_name.name);
+            const name = try fizzy.app.allocator.dupe(u8, file.layers.items(.name)[layer_name.index]);
+            fizzy.app.allocator.free(file.layers.items(.name)[layer_name.index]);
+            file.layers.items(.name)[layer_name.index] = try fizzy.app.allocator.dupe(u8, layer_name.name);
             layer_name.name = name;
-            pixi.editor.explorer.pane = .tools;
+            fizzy.editor.explorer.pane = .tools;
         },
         .layer_settings => |*layer_settings| {
             const idx = layer_settings.index;
@@ -693,21 +693,21 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
             if (visibility_changed) {
                 file.editor.split_composite_dirty = true;
             }
-            pixi.editor.explorer.pane = .tools;
+            fizzy.editor.explorer.pane = .tools;
         },
         .animation_restore_delete => |*animation_restore_delete| {
             const a = animation_restore_delete.action;
             switch (a) {
                 .restore => {
                     const animation = file.deleted_animations.pop().?;
-                    try file.animations.insert(pixi.app.allocator, animation_restore_delete.index, animation);
+                    try file.animations.insert(fizzy.app.allocator, animation_restore_delete.index, animation);
                     animation_restore_delete.action = .delete;
                     file.selected_animation_index = animation_restore_delete.index;
                 },
                 .delete => {
                     const animation = file.animations.slice().get(animation_restore_delete.index);
                     file.animations.orderedRemove(animation_restore_delete.index);
-                    try file.deleted_animations.append(pixi.app.allocator, animation);
+                    try file.deleted_animations.append(fizzy.app.allocator, animation);
                     animation_restore_delete.action = .restore;
 
                     if (file.selected_animation_index) |selected_animation_index| {
@@ -719,14 +719,14 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
                     }
                 },
             }
-            pixi.editor.explorer.pane = .sprites;
+            fizzy.editor.explorer.pane = .sprites;
         },
         .animation_name => |*animation_name| {
-            const name = try pixi.app.allocator.dupe(u8, file.animations.items(.name)[animation_name.index]);
-            pixi.app.allocator.free(file.animations.items(.name)[animation_name.index]);
-            file.animations.items(.name)[animation_name.index] = try pixi.app.allocator.dupe(u8, animation_name.name);
+            const name = try fizzy.app.allocator.dupe(u8, file.animations.items(.name)[animation_name.index]);
+            fizzy.app.allocator.free(file.animations.items(.name)[animation_name.index]);
+            file.animations.items(.name)[animation_name.index] = try fizzy.app.allocator.dupe(u8, animation_name.name);
             animation_name.name = name;
-            pixi.editor.explorer.pane = .sprites;
+            fizzy.editor.explorer.pane = .sprites;
         },
         .animation_settings => {},
         .animation_order => |*animation_order| {
@@ -763,7 +763,7 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
             const history_frames = &animation_frames.frames;
             const current_frames = &file.animations.items(.frames)[animation_frames.index];
 
-            std.mem.swap([]pixi.Animation.Frame, history_frames, current_frames);
+            std.mem.swap([]fizzy.Animation.Frame, history_frames, current_frames);
 
             file.selected_animation_index = animation_frames.index;
         },
@@ -774,7 +774,7 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
             resize.height = file.height();
 
             var layer_data: ?[][][4]u8 = null;
-            var animation_data: ?[][]pixi.Animation.Frame = null;
+            var animation_data: ?[][]fizzy.Animation.Frame = null;
             var sprite_data: ?[][2]f32 = null;
 
             switch (action) {
@@ -787,9 +787,9 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
                     if (self.undo_animation_data_stack.pop()) |ad| {
                         animation_data = ad;
 
-                        var anim_data = try pixi.app.allocator.alloc([]pixi.Animation.Frame, file.animations.len);
+                        var anim_data = try fizzy.app.allocator.alloc([]fizzy.Animation.Frame, file.animations.len);
                         for (0..file.animations.len) |animation_index| {
-                            anim_data[animation_index] = pixi.app.allocator.dupe(pixi.Animation.Frame, file.animations.items(.frames)[animation_index]) catch return error.MemoryAllocationFailed;
+                            anim_data[animation_index] = fizzy.app.allocator.dupe(fizzy.Animation.Frame, file.animations.items(.frames)[animation_index]) catch return error.MemoryAllocationFailed;
                         }
                         try self.redo_animation_data_stack.append(anim_data);
                     }
@@ -797,7 +797,7 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
                     if (self.undo_sprite_data_stack.pop()) |sd| {
                         sprite_data = sd;
 
-                        const new_sprite_data = try pixi.app.allocator.alloc([2]f32, file.spriteCount());
+                        const new_sprite_data = try fizzy.app.allocator.alloc([2]f32, file.spriteCount());
                         for (0..file.spriteCount()) |sprite_index| {
                             new_sprite_data[sprite_index] = file.sprites.items(.origin)[sprite_index];
                         }
@@ -812,16 +812,16 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
                     if (self.redo_animation_data_stack.pop()) |ad| {
                         animation_data = ad;
 
-                        var anim_data = try pixi.app.allocator.alloc([]pixi.Animation.Frame, file.animations.len);
+                        var anim_data = try fizzy.app.allocator.alloc([]fizzy.Animation.Frame, file.animations.len);
                         for (0..file.animations.len) |animation_index| {
-                            anim_data[animation_index] = pixi.app.allocator.dupe(pixi.Animation.Frame, file.animations.items(.frames)[animation_index]) catch return error.MemoryAllocationFailed;
+                            anim_data[animation_index] = fizzy.app.allocator.dupe(fizzy.Animation.Frame, file.animations.items(.frames)[animation_index]) catch return error.MemoryAllocationFailed;
                         }
                         try self.undo_animation_data_stack.append(anim_data);
                     }
                     if (self.redo_sprite_data_stack.pop()) |sd| {
                         sprite_data = sd;
 
-                        const new_sprite_data = try pixi.app.allocator.alloc([2]f32, file.spriteCount());
+                        const new_sprite_data = try fizzy.app.allocator.alloc([2]f32, file.spriteCount());
                         for (0..file.spriteCount()) |sprite_index| {
                             new_sprite_data[sprite_index] = file.sprites.items(.origin)[sprite_index];
                         }
@@ -840,11 +840,11 @@ pub fn undoRedo(self: *History, file: *pixi.Internal.File, action: Action) !void
             }) catch return error.ResizeError;
 
             if (animation_data) |ad| {
-                pixi.app.allocator.free(ad);
+                fizzy.app.allocator.free(ad);
             }
 
             if (sprite_data) |sd| {
-                pixi.app.allocator.free(sd);
+                fizzy.app.allocator.free(sd);
             }
 
             file.invalidateActiveLayerTransparencyMaskCache();
@@ -936,16 +936,16 @@ pub fn clearRetainingCapacity(self: *History) void {
 pub fn deinit(self: *History) void {
     for (self.undo_layer_data_stack.items) |data| {
         for (data) |layer| {
-            pixi.app.allocator.free(layer);
+            fizzy.app.allocator.free(layer);
         }
-        pixi.app.allocator.free(data);
+        fizzy.app.allocator.free(data);
     }
 
     for (self.redo_layer_data_stack.items) |data| {
         for (data) |layer| {
-            pixi.app.allocator.free(layer);
+            fizzy.app.allocator.free(layer);
         }
-        pixi.app.allocator.free(data);
+        fizzy.app.allocator.free(data);
     }
 
     self.undo_layer_data_stack.deinit();

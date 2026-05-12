@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const assets = @import("assets");
@@ -67,10 +67,10 @@ pub fn draw(self: *Tools) !void {
     drawLayerControls() catch {};
 
     // Collect layers length to trigger a refit of the panel
-    const layer_count: usize = if (pixi.editor.activeFile()) |file| file.layers.len else 0;
+    const layer_count: usize = if (fizzy.editor.activeFile()) |file| file.layers.len else 0;
     defer prev_layer_count = layer_count;
 
-    var paned = pixi.dvui.paned(@src(), .{
+    var paned = fizzy.dvui.paned(@src(), .{
         .direction = .vertical,
         .collapsed_size = 0,
         .handle_size = 10,
@@ -80,7 +80,7 @@ pub fn draw(self: *Tools) !void {
 
     if (paned.dragging) {
         max_split_ratio = paned.split_ratio.*;
-        pixi.editor.explorer.layers_ratio = paned.split_ratio.*;
+        fizzy.editor.explorer.layers_ratio = paned.split_ratio.*;
     }
 
     if (paned.showFirst()) {
@@ -96,7 +96,7 @@ pub fn draw(self: *Tools) !void {
     const autofit = !paned.dragging and !paned.collapsed_state and !paned.animating;
 
     // Refit must be done between showFirst and showSecond
-    if (((dvui.firstFrame(paned.data().id) or prev_layer_count != layer_count) or autofit) and !pixi.editor.explorer.pinned_palettes) {
+    if (((dvui.firstFrame(paned.data().id) or prev_layer_count != layer_count) or autofit) and !fizzy.editor.explorer.pinned_palettes) {
         if (dvui.firstFrame(paned.data().id) and layer_count == 0)
             paned.split_ratio.* = 0.0;
 
@@ -107,7 +107,7 @@ pub fn draw(self: *Tools) !void {
         // next frame when min sizes are valid.
         if (dvui.firstFrame(paned.data().id) and layer_count > 0) {
             paned.split_ratio.* = 0.01;
-            //pixi.editor.explorer.layers_ratio = paned.split_ratio.*;
+            //fizzy.editor.explorer.layers_ratio = paned.split_ratio.*;
         } else {
             const ratio = paned.getFirstFittedRatio(
                 .{
@@ -128,9 +128,9 @@ pub fn draw(self: *Tools) !void {
             if (layer_count == 0)
                 paned.split_ratio.* = 0.0
             else
-                paned.split_ratio.* = pixi.editor.explorer.layers_ratio;
+                paned.split_ratio.* = fizzy.editor.explorer.layers_ratio;
 
-            pixi.editor.explorer.layers_ratio = paned.split_ratio.*;
+            fizzy.editor.explorer.layers_ratio = paned.split_ratio.*;
         }
     }
 
@@ -158,28 +158,28 @@ pub fn drawTools() !void {
         .padding = .{ .h = 10.0, .w = 4.0, .x = 4.0, .y = 4.0 },
     });
     defer toolbox.deinit();
-    for (0..std.meta.fields(pixi.Editor.Tools.Tool).len) |i| {
-        const tool: pixi.Editor.Tools.Tool = @enumFromInt(i);
+    for (0..std.meta.fields(fizzy.Editor.Tools.Tool).len) |i| {
+        const tool: fizzy.Editor.Tools.Tool = @enumFromInt(i);
         const id_extra = i;
 
-        const selected = pixi.editor.tools.current == tool;
+        const selected = fizzy.editor.tools.current == tool;
 
         var color = dvui.themeGet().color(.control, .fill_hover);
-        if (pixi.editor.colors.file_tree_palette) |*palette| {
+        if (fizzy.editor.colors.file_tree_palette) |*palette| {
             color = palette.getDVUIColor(i);
         }
 
-        const selection_sprite = switch (pixi.editor.tools.selection_mode) {
-            .pixel => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.pixel_selection_default],
-            .box => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.box_selection_default],
-            .color => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.color_selection_default],
+        const selection_sprite = switch (fizzy.editor.tools.selection_mode) {
+            .pixel => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_default],
+            .box => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_default],
+            .color => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_default],
         };
 
         const sprite = switch (tool) {
-            .pointer => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.cursor_default],
-            .pencil => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.pencil_default],
-            .eraser => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.eraser_default],
-            .bucket => pixi.editor.atlas.data.sprites[pixi.atlas.sprites.bucket_default],
+            .pointer => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.cursor_default],
+            .pencil => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pencil_default],
+            .eraser => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.eraser_default],
+            .bucket => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.bucket_default],
             .selection => selection_sprite,
         };
         var button: dvui.ButtonWidget = undefined;
@@ -203,13 +203,13 @@ pub fn drawTools() !void {
         });
         defer button.deinit();
 
-        pixi.editor.tools.drawTooltip(tool, button.data().rectScale().r, id_extra) catch {};
+        fizzy.editor.tools.drawTooltip(tool, button.data().rectScale().r, id_extra) catch {};
 
         if (button.hovered()) {
             button.data().options.color_border = color;
         }
 
-        const size: dvui.Size = dvui.imageSize(pixi.editor.atlas.source) catch .{ .w = 0, .h = 0 };
+        const size: dvui.Size = dvui.imageSize(fizzy.editor.atlas.source) catch .{ .w = 0, .h = 0 };
 
         const uv = dvui.Rect{
             .x = @as(f32, @floatFromInt(sprite.source[0])) / size.w,
@@ -231,7 +231,7 @@ pub fn drawTools() !void {
         rs.r.w = width;
         rs.r.h = height;
 
-        dvui.renderImage(pixi.editor.atlas.source, rs, .{
+        dvui.renderImage(fizzy.editor.atlas.source, rs, .{
             .uv = uv,
             .fade = 0.0,
         }) catch {
@@ -239,7 +239,7 @@ pub fn drawTools() !void {
         };
 
         if (button.clicked()) {
-            pixi.editor.tools.set(tool);
+            fizzy.editor.tools.set(tool);
         }
     }
 }
@@ -252,7 +252,7 @@ pub fn drawLayerControls() !void {
     defer box.deinit();
     dvui.labelNoFmt(@src(), "LAYERS", .{}, .{ .font = dvui.Font.theme(.heading), .gravity_y = 0.5 });
 
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .none,
             .background = false,
@@ -401,7 +401,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
     });
     defer vbox.deinit();
 
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         layer_rename_hit_te_id = null;
         layer_rename_hit_rect = null;
         file.editor.layer_drag_preview_removed = null;
@@ -423,7 +423,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
 
         const vertical_scroll = file.editor.layers_scroll_info.offset(.vertical);
 
-        var tree = pixi.dvui.TreeWidget.tree(@src(), .{ .enable_reordering = true }, .{
+        var tree = fizzy.dvui.TreeWidget.tree(@src(), .{ .enable_reordering = true }, .{
             .expand = .horizontal,
             .background = false,
         });
@@ -437,7 +437,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
             if (removed_layer_indices_len > 0) {
                 const sources = removed_layer_indices_buf[0..removed_layer_indices_len];
 
-                const prev_order = try pixi.app.allocator.alloc(u64, file.layers.len);
+                const prev_order = try fizzy.app.allocator.alloc(u64, file.layers.len);
                 for (file.layers.items(.id), 0..) |id, i| {
                     prev_order[i] = id;
                 }
@@ -454,8 +454,8 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
                 }
 
                 // Snapshot moved layers before any removal so indices stay valid.
-                var moved = try pixi.app.allocator.alloc(pixi.Internal.Layer, sources.len);
-                defer pixi.app.allocator.free(moved);
+                var moved = try fizzy.app.allocator.alloc(fizzy.Internal.Layer, sources.len);
+                defer fizzy.app.allocator.free(moved);
                 for (sources, 0..) |s, i| {
                     moved[i] = file.layers.get(s);
                 }
@@ -467,11 +467,11 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
                     file.layers.orderedRemove(sources[ri]);
                 }
 
-                const target_raw = pixi.dvui.TreeSelection.adjustInsertBeforeForRemovals(sources, insert_before_raw);
+                const target_raw = fizzy.dvui.TreeSelection.adjustInsertBeforeForRemovals(sources, insert_before_raw);
                 const target = @min(target_raw, file.layers.len);
 
                 for (moved, 0..) |layer, i| {
-                    file.layers.insert(pixi.app.allocator, target + i, layer) catch {
+                    file.layers.insert(fizzy.app.allocator, target + i, layer) catch {
                         dvui.log.err("Failed to insert layer", .{});
                     };
                 }
@@ -486,7 +486,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
                 // After a group move the moved rows become contiguous; resync multi-selection to reflect that.
                 file.editor.selected_layer_indices.clearRetainingCapacity();
                 for (0..moved.len) |i| {
-                    file.editor.selected_layer_indices.append(pixi.app.allocator, target + i) catch {
+                    file.editor.selected_layer_indices.append(fizzy.app.allocator, target + i) catch {
                         dvui.log.err("Failed to update layer selection", .{});
                     };
                 }
@@ -502,7 +502,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
                         dvui.log.err("Failed to append history", .{});
                     };
                 } else {
-                    pixi.app.allocator.free(prev_order);
+                    fizzy.app.allocator.free(prev_order);
                 }
 
                 insert_before_index = null;
@@ -536,7 +536,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
             const font = if (visible) dvui.Font.theme(.body) else dvui.Font.theme(.body).withStyle(.italic);
 
             var color = dvui.themeGet().color(.control, .fill_hover);
-            if (pixi.editor.colors.file_tree_palette) |*palette| {
+            if (fizzy.editor.colors.file_tree_palette) |*palette| {
                 color = palette.getDVUIColor(layer_id);
             }
 
@@ -586,7 +586,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
             if (file.editor.isolate_layer) {
                 if (file.peek_layer_index) |peek_layer_index| {
                     min_layer_index = peek_layer_index;
-                } else if (!pixi.editor.explorer.tools.layersHovered()) {
+                } else if (!fizzy.editor.explorer.tools.layersHovered()) {
                     min_layer_index = file.selected_layer_index;
                 }
             }
@@ -716,13 +716,13 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
                         file.history.append(.{
                             .layer_name = .{
                                 .index = layer_index,
-                                .name = try pixi.app.allocator.dupe(u8, file.layers.items(.name)[layer_index]),
+                                .name = try fizzy.app.allocator.dupe(u8, file.layers.items(.name)[layer_index]),
                             },
                         }) catch {
                             dvui.log.err("Failed to append history", .{});
                         };
-                        pixi.app.allocator.free(file.layers.items(.name)[layer_index]);
-                        file.layers.items(.name)[layer_index] = try pixi.app.allocator.dupe(u8, te.getText());
+                        fizzy.app.allocator.free(file.layers.items(.name)[layer_index]);
+                        file.layers.items(.name)[layer_index] = try fizzy.app.allocator.dupe(u8, te.getText());
                     }
                     if (te.enter_pressed) {
                         file.selected_layer_index = layer_index;
@@ -914,13 +914,13 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
 
         // Only draw shadow if the scroll bar has been scrolled some
         if (vertical_scroll > 0.0)
-            pixi.dvui.drawEdgeShadow(scroll_area.data().contentRectScale(), .top, .{});
+            fizzy.dvui.drawEdgeShadow(scroll_area.data().contentRectScale(), .top, .{});
 
         if (file.editor.layers_scroll_info.virtual_size.h > file.editor.layers_scroll_info.viewport.h + 1 and vertical_scroll < file.editor.layers_scroll_info.scrollMax(.vertical))
-            pixi.dvui.drawEdgeShadow(scroll_area.data().contentRectScale(), .bottom, .{});
+            fizzy.dvui.drawEdgeShadow(scroll_area.data().contentRectScale(), .bottom, .{});
     }
 
-    if (pixi.dvui.hovered(vbox.data())) {
+    if (fizzy.dvui.hovered(vbox.data())) {
         const mp = dvui.currentWindow().mouse_pt;
         if (tools.layers_scroll_viewport_rect) |vr| {
             if (!vr.contains(mp)) return null;
@@ -942,8 +942,8 @@ pub fn drawColors() !void {
     });
     defer hbox.deinit();
 
-    const primary: dvui.Color = .{ .r = pixi.editor.colors.primary[0], .g = pixi.editor.colors.primary[1], .b = pixi.editor.colors.primary[2], .a = pixi.editor.colors.primary[3] };
-    const secondary: dvui.Color = .{ .r = pixi.editor.colors.secondary[0], .g = pixi.editor.colors.secondary[1], .b = pixi.editor.colors.secondary[2], .a = pixi.editor.colors.secondary[3] };
+    const primary: dvui.Color = .{ .r = fizzy.editor.colors.primary[0], .g = fizzy.editor.colors.primary[1], .b = fizzy.editor.colors.primary[2], .a = fizzy.editor.colors.primary[3] };
+    const secondary: dvui.Color = .{ .r = fizzy.editor.colors.secondary[0], .g = fizzy.editor.colors.secondary[1], .b = fizzy.editor.colors.secondary[2], .a = fizzy.editor.colors.secondary[3] };
 
     const button_opts: dvui.Options = .{
         .expand = .both,
@@ -978,7 +978,7 @@ pub fn drawColors() !void {
         primary_button.processEvents();
         primary_button.drawBackground();
 
-        drawColorPicker(primary_button.data().rectScale().r, &pixi.editor.colors.primary) catch {};
+        drawColorPicker(primary_button.data().rectScale().r, &fizzy.editor.colors.primary) catch {};
 
         if (primary_button.clicked()) clicked = true;
     }
@@ -991,13 +991,13 @@ pub fn drawColors() !void {
         secondary_button.processEvents();
         secondary_button.drawBackground();
 
-        drawColorPicker(secondary_button.data().rectScale().r, &pixi.editor.colors.secondary) catch {};
+        drawColorPicker(secondary_button.data().rectScale().r, &fizzy.editor.colors.secondary) catch {};
 
         if (secondary_button.clicked()) clicked = true;
     }
 
     if (clicked) {
-        std.mem.swap([4]u8, &pixi.editor.colors.primary, &pixi.editor.colors.secondary);
+        std.mem.swap([4]u8, &fizzy.editor.colors.primary, &fizzy.editor.colors.secondary);
     }
 }
 
@@ -1060,9 +1060,9 @@ pub fn drawPaletteControls() !void {
             .corner_radius = dvui.Rect.all(1000),
         },
         .rotation = std.math.pi * 0.25,
-        .style = if (pixi.editor.explorer.pinned_palettes) .highlight else .control,
+        .style = if (fizzy.editor.explorer.pinned_palettes) .highlight else .control,
     })) {
-        pixi.editor.explorer.pinned_palettes = !pixi.editor.explorer.pinned_palettes;
+        fizzy.editor.explorer.pinned_palettes = !fizzy.editor.explorer.pinned_palettes;
     }
 }
 
@@ -1094,7 +1094,7 @@ pub fn drawPalettes() !void {
             .gravity_x = 1.0,
         });
 
-        if (pixi.editor.colors.palette) |*palette| {
+        if (fizzy.editor.colors.palette) |*palette| {
             dvui.label(@src(), "{s}", .{palette.name}, .{ .margin = .all(0), .padding = .all(0) });
         } else {
             dvui.label(@src(), "Palette Search", .{}, .{ .margin = .all(0), .padding = .all(0) });
@@ -1124,7 +1124,7 @@ pub fn drawPalettes() !void {
                         const ext = std.fs.path.extension(entry.name);
                         if (std.mem.eql(u8, ext, ".hex")) {
                             if (dropdown.addChoiceLabel(entry.name)) {
-                                pixi.editor.colors.palette = pixi.Internal.Palette.loadFromBytes(pixi.app.allocator, entry.name, data) catch |err| {
+                                fizzy.editor.colors.palette = fizzy.Internal.Palette.loadFromBytes(fizzy.app.allocator, entry.name, data) catch |err| {
                                     dvui.log.err("Failed to load palette: {s}", .{@errorName(err)});
                                     return error.FailedToLoadPalette;
                                 };
@@ -1145,12 +1145,12 @@ pub fn drawPalettes() !void {
     }
 
     {
-        if (pixi.editor.colors.palette) |*palette| {
+        if (fizzy.editor.colors.palette) |*palette| {
             var flex_box = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
                 .expand = .horizontal,
                 .max_size_content = .{
-                    .w = pixi.editor.explorer.rect.w - 20 * dvui.currentWindow().natural_scale,
-                    .h = pixi.editor.explorer.rect.h - 20 * dvui.currentWindow().natural_scale,
+                    .w = fizzy.editor.explorer.rect.w - 20 * dvui.currentWindow().natural_scale,
+                    .h = fizzy.editor.explorer.rect.h - 20 * dvui.currentWindow().natural_scale,
                 },
             });
 
@@ -1233,10 +1233,10 @@ pub fn drawPalettes() !void {
                         .mouse => |mouse_evt| {
                             switch (mouse_evt.button) {
                                 .left => {
-                                    @memcpy(&pixi.editor.colors.primary, &color);
+                                    @memcpy(&fizzy.editor.colors.primary, &color);
                                 },
                                 .right => {
-                                    @memcpy(&pixi.editor.colors.secondary, &color);
+                                    @memcpy(&fizzy.editor.colors.secondary, &color);
                                 },
 
                                 else => {},
@@ -1261,7 +1261,7 @@ pub fn drawPalettes() !void {
 }
 fn searchPalettes(dropdown: *dvui.DropdownWidget) !void {
     const io = dvui.io;
-    var dir_opt = std.Io.Dir.cwd().openDir(io, pixi.editor.palette_folder, .{ .access_sub_paths = false, .iterate = true }) catch null;
+    var dir_opt = std.Io.Dir.cwd().openDir(io, fizzy.editor.palette_folder, .{ .access_sub_paths = false, .iterate = true }) catch null;
     if (dir_opt) |*dir| {
         defer dir.close(io);
         var iter = dir.iterate();
@@ -1271,12 +1271,12 @@ fn searchPalettes(dropdown: *dvui.DropdownWidget) !void {
                 if (std.mem.eql(u8, ext, ".hex")) {
                     const label = try std.fmt.allocPrint(dvui.currentWindow().arena(), "{s}", .{entry.name});
                     if (dropdown.addChoiceLabel(label)) {
-                        const abs_path = try std.fs.path.join(dvui.currentWindow().arena(), &.{ pixi.editor.palette_folder, entry.name });
+                        const abs_path = try std.fs.path.join(dvui.currentWindow().arena(), &.{ fizzy.editor.palette_folder, entry.name });
 
-                        if (pixi.editor.colors.palette) |*palette|
+                        if (fizzy.editor.colors.palette) |*palette|
                             palette.deinit();
 
-                        pixi.editor.colors.palette = pixi.Internal.Palette.loadFromFile(pixi.app.allocator, abs_path) catch |err| {
+                        fizzy.editor.colors.palette = fizzy.Internal.Palette.loadFromFile(fizzy.app.allocator, abs_path) catch |err| {
                             dvui.log.err("Failed to load palette: {s}", .{@errorName(err)});
                             return error.FailedToLoadPalette;
                         };
@@ -1310,12 +1310,12 @@ fn pointerReleaseInRectWithoutSelectionModifier(r: dvui.Rect.Physical) bool {
     return false;
 }
 
-fn layerGestureMatches(file: *const pixi.Internal.File) bool {
+fn layerGestureMatches(file: *const fizzy.Internal.File) bool {
     return layer_row_gesture != null and layer_row_gesture.?.file_id == file.id;
 }
 
 /// True if `layer_index` is present in the multi-selection set (the primary index is always implicitly selected).
-fn layerIndexInMulti(file: *const pixi.Internal.File, layer_index: usize) bool {
+fn layerIndexInMulti(file: *const fizzy.Internal.File, layer_index: usize) bool {
     for (file.editor.selected_layer_indices.items) |i| {
         if (i == layer_index) return true;
     }
@@ -1324,7 +1324,7 @@ fn layerIndexInMulti(file: *const pixi.Internal.File, layer_index: usize) bool {
 
 /// Sync the multi-selection list with `file.selected_layer_index` and the current layer count.
 /// The primary must always be present; stale / out-of-range entries from deletions are dropped.
-fn ensureLayerSelection(file: *pixi.Internal.File) void {
+fn ensureLayerSelection(file: *fizzy.Internal.File) void {
     var sel = &file.editor.selected_layer_indices;
 
     // Drop out-of-range entries.
@@ -1351,7 +1351,7 @@ fn ensureLayerSelection(file: *pixi.Internal.File) void {
         }
     }
     if (!has_primary and file.layers.len > 0) {
-        sel.append(pixi.app.allocator, file.selected_layer_index) catch return;
+        sel.append(fizzy.app.allocator, file.selected_layer_index) catch return;
         std.sort.pdq(usize, sel.items, {}, std.sort.asc(usize));
     }
 }
@@ -1366,9 +1366,9 @@ const LayerClickApplied = struct {
 };
 
 fn applyLayerClick(
-    file: *pixi.Internal.File,
+    file: *fizzy.Internal.File,
     clicked: usize,
-    mode: pixi.dvui.TreeSelection.ClickMode,
+    mode: fizzy.dvui.TreeSelection.ClickMode,
 ) LayerClickApplied {
     const count_before = file.editor.selected_layer_indices.items.len;
 
@@ -1379,10 +1379,10 @@ fn applyLayerClick(
     }
 
     var tmp: std.ArrayList(usize) = .empty;
-    defer tmp.deinit(pixi.app.allocator);
+    defer tmp.deinit(fizzy.app.allocator);
 
-    const res = pixi.dvui.TreeSelection.applyClickUsize(
-        pixi.app.allocator,
+    const res = fizzy.dvui.TreeSelection.applyClickUsize(
+        fizzy.app.allocator,
         file.editor.selected_layer_indices.items,
         file.selected_layer_index,
         file.editor.layer_selection_anchor,
@@ -1393,7 +1393,7 @@ fn applyLayerClick(
     ) catch return .{ .primary = file.selected_layer_index, .narrow_on_release = false };
 
     file.editor.selected_layer_indices.clearRetainingCapacity();
-    file.editor.selected_layer_indices.appendSlice(pixi.app.allocator, tmp.items) catch {};
+    file.editor.selected_layer_indices.appendSlice(fizzy.app.allocator, tmp.items) catch {};
 
     const new_primary = res.primary orelse clicked;
     file.selected_layer_index = new_primary;
@@ -1404,9 +1404,9 @@ fn applyLayerClick(
 
 /// Narrow the multi-selection to just `clicked` — used when the user performed a plain press on an
 /// already-multi-selected row and released without dragging. Mirrors Finder-style behavior.
-fn narrowLayerSelectionTo(file: *pixi.Internal.File, clicked: usize) void {
+fn narrowLayerSelectionTo(file: *fizzy.Internal.File, clicked: usize) void {
     file.editor.selected_layer_indices.clearRetainingCapacity();
-    file.editor.selected_layer_indices.append(pixi.app.allocator, clicked) catch {};
+    file.editor.selected_layer_indices.append(fizzy.app.allocator, clicked) catch {};
     file.selected_layer_index = clicked;
     file.editor.layer_selection_anchor = clicked;
 }
@@ -1416,7 +1416,7 @@ fn narrowLayerSelectionTo(file: *pixi.Internal.File, clicked: usize) void {
 /// in the row-hits buffer are included (out-of-viewport selections are allowed because hits are
 /// populated for every drawn row, not just hovered ones).
 fn buildLayerMultiDragIds(
-    file: *const pixi.Internal.File,
+    file: *const fizzy.Internal.File,
     hits: []const LayerRowHit,
     out: []usize,
 ) usize {
@@ -1436,12 +1436,12 @@ fn buildLayerMultiDragIds(
 }
 
 /// Clear in-flight gesture only (no `dragEnd`). Used before arming a new row press.
-fn layerTreeClearGestureKeysOnly(_: *const pixi.Internal.File) void {
+fn layerTreeClearGestureKeysOnly(_: *const fizzy.Internal.File) void {
     layer_row_gesture = null;
 }
 
 /// Clear gesture and global `Dragging` (stale prestart/drag from other widgets).
-fn layerTreeResetRowPointerGesture(_: *const pixi.Internal.File) void {
+fn layerTreeResetRowPointerGesture(_: *const fizzy.Internal.File) void {
     dvui.dragEnd();
     layer_row_gesture = null;
 }
@@ -1468,7 +1468,7 @@ fn layerPointerInScrollViewport(p: dvui.Point.Physical, viewport_r: ?dvui.Rect.P
     return true;
 }
 
-fn layerTreePointerInTreeSurface(tree: *pixi.dvui.TreeWidget, p: dvui.Point.Physical, floating_win: dvui.Id) bool {
+fn layerTreePointerInTreeSurface(tree: *fizzy.dvui.TreeWidget, p: dvui.Point.Physical, floating_win: dvui.Id) bool {
     if (floating_win != dvui.subwindowCurrentId()) return false;
     const tr = tree.data().borderRectScale().r;
     if (!tr.contains(p)) return false;
@@ -1476,14 +1476,14 @@ fn layerTreePointerInTreeSurface(tree: *pixi.dvui.TreeWidget, p: dvui.Point.Phys
     return true;
 }
 
-fn layerTreePointerInTreeBorder(tree: *pixi.dvui.TreeWidget, p: dvui.Point.Physical, floating_win: dvui.Id) bool {
+fn layerTreePointerInTreeBorder(tree: *fizzy.dvui.TreeWidget, p: dvui.Point.Physical, floating_win: dvui.Id) bool {
     if (floating_win != dvui.subwindowCurrentId()) return false;
     return tree.data().borderRectScale().r.contains(p);
 }
 
 /// While another widget holds capture, `target_widgetId` may not be the tree. Allow starting a reorder drag
 /// when the pointer is over the tree border (scroll clip can disagree with visible row geometry).
-fn layerTreeMotionAllowsLayerReorder(tree: *pixi.dvui.TreeWidget, e: *dvui.Event) bool {
+fn layerTreeMotionAllowsLayerReorder(tree: *fizzy.dvui.TreeWidget, e: *dvui.Event) bool {
     if (e.target_widgetId) |fwid| {
         if (fwid == tree.data().id) return true;
     }
@@ -1497,7 +1497,7 @@ fn layerTreeMotionAllowsLayerReorder(tree: *pixi.dvui.TreeWidget, e: *dvui.Event
 
 /// One pass over `events()` in frame order: press → motion → release.
 /// Runs after layer rows (and rename `textEntry`) are built so geometry and `e.handled` reflect z-order.
-fn processLayerTreePointerEvents(tree: *pixi.dvui.TreeWidget, file: *pixi.Internal.File, hits: []const LayerRowHit, layers_viewport_r: ?dvui.Rect.Physical) void {
+fn processLayerTreePointerEvents(tree: *fizzy.dvui.TreeWidget, file: *fizzy.Internal.File, hits: []const LayerRowHit, layers_viewport_r: ?dvui.Rect.Physical) void {
     if (!tree.init_options.enable_reordering) return;
 
     for (dvui.events()) |*e| {
@@ -1523,7 +1523,7 @@ fn processLayerTreePointerEvents(tree: *pixi.dvui.TreeWidget, file: *pixi.Intern
                         layerTreeClearGestureKeysOnly(file);
                         dvui.dragPreStart(me.p, .{ .offset = h.hbox_tl.diff(me.p) });
 
-                        const mode = pixi.dvui.TreeSelection.clickModeFromMod(me.mod);
+                        const mode = fizzy.dvui.TreeSelection.clickModeFromMod(me.mod);
                         const applied = applyLayerClick(file, h.layer_index, mode);
 
                         layer_row_gesture = .{

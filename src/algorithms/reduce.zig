@@ -7,7 +7,7 @@
 //! that the in-game anchor point (feet, hand, muzzle, …) still lines up after the bitmap is
 //! tightened.
 //!
-//! This module is std-only: no dvui, no pixi globals, no allocator. `Internal.Layer.reduce` is
+//! This module is std-only: no dvui, no fizzy globals, no allocator. `Internal.Layer.reduce` is
 //! a thin wrapper around `reduce` here, and `Packer.append` consumes both `reduce` and
 //! `originAfterReduce`.
 //!

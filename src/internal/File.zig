@@ -1,9 +1,9 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const zip = @import("zip");
 const dvui = @import("dvui");
 
-const Editor = pixi.Editor;
+const Editor = fizzy.Editor;
 
 const File = @This();
 
@@ -53,8 +53,8 @@ editor: EditorData = .{},
 /// Also, the fields here tend to be directly coupled with the UI library
 pub const EditorData = struct {
     // Only valid while file widget is drawing the file
-    workspace: *pixi.Editor.Workspace = undefined,
-    canvas: pixi.dvui.CanvasWidget = .{},
+    workspace: *fizzy.Editor.Workspace = undefined,
+    canvas: fizzy.dvui.CanvasWidget = .{},
     layers_scroll_info: dvui.ScrollInfo = .{ .horizontal = .auto },
     sprites_scroll_info: dvui.ScrollInfo = .{ .horizontal = .auto },
     animations_scroll_info: dvui.ScrollInfo = .{ .horizontal = .auto },
@@ -157,28 +157,28 @@ pub const InitOptions = struct {
     row_height: u32,
 };
 
-pub fn init(path: []const u8, options: InitOptions) !pixi.Internal.File {
-    var internal: pixi.Internal.File = .{
-        .id = pixi.editor.newFileID(),
-        .path = try pixi.app.allocator.dupe(u8, path),
+pub fn init(path: []const u8, options: InitOptions) !fizzy.Internal.File {
+    var internal: fizzy.Internal.File = .{
+        .id = fizzy.editor.newFileID(),
+        .path = try fizzy.app.allocator.dupe(u8, path),
         .columns = options.columns,
         .rows = options.rows,
         .column_width = options.column_width,
         .row_height = options.row_height,
-        .history = pixi.Internal.File.History.init(pixi.app.allocator),
-        .buffers = pixi.Internal.File.Buffers.init(pixi.app.allocator),
+        .history = fizzy.Internal.File.History.init(fizzy.app.allocator),
+        .buffers = fizzy.Internal.File.Buffers.init(fizzy.app.allocator),
     };
 
     // Initialize editor layers and selected sprites
     internal.editor.temporary_layer = try .init(internal.newLayerID(), "Temporary", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
     internal.editor.selection_layer = try .init(internal.newLayerID(), "Selection", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
     internal.editor.transform_layer = try .init(internal.newLayerID(), "Transform", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
-    internal.editor.selected_sprites = try std.DynamicBitSet.initEmpty(pixi.app.allocator, internal.spriteCount());
+    internal.editor.selected_sprites = try std.DynamicBitSet.initEmpty(fizzy.app.allocator, internal.spriteCount());
 
-    internal.editor.checkerboard = try std.DynamicBitSet.initEmpty(pixi.app.allocator, internal.width() * internal.height());
+    internal.editor.checkerboard = try std.DynamicBitSet.initEmpty(fizzy.app.allocator, internal.width() * internal.height());
     // Create a layer-sized checkerboard pattern for selection tools
     for (0..internal.width() * internal.height()) |i| {
-        const value = pixi.math.checker(.{ .w = @floatFromInt(internal.width()), .h = @floatFromInt(internal.height()) }, i);
+        const value = fizzy.math.checker(.{ .w = @floatFromInt(internal.width()), .h = @floatFromInt(internal.height()) }, i);
         internal.editor.checkerboard.setValue(i, value);
     }
 
@@ -188,18 +188,18 @@ pub fn init(path: []const u8, options: InitOptions) !pixi.Internal.File {
         const aspect_ratio = @as(f32, @floatFromInt(internal.column_width)) / @as(f32, @floatFromInt(internal.row_height));
         const alpha_height = @round(alpha_width / aspect_ratio);
 
-        internal.editor.checkerboard_tile = pixi.image.init(
+        internal.editor.checkerboard_tile = fizzy.image.init(
             alpha_width,
             std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
             .{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .ptr,
         ) catch return error.LayerCreateError;
 
-        for (pixi.image.pixels(internal.editor.checkerboard_tile), 0..) |*pixel, i| {
-            if (pixi.math.checker(pixi.image.size(internal.editor.checkerboard_tile), i)) {
-                pixel.* = pixi.editor.settings.checker_color_even;
+        for (fizzy.image.pixels(internal.editor.checkerboard_tile), 0..) |*pixel, i| {
+            if (fizzy.math.checker(fizzy.image.size(internal.editor.checkerboard_tile), i)) {
+                pixel.* = fizzy.editor.settings.checker_color_even;
             } else {
-                pixel.* = pixi.editor.settings.checker_color_odd;
+                pixel.* = fizzy.editor.settings.checker_color_odd;
             }
         }
         dvui.textureInvalidateCache(internal.editor.checkerboard_tile.hash());
@@ -207,13 +207,13 @@ pub fn init(path: []const u8, options: InitOptions) !pixi.Internal.File {
 
     {
         // Create a single layer for the file
-        const layer: pixi.Internal.Layer = try .init(internal.newLayerID(), "Layer", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
-        internal.layers.append(pixi.app.allocator, layer) catch return error.LayerCreateError;
+        const layer: fizzy.Internal.Layer = try .init(internal.newLayerID(), "Layer", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
+        internal.layers.append(fizzy.app.allocator, layer) catch return error.LayerCreateError;
     }
 
     // Initialize sprites
     for (0..internal.spriteCount()) |_| {
-        internal.sprites.append(pixi.app.allocator, .{
+        internal.sprites.append(fizzy.app.allocator, .{
             .origin = .{ 0.0, 0.0 },
         }) catch return error.FileLoadError;
     }
@@ -256,7 +256,7 @@ pub fn invalidateActiveLayerTransparencyMaskCache(file: *File) void {
 pub const layerOrderAfterMove = @import("layer_order.zig").layerOrderAfterMove;
 
 /// Attempts to load a file from the given path to create a new file
-pub fn fromPath(path: []const u8) !?pixi.Internal.File {
+pub fn fromPath(path: []const u8) !?fizzy.Internal.File {
     const extension = std.fs.path.extension(path[0..path.len]);
     if (isFlatImageExtension(extension)) {
         const file = fromPathFlatImage(path) catch |err| {
@@ -266,8 +266,8 @@ pub fn fromPath(path: []const u8) !?pixi.Internal.File {
         return file;
     }
 
-    if (std.mem.eql(u8, extension, ".pixi")) {
-        const file = fromPathPixi(path) catch |err| {
+    if (isFizzyExtension(extension)) {
+        const file = fromPathFizzy(path) catch |err| {
             dvui.log.err("{any}: {s}", .{ err, path });
             return err;
         };
@@ -277,22 +277,31 @@ pub fn fromPath(path: []const u8) !?pixi.Internal.File {
     return error.InvalidExtension;
 }
 
-pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
-    if (!std.mem.eql(u8, std.fs.path.extension(path[0..path.len]), ".pixi"))
+/// `.fiz` is the current native extension; `.pixi` is kept for legacy file load support.
+pub fn isFizzyExtension(ext: []const u8) bool {
+    return std.mem.eql(u8, ext, ".fiz") or std.mem.eql(u8, ext, ".pixi");
+}
+
+pub fn fromPathFizzy(path: []const u8) !?fizzy.Internal.File {
+    if (!isFizzyExtension(std.fs.path.extension(path[0..path.len])))
         return error.InvalidExtension;
 
-    const null_terminated_path = try pixi.app.allocator.dupeZ(u8, path);
-    defer pixi.app.allocator.free(null_terminated_path);
+    const null_terminated_path = try fizzy.app.allocator.dupeZ(u8, path);
+    defer fizzy.app.allocator.free(null_terminated_path);
 
     zip_open: {
-        const pixi_file = zip.zip_open(null_terminated_path.ptr, 0, 'r') orelse break :zip_open;
-        defer zip.zip_close(pixi_file);
+        const fizzy_file = zip.zip_open(null_terminated_path.ptr, 0, 'r') orelse break :zip_open;
+        defer zip.zip_close(fizzy_file);
 
         var buf: ?*anyopaque = null;
         var size: u64 = 0;
-        _ = zip.zip_entry_open(pixi_file, "pixidata.json");
-        _ = zip.zip_entry_read(pixi_file, &buf, &size);
-        _ = zip.zip_entry_close(pixi_file);
+        // Try the current entry name first, then fall back to the legacy `pixidata.json`
+        // so files saved by the pre-rename Pixi versions still load.
+        if (zip.zip_entry_open(fizzy_file, "fizzydata.json") != 0) {
+            _ = zip.zip_entry_open(fizzy_file, "pixidata.json");
+        }
+        _ = zip.zip_entry_read(fizzy_file, &buf, &size);
+        _ = zip.zip_entry_close(fizzy_file);
 
         const content: []const u8 = @as([*]const u8, @ptrCast(buf))[0..size];
 
@@ -301,19 +310,19 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
             .ignore_unknown_fields = true,
         };
 
-        var try_parse: ?std.json.Parsed(pixi.File) = null;
-        try_parse = std.json.parseFromSlice(pixi.File, pixi.app.allocator, content, options) catch null;
+        var try_parse: ?std.json.Parsed(fizzy.File) = null;
+        try_parse = std.json.parseFromSlice(fizzy.File, fizzy.app.allocator, content, options) catch null;
 
-        var ext: pixi.File = if (try_parse) |parsed| parsed.value else undefined;
+        var ext: fizzy.File = if (try_parse) |parsed| parsed.value else undefined;
 
         if (try_parse == null) {
             // If we are here, we have tried to load the file but hit an issue because the old animation format
-            if (std.json.parseFromSlice(pixi.File.FileV3, pixi.app.allocator, content, options) catch null) |old_file| {
+            if (std.json.parseFromSlice(fizzy.File.FileV3, fizzy.app.allocator, content, options) catch null) |old_file| {
                 std.log.info("Loading file v3: {s}", .{path});
-                const animations = try pixi.app.allocator.alloc(pixi.Animation, old_file.value.animations.len);
+                const animations = try fizzy.app.allocator.alloc(fizzy.Animation, old_file.value.animations.len);
                 for (animations, old_file.value.animations) |*animation, old_animation| {
-                    animation.name = try pixi.app.allocator.dupe(u8, old_animation.name);
-                    animation.frames = try pixi.app.allocator.alloc(Animation.Frame, old_animation.frames.len);
+                    animation.name = try fizzy.app.allocator.dupe(u8, old_animation.name);
+                    animation.frames = try fizzy.app.allocator.alloc(Animation.Frame, old_animation.frames.len);
                     for (animation.frames, old_animation.frames) |*frame, old_frame| {
                         frame.sprite_index = old_frame;
                         frame.ms = @intFromFloat(1000 / old_animation.fps);
@@ -330,12 +339,12 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
                     .sprites = old_file.value.sprites,
                     .animations = animations,
                 };
-            } else if (std.json.parseFromSlice(pixi.File.FileV2, pixi.app.allocator, content, options) catch null) |old_file| {
+            } else if (std.json.parseFromSlice(fizzy.File.FileV2, fizzy.app.allocator, content, options) catch null) |old_file| {
                 std.log.info("Loading file v2: {s}", .{path});
-                const animations = try pixi.app.allocator.alloc(pixi.Animation, old_file.value.animations.len);
+                const animations = try fizzy.app.allocator.alloc(fizzy.Animation, old_file.value.animations.len);
                 for (animations, old_file.value.animations) |*animation, old_animation| {
-                    animation.name = try pixi.app.allocator.dupe(u8, old_animation.name);
-                    animation.frames = try pixi.app.allocator.alloc(Animation.Frame, old_animation.frames.len);
+                    animation.name = try fizzy.app.allocator.dupe(u8, old_animation.name);
+                    animation.frames = try fizzy.app.allocator.alloc(Animation.Frame, old_animation.frames.len);
                     for (animation.frames, old_animation.frames) |*frame, old_frame| {
                         frame.sprite_index = old_frame;
                         frame.ms = @intFromFloat(1000 / old_animation.fps);
@@ -352,12 +361,12 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
                     .sprites = old_file.value.sprites,
                     .animations = animations,
                 };
-            } else if (std.json.parseFromSlice(pixi.File.FileV1, pixi.app.allocator, content, options) catch null) |old_file| {
+            } else if (std.json.parseFromSlice(fizzy.File.FileV1, fizzy.app.allocator, content, options) catch null) |old_file| {
                 std.log.info("Loading file v1: {s}", .{path});
-                const animations = try pixi.app.allocator.alloc(pixi.Animation, old_file.value.animations.len);
+                const animations = try fizzy.app.allocator.alloc(fizzy.Animation, old_file.value.animations.len);
                 for (animations, 0..) |*animation, i| {
-                    animation.name = try pixi.app.allocator.dupe(u8, old_file.value.animations[i].name);
-                    animation.frames = try pixi.app.allocator.alloc(Animation.Frame, old_file.value.animations[i].length);
+                    animation.name = try fizzy.app.allocator.dupe(u8, old_file.value.animations[i].name);
+                    animation.frames = try fizzy.app.allocator.alloc(Animation.Frame, old_file.value.animations[i].length);
                     for (animation.frames, 0..old_file.value.animations[i].length) |*frame, j| {
                         frame.sprite_index = old_file.value.animations[i].start + j;
                         frame.ms = @intFromFloat(1000 / old_file.value.animations[i].fps);
@@ -381,15 +390,15 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
 
         //defer parsed.deinit();
 
-        var internal: pixi.Internal.File = .{
-            .id = pixi.editor.newFileID(),
-            .path = try pixi.app.allocator.dupe(u8, path),
+        var internal: fizzy.Internal.File = .{
+            .id = fizzy.editor.newFileID(),
+            .path = try fizzy.app.allocator.dupe(u8, path),
             .columns = ext.columns,
             .rows = ext.rows,
             .column_width = ext.column_width,
             .row_height = ext.row_height,
-            .history = pixi.Internal.File.History.init(pixi.app.allocator),
-            .buffers = pixi.Internal.File.Buffers.init(pixi.app.allocator),
+            .history = fizzy.Internal.File.History.init(fizzy.app.allocator),
+            .buffers = fizzy.Internal.File.Buffers.init(fizzy.app.allocator),
         };
 
         //Initialize editor layers and selected sprites
@@ -398,12 +407,12 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
         internal.editor.temporary_layer = try .init(internal.newLayerID(), "Temporary", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
         internal.editor.selection_layer = try .init(internal.newLayerID(), "Selection", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
         internal.editor.transform_layer = try .init(internal.newLayerID(), "Transform", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
-        internal.editor.selected_sprites = try std.DynamicBitSet.initEmpty(pixi.app.allocator, internal.spriteCount());
+        internal.editor.selected_sprites = try std.DynamicBitSet.initEmpty(fizzy.app.allocator, internal.spriteCount());
 
-        internal.editor.checkerboard = try std.DynamicBitSet.initEmpty(pixi.app.allocator, internal.width() * internal.height());
+        internal.editor.checkerboard = try std.DynamicBitSet.initEmpty(fizzy.app.allocator, internal.width() * internal.height());
         // Create a layer-sized checkerboard pattern for selection tools
         for (0..internal.width() * internal.height()) |i| {
-            const value = pixi.math.checker(.{ .w = @floatFromInt(internal.width()), .h = @floatFromInt(internal.height()) }, i);
+            const value = fizzy.math.checker(.{ .w = @floatFromInt(internal.width()), .h = @floatFromInt(internal.height()) }, i);
             internal.editor.checkerboard.setValue(i, value);
         }
 
@@ -413,7 +422,7 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
             const aspect_ratio = @as(f32, @floatFromInt(internal.column_width)) / @as(f32, @floatFromInt(internal.row_height));
             const alpha_height = @round(alpha_width / aspect_ratio);
 
-            internal.editor.checkerboard_tile = pixi.image.init(
+            internal.editor.checkerboard_tile = fizzy.image.init(
                 alpha_width,
                 std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
                 .{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -423,8 +432,8 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
             const checker_color_1: [4]u8 = .{ 255, 255, 255, 255 };
             const checker_color_2: [4]u8 = .{ 175, 175, 175, 255 };
 
-            for (pixi.image.pixels(internal.editor.checkerboard_tile), 0..) |*pixel, i| {
-                if (pixi.math.checker(pixi.image.size(internal.editor.checkerboard_tile), i)) {
+            for (fizzy.image.pixels(internal.editor.checkerboard_tile), 0..) |*pixel, i| {
+                if (fizzy.math.checker(fizzy.image.size(internal.editor.checkerboard_tile), i)) {
                     pixel.* = checker_color_1;
                 } else {
                     pixel.* = checker_color_2;
@@ -435,19 +444,19 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
 
         var set_layer_index: bool = false;
         for (ext.layers, 0..) |l, i| {
-            const layer_image_name = std.fmt.allocPrintSentinel(pixi.app.allocator, "{s}.layer", .{l.name}, 0) catch "Memory Allocation Failed";
-            defer pixi.app.allocator.free(layer_image_name);
-            const png_image_name = std.fmt.allocPrintSentinel(pixi.app.allocator, "{s}.png", .{l.name}, 0) catch "Memory Allocation Failed";
-            defer pixi.app.allocator.free(png_image_name);
+            const layer_image_name = std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}.layer", .{l.name}, 0) catch "Memory Allocation Failed";
+            defer fizzy.app.allocator.free(layer_image_name);
+            const png_image_name = std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}.png", .{l.name}, 0) catch "Memory Allocation Failed";
+            defer fizzy.app.allocator.free(png_image_name);
 
             var img_buf: ?*anyopaque = null;
             var img_len: usize = 0;
 
-            if (zip.zip_entry_open(pixi_file, layer_image_name.ptr) == 0) { // Read layer file as directly pixels
-                _ = zip.zip_entry_read(pixi_file, &img_buf, &img_len);
+            if (zip.zip_entry_open(fizzy_file, layer_image_name.ptr) == 0) { // Read layer file as directly pixels
+                _ = zip.zip_entry_read(fizzy_file, &img_buf, &img_len);
                 const data = img_buf orelse continue;
 
-                var new_layer: pixi.Internal.Layer = try .fromPixelsPMA(
+                var new_layer: fizzy.Internal.Layer = try .fromPixelsPMA(
                     internal.newLayerID(),
                     l.name,
                     @as([*]dvui.Color.PMA, @ptrCast(@constCast(data)))[0..(internal.width() * internal.height())],
@@ -461,17 +470,17 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
 
                 new_layer.setMaskFromTransparency(true);
 
-                internal.layers.append(pixi.app.allocator, new_layer) catch return error.FileLoadError;
+                internal.layers.append(fizzy.app.allocator, new_layer) catch return error.FileLoadError;
 
                 if (l.visible and !set_layer_index) {
                     internal.selected_layer_index = i;
                     set_layer_index = true;
                 }
-            } else if (zip.zip_entry_open(pixi_file, png_image_name.ptr) == 0) { // Read the layer file as PNG file
-                _ = zip.zip_entry_read(pixi_file, &img_buf, &img_len);
+            } else if (zip.zip_entry_open(fizzy_file, png_image_name.ptr) == 0) { // Read the layer file as PNG file
+                _ = zip.zip_entry_read(fizzy_file, &img_buf, &img_len);
                 const data = img_buf orelse continue;
 
-                var new_layer: pixi.Internal.Layer = try .fromImageFileBytes(
+                var new_layer: fizzy.Internal.Layer = try .fromImageFileBytes(
                     internal.newLayerID(),
                     l.name,
                     @as([*]u8, @ptrCast(data))[0..img_len],
@@ -483,7 +492,7 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
 
                 new_layer.setMaskFromTransparency(true);
 
-                internal.layers.append(pixi.app.allocator, new_layer) catch return error.FileLoadError;
+                internal.layers.append(fizzy.app.allocator, new_layer) catch return error.FileLoadError;
 
                 if (l.visible and !set_layer_index) {
                     internal.selected_layer_index = i;
@@ -491,27 +500,27 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
                 }
             }
 
-            _ = zip.zip_entry_close(pixi_file);
+            _ = zip.zip_entry_close(fizzy_file);
         }
-        _ = zip.zip_entry_close(pixi_file);
+        _ = zip.zip_entry_close(fizzy_file);
 
         for (0..internal.spriteCount()) |sprite_index| {
             if (sprite_index >= ext.sprites.len) {
-                internal.sprites.append(pixi.app.allocator, .{
+                internal.sprites.append(fizzy.app.allocator, .{
                     .origin = .{ 0, 0 },
                 }) catch return error.FileLoadError;
             } else {
-                internal.sprites.append(pixi.app.allocator, .{
+                internal.sprites.append(fizzy.app.allocator, .{
                     .origin = .{ ext.sprites[sprite_index].origin[0], ext.sprites[sprite_index].origin[1] },
                 }) catch return error.FileLoadError;
             }
         }
 
         for (ext.animations) |animation| {
-            internal.animations.append(pixi.app.allocator, .{
+            internal.animations.append(fizzy.app.allocator, .{
                 .id = internal.newAnimationID(),
-                .name = try pixi.app.allocator.dupe(u8, animation.name),
-                .frames = try pixi.app.allocator.dupe(Animation.Frame, animation.frames),
+                .name = try fizzy.app.allocator.dupe(u8, animation.name),
+                .frames = try fizzy.app.allocator.dupe(Animation.Frame, animation.frames),
             }) catch return error.FileLoadError;
         }
         return internal;
@@ -520,7 +529,7 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
     //     var file_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
     //     var link_name_buffer: [std.fs.max_path_bytes]u8 = undefined;
 
-    //     if (pixi.fs.read(pixi.app.allocator, path) catch null) |file_bytes| {
+    //     if (fizzy.fs.read(fizzy.app.allocator, path) catch null) |file_bytes| {
     //         std.log.debug("Read file bytes!", .{});
     //         var input = std.io.fixedBufferStream(file_bytes);
     //         var iter = std.tar.iterator(input.reader(), .{
@@ -528,7 +537,7 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
     //             .link_name_buffer = &link_name_buffer,
     //         });
 
-    //         var json_content = std.array_list.Managed(u8).init(pixi.app.allocator);
+    //         var json_content = std.array_list.Managed(u8).init(fizzy.app.allocator);
     //         defer json_content.deinit();
 
     //         while (try iter.next()) |entry| {
@@ -543,23 +552,23 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
     //             .ignore_unknown_fields = true,
     //         };
 
-    //         if (std.json.parseFromSlice(pixi.File, pixi.app.allocator, json_content.items, options) catch null) |parsed| {
+    //         if (std.json.parseFromSlice(fizzy.File, fizzy.app.allocator, json_content.items, options) catch null) |parsed| {
     //             defer parsed.deinit();
 
-    //             std.log.debug("Parsed pixidata.json!", .{});
+    //             std.log.debug("Parsed fizzydata.json!", .{});
 
     //             const ext = parsed.value;
 
-    //             var internal: pixi.Internal.File = .{
-    //                 .id = pixi.editor.newFileID(),
-    //                 .path = try pixi.app.allocator.dupe(u8, path),
+    //             var internal: fizzy.Internal.File = .{
+    //                 .id = fizzy.editor.newFileID(),
+    //                 .path = try fizzy.app.allocator.dupe(u8, path),
     //                 .width = ext.width,
     //                 .height = ext.height,
     //                 .tile_width = ext.tile_width,
     //                 .tile_height = ext.tile_height,
-    //                 .history = pixi.Internal.File.History.init(pixi.app.allocator),
-    //                 .buffers = pixi.Internal.File.Buffers.init(pixi.app.allocator),
-    //                 .checkerboard = pixi.image.init(
+    //                 .history = fizzy.Internal.File.History.init(fizzy.app.allocator),
+    //                 .buffers = fizzy.Internal.File.Buffers.init(fizzy.app.allocator),
+    //                 .checkerboard = fizzy.image.init(
     //                     ext.tile_width * 2,
     //                     ext.tile_height * 2,
     //                     .{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -568,7 +577,7 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
     //                 .temporary_layer = undefined,
     //                 .selection_layer = undefined,
     //                 .selected_sprites = try std.DynamicBitSet.initEmpty(
-    //                     pixi.app.allocator,
+    //                     fizzy.app.allocator,
     //                     @divExact(ext.width, ext.tile_width) * @divExact(ext.height, ext.tile_height),
     //                 ),
     //             };
@@ -591,15 +600,15 @@ pub fn fromPathPixi(path: []const u8) !?pixi.Internal.File {
     //                     std.log.debug("Entry name: {s}", .{entry.name});
 
     //                     if (std.mem.eql(u8, entry.name, layer_image_name)) {
-    //                         var layer_content = std.array_list.Managed(u8).init(pixi.app.allocator);
+    //                         var layer_content = std.array_list.Managed(u8).init(fizzy.app.allocator);
     //                         try entry.writeAll(layer_content.writer());
 
-    //                         var cond: ?pixi.Internal.Layer = pixi.Internal.Layer.fromPixels(internal.newID(), pixi.app.allocator.dupe(u8, ext_layer.name) catch ext_layer.name, layer_content.items, ext.width, ext.height, .ptr) catch null;
+    //                         var cond: ?fizzy.Internal.Layer = fizzy.Internal.Layer.fromPixels(internal.newID(), fizzy.app.allocator.dupe(u8, ext_layer.name) catch ext_layer.name, layer_content.items, ext.width, ext.height, .ptr) catch null;
 
     //                         if (cond) |*new_layer| {
     //                             new_layer.visible = ext_layer.visible;
     //                             new_layer.collapse = ext_layer.collapse;
-    //                             internal.layers.append(pixi.app.allocator, new_layer.*) catch return error.FileLoadError;
+    //                             internal.layers.append(fizzy.app.allocator, new_layer.*) catch return error.FileLoadError;
     //                         } else {
     //                             std.log.err("Failed to create layer from pixels", .{});
     //                         }
@@ -624,12 +633,12 @@ fn isFlatImageExtension(ext: []const u8) bool {
 /// Extensions that `saveAsync` can write without a Save As dialog.
 pub fn hasRecognizedSaveExtension(path: []const u8) bool {
     const ext = std.fs.path.extension(path);
-    return std.mem.eql(u8, ext, ".pixi") or isFlatImageExtension(ext);
+    return isFizzyExtension(ext) or isFlatImageExtension(ext);
 }
 
 /// True when the document holds state that a flat PNG/JPEG round-trip would not preserve
 /// (layers, tile grid, animations, per-sprite origins).
-pub fn requiresPixiCompatibleSave(self: File) bool {
+pub fn requiresFizzyCompatibleSave(self: File) bool {
     if (self.layers.len != 1) return true;
     if (self.columns != 1 or self.rows != 1) return true;
     if (self.animations.len != 0) return true;
@@ -642,43 +651,43 @@ pub fn requiresPixiCompatibleSave(self: File) bool {
 pub fn shouldConfirmFlatRasterSave(self: File) bool {
     const ext = std.fs.path.extension(self.path);
     if (!isFlatImageExtension(ext)) return false;
-    return requiresPixiCompatibleSave(self);
+    return requiresFizzyCompatibleSave(self);
 }
 
 /// Loads a PNG or JPEG as the first layer of a new file, and retains the path
 /// when saved; layers will be flattened to that file
-pub fn fromPathFlatImage(path: []const u8) !?pixi.Internal.File {
+pub fn fromPathFlatImage(path: []const u8) !?fizzy.Internal.File {
     if (!isFlatImageExtension(std.fs.path.extension(path[0..path.len])))
         return error.InvalidExtension;
 
-    var image_layer: pixi.Internal.Layer = try pixi.Internal.Layer.fromImageFilePath(pixi.editor.newFileID(), "Layer", path, .ptr);
+    var image_layer: fizzy.Internal.Layer = try fizzy.Internal.Layer.fromImageFilePath(fizzy.editor.newFileID(), "Layer", path, .ptr);
     const size = image_layer.size();
     const column_width: u32 = @intFromFloat(size.w);
     const row_height: u32 = @intFromFloat(size.h);
 
-    var internal: pixi.Internal.File = .{
-        .id = pixi.editor.newFileID(),
-        .path = try pixi.app.allocator.dupe(u8, path),
+    var internal: fizzy.Internal.File = .{
+        .id = fizzy.editor.newFileID(),
+        .path = try fizzy.app.allocator.dupe(u8, path),
         .columns = 1,
         .rows = 1,
         .column_width = column_width,
         .row_height = row_height,
-        .history = pixi.Internal.File.History.init(pixi.app.allocator),
-        .buffers = pixi.Internal.File.Buffers.init(pixi.app.allocator),
+        .history = fizzy.Internal.File.History.init(fizzy.app.allocator),
+        .buffers = fizzy.Internal.File.Buffers.init(fizzy.app.allocator),
     };
 
-    internal.layers.append(pixi.app.allocator, image_layer) catch return error.LayerCreateError;
+    internal.layers.append(fizzy.app.allocator, image_layer) catch return error.LayerCreateError;
 
     // Initialize editor layers and selected sprites
     internal.editor.temporary_layer = try .init(internal.newLayerID(), "Temporary", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
     internal.editor.selection_layer = try .init(internal.newLayerID(), "Selection", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
     internal.editor.transform_layer = try .init(internal.newLayerID(), "Transform", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
-    internal.editor.selected_sprites = try std.DynamicBitSet.initEmpty(pixi.app.allocator, internal.spriteCount());
+    internal.editor.selected_sprites = try std.DynamicBitSet.initEmpty(fizzy.app.allocator, internal.spriteCount());
 
-    internal.editor.checkerboard = try std.DynamicBitSet.initEmpty(pixi.app.allocator, internal.width() * internal.height());
+    internal.editor.checkerboard = try std.DynamicBitSet.initEmpty(fizzy.app.allocator, internal.width() * internal.height());
     // Create a layer-sized checkerboard pattern for selection tools
     for (0..internal.width() * internal.height()) |i| {
-        const value = pixi.math.checker(.{ .w = @floatFromInt(internal.width()), .h = @floatFromInt(internal.height()) }, i);
+        const value = fizzy.math.checker(.{ .w = @floatFromInt(internal.width()), .h = @floatFromInt(internal.height()) }, i);
         internal.editor.checkerboard.setValue(i, value);
     }
 
@@ -688,7 +697,7 @@ pub fn fromPathFlatImage(path: []const u8) !?pixi.Internal.File {
         const aspect_ratio = @as(f32, @floatFromInt(internal.column_width)) / @as(f32, @floatFromInt(internal.row_height));
         const alpha_height = @round(alpha_width / aspect_ratio);
 
-        internal.editor.checkerboard_tile = pixi.image.init(
+        internal.editor.checkerboard_tile = fizzy.image.init(
             alpha_width,
             std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
             .{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -698,8 +707,8 @@ pub fn fromPathFlatImage(path: []const u8) !?pixi.Internal.File {
         const checker_color_1: [4]u8 = .{ 255, 255, 255, 255 };
         const checker_color_2: [4]u8 = .{ 175, 175, 175, 255 };
 
-        for (pixi.image.pixels(internal.editor.checkerboard_tile), 0..) |*pixel, i| {
-            if (pixi.math.checker(pixi.image.size(internal.editor.checkerboard_tile), i)) {
+        for (fizzy.image.pixels(internal.editor.checkerboard_tile), 0..) |*pixel, i| {
+            if (fizzy.math.checker(fizzy.image.size(internal.editor.checkerboard_tile), i)) {
                 pixel.* = checker_color_1;
             } else {
                 pixel.* = checker_color_2;
@@ -715,7 +724,7 @@ pub const ResizeOptions = struct {
     rows: u32,
     history: bool = true, // If true, layer data will be recorded for undo/redo
     layer_data: ?[][][4]u8 = null, // If provided, the layer data will be applied to the layers after resizing
-    animation_data: ?[][]pixi.Animation.Frame = null, // If provided, the animation data will be applied to the animations after resizing
+    animation_data: ?[][]fizzy.Animation.Frame = null, // If provided, the animation data will be applied to the animations after resizing
     sprite_data: ?[][2]f32 = null, // If provided, the sprite data will be applied to the sprites after resizing
 };
 
@@ -738,22 +747,22 @@ pub fn resize(file: *File, options: ResizeOptions) !void {
     if (options.history) {
         file.history.append(.{ .resize = .{ .width = file.width(), .height = file.height() } }) catch return error.HistoryAppendError;
 
-        var layer_data = try pixi.app.allocator.alloc([][4]u8, file.layers.len);
+        var layer_data = try fizzy.app.allocator.alloc([][4]u8, file.layers.len);
         for (0..file.layers.len) |layer_index| {
             var layer = file.layers.get(layer_index);
-            layer_data[layer_index] = pixi.app.allocator.dupe([4]u8, layer.pixels()) catch return error.MemoryAllocationFailed;
+            layer_data[layer_index] = fizzy.app.allocator.dupe([4]u8, layer.pixels()) catch return error.MemoryAllocationFailed;
         }
         file.history.undo_layer_data_stack.append(layer_data) catch return error.MemoryAllocationFailed;
 
         // Store all the animations before the resize event
-        var anim_data = try pixi.app.allocator.alloc([]pixi.Animation.Frame, file.animations.len);
+        var anim_data = try fizzy.app.allocator.alloc([]fizzy.Animation.Frame, file.animations.len);
         for (0..file.animations.len) |anim_index| {
             const animation = file.animations.get(anim_index);
-            anim_data[anim_index] = pixi.app.allocator.dupe(pixi.Animation.Frame, animation.frames) catch return error.MemoryAllocationFailed;
+            anim_data[anim_index] = fizzy.app.allocator.dupe(fizzy.Animation.Frame, animation.frames) catch return error.MemoryAllocationFailed;
         }
         file.history.undo_animation_data_stack.append(anim_data) catch return error.MemoryAllocationFailed;
 
-        var sprite_data = try pixi.app.allocator.alloc([2]f32, file.spriteCount());
+        var sprite_data = try fizzy.app.allocator.alloc([2]f32, file.spriteCount());
         for (0..file.spriteCount()) |sprite_index| {
             sprite_data[sprite_index] = file.sprites.items(.origin)[sprite_index];
         }
@@ -765,22 +774,22 @@ pub fn resize(file: *File, options: ResizeOptions) !void {
             var current_animation = file.animations.get(anim_index);
             const current_data = anim_data[anim_index];
 
-            var new_animation = pixi.Internal.Animation.init(pixi.app.allocator, current_animation.id, current_animation.name, &.{}) catch return error.AnimationCreateError;
+            var new_animation = fizzy.Internal.Animation.init(fizzy.app.allocator, current_animation.id, current_animation.name, &.{}) catch return error.AnimationCreateError;
             defer file.animations.set(anim_index, new_animation);
-            defer current_animation.deinit(pixi.app.allocator);
+            defer current_animation.deinit(fizzy.app.allocator);
             for (current_data) |frame| {
-                new_animation.appendFrame(pixi.app.allocator, .{ .sprite_index = frame.sprite_index, .ms = frame.ms }) catch return error.AnimationFrameAppendError;
+                new_animation.appendFrame(fizzy.app.allocator, .{ .sprite_index = frame.sprite_index, .ms = frame.ms }) catch return error.AnimationFrameAppendError;
             }
         }
     } else for (0..file.animations.len) |anim_index| {
         var animation = file.animations.get(anim_index);
-        var new_animation = pixi.Internal.Animation.init(pixi.app.allocator, animation.id, animation.name, &.{}) catch return error.AnimationCreateError;
+        var new_animation = fizzy.Internal.Animation.init(fizzy.app.allocator, animation.id, animation.name, &.{}) catch return error.AnimationCreateError;
         defer file.animations.set(anim_index, new_animation);
-        defer animation.deinit(pixi.app.allocator);
+        defer animation.deinit(fizzy.app.allocator);
         for (0..animation.frames.len) |frame_index| {
             const old_sprite_index = animation.frames[frame_index].sprite_index;
             if (file.getResizedIndex(old_sprite_index, new_columns, new_rows)) |new_sprite_index| {
-                new_animation.appendFrame(pixi.app.allocator, .{ .sprite_index = new_sprite_index, .ms = animation.frames[frame_index].ms }) catch return error.AnimationFrameAppendError;
+                new_animation.appendFrame(fizzy.app.allocator, .{ .sprite_index = new_sprite_index, .ms = animation.frames[frame_index].ms }) catch return error.AnimationFrameAppendError;
             }
         }
     }
@@ -789,10 +798,10 @@ pub fn resize(file: *File, options: ResizeOptions) !void {
     const new_sprite_count = new_columns * new_rows;
 
     var old_origins_snapshot: ?[][2]f32 = null;
-    defer if (old_origins_snapshot) |s| pixi.app.allocator.free(s);
+    defer if (old_origins_snapshot) |s| fizzy.app.allocator.free(s);
 
     if (options.sprite_data == null) {
-        const snapshot = try pixi.app.allocator.alloc([2]f32, old_sprite_count);
+        const snapshot = try fizzy.app.allocator.alloc([2]f32, old_sprite_count);
         for (0..old_sprite_count) |i| {
             snapshot[i] = file.sprites.items(.origin)[i];
         }
@@ -800,7 +809,7 @@ pub fn resize(file: *File, options: ResizeOptions) !void {
     }
 
     file.sprites.resize(
-        pixi.app.allocator,
+        fizzy.app.allocator,
         new_sprite_count,
     ) catch return error.MemoryAllocationFailed;
 
@@ -844,7 +853,7 @@ pub fn resize(file: *File, options: ResizeOptions) !void {
 
     file.editor.checkerboard.resize(new_width * new_height, false) catch return error.MemoryAllocationFailed;
     for (0..new_width * new_height) |i| {
-        const value = pixi.math.checker(.{ .w = @floatFromInt(new_width), .h = @floatFromInt(new_height) }, i);
+        const value = fizzy.math.checker(.{ .w = @floatFromInt(new_width), .h = @floatFromInt(new_height) }, i);
         file.editor.checkerboard.setValue(i, value);
     }
 
@@ -1172,7 +1181,7 @@ pub fn reorderRows(file: *File, removed_row_index: usize, insert_before_row_inde
 }
 
 pub fn deinit(file: *File) void {
-    pixi.render.destroyLayerCompositeResources(file);
+    fizzy.render.destroyLayerCompositeResources(file);
 
     strokeUndoFreeSnapshot(file);
 
@@ -1180,31 +1189,31 @@ pub fn deinit(file: *File) void {
     file.buffers.deinit();
 
     for (file.layers.items(.name)) |name| {
-        pixi.app.allocator.free(name);
+        fizzy.app.allocator.free(name);
     }
 
     for (file.animations.items(.name)) |name| {
-        pixi.app.allocator.free(name);
+        fizzy.app.allocator.free(name);
     }
 
     for (file.animations.items(.frames)) |frames| {
-        pixi.app.allocator.free(frames);
+        fizzy.app.allocator.free(frames);
     }
 
     file.editor.temporary_layer.deinit();
     file.editor.selection_layer.deinit();
     file.editor.transform_layer.deinit();
 
-    file.editor.selected_layer_indices.deinit(pixi.app.allocator);
-    file.editor.selected_animation_indices.deinit(pixi.app.allocator);
-    file.editor.selected_frame_indices.deinit(pixi.app.allocator);
+    file.editor.selected_layer_indices.deinit(fizzy.app.allocator);
+    file.editor.selected_animation_indices.deinit(fizzy.app.allocator);
+    file.editor.selected_frame_indices.deinit(fizzy.app.allocator);
 
-    file.layers.deinit(pixi.app.allocator);
-    file.deleted_layers.deinit(pixi.app.allocator);
-    file.sprites.deinit(pixi.app.allocator);
-    file.animations.deinit(pixi.app.allocator);
-    file.deleted_animations.deinit(pixi.app.allocator);
-    pixi.app.allocator.free(file.path);
+    file.layers.deinit(fizzy.app.allocator);
+    file.deleted_layers.deinit(fizzy.app.allocator);
+    file.sprites.deinit(fizzy.app.allocator);
+    file.animations.deinit(fizzy.app.allocator);
+    file.deleted_animations.deinit(fizzy.app.allocator);
+    fizzy.app.allocator.free(file.path);
 }
 
 pub fn dirty(self: File) bool {
@@ -1427,7 +1436,7 @@ pub fn clearSelectedSprites(file: *File) void {
 pub fn collapseAnimationSelectionToPrimary(file: *File) void {
     if (file.selected_animation_index) |p| {
         file.editor.selected_animation_indices.clearRetainingCapacity();
-        file.editor.selected_animation_indices.append(pixi.app.allocator, p) catch return;
+        file.editor.selected_animation_indices.append(fizzy.app.allocator, p) catch return;
         file.editor.animation_selection_anchor = p;
     }
 }
@@ -1489,9 +1498,9 @@ pub fn selectPoint(file: *File, point: dvui.Point, select_options: SelectOptions
             }
         }
     } else {
-        var iter = pixi.editor.tools.stroke.iterator(.{ .kind = .set, .direction = .forward });
+        var iter = fizzy.editor.tools.stroke.iterator(.{ .kind = .set, .direction = .forward });
         while (iter.next()) |i| {
-            const offset = pixi.editor.tools.offset_table[i];
+            const offset = fizzy.editor.tools.offset_table[i];
             const new_point: dvui.Point = .{ .x = point.x + offset[0], .y = point.y + offset[1] };
 
             if (select_options.constrain_to_tile) {
@@ -1535,29 +1544,29 @@ pub fn selectLine(file: *File, point1: dvui.Point, point2: dvui.Point, select_op
     const max_y: f32 = min_y + @as(f32, @floatFromInt(file.row_height));
 
     const diff = point2.diff(point1).normalize().scale(4, dvui.Point);
-    const stroke_size: usize = @intCast(pixi.Editor.Tools.max_brush_size);
+    const stroke_size: usize = @intCast(fizzy.Editor.Tools.max_brush_size);
 
-    const center: dvui.Point = .{ .x = @floor(pixi.Editor.Tools.max_brush_size_float / 2), .y = @floor(pixi.Editor.Tools.max_brush_size_float / 2) };
-    var mask = pixi.editor.tools.stroke;
+    const center: dvui.Point = .{ .x = @floor(fizzy.Editor.Tools.max_brush_size_float / 2), .y = @floor(fizzy.Editor.Tools.max_brush_size_float / 2) };
+    var mask = fizzy.editor.tools.stroke;
 
-    if (select_options.stroke_size > pixi.Editor.Tools.min_full_stroke_size) {
+    if (select_options.stroke_size > fizzy.Editor.Tools.min_full_stroke_size) {
         for (0..(stroke_size * stroke_size)) |index| {
-            if (pixi.editor.tools.getIndexShapeOffset(center.diff(diff), index)) |i| {
+            if (fizzy.editor.tools.getIndexShapeOffset(center.diff(diff), index)) |i| {
                 mask.unset(i);
             }
         }
     }
 
-    if (pixi.algorithms.brezenham.process(point1, point2) catch null) |points| {
+    if (fizzy.algorithms.brezenham.process(point1, point2) catch null) |points| {
         for (points, 0..) |point, point_i| {
-            if (select_options.stroke_size < pixi.Editor.Tools.min_full_stroke_size) {
+            if (select_options.stroke_size < fizzy.Editor.Tools.min_full_stroke_size) {
                 selectPoint(file, point, select_options);
             } else {
-                var stroke = if (point_i == 0) pixi.editor.tools.stroke else mask;
+                var stroke = if (point_i == 0) fizzy.editor.tools.stroke else mask;
 
                 var iter = stroke.iterator(.{ .kind = .set, .direction = .forward });
                 while (iter.next()) |i| {
-                    const offset = pixi.editor.tools.offset_table[i];
+                    const offset = fizzy.editor.tools.offset_table[i];
                     const new_point: dvui.Point = .{ .x = point.x + offset[0], .y = point.y + offset[1] };
 
                     if (select_options.constrain_to_tile) {
@@ -1615,16 +1624,16 @@ pub fn selectColorFloodFromPoint(file: *File, p: dvui.Point, value: bool) !void 
     const bounds = dvui.Rect.fromSize(.{ .w = @floatFromInt(file.width()), .h = @floatFromInt(file.height()) });
     if (!bounds.contains(p)) return;
 
-    const start_idx = pixi.image.pixelIndex(read_layer.source, p) orelse return;
+    const start_idx = fizzy.image.pixelIndex(read_layer.source, p) orelse return;
     const original_color = read_layer.pixels()[start_idx];
 
     const n = read_layer.pixels().len;
     if (selection_layer.mask.capacity() != n) return;
 
-    var visited = try std.DynamicBitSet.initEmpty(pixi.app.allocator, n);
+    var visited = try std.DynamicBitSet.initEmpty(fizzy.app.allocator, n);
     defer visited.deinit();
 
-    var queue = std.array_list.Managed(dvui.Point).init(pixi.app.allocator);
+    var queue = std.array_list.Managed(dvui.Point).init(fizzy.app.allocator);
     defer queue.deinit();
 
     try queue.append(p);
@@ -1638,7 +1647,7 @@ pub fn selectColorFloodFromPoint(file: *File, p: dvui.Point, value: bool) !void 
     };
 
     while (queue.pop()) |qp| {
-        const idx = pixi.image.pixelIndex(read_layer.source, qp) orelse continue;
+        const idx = fizzy.image.pixelIndex(read_layer.source, qp) orelse continue;
         if (!std.meta.eql(original_color, read_layer.pixels()[idx])) continue;
 
         selection_layer.mask.setValue(idx, value);
@@ -1646,7 +1655,7 @@ pub fn selectColorFloodFromPoint(file: *File, p: dvui.Point, value: bool) !void 
         for (directions) |direction| {
             const np = qp.plus(direction);
             if (!bounds.contains(np)) continue;
-            if (pixi.image.pixelIndex(read_layer.source, np)) |ni| {
+            if (fizzy.image.pixelIndex(read_layer.source, np)) |ni| {
                 if (visited.isSet(ni)) continue;
                 if (!std.meta.eql(original_color, read_layer.pixels()[ni])) continue;
                 visited.set(ni);
@@ -1752,7 +1761,7 @@ pub fn brushStampRect(file: *const File, point: dvui.Point, stroke_size: usize) 
 
 fn strokeUndoFreeSnapshot(file: *File) void {
     if (file.editor.stroke_undo_pixels) |p| {
-        pixi.app.allocator.free(p);
+        fizzy.app.allocator.free(p);
         file.editor.stroke_undo_pixels = null;
     }
     file.editor.stroke_undo_x = 0;
@@ -1779,7 +1788,7 @@ pub fn strokeUndoBegin(file: *File, cover: dvui.Rect) !void {
     }
 
     const n = @as(usize, b.w) * @as(usize, b.h) * 4;
-    const buf = try pixi.app.allocator.alloc(u8, n);
+    const buf = try fizzy.app.allocator.alloc(u8, n);
 
     const layer = file.layers.get(file.selected_layer_index);
     const pix = layer.pixels();
@@ -1824,7 +1833,7 @@ pub fn strokeUndoExpandToCoverRect(file: *File, cover: dvui.Rect) !void {
     if (tw == ow and th == oh and tx == ox and ty == oy) return;
 
     const new_n = @as(usize, tw) * @as(usize, th) * 4;
-    const new_buf = try pixi.app.allocator.alloc(u8, new_n);
+    const new_buf = try fizzy.app.allocator.alloc(u8, new_n);
 
     const layer = file.layers.get(file.selected_layer_index);
     const pix = layer.pixels();
@@ -1850,7 +1859,7 @@ pub fn strokeUndoExpandToCoverRect(file: *File, cover: dvui.Rect) !void {
         }
     }
 
-    pixi.app.allocator.free(old_buf);
+    fizzy.app.allocator.free(old_buf);
     file.editor.stroke_undo_pixels = new_buf;
     file.editor.stroke_undo_x = tx;
     file.editor.stroke_undo_y = ty;
@@ -2133,9 +2142,9 @@ pub fn drawPoint(file: *File, point: dvui.Point, layer: DrawLayer, draw_options:
             }
         }
     } else {
-        var iter = pixi.editor.tools.stroke.iterator(.{ .kind = .set, .direction = .forward });
+        var iter = fizzy.editor.tools.stroke.iterator(.{ .kind = .set, .direction = .forward });
         while (iter.next()) |i| {
-            const offset = pixi.editor.tools.offset_table[i];
+            const offset = fizzy.editor.tools.offset_table[i];
             const new_point: dvui.Point = .{ .x = point.x + offset[0], .y = point.y + offset[1] };
 
             if (clip_rect) |cr| {
@@ -2221,26 +2230,26 @@ pub fn drawLine(file: *File, point1: dvui.Point, point2: dvui.Point, layer: Draw
     const max_y: f32 = min_y + @as(f32, @floatFromInt(file.row_height));
 
     const diff = point2.diff(point1).normalize().scale(4, dvui.Point);
-    const stroke_size: usize = @intCast(pixi.Editor.Tools.max_brush_size);
+    const stroke_size: usize = @intCast(fizzy.Editor.Tools.max_brush_size);
 
-    const center: dvui.Point = .{ .x = @floor(pixi.Editor.Tools.max_brush_size_float / 2), .y = @floor(pixi.Editor.Tools.max_brush_size_float / 2) };
-    var mask = pixi.editor.tools.stroke;
+    const center: dvui.Point = .{ .x = @floor(fizzy.Editor.Tools.max_brush_size_float / 2), .y = @floor(fizzy.Editor.Tools.max_brush_size_float / 2) };
+    var mask = fizzy.editor.tools.stroke;
 
-    if (draw_options.stroke_size > pixi.Editor.Tools.min_full_stroke_size) {
+    if (draw_options.stroke_size > fizzy.Editor.Tools.min_full_stroke_size) {
         for (0..(stroke_size * stroke_size)) |index| {
-            if (pixi.editor.tools.getIndexShapeOffset(center.diff(diff), index)) |i| {
+            if (fizzy.editor.tools.getIndexShapeOffset(center.diff(diff), index)) |i| {
                 mask.unset(i);
             }
         }
     }
 
-    if (pixi.algorithms.brezenham.process(point1, point2) catch null) |points| {
+    if (fizzy.algorithms.brezenham.process(point1, point2) catch null) |points| {
         for (points, 0..) |point, point_i| {
             if (clip_rect) |cr| {
                 const br = brushRect(point, draw_options.stroke_size, iw, ih);
                 if (br.intersect(cr).empty()) continue;
             }
-            if (draw_options.stroke_size < pixi.Editor.Tools.min_full_stroke_size) {
+            if (draw_options.stroke_size < fizzy.Editor.Tools.min_full_stroke_size) {
                 drawPoint(file, point, layer, .{
                     .color = draw_options.color,
                     .stroke_size = draw_options.stroke_size,
@@ -2251,11 +2260,11 @@ pub fn drawLine(file: *File, point1: dvui.Point, point2: dvui.Point, layer: Draw
                     .clip_rect = draw_options.clip_rect,
                 });
             } else {
-                var stroke = if (point_i == 0) pixi.editor.tools.stroke else mask;
+                var stroke = if (point_i == 0) fizzy.editor.tools.stroke else mask;
 
                 var iter = stroke.iterator(.{ .kind = .set, .direction = .forward });
                 while (iter.next()) |i| {
-                    const offset = pixi.editor.tools.offset_table[i];
+                    const offset = fizzy.editor.tools.offset_table[i];
                     const new_point: dvui.Point = .{ .x = point.x + offset[0], .y = point.y + offset[1] };
 
                     if (clip_rect) |cr| {
@@ -2403,7 +2412,7 @@ pub fn getLayer(self: *File, id: u64) ?Layer {
 }
 
 pub fn deleteLayer(self: *File, index: usize) !void {
-    try self.deleted_layers.append(pixi.app.allocator, self.layers.slice().get(index));
+    try self.deleted_layers.append(fizzy.app.allocator, self.layers.slice().get(index));
     self.layers.orderedRemove(index);
     self.editor.layer_composite_dirty = true;
     self.editor.split_composite_dirty = true;
@@ -2439,10 +2448,10 @@ fn mergeLayerInternal(self: *File, kind: History.Change.LayerMerge.Kind, src_i: 
     const dest_id = self.layers.items(.id)[dest_i];
     const src_id = self.layers.items(.id)[src_i];
 
-    const dest_pixels_before = try pixi.app.allocator.dupe([4]u8, dest.pixels());
-    errdefer pixi.app.allocator.free(dest_pixels_before);
+    const dest_pixels_before = try fizzy.app.allocator.dupe([4]u8, dest.pixels());
+    errdefer fizzy.app.allocator.free(dest_pixels_before);
 
-    var dest_mask_before = try dest.mask.clone(pixi.app.allocator);
+    var dest_mask_before = try dest.mask.clone(fizzy.app.allocator);
     errdefer dest_mask_before.deinit();
 
     for (0..pix_n) |i| {
@@ -2457,7 +2466,7 @@ fn mergeLayerInternal(self: *File, kind: History.Change.LayerMerge.Kind, src_i: 
     dest.invalidate();
     self.layers.set(dest_i, dest);
 
-    try self.deleted_layers.append(pixi.app.allocator, self.layers.slice().get(src_i));
+    try self.deleted_layers.append(fizzy.app.allocator, self.layers.slice().get(src_i));
     self.layers.orderedRemove(src_i);
 
     self.editor.layer_composite_dirty = true;
@@ -2476,7 +2485,7 @@ fn mergeLayerInternal(self: *File, kind: History.Change.LayerMerge.Kind, src_i: 
         .dest_pixels_before = dest_pixels_before,
         .dest_mask_before = dest_mask_before,
     } });
-    pixi.editor.explorer.pane = .tools;
+    fizzy.editor.explorer.pane = .tools;
 }
 
 pub fn duplicateLayer(self: *File, index: usize) !u64 {
@@ -2491,7 +2500,7 @@ pub fn duplicateLayer(self: *File, index: usize) !u64 {
 
     @memcpy(new_layer.pixels(), layer.pixels());
 
-    self.layers.insert(pixi.app.allocator, 0, new_layer) catch {
+    self.layers.insert(fizzy.app.allocator, 0, new_layer) catch {
         dvui.log.err("Failed to append layer", .{});
     };
 
@@ -2512,8 +2521,8 @@ pub fn duplicateLayer(self: *File, index: usize) !u64 {
 }
 
 pub fn createLayer(self: *File) !u64 {
-    if (pixi.Internal.Layer.init(self.newLayerID(), "New Layer", self.width(), self.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch null) |layer| {
-        self.layers.insert(pixi.app.allocator, 0, layer) catch {
+    if (fizzy.Internal.Layer.init(self.newLayerID(), "New Layer", self.width(), self.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch null) |layer| {
+        self.layers.insert(fizzy.app.allocator, 0, layer) catch {
             dvui.log.err("Failed to append layer", .{});
         };
         self.selected_layer_index = 0;
@@ -2537,14 +2546,14 @@ pub fn createLayer(self: *File) !u64 {
 
 pub fn createAnimation(self: *File) !usize {
     var animation = Animation.init(
-        pixi.app.allocator,
+        fizzy.app.allocator,
         self.newAnimationID(),
         "New Animation",
         &[_]Animation.Frame{},
     ) catch return error.FailedToCreateAnimation;
 
     if (self.editor.selected_sprites.count() > 0) {
-        animation.frames = try pixi.app.allocator.alloc(Animation.Frame, self.editor.selected_sprites.count());
+        animation.frames = try fizzy.app.allocator.alloc(Animation.Frame, self.editor.selected_sprites.count());
 
         var iter = self.editor.selected_sprites.iterator(.{ .kind = .set, .direction = .forward });
         var i: usize = 0;
@@ -2553,7 +2562,7 @@ pub fn createAnimation(self: *File) !usize {
         }
     }
 
-    self.animations.append(pixi.app.allocator, animation) catch {
+    self.animations.append(fizzy.app.allocator, animation) catch {
         dvui.log.err("Failed to append animation", .{});
     };
     return self.animations.len - 1;
@@ -2562,15 +2571,15 @@ pub fn createAnimation(self: *File) !usize {
 pub fn duplicateAnimation(self: *File, index: usize) !usize {
     const animation = self.animations.slice().get(index);
     const new_name = try std.fmt.allocPrint(dvui.currentWindow().lifo(), "{s}_copy", .{animation.name});
-    const new_animation = Animation.init(pixi.app.allocator, self.newAnimationID(), new_name, animation.frames) catch return error.FailedToDuplicateAnimation;
-    self.animations.insert(pixi.app.allocator, index + 1, new_animation) catch {
+    const new_animation = Animation.init(fizzy.app.allocator, self.newAnimationID(), new_name, animation.frames) catch return error.FailedToDuplicateAnimation;
+    self.animations.insert(fizzy.app.allocator, index + 1, new_animation) catch {
         dvui.log.err("Failed to append animation", .{});
     };
     return index + 1;
 }
 
 pub fn deleteAnimation(self: *File, index: usize) !void {
-    try self.deleted_animations.append(pixi.app.allocator, self.animations.slice().get(index));
+    try self.deleted_animations.append(fizzy.app.allocator, self.animations.slice().get(index));
     self.animations.orderedRemove(index);
     try self.history.append(.{ .animation_restore_delete = .{
         .action = .restore,
@@ -2589,16 +2598,16 @@ pub fn redo(self: *File) !void {
 pub fn saveTar(self: *File, window: *dvui.Window) !void {
     if (self.saving) return;
     self.saving = true;
-    var ext = try self.external(pixi.app.allocator);
-    defer ext.deinit(pixi.app.allocator);
+    var ext = try self.external(fizzy.app.allocator);
+    defer ext.deinit(fizzy.app.allocator);
 
-    const output_path = try pixi.editor.arena.allocator().dupeZ(u8, self.path);
+    const output_path = try fizzy.editor.arena.allocator().dupeZ(u8, self.path);
 
     var handle = try std.fs.cwd().createFile(output_path, .{});
     defer handle.close();
     var wrt = std.tar.writer(handle.writer());
 
-    var json = std.array_list.Managed(u8).init(pixi.app.allocator);
+    var json = std.array_list.Managed(u8).init(fizzy.app.allocator);
     const out_stream = json.writer();
     const options = std.json.StringifyOptions{};
 
@@ -2606,7 +2615,7 @@ pub fn saveTar(self: *File, window: *dvui.Window) !void {
 
     const json_output = try json.toOwnedSlice();
 
-    try wrt.writeFileBytes("pixidata.json", json_output, .{});
+    try wrt.writeFileBytes("fizzydata.json", json_output, .{});
 
     if (self.layers.len > 0) {
         const slice = self.layers.slice();
@@ -2620,14 +2629,14 @@ pub fn saveTar(self: *File, window: *dvui.Window) !void {
                 else => return error.InvalidImageSource,
             };
 
-            try wrt.writeFileBytes(try std.fmt.allocPrintZ(pixi.editor.arena.allocator(), "{s}.layer", .{layer.name}), data, .{});
+            try wrt.writeFileBytes(try std.fmt.allocPrintZ(fizzy.editor.arena.allocator(), "{s}.layer", .{layer.name}), data, .{});
         }
     }
 
     try wrt.finish();
 
     {
-        const id_mutex = dvui.toastAdd(window, @src(), 0, self.editor.canvas.id, pixi.dvui.toastDisplay, 2_000_000);
+        const id_mutex = dvui.toastAdd(window, @src(), 0, self.editor.canvas.id, fizzy.dvui.toastDisplay, 2_000_000);
         const id = id_mutex.id;
         const message = std.fmt.allocPrint(window.arena(), "Saved {s}", .{std.fs.path.basename(self.path)}) catch "Saved file";
         dvui.dataSetSlice(window, id, "_message", message);
@@ -2644,26 +2653,26 @@ fn writeFlattenedLayersToPath(self: *File, out_path: []const u8, window: *dvui.W
     const h = self.height();
     if (w == 0 or h == 0) return error.InvalidImageSize;
 
-    try pixi.render.syncLayerComposite(self);
+    try fizzy.render.syncLayerComposite(self);
     const target = self.editor.layer_composite_target orelse return error.NoLayerComposite;
 
-    const pma_read: []dvui.Color.PMA = try dvui.Texture.readTarget(pixi.app.allocator, target);
+    const pma_read: []dvui.Color.PMA = try dvui.Texture.readTarget(fizzy.app.allocator, target);
     defer {
         const byte_len = pma_read.len * @sizeOf(dvui.Color.PMA);
-        pixi.app.allocator.free(@as([*]u8, @ptrCast(pma_read.ptr))[0..byte_len]);
+        fizzy.app.allocator.free(@as([*]u8, @ptrCast(pma_read.ptr))[0..byte_len]);
     }
 
-    var tmp_layer: pixi.Internal.Layer = try .fromPixelsPMA(self.newLayerID(), "_flat_save", pma_read, w, h, .ptr);
+    var tmp_layer: fizzy.Internal.Layer = try .fromPixelsPMA(self.newLayerID(), "_flat_save", pma_read, w, h, .ptr);
     defer tmp_layer.deinit();
 
     switch (kind) {
         .png => {
             const r: u32 = @intFromFloat(@round(window.natural_scale * 72.0 / 0.0254));
-            try pixi.image.writeToPngResolution(tmp_layer.source, out_path, r);
+            try fizzy.image.writeToPngResolution(tmp_layer.source, out_path, r);
         },
         .jpg => {
             const ppi: u16 = @intFromFloat(@round(window.natural_scale * 72.0));
-            try pixi.image.writeToJpgPpi(tmp_layer.source, out_path, ppi);
+            try fizzy.image.writeToJpgPpi(tmp_layer.source, out_path, ppi);
         },
     }
 }
@@ -2676,7 +2685,7 @@ pub fn savePng(self: *File, window: *dvui.Window) !void {
     try self.writeFlattenedLayersToPath(self.path, window, .png);
 
     {
-        const id_mutex = dvui.toastAdd(window, @src(), self.id, self.editor.canvas.id, pixi.dvui.toastDisplay, 2_000_000);
+        const id_mutex = dvui.toastAdd(window, @src(), self.id, self.editor.canvas.id, fizzy.dvui.toastDisplay, 2_000_000);
         const id = id_mutex.id;
         const message = std.fmt.allocPrint(window.arena(), "Saved {s} to disk", .{std.fs.path.basename(self.path)}) catch "Saved file";
         dvui.dataSetSlice(window, id, "_message", message);
@@ -2695,7 +2704,7 @@ pub fn saveJpg(self: *File, window: *dvui.Window) !void {
     try self.writeFlattenedLayersToPath(self.path, window, .jpg);
 
     {
-        const id_mutex = dvui.toastAdd(window, @src(), self.id, self.editor.canvas.id, pixi.dvui.toastDisplay, 2_000_000);
+        const id_mutex = dvui.toastAdd(window, @src(), self.id, self.editor.canvas.id, fizzy.dvui.toastDisplay, 2_000_000);
         const id = id_mutex.id;
         const message = std.fmt.allocPrint(window.arena(), "Saved {s} to disk", .{std.fs.path.basename(self.path)}) catch "Saved file";
         dvui.dataSetSlice(window, id, "_message", message);
@@ -2709,19 +2718,19 @@ pub fn saveJpg(self: *File, window: *dvui.Window) !void {
 pub fn saveZip(self: *File, window: *dvui.Window) !void {
     if (self.editor.saving) return;
     self.editor.saving = true;
-    var ext = try self.external(pixi.app.allocator);
-    defer ext.deinit(pixi.app.allocator);
-    const null_terminated_path = try pixi.editor.arena.allocator().dupeZ(u8, self.path);
+    var ext = try self.external(fizzy.app.allocator);
+    defer ext.deinit(fizzy.app.allocator);
+    const null_terminated_path = try fizzy.editor.arena.allocator().dupeZ(u8, self.path);
 
     const zip_file = zip.zip_open(null_terminated_path.ptr, zip.ZIP_DEFAULT_COMPRESSION_LEVEL, 'w');
 
     if (zip_file) |z| {
         const options = std.json.Stringify.Options{};
 
-        const output = try std.json.Stringify.valueAlloc(pixi.app.allocator, ext, options);
-        defer pixi.app.allocator.free(output);
+        const output = try std.json.Stringify.valueAlloc(fizzy.app.allocator, ext, options);
+        defer fizzy.app.allocator.free(output);
 
-        _ = zip.zip_entry_open(z, "pixidata.json");
+        _ = zip.zip_entry_open(z, "fizzydata.json");
         _ = zip.zip_entry_write(z, output.ptr, output.len);
         _ = zip.zip_entry_close(z);
 
@@ -2731,7 +2740,7 @@ pub fn saveZip(self: *File, window: *dvui.Window) !void {
             while (index < self.layers.len) : (index += 1) {
                 const layer = slice.get(index);
 
-                const image_name = try std.fmt.allocPrintSentinel(pixi.editor.arena.allocator(), "{s}.layer", .{layer.name}, 0);
+                const image_name = try std.fmt.allocPrintSentinel(fizzy.editor.arena.allocator(), "{s}.layer", .{layer.name}, 0);
                 _ = zip.zip_entry_open(z, @as([*c]const u8, @ptrCast(image_name)));
                 _ = zip.zip_entry_write(z, @ptrCast(layer.bytes().ptr), layer.bytes().len);
                 _ = zip.zip_entry_close(z);
@@ -2741,7 +2750,7 @@ pub fn saveZip(self: *File, window: *dvui.Window) !void {
         zip.zip_close(z);
 
         {
-            const id_mutex = dvui.toastAdd(window, @src(), 0, self.editor.canvas.id, pixi.dvui.toastDisplay, 2_000_000);
+            const id_mutex = dvui.toastAdd(window, @src(), 0, self.editor.canvas.id, fizzy.dvui.toastDisplay, 2_000_000);
             const id = id_mutex.id;
             const message = std.fmt.allocPrint(window.arena(), "Saved {s}", .{std.fs.path.basename(self.path)}) catch "Saved file";
             dvui.dataSetSlice(window, id, "_message", message);
@@ -2754,30 +2763,30 @@ pub fn saveZip(self: *File, window: *dvui.Window) !void {
 }
 
 /// Point `path` at `new_path`, then `saveZip` (same on-disk work as a normal .pixi save). Restores the previous `path` if saving fails.
-pub fn saveAsPixi(self: *File, new_path: []const u8, window: *dvui.Window) !void {
+pub fn saveAsFizzy(self: *File, new_path: []const u8, window: *dvui.Window) !void {
     if (self.editor.saving) return;
     if (std.mem.eql(u8, self.path, new_path)) {
         return saveZip(self, window);
     }
     const old_path = self.path;
-    const new_owned = try pixi.app.allocator.dupe(u8, new_path);
+    const new_owned = try fizzy.app.allocator.dupe(u8, new_path);
     self.path = new_owned;
     errdefer {
-        pixi.app.allocator.free(self.path[0..self.path.len]);
+        fizzy.app.allocator.free(self.path[0..self.path.len]);
         self.path = old_path;
     }
     try saveZip(self, window);
-    pixi.app.allocator.free(old_path[0..old_path.len]);
+    fizzy.app.allocator.free(old_path[0..old_path.len]);
 }
 
-/// Default filename (with `.pixi`) for a Save As dialog, derived from the current path.
+/// Default filename (with `.fiz`) for a Save As dialog, derived from the current path.
 pub fn defaultSaveAsFilename(allocator: std.mem.Allocator, current_path: []const u8) ![]u8 {
     const base = std.fs.path.basename(current_path);
     const stem: []const u8 = if (std.mem.lastIndexOf(u8, base, ".")) |i| base[0..i] else base;
     if (stem.len == 0) {
-        return try std.fmt.allocPrint(allocator, "{s}", .{"untitled.pixi"});
+        return try std.fmt.allocPrint(allocator, "{s}", .{"untitled.fiz"});
     }
-    return try std.fmt.allocPrint(allocator, "{s}.pixi", .{stem});
+    return try std.fmt.allocPrint(allocator, "{s}.fiz", .{stem});
 }
 
 fn deinitAllUserLayers(self: *File) void {
@@ -2791,10 +2800,10 @@ fn deinitAllUserLayers(self: *File) void {
 
 fn clearAnimationsForSaveAs(self: *File) void {
     for (self.animations.items(.name)) |n| {
-        pixi.app.allocator.free(n);
+        fizzy.app.allocator.free(n);
     }
     for (self.animations.items(.frames)) |frames| {
-        pixi.app.allocator.free(frames);
+        fizzy.app.allocator.free(frames);
     }
     self.animations.clearRetainingCapacity();
     self.deleted_animations.clearRetainingCapacity();
@@ -2810,43 +2819,43 @@ fn reinitEditorSurfaceForFlatDocument(self: *File) !void {
     self.editor.transform_layer.deinit();
     self.editor.checkerboard.deinit();
     switch (self.editor.checkerboard_tile) {
-        .pixelsPMA => |p| pixi.app.allocator.free(p.rgba),
-        .pixels => |p| pixi.app.allocator.free(p.rgba),
+        .pixelsPMA => |p| fizzy.app.allocator.free(p.rgba),
+        .pixels => |p| fizzy.app.allocator.free(p.rgba),
         .texture => |t| dvui.textureDestroyLater(t),
-        .imageFile => |i| pixi.app.allocator.free(i.bytes),
+        .imageFile => |i| fizzy.app.allocator.free(i.bytes),
     }
     self.editor.selected_sprites.deinit();
 
     self.editor.temporary_layer = try .init(self.newLayerID(), "Temporary", self.width(), self.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
     self.editor.selection_layer = try .init(self.newLayerID(), "Selection", self.width(), self.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
     self.editor.transform_layer = try .init(self.newLayerID(), "Transform", self.width(), self.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
-    self.editor.selected_sprites = try std.DynamicBitSet.initEmpty(pixi.app.allocator, self.spriteCount());
+    self.editor.selected_sprites = try std.DynamicBitSet.initEmpty(fizzy.app.allocator, self.spriteCount());
 
-    self.editor.checkerboard = try std.DynamicBitSet.initEmpty(pixi.app.allocator, self.width() * self.height());
+    self.editor.checkerboard = try std.DynamicBitSet.initEmpty(fizzy.app.allocator, self.width() * self.height());
     for (0..self.width() * self.height()) |i| {
-        const value = pixi.math.checker(.{ .w = @floatFromInt(self.width()), .h = @floatFromInt(self.height()) }, i);
+        const value = fizzy.math.checker(.{ .w = @floatFromInt(self.width()), .h = @floatFromInt(self.height()) }, i);
         self.editor.checkerboard.setValue(i, value);
     }
     {
         const alpha_width = alpha_checkerboard_count;
         const aspect_ratio = @as(f32, @floatFromInt(self.column_width)) / @as(f32, @floatFromInt(self.row_height));
         const alpha_height = @round(alpha_width / aspect_ratio);
-        self.editor.checkerboard_tile = pixi.image.init(
+        self.editor.checkerboard_tile = fizzy.image.init(
             alpha_width,
             std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
             .{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .ptr,
         ) catch return error.LayerCreateError;
-        for (pixi.image.pixels(self.editor.checkerboard_tile), 0..) |*pixel, j| {
-            if (pixi.math.checker(pixi.image.size(self.editor.checkerboard_tile), j)) {
-                pixel.* = pixi.editor.settings.checker_color_even;
+        for (fizzy.image.pixels(self.editor.checkerboard_tile), 0..) |*pixel, j| {
+            if (fizzy.math.checker(fizzy.image.size(self.editor.checkerboard_tile), j)) {
+                pixel.* = fizzy.editor.settings.checker_color_even;
             } else {
-                pixel.* = pixi.editor.settings.checker_color_odd;
+                pixel.* = fizzy.editor.settings.checker_color_odd;
             }
         }
     }
     self.editor.selected_layer_indices.clearRetainingCapacity();
-    try self.editor.selected_layer_indices.append(pixi.app.allocator, 0);
+    try self.editor.selected_layer_indices.append(fizzy.app.allocator, 0);
 }
 
 /// Flattens visible layers (via GPU composite), writes PNG or JPEG to `output_path`, and replaces
@@ -2864,16 +2873,16 @@ pub fn saveAsFlattened(self: *File, output_path: []const u8, window: *dvui.Windo
         return error.InvalidImageSize;
     }
 
-    try pixi.render.syncLayerComposite(self);
+    try fizzy.render.syncLayerComposite(self);
     const target = self.editor.layer_composite_target orelse {
         self.editor.saving = false;
         return error.NoLayerComposite;
     };
 
-    const pma_read: []dvui.Color.PMA = try dvui.Texture.readTarget(pixi.app.allocator, target);
+    const pma_read: []dvui.Color.PMA = try dvui.Texture.readTarget(fizzy.app.allocator, target);
     defer {
         const byte_len = pma_read.len * @sizeOf(dvui.Color.PMA);
-        pixi.app.allocator.free(@as([*]u8, @ptrCast(pma_read.ptr))[0..byte_len]);
+        fizzy.app.allocator.free(@as([*]u8, @ptrCast(pma_read.ptr))[0..byte_len]);
     }
 
     const ext = std.fs.path.extension(output_path);
@@ -2884,32 +2893,32 @@ pub fn saveAsFlattened(self: *File, output_path: []const u8, window: *dvui.Windo
         return error.InvalidExtension;
     }
 
-    var single_layer: pixi.Internal.Layer = try .fromPixelsPMA(self.newLayerID(), "Layer", pma_read, w, h, .ptr);
+    var single_layer: fizzy.Internal.Layer = try .fromPixelsPMA(self.newLayerID(), "Layer", pma_read, w, h, .ptr);
     errdefer single_layer.deinit();
 
     if (is_png) {
         const r: u32 = @intFromFloat(@round(window.natural_scale * 72.0 / 0.0254));
-        try pixi.image.writeToPngResolution(single_layer.source, output_path, r);
+        try fizzy.image.writeToPngResolution(single_layer.source, output_path, r);
     } else {
         const ppi: u16 = @intFromFloat(@round(window.natural_scale * 72.0));
-        try pixi.image.writeToJpgPpi(single_layer.source, output_path, ppi);
+        try fizzy.image.writeToJpgPpi(single_layer.source, output_path, ppi);
     }
 
-    pixi.render.destroyLayerCompositeResources(self);
-    pixi.render.destroySplitCompositeResources(self);
+    fizzy.render.destroyLayerCompositeResources(self);
+    fizzy.render.destroySplitCompositeResources(self);
 
     deinitAllUserLayers(self);
     clearAnimationsForSaveAs(self);
     self.sprites.clearRetainingCapacity();
     for (0..self.spriteCount()) |_| {
-        self.sprites.append(pixi.app.allocator, .{ .origin = .{ 0, 0 } }) catch {
+        self.sprites.append(fizzy.app.allocator, .{ .origin = .{ 0, 0 } }) catch {
             single_layer.deinit();
             return error.FileLoadError;
         };
     }
 
-    const new_path = try pixi.app.allocator.dupe(u8, output_path);
-    pixi.app.allocator.free(self.path[0..self.path.len]);
+    const new_path = try fizzy.app.allocator.dupe(u8, output_path);
+    fizzy.app.allocator.free(self.path[0..self.path.len]);
     self.path = new_path;
     self.columns = 1;
     self.rows = 1;
@@ -2917,26 +2926,26 @@ pub fn saveAsFlattened(self: *File, output_path: []const u8, window: *dvui.Windo
     self.row_height = h;
     self.selected_layer_index = 0;
     self.peek_layer_index = null;
-    self.layers.append(pixi.app.allocator, single_layer) catch {
+    self.layers.append(fizzy.app.allocator, single_layer) catch {
         single_layer.deinit();
         return error.LayerCreateError;
     };
 
     self.history.deinit();
-    self.history = .init(pixi.app.allocator);
+    self.history = .init(fizzy.app.allocator);
 
     try reinitEditorSurfaceForFlatDocument(self);
     self.editor.layer_composite_dirty = true;
     self.editor.split_composite_dirty = true;
     self.editor.saving = false;
     {
-        const id_mutex = dvui.toastAdd(window, @src(), self.id, self.editor.canvas.id, pixi.dvui.toastDisplay, 2_000_000);
+        const id_mutex = dvui.toastAdd(window, @src(), self.id, self.editor.canvas.id, fizzy.dvui.toastDisplay, 2_000_000);
         const id = id_mutex.id;
         const message = std.fmt.allocPrint(window.arena(), "Saved {s} to disk", .{std.fs.path.basename(self.path)}) catch "Saved file";
         dvui.dataSetSlice(window, id, "_message", message);
         id_mutex.mutex.unlock(dvui.io);
     }
-    pixi.editor.requestCompositeWarmup();
+    fizzy.editor.requestCompositeWarmup();
 }
 
 pub const GridLayoutOptions = struct {
@@ -2944,7 +2953,7 @@ pub const GridLayoutOptions = struct {
     row_height: u32,
     columns: u32,
     rows: u32,
-    anchor: pixi.math.layout_anchor.LayoutAnchor,
+    anchor: fizzy.math.layout_anchor.LayoutAnchor,
     /// When true (default), `applyGridLayout` snapshots the previous state and pushes a
     /// `grid_layout` change to the file's history before mutating. Internal callers driving
     /// undo/redo restoration should pass `false` so the swap doesn't loop into itself.
@@ -2953,34 +2962,34 @@ pub const GridLayoutOptions = struct {
 
 /// Captures everything `applyGridLayout` mutates, owning all returned slices. The caller is
 /// responsible for freeing via `Change.deinit` (see `History.Change.GridLayout.deinit`).
-pub fn captureGridLayoutSnapshot(file: *File) !pixi.Internal.History.Change.GridLayout {
+pub fn captureGridLayoutSnapshot(file: *File) !fizzy.Internal.History.Change.GridLayout {
     const total: usize = @as(usize, file.column_width) * @as(usize, file.columns) *
         @as(usize, file.row_height) * @as(usize, file.rows);
 
     const layer_count = file.layers.len;
-    var layer_ids = try pixi.app.allocator.alloc(u64, layer_count);
-    errdefer pixi.app.allocator.free(layer_ids);
+    var layer_ids = try fizzy.app.allocator.alloc(u64, layer_count);
+    errdefer fizzy.app.allocator.free(layer_ids);
 
-    var layer_pixels = try pixi.app.allocator.alloc([][4]u8, layer_count);
+    var layer_pixels = try fizzy.app.allocator.alloc([][4]u8, layer_count);
     var allocated: usize = 0;
     errdefer {
-        for (layer_pixels[0..allocated]) |buf| pixi.app.allocator.free(buf);
-        pixi.app.allocator.free(layer_pixels);
+        for (layer_pixels[0..allocated]) |buf| fizzy.app.allocator.free(buf);
+        fizzy.app.allocator.free(layer_pixels);
     }
 
     for (0..layer_count) |i| {
         layer_ids[i] = file.layers.items(.id)[i];
         const src = file.layers.get(i).pixels();
         std.debug.assert(src.len == total);
-        const dst = try pixi.app.allocator.alloc([4]u8, total);
+        const dst = try fizzy.app.allocator.alloc([4]u8, total);
         @memcpy(dst, src);
         layer_pixels[i] = dst;
         allocated += 1;
     }
 
     const sprite_count = file.sprites.len;
-    var sprite_origins = try pixi.app.allocator.alloc([2]f32, sprite_count);
-    errdefer pixi.app.allocator.free(sprite_origins);
+    var sprite_origins = try fizzy.app.allocator.alloc([2]f32, sprite_count);
+    errdefer fizzy.app.allocator.free(sprite_origins);
     for (0..sprite_count) |i| sprite_origins[i] = file.sprites.items(.origin)[i];
 
     return .{
@@ -3000,7 +3009,7 @@ pub fn captureGridLayoutSnapshot(file: *File) !pixi.Internal.History.Change.Grid
 /// Restores the file to the exact state described by `snap`. Mirrors the structural updates of
 /// `applyGridLayout` (resize layer buffers, sprite list, scratch layers, checkerboard, composite
 /// tear-down) but copies pixel data verbatim instead of re-anchoring it.
-pub fn applyGridLayoutSnapshot(file: *File, snap: pixi.Internal.History.Change.GridLayout) !void {
+pub fn applyGridLayoutSnapshot(file: *File, snap: fizzy.Internal.History.Change.GridLayout) !void {
     const new_w: u32 = snap.column_width * snap.columns;
     const new_h: u32 = snap.row_height * snap.rows;
     const total: usize = @as(usize, new_w) * @as(usize, new_h);
@@ -3016,7 +3025,7 @@ pub fn applyGridLayoutSnapshot(file: *File, snap: pixi.Internal.History.Change.G
             break :blk null;
         };
 
-        var rebuilt = pixi.Internal.Layer.init(
+        var rebuilt = fizzy.Internal.Layer.init(
             live.id,
             live.name,
             new_w,
@@ -3037,48 +3046,48 @@ pub fn applyGridLayoutSnapshot(file: *File, snap: pixi.Internal.History.Change.G
     file.editor.temporary_layer.deinit();
     file.editor.selection_layer.deinit();
     file.editor.transform_layer.deinit();
-    file.editor.temporary_layer = pixi.Internal.Layer.init(file.newLayerID(), "Temporary", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
-    file.editor.selection_layer = pixi.Internal.Layer.init(file.newLayerID(), "Selection", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
-    file.editor.transform_layer = pixi.Internal.Layer.init(file.newLayerID(), "Transform", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
+    file.editor.temporary_layer = fizzy.Internal.Layer.init(file.newLayerID(), "Temporary", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
+    file.editor.selection_layer = fizzy.Internal.Layer.init(file.newLayerID(), "Selection", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
+    file.editor.transform_layer = fizzy.Internal.Layer.init(file.newLayerID(), "Transform", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
 
     file.sprites.shrinkRetainingCapacity(0);
     const new_sprite_count: usize = @as(usize, snap.columns) * @as(usize, snap.rows);
     var i: usize = 0;
     while (i < new_sprite_count) : (i += 1) {
         const origin: [2]f32 = if (i < snap.sprite_origins.len) snap.sprite_origins[i] else .{ 0.0, 0.0 };
-        file.sprites.append(pixi.app.allocator, .{ .origin = origin }) catch return error.MemoryAllocationFailed;
+        file.sprites.append(fizzy.app.allocator, .{ .origin = origin }) catch return error.MemoryAllocationFailed;
     }
 
     file.editor.selected_sprites.deinit();
-    file.editor.selected_sprites = std.DynamicBitSet.initEmpty(pixi.app.allocator, new_sprite_count) catch return error.MemoryAllocationFailed;
+    file.editor.selected_sprites = std.DynamicBitSet.initEmpty(fizzy.app.allocator, new_sprite_count) catch return error.MemoryAllocationFailed;
 
     file.editor.checkerboard.deinit();
-    file.editor.checkerboard = std.DynamicBitSet.initEmpty(pixi.app.allocator, total) catch return error.MemoryAllocationFailed;
+    file.editor.checkerboard = std.DynamicBitSet.initEmpty(fizzy.app.allocator, total) catch return error.MemoryAllocationFailed;
     for (0..total) |idx| {
-        const value = pixi.math.checker(.{ .w = @floatFromInt(new_w), .h = @floatFromInt(new_h) }, idx);
+        const value = fizzy.math.checker(.{ .w = @floatFromInt(new_w), .h = @floatFromInt(new_h) }, idx);
         file.editor.checkerboard.setValue(idx, value);
     }
 
     switch (file.editor.checkerboard_tile) {
-        .pixelsPMA => |p| pixi.app.allocator.free(p.rgba),
-        .pixels => |p| pixi.app.allocator.free(p.rgba),
+        .pixelsPMA => |p| fizzy.app.allocator.free(p.rgba),
+        .pixels => |p| fizzy.app.allocator.free(p.rgba),
         else => {},
     }
     {
         const alpha_width: u32 = alpha_checkerboard_count;
         const aspect_ratio = @as(f32, @floatFromInt(snap.column_width)) / @as(f32, @floatFromInt(snap.row_height));
         const alpha_height = @round(@as(f32, @floatFromInt(alpha_width)) / aspect_ratio);
-        file.editor.checkerboard_tile = pixi.image.init(
+        file.editor.checkerboard_tile = fizzy.image.init(
             alpha_width,
             std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
             .{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .ptr,
         ) catch return error.LayerCreateError;
-        for (pixi.image.pixels(file.editor.checkerboard_tile), 0..) |*pixel, idx| {
-            if (pixi.math.checker(pixi.image.size(file.editor.checkerboard_tile), idx)) {
-                pixel.* = pixi.editor.settings.checker_color_even;
+        for (fizzy.image.pixels(file.editor.checkerboard_tile), 0..) |*pixel, idx| {
+            if (fizzy.math.checker(fizzy.image.size(file.editor.checkerboard_tile), idx)) {
+                pixel.* = fizzy.editor.settings.checker_color_even;
             } else {
-                pixel.* = pixi.editor.settings.checker_color_odd;
+                pixel.* = fizzy.editor.settings.checker_color_odd;
             }
         }
         dvui.textureInvalidateCache(file.editor.checkerboard_tile.hash());
@@ -3096,7 +3105,7 @@ pub fn applyGridLayoutSnapshot(file: *File, snap: pixi.Internal.History.Change.G
     file.columns = snap.columns;
     file.rows = snap.rows;
 
-    pixi.render.destroyLayerCompositeResources(file);
+    fizzy.render.destroyLayerCompositeResources(file);
     file.invalidateActiveLayerTransparencyMaskCache();
 }
 
@@ -3135,12 +3144,12 @@ pub fn applyGridSliceOnly(file: *File, options: GridSliceOptions) !void {
         options.rows == file.rows;
     if (same) return;
 
-    var snapshot_opt: ?pixi.Internal.History.Change.GridLayout = if (options.history)
+    var snapshot_opt: ?fizzy.Internal.History.Change.GridLayout = if (options.history)
         try file.captureGridLayoutSnapshot()
     else
         null;
     errdefer if (snapshot_opt) |snap| {
-        var ch = pixi.Internal.History.Change{ .grid_layout = snap };
+        var ch = fizzy.Internal.History.Change{ .grid_layout = snap };
         ch.deinit();
     };
 
@@ -3151,7 +3160,7 @@ pub fn applyGridSliceOnly(file: *File, options: GridSliceOptions) !void {
     const new_sprite_count: usize = @as(usize, new_cols) * @as(usize, new_rows);
 
     const old_sprite_count = file.sprites.len;
-    file.sprites.resize(pixi.app.allocator, new_sprite_count) catch return error.MemoryAllocationFailed;
+    file.sprites.resize(fizzy.app.allocator, new_sprite_count) catch return error.MemoryAllocationFailed;
 
     if (new_sprite_count > old_sprite_count) {
         var i: usize = old_sprite_count;
@@ -3160,7 +3169,7 @@ pub fn applyGridSliceOnly(file: *File, options: GridSliceOptions) !void {
         }
     }
 
-    var new_selected = try std.DynamicBitSet.initEmpty(pixi.app.allocator, new_sprite_count);
+    var new_selected = try std.DynamicBitSet.initEmpty(fizzy.app.allocator, new_sprite_count);
     const sel_copy = @min(old_sprite_count, new_sprite_count);
     for (0..sel_copy) |i| {
         if (file.editor.selected_sprites.isSet(i)) new_selected.set(i);
@@ -3174,31 +3183,31 @@ pub fn applyGridSliceOnly(file: *File, options: GridSliceOptions) !void {
     file.rows = new_rows;
 
     switch (file.editor.checkerboard_tile) {
-        .pixelsPMA => |p| pixi.app.allocator.free(p.rgba),
-        .pixels => |p| pixi.app.allocator.free(p.rgba),
+        .pixelsPMA => |p| fizzy.app.allocator.free(p.rgba),
+        .pixels => |p| fizzy.app.allocator.free(p.rgba),
         else => {},
     }
     {
         const alpha_width: u32 = alpha_checkerboard_count;
         const aspect_ratio = @as(f32, @floatFromInt(new_cw)) / @as(f32, @floatFromInt(new_rh));
         const alpha_height = @round(@as(f32, @floatFromInt(alpha_width)) / aspect_ratio);
-        file.editor.checkerboard_tile = pixi.image.init(
+        file.editor.checkerboard_tile = fizzy.image.init(
             alpha_width,
             std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
             .{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .ptr,
         ) catch return error.LayerCreateError;
-        for (pixi.image.pixels(file.editor.checkerboard_tile), 0..) |*pixel, idx| {
-            if (pixi.math.checker(pixi.image.size(file.editor.checkerboard_tile), idx)) {
-                pixel.* = pixi.editor.settings.checker_color_even;
+        for (fizzy.image.pixels(file.editor.checkerboard_tile), 0..) |*pixel, idx| {
+            if (fizzy.math.checker(fizzy.image.size(file.editor.checkerboard_tile), idx)) {
+                pixel.* = fizzy.editor.settings.checker_color_even;
             } else {
-                pixel.* = pixi.editor.settings.checker_color_odd;
+                pixel.* = fizzy.editor.settings.checker_color_odd;
             }
         }
         dvui.textureInvalidateCache(file.editor.checkerboard_tile.hash());
     }
 
-    pixi.render.destroyLayerCompositeResources(file);
+    fizzy.render.destroyLayerCompositeResources(file);
     file.invalidateActiveLayerTransparencyMaskCache();
 
     if (snapshot_opt) |snap| {
@@ -3231,12 +3240,12 @@ pub fn applyGridLayout(file: *File, options: GridLayoutOptions) !void {
 
     // Capture undo state up front. If allocation fails we abort *before* mutating, so the file
     // is left untouched and the user can retry.
-    var snapshot_opt: ?pixi.Internal.History.Change.GridLayout = if (options.history)
+    var snapshot_opt: ?fizzy.Internal.History.Change.GridLayout = if (options.history)
         try file.captureGridLayoutSnapshot()
     else
         null;
     errdefer if (snapshot_opt) |snap| {
-        var ch = pixi.Internal.History.Change{ .grid_layout = snap };
+        var ch = fizzy.Internal.History.Change{ .grid_layout = snap };
         ch.deinit();
     };
 
@@ -3265,7 +3274,7 @@ pub fn applyGridLayout(file: *File, options: GridLayoutOptions) !void {
         var old_layer = file.layers.get(layer_index);
         const old_pix = old_layer.pixels();
 
-        var new_layer = pixi.Internal.Layer.init(
+        var new_layer = fizzy.Internal.Layer.init(
             old_layer.id,
             old_layer.name,
             new_w,
@@ -3286,7 +3295,7 @@ pub fn applyGridLayout(file: *File, options: GridLayoutOptions) !void {
             while (nrow < @min(new_rows, old_rows)) : (nrow += 1) {
                 var ncol: u32 = 0;
                 while (ncol < @min(new_cols, old_cols)) : (ncol += 1) {
-                    const blk = pixi.math.layout_anchor.cellAnchoredBlit(old_cw, old_rh, new_cw, new_rh, options.anchor);
+                    const blk = fizzy.math.layout_anchor.cellAnchoredBlit(old_cw, old_rh, new_cw, new_rh, options.anchor);
                     if (blk.sw == 0 or blk.sh == 0) continue;
 
                     const src_x0: u32 = ncol * old_cw + blk.sx;
@@ -3316,49 +3325,49 @@ pub fn applyGridLayout(file: *File, options: GridLayoutOptions) !void {
     file.editor.temporary_layer.deinit();
     file.editor.selection_layer.deinit();
     file.editor.transform_layer.deinit();
-    file.editor.temporary_layer = pixi.Internal.Layer.init(file.newLayerID(), "Temporary", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
-    file.editor.selection_layer = pixi.Internal.Layer.init(file.newLayerID(), "Selection", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
-    file.editor.transform_layer = pixi.Internal.Layer.init(file.newLayerID(), "Transform", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
+    file.editor.temporary_layer = fizzy.Internal.Layer.init(file.newLayerID(), "Temporary", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
+    file.editor.selection_layer = fizzy.Internal.Layer.init(file.newLayerID(), "Selection", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
+    file.editor.transform_layer = fizzy.Internal.Layer.init(file.newLayerID(), "Transform", new_w, new_h, .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr) catch return error.LayerCreateError;
 
     // Sprite origins reset: cell positions and meaning change with cell size, so re-anchoring is undefined.
     file.sprites.shrinkRetainingCapacity(0);
     const new_sprite_count: usize = @as(usize, new_cols) * @as(usize, new_rows);
     var i: usize = 0;
     while (i < new_sprite_count) : (i += 1) {
-        file.sprites.append(pixi.app.allocator, .{ .origin = .{ 0.0, 0.0 } }) catch return error.MemoryAllocationFailed;
+        file.sprites.append(fizzy.app.allocator, .{ .origin = .{ 0.0, 0.0 } }) catch return error.MemoryAllocationFailed;
     }
 
     file.editor.selected_sprites.deinit();
-    file.editor.selected_sprites = std.DynamicBitSet.initEmpty(pixi.app.allocator, new_sprite_count) catch return error.MemoryAllocationFailed;
+    file.editor.selected_sprites = std.DynamicBitSet.initEmpty(fizzy.app.allocator, new_sprite_count) catch return error.MemoryAllocationFailed;
 
     file.editor.checkerboard.deinit();
-    file.editor.checkerboard = std.DynamicBitSet.initEmpty(pixi.app.allocator, @as(usize, new_w) * @as(usize, new_h)) catch return error.MemoryAllocationFailed;
+    file.editor.checkerboard = std.DynamicBitSet.initEmpty(fizzy.app.allocator, @as(usize, new_w) * @as(usize, new_h)) catch return error.MemoryAllocationFailed;
     for (0..@as(usize, new_w) * @as(usize, new_h)) |idx| {
-        const value = pixi.math.checker(.{ .w = @floatFromInt(new_w), .h = @floatFromInt(new_h) }, idx);
+        const value = fizzy.math.checker(.{ .w = @floatFromInt(new_w), .h = @floatFromInt(new_h) }, idx);
         file.editor.checkerboard.setValue(idx, value);
     }
 
     // The single-cell tile aspect drives the on-canvas alpha checker; rebuild for the new ratio.
     switch (file.editor.checkerboard_tile) {
-        .pixelsPMA => |p| pixi.app.allocator.free(p.rgba),
-        .pixels => |p| pixi.app.allocator.free(p.rgba),
+        .pixelsPMA => |p| fizzy.app.allocator.free(p.rgba),
+        .pixels => |p| fizzy.app.allocator.free(p.rgba),
         else => {},
     }
     {
         const alpha_width: u32 = alpha_checkerboard_count;
         const aspect_ratio = @as(f32, @floatFromInt(new_cw)) / @as(f32, @floatFromInt(new_rh));
         const alpha_height = @round(@as(f32, @floatFromInt(alpha_width)) / aspect_ratio);
-        file.editor.checkerboard_tile = pixi.image.init(
+        file.editor.checkerboard_tile = fizzy.image.init(
             alpha_width,
             std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
             .{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .ptr,
         ) catch return error.LayerCreateError;
-        for (pixi.image.pixels(file.editor.checkerboard_tile), 0..) |*pixel, idx| {
-            if (pixi.math.checker(pixi.image.size(file.editor.checkerboard_tile), idx)) {
-                pixel.* = pixi.editor.settings.checker_color_even;
+        for (fizzy.image.pixels(file.editor.checkerboard_tile), 0..) |*pixel, idx| {
+            if (fizzy.math.checker(fizzy.image.size(file.editor.checkerboard_tile), idx)) {
+                pixel.* = fizzy.editor.settings.checker_color_even;
             } else {
-                pixel.* = pixi.editor.settings.checker_color_odd;
+                pixel.* = fizzy.editor.settings.checker_color_odd;
             }
         }
         dvui.textureInvalidateCache(file.editor.checkerboard_tile.hash());
@@ -3375,7 +3384,7 @@ pub fn applyGridLayout(file: *File, options: GridLayoutOptions) !void {
     file.columns = new_cols;
     file.rows = new_rows;
 
-    pixi.render.destroyLayerCompositeResources(file);
+    fizzy.render.destroyLayerCompositeResources(file);
     file.invalidateActiveLayerTransparencyMaskCache();
 
     if (snapshot_opt) |snap| {
@@ -3391,7 +3400,7 @@ pub fn saveAsync(self: *File) !void {
 
     const ext = std.fs.path.extension(self.path);
 
-    if (std.mem.eql(u8, ext, ".pixi")) {
+    if (isFizzyExtension(ext)) {
         const thread = try std.Thread.spawn(.{}, saveZip, .{ self, dvui.currentWindow() });
         thread.detach();
     } else if (std.mem.eql(u8, ext, ".png")) {
@@ -3402,10 +3411,10 @@ pub fn saveAsync(self: *File) !void {
     }
 }
 
-pub fn external(self: File, allocator: std.mem.Allocator) !pixi.File {
-    const layers = try allocator.alloc(pixi.Layer, self.layers.slice().len);
-    const sprites = try allocator.alloc(pixi.Sprite, self.sprites.slice().len);
-    const animations = try allocator.alloc(pixi.Animation, self.animations.slice().len);
+pub fn external(self: File, allocator: std.mem.Allocator) !fizzy.File {
+    const layers = try allocator.alloc(fizzy.Layer, self.layers.slice().len);
+    const sprites = try allocator.alloc(fizzy.Sprite, self.sprites.slice().len);
+    const animations = try allocator.alloc(fizzy.Animation, self.animations.slice().len);
 
     for (layers, 0..) |*working_layer, i| {
         working_layer.name = try allocator.dupe(u8, self.layers.items(.name)[i]);
@@ -3423,7 +3432,7 @@ pub fn external(self: File, allocator: std.mem.Allocator) !pixi.File {
     }
 
     return .{
-        .version = pixi.version,
+        .version = fizzy.version,
         .columns = self.columns,
         .rows = self.rows,
         .column_width = self.column_width,

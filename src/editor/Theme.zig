@@ -1,10 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 
-const App = pixi.App;
-const Color = pixi.math.Color;
+const App = fizzy.App;
+const Color = fizzy.math.Color;
 
 const Theme = @This();
 
@@ -52,11 +52,11 @@ pub fn init(theme: *Theme, core: *mach.Core, app: *App) void {
     style.hover_delay_normal = 0.5;
     style.hover_delay_short = 0.25;
     style.popup_rounding = 8.0;
-    style.separator_text_align = .{ .x = pixi.editor.settings.explorer_title_align, .y = 0.5 };
+    style.separator_text_align = .{ .x = fizzy.editor.settings.explorer_title_align, .y = 0.5 };
     style.separator_text_border_size = 1.0;
     style.separator_text_padding = .{ .x = 20.0, .y = 10.0 };
 
-    //style.scaleAllSizes(pixi.content_scale[0]);
+    //style.scaleAllSizes(fizzy.content_scale[0]);
 
     const bg = theme.background.toImguiVec4();
     const fg = theme.foreground.toImguiVec4();
@@ -151,9 +151,9 @@ pub fn push(theme: *Theme) void {
 }
 
 pub fn loadOrDefault(file: [:0]const u8) !Theme {
-    if (pixi.fs.read(pixi.editor.arena, file) catch null) |read| {
+    if (fizzy.fs.read(fizzy.editor.arena, file) catch null) |read| {
         const options = std.json.ParseOptions{ .duplicate_field_behavior = .use_first, .ignore_unknown_fields = true };
-        if (std.json.parseFromSlice(Theme, pixi.editor.arena, read, options) catch null) |p| {
+        if (std.json.parseFromSlice(Theme, fizzy.editor.arena, read, options) catch null) |p| {
             const theme = p.value;
             //p.deinit();
             return theme;
@@ -186,7 +186,7 @@ pub const StyleColorButton = struct {
 };
 
 pub fn styleColorEdit(desc_id: [:0]const u8, args: StyleColorButton) bool {
-    var disable_hotkeys = pixi.editor.hotkeys.disable;
+    var disable_hotkeys = fizzy.editor.hotkeys.disable;
 
     const c = args.col.toImguiVec4();
     var c_slice = args.col.toSlice();
@@ -212,6 +212,6 @@ pub fn styleColorEdit(desc_id: [:0]const u8, args: StyleColorButton) bool {
     imgui.sameLine();
     imgui.text(desc_id);
 
-    pixi.editor.hotkeys.disable = disable_hotkeys;
+    fizzy.editor.hotkeys.disable = disable_hotkeys;
     return false;
 }

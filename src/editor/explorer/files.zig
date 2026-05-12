@@ -1,7 +1,7 @@
 const std = @import("std");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
-const Editor = pixi.Editor;
+const Editor = fizzy.Editor;
 const builtin = @import("builtin");
 
 const icons = @import("icons");
@@ -15,7 +15,7 @@ pub var edit_id: ?usize = null;
 
 /// Multi-selection for the file tree. Maps `id_extra` (hash of absolute path) to the heap-owned
 /// absolute path string. The primary `selected_id` is always a key here when set. Paths are
-/// allocated from `pixi.app.allocator` so they outlive the dvui arena used during draw.
+/// allocated from `fizzy.app.allocator` so they outlive the dvui arena used during draw.
 pub var selected_paths: std.AutoArrayHashMapUnmanaged(usize, []u8) = .empty;
 pub var selection_anchor: ?usize = null;
 
@@ -41,7 +41,7 @@ const open_message = if (builtin.os.tag == .macos) "Reveal in Finder" else "Reve
 pub const Extension = enum {
     unsupported,
     hidden,
-    pixi,
+    fizzy,
     atlas,
     png,
     jpg,
@@ -60,7 +60,7 @@ pub const Extension = enum {
 
 pub fn draw() !void {
     // `tab_drag` matches workspace tab strips so file rows can drop on the canvas like tabs (DVUI reorder_tree cross-widget pattern).
-    var tree = pixi.dvui.TreeWidget.tree(@src(), .{ .enable_reordering = true, .drag_name = "tab_drag" }, .{ .background = false, .expand = .both });
+    var tree = fizzy.dvui.TreeWidget.tree(@src(), .{ .enable_reordering = true, .drag_name = "tab_drag" }, .{ .background = false, .expand = .both });
     defer tree.deinit();
 
     // Same as tools pane header: first frame after open (or after Files wasn't drawn last frame)
@@ -76,10 +76,10 @@ pub fn draw() !void {
     // Safe as long as `selected_paths` isn't mutated between now and `tree.deinit`.
     tree.selected_branch_ids = selectionBranchIdsForMultiDrag(dvui.currentWindow().arena()) catch selected_paths.keys();
 
-    if (pixi.editor.folder) |path| {
+    if (fizzy.editor.folder) |path| {
         try drawFiles(path, tree);
     } else {
-        pixi.editor.file_tree_data_id = null;
+        fizzy.editor.file_tree_data_id = null;
         dvui.labelNoFmt(
             @src(),
             "Open a project folder to begin.",
@@ -89,15 +89,15 @@ pub fn draw() !void {
 
         if (dvui.button(@src(), "Open Folder", .{ .draw_focus = false }, .{ .expand = .horizontal, .style = .highlight })) {
             if (try dvui.dialogNativeFolderSelect(dvui.currentWindow().arena(), .{ .title = "Open Project Folder" })) |folder| {
-                try pixi.editor.setProjectFolder(folder);
+                try fizzy.editor.setProjectFolder(folder);
             }
         }
     }
 }
 
-pub fn drawFiles(path: []const u8, tree: *pixi.dvui.TreeWidget) !void {
+pub fn drawFiles(path: []const u8, tree: *fizzy.dvui.TreeWidget) !void {
     const unique_id = dvui.parentGet().extendId(@src(), 0);
-    pixi.editor.file_tree_data_id = unique_id;
+    fizzy.editor.file_tree_data_id = unique_id;
 
     var filter_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     dvui.icon(
@@ -147,10 +147,10 @@ pub fn drawFiles(path: []const u8, tree: *pixi.dvui.TreeWidget) !void {
             if ((dvui.menuItemLabel(@src(), "Close", .{}, .{
                 .expand = .horizontal,
             })) != null) {
-                if (pixi.editor.folder) |f| {
-                    pixi.editor.ignore.deinit(pixi.app.allocator);
-                    pixi.app.allocator.free(f);
-                    pixi.editor.folder = null;
+                if (fizzy.editor.folder) |f| {
+                    fizzy.editor.ignore.deinit(fizzy.app.allocator);
+                    fizzy.app.allocator.free(f);
+                    fizzy.editor.folder = null;
                 }
 
                 fw2.close();
@@ -305,20 +305,20 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
                     .directory => {
                         std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename folder: {s} to {s}", .{ label, te.getText() });
 
-                        for (pixi.editor.open_files.values()) |*file| {
+                        for (fizzy.editor.open_files.values()) |*file| {
                             if (std.mem.containsAtLeast(u8, file.path, 1, full_path)) {
                                 const file_name = dvui.currentWindow().arena().dupe(u8, std.fs.path.basename(file.path)) catch "Failed to duplicate path";
-                                pixi.app.allocator.free(file.path);
-                                file.path = try std.fs.path.join(pixi.app.allocator, &.{ new_path, file_name });
+                                fizzy.app.allocator.free(file.path);
+                                file.path = try std.fs.path.join(fizzy.app.allocator, &.{ new_path, file_name });
                             }
                         }
                     },
                     .file => {
                         std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename file: {s} to {s}", .{ label, te.getText() });
 
-                        if (pixi.editor.getFileFromPath(full_path)) |file| {
-                            pixi.app.allocator.free(file.path);
-                            file.path = pixi.app.allocator.dupe(u8, new_path) catch {
+                        if (fizzy.editor.getFileFromPath(full_path)) |file| {
+                            fizzy.app.allocator.free(file.path);
+                            file.path = fizzy.app.allocator.dupe(u8, new_path) catch {
                                 dvui.log.err("Failed to duplicate path: {s}", .{new_path});
                                 return error.FailedToDuplicatePath;
                             };
@@ -340,7 +340,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
     }
 }
 
-pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidget, unique_id: dvui.Id, outer_filter_text: []const u8) !void {
+pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidget, unique_id: dvui.Id, outer_filter_text: []const u8) !void {
     var color_i: usize = 0;
     var id_extra: usize = 0;
 
@@ -348,7 +348,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
     errdefer pending_file_shift_range = null;
 
     const recursor = struct {
-        fn search(directory: []const u8, tree: *pixi.dvui.TreeWidget, inner_unique_id: dvui.Id, inner_id_extra: *usize, color_id: *usize, filter_text: []const u8, parent_branch: ?*pixi.dvui.TreeWidget.Branch) !void {
+        fn search(directory: []const u8, tree: *fizzy.dvui.TreeWidget, inner_unique_id: dvui.Id, inner_id_extra: *usize, color_id: *usize, filter_text: []const u8, parent_branch: ?*fizzy.dvui.TreeWidget.Branch) !void {
             const io = dvui.io;
             var dir = std.Io.Dir.cwd().openDir(io, directory, .{ .access_sub_paths = true, .iterate = true }) catch return;
             defer dir.close(io);
@@ -376,8 +376,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                     &.{ directory, entry.name },
                 );
 
-                if (pixi.editor.folder) |proj_root| {
-                    if (pixi.editor.ignore.isIgnored(proj_root, abs_path, entry.name, entry.kind)) {
+                if (fizzy.editor.folder) |proj_root| {
+                    if (fizzy.editor.ignore.isIgnored(proj_root, abs_path, entry.name, entry.kind)) {
                         continue;
                     }
                 }
@@ -392,10 +392,10 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                 }
 
                 inner_id_extra.* = dvui.Id.update(tree.data().id, abs_path).asUsize();
-                try visible_file_rows_order.append(pixi.app.allocator, .{ .id = inner_id_extra.*, .path = abs_path });
+                try visible_file_rows_order.append(fizzy.app.allocator, .{ .id = inner_id_extra.*, .path = abs_path });
 
                 var color = dvui.themeGet().color(.control, .fill);
-                if (pixi.editor.colors.palette) |*palette| {
+                if (fizzy.editor.colors.palette) |*palette| {
                     color = palette.getDVUIColor(color_id.*);
                 }
 
@@ -409,7 +409,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                 var expanded = false;
                 const expanded_indent: f32 = 14.0;
 
-                if (pixi.editor.explorer.open_branches.get(branch_id) != null) {
+                if (fizzy.editor.explorer.open_branches.get(branch_id) != null) {
                     expanded = true;
                 }
 
@@ -489,13 +489,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                         dvui.dataSetSlice(null, inner_unique_id, "removed_path", abs_path);
 
                     if (entry.kind == .file and tree.id_branch == inner_id_extra.*) {
-                        if (pixi.editor.tab_drag_from_tree_path) |old| {
+                        if (fizzy.editor.tab_drag_from_tree_path) |old| {
                             if (!std.mem.eql(u8, old, abs_path)) {
-                                pixi.app.allocator.free(old);
-                                pixi.editor.tab_drag_from_tree_path = pixi.app.allocator.dupe(u8, abs_path) catch null;
+                                fizzy.app.allocator.free(old);
+                                fizzy.editor.tab_drag_from_tree_path = fizzy.app.allocator.dupe(u8, abs_path) catch null;
                             }
                         } else {
-                            pixi.editor.tab_drag_from_tree_path = pixi.app.allocator.dupe(u8, abs_path) catch null;
+                            fizzy.editor.tab_drag_from_tree_path = fizzy.app.allocator.dupe(u8, abs_path) catch null;
                         }
                     }
                 }
@@ -508,7 +508,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                 if (branch.dropInto() and entry.kind == .directory) {
                     try applyFileMove(inner_unique_id, tree, abs_path);
                     // Expand the folder so the dropped item is visible
-                    pixi.editor.explorer.open_branches.put(branch_id, {}) catch {};
+                    fizzy.editor.explorer.open_branches.put(branch_id, {}) catch {};
                 }
 
                 { // Add right click context menu for item options
@@ -544,7 +544,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                                     break :blk &[_][]const u8{};
                                 };
                                 for (to_open) |p| {
-                                    _ = pixi.editor.openFilePath(p, pixi.editor.currentGroupingID()) catch |e| {
+                                    _ = fizzy.editor.openFilePath(p, fizzy.editor.currentGroupingID()) catch |e| {
                                         dvui.log.err("Failed to open file: {any} ({s})", .{ e, p });
                                     };
                                 }
@@ -564,13 +564,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                                 var have_grouping = false;
                                 for (to_open) |p| {
                                     if (!have_grouping) {
-                                        side_grouping = if (pixi.editor.open_files.count() == 0)
-                                            pixi.editor.currentGroupingID()
+                                        side_grouping = if (fizzy.editor.open_files.count() == 0)
+                                            fizzy.editor.currentGroupingID()
                                         else
-                                            pixi.editor.newGroupingID();
+                                            fizzy.editor.newGroupingID();
                                         have_grouping = true;
                                     }
-                                    _ = pixi.editor.openFilePath(p, side_grouping) catch {
+                                    _ = fizzy.editor.openFilePath(p, side_grouping) catch {
                                         dvui.log.err("Failed to open file: {s}", .{p});
                                     };
                                 }
@@ -582,7 +582,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                         }
 
                         if ((dvui.menuItemLabel(@src(), open_message, .{}, .{ .expand = .horizontal })) != null) {
-                            pixi.editor.openInFileBrowser(if (entry.kind == .file) std.fs.path.dirname(abs_path) orelse abs_path else abs_path) catch {
+                            fizzy.editor.openInFileBrowser(if (entry.kind == .file) std.fs.path.dirname(abs_path) orelse abs_path else abs_path) catch {
                                 dvui.log.err("Failed to open file browser", .{});
                             };
 
@@ -596,9 +596,9 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                             const parent_owned = try dvui.currentWindow().arena().dupe(u8, parent_dir);
                             // Create a generic dialog that contains typical okay and cancel buttons and header
                             // The displayFn will be called during the drawing of the dialog, prior to ok and cancel buttons
-                            var mutex = pixi.dvui.dialog(@src(), .{
-                                .displayFn = pixi.Editor.Dialogs.NewFile.dialog,
-                                .callafterFn = pixi.Editor.Dialogs.NewFile.callAfter,
+                            var mutex = fizzy.dvui.dialog(@src(), .{
+                                .displayFn = fizzy.Editor.Dialogs.NewFile.dialog,
+                                .callafterFn = fizzy.Editor.Dialogs.NewFile.callAfter,
                                 .title = "New File...",
                                 .ok_label = "Create",
                                 .cancel_label = "Cancel",
@@ -662,7 +662,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                         const ext = extension(entry.name);
                         //if (ext == .hidden) continue;
                         const icon = switch (ext) {
-                            .pixi, .psd => icons.tvg.lucide.@"file-pen-line",
+                            .fizzy, .psd => icons.tvg.lucide.@"file-pen-line",
                             .jpg, .png, .aseprite, .pyxel, .gif => icons.tvg.entypo.picture,
                             .pdf => icons.tvg.entypo.@"doc-text",
                             .json, .zig, .txt, .atlas => icons.tvg.entypo.code,
@@ -672,12 +672,12 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
 
                         const icon_color = color;
 
-                        const file_icon_color: dvui.Color = if (ext == .pixi) .transparent else icon_color;
+                        const file_icon_color: dvui.Color = if (ext == .fizzy) .transparent else icon_color;
 
-                        if (ext == .pixi) {
-                            _ = pixi.dvui.sprite(
+                        if (ext == .fizzy) {
+                            _ = fizzy.dvui.sprite(
                                 @src(),
-                                .{ .source = pixi.editor.atlas.source, .sprite = pixi.editor.atlas.data.sprites[pixi.atlas.sprites.logo_default], .scale = 2.0 },
+                                .{ .source = fizzy.editor.atlas.source, .sprite = fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.logo_default], .scale = 2.0 },
                                 .{ .gravity_y = 0.5, .margin = padding, .padding = padding, .background = false },
                             );
                         } else {
@@ -696,15 +696,15 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
 
                         editableLabel(
                             inner_id_extra.*,
-                            if (filter_text.len > 0) std.fs.path.relativePosix(dvui.currentWindow().arena(), ".", pixi.editor.folder.?, abs_path) catch entry.name else entry.name,
-                            if (pixi.editor.getFileFromPath(abs_path) != null) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
+                            if (filter_text.len > 0) std.fs.path.relativePosix(dvui.currentWindow().arena(), ".", fizzy.editor.folder.?, abs_path) catch entry.name else entry.name,
+                            if (fizzy.editor.getFileFromPath(abs_path) != null) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
                             entry.kind,
                             abs_path,
                         ) catch {
                             dvui.log.err("Failed to draw editable label", .{});
                         };
 
-                        if (pixi.editor.getFileFromPath(abs_path)) |file| {
+                        if (fizzy.editor.getFileFromPath(abs_path)) |file| {
                             if (file.dirty()) {
                                 _ = dvui.icon(
                                     @src(),
@@ -721,8 +721,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                             applyFileClick(inner_id_extra.*, abs_path, mode);
                             if (mode == .replace) {
                                 switch (ext) {
-                                    .pixi, .png, .jpg => {
-                                        _ = pixi.editor.openFilePath(abs_path, pixi.editor.currentGroupingID()) catch |err| {
+                                    .fizzy, .png, .jpg => {
+                                        _ = fizzy.editor.openFilePath(abs_path, fizzy.editor.currentGroupingID()) catch |err| {
                                             dvui.log.err("{any}: {s}", .{ err, abs_path });
                                         };
                                     },
@@ -792,7 +792,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                             //     .alpha = 0.15 * t,
                             // },
                         })) {
-                            pixi.editor.explorer.open_branches.put(branch_id, {}) catch {
+                            fizzy.editor.explorer.open_branches.put(branch_id, {}) catch {
                                 dvui.log.debug("Failed to track branch state!", .{});
                             };
                             try search(
@@ -805,13 +805,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *pixi.dvui.TreeWidge
                                 branch,
                             );
                         } else {
-                            if (pixi.editor.explorer.open_branches.contains(branch_id)) {
-                                _ = pixi.editor.explorer.open_branches.remove(branch_id);
+                            if (fizzy.editor.explorer.open_branches.contains(branch_id)) {
+                                _ = fizzy.editor.explorer.open_branches.remove(branch_id);
                             }
                         }
                         // Keep open_branches in sync so hover-expand and drop-into expand persist next frame
                         if (branch.expanded) {
-                            pixi.editor.explorer.open_branches.put(branch_id, {}) catch {};
+                            fizzy.editor.explorer.open_branches.put(branch_id, {}) catch {};
                         }
                         color_id.* = color_id.* + 1;
                     },
@@ -834,33 +834,33 @@ pub fn isFileSelected(id: usize) bool {
 
 fn selectionFreeAll() void {
     var it = selected_paths.iterator();
-    while (it.next()) |e| pixi.app.allocator.free(e.value_ptr.*);
+    while (it.next()) |e| fizzy.app.allocator.free(e.value_ptr.*);
     selected_paths.clearRetainingCapacity();
 }
 
 fn selectionPut(id: usize, path: []const u8) void {
     if (selected_paths.getPtr(id)) |existing| {
         if (std.mem.eql(u8, existing.*, path)) return;
-        pixi.app.allocator.free(existing.*);
-        existing.* = pixi.app.allocator.dupe(u8, path) catch return;
+        fizzy.app.allocator.free(existing.*);
+        existing.* = fizzy.app.allocator.dupe(u8, path) catch return;
         return;
     }
-    const copy = pixi.app.allocator.dupe(u8, path) catch return;
-    selected_paths.put(pixi.app.allocator, id, copy) catch {
-        pixi.app.allocator.free(copy);
+    const copy = fizzy.app.allocator.dupe(u8, path) catch return;
+    selected_paths.put(fizzy.app.allocator, id, copy) catch {
+        fizzy.app.allocator.free(copy);
     };
 }
 
 fn selectionRemove(id: usize) bool {
     if (selected_paths.fetchSwapRemove(id)) |kv| {
-        pixi.app.allocator.free(kv.value);
+        fizzy.app.allocator.free(kv.value);
         return true;
     }
     return false;
 }
 
 /// Apply a modifier-aware click to the file-tree selection. Indexed by id_extra (path hash).
-fn applyFileClick(id: usize, path: []const u8, mode: pixi.dvui.TreeSelection.ClickMode) void {
+fn applyFileClick(id: usize, path: []const u8, mode: fizzy.dvui.TreeSelection.ClickMode) void {
     switch (mode) {
         .replace => {
             selectionFreeAll();
@@ -924,14 +924,14 @@ fn applyFileShiftRange(clicked_id: usize, clicked_path: []const u8, anchor_id: u
 /// Derive the click mode from the most recent pointer release event that falls within `rect`.
 /// Used after `branch.button.clicked()` so we can honor ctrl/cmd/shift without intercepting the
 /// button's own event handling.
-fn detectClickMode(rect: dvui.Rect.Physical) pixi.dvui.TreeSelection.ClickMode {
-    var mode: pixi.dvui.TreeSelection.ClickMode = .replace;
+fn detectClickMode(rect: dvui.Rect.Physical) fizzy.dvui.TreeSelection.ClickMode {
+    var mode: fizzy.dvui.TreeSelection.ClickMode = .replace;
     for (dvui.events()) |*e| {
         if (e.evt != .mouse) continue;
         const me = e.evt.mouse;
         if (me.action != .release or !me.button.pointer()) continue;
         if (!rect.contains(me.p)) continue;
-        mode = pixi.dvui.TreeSelection.clickModeFromMod(me.mod);
+        mode = fizzy.dvui.TreeSelection.clickModeFromMod(me.mod);
     }
     return mode;
 }
@@ -983,7 +983,7 @@ fn pathIsDirAbsolute(abs: []const u8) bool {
 fn openablePath(abs_path: []const u8) bool {
     if (pathIsDirAbsolute(abs_path)) return false;
     return switch (extension(abs_path)) {
-        .pixi, .png, .jpg => true,
+        .fizzy, .png, .jpg => true,
         else => false,
     };
 }
@@ -1055,7 +1055,7 @@ fn selectionBranchIdsForMultiDrag(arena: std.mem.Allocator) ![]const usize {
 /// Move the drag source (and, for a multi-drag, every other selected path) into `target_dir`.
 /// Renames files/folders on disk and rewrites open-file paths in-place. Clears the drag's
 /// stashed `removed_path` when complete.
-fn applyFileMove(unique_id: dvui.Id, tree: *pixi.dvui.TreeWidget, target_dir: []const u8) !void {
+fn applyFileMove(unique_id: dvui.Id, tree: *fizzy.dvui.TreeWidget, target_dir: []const u8) !void {
     const arena = dvui.currentWindow().arena();
 
     // The primary (floating) row's path is stashed here by the branch that reports `floating()`.
@@ -1115,9 +1115,9 @@ fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.mem.A
         return false;
     };
 
-    if (pixi.editor.getFileFromPath(source_path)) |file| {
-        pixi.app.allocator.free(file.path);
-        file.path = pixi.app.allocator.dupe(u8, new_path) catch {
+    if (fizzy.editor.getFileFromPath(source_path)) |file| {
+        fizzy.app.allocator.free(file.path);
+        file.path = fizzy.app.allocator.dupe(u8, new_path) catch {
             dvui.log.err("Failed to duplicate path: {s}", .{new_path});
             return error.FailedToDuplicatePath;
         };
@@ -1136,7 +1136,7 @@ pub fn pruneMissingSelections() void {
                 continue;
             };
             if (selected_id == removed.key) selected_id = null;
-            pixi.app.allocator.free(removed.value);
+            fizzy.app.allocator.free(removed.value);
             continue;
         };
         i += 1;
@@ -1146,7 +1146,8 @@ pub fn pruneMissingSelections() void {
 pub fn extension(file: []const u8) Extension {
     const ext = std.fs.path.extension(file);
     if (std.mem.eql(u8, ext, "")) return .hidden;
-    if (std.mem.eql(u8, ext, ".pixi")) return .pixi;
+    if (std.mem.eql(u8, ext, ".fiz")) return .fizzy;
+    if (std.mem.eql(u8, ext, ".pixi")) return .fizzy;
     if (std.mem.eql(u8, ext, ".atlas")) return .atlas;
     if (std.mem.eql(u8, ext, ".png")) return .png;
     if (std.mem.eql(u8, ext, ".gif")) return .gif;

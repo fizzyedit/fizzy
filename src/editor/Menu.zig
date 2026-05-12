@@ -1,8 +1,8 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
-const Editor = pixi.Editor;
-const settings = pixi.settings;
+const Editor = fizzy.Editor;
+const settings = fizzy.settings;
 const zstbi = @import("zstbi");
 const builtin = @import("builtin");
 const icons = @import("icons");
@@ -46,7 +46,7 @@ pub fn draw() !dvui.App.Result {
             //.style = .control,
         }) != null) {
             if (try dvui.dialogNativeFolderSelect(dvui.currentWindow().arena(), .{ .title = "Open Project Folder" })) |folder| {
-                try pixi.editor.setProjectFolder(folder);
+                try fizzy.editor.setProjectFolder(folder);
             }
             fw.close();
         }
@@ -54,7 +54,7 @@ pub fn draw() !dvui.App.Result {
         if (menuItemWithHotkey(@src(), "New File…", dvui.currentWindow().keybinds.get("new_file") orelse .{}, true, .{}, .{
             .expand = .horizontal,
         }) != null) {
-            pixi.editor.requestNewFileDialog();
+            fizzy.editor.requestNewFileDialog();
             fw.close();
         }
 
@@ -64,11 +64,11 @@ pub fn draw() !dvui.App.Result {
         }) != null) {
             if (try dvui.dialogNativeFileOpenMultiple(dvui.currentWindow().arena(), .{
                 .title = "Open Files...",
-                .filter_description = ".pixi, .png, .jpg, .jpeg",
-                .filters = &.{ "*.pixi", "*.png", "*.jpg", "*.jpeg" },
+                .filter_description = ".fiz, .pixi, .png, .jpg, .jpeg",
+                .filters = &.{ "*.fiz", "*.pixi", "*.png", "*.jpg", "*.jpeg" },
             })) |files| {
                 for (files) |file| {
-                    _ = pixi.editor.openFilePath(file, pixi.editor.open_workspace_grouping) catch {
+                    _ = fizzy.editor.openFilePath(file, fizzy.editor.open_workspace_grouping) catch {
                         std.log.err("Failed to open file: {s}", .{file});
                     };
                 }
@@ -104,9 +104,9 @@ pub fn draw() !dvui.App.Result {
             });
             defer vert_box.deinit();
 
-            var i: usize = pixi.editor.recents.folders.items.len;
+            var i: usize = fizzy.editor.recents.folders.items.len;
             while (i > 0) : (i -= 1) {
-                const folder = pixi.editor.recents.folders.items[i - 1];
+                const folder = fizzy.editor.recents.folders.items[i - 1];
                 if (menuItem(@src(), folder, .{}, .{
                     .expand = .horizontal,
                     .font = dvui.Font.theme(.mono).larger(-2.0),
@@ -114,31 +114,31 @@ pub fn draw() !dvui.App.Result {
                     .margin = dvui.Rect.all(1),
                     .padding = dvui.Rect.all(2),
                 })) |_| {
-                    try pixi.editor.setProjectFolder(folder);
+                    try fizzy.editor.setProjectFolder(folder);
                 }
             }
         }
 
         _ = dvui.separator(@src(), .{ .expand = .horizontal });
 
-        if (menuItemWithHotkey(@src(), "Save", dvui.currentWindow().keybinds.get("save") orelse .{}, if (pixi.editor.activeFile()) |file|
-            (file.dirty() or !pixi.Internal.File.hasRecognizedSaveExtension(file.path))
+        if (menuItemWithHotkey(@src(), "Save", dvui.currentWindow().keybinds.get("save") orelse .{}, if (fizzy.editor.activeFile()) |file|
+            (file.dirty() or !fizzy.Internal.File.hasRecognizedSaveExtension(file.path))
         else
             false, .{}, .{
             .expand = .horizontal,
             .color_text = dvui.themeGet().color(.window, .text),
         }) != null) {
-            pixi.editor.save() catch {
+            fizzy.editor.save() catch {
                 std.log.err("Failed to save", .{});
             };
             fw.close();
         }
 
-        if (menuItemWithHotkey(@src(), "Save As…", dvui.currentWindow().keybinds.get("save_as") orelse .{}, pixi.editor.activeFile() != null, .{}, .{
+        if (menuItemWithHotkey(@src(), "Save As…", dvui.currentWindow().keybinds.get("save_as") orelse .{}, fizzy.editor.activeFile() != null, .{}, .{
             .expand = .horizontal,
             .color_text = dvui.themeGet().color(.window, .text),
         }) != null) {
-            pixi.editor.requestSaveAs();
+            fizzy.editor.requestSaveAs();
             fw.close();
         }
     }
@@ -168,12 +168,12 @@ pub fn draw() !dvui.App.Result {
             @src(),
             "Copy",
             dvui.currentWindow().keybinds.get("copy") orelse .{},
-            if (pixi.editor.activeFile() != null) true else false,
+            if (fizzy.editor.activeFile() != null) true else false,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (pixi.editor.activeFile() != null) {
-                pixi.editor.copy() catch {
+            if (fizzy.editor.activeFile() != null) {
+                fizzy.editor.copy() catch {
                     std.log.err("Failed to copy", .{});
                 };
                 fw.close();
@@ -184,12 +184,12 @@ pub fn draw() !dvui.App.Result {
             @src(),
             "Paste",
             dvui.currentWindow().keybinds.get("paste") orelse .{},
-            if (pixi.editor.activeFile() != null) true else false,
+            if (fizzy.editor.activeFile() != null) true else false,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (pixi.editor.activeFile() != null) {
-                pixi.editor.paste() catch {
+            if (fizzy.editor.activeFile() != null) {
+                fizzy.editor.paste() catch {
                     std.log.err("Failed to paste", .{});
                 };
                 fw.close();
@@ -202,11 +202,11 @@ pub fn draw() !dvui.App.Result {
             @src(),
             "Undo",
             dvui.currentWindow().keybinds.get("undo") orelse .{},
-            if (pixi.editor.activeFile()) |file| if (file.history.undo_stack.items.len > 0) true else false else false,
+            if (fizzy.editor.activeFile()) |file| if (file.history.undo_stack.items.len > 0) true else false else false,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (pixi.editor.activeFile()) |file| {
+            if (fizzy.editor.activeFile()) |file| {
                 file.history.undoRedo(file, .undo) catch {
                     std.log.err("Failed to undo", .{});
                 };
@@ -217,11 +217,11 @@ pub fn draw() !dvui.App.Result {
             @src(),
             "Redo",
             dvui.currentWindow().keybinds.get("redo") orelse .{},
-            if (pixi.editor.activeFile()) |file| if (file.history.redo_stack.items.len > 0) true else false else false,
+            if (fizzy.editor.activeFile()) |file| if (file.history.redo_stack.items.len > 0) true else false else false,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (pixi.editor.activeFile()) |file| {
+            if (fizzy.editor.activeFile()) |file| {
                 file.history.undoRedo(file, .redo) catch {
                     std.log.err("Failed to redo", .{});
                 };
@@ -234,12 +234,12 @@ pub fn draw() !dvui.App.Result {
             @src(),
             "Transform",
             dvui.currentWindow().keybinds.get("transform") orelse .{},
-            if (pixi.editor.activeFile() != null) true else false,
+            if (fizzy.editor.activeFile() != null) true else false,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (pixi.editor.activeFile() != null) {
-                pixi.editor.transform() catch {
+            if (fizzy.editor.activeFile() != null) {
+                fizzy.editor.transform() catch {
                     std.log.err("Failed to transform", .{});
                 };
                 fw.close();
@@ -252,12 +252,12 @@ pub fn draw() !dvui.App.Result {
             @src(),
             "Grid Layout…",
             dvui.currentWindow().keybinds.get("grid_layout") orelse .{},
-            if (pixi.editor.activeFile() != null) true else false,
+            if (fizzy.editor.activeFile() != null) true else false,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (pixi.editor.activeFile() != null) {
-                pixi.editor.requestGridLayoutDialog();
+            if (fizzy.editor.activeFile() != null) {
+                fizzy.editor.requestGridLayoutDialog();
                 fw.close();
             }
         }
@@ -280,7 +280,7 @@ pub fn draw() !dvui.App.Result {
 
         if (menuItemWithHotkey(
             @src(),
-            if (pixi.editor.explorer.paned.split_ratio.* == 0.0) "Show Explorer" else "Hide Explorer",
+            if (fizzy.editor.explorer.paned.split_ratio.* == 0.0) "Show Explorer" else "Hide Explorer",
             dvui.currentWindow().keybinds.get("explorer") orelse .{},
             true,
             .{},
@@ -288,10 +288,10 @@ pub fn draw() !dvui.App.Result {
                 .expand = .horizontal,
             },
         ) != null) {
-            if (pixi.editor.explorer.paned.split_ratio.* == 0.0) {
-                pixi.editor.explorer.open();
+            if (fizzy.editor.explorer.paned.split_ratio.* == 0.0) {
+                fizzy.editor.explorer.open();
             } else {
-                pixi.editor.explorer.close();
+                fizzy.editor.explorer.close();
             }
 
             fw.close();
@@ -316,7 +316,7 @@ pub fn menuItemWithHotkey(src: std.builtin.SourceLocation, label_str: []const u8
         ret = r;
     }
 
-    pixi.dvui.labelWithKeybind(label_str, hotkey, enabled, opts, opts);
+    fizzy.dvui.labelWithKeybind(label_str, hotkey, enabled, opts, opts);
 
     mi.deinit();
 
@@ -335,7 +335,7 @@ pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opt
     label_opts.margin = dvui.Rect.all(0);
     label_opts.padding = dvui.Rect.all(0);
 
-    if (pixi.dvui.hovered(mi.data())) {
+    if (fizzy.dvui.hovered(mi.data())) {
         label_opts.color_text = dvui.themeGet().color(.window, .text);
     }
 
@@ -346,8 +346,8 @@ pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opt
     // items rendered inside floatingMenu are below the strip and don't need registering.
     if (builtin.os.tag == .windows) {
         const r = mi.data().rectScale().r;
-        const strip_h = (pixi.editor.settings.titlebar_top_buffer + pixi.editor.settings.titlebar_height) * dvui.windowNaturalScale();
-        if (r.y < strip_h) pixi.backend.pushTitleBarInteractiveRect(r);
+        const strip_h = (fizzy.editor.settings.titlebar_top_buffer + fizzy.editor.settings.titlebar_height) * dvui.windowNaturalScale();
+        if (r.y < strip_h) fizzy.backend.pushTitleBarInteractiveRect(r);
     }
 
     mi.deinit();
@@ -367,7 +367,7 @@ pub fn menuItemWithChevron(src: std.builtin.SourceLocation, label_str: []const u
     label_opts.margin = dvui.Rect.all(0);
     label_opts.padding = dvui.Rect.all(0);
 
-    if (pixi.dvui.hovered(mi.data())) {
+    if (fizzy.dvui.hovered(mi.data())) {
         label_opts.color_text = dvui.themeGet().color(.window, .text);
     }
 

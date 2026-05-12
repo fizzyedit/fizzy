@@ -1,6 +1,6 @@
 //! Pure scalar easing helpers.
 //!
-//! Kept in its own file (free of dvui / pixi imports) so that
+//! Kept in its own file (free of dvui / fizzy imports) so that
 //! `zig build test` can exercise it without pulling in the GUI stack.
 //! `src/math/math.zig` re-exports these so existing call sites stay
 //! unchanged.

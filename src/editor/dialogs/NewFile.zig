@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 
 const Dialogs = @import("Dialogs.zig");
@@ -188,10 +188,10 @@ pub fn callAfter(id: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void
     switch (response) {
         .ok => {
             if (parent_path) |parent| {
-                const new_path = try std.fs.path.join(pixi.app.allocator, &.{ parent, "untitled.pixi" });
-                defer pixi.app.allocator.free(new_path);
+                const new_path = try std.fs.path.join(fizzy.app.allocator, &.{ parent, "untitled.fiz" });
+                defer fizzy.app.allocator.free(new_path);
 
-                const file = pixi.editor.newFile(new_path, .{
+                const file = fizzy.editor.newFile(new_path, .{
                     .column_width = column_width,
                     .row_height = row_height,
                     .columns = if (mode == .single) 1 else columns,
@@ -208,15 +208,15 @@ pub fn callAfter(id: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void
                     return error.FailedToSaveFile;
                 };
 
-                if (pixi.Editor.Explorer.files.new_file_path) |old| {
-                    pixi.app.allocator.free(old);
+                if (fizzy.Editor.Explorer.files.new_file_path) |old| {
+                    fizzy.app.allocator.free(old);
                 }
-                pixi.Editor.Explorer.files.new_file_path = try pixi.app.allocator.dupe(u8, file.path);
+                fizzy.Editor.Explorer.files.new_file_path = try fizzy.app.allocator.dupe(u8, file.path);
                 dvui.refresh(null, @src(), dvui.currentWindow().data().id);
             } else {
-                const new_path = try pixi.editor.allocNextUntitledPath();
-                defer pixi.app.allocator.free(new_path);
-                _ = pixi.editor.newFile(new_path, .{
+                const new_path = try fizzy.editor.allocNextUntitledPath();
+                defer fizzy.app.allocator.free(new_path);
+                _ = fizzy.editor.newFile(new_path, .{
                     .column_width = column_width,
                     .row_height = row_height,
                     .columns = if (mode == .single) 1 else columns,

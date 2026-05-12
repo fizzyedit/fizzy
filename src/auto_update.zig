@@ -31,7 +31,7 @@ fn castManager(m: *anyopaque) *Vpk.vpkc_update_manager_t {
 }
 
 /// Velopack's macOS locator expects the process image under `*.app/Contents/MacOS/*`.
-/// Loose binaries from `zig build` / `zig-out/.../Pixi` are not supported — skip the C API
+/// Loose binaries from `zig build` / `zig-out/.../Fizzy` are not supported — skip the C API
 /// so we don't spam logs or Velopack errors on every frame.
 pub fn installLayoutSupported(io: std.Io) bool {
     if (!impl) return false;
@@ -42,19 +42,19 @@ pub fn installLayoutSupported(io: std.Io) bool {
     return std.mem.indexOf(u8, buf[0..n], ".app/") != null;
 }
 
-/// Create an update manager using `PIXI_AUTOUPDATE_URL` or the build-time repo URL.
+/// Create an update manager using `FIZZY_AUTOUPDATE_URL` or the build-time repo URL.
 pub fn openUpdateManager(io: std.Io, allocator: std.mem.Allocator) error{OutOfMemory}!?*anyopaque {
     if (!impl) return null;
     if (!installLayoutSupported(io)) return null;
 
-    if (std.c.getenv("PIXI_AUTOUPDATE_URL")) |raw| {
+    if (std.c.getenv("FIZZY_AUTOUPDATE_URL")) |raw| {
         const update_url = std.mem.span(raw);
         if (update_url.len == 0) return null;
         const update_url_z = try allocator.dupeZ(u8, update_url);
         defer allocator.free(update_url_z);
         var manager: ?*Vpk.vpkc_update_manager_t = null;
         if (!Vpk.vpkc_new_update_manager(update_url_z.ptr, null, null, &manager)) {
-            logVpkError("pixi autoupdate: vpkc_new_update_manager failed");
+            logVpkError("fizzy autoupdate: vpkc_new_update_manager failed");
             return null;
         }
         return @ptrCast(manager.?);
@@ -67,14 +67,14 @@ pub fn openUpdateManager(io: std.Io, allocator: std.mem.Allocator) error{OutOfMe
 
     const source: ?*Vpk.vpkc_update_source_t = Vpk.vpkc_new_source_github(repo_url_z.ptr, null, false);
     if (source == null) {
-        logVpkError("pixi autoupdate: vpkc_new_source_github failed");
+        logVpkError("fizzy autoupdate: vpkc_new_source_github failed");
         return null;
     }
 
     var manager: ?*Vpk.vpkc_update_manager_t = null;
     if (!Vpk.vpkc_new_update_manager_with_source(source, null, null, &manager)) {
         Vpk.vpkc_free_source(source);
-        logVpkError("pixi autoupdate: vpkc_new_update_manager_with_source failed");
+        logVpkError("fizzy autoupdate: vpkc_new_update_manager_with_source failed");
         return null;
     }
     return @ptrCast(manager.?);
@@ -107,13 +107,13 @@ pub fn checkAndMaybeApplyAtStartup(io: std.Io, allocator: std.mem.Allocator) !vo
             const u = update_info.?;
             defer Vpk.vpkc_free_update_info(u);
 
-            std.log.info("pixi autoupdate: update available, downloading", .{});
+            std.log.info("fizzy autoupdate: update available, downloading", .{});
             if (!Vpk.vpkc_download_updates(castManager(mgr), u, null, null)) {
-                logVpkError("pixi autoupdate: download failed");
+                logVpkError("fizzy autoupdate: download failed");
                 return error.UpdateDownloadFailed;
             }
 
-            std.log.info("pixi autoupdate: applying update and exiting", .{});
+            std.log.info("fizzy autoupdate: applying update and exiting", .{});
             const target_asset = u.TargetFullRelease;
             _ = Vpk.vpkc_wait_exit_then_apply_updates(castManager(mgr), target_asset, true, false, null, 0);
             if (builtin.os.tag == .windows) {
@@ -126,17 +126,17 @@ pub fn checkAndMaybeApplyAtStartup(io: std.Io, allocator: std.mem.Allocator) !vo
             std.process.exit(0);
         },
         Vpk.NO_UPDATE_AVAILABLE => {
-            std.log.info("pixi autoupdate: no update available", .{});
+            std.log.info("fizzy autoupdate: no update available", .{});
         },
         Vpk.REMOTE_IS_EMPTY => {
-            std.log.info("pixi autoupdate: remote feed empty", .{});
+            std.log.info("fizzy autoupdate: remote feed empty", .{});
         },
         Vpk.UPDATE_ERROR => {
-            logVpkError("pixi autoupdate: check failed");
+            logVpkError("fizzy autoupdate: check failed");
             return error.UpdateCheckFailed;
         },
         else => |i| {
-            std.log.err("pixi autoupdate unknown status: {d}", .{i});
+            std.log.err("fizzy autoupdate unknown status: {d}", .{i});
             return error.UpdateCheckUnknown;
         },
     }
@@ -209,7 +209,7 @@ pub fn checkDownloadApplyAndExit(io: std.Io, allocator: std.mem.Allocator) Updat
             defer Vpk.vpkc_free_update_info(u);
 
             if (!Vpk.vpkc_download_updates(castManager(mgr), u, null, null)) {
-                logVpkError("pixi autoupdate: download failed");
+                logVpkError("fizzy autoupdate: download failed");
                 return error.DownloadFailed;
             }
             const target_asset = u.TargetFullRelease;

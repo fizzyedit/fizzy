@@ -1,9 +1,9 @@
 const std = @import("std");
-const pixi = @import("pixi.zig");
+const fizzy = @import("fizzy.zig");
 
 const File = @This();
 
-/// Version of pixi that created this file
+/// Version of fizzy that created this file
 version: std.SemanticVersion,
 
 // Grid data
@@ -13,11 +13,11 @@ column_width: u32,
 row_height: u32,
 
 // Layer data
-layers: []pixi.Layer,
+layers: []fizzy.Layer,
 // Origins of sprites
-sprites: []pixi.Sprite,
+sprites: []fizzy.Sprite,
 // Lists of sprite indexes and timings
-animations: []pixi.Animation,
+animations: []fizzy.Animation,
 
 pub fn deinit(self: *File, allocator: std.mem.Allocator) void {
     for (self.layers) |*layer| {
@@ -39,9 +39,9 @@ pub const FileV3 = struct {
     rows: u32,
     column_width: u32,
     row_height: u32,
-    layers: []pixi.Layer,
-    sprites: []pixi.Sprite,
-    animations: []pixi.Animation.AnimationV2,
+    layers: []fizzy.Layer,
+    sprites: []fizzy.Sprite,
+    animations: []fizzy.Animation.AnimationV2,
 
     pub fn deinit(self: *File, allocator: std.mem.Allocator) void {
         for (self.layers) |*layer| {
@@ -63,9 +63,9 @@ pub const FileV2 = struct {
     height: u32,
     tile_width: u32,
     tile_height: u32,
-    layers: []pixi.Layer,
-    sprites: []pixi.Sprite,
-    animations: []pixi.Animation.AnimationV2,
+    layers: []fizzy.Layer,
+    sprites: []fizzy.Sprite,
+    animations: []fizzy.Animation.AnimationV2,
 
     pub fn deinit(self: *File, allocator: std.mem.Allocator) void {
         for (self.layers) |*layer| {
@@ -87,9 +87,9 @@ pub const FileV1 = struct {
     height: u32,
     tile_width: u32,
     tile_height: u32,
-    layers: []pixi.Layer,
-    sprites: []pixi.Sprite,
-    animations: []pixi.Animation.AnimationV1,
+    layers: []fizzy.Layer,
+    sprites: []fizzy.Sprite,
+    animations: []fizzy.Animation.AnimationV1,
 
     pub fn deinit(self: *File, allocator: std.mem.Allocator) void {
         for (self.layers) |*layer| {

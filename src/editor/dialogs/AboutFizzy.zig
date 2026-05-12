@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const build_opts = @import("build_opts");
 const auto_update = @import("../../auto_update.zig");
@@ -31,7 +31,7 @@ fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: 
 pub fn active(win: *dvui.Window) bool {
     var it = win.dialogs.iterator(null);
     while (it.next()) |d| {
-        const df = dvui.dataGet(null, d.id, "_displayFn", pixi.dvui.DisplayFn) orelse continue;
+        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dvui.DisplayFn) orelse continue;
         if (df == dialog) return true;
     }
     return false;
@@ -54,11 +54,11 @@ pub fn request() void {
     if (active(dvui.currentWindow())) return;
     status_line = " ";
     update_ready_after_check = false;
-    primeAboutVelopackVersion(pixi.app.allocator);
-    var mutex = pixi.dvui.dialog(@src(), .{
+    primeAboutVelopackVersion(fizzy.app.allocator);
+    var mutex = fizzy.dvui.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
-        .title = "About Pixi",
+        .title = "About Fizzy",
         .ok_label = "",
         .cancel_label = "",
         .resizeable = false,
@@ -82,7 +82,7 @@ fn setStatus(msg: []const u8) void {
 }
 
 pub fn dialog(_: dvui.Id) anyerror!bool {
-    const alloc = pixi.app.allocator;
+    const alloc = fizzy.app.allocator;
 
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(8) });
     defer outer.deinit();
@@ -120,8 +120,8 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
         dvui.labelNoFmt(@src(), "Automatic updates are not included in this build.", .{}, .{ .font = body_small });
     }
 
-    if (std.c.getenv("PIXI_AUTOUPDATE_URL")) |_| {
-        dvui.labelNoFmt(@src(), "PIXI_AUTOUPDATE_URL is set (local/HTTP feed).", .{}, .{ .font = body_small });
+    if (std.c.getenv("FIZZY_AUTOUPDATE_URL")) |_| {
+        dvui.labelNoFmt(@src(), "FIZZY_AUTOUPDATE_URL is set (local/HTTP feed).", .{}, .{ .font = body_small });
     }
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 8, .h = 10 } });
@@ -204,7 +204,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
 
     if (dialogButton(@src(), "Close", .control, 10, 2)) {
-        pixi.dvui.closeFloatingDialogAnchored();
+        fizzy.dvui.closeFloatingDialogAnchored();
     }
 
     return true;

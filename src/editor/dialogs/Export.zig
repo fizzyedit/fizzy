@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const zigimg = @import("zigimg");
 const msf_gif = @import("msf_gif");
@@ -124,7 +124,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
         .all => try allDialog(id),
     };
 
-    return mode_valid and (pixi.editor.activeFile() != null);
+    return mode_valid and (fizzy.editor.activeFile() != null);
 }
 
 pub fn singleDialog(_: dvui.Id) anyerror!bool {
@@ -132,14 +132,14 @@ pub fn singleDialog(_: dvui.Id) anyerror!bool {
     var max_scale: f32 = 16.0;
     var valid: bool = false;
 
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         if (file.editor.selected_sprites.findFirstSet() != null) {
             max_scale = @min(@divTrunc(max_gif_size[0], @as(f32, @floatFromInt(file.column_width))), @divTrunc(max_gif_size[1], @as(f32, @floatFromInt(file.row_height))));
             valid = true;
         }
     }
 
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         if (file.editor.selected_sprites.findFirstSet()) |sprite_index| {
             renderExportPreviewSprite(file, sprite_index);
         }
@@ -147,7 +147,7 @@ pub fn singleDialog(_: dvui.Id) anyerror!bool {
 
     exportScaleSlider(max_scale);
 
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         if (file.editor.selected_sprites.findFirstSet() != null) {
             const column_width: u32 = @intFromFloat(@as(f32, @floatFromInt(file.column_width)) * scale);
             const row_height: u32 = @intFromFloat(@as(f32, @floatFromInt(file.row_height)) * scale);
@@ -163,7 +163,7 @@ pub fn animationDialog(id: dvui.Id) anyerror!bool {
     var max_scale: f32 = 16.0;
     var preview_sprite: ?usize = null;
 
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         max_scale = @min(
             @divTrunc(max_gif_size[0], @as(f32, @floatFromInt(file.column_width))),
             @divTrunc(max_gif_size[1], @as(f32, @floatFromInt(file.row_height))),
@@ -188,7 +188,7 @@ pub fn animationDialog(id: dvui.Id) anyerror!bool {
         }
     }
 
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         if (preview_sprite) |sprite_index| {
             renderExportPreviewSprite(file, sprite_index);
         }
@@ -197,7 +197,7 @@ pub fn animationDialog(id: dvui.Id) anyerror!bool {
     exportScaleSlider(max_scale);
 
     if (preview_sprite) |_| {
-        if (pixi.editor.activeFile()) |file| {
+        if (fizzy.editor.activeFile()) |file| {
             const column_width: u32 = @intFromFloat(@as(f32, @floatFromInt(file.column_width)) * scale);
             const row_height: u32 = @intFromFloat(@as(f32, @floatFromInt(file.row_height)) * scale);
             exportDimensionsLabelForExport(column_width, row_height);
@@ -208,20 +208,20 @@ pub fn animationDialog(id: dvui.Id) anyerror!bool {
 }
 
 pub fn layerDialog(_: dvui.Id) anyerror!bool {
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         renderExportPreview(file, .layer);
     }
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         exportDimensionsLabelForExport(file.width(), file.height());
     }
     return true;
 }
 
 pub fn allDialog(_: dvui.Id) anyerror!bool {
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         renderExportPreview(file, .composite);
     }
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         exportDimensionsLabelForExport(file.width(), file.height());
     }
     return true;
@@ -233,11 +233,11 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
             switch (mode) {
                 .animation => {
                     const default = blk: {
-                        const file = pixi.editor.activeFile() orelse {
+                        const file = fizzy.editor.activeFile() orelse {
                             break :blk "animation.gif";
                         };
 
-                        const default_filename: [:0]const u8 = std.fmt.allocPrintSentinel(pixi.app.allocator, "{s}.gif", .{
+                        const default_filename: [:0]const u8 = std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}.gif", .{
                             if (file.selected_animation_index) |animation_index| file.animations.items(.name)[animation_index] else "animation",
                         }, 0) catch {
                             dvui.log.err("Failed to allocate filename", .{});
@@ -247,7 +247,7 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
                         break :blk default_filename;
                     };
 
-                    pixi.backend.showSaveFileDialog(
+                    fizzy.backend.showSaveFileDialog(
                         saveAnimationCallback,
                         &[_]sdl3.SDL_DialogFileFilter{.{ .name = "GIF", .pattern = "gif" }},
                         default,
@@ -255,22 +255,22 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
                     );
                 },
                 .single => {
-                    const file = pixi.editor.activeFile() orelse return;
+                    const file = fizzy.editor.activeFile() orelse return;
                     const sprite_index = file.editor.selected_sprites.findFirstSet() orelse return;
 
-                    const base = file.spriteExportName(pixi.app.allocator, sprite_index) catch {
+                    const base = file.spriteExportName(fizzy.app.allocator, sprite_index) catch {
                         dvui.log.err("Failed to allocate default export name", .{});
                         return;
                     };
-                    defer pixi.app.allocator.free(base);
+                    defer fizzy.app.allocator.free(base);
 
-                    const default = std.fmt.allocPrintSentinel(pixi.app.allocator, "{s}.png", .{base}, 0) catch {
+                    const default = std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}.png", .{base}, 0) catch {
                         dvui.log.err("Failed to allocate filename", .{});
                         return;
                     };
-                    defer pixi.app.allocator.free(default);
+                    defer fizzy.app.allocator.free(default);
 
-                    pixi.backend.showSaveFileDialog(
+                    fizzy.backend.showSaveFileDialog(
                         exportCurrentSpriteCallback,
                         &[_]sdl3.SDL_DialogFileFilter{
                             .{ .name = "PNG", .pattern = "png" },
@@ -281,20 +281,20 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
                     );
                 },
                 .layer => {
-                    const file = pixi.editor.activeFile() orelse return;
-                    const base = file.layerExportBaseName(pixi.app.allocator) catch {
+                    const file = fizzy.editor.activeFile() orelse return;
+                    const base = file.layerExportBaseName(fizzy.app.allocator) catch {
                         dvui.log.err("Failed to allocate default export name", .{});
                         return;
                     };
-                    defer pixi.app.allocator.free(base);
+                    defer fizzy.app.allocator.free(base);
 
-                    const default = std.fmt.allocPrintSentinel(pixi.app.allocator, "{s}.png", .{base}, 0) catch {
+                    const default = std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}.png", .{base}, 0) catch {
                         dvui.log.err("Failed to allocate filename", .{});
                         return;
                     };
-                    defer pixi.app.allocator.free(default);
+                    defer fizzy.app.allocator.free(default);
 
-                    pixi.backend.showSaveFileDialog(
+                    fizzy.backend.showSaveFileDialog(
                         exportLayerCallback,
                         &[_]sdl3.SDL_DialogFileFilter{
                             .{ .name = "PNG", .pattern = "png" },
@@ -305,20 +305,20 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
                     );
                 },
                 .all => {
-                    const file = pixi.editor.activeFile() orelse return;
-                    const base = file.allExportBaseName(pixi.app.allocator) catch {
+                    const file = fizzy.editor.activeFile() orelse return;
+                    const base = file.allExportBaseName(fizzy.app.allocator) catch {
                         dvui.log.err("Failed to allocate default export name", .{});
                         return;
                     };
-                    defer pixi.app.allocator.free(base);
+                    defer fizzy.app.allocator.free(base);
 
-                    const default = std.fmt.allocPrintSentinel(pixi.app.allocator, "{s}.png", .{base}, 0) catch {
+                    const default = std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}.png", .{base}, 0) catch {
                         dvui.log.err("Failed to allocate filename", .{});
                         return;
                     };
-                    defer pixi.app.allocator.free(default);
+                    defer fizzy.app.allocator.free(default);
 
-                    pixi.backend.showSaveFileDialog(
+                    fizzy.backend.showSaveFileDialog(
                         exportAllCallback,
                         &[_]sdl3.SDL_DialogFileFilter{
                             .{ .name = "PNG", .pattern = "png" },
@@ -338,7 +338,7 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
 /// One call site for the export preview scroll+tile so widget ids (and first-frame layout) stay
 /// stable when switching between Single and Animation. Otherwise `renderLayers` early-outs for
 /// one frame with `content_rs.s == 0` on a fresh scroll id.
-fn renderExportPreviewSprite(file: *pixi.Internal.File, sprite_index: usize) void {
+fn renderExportPreviewSprite(file: *fizzy.Internal.File, sprite_index: usize) void {
     const sprite_rect = file.spriteRect(sprite_index);
     const max_size_content: dvui.Size = .{
         .w = (dvui.currentWindow().rect_pixels.w / dvui.currentWindow().natural_scale) / 2,
@@ -379,7 +379,7 @@ fn renderExportPreviewSprite(file: *pixi.Internal.File, sprite_index: usize) voi
         const local_natural = dvui.Rect{ .x = 0, .y = 0, .w = sprite_rect.w * scale, .h = sprite_rect.h * scale };
         drawCheckerboardTiled(file, sprite_rect, local_natural, box.data().rectScale());
 
-        pixi.render.renderLayers(.{
+        fizzy.render.renderLayers(.{
             .file = file,
             .rs = box.data().rectScale(),
             .uv = uv,
@@ -418,7 +418,7 @@ const ExportFullPreviewKind = enum { layer, composite };
 /// `geometry_natural` is the rect in the widget’s natural space used for `rectToPhysical` (matches
 /// full file for layer/all, or `0,0,sw×scale,sh×scale` for the sprite export box).
 fn drawCheckerboardTiled(
-    file: *pixi.Internal.File,
+    file: *fizzy.Internal.File,
     uv_file: dvui.Rect,
     geometry_natural: dvui.Rect,
     rs_box: dvui.RectScale,
@@ -453,13 +453,13 @@ fn drawCheckerboardTiled(
 
 /// Full-canvas preview at 1:1 logical pixels: checkerboard + either the selected layer only or the
 /// flattened composite (all visible layers). One scroll + box `call site for stable widget ids.
-fn renderExportPreview(file: *pixi.Internal.File, kind: ExportFullPreviewKind) void {
+fn renderExportPreview(file: *fizzy.Internal.File, kind: ExportFullPreviewKind) void {
     const w = file.width();
     const h = file.height();
     if (w == 0 or h == 0) return;
 
     if (kind == .composite) {
-        pixi.render.syncLayerComposite(file) catch {
+        fizzy.render.syncLayerComposite(file) catch {
             dvui.log.err("Export preview: failed to build layer composite", .{});
             return;
         };
@@ -500,13 +500,13 @@ fn renderExportPreview(file: *pixi.Internal.File, kind: ExportFullPreviewKind) v
         const full_uv = dvui.Rect{ .x = 0, .y = 0, .w = 1, .h = 1 };
         const rs = box.data().rectScale();
 
-        var path_tris: dvui.Path.Builder = .init(pixi.app.allocator);
+        var path_tris: dvui.Path.Builder = .init(fizzy.app.allocator);
         defer path_tris.deinit();
         path_tris.addRect(rs.r, .all(0));
-        var tris = path_tris.build().fillConvexTriangles(pixi.app.allocator, .{ .color = .white, .fade = 0.0 }) catch {
+        var tris = path_tris.build().fillConvexTriangles(fizzy.app.allocator, .{ .color = .white, .fade = 0.0 }) catch {
             return;
         };
-        defer tris.deinit(pixi.app.allocator);
+        defer tris.deinit(fizzy.app.allocator);
         tris.uvFromRectuv(rs.r, full_uv);
 
         switch (kind) {
@@ -535,7 +535,7 @@ fn renderExportPreview(file: *pixi.Internal.File, kind: ExportFullPreviewKind) v
 
 /// Flatten visible layers for one sprite tile. Layer index `0` is the front (drawn last on canvas);
 /// higher indices sit behind. `blitData` composites its **first** buffer (upper) over the **second** (lower).
-fn compositedSpritePixels(allocator: std.mem.Allocator, file: *pixi.Internal.File, sprite_index: usize) ![][4]u8 {
+fn compositedSpritePixels(allocator: std.mem.Allocator, file: *fizzy.Internal.File, sprite_index: usize) ![][4]u8 {
     const sprite_rect = file.spriteRect(sprite_index);
     const w: usize = @intFromFloat(sprite_rect.w);
     const h: usize = @intFromFloat(sprite_rect.h);
@@ -556,7 +556,7 @@ fn compositedSpritePixels(allocator: std.mem.Allocator, file: *pixi.Internal.Fil
             const layer_pixels = lower.pixelsFromRect(allocator, sprite_rect) orelse continue;
             defer allocator.free(layer_pixels);
 
-            pixi.image.blitData(pixels, w, h, layer_pixels, sprite_rect.justSize(), true);
+            fizzy.image.blitData(pixels, w, h, layer_pixels, sprite_rect.justSize(), true);
         }
 
         return pixels;
@@ -616,7 +616,7 @@ pub fn exportCurrentSprite(path: []const u8) anyerror!void {
         return error.InvalidExtension;
     }
 
-    const file = pixi.editor.activeFile() orelse {
+    const file = fizzy.editor.activeFile() orelse {
         dvui.log.err("Export: No active file", .{});
         return error.NoActiveFile;
     };
@@ -632,14 +632,14 @@ pub fn exportCurrentSprite(path: []const u8) anyerror!void {
         export_height = @intFromFloat(@as(f32, @floatFromInt(file.row_height)) * scale);
     }
 
-    const pixels = try compositedSpritePixels(pixi.app.allocator, file, sprite_index);
-    defer pixi.app.allocator.free(pixels);
+    const pixels = try compositedSpritePixels(fizzy.app.allocator, file, sprite_index);
+    defer fizzy.app.allocator.free(pixels);
 
     if (scale != 1.0) {
-        const resized = pixi.app.allocator.alloc([4]u8, export_width * export_height) catch {
+        const resized = fizzy.app.allocator.alloc([4]u8, export_width * export_height) catch {
             return error.OutOfMemory;
         };
-        defer pixi.app.allocator.free(resized);
+        defer fizzy.app.allocator.free(resized);
         if (zstbi.resize(
             pixels,
             file.column_width,
@@ -659,9 +659,9 @@ pub fn exportCurrentSprite(path: []const u8) anyerror!void {
         // `writeToPng` / `writeToJpg` use `windowNaturalScale` and require `Window.begin`/`end`.
         // File dialog callbacks (e.g. NSOpenPanel) can run when `currentWindow` is null.
         if (is_png) {
-            try pixi.image.writeToPngResolution(src, path, 0);
+            try fizzy.image.writeToPngResolution(src, path, 0);
         } else {
-            try pixi.image.writeToJpgPpi(src, path, 0);
+            try fizzy.image.writeToJpgPpi(src, path, 0);
         }
     } else {
         const src: dvui.ImageSource = .{ .pixels = .{
@@ -670,9 +670,9 @@ pub fn exportCurrentSprite(path: []const u8) anyerror!void {
             .height = file.row_height,
         } };
         if (is_png) {
-            try pixi.image.writeToPngResolution(src, path, 0);
+            try fizzy.image.writeToPngResolution(src, path, 0);
         } else {
-            try pixi.image.writeToJpgPpi(src, path, 0);
+            try fizzy.image.writeToJpgPpi(src, path, 0);
         }
     }
 }
@@ -686,7 +686,7 @@ pub fn exportLayerToPath(path: []const u8) anyerror!void {
         return error.InvalidExtension;
     }
 
-    const file = pixi.editor.activeFile() orelse {
+    const file = fizzy.editor.activeFile() orelse {
         dvui.log.err("Export: No active file", .{});
         return error.NoActiveFile;
     };
@@ -694,9 +694,9 @@ pub fn exportLayerToPath(path: []const u8) anyerror!void {
     const layer = file.layers.get(file.selected_layer_index);
     const src = layer.source;
     if (is_png) {
-        try pixi.image.writeToPngResolution(src, path, 0);
+        try fizzy.image.writeToPngResolution(src, path, 0);
     } else {
-        try pixi.image.writeToJpgPpi(src, path, 0);
+        try fizzy.image.writeToJpgPpi(src, path, 0);
     }
 }
 
@@ -709,7 +709,7 @@ pub fn exportAllToPath(path: []const u8) anyerror!void {
         return error.InvalidExtension;
     }
 
-    const file = pixi.editor.activeFile() orelse {
+    const file = fizzy.editor.activeFile() orelse {
         dvui.log.err("Export: No active file", .{});
         return error.NoActiveFile;
     };
@@ -718,24 +718,24 @@ pub fn exportAllToPath(path: []const u8) anyerror!void {
     const h = file.height();
     if (w == 0 or h == 0) return error.InvalidImageSize;
 
-    try pixi.render.syncLayerComposite(file);
+    try fizzy.render.syncLayerComposite(file);
     const target = file.editor.layer_composite_target orelse {
         return error.NoLayerComposite;
     };
 
-    const pma_read: []dvui.Color.PMA = try dvui.Texture.readTarget(pixi.app.allocator, target);
+    const pma_read: []dvui.Color.PMA = try dvui.Texture.readTarget(fizzy.app.allocator, target);
     defer {
         const byte_len = pma_read.len * @sizeOf(dvui.Color.PMA);
-        pixi.app.allocator.free(@as([*]u8, @ptrCast(pma_read.ptr))[0..byte_len]);
+        fizzy.app.allocator.free(@as([*]u8, @ptrCast(pma_read.ptr))[0..byte_len]);
     }
 
-    var tmp_layer: pixi.Internal.Layer = try .fromPixelsPMA(0, "export", pma_read, w, h, .ptr);
+    var tmp_layer: fizzy.Internal.Layer = try .fromPixelsPMA(0, "export", pma_read, w, h, .ptr);
     defer tmp_layer.deinit();
 
     if (is_png) {
-        try pixi.image.writeToPngResolution(tmp_layer.source, path, 0);
+        try fizzy.image.writeToPngResolution(tmp_layer.source, path, 0);
     } else {
-        try pixi.image.writeToJpgPpi(tmp_layer.source, path, 0);
+        try fizzy.image.writeToJpgPpi(tmp_layer.source, path, 0);
     }
 }
 
@@ -748,7 +748,7 @@ pub fn createAnimationGif(path: []const u8) anyerror!void {
         return error.InvalidExtension;
     }
 
-    const file = pixi.editor.activeFile() orelse {
+    const file = fizzy.editor.activeFile() orelse {
         dvui.log.err("Export: No active file", .{});
         return error.NoActiveFile;
     };
@@ -759,7 +759,7 @@ pub fn createAnimationGif(path: []const u8) anyerror!void {
     }
 
     if (file.selected_animation_index) |animation_index| {
-        const anim: pixi.Internal.Animation = file.animations.get(animation_index);
+        const anim: fizzy.Internal.Animation = file.animations.get(animation_index);
 
         var export_width = file.column_width;
         var export_height = file.row_height;
@@ -778,11 +778,11 @@ pub fn createAnimationGif(path: []const u8) anyerror!void {
         msf_gif.msf_gif_alpha_threshold = 240;
 
         for (anim.frames) |frame| {
-            const pixels = compositedSpritePixels(pixi.app.allocator, file, frame.sprite_index) catch |err| {
+            const pixels = compositedSpritePixels(fizzy.app.allocator, file, frame.sprite_index) catch |err| {
                 if (err == error.NoPixels) continue;
                 return err;
             };
-            defer pixi.app.allocator.free(pixels);
+            defer fizzy.app.allocator.free(pixels);
 
             { // msf_gif will error if there are only transparent pixels
                 const valid = blk: {
@@ -802,11 +802,11 @@ pub fn createAnimationGif(path: []const u8) anyerror!void {
             }
 
             if (scale != 1.0) {
-                const resized_pixels = pixi.app.allocator.alloc([4]u8, export_width * export_height) catch {
+                const resized_pixels = fizzy.app.allocator.alloc([4]u8, export_width * export_height) catch {
                     dvui.log.err("Failed to allocate resized pixels", .{});
                     continue;
                 };
-                defer pixi.app.allocator.free(resized_pixels);
+                defer fizzy.app.allocator.free(resized_pixels);
 
                 _ = zstbi.resize(
                     pixels,

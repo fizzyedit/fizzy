@@ -7,7 +7,7 @@
       https://docs.microsoft.com/dotnet/core/install/macos-notarization-issues
       because Velopack's UpdateMac binary is .NET-compiled and needs
       JIT + unsigned-executable-memory + library-validation relaxed.
-      Pixi itself (Zig + SDL3 + Metal) only needs library-validation off
+      Fizzy itself (Zig + SDL3 + Metal) only needs library-validation off
       so frameworks loaded at runtime aren't blocked.
     -->
     <key>com.apple.security.cs.allow-jit</key>

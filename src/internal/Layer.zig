@@ -1,6 +1,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const zip = @import("zip");
 
 const Layer = @This();
@@ -33,13 +33,13 @@ dirty: bool = false,
 
 pub fn init(id: u64, name: []const u8, width: u32, height: u32, default_color: dvui.Color, invalidation: dvui.ImageSource.InvalidationStrategy) !Layer {
     const num_pixels = width * height;
-    const p = pixi.app.allocator.alloc([4]u8, num_pixels) catch return error.MemoryAllocationFailed;
+    const p = fizzy.app.allocator.alloc([4]u8, num_pixels) catch return error.MemoryAllocationFailed;
 
     @memset(p, default_color.toRGBA());
 
     return .{
         .id = id,
-        .name = pixi.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
+        .name = fizzy.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
         .source = .{
             .pixelsPMA = .{
                 .rgba = @ptrCast(p),
@@ -49,29 +49,29 @@ pub fn init(id: u64, name: []const u8, width: u32, height: u32, default_color: d
                 .invalidation = invalidation,
             },
         },
-        .mask = std.DynamicBitSet.initEmpty(pixi.app.allocator, num_pixels) catch return error.MemoryAllocationFailed,
+        .mask = std.DynamicBitSet.initEmpty(fizzy.app.allocator, num_pixels) catch return error.MemoryAllocationFailed,
     };
 }
 
 pub fn fromImageFilePath(id: u64, name: []const u8, path: []const u8, invalidation: dvui.ImageSource.InvalidationStrategy) !Layer {
-    const source = pixi.image.fromImageFilePath(name, path, invalidation) catch return error.ErrorCreatingImageSource;
-    const mask = std.DynamicBitSet.initEmpty(pixi.app.allocator, pixelCountForSource(source)) catch return error.MemoryAllocationFailed;
+    const source = fizzy.image.fromImageFilePath(name, path, invalidation) catch return error.ErrorCreatingImageSource;
+    const mask = std.DynamicBitSet.initEmpty(fizzy.app.allocator, pixelCountForSource(source)) catch return error.MemoryAllocationFailed;
 
     return .{
         .id = id,
-        .name = pixi.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
+        .name = fizzy.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
         .source = source,
         .mask = mask,
     };
 }
 
 pub fn fromImageFileBytes(id: u64, name: []const u8, image_bytes: []const u8, invalidation: dvui.ImageSource.InvalidationStrategy) !Layer {
-    const source = pixi.image.fromImageFileBytes(name, image_bytes, invalidation) catch return error.ErrorCreatingImageSource;
-    const mask = std.DynamicBitSet.initEmpty(pixi.app.allocator, pixelCountForSource(source)) catch return error.MemoryAllocationFailed;
+    const source = fizzy.image.fromImageFileBytes(name, image_bytes, invalidation) catch return error.ErrorCreatingImageSource;
+    const mask = std.DynamicBitSet.initEmpty(fizzy.app.allocator, pixelCountForSource(source)) catch return error.MemoryAllocationFailed;
 
     return .{
         .id = id,
-        .name = pixi.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
+        .name = fizzy.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
         .source = source,
         .mask = mask,
     };
@@ -79,12 +79,12 @@ pub fn fromImageFileBytes(id: u64, name: []const u8, image_bytes: []const u8, in
 
 pub fn fromPixelsPMA(id: u64, name: []const u8, pixel_data: []dvui.Color.PMA, width: u32, height: u32, invalidation: dvui.ImageSource.InvalidationStrategy) !Layer {
     if (pixel_data.len != width * height) return error.InvalidPixelDataLength;
-    const source = pixi.image.fromPixelsPMA(pixel_data, width, height, invalidation) catch return error.ErrorCreatingImageSource;
-    const mask = std.DynamicBitSet.initEmpty(pixi.app.allocator, @as(usize, @intCast(width * height))) catch return error.MemoryAllocationFailed;
+    const source = fizzy.image.fromPixelsPMA(pixel_data, width, height, invalidation) catch return error.ErrorCreatingImageSource;
+    const mask = std.DynamicBitSet.initEmpty(fizzy.app.allocator, @as(usize, @intCast(width * height))) catch return error.MemoryAllocationFailed;
 
     return .{
         .id = id,
-        .name = pixi.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
+        .name = fizzy.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
         .source = source,
         .mask = mask,
     };
@@ -92,24 +92,24 @@ pub fn fromPixelsPMA(id: u64, name: []const u8, pixel_data: []dvui.Color.PMA, wi
 
 pub fn fromPixels(id: u64, name: []const u8, pixel_data: []u8, width: u32, height: u32, invalidation: dvui.ImageSource.InvalidationStrategy) !Layer {
     if (pixel_data.len != width * height) return error.InvalidPixelDataLength;
-    const source = pixi.image.fromPixels(pixel_data, width, height, invalidation) catch return error.ErrorCreatingImageSource;
-    const mask = std.DynamicBitSet.initEmpty(pixi.app.allocator, @as(usize, @intCast(width * height))) catch return error.MemoryAllocationFailed;
+    const source = fizzy.image.fromPixels(pixel_data, width, height, invalidation) catch return error.ErrorCreatingImageSource;
+    const mask = std.DynamicBitSet.initEmpty(fizzy.app.allocator, @as(usize, @intCast(width * height))) catch return error.MemoryAllocationFailed;
 
     return .{
         .id = id,
-        .name = pixi.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
+        .name = fizzy.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
         .source = source,
         .mask = mask,
     };
 }
 
 pub fn fromTexture(id: u64, name: []const u8, texture: dvui.Texture, invalidation: dvui.ImageSource.InvalidationStrategy) Layer {
-    const source = pixi.fs.sourceFromTexture(name, texture, invalidation) catch return error.ErrorCreatingImageSource;
-    const mask = std.DynamicBitSet.initEmpty(pixi.app.allocator, pixelCountForSource(source)) catch return error.MemoryAllocationFailed;
+    const source = fizzy.fs.sourceFromTexture(name, texture, invalidation) catch return error.ErrorCreatingImageSource;
+    const mask = std.DynamicBitSet.initEmpty(fizzy.app.allocator, pixelCountForSource(source)) catch return error.MemoryAllocationFailed;
 
     return .{
         .id = id,
-        .name = pixi.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
+        .name = fizzy.app.allocator.dupe(u8, name) catch return error.MemoryAllocationFailed,
         .source = source,
         .mask = mask,
     };
@@ -121,53 +121,53 @@ pub fn size(self: Layer) dvui.Size {
 
 pub fn deinit(self: *Layer) void {
     switch (self.source) {
-        .imageFile => |image| pixi.app.allocator.free(image.bytes),
-        .pixels => |p| pixi.app.allocator.free(p.rgba),
-        .pixelsPMA => |p| pixi.app.allocator.free(p.rgba),
+        .imageFile => |image| fizzy.app.allocator.free(image.bytes),
+        .pixels => |p| fizzy.app.allocator.free(p.rgba),
+        .pixelsPMA => |p| fizzy.app.allocator.free(p.rgba),
         .texture => |t| dvui.textureDestroyLater(t),
     }
 
-    pixi.app.allocator.free(self.name);
+    fizzy.app.allocator.free(self.name);
     self.mask.deinit();
 }
 
 /// Casts the source pixels into a slice of [4]u8
 pub fn pixels(self: *const Layer) [][4]u8 {
-    return pixi.image.pixels(self.source);
+    return fizzy.image.pixels(self.source);
 }
 
 /// Caller owns memory that must be freed!
 pub fn pixelsFromRect(self: *const Layer, allocator: std.mem.Allocator, rect: dvui.Rect) ?[][4]u8 {
-    return pixi.image.pixelsFromRect(allocator, self.source, rect);
+    return fizzy.image.pixelsFromRect(allocator, self.source, rect);
 }
 
 /// Casts the source pixels into a slice of bytes
 pub fn bytes(self: *const Layer) []u8 {
-    return pixi.image.bytes(self.source);
+    return fizzy.image.bytes(self.source);
 }
 
 /// Returns the index of the pixel at the given point
 /// returns null if the point is out of bounds
 pub fn pixelIndex(self: *Layer, p: dvui.Point) ?usize {
-    return pixi.image.pixelIndex(self.source, p);
+    return fizzy.image.pixelIndex(self.source, p);
 }
 
 /// Returns the point at the given index
 /// returns null if the index is out of bounds
 pub fn point(self: *Layer, index: usize) ?dvui.Point {
-    return pixi.image.point(self.source, index);
+    return fizzy.image.point(self.source, index);
 }
 
 /// Returns the color at the given point
 /// returns null if the point is out of bounds
 pub fn pixel(self: *Layer, p: dvui.Point) ?[4]u8 {
-    return pixi.image.pixel(self.source, p);
+    return fizzy.image.pixel(self.source, p);
 }
 
 /// Sets the color at the given point
 /// does not invalidate the layer
 pub fn setPixel(self: *Layer, p: dvui.Point, color: [4]u8) void {
-    pixi.image.setPixel(self.source, p, color);
+    fizzy.image.setPixel(self.source, p, color);
 }
 
 /// Sets the mask at the given point
@@ -217,7 +217,7 @@ pub fn setColorFromMask(self: *Layer, color: dvui.Color) void {
 pub fn floodMaskPoint(layer: *Layer, p: dvui.Point, bounds: dvui.Rect, value: bool) !void {
     if (!bounds.contains(p)) return;
 
-    var queue = std.array_list.Managed(dvui.Point).init(pixi.app.allocator);
+    var queue = std.array_list.Managed(dvui.Point).init(fizzy.app.allocator);
     defer queue.deinit();
     queue.append(p) catch return error.MemoryAllocationFailed;
 
@@ -249,7 +249,7 @@ pub fn floodMaskPoint(layer: *Layer, p: dvui.Point, bounds: dvui.Rect, value: bo
 }
 
 pub fn setPixelIndex(self: *Layer, index: usize, color: [4]u8) void {
-    pixi.image.setPixelIndex(self.source, index, color);
+    fizzy.image.setPixelIndex(self.source, index, color);
 }
 
 pub const ShapeOffsetResult = struct {
@@ -266,8 +266,8 @@ pub fn invalidate(self: *Layer) void {
 /// Only used for handling getting the pixels surrounding the origin
 /// for stroke sizes larger than 1
 pub fn getIndexShapeOffset(self: *Layer, origin: dvui.Point, current_index: usize) ?ShapeOffsetResult {
-    const shape = pixi.editor.tools.stroke_shape;
-    const s: i32 = @intCast(pixi.editor.tools.stroke_size);
+    const shape = fizzy.editor.tools.stroke_shape;
+    const s: i32 = @intCast(fizzy.editor.tools.stroke_size);
 
     if (s == 1) {
         if (current_index != 0)
@@ -335,12 +335,12 @@ pub fn blendPmaSrcOver(top: [4]u8, bottom: [4]u8) [4]u8 {
 }
 
 pub fn clearRect(self: *Layer, rect: dvui.Rect) void {
-    pixi.image.clearRect(self.source, rect);
+    fizzy.image.clearRect(self.source, rect);
     self.invalidate();
 }
 
 pub fn setRect(self: *Layer, rect: dvui.Rect, color: [4]u8) void {
-    pixi.image.setRect(self.source, rect, color);
+    fizzy.image.setRect(self.source, rect, color);
     self.invalidate();
 }
 
@@ -416,11 +416,11 @@ pub fn writeSourceToZip(
     zip_file: ?*anyopaque,
     resolution: u32,
 ) !void {
-    return pixi.image.writeToZip(layer.source, zip_file, resolution);
+    return fizzy.image.writeToZip(layer.source, zip_file, resolution);
 }
 
 pub fn writeSourceToPng(layer: *const Layer, path: []const u8) !void {
-    return pixi.fs.writeSourceToPng(layer.source, path);
+    return fizzy.fs.writeSourceToPng(layer.source, path);
 }
 
 pub fn resize(layer: *Layer, new_size: dvui.Size) !void {
@@ -429,7 +429,7 @@ pub fn resize(layer: *Layer, new_size: dvui.Size) !void {
 
     var new_layer = Layer.init(
         layer.id,
-        pixi.app.allocator.dupe(u8, layer.name) catch return error.MemoryAllocationFailed,
+        fizzy.app.allocator.dupe(u8, layer.name) catch return error.MemoryAllocationFailed,
         @as(u32, @intFromFloat(new_size.w)),
         @as(u32, @intFromFloat(new_size.h)),
         .{ .r = 0, .g = 0, .b = 0, .a = 0 },
@@ -457,14 +457,14 @@ pub fn resize(layer: *Layer, new_size: dvui.Size) !void {
 /// Tighten `src` to the smallest sub-rect of this layer containing every opaque pixel.
 /// Returns null when `src` is empty, off-layer, or covers only fully-transparent pixels.
 ///
-/// Pure scalar logic lives in `pixi.algorithms.reduce.reduce` so it can be exercised by
-/// unit tests without dvui / pixi globals — see that module for the contract details.
+/// Pure scalar logic lives in `fizzy.algorithms.reduce.reduce` so it can be exercised by
+/// unit tests without dvui / fizzy globals — see that module for the contract details.
 pub fn reduce(layer: *Layer, src: dvui.Rect) ?dvui.Rect {
     const sz = layer.size();
     const layer_w: u32 = @intFromFloat(sz.w);
     const layer_h: u32 = @intFromFloat(sz.h);
 
-    const r = pixi.algorithms.reduce.reduce(layer.pixels(), layer_w, layer_h, .{
+    const r = fizzy.algorithms.reduce.reduce(layer.pixels(), layer_w, layer_h, .{
         .x = @intFromFloat(src.x),
         .y = @intFromFloat(src.y),
         .w = @intFromFloat(src.w),

@@ -2,12 +2,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const dvui = @import("dvui");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 
 const Core = @import("mach").Core;
-const App = pixi.App;
-const Editor = pixi.Editor;
-const Packer = pixi.Packer;
+const App = fizzy.App;
+const Editor = fizzy.Editor;
+const Packer = fizzy.Packer;
 
 pub const Panel = @This();
 
@@ -15,7 +15,7 @@ pub const Sprites = @import("sprites.zig");
 
 sprites: Sprites = .{},
 pane: Pane = .sprites,
-paned: *pixi.dvui.PanedWidget = undefined,
+paned: *fizzy.dvui.PanedWidget = undefined,
 scroll_info: dvui.ScrollInfo = .{
     .horizontal = .auto,
 },
@@ -40,10 +40,10 @@ pub fn draw(panel: *Panel) !dvui.App.Result {
 
     switch (builtin.os.tag) {
         .macos => {
-            content_color = if (!pixi.backend.isMaximized(dvui.currentWindow())) content_color.opacity(pixi.editor.settings.content_opacity) else content_color;
+            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
         },
         .windows => {
-            content_color = if (!pixi.backend.isMaximized(dvui.currentWindow())) content_color.opacity(pixi.editor.settings.content_opacity) else content_color;
+            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
         },
         else => {},
     }

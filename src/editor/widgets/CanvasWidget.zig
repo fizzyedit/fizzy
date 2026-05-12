@@ -1,6 +1,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
-const pixi = @import("../../pixi.zig");
+const fizzy = @import("../../fizzy.zig");
 
 pub const CanvasWidget = @This();
 
@@ -244,7 +244,7 @@ pub fn processEvents(self: *CanvasWidget) void {
                         }
                     }
                 } else if (me.action == .wheel_y or me.action == .wheel_x) {
-                    switch (pixi.editor.settings.input_scheme) {
+                    switch (fizzy.editor.settings.input_scheme) {
                         .mouse => {
                             const base: f32 = if (me.mod.matchBind("shift")) 1.005 else 1.005;
                             if ((me.mod.matchBind("shift") and me.mod.matchBind("ctrl/cmd")) or !me.mod.matchBind("shift") and !me.mod.matchBind("ctrl/cmd")) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pixi release script — runs from macOS, builds + signs + uploads to GitHub.
+# fizzy release script — runs from macOS, builds + signs + uploads to GitHub.
 #
 # Workflow:
 #   1. Edit VERSION (e.g. 0.0.3 -> 0.0.4), commit it.
@@ -11,7 +11,7 @@
 #   - Confirms HEAD has a tag matching v<VERSION>.
 #   - Builds all 6 targets in release mode via `zig build packageall`.
 #   - Signs + notarizes macOS bundles if signing env vars are set.
-#   - Renames installers to pixi_<os>_<arch>.<ext> for human download.
+#   - Renames installers to fizzy_<os>_<arch>.<ext> for human download.
 #   - Leaves *.nupkg and releases.<channel>.json under their canonical names
 #     (Velopack auto-update looks for those literally; do not rename).
 #   - Creates a *draft* GitHub release with `gh release create` and uploads
@@ -21,13 +21,13 @@
 #     the release is published (not while it's a draft).
 #
 # Env vars consumed (all optional; missing signing → unsigned macOS build):
-#   PIXI_MACOS_SIGN_APP        - Developer ID Application identity
-#   PIXI_MACOS_SIGN_INSTALLER  - Developer ID Installer identity
-#   PIXI_MACOS_NOTARY_PROFILE  - notarytool keychain profile name
+#   FIZZY_MACOS_SIGN_APP        - Developer ID Application identity
+#   FIZZY_MACOS_SIGN_INSTALLER  - Developer ID Installer identity
+#   FIZZY_MACOS_NOTARY_PROFILE  - notarytool keychain profile name
 #   GITHUB_TOKEN               - for `gh` (or use `gh auth login` once)
-#   PIXI_RELEASE_NOTES         - free-form notes; default: "Release v<VERSION>"
-#   PIXI_RELEASE_PUBLISH       - if "1", publishes the release (otherwise draft)
-#   PIXI_RELEASE_SKIP_BUILD    - if "1", skip `zig build packageall`
+#   FIZZY_RELEASE_NOTES         - free-form notes; default: "Release v<VERSION>"
+#   FIZZY_RELEASE_PUBLISH       - if "1", publishes the release (otherwise draft)
+#   FIZZY_RELEASE_SKIP_BUILD    - if "1", skip `zig build packageall`
 #                                (assumes zig-out is already populated)
 
 set -euo pipefail
@@ -91,14 +91,14 @@ fi
 
 # ----- signing env: report -------------------------------------------------
 
-sign_app="${PIXI_MACOS_SIGN_APP:-}"
-sign_install="${PIXI_MACOS_SIGN_INSTALLER:-}"
-notary_profile="${PIXI_MACOS_NOTARY_PROFILE:-}"
+sign_app="${FIZZY_MACOS_SIGN_APP:-}"
+sign_install="${FIZZY_MACOS_SIGN_INSTALLER:-}"
+notary_profile="${FIZZY_MACOS_NOTARY_PROFILE:-}"
 
 if [[ -n "$sign_app" && -n "$sign_install" && -n "$notary_profile" ]]; then
     echo "==> macOS signing: enabled (app=${sign_app}, installer=${sign_install}, notary=${notary_profile})"
 else
-    echo "==> macOS signing: DISABLED (set PIXI_MACOS_SIGN_APP, PIXI_MACOS_SIGN_INSTALLER, PIXI_MACOS_NOTARY_PROFILE to enable)"
+    echo "==> macOS signing: DISABLED (set FIZZY_MACOS_SIGN_APP, FIZZY_MACOS_SIGN_INSTALLER, FIZZY_MACOS_NOTARY_PROFILE to enable)"
     if [[ -n "$sign_app" || -n "$sign_install" || -n "$notary_profile" ]]; then
         echo "    one or more macOS signing vars are set but not all three — skipping signing" >&2
     fi
@@ -106,7 +106,7 @@ fi
 
 # ----- build all 6 targets -------------------------------------------------
 
-if [[ "${PIXI_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+if [[ "${FIZZY_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
     # MSVC SDK setup is run as its OWN step, not just via -Dfetch-msvc on
     # packageall. The reason: build.zig wires msvcup_before_compile as a
     # dependency of the root compile artifacts only (exe, tests). Transitive
@@ -132,7 +132,7 @@ if [[ "${PIXI_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
     echo "==> Building all targets (zig build packageall -Doptimize=ReleaseFast)"
     zig build packageall -Doptimize=ReleaseFast
 else
-    echo "==> PIXI_RELEASE_SKIP_BUILD=1, reusing existing zig-out/"
+    echo "==> FIZZY_RELEASE_SKIP_BUILD=1, reusing existing zig-out/"
 fi
 
 # ----- collect + rename artifacts ------------------------------------------
@@ -150,7 +150,7 @@ declare -a channels=(
 )
 
 # Map channel -> (os, arch, installer-extension) used to build the public
-# installer name: pixi_<os>_<arch>.<ext>
+# installer name: fizzy_<os>_<arch>.<ext>
 #
 # Implemented as a function rather than `declare -A` because the release runs
 # on macOS, where /bin/bash is 3.2 and lacks associative arrays. The channel
@@ -172,7 +172,7 @@ rm -rf "$staging"
 mkdir -p "$staging"
 
 # Locate an installer for a channel by extension. Velopack names the installer
-# something like Pixi-<version>-<channel>-Setup.<ext> or similar, but we just
+# something like Fizzy-<version>-<channel>-Setup.<ext> or similar, but we just
 # match by extension within that channel's output dir — there's only one.
 find_installer() {
     local dir="$1" ext="$2"
@@ -183,7 +183,7 @@ find_installer() {
 
 # Copy a file into staging while detecting cross-channel name collisions.
 # vpk historically has emitted the same nupkg name for different OS targets
-# (e.g. `pixi-0.0.3-full.nupkg` on both arm64-windows and x86_64-windows
+# (e.g. `fizzy-0.0.3-full.nupkg` on both arm64-windows and x86_64-windows
 # when --channel isn't set). The --channel arg we now pass in build.zig
 # should keep names unique, but this is a defensive check: if two channels
 # stage a file under the same name, the GitHub release upload would fail
@@ -223,7 +223,7 @@ for ch in "${channels[@]}"; do
     # Renamed installer: staged under the public name. This name is intentional
     # and stable; users will link to it. The Velopack runtime never looks for
     # this filename — it queries the GitHub API for the nupkg.
-    public_name="pixi_${os}_${arch}.${ext}"
+    public_name="fizzy_${os}_${arch}.${ext}"
     if [[ -e "$staging/$public_name" ]]; then
         echo "error: two channels would produce $public_name (table misconfigured)" >&2
         exit 1
@@ -277,7 +277,7 @@ echo "==> Staged ${#uploads[@]} files in $staging"
 
 # ----- create + populate the release ---------------------------------------
 
-notes="${PIXI_RELEASE_NOTES:-Release $tag}"
+notes="${FIZZY_RELEASE_NOTES:-Release $tag}"
 
 # If the release already exists, upload missing assets to it (idempotent re-runs).
 if gh release view "$tag" >/dev/null 2>&1; then
@@ -292,7 +292,7 @@ else
         "${uploads[@]}"
 fi
 
-if [[ "${PIXI_RELEASE_PUBLISH:-0}" == "1" ]]; then
+if [[ "${FIZZY_RELEASE_PUBLISH:-0}" == "1" ]]; then
     echo "==> Publishing release $tag"
     gh release edit "$tag" --draft=false
 fi
@@ -300,7 +300,7 @@ fi
 release_url="$(gh release view "$tag" --json url -q .url)"
 echo ""
 echo "==> Done. Release: $release_url"
-if [[ "${PIXI_RELEASE_PUBLISH:-0}" != "1" ]]; then
+if [[ "${FIZZY_RELEASE_PUBLISH:-0}" != "1" ]]; then
     echo "    (draft) Review the release in the browser, then publish."
     echo "    Auto-update on existing installs only kicks in after publishing."
 fi

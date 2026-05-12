@@ -1,13 +1,13 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
-const perf = pixi.perf;
+const perf = fizzy.perf;
 
 /// Monotonic frame counter, incremented once per frame from Editor.tick.
 pub var frame_index: u64 = 0;
 
 pub const RenderFileOptions = struct {
-    file: *pixi.Internal.File,
+    file: *fizzy.Internal.File,
     rs: dvui.RectScale,
     color_mod: dvui.Color = .white,
     fade: f32 = 0.0,
@@ -29,7 +29,7 @@ fn flushPendingLayerTextureUploads(init_opts: RenderFileOptions) void {
             if (dvui.textureGetCached(source.hash())) |cached| {
                 var tex = cached;
                 tex.updateSubRect(
-                    pixi.image.bytes(source).ptr,
+                    fizzy.image.bytes(source).ptr,
                     @intFromFloat(dirty.x),
                     @intFromFloat(dirty.y),
                     @intFromFloat(dirty.w),
@@ -52,7 +52,7 @@ fn flushPendingLayerTextureUploads(init_opts: RenderFileOptions) void {
                     perf.draw_temp_rect_area += @intFromFloat(dirty.w * dirty.h);
                     var tex = cached;
                     tex.updateSubRect(
-                        pixi.image.bytes(temp_source).ptr,
+                        fizzy.image.bytes(temp_source).ptr,
                         @intFromFloat(dirty.x),
                         @intFromFloat(dirty.y),
                         @intFromFloat(dirty.w),
@@ -82,7 +82,7 @@ fn layerViewStateForRender(init_opts: RenderFileOptions) struct { min_layer_inde
         if (init_opts.file.editor.isolate_layer) {
             if (init_opts.file.peek_layer_index) |peek_layer_index| {
                 min_layer_index = peek_layer_index;
-            } else if (!pixi.editor.explorer.tools.layersHovered()) {
+            } else if (!fizzy.editor.explorer.tools.layersHovered()) {
                 min_layer_index = init_opts.file.selected_layer_index;
             }
         }
@@ -92,11 +92,11 @@ fn layerViewStateForRender(init_opts: RenderFileOptions) struct { min_layer_inde
 }
 
 /// Non-null while layer list DnD preview is active (`File.editor.layer_drag_preview_*`); maps list position → storage index.
-fn layerOrderBufForDragPreview(file: *pixi.Internal.File, buf: []usize) ?[]const usize {
+fn layerOrderBufForDragPreview(file: *fizzy.Internal.File, buf: []usize) ?[]const usize {
     const r = file.editor.layer_drag_preview_removed orelse return null;
     const ins = file.editor.layer_drag_preview_insert_before orelse return null;
     if (file.layers.len == 0 or file.layers.len > buf.len) return null;
-    pixi.Internal.File.layerOrderAfterMove(file.layers.len, r, ins, buf[0..file.layers.len]);
+    fizzy.Internal.File.layerOrderAfterMove(file.layers.len, r, ins, buf[0..file.layers.len]);
     return buf[0..file.layers.len];
 }
 
@@ -282,7 +282,7 @@ fn splitCompositeEligible(
 /// Pixel size of the flattened layer stack — prefers the first layer (`canvasPixelSize`) so the
 /// composite matches bitmap data even when `columns × column_width` / `rows × row_height` disagree
 /// (slice/grid previews use the canvas as the locked image rect).
-fn layerCompositeExtent(file: *pixi.Internal.File) struct { w: u32, h: u32 } {
+fn layerCompositeExtent(file: *fizzy.Internal.File) struct { w: u32, h: u32 } {
     const c = file.canvasPixelSize();
     if (c.w > 0 and c.h > 0) return .{ .w = c.w, .h = c.h };
     const w = file.width();
@@ -292,7 +292,7 @@ fn layerCompositeExtent(file: *pixi.Internal.File) struct { w: u32, h: u32 } {
 
 /// Rebuilds the full-canvas flattened layer texture (all layers included).
 /// Used when NOT actively drawing.
-pub fn syncLayerComposite(file: *pixi.Internal.File) !void {
+pub fn syncLayerComposite(file: *fizzy.Internal.File) !void {
     const ce = layerCompositeExtent(file);
     const w = ce.w;
     const h = ce.h;
@@ -343,7 +343,7 @@ pub fn syncLayerComposite(file: *pixi.Internal.File) !void {
 /// The "below" target flattens layers visually below (higher index), and
 /// the "above" target flattens layers visually above (lower index).
 /// Only rebuilt when the split layer changes or a structural change occurs.
-fn syncSplitComposite(file: *pixi.Internal.File) !void {
+fn syncSplitComposite(file: *fizzy.Internal.File) !void {
     const ce = layerCompositeExtent(file);
     const w = ce.w;
     const h = ce.h;
@@ -428,7 +428,7 @@ fn syncSplitComposite(file: *pixi.Internal.File) !void {
 /// Pre-builds split-composite GPU targets and touches temp/selection textures so the first
 /// stroke does not pay allocation + flatten cost. Safe to call once after open or when
 /// selecting a drawing tool; no-op if composites are already current.
-pub fn warmupDrawingComposites(file: *pixi.Internal.File) !void {
+pub fn warmupDrawingComposites(file: *fizzy.Internal.File) !void {
     const w0 = perf.nanoTimestamp();
     try syncSplitComposite(file);
     _ = file.editor.temporary_layer.source.getTexture() catch null;
@@ -441,7 +441,7 @@ pub fn warmupDrawingComposites(file: *pixi.Internal.File) !void {
 /// from high index (visually bottom) to low index (visually top). An optional
 /// `skip_index` excludes a single layer.
 fn renderLayersIntoTarget(
-    file: *pixi.Internal.File,
+    file: *fizzy.Internal.File,
     target: dvui.Texture.Target,
     min_index: usize,
     max_index: usize,
@@ -465,12 +465,12 @@ fn renderLayersIntoTarget(
     defer dvui.clipSet(prev_clip);
     dvui.clipSet(image_rect);
 
-    var path: dvui.Path.Builder = .init(pixi.app.allocator);
+    var path: dvui.Path.Builder = .init(fizzy.app.allocator);
     defer path.deinit();
     path.addRect(image_rect, dvui.Rect.Physical.all(0));
 
-    var tris = try path.build().fillConvexTriangles(pixi.app.allocator, .{ .color = .white, .fade = 0 });
-    defer tris.deinit(pixi.app.allocator);
+    var tris = try path.build().fillConvexTriangles(fizzy.app.allocator, .{ .color = .white, .fade = 0 });
+    defer tris.deinit(fizzy.app.allocator);
     tris.uvFromRectuv(image_rect, .{ .x = 0, .y = 0, .w = 1, .h = 1 });
 
     var order_buf: [1024]usize = undefined;
@@ -493,7 +493,7 @@ fn renderLayersIntoTarget(
     }
 }
 
-pub fn destroyLayerCompositeResources(file: *pixi.Internal.File) void {
+pub fn destroyLayerCompositeResources(file: *fizzy.Internal.File) void {
     if (file.editor.layer_composite_target) |t| {
         t.destroyLater();
         file.editor.layer_composite_target = null;
@@ -503,7 +503,7 @@ pub fn destroyLayerCompositeResources(file: *pixi.Internal.File) void {
     destroySplitCompositeResources(file);
 }
 
-pub fn destroySplitCompositeResources(file: *pixi.Internal.File) void {
+pub fn destroySplitCompositeResources(file: *fizzy.Internal.File) void {
     if (file.editor.split_composite_below) |t| {
         t.destroyLater();
         file.editor.split_composite_below = null;
@@ -538,22 +538,22 @@ pub fn renderLayers(init_opts: RenderFileOptions) !void {
     const min_layer_index = vs.min_layer_index;
     const needs_dimmed = vs.needs_dimmed;
 
-    var path: dvui.Path.Builder = .init(pixi.app.allocator);
+    var path: dvui.Path.Builder = .init(fizzy.app.allocator);
     defer path.deinit();
 
     path.addRect(content_rs.r, init_opts.corner_radius.scale(content_rs.s, dvui.Rect.Physical));
 
-    var triangles = try path.build().fillConvexTriangles(pixi.app.allocator, .{ .color = init_opts.color_mod, .fade = init_opts.fade });
-    defer triangles.deinit(pixi.app.allocator);
+    var triangles = try path.build().fillConvexTriangles(fizzy.app.allocator, .{ .color = init_opts.color_mod, .fade = init_opts.fade });
+    defer triangles.deinit(fizzy.app.allocator);
 
     triangles.uvFromRectuv(content_rs.r, init_opts.uv);
 
     var dimmed_triangles: ?dvui.Triangles = null;
     defer {
-        if (dimmed_triangles) |*dt| dt.deinit(pixi.app.allocator);
+        if (dimmed_triangles) |*dt| dt.deinit(fizzy.app.allocator);
     }
     if (needs_dimmed) {
-        var dt = try triangles.dupe(pixi.app.allocator);
+        var dt = try triangles.dupe(fizzy.app.allocator);
         dt.color(.gray);
         dimmed_triangles = dt;
     }

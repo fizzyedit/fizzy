@@ -6,10 +6,10 @@
  * menuForEvent: to return nil so the system doesn't show a context menu and
  * delivers rightMouseDown to the hit-tested view.
  */
-@interface PixiVisualEffectView : NSVisualEffectView
+@interface FizzyVisualEffectView : NSVisualEffectView
 @end
 
-@implementation PixiVisualEffectView
+@implementation FizzyVisualEffectView
 
 - (NSView *)hitTest:(NSPoint)point {
     NSView *subview = self.subviews.firstObject;

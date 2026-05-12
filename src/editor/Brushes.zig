@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 
 pub const Brushes = @This();
@@ -15,7 +15,7 @@ selected_brush_index: usize = 0,
 
 pub fn init() !Brushes {
     return .{
-        .brushes = std.ArrayList(Brush).init(pixi.app.allocator),
+        .brushes = std.ArrayList(Brush).init(fizzy.app.allocator),
     };
 }
 

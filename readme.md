@@ -1,22 +1,17 @@
 
-<p align="center">  
-  <img width="25%" src="https://github.com/user-attachments/assets/fa4adcf9-6b59-49f9-8dd9-e8851ab0192d">
-  <h3 align=center></h3>
+<p align="center">
+  <img width="20%" src="assets/icon.png" alt="Fizzy logo">
 </p>
 
-![buildworkflow](https://github.com/foxnne/pixi/actions/workflows/ci.yml/badge.svg)
+![buildworkflow](https://github.com/foxnne/fizzy/actions/workflows/ci.yml/badge.svg)
 
 # 
-**Pixi** is an cross-platform open-source pixel art editor and animation editor written in [Zig](https://github.com/ziglang/zig).
+**Fizzy** is an cross-platform open-source pixel art editor and animation editor written in [Zig](https://github.com/ziglang/zig).
 
 
-<img width="1776" height="1259" alt="image" src="https://github.com/user-attachments/assets/d787bbc3-7c71-47f4-a841-b9a1f19c1e71" />
+#### Check out the [user guide](https://github.com/foxnne/fizzy/wiki/User-Guide)!
 
 
-#### Check out the [user guide](https://github.com/foxnne/pixi/wiki/User-Guide)!
-
-![Pixi-FileExplorer](https://github.com/user-attachments/assets/b69bd3f5-d387-4a51-8767-d29179cd3061)
-![Pixi-TabSplits](https://github.com/user-attachments/assets/8d947fe8-3dec-45fc-9550-0a250981895d)
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R5R4LL2PJ)
 
 ## Currently supported features
@@ -41,10 +36,10 @@
 ## Compilation
 - [Linux] Ensure `gtk+3-devel` or similar is installed (for native file dialogs).
 - Install zig 0.16.0.
-- Clone pixi.
+- Clone fizzy.
 - Build.
-    - ```git clone https://github.com/foxnne/pixi.git```
-    - ```cd pixi```
+    - ```git clone https://github.com/foxnne/fizzy.git```
+    - ```cd fizzy```
     - ```zig build run```
 
 ## Credits

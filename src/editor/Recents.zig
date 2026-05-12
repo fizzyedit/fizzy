@@ -1,5 +1,5 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 
 const Recents = @This();
@@ -28,7 +28,7 @@ fn trimTrailingPathSeparators(path: []const u8) []const u8 {
 pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
     var folders = std.array_list.Managed([]const u8).init(allocator);
 
-    if (pixi.fs.read(allocator, dvui.io, path) catch null) |read| {
+    if (fizzy.fs.read(allocator, dvui.io, path) catch null) |read| {
         defer allocator.free(read);
 
         const options = std.json.ParseOptions{ .duplicate_field_behavior = .use_first, .ignore_unknown_fields = true };
@@ -88,21 +88,21 @@ pub fn indexOfFolder(recents: *Recents, path: []const u8) ?usize {
 pub fn appendFolder(recents: *Recents, path: []const u8) !void {
     const canon_owned = dup: {
         const t = trimTrailingPathSeparators(path);
-        const duped = try pixi.app.allocator.dupe(u8, t);
-        pixi.app.allocator.free(path);
+        const duped = try fizzy.app.allocator.dupe(u8, t);
+        fizzy.app.allocator.free(path);
         break :dup duped;
     };
 
     if (recents.indexOfFolder(canon_owned)) |index| {
-        pixi.app.allocator.free(canon_owned);
+        fizzy.app.allocator.free(canon_owned);
         const folder = recents.folders.orderedRemove(index);
         try recents.folders.append(folder);
         return;
     }
 
-    if (recents.folders.items.len >= pixi.editor.settings.max_recents) {
+    if (recents.folders.items.len >= fizzy.editor.settings.max_recents) {
         const oldest = recents.folders.orderedRemove(0);
-        pixi.app.allocator.free(oldest);
+        fizzy.app.allocator.free(oldest);
     }
 
     try recents.folders.append(canon_owned);

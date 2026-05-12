@@ -1,7 +1,7 @@
 //! Pure layer-list reorder algorithm.
 //!
 //! Extracted from `internal/File.zig` so `zig build test` can exercise
-//! it without pulling in dvui / pixi globals. Re-exported by File.zig
+//! it without pulling in dvui / fizzy globals. Re-exported by File.zig
 //! as `layerOrderAfterMove`.
 //!
 //! Mirrors the drop-handling logic in `editor/explorer/tools.zig`: given
@@ -12,7 +12,7 @@
 const std = @import("std");
 
 /// Maximum list length supported by the in-place implementation.
-/// Layers in pixi are bounded well below this; raising it just bumps
+/// Layers in fizzy are bounded well below this; raising it just bumps
 /// the stack-allocated scratch buffer.
 pub const max_len: usize = 1024;
 

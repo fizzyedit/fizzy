@@ -1,8 +1,8 @@
 const std = @import("std");
-const pixi = @import("../pixi.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
-const Dialogs = pixi.Editor.Dialogs;
+const Dialogs = fizzy.Editor.Dialogs;
 
 pub const Infobar = @This();
 
@@ -54,16 +54,16 @@ pub fn draw(_: Infobar) !void {
                 .x = 4,
             } },
         );
-        dvui.label(@src(), "Pixi", .{}, .{ .font = font, .gravity_y = 0.5, .margin = .all(0) });
+        dvui.label(@src(), "Fizzy", .{}, .{ .font = font, .gravity_y = 0.5, .margin = .all(0) });
 
         if (button.clicked()) {
-            Dialogs.AboutPixi.request();
+            Dialogs.AboutFizzy.request();
         }
     }
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 12 } });
 
-    if (pixi.editor.folder) |folder| {
+    if (fizzy.editor.folder) |folder| {
         dvui.icon(
             @src(),
             "project_icon",
@@ -76,7 +76,7 @@ pub fn draw(_: Infobar) !void {
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 12 } });
 
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         dvui.icon(
             @src(),
             "file_icon",
@@ -96,7 +96,7 @@ pub fn draw(_: Infobar) !void {
             .{ .gravity_y = 0.5 },
         );
 
-        pixi.Editor.Dialogs.drawDimensionsLabel(@src(), file.width(), file.height(), font_mono, "px", .{ .gravity_y = 0.5, .margin = .{ .x = 4 } });
+        fizzy.Editor.Dialogs.drawDimensionsLabel(@src(), file.width(), file.height(), font_mono, "px", .{ .gravity_y = 0.5, .margin = .{ .x = 4 } });
 
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 12 } });
 
@@ -108,7 +108,7 @@ pub fn draw(_: Infobar) !void {
             .{ .gravity_y = 0.5 },
         );
 
-        pixi.Editor.Dialogs.drawDimensionsLabel(@src(), file.column_width, file.row_height, font_mono, "px", .{ .gravity_y = 0.5, .margin = .{ .x = 4 } });
+        fizzy.Editor.Dialogs.drawDimensionsLabel(@src(), file.column_width, file.row_height, font_mono, "px", .{ .gravity_y = 0.5, .margin = .{ .x = 4 } });
 
         //dvui.label(@src(), "{d}x{d} - {d}x{d}", .{ file.width(), file.height(), file.column_width, file.row_height }, .{ .font = font, .gravity_y = 0.5 });
 

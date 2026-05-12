@@ -1,5 +1,5 @@
 // These are functions specific to the backend, which is currently SDL3
-const pixi = @import("pixi.zig");
+const fizzy = @import("fizzy.zig");
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -51,7 +51,7 @@ const NSEventModifierFlagShift: c_ulong = 1 << 17;
 const NSEventModifierFlagOption: c_ulong = 1 << 18;
 const NSEventModifierFlagControl: c_ulong = 1 << 19;
 
-// macOS native menu bar (top bar): action ids match PixiMenuTarget.m
+// macOS native menu bar (top bar): action ids match FizzyMenuTarget.m
 pub const NativeMenuAction = enum(c_int) {
     open_folder = 0,
     open_files = 1,
@@ -72,16 +72,16 @@ pub const NativeMenuAction = enum(c_int) {
 // This may be written from an AppKit callback thread, so use an atomic.
 var pending_native_menu_action_id: std.atomic.Value(c_int) = .init(-1);
 
-/// Called from PixiMenuTarget.m when user picks a native menu item. Runs on main thread.
-export fn PixiNativeMenuAction(id: c_int) void {
+/// Called from FizzyMenuTarget.m when user picks a native menu item. Runs on main thread.
+export fn FizzyNativeMenuAction(id: c_int) void {
     pending_native_menu_action_id.store(id, .release);
 }
 
 // Only referenced on macOS (from setupMacOSMenuBar).
-const pixi_get_selector = if (builtin.os.tag == .macos) struct {
-    extern fn PixiGetSelector(name: [*c]const u8) ?*anyopaque;
+const fizzy_get_selector = if (builtin.os.tag == .macos) struct {
+    extern fn FizzyGetSelector(name: [*c]const u8) ?*anyopaque;
     fn get(name: [*c]const u8) ?*anyopaque {
-        return PixiGetSelector(name);
+        return FizzyGetSelector(name);
     }
 }.get else struct {
     fn get(_: [*c]const u8) ?*anyopaque {
@@ -93,7 +93,7 @@ const pixi_get_selector = if (builtin.os.tag == .macos) struct {
 /// vibrancy (blur of the desktop behind it). Safe to call multiple times;
 /// only wraps once per window. Caller should set full-size content view style
 /// mask and titlebarAppearsTransparent before calling so the effect covers the titlebar.
-/// Uses PixiVisualEffectView (custom subclass) when available so right-click is forwarded to the content view.
+/// Uses FizzyVisualEffectView (custom subclass) when available so right-click is forwarded to the content view.
 fn wrapContentViewWithVibrancy(window: objc.Object) void {
     const content_view = window.msgSend(objc.Object, "contentView", .{});
     if (content_view.value == 0) return;
@@ -117,7 +117,7 @@ fn wrapContentViewWithVibrancy(window: objc.Object) void {
     }
 
     // Prefer custom subclass that forwards rightMouseDown to the content view (see vibrancy_rightclick_fix.m).
-    const EffectViewClass = objc.getClass("PixiVisualEffectView") orelse NSVisualEffectViewClass;
+    const EffectViewClass = objc.getClass("FizzyVisualEffectView") orelse NSVisualEffectViewClass;
     const effect_view = EffectViewClass.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
     if (effect_view.value == 0) return;
 
@@ -628,8 +628,8 @@ pub fn setupMacOSMenuBar() void {
     const NSString = objc.getClass("NSString") orelse return;
     const NSMenu = objc.getClass("NSMenu") orelse return;
     const NSMenuItem = objc.getClass("NSMenuItem") orelse return;
-    const PixiMenuTargetClass = objc.getClass("PixiMenuTarget") orelse return;
-    const target = PixiMenuTargetClass.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
+    const FizzyMenuTargetClass = objc.getClass("FizzyMenuTarget") orelse return;
+    const target = FizzyMenuTargetClass.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
     if (target.value == 0) return;
 
     const file_menu_title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"File".ptr});
@@ -647,7 +647,7 @@ pub fn setupMacOSMenuBar() void {
     // New — ⌘N
     {
         const new_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"New".ptr});
-        const new_sel = pixi_get_selector("newFile:") orelse return;
+        const new_sel = fizzy_get_selector("newFile:") orelse return;
         const new_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
             new_title.value,
             new_sel,
@@ -662,7 +662,7 @@ pub fn setupMacOSMenuBar() void {
     // Open Folder — ⌘F, folder icon
     {
         const open_folder_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Open Folder".ptr});
-        const open_folder_sel = pixi_get_selector("openFolder:") orelse return;
+        const open_folder_sel = fizzy_get_selector("openFolder:") orelse return;
         const open_folder_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
             open_folder_title.value,
             open_folder_sel,
@@ -677,7 +677,7 @@ pub fn setupMacOSMenuBar() void {
     // Open Files — ⌘O, doc icon
     {
         const open_files_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Open Files".ptr});
-        const open_files_sel = pixi_get_selector("openFiles:") orelse return;
+        const open_files_sel = fizzy_get_selector("openFiles:") orelse return;
         const open_files_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
             open_files_title.value,
             open_files_sel,
@@ -695,7 +695,7 @@ pub fn setupMacOSMenuBar() void {
 
     // Save — ⌘S
     const save_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Save".ptr});
-    const save_sel = pixi_get_selector("save:") orelse return;
+    const save_sel = fizzy_get_selector("save:") orelse return;
     const save_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
         save_title.value,
         save_sel,
@@ -709,7 +709,7 @@ pub fn setupMacOSMenuBar() void {
     // Save As — ⇧⌘S
     {
         const save_as_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Save As…".ptr});
-        const save_as_sel = pixi_get_selector("saveAs:") orelse return;
+        const save_as_sel = fizzy_get_selector("saveAs:") orelse return;
         const save_as_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
             save_as_title.value,
             save_as_sel,
@@ -784,13 +784,13 @@ pub fn setupMacOSMenuBar() void {
         }
     }
 
-    // Window submenu under the Pixi (app) menu — Minimize, Zoom, Bring All to Front (standard NS actions, target nil)
+    // Window submenu under the Fizzy (app) menu — Minimize, Zoom, Bring All to Front (standard NS actions, target nil)
     const app_menu_item = main_menu.msgSend(objc.Object, "itemAtIndex:", .{@as(c_ulong, 0)});
     const app_submenu = app_menu_item.msgSend(objc.Object, "submenu", .{});
     if (app_submenu.value != 0) {
-        if (pixi_get_selector("performMiniaturize:")) |perform_mini| {
-            if (pixi_get_selector("performZoom:")) |perform_zoom| {
-                if (pixi_get_selector("arrangeInFront:")) |arrange_front| {
+        if (fizzy_get_selector("performMiniaturize:")) |perform_mini| {
+            if (fizzy_get_selector("performZoom:")) |perform_zoom| {
+                if (fizzy_get_selector("arrangeInFront:")) |arrange_front| {
                     const window_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Window".ptr}).value});
                     if (window_menu.value != 0) {
                         addNativeMenuItemWithTarget(window_menu, NSMenuItem, NSString, null, "Minimize", perform_mini, @intFromPtr(key_m.value), NSEventModifierFlagCommand, @intFromPtr(empty.value));
@@ -830,7 +830,7 @@ fn setMenuItemImage(menu_item: objc.Object, NSImageClass: objc.Class, NSStringCl
 }
 
 fn addNativeMenuItem(menu: objc.Object, _: objc.Class, NSStringClass: objc.Class, target: objc.Object, title: [*:0]const u8, action_name: [*:0]const u8, key_equiv_value: usize, modifier_mask: c_ulong, empty_str: usize) void {
-    const sel = pixi_get_selector(action_name) orelse return;
+    const sel = fizzy_get_selector(action_name) orelse return;
     const title_obj = NSStringClass.msgSend(objc.Object, "stringWithUTF8String:", .{title});
     const item = menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
         title_obj.value,
@@ -872,14 +872,14 @@ pub fn showSimpleMessage(title: [:0]const u8, message: [:0]const u8) void {
 pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const sdl3.SDL_DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
         if (default_folder) |folder| {
-            break :blk std.fs.path.joinZ(pixi.app.allocator, &.{ folder, default_filename }) catch "untitled";
-        } else if (pixi.editor.recents.last_save_folder) |last_save_folder| {
-            break :blk std.fs.path.joinZ(pixi.app.allocator, &.{ last_save_folder, default_filename }) catch "untitled";
+            break :blk std.fs.path.joinZ(fizzy.app.allocator, &.{ folder, default_filename }) catch "untitled";
+        } else if (fizzy.editor.recents.last_save_folder) |last_save_folder| {
+            break :blk std.fs.path.joinZ(fizzy.app.allocator, &.{ last_save_folder, default_filename }) catch "untitled";
         } else {
-            break :blk std.fs.path.joinZ(pixi.app.allocator, &.{ pixi.editor.folder orelse "", default_filename }) catch "untitled";
+            break :blk std.fs.path.joinZ(fizzy.app.allocator, &.{ fizzy.editor.folder orelse "", default_filename }) catch "untitled";
         }
     };
-    defer pixi.app.allocator.free(default);
+    defer fizzy.app.allocator.free(default);
     // Do not use our borderless/custom-frame main window as the dialog parent on Windows: the shell
     // may inherit extended style and the picker loses normal frame/close affordances.
     const parent: ?*sdl3.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
@@ -889,14 +889,14 @@ pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
 pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const sdl3.SDL_DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
         if (default_folder) |folder| {
-            break :blk std.fs.path.joinZ(pixi.app.allocator, &.{ folder, default_filename }) catch "untitled";
-        } else if (pixi.editor.recents.last_open_folder) |last_open_folder| {
-            break :blk std.fs.path.joinZ(pixi.app.allocator, &.{ last_open_folder, default_filename }) catch "untitled";
+            break :blk std.fs.path.joinZ(fizzy.app.allocator, &.{ folder, default_filename }) catch "untitled";
+        } else if (fizzy.editor.recents.last_open_folder) |last_open_folder| {
+            break :blk std.fs.path.joinZ(fizzy.app.allocator, &.{ last_open_folder, default_filename }) catch "untitled";
         } else {
-            break :blk std.fs.path.joinZ(pixi.app.allocator, &.{ pixi.editor.folder orelse "", default_filename }) catch "untitled";
+            break :blk std.fs.path.joinZ(fizzy.app.allocator, &.{ fizzy.editor.folder orelse "", default_filename }) catch "untitled";
         }
     };
-    defer pixi.app.allocator.free(default);
+    defer fizzy.app.allocator.free(default);
     const parent: ?*sdl3.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
     sdl3.SDL_ShowOpenFileDialog(GenericOpenDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, filters.ptr, @intCast(filters.len), default.ptr, true);
 }
@@ -904,16 +904,16 @@ pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
 pub fn showOpenFolderDialog(cb: *const fn (?[][:0]const u8) void, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
         if (default_folder) |folder| {
-            break :blk std.fmt.allocPrintSentinel(pixi.app.allocator, "{s}", .{folder}, 0) catch "untitled";
+            break :blk std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}", .{folder}, 0) catch "untitled";
         } else {
-            if (pixi.editor.recents.last_open_folder) |last_open_folder| {
-                break :blk std.fmt.allocPrintSentinel(pixi.app.allocator, "{s}", .{last_open_folder}, 0) catch "untitled";
+            if (fizzy.editor.recents.last_open_folder) |last_open_folder| {
+                break :blk std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}", .{last_open_folder}, 0) catch "untitled";
             } else {
-                break :blk std.fmt.allocPrintSentinel(pixi.app.allocator, "{s}", .{pixi.editor.folder orelse ""}, 0) catch "untitled";
+                break :blk std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}", .{fizzy.editor.folder orelse ""}, 0) catch "untitled";
             }
         }
     };
-    defer pixi.app.allocator.free(default);
+    defer fizzy.app.allocator.free(default);
     const parent: ?*sdl3.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
     sdl3.SDL_ShowOpenFolderDialog(GenericOpenDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, default.ptr, false);
 }
@@ -950,18 +950,18 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: e
     { // Save the open or save folder for the next time the dialog is shown
         if (std.fs.path.dirname(zig_files[0])) |dir| {
             if (mode == .save) {
-                if (pixi.editor.recents.last_save_folder) |last_save_folder| {
-                    pixi.app.allocator.free(last_save_folder);
+                if (fizzy.editor.recents.last_save_folder) |last_save_folder| {
+                    fizzy.app.allocator.free(last_save_folder);
                 }
-                pixi.editor.recents.last_save_folder = pixi.app.allocator.dupe(u8, dir) catch {
+                fizzy.editor.recents.last_save_folder = fizzy.app.allocator.dupe(u8, dir) catch {
                     dvui.log.err("Failed to dupe directory {s}", .{dir});
                     return;
                 };
             } else {
-                if (pixi.editor.recents.last_open_folder) |last_open_folder| {
-                    pixi.app.allocator.free(last_open_folder);
+                if (fizzy.editor.recents.last_open_folder) |last_open_folder| {
+                    fizzy.app.allocator.free(last_open_folder);
                 }
-                pixi.editor.recents.last_open_folder = pixi.app.allocator.dupe(u8, dir) catch {
+                fizzy.editor.recents.last_open_folder = fizzy.app.allocator.dupe(u8, dir) catch {
                     dvui.log.err("Failed to dupe directory {s}", .{dir});
                     return;
                 };

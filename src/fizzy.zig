@@ -37,8 +37,8 @@ pub var assets: *Assets = undefined;
 
 /// Internal types
 /// These types contain additional data to support the editor
-/// An example of this is File. pixi.File matches the file type to read from JSON,
-/// while the pixi.Internal.File contains cameras, timers, file-specific editor fields.
+/// An example of this is File. fizzy.File matches the file type to read from JSON,
+/// while the fizzy.Internal.File contains cameras, timers, file-specific editor fields.
 pub const Internal = struct {
     pub const Animation = @import("internal/Animation.zig");
     pub const Atlas = @import("internal/Atlas.zig");

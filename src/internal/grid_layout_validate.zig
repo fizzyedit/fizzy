@@ -3,7 +3,7 @@
 //! Mirrors the export size cap (4096×4096) and rejects degenerate proposals before any
 //! allocation. Lives in its own std-only file so the editor's grid-layout dialog and
 //! `Internal.File.applyGridLayout{,SliceOnly}` can share a single source of truth that's
-//! also reachable from `zig build test` without dvui / pixi globals.
+//! also reachable from `zig build test` without dvui / fizzy globals.
 //!
 //! Re-exported by `Internal.File.validateGridLayoutProposedDims` for backward compatibility
 //! with existing call sites.

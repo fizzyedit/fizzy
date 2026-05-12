@@ -1,8 +1,8 @@
 const std = @import("std");
 const icons = @import("icons");
 const dvui = @import("dvui");
-const pixi = @import("../../pixi.zig");
-const Editor = pixi.Editor;
+const fizzy = @import("../../fizzy.zig");
+const Editor = fizzy.Editor;
 
 const Sprites = @This();
 
@@ -10,7 +10,7 @@ var prev_scale: f32 = 1.0;
 var current_scale: f32 = 1.0;
 
 pub fn draw(self: *Sprites) !void {
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         const prev_clip = dvui.clip(dvui.parentGet().data().rectScale().r);
         defer dvui.clipSet(prev_clip);
 
@@ -23,10 +23,10 @@ pub fn draw(self: *Sprites) !void {
         // Since not all panel screens will likely want shadows, which should be reserved for canvases?
         // Text editors, consoles, etc would likely want flat panels or to handle shadows themselves.
         defer {
-            pixi.dvui.drawEdgeShadow(dvui.parentGet().data().rectScale(), .top, .{ .opacity = 0.15 });
-            pixi.dvui.drawEdgeShadow(dvui.parentGet().data().rectScale(), .bottom, .{ .opacity = 0.15 });
-            pixi.dvui.drawEdgeShadow(dvui.parentGet().data().rectScale(), .left, .{ .opacity = 0.15 });
-            pixi.dvui.drawEdgeShadow(dvui.parentGet().data().rectScale(), .right, .{ .opacity = 0.15 });
+            fizzy.dvui.drawEdgeShadow(dvui.parentGet().data().rectScale(), .top, .{ .opacity = 0.15 });
+            fizzy.dvui.drawEdgeShadow(dvui.parentGet().data().rectScale(), .bottom, .{ .opacity = 0.15 });
+            fizzy.dvui.drawEdgeShadow(dvui.parentGet().data().rectScale(), .left, .{ .opacity = 0.15 });
+            fizzy.dvui.drawEdgeShadow(dvui.parentGet().data().rectScale(), .right, .{ .opacity = 0.15 });
         }
 
         const parent = dvui.parentGet().data().rect;
@@ -67,7 +67,7 @@ pub fn draw(self: *Sprites) !void {
         }
 
         const scale = blk: {
-            const steps = pixi.editor.settings.zoom_steps;
+            const steps = fizzy.editor.settings.zoom_steps;
             const sprite_width = src_rect.w * 1.2;
             const sprite_height = src_rect.h * 1.2;
             const target_width = if (sprite_width < parent.w) parent.w else sprite_width;
@@ -147,10 +147,10 @@ pub fn draw(self: *Sprites) !void {
             return;
         }
 
-        const perf_sp = pixi.perf.spritePreviewBegin();
-        defer pixi.perf.spritePreviewEnd(perf_sp);
+        const perf_sp = fizzy.perf.spritePreviewBegin();
+        defer fizzy.perf.spritePreviewEnd(perf_sp);
 
-        _ = pixi.dvui.sprite(@src(), .{
+        _ = fizzy.dvui.sprite(@src(), .{
             .source = file.layers.items(.source)[file.selected_layer_index],
             .file = file,
             .alpha_source = file.editor.checkerboard_tile,
@@ -169,7 +169,7 @@ pub fn draw(self: *Sprites) !void {
             .scale = scale,
             // Compute a normalized depth in [-1.0, 1.0] where 0.0 is the center of the viewport
             // .depth = blk: {
-            //     const viewport = pixi.editor.panel.scroll_info.viewport;
+            //     const viewport = fizzy.editor.panel.scroll_info.viewport;
             //     const cx = viewport.x + viewport.w / 2.0;
             //     const px = hbox.data().rectScale().r.center().x;
             //     break :blk (px - cx) / (viewport.w / 2.0);
@@ -187,7 +187,7 @@ pub fn draw(self: *Sprites) !void {
 }
 
 pub fn drawAnimationControlsDialog(_: *Sprites) void {
-    if (pixi.editor.activeFile()) |file| {
+    if (fizzy.editor.activeFile()) |file| {
         if (file.selected_animation_index) |_| {
             var rect = dvui.parentGet().data().rectScale().r;
 
