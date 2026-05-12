@@ -4,6 +4,12 @@
     "version": "2.0.0",
     "options": {
         "env": {
+            // Cursor's terminal sandbox redirects NuGet restore to a cache dir
+            // that drops loose vendor binaries (UpdateMac, setup.exe, etc.) from
+            // the vpk package, so `dotnet vpk pack` fails with "HelperFile could
+            // not find 'UpdateMac'". Force restore to write to the real per-user
+            // cache where the binaries land correctly.
+            "NUGET_PACKAGES": "${env:HOME}/.nuget/packages",
             "ZIG_SYSTEM_LINKER_HACK": "1",
             "MTL_SHADER_VALIDATION": "1",
             "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
