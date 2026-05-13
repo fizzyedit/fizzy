@@ -6,7 +6,7 @@
 ![buildworkflow](https://github.com/foxnne/fizzy/actions/workflows/ci.yml/badge.svg)
 
 # 
-**Fizzy** is an cross-platform open-source pixel art editor and animation editor written in [Zig](https://github.com/ziglang/zig).
+**Fizzy** is a cross-platform open-source pixel art editor and animation editor written in [Zig](https://github.com/ziglang/zig).
 
 ### Downloads are available [here](https://fizzyed.it)
 
