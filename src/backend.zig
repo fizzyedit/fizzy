@@ -504,6 +504,11 @@ pub fn setWindowStyle(win: *dvui.Window) void {
             window.msgSend(void, "setStyleMask:", .{style_mask | NSWindowStyleMaskFullSizeContentView});
             // This sets the titlebar to transparent so our effect view shows through.
             window.msgSend(void, "setTitlebarAppearsTransparent:", .{true});
+            // Hide the title text in the titlebar (matches Windows, where we
+            // draw our own chrome). `NSWindowTitleHidden` = 1. The window still
+            // has a programmatic title (used by the Window menu / Dock) — only
+            // the rendered titlebar string is hidden.
+            window.msgSend(void, "setTitleVisibility:", .{@as(c_long, 1)});
         }
     } else if (builtin.os.tag == .windows) {
         const hwnd = getWin32Hwnd(win) orelse return;
