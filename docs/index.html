@@ -149,9 +149,12 @@
       transform: translateY(0) scale(1);
     }
     .dl-group .dl::after {
-      content: "\25BE"; /* small caret */
-      margin-left: 6px; opacity: .55;
-      font-size: 10px;
+      content: "\25BE"; /* caret */
+      margin-left: 8px; opacity: .65;
+      font-size: 22px; line-height: 1;
+      /* `inline-block` + explicit transform-origin so the open-state 180°
+         rotation pivots around the glyph's own center, not the text baseline. */
+      display: inline-block; transform-origin: center;
       transition: transform .2s ease;
     }
     .dl-group.open .dl::after { transform: rotate(180deg); }
@@ -505,7 +508,14 @@
         display: flex; align-items: center; justify-content: center;
         width: 36px; height: 36px; background: var(--fg);
         border: 1px solid var(--fg-raised); border-radius: 6px;
-        color: var(--text); font-family: var(--mono); cursor: pointer;
+        color: var(--text); cursor: pointer;
+        /* Use the system UI font for the glyph (instead of the pixel `--mono`
+           Silkscreen, which renders ☰ way below center) and nudge it up a
+           touch — the box-drawing glyph still sits slightly below the cap
+           line in most fonts. */
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 18px; line-height: 1;
+        padding: 0; padding-bottom: 4px;
       }
       .mockup .panel { width: 110px; }
     }
@@ -527,7 +537,7 @@
         <span class="name">fizzy</span>
         <span class="ver" id="ver">v0.0.6 · zig 0.16</span>
       </a>
-      <button class="menu-toggle" aria-label="Menu" onclick="document.querySelector('nav.top').classList.toggle('open')">≡</button>
+      <button class="menu-toggle" aria-label="Menu" onclick="document.querySelector('nav.top').classList.toggle('open')">☰</button>
       <nav class="top">
         <a href="#features">Features</a>
         <a href="#roadmap">Roadmap</a>
