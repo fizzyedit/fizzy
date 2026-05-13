@@ -61,7 +61,8 @@
     }
     header.site .row {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 18px 0;
+      /* `padding-block` so we don't clobber the `padding-inline` from `.wrap`. */
+      padding-block: 18px;
     }
     .brand { display: flex; align-items: center; gap: 12px; }
     .brand img {
