@@ -4,6 +4,10 @@ const fizzy = @import("../../fizzy.zig");
 
 pub const CanvasWidget = @This();
 
+/// Canvas reveal fade duration in microseconds. Tuned to overlap noticeably with pane open
+/// animations so the canvas doesn't pop in after them. Adjust here, not at the call site.
+const fade_duration_micros: i32 = 350_000;
+
 id: dvui.Id = undefined,
 installed: bool = false,
 init_opts: InitOptions = undefined,
@@ -19,9 +23,20 @@ scale: f32 = 1.0,
 prev_size: dvui.Size = .{},
 prev_scale: f32 = 0.0,
 
-// This is a mess but i cant figure out why the first call to center on the first install doesn't work correctly
+// Centering needs the scroll container's final laid-out rect to compute the correct origin,
+// but `install()` runs before the new scroll area's layout has settled — so the first
+// `recenter()` pass uses a stale/empty viewport and the canvas appears at the wrong position
+// for one frame, then "snaps" to centered on the second frame. We absorb this by tracking
+// settlement explicitly and hiding the visible canvas behind a cover rect (see `settled()`
+// usage in `deinit`) until both passes complete, then fading the cover out via a dvui
+// `Animation` keyed off the canvas id.
 first_center: bool = true,
 second_center: bool = true,
+
+// Set to false on a reset (new file / size change / explicit recenter) so `install` kicks off
+// a fresh fade-in animation exactly once per reset. dvui's animation system drives the value
+// and the per-frame refresh internally.
+fade_started: bool = false,
 hovered: bool = false,
 
 pub const InitOptions = struct {
@@ -81,13 +96,46 @@ pub fn install(self: *CanvasWidget, src: std.builtin.SourceLocation, init_opts: 
 
     defer self.prev_size = self.init_opts.data_size;
 
-    if (self.prev_size.h != self.init_opts.data_size.h or self.prev_size.w != self.init_opts.data_size.w or self.second_center or self.init_opts.center) {
+    const size_changed = self.prev_size.h != self.init_opts.data_size.h or self.prev_size.w != self.init_opts.data_size.w;
+    if (size_changed) {
+        // Genuinely new content — restart the centering + fade. We deliberately do NOT key
+        // off `init_opts.center` here: the workspace re-asserts `center=true` every frame
+        // while the bottom-pane tray is animating open, and resetting `fade_started` each
+        // frame would re-register the dvui animation at `start_time=0` forever, so the
+        // fade would only "start" once the tray finishes. Centering itself is fine to run
+        // multiple times — the two-frame `first/second_center` machinery handles that.
+        self.first_center = true;
+        self.second_center = true;
+        self.fade_started = false;
+    }
+    if (size_changed or self.second_center or self.init_opts.center) {
         self.rescale();
         self.recenter();
         dvui.refresh(null, @src(), self.id);
     }
 
-    self.scroll = dvui.scrollArea(src, .{ .scroll_info = &self.scroll_info }, opts);
+    if (!self.fade_started) {
+        dvui.animation(self.id, "canvas_reveal", .{
+            .start_time = 0,
+            .end_time = fade_duration_micros,
+        });
+        self.fade_started = true;
+    }
+
+    // Decide scrollbar visibility from last frame's viewport + this frame's scale. The bars are
+    // misleading when virtual_size is artificially inflated by the pan-slack pad (deinit), so we
+    // hide them outright when the content rect fits inside the viewport.
+    const content_w_vp = self.init_opts.data_size.w * self.scale;
+    const content_h_vp = self.init_opts.data_size.h * self.scale;
+    const vp = self.scroll_info.viewport;
+    const overflow_w = vp.w > 0 and content_w_vp > vp.w + 0.001;
+    const overflow_h = vp.h > 0 and content_h_vp > vp.h + 0.001;
+
+    self.scroll = dvui.scrollArea(src, .{
+        .scroll_info = &self.scroll_info,
+        .horizontal_bar = if (overflow_w) .auto else .hide,
+        .vertical_bar = if (overflow_h) .auto else .hide,
+    }, opts);
 
     self.scroll_container = &self.scroll.scroll.?;
 
@@ -127,8 +175,35 @@ pub fn fitContentContainInHost(self: *CanvasWidget, content: dvui.Size, host: dv
     self.origin.y = -(host.h - virt_h) * 0.5;
 }
 
+/// True once both centering passes have completed. While unsettled, the canvas contents are
+/// positioned with a stale viewport, so callers should treat coordinate transforms as
+/// preliminary. `deinit` paints a cover rect over the canvas to hide the visible misalignment.
+pub fn settled(self: *const CanvasWidget) bool {
+    return !self.first_center and !self.second_center;
+}
+
 pub fn deinit(self: *CanvasWidget) void {
     self.scaler.deinit();
+
+    // Read the reveal animation. `null` means the animation already expired (or was never
+    // started) — treat as fully revealed. Linear easing is the default in `dvui.Animation`.
+    const reveal: f32 = if (dvui.animationGet(self.id, "canvas_reveal")) |a|
+        std.math.clamp(a.value(), 0.0, 1.0)
+    else
+        1.0;
+
+    // Cover rect with (1 - reveal) opacity. Drawn after `scaler.deinit` so the rect is in
+    // screen-space (not scaled), and before `scroll.deinit` so it lives inside the scroll
+    // container's clip rect. Color matches the window backdrop, so blending against it visually
+    // matches "canvas content fading in from invisible".
+    if (reveal < 1.0) {
+        const cover_alpha = 1.0 - reveal;
+        var color = dvui.themeGet().color(.window, .fill);
+        color.a = @intFromFloat(@as(f32, @floatFromInt(color.a)) * cover_alpha);
+        const rs = self.scroll_container.data().rectScale();
+        rs.r.fill(.{}, .{ .color = color });
+    }
+
     self.scroll.deinit();
 }
 
@@ -262,7 +337,7 @@ pub fn processEvents(self: *CanvasWidget) void {
                             if (me.mod.matchBind("zoom")) {
                                 e.handle(@src(), self.scroll_container.data());
                                 if (me.action == .wheel_y) {
-                                    const base: f32 = if (me.mod.matchBind("shift")) 1.001 else 1.001;
+                                    const base: f32 = if (me.mod.matchBind("shift")) 1.003 else 1.002;
                                     const zs = @exp(@log(base) * me.action.wheel_y);
                                     if (zs != 1.0) {
                                         zoom *= zs;
@@ -305,8 +380,25 @@ pub fn processEvents(self: *CanvasWidget) void {
     // // don't mess with scrolling if we aren't being shown (prevents weirdness
     // // when starting out)
     if (!self.scroll_info.viewport.empty()) {
-        // add current viewport plus padding
-        const pad = 10;
+        // Pad strategy depends on whether the content rect overflows the viewport:
+        //   - Overflow (zoomed in): use a tiny pad so virtual_size tracks the content rect.
+        //     Scrollbars stay anchored to the artwork bounds and don't dance around as the user
+        //     pans into a viewport-relative bbox that keeps shifting.
+        //   - Fit (zoomed out): use the hybrid pad for generous, smooth pan slack since
+        //     scrollbars are hidden in this regime anyway (see `install`).
+        const content_w_vp = self.init_opts.data_size.w * self.scale;
+        const content_h_vp = self.init_opts.data_size.h * self.scale;
+        const overflow_w = content_w_vp > self.scroll_info.viewport.w + 0.001;
+        const overflow_h = content_h_vp > self.scroll_info.viewport.h + 0.001;
+        const content_overflows = overflow_w or overflow_h;
+
+        const pad: f32 = if (content_overflows) 6.0 else blk: {
+            const viewport_min = @min(self.scroll_info.viewport.w, self.scroll_info.viewport.h);
+            break :blk @max(
+                @max(6.0, viewport_min * 0.5),
+                6.0 / @max(self.scale, 0.0001),
+            );
+        };
         var bbox = self.scroll_info.viewport.outsetAll(pad);
         const scrollbbox = self.viewportFromScreenRect(self.rect);
         bbox = bbox.unionWith(scrollbbox);

@@ -152,10 +152,10 @@
             }
         },
         {
-            "label": "Run Release Script",
+            "label": "Run Release Script (skip build, reuse zig-out)",
             "type": "shell",
-            "command": "[ -f .env.local ] && set -a && . ./.env.local && set +a; tools/release.sh",
-            "group": {"kind": "build", "isDefault": true},      
+            "command": "[ -f .env.local ] && set -a && . ./.env.local && set +a; FIZZY_RELEASE_SKIP_BUILD=1 scripts/release.sh",
+            "group": {"kind": "build", "isDefault": true},
             "presentation": {
                 "clear": true
             }
