@@ -225,7 +225,12 @@ pub fn draw() !void {
         });
 
         const label_text: []const u8 = switch (fizzy.editor.settings.input_scheme) {
-            .auto => try std.fmt.allocPrint(dvui.currentWindow().lifo(), "Auto ({s})", .{@tagName(dvui.getMouseTypeHint())}),
+            .auto => switch (dvui.getMouseTypeHint()) {
+                // Pre-classification (no scroll events seen yet) — drop the parenthetical
+                // entirely rather than showing "Auto (unknown)".
+                .unknown => "Auto",
+                .mouse, .trackpad => |hint| try std.fmt.allocPrint(dvui.currentWindow().lifo(), "Auto ({s})", .{@tagName(hint)}),
+            },
             .mouse => "Mouse",
             .trackpad => "Trackpad",
         };

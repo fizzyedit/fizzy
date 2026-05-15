@@ -43,7 +43,6 @@ min_window_size: [2]f32 = .{ 640, 480 },
 initial_window_size: [2]f32 = .{ 1280, 720 },
 
 /// Zoom/pan control scheme (`auto` picks mouse vs trackpad gestures from `dvui.getMouseTypeHint` after scroll events).
-/// FIXME: On macOS, .auto always reports trackpad as scroll events are not reliably different from trackpad events.
 input_scheme: InputScheme = .auto,
 
 /// Whether or not to show rulers on each canvas.
