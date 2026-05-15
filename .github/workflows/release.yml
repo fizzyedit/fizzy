@@ -6,11 +6,13 @@ name: Release
 #
 # Flow:
 #   1. Operator edits VERSION, commits, tags v<VERSION>, pushes the tag.
-#   2. Matrix builds (Linux ×2, Windows ×2, macOS ×2): prefetch with retries, then
-#      package per target. Windows targets run on windows-latest but use a separate
-#      `zig build msvcup-setup` pre-step to download a known-good MSVC SDK into
-#      .velopack-msvc/ — using the runner's system MSVC instead trips Zig's
-#      translate-c on ui64 literals and ARM64 NEON intrinsics in the SDK headers.
+#   2. Matrix builds (Linux ×2, Windows ×2 cross-compiled from Linux, macOS ×2):
+#      prefetch with retries, then package per target. Windows targets run on
+#      ubuntu-latest with a `zig build msvcup-setup` pre-step (downloads MSVC +
+#      Windows SDK to .velopack-msvc/) followed by a small case-sensitivity fix
+#      (lowercase *.Lib symlinks). Cross-compiling from a non-Windows host avoids
+#      Zig's MSVC auto-discovery leaking the runner's newer system SDK headers
+#      (which translate-c can't parse and break SDL3 linking).
 #   3. The assemble job downloads zig-out/<channel>/ from each artifact, runs
 #      FIZZY_RELEASE_SKIP_BUILD=1 ./scripts/release.sh (staging + gh release create).
 #   4. Operator reviews the draft and publishes when ready (auto-update only after publish).
@@ -51,19 +53,21 @@ jobs:
           - channel: arm64-linux
             target: aarch64-linux-gnu
             runner: ubuntu-latest
-          # Windows targets run on windows-latest but use msvcup-fetched MSVC, NOT
-          # the runner's system MSVC. The system MSVC headers on windows-latest
-          # trip Zig 0.16's translate-c (e.g. `0xff…ui64` in stdint.h, NEON
-          # intrinsics in the ARM64 ucrt wchar.h); the SDK velopack-zig downloads
-          # is a known-good version translate-c handles cleanly. Native runner +
-          # downloaded SDK avoids both that issue and the Linux case-sensitivity
-          # bug in velopack-zig's gen_zig_libc_msvc.zig (kernel32.Lib vs .lib).
+          # Windows targets cross-compile from Linux. Cannot use windows-latest:
+          # Zig's MSVC auto-discovery on a Windows host leaks the runner's system
+          # SDK into both translate-c (newer headers with ui64 / NEON intrinsics
+          # translate-c can't parse) and SDL3 link (which expects gameinput.h
+          # from a newer SDK than msvcup downloads). The only configuration where
+          # the .velopack-msvc/ SDK wins cleanly is a non-Windows host.
+          # macOS-latest also works (and is what the old monolithic build used);
+          # Linux is cheaper but needs the case-sensitivity workaround below for
+          # the kernel32.Lib vs .lib casing in velopack-zig's MSI extraction.
           - channel: x86-64-windows
             target: x86_64-windows-msvc
-            runner: windows-latest
+            runner: ubuntu-latest
           - channel: arm64-windows
             target: aarch64-windows-msvc
-            runner: windows-latest
+            runner: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -125,6 +129,26 @@ jobs:
         run: |
           set -euo pipefail
           zig build msvcup-setup
+
+      # MSI extraction on Linux preserves the original mixed-case filenames from
+      # the SDK packages (kernel32.Lib, AdvAPI32.Lib, ...) — fine on macOS/Windows
+      # which are case-insensitive, but on Linux's case-sensitive FS the gen
+      # script (and later the linker) can't find kernel32.lib. Symlink each *.Lib
+      # to a lowercase sibling so any consumer requesting *.lib resolves it.
+      # Upstream bug in velopack-zig's tools/gen_zig_libc_msvc.zig + MSI extractor.
+      - name: Fix MSVC SDK case-sensitivity (Linux + Windows targets)
+        if: endsWith(matrix.target, '-windows-msvc')
+        run: |
+          set -euo pipefail
+          n=0
+          while IFS= read -r -d '' f; do
+            lower="${f%.Lib}.lib"
+            if [[ ! -e "$lower" ]]; then
+              ln -s "$(basename "$f")" "$lower"
+              n=$((n + 1))
+            fi
+          done < <(find .velopack-msvc -type f -name "*.Lib" -print0)
+          echo "Created $n lowercase symlinks for *.Lib -> *.lib"
 
       - name: Package (${{ matrix.channel }})
         run: |
