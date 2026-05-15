@@ -114,14 +114,21 @@ jobs:
           fetch "" || exit 1
           fetch "-Dtarget=${{ matrix.target }}" || exit 1
 
+      # MSVC SDK has to materialize on disk BEFORE `zig build package` configures,
+      # because applyMsvcIncludesToReachableTranslateC reads zig-libc-*.ini during
+      # build() to add -isystem paths to DVUI's translate-c steps. -Dfetch-msvc only
+      # schedules msvcup as a build-step dependency, which is too late. Same reason
+      # scripts/release.sh runs msvcup-setup as its own pre-step.
+      - name: Setup MSVC SDK (Windows targets)
+        if: endsWith(matrix.target, '-windows-msvc')
+        run: |
+          set -euo pipefail
+          zig build msvcup-setup
+
       - name: Package (${{ matrix.channel }})
         run: |
           set -euo pipefail
-          extra=()
-          if [[ "${{ matrix.target }}" == *-windows-msvc ]]; then
-            extra+=(-Dfetch-msvc)
-          fi
-          zig build package -Doptimize=ReleaseFast "-Dtarget=${{ matrix.target }}" "${extra[@]}"
+          zig build package -Doptimize=ReleaseFast "-Dtarget=${{ matrix.target }}"
 
       - name: Upload zig-out-${{ matrix.channel }}
         uses: actions/upload-artifact@v4
