@@ -124,22 +124,20 @@ jobs:
       # build() to add -isystem paths to DVUI's translate-c steps. -Dfetch-msvc only
       # schedules msvcup as a build-step dependency, which is too late. Same reason
       # scripts/release.sh runs msvcup-setup as its own pre-step.
+      # MSI extraction on Linux preserves the SDK packages' mixed-case filenames
+      # (kernel32.Lib, AdvAPI32.Lib, …) — fine on macOS/Windows (case-insensitive
+      # FS), but on Linux velopack-zig's gen_zig_libc_msvc.zig + the linker need
+      # lowercase. The fix has to interleave with msvcup-setup itself: the gen
+      # check runs inside setup-msvc.sh right after MSI extraction. Two passes:
+      # the first downloads + extracts (then fails on the .lib check); we add
+      # lowercase symlinks; the second skips the install (its needs_install check
+      # also keys on kernel32.Lib so it passes) and just runs the gen step.
       - name: Setup MSVC SDK (Windows targets)
         if: endsWith(matrix.target, '-windows-msvc')
         run: |
           set -euo pipefail
-          zig build msvcup-setup
-
-      # MSI extraction on Linux preserves the original mixed-case filenames from
-      # the SDK packages (kernel32.Lib, AdvAPI32.Lib, ...) — fine on macOS/Windows
-      # which are case-insensitive, but on Linux's case-sensitive FS the gen
-      # script (and later the linker) can't find kernel32.lib. Symlink each *.Lib
-      # to a lowercase sibling so any consumer requesting *.lib resolves it.
-      # Upstream bug in velopack-zig's tools/gen_zig_libc_msvc.zig + MSI extractor.
-      - name: Fix MSVC SDK case-sensitivity (Linux + Windows targets)
-        if: endsWith(matrix.target, '-windows-msvc')
-        run: |
-          set -euo pipefail
+          # First pass: extract SDK; gen step is expected to fail on Linux.
+          zig build msvcup-setup || echo "first msvcup-setup failed (expected on Linux); fixing case-sensitivity"
           n=0
           while IFS= read -r -d '' f; do
             lower="${f%.Lib}.lib"
@@ -149,6 +147,9 @@ jobs:
             fi
           done < <(find .velopack-msvc -type f -name "*.Lib" -print0)
           echo "Created $n lowercase symlinks for *.Lib -> *.lib"
+          # Second pass: install check passes (kernel32.Lib exists), gen step
+          # finds kernel32.lib via our symlinks and writes zig-libc-*.ini.
+          zig build msvcup-setup
 
       - name: Package (${{ matrix.channel }})
         run: |
