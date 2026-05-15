@@ -6,10 +6,11 @@ name: Release
 #
 # Flow:
 #   1. Operator edits VERSION, commits, tags v<VERSION>, pushes the tag.
-#   2. Matrix builds (Linux / Windows ×2, macOS ×2): prefetch with retries, then
-#      package per target. Prefer "latest" hosts + Zig cross-compile (arm64 linux/macos/win
-#      from x86/macOS/Windows equivalents) instead of shrinking legacy runner pools (e.g. macOS-13).
-#      Windows MSVC prep uses scripts/msvcup/setup-msvc.ps1 — not zig build msvcup-setup.
+#   2. Matrix builds (Linux ×2, Windows ×2 cross-compiled from Linux, macOS ×2):
+#      prefetch with retries, then package per target. Windows MSVC targets run on
+#      ubuntu-latest with -Dfetch-msvc (downloads a known-good MSVC SDK into
+#      .velopack-msvc/) — building on windows-latest fails because Zig's translate-c
+#      can't parse the runner's system MSVC headers (ui64 suffixes, NEON intrinsics).
 #   3. The assemble job downloads zig-out/<channel>/ from each artifact, runs
 #      FIZZY_RELEASE_SKIP_BUILD=1 ./scripts/release.sh (staging + gh release create).
 #   4. Operator reviews the draft and publishes when ready (auto-update only after publish).
@@ -50,12 +51,18 @@ jobs:
           - channel: arm64-linux
             target: aarch64-linux-gnu
             runner: ubuntu-latest
+          # Windows targets cross-compile from Linux with -Dfetch-msvc (downloads
+          # a known-good MSVC SDK into .velopack-msvc/). Building on windows-latest
+          # picks up the runner's system MSVC headers, which Zig 0.16's translate-c
+          # can't parse (e.g. `0xff…ui64` literals in stdint.h, NEON intrinsics in
+          # the ARM64 ucrt wchar.h). The old monolithic release used this same
+          # cross-compile path from macOS-latest.
           - channel: x86-64-windows
             target: x86_64-windows-msvc
-            runner: windows-latest
+            runner: ubuntu-latest
           - channel: arm64-windows
             target: aarch64-windows-msvc
-            runner: windows-latest
+            runner: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -110,7 +117,11 @@ jobs:
       - name: Package (${{ matrix.channel }})
         run: |
           set -euo pipefail
-          zig build package -Doptimize=ReleaseFast "-Dtarget=${{ matrix.target }}"
+          extra=()
+          if [[ "${{ matrix.target }}" == *-windows-msvc ]]; then
+            extra+=(-Dfetch-msvc)
+          fi
+          zig build package -Doptimize=ReleaseFast "-Dtarget=${{ matrix.target }}" "${extra[@]}"
 
       - name: Upload zig-out-${{ matrix.channel }}
         uses: actions/upload-artifact@v4

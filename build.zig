@@ -276,9 +276,12 @@ pub fn build(b: *std.Build) !void {
         .linux, .macos, .windows => {
             // Host strip can't process foreign object files when cross-compiling.
             const cross_os = target.result.os.tag != b.graph.host.result.os.tag;
+            // Same-OS / different-arch (e.g. aarch64-linux from x86_64-linux) also
+            // breaks host strip — it errors with "Unable to recognise the format".
+            const cross_for_strip = cross_os or target.result.cpu.arch != b.graph.host.result.cpu.arch;
             const strip_release_sh = b.addSystemCommand(&.{switch (optimize) {
                 .Debug => "touch",
-                else => if (cross_os) "touch" else "strip",
+                else => if (cross_for_strip) "touch" else "strip",
             }});
             strip_release_sh.addFileArg(exe_for_package.getEmittedBin());
 
