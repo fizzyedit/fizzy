@@ -6,13 +6,11 @@ name: Release
 #
 # Flow:
 #   1. Operator edits VERSION, commits, tags v<VERSION>, pushes the tag.
-#   2. Matrix builds (Linux ×2, Windows ×2 cross-compiled from Linux, macOS ×2):
-#      prefetch with retries, then package per target. Windows targets run on
-#      ubuntu-latest with a `zig build msvcup-setup` pre-step (downloads MSVC +
-#      Windows SDK to .velopack-msvc/) followed by a small case-sensitivity fix
-#      (lowercase *.Lib symlinks). Cross-compiling from a non-Windows host avoids
-#      Zig's MSVC auto-discovery leaking the runner's newer system SDK headers
-#      (which translate-c can't parse and break SDL3 linking).
+#   2. Matrix builds (Linux ×2, Windows ×2, macOS ×2): prefetch with retries,
+#      then package per target. Windows targets build natively on windows-latest
+#      with the runner's system MSVC; build.zig wires a translate-c shim
+#      (src/tools/msvc_translatec_shim) and a SIZE_MAX defineCMacro so aro
+#      doesn't reject MSVC stdint.h's `0xff…ui64` literal.
 #   3. The assemble job downloads zig-out/<channel>/ from each artifact, runs
 #      FIZZY_RELEASE_SKIP_BUILD=1 ./scripts/release.sh (staging + gh release create).
 #   4. Operator reviews the draft and publishes when ready (auto-update only after publish).
@@ -53,21 +51,16 @@ jobs:
           - channel: arm64-linux
             target: aarch64-linux-gnu
             runner: ubuntu-latest
-          # Windows targets cross-compile from Linux. Cannot use windows-latest:
-          # Zig's MSVC auto-discovery on a Windows host leaks the runner's system
-          # SDK into both translate-c (newer headers with ui64 / NEON intrinsics
-          # translate-c can't parse) and SDL3 link (which expects gameinput.h
-          # from a newer SDK than msvcup downloads). The only configuration where
-          # the .velopack-msvc/ SDK wins cleanly is a non-Windows host.
-          # macOS-latest also works (and is what the old monolithic build used);
-          # Linux is cheaper but needs the case-sensitivity workaround below for
-          # the kernel32.Lib vs .lib casing in velopack-zig's MSI extraction.
+          # Windows targets build natively on windows-latest using the runner's
+          # system MSVC. build.zig installs a translate-c shim (src/tools/
+          # msvc_translatec_shim) and predefines SIZE_MAX so aro doesn't choke on
+          # MSVC stdint.h's `0xff…ui64` literal.
           - channel: x86-64-windows
             target: x86_64-windows-msvc
-            runner: ubuntu-latest
+            runner: windows-latest
           - channel: arm64-windows
             target: aarch64-windows-msvc
-            runner: ubuntu-latest
+            runner: windows-latest
     defaults:
       run:
         shell: bash
@@ -118,48 +111,6 @@ jobs:
           }
           fetch "" || exit 1
           fetch "-Dtarget=${{ matrix.target }}" || exit 1
-
-      # MSVC SDK has to materialize on disk BEFORE `zig build package` configures,
-      # because applyMsvcIncludesToReachableTranslateC reads zig-libc-*.ini during
-      # build() to add -isystem paths to DVUI's translate-c steps. -Dfetch-msvc only
-      # schedules msvcup as a build-step dependency, which is too late. Same reason
-      # scripts/release.sh runs msvcup-setup as its own pre-step.
-      # MSI extraction on Linux preserves the SDK packages' mixed-case filenames
-      # (kernel32.Lib, AdvAPI32.Lib, …) — fine on macOS/Windows (case-insensitive
-      # FS), but on Linux velopack-zig's gen_zig_libc_msvc.zig + the linker need
-      # lowercase. The fix has to interleave with msvcup-setup itself: the gen
-      # check runs inside setup-msvc.sh right after MSI extraction. Two passes:
-      # the first downloads + extracts (then fails on the .lib check); we add
-      # lowercase symlinks; the second skips the install (its needs_install check
-      # also keys on kernel32.Lib so it passes) and just runs the gen step.
-      - name: Setup MSVC SDK (Windows targets)
-        if: endsWith(matrix.target, '-windows-msvc')
-        run: |
-          set -euo pipefail
-          # First pass: extract SDK; gen step is expected to fail on Linux.
-          zig build msvcup-setup || echo "first msvcup-setup failed (expected on Linux); fixing case-sensitivity"
-          # The SDK ships hundreds of mixed-case filenames (Windows.h, kernel32.Lib,
-          # ADSIid.h, AccCtrl.h, …) but downstream C code includes them lowercase.
-          # Symlink every file whose basename has uppercase letters to an
-          # all-lowercase sibling so case-insensitive lookups resolve.
-          python3 - <<'PY'
-          import os
-          n = 0
-          for dirpath, _dirnames, filenames in os.walk('.velopack-msvc'):
-              for name in filenames:
-                  lower = name.lower()
-                  if lower == name:
-                      continue
-                  dst = os.path.join(dirpath, lower)
-                  if os.path.lexists(dst):
-                      continue
-                  os.symlink(name, dst)
-                  n += 1
-          print(f"Created {n} lowercase filename symlinks")
-          PY
-          # Second pass: install check passes (kernel32.Lib exists), gen step
-          # finds kernel32.lib via our symlinks and writes zig-libc-*.ini.
-          zig build msvcup-setup
 
       - name: Package (${{ matrix.channel }})
         run: |

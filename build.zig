@@ -597,32 +597,78 @@ pub fn build(b: *std.Build) !void {
         unit_tests.step.dependOn(&msvcup_before_compile.step);
     }
 
-    if (effective_win_libc) |ini| {
-        if (target.result.os.tag == .windows and target.result.abi == .msvc) {
+    if (target.result.os.tag == .windows and target.result.abi == .msvc) {
+        var roots: [4]*std.Build.Step.Compile = undefined;
+        var n: usize = 0;
+        roots[n] = exe;
+        n += 1;
+        roots[n] = unit_tests;
+        n += 1;
+        roots[n] = integration_tests;
+        n += 1;
+        if (!velopack_enabled and velopack_supported_for_target) {
+            roots[n] = exe_for_package;
+            n += 1;
+        }
+
+        // Always apply the translate-c shim + SIZE_MAX define for windows-msvc, regardless of
+        // whether we're using a downloaded SDK or the host's system MSVC. translate-c uses aro
+        // (not MSVC cl.exe), and aro rejects literals like `0xffffffffffffffffui64` from MSVC's
+        // <stdint.h>. The shim shadows stdint.h via `-I` (search order beats `-isystem`); the
+        // defineCMacro adds belt-and-suspenders by predefining SIZE_MAX before any include so
+        // MSVC's stdint.h `#ifndef SIZE_MAX` skips its own definition entirely.
+        applyMsvcTranslateCShim(b, roots[0..n]) catch |e| {
+            std.debug.panic("MSVC translate-c shim wiring failed: {s}", .{@errorName(e)});
+        };
+
+        if (effective_win_libc) |ini| {
             if (cross_win_msvc) b.libc_file = null;
             const libc_lp: std.Build.LazyPath = .{ .cwd_relative = ini };
-
-            var roots: [4]*std.Build.Step.Compile = undefined;
-            var n: usize = 0;
-            roots[n] = exe;
-            n += 1;
-            roots[n] = unit_tests;
-            n += 1;
-            roots[n] = integration_tests;
-            n += 1;
-            if (!velopack_enabled and velopack_supported_for_target) {
-                roots[n] = exe_for_package;
-                n += 1;
-            }
             velopack.applyWindowsMsvcLibcRecursive(b, roots[0..n], libc_lp);
 
-            // `applyWindowsMsvcLibcRecursive` walks Compile steps; DVUI's `sdl3-c` / `dvui-c` bindings
-            // use `Step.TranslateC`. `zig translate-c` has no `--libc`; we add MSVC/UCRT + SDK
-            // `-isystem` paths by scanning each root compile's module graph (see
-            // `applyMsvcIncludesToReachableTranslateC`).
+            // Adds explicit MSVC/UCRT/SDK `-isystem` paths from the libc INI to each reachable
+            // translate-c step. Only relevant when cross-compiling with .velopack-msvc/; on a
+            // Windows host with system MSVC, Zig auto-discovers these paths itself.
             applyMsvcIncludesToReachableTranslateC(b, roots[0..n], ini) catch |e| {
                 std.debug.panic("MSVC translate-c include fixup failed: {s}", .{@errorName(e)});
             };
+        }
+    }
+}
+
+/// Apply the always-on translate-c fixups for windows-msvc targets: the stdint.h shim
+/// (so aro doesn't choke on MSVC's `ui64` literal suffix) and a predefined SIZE_MAX.
+/// Runs whether or not we have a downloaded SDK — the shim is purely an `-I` injection
+/// and a `-D` flag, so it works equally on cross-compile and native windows-host builds.
+fn applyMsvcTranslateCShim(b: *std.Build, roots: []const *std.Build.Step.Compile) !void {
+    var seen = std.AutoHashMap(*std.Build.Step.TranslateC, void).init(b.allocator);
+    defer seen.deinit();
+    for (roots) |root_compile| {
+        const graph = root_compile.root_module.getGraph();
+        for (graph.modules) |mod| {
+            const root_src = mod.root_source_file orelse continue;
+            const gen = switch (root_src) {
+                .generated => |g| g,
+                else => continue,
+            };
+            const dep_step = gen.file.step;
+            if (dep_step.id != .translate_c) continue;
+            const tc: *std.Build.Step.TranslateC = @fieldParentPtr("step", dep_step);
+            const gop = try seen.getOrPut(tc);
+            if (gop.found_existing) continue;
+            const rt = tc.target.result;
+            if (rt.os.tag != .windows or rt.abi != .msvc) continue;
+            // `-I` searches before `-isystem`, so this shim wins over MSVC's <stdint.h>.
+            tc.addIncludePath(b.path("src/tools/msvc_translatec_shim"));
+            // Pre-define SIZE_MAX so MSVC's stdint.h `#ifndef SIZE_MAX` block — which would
+            // otherwise install a `0xff…ui64` literal — skips itself. Belt-and-suspenders
+            // to the shim: covers the case where another header includes <stdint.h> through
+            // a path that bypasses our shim.
+            tc.defineCMacro("SIZE_MAX", switch (rt.ptrBitWidth()) {
+                32 => "4294967295U",
+                64 => "18446744073709551615ULL",
+                else => "UINT_MAX",
+            });
         }
     }
 }
@@ -680,12 +726,9 @@ fn applyMsvcIncludesToReachableTranslateC(
 
             const rt = tc.target.result;
             if (rt.os.tag == .windows and rt.abi == .msvc) {
-                // `translate-c` uses aro, not MSVC cl.exe. MSVC's <stdint.h> uses literals like
-                // `0xffffffffffffffffui64` which aro rejects — an `-I` shim must win before `-isystem`
-                // pulls in VC/include.
-                tc.addIncludePath(b.path("src/tools/msvc_translatec_shim"));
-                // Order matters: MSVC's own headers first (override Windows SDK declarations when both
-                // exist), then UCRT, then the Windows SDK trio.
+                // Shim + SIZE_MAX define are applied separately by `applyMsvcTranslateCShim`.
+                // Order matters: MSVC's own headers first (override Windows SDK declarations
+                // when both exist), then UCRT, then the Windows SDK trio.
                 tc.addSystemIncludePath(.{ .cwd_relative = sys_include_dir.? });
                 tc.addSystemIncludePath(.{ .cwd_relative = include_dir.? });
                 tc.addSystemIncludePath(.{ .cwd_relative = um_dir });
