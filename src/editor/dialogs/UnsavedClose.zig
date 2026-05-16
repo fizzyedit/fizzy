@@ -93,19 +93,13 @@ fn onCancel() void {
     fizzy.dvui.closeFloatingDialogAnchored();
 }
 
-/// Must complete before the file is closed — `saveAsync` runs on another thread and races with `deinit`.
-pub fn saveSynchronously(file: *fizzy.Internal.File) !void {
-    const ext = std.fs.path.extension(file.path);
-    const win = dvui.currentWindow();
-    if (fizzy.Internal.File.isFizzyExtension(ext)) {
-        try file.saveZip(win);
-    } else if (std.mem.eql(u8, ext, ".png")) {
-        try file.savePng(win);
-    } else if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) {
-        try file.saveJpg(win);
-    } else {
-        return error.UnsupportedSaveExtension;
-    }
+/// Start an async save for the file (`.fizzy` runs on a worker, PNG/JPG runs sync
+/// on the GUI thread) and queue the close for once `File.isSaving()` clears.
+/// `Editor.tickPendingSaveCloses` does the actual close on the next frame after
+/// the worker settles, so the GUI thread never blocks on the save.
+fn beginSaveAndClose(file: *fizzy.Internal.File, file_id: u64) !void {
+    try file.saveAsync();
+    try fizzy.editor.pending_close_after_save.put(fizzy.app.allocator, file_id, {});
 }
 
 fn onSaveAndClose(file_id: u64) !void {
@@ -124,11 +118,10 @@ fn onSaveAndClose(file_id: u64) !void {
         FlatRasterSaveWarning.request(file_id, .save_and_close);
         return;
     }
-    saveSynchronously(file) catch |err| {
+    beginSaveAndClose(file, file_id) catch |err| {
         dvui.log.err("Save and Close failed: {s}", .{@errorName(err)});
         return;
     };
-    try fizzy.editor.rawCloseFileID(file_id);
     fizzy.dvui.closeFloatingDialogAnchored();
 }
 

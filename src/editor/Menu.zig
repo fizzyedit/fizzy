@@ -140,6 +140,24 @@ pub fn draw() !dvui.App.Result {
             fizzy.editor.requestSaveAs();
             fw.close();
         }
+
+        // Save All is enabled whenever any open file is dirty with a recognized
+        // extension. Worker queue handles them serially; UI stays responsive.
+        const any_dirty = blk: {
+            for (fizzy.editor.open_files.values()) |*f| {
+                if (f.dirty() and fizzy.Internal.File.hasRecognizedSaveExtension(f.path)) break :blk true;
+            }
+            break :blk false;
+        };
+        if (menuItemWithHotkey(@src(), "Save All", dvui.currentWindow().keybinds.get("save_all") orelse .{}, any_dirty, .{}, .{
+            .expand = .horizontal,
+            .color_text = dvui.themeGet().color(.window, .text),
+        }) != null) {
+            fizzy.editor.saveAll() catch {
+                std.log.err("Failed to save all", .{});
+            };
+            fw.close();
+        }
     }
 
     if (menuItem(

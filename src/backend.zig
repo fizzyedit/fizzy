@@ -69,6 +69,7 @@ pub const NativeMenuAction = enum(c_int) {
     about = 13,
     check_for_updates = 14,
     report_bug = 15,
+    save_all = 16,
 };
 
 // Queue a single pending native action id.
@@ -773,6 +774,22 @@ pub fn setupMacOSMenuBar() void {
         }
     }
 
+    // Save All — ⌥⌘S (Option-Command-S, matches the common convention used by Xcode etc.)
+    {
+        const save_all_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Save All".ptr});
+        const save_all_sel = fizzy_get_selector("saveAll:") orelse return;
+        const save_all_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
+            save_all_title.value,
+            save_all_sel,
+            key_s.value,
+        });
+        if (save_all_item.value != 0) {
+            save_all_item.msgSend(void, "setTarget:", .{target.value});
+            save_all_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand | NSEventModifierFlagOption});
+            setMenuItemImage(save_all_item, NSImage, NSString, "square.and.arrow.down.on.square", "Save All");
+        }
+    }
+
     const file_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"File".ptr});
     const file_item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
         file_title.value,
@@ -959,7 +976,7 @@ fn addNativeMenuItemWithTarget(menu: objc.Object, _: objc.Class, NSStringClass: 
 /// Returns and clears a pending native menu action (macOS menu bar). Call once per frame; on non-macOS always returns null.
 pub fn pollPendingNativeMenuAction() ?NativeMenuAction {
     const id = pending_native_menu_action_id.swap(-1, .acq_rel);
-    if (id < 0 or id > @intFromEnum(NativeMenuAction.report_bug)) return null;
+    if (id < 0 or id > @intFromEnum(NativeMenuAction.save_all)) return null;
     return @enumFromInt(id);
 }
 

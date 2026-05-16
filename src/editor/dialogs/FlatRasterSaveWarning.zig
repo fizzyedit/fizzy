@@ -59,21 +59,6 @@ fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: 
     return button.clicked();
 }
 
-/// Same routing as `UnsavedClose.saveSynchronously` — must not use `saveAsync` before tab close.
-fn saveSynchronously(file: *fizzy.Internal.File) !void {
-    const ext = std.fs.path.extension(file.path);
-    const win = dvui.currentWindow();
-    if (fizzy.Internal.File.isFizzyExtension(ext)) {
-        try file.saveZip(win);
-    } else if (std.mem.eql(u8, ext, ".png")) {
-        try file.savePng(win);
-    } else if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) {
-        try file.saveJpg(win);
-    } else {
-        return error.UnsupportedSaveExtension;
-    }
-}
-
 pub fn dialog(id: dvui.Id) anyerror!bool {
     const file_id = dvui.dataGet(null, id, "_flat_raster_file_id", u64) orelse return false;
     const file = fileRef(file_id) orelse return false;
@@ -145,15 +130,27 @@ fn onChooseFlatRaster(file_id: u64) !void {
             fizzy.dvui.closeFloatingDialogAnchored();
         },
         .save_and_close => {
-            saveSynchronously(f) catch |err| {
+            // Kick off async; close happens once the worker settles (see
+            // Editor.tickPendingSaveCloses / advanceSaveAllQuit). When this dialog
+            // was reached from save-all quit, route the close through the quit
+            // walker's in-flight set so it gates pending_app_close correctly;
+            // otherwise this is a single-doc save-and-close.
+            f.saveAsync() catch |err| {
                 dvui.log.err("Save failed: {s}", .{@errorName(err)});
+                if (pending_from_save_all_quit) fizzy.editor.abortSaveAllQuit();
                 return;
             };
-            try fizzy.editor.rawCloseFileID(file_id);
-            fizzy.dvui.closeFloatingDialogAnchored();
             if (pending_from_save_all_quit) {
+                fizzy.editor.quit_saves_in_flight.put(fizzy.app.allocator, file_id, {}) catch |err| {
+                    dvui.log.err("Save all quit track: {s}", .{@errorName(err)});
+                    fizzy.editor.abortSaveAllQuit();
+                    return;
+                };
                 fizzy.editor.pending_quit_continue = true;
+            } else {
+                try fizzy.editor.pending_close_after_save.put(fizzy.app.allocator, file_id, {});
             }
+            fizzy.dvui.closeFloatingDialogAnchored();
         },
     }
 }

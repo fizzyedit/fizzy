@@ -9,6 +9,7 @@ extern void FizzyNativeMenuAction(int id);
 - (void)openFiles:(id)sender;
 - (void)save:(id)sender;
 - (void)saveAs:(id)sender;
+- (void)saveAll:(id)sender;
 - (void)copy:(id)sender;
 - (void)paste:(id)sender;
 - (void)undo:(id)sender;
@@ -28,6 +29,7 @@ extern void FizzyNativeMenuAction(int id);
 - (void)openFiles:(id)sender     { (void)sender; FizzyNativeMenuAction(1); }
 - (void)save:(id)sender          { (void)sender; FizzyNativeMenuAction(2); }
 - (void)saveAs:(id)sender        { (void)sender; FizzyNativeMenuAction(10); }
+- (void)saveAll:(id)sender       { (void)sender; FizzyNativeMenuAction(16); }
 - (void)copy:(id)sender          { (void)sender; FizzyNativeMenuAction(3); }
 - (void)paste:(id)sender         { (void)sender; FizzyNativeMenuAction(4); }
 - (void)undo:(id)sender          { (void)sender; FizzyNativeMenuAction(5); }

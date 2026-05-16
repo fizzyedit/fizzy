@@ -2731,48 +2731,191 @@ pub fn saveJpg(self: *File, window: *dvui.Window) !void {
 pub fn saveZip(self: *File, window: *dvui.Window) !void {
     if (self.isSaving()) return;
     self.setSaving(true);
-    var ext = try self.external(fizzy.app.allocator);
-    defer ext.deinit(fizzy.app.allocator);
-    const null_terminated_path = try fizzy.editor.arena.allocator().dupeZ(u8, self.path);
+    defer self.setSaving(false);
+    // Synchronous callers (e.g. `saveAsFizzy`) run on the GUI thread, which is
+    // already the only writer of `self.layers` — so a snapshot would be pointless
+    // copying. Build the snapshot inline and immediately consume it. We still
+    // use the same code path so there's a single zip-writing function.
+    var snap = try SaveSnapshot.fromFileOnGuiThread(self, fizzy.app.allocator);
+    defer snap.deinit(fizzy.app.allocator);
+    try writeSnapshotToZip(self.id, window, &snap);
+}
 
-    const zip_file = zip.zip_open(null_terminated_path.ptr, zip.ZIP_DEFAULT_COMPRESSION_LEVEL, 'w');
+/// Layer pixel bytes + metadata copied from `*File` on the GUI thread before a
+/// worker save kicks off. The worker reads only this struct, never the live
+/// `*File`, so user edits during the save can't tear `self.layers` mid-iteration
+/// (manifested as MultiArrayList slice OOB / corrupt layer.name).
+pub const SaveSnapshot = struct {
+    ext: fizzy.File,
+    layer_bytes: [][]u8,
+    layer_entry_names: [][:0]const u8,
+    null_terminated_path: [:0]u8,
+
+    /// Allocate + populate from `*File`. MUST be called from the GUI thread
+    /// (the only writer of `file.layers`).
+    pub fn fromFileOnGuiThread(file: *File, allocator: std.mem.Allocator) !SaveSnapshot {
+        var snap: SaveSnapshot = .{
+            .ext = try file.external(allocator),
+            .layer_bytes = try allocator.alloc([]u8, file.layers.len),
+            .layer_entry_names = try allocator.alloc([:0]const u8, file.layers.len),
+            .null_terminated_path = try allocator.dupeZ(u8, file.path),
+        };
+        // Initialize slots so partial-init cleanup is safe.
+        @memset(snap.layer_bytes, &[_]u8{});
+        for (snap.layer_entry_names) |*n| n.* = "";
+        errdefer snap.deinit(allocator);
+
+        const slice = file.layers.slice();
+        var i: usize = 0;
+        while (i < file.layers.len) : (i += 1) {
+            const layer = slice.get(i);
+            snap.layer_bytes[i] = try allocator.dupe(u8, layer.bytes());
+            snap.layer_entry_names[i] = try std.fmt.allocPrintSentinel(allocator, "{s}.layer", .{layer.name}, 0);
+        }
+        return snap;
+    }
+
+    pub fn deinit(self: *SaveSnapshot, allocator: std.mem.Allocator) void {
+        self.ext.deinit(allocator);
+        for (self.layer_bytes) |b| if (b.len != 0) allocator.free(b);
+        allocator.free(self.layer_bytes);
+        for (self.layer_entry_names) |n| if (n.len != 0) allocator.free(n);
+        allocator.free(self.layer_entry_names);
+        allocator.free(self.null_terminated_path);
+    }
+};
+
+/// Single dedicated worker that serializes all `.fiz` async saves through one
+/// thread. Pushed-into by `saveAsync` (via `save_queue.submit`), drained by the
+/// long-lived `saveQueueWorker` thread spawned by `initSaveQueue`.
+///
+/// IMPORTANT: jobs reference the target file by `id`, not by `*File`. The editor's
+/// `open_files` is an `AutoArrayHashMap` with inline values, and `rawCloseFileID`
+/// does an `orderedRemove` that shifts later entries down to fill the gap. Any
+/// `*File` pointer captured at submit time would be silently invalidated the
+/// moment an earlier file in the queue completes and gets closed — manifesting
+/// as the worker dequeuing the "right" Job slot but its `file` pointer reading
+/// the SHIFTED-INTO-PLACE file's data.
+pub const SaveQueue = struct {
+    pub const Job = struct {
+        file_id: u64,
+        window: *dvui.Window,
+        snap: *SaveSnapshot,
+    };
+
+    mutex: std.Io.Mutex = .init,
+    cond: std.Io.Condition = .init,
+    queue: std.ArrayListUnmanaged(Job) = .empty,
+    shutdown: bool = false,
+    worker: ?std.Thread = null,
+
+    pub fn submit(self: *SaveQueue, job: Job) !void {
+        self.mutex.lockUncancelable(dvui.io);
+        defer self.mutex.unlock(dvui.io);
+        try self.queue.append(fizzy.app.allocator, job);
+        self.cond.signal(dvui.io);
+    }
+};
+
+var save_queue: SaveQueue = .{};
+
+/// Spawn the long-lived save-queue worker. Safe to call multiple times; second+
+/// calls are no-ops. Call from the GUI thread before any `saveAsync` runs.
+pub fn initSaveQueue() !void {
+    if (save_queue.worker != null) return;
+    save_queue.worker = try std.Thread.spawn(.{}, saveQueueWorker, .{});
+}
+
+/// Signal the save-queue worker to drain remaining jobs and exit, then join.
+/// Call from the GUI thread during editor shutdown.
+pub fn deinitSaveQueue() void {
+    save_queue.mutex.lockUncancelable(dvui.io);
+    save_queue.shutdown = true;
+    save_queue.cond.broadcast(dvui.io);
+    save_queue.mutex.unlock(dvui.io);
+    if (save_queue.worker) |w| {
+        w.join();
+        save_queue.worker = null;
+    }
+    // Anything still queued after worker exit is leaked snapshots — shouldn't
+    // happen since the worker drains before exit, but clean up defensively.
+    for (save_queue.queue.items) |*job| {
+        job.snap.deinit(fizzy.app.allocator);
+        fizzy.app.allocator.destroy(job.snap);
+    }
+    save_queue.queue.deinit(fizzy.app.allocator);
+}
+
+fn saveQueueWorker() void {
+    while (true) {
+        save_queue.mutex.lockUncancelable(dvui.io);
+        while (save_queue.queue.items.len == 0 and !save_queue.shutdown) {
+            save_queue.cond.waitUncancelable(dvui.io, &save_queue.mutex);
+        }
+        if (save_queue.shutdown and save_queue.queue.items.len == 0) {
+            save_queue.mutex.unlock(dvui.io);
+            return;
+        }
+        const job = save_queue.queue.orderedRemove(0);
+        save_queue.mutex.unlock(dvui.io);
+
+        // The snapshot owns everything the writer needs. For the post-write
+        // `setSaving(false)` and `history.bookmark = 0` we MUST re-lookup the
+        // file pointer at the moment of use — `editor.open_files` is an
+        // AutoArrayHashMap with inline values, and any concurrent `orderedRemove`
+        // shifts later entries down. A pointer captured here at dequeue time
+        // becomes stale (silently aliasing a different file) as soon as the GUI
+        // thread closes any earlier file from the in-flight set.
+        defer {
+            job.snap.deinit(fizzy.app.allocator);
+            fizzy.app.allocator.destroy(job.snap);
+            if (fizzy.editor.open_files.getPtr(job.file_id)) |f| f.setSaving(false);
+            dvui.refresh(job.window, @src(), null);
+        }
+        writeSnapshotToZip(job.file_id, job.window, job.snap) catch |err| {
+            dvui.log.err("Async save failed: {s}", .{@errorName(err)});
+        };
+    }
+}
+
+/// Shared zip-writing logic. Reads ONLY from `snap`, never `self.*` collection
+/// fields. `self` is used for the post-save `history.bookmark = 0` update.
+///
+/// This runs on a worker thread when invoked via `saveAsync`/`saveZipFromSnapshot`.
+/// Anything that mutates dvui state (toasts, window arena allocations, etc.) MUST
+/// stay off this path — concurrent workers calling into `dvui.toastAdd` race on
+/// the toast subsystem's mutex against the GUI thread's per-frame toast iteration,
+/// and the contention can wedge one of them indefinitely (observed in multi-doc
+/// save-all-quit). The save-complete toast is duplicate feedback — the dialog
+/// closing + tab disappearing already signals completion — so we skip it.
+/// Async-path entry takes `file_id` and re-looks up the file at the END (for
+/// `history.bookmark` reset). The snapshot owns its own bytes so the actual
+/// zip write doesn't need any access to the live file. Re-lookup is critical
+/// because `open_files` shifts inline values on remove and any pointer captured
+/// upfront would silently alias a different file by the time we write.
+fn writeSnapshotToZip(file_id: u64, window: *dvui.Window, snap: *const SaveSnapshot) !void {
+    _ = window;
+    const zip_file = zip.zip_open(snap.null_terminated_path.ptr, zip.ZIP_DEFAULT_COMPRESSION_LEVEL, 'w');
 
     if (zip_file) |z| {
         const options = std.json.Stringify.Options{};
-
-        const output = try std.json.Stringify.valueAlloc(fizzy.app.allocator, ext, options);
+        const output = try std.json.Stringify.valueAlloc(fizzy.app.allocator, snap.ext, options);
         defer fizzy.app.allocator.free(output);
 
         _ = zip.zip_entry_open(z, "fizzydata.json");
         _ = zip.zip_entry_write(z, output.ptr, output.len);
         _ = zip.zip_entry_close(z);
 
-        if (self.layers.len > 0) {
-            const slice = self.layers.slice();
-            var index: usize = 0;
-            while (index < self.layers.len) : (index += 1) {
-                const layer = slice.get(index);
-
-                const image_name = try std.fmt.allocPrintSentinel(fizzy.editor.arena.allocator(), "{s}.layer", .{layer.name}, 0);
-                _ = zip.zip_entry_open(z, @as([*c]const u8, @ptrCast(image_name)));
-                _ = zip.zip_entry_write(z, @ptrCast(layer.bytes().ptr), layer.bytes().len);
-                _ = zip.zip_entry_close(z);
-            }
+        for (snap.layer_entry_names, snap.layer_bytes) |entry_name, bytes| {
+            _ = zip.zip_entry_open(z, @as([*c]const u8, @ptrCast(entry_name)));
+            _ = zip.zip_entry_write(z, @ptrCast(bytes.ptr), bytes.len);
+            _ = zip.zip_entry_close(z);
         }
 
         zip.zip_close(z);
-
-        {
-            const id_mutex = dvui.toastAdd(window, @src(), 0, fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
-            const id = id_mutex.id;
-            const message = std.fmt.allocPrint(window.arena(), "Saved {s}", .{std.fs.path.basename(self.path)}) catch "Saved file";
-            dvui.dataSetSlice(window, id, "_message", message);
-            id_mutex.mutex.unlock(dvui.io);
-        }
     }
 
-    self.setSaving(false);
-    self.history.bookmark = 0;
+    if (fizzy.editor.open_files.getPtr(file_id)) |f| f.history.bookmark = 0;
 }
 
 /// Point `path` at `new_path`, then `saveZip` (same on-disk work as a normal .pixi save). Restores the previous `path` if saving fails.
@@ -3414,8 +3557,45 @@ pub fn saveAsync(self: *File) !void {
     const ext = std.fs.path.extension(self.path);
 
     if (isFizzyExtension(ext)) {
-        const thread = try std.Thread.spawn(.{}, saveZip, .{ self, dvui.currentWindow() });
-        thread.detach();
+        // Flip the in-flight flag here on the GUI thread, before submitting to
+        // the save queue. Otherwise `Editor.tickPendingSaveCloses` can run on the
+        // next GUI frame, observe `isSaving() == false` (worker hasn't dequeued
+        // yet), and close the file before the worker reads it.
+        if (self.isSaving()) return;
+        self.setSaving(true);
+
+        // Snapshot all save-relevant data on the GUI thread NOW, before the worker
+        // could observe a torn `self.layers` (the user can still draw / add layers
+        // while the async save runs). Worker reads only the snapshot.
+        const snap_ptr = fizzy.app.allocator.create(SaveSnapshot) catch |err| {
+            self.setSaving(false);
+            return err;
+        };
+        snap_ptr.* = SaveSnapshot.fromFileOnGuiThread(self, fizzy.app.allocator) catch |err| {
+            fizzy.app.allocator.destroy(snap_ptr);
+            self.setSaving(false);
+            return err;
+        };
+
+        // Hand off to the single dedicated save-queue worker. Serializing all
+        // .fiz writes through one thread (instead of spawning a per-save thread)
+        // avoids worker-vs-worker contention on allocator / zip lib / dvui state
+        // that previously wedged one of N concurrent saves indefinitely.
+        //
+        // We submit by file id rather than by `*File` pointer: the editor's
+        // `open_files` AutoArrayHashMap shifts inline values on `orderedRemove`,
+        // so a stored pointer would silently start aliasing a different file the
+        // moment any earlier file in the queue completes and gets closed.
+        save_queue.submit(.{
+            .file_id = self.id,
+            .window = dvui.currentWindow(),
+            .snap = snap_ptr,
+        }) catch |err| {
+            snap_ptr.deinit(fizzy.app.allocator);
+            fizzy.app.allocator.destroy(snap_ptr);
+            self.setSaving(false);
+            return err;
+        };
     } else if (std.mem.eql(u8, ext, ".png")) {
         // `writeFlattenedLayersToPath` uses `syncLayerComposite` + `readTarget` (GPU); must run on the GUI thread.
         try savePng(self, dvui.currentWindow());

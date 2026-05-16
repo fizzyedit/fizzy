@@ -18,6 +18,7 @@ pub fn register() !void {
         try window.keybinds.putNoClobber(window.gpa, "zoom", .{ .command = true });
         try window.keybinds.putNoClobber(window.gpa, "save", .{ .command = true, .key = .s });
         try window.keybinds.putNoClobber(window.gpa, "save_as", .{ .command = true, .shift = true, .key = .s });
+        try window.keybinds.putNoClobber(window.gpa, "save_all", .{ .command = true, .alt = true, .key = .s });
         try window.keybinds.putNoClobber(window.gpa, "sample", .{ .control = true });
         try window.keybinds.putNoClobber(window.gpa, "transform", .{ .command = true, .key = .t });
         try window.keybinds.putNoClobber(window.gpa, "grid_layout", .{ .command = true, .key = .g });
@@ -34,6 +35,7 @@ pub fn register() !void {
         try window.keybinds.putNoClobber(window.gpa, "zoom", .{ .control = true });
         try window.keybinds.putNoClobber(window.gpa, "save", .{ .control = true, .key = .s });
         try window.keybinds.putNoClobber(window.gpa, "save_as", .{ .control = true, .shift = true, .key = .s });
+        try window.keybinds.putNoClobber(window.gpa, "save_all", .{ .control = true, .alt = true, .key = .s });
         try window.keybinds.putNoClobber(window.gpa, "sample", .{ .alt = true });
         try window.keybinds.putNoClobber(window.gpa, "transform", .{ .control = true, .key = .t });
         try window.keybinds.putNoClobber(window.gpa, "grid_layout", .{ .control = true, .key = .g });
@@ -116,6 +118,12 @@ pub fn tick() !void {
 
                 if (ke.matchBind("save_as") and ke.action == .down) {
                     fizzy.editor.requestSaveAs();
+                }
+
+                if (ke.matchBind("save_all") and ke.action == .down) {
+                    fizzy.editor.saveAll() catch {
+                        std.log.err("Failed to save all", .{});
+                    };
                 }
 
                 if (ke.matchBind("export") and ke.action == .down) {

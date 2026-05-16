@@ -123,8 +123,20 @@ pending_save_as_path: ?[]u8 = null,
 /// After Save As from "Save and Close", close this file id once save completes.
 pending_close_file_id: ?u64 = null,
 
-/// "Save all and quit" walks these ids (see `advanceSaveAllQuit`). Non-empty ⇒ save-all quit in progress.
+/// Files whose async save was kicked off by "Save and Close" (single-doc) — once
+/// `File.isSaving()` clears, `tickPendingSaveCloses` closes the file. Set is fine
+/// because at most one entry per file (saveAsync no-ops while already saving).
+pending_close_after_save: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
+
+/// "Save all and quit" queue. Walked by `advanceSaveAllQuit`: items move from this
+/// queue into `quit_saves_in_flight` when their save kicks off, then drop out when
+/// their save completes and the file closes. Non-empty (or in-flight non-empty) ⇒
+/// save-all quit in progress.
 quit_save_all_ids: std.ArrayListUnmanaged(u64) = .empty,
+
+/// Files whose async save was started as part of save-all quit and we're waiting on.
+/// When this AND `quit_save_all_ids` are both empty, the quit completes.
+quit_saves_in_flight: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
 
 /// True during save-all quit (nested Save As / flat-raster prompts).
 quit_in_progress: bool = false,
@@ -229,6 +241,11 @@ pub fn init(
     };
 
     editor.settings = try Settings.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.config_folder, "settings.json" }));
+
+    // Start the long-lived save-queue worker. All .fiz async saves get
+    // serialized through this single thread (see `File.SaveQueue`); concurrent
+    // worker spawns were causing one save to wedge under contention.
+    try fizzy.Internal.File.initSaveQueue();
 
     { // Setup themes
         var fizzy_dark = dvui.themeGet();
@@ -492,32 +509,6 @@ pub fn applySettingsTheme(editor: *Editor) !void {
     }
     dvui.themeSet(t.*);
     editor.applyFontSizesFromSettings();
-
-    // TEMP diagnostic: dump every Source registered in the font database, plus
-    // the active theme's heading/title font specs. Helps confirm whether the
-    // Comfortaa-Bold entry actually made it in and what weight font_heading asks for.
-    {
-        const cw = dvui.currentWindow();
-        dvui.log.info("[font-debug] active theme: {s}", .{cw.theme.name});
-        dvui.log.info("[font-debug]   font_heading: family={s} weight={s} size={d}", .{
-            cw.theme.font_heading.familyName(),
-            @tagName(cw.theme.font_heading.weight),
-            cw.theme.font_heading.size,
-        });
-        dvui.log.info("[font-debug]   font_title:   family={s} weight={s} size={d}", .{
-            cw.theme.font_title.familyName(),
-            @tagName(cw.theme.font_title.weight),
-            cw.theme.font_title.size,
-        });
-        for (cw.fonts.database.items, 0..) |src, i| {
-            dvui.log.info("[font-debug]   db[{d}]: family={s} weight={s} bytes.ptr={x}", .{
-                i,
-                src.familyName(),
-                @tagName(src.weight),
-                @intFromPtr(src.bytes.ptr),
-            });
-        }
-    }
 }
 
 pub fn currentGroupingID(editor: *Editor) u64 {
@@ -613,6 +604,10 @@ const handle_dist = 60;
 pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.window_opacity = if (dvui.themeGet().dark) editor.settings.window_opacity_dark else editor.settings.window_opacity_light;
 
+    // Drain any "Save and Close" requests whose async save has settled.
+    editor.tickPendingSaveCloses();
+    // Re-poll the quit walker while saves are in flight on worker threads.
+    if (editor.quit_saves_in_flight.count() > 0) editor.pending_quit_continue = true;
     if (editor.pending_quit_continue) {
         editor.pending_quit_continue = false;
         editor.advanceSaveAllQuit();
@@ -1146,6 +1141,11 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
                 std.log.err("Failed to save", .{});
             };
         },
+        .save_all => {
+            editor.saveAll() catch {
+                std.log.err("Failed to save all", .{});
+            };
+        },
         .new_file => {
             editor.requestNewFileDialog();
         },
@@ -1563,14 +1563,54 @@ pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
 pub fn abortSaveAllQuit(editor: *Editor) void {
     Dialogs.FlatRasterSaveWarning.pending_from_save_all_quit = false;
     editor.quit_save_all_ids.clearAndFree(fizzy.app.allocator);
+    editor.quit_saves_in_flight.clearRetainingCapacity();
     editor.quit_in_progress = false;
     editor.pending_close_file_id = null;
     editor.pending_quit_continue = false;
 }
 
-pub fn advanceSaveAllQuit(editor: *Editor) void {
-    if (editor.quit_save_all_ids.items.len == 0) return;
+/// Close any file whose "save and close" save has finished. Called once per frame
+/// at the top of `tick`. Files for which `saveAsync` didn't actually start a worker
+/// (e.g. unrecognized extension) are dropped without close — the dialog flow handles
+/// those via the Save As path. `quit_saves_in_flight` is drained by `advanceSaveAllQuit`.
+///
+/// Iteration note: `swapRemove` invalidates a captured `.keys()` slice (moves the
+/// last entry into the removed slot, shrinks length). Re-fetch the keys slice every
+/// iteration and use `count()` as the bound — otherwise we read stale memory and the
+/// loop never terminates, hanging the GUI thread.
+fn tickPendingSaveCloses(editor: *Editor) void {
+    var i: usize = 0;
+    while (i < editor.pending_close_after_save.count()) {
+        const id = editor.pending_close_after_save.keys()[i];
+        const file_ptr = editor.open_files.getPtr(id);
+        if (file_ptr) |f| {
+            if (f.isSaving()) {
+                i += 1;
+                continue;
+            }
+            editor.rawCloseFileID(id) catch |err| {
+                dvui.log.err("Post-save close failed: {s}", .{@errorName(err)});
+            };
+        }
+        // File gone (already closed elsewhere) or successfully closed: drop the
+        // entry. Leave `i` where it is — the swapped-in entry needs checking next.
+        _ = editor.pending_close_after_save.swapRemove(id);
+    }
+    // Worker threads also call `dvui.refresh(...)` from their completion defer to
+    // wake the wait loop when no UI input is happening — between the two, the
+    // walker reliably catches a save completion within one frame.
+}
 
+/// Kick off async saves for as many queued files as possible, then drain the
+/// in-flight set as workers finish. Called on the first quit frame
+/// (`pending_quit_continue`) AND every frame afterwards while there is work left.
+/// .fizzy saves run in parallel on worker threads. PNG/JPG saves still block the
+/// GUI thread (they hit the GPU) — those are done one per call so the UI can paint
+/// between them.
+pub fn advanceSaveAllQuit(editor: *Editor) void {
+    if (editor.quit_save_all_ids.items.len == 0 and editor.quit_saves_in_flight.count() == 0) return;
+
+    // Pass 1: kick off any queued saves we haven't started yet.
     while (editor.quit_save_all_ids.items.len > 0) {
         const id = editor.quit_save_all_ids.items[0];
         const file_ptr = editor.open_files.getPtr(id) orelse {
@@ -1582,37 +1622,69 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
             continue;
         }
 
-        if (editor.open_files.getIndex(id)) |idx| {
-            editor.setActiveFile(idx);
-        }
-
         if (!fizzy.Internal.File.hasRecognizedSaveExtension(file_ptr.path)) {
+            // Save As dialog needs a single active file — bail out of the parallel
+            // kickoff for this one and let the existing Save As + pending_close_file_id
+            // flow handle it. Next frame, pending_quit_continue will re-enter us.
+            if (editor.open_files.getIndex(id)) |idx| editor.setActiveFile(idx);
             editor.pending_close_file_id = id;
             editor.quit_in_progress = true;
             editor.requestSaveAs();
             return;
         }
         if (file_ptr.shouldConfirmFlatRasterSave()) {
+            // Flat-raster prompt is a modal dialog — same reason as Save As, do
+            // it serially and rejoin afterwards.
+            if (editor.open_files.getIndex(id)) |idx| editor.setActiveFile(idx);
             Dialogs.FlatRasterSaveWarning.pending_from_save_all_quit = true;
             Dialogs.FlatRasterSaveWarning.request(id, .save_and_close);
             return;
         }
-        Dialogs.UnsavedClose.saveSynchronously(file_ptr) catch |err| {
-            dvui.log.err("Save all quit: {s}", .{@errorName(err)});
+
+        // Async-safe path: kick off, move to in-flight, drop from queue.
+        file_ptr.saveAsync() catch |err| {
+            dvui.log.err("Save all quit kickoff: {s}", .{@errorName(err)});
             editor.abortSaveAllQuit();
             return;
         };
-        editor.rawCloseFileID(id) catch |err| {
-            dvui.log.err("Save all quit close: {s}", .{@errorName(err)});
+        editor.quit_saves_in_flight.put(fizzy.app.allocator, id, {}) catch |err| {
+            dvui.log.err("Save all quit track: {s}", .{@errorName(err)});
             editor.abortSaveAllQuit();
             return;
         };
         _ = editor.quit_save_all_ids.swapRemove(0);
     }
 
-    editor.quit_save_all_ids.clearRetainingCapacity();
-    editor.quit_in_progress = false;
-    editor.pending_app_close = true;
+    // Pass 2: drain completed in-flight saves. Same iteration pattern as
+    // `tickPendingSaveCloses` — re-fetch keys each iteration since swapRemove
+    // invalidates a previously-captured slice.
+    {
+        var i: usize = 0;
+        while (i < editor.quit_saves_in_flight.count()) {
+            const id = editor.quit_saves_in_flight.keys()[i];
+            const file_ptr = editor.open_files.getPtr(id);
+            if (file_ptr) |f| {
+                if (f.isSaving()) {
+                    i += 1;
+                    continue;
+                }
+                editor.rawCloseFileID(id) catch |err| {
+                    dvui.log.err("Save all quit close: {s}", .{@errorName(err)});
+                };
+            }
+            _ = editor.quit_saves_in_flight.swapRemove(id);
+        }
+    }
+
+    if (editor.quit_save_all_ids.items.len == 0 and editor.quit_saves_in_flight.count() == 0) {
+        editor.quit_in_progress = false;
+        editor.pending_app_close = true;
+    }
+    // No re-arming refresh here on purpose — the worker threads themselves call
+    // `dvui.refresh(window, ...)` from their completion defer (see
+    // `File.saveZipFromSnapshot`). Spinning a polling loop on the GUI thread
+    // starves the workers for CPU and serializes contention on `dvui.toastAdd`,
+    // which one worker reaches before the GUI's wakeup yields.
 }
 
 pub fn close(app: *App, editor: *Editor) void {
@@ -2645,6 +2717,22 @@ pub fn save(editor: *Editor) !void {
     try file.saveAsync();
 }
 
+/// Kick off an async save for every dirty file with a recognized extension.
+/// Each save lands in the single save-queue worker and runs serially in the
+/// background; the GUI stays responsive. Files that need Save As (no extension)
+/// or flat-raster confirmation are skipped — the user can save those individually.
+/// Files that are already saving are also skipped (their `saveAsync` no-ops).
+pub fn saveAll(editor: *Editor) !void {
+    for (editor.open_files.values()) |*file| {
+        if (!file.dirty()) continue;
+        if (!fizzy.Internal.File.hasRecognizedSaveExtension(file.path)) continue;
+        if (file.shouldConfirmFlatRasterSave()) continue;
+        file.saveAsync() catch |err| {
+            dvui.log.err("Save All: file {s} failed: {s}", .{ file.path, @errorName(err) });
+        };
+    }
+}
+
 const save_as_dialog_filters: [3]sdl3.SDL_DialogFileFilter = .{
     .{ .name = "fizzy", .pattern = "fiz;pixi" },
     .{ .name = "PNG", .pattern = "png" },
@@ -2816,6 +2904,9 @@ pub fn closeReference(editor: *Editor, index: usize) !void {
 }
 
 pub fn deinit(editor: *Editor) !void {
+    // Drain & join the save-queue worker before tearing anything else down. Any
+    // queued jobs need to finish writing or be dropped before File data is freed.
+    fizzy.Internal.File.deinitSaveQueue();
     // Signal cancel to any in-flight load workers. They check the flag after `fromPath` returns
     // and discard the result; we can't synchronously join them without blocking quit, so we
     // accept a brief window where a worker may still be running with a discardable result.
@@ -2852,6 +2943,8 @@ pub fn deinit(editor: *Editor) !void {
     }
 
     editor.quit_save_all_ids.deinit(fizzy.app.allocator);
+    editor.quit_saves_in_flight.deinit(fizzy.app.allocator);
+    editor.pending_close_after_save.deinit(fizzy.app.allocator);
 
     if (editor.colors.palette) |*palette| palette.deinit();
     if (editor.colors.file_tree_palette) |*palette| palette.deinit();
