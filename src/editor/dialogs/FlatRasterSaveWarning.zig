@@ -156,19 +156,13 @@ fn onChooseFlatRaster(file_id: u64) !void {
 }
 
 fn onCancel() void {
-    if (pending_mode == .save_and_close and pending_from_save_all_quit) {
-        fizzy.editor.abortSaveAllQuit();
-    }
+    fizzy.editor.cancelPendingSaveDialog();
     fizzy.dvui.closeFloatingDialogAnchored();
 }
 
 pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) !void {
     switch (response) {
-        .cancel => {
-            if (pending_mode == .save_and_close and pending_from_save_all_quit) {
-                fizzy.editor.abortSaveAllQuit();
-            }
-        },
+        .cancel => fizzy.editor.cancelPendingSaveDialog(),
         else => {},
     }
 }

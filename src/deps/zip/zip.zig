@@ -57,3 +57,6 @@ pub const ZIP_EFSEEK = -@as(c_int, 27);
 pub const ZIP_EFREAD = -@as(c_int, 28);
 pub const ZIP_EFWRITE = -@as(c_int, 29);
 pub const zip_t = struct_zip_t;
+
+/// Frees a buffer returned by `zip_stream_copy` (C `calloc`). Only used on wasm.
+pub extern fn fizzy_zip_free(ptr: ?*anyopaque) void;

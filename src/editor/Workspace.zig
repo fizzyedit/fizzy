@@ -90,7 +90,7 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .gravity_y = 0.0,
-        .id_extra = self.grouping,
+        .id_extra = @intCast(self.grouping),
     });
     defer vbox.deinit();
 
@@ -124,7 +124,7 @@ fn workspaceMainCanvasVbox(content_color: dvui.Color, background: bool, grouping
         .expand = .both,
         .background = background,
         .color_fill = content_color,
-        .id_extra = grouping,
+        .id_extra = @intCast(grouping),
     });
 }
 
@@ -137,7 +137,7 @@ fn workspaceEmptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.BoxWi
         .color_fill = content_color,
         .corner_radius = dvui.Rect.all(16),
         .margin = .{ .y = 10 },
-        .id_extra = grouping,
+        .id_extra = @intCast(grouping),
     });
 }
 
@@ -154,7 +154,10 @@ fn drawProject(self: *Workspace) void {
         else => {},
     }
 
-    const show_packed_atlas = fizzy.editor.folder != null and fizzy.packer.atlas != null;
+    const show_packed_atlas = if (comptime builtin.target.cpu.arch == .wasm32)
+        fizzy.packer.atlas != null
+    else
+        fizzy.editor.folder != null and fizzy.packer.atlas != null;
 
     // Match `drawCanvas`: no outer fill when showing centered card (transparency shows through like homepage).
     var canvas_vbox = workspaceMainCanvasVbox(content_color, show_packed_atlas, self.grouping);
@@ -170,7 +173,7 @@ fn drawProject(self: *Workspace) void {
             .source = atlas.source,
             .canvas = &atlas.canvas,
         }, .{
-            .id_extra = self.grouping,
+            .id_extra = @intCast(self.grouping),
             .expand = .both,
             .background = false,
             .color_fill = .transparent,
@@ -186,7 +189,9 @@ fn drawProject(self: *Workspace) void {
         dvui.alphaSet(1.0);
         defer dvui.alphaSet(alpha);
 
-        const hint: []const u8 = if (fizzy.editor.folder == null)
+        const hint: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
+            "Pack open files to see the preview."
+        else if (fizzy.editor.folder == null)
             "Open a project folder, then pack to see the preview."
         else
             "Pack the project to see the preview.";
@@ -217,7 +222,7 @@ fn drawTabs(self: *Workspace) void {
 
         var tabs_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .none,
-            .id_extra = self.grouping,
+            .id_extra = @intCast(self.grouping),
         });
         defer tabs_box.deinit();
 
@@ -225,7 +230,7 @@ fn drawTabs(self: *Workspace) void {
             .expand = .none,
             .background = false,
             .corner_radius = dvui.Rect.all(0),
-            .id_extra = self.grouping,
+            .id_extra = @intCast(self.grouping),
         });
         defer scroll_area.deinit();
 
@@ -238,7 +243,7 @@ fn drawTabs(self: *Workspace) void {
 
             var tabs_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .none,
-                .id_extra = self.grouping,
+                .id_extra = @intCast(self.grouping),
             });
             defer tabs_hbox.deinit();
 

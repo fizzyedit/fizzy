@@ -101,7 +101,9 @@ titlebar_top_buffer: f32 = 10.0,
 pub fn resolvedPanZoomScheme(settings: *const Settings) ResolvedPanZoomScheme {
     return switch (settings.input_scheme) {
         .auto => switch (dvui.mouseType()) {
-            .unknown => if (builtin.os.tag == .macos) .trackpad else .mouse,
+            // Use runtime platform detection so macOS web users get the trackpad
+            // default. `builtin.os.tag == .macos` is false on wasm32-freestanding.
+            .unknown => if (fizzy.platform.isMacOS()) .trackpad else .mouse,
             .mouse => .mouse,
             .trackpad => .trackpad,
         },
@@ -125,6 +127,8 @@ pub fn setThemeName(settings: *Settings, allocator: std.mem.Allocator, name: []c
 
 /// Loads settings (`theme` is always heap-owned after successful return — see `setThemeName` / `deinit`).
 pub fn load(allocator: std.mem.Allocator, path: []const u8) !Settings {
+    // Wasm: no on-disk config; `fizzy.fs.read` uses `Io.Dir.cwd()` (posix.AT).
+    if (comptime builtin.target.cpu.arch == .wasm32) return default(allocator);
     const maybe_data = fizzy.fs.read(allocator, dvui.io, path) catch null;
     const data = maybe_data orelse return default(allocator);
     defer allocator.free(data);

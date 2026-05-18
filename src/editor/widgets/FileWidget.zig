@@ -985,7 +985,7 @@ fn drawSpriteBubbleForRow(
     if (animation_index) |ai| {
         const id = file.animations.get(ai).id;
         if (fizzy.editor.colors.file_tree_palette) |*palette| {
-            color = palette.getDVUIColor(id);
+            color = palette.getDVUIColor(@intCast(id));
         }
         if (file.selected_animation_index == ai) {
             automatic_animation = true;
@@ -1286,7 +1286,7 @@ pub fn drawSpriteBubble(
         var border_color = dvui.themeGet().color(.control, .fill_hover);
         if (fizzy.editor.colors.file_tree_palette) |*palette| {
             if (self.init_options.file.selected_animation_index) |index| {
-                border_color = palette.getDVUIColor(self.init_options.file.animations.get(index).id);
+                border_color = palette.getDVUIColor(@intCast(self.init_options.file.animations.get(index).id));
                 add_rem_message = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s}", .{self.init_options.file.animations.get(index).name}) catch {
                     dvui.log.err("Failed to allocate add/remove message", .{});
                     return false;
@@ -3675,7 +3675,7 @@ fn spriteAnimationPaletteColor(file: *fizzy.Internal.File, sprite_index: usize) 
 
         if (animation_index) |ai| {
             const id = file.animations.get(ai).id;
-            return palette.getDVUIColor(id);
+            return palette.getDVUIColor(@intCast(id));
         }
     }
     return null;
@@ -3744,8 +3744,8 @@ fn checkerboardTintAtSpriteCellCenter(file: *fizzy.Internal.File, sprite_index: 
     }
 }
 
-/// Checkerboard behind layers: one tiled quad when `transparency_effect == .none`; otherwise one quad per
-/// visible cell (per-cell UVs + vertex colors for rainbow / animation).
+/// Checkerboard behind layers: one batched quad per visible cell (UV 0..1 per cell so the tile repeats
+/// with CLAMP_TO_EDGE textures). Vertex colors vary for rainbow / animation effects.
 fn drawCheckerboardCellsBatched(file: *fizzy.Internal.File) void {
     const n = file.spriteCount();
     if (n == 0) return;
@@ -3755,42 +3755,8 @@ fn drawCheckerboardCellsBatched(file: *fizzy.Internal.File) void {
     const tone = pal.tone;
     const rs = file.editor.canvas.screen_rect_scale;
 
-    if (te == .none) {
-        const gp = fileCanvasVisibleGridParams(file) orelse return;
-        const file_w = @as(f32, @floatFromInt(file.width()));
-        const file_h = @as(f32, @floatFromInt(file.height()));
-        if (file_w <= 0 or file_h <= 0) return;
-        const layer_r = gp.visible_data.intersect(.{ .x = 0, .y = 0, .w = file_w, .h = file_h });
-        if (layer_r.empty()) return;
-
-        const r = rs.rectToPhysical(layer_r);
-        const tl = r.topLeft();
-        const tr = r.topRight();
-        const br = r.bottomRight();
-        const bl = r.bottomLeft();
-        const col_w = gp.col_w;
-        const row_h = gp.row_h;
-        const uv_x0 = layer_r.x / col_w;
-        const uv_y0 = layer_r.y / row_h;
-        const uv_x1 = (layer_r.x + layer_r.w) / col_w;
-        const uv_y1 = (layer_r.y + layer_r.h) / row_h;
-        const pma = dvui.Color.PMA.fromColor(tone);
-
-        const arena = dvui.currentWindow().arena();
-        var builder = dvui.Triangles.Builder.init(arena, 4, 6) catch return;
-        defer builder.deinit(arena);
-        builder.appendVertex(.{ .pos = tl, .col = pma, .uv = .{ uv_x0, uv_y0 } });
-        builder.appendVertex(.{ .pos = tr, .col = pma, .uv = .{ uv_x1, uv_y0 } });
-        builder.appendVertex(.{ .pos = br, .col = pma, .uv = .{ uv_x1, uv_y1 } });
-        builder.appendVertex(.{ .pos = bl, .col = pma, .uv = .{ uv_x0, uv_y1 } });
-        builder.appendTriangles(&.{ 1, 0, 3, 1, 3, 2 });
-        const triangles = builder.build();
-        dvui.renderTriangles(triangles, file.editor.checkerboard_tile.getTexture() catch null) catch {
-            dvui.log.err("Failed to render batched checkerboard", .{});
-        };
-        return;
-    }
-
+    // One quad per cell with UV 0..1 so the checker tile repeats correctly (textures use
+    // CLAMP_TO_EDGE on web and desktop; a single quad with UV > 1 would not tile).
     const gp = fileCanvasVisibleGridParams(file) orelse return;
     if (gp.first_vis_row >= gp.last_vis_row or gp.vx1 <= 0) return;
 

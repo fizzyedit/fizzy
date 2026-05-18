@@ -192,9 +192,17 @@ pub fn init(
     app: *App,
 ) !Editor {
     const arena = dvui.currentWindow().arena();
-    var environ_map = try fizzy.processEnviron().createMap(arena);
-    defer environ_map.deinit();
-    const config_root = try known_folders.getPath(dvui.io, arena, environ_map, .local_configuration) orelse app.root_path;
+    // Wasm: skip the env-map / known-folders lookup. `std.process.Environ.put`
+    // analyzes a `block.view()` call that doesn't compile on freestanding (where
+    // `Block == GlobalBlock`), and the browser has no concept of OS user dirs
+    // anyway. `app.root_path` ("." on wasm) is the only sensible fallback.
+    const config_root: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
+        app.root_path
+    else config_root_blk: {
+        var environ_map = try fizzy.processEnviron().createMap(arena);
+        defer environ_map.deinit();
+        break :config_root_blk try known_folders.getPath(dvui.io, arena, environ_map, .local_configuration) orelse app.root_path;
+    };
     const config_folder = std.fs.path.join(fizzy.app.allocator, &.{ config_root, "fizzy" }) catch app.root_path;
 
     // One-time migration: pre-rename builds used `Fizzy/` (capitalized).
@@ -202,7 +210,8 @@ pub fn init(
     // resolves to that same directory, so the rename is a no-op and the
     // failure is ignored. On case-sensitive filesystems (most Linux) the legacy
     // dir is otherwise orphaned, so we move it across to preserve user settings.
-    {
+    // Wasm: no filesystem, no migration; `Io.Dir.renameAbsolute` pulls in posix.AT.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
         const legacy = std.fs.path.join(arena, &.{ config_root, "Fizzy" }) catch null;
         if (legacy) |legacy_path| {
             // Only rename if the new path doesn't already have content.
@@ -332,9 +341,13 @@ pub fn init(
         fizzy_light.text = .{ .r = 40, .g = 40, .b = 45, .a = 255 };
         fizzy_light.focus = fizzy_light.highlight.fill.?;
 
-        appendUserThemes(app.allocator, &editor) catch |err| {
-            dvui.log.err("Failed to prepare user themes folder: {s}", .{@errorName(err)});
-        };
+        // User-themes scan reads a directory off disk (Io.Dir.cwd → posix.AT / NAME_MAX),
+        // unavailable on wasm32-freestanding. No persistent FS in browser anyway.
+        if (comptime builtin.target.cpu.arch != .wasm32) {
+            appendUserThemes(app.allocator, &editor) catch |err| {
+                dvui.log.err("Failed to prepare user themes folder: {s}", .{@errorName(err)});
+            };
+        }
 
         editor.themes.append(app.allocator, fizzy_dark) catch {
             dvui.log.err("Failed to append theme", .{});
@@ -361,32 +374,40 @@ pub fn init(
         try editor.applySettingsTheme();
     }
 
-    var valid_path: bool = true;
-    if (std.fs.path.isAbsolute(editor.config_folder)) {
-        std.Io.Dir.accessAbsolute(dvui.io, editor.config_folder, .{ .read = true }) catch {
-            valid_path = false;
-        };
+    // Config + palette folder creation and recents-from-disk load are no-ops on
+    // wasm: `Io.Dir.accessAbsolute` / `createDirAbsolute` / `Recents.load` all
+    // walk `Io.Dir.cwd()` (posix.AT), unavailable on wasm32-freestanding.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        var valid_path: bool = true;
+        if (std.fs.path.isAbsolute(editor.config_folder)) {
+            std.Io.Dir.accessAbsolute(dvui.io, editor.config_folder, .{ .read = true }) catch {
+                valid_path = false;
+            };
 
-        if (!valid_path) {
-            std.Io.Dir.createDirAbsolute(dvui.io, editor.config_folder, .default_dir) catch |err| dvui.log.err("Failed to create config folder: {s}: {any}", .{ editor.config_folder, err });
+            if (!valid_path) {
+                std.Io.Dir.createDirAbsolute(dvui.io, editor.config_folder, .default_dir) catch |err| dvui.log.err("Failed to create config folder: {s}: {any}", .{ editor.config_folder, err });
+            }
         }
-    }
 
-    valid_path = true;
-    if (std.fs.path.isAbsolute(editor.palette_folder)) {
-        std.Io.Dir.accessAbsolute(dvui.io, editor.palette_folder, .{ .read = true }) catch {
-            valid_path = false;
-        };
+        valid_path = true;
+        if (std.fs.path.isAbsolute(editor.palette_folder)) {
+            std.Io.Dir.accessAbsolute(dvui.io, editor.palette_folder, .{ .read = true }) catch {
+                valid_path = false;
+            };
 
-        if (!valid_path) {
-            std.Io.Dir.createDirAbsolute(dvui.io, editor.palette_folder, .default_dir) catch |err| dvui.log.err("Failed to create palette folder: {s}: {any}", .{ editor.palette_folder, err });
+            if (!valid_path) {
+                std.Io.Dir.createDirAbsolute(dvui.io, editor.palette_folder, .default_dir) catch |err| dvui.log.err("Failed to create palette folder: {s}: {any}", .{ editor.palette_folder, err });
+            }
         }
     }
 
     fizzy.perf.console_logging_enabled = editor.settings.perf_logging;
-    editor.recents = Recents.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.config_folder, "recents.json" })) catch .{
-        .folders = .init(app.allocator),
-    };
+    editor.recents = if (comptime builtin.target.cpu.arch == .wasm32)
+        .{ .folders = .init(app.allocator) }
+    else
+        Recents.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.config_folder, "recents.json" })) catch .{
+            .folders = .init(app.allocator),
+        };
 
     fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) editor.settings.window_opacity_dark else editor.settings.window_opacity_light));
 
@@ -539,6 +560,8 @@ fn activelyDrawing(editor: *Editor) bool {
 
 /// Debounced autosave (defers while a canvas stroke is active).
 fn saveSettingsGuarded(editor: *Editor) !void {
+    // Wasm: settings live in memory only; `Settings.save` uses `Io.Dir.cwd()` (posix.AT).
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
     if (!editor.settings_dirty) return;
 
     const now = fizzy.perf.nanoTimestamp();
@@ -658,6 +681,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Reap completed background file loads. Must run BEFORE `pending_composite_warmup` and any
     // workspace/file iteration so that a just-loaded file is visible to the rest of this frame.
     editor.processLoadingJobs();
+    if (comptime builtin.target.cpu.arch == .wasm32) fizzy.backend.pollWebFileIo(editor);
     editor.processPackJob();
 
     // Build workspaces AFTER reaping load jobs so a freshly-loaded file with a new grouping
@@ -1094,6 +1118,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         dvui.log.err("Failed to autosave settings ({s})", .{@errorName(err)});
     };
 
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        runWasmPackWorkers(editor);
+    }
+
     _ = editor.arena.reset(.retain_capacity);
 
     if (editor.pending_app_close) {
@@ -1129,12 +1157,23 @@ fn flushQueuedNativeMenuActions(editor: *Editor) void {
 pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuAction) !void {
     switch (action) {
         .open_folder => {
-            if (try dvui.dialogNativeFolderSelect(dvui.currentWindow().arena(), .{ .title = "Open Project Folder" })) |folder| {
+            if (comptime builtin.target.cpu.arch == .wasm32) {
+                Dialogs.WebFolderUnavailable.request();
+            } else if (try dvui.dialogNativeFolderSelect(dvui.currentWindow().arena(), .{ .title = "Open Project Folder" })) |folder| {
                 try editor.setProjectFolder(folder);
             }
         },
         .open_files => {
-            if (try dvui.dialogNativeFileOpenMultiple(dvui.currentWindow().arena(), .{
+            if (comptime builtin.target.cpu.arch == .wasm32) {
+                fizzy.backend.showOpenFileDialog(
+                    struct {
+                        fn cb(_: ?[][:0]const u8) void {}
+                    }.cb,
+                    &.{},
+                    "",
+                    null,
+                );
+            } else if (try dvui.dialogNativeFileOpenMultiple(dvui.currentWindow().arena(), .{
                 .title = "Open Files...",
                 .filter_description = ".fiz, .pixi, .png, .jpg, .jpeg",
                 .filters = &.{ "*.fiz", "*.pixi", "*.png", "*.jpg", "*.jpeg" },
@@ -1794,6 +1833,15 @@ pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
     try editor.loading_jobs.put(fizzy.app.allocator, job.path, job);
     editor.last_load_request_path = job.path;
 
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        // Wasm has no Thread.spawn. File-open from a wasm-reachable path needs
+        // a synchronous load (the file picker hands us bytes inline). Not yet
+        // implemented — drop the job here and report unsupported.
+        _ = editor.loading_jobs.remove(job.path);
+        job.destroy();
+        dvui.log.warn("Async file load not yet supported on web", .{});
+        return false;
+    }
     const thread = std.Thread.spawn(.{}, FileLoadJob.workerMain, .{job}) catch |err| {
         _ = editor.loading_jobs.remove(job.path);
         job.destroy();
@@ -1802,6 +1850,30 @@ pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
     thread.detach();
 
     return true;
+}
+
+/// Synchronous open from browser file-picker bytes. Caller owns `path` on success (stored in `File.path`).
+pub fn openFileFromBytes(editor: *Editor, path: []u8, bytes: []const u8, grouping: u64) !fizzy.Internal.File {
+    for (editor.open_files.values()) |*file| {
+        if (std.mem.eql(u8, file.path, path)) {
+            if (editor.open_files.getIndex(file.id)) |idx| {
+                editor.setActiveFile(idx);
+            }
+            fizzy.app.allocator.free(path);
+            return error.AlreadyOpen;
+        }
+    }
+
+    const loaded = fizzy.Internal.File.fromBytes(path, bytes) catch |err| {
+        fizzy.app.allocator.free(path);
+        return err;
+    };
+    var file = loaded orelse {
+        fizzy.app.allocator.free(path);
+        return error.InvalidFile;
+    };
+    file.editor.grouping = grouping;
+    return file;
 }
 
 /// Per-frame sweep called from `tick`. Moves completed load jobs into `open_files`, cleans up
@@ -1880,17 +1952,26 @@ pub fn processLoadingJobs(editor: *Editor) void {
 /// running long enough to observe the flag and exit cleanly; their results are discarded by
 /// `processPackJob`. Only the most recently-started job's result is installed.
 pub fn startPackProject(editor: *Editor) !void {
-    const root = fizzy.editor.folder orelse return;
-
     var inputs: std.ArrayListUnmanaged(PackJob.PackInput) = .empty;
     errdefer {
         for (inputs.items) |*input| input.deinit(fizzy.app.allocator);
         inputs.deinit(fizzy.app.allocator);
     }
 
-    // Recurse the project directory and gather one PackInput per fizzy-extension file. Open
-    // files get snapshotted now so their in-memory (possibly-dirty) state is what we pack.
-    try gatherPackInputs(editor, &inputs, root);
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        // Web: no on-disk project folder, just snapshot every open file. The
+        // user has to open files explicitly through the file picker — that's
+        // their working set.
+        for (editor.open_files.values()) |*open_file| {
+            const ext = std.fs.path.extension(open_file.path);
+            if (!fizzy.Internal.File.isFizzyExtension(ext)) continue;
+            const snapshot = try PackJob.PackFile.fromOpenFile(fizzy.app.allocator, open_file);
+            try inputs.append(fizzy.app.allocator, .{ .open = snapshot });
+        }
+    } else {
+        const root = editor.folder orelse return;
+        try gatherPackInputs(editor, &inputs, root);
+    }
 
     if (inputs.items.len == 0) return;
 
@@ -1918,17 +1999,35 @@ pub fn startPackProject(editor: *Editor) !void {
     try editor.pack_jobs.append(fizzy.app.allocator, job);
     errdefer _ = editor.pack_jobs.pop();
 
-    const thread = try std.Thread.spawn(.{}, PackJob.workerMain, .{job});
-    thread.detach();
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        // Worker runs at end of `tick` (after the explorer draws) so the Pack
+        // button can show a spinner for at least one frame before work starts.
+        dvui.refresh(dvui.currentWindow(), @src(), null);
+    } else {
+        const thread = try std.Thread.spawn(.{}, PackJob.workerMain, .{job});
+        thread.detach();
+    }
 }
 
-/// True iff there is a non-cancelled pack job in flight. Drives the explorer button's spinner
-/// state without coupling the UI to the internal pack-job list.
+/// True while a pack is queued, running, or finished but not yet installed into
+/// `fizzy.packer.atlas`. Drives the explorer Pack button spinner.
 pub fn isPackingActive(editor: *const Editor) bool {
     for (editor.pack_jobs.items) |job| {
-        if (!job.cancelled.load(.monotonic) and !job.done.load(.acquire)) return true;
+        if (job.cancelled.load(.monotonic)) continue;
+        if (!job.done.load(.acquire)) return true;
+        if (!job.result_consumed) return true;
     }
     return false;
+}
+
+/// Run queued wasm pack workers after UI has drawn so `isPackingActive` can show feedback.
+fn runWasmPackWorkers(editor: *Editor) void {
+    for (editor.pack_jobs.items) |job| {
+        if (job.cancelled.load(.monotonic)) continue;
+        if (job.done.load(.acquire)) continue;
+        PackJob.workerMain(job);
+        return;
+    }
 }
 
 fn gatherPackInputs(
@@ -2487,7 +2586,7 @@ pub fn paste(editor: *Editor) !void {
                 dst_rect.y = sprite_rect.y + clipboard.offset.y;
 
                 file.editor.transform = .{
-                    .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, .rgba_8_8_8_8) catch {
+                    .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, fizzy.render.compositeTargetPixelFormat()) catch {
                         dvui.log.err("Failed to create target texture", .{});
                         return;
                     },
@@ -2530,7 +2629,7 @@ pub fn paste(editor: *Editor) !void {
                     dst_rect.y = rect.y + clipboard.offset.y;
 
                     file.editor.transform = .{
-                        .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, .rgba_8_8_8_8) catch {
+                        .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, fizzy.render.compositeTargetPixelFormat()) catch {
                             dvui.log.err("Failed to create target texture", .{});
                             return;
                         },
@@ -2559,7 +2658,7 @@ pub fn paste(editor: *Editor) !void {
             }
 
             file.editor.transform = .{
-                .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, .rgba_8_8_8_8) catch {
+                .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, fizzy.render.compositeTargetPixelFormat()) catch {
                     dvui.log.err("Failed to create target texture", .{});
                     return;
                 },
@@ -2680,7 +2779,7 @@ pub fn transform(editor: *Editor) !void {
         if (file.editor.transform_layer.reduce(source_rect)) |reduced_data_rect| {
             defer file.editor.selection_layer.clearMask();
             file.editor.transform = .{
-                .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, .rgba_8_8_8_8) catch {
+                .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, fizzy.render.compositeTargetPixelFormat()) catch {
                     dvui.log.err("Failed to create target texture", .{});
                     return;
                 },
@@ -2743,7 +2842,7 @@ pub fn saveAll(editor: *Editor) !void {
     }
 }
 
-const save_as_dialog_filters: [3]sdl3.SDL_DialogFileFilter = .{
+const save_as_dialog_filters: [3]fizzy.backend.DialogFileFilter = .{
     .{ .name = "fizzy", .pattern = "fiz;pixi" },
     .{ .name = "PNG", .pattern = "png" },
     .{ .name = "JPEG", .pattern = "jpg;jpeg" },
@@ -2761,15 +2860,41 @@ pub fn requestSaveAs(_: *Editor) void {
     fizzy.backend.showSaveFileDialog(saveAsDialogCallback, &save_as_dialog_filters, def, current_file_dir);
 }
 
+/// Clears pending save-as / save-and-close state when the user dismisses a save dialog.
+pub fn cancelPendingSaveDialog(editor: *Editor) void {
+    if (editor.pending_save_as_path) |p| {
+        fizzy.app.allocator.free(p);
+        editor.pending_save_as_path = null;
+    }
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        const WebFileIo = @import("WebFileIo.zig");
+        if (WebFileIo.pending_save_filename) |p| {
+            fizzy.app.allocator.free(p);
+            WebFileIo.pending_save_filename = null;
+        }
+    }
+
+    const file_id = editor.pending_close_file_id orelse if (editor.activeFile()) |f| f.id else null;
+    editor.pending_close_file_id = null;
+
+    if (file_id) |id| {
+        _ = editor.pending_close_after_save.swapRemove(id);
+        if (editor.open_files.getPtr(id)) |f| {
+            f.resetSaveUIState();
+        }
+    } else if (editor.activeFile()) |f| {
+        f.resetSaveUIState();
+    }
+
+    if (editor.quit_save_all_ids.items.len > 0 or editor.quit_in_progress) {
+        editor.abortSaveAllQuit();
+    }
+}
+
 /// Save dialog may invoke this from AppKit outside `Window.begin` / `end`; do not use `currentWindow` here.
 pub fn saveAsDialogCallback(paths: ?[][:0]const u8) void {
     if (paths == null) {
-        if (fizzy.editor.pending_close_file_id) |_| {
-            fizzy.editor.pending_close_file_id = null;
-            if (fizzy.editor.quit_save_all_ids.items.len > 0) {
-                fizzy.editor.abortSaveAllQuit();
-            }
-        }
+        fizzy.editor.cancelPendingSaveDialog();
         return;
     }
     const p = paths.?;
@@ -2786,6 +2911,51 @@ pub fn saveAsDialogCallback(paths: ?[][:0]const u8) void {
 }
 
 fn processPendingSaveAs(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        const path = blk: {
+            if (editor.pending_save_as_path) |p| break :blk p;
+            const WebFileIo = @import("WebFileIo.zig");
+            if (WebFileIo.pending_save_filename) |p| break :blk p;
+            return;
+        };
+        const owned_by_editor = editor.pending_save_as_path != null;
+        editor.pending_save_as_path = null;
+        if (!owned_by_editor) {
+            const WebFileIo = @import("WebFileIo.zig");
+            WebFileIo.pending_save_filename = null;
+        }
+        defer fizzy.app.allocator.free(path);
+
+        const file = editor.activeFile() orelse return;
+        const ext = std.fs.path.extension(path);
+        const saved: bool = blk: {
+            if (fizzy.Internal.File.isFizzyExtension(ext)) {
+                file.saveAsFizzy(path, dvui.currentWindow()) catch |err| {
+                    dvui.log.err("Save As: {any}", .{err});
+                    break :blk false;
+                };
+            } else if (std.mem.eql(u8, ext, ".png") or std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) {
+                file.saveAsFlattened(path, dvui.currentWindow()) catch |err| {
+                    dvui.log.err("Save As: {any}", .{err});
+                    break :blk false;
+                };
+            } else {
+                dvui.log.err("Save As: choose extension .fiz, .png, .jpg, or .jpeg (got {s})", .{ext});
+                break :blk false;
+            }
+            break :blk true;
+        };
+        if (!saved) return;
+        if (editor.pending_close_file_id) |cid| {
+            if (file.id == cid) {
+                editor.pending_close_file_id = null;
+                editor.rawCloseFileID(cid) catch |err| {
+                    dvui.log.err("Failed to close file after Save As: {s}", .{@errorName(err)});
+                };
+            }
+        }
+        return;
+    }
     const path = editor.pending_save_as_path orelse return;
     editor.pending_save_as_path = null;
     defer fizzy.app.allocator.free(path);
@@ -2959,12 +3129,15 @@ pub fn deinit(editor: *Editor) !void {
     if (editor.colors.palette) |*palette| palette.deinit();
     if (editor.colors.file_tree_palette) |*palette| palette.deinit();
 
-    editor.recents.save(fizzy.app.allocator, try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "recents.json" })) catch {
-        dvui.log.err("Failed to save recents", .{});
-    };
+    // Recents persist via Io.Dir.cwd writes — no FS on wasm; skip persist.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        editor.recents.save(fizzy.app.allocator, try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "recents.json" })) catch {
+            dvui.log.err("Failed to save recents", .{});
+        };
+    }
     editor.recents.deinit(fizzy.app.allocator);
 
-    try saveSettingsRaw(editor);
+    if (comptime builtin.target.cpu.arch != .wasm32) try saveSettingsRaw(editor);
     if (editor.settings_last_saved_json) |blob| {
         fizzy.app.allocator.free(blob);
         editor.settings_last_saved_json = null;
@@ -2972,9 +3145,14 @@ pub fn deinit(editor: *Editor) !void {
     editor.settings.deinit(fizzy.app.allocator);
 
     if (editor.project) |*project| {
-        project.save() catch {
-            dvui.log.err("Failed to save project file", .{});
-        };
+        // Wasm: skip project.save() — it walks std.Io.Dir.cwd() which pulls in
+        // posix.AT (unavailable on freestanding). Browser tabs have no
+        // persistent on-disk project anyway.
+        if (comptime builtin.target.cpu.arch != .wasm32) {
+            project.save() catch {
+                dvui.log.err("Failed to save project file", .{});
+            };
+        }
         project.deinit(fizzy.app.allocator);
     }
 

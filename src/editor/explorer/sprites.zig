@@ -96,7 +96,9 @@ fn selectionUiKey(file: *fizzy.Internal.File) u64 {
     if (c == 0) return 0;
     const first = file.editor.selected_sprites.findFirstSet() orelse return 0;
     const last = file.editor.selected_sprites.findLastSet() orelse return 0;
-    return (c << 48) ^ (first << 24) ^ last;
+    // Widen to u64 before shifting: `usize` is `u32` on wasm32, so `c << 48`
+    // would overflow without the cast.
+    return (@as(u64, c) << 48) ^ (@as(u64, first) << 24) ^ @as(u64, last);
 }
 
 fn selectionOriginsDifferFrom(file: *fizzy.Internal.File, indices: []const usize, old_vals: []const [2]f32) bool {
@@ -828,7 +830,7 @@ pub fn drawAnimations(self: *Sprites) !void {
 
             var color = dvui.themeGet().color(.control, .fill_hover);
             if (fizzy.editor.colors.file_tree_palette) |*palette| {
-                color = palette.getDVUIColor(anim_id);
+                color = palette.getDVUIColor(@intCast(anim_id));
             }
 
             var branch = tree.branch(@src(), .{
@@ -838,7 +840,7 @@ pub fn drawAnimations(self: *Sprites) !void {
                 .animation_duration = 250_000,
                 .animation_easing = dvui.easing.outBack,
             }, .{
-                .id_extra = anim_id,
+                .id_extra = @intCast(anim_id),
                 .expand = .horizontal,
                 .corner_radius = dvui.Rect.all(1000),
                 .background = false,
@@ -1599,7 +1601,7 @@ pub fn drawFrames(self: *Sprites) !void {
             for (animation.frames, 0..) |*frame, frame_index| {
                 var anim_color = dvui.themeGet().color(.control, .fill_hover);
                 if (fizzy.editor.colors.file_tree_palette) |*palette| {
-                    anim_color = palette.getDVUIColor(animation.id);
+                    anim_color = palette.getDVUIColor(@intCast(animation.id));
                 }
 
                 var branch = tree.branch(@src(), .{

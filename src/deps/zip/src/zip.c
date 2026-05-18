@@ -9,6 +9,10 @@
  */
 #define __STDC_WANT_LIB_EXT1__ 1
 
+#ifdef FIZZY_ZIP_WASM
+#include "../fizzy_zip_wasm.h"
+#define STRCLONE(STR) ((STR) ? fizzy_strdup(STR) : NULL)
+#else
 #include <errno.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -37,6 +41,7 @@
 #endif
 
 #include "miniz.h"
+#endif
 #include "zip.h"
 
 #ifdef _MSC_VER
@@ -94,7 +99,11 @@ struct zip_entry_t {
   mz_zip_writer_add_state state;
   tdefl_compressor comp;
   mz_uint32 external_attr;
+#ifdef MINIZ_NO_TIME
+  mz_uint32 m_time;
+#else
   time_t m_time;
+#endif
 };
 
 struct zip_t {
@@ -157,6 +166,8 @@ const char *zip_strerror(int errnum) {
 
   return zip_errlist[errnum];
 }
+
+#ifndef FIZZY_ZIP_WASM
 
 static const char *zip_basename(const char *name) {
   char const *p;
@@ -282,7 +293,13 @@ static mz_bool zip_name_match(const char *name1, const char *name2) {
   return res;
 }
 
+#endif /* !FIZZY_ZIP_WASM */
+
 static int zip_archive_truncate(mz_zip_archive *pzip) {
+#ifdef FIZZY_ZIP_WASM
+  (void)pzip;
+  return 0;
+#else
   mz_zip_internal_state *pState = pzip->m_pState;
   mz_uint64 file_size = pzip->m_archive_size;
   if ((pzip->m_pWrite == mz_zip_heap_write_func) && (pState->m_pMem)) {
@@ -295,7 +312,10 @@ static int zip_archive_truncate(mz_zip_archive *pzip) {
     }
   }
   return 0;
+#endif
 }
+
+#ifndef FIZZY_ZIP_WASM
 
 static int zip_archive_extract(mz_zip_archive *zip_archive, const char *dir,
                                int (*on_extract)(const char *filename,
@@ -425,10 +445,14 @@ out:
   return err;
 }
 
+#endif /* !FIZZY_ZIP_WASM */
+
 static inline void zip_archive_finalize(mz_zip_archive *pzip) {
   mz_zip_writer_finalize_archive(pzip);
   zip_archive_truncate(pzip);
 }
+
+#ifndef FIZZY_ZIP_WASM
 
 static ssize_t zip_entry_mark(struct zip_t *zip,
                               struct zip_entry_mark_t *entry_mark,
@@ -902,6 +926,8 @@ int zip_is64(struct zip_t *zip) {
   return (int)zip->archive.m_pState->m_zip64;
 }
 
+#endif /* !FIZZY_ZIP_WASM */
+
 static int _zip_entry_open(struct zip_t *zip, const char *entryname,
                            int case_sensitive) {
   size_t entrylen = 0;
@@ -1024,8 +1050,8 @@ static int _zip_entry_open(struct zip_t *zip, const char *entryname,
   }
   local_dir_header_ofs += num_alignment_padding_bytes;
 
-  zip->entry.m_time = time(NULL);
 #ifndef MINIZ_NO_TIME
+  zip->entry.m_time = time(NULL);
   mz_zip_time_t_to_dos_time(zip->entry.m_time, &dos_time, &dos_date);
 #endif
 
@@ -1369,6 +1395,8 @@ int zip_entry_write(struct zip_t *zip, const void *buf, size_t bufsize) {
   return 0;
 }
 
+#ifndef FIZZY_ZIP_WASM
+
 int zip_entry_fwrite(struct zip_t *zip, const char *filename) {
   int err = 0;
   size_t n = 0;
@@ -1434,6 +1462,8 @@ int zip_entry_fwrite(struct zip_t *zip, const char *filename) {
   return err;
 }
 
+#endif /* !FIZZY_ZIP_WASM */
+
 ssize_t zip_entry_read(struct zip_t *zip, void **buf, size_t *bufsize) {
   mz_zip_archive *pzip = NULL;
   mz_uint idx;
@@ -1486,6 +1516,8 @@ ssize_t zip_entry_noallocread(struct zip_t *zip, void *buf, size_t bufsize) {
 
   return (ssize_t)zip->entry.uncomp_size;
 }
+
+#ifndef FIZZY_ZIP_WASM
 
 int zip_entry_fread(struct zip_t *zip, const char *filename) {
   mz_zip_archive *pzip = NULL;
@@ -1560,6 +1592,8 @@ int zip_entry_extract(struct zip_t *zip,
              : ZIP_EINVIDX;
 }
 
+#endif /* !FIZZY_ZIP_WASM */
+
 ssize_t zip_entries_total(struct zip_t *zip) {
   if (!zip) {
     // zip_t handler is not initialized
@@ -1568,6 +1602,8 @@ ssize_t zip_entries_total(struct zip_t *zip) {
 
   return (ssize_t)zip->archive.m_total_files;
 }
+
+#ifndef FIZZY_ZIP_WASM
 
 ssize_t zip_entries_delete(struct zip_t *zip, char *const entries[],
                            size_t len) {
@@ -1604,6 +1640,10 @@ ssize_t zip_entries_delete(struct zip_t *zip, char *const entries[],
   return err;
 }
 
+#endif /* !FIZZY_ZIP_WASM */
+
+#ifndef FIZZY_ZIP_WASM
+
 int zip_stream_extract(const char *stream, size_t size, const char *dir,
                        int (*on_extract)(const char *filename, void *arg),
                        void *arg) {
@@ -1623,6 +1663,8 @@ int zip_stream_extract(const char *stream, size_t size, const char *dir,
 
   return zip_archive_extract(&zip_archive, dir, on_extract, arg);
 }
+
+#endif /* !FIZZY_ZIP_WASM */
 
 struct zip_t *zip_stream_open(const char *stream, size_t size, int level,
                               char mode) {
@@ -1686,6 +1728,8 @@ void zip_stream_close(struct zip_t *zip) {
     CLEANUP(zip);
   }
 }
+
+#ifndef FIZZY_ZIP_WASM
 
 int zip_create(const char *zipname, const char *filenames[], size_t len) {
   int err = 0;
@@ -1791,3 +1835,79 @@ int zip_extract(const char *zipname, const char *dir,
 
   return zip_archive_extract(&zip_archive, dir, on_extract, arg);
 }
+
+#else /* FIZZY_ZIP_WASM */
+
+struct zip_t *zip_open(const char *zipname, int level, char mode) {
+  (void)zipname;
+  (void)level;
+  (void)mode;
+  return NULL;
+}
+
+void zip_close(struct zip_t *zip) {
+  if (zip) {
+    mz_zip_writer_end(&(zip->archive));
+    mz_zip_reader_end(&(zip->archive));
+    CLEANUP(zip);
+  }
+}
+
+int zip_entry_fwrite(struct zip_t *zip, const char *filename) {
+  (void)zip;
+  (void)filename;
+  return ZIP_ENOFILE;
+}
+
+int zip_entry_fread(struct zip_t *zip, const char *filename) {
+  (void)zip;
+  (void)filename;
+  return ZIP_ENOFILE;
+}
+
+int zip_entry_extract(struct zip_t *zip,
+                      size_t (*on_extract)(void *arg, uint64_t offset,
+                                           const void *buf, size_t bufsize),
+                      void *arg) {
+  (void)zip;
+  (void)on_extract;
+  (void)arg;
+  return ZIP_ENOFILE;
+}
+
+ssize_t zip_entries_delete(struct zip_t *zip, char *const entries[],
+                           size_t len) {
+  (void)zip;
+  (void)entries;
+  (void)len;
+  return ZIP_ENOFILE;
+}
+
+int zip_stream_extract(const char *stream, size_t size, const char *dir,
+                       int (*on_extract)(const char *filename, void *arg),
+                       void *arg) {
+  (void)stream;
+  (void)size;
+  (void)dir;
+  (void)on_extract;
+  (void)arg;
+  return ZIP_ENOFILE;
+}
+
+int zip_create(const char *zipname, const char *filenames[], size_t len) {
+  (void)zipname;
+  (void)filenames;
+  (void)len;
+  return ZIP_ENOFILE;
+}
+
+int zip_extract(const char *zipname, const char *dir,
+                int (*on_extract)(const char *filename, void *arg), void *arg) {
+  (void)zipname;
+  (void)dir;
+  (void)on_extract;
+  (void)arg;
+  return ZIP_ENOFILE;
+}
+
+#endif /* FIZZY_ZIP_WASM */

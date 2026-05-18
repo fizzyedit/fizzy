@@ -2,6 +2,7 @@
 //! otherwise `.gitignore` at the project root.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 
@@ -19,6 +20,7 @@ pub fn deinit(self: *IgnoreRules, gpa: std.mem.Allocator) void {
 }
 
 fn fileExistsAbs(path: []const u8) bool {
+    if (comptime builtin.target.cpu.arch == .wasm32) return false;
     const f = std.Io.Dir.cwd().openFile(dvui.io, path, .{}) catch return false;
     defer f.close(dvui.io);
     return true;
@@ -26,6 +28,7 @@ fn fileExistsAbs(path: []const u8) bool {
 
 /// Prefer `.fizignore`, else `.gitignore`.
 pub fn load(gpa: std.mem.Allocator, project_root_abs: []const u8) !IgnoreRules {
+    if (comptime builtin.target.cpu.arch == .wasm32) return .{};
     var out: IgnoreRules = .{};
     errdefer out.deinit(gpa);
 

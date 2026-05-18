@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 
 const Dialogs = @This();
@@ -10,6 +11,24 @@ pub const AppQuitUnsaved = @import("AppQuitUnsaved.zig");
 pub const GridLayout = @import("GridLayout.zig");
 pub const FlatRasterSaveWarning = @import("FlatRasterSaveWarning.zig");
 pub const AboutFizzy = @import("AboutFizzy.zig");
+pub const WebFolderUnavailable = if (builtin.target.cpu.arch == .wasm32)
+    @import("WebFolderUnavailable.zig")
+else
+    struct {
+        pub fn request() void {}
+        pub fn active(_: *dvui.Window) bool {
+            return false;
+        }
+    };
+pub const WebSaveAs = if (builtin.target.cpu.arch == .wasm32)
+    @import("WebSaveAs.zig")
+else
+    struct {
+        pub fn request(_: []const u8) void {}
+        pub fn active(_: *dvui.Window) bool {
+            return false;
+        }
+    };
 
 pub fn drawDimensionsLabel(src: std.builtin.SourceLocation, width: u32, height: u32, font: dvui.Font, unit: []const u8, opts: dvui.Options) void {
     {

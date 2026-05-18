@@ -235,6 +235,187 @@ pub fn build(b: *std.Build) !void {
     const process_assets_step = b.step("process-assets", "generates struct for all assets");
     process_assets_step.dependOn(&assets_processing.step);
 
+    // ---------------------------------------------------------------
+    // Web (wasm) build — entirely separate from the native exe so it can't disturb
+    // packaging / SDL / Velopack paths. `zig build web` produces `zig-out/web/{web.wasm,
+    // web.js, index.html, NotoSansKR-Regular.ttf}`, deployable as-is to a static host.
+    //
+    // Checkpoint A: minimal placeholder app, no fizzy editor code yet. Later checkpoints
+    // will incrementally pull fizzy modules in, gating each native-only path behind a
+    // `arch != .wasm32` check.
+    // ---------------------------------------------------------------
+    {
+        const web_target = b.resolveTargetQuery(.{
+            .cpu_arch = .wasm32,
+            .os_tag = .freestanding,
+            .cpu_features_add = std.Target.wasm.featureSet(&.{
+                .atomics,
+                .multivalue,
+                .bulk_memory,
+            }),
+        });
+
+        const dvui_web_dep = b.dependency("dvui", .{
+            .target = web_target,
+            .optimize = optimize,
+            .backend = .web,
+            .freetype = false,
+        });
+
+        const web_exe = b.addExecutable(.{
+            .name = "web",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/web_main.zig"),
+                .target = web_target,
+                .optimize = optimize,
+                .link_libc = false,
+                .single_threaded = true,
+                .strip = optimize == .ReleaseFast or optimize == .ReleaseSmall,
+            }),
+        });
+        web_exe.entry = .disabled;
+        web_exe.root_module.addImport("dvui", dvui_web_dep.module("dvui_web"));
+        web_exe.root_module.addImport("web-backend", dvui_web_dep.module("web"));
+
+        // `icons` (pure-Zig icon data) is referenced at file scope in
+        // `src/dvui.zig` and `src/editor/Infobar.zig`. Wired in so any future
+        // wasm-reachable code that pulls those files in compiles cleanly.
+        if (b.lazyDependency("icons", .{ .target = web_target, .optimize = optimize })) |dep| {
+            web_exe.root_module.addImport("icons", dep.module("icons"));
+        }
+
+        // `assets` is generated at build time by assetpack (pure `@embedFile`s,
+        // target-independent). Same instance as native — no extra build cost.
+        web_exe.root_module.addImport("assets", assets_module);
+
+        // `build_opts` (app_version, app_repo_url, velopack_enabled) — shared
+        // with native. velopack_enabled is whatever was passed via `-Dvelopack`;
+        // wasm path is gated by `arch != .wasm32` in `auto_update.impl`.
+        web_exe.root_module.addOptions("build_opts", build_opts);
+
+        // `zip` — Zig decls + miniz/zip.c compiled for wasm with `fizzy_zip_libc.c`
+        // (malloc → dvui_c_alloc). Enables `zip_stream_*` for .fiz open/save in browser.
+        web_exe.root_module.addImport("zip", zip_pkg.module);
+        zip.linkWasm(web_exe);
+
+        // `known-folders` is referenced at file scope in a few editor files
+        // (AboutFizzy, Editor settings paths). It's a pure-Zig wrapper for
+        // OS-specific user-directory APIs — the file compiles fine on wasm even
+        // though runtime calls would fail (which we'll never reach on web).
+        const known_folders_web = b.dependency("known_folders", .{
+            .target = web_target,
+            .optimize = optimize,
+        }).module("known-folders");
+        web_exe.root_module.addImport("known-folders", known_folders_web);
+
+        // Three editor files have `const sdl3 = @import("backend").c;` at file
+        // scope. After refactoring all `sdl3.SDL_DialogFileFilter` references
+        // to `fizzy.backend.DialogFileFilter`, those decls became dead — Zig's
+        // lazy analysis skips file-scope consts that no reachable body uses.
+        // So no `backend` module is wired in for the web build.
+
+        // `zstbi` for the web build. The C sources include `<stdlib.h>` /
+        // `<assert.h>` only when `STBI_NO_STDLIB` is undefined; with the flag
+        // set, `zstbi.c` routes alloc + qsort through `fizzy_stbi_libc.c`
+        // (which forwards to DVUI's `dvui_c_alloc` / `dvui_c_free`). Lets the
+        // Packer compile + run on wasm against the currently-open files.
+        const zstbi_web_lib = b.addLibrary(.{
+            .name = "zstbi-web",
+            .root_module = b.addModule("zstbi_web", .{
+                .target = web_target,
+                .optimize = optimize,
+                .root_source_file = b.path("src/deps/stbi/zstbi.zig"),
+                .link_libc = false,
+                .single_threaded = true,
+            }),
+        });
+        const zstbi_web_cflags = [_][]const u8{
+            "-DSTBI_NO_STDLIB=1",
+            "-DSTBI_NO_SIMD=1",
+        };
+        zstbi_web_lib.root_module.addCSourceFile(.{
+            .file = std.Build.path(b, "src/deps/stbi/zstbi.c"),
+            .flags = &zstbi_web_cflags,
+        });
+        zstbi_web_lib.root_module.addCSourceFile(.{
+            .file = std.Build.path(b, "src/deps/stbi/fizzy_stbi_libc.c"),
+            .flags = &zstbi_web_cflags,
+        });
+        web_exe.root_module.addImport("zstbi", zstbi_web_lib.root_module);
+
+        const msf_gif_web_lib = b.addLibrary(.{
+            .name = "msf_gif-web",
+            .root_module = b.addModule("msf_gif_web", .{
+                .target = web_target,
+                .optimize = optimize,
+                .root_source_file = b.path("src/deps/msf_gif/msf_gif.zig"),
+                .link_libc = false,
+                .single_threaded = true,
+            }),
+        });
+        const msf_gif_wasm_cflags = [_][]const u8{"-Isrc/deps/msf_gif/wasm_shim"};
+        msf_gif_web_lib.root_module.addCSourceFile(.{
+            .file = std.Build.path(b, "src/deps/msf_gif/fizzy_msf_gif_wasm.c"),
+            .flags = &msf_gif_wasm_cflags,
+        });
+        web_exe.root_module.addImport("msf_gif", msf_gif_web_lib.root_module);
+
+        const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
+        const install_wasm = b.addInstallArtifact(web_exe, .{
+            .dest_dir = .{ .override = web_install_dir },
+        });
+
+        // Cache-buster: stamps a 64-char hash into the index.html / web.js placeholders so
+        // the browser picks up new wasm builds without manual hard-reloads. Re-implements
+        // upstream DVUI's `addWebExample` machinery so we don't have to invoke its step.
+        const cb = b.addExecutable(.{
+            .name = "cacheBuster",
+            .root_module = b.createModule(.{
+                .root_source_file = dvui_web_dep.path("src/cacheBuster.zig"),
+                .target = b.graph.host,
+            }),
+        });
+        const cb_run = b.addRunArtifact(cb);
+        cb_run.addFileArg(dvui_web_dep.path("src/backends/index.html"));
+        cb_run.addFileArg(dvui_web_dep.path("src/backends/web.js"));
+        cb_run.addFileArg(web_exe.getEmittedBin());
+        const index_html_with_hash = cb_run.captureStdOut(.{});
+
+        const web_step = b.step("web", "Build the fizzy web (wasm) app into zig-out/web/");
+        web_step.dependOn(&install_wasm.step);
+        web_step.dependOn(&b.addInstallFileWithDir(
+            index_html_with_hash,
+            web_install_dir,
+            "index.html",
+        ).step);
+        web_step.dependOn(&b.addInstallFileWithDir(
+            dvui_web_dep.path("src/backends/web.js"),
+            web_install_dir,
+            "web.js",
+        ).step);
+        web_step.dependOn(&b.addInstallFileWithDir(
+            dvui_web_dep.path("src/fonts/NotoSansKR-Regular.ttf"),
+            web_install_dir,
+            "NotoSansKR-Regular.ttf",
+        ).step);
+
+        // Compile-only smoke check for the wasm target. Pairs with `check` (unit
+        // tests). Catches regressions where someone reaches a wasm-incompatible
+        // code path (thread spawn, std.posix surface, missing module import)
+        // from the wasm root. No install — just compile.
+        const check_web_step = b.step("check-web", "Compile fizzy web (wasm) without installing artifacts");
+        check_web_step.dependOn(&web_exe.step);
+
+        // Copy zig-out/web into docs/app/ for local preview: `cd docs && python3 -m http.server`
+        // then open http://localhost:8000/app/ (matches production /app/ path).
+        const web_docs_step = b.step("web-docs", "Build web app and copy into docs/app/ for local Pages preview");
+        web_docs_step.dependOn(web_step);
+        const cp_web_to_docs = b.addSystemCommand(&.{ "sh", "-c" });
+        cp_web_to_docs.addArg("mkdir -p docs/app && cp -R zig-out/web/. docs/app/");
+        cp_web_to_docs.step.dependOn(web_step);
+        web_docs_step.dependOn(&cp_web_to_docs.step);
+    }
+
     const main_fizzy = try addFizzyExecutableForTarget(b, target, optimize, accesskit, build_opts, zip_pkg, assets_module, process_assets_step, macos_sdl_paths, velopack_enabled);
     const exe = main_fizzy.exe;
     const zstbi_module = main_fizzy.zstbi_module;

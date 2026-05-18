@@ -65,11 +65,21 @@ pub const Layer = @import("Layer.zig");
 /// Source location within the atlas texture and origin location
 pub const Sprite = @import("Sprite.zig");
 
+/// Runtime platform detection (`isMacOS()` etc.) that's accurate on wasm web
+/// builds, where `builtin.os.tag` is always `.freestanding`.
+pub const platform = @import("platform.zig");
+
 /// Custom dvui stuff
 pub const dvui = @import("dvui.zig");
 
-/// Custom backend stuff
-pub const backend = @import("backend.zig");
+/// Custom backend stuff. Split per-arch: native uses SDL3 + objc + win32; web is a
+/// no-op stub layer (no window chrome, no native dialogs, no native menu bar).
+/// Zig only semantically analyzes the chosen branch, so the wasm build never sees
+/// the SDL3 / objc / win32 imports inside `backend_native.zig`.
+pub const backend = if (@import("builtin").target.cpu.arch == .wasm32)
+    @import("backend_web.zig")
+else
+    @import("backend_native.zig");
 
 /// Returns a `std.process.Environ` populated from the libc `environ` global.
 /// Used to bridge APIs (like `known-folders.getPath`) that require an

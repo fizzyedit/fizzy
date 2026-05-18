@@ -13,8 +13,21 @@
 #define ZIP_H
 
 #include <stdint.h>
+#ifdef FIZZY_ZIP_WASM
+extern void *memcpy(void *dest, const void *src, size_t n);
+extern void *memset(void *dest, int c, size_t n);
+#else
 #include <string.h>
+#endif
+#ifdef FIZZY_ZIP_WASM
+#include <stddef.h>
+#ifndef _SSIZE_T_DEFINED
+#define _SSIZE_T_DEFINED
+typedef ptrdiff_t ssize_t;
+#endif
+#else
 #include <sys/types.h>
+#endif
 
 #ifndef ZIP_SHARED
 #define ZIP_EXPORT

@@ -573,10 +573,19 @@ typedef void *const voidpc;
 #endif
 
 #pragma once
+#ifndef FIZZY_ZIP_WASM
 #include <assert.h>
+#endif
 #include <stdint.h>
+#ifndef FIZZY_ZIP_WASM
 #include <stdlib.h>
 #include <string.h>
+#else
+#include <stddef.h>
+extern void *memcpy(void *dest, const void *src, size_t n);
+extern void *memset(void *dest, int c, size_t n);
+extern void *memmove(void *dest, const void *src, size_t n);
+#endif
 
 /* ------------------- Types and macros */
 typedef unsigned char mz_uint8;
@@ -622,9 +631,15 @@ typedef struct mz_dummy_time_t_tag {
 #define MZ_FREE(x) (void)x, ((void)0)
 #define MZ_REALLOC(p, x) NULL
 #else
+#ifndef MZ_MALLOC
 #define MZ_MALLOC(x) malloc(x)
+#endif
+#ifndef MZ_FREE
 #define MZ_FREE(x) free(x)
+#endif
+#ifndef MZ_REALLOC
 #define MZ_REALLOC(p, x) realloc(p, x)
+#endif
 #endif
 
 #define MZ_MAX(a, b) (((a) > (b)) ? (a) : (b))

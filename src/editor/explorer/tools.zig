@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -496,7 +497,9 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
                     file.history.append(.{
                         .layers_order = .{
                             .order = prev_order,
-                            .selected = file.layers.items(.id)[file.selected_layer_index],
+                            // Layer ids are u64 on disk; convert to the usize the
+                            // history's `selected` field expects.
+                            .selected = @intCast(file.layers.items(.id)[file.selected_layer_index]),
                         },
                     }) catch {
                         dvui.log.err("Failed to append history", .{});
@@ -537,7 +540,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
 
             var color = dvui.themeGet().color(.control, .fill_hover);
             if (fizzy.editor.colors.file_tree_palette) |*palette| {
-                color = palette.getDVUIColor(layer_id);
+                color = palette.getDVUIColor(@intCast(layer_id));
             }
 
             // `process_events` must be false: Tree Branch's header `ButtonWidget.processEvents` runs
@@ -550,7 +553,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
                 .animation_duration = 250_000,
                 .animation_easing = dvui.easing.outBack,
             }, .{
-                .id_extra = layer_id,
+                .id_extra = @intCast(layer_id),
                 .expand = .horizontal,
                 .corner_radius = dvui.Rect.all(1000),
                 .background = false,
@@ -1136,9 +1139,12 @@ pub fn drawPalettes() !void {
             }
 
             _ = dvui.separator(@src(), .{ .expand = .horizontal });
-            searchPalettes(&dropdown) catch {
-                dvui.log.err("Failed to search palettes", .{});
-            };
+            // User palette folder scan uses Io.Dir.iterate (NAME_MAX) — unavailable on wasm.
+            if (comptime builtin.target.cpu.arch != .wasm32) {
+                searchPalettes(&dropdown) catch {
+                    dvui.log.err("Failed to search palettes", .{});
+                };
+            }
         }
 
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 10 } });

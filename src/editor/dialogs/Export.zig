@@ -1,10 +1,14 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const zigimg = @import("zigimg");
 const msf_gif = @import("msf_gif");
-const sdl3 = @import("backend").c;
 const zstbi = @import("zstbi");
+
+const WebFileIo = if (builtin.target.cpu.arch == .wasm32) @import("../WebFileIo.zig") else struct {};
+
+const ExportImageFormat = enum { png, jpg };
 
 const Dialogs = @import("Dialogs.zig");
 
@@ -33,6 +37,13 @@ pub const min_size: [2]u32 = .{ 1, 1 };
 pub const min_scale: u32 = 1;
 
 pub var anim_frame_index: usize = 0;
+
+/// Animation to export/preview: uses the animation selected in the editor.
+fn exportAnimationIndex(file: *fizzy.Internal.File) ?usize {
+    const idx = file.selected_animation_index orelse return null;
+    if (idx >= file.animations.len) return null;
+    return idx;
+}
 
 pub fn dialog(id: dvui.Id) anyerror!bool {
     var outer_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
@@ -111,6 +122,10 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
 
             if (button.clicked()) {
                 mode = @enumFromInt(i);
+                if (mode == .animation) {
+                    anim_frame_index = 0;
+                    dvui.currentWindow().timerRemove(id);
+                }
                 // Second layout pass after the scroll+preview id stabilizes; avoids one blank frame.
                 dvui.currentWindow().extra_frames_needed = 2;
             }
@@ -168,23 +183,36 @@ pub fn animationDialog(id: dvui.Id) anyerror!bool {
             @divTrunc(max_gif_size[0], @as(f32, @floatFromInt(file.column_width))),
             @divTrunc(max_gif_size[1], @as(f32, @floatFromInt(file.row_height))),
         );
-        if (file.selected_animation_index) |animation_index| {
+        if (exportAnimationIndex(file)) |animation_index| {
             const anim = file.animations.get(animation_index);
+
             if (anim.frames.len > 0) {
-                if (dvui.timerDoneOrNone(id)) {
-                    if (anim_frame_index >= anim.frames.len - 1) {
-                        anim_frame_index = 0;
-                    } else {
-                        anim_frame_index += 1;
-                    }
-                    const millis_per_frame = anim.frames[anim_frame_index].ms;
-                    dvui.timer(id, @intCast(millis_per_frame * 1000));
+                if (anim_frame_index >= anim.frames.len) anim_frame_index = 0;
+
+                const frame_ms = anim.frames[anim_frame_index].ms;
+                if (dvui.timerGet(id) == null) {
+                    dvui.timer(id, @intCast(frame_ms * 1000));
+                } else if (dvui.timerDone(id)) {
+                    anim_frame_index = (anim_frame_index + 1) % anim.frames.len;
+                    const next_ms = anim.frames[anim_frame_index].ms;
+                    dvui.timer(id, @intCast(next_ms * 1000));
+                    dvui.currentWindow().extra_frames_needed = 1;
                 }
-                if (anim_frame_index >= anim.frames.len) {
-                    anim_frame_index = 0;
-                }
+
                 preview_sprite = anim.frames[anim_frame_index].sprite_index;
             }
+        } else if (file.animations.len == 0) {
+            dvui.labelNoFmt(@src(), "This file has no animations.", .{}, .{
+                .gravity_x = 0.5,
+                .color_text = dvui.themeGet().color(.control, .text),
+                .margin = .{ .y = 8, .h = 8 },
+            });
+        } else {
+            dvui.labelNoFmt(@src(), "Select an animation in the editor.", .{}, .{
+                .gravity_x = 0.5,
+                .color_text = dvui.themeGet().color(.control, .text),
+                .margin = .{ .y = 8, .h = 8 },
+            });
         }
     }
 
@@ -238,7 +266,7 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
                         };
 
                         const default_filename: [:0]const u8 = std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}.gif", .{
-                            if (file.selected_animation_index) |animation_index| file.animations.items(.name)[animation_index] else "animation",
+                            if (exportAnimationIndex(file)) |animation_index| file.animations.items(.name)[animation_index] else "animation",
                         }, 0) catch {
                             dvui.log.err("Failed to allocate filename", .{});
                             return;
@@ -249,7 +277,7 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
 
                     fizzy.backend.showSaveFileDialog(
                         saveAnimationCallback,
-                        &[_]sdl3.SDL_DialogFileFilter{.{ .name = "GIF", .pattern = "gif" }},
+                        &[_]fizzy.backend.DialogFileFilter{.{ .name = "GIF", .pattern = "gif" }},
                         default,
                         null, // Passing null here means use the last save folder location
                     );
@@ -272,7 +300,7 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
 
                     fizzy.backend.showSaveFileDialog(
                         exportCurrentSpriteCallback,
-                        &[_]sdl3.SDL_DialogFileFilter{
+                        &[_]fizzy.backend.DialogFileFilter{
                             .{ .name = "PNG", .pattern = "png" },
                             .{ .name = "JPEG", .pattern = "jpg;jpeg" },
                         },
@@ -296,7 +324,7 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
 
                     fizzy.backend.showSaveFileDialog(
                         exportLayerCallback,
-                        &[_]sdl3.SDL_DialogFileFilter{
+                        &[_]fizzy.backend.DialogFileFilter{
                             .{ .name = "PNG", .pattern = "png" },
                             .{ .name = "JPEG", .pattern = "jpg;jpeg" },
                         },
@@ -320,7 +348,7 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
 
                     fizzy.backend.showSaveFileDialog(
                         exportAllCallback,
-                        &[_]sdl3.SDL_DialogFileFilter{
+                        &[_]fizzy.backend.DialogFileFilter{
                             .{ .name = "PNG", .pattern = "png" },
                             .{ .name = "JPEG", .pattern = "jpg;jpeg" },
                         },
@@ -377,7 +405,7 @@ fn renderExportPreviewSprite(file: *fizzy.Internal.File, sprite_index: usize) vo
         // Same tiled checker + tone as layer/all. Sprite box natural space is (0,0)–(sw×scale,sh×scale)
         // (see `min_size_content`), not file coordinates—geometry must be local, UVs use file `sprite_rect`.
         const local_natural = dvui.Rect{ .x = 0, .y = 0, .w = sprite_rect.w * scale, .h = sprite_rect.h * scale };
-        drawCheckerboardTiled(file, sprite_rect, local_natural, box.data().rectScale());
+        drawCheckerboardCell(file, sprite_index, local_natural, box.data().rectScale());
 
         fizzy.render.renderLayers(.{
             .file = file,
@@ -413,40 +441,200 @@ fn exportDimensionsLabelForExport(column_w: u32, row_h: u32) void {
 
 const ExportFullPreviewKind = enum { layer, composite };
 
-/// `uv_file` is the region in file pixel coordinates; UVs tile by column/row (same as
-/// `FileWidget.drawCheckerboardCellsBatched` for `transparency_effect == .none`).
-/// `geometry_natural` is the rect in the widget’s natural space used for `rectToPhysical` (matches
-/// full file for layer/all, or `0,0,sw×scale,sh×scale` for the sprite export box).
-fn drawCheckerboardTiled(
+const CheckerboardPalette = struct {
+    tone: dvui.Color,
+    c_tl: dvui.Color,
+    c_tr: dvui.Color,
+    c_bl: dvui.Color,
+    c_br: dvui.Color,
+};
+
+fn exportCheckerboardPalette() CheckerboardPalette {
+    const tone = dvui.themeGet().color(.content, .fill).lighten(6.0).opacity(0.5).opacity(dvui.currentWindow().alpha);
+    const c_tl = tone;
+    const c_tr = tone.lerp(.red, 0.18);
+    const c_bl = tone.lerp(.blue, 0.12);
+    const c_br = c_tr.lerp(c_bl, 0.5);
+    return .{ .tone = tone, .c_tl = c_tl, .c_tr = c_tr, .c_bl = c_bl, .c_br = c_br };
+}
+
+fn exportCheckerboardGridColorBilinear(
+    c_tl: dvui.Color,
+    c_tr: dvui.Color,
+    c_bl: dvui.Color,
+    c_br: dvui.Color,
+    u: f32,
+    v: f32,
+) dvui.Color {
+    const top = c_tl.lerp(c_tr, u);
+    const bottom = c_bl.lerp(c_br, u);
+    return top.lerp(bottom, v);
+}
+
+fn exportCheckerboardVertexColor(
+    c_tl: dvui.Color,
+    c_tr: dvui.Color,
+    c_bl: dvui.Color,
+    c_br: dvui.Color,
+    u: f32,
+    v: f32,
+    mu: f32,
+    mv: f32,
+    tone: dvui.Color,
+) dvui.Color {
+    const c_corner = exportCheckerboardGridColorBilinear(c_tl, c_tr, c_bl, c_br, u, v);
+    const du = u - mu;
+    const dv = v - mv;
+    const dist = @sqrt(du * du + dv * dv);
+    var t = @min(@max(dist * 1.55, 0), 1);
+    t = t * t * (3.0 - 2.0 * t);
+    return tone.lerp(c_corner, t);
+}
+
+fn exportSpriteAnimationPaletteColor(file: *fizzy.Internal.File, sprite_index: usize) ?dvui.Color {
+    if (fizzy.editor.colors.file_tree_palette) |*palette| {
+        var animation_index: ?usize = null;
+
+        if (file.selected_animation_index) |selected_animation_index| {
+            for (file.animations.items(.frames)[selected_animation_index]) |frame| {
+                if (frame.sprite_index == sprite_index) {
+                    animation_index = selected_animation_index;
+                    break;
+                }
+            }
+        }
+
+        if (animation_index == null) {
+            anim_blk: for (file.animations.items(.frames), 0..) |frames, i| {
+                for (frames) |frame| {
+                    if (frame.sprite_index == sprite_index) {
+                        animation_index = i;
+                        break :anim_blk;
+                    }
+                }
+            }
+        }
+
+        if (animation_index) |ai| {
+            const id = file.animations.get(ai).id;
+            return palette.getDVUIColor(@intCast(id));
+        }
+    }
+    return null;
+}
+
+fn exportCheckerboardCellCornerColor(
     file: *fizzy.Internal.File,
-    uv_file: dvui.Rect,
+    sprite_index: usize,
+    pal: CheckerboardPalette,
+    u: f32,
+    v: f32,
+) dvui.Color {
+    switch (fizzy.editor.settings.transparency_effect) {
+        .none => return pal.tone,
+        .rainbow => return exportCheckerboardVertexColor(pal.c_tl, pal.c_tr, pal.c_bl, pal.c_br, u, v, 0.5, 0.5, pal.tone),
+        .animation => {
+            if (exportSpriteAnimationPaletteColor(file, sprite_index)) |ac| {
+                const row = file.rowFromIndex(sprite_index);
+                const rows_f = @max(@as(f32, @floatFromInt(file.rows)), 1.0);
+                const v_cell_top = @as(f32, @floatFromInt(row)) / rows_f;
+                const v_cell_bot = @as(f32, @floatFromInt(row + 1)) / rows_f;
+                const v_mid = (v_cell_top + v_cell_bot) * 0.5;
+                if (v <= v_mid) return pal.tone;
+                return pal.tone.lerp(ac, 0.4);
+            }
+            return pal.tone;
+        },
+    }
+}
+
+/// One quad per sprite cell, UV 0..1 (matches `FileWidget.drawCheckerboardCellsBatched`).
+fn appendCheckerboardCellQuad(
+    builder: *dvui.Triangles.Builder,
+    quad_idx: *usize,
+    file: *fizzy.Internal.File,
+    sprite_index: usize,
+    pal: CheckerboardPalette,
     geometry_natural: dvui.Rect,
     rs_box: dvui.RectScale,
 ) void {
-    const col_w = @as(f32, @floatFromInt(file.column_width));
-    const row_h = @as(f32, @floatFromInt(file.row_height));
-    if (col_w <= 0 or row_h <= 0) return;
+    if (geometry_natural.w <= 0 or geometry_natural.h <= 0) return;
+
+    const cols_f = @max(@as(f32, @floatFromInt(file.columns)), 1.0);
+    const rows_f = @max(@as(f32, @floatFromInt(file.rows)), 1.0);
+    const col_i = file.columnFromIndex(sprite_index);
+    const row_i = file.rowFromIndex(sprite_index);
+    const u_left = @as(f32, @floatFromInt(col_i)) / cols_f;
+    const u_right = @as(f32, @floatFromInt(col_i + 1)) / cols_f;
+    const v_top = @as(f32, @floatFromInt(row_i)) / rows_f;
+    const v_bot = @as(f32, @floatFromInt(row_i + 1)) / rows_f;
+
     const r = rs_box.rectToPhysical(geometry_natural);
     const tl = r.topLeft();
     const tr = r.topRight();
     const br = r.bottomRight();
     const bl = r.bottomLeft();
-    const uv_x0 = uv_file.x / col_w;
-    const uv_y0 = uv_file.y / row_h;
-    const uv_x1 = (uv_file.x + uv_file.w) / col_w;
-    const uv_y1 = (uv_file.y + uv_file.h) / row_h;
-    const tone = dvui.themeGet().color(.content, .fill).lighten(6.0).opacity(0.5).opacity(dvui.currentWindow().alpha);
-    const pma = dvui.Color.PMA.fromColor(tone);
+
+    const pma_tl = dvui.Color.PMA.fromColor(exportCheckerboardCellCornerColor(file, sprite_index, pal, u_left, v_top));
+    const pma_tr = dvui.Color.PMA.fromColor(exportCheckerboardCellCornerColor(file, sprite_index, pal, u_right, v_top));
+    const pma_br = dvui.Color.PMA.fromColor(exportCheckerboardCellCornerColor(file, sprite_index, pal, u_right, v_bot));
+    const pma_bl = dvui.Color.PMA.fromColor(exportCheckerboardCellCornerColor(file, sprite_index, pal, u_left, v_bot));
+
+    builder.appendVertex(.{ .pos = tl, .col = pma_tl, .uv = .{ 0, 0 } });
+    builder.appendVertex(.{ .pos = tr, .col = pma_tr, .uv = .{ 1, 0 } });
+    builder.appendVertex(.{ .pos = br, .col = pma_br, .uv = .{ 1, 1 } });
+    builder.appendVertex(.{ .pos = bl, .col = pma_bl, .uv = .{ 0, 1 } });
+
+    const quad_base: dvui.Vertex.Index = @intCast(quad_idx.* * 4);
+    builder.appendTriangles(&.{ quad_base + 1, quad_base + 0, quad_base + 3, quad_base + 1, quad_base + 3, quad_base + 2 });
+    quad_idx.* += 1;
+}
+
+fn drawCheckerboardCell(
+    file: *fizzy.Internal.File,
+    sprite_index: usize,
+    geometry_natural: dvui.Rect,
+    rs_box: dvui.RectScale,
+) void {
+    const tex = file.editor.checkerboard_tile.getTexture() catch null;
+    if (tex == null) return;
+
+    const pal = exportCheckerboardPalette();
     const arena = dvui.currentWindow().arena();
     var builder = dvui.Triangles.Builder.init(arena, 4, 6) catch return;
     defer builder.deinit(arena);
-    builder.appendVertex(.{ .pos = tl, .col = pma, .uv = .{ uv_x0, uv_y0 } });
-    builder.appendVertex(.{ .pos = tr, .col = pma, .uv = .{ uv_x1, uv_y0 } });
-    builder.appendVertex(.{ .pos = br, .col = pma, .uv = .{ uv_x1, uv_y1 } });
-    builder.appendVertex(.{ .pos = bl, .col = pma, .uv = .{ uv_x0, uv_y1 } });
-    builder.appendTriangles(&.{ 1, 0, 3, 1, 3, 2 });
+
+    var quad_idx: usize = 0;
+    appendCheckerboardCellQuad(&builder, &quad_idx, file, sprite_index, pal, geometry_natural, rs_box);
+    if (quad_idx == 0) return;
+
     const triangles = builder.build();
-    dvui.renderTriangles(triangles, file.editor.checkerboard_tile.getTexture() catch null) catch {
+    dvui.renderTriangles(triangles, tex) catch {
+        dvui.log.err("Failed to render export preview checkerboard", .{});
+    };
+}
+
+fn drawCheckerboardFileGrid(file: *fizzy.Internal.File, rs_box: dvui.RectScale) void {
+    const n = file.spriteCount();
+    if (n == 0) return;
+
+    const tex = file.editor.checkerboard_tile.getTexture() catch null;
+    if (tex == null) return;
+
+    const pal = exportCheckerboardPalette();
+    const arena = dvui.currentWindow().arena();
+    var builder = dvui.Triangles.Builder.init(arena, n * 4, n * 6) catch return;
+    defer builder.deinit(arena);
+
+    var quad_idx: usize = 0;
+    for (0..n) |i| {
+        appendCheckerboardCellQuad(&builder, &quad_idx, file, i, pal, file.spriteRect(i), rs_box);
+    }
+
+    if (quad_idx == 0) return;
+
+    const triangles = builder.build();
+    dvui.renderTriangles(triangles, tex) catch {
         dvui.log.err("Failed to render export preview checkerboard", .{});
     };
 }
@@ -492,10 +680,7 @@ fn renderExportPreview(file: *fizzy.Internal.File, kind: ExportFullPreviewKind) 
         });
         defer box.deinit();
 
-        // Tiled cell UVs over the full image (same as `FileWidget.drawCheckerboardCellsBatched` for
-        // `transparency_effect == .none` — not one stretched cell across the whole preview).
-        const full_r = dvui.Rect{ .x = 0, .y = 0, .w = @floatFromInt(w), .h = @floatFromInt(h) };
-        drawCheckerboardTiled(file, full_r, full_r, box.data().rectScale());
+        drawCheckerboardFileGrid(file, box.data().rectScale());
 
         const full_uv = dvui.Rect{ .x = 0, .y = 0, .w = 1, .h = 1 };
         const rs = box.data().rectScale();
@@ -531,6 +716,33 @@ fn renderExportPreview(file: *fizzy.Internal.File, kind: ExportFullPreviewKind) 
             },
         }
     }
+}
+
+fn writeImageToPath(source: dvui.ImageSource, path: []const u8, format: ExportImageFormat) !void {
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        var out = std.Io.Writer.Allocating.init(fizzy.app.allocator);
+        errdefer out.deinit();
+        switch (format) {
+            .png => try fizzy.image.writePngToWriter(source, &out.writer, 0),
+            .jpg => try fizzy.image.writeJpgPpiToWriter(source, &out.writer, 0),
+        }
+        const bytes = try out.toOwnedSlice();
+        defer fizzy.app.allocator.free(bytes);
+        try WebFileIo.downloadBytes(path, bytes);
+        return;
+    }
+    switch (format) {
+        .png => try fizzy.image.writeToPngResolution(source, path, 0),
+        .jpg => try fizzy.image.writeToJpgPpi(source, path, 0),
+    }
+}
+
+fn writeGifBytes(path: []const u8, data: []const u8) !void {
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        try WebFileIo.downloadBytes(path, data);
+        return;
+    }
+    try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = data });
 }
 
 /// Flatten visible layers for one sprite tile. Layer index `0` is the front (drawn last on canvas);
@@ -656,24 +868,16 @@ pub fn exportCurrentSprite(path: []const u8) anyerror!void {
             .width = export_width,
             .height = export_height,
         } };
-        // `writeToPng` / `writeToJpg` use `windowNaturalScale` and require `Window.begin`/`end`.
-        // File dialog callbacks (e.g. NSOpenPanel) can run when `currentWindow` is null.
-        if (is_png) {
-            try fizzy.image.writeToPngResolution(src, path, 0);
-        } else {
-            try fizzy.image.writeToJpgPpi(src, path, 0);
-        }
+        const format: ExportImageFormat = if (is_png) .png else .jpg;
+        try writeImageToPath(src, path, format);
     } else {
         const src: dvui.ImageSource = .{ .pixels = .{
             .rgba = std.mem.sliceAsBytes(pixels),
             .width = file.column_width,
             .height = file.row_height,
         } };
-        if (is_png) {
-            try fizzy.image.writeToPngResolution(src, path, 0);
-        } else {
-            try fizzy.image.writeToJpgPpi(src, path, 0);
-        }
+        const format: ExportImageFormat = if (is_png) .png else .jpg;
+        try writeImageToPath(src, path, format);
     }
 }
 
@@ -693,11 +897,8 @@ pub fn exportLayerToPath(path: []const u8) anyerror!void {
 
     const layer = file.layers.get(file.selected_layer_index);
     const src = layer.source;
-    if (is_png) {
-        try fizzy.image.writeToPngResolution(src, path, 0);
-    } else {
-        try fizzy.image.writeToJpgPpi(src, path, 0);
-    }
+    const format: ExportImageFormat = if (is_png) .png else .jpg;
+    try writeImageToPath(src, path, format);
 }
 
 pub fn exportAllToPath(path: []const u8) anyerror!void {
@@ -732,11 +933,8 @@ pub fn exportAllToPath(path: []const u8) anyerror!void {
     var tmp_layer: fizzy.Internal.Layer = try .fromPixelsPMA(0, "export", pma_read, w, h, .ptr);
     defer tmp_layer.deinit();
 
-    if (is_png) {
-        try fizzy.image.writeToPngResolution(tmp_layer.source, path, 0);
-    } else {
-        try fizzy.image.writeToJpgPpi(tmp_layer.source, path, 0);
-    }
+    const format: ExportImageFormat = if (is_png) .png else .jpg;
+    try writeImageToPath(tmp_layer.source, path, format);
 }
 
 pub fn createAnimationGif(path: []const u8) anyerror!void {
@@ -758,7 +956,8 @@ pub fn createAnimationGif(path: []const u8) anyerror!void {
         return error.NoAnimations;
     }
 
-    if (file.selected_animation_index) |animation_index| {
+    const animation_index = exportAnimationIndex(file) orelse return error.NoSelectedAnimation;
+    {
         const anim: fizzy.Internal.Animation = file.animations.get(animation_index);
 
         var export_width = file.column_width;
@@ -826,9 +1025,8 @@ pub fn createAnimationGif(path: []const u8) anyerror!void {
         const result = msf_gif.end(&handle);
         defer msf_gif.free(result);
 
-        // // Now write to file using the new Writer interface
         if (result.data) |data| {
-            std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = data[0..result.dataSize] }) catch {
+            writeGifBytes(path, data[0..result.dataSize]) catch {
                 dvui.log.err("Failed to write to file {s}", .{path});
                 return;
             };
@@ -836,6 +1034,4 @@ pub fn createAnimationGif(path: []const u8) anyerror!void {
 
         return;
     }
-
-    return error.NoSelectedAnimation;
 }

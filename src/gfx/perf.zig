@@ -8,6 +8,17 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 
 pub inline fn nanoTimestamp() i128 {
+    // On wasm, `dvui.io` is `std.Io.failing` (the web backend never plugs in a real
+    // Io impl), and `failing.now()` returns `Timestamp.zero` — every call returns 0
+    // nanoseconds. Reading the JS `performance.now()` via the DVUI extern keeps
+    // animation timers (e.g. `tickSaveDoneFlash`) advancing instead of stuck.
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        const wasm = struct {
+            extern "dvui" fn wasm_now() f64;
+        };
+        const ms = wasm.wasm_now();
+        return @as(i128, @intFromFloat(ms * 1_000_000.0));
+    }
     return std.Io.Clock.boot.now(dvui.io).nanoseconds;
 }
 
@@ -53,17 +64,14 @@ pub fn drawFrameBegin(active_drawing: bool) void {
 
 pub fn drawFrameEnd() void {
     if (!draw_frame_active) {
-        if (console_logging_enabled) {
-            if (draw_frames_total > 0) {
-                const avg_us = if (draw_frames_total > 0) draw_time_sum_us / draw_frames_total else 0;
+        if (comptime builtin.target.cpu.arch != .wasm32) {
+            if (console_logging_enabled and draw_frames_total > 0) {
+                const avg_us = draw_time_sum_us / draw_frames_total;
                 std.debug.print("DRAW SESSION END: {d} frames, avg {d} us/frame\n", .{ draw_frames_total, avg_us });
-                draw_frames_total = 0;
-                draw_time_sum_us = 0;
             }
-        } else {
-            draw_frames_total = 0;
-            draw_time_sum_us = 0;
         }
+        draw_frames_total = 0;
+        draw_time_sum_us = 0;
         return;
     }
     const elapsed_ns: u64 = @intCast(nanoTimestamp() - draw_frame_start_ts);
@@ -71,25 +79,28 @@ pub fn drawFrameEnd() void {
     draw_frames_total += 1;
     draw_time_sum_us += elapsed_us;
 
-    if (console_logging_enabled and (draw_frames_total <= 5 or draw_frames_total % 30 == 0)) {
-        std.debug.print(
-            "DRAW f{d}: {d}us events={d} active_rect={d}px temp_rect={d}px rl={d} split_rb={d} full_rb={d} tex_new={d} stroke_buf={d}\n",
-            .{ draw_frames_total, elapsed_us, draw_event_count, draw_active_rect_area, draw_temp_rect_area, draw_render_layers_calls, draw_split_rebuilds, draw_full_composite_rebuilds, draw_texture_creates, draw_stroke_buf_count },
-        );
-        if (stroke_append_calls > 0 or stroke_to_change_calls > 0 or history_append_pixels_calls > 0) {
+    // `std.debug.print` pulls in debug_threaded_io → posix.getrandom on freestanding wasm.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (console_logging_enabled and (draw_frames_total <= 5 or draw_frames_total % 30 == 0)) {
             std.debug.print(
-                "  stroke: append_calls={d} new_keys={d} | toChange {d} calls {d}us {d}px out | history(pixels) {d} calls {d}us {d} slots\n",
-                .{
-                    stroke_append_calls,
-                    stroke_append_new_keys,
-                    stroke_to_change_calls,
-                    stroke_to_change_ns / 1000,
-                    stroke_to_change_pixels_out,
-                    history_append_pixels_calls,
-                    history_append_pixels_ns / 1000,
-                    history_append_pixels_slots,
-                },
+                "DRAW f{d}: {d}us events={d} active_rect={d}px temp_rect={d}px rl={d} split_rb={d} full_rb={d} tex_new={d} stroke_buf={d}\n",
+                .{ draw_frames_total, elapsed_us, draw_event_count, draw_active_rect_area, draw_temp_rect_area, draw_render_layers_calls, draw_split_rebuilds, draw_full_composite_rebuilds, draw_texture_creates, draw_stroke_buf_count },
             );
+            if (stroke_append_calls > 0 or stroke_to_change_calls > 0 or history_append_pixels_calls > 0) {
+                std.debug.print(
+                    "  stroke: append_calls={d} new_keys={d} | toChange {d} calls {d}us {d}px out | history(pixels) {d} calls {d}us {d} slots\n",
+                    .{
+                        stroke_append_calls,
+                        stroke_append_new_keys,
+                        stroke_to_change_calls,
+                        stroke_to_change_ns / 1000,
+                        stroke_to_change_pixels_out,
+                        history_append_pixels_calls,
+                        history_append_pixels_ns / 1000,
+                        history_append_pixels_slots,
+                    },
+                );
+            }
         }
     }
 }

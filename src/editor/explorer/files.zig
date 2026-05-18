@@ -59,6 +59,11 @@ pub const Extension = enum {
 };
 
 pub fn draw() !void {
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        try drawWeb();
+        return;
+    }
+
     // `tab_drag` matches workspace tab strips so file rows can drop on the canvas like tabs (DVUI reorder_tree cross-widget pattern).
     var tree = fizzy.dvui.TreeWidget.tree(@src(), .{ .enable_reordering = true, .drag_name = "tab_drag" }, .{ .background = false, .expand = .both });
     defer tree.deinit();
@@ -92,6 +97,29 @@ pub fn draw() !void {
                 try fizzy.editor.setProjectFolder(folder);
             }
         }
+    }
+}
+
+fn drawWeb() !void {
+    var tree = fizzy.dvui.TreeWidget.tree(@src(), .{}, .{ .background = false, .expand = .both });
+    defer tree.deinit();
+
+    dvui.labelNoFmt(
+        @src(),
+        "No project folder in the browser. Open files from your device.",
+        .{},
+        .{ .color_text = dvui.themeGet().color(.control, .text) },
+    );
+
+    if (dvui.button(@src(), "Open Files", .{ .draw_focus = false }, .{ .expand = .horizontal, .style = .highlight })) {
+        fizzy.backend.showOpenFileDialog(
+            struct {
+                fn cb(_: ?[][:0]const u8) void {}
+            }.cb,
+            &.{},
+            "",
+            null,
+        );
     }
 }
 

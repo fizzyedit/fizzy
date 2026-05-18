@@ -242,7 +242,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
         .delay = 500_000,
         .interactive = if (tool == .selection) true else false,
     }, .{
-        .id_extra = id_extra,
+        .id_extra = @intCast(id_extra),
         .color_fill = dvui.themeGet().color(.content, .fill).opacity(0.9),
         .border = dvui.Rect.all(0),
         .box_shadow = .{

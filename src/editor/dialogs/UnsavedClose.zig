@@ -98,6 +98,7 @@ fn onCancel() void {
 /// `Editor.tickPendingSaveCloses` does the actual close on the next frame after
 /// the worker settles, so the GUI thread never blocks on the save.
 fn beginSaveAndClose(file: *fizzy.Internal.File, file_id: u64) !void {
+    if (file.isSaving()) return;
     try file.saveAsync();
     try fizzy.editor.pending_close_after_save.put(fizzy.app.allocator, file_id, {});
 }

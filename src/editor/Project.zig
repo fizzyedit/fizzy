@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 
@@ -20,6 +21,7 @@ packed_atlas_output: ?[]const u8 = null,
 pack_on_save: bool = false,
 
 pub fn load(allocator: std.mem.Allocator) !?Project {
+    if (comptime builtin.target.cpu.arch == .wasm32) return null;
     if (fizzy.editor.folder) |folder| {
         const file = try std.fs.path.join(fizzy.editor.arena.allocator(), &.{ folder, ".fizproject" });
 
@@ -57,6 +59,7 @@ pub fn load(allocator: std.mem.Allocator) !?Project {
 }
 
 pub fn save(project: *Project) !void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
     if (fizzy.editor.folder) |folder| {
         const file = try std.fs.path.join(fizzy.editor.arena.allocator(), &.{ folder, ".fizproject" });
         const options = std.json.Stringify.Options{};

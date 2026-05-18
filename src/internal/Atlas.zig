@@ -21,6 +21,43 @@ pub const Selector = enum {
 };
 
 pub fn save(atlas: Atlas, path: []const u8, selector: Selector) !void {
+    // Wasm: there's no on-disk path to write to. Encode the atlas into a buffer
+    // and trigger a browser download via `wasm_download_data`. The native path
+    // below writes through `std.Io.Dir.cwd()` which requires `posix.AT` (not
+    // available on `wasm32-freestanding`).
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) {
+        const allocator = fizzy.editor.arena.allocator();
+        switch (selector) {
+            .source => {
+                const ext = std.fs.path.extension(path);
+                var out = std.Io.Writer.Allocating.init(allocator);
+                errdefer out.deinit();
+                if (std.mem.eql(u8, ext, ".png")) {
+                    try fizzy.image.writePngToWriter(atlas.source, &out.writer, 72);
+                } else if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) {
+                    try fizzy.image.writeJpgPpiToWriter(atlas.source, &out.writer, 72);
+                } else {
+                    std.log.debug("File name must end with .png, .jpg, or .jpeg extension!", .{});
+                    return error.InvalidExtension;
+                }
+                const bytes = try out.toOwnedSlice();
+                defer allocator.free(bytes);
+                try @import("../editor/WebFileIo.zig").downloadBytes(path, bytes);
+            },
+            .data => {
+                if (!std.mem.eql(u8, ".atlas", std.fs.path.extension(path))) {
+                    std.log.debug("File name must end with .atlas extension!", .{});
+                    return error.InvalidExtension;
+                }
+                const options: std.json.Stringify.Options = .{};
+                const output = try std.json.Stringify.valueAlloc(allocator, atlas.data, options);
+                defer allocator.free(output);
+                try @import("../editor/WebFileIo.zig").downloadBytes(path, output);
+            },
+        }
+        return;
+    }
+
     switch (selector) {
         .source => {
             const ext = std.fs.path.extension(path);

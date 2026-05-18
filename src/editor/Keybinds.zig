@@ -9,7 +9,11 @@ pub const Keybinds = @This();
 pub fn register() !void {
     const window = dvui.currentWindow();
 
-    if (builtin.os.tag.isDarwin()) {
+    // Runtime mac detection — `builtin.os.tag.isDarwin()` is `false` for
+    // wasm32-freestanding, so macOS web users would otherwise get the Windows
+    // (Ctrl) bindings. `fizzy.platform.isMacOS()` reads DVUI's `navigator.platform`-
+    // derived choice on web and uses `os.tag` on native.
+    if (fizzy.platform.isMacOS()) {
         try window.keybinds.putNoClobber(window.gpa, "open_folder", .{ .key = .f, .command = true });
         try window.keybinds.putNoClobber(window.gpa, "new_file", .{ .key = .n, .command = true });
         try window.keybinds.putNoClobber(window.gpa, "open_files", .{ .key = .o, .command = true });

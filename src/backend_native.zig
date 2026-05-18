@@ -52,6 +52,11 @@ const NSEventModifierFlagShift: c_ulong = 1 << 17;
 const NSEventModifierFlagOption: c_ulong = 1 << 18;
 const NSEventModifierFlagControl: c_ulong = 1 << 19;
 
+/// Re-export of SDL3's filter struct under a fizzy-owned name. Editor call sites
+/// type their filter literals with this so the same code compiles on web (where
+/// `backend_web.zig` defines its own `DialogFileFilter` with the same layout).
+pub const DialogFileFilter = sdl3.SDL_DialogFileFilter;
+
 // macOS native menu bar (top bar): action ids match FizzyMenuTarget.m
 pub const NativeMenuAction = enum(c_int) {
     open_folder = 0,
@@ -987,7 +992,7 @@ pub fn showSimpleMessage(title: [:0]const u8, message: [:0]const u8) void {
     }
 }
 
-pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const sdl3.SDL_DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
+pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
         if (default_folder) |folder| {
             break :blk std.fs.path.joinZ(fizzy.app.allocator, &.{ folder, default_filename }) catch "untitled";
@@ -1004,7 +1009,7 @@ pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
     sdl3.SDL_ShowSaveFileDialog(GenericSaveDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, filters.ptr, @intCast(filters.len), default);
 }
 
-pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const sdl3.SDL_DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
+pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
         if (default_folder) |folder| {
             break :blk std.fs.path.joinZ(fizzy.app.allocator, &.{ folder, default_filename }) catch "untitled";

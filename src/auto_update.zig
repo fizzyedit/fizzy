@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_opts = @import("build_opts");
 
-pub const impl: bool = build_opts.velopack_enabled and builtin.os.tag != .wasi;
+pub const impl: bool = build_opts.velopack_enabled and builtin.target.cpu.arch != .wasm32;
 
 const Vpk = if (impl)
     @cImport({

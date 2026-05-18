@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const perf = fizzy.perf;
@@ -16,6 +17,27 @@ pub const RenderFileOptions = struct {
     allow_peek: bool = true,
 };
 
+/// Web backends without `textureUpdateSubRect` recreate the GPU texture on upload; sync the cache
+/// when the pointer changes so we do not keep drawing a texture id that was destroyLater'd.
+fn uploadSubRectAndSyncCache(
+    key: u64,
+    tex: *dvui.Texture,
+    pixels: [*]const u8,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) void {
+    const prev_ptr = tex.ptr;
+    tex.updateSubRect(pixels, x, y, w, h) catch |err| {
+        dvui.log.err("Sub-rect texture upload failed: {any}", .{err});
+        return;
+    };
+    if (tex.ptr != prev_ptr) {
+        dvui.textureAddToCache(key, tex.*);
+    }
+}
+
 /// Pushes pending CPU pixel edits to GPU textures. Must run even when `renderLayers` returns early
 /// (scale zero / clip empty): otherwise `defer` blocks that normally perform uploads are never
 /// registered, and `temp_gpu_dirty_rect` keeps unioning every frame until it covers the whole image.
@@ -26,17 +48,18 @@ fn flushPendingLayerTextureUploads(init_opts: RenderFileOptions) void {
         if (dirty.w > 0 and dirty.h > 0) {
             perf.draw_active_rect_area += @intFromFloat(dirty.w * dirty.h);
             const source = file.layers.items(.source)[file.selected_layer_index];
-            if (dvui.textureGetCached(source.hash())) |cached| {
+            const source_key = source.hash();
+            if (dvui.textureGetCached(source_key)) |cached| {
                 var tex = cached;
-                tex.updateSubRect(
+                uploadSubRectAndSyncCache(
+                    source_key,
+                    &tex,
                     fizzy.image.bytes(source).ptr,
                     @intFromFloat(dirty.x),
                     @intFromFloat(dirty.y),
                     @intFromFloat(dirty.w),
                     @intFromFloat(dirty.h),
-                ) catch |err| {
-                    dvui.log.err("Sub-rect texture upload failed: {any}", .{err});
-                };
+                );
             }
         }
         file.editor.active_layer_dirty_rect = null;
@@ -46,20 +69,21 @@ fn flushPendingLayerTextureUploads(init_opts: RenderFileOptions) void {
         file.editor.temp_gpu_dirty_rect != null)
     {
         const temp_source = file.editor.temporary_layer.source;
-        if (dvui.textureGetCached(temp_source.hash())) |cached| {
+        const temp_key = temp_source.hash();
+        if (dvui.textureGetCached(temp_key)) |cached| {
             if (file.editor.temp_gpu_dirty_rect) |dirty| {
                 if (dirty.w > 0 and dirty.h > 0) {
                     perf.draw_temp_rect_area += @intFromFloat(dirty.w * dirty.h);
                     var tex = cached;
-                    tex.updateSubRect(
+                    uploadSubRectAndSyncCache(
+                        temp_key,
+                        &tex,
                         fizzy.image.bytes(temp_source).ptr,
                         @intFromFloat(dirty.x),
                         @intFromFloat(dirty.y),
                         @intFromFloat(dirty.w),
                         @intFromFloat(dirty.h),
-                    ) catch |err| {
-                        dvui.log.err("Temp sub-rect upload failed: {any}", .{err});
-                    };
+                    );
                 }
                 file.editor.temp_gpu_dirty_rect = null;
             } else if (file.editor.temp_layer_has_content) {
@@ -290,6 +314,15 @@ fn layerCompositeExtent(file: *fizzy.Internal.File) struct { w: u32, h: u32 } {
     return .{ .w = w, .h = h };
 }
 
+/// Pixel format for off-screen render targets (layer composites, transforms).
+/// The web backend only supports `.rgba_32`.
+pub fn compositeTargetPixelFormat() dvui.enums.TexturePixelFormat {
+    return if (comptime builtin.target.cpu.arch == .wasm32)
+        .rgba_32
+    else
+        .rgba_8_8_8_8;
+}
+
 /// Rebuilds the full-canvas flattened layer texture (all layers included).
 /// Used when NOT actively drawing.
 pub fn syncLayerComposite(file: *fizzy.Internal.File) !void {
@@ -330,7 +363,7 @@ pub fn syncLayerComposite(file: *fizzy.Internal.File) !void {
     defer perf.syncCompositeEnd(sc_t0);
 
     const target = if (file.editor.layer_composite_target) |t| t else blk: {
-        const nt = try dvui.textureCreateTarget(w, h, .nearest, .rgba_8_8_8_8);
+        const nt = try dvui.textureCreateTarget(w, h, .nearest, compositeTargetPixelFormat());
         file.editor.layer_composite_target = nt;
         break :blk nt;
     };
@@ -398,13 +431,13 @@ fn syncSplitComposite(file: *fizzy.Internal.File) !void {
     defer perf.syncCompositeEnd(sc_t0);
 
     const below = if (file.editor.split_composite_below) |t| t else blk: {
-        const nt = try dvui.textureCreateTarget(w, h, .nearest, .rgba_8_8_8_8);
+        const nt = try dvui.textureCreateTarget(w, h, .nearest, compositeTargetPixelFormat());
         file.editor.split_composite_below = nt;
         break :blk nt;
     };
 
     const above = if (file.editor.split_composite_above) |t| t else blk: {
-        const nt = try dvui.textureCreateTarget(w, h, .nearest, .rgba_8_8_8_8);
+        const nt = try dvui.textureCreateTarget(w, h, .nearest, compositeTargetPixelFormat());
         file.editor.split_composite_above = nt;
         break :blk nt;
     };

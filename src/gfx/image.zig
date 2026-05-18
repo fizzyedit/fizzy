@@ -304,6 +304,12 @@ pub fn blitData(src_pixels: [][4]u8, src_width: usize, src_height: usize, dst_pi
     }
 }
 
+fn ensurePngWriterBuffer(writer: *std.Io.Writer) !void {
+    if (writer.buffer.len < dvui.PNGEncoder.min_buffer_size) {
+        try writer.rebase(0, dvui.PNGEncoder.min_buffer_size);
+    }
+}
+
 pub fn writeToZip(
     source: dvui.ImageSource,
     zip_file: ?*anyopaque,
@@ -316,11 +322,28 @@ pub fn writeToZip(
 
     var writer = std.Io.Writer.Allocating.init(fizzy.editor.arena.allocator());
 
+    try ensurePngWriterBuffer(&writer.writer);
     try dvui.PNGEncoder.writeWithResolution(&writer.writer, fizzy.image.bytes(source), @intCast(w), @intCast(h), resolution);
 
     if (@as(?*zip.struct_zip_t, @ptrCast(zip_file))) |z| {
         _ = zip.zip_entry_write(z, writer.written().ptr, @as(usize, writer.written().len));
     }
+}
+
+pub fn writePngToWriter(source: dvui.ImageSource, writer: *std.Io.Writer, resolution: u32) !void {
+    const flat = try flatRgbaForEncode(source);
+    try ensurePngWriterBuffer(writer);
+    if (resolution > 0) {
+        try dvui.PNGEncoder.writeWithResolution(writer, flat.data, flat.w, flat.h, resolution);
+    } else {
+        try dvui.PNGEncoder.write(writer, flat.data, flat.w, flat.h);
+    }
+}
+
+pub fn writeJpgPpiToWriter(source: dvui.ImageSource, writer: *std.Io.Writer, ppi: u16) !void {
+    const flat = try flatRgbaForEncode(source);
+    var enc = dvui.JPGEncoder.initDensity(writer, ppi);
+    try enc.writeWithQuality(flat.data, flat.w, flat.h, 90);
 }
 
 pub fn writeToPng(source: dvui.ImageSource, path: []const u8) !void {

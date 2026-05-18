@@ -251,13 +251,27 @@ pub fn setSaving(file: *File, v: bool) void {
         file.editor.save_complete_show_duration = null;
         file.editor.save_complete_show_start = null;
     } else {
-        file.editor.save_complete.store(true, .monotonic);
+        // Arm the finish animation immediately so synchronous wasm saves (and any save
+        // that completes between frames) don't leave `save_complete` stuck true.
+        const now = fizzy.perf.nanoTimestamp();
+        file.editor.save_complete_show_start = now;
+        file.editor.save_complete_show_duration = now + save_done_flash_duration_ns;
+        file.editor.save_complete.store(false, .monotonic);
     }
 }
 
 /// Atomic-load counterpart to `setSaving`. Safe to call from any thread.
 pub fn isSaving(file: *const File) bool {
     return @atomicLoad(bool, &file.editor.saving, .monotonic);
+}
+
+/// Clears in-flight save UI state (tab spinner, blocked close). Call when a save dialog is cancelled.
+pub fn resetSaveUIState(file: *File) void {
+    file.setSaving(false);
+    file.editor.save_complete.store(false, .monotonic);
+    file.editor.save_complete_show_duration = null;
+    file.editor.save_complete_show_start = null;
+    file.editor.was_saving = false;
 }
 
 const save_done_flash_duration_ns: i128 = 2 * std.time.ns_per_s;
@@ -268,7 +282,7 @@ pub fn tickSaveDoneFlash(file: *File) void {
     const now = fizzy.perf.nanoTimestamp();
     const saving = file.isSaving();
     const pending = file.editor.save_complete.swap(false, .monotonic);
-    if (!saving and (pending or file.editor.was_saving)) {
+    if (!saving and (pending or file.editor.was_saving) and file.editor.save_complete_show_duration == null) {
         file.editor.save_complete_show_start = now;
         file.editor.save_complete_show_duration = now + save_done_flash_duration_ns;
     }
@@ -286,11 +300,10 @@ pub fn tickSaveDoneFlash(file: *File) void {
     }
 }
 
-/// Tab / tree slot should show the bubble spinner (saving, finish animation, or until flash arms).
+/// Tab / tree slot should show the bubble spinner (saving or finish animation).
 pub fn showsSaveStatusIndicator(file: *const File) bool {
     if (file.isSaving()) return true;
-    if (timeSinceSaveComplete(file) != null) return true;
-    return file.editor.save_complete.load(.monotonic);
+    return timeSinceSaveComplete(file) != null;
 }
 
 pub fn showSaveDoneFlash(file: *const File) bool {
@@ -333,6 +346,18 @@ pub fn invalidateActiveLayerTransparencyMaskCache(file: *File) void {
 /// keep existing call sites unchanged.
 pub const layerOrderAfterMove = @import("layer_order.zig").layerOrderAfterMove;
 
+/// Load from in-memory bytes (browser file picker). `path` is used for extension detection and display name.
+pub fn fromBytes(path: []const u8, file_bytes: []const u8) !?fizzy.Internal.File {
+    const extension = std.fs.path.extension(path);
+    if (isFlatImageExtension(extension)) {
+        return fromBytesFlatImage(path, file_bytes);
+    }
+    if (isFizzyExtension(extension)) {
+        return fromBytesFizzy(path, file_bytes);
+    }
+    return error.InvalidExtension;
+}
+
 /// Attempts to load a file from the given path to create a new file
 pub fn fromPath(path: []const u8) !?fizzy.Internal.File {
     const extension = std.fs.path.extension(path[0..path.len]);
@@ -361,18 +386,32 @@ pub fn isFizzyExtension(ext: []const u8) bool {
 }
 
 pub fn fromPathFizzy(path: []const u8) !?fizzy.Internal.File {
+    return loadFizzyZip(path, null);
+}
+
+pub fn fromBytesFizzy(path: []const u8, file_bytes: []const u8) !?fizzy.Internal.File {
+    return loadFizzyZip(path, file_bytes);
+}
+
+fn loadFizzyZip(path: []const u8, file_bytes: ?[]const u8) !?fizzy.Internal.File {
     if (!isFizzyExtension(std.fs.path.extension(path[0..path.len])))
         return error.InvalidExtension;
 
-    const null_terminated_path = try fizzy.app.allocator.dupeZ(u8, path);
-    defer fizzy.app.allocator.free(null_terminated_path);
+    const null_terminated_path = if (file_bytes == null)
+        try fizzy.app.allocator.dupeZ(u8, path)
+    else
+        "";
+    defer if (file_bytes == null) fizzy.app.allocator.free(null_terminated_path);
 
     zip_open: {
-        const fizzy_file = zip.zip_open(null_terminated_path.ptr, 0, 'r') orelse break :zip_open;
-        defer zip.zip_close(fizzy_file);
+        const fizzy_file = if (file_bytes) |bytes|
+            zip.zip_stream_open(bytes.ptr, bytes.len, 0, 'r')
+        else
+            zip.zip_open(null_terminated_path.ptr, 0, 'r') orelse break :zip_open;
+        defer if (file_bytes != null) zip.zip_stream_close(fizzy_file) else zip.zip_close(fizzy_file);
 
         var buf: ?*anyopaque = null;
-        var size: u64 = 0;
+        var size: usize = 0;
         // Try the current entry name first, then fall back to the legacy `pixidata.json`
         // so files saved by the pre-rename Pixi versions still load.
         if (zip.zip_entry_open(fizzy_file, "fizzydata.json") != 0) {
@@ -380,8 +419,15 @@ pub fn fromPathFizzy(path: []const u8) !?fizzy.Internal.File {
         }
         _ = zip.zip_entry_read(fizzy_file, &buf, &size);
         _ = zip.zip_entry_close(fizzy_file);
+        defer if (buf) |b| {
+            if (comptime @import("builtin").target.cpu.arch == .wasm32) {
+                zip.fizzy_zip_free(b);
+            } else {
+                std.c.free(b);
+            }
+        };
 
-        const content: []const u8 = @as([*]const u8, @ptrCast(buf))[0..size];
+        const content: []const u8 = if (buf) |b| @as([*]const u8, @ptrCast(b))[0..size] else "";
 
         const options = std.json.ParseOptions{
             .duplicate_field_behavior = .use_first,
@@ -732,13 +778,30 @@ pub fn shouldConfirmFlatRasterSave(self: File) bool {
     return requiresFizzyCompatibleSave(self);
 }
 
+pub fn fromBytesFlatImage(path: []const u8, file_bytes: []const u8) !?fizzy.Internal.File {
+    if (!isFlatImageExtension(std.fs.path.extension(path[0..path.len])))
+        return error.InvalidExtension;
+
+    const image_layer: fizzy.Internal.Layer = try fizzy.Internal.Layer.fromImageFileBytes(
+        fizzy.editor.newFileID(),
+        "Layer",
+        file_bytes,
+        .ptr,
+    );
+    return finishFlatImageFile(path, image_layer);
+}
+
 /// Loads a PNG or JPEG as the first layer of a new file, and retains the path
 /// when saved; layers will be flattened to that file
 pub fn fromPathFlatImage(path: []const u8) !?fizzy.Internal.File {
     if (!isFlatImageExtension(std.fs.path.extension(path[0..path.len])))
         return error.InvalidExtension;
 
-    var image_layer: fizzy.Internal.Layer = try fizzy.Internal.Layer.fromImageFilePath(fizzy.editor.newFileID(), "Layer", path, .ptr);
+    const image_layer: fizzy.Internal.Layer = try fizzy.Internal.Layer.fromImageFilePath(fizzy.editor.newFileID(), "Layer", path, .ptr);
+    return finishFlatImageFile(path, image_layer);
+}
+
+fn finishFlatImageFile(path: []const u8, image_layer: fizzy.Internal.Layer) !?fizzy.Internal.File {
     const size = image_layer.size();
     const column_width: u32 = @intFromFloat(size.w);
     const row_height: u32 = @intFromFloat(size.h);
@@ -2763,7 +2826,9 @@ pub fn savePng(self: *File, window: *dvui.Window) !void {
     try self.writeFlattenedLayersToPath(self.path, window, .png);
 
     {
-        const id_mutex = dvui.toastAdd(window, @src(), self.id, fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
+        // `id_extra` is `usize` (u32 on wasm32). File IDs are session-local monotonic
+// u64s; in practice they fit, so an `@intCast` is safe and panics if not.
+const id_mutex = dvui.toastAdd(window, @src(), @as(usize, @intCast(self.id)), fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
         const id = id_mutex.id;
         const message = std.fmt.allocPrint(window.arena(), "Saved {s} to disk", .{std.fs.path.basename(self.path)}) catch "Saved file";
         dvui.dataSetSlice(window, id, "_message", message);
@@ -2782,7 +2847,9 @@ pub fn saveJpg(self: *File, window: *dvui.Window) !void {
     try self.writeFlattenedLayersToPath(self.path, window, .jpg);
 
     {
-        const id_mutex = dvui.toastAdd(window, @src(), self.id, fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
+        // `id_extra` is `usize` (u32 on wasm32). File IDs are session-local monotonic
+// u64s; in practice they fit, so an `@intCast` is safe and panics if not.
+const id_mutex = dvui.toastAdd(window, @src(), @as(usize, @intCast(self.id)), fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
         const id = id_mutex.id;
         const message = std.fmt.allocPrint(window.arena(), "Saved {s} to disk", .{std.fs.path.basename(self.path)}) catch "Saved file";
         dvui.dataSetSlice(window, id, "_message", message);
@@ -2886,14 +2953,19 @@ var save_queue: SaveQueue = .{};
 
 /// Spawn the long-lived save-queue worker. Safe to call multiple times; second+
 /// calls are no-ops. Call from the GUI thread before any `saveAsync` runs.
+/// Wasm: no-op. Single-threaded freestanding wasm can't spawn threads; the
+/// browser save path needs a different strategy (inline + `wasm_download_data`).
 pub fn initSaveQueue() !void {
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) return;
     if (save_queue.worker != null) return;
     save_queue.worker = try std.Thread.spawn(.{}, saveQueueWorker, .{});
 }
 
 /// Signal the save-queue worker to drain remaining jobs and exit, then join.
 /// Call from the GUI thread during editor shutdown.
+/// Wasm: no-op (no worker was ever spawned).
 pub fn deinitSaveQueue() void {
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) return;
     save_queue.mutex.lockUncancelable(dvui.io);
     save_queue.shutdown = true;
     save_queue.cond.broadcast(dvui.io);
@@ -2963,30 +3035,126 @@ fn writeSnapshotToZip(file_id: u64, window: *dvui.Window, snap: *const SaveSnaps
     const zip_file = zip.zip_open(snap.null_terminated_path.ptr, zip.ZIP_DEFAULT_COMPRESSION_LEVEL, 'w');
 
     if (zip_file) |z| {
-        const options = std.json.Stringify.Options{};
-        const output = try std.json.Stringify.valueAlloc(fizzy.app.allocator, snap.ext, options);
-        defer fizzy.app.allocator.free(output);
-
-        _ = zip.zip_entry_open(z, "fizzydata.json");
-        _ = zip.zip_entry_write(z, output.ptr, output.len);
-        _ = zip.zip_entry_close(z);
-
-        for (snap.layer_entry_names, snap.layer_bytes) |entry_name, bytes| {
-            _ = zip.zip_entry_open(z, @as([*c]const u8, @ptrCast(entry_name)));
-            _ = zip.zip_entry_write(z, @ptrCast(bytes.ptr), bytes.len);
-            _ = zip.zip_entry_close(z);
-        }
-
+        try writeSnapshotEntriesToZip(z, snap);
         zip.zip_close(z);
     }
 
     if (fizzy.editor.open_files.getPtr(file_id)) |f| f.history.bookmark = 0;
 }
 
+fn zipEntryOk(rc: c_int) !void {
+    if (rc < 0) return error.ZipEntryFailed;
+}
+
+fn writeSnapshotEntriesToZip(z: *zip.struct_zip_t, snap: *const SaveSnapshot) !void {
+    const options = std.json.Stringify.Options{};
+    const output = try std.json.Stringify.valueAlloc(fizzy.app.allocator, snap.ext, options);
+    defer fizzy.app.allocator.free(output);
+
+    try zipEntryOk(zip.zip_entry_open(z, "fizzydata.json"));
+    try zipEntryOk(zip.zip_entry_write(z, output.ptr, output.len));
+    try zipEntryOk(zip.zip_entry_close(z));
+
+    for (snap.layer_entry_names, snap.layer_bytes) |entry_name, bytes| {
+        try zipEntryOk(zip.zip_entry_open(z, @as([*c]const u8, @ptrCast(entry_name))));
+        try zipEntryOk(zip.zip_entry_write(z, @ptrCast(bytes.ptr), bytes.len));
+        try zipEntryOk(zip.zip_entry_close(z));
+    }
+}
+
+fn writeSnapshotToZipBytes(snap: *const SaveSnapshot, allocator: std.mem.Allocator) ![]u8 {
+    // Stored (level 0) on wasm: DEFLATE in miniz is less tested on freestanding and some
+    // readers reject malformed compressed entries from in-memory writers.
+    const level: c_int = if (comptime @import("builtin").target.cpu.arch == .wasm32) 0 else zip.ZIP_DEFAULT_COMPRESSION_LEVEL;
+    const z = zip.zip_stream_open(null, 0, level, 'w') orelse return error.ZipOpenFailed;
+    defer zip.zip_stream_close(z);
+    try writeSnapshotEntriesToZip(z, snap);
+    var buf: ?*anyopaque = null;
+    var bufsize: usize = 0;
+    const n = zip.zip_stream_copy(z, &buf, &bufsize);
+    if (n < 0 or buf == null) return error.ZipCopyFailed;
+    const slice = @as([*]const u8, @ptrCast(buf))[0..bufsize];
+    const owned = try allocator.dupe(u8, slice);
+    zip.fizzy_zip_free(buf);
+    if (owned.len < 4 or !std.mem.eql(u8, owned[0..4], "PK\x03\x04")) return error.InvalidZip;
+    return owned;
+}
+
+/// Browser save: encode in memory and trigger a download (no on-disk project folder).
+pub fn saveToDownload(self: *File, window: *dvui.Window) !void {
+    if (comptime @import("builtin").target.cpu.arch != .wasm32) return;
+    if (self.isSaving()) return;
+    self.setSaving(true);
+    defer self.setSaving(false);
+
+    const basename = std.fs.path.basename(self.path);
+    const ext = std.fs.path.extension(self.path);
+
+    if (isFizzyExtension(ext)) {
+        var snap = try SaveSnapshot.fromFileOnGuiThread(self, fizzy.app.allocator);
+        defer snap.deinit(fizzy.app.allocator);
+        const bytes = try writeSnapshotToZipBytes(&snap, fizzy.app.allocator);
+        defer fizzy.app.allocator.free(bytes);
+        try @import("../editor/WebFileIo.zig").downloadBytesWithExtension(basename, ".fiz", bytes);
+    } else if (std.mem.eql(u8, ext, ".png")) {
+        const bytes = try flattenedImageBytes(self, window, .png);
+        defer fizzy.app.allocator.free(bytes);
+        try @import("../editor/WebFileIo.zig").downloadBytesWithExtension(basename, ".png", bytes);
+    } else if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) {
+        const bytes = try flattenedImageBytes(self, window, .jpg);
+        defer fizzy.app.allocator.free(bytes);
+        try @import("../editor/WebFileIo.zig").downloadBytesWithExtension(basename, ".jpg", bytes);
+    } else {
+        return;
+    }
+
+    self.history.bookmark = 0;
+    const id_mutex = dvui.toastAdd(window, @src(), 0, fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
+    const id = id_mutex.id;
+    const message = std.fmt.allocPrint(window.arena(), "Downloaded {s}", .{basename}) catch "Downloaded file";
+    dvui.dataSetSlice(window, id, "_message", message);
+    id_mutex.mutex.unlock(dvui.io);
+}
+
+fn flattenedImageBytes(self: *File, window: *dvui.Window, comptime kind: enum { png, jpg }) ![]u8 {
+    const w = self.width();
+    const h = self.height();
+    if (w == 0 or h == 0) return error.InvalidImageSize;
+
+    try fizzy.render.syncLayerComposite(self);
+    const target = self.editor.layer_composite_target orelse return error.NoLayerComposite;
+
+    const pma_read: []dvui.Color.PMA = try dvui.Texture.readTarget(fizzy.app.allocator, target);
+    defer {
+        const byte_len = pma_read.len * @sizeOf(dvui.Color.PMA);
+        fizzy.app.allocator.free(@as([*]u8, @ptrCast(pma_read.ptr))[0..byte_len]);
+    }
+
+    var tmp_layer: fizzy.Internal.Layer = try .fromPixelsPMA(self.newLayerID(), "_flat_save", pma_read, w, h, .ptr);
+    defer tmp_layer.deinit();
+
+    var out = std.Io.Writer.Allocating.init(fizzy.app.allocator);
+    errdefer out.deinit();
+    switch (kind) {
+        .png => {
+            const r: u32 = @intFromFloat(@round(window.natural_scale * 72.0 / 0.0254));
+            try fizzy.image.writePngToWriter(tmp_layer.source, &out.writer, r);
+        },
+        .jpg => {
+            const ppi: u16 = @intFromFloat(@round(window.natural_scale * 72.0));
+            try fizzy.image.writeJpgPpiToWriter(tmp_layer.source, &out.writer, ppi);
+        },
+    }
+    return out.toOwnedSlice();
+}
+
 /// Point `path` at `new_path`, then `saveZip` (same on-disk work as a normal .pixi save). Restores the previous `path` if saving fails.
 pub fn saveAsFizzy(self: *File, new_path: []const u8, window: *dvui.Window) !void {
     if (self.isSaving()) return;
     if (std.mem.eql(u8, self.path, new_path)) {
+        if (comptime @import("builtin").target.cpu.arch == .wasm32) {
+            return saveToDownload(self, window);
+        }
         return saveZip(self, window);
     }
     const old_path = self.path;
@@ -2996,7 +3164,11 @@ pub fn saveAsFizzy(self: *File, new_path: []const u8, window: *dvui.Window) !voi
         fizzy.app.allocator.free(self.path[0..self.path.len]);
         self.path = old_path;
     }
-    try saveZip(self, window);
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) {
+        try saveToDownload(self, window);
+    } else {
+        try saveZip(self, window);
+    }
     fizzy.app.allocator.free(old_path[0..old_path.len]);
 }
 
@@ -3117,7 +3289,24 @@ pub fn saveAsFlattened(self: *File, output_path: []const u8, window: *dvui.Windo
     var single_layer: fizzy.Internal.Layer = try .fromPixelsPMA(self.newLayerID(), "Layer", pma_read, w, h, .ptr);
     errdefer single_layer.deinit();
 
-    if (is_png) {
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) {
+        const bytes = if (is_png) blk: {
+            const r: u32 = @intFromFloat(@round(window.natural_scale * 72.0 / 0.0254));
+            var out = std.Io.Writer.Allocating.init(fizzy.app.allocator);
+            errdefer out.deinit();
+            try fizzy.image.writePngToWriter(single_layer.source, &out.writer, r);
+            break :blk try out.toOwnedSlice();
+        } else blk: {
+            const ppi: u16 = @intFromFloat(@round(window.natural_scale * 72.0));
+            var out = std.Io.Writer.Allocating.init(fizzy.app.allocator);
+            errdefer out.deinit();
+            try fizzy.image.writeJpgPpiToWriter(single_layer.source, &out.writer, ppi);
+            break :blk try out.toOwnedSlice();
+        };
+        defer fizzy.app.allocator.free(bytes);
+        const dl_ext = if (is_png) ".png" else ".jpg";
+        try @import("../editor/WebFileIo.zig").downloadBytesWithExtension(std.fs.path.basename(output_path), dl_ext, bytes);
+    } else if (is_png) {
         const r: u32 = @intFromFloat(@round(window.natural_scale * 72.0 / 0.0254));
         try fizzy.image.writeToPngResolution(single_layer.source, output_path, r);
     } else {
@@ -3160,7 +3349,9 @@ pub fn saveAsFlattened(self: *File, output_path: []const u8, window: *dvui.Windo
     self.editor.split_composite_dirty = true;
     self.setSaving(false);
     {
-        const id_mutex = dvui.toastAdd(window, @src(), self.id, fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
+        // `id_extra` is `usize` (u32 on wasm32). File IDs are session-local monotonic
+// u64s; in practice they fit, so an `@intCast` is safe and panics if not.
+const id_mutex = dvui.toastAdd(window, @src(), @as(usize, @intCast(self.id)), fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
         const id = id_mutex.id;
         const message = std.fmt.allocPrint(window.arena(), "Saved {s} to disk", .{std.fs.path.basename(self.path)}) catch "Saved file";
         dvui.dataSetSlice(window, id, "_message", message);
@@ -3615,6 +3806,11 @@ pub fn applyGridLayout(file: *File, options: GridLayoutOptions) !void {
 }
 
 pub fn saveAsync(self: *File) !void {
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) {
+        try self.saveToDownload(dvui.currentWindow());
+        return;
+    }
+
     //if (!self.dirty()) return;
 
     if (!hasRecognizedSaveExtension(self.path)) return;

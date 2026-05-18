@@ -131,8 +131,12 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
         dvui.labelNoFmt(@src(), "Automatic updates are not included in this build.", .{}, .{ .font = body_small, .gravity_x = 0.5 });
     }
 
-    if (std.c.getenv("FIZZY_AUTOUPDATE_URL")) |_| {
-        dvui.labelNoFmt(@src(), "FIZZY_AUTOUPDATE_URL is set (local/HTTP feed).", .{}, .{ .font = body_small, .gravity_x = 0.5 });
+    // `std.c.getenv` requires libc (not available on wasm32-freestanding).
+    // Auto-update is disabled on web anyway (see `auto_update.impl`).
+    if (comptime @import("builtin").target.cpu.arch != .wasm32) {
+        if (std.c.getenv("FIZZY_AUTOUPDATE_URL")) |_| {
+            dvui.labelNoFmt(@src(), "FIZZY_AUTOUPDATE_URL is set (local/HTTP feed).", .{}, .{ .font = body_small, .gravity_x = 0.5 });
+        }
     }
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 8, .h = 10 } });

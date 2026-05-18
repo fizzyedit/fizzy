@@ -1342,7 +1342,7 @@ pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.
             if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip());
             //if (needs_plus) dvui.labelNoFmt(@src(), "+", .{}, opts.strip()) else needs_plus = true;
             //if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip()) else needs_space = true;
-            if (builtin.os.tag == .macos) {
+            if (fizzy.platform.isMacOS()) {
                 dvui.icon(@src(), "cmd", icons.tvg.lucide.command, .{ .stroke_color = color }, .{ .gravity_y = 0.5 });
             } else {
                 dvui.labelNoFmt(@src(), "cmd", .{}, second_opts);
@@ -1356,7 +1356,7 @@ pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.
             if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip());
             //if (needs_plus) dvui.labelNoFmt(@src(), "+", .{}, opts.strip()) else needs_plus = true;
             //if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip()) else needs_space = true;
-            if (builtin.os.tag == .macos) {
+            if (fizzy.platform.isMacOS()) {
                 dvui.icon(@src(), "option", icons.tvg.lucide.option, .{ .stroke_color = color }, .{ .gravity_y = 0.5 });
             } else {
                 dvui.labelNoFmt(@src(), "alt", .{}, second_opts);

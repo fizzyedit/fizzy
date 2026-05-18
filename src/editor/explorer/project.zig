@@ -1,10 +1,19 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const icons = @import("icons");
 
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 
 pub fn draw() !void {
+    // On web there's no project folder concept. Render a simplified pane that
+    // only exposes the Pack button (operates on currently-open files via
+    // `startPackProject`'s wasm path). Native flow below assumes a folder.
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        try drawWeb();
+        return;
+    }
+
     if (fizzy.editor.folder) |folder| {
         const packing = fizzy.editor.isPackingActive();
         if (packProjectButton(packing)) {
@@ -392,6 +401,51 @@ pub fn packedImageOutputCallback(paths: ?[][:0]const u8) void {
             for (paths_) |path| {
                 output_path.* = fizzy.app.allocator.dupe(u8, path) catch null;
             }
+        }
+    }
+}
+
+/// Wasm-specific simplified pack pane. No folder, no `.fizproject` UI — just
+/// the Pack button (operates on currently-open files) and Download buttons for
+/// the resulting atlas/image data.
+fn drawWeb() !void {
+    if (fizzy.editor.open_files.count() == 0) {
+        dvui.labelNoFmt(
+            @src(),
+            "Open one or more files to pack.",
+            .{},
+            .{ .color_text = dvui.themeGet().color(.control, .text) },
+        );
+        return;
+    }
+
+    var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    defer vbox.deinit();
+
+    const btn_opts = dvui.Options{
+        .expand = .horizontal,
+        .style = .highlight,
+    };
+
+    const packing = fizzy.editor.isPackingActive();
+    if (packProjectButton(packing)) {
+        fizzy.editor.startPackProject() catch |err| {
+            dvui.log.err("Failed to pack open files: {any}", .{err});
+        };
+    }
+
+    if (fizzy.packer.atlas) |atlas| {
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = 4 } });
+        if (dvui.button(@src(), "Download Atlas JSON", .{ .draw_focus = false }, btn_opts)) {
+            atlas.save("atlas.atlas", .data) catch {
+                dvui.log.err("Failed to download atlas data", .{});
+            };
+        }
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = 4 } });
+        if (dvui.button(@src(), "Download Atlas PNG", .{ .draw_focus = false }, btn_opts)) {
+            atlas.save("atlas.png", .source) catch {
+                dvui.log.err("Failed to download atlas image", .{});
+            };
         }
     }
 }

@@ -26,7 +26,16 @@ root_path: [:0]const u8 = undefined,
 should_close: bool = false,
 window: *dvui.Window = undefined,
 
-var gpa: std.heap.DebugAllocator(.{}) = .init;
+// Wasm must not declare DebugAllocator at all — the type itself pulls in stack-trace
+// capture → Threaded Io → posix.getrandom, even if never called.
+const NativeGpa = std.heap.DebugAllocator(.{});
+var gpa: if (builtin.target.cpu.arch == .wasm32) void else NativeGpa =
+    if (builtin.target.cpu.arch == .wasm32) {} else .init;
+
+fn appAllocator() std.mem.Allocator {
+    if (comptime builtin.target.cpu.arch == .wasm32) return std.heap.page_allocator;
+    return gpa.allocator();
+}
 
 // Stashed in `main` so `AppInit` (which runs later via dvui's initFn) can
 // reach argv through this zig's `process.Init` API.
@@ -81,7 +90,11 @@ pub const std_options: std.Options = .{
 
 // Runs before the first frame, after backend and dvui.Window.init()
 pub fn AppInit(win: *dvui.Window) !void {
-    const allocator = gpa.allocator();
+    // Snapshot the platform from DVUI's keybind selection. On native this is a
+    // no-op; on wasm it tells `fizzy.platform.isMacOS()` what browser we're in.
+    fizzy.platform.cacheFromWindow(win);
+
+    const allocator = appAllocator();
 
     // Acquire the single-instance lock before chdir or any fizzy globals are
     // created. If another fizzy is already running, our argv is forwarded
@@ -93,17 +106,22 @@ pub fn AppInit(win: *dvui.Window) !void {
     try singleton.acquireLock(allocator, resolved_argv);
 
     // Run from the directory where the executable is located so relative assets can be found.
+    // No-op on wasm: there's no executable path or working directory in the browser, and
+    // `std.posix.PATH_MAX` / `std.posix.system.chdir` are unavailable on wasm32-freestanding.
+    // Assets on wasm are baked into the binary via `@embedFile`, so no chdir is needed.
     var buffer: [1024]u8 = undefined;
-    const exe_dir_len = std.process.executableDirPath(dvui.io, buffer[0..]) catch 0;
-    const path: []const u8 = if (exe_dir_len > 0) buffer[0..exe_dir_len] else ".";
-    {
+    const path: []const u8 = path_blk: {
+        if (comptime builtin.target.cpu.arch == .wasm32) break :path_blk ".";
+        const exe_dir_len = std.process.executableDirPath(dvui.io, buffer[0..]) catch 0;
+        const dir: []const u8 = if (exe_dir_len > 0) buffer[0..exe_dir_len] else ".";
         var path_buf: [std.posix.PATH_MAX]u8 = undefined;
-        if (path.len < path_buf.len) {
-            @memcpy(path_buf[0..path.len], path);
-            path_buf[path.len] = 0;
+        if (dir.len < path_buf.len) {
+            @memcpy(path_buf[0..dir.len], dir);
+            path_buf[dir.len] = 0;
             _ = std.posix.system.chdir(@ptrCast(&path_buf));
         }
-    }
+        break :path_blk dir;
+    };
 
     fizzy.app = try allocator.create(App);
     fizzy.app.* = .{
@@ -115,6 +133,9 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.editor = try allocator.create(Editor);
     fizzy.editor.* = Editor.init(fizzy.app) catch unreachable;
 
+    // `Packer` works on web now that `zstbi.c` compiles for wasm32-freestanding
+    // (`STBI_NO_STDLIB` + the `fizzy_stbi_libc.c` shims). The web pack flow
+    // packs the currently-open files instead of walking a project directory.
     fizzy.packer = try allocator.create(Packer);
     fizzy.packer.* = Packer.init(allocator) catch unreachable;
 

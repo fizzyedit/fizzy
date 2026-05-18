@@ -618,7 +618,9 @@ pub fn undoRedo(self: *History, file: *fizzy.Internal.File, action: Action) !voi
         .layers_order => |*layers_order| {
             file.editor.layer_composite_dirty = true;
             file.editor.split_composite_dirty = true;
-            var new_order = try fizzy.app.allocator.alloc(usize, layers_order.order.len);
+            // `new_order` holds layer ids (u64 in the on-disk format), not
+            // indices — `layers_order.order` below is `[]u64` so this matches.
+            var new_order = try fizzy.app.allocator.alloc(u64, layers_order.order.len);
             for (0..file.layers.len) |layer_index| {
                 new_order[layer_index] = file.layers.items(.id)[layer_index];
             }
@@ -730,7 +732,8 @@ pub fn undoRedo(self: *History, file: *fizzy.Internal.File, action: Action) !voi
         },
         .animation_settings => {},
         .animation_order => |*animation_order| {
-            var new_order = try dvui.currentWindow().arena().alloc(usize, animation_order.order.len);
+            // `new_order` holds animation ids (u64), matching `animation_order.order: []u64`.
+            var new_order = try dvui.currentWindow().arena().alloc(u64, animation_order.order.len);
             for (0..file.animations.len) |anim_index| {
                 new_order[anim_index] = file.animations.items(.id)[anim_index];
             }

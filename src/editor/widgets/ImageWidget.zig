@@ -304,30 +304,61 @@ fn drawPackedAtlasCheckerboardBackground(canvas: *CanvasWidget, data_rect: dvui.
         null;
     if (tex == null) return;
 
+    // Same 8×8 tile as `File.alpha_checkerboard_count` / `drawCheckerboardCellsBatched`.
+    const tile_w: f32 = 8.0;
+    const tile_h: f32 = 8.0;
+    if (data_rect.w <= 0 or data_rect.h <= 0) return;
+
+    const visible = canvas.dataFromScreenRect(canvas.rect);
+    const draw_rect = visible.intersect(data_rect);
+    if (draw_rect.empty()) return;
+
+    const est_tiles_x: usize = @intFromFloat(@ceil(draw_rect.w / tile_w));
+    const est_tiles_y: usize = @intFromFloat(@ceil(draw_rect.h / tile_h));
+    if (est_tiles_x == 0 or est_tiles_y == 0) return;
+
     const tone = dvui.themeGet().color(.content, .fill).lighten(6.0).opacity(0.5).opacity(dvui.currentWindow().alpha);
     const pma = dvui.Color.PMA.fromColor(tone);
 
-    const col_w: f32 = 8.0;
-    const row_h: f32 = 8.0;
-    const rs = canvas.screen_rect_scale;
-    const r = rs.rectToPhysical(data_rect);
-    const tl = r.topLeft();
-    const tr = r.topRight();
-    const br = r.bottomRight();
-    const bl = r.bottomLeft();
-    const uv_x0 = data_rect.x / col_w;
-    const uv_y0 = data_rect.y / row_h;
-    const uv_x1 = (data_rect.x + data_rect.w) / col_w;
-    const uv_y1 = (data_rect.y + data_rect.h) / row_h;
-
     const arena = dvui.currentWindow().arena();
-    var builder = dvui.Triangles.Builder.init(arena, 4, 6) catch return;
+    var builder = dvui.Triangles.Builder.init(arena, est_tiles_x * est_tiles_y * 4, est_tiles_x * est_tiles_y * 6) catch return;
     defer builder.deinit(arena);
-    builder.appendVertex(.{ .pos = tl, .col = pma, .uv = .{ uv_x0, uv_y0 } });
-    builder.appendVertex(.{ .pos = tr, .col = pma, .uv = .{ uv_x1, uv_y0 } });
-    builder.appendVertex(.{ .pos = br, .col = pma, .uv = .{ uv_x1, uv_y1 } });
-    builder.appendVertex(.{ .pos = bl, .col = pma, .uv = .{ uv_x0, uv_y1 } });
-    builder.appendTriangles(&.{ 1, 0, 3, 1, 3, 2 });
+
+    const rs = canvas.screen_rect_scale;
+    var quad_idx: usize = 0;
+    const x_start = @floor(draw_rect.x / tile_w) * tile_w;
+    const y_start = @floor(draw_rect.y / tile_h) * tile_h;
+    var y = y_start;
+    while (y < draw_rect.y + draw_rect.h) : (y += tile_h) {
+        var x = x_start;
+        while (x < draw_rect.x + draw_rect.w) : (x += tile_w) {
+            const x0 = @max(x, data_rect.x);
+            const y0 = @max(y, data_rect.y);
+            const x1 = @min(x + tile_w, data_rect.x + data_rect.w);
+            const y1 = @min(y + tile_h, data_rect.y + data_rect.h);
+            if (x1 <= x0 or y1 <= y0) continue;
+
+            const sr = Rect{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
+            const r = rs.rectToPhysical(sr);
+            const tl = r.topLeft();
+            const tr = r.topRight();
+            const br = r.bottomRight();
+            const bl = r.bottomLeft();
+
+            // UV 0..1 per tile — textures use CLAMP_TO_EDGE; one quad with UV > 1 does not tile.
+            builder.appendVertex(.{ .pos = tl, .col = pma, .uv = .{ 0, 0 } });
+            builder.appendVertex(.{ .pos = tr, .col = pma, .uv = .{ 1, 0 } });
+            builder.appendVertex(.{ .pos = br, .col = pma, .uv = .{ 1, 1 } });
+            builder.appendVertex(.{ .pos = bl, .col = pma, .uv = .{ 0, 1 } });
+
+            const quad_base: dvui.Vertex.Index = @intCast(quad_idx * 4);
+            builder.appendTriangles(&.{ quad_base + 1, quad_base + 0, quad_base + 3, quad_base + 1, quad_base + 3, quad_base + 2 });
+            quad_idx += 1;
+        }
+    }
+
+    if (quad_idx == 0) return;
+
     const triangles = builder.build();
     dvui.renderTriangles(triangles, tex) catch {
         dvui.log.err("Failed to render packed atlas checkerboard", .{});

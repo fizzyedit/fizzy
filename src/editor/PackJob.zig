@@ -329,6 +329,17 @@ pub fn workerMain(job: *PackJob) void {
                 };
             },
             .path => |path| {
+                // The wasm path of `startPackProject` only ever emits `.open`
+                // inputs (browser has no project folder to scan), so this
+                // branch is unreachable on wasm. Static-gate it to keep
+                // `File.fromPath` (which calls `Io.Dir.cwd()` / `posix.AT`,
+                // unavailable on `wasm32-freestanding`) out of the wasm
+                // reachability graph.
+                if (comptime @import("builtin").target.cpu.arch == .wasm32) {
+                    job.err = error.PathInputsNotSupportedOnWasm;
+                    job.phase.store(@intFromEnum(Phase.failed), .release);
+                    return;
+                }
                 job.phase.store(@intFromEnum(Phase.loading), .release);
                 const maybe_pf = PackFile.fromPath(fizzy.app.allocator, path) catch |e| {
                     job.err = e;
