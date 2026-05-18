@@ -13,7 +13,7 @@ const Running = std.atomic.Value(u8);
 const log = std.log.scoped(.singleton_app);
 
 // ----------------------------------------------------------------------------
-// Win32 declarations missing from std.os.windows.kernel32 in 0.15.
+// Win32 declarations not exposed by std.os.windows.kernel32.
 // ----------------------------------------------------------------------------
 
 const FILE_FLAG_FIRST_PIPE_INSTANCE: w.DWORD = 0x00080000;
@@ -38,9 +38,30 @@ const ERROR_PIPE_BUSY = @as(w.Win32Error, @enumFromInt(231));
 const ERROR_PIPE_CONNECTED = @as(w.Win32Error, @enumFromInt(535));
 const ERROR_BROKEN_PIPE = @as(w.Win32Error, @enumFromInt(109));
 
+extern "kernel32" fn CreateFileW(
+    lpFileName: w.LPCWSTR,
+    dwDesiredAccess: w.DWORD,
+    dwShareMode: w.DWORD,
+    lpSecurityAttributes: ?*w.SECURITY_ATTRIBUTES,
+    dwCreationDisposition: w.DWORD,
+    dwFlagsAndAttributes: w.DWORD,
+    hTemplateFile: ?w.HANDLE,
+) callconv(.winapi) w.HANDLE;
+
+extern "kernel32" fn CreateNamedPipeW(
+    lpName: w.LPCWSTR,
+    dwOpenMode: w.DWORD,
+    dwPipeMode: w.DWORD,
+    nMaxInstances: w.DWORD,
+    nOutBufferSize: w.DWORD,
+    nInBufferSize: w.DWORD,
+    nDefaultTimeOut: w.DWORD,
+    lpSecurityAttributes: ?*w.SECURITY_ATTRIBUTES,
+) callconv(.winapi) w.HANDLE;
+
 extern "kernel32" fn ConnectNamedPipe(
     hNamedPipe: w.HANDLE,
-    lpOverlapped: ?*w.OVERLAPPED,
+    lpOverlapped: ?*anyopaque,
 ) callconv(.winapi) w.BOOL;
 
 extern "kernel32" fn DisconnectNamedPipe(
@@ -50,6 +71,10 @@ extern "kernel32" fn DisconnectNamedPipe(
 extern "kernel32" fn WaitNamedPipeW(
     lpNamedPipeName: w.LPCWSTR,
     nTimeOut: w.DWORD,
+) callconv(.winapi) w.BOOL;
+
+extern "kernel32" fn FlushFileBuffers(
+    hFile: w.HANDLE,
 ) callconv(.winapi) w.BOOL;
 
 // ----------------------------------------------------------------------------
@@ -118,7 +143,7 @@ pub const Primary = struct {
         // pipe instances.
         var attempts: u8 = 0;
         while (attempts < 100) : (attempts += 1) {
-            const h = w.kernel32.CreateFileW(
+            const h = CreateFileW(
                 self.pipe_name_w.ptr,
                 GENERIC_READ | GENERIC_WRITE,
                 0,
@@ -147,8 +172,8 @@ pub const Primary = struct {
             }
 
             const ok = ConnectNamedPipe(current, null);
-            const err = if (ok == 0) w.GetLastError() else @as(w.Win32Error, @enumFromInt(0));
-            if (ok == 0 and err != ERROR_PIPE_CONNECTED) {
+            const err = if (ok == .FALSE) w.GetLastError() else @as(w.Win32Error, @enumFromInt(0));
+            if (ok == .FALSE and err != ERROR_PIPE_CONNECTED) {
                 log.warn("ConnectNamedPipe failed: {t}", .{err});
                 w.CloseHandle(current);
                 return;
@@ -160,7 +185,7 @@ pub const Primary = struct {
                 return;
             }
 
-            const file = std.Io.File{ .handle = current };
+            const file = std.Io.File{ .handle = current, .flags = .{ .nonblocking = false } };
             var rbuf: [4096]u8 = undefined;
             var fr = file.reader(self.io, &rbuf);
             const argv = root.readArgvIo(self.allocator, &fr.interface) catch |e| blk: {
@@ -193,7 +218,7 @@ fn createPipeInstance(pipe_name: [:0]const u16, first: bool) w.HANDLE {
         (if (first) FILE_FLAG_FIRST_PIPE_INSTANCE else @as(w.DWORD, 0));
     const pipe_mode: w.DWORD = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE |
         PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS;
-    return w.kernel32.CreateNamedPipeW(
+    return CreateNamedPipeW(
         pipe_name.ptr,
         open_mode,
         pipe_mode,
@@ -208,7 +233,7 @@ fn createPipeInstance(pipe_name: [:0]const u16, first: bool) w.HANDLE {
 fn sendArgv(io: std.Io, pipe_name: [:0]const u16, argv: []const []const u8) !void {
     var attempts: u8 = 0;
     while (attempts < 10) : (attempts += 1) {
-        const h = w.kernel32.CreateFileW(
+        const h = CreateFileW(
             pipe_name.ptr,
             GENERIC_READ | GENERIC_WRITE,
             0,
@@ -219,13 +244,13 @@ fn sendArgv(io: std.Io, pipe_name: [:0]const u16, argv: []const []const u8) !voi
         );
         if (h != w.INVALID_HANDLE_VALUE) {
             defer w.CloseHandle(h);
-            const file = std.Io.File{ .handle = h };
+            const file = std.Io.File{ .handle = h, .flags = .{ .nonblocking = false } };
             var wbuf: [4096]u8 = undefined;
             var fw = file.writer(io, &wbuf);
             try root.writeArgvIo(&fw.interface, argv);
             fw.interface.flush() catch {};
             // Make sure the server reads the data before we close.
-            _ = w.kernel32.FlushFileBuffers(h);
+            _ = FlushFileBuffers(h);
             return;
         }
         const err = w.GetLastError();
