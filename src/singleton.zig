@@ -150,13 +150,55 @@ fn dispatchPath(path: []const u8) !void {
         try fizzy.editor.setProjectFolder(path);
         return;
     } else |_| {}
-    // Otherwise try as file.
+
+    // It's a file. If no project folder is currently open, walk up the
+    // directory tree looking for a `.fizproject` (or `.pixiproject` for
+    // backwards-compat with pixi) marker and open that as the project
+    // folder first. That way double-clicking any file inside a project
+    // automatically loads the project context.
+    if (fizzy.editor.folder == null) {
+        if (findProjectRoot(state.allocator, path)) |root| {
+            defer state.allocator.free(root);
+            fizzy.editor.setProjectFolder(root) catch |err| {
+                log.warn("found project root '{s}' but failed to set: {t}", .{ root, err });
+            };
+        }
+    }
+
     const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
         log.warn("open '{s}' failed: {t}", .{ path, err });
         return err;
     };
     file.close(io);
     _ = try fizzy.editor.openFilePath(path, fizzy.editor.open_workspace_grouping);
+}
+
+/// Walk upward from `file_path`'s parent directory, returning the first
+/// ancestor that contains a `.fizproject` or `.pixiproject` marker (caller
+/// owns the returned slice). Returns null on filesystem root, after a
+/// safety-bound depth, or if no marker is found.
+fn findProjectRoot(gpa: std.mem.Allocator, file_path: []const u8) ?[]u8 {
+    var current = std.fs.path.dirname(file_path) orelse return null;
+    var depth: u8 = 0;
+    while (depth < 64) : (depth += 1) {
+        if (dirHasProjectMarker(gpa, current)) {
+            return gpa.dupe(u8, current) catch null;
+        }
+        const parent = std.fs.path.dirname(current) orelse return null;
+        if (parent.len == current.len) return null; // unchanged (hit root)
+        current = parent;
+    }
+    return null;
+}
+
+fn dirHasProjectMarker(gpa: std.mem.Allocator, dir: []const u8) bool {
+    const names = [_][]const u8{ ".fizproject", ".pixiproject" };
+    for (names) |name| {
+        const candidate = std.fs.path.join(gpa, &.{ dir, name }) catch continue;
+        defer gpa.free(candidate);
+        if (std.Io.Dir.accessAbsolute(dvui.io, candidate, .{ .read = true })) |_| return true else |_| {}
+    }
+    return false;
 }
 
 /// Walk `argv` once via this zig's `Args.Iterator` API and return a slice
