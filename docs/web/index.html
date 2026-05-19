@@ -52,7 +52,9 @@
         text-align: center;
         background: var(--bg);
         z-index: 2;
+        pointer-events: none;
       }
+      #error-panel { pointer-events: auto; }
       #loading.hidden { display: none; }
       .brand {
         font-family: "Comfortaa", system-ui, sans-serif;
@@ -96,7 +98,7 @@
         <p class="status" id="error-message"></p>
         <a class="home-link" href="/">Back to fizzyed.it</a>
       </div>
-      <canvas id="dvui-canvas" tabIndex="1" hidden></canvas>
+      <canvas id="dvui-canvas" tabIndex="1" style="width: 100%; height: 100%;"></canvas>
     </div>
     <script type="module">
       const loadingEl = document.getElementById("loading");
@@ -121,13 +123,17 @@
         const wasmUrl = "web.wasm?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
         import("./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256")
           .then(({ dvui }) => dvui("#dvui-canvas", wasmUrl))
-          .then(() => {
+          .then((app) => {
+            // Canvas must be laid out (not `hidden`) before dvui reads clientWidth/Height.
+            // On production we saw 300×150 px backing store while the shell still showed loading.
+            window.dispatchEvent(new Event("resize"));
+            app.requestRender();
             loadingEl.classList.add("hidden");
-            canvas.hidden = false;
           })
           .catch((err) => {
             console.error(err);
-            showError("Failed to load the editor. Try a hard refresh, or use a recent Chrome, Firefox, or Safari.");
+            const detail = err instanceof Error ? err.message : String(err);
+            showError(`Failed to load the editor (${detail}). Try a hard refresh, or use a recent Chrome, Firefox, or Safari.`);
           });
       }
     </script>

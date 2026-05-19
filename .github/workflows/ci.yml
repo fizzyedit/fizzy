@@ -66,7 +66,10 @@ jobs:
           ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
         run: zig build test --summary all
 
+  # Compile-only wasm smoke test on PRs. Pushes to main use deploy-web.yml
+  # (`zig build web -Doptimize=ReleaseSafe`) — avoid building wasm twice on main.
   check-web:
+    if: github.event_name == 'pull_request'
     name: Web (wasm compile)
     runs-on: ubuntu-latest
     steps:
