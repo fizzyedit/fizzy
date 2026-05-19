@@ -52,7 +52,8 @@ pub fn loadFromBytes(allocator: std.mem.Allocator, bytes: []const u8) !Atlas {
             animation.frames = try allocator.alloc(Animation.Frame, old_animation.frames.len);
             for (animation.frames, old_animation.frames) |*frame, old_frame| {
                 frame.sprite_index = old_frame;
-                frame.ms = @intFromFloat(1000.0 / old_animation.fps);
+                const fps = if (old_animation.fps > 0) old_animation.fps else 1.0;
+                frame.ms = @intFromFloat(1000.0 / fps);
             }
         }
 
@@ -67,7 +68,8 @@ pub fn loadFromBytes(allocator: std.mem.Allocator, bytes: []const u8) !Atlas {
             animation.frames = try allocator.alloc(Animation.Frame, old_animation.length);
             for (animation.frames, old_animation.start..old_animation.start + old_animation.length) |*frame, frame_index| {
                 frame.sprite_index = frame_index;
-                frame.ms = @intFromFloat(1000.0 / old_animation.fps);
+                const fps = if (old_animation.fps > 0) old_animation.fps else 1.0;
+                frame.ms = @intFromFloat(1000.0 / fps);
             }
         }
 

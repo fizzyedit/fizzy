@@ -60,10 +60,10 @@ jobs:
             echo "All fetch attempts failed"; exit 1
           fi
 
-      - name: Build web app (ReleaseSmall)
+      - name: Build web app (ReleaseSafe)
         env:
           ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
-        run: zig build web -Doptimize=ReleaseSmall
+        run: zig build web -Doptimize=ReleaseSafe
 
       - name: Assemble site
         run: |

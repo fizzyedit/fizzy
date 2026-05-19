@@ -65,3 +65,33 @@ jobs:
         env:
           ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
         run: zig build test --summary all
+
+  check-web:
+    name: Web (wasm compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pre-create Zig global cache tmp/
+        run: mkdir -p "$GITHUB_WORKSPACE/zig-global-cache/tmp"
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          cache-key: ${{ hashFiles('build.zig.zon') }}
+      - name: Fetch dependencies (with retries)
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
+        run: |
+          n=0
+          until [ "$n" -ge 5 ]; do
+            zig build --fetch && break
+            n=$((n+1))
+            echo "Fetch attempt $n failed, sleeping $((n*10))s before retry..."
+            sleep $((n*10))
+          done
+          if [ "$n" -ge 5 ]; then
+            echo "All fetch attempts failed"; exit 1
+          fi
+      - name: Check web build
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
+        run: zig build check-web

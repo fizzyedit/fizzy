@@ -45,11 +45,9 @@ Native-only modules are split into two files plus a facade:
 - Artifacts at `zig-out/web/`: `web.wasm`, `web.js`, `index.html` (cache-busted), `NotoSansKR-Regular.ttf`.
 - Verified: serves cleanly via `python3 -m http.server` (see [.claude/launch.json](.claude/launch.json) — fizzy-web entry), DVUI renders, no console errors.
 
-### Checkpoint B (in progress) — boot the real editor in browser
+### Checkpoint B — boot the real editor in browser ✅
 
-**Latest (this session):** Editor boots and draws in browser. Fixed runtime `wasm_renderGeometry: missing texture id N` when painting: DVUI web backend has no `textureUpdateSubRect`, so `updateSubRect` destroys/recreates the GPU texture while the texture cache kept the old id (destroyed at next `Window.begin`). `src/gfx/render.zig` now calls `textureAddToCache` when the texture pointer changes after upload.
-
-`web_main.zig` uses `fizzy.App.dvui_app` (real `AppInit` / `AppFrame` / `AppDeinit`). `zig build check-web` and `zig build web` both succeed. Debug wasm is ~29 MB; use `-Doptimize=ReleaseSmall` before deploy.
+Editor boots and draws in browser. Export (PNG/JPEG/GIF), open/save via DVUI file picker + download, packer, zip/.fiz I/O. `web_main.zig` uses `fizzy.App.dvui_app`. `zig build check-web` and `zig build web` succeed. Deploy uses `ReleaseSafe` (~9 MB wasm). Branded app shell at `docs/web/index.html` (loading screen + WebGL probe).
 
 Sub-tasks landed so far:
 - ✅ **`backend.zig` split** — [src/backend_native.zig](src/backend_native.zig) (the original SDL3 + objc + win32 code, renamed), [src/backend_web.zig](src/backend_web.zig) (19 stubs). [src/fizzy.zig:75-78](src/fizzy.zig) switches inline.
@@ -228,22 +226,18 @@ Gate the native init calls in [src/App.zig](src/App.zig):
 
 DVUI's `web.js` has no `drop` listener. Extend it to call a fizzy-exported `wasm_drop_file(name_ptr, name_len, data_ptr, data_len)` on drop. Mirror the SDL_EVENT_DROP_FILE path in `backend_native.zig:1097-1132` so the editor's existing open-file handler is the consumer.
 
-### 9. GH Pages deploy workflow
+### 9. ~~GH Pages deploy workflow~~ ✅ DONE
 
-Add `.github/workflows/deploy-web.yml`:
-- Trigger: `push: { branches: [main] }` + `workflow_dispatch`.
-- Build: `zig build web -Doptimize=ReleaseSmall`.
-- Stage: copy `docs/*` (existing landing) into `site/`, then `zig-out/web/*` into `site/app/`.
-- Deploy: `actions/upload-pages-artifact@v3` + `actions/deploy-pages@v4`.
+[`.github/workflows/deploy-web.yml`](.github/workflows/deploy-web.yml): builds `zig build web -Doptimize=ReleaseSafe`, publishes `docs/` + `zig-out/web/` → `site/app/`. Landing page has **Give it a try** → `/app/` and nav **Try online**.
 
-One-time repo setting: **Settings → Pages → Source = "GitHub Actions"** (currently "branch: main /docs"). After flipping, the workflow assembles the published site. The CNAME `docs/CNAME` = `fizzyed.it` continues to work.
+One-time repo setting: **Settings → Pages → Source = "GitHub Actions"** (if still on branch `/docs`, flip before first Actions deploy).
 
-Add a "Try it in your browser →" link from [docs/index.html](docs/index.html) to `/app/`.
+Local preview: `zig build web-docs` then `cd docs && python3 -m http.server 8765` → http://localhost:8765/app/
 
-### 10. Polish
+### 10. Polish (partial)
 
-- Loading screen while wasm streams in (1–3 MB at ReleaseSmall).
-- WebGL2 feature check before wasm instantiation.
+- ✅ Loading screen + WebGL probe in [`docs/web/index.html`](docs/web/index.html).
+- ✅ `check-web` in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 - Optional: File System Access API path for browsers that support it, so "Save" overwrites instead of re-downloading. Gate by feature detection.
 
 ## Files touched by this port (so far)

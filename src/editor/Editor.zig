@@ -1407,13 +1407,15 @@ pub fn drawRadialMenu(editor: *Editor) !void {
             .bucket => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.bucket_default],
             .selection => selection_sprite,
         };
-        const size: dvui.Size = dvui.imageSize(fizzy.editor.atlas.source) catch .{ .w = 0, .h = 0 };
+        const size: dvui.Size = dvui.imageSize(fizzy.editor.atlas.source) catch .{ .w = 1, .h = 1 };
+        const atlas_w = if (size.w > 0) size.w else 1;
+        const atlas_h = if (size.h > 0) size.h else 1;
 
         const uv = dvui.Rect{
-            .x = @as(f32, @floatFromInt(sprite.source[0])) / size.w,
-            .y = @as(f32, @floatFromInt(sprite.source[1])) / size.h,
-            .w = @as(f32, @floatFromInt(sprite.source[2])) / size.w,
-            .h = @as(f32, @floatFromInt(sprite.source[3])) / size.h,
+            .x = @as(f32, @floatFromInt(sprite.source[0])) / atlas_w,
+            .y = @as(f32, @floatFromInt(sprite.source[1])) / atlas_h,
+            .w = @as(f32, @floatFromInt(sprite.source[2])) / atlas_w,
+            .h = @as(f32, @floatFromInt(sprite.source[3])) / atlas_h,
         };
 
         button.processEvents();

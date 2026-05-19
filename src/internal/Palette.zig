@@ -10,6 +10,7 @@ name: []const u8,
 colors: [][4]u8,
 
 pub fn getDVUIColor(self: *Palette, id: usize) dvui.Color {
+    if (self.colors.len == 0) return .magenta;
     const new_id = id % self.colors.len;
     return .{ .r = self.colors[new_id][0], .g = self.colors[new_id][1], .b = self.colors[new_id][2], .a = self.colors[new_id][3] };
 }

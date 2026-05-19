@@ -376,7 +376,7 @@ pub fn build(b: *std.Build) !void {
             }),
         });
         const cb_run = b.addRunArtifact(cb);
-        cb_run.addFileArg(dvui_web_dep.path("src/backends/index.html"));
+        cb_run.addFileArg(b.path("docs/web/index.html"));
         cb_run.addFileArg(dvui_web_dep.path("src/backends/web.js"));
         cb_run.addFileArg(web_exe.getEmittedBin());
         const index_html_with_hash = cb_run.captureStdOut(.{});

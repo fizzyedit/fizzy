@@ -193,8 +193,10 @@ pub fn point(source: dvui.ImageSource, index: usize) ?dvui.Point {
         return null;
     }
     const s = size(source);
+    const w = @as(usize, @intFromFloat(s.w));
+    if (w == 0) return .{};
 
-    return .{ .x = @floatFromInt(index % @as(usize, @intFromFloat(s.w))), .y = @floatFromInt(index / @as(usize, @intFromFloat(s.w))) };
+    return .{ .x = @floatFromInt(index % w), .y = @floatFromInt(index / w) };
 }
 
 pub fn pixel(source: dvui.ImageSource, p: dvui.Point) ?[4]u8 {

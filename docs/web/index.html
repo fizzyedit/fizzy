@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>fizzy</title>
+    <meta name="description" content="fizzy — pixel art editor in your browser." />
+    <link rel="icon" type="image/png" href="/img/icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@600;700&family=Noto+Sans:wght@400;600&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg: #22232a;
+        --text: #e6af89;
+        --text-muted: #9f9fb0;
+        --accent: #2fb387;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text-muted);
+        font-family: "Noto Sans", system-ui, sans-serif;
+      }
+      #app-root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      #dvui-canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        outline: none;
+        caret-color: transparent;
+      }
+      #loading, #error-panel {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        padding: 24px;
+        text-align: center;
+        background: var(--bg);
+        z-index: 2;
+      }
+      #loading.hidden { display: none; }
+      .brand {
+        font-family: "Comfortaa", system-ui, sans-serif;
+        font-weight: 700;
+        font-size: clamp(28px, 5vw, 40px);
+        color: var(--text);
+        letter-spacing: -0.02em;
+      }
+      .status {
+        font-size: 15px;
+        max-width: 420px;
+        line-height: 1.5;
+      }
+      .spinner {
+        width: 36px;
+        height: 36px;
+        border: 3px solid #34363f;
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .home-link {
+        margin-top: 8px;
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      .home-link:hover { text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <div id="app-root">
+      <div id="loading" aria-live="polite">
+        <div class="brand">fizzy</div>
+        <div class="spinner" aria-hidden="true"></div>
+        <p class="status" id="loading-status">Loading editor…</p>
+      </div>
+      <div id="error-panel" role="alert" hidden>
+        <div class="brand">fizzy</div>
+        <p class="status" id="error-message"></p>
+        <a class="home-link" href="/">Back to fizzyed.it</a>
+      </div>
+      <canvas id="dvui-canvas" tabIndex="1" hidden></canvas>
+    </div>
+    <script type="module">
+      const loadingEl = document.getElementById("loading");
+      const errorPanel = document.getElementById("error-panel");
+      const errorMessage = document.getElementById("error-message");
+      const canvas = document.getElementById("dvui-canvas");
+
+      function showError(message) {
+        loadingEl.classList.add("hidden");
+        errorMessage.textContent = message;
+        errorPanel.hidden = false;
+      }
+
+      function hasWebGl() {
+        const probe = document.createElement("canvas");
+        return !!(probe.getContext("webgl2") || probe.getContext("webgl"));
+      }
+
+      if (!hasWebGl()) {
+        showError("This browser does not support WebGL, which fizzy needs to run.");
+      } else {
+        const wasmUrl = "web.wasm?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
+        import("./web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256")
+          .then(({ dvui }) => dvui("#dvui-canvas", wasmUrl))
+          .then(() => {
+            loadingEl.classList.add("hidden");
+            canvas.hidden = false;
+          })
+          .catch((err) => {
+            console.error(err);
+            showError("Failed to load the editor. Try a hard refresh, or use a recent Chrome, Firefox, or Safari.");
+          });
+      }
+    </script>
+  </body>
+</html>
