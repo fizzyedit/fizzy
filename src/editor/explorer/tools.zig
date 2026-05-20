@@ -975,26 +975,26 @@ pub fn drawColors() !void {
     var clicked: bool = false;
     {
         var primary_button: dvui.ButtonWidget = undefined;
-        primary_button.init(@src(), .{}, button_opts);
+        primary_button.init(@src(), .{ .touch_drag = true }, button_opts);
         defer primary_button.deinit();
+
+        try drawColorPicker(primary_button.data().rectScale().r, &fizzy.editor.colors.primary, 0);
 
         primary_button.processEvents();
         primary_button.drawBackground();
-
-        drawColorPicker(primary_button.data().rectScale().r, &fizzy.editor.colors.primary) catch {};
 
         if (primary_button.clicked()) clicked = true;
     }
 
     {
         var secondary_button: dvui.ButtonWidget = undefined;
-        secondary_button.init(@src(), .{}, button_opts.override(secondary_overrider));
+        secondary_button.init(@src(), .{ .touch_drag = true }, button_opts.override(secondary_overrider));
         defer secondary_button.deinit();
+
+        try drawColorPicker(secondary_button.data().rectScale().r, &fizzy.editor.colors.secondary, 1);
 
         secondary_button.processEvents();
         secondary_button.drawBackground();
-
-        drawColorPicker(secondary_button.data().rectScale().r, &fizzy.editor.colors.secondary) catch {};
 
         if (secondary_button.clicked()) clicked = true;
     }
@@ -1004,8 +1004,8 @@ pub fn drawColors() !void {
     }
 }
 
-fn drawColorPicker(rect: dvui.Rect.Physical, backing_color: *[4]u8) !void {
-    var context = dvui.context(@src(), .{ .rect = rect }, .{});
+fn drawColorPicker(rect: dvui.Rect.Physical, backing_color: *[4]u8, id_extra: usize) !void {
+    var context = dvui.context(@src(), .{ .rect = rect }, .{ .id_extra = id_extra });
     defer context.deinit();
 
     if (context.activePoint()) |point| {
@@ -1206,7 +1206,7 @@ pub fn drawPalettes() !void {
                 box_widget.deinit();
 
                 var button_widget: dvui.ButtonWidget = undefined;
-                button_widget.init(@src(), .{}, .{
+                button_widget.init(@src(), .{ .touch_drag = true }, .{
                     .expand = .none,
                     .rect = rect,
                     .id_extra = i,
@@ -1238,18 +1238,12 @@ pub fn drawPalettes() !void {
                 if (dvui.clickedEx(button_widget.data(), .{ .buttons = .any })) |evt| {
                     switch (evt) {
                         .mouse => |mouse_evt| {
-                            switch (mouse_evt.button) {
-                                .left => {
-                                    @memcpy(&fizzy.editor.colors.primary, &color);
-                                },
-                                .right => {
-                                    @memcpy(&fizzy.editor.colors.secondary, &color);
-                                },
-
-                                else => {},
+                            if (mouse_evt.button.pointer()) {
+                                @memcpy(&fizzy.editor.colors.primary, &color);
+                            } else if (mouse_evt.button == .right) {
+                                @memcpy(&fizzy.editor.colors.secondary, &color);
                             }
                         },
-
                         else => {},
                     }
                 }
