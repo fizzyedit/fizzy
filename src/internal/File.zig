@@ -1973,6 +1973,12 @@ pub fn strokeUndoExpandToCoverRect(file: *File, cover: dvui.Rect) !void {
 
     if (tw == ow and th == oh and tx == ox and ty == oy) return;
 
+    const snap_area = @as(u64, tw) * @as(u64, th);
+    if (snap_area > stroke_undo_max_snapshot_pixels) {
+        strokeUndoFlushSnapshotToStrokeBuffer(file);
+        return;
+    }
+
     const new_n = @as(usize, tw) * @as(usize, th) * 4;
     const new_buf = try fizzy.app.allocator.alloc(u8, new_n);
 
@@ -2008,9 +2014,14 @@ pub fn strokeUndoExpandToCoverRect(file: *File, cover: dvui.Rect) !void {
     file.editor.stroke_undo_h = th;
 }
 
-pub fn strokeUndoCommit(file: *File) void {
-    defer strokeUndoFreeSnapshot(file);
-    const snap = file.editor.stroke_undo_pixels orelse return;
+/// Move deferred snapshot diffs into the live stroke buffer and stop using the snapshot.
+/// Used when the snapshot can no longer grow (size cap) so later pixels still get undo entries.
+fn strokeUndoFlushSnapshotToStrokeBuffer(file: *File) void {
+    if (!file.editor.stroke_undo_deferred) return;
+    const snap = file.editor.stroke_undo_pixels orelse {
+        file.editor.stroke_undo_deferred = false;
+        return;
+    };
 
     const layer = file.layers.get(file.selected_layer_index);
     const pixels = layer.pixels();
@@ -2020,8 +2031,6 @@ pub fn strokeUndoCommit(file: *File) void {
     const sy = file.editor.stroke_undo_y;
     const sw = file.editor.stroke_undo_w;
     const sh = file.editor.stroke_undo_h;
-
-    file.buffers.stroke.clearAndFree();
 
     var row: u32 = 0;
     while (row < sh) : (row += 1) {
@@ -2035,13 +2044,21 @@ pub fn strokeUndoCommit(file: *File) void {
             const cur = pixels[idx];
             if (!std.mem.eql(u8, &old_px, &cur)) {
                 file.buffers.stroke.append(idx, old_px) catch {
-                    dvui.log.err("Failed to append to stroke buffer (deferred commit)", .{});
+                    dvui.log.err("Failed to append to stroke buffer (flush snapshot)", .{});
                 };
             }
         }
     }
 
-    const change_opt = file.buffers.stroke.toChange(layer.id) catch null;
+    strokeUndoFreeSnapshot(file);
+}
+
+pub fn strokeUndoCommit(file: *File) void {
+    if (file.editor.stroke_undo_deferred) {
+        strokeUndoFlushSnapshotToStrokeBuffer(file);
+    }
+
+    const change_opt = file.buffers.stroke.toChange(file.layers.get(file.selected_layer_index).id) catch null;
     if (change_opt) |change| {
         file.history.append(change) catch {
             dvui.log.err("Failed to append to history", .{});

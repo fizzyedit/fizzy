@@ -2153,6 +2153,94 @@ pub fn processSelection(self: *FileWidget) void {
     file.editor.temp_layer_has_content = true;
 }
 
+fn processStrokeDragSegment(
+    self: *FileWidget,
+    file: *fizzy.Internal.File,
+    previous_point: dvui.Point,
+    current_point: dvui.Point,
+    screen_pt: dvui.Point.Physical,
+    color: [4]u8,
+    stroke_size: u8,
+    shift: bool,
+) void {
+    const min_x = @min(previous_point.x, current_point.x);
+    const min_y = @min(previous_point.y, current_point.y);
+    const max_x = @max(previous_point.x, current_point.x);
+    const max_y = @max(previous_point.y, current_point.y);
+    const span_rect = dvui.Rect{
+        .x = min_x,
+        .y = min_y,
+        .w = max_x - min_x + 1,
+        .h = max_y - min_y + 1,
+    };
+
+    const screen_rect = self.init_options.file.editor.canvas.screenFromDataRect(span_rect);
+    dvui.scrollDrag(.{
+        .mouse_pt = screen_pt,
+        .screen_rect = screen_rect,
+    });
+
+    if (shift) {
+        const preview_clip = tempStrokePreviewClipRect(&self.init_options.file.editor.canvas, file, stroke_size);
+        const line_cover = file.lineBrushCoverRect(previous_point, current_point, stroke_size);
+        const dirty = dvui.Rect.intersect(line_cover, preview_clip);
+        if (!dirty.empty()) {
+            file.drawLine(
+                previous_point,
+                current_point,
+                .temporary,
+                .{
+                    .color = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] },
+                    .stroke_size = stroke_size,
+                    .clip_rect = preview_clip,
+                },
+            );
+            file.editor.temp_preview_dirty_rect = dirty;
+            file.editor.temp_layer_has_content = true;
+            expandTempGpuDirtyRect(&file.editor, dirty);
+        }
+        return;
+    }
+
+    if (file.strokeUndoExpandToCoverRect(file.lineBrushCoverRect(previous_point, current_point, stroke_size))) |_| {
+        file.drawLine(
+            previous_point,
+            current_point,
+            .selected,
+            .{
+                .color = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] },
+                .invalidate = true,
+                .to_change = false,
+                .stroke_size = stroke_size,
+            },
+        );
+        fizzy.perf.draw_event_count += 1;
+    } else |err| {
+        dvui.log.err("strokeUndoExpandToCoverRect failed: {}", .{err});
+    }
+
+    self.drag_data_point = current_point;
+
+    if (self.init_options.file.editor.canvas.rect.contains(screen_pt) and self.sample_data_point == null) {
+        if (self.sample_data_point == null or color[3] == 0) {
+            clearTempPreview(&file.editor);
+            const temp_color = if (fizzy.editor.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
+            file.drawPoint(
+                current_point,
+                .temporary,
+                .{
+                    .color = .{ .r = temp_color[0], .g = temp_color[1], .b = temp_color[2], .a = temp_color[3] },
+                    .stroke_size = stroke_size,
+                },
+            );
+            const brush_rect = tempBrushRect(current_point, stroke_size, file.width(), file.height());
+            file.editor.temp_preview_dirty_rect = brush_rect;
+            file.editor.temp_layer_has_content = true;
+            expandTempGpuDirtyRect(&file.editor, brush_rect);
+        }
+    }
+}
+
 /// Responsible for processing events to modify pixels on the current layer for strokes of various size
 /// Supports using shift to draw a line between two points, and increasing/decreasing stroke size
 pub fn processStroke(self: *FileWidget) void {
@@ -2238,20 +2326,23 @@ pub fn processStroke(self: *FileWidget) void {
                                 }
                             }
                         } else {
-                            if (file.strokeUndoExpandToCoverRect(file.brushStampRect(current_point, stroke_size))) |_| {
-                                file.drawPoint(
-                                    current_point,
-                                    .selected,
-                                    .{
-                                        .color = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] },
-                                        .invalidate = true,
-                                        .to_change = true,
-                                        .stroke_size = stroke_size,
-                                    },
-                                );
-                            } else |err| {
-                                dvui.log.err("strokeUndoExpandToCoverRect failed: {}", .{err});
+                            if (self.drag_data_point) |start| {
+                                const full_cover = file.lineBrushCoverRect(start, current_point, stroke_size);
+                                if (file.strokeUndoExpandToCoverRect(full_cover)) |_| {} else |err| {
+                                    dvui.log.err("strokeUndoExpandToCoverRect failed: {}", .{err});
+                                }
                             }
+
+                            file.drawPoint(
+                                current_point,
+                                .selected,
+                                .{
+                                    .color = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] },
+                                    .invalidate = true,
+                                    .to_change = true,
+                                    .stroke_size = stroke_size,
+                                },
+                            );
 
                             // We need one extra frame to go ahead and set the dirty flag and update the ui to show
                             // the dirty flag, since the mouse hasn't moved and we will stop processing events the moment the
@@ -2269,92 +2360,39 @@ pub fn processStroke(self: *FileWidget) void {
 
                         self.drag_data_point = null;
                     }
+                } else if (me.action == .motion and me.button.touch()) {
+                    if (dvui.captured(self.init_options.file.editor.canvas.scroll_container.data().id)) {
+                        if (!widget_active) continue;
+                        if (dvui.dragging(me.p, "stroke_drag")) |_| {
+                            if (self.drag_data_point) |previous_point| {
+                                processStrokeDragSegment(
+                                    self,
+                                    file,
+                                    previous_point,
+                                    current_point,
+                                    me.p,
+                                    color,
+                                    stroke_size,
+                                    me.mod.matchBind("shift"),
+                                );
+                            }
+                        }
+                    }
                 } else if (me.action == .position or me.action == .wheel_x or me.action == .wheel_y) {
                     if (dvui.captured(self.init_options.file.editor.canvas.scroll_container.data().id)) {
                         if (!widget_active) continue;
                         if (dvui.dragging(me.p, "stroke_drag")) |_| {
                             if (self.drag_data_point) |previous_point| {
-                                // Construct a rect spanning between current_point and previous_point
-                                const min_x = @min(previous_point.x, current_point.x);
-                                const min_y = @min(previous_point.y, current_point.y);
-                                const max_x = @max(previous_point.x, current_point.x);
-                                const max_y = @max(previous_point.y, current_point.y);
-                                const span_rect = dvui.Rect{
-                                    .x = min_x,
-                                    .y = min_y,
-                                    .w = max_x - min_x + 1,
-                                    .h = max_y - min_y + 1,
-                                };
-
-                                const screen_rect = self.init_options.file.editor.canvas.screenFromDataRect(span_rect);
-
-                                dvui.scrollDrag(.{
-                                    .mouse_pt = me.p,
-                                    .screen_rect = screen_rect,
-                                });
-                            }
-
-                            if (me.mod.matchBind("shift")) {
-                                if (self.drag_data_point) |previous_point| {
-                                    const preview_clip = tempStrokePreviewClipRect(&self.init_options.file.editor.canvas, file, stroke_size);
-                                    const line_cover = file.lineBrushCoverRect(previous_point, current_point, stroke_size);
-                                    const dirty = dvui.Rect.intersect(line_cover, preview_clip);
-                                    if (!dirty.empty()) {
-                                        file.drawLine(
-                                            previous_point,
-                                            current_point,
-                                            .temporary,
-                                            .{
-                                                .color = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] },
-                                                .stroke_size = stroke_size,
-                                                .clip_rect = preview_clip,
-                                            },
-                                        );
-                                        file.editor.temp_preview_dirty_rect = dirty;
-                                        file.editor.temp_layer_has_content = true;
-                                        expandTempGpuDirtyRect(&file.editor, dirty);
-                                    }
-                                }
-                            } else {
-                                if (self.drag_data_point) |previous_point| {
-                                    if (file.strokeUndoExpandToCoverRect(file.lineBrushCoverRect(previous_point, current_point, stroke_size))) |_| {
-                                        file.drawLine(
-                                            previous_point,
-                                            current_point,
-                                            .selected,
-                                            .{
-                                                .color = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] },
-                                                .invalidate = true,
-                                                .to_change = false,
-                                                .stroke_size = stroke_size,
-                                            },
-                                        );
-                                        fizzy.perf.draw_event_count += 1;
-                                    } else |err| {
-                                        dvui.log.err("strokeUndoExpandToCoverRect failed: {}", .{err});
-                                    }
-                                }
-
-                                self.drag_data_point = current_point;
-
-                                if (self.init_options.file.editor.canvas.rect.contains(me.p) and self.sample_data_point == null) {
-                                    if (self.sample_data_point == null or color[3] == 0) {
-                                        clearTempPreview(&file.editor);
-                                        const temp_color = if (fizzy.editor.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
-                                        file.drawPoint(
-                                            current_point,
-                                            .temporary,
-                                            .{
-                                                .color = .{ .r = temp_color[0], .g = temp_color[1], .b = temp_color[2], .a = temp_color[3] },
-                                                .stroke_size = stroke_size,
-                                            },
-                                        );
-                                        const brush_rect = tempBrushRect(current_point, stroke_size, file.width(), file.height());
-                                        file.editor.temp_preview_dirty_rect = brush_rect;
-                                        file.editor.temp_layer_has_content = true;
-                                        expandTempGpuDirtyRect(&file.editor, brush_rect);
-                                    }
-                                }
+                                processStrokeDragSegment(
+                                    self,
+                                    file,
+                                    previous_point,
+                                    current_point,
+                                    me.p,
+                                    color,
+                                    stroke_size,
+                                    me.mod.matchBind("shift"),
+                                );
                             }
                         }
                     } else {
