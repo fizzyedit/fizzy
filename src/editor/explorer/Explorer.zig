@@ -243,7 +243,7 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
 }
 
 fn drawCollapseButton(explorer: *Explorer) void {
-    const button_size: f32 = 44;
+    const button_size: f32 = 70;
     const margin: f32 = 16;
     const wr = dvui.windowRect();
 
@@ -293,7 +293,7 @@ fn drawCollapseButton(explorer: *Explorer) void {
     dvui.icon(
         @src(),
         "collapse_explorer",
-        icons.tvg.lucide.@"panel-left-close",
+        icons.tvg.lucide.@"arrow-left-to-line",
         .{ .stroke_color = dvui.themeGet().color(.highlight, .text), .fill_color = dvui.themeGet().color(.highlight, .text) },
         .{
             .expand = .ratio,

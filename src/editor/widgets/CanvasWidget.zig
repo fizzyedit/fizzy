@@ -63,6 +63,16 @@ prev_hovered: bool = false,
 // down. Without this, mid-stroke gesture takeovers swallow the release event and the
 // pixels already drawn never make it into the undo stack.
 prev_gesture_active: bool = false,
+// Sticky input-mode flag: true once a touch has pressed, cleared by any subsequent
+// non-touch mouse motion / press. Used by tools to suppress *all* temp-layer preview
+// drawing while the user is on touch — there's no visible cursor, the finger occludes
+// whatever it's over, and hover==drag on a touchscreen, so the preview pixel is dead
+// weight that only ever shows up as a phantom after the user lifts off.
+last_input_was_touch: bool = false,
+// Latched in `deinit` so FileWidget can clear the temp layer exactly once on the input-
+// mode transition (a mouse hover preview drawn before the user reached for the screen
+// shouldn't linger after the first touch lands, and vice versa).
+prev_last_input_was_touch: bool = false,
 
 // Two-finger pan + pinch zoom (web/mobile touch). One finger continues to draw — the
 // gesture only kicks in once a second finger touches. We mark the gesture sticky until
@@ -100,6 +110,7 @@ const touch_eval_duration_ns: i128 = 80 * std.time.ns_per_ms;
 pub fn gestureActive(self: *const CanvasWidget) bool {
     return self.gesture_active or self.touch_eval_active;
 }
+
 
 pub const InitOptions = struct {
     id: dvui.Id,
@@ -304,6 +315,22 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
     var zoom: f32 = 1.0;
     var zoomP: dvui.Point.Physical = self.last_centroid;
 
+    // Sniff this frame's events for the input mode. A non-touch press / motion (real
+    // mouse) drops us out of "touch mode"; a touch press puts us back in. The flag
+    // sticks across frames so hover previews stay suppressed while the user's finger is
+    // lifted but `mouse_pt` still points at the last touch.
+    for (dvui.events()) |*e| {
+        if (e.evt != .mouse) continue;
+        const me = e.evt.mouse;
+        switch (me.action) {
+            .press => self.last_input_was_touch = me.button.touch(),
+            .motion => {
+                if (!me.button.touch()) self.last_input_was_touch = false;
+            },
+            else => {},
+        }
+    }
+
     for (dvui.events()) |*e| {
         if (e.evt != .mouse) continue;
         const me = e.evt.mouse;
@@ -499,11 +526,13 @@ pub fn settled(self: *const CanvasWidget) bool {
 }
 
 pub fn deinit(self: *CanvasWidget) void {
-    // Latch `hovered` / `gesture_active` for the next frame's transition checks. Done in
-    // deinit (rather than install) so FileWidget's hover-leave / gesture-takeover handlers
-    // run against the values set during *this* frame's processing.
+    // Latch `hovered` / `gesture_active` / active touch count for the next frame's
+    // transition checks. Done in deinit (rather than install) so FileWidget's hover-leave
+    // / gesture-takeover / touch-lift handlers run against the values set during *this*
+    // frame's processing.
     self.prev_hovered = self.hovered;
     self.prev_gesture_active = self.gesture_active;
+    self.prev_last_input_was_touch = self.last_input_was_touch;
     self.scaler.deinit();
     self.scroll.deinit();
     // Restore the alpha multiplied in `install`. Done after the children deinit so any

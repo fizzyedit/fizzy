@@ -2198,6 +2198,8 @@ fn processStrokeDragSegment(
     });
 
     if (shift) {
+        // Skip the shift-line temp preview on touch — finger occludes it anyway.
+        if (self.init_options.file.editor.canvas.last_input_was_touch) return;
         const preview_clip = tempStrokePreviewClipRect(&self.init_options.file.editor.canvas, file, stroke_size);
         const line_cover = file.lineBrushCoverRect(previous_point, current_point, stroke_size);
         const dirty = dvui.Rect.intersect(line_cover, preview_clip);
@@ -2238,7 +2240,12 @@ fn processStrokeDragSegment(
 
     self.drag_data_point = current_point;
 
-    if (self.init_options.file.editor.canvas.rect.contains(screen_pt) and self.sample_data_point == null) {
+    // Drag-position brush preview: pointless on touch (finger occludes the pixel and
+    // hover == drag), and leaves a phantom that lingers after the stroke ends.
+    if (!self.init_options.file.editor.canvas.last_input_was_touch and
+        self.init_options.file.editor.canvas.rect.contains(screen_pt) and
+        self.sample_data_point == null)
+    {
         if (self.sample_data_point == null or color[3] == 0) {
             clearTempPreview(&file.editor);
             const temp_color = if (fizzy.editor.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
@@ -2415,7 +2422,12 @@ pub fn processStroke(self: *FileWidget) void {
                             }
                         }
                     } else {
-                        if (self.init_options.file.editor.canvas.rect.contains(me.p) and self.sample_data_point == null) {
+                        // Hover (cursor-follow) brush preview — mouse only. Touch input
+                        // has no hover state, and the finger covers the pixel anyway.
+                        if (!self.init_options.file.editor.canvas.last_input_was_touch and
+                            self.init_options.file.editor.canvas.rect.contains(me.p) and
+                            self.sample_data_point == null)
+                        {
                             clearTempPreview(&file.editor);
                             const temp_color = if (fizzy.editor.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
                             file.drawPoint(
@@ -2449,7 +2461,12 @@ pub fn processFill(self: *FileWidget) void {
     const color = fizzy.editor.colors.primary;
     const widget_active = self.active();
 
-    if (self.init_options.file.editor.canvas.rect.contains(dvui.currentWindow().mouse_pt) and self.sample_data_point == null) {
+    // Skip the cursor-follow temp preview on touch: the finger occludes the pixel and
+    // hover == drag, so the preview adds nothing but a phantom that lingers after lift.
+    if (!self.init_options.file.editor.canvas.last_input_was_touch and
+        self.init_options.file.editor.canvas.rect.contains(dvui.currentWindow().mouse_pt) and
+        self.sample_data_point == null)
+    {
         clearTempPreview(&file.editor);
         const temp_color = if (fizzy.editor.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
         const fill_preview_pt = self.init_options.file.editor.canvas.dataFromScreenPoint(dvui.currentWindow().mouse_pt);
@@ -5474,6 +5491,17 @@ pub fn processEvents(self: *FileWidget) void {
     // files and clearing it each frame murders performance for nothing).
     const canvas_ptr = &self.init_options.file.editor.canvas;
     if (canvas_ptr.prev_hovered and !canvas_ptr.hovered and self.init_options.file.editor.temp_layer_has_content) {
+        resetTempLayerPreview(&self.init_options.file.editor);
+        dvui.refresh(null, @src(), canvas_ptr.scroll_container.data().id);
+    }
+
+    // Input-mode flip (mouse ↔ touch): clear the temp preview exactly once. On touch
+    // there's no cursor to chase and the finger occludes the preview anyway — tools below
+    // skip drawing it altogether — but any pixels left over from the prior mode would
+    // otherwise sit there until the user moves a mouse / lifts a finger.
+    if (canvas_ptr.prev_last_input_was_touch != canvas_ptr.last_input_was_touch and
+        self.init_options.file.editor.temp_layer_has_content)
+    {
         resetTempLayerPreview(&self.init_options.file.editor);
         dvui.refresh(null, @src(), canvas_ptr.scroll_container.data().id);
     }
