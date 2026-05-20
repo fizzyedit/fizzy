@@ -65,10 +65,32 @@ gesture_active: bool = false,
 last_centroid: dvui.Point.Physical = .{},
 last_pinch: f32 = 0.0,
 
+// Single-touch evaluation window. When the first finger lands we don't yet know whether
+// the user is starting to draw or beginning a two-finger pan. Swallow the press (and any
+// follow-up motion/release) for a short window; if a second finger doesn't arrive in
+// time, replay the press into dvui's event queue so the active tool can react.
+touch_eval_active: bool = false,
+touch_eval_started_ns: i128 = 0,
+touch_eval_slot: u8 = 0,
+touch_eval_button: dvui.enums.Button = .touch0,
+touch_eval_press_p: dvui.Point.Physical = .{},
+touch_eval_released: bool = false,
+touch_eval_release_p: dvui.Point.Physical = .{},
+
 const TouchSlot = struct {
     active: bool = false,
     p: dvui.Point.Physical = .{},
 };
+
+const touch_eval_duration_ns: i128 = 80 * std.time.ns_per_ms;
+
+/// True while a 2-finger pan/pinch is in progress, or while we're still deciding whether
+/// a single touch will become one. Tools should skip their input processing whenever this
+/// returns true so previews / strokes / fills aren't triggered by the touch that's about
+/// to become a pan.
+pub fn gestureActive(self: *const CanvasWidget) bool {
+    return self.gesture_active or self.touch_eval_active;
+}
 
 pub const InitOptions = struct {
     id: dvui.Id,
@@ -289,21 +311,42 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
 
         switch (me.action) {
             .press => {
-                if (!in_area and !self.gesture_active) continue;
+                if (!in_area and !self.gesture_active and !self.touch_eval_active) continue;
                 self.touches[slot] = .{ .active = true, .p = me.p };
 
                 if (self.activeTouchCount() >= 2 and !self.gesture_active) {
+                    // Second finger arrived — promote to a gesture. Any pending evaluation
+                    // is discarded; we never replay the original press.
                     self.gesture_active = true;
+                    self.touch_eval_active = false;
                     self.last_centroid = self.touchCentroid();
                     self.last_pinch = self.touchPinchDistance();
                     dvui.captureMouse(self.scaler.data(), e.num);
+                } else if (!self.gesture_active and !self.touch_eval_active and self.activeTouchCount() == 1) {
+                    // First (and so far only) finger — start the wait window.
+                    self.touch_eval_active = true;
+                    self.touch_eval_started_ns = dvui.currentWindow().frame_time_ns;
+                    self.touch_eval_slot = @intCast(slot);
+                    self.touch_eval_button = me.button;
+                    self.touch_eval_press_p = me.p;
+                    self.touch_eval_released = false;
+                    dvui.captureMouse(self.scaler.data(), e.num);
                 }
-                if (self.gesture_active) {
+                if (self.gesture_active or self.touch_eval_active) {
                     e.handle(@src(), self.scaler.data());
                 }
             },
             .release => {
                 if (self.touches[slot].active) self.touches[slot].active = false;
+
+                if (self.touch_eval_active and slot == @as(usize, self.touch_eval_slot)) {
+                    // User lifted before the eval window elapsed. Record it so the replay
+                    // can synthesize both a press and a release once the window times out.
+                    self.touch_eval_released = true;
+                    self.touch_eval_release_p = me.p;
+                    e.handle(@src(), self.scaler.data());
+                }
+
                 if (self.gesture_active) {
                     e.handle(@src(), self.scaler.data());
 
@@ -322,6 +365,14 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
             .motion => {
                 if (self.touches[slot].active) {
                     self.touches[slot].p = me.p;
+                }
+                if (self.touch_eval_active and slot == @as(usize, self.touch_eval_slot)) {
+                    // Swallow motion during eval so the scroll container's touch-pan and the
+                    // drawing tools' previews don't run on a touch that might still become a
+                    // gesture. The latest position is used as the release point if the user
+                    // lifts mid-window.
+                    self.touch_eval_release_p = me.p;
+                    e.handle(@src(), self.scaler.data());
                 }
                 if (self.gesture_active) {
                     e.handle(@src(), self.scaler.data());
@@ -348,6 +399,41 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
                 }
             },
             else => {},
+        }
+    }
+
+    // Drive the wait window: if the timer expired without a 2nd touch, replay the
+    // swallowed press/release into dvui's event queue. Later widgets this frame fetch a
+    // fresh `dvui.events()` slice that includes the synthetic events and react normally.
+    if (self.touch_eval_active and !self.gesture_active) {
+        const now = dvui.currentWindow().frame_time_ns;
+        const elapsed = now - self.touch_eval_started_ns;
+        if (elapsed >= touch_eval_duration_ns) {
+            const win = dvui.currentWindow();
+            const press_p = self.touch_eval_press_p;
+            const release_p = self.touch_eval_release_p;
+            const button = self.touch_eval_button;
+            const released = self.touch_eval_released;
+
+            self.touch_eval_active = false;
+            if (dvui.captured(self.scaler.data().id)) {
+                dvui.captureMouse(null, 0);
+            }
+
+            // `addEventPointer` uses `win.mouse_pt` for the event position. Push the press
+            // point first, fire the synthetic press, then do the same for the release.
+            win.mouse_pt = press_p;
+            _ = win.addEventPointer(.{ .button = button, .action = .press }) catch {};
+
+            if (released) {
+                win.mouse_pt = release_p;
+                _ = win.addEventPointer(.{ .button = button, .action = .release }) catch {};
+            }
+
+            dvui.refresh(null, @src(), self.scroll_container.data().id);
+        } else {
+            // Keep frames coming so the timer ticks even on an idle press.
+            dvui.refresh(null, @src(), self.scroll_container.data().id);
         }
     }
 

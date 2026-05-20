@@ -2364,7 +2364,6 @@ pub fn processStroke(self: *FileWidget) void {
                                     .stroke_size = stroke_size,
                                 },
                             );
-
                         }
 
                         // Redraw without the temp brush overlay; needed when hover stops after touch lift.
@@ -5471,7 +5470,10 @@ pub fn processEvents(self: *FileWidget) void {
 
     // Hover alone is enough for brush/bucket/selection previews (e.g. sampling a color on one
     // document while hovering another). Pixel edits are still gated inside each tool via `active()`.
-    if (self.hovered()) {
+    // Skip everything when a 2-finger pan is active or while we're still deciding whether the
+    // current single touch will become one — otherwise the bucket/pencil hover preview would
+    // flash on the pinned finger as the user starts a pan gesture.
+    if (self.hovered() and !self.init_options.file.editor.canvas.gestureActive()) {
         const pe_t0 = fizzy.perf.processEventsBegin();
         defer fizzy.perf.processEventsEnd(pe_t0);
 
@@ -5502,12 +5504,19 @@ pub fn processEvents(self: *FileWidget) void {
             self.processSample();
             fizzy.perf.toolProcessEnd(tool_t0);
         }
+    } else if (self.hovered() and self.init_options.file.editor.canvas.gestureActive()) {
+        // A 2-finger gesture (or its pending evaluation) just took over. Make sure any
+        // hover brush / fill preview from a prior frame is cleared so it doesn't linger
+        // under the panning fingers.
+        resetTempLayerPreview(&self.init_options.file.editor);
     }
 
     // Use `active()`, not `hovered()`: `hovered` is tied to `canvas.rect` (image bounds in screen
     // space). The transform quad can extend outside that rect; we still need presses/drags there and
     // continued drags after the cursor leaves the image (capture + motion).
-    if (self.active() and self.init_options.file.editor.transform != null) {
+    const suppress = self.init_options.file.editor.canvas.gestureActive();
+
+    if (self.active() and self.init_options.file.editor.transform != null and !suppress) {
         self.processTransform();
     }
 
@@ -5521,11 +5530,11 @@ pub fn processEvents(self: *FileWidget) void {
         self.drawSpriteBubbles();
     }
 
-    if (self.active()) {
+    if (self.active() and !suppress) {
         self.processCellReorder();
     }
 
-    if ((self.active() or self.hovered()) and !transform and !reorder) {
+    if ((self.active() or self.hovered()) and !transform and !reorder and !suppress) {
         self.processResize();
 
         self.processAnimationSelection();
