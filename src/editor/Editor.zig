@@ -372,6 +372,7 @@ pub fn init(
         }
 
         try editor.applySettingsTheme();
+        editor.applyHoldMenuDuration();
     }
 
     // Config + palette folder creation and recents-from-disk load are no-ops on
@@ -530,6 +531,11 @@ pub fn applySettingsTheme(editor: *Editor) !void {
     }
     dvui.themeSet(t.*);
     editor.applyFontSizesFromSettings();
+}
+
+pub fn applyHoldMenuDuration(editor: *Editor) void {
+    const ms = @max(@as(u32, 100), editor.settings.hold_menu_duration_ms);
+    fizzy.app.window.hold_menu_duration_ns = @as(i128, ms) * 1_000_000;
 }
 
 pub fn currentGroupingID(editor: *Editor) u64 {

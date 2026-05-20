@@ -44,6 +44,9 @@ peek_open: bool = false,
 peek_deadline_ns: i128 = 0,
 collapse_btn_anim_started: bool = false,
 
+/// Set during `draw` when an explorer `dvui.context()` menu is visible this frame.
+context_menu_open: bool = false,
+
 const peek_duration_ns: i128 = 2_000_000_000;
 
 pub const Pane = enum(u32) {
@@ -115,8 +118,14 @@ pub fn peekRefresh(explorer: *Explorer) void {
     explorer.peek_deadline_ns = dvui.currentWindow().frame_time_ns + peek_duration_ns;
 }
 
+/// Called when an explorer context menu is being shown (`context.activePoint() != null`).
+pub fn markContextMenuOpen(explorer: *Explorer) void {
+    explorer.context_menu_open = true;
+}
+
 pub fn peekClose(explorer: *Explorer) void {
     explorer.peek_open = false;
+    explorer.context_menu_open = false;
     explorer.paned.animateSplit(0.0, dvui.easing.outQuint);
     explorer.closed = true;
     explorer.collapse_btn_anim_started = false;
@@ -128,6 +137,14 @@ pub fn peekClose(explorer: *Explorer) void {
 /// the explorer rect would refresh the deadline forever and the peek would never close.
 pub fn updatePeek(explorer: *Explorer) void {
     if (!explorer.peek_open) return;
+
+    // Paused while an explorer context menu is visible (set during `draw` from
+    // `context.activePoint()` checks in tools/files).
+    if (explorer.context_menu_open) {
+        explorer.peekRefresh();
+        dvui.refresh(null, @src(), null);
+        return;
+    }
 
     for (dvui.events()) |*e| {
         switch (e.evt) {
@@ -151,6 +168,8 @@ pub fn updatePeek(explorer: *Explorer) void {
 }
 
 pub fn draw(explorer: *Explorer) !dvui.App.Result {
+    explorer.context_menu_open = false;
+
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,

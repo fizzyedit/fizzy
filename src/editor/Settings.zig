@@ -45,6 +45,9 @@ initial_window_size: [2]f32 = .{ 1280, 720 },
 /// Zoom/pan control scheme (`auto` picks mouse vs trackpad gestures from `dvui.getMouseTypeHint` after scroll events).
 input_scheme: InputScheme = .auto,
 
+/// Touch or long-press duration (ms) before a context menu opens instead of a normal click.
+hold_menu_duration_ms: u32 = 500,
+
 /// Whether or not to show rulers on each canvas.
 show_rulers: bool = true,
 

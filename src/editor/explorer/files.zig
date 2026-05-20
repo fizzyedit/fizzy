@@ -182,6 +182,7 @@ pub fn drawFiles(path: []const u8, tree: *fizzy.dvui.TreeWidget) !void {
         defer context.deinit();
 
         if (context.activePoint()) |point| {
+            fizzy.editor.explorer.markContextMenuOpen();
             try showRootProjectContextMenu(point, path, tree);
         }
     }
@@ -246,6 +247,7 @@ pub fn drawFiles(path: []const u8, tree: *fizzy.dvui.TreeWidget) !void {
             defer blank_ctx.deinit();
 
             if (blank_ctx.activePoint()) |point| {
+                fizzy.editor.explorer.markContextMenuOpen();
                 try showRootProjectContextMenu(point, path, tree);
             }
         }
@@ -624,6 +626,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                     defer context.deinit();
 
                     if (context.activePoint()) |point| {
+                        fizzy.editor.explorer.markContextMenuOpen();
                         var fw2 = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(point) }, .{ .box_shadow = .{
                             .color = .black,
                             .offset = .{ .x = 0, .y = 0 },

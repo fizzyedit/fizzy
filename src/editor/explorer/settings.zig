@@ -264,6 +264,21 @@ pub fn draw() !void {
             }
         }
 
+        var hold_menu_ms: f32 = @floatFromInt(fizzy.editor.settings.hold_menu_duration_ms);
+        if (dvui.sliderEntry(@src(), "Context menu hold: {d:0.0} ms", .{
+            .value = &hold_menu_ms,
+            .interval = 50,
+            .max = 1500,
+            .min = 100,
+        }, .{
+            .expand = .horizontal,
+        })) {
+            fizzy.editor.settings.hold_menu_duration_ms = @intFromFloat(hold_menu_ms);
+            fizzy.editor.applyHoldMenuDuration();
+            fizzy.editor.markSettingsDirty();
+            dvui.refresh(null, @src(), vbox.data().id);
+        }
+
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 10 } });
     }
 
