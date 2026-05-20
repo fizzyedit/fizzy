@@ -3,8 +3,9 @@
   "configurations": [
     {
       "name": "fizzy-web",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "zig-out/web"],
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["scripts/serve-web.sh"],
+      "cwd": ".",
       "port": 8765
     },
     {

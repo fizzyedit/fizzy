@@ -2307,6 +2307,10 @@ pub fn processStroke(self: *FileWidget) void {
                         dvui.captureMouse(null, e.num);
                         dvui.dragEnd();
 
+                        // Touch drags do not get `.position` hover updates, so the per-frame temp
+                        // cleanup in `process()` may not run after lift. Clear any brush preview now.
+                        resetTempLayerPreview(&file.editor);
+
                         if (me.mod.matchBind("shift")) {
                             if (self.drag_data_point) |previous_point| {
                                 if (file.strokeUndoExpandToCoverRect(file.lineBrushCoverRect(previous_point, current_point, stroke_size))) |_| {
@@ -2344,11 +2348,10 @@ pub fn processStroke(self: *FileWidget) void {
                                 },
                             );
 
-                            // We need one extra frame to go ahead and set the dirty flag and update the ui to show
-                            // the dirty flag, since the mouse hasn't moved and we will stop processing events the moment the
-                            // mouse is released.
-                            dvui.refresh(null, @src(), self.init_options.file.editor.canvas.scroll_container.data().id);
                         }
+
+                        // Redraw without the temp brush overlay; needed when hover stops after touch lift.
+                        dvui.refresh(null, @src(), self.init_options.file.editor.canvas.scroll_container.data().id);
 
                         // End active drawing after committing the release stroke.
                         // Reset the composite frame guard so the canvas renderLayers
@@ -5376,20 +5379,7 @@ pub fn processEvents(self: *FileWidget) void {
         const pe_t0 = fizzy.perf.processEventsBegin();
         defer fizzy.perf.processEventsEnd(pe_t0);
 
-        const editor = &self.init_options.file.editor;
-        if (editor.temp_preview_dirty_rect) |dirty| {
-            if (dirty.w > 0 and dirty.h > 0) {
-                fizzy.image.clearRect(editor.temporary_layer.source, dirty);
-                expandTempGpuDirtyRect(editor, dirty);
-            }
-            editor.temp_preview_dirty_rect = null;
-        } else if (editor.temp_layer_has_content) {
-            @memset(editor.temporary_layer.pixels(), .{ 0, 0, 0, 0 });
-            editor.temporary_layer.invalidate();
-            editor.temp_gpu_dirty_rect = null;
-        }
-        editor.temp_layer_has_content = false;
-        editor.temporary_layer.clearMask();
+        resetTempLayerPreview(&self.init_options.file.editor);
 
         {
             const mask_t0 = fizzy.perf.updateMaskBegin();
@@ -5522,6 +5512,23 @@ fn clearTempPreview(editor: *fizzy.Internal.File.EditorData) void {
         }
     }
     editor.temp_preview_dirty_rect = null;
+}
+
+/// Clears the temporary brush preview layer and marks GPU/composite dirty.
+fn resetTempLayerPreview(editor: *fizzy.Internal.File.EditorData) void {
+    if (editor.temp_preview_dirty_rect) |dirty| {
+        if (dirty.w > 0 and dirty.h > 0) {
+            fizzy.image.clearRect(editor.temporary_layer.source, dirty);
+            expandTempGpuDirtyRect(editor, dirty);
+        }
+        editor.temp_preview_dirty_rect = null;
+    } else if (editor.temp_layer_has_content) {
+        @memset(editor.temporary_layer.pixels(), .{ 0, 0, 0, 0 });
+        editor.temporary_layer.invalidate();
+        editor.temp_gpu_dirty_rect = null;
+    }
+    editor.temp_layer_has_content = false;
+    editor.temporary_layer.clearMask();
 }
 
 test {

@@ -414,6 +414,13 @@ pub fn build(b: *std.Build) !void {
         cp_web_to_docs.addArg("mkdir -p docs/app && cp -R zig-out/web/. docs/app/");
         cp_web_to_docs.step.dependOn(web_step);
         web_docs_step.dependOn(&cp_web_to_docs.step);
+
+        const serve_web_cmd = b.addSystemCommand(&.{ "sh", "scripts/serve-web.sh" });
+        serve_web_cmd.step.dependOn(web_step);
+        _ = b.step(
+            "serve-web",
+            "Serve zig-out/web at http://127.0.0.1:8765/ (builds web first; frees stale :8765)",
+        ).dependOn(&serve_web_cmd.step);
     }
 
     const main_fizzy = try addFizzyExecutableForTarget(b, target, optimize, accesskit, build_opts, zip_pkg, assets_module, process_assets_step, macos_sdl_paths, velopack_enabled);
