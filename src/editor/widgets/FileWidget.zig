@@ -5468,6 +5468,24 @@ pub fn processEvents(self: *FileWidget) void {
         dvui.dataRemove(null, self.init_options.file.editor.canvas.id, "hide_distance_bubble");
     };
 
+    // Cursor-leave: when hover transitions true → false, the last brush/fill preview
+    // pixels are still painted on the temp layer. Clear them exactly once on the way out
+    // (we deliberately do NOT clear every frame — the temp layer can be 64 MB on large
+    // files and clearing it each frame murders performance for nothing).
+    const canvas_ptr = &self.init_options.file.editor.canvas;
+    if (canvas_ptr.prev_hovered and !canvas_ptr.hovered and self.init_options.file.editor.temp_layer_has_content) {
+        resetTempLayerPreview(&self.init_options.file.editor);
+        dvui.refresh(null, @src(), canvas_ptr.scroll_container.data().id);
+    }
+
+    // Gesture takeover: if a 2-finger pan just activated while a stroke / fill drag was
+    // in progress, the release event for that touch was swallowed by the canvas — the
+    // pixels were drawn but the history entry never got appended. Finalize the stroke
+    // here so undo still works.
+    if (!canvas_ptr.prev_gesture_active and canvas_ptr.gesture_active and self.init_options.file.editor.active_drawing) {
+        self.cancelActiveDrawing();
+    }
+
     // Hover alone is enough for brush/bucket/selection previews (e.g. sampling a color on one
     // document while hovering another). Pixel edits are still gated inside each tool via `active()`.
     // Skip everything when a 2-finger pan is active or while we're still deciding whether the
@@ -5566,6 +5584,35 @@ pub fn deinit(self: *FileWidget) void {
 
 pub fn hovered(self: *FileWidget) bool {
     return self.init_options.file.editor.canvas.hovered;
+}
+
+/// Tear down an in-progress brush/eraser stroke when a 2-finger pan steals the touch.
+/// The release event never reaches `processStroke`, so its history-commit code doesn't
+/// run. We finalize the deferred undo snapshot here so the pixels already drawn are
+/// preserved in the undo stack, and drop the related capture/drag state.
+fn cancelActiveDrawing(self: *FileWidget) void {
+    const file = self.init_options.file;
+    if (!file.editor.active_drawing) return;
+
+    // Commit whatever pixels were drawn so far — `strokeUndoCommit` is safe even if the
+    // stroke buffer ended up empty (it appends nothing in that case).
+    file.strokeUndoCommit();
+
+    if (dvui.captured(file.editor.canvas.scroll_container.data().id)) {
+        dvui.captureMouse(null, 0);
+    }
+    if (dvui.dragName("stroke_drag")) {
+        dvui.dragEnd();
+    }
+
+    resetTempLayerPreview(&file.editor);
+
+    file.editor.active_drawing = false;
+    file.editor.layer_composite_dirty = true;
+    file.editor.layer_composite_frame_built = 0;
+    self.drag_data_point = null;
+
+    dvui.refresh(null, @src(), file.editor.canvas.scroll_container.data().id);
 }
 
 /// Computes the pixel bounding rect of a brush draw, clamped to image bounds.

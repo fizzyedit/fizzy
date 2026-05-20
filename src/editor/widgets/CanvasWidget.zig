@@ -54,6 +54,15 @@ fade_pending: bool = false,
 // Saved between `install` and `deinit` so the parent alpha is restored exactly.
 prev_alpha: f32 = 1.0,
 hovered: bool = false,
+// Previous frame's `hovered`. Lets the tool dispatch detect the cursor-leaving-canvas
+// transition exactly once, so the temp brush/fill preview can be cleared on the way out
+// without paying the per-frame clear cost while the cursor is outside the canvas.
+prev_hovered: bool = false,
+// Previous frame's `gesture_active`. Lets FileWidget detect the moment a 2-finger pan
+// takes over so an in-progress stroke / drag can be finalized (history append) and torn
+// down. Without this, mid-stroke gesture takeovers swallow the release event and the
+// pixels already drawn never make it into the undo stack.
+prev_gesture_active: bool = false,
 
 // Two-finger pan + pinch zoom (web/mobile touch). One finger continues to draw — the
 // gesture only kicks in once a second finger touches. We mark the gesture sticky until
@@ -490,6 +499,11 @@ pub fn settled(self: *const CanvasWidget) bool {
 }
 
 pub fn deinit(self: *CanvasWidget) void {
+    // Latch `hovered` / `gesture_active` for the next frame's transition checks. Done in
+    // deinit (rather than install) so FileWidget's hover-leave / gesture-takeover handlers
+    // run against the values set during *this* frame's processing.
+    self.prev_hovered = self.hovered;
+    self.prev_gesture_active = self.gesture_active;
     self.scaler.deinit();
     self.scroll.deinit();
     // Restore the alpha multiplied in `install`. Done after the children deinit so any
