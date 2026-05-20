@@ -435,6 +435,23 @@ pub fn processSpriteSelection(self: *FileWidget) void {
 
     const file = self.init_options.file;
 
+    // A second finger landing on a pending single-finger press promotes the touch to a
+    // pan/pinch gesture (see CanvasWidget.updateTouchGesture). The first press already
+    // ran through this handler and seeded `drag_data_point` / a `sprite_selection_drag`,
+    // which would otherwise render the marquee box while the user pans. The gesture
+    // takeover already reassigned mouse capture to the scaler, so just clear our own
+    // drag state and end the named drag.
+    if (file.editor.canvas.gesture_active) {
+        if (self.drag_data_point != null) {
+            self.drag_data_point = null;
+            if (dvui.dragName("sprite_selection_drag")) {
+                dvui.dragEnd();
+            }
+            dvui.refresh(null, @src(), file.editor.canvas.scroll_container.data().id);
+        }
+        return;
+    }
+
     for (dvui.events()) |*e| {
         if (!file.editor.canvas.scroll_container.matchEvent(e)) {
             continue;
@@ -5101,6 +5118,76 @@ pub fn drawCellReorderPreview(self: *FileWidget) void {
     }
 }
 
+/// Edge-auto-pan for the grid resize drag. Pushes the canvas viewport when the cursor
+/// reaches/exceeds the scroll container edges; velocity ramps up as the cursor moves
+/// further past the edge, so the user can grow the grid well beyond the current view.
+fn autoPanForResize(self: *FileWidget, mouse_pt: dvui.Point.Physical) void {
+    const canvas = &self.init_options.file.editor.canvas;
+    const rs = canvas.scroll_container.data().contentRectScale();
+    const r = rs.r;
+    const win = dvui.currentWindow();
+    const win_r = win.rect_pixels;
+
+    // Distance past the edge (in screen px) drives velocity. Once `over >= ramp`, we're at
+    // max speed; this prevents jitter from a cursor sitting exactly on the boundary.
+    const ramp: f32 = 80.0 * win.natural_scale;
+    const max_speed_px_per_sec: f32 = 2500.0 * win.natural_scale;
+
+    // OS clamps the cursor at the window edge — if the canvas sits flush against that edge,
+    // the user can only push a couple of pixels past `r`, leaving the ramp linger near zero.
+    // Treat "cursor pinned to the window edge AND past the canvas edge" as full velocity.
+    const edge_eps: f32 = 2.0 * win.natural_scale;
+
+    var vx: f32 = 0;
+    var vy: f32 = 0;
+
+    if (mouse_pt.x < r.x) {
+        const pinned = mouse_pt.x <= win_r.x + edge_eps;
+        const t: f32 = if (pinned) 1.0 else @min((r.x - mouse_pt.x) / ramp, 1.0);
+        vx = -t * max_speed_px_per_sec;
+    } else if (mouse_pt.x > r.x + r.w) {
+        const pinned = mouse_pt.x >= win_r.x + win_r.w - edge_eps;
+        const t: f32 = if (pinned) 1.0 else @min((mouse_pt.x - (r.x + r.w)) / ramp, 1.0);
+        vx = t * max_speed_px_per_sec;
+    }
+
+    if (mouse_pt.y < r.y) {
+        const pinned = mouse_pt.y <= win_r.y + edge_eps;
+        const t: f32 = if (pinned) 1.0 else @min((r.y - mouse_pt.y) / ramp, 1.0);
+        vy = -t * max_speed_px_per_sec;
+    } else if (mouse_pt.y > r.y + r.h) {
+        const pinned = mouse_pt.y >= win_r.y + win_r.h - edge_eps;
+        const t: f32 = if (pinned) 1.0 else @min((mouse_pt.y - (r.y + r.h)) / ramp, 1.0);
+        vy = t * max_speed_px_per_sec;
+    }
+
+    if (vx == 0 and vy == 0) return;
+    if (rs.s <= 0) return;
+
+    const dt = dvui.secondsSinceLastFrame();
+    const si = &canvas.scroll_info;
+    si.viewport.x += vx * dt / rs.s;
+    si.viewport.y += vy * dt / rs.s;
+
+    // Grow virtual_size eagerly when panning down/right so we stay inside `scrollMax` and
+    // the scroll container's bounce-back doesn't claw us back ~4 screen-px per frame.
+    // (The up/left side is implicitly handled by CanvasWidget.deinit's bbox normalization,
+    // which is why those directions already feel fast.)
+    if (vx > 0) {
+        const need_w = si.viewport.x + si.viewport.w;
+        if (si.virtual_size.w < need_w) si.virtual_size.w = need_w;
+    }
+    if (vy > 0) {
+        const need_h = si.viewport.y + si.viewport.h;
+        if (si.virtual_size.h < need_h) si.virtual_size.h = need_h;
+    }
+
+    dvui.refresh(null, @src(), canvas.scroll_container.data().id);
+    // Force a motion event next frame so the resize handle keeps tracking against the
+    // newly-scrolled viewport even if the user holds the cursor stationary past the edge.
+    dvui.currentWindow().inject_motion_event = true;
+}
+
 pub fn processResize(self: *FileWidget) void {
     if (fizzy.editor.tools.current != .pointer) return;
     if (self.init_options.file.editor.transform != null) return;
@@ -5118,6 +5205,15 @@ pub fn processResize(self: *FileWidget) void {
             .mouse => |me| {
                 if (me.action == .release and me.button.pointer()) {
                     dvui.refresh(null, @src(), self.init_options.file.editor.canvas.id);
+                }
+
+                // Auto-pan the canvas while dragging the resize handle so the user can
+                // grow the grid past the viewport edge without zooming out first.
+                // `dvui.scrollDrag` caps at ~5 screen px/frame which feels glacial on a
+                // wide canvas; we drive the canvas viewport directly with a velocity that
+                // ramps up as the cursor pushes past the edge.
+                if (me.action == .motion and dvui.dragName("resize_drag")) {
+                    self.autoPanForResize(me.p);
                 }
             },
             else => {},
