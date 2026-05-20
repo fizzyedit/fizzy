@@ -2,6 +2,7 @@ const std = @import("std");
 
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
+const icons = @import("icons");
 
 const Core = @import("mach").Core;
 const App = fizzy.App;
@@ -41,6 +42,7 @@ closed: bool = false,
 /// deadline rather than retriggering the animation.
 peek_open: bool = false,
 peek_deadline_ns: i128 = 0,
+collapse_btn_anim_started: bool = false,
 
 const peek_duration_ns: i128 = 2_000_000_000;
 
@@ -117,20 +119,23 @@ pub fn peekClose(explorer: *Explorer) void {
     explorer.peek_open = false;
     explorer.paned.animateSplit(0.0, dvui.easing.outQuint);
     explorer.closed = true;
+    explorer.collapse_btn_anim_started = false;
 }
 
-/// Called once per frame after `draw`. While peeking, any pointer event landing inside the
-/// explorer's screen rect refreshes the deadline; once the deadline expires the peek closes.
+/// Called once per frame after `draw`. While peeking, a press inside the explorer's first
+/// pane refreshes the deadline; once the deadline expires the peek closes. Position/hover
+/// events are deliberately ignored — otherwise the per-frame synthetic position event over
+/// the explorer rect would refresh the deadline forever and the peek would never close.
 pub fn updatePeek(explorer: *Explorer) void {
     if (!explorer.peek_open) return;
 
     for (dvui.events()) |*e| {
         switch (e.evt) {
             .mouse => |me| {
-                if (explorer.rect_screen.contains(me.p)) {
-                    explorer.peekRefresh();
-                    break;
-                }
+                if (me.action != .press) continue;
+                if (!explorer.rect_screen.contains(me.p)) continue;
+                explorer.peekRefresh();
+                break;
             },
             else => {},
         }
@@ -209,7 +214,79 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
         fizzy.dvui.drawEdgeShadow(vbox.data().contentRectScale(), .left, .{});
     }
 
+    // Peek-only floating collapse button. Drawn last so it overlays everything else in the
+    // explorer pane. Only appears while we're full-screen peeking on a collapsed paned.
+    if (explorer.peek_open and explorer.paned.collapsed()) {
+        drawCollapseButton(explorer);
+    }
+
     return .ok;
+}
+
+fn drawCollapseButton(explorer: *Explorer) void {
+    const button_size: f32 = 44;
+    const margin: f32 = 16;
+    const wr = dvui.windowRect();
+
+    const anim_id = dvui.Id.update(explorer.paned.data().id, "collapse_btn");
+    if (!explorer.collapse_btn_anim_started) {
+        explorer.collapse_btn_anim_started = true;
+        dvui.animation(anim_id, "_appear", .{
+            .start_val = 0.0,
+            .end_val = 1.0,
+            .end_time = 450_000,
+            .easing = dvui.easing.outBack,
+        });
+    }
+
+    var s: f32 = 1.0;
+    if (dvui.animationGet(anim_id, "_appear")) |a| s = a.value();
+    if (s < 0.0) s = 0.0;
+
+    const sized = button_size * s;
+    if (sized < 0.5) return;
+
+    var fw: dvui.FloatingWidget = undefined;
+    fw.init(@src(), .{ .mouse_events = true }, .{
+        .rect = .{
+            .x = wr.w - margin - sized,
+            .y = wr.h - margin - sized,
+            .w = sized,
+            .h = sized,
+        },
+    });
+    defer fw.deinit();
+
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(@src(), .{}, .{
+        .expand = .both,
+        .corner_radius = .all(button_size / 2),
+        .background = true,
+        .color_fill = dvui.themeGet().color(.highlight, .fill),
+        .color_fill_hover = dvui.themeGet().color(.highlight, .fill).lighten(if (dvui.themeGet().dark) 6 else -6),
+        .color_border = .transparent,
+        .min_size_content = .{ .w = button_size, .h = button_size },
+    });
+    defer bw.deinit();
+    bw.processEvents();
+    bw.drawBackground();
+
+    dvui.icon(
+        @src(),
+        "collapse_explorer",
+        icons.tvg.lucide.@"panel-left-close",
+        .{ .stroke_color = dvui.themeGet().color(.highlight, .text), .fill_color = dvui.themeGet().color(.highlight, .text) },
+        .{
+            .expand = .ratio,
+            .padding = .all(2),
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+        },
+    );
+
+    if (bw.clicked()) {
+        explorer.peekClose();
+    }
 }
 
 pub fn hovered(explorer: *Explorer) bool {

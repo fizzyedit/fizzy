@@ -213,6 +213,12 @@ pub fn install(self: *CanvasWidget, src: std.builtin.SourceLocation, init_opts: 
 
     self.syncTransformCachesFromWidgets();
 
+    // Eagerly update `hovered` against the current mouse position so the drawing tools (which
+    // read it during the same frame) don't see stale state on the first touch frame. The
+    // tail-end `processEvents()` pass also updates it, but by then the brush has already
+    // skipped the press because `hovered` was still false from the previous frame.
+    self.hovered = self.rect.contains(dvui.currentWindow().mouse_pt);
+
     // Process two-finger gesture BEFORE any drawing tool event loop so we can capture the
     // touches and prevent the brush from drawing during pan/pinch.
     self.updateTouchGesture();
