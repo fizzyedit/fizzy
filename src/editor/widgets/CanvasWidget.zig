@@ -202,7 +202,12 @@ pub fn install(self: *CanvasWidget, src: std.builtin.SourceLocation, init_opts: 
     const parent_rect_now = dvui.parentGet().data().rect;
     const parent_changed_while_unsettled = !self.settled() and
         (parent_rect_now.w != self.prev_parent_rect.w or parent_rect_now.h != self.prev_parent_rect.h);
-    if (size_changed or self.second_center or self.init_opts.center or parent_changed_while_unsettled) {
+    // `init_opts.center` is driven by workspace split / bottom-panel tray animation. If the
+    // workspace subtree was not drawn (explorer peek/collapse), `drawWorkspaces` may not run
+    // for many frames and `center` can stay true — ignore it once the canvas has settled so
+    // reopening the explorer does not recenter an already-panned file.
+    const explicit_center = self.init_opts.center and !self.settled();
+    if (size_changed or self.second_center or explicit_center or parent_changed_while_unsettled) {
         self.rescale();
         self.recenter();
         dvui.refresh(null, @src(), self.id);
@@ -259,7 +264,8 @@ pub fn install(self: *CanvasWidget, src: std.builtin.SourceLocation, init_opts: 
     // read it during the same frame) don't see stale state on the first touch frame. The
     // tail-end `processEvents()` pass also updates it, but by then the brush has already
     // skipped the press because `hovered` was still false from the previous frame.
-    self.hovered = self.rect.contains(dvui.currentWindow().mouse_pt);
+    self.hovered = !fizzy.dvui.canvasPointerInputSuppressed() and
+        self.rect.contains(dvui.currentWindow().mouse_pt);
 
     // Process two-finger gesture BEFORE any drawing tool event loop so we can capture the
     // touches and prevent the brush from drawing during pan/pinch.
@@ -609,6 +615,11 @@ pub fn mouse(self: *CanvasWidget) ?dvui.Event.Mouse {
 }
 
 pub fn processEvents(self: *CanvasWidget) void {
+    if (fizzy.dvui.canvasPointerInputSuppressed()) {
+        self.hovered = false;
+        return;
+    }
+
     //const file = self.file;
 
     var zoom: f32 = 1;

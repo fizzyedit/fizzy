@@ -144,6 +144,7 @@ fn sample(self: *ImageWidget, point: dvui.Point) void {
 }
 
 pub fn drawCursor(self: *ImageWidget) void {
+    if (fizzy.dvui.canvasPointerInputSuppressed()) return;
     for (dvui.events()) |*e| {
         if (!self.init_options.canvas.scroll_container.matchEvent(e)) {
             continue;

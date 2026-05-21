@@ -126,6 +126,21 @@ pub fn defaultDialogCallAfter(id: dvui.Id, response: dvui.enums.DialogResponse) 
     }
 }
 
+/// True when the canvas should not hide the OS cursor or draw tool cursors, and should not
+/// treat the pointer as hovering the artboard.
+/// - Modal dialogs: block the entire main pane.
+/// - Non-modal floating windows (e.g. Export): block only while the cursor is over that window.
+pub fn canvasPointerInputSuppressed() bool {
+    const cw = dvui.currentWindow();
+    const main_id = cw.data().id;
+    var i = cw.subwindows.stack.items.len;
+    while (i > 1) : (i -= 1) {
+        if (cw.subwindows.stack.items[i - 1].modal) return true;
+    }
+    const target = cw.subwindows.windowFor(cw.mouse_pt);
+    return target != main_id and target != .zero;
+}
+
 /// Creates a new file dialog with necessary data set and returns the id mutex.
 /// Caller must unlock the mutex after setting any additional data on the id.
 pub fn dialog(src: std.builtin.SourceLocation, opts: DialogOptions) dvui.IdMutex {

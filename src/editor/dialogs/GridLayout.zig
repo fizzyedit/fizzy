@@ -206,55 +206,85 @@ fn font() dvui.Font {
     return dvui.Font.theme(.body);
 }
 
-/// Tiled checker (UV repeat per cell, like `FileWidget` non-effect mode) for the preview's transparency backdrop.
+/// Checkerboard behind the preview: one quad per grid cell with UV 0..1 (same as
+/// `FileWidget.drawCheckerboardCellsBatched`). Textures use CLAMP_TO_EDGE, so a single
+/// quad with UV > 1 only shows the tile correctly in the top-left corner.
 fn drawCheckerboardPreviewTiled(
     file: *fizzy.Internal.File,
     cv: *CanvasWidget,
     rs_box: dvui.RectScale,
-    nw: f32,
-    nh: f32,
-    proto_cell_w: f32,
-    proto_cell_h: f32,
+    cols: u32,
+    rows: u32,
+    cell_w: f32,
+    cell_h: f32,
 ) void {
-    if (proto_cell_w <= 0 or proto_cell_h <= 0) return;
+    if (cell_w <= 0 or cell_h <= 0 or cols == 0 or rows == 0) return;
 
-    const geometry_natural = dvui.Rect{ .x = 0, .y = 0, .w = nw, .h = nh };
-    const r = rs_box.rectToPhysical(geometry_natural);
-    const tl = r.topLeft();
-    const tr = r.topRight();
-    const br = r.bottomRight();
-    const bl = r.bottomLeft();
-    const uv_x1 = nw / proto_cell_w;
-    const uv_y1 = nh / proto_cell_h;
     const pal = previewCheckerboardPalette();
+    const te = fizzy.editor.settings.transparency_effect;
+    const cols_f = @max(@as(f32, @floatFromInt(cols)), 1.0);
+    const rows_f = @max(@as(f32, @floatFromInt(rows)), 1.0);
+    const nw = cell_w * cols_f;
+    const nh = cell_h * rows_f;
     const mu_mv = updatePreviewCheckerboardMouseUv(cv, nw, nh);
     const mu = mu_mv.x;
     const mv = mu_mv.y;
 
+    const n_cells = @as(usize, cols) * @as(usize, rows);
     const arena = dvui.currentWindow().arena();
-    var builder = dvui.Triangles.Builder.init(arena, 4, 6) catch return;
+    var builder = dvui.Triangles.Builder.init(arena, n_cells * 4, n_cells * 6) catch return;
     defer builder.deinit(arena);
 
-    switch (fizzy.editor.settings.transparency_effect) {
-        .rainbow => {
-            const p_tl = dvui.Color.PMA.fromColor(previewCheckerboardVertexColor(pal.c_tl, pal.c_tr, pal.c_bl, pal.c_br, 0, 0, mu, mv, pal.tone));
-            const p_tr = dvui.Color.PMA.fromColor(previewCheckerboardVertexColor(pal.c_tl, pal.c_tr, pal.c_bl, pal.c_br, 1, 0, mu, mv, pal.tone));
-            const p_br = dvui.Color.PMA.fromColor(previewCheckerboardVertexColor(pal.c_tl, pal.c_tr, pal.c_bl, pal.c_br, 1, 1, mu, mv, pal.tone));
-            const p_bl = dvui.Color.PMA.fromColor(previewCheckerboardVertexColor(pal.c_tl, pal.c_tr, pal.c_bl, pal.c_br, 0, 1, mu, mv, pal.tone));
-            builder.appendVertex(.{ .pos = tl, .col = p_tl, .uv = .{ 0, 0 } });
-            builder.appendVertex(.{ .pos = tr, .col = p_tr, .uv = .{ uv_x1, 0 } });
-            builder.appendVertex(.{ .pos = br, .col = p_br, .uv = .{ uv_x1, uv_y1 } });
-            builder.appendVertex(.{ .pos = bl, .col = p_bl, .uv = .{ 0, uv_y1 } });
-        },
-        .none, .animation => {
-            const pma = dvui.Color.PMA.fromColor(pal.tone);
-            builder.appendVertex(.{ .pos = tl, .col = pma, .uv = .{ 0, 0 } });
-            builder.appendVertex(.{ .pos = tr, .col = pma, .uv = .{ uv_x1, 0 } });
-            builder.appendVertex(.{ .pos = br, .col = pma, .uv = .{ uv_x1, uv_y1 } });
-            builder.appendVertex(.{ .pos = bl, .col = pma, .uv = .{ 0, uv_y1 } });
-        },
+    var quad_idx: usize = 0;
+    var row: u32 = 0;
+    while (row < rows) : (row += 1) {
+        var col: u32 = 0;
+        while (col < cols) : (col += 1) {
+            const natural = dvui.Rect{
+                .x = @as(f32, @floatFromInt(col)) * cell_w,
+                .y = @as(f32, @floatFromInt(row)) * cell_h,
+                .w = cell_w,
+                .h = cell_h,
+            };
+            const r = rs_box.rectToPhysical(natural);
+            const tl = r.topLeft();
+            const tr = r.topRight();
+            const br = r.bottomRight();
+            const bl = r.bottomLeft();
+
+            const u_left = @as(f32, @floatFromInt(col)) / cols_f;
+            const u_right = @as(f32, @floatFromInt(col + 1)) / cols_f;
+            const v_top = @as(f32, @floatFromInt(row)) / rows_f;
+            const v_bot = @as(f32, @floatFromInt(row + 1)) / rows_f;
+
+            switch (te) {
+                .rainbow => {
+                    const p_tl = dvui.Color.PMA.fromColor(previewCheckerboardVertexColor(pal.c_tl, pal.c_tr, pal.c_bl, pal.c_br, u_left, v_top, mu, mv, pal.tone));
+                    const p_tr = dvui.Color.PMA.fromColor(previewCheckerboardVertexColor(pal.c_tl, pal.c_tr, pal.c_bl, pal.c_br, u_right, v_top, mu, mv, pal.tone));
+                    const p_br = dvui.Color.PMA.fromColor(previewCheckerboardVertexColor(pal.c_tl, pal.c_tr, pal.c_bl, pal.c_br, u_right, v_bot, mu, mv, pal.tone));
+                    const p_bl = dvui.Color.PMA.fromColor(previewCheckerboardVertexColor(pal.c_tl, pal.c_tr, pal.c_bl, pal.c_br, u_left, v_bot, mu, mv, pal.tone));
+                    builder.appendVertex(.{ .pos = tl, .col = p_tl, .uv = .{ 0, 0 } });
+                    builder.appendVertex(.{ .pos = tr, .col = p_tr, .uv = .{ 1, 0 } });
+                    builder.appendVertex(.{ .pos = br, .col = p_br, .uv = .{ 1, 1 } });
+                    builder.appendVertex(.{ .pos = bl, .col = p_bl, .uv = .{ 0, 1 } });
+                },
+                .none, .animation => {
+                    const pma = dvui.Color.PMA.fromColor(pal.tone);
+                    builder.appendVertex(.{ .pos = tl, .col = pma, .uv = .{ 0, 0 } });
+                    builder.appendVertex(.{ .pos = tr, .col = pma, .uv = .{ 1, 0 } });
+                    builder.appendVertex(.{ .pos = br, .col = pma, .uv = .{ 1, 1 } });
+                    builder.appendVertex(.{ .pos = bl, .col = pma, .uv = .{ 0, 1 } });
+                },
+            }
+
+            const quad_base: dvui.Vertex.Index = @intCast(quad_idx * 4);
+            builder.appendTriangles(&.{ quad_base + 1, quad_base + 0, quad_base + 3, quad_base + 1, quad_base + 3, quad_base + 2 });
+            quad_idx += 1;
+        }
     }
-    builder.appendTriangles(&.{ 1, 0, 3, 1, 3, 2 });
+
+    if (quad_idx == 0) return;
+
     const triangles = builder.build();
     dvui.renderTriangles(triangles, file.editor.checkerboard_tile.getTexture() catch null) catch {
         dvui.log.err("Grid layout preview: failed to render checkerboard", .{});
@@ -655,8 +685,8 @@ fn renderPreview(
         file,
         &preview_canvas,
         rs,
-        nw_f,
-        nh_f,
+        @max(new_cols, 1),
+        @max(new_rows, 1),
         @floatFromInt(new_cw_),
         @floatFromInt(new_rh_),
     );

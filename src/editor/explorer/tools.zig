@@ -1217,7 +1217,7 @@ pub fn drawPalettes() !void {
                 box_widget.deinit();
 
                 var button_widget: dvui.ButtonWidget = undefined;
-                button_widget.init(@src(), .{ .touch_drag = true }, .{
+                button_widget.init(@src(), .{ .touch_drag = false }, .{
                     .expand = .none,
                     .rect = rect,
                     .id_extra = i,
@@ -1246,10 +1246,10 @@ pub fn drawPalettes() !void {
                 }
                 triangles.appendTriangles(b.indices);
 
-                if (dvui.clickedEx(button_widget.data(), .{ .buttons = .any })) |evt| {
+                if (dvui.clickedEx(button_widget.data(), .{ .buttons = .any, .touch_drag = true })) |evt| {
                     switch (evt) {
                         .mouse => |mouse_evt| {
-                            if (mouse_evt.button.pointer()) {
+                            if (mouse_evt.button.pointer() or mouse_evt.button.touch()) {
                                 @memcpy(&fizzy.editor.colors.primary, &color);
                             } else if (mouse_evt.button == .right) {
                                 @memcpy(&fizzy.editor.colors.secondary, &color);

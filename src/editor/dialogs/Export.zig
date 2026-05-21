@@ -46,6 +46,12 @@ fn exportAnimationIndex(file: *fizzy.Internal.File) ?usize {
 }
 
 pub fn dialog(id: dvui.Id) anyerror!bool {
+    // Export stays non-modal so the user can click the canvas to adjust selections. Switch to
+    // the pointer tool on open so marquee/sprite picks work; drawing tools stay off until close.
+    if (dvui.firstFrame(id)) {
+        fizzy.editor.tools.set(.pointer);
+    }
+
     var outer_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer outer_box.deinit();
 

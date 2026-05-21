@@ -3934,6 +3934,7 @@ pub fn active(self: *FileWidget) bool {
 }
 
 pub fn drawCursor(self: *FileWidget) void {
+    if (fizzy.dvui.canvasPointerInputSuppressed()) return;
     if (fizzy.editor.tools.current == .pointer and self.sample_data_point == null) return;
     if (fizzy.editor.tools.radial_menu.visible) return;
     if (self.init_options.file.editor.transform != null) return;
@@ -5611,6 +5612,7 @@ pub fn deinit(self: *FileWidget) void {
 }
 
 pub fn hovered(self: *FileWidget) bool {
+    if (fizzy.dvui.canvasPointerInputSuppressed()) return false;
     return self.init_options.file.editor.canvas.hovered;
 }
 

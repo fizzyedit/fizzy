@@ -1112,6 +1112,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     return result;
                 }
             }
+        } else {
+            // Explorer peek/collapse hides the workspace subtree, so `drawWorkspaces` does not
+            // run and `workspace.center` would otherwise stay latched from a prior panel animation.
+            for (editor.workspaces.values()) |*ws| {
+                ws.center = false;
+            }
         }
 
         { // Radial Menu
@@ -1617,10 +1623,12 @@ pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
     const dragging = editor.panel.paned.dragging or s.dragging;
 
     if (!dragging) {
+        const should_center = (s.animating and s.split_ratio.* < 1.0) or
+            (editor.panel.paned.animating and editor.panel.paned.split_ratio.* < 1.0);
         if (index + 1 < editor.workspaces.count()) {
-            editor.workspaces.values()[index + 1].center = (s.animating and s.split_ratio.* < 1.0) or (editor.panel.paned.animating and editor.panel.paned.split_ratio.* < 1.0);
+            editor.workspaces.values()[index + 1].center = should_center;
         } else if (editor.workspaces.count() == 1) {
-            editor.workspaces.values()[index].center = (editor.panel.paned.animating and editor.panel.paned.split_ratio.* < 1.0);
+            editor.workspaces.values()[index].center = should_center;
         }
     }
 
@@ -2009,21 +2017,26 @@ pub fn startPackProject(editor: *Editor) !void {
     }
 
     if (comptime builtin.target.cpu.arch == .wasm32) {
-        // Web: no on-disk project folder, just snapshot every open file. The
-        // user has to open files explicitly through the file picker — that's
-        // their working set.
-        for (editor.open_files.values()) |*open_file| {
-            const ext = std.fs.path.extension(open_file.path);
-            if (!fizzy.Internal.File.isFizzyExtension(ext)) continue;
-            const snapshot = try PackJob.PackFile.fromOpenFile(fizzy.app.allocator, open_file);
-            try inputs.append(fizzy.app.allocator, .{ .open = snapshot });
-        }
+        // Web: no project folder to walk — pack every open document (fiz, pixi, png,
+        // jpg, in-memory untitled, etc.). Saved-path tracking is not available in the
+        // browser, so the open tab set is the only source of truth.
+        try appendOpenPackInputs(editor, &inputs);
     } else {
         const root = editor.folder orelse return;
+        // Snapshot open files first so unsaved edits are included and gather can skip
+        // duplicates when it walks the project tree.
+        try appendOpenPackInputs(editor, &inputs);
         try gatherPackInputs(editor, &inputs, root);
     }
 
-    if (inputs.items.len == 0) return;
+    if (inputs.items.len == 0) {
+        const msg = if (comptime builtin.target.cpu.arch == .wasm32)
+            "No open files to pack"
+        else
+            "No .fiz or .pixi files to pack";
+        showPackToast(msg, null);
+        return;
+    }
 
     // `owned_inputs` is nulled out once ownership transfers into the job, so the errdefer
     // below is a no-op on the success path and avoids the double-free of letting both this
@@ -2080,6 +2093,13 @@ fn runWasmPackWorkers(editor: *Editor) void {
     }
 }
 
+fn appendOpenPackInputs(editor: *Editor, inputs: *std.ArrayListUnmanaged(PackJob.PackInput)) !void {
+    for (editor.open_files.values()) |*open_file| {
+        const snapshot = try PackJob.PackFile.fromOpenFile(fizzy.app.allocator, open_file);
+        try inputs.append(fizzy.app.allocator, .{ .open = snapshot });
+    }
+}
+
 fn gatherPackInputs(
     editor: *Editor,
     inputs: *std.ArrayListUnmanaged(PackJob.PackInput),
@@ -2095,28 +2115,52 @@ fn gatherPackInputs(
             const ext = std.fs.path.extension(entry.name);
             if (!fizzy.Internal.File.isFizzyExtension(ext)) continue;
 
-            const abs_path = try std.fs.path.joinZ(fizzy.app.allocator, &.{ directory, entry.name });
-            // Determine whether this file is currently open. If so, snapshot it now; the
-            // returned `PackFile` owns its allocations. Otherwise the worker will read it
-            // from disk, so we pass the path along (transferring ownership to the input).
-            if (editor.getFileFromPath(abs_path)) |open_file| {
-                defer fizzy.app.allocator.free(abs_path);
-                const snapshot = try PackJob.PackFile.fromOpenFile(fizzy.app.allocator, open_file);
-                try inputs.append(fizzy.app.allocator, .{ .open = snapshot });
-            } else {
-                // Transfer ownership of the path into the input; the input deinit will free it.
-                // `joinZ` produced a null-terminated slice but we only need the non-sentinel
-                // bytes for `File.fromPath`; copy into a plain `[]u8` so deinit is symmetric.
-                const owned_path = try fizzy.app.allocator.dupe(u8, abs_path);
-                fizzy.app.allocator.free(abs_path);
-                try inputs.append(fizzy.app.allocator, .{ .path = owned_path });
-            }
+            const abs_path = try std.fs.path.join(fizzy.app.allocator, &.{ directory, entry.name });
+            defer fizzy.app.allocator.free(abs_path);
+
+            // Open files were snapshotted in `appendOpenPackInputs` (including unsaved edits).
+            if (findOpenFileForPackPath(editor, abs_path) != null) continue;
+
+            const owned_path = try fizzy.app.allocator.dupe(u8, abs_path);
+            try inputs.append(fizzy.app.allocator, .{ .path = owned_path });
         } else if (entry.kind == .directory) {
             const abs_path = try std.fs.path.join(fizzy.app.allocator, &.{ directory, entry.name });
             defer fizzy.app.allocator.free(abs_path);
             try gatherPackInputs(editor, inputs, abs_path);
         }
     }
+}
+
+/// Match a project-tree path to an open file (`file.path` may differ in normalization from `join` vs `joinZ`).
+fn findOpenFileForPackPath(editor: *Editor, path: []const u8) ?*fizzy.Internal.File {
+    if (editor.getFileFromPath(path)) |file| return file;
+
+    const basename = std.fs.path.basename(path);
+    for (editor.open_files.values()) |*file| {
+        if (!std.mem.eql(u8, std.fs.path.basename(file.path), basename)) continue;
+        if (std.mem.eql(u8, file.path, path)) return file;
+        if (editor.folder) |folder| {
+            const joined = std.fs.path.join(fizzy.app.allocator, &.{ folder, basename }) catch continue;
+            defer fizzy.app.allocator.free(joined);
+            if (std.mem.eql(u8, file.path, joined)) return file;
+        }
+    }
+    return null;
+}
+
+fn showPackToast(message: []const u8, canvas_id: ?dvui.Id) void {
+    const anchor = canvas_id orelse blk: {
+        if (fizzy.editor.activeWorkspaceCanvasRectPhysical()) |r| {
+            if (fizzy.editor.activeFile()) |file| break :blk file.editor.canvas.id;
+            _ = r;
+        }
+        break :blk dvui.currentWindow().data().id;
+    };
+    const id_mutex = dvui.toastAdd(dvui.currentWindow(), @src(), 0, anchor, fizzy.dvui.toastDisplay, 2_500_000);
+    const id = id_mutex.id;
+    const msg_copy = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s}", .{message}) catch message;
+    dvui.dataSetSlice(dvui.currentWindow(), id, "_message", msg_copy);
+    id_mutex.mutex.unlock(dvui.io);
 }
 
 /// Per-frame sweep called from `tick`. Reaps any pack jobs whose worker has published `done`,
@@ -2161,6 +2205,23 @@ pub fn processPackJob(editor: *Editor) void {
             fizzy.packer.atlas = new_atlas;
         }
         job.result_consumed = true;
+        editor.explorer.pane = .project;
+        const toast_canvas: ?dvui.Id = if (editor.activeFile()) |file| file.editor.canvas.id else null;
+        showPackToast("Project packed", toast_canvas);
+    } else blk: {
+        // Newest finished job had no atlas (empty inputs / no packable frames). Tell the user
+        // so the Pack button doesn't look like it silently did nothing.
+        var i = editor.pack_jobs.items.len;
+        while (i > 0) {
+            i -= 1;
+            const job = editor.pack_jobs.items[i];
+            if (!job.done.load(.acquire)) continue;
+            if (job.cancelled.load(.monotonic)) continue;
+            if (job.currentPhase() == .ready and job.result_atlas == null) {
+                showPackToast("Nothing to pack in the selected files", null);
+                break :blk;
+            }
+        }
     }
 
     // Reap everything that has published `done`. Successful-but-superseded jobs leave their
@@ -2175,7 +2236,10 @@ pub fn processPackJob(editor: *Editor) void {
         const phase = job.currentPhase();
         switch (phase) {
             .ready, .cancelled => {},
-            .failed => dvui.log.err("Pack project failed: {any}", .{job.err}),
+            .failed => {
+                dvui.log.err("Pack project failed: {any}", .{job.err});
+                showPackToast("Pack failed", null);
+            },
             else => dvui.log.err("Pack job finished in unexpected phase {s}", .{@tagName(phase)}),
         }
         job.destroy();
