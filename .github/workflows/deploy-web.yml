@@ -2,6 +2,9 @@
 #
 # One-time repo setup: Settings → Pages → Build and deployment → Source: GitHub Actions.
 # Keep docs/CNAME (fizzyed.it) — it is copied into the published artifact.
+#
+# Build and deploy are separate jobs so re-running only "deploy" does not upload a second
+# "github-pages" artifact (deploy-pages@v4 fails if multiple exist in one run).
 
 name: Deploy website
 
@@ -29,11 +32,8 @@ env:
   ZIG_VERSION: "0.16.0"
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -76,6 +76,13 @@ jobs:
         with:
           path: site
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
