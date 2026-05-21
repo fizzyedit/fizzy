@@ -96,13 +96,6 @@ touch_eval_press_p: dvui.Point.Physical = .{},
 touch_eval_released: bool = false,
 touch_eval_release_p: dvui.Point.Physical = .{},
 
-// Timestamp of the most recent touch press. While we're inside the post-press grace
-// window we force a refresh every frame so dvui.ContextWidget's hold-timer check
-// actually re-runs in time to open the menu. (ContextWidget itself doesn't request
-// refreshes during a hold — it only re-evaluates the elapsed time inside
-// processEvents.) Without this, on idle touch-only hardware the app settles after the
-// press frame and the hold-to-open menu never fires.
-last_touch_press_ns: i128 = std.math.minInt(i128),
 
 const TouchSlot = struct {
     active: bool = false,
@@ -326,44 +319,15 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
     // mouse) drops us out of "touch mode"; a touch press puts us back in. The flag
     // sticks across frames so hover previews stay suppressed while the user's finger is
     // lifted but `mouse_pt` still points at the last touch.
-    //
-    // Bonus: on a touch press, schedule a one-shot dvui timer for the hold-menu
-    // duration. This is what makes `dvui.ContextWidget`'s hold-to-open behave on a
-    // touch-only device. `ContextWidget.updateHold` only checks "did enough time elapse
-    // since the press" — it doesn't request its own refreshes. So when the user touches
-    // and holds (with no motion between press and release), dvui has no event to drive
-    // a new frame, the check never re-runs, and the menu never opens. Scheduling a
-    // timer here forces dvui to wake up once after the hold deadline, giving the
-    // context widget the frame it needs to open.
-    var saw_touch_press: bool = false;
     for (dvui.events()) |*e| {
         if (e.evt != .mouse) continue;
         const me = e.evt.mouse;
         switch (me.action) {
-            .press => {
-                self.last_input_was_touch = me.button.touch();
-                if (me.button.touch()) saw_touch_press = true;
-            },
+            .press => self.last_input_was_touch = me.button.touch(),
             .motion => {
                 if (!me.button.touch()) self.last_input_was_touch = false;
             },
             else => {},
-        }
-    }
-    if (saw_touch_press) {
-        self.last_touch_press_ns = dvui.currentWindow().frame_time_ns;
-    }
-
-    // Refresh every frame for the first hold-duration + small buffer after each touch
-    // press. This is the only reliable way I've found to keep `ContextWidget.updateHold`
-    // ticking on touch — a single one-shot `dvui.timer` *should* work in theory, but in
-    // practice the menu never opens on web/wasm without forcing frames continuously.
-    // Idle cost is bounded: the refresh stops once the grace window elapses.
-    {
-        const now = dvui.currentWindow().frame_time_ns;
-        const grace_ns: i128 = dvui.currentWindow().hold_menu_duration_ns + std.time.ns_per_ms * 100;
-        if (now - self.last_touch_press_ns < grace_ns) {
-            dvui.refresh(null, @src(), null);
         }
     }
 

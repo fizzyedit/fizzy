@@ -152,6 +152,12 @@ settings_dirty: bool = false,
 /// Monotonic deadline (`perf.nanoTimestamp()`): autosave runs when dirty and `now >= deadline`.
 settings_save_deadline_ns: i128 = 0,
 
+/// Timestamp of the most recent touch press anywhere in the app, or null if there
+/// hasn't been one. `Editor.draw` forces a per-frame refresh during the post-press
+/// grace window so `dvui.ContextWidget.updateHold` actually re-runs and gets a chance
+/// to open the hold-to-context menu on touch-only hardware.
+last_touch_press_ns: ?i128 = null,
+
 pub const SpriteClipboard = struct {
     source: dvui.ImageSource,
     offset: dvui.Point,
@@ -1007,6 +1013,30 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             .open => editor.explorer.open(),
             .close => editor.explorer.peekClose(),
             .none => {},
+        }
+
+        // Force continuous frames for a short grace window after every touch press.
+        // `dvui.ContextWidget`'s hold-to-open check only re-runs while frames render,
+        // and the engine otherwise settles after the press frame on idle touch
+        // hardware — so without this, the hold timer freezes and the color-picker
+        // context never opens. We do it at the editor level (rather than only inside
+        // canvas) so it works even when no file is open or no canvas is interactive.
+        {
+            for (dvui.events()) |*e| {
+                if (e.evt != .mouse) continue;
+                const me = e.evt.mouse;
+                if (me.action == .press and me.button.touch()) {
+                    editor.last_touch_press_ns = dvui.currentWindow().frame_time_ns;
+                    break;
+                }
+            }
+            if (editor.last_touch_press_ns) |press_ns| {
+                const now = dvui.currentWindow().frame_time_ns;
+                const grace_ns: i128 = dvui.currentWindow().hold_menu_duration_ns + std.time.ns_per_ms * 100;
+                if (now - press_ns < grace_ns) {
+                    dvui.refresh(null, @src(), null);
+                }
+            }
         }
 
         if (editor.explorer.paned.showFirst()) {
