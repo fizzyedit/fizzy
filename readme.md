@@ -8,6 +8,8 @@
 # 
 **Fizzy** is a cross-platform open-source pixel art editor and animation editor written in [Zig](https://github.com/ziglang/zig).
 
+### Try it in your browser [here](https://fizzyed.it/app/)
+
 ### Downloads are available [here](https://fizzyed.it)
 
 #### Check out the [user guide](https://github.com/foxnne/fizzy/wiki/User-Guide)!
