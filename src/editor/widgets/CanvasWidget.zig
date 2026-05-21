@@ -111,7 +111,6 @@ pub fn gestureActive(self: *const CanvasWidget) bool {
     return self.gesture_active or self.touch_eval_active;
 }
 
-
 pub const InitOptions = struct {
     id: dvui.Id,
     data_size: dvui.Size,
@@ -319,16 +318,36 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
     // mouse) drops us out of "touch mode"; a touch press puts us back in. The flag
     // sticks across frames so hover previews stay suppressed while the user's finger is
     // lifted but `mouse_pt` still points at the last touch.
+    //
+    // Bonus: on a touch press, schedule a one-shot dvui timer for the hold-menu
+    // duration. This is what makes `dvui.ContextWidget`'s hold-to-open behave on a
+    // touch-only device. `ContextWidget.updateHold` only checks "did enough time elapse
+    // since the press" — it doesn't request its own refreshes. So when the user touches
+    // and holds (with no motion between press and release), dvui has no event to drive
+    // a new frame, the check never re-runs, and the menu never opens. Scheduling a
+    // timer here forces dvui to wake up once after the hold deadline, giving the
+    // context widget the frame it needs to open.
+    var saw_touch_press: bool = false;
     for (dvui.events()) |*e| {
         if (e.evt != .mouse) continue;
         const me = e.evt.mouse;
         switch (me.action) {
-            .press => self.last_input_was_touch = me.button.touch(),
+            .press => {
+                self.last_input_was_touch = me.button.touch();
+                if (me.button.touch()) saw_touch_press = true;
+            },
             .motion => {
                 if (!me.button.touch()) self.last_input_was_touch = false;
             },
             else => {},
         }
+    }
+    if (saw_touch_press) {
+        const win = dvui.currentWindow();
+        // Convert the configured hold duration from ns → µs (dvui.timer takes i32 µs)
+        // and add a small pad so the elapsed comparison resolves on the wake-up frame.
+        const micros: i32 = @intCast(@divTrunc(win.hold_menu_duration_ns, std.time.ns_per_us));
+        dvui.timer(self.id, micros + 1_000);
     }
 
     for (dvui.events()) |*e| {

@@ -1033,6 +1033,12 @@ fn drawColorPicker(rect: dvui.Rect.Physical, backing_color: *[4]u8, id_extra: us
             .expand = .horizontal,
             .background = false,
             .corner_radius = dvui.Rect.all(1000),
+            // Default saturation box is 100×100 and the sliders / hue strip size off of
+            // that. Bumping the outer min_size_content to ~2× makes everything inside
+            // (the value/saturation pad, the hue strip, the RGB+A sliders, the hex
+            // entry) scale up via their `.expand = .ratio` / `.expand = .horizontal`,
+            // giving a touch-friendly hit area without restyling each piece.
+            .min_size_content = .{ .w = 220, .h = 220 },
         })) {
             const c = color.toColor();
             backing_color.* = .{
