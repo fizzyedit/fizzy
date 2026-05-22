@@ -272,6 +272,61 @@ pub fn renderReflectionLayerStack(
     }
 }
 
+/// Draw layers into the **current** render target using cached composites only (no `sync*` rebinding).
+/// Caller must run `ensureLayerCompositesForPreview` first while the screen target is active.
+pub fn renderLayersMagnifierSample(init_opts: RenderFileOptions) !void {
+    flushPendingLayerTextureUploads(init_opts);
+
+    if (init_opts.rs.s == 0) return;
+    if (dvui.clipGet().intersect(init_opts.rs.r).empty()) return;
+
+    const vs = layerViewStateForRender(init_opts);
+
+    var path: dvui.Path.Builder = .init(fizzy.app.allocator);
+    defer path.deinit();
+
+    path.addRect(init_opts.rs.r, dvui.Rect.Physical.all(0));
+
+    var triangles = try path.build().fillConvexTriangles(fizzy.app.allocator, .{ .color = init_opts.color_mod, .fade = init_opts.fade });
+    defer triangles.deinit(fizzy.app.allocator);
+
+    triangles.uvFromRectuv(init_opts.rs.r, init_opts.uv);
+
+    var dimmed_triangles: ?dvui.Triangles = null;
+    defer {
+        if (dimmed_triangles) |*dt| dt.deinit(fizzy.app.allocator);
+    }
+    if (vs.needs_dimmed) {
+        var dt = try triangles.dupe(fizzy.app.allocator);
+        dt.color(.gray);
+        dimmed_triangles = dt;
+    }
+
+    const dimmed = dimmed_triangles orelse triangles;
+    try renderReflectionLayerStack(init_opts, triangles, dimmed);
+
+    if (dvui.textureGetCached(init_opts.file.editor.selection_layer.source.hash()) == null)
+        perf.draw_texture_creates += 1;
+    dvui.renderTriangles(triangles, init_opts.file.editor.selection_layer.source.getTexture() catch null) catch {
+        dvui.log.err("Failed to render magnifier selection layer", .{});
+    };
+
+    if (init_opts.file.editor.temp_layer_has_content) {
+        const temp_source = init_opts.file.editor.temporary_layer.source;
+        if (dvui.textureGetCached(temp_source.hash()) == null)
+            perf.draw_texture_creates += 1;
+        if (dvui.textureGetCached(temp_source.hash())) |cached| {
+            dvui.renderTriangles(triangles, cached) catch {
+                dvui.log.err("Failed to render magnifier temporary layer", .{});
+            };
+        } else {
+            dvui.renderTriangles(triangles, temp_source.getTexture() catch null) catch {
+                dvui.log.err("Failed to render magnifier temporary layer", .{});
+            };
+        }
+    }
+}
+
 fn fullCompositeEligible(
     init_opts: RenderFileOptions,
     min_layer_index: usize,

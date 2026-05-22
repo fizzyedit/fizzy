@@ -88,15 +88,17 @@ pub fn processSample(self: *FileWidget) void {
 
     const current_mods = dvui.currentWindow().modifiers;
 
+    const mouse_pt = dvui.currentWindow().mouse_pt;
+
     if (current_mods.matchBind("ctrl/cmd") and !self.previous_mods.matchBind("ctrl/cmd") and (self.right_mouse_down or self.sample_key_down)) {
-        const current_point = self.init_options.file.editor.canvas.dataFromScreenPoint(dvui.currentWindow().mouse_pt);
-        self.sample(file, current_point, true, true);
+        const current_point = self.init_options.file.editor.canvas.dataFromScreenPoint(mouse_pt);
+        self.sample(file, current_point, mouse_pt, true, true);
     }
 
     if (current_mods.matchBind("sample") and !self.previous_mods.matchBind("sample")) {
         self.sample_key_down = true;
-        const current_point = self.init_options.file.editor.canvas.dataFromScreenPoint(dvui.currentWindow().mouse_pt);
-        self.sample(file, current_point, self.right_mouse_down or self.left_mouse_down, false);
+        const current_point = self.init_options.file.editor.canvas.dataFromScreenPoint(mouse_pt);
+        self.sample(file, current_point, mouse_pt, self.right_mouse_down or self.left_mouse_down, false);
     } else if (!current_mods.matchBind("sample") and self.sample_key_down) {
         self.sample_key_down = false;
         if (!self.right_mouse_down) {
@@ -104,19 +106,26 @@ pub fn processSample(self: *FileWidget) void {
         }
     }
 
+    const canvas = &self.init_options.file.editor.canvas;
+    const scroll_container = canvas.scroll_container;
+    if (!canvas.installed) return;
+
+    const scroll_id = scroll_container.data().id;
+
     for (dvui.events()) |*e| {
         switch (e.evt) {
             .mouse => |me| {
-                if (!self.init_options.file.editor.canvas.scroll_container.matchEvent(e)) {
+                const sample_captured = dvui.captured(scroll_id);
+                if (!scroll_container.matchEvent(e) and !sample_captured) {
                     continue;
                 }
-                const current_point = self.init_options.file.editor.canvas.dataFromScreenPoint(me.p);
+                const current_point = canvas.dataFromScreenPoint(me.p);
 
                 if (me.action == .press and me.button.pointer()) {
                     dvui.refresh(null, @src(), self.init_options.file.editor.canvas.scroll_container.data().id);
                     self.left_mouse_down = true;
                     if (dvui.dragging(me.p, "sample_drag")) |_| {
-                        self.sample(file, current_point, true, false);
+                        self.sample(file, current_point, me.p, true, false);
                     }
                 } else if (me.action == .release and me.button.pointer()) {
                     dvui.refresh(null, @src(), self.init_options.file.editor.canvas.scroll_container.data().id);
@@ -131,7 +140,7 @@ pub fn processSample(self: *FileWidget) void {
                     dvui.dragPreStart(me.p, .{ .name = "sample_drag" });
                     self.drag_data_point = current_point;
 
-                    self.sample(file, current_point, self.sample_key_down or self.left_mouse_down, false);
+                    self.sample(file, current_point, me.p, self.sample_key_down or self.left_mouse_down, false);
 
                     clearTempPreview(&file.editor);
                     if (file.editor.temp_layer_has_content) {
@@ -140,21 +149,25 @@ pub fn processSample(self: *FileWidget) void {
                     file.editor.temp_layer_has_content = false;
                     file.editor.temporary_layer.dirty = false;
                 } else if (me.action == .release and me.button == .right) {
-                    dvui.refresh(null, @src(), self.init_options.file.editor.canvas.scroll_container.data().id);
+                    dvui.refresh(null, @src(), scroll_container.data().id);
                     self.right_mouse_down = false;
-                    self.sample(file, current_point, self.sample_key_down or self.left_mouse_down, true);
-                    if (dvui.captured(self.init_options.file.editor.canvas.scroll_container.data().id)) {
-                        e.handle(@src(), self.init_options.file.editor.canvas.scroll_container.data());
+                    if (sample_captured) {
+                        e.handle(@src(), scroll_container.data());
                         dvui.captureMouse(null, e.num);
                         dvui.dragEnd();
-
+                        if (canvas.samplePointerInViewport(me.p)) {
+                            self.sample(file, current_point, me.p, self.sample_key_down or self.left_mouse_down, true);
+                        }
                         if (!self.sample_key_down) {
                             self.drag_data_point = null;
                             self.sample_data_point = null;
                         }
                     }
                 } else if (me.action == .motion or me.action == .wheel_x or me.action == .wheel_y) {
-                    if (dvui.captured(self.init_options.file.editor.canvas.scroll_container.data().id)) {
+                    if (sample_captured and !canvas.samplePointerInViewport(me.p)) {
+                        self.sample_data_point = null;
+                    }
+                    if (dvui.captured(scroll_id)) {
                         if (dvui.dragging(me.p, "sample_drag")) |diff| {
                             const previous_point = current_point.plus(self.init_options.file.editor.canvas.dataFromScreenPoint(diff));
                             // Construct a rect spanning between current_point and previous_point
@@ -176,11 +189,11 @@ pub fn processSample(self: *FileWidget) void {
                                 .screen_rect = screen_rect,
                             });
 
-                            self.sample(file, current_point, self.sample_key_down or self.left_mouse_down or current_mods.matchBind("ctrl/cmd"), false);
+                            self.sample(file, current_point, me.p, self.sample_key_down or self.left_mouse_down or current_mods.matchBind("ctrl/cmd"), false);
                             e.handle(@src(), self.init_options.file.editor.canvas.scroll_container.data());
                         }
                     } else if (self.right_mouse_down or self.sample_key_down) {
-                        self.sample(file, current_point, self.right_mouse_down and (self.sample_key_down or self.left_mouse_down or current_mods.matchBind("ctrl/cmd")), false);
+                        self.sample(file, current_point, me.p, self.right_mouse_down and (self.sample_key_down or self.left_mouse_down or current_mods.matchBind("ctrl/cmd")), false);
                     }
                 }
             },
@@ -244,7 +257,11 @@ pub fn sampleColorAtPoint(
     }
 }
 
-fn sample(self: *FileWidget, file: *fizzy.Internal.File, point: dvui.Point, change_layer: bool, change_tool: bool) void {
+fn sample(self: *FileWidget, file: *fizzy.Internal.File, point: dvui.Point, screen_p: dvui.Point.Physical, change_layer: bool, change_tool: bool) void {
+    if (!file.editor.canvas.samplePointerInViewport(screen_p)) {
+        self.sample_data_point = null;
+        return;
+    }
     self.sample_data_point = point;
     sampleColorAtPoint(file, point, change_layer, change_tool, change_tool);
 }
@@ -3979,7 +3996,7 @@ pub fn drawCursor(self: *FileWidget) void {
     }
 
     const mouse_point = dvui.currentWindow().mouse_pt;
-    if (!self.init_options.file.editor.canvas.rect.contains(mouse_point)) return;
+    if (!self.init_options.file.editor.canvas.pointerOverDrawable(mouse_point)) return;
     if (self.sample_data_point != null) return;
 
     _ = dvui.cursorSet(.hidden);
@@ -4045,148 +4062,328 @@ pub fn drawCursor(self: *FileWidget) void {
     }
 }
 
+fn drawSamplePixelOutline(canvas: *CanvasWidget, data_point: dvui.Point) void {
+    const pixel_box_size = canvas.scale * dvui.currentWindow().rectScale().s;
+    const pixel_point: dvui.Point = .{
+        .x = @round(data_point.x - 0.5),
+        .y = @round(data_point.y - 0.5),
+    };
+    const pixel_box_point = canvas.screenFromDataPoint(pixel_point);
+    var pixel_box = dvui.Rect.Physical.fromSize(.{ .w = pixel_box_size, .h = pixel_box_size });
+    pixel_box.x = pixel_box_point.x;
+    pixel_box.y = pixel_box_point.y;
+    dvui.Path.stroke(.{ .points = &.{
+        pixel_box.topLeft(),
+        pixel_box.topRight(),
+        pixel_box.bottomRight(),
+        pixel_box.bottomLeft(),
+    } }, .{ .thickness = 2, .color = .white, .closed = true });
+}
+
 pub fn drawSample(self: *FileWidget) void {
     const file = self.init_options.file;
-    const point = self.sample_data_point;
+    if (self.sample_data_point) |data_point| {
+        if (!file.editor.canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) return;
+        drawSamplePixelOutline(&file.editor.canvas, data_point);
+    }
+}
 
-    if (point) |data_point| {
-        const mouse_point = self.init_options.file.editor.canvas.screenFromDataPoint(data_point);
-        if (!self.init_options.file.editor.canvas.rect.contains(mouse_point)) return;
+/// Color-dropper magnifier: composite built to a render target, presented via RenderFrontToBack (not FloatingWidget).
+/// Call after the file widget has finished drawing for the frame.
+/// Map a data rect inside `region_data` to the corresponding physical pixels in `dest_phys`.
+fn mapDataRectToPhysicalStrip(sr: dvui.Rect, parent_data: dvui.Rect, parent_phys: dvui.Rect.Physical) dvui.Rect.Physical {
+    const rel_x = sr.x - parent_data.x;
+    const rel_y = sr.y - parent_data.y;
+    return .{
+        .x = parent_phys.x + rel_x / parent_data.w * parent_phys.w,
+        .y = parent_phys.y + rel_y / parent_data.h * parent_phys.h,
+        .w = sr.w / parent_data.w * parent_phys.w,
+        .h = sr.h / parent_data.h * parent_phys.h,
+    };
+}
 
-        { // Draw a box around the hovered pixel at the correct scale
-            const pixel_box_size = self.init_options.file.editor.canvas.scale * dvui.currentWindow().rectScale().s;
+/// Draw checkerboard alpha tiles into `dest_phys` (no per-tile corner radius).
+fn drawSampleMagnifierCheckerboardTiles(
+    file: *fizzy.Internal.File,
+    region_data: dvui.Rect,
+    dest_phys: dvui.Rect.Physical,
+    scale: f32,
+) void {
+    const cw: f32 = @floatFromInt(file.column_width);
+    const ch: f32 = @floatFromInt(file.row_height);
+    if (region_data.w <= 0 or region_data.h <= 0 or dest_phys.w <= 0 or dest_phys.h <= 0) return;
+    if (cw <= 0 or ch <= 0) return;
 
-            const pixel_point: dvui.Point = .{
-                .x = @round(data_point.x - 0.5),
-                .y = @round(data_point.y - 0.5),
+    const colormod = dvui.themeGet().color(.content, .fill).lighten(12.0);
+
+    const x_end = region_data.x + region_data.w;
+    const y_end = region_data.y + region_data.h;
+    const tx0 = @as(i32, @intFromFloat(@floor(region_data.x / cw)));
+    const ty0 = @as(i32, @intFromFloat(@floor(region_data.y / ch)));
+    const tx1 = @as(i32, @intFromFloat(@ceil(x_end / cw)));
+    const ty1 = @as(i32, @intFromFloat(@ceil(y_end / ch)));
+
+    var ty = ty0;
+    while (ty < ty1) : (ty += 1) {
+        var tx = tx0;
+        while (tx < tx1) : (tx += 1) {
+            const tile_rect = dvui.Rect{
+                .x = @as(f32, @floatFromInt(tx)) * cw,
+                .y = @as(f32, @floatFromInt(ty)) * ch,
+                .w = cw,
+                .h = ch,
+            };
+            const isect = region_data.intersect(tile_rect);
+            if (isect.empty()) continue;
+
+            const phys = mapDataRectToPhysicalStrip(isect, region_data, dest_phys);
+            const tile_rs = dvui.RectScale{ .r = phys, .s = scale };
+            const uv = dvui.Rect{
+                .x = (isect.x - tile_rect.x) / cw,
+                .y = (isect.y - tile_rect.y) / ch,
+                .w = isect.w / cw,
+                .h = isect.h / ch,
             };
 
-            const pixel_box_point = self.init_options.file.editor.canvas.screenFromDataPoint(pixel_point);
-            var pixel_box = dvui.Rect.Physical.fromSize(.{ .w = pixel_box_size, .h = pixel_box_size });
-            pixel_box.x = pixel_box_point.x;
-            pixel_box.y = pixel_box_point.y;
-            dvui.Path.stroke(.{ .points = &.{
-                pixel_box.topLeft(),
-                pixel_box.topRight(),
-                pixel_box.bottomRight(),
-                pixel_box.bottomLeft(),
-            } }, .{ .thickness = 2, .color = .white, .closed = true });
+            dvui.renderImage(file.editor.checkerboard_tile, tile_rs, .{
+                .colormod = colormod,
+                .uv = uv,
+            }) catch {
+                dvui.log.err("Failed to render magnifier checkerboard tile", .{});
+            };
         }
-
-        // The scale of the enlarged view varies based on the canvas scale
-        // When canvas scale is small, we want more magnification
-        // When canvas scale is large, we want less magnification
-        const enlarged_scale: f32 = self.init_options.file.editor.canvas.scale * (8.0 / (1.0 + self.init_options.file.editor.canvas.scale));
-
-        // The size of the sample box in screen space (constant size)
-        const sample_box_size: f32 = 100.0 * 1 / self.init_options.file.editor.canvas.scale; // e.g. 100x80 pixels on screen
-
-        // x/y/w/h = top-left / top-right / bottom-right / bottom-left (dvui Path.addRect).
-        const cr = sample_box_size / 2;
-        const corner_radius = dvui.Rect{ .x = cr, .y = cr, .w = cr, .h = 0 };
-
-        // The size of the sample region in data (texture) space
-        // This is how many data pixels are shown in the box, so that the box always shows the same number of data pixels at 2x the canvas scale
-        const sample_region_size: f32 = sample_box_size / enlarged_scale;
-
-        const border_width = 2 / self.init_options.file.editor.canvas.scale;
-
-        // Anchor the magnifier at the sample point's bottom-left so the bubble sits up-right.
-        const box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .none,
-            .rect = .{
-                .x = data_point.x,
-                .y = data_point.y - sample_box_size,
-                .w = sample_box_size,
-                .h = sample_box_size,
-            },
-            .border = dvui.Rect.all(border_width),
-            .color_border = dvui.themeGet().color(.control, .text),
-            .corner_radius = corner_radius,
-            .background = true,
-            .color_fill = dvui.themeGet().color(.window, .fill),
-            .box_shadow = .{
-                .fade = 15 * 1 / self.init_options.file.editor.canvas.scale,
-                .corner_radius = corner_radius,
-                .alpha = 0.2,
-                .offset = .{
-                    .x = 2 * 1 / self.init_options.file.editor.canvas.scale,
-                    .y = 2 * 1 / self.init_options.file.editor.canvas.scale,
-                },
-            },
-        });
-        defer box.deinit();
-
-        // Compute UVs for the region to sample, normalized to [0,1]
-        const uv_rect = dvui.Rect{
-            .x = (data_point.x - sample_region_size / 2) / @as(f32, @floatFromInt(file.width())),
-            .y = (data_point.y - sample_region_size / 2) / @as(f32, @floatFromInt(file.height())),
-            .w = sample_region_size / @as(f32, @floatFromInt(file.width())),
-            .h = sample_region_size / @as(f32, @floatFromInt(file.height())),
-        };
-
-        var rs = box.data().borderRectScale();
-        rs.r = rs.r.inset(dvui.Rect.Physical.all(border_width * self.init_options.file.editor.canvas.scale * 2));
-
-        const nat_scale: u32 = @intFromFloat(1.0);
-
-        dvui.renderImage(file.editor.checkerboard_tile, rs, .{
-            .colormod = dvui.themeGet().color(.content, .fill).lighten(12.0),
-            .uv = .{
-                .x = @mod(data_point.x - sample_region_size / 2, @as(f32, @floatFromInt(file.column_width * nat_scale))) / @as(f32, @floatFromInt(file.column_width * nat_scale)),
-                .y = @mod(data_point.y - sample_region_size / 2, @as(f32, @floatFromInt(file.row_height * nat_scale))) / @as(f32, @floatFromInt(file.row_height * nat_scale)),
-                .w = sample_region_size / @as(f32, @floatFromInt(file.column_width * nat_scale)),
-                .h = sample_region_size / @as(f32, @floatFromInt(file.row_height * nat_scale)),
-            },
-            .corner_radius = .{
-                .x = corner_radius.x * rs.s,
-                .y = corner_radius.y * rs.s,
-                .w = corner_radius.w * rs.s,
-                .h = corner_radius.h * rs.s,
-            },
-        }) catch {
-            dvui.log.err("Failed to render checkerboard", .{});
-        };
-
-        fizzy.render.renderLayers(.{
-            .file = file,
-            .rs = rs,
-            .uv = uv_rect,
-            .corner_radius = .{
-                .x = corner_radius.x * rs.s,
-                .y = corner_radius.y * rs.s,
-                .w = corner_radius.w * rs.s,
-                .h = corner_radius.h * rs.s,
-            },
-        }) catch {
-            dvui.log.err("Failed to render layers", .{});
-        };
-
-        // Draw a cross at the center of the rounded sample box
-        const center_x = rs.r.x + rs.r.w / 2;
-        const center_y = rs.r.y + rs.r.h / 2;
-        const cross_size = @min(rs.r.w, rs.r.h) * 0.2;
-
-        dvui.Path.stroke(.{ .points = &.{
-            .{ .x = center_x - cross_size / 2, .y = center_y },
-            .{ .x = center_x + cross_size / 2, .y = center_y },
-        } }, .{ .thickness = 4, .color = .white });
-
-        dvui.Path.stroke(.{ .points = &.{
-            .{ .x = center_x, .y = center_y - cross_size / 2 },
-            .{ .x = center_x, .y = center_y + cross_size / 2 },
-        } }, .{ .thickness = 4, .color = .white });
-
-        dvui.Path.stroke(.{ .points = &.{
-            .{ .x = center_x - cross_size / 2 + 4, .y = center_y },
-            .{ .x = center_x + cross_size / 2 - 4, .y = center_y },
-        } }, .{ .thickness = 2, .color = .black });
-
-        dvui.Path.stroke(.{ .points = &.{
-            .{ .x = center_x, .y = center_y - cross_size / 2 + 4 },
-            .{ .x = center_x, .y = center_y + cross_size / 2 - 4 },
-        } }, .{ .thickness = 2, .color = .black });
     }
+}
+
+/// Build checkerboard + layers into an offscreen target. Layer composites are synced on the screen
+/// target first so `renderLayers` does not rebind this target via `syncLayerComposite`.
+fn drawSampleMagnifierCompositeBuild(
+    file: *fizzy.Internal.File,
+    region_data: dvui.Rect,
+    content_rs: dvui.RectScale,
+    file_w: f32,
+    file_h: f32,
+) ?dvui.Texture.Target {
+    if (region_data.w <= 0 or region_data.h <= 0 or content_rs.r.w <= 0 or content_rs.r.h <= 0) return null;
+
+    const w: u32 = @intFromFloat(@max(@ceil(content_rs.r.w), 1));
+    const h: u32 = @intFromFloat(@max(@ceil(content_rs.r.h), 1));
+
+    const layer_region = region_data.intersect(dvui.Rect{ .x = 0, .y = 0, .w = file_w, .h = file_h });
+    const layer_opts_base = fizzy.render.RenderFileOptions{
+        .file = file,
+        .rs = content_rs,
+        .allow_peek = false,
+    };
+
+    // Refresh cached layer composites on the screen target (not the magnifier target).
+    fizzy.render.ensureLayerCompositesForPreview(layer_opts_base) catch {
+        dvui.log.err("Failed to sync layer composites for magnifier", .{});
+    };
+
+    const target = dvui.textureCreateTarget(w, h, .nearest, fizzy.render.compositeTargetPixelFormat()) catch {
+        dvui.log.err("Failed to create magnifier composite target", .{});
+        return null;
+    };
+
+    target.clear();
+
+    const prev_target = dvui.renderTarget(.{ .texture = target, .offset = .{ .x = 0, .y = 0 } });
+    defer _ = dvui.renderTarget(prev_target);
+
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    dvui.clipSet(dvui.Rect.Physical{ .x = 0, .y = 0, .w = @floatFromInt(w), .h = @floatFromInt(h) });
+
+    const dest_phys = dvui.Rect.Physical{ .x = 0, .y = 0, .w = @floatFromInt(w), .h = @floatFromInt(h) };
+
+    drawSampleMagnifierCheckerboardTiles(file, region_data, dest_phys, 1.0);
+
+    if (!layer_region.empty()) {
+        const layer_phys = mapDataRectToPhysicalStrip(layer_region, region_data, dest_phys);
+        const uv_rect = dvui.Rect{
+            .x = layer_region.x / file_w,
+            .y = layer_region.y / file_h,
+            .w = layer_region.w / file_w,
+            .h = layer_region.h / file_h,
+        };
+        fizzy.render.renderLayersMagnifierSample(.{
+            .file = file,
+            .rs = .{ .r = layer_phys, .s = 1.0 },
+            .uv = uv_rect,
+            .allow_peek = false,
+        }) catch {
+            dvui.log.err("Failed to render magnifier layers into composite", .{});
+        };
+    }
+
+    return target;
+}
+
+/// Present magnifier chrome + composite (deferred via RenderFrontToBack so it stacks above the canvas).
+fn drawSampleMagnifierPresent(
+    composite: dvui.Texture.Target,
+    frame_phys: dvui.Rect.Physical,
+    content_rs: dvui.RectScale,
+    corner_radius: dvui.Rect,
+    border_nat: f32,
+) void {
+    const window_fill = dvui.themeGet().color(.window, .fill);
+    const border_color = dvui.themeGet().color(.control, .text);
+    const ns = dvui.currentWindow().natural_scale;
+
+    const corner_frame_phys = corner_radius.scale(content_rs.s, dvui.Rect.Physical);
+    const inner_corner = dvui.Rect{
+        .x = @max(0, corner_radius.x - border_nat),
+        .y = @max(0, corner_radius.y - border_nat),
+        .w = @max(0, corner_radius.w - border_nat),
+        .h = @max(0, corner_radius.h - border_nat),
+    };
+
+    // Shadow (matches FloatingWidget magnifier styling).
+    const shadow_offset = dvui.Point.Physical{ .x = 2.0 / ns * content_rs.s, .y = 2.0 / ns * content_rs.s };
+    const shadow_rect = dvui.Rect.Physical{
+        .x = frame_phys.x + shadow_offset.x,
+        .y = frame_phys.y + shadow_offset.y,
+        .w = frame_phys.w,
+        .h = frame_phys.h,
+    };
+    var shadow_path = dvui.Path.Builder.init(dvui.currentWindow().arena());
+    defer shadow_path.deinit();
+    shadow_path.addRect(shadow_rect, corner_frame_phys);
+    dvui.Path.fillConvex(shadow_path.build(), .{
+        .color = dvui.Color.black.opacity(0.2),
+        .fade = 15.0 / ns * content_rs.s,
+    });
+
+    // Window background behind content.
+    var bg_path = dvui.Path.Builder.init(dvui.currentWindow().arena());
+    defer bg_path.deinit();
+    bg_path.addRect(frame_phys, corner_frame_phys);
+    dvui.Path.fillConvex(bg_path.build(), .{ .color = window_fill, .fade = 0 });
+
+    const tex = dvui.Texture.fromTargetTemp(composite) catch {
+        dvui.log.err("Failed to get magnifier composite texture", .{});
+        return;
+    };
+
+    const source: dvui.ImageSource = .{ .texture = tex };
+    dvui.renderImage(source, content_rs, .{
+        .colormod = .white,
+        .uv = .{ .x = 0, .y = 0, .w = 1, .h = 1 },
+        // Natural radii; `renderTexture` scales by `content_rs.s` once (not pre-scaled).
+        .corner_radius = inner_corner,
+    }) catch {
+        dvui.log.err("Failed to render magnifier composite", .{});
+    };
+
+    // Border stroke centerline (matches FloatingWidget `borderAndBackground`).
+    const border_thickness = border_nat * content_rs.s;
+    const half = border_thickness * 0.5;
+    const border_stroke_rect = frame_phys.inset(dvui.Rect.Physical.all(half));
+    border_stroke_rect.stroke(corner_frame_phys, .{ .thickness = border_thickness, .color = border_color });
+
+    const center_x = content_rs.r.x + content_rs.r.w / 2;
+    const center_y = content_rs.r.y + content_rs.r.h / 2;
+    const cross_size = @min(content_rs.r.w, content_rs.r.h) * 0.2;
+
+    dvui.Path.stroke(.{ .points = &.{
+        .{ .x = center_x - cross_size / 2, .y = center_y },
+        .{ .x = center_x + cross_size / 2, .y = center_y },
+    } }, .{ .thickness = 4, .color = .white });
+
+    dvui.Path.stroke(.{ .points = &.{
+        .{ .x = center_x, .y = center_y - cross_size / 2 },
+        .{ .x = center_x, .y = center_y + cross_size / 2 },
+    } }, .{ .thickness = 4, .color = .white });
+
+    dvui.Path.stroke(.{ .points = &.{
+        .{ .x = center_x - cross_size / 2 + 4, .y = center_y },
+        .{ .x = center_x + cross_size / 2 - 4, .y = center_y },
+    } }, .{ .thickness = 2, .color = .black });
+
+    dvui.Path.stroke(.{ .points = &.{
+        .{ .x = center_x, .y = center_y - cross_size / 2 + 4 },
+        .{ .x = center_x, .y = center_y + cross_size / 2 - 4 },
+    } }, .{ .thickness = 2, .color = .black });
+}
+
+pub fn drawSampleMagnifier(file: *fizzy.Internal.File, data_point: dvui.Point) void {
+    const canvas = &file.editor.canvas;
+    if (fizzy.dvui.canvasPointerInputSuppressed()) return;
+    if (!canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) return;
+
+    _ = dvui.cursorSet(.hidden);
+
+    const enlarged_scale: f32 = canvas.scale * (8.0 / (1.0 + canvas.scale));
+    const sample_box_size: f32 = 200.0 * 1 / canvas.scale;
+    const sample_region_size: f32 = sample_box_size / enlarged_scale;
+
+    // Flip placement when the default (up-and-right) would clip the OS window edges.
+    const default_magnifier_phys = canvas.screenFromDataRect(.{
+        .x = data_point.x,
+        .y = data_point.y - sample_box_size,
+        .w = sample_box_size,
+        .h = sample_box_size,
+    });
+    const window_rect = dvui.windowRectPixels();
+    const flip_h = (default_magnifier_phys.x + default_magnifier_phys.w) > (window_rect.x + window_rect.w);
+    const flip_v = default_magnifier_phys.y < window_rect.y;
+
+    const magnifier_data = dvui.Rect{
+        .x = if (flip_h) data_point.x - sample_box_size else data_point.x,
+        .y = if (flip_v) data_point.y else data_point.y - sample_box_size,
+        .w = sample_box_size,
+        .h = sample_box_size,
+    };
+    const magnifier_phys = canvas.screenFromDataRect(magnifier_data);
+    const magnifier_nat = magnifier_phys.toNatural();
+
+    // Adjacent radii must not sum to a full edge: `Path.addRect` skips the apex when two corners meet (stroke gap).
+    // Corner-radius rect maps {x: TL, y: TR, w: BR, h: BL}; the sharp corner points at the sample.
+    const cr = magnifier_nat.w / 2 - 0.51;
+    const corner_radius = if (flip_h and flip_v)
+        dvui.Rect{ .x = cr, .y = 0, .w = cr, .h = cr } // sharp TR
+    else if (flip_h)
+        dvui.Rect{ .x = cr, .y = cr, .w = 0, .h = cr } // sharp BR
+    else if (flip_v)
+        dvui.Rect{ .x = 0, .y = cr, .w = cr, .h = cr } // sharp TL
+    else
+        dvui.Rect{ .x = cr, .y = cr, .w = cr, .h = 0 }; // sharp BL (default)
+
+    const win_rs = dvui.windowRectScale();
+    const ns = dvui.currentWindow().natural_scale;
+    const border_nat = 2.0 / ns;
+    const border_phys = border_nat * win_rs.s;
+
+    const frame_phys = magnifier_phys;
+    const content_phys = frame_phys.inset(dvui.Rect.Physical.all(border_phys));
+    const content_rs = dvui.RectScale{ .r = content_phys, .s = win_rs.s };
+
+    const region_data = dvui.Rect{
+        .x = data_point.x - sample_region_size / 2,
+        .y = data_point.y - sample_region_size / 2,
+        .w = sample_region_size,
+        .h = sample_region_size,
+    };
+
+    const file_w: f32 = @floatFromInt(file.width());
+    const file_h: f32 = @floatFromInt(file.height());
+
+    const composite = drawSampleMagnifierCompositeBuild(file, region_data, content_rs, file_w, file_h) orelse return;
+    defer composite.destroyLater();
+
+    // Break out of canvas/file clipping (same as FloatingWidget) so the border is not cut off at the top.
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    dvui.clipSet(dvui.windowRectPixels());
+
+    // Draw on top of the canvas after normal widgets (FloatingWidget defers; this uses RenderFrontToBack).
+    var ftb: dvui.RenderFrontToBack = undefined;
+    ftb.init();
+    defer ftb.deinit();
+
+    drawSampleMagnifierPresent(composite, frame_phys, content_rs, corner_radius, border_nat);
 }
 
 pub fn updateActiveLayerMask(self: *FileWidget) void {
@@ -4372,17 +4569,6 @@ pub fn drawLayers(self: *FileWidget) void {
 }
 
 const ReorderAxis = enum { columns, rows };
-
-fn mapDataRectToPhysicalStrip(sr: dvui.Rect, parent_data: dvui.Rect, parent_phys: dvui.Rect.Physical) dvui.Rect.Physical {
-    const rel_x = sr.x - parent_data.x;
-    const rel_y = sr.y - parent_data.y;
-    return .{
-        .x = parent_phys.x + rel_x / parent_data.w * parent_phys.w,
-        .y = parent_phys.y + rel_y / parent_data.h * parent_phys.h,
-        .w = sr.w / parent_data.w * parent_phys.w,
-        .h = sr.h / parent_data.h * parent_phys.h,
-    };
-}
 
 /// Checkerboard alpha over each cell of the floating column/row, matching `drawCheckerboardCellsBatched` tint/UVs at half opacity.
 fn drawCheckerboardReorderFloatingStrip(
@@ -5494,7 +5680,7 @@ pub fn processEvents(self: *FileWidget) void {
     const canvas_ptr = &self.init_options.file.editor.canvas;
     const mouse_pt = dvui.currentWindow().mouse_pt;
     canvas_ptr.hovered = !fizzy.dvui.canvasPointerInputSuppressed() and
-        canvas_ptr.rect.contains(mouse_pt);
+        canvas_ptr.pointerOverDrawable(mouse_pt);
 
     // Cursor-leave: when hover transitions true → false, the last brush/fill preview
     // pixels are still painted on the temp layer. Clear them exactly once on the way out
@@ -5562,7 +5748,6 @@ pub fn processEvents(self: *FileWidget) void {
                 .selection => self.processSelection(),
                 else => {},
             }
-            self.processSample();
             fizzy.perf.toolProcessEnd(tool_t0);
         }
     } else if (self.hovered() and self.init_options.file.editor.canvas.gestureActive()) {
@@ -5572,9 +5757,10 @@ pub fn processEvents(self: *FileWidget) void {
         resetTempLayerPreview(&self.init_options.file.editor);
     }
 
-    // Use `active()`, not `hovered()`: `hovered` is tied to `canvas.rect` (image bounds in screen
-    // space). The transform quad can extend outside that rect; we still need presses/drags there and
-    // continued drags after the cursor leaves the image (capture + motion).
+    // Use `active()`, not `hovered()`: `hovered` is the drawable artboard (`pointerOverDrawable`),
+    // not the full scroll viewport or unclipped `canvas.rect`. The transform quad can extend outside
+    // that rect; we still need presses/drags there and continued drags after the cursor leaves the
+    // image (capture + motion).
     const suppress = self.init_options.file.editor.canvas.gestureActive();
 
     if (self.active() and self.init_options.file.editor.transform != null and !suppress) {
@@ -5611,13 +5797,10 @@ pub fn processEvents(self: *FileWidget) void {
     fizzy.dvui.drawEdgeShadow(self.init_options.file.editor.canvas.scroll_container.data().rectScale(), .right, .{});
 
     self.drawTransform();
+    self.processSample();
     self.drawSample();
     if (self.hovered())
         self.drawCursor();
-
-    if (!fizzy.dvui.canvasPointerInputSuppressed() and !canvas_ptr.rect.contains(mouse_pt)) {
-        _ = dvui.cursorSet(.arrow);
-    }
 
     // Then process the scroll and zoom events last
     self.init_options.file.editor.canvas.processEvents();

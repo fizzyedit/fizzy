@@ -13,6 +13,7 @@ sample_key_down: bool = false,
 pub const InitOptions = struct {
     canvas: *CanvasWidget,
     source: dvui.ImageSource,
+    grouping: u64,
 };
 
 pub fn init(src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) ImageWidget {
@@ -51,19 +52,27 @@ pub fn processSample(self: *ImageWidget) void {
     } else if (current_mods.matchBind("sample") and !self.previous_mods.matchBind("sample")) {
         self.sample_key_down = true;
         if (self.last_mouse_event) |event| {
-            const current_point = self.init_options.canvas.dataFromScreenPoint(event.evt.mouse.p);
-            self.sample(current_point);
+            const me = event.evt.mouse;
+            const current_point = self.init_options.canvas.dataFromScreenPoint(me.p);
+            self.sample(current_point, me.p);
         }
     }
+
+    const canvas = self.init_options.canvas;
+    const scroll_container = canvas.scroll_container;
+    if (!canvas.installed) return;
+
+    const scroll_id = scroll_container.data().id;
 
     for (dvui.events()) |*e| {
         switch (e.evt) {
             .mouse => |me| {
-                if (!self.init_options.canvas.scroll_container.matchEvent(e))
+                const sample_captured = dvui.captured(scroll_id);
+                if (!scroll_container.matchEvent(e) and !sample_captured)
                     continue;
 
                 self.last_mouse_event = e.*;
-                const current_point = self.init_options.canvas.dataFromScreenPoint(me.p);
+                const current_point = canvas.dataFromScreenPoint(me.p);
 
                 if (me.action == .press and me.button == .right) {
                     self.right_mouse_down = true;
@@ -72,11 +81,11 @@ pub fn processSample(self: *ImageWidget) void {
                     dvui.dragPreStart(me.p, .{ .name = "sample_drag" });
                     self.drag_data_point = current_point;
 
-                    self.sample(current_point);
+                    self.sample(current_point, me.p);
                 } else if (me.action == .release and me.button == .right) {
                     self.right_mouse_down = false;
-                    if (dvui.captured(self.init_options.canvas.scroll_container.data().id)) {
-                        e.handle(@src(), self.init_options.canvas.scroll_container.data());
+                    if (sample_captured) {
+                        e.handle(@src(), scroll_container.data());
                         dvui.captureMouse(null, e.num);
                         dvui.dragEnd();
 
@@ -86,7 +95,10 @@ pub fn processSample(self: *ImageWidget) void {
                         }
                     }
                 } else if (me.action == .motion or me.action == .wheel_x or me.action == .wheel_y) {
-                    if (dvui.captured(self.init_options.canvas.scroll_container.data().id)) {
+                    if (sample_captured and !canvas.samplePointerInViewport(me.p)) {
+                        self.sample_data_point = null;
+                    }
+                    if (dvui.captured(scroll_id)) {
                         if (dvui.dragging(me.p, "sample_drag")) |diff| {
                             const previous_point = current_point.plus(self.init_options.canvas.dataFromScreenPoint(diff));
                             // Construct a rect spanning between current_point and previous_point
@@ -108,11 +120,11 @@ pub fn processSample(self: *ImageWidget) void {
                                 .screen_rect = screen_rect,
                             });
 
-                            self.sample(current_point);
+                            self.sample(current_point, me.p);
                             e.handle(@src(), self.init_options.canvas.scroll_container.data());
                         }
                     } else if (self.right_mouse_down or self.sample_key_down) {
-                        self.sample(current_point);
+                        self.sample(current_point, me.p);
                     }
                 }
             },
@@ -121,7 +133,12 @@ pub fn processSample(self: *ImageWidget) void {
     }
 }
 
-fn sample(self: *ImageWidget, point: dvui.Point) void {
+fn sample(self: *ImageWidget, point: dvui.Point, screen_p: dvui.Point.Physical) void {
+    if (!self.init_options.canvas.samplePointerInViewport(screen_p)) {
+        self.sample_data_point = null;
+        return;
+    }
+
     var color: [4]u8 = .{ 0, 0, 0, 0 };
 
     if (fizzy.image.pixelIndex(self.init_options.source, point)) |index| {
@@ -161,125 +178,140 @@ pub fn drawCursor(self: *ImageWidget) void {
     }
 }
 
+fn drawSamplePixelOutline(canvas: *CanvasWidget, data_point: dvui.Point) void {
+    const pixel_box_size = canvas.scale * dvui.currentWindow().rectScale().s;
+    const pixel_point: dvui.Point = .{
+        .x = @round(data_point.x - 0.5),
+        .y = @round(data_point.y - 0.5),
+    };
+    const pixel_box_point = canvas.screenFromDataPoint(pixel_point);
+    var pixel_box = dvui.Rect.Physical.fromSize(.{ .w = pixel_box_size, .h = pixel_box_size });
+    pixel_box.x = pixel_box_point.x;
+    pixel_box.y = pixel_box_point.y;
+    dvui.Path.stroke(.{ .points = &.{
+        pixel_box.topLeft(),
+        pixel_box.topRight(),
+        pixel_box.bottomRight(),
+        pixel_box.bottomLeft(),
+    } }, .{ .thickness = 2, .color = .white, .closed = true });
+}
+
 pub fn drawSample(self: *ImageWidget) void {
-    const point = self.sample_data_point;
-
-    if (point) |data_point| {
-        const mouse_point = self.init_options.canvas.screenFromDataPoint(data_point);
-        if (!self.init_options.canvas.rect.contains(mouse_point)) return;
-
-        { // Draw a box around the hovered pixel at the correct scale
-            const pixel_box_size = self.init_options.canvas.scale * dvui.currentWindow().rectScale().s;
-
-            const pixel_point: dvui.Point = .{
-                .x = @round(data_point.x - 0.5),
-                .y = @round(data_point.y - 0.5),
-            };
-
-            const pixel_box_point = self.init_options.canvas.screenFromDataPoint(pixel_point);
-            var pixel_box = dvui.Rect.Physical.fromSize(.{ .w = pixel_box_size, .h = pixel_box_size });
-            pixel_box.x = pixel_box_point.x;
-            pixel_box.y = pixel_box_point.y;
-            dvui.Path.stroke(.{ .points = &.{
-                pixel_box.topLeft(),
-                pixel_box.topRight(),
-                pixel_box.bottomRight(),
-                pixel_box.bottomLeft(),
-            } }, .{ .thickness = 2, .color = .white, .closed = true });
-        }
-
-        // The scale of the enlarged view is always twice the scale of self.init_options.canvas
-        const enlarged_scale: f32 = self.init_options.canvas.scale * 2.0;
-
-        // The size of the sample box in screen space (constant size)
-        const sample_box_size: f32 = 100.0 * 1 / self.init_options.canvas.scale; // e.g. 100x80 pixels on screen
-
-        // x/y/w/h = top-left / top-right / bottom-right / bottom-left (dvui Path.addRect).
-        const cr = sample_box_size / 2;
-        const corner_radius = dvui.Rect{ .x = cr, .y = cr, .w = cr, .h = 0 };
-
-        // The size of the sample region in data (texture) space
-        // This is how many data pixels are shown in the box, so that the box always shows the same number of data pixels at 2x the canvas scale
-        const sample_region_size: f32 = sample_box_size / enlarged_scale;
-
-        const border_width = 2 / self.init_options.canvas.scale;
-
-        // Anchor the magnifier at the sample point's bottom-left so the bubble sits up-right.
-        const box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .none,
-            .rect = .{
-                .x = data_point.x,
-                .y = data_point.y - sample_box_size,
-                .w = sample_box_size,
-                .h = sample_box_size,
-            },
-            .border = dvui.Rect.all(border_width),
-            .color_border = dvui.themeGet().color(.control, .text),
-            .corner_radius = corner_radius,
-            .background = true,
-            .color_fill = dvui.themeGet().color(.window, .fill),
-            .box_shadow = .{
-                .fade = 15 * 1 / self.init_options.canvas.scale,
-                .corner_radius = corner_radius,
-                .alpha = 0.2,
-                .offset = .{
-                    .x = 2 * 1 / self.init_options.canvas.scale,
-                    .y = 2 * 1 / self.init_options.canvas.scale,
-                },
-            },
-        });
-        defer box.deinit();
-
-        const size = fizzy.image.size(self.init_options.source);
-
-        // Compute UVs for the region to sample, normalized to [0,1]
-        const uv_rect = dvui.Rect{
-            .x = (data_point.x - sample_region_size / 2) / size.w,
-            .y = (data_point.y - sample_region_size / 2) / size.h,
-            .w = sample_region_size / size.w,
-            .h = sample_region_size / size.h,
-        };
-
-        var rs = box.data().borderRectScale();
-        rs.r = rs.r.inset(dvui.Rect.Physical.all(border_width * self.init_options.canvas.scale * 2));
-
-        dvui.renderImage(self.init_options.source, rs, .{
-            .uv = uv_rect,
-            .corner_radius = .{
-                .x = corner_radius.x * rs.s,
-                .y = corner_radius.y * rs.s,
-                .w = corner_radius.w * rs.s,
-                .h = corner_radius.h * rs.s,
-            },
-        }) catch {
-            std.log.err("Failed to render image", .{});
-        };
-
-        // Draw a cross at the center of the rounded sample box
-        const center_x = rs.r.x + rs.r.w / 2;
-        const center_y = rs.r.y + rs.r.h / 2;
-        const cross_size = @min(rs.r.w, rs.r.h) * 0.2;
-
-        dvui.Path.stroke(.{ .points = &.{
-            .{ .x = center_x - cross_size / 2, .y = center_y },
-            .{ .x = center_x + cross_size / 2, .y = center_y },
-        } }, .{ .thickness = 4, .color = .white });
-
-        dvui.Path.stroke(.{ .points = &.{
-            .{ .x = center_x, .y = center_y - cross_size / 2 },
-            .{ .x = center_x, .y = center_y + cross_size / 2 },
-        } }, .{ .thickness = 4, .color = .white });
-
-        dvui.Path.stroke(.{ .points = &.{
-            .{ .x = center_x - cross_size / 2 + 4, .y = center_y },
-            .{ .x = center_x + cross_size / 2 - 4, .y = center_y },
-        } }, .{ .thickness = 2, .color = .black });
-
-        dvui.Path.stroke(.{ .points = &.{
-            .{ .x = center_x, .y = center_y - cross_size / 2 + 4 },
-            .{ .x = center_x, .y = center_y + cross_size / 2 - 4 },
-        } }, .{ .thickness = 2, .color = .black });
+    if (self.sample_data_point) |data_point| {
+        if (!self.init_options.canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) return;
+        drawSamplePixelOutline(self.init_options.canvas, data_point);
     }
+}
+
+pub fn drawSampleMagnifier(canvas: *CanvasWidget, source: dvui.ImageSource, data_point: dvui.Point) void {
+    if (fizzy.dvui.canvasPointerInputSuppressed()) return;
+    if (!canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) return;
+
+    _ = dvui.cursorSet(.hidden);
+
+    const enlarged_scale: f32 = canvas.scale * 2.0;
+    const sample_box_size: f32 = 200.0 * 1 / canvas.scale;
+    const sample_region_size: f32 = sample_box_size / enlarged_scale;
+
+    // Flip placement when the default (up-and-right) would clip the OS window edges.
+    const default_magnifier_phys = canvas.screenFromDataRect(.{
+        .x = data_point.x,
+        .y = data_point.y - sample_box_size,
+        .w = sample_box_size,
+        .h = sample_box_size,
+    });
+    const window_rect = dvui.windowRectPixels();
+    const flip_h = (default_magnifier_phys.x + default_magnifier_phys.w) > (window_rect.x + window_rect.w);
+    const flip_v = default_magnifier_phys.y < window_rect.y;
+
+    const magnifier_data = dvui.Rect{
+        .x = if (flip_h) data_point.x - sample_box_size else data_point.x,
+        .y = if (flip_v) data_point.y else data_point.y - sample_box_size,
+        .w = sample_box_size,
+        .h = sample_box_size,
+    };
+    const magnifier_nat = canvas.screenFromDataRect(magnifier_data).toNatural();
+
+    // Corner-radius rect maps {x: TL, y: TR, w: BR, h: BL}; the sharp corner points at the sample.
+    const cr = magnifier_nat.w / 2;
+    const corner_radius = if (flip_h and flip_v)
+        dvui.Rect{ .x = cr, .y = 0, .w = cr, .h = cr } // sharp TR
+    else if (flip_h)
+        dvui.Rect{ .x = cr, .y = cr, .w = 0, .h = cr } // sharp BR
+    else if (flip_v)
+        dvui.Rect{ .x = 0, .y = cr, .w = cr, .h = cr } // sharp TL
+    else
+        dvui.Rect{ .x = cr, .y = cr, .w = cr, .h = 0 }; // sharp BL (default)
+
+    const ns = dvui.currentWindow().natural_scale;
+    const border_nat = 2.0 / ns;
+
+    var fw: dvui.FloatingWidget = undefined;
+    fw.init(@src(), .{ .mouse_events = false }, .{
+        .rect = dvui.Rect.cast(magnifier_nat),
+        .expand = .none,
+        .background = true,
+        .color_fill = dvui.themeGet().color(.window, .fill),
+        .border = dvui.Rect.all(border_nat),
+        .color_border = dvui.themeGet().color(.control, .text),
+        .corner_radius = corner_radius,
+        .box_shadow = .{
+            .fade = 15.0 / ns,
+            .corner_radius = corner_radius,
+            .alpha = 0.2,
+            .offset = .{ .x = 2.0 / ns, .y = 2.0 / ns },
+        },
+    });
+    defer fw.deinit();
+
+    const size = fizzy.image.size(source);
+    const uv_rect = dvui.Rect{
+        .x = (data_point.x - sample_region_size / 2) / size.w,
+        .y = (data_point.y - sample_region_size / 2) / size.h,
+        .w = sample_region_size / size.w,
+        .h = sample_region_size / size.h,
+    };
+
+    var rs = fw.data().borderRectScale();
+    rs.r = rs.r.inset(dvui.Rect.Physical.all(2.0 * rs.s));
+
+    const corner_scaled = dvui.Rect{
+        .x = corner_radius.x * rs.s,
+        .y = corner_radius.y * rs.s,
+        .w = corner_radius.w * rs.s,
+        .h = corner_radius.h * rs.s,
+    };
+
+    dvui.renderImage(source, rs, .{
+        .uv = uv_rect,
+        .corner_radius = corner_scaled,
+    }) catch {
+        std.log.err("Failed to render image", .{});
+    };
+
+    const center_x = rs.r.x + rs.r.w / 2;
+    const center_y = rs.r.y + rs.r.h / 2;
+    const cross_size = @min(rs.r.w, rs.r.h) * 0.2;
+
+    dvui.Path.stroke(.{ .points = &.{
+        .{ .x = center_x - cross_size / 2, .y = center_y },
+        .{ .x = center_x + cross_size / 2, .y = center_y },
+    } }, .{ .thickness = 4, .color = .white });
+
+    dvui.Path.stroke(.{ .points = &.{
+        .{ .x = center_x, .y = center_y - cross_size / 2 },
+        .{ .x = center_x, .y = center_y + cross_size / 2 },
+    } }, .{ .thickness = 4, .color = .white });
+
+    dvui.Path.stroke(.{ .points = &.{
+        .{ .x = center_x - cross_size / 2 + 4, .y = center_y },
+        .{ .x = center_x + cross_size / 2 - 4, .y = center_y },
+    } }, .{ .thickness = 2, .color = .black });
+
+    dvui.Path.stroke(.{ .points = &.{
+        .{ .x = center_x, .y = center_y - cross_size / 2 + 4 },
+        .{ .x = center_x, .y = center_y + cross_size / 2 - 4 },
+    } }, .{ .thickness = 2, .color = .black });
 }
 
 /// Checkerboard + content fill behind packed atlas RGBA (matches FileWidget layer backdrop for `transparency_effect == .none`).

@@ -176,6 +176,7 @@ fn drawProject(self: *Workspace) void {
         var image_widget = fizzy.dvui.ImageWidget.init(@src(), .{
             .source = atlas.source,
             .canvas = &atlas.canvas,
+            .grouping = self.grouping,
         }, .{
             .id_extra = @intCast(self.grouping),
             .expand = .both,
@@ -185,6 +186,12 @@ fn drawProject(self: *Workspace) void {
         defer image_widget.deinit();
 
         image_widget.processEvents();
+
+        if (dvui.dataGet(null, atlas.canvas.id, "sample_data_point", dvui.Point)) |data_pt| {
+            if (atlas.canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) {
+                fizzy.dvui.ImageWidget.drawSampleMagnifier(&atlas.canvas, atlas.source, data_pt);
+            }
+        }
     } else {
         var box = workspaceEmptyStateCard(content_color, self.grouping);
         defer box.deinit();
@@ -887,6 +894,7 @@ pub fn drawCanvas(self: *Workspace) !void {
 
         self.drawTransformDialog(canvas_vbox);
         self.drawEditPill(canvas_vbox);
+        // Before the file widget so FloatingWidget uses window-scale coords (not canvas zoom).
         self.drawSampleButton(canvas_vbox);
 
         if (self.grouping != file.editor.grouping) return;
@@ -904,6 +912,12 @@ pub fn drawCanvas(self: *Workspace) !void {
 
         defer file_widget.deinit();
         file_widget.processEvents();
+
+        if (dvui.dataGet(null, file.editor.canvas.id, "sample_data_point", dvui.Point)) |data_pt| {
+            if (file.editor.canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) {
+                fizzy.dvui.FileWidget.drawSampleMagnifier(file, data_pt);
+            }
+        }
     } else {
         var box = workspaceEmptyStateCard(content_color, self.grouping);
         defer box.deinit();
@@ -2026,12 +2040,13 @@ pub fn drawSampleButton(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
                 if (!dvui.captured(btn.data().id)) continue;
                 if (dvui.dragging(me.p, "sample_button_drag")) |_| {
                     is_drag_sampling = true;
-                    // Convert touch position into canvas data coords and stash it so
-                    // FileWidget's next install picks it up and drawSample renders the
-                    // magnifier at the touch point.
-                    const data_pt = file.editor.canvas.dataFromScreenPoint(me.p);
-                    dvui.dataSet(null, file.editor.canvas.id, "sample_data_point", data_pt);
-                    did_sample = true;
+                    if (file.editor.canvas.samplePointerInViewport(me.p)) {
+                        const data_pt = file.editor.canvas.dataFromScreenPoint(me.p);
+                        dvui.dataSet(null, file.editor.canvas.id, "sample_data_point", data_pt);
+                        did_sample = true;
+                    } else {
+                        dvui.dataRemove(null, file.editor.canvas.id, "sample_data_point");
+                    }
                     dvui.refresh(null, @src(), file.editor.canvas.id);
                     e.handle(@src(), btn.data());
                 }
@@ -2043,7 +2058,7 @@ pub fn drawSampleButton(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
                 dvui.captureMouse(null, e.num);
                 dvui.dragEnd();
 
-                if (is_drag_sampling and did_sample) {
+                if (is_drag_sampling and did_sample and file.editor.canvas.samplePointerInViewport(me.p)) {
                     const data_pt = file.editor.canvas.dataFromScreenPoint(me.p);
                     fizzy.dvui.FileWidget.sampleColorAtPoint(file, data_pt, true, true, true);
                 }

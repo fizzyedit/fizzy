@@ -74,9 +74,13 @@ fade_pending: bool = false,
 // Saved between `install` and `deinit` so the parent alpha is restored exactly.
 prev_alpha: f32 = 1.0,
 hovered: bool = false,
-// Previous frame's `hovered`. Lets the tool dispatch detect the cursor-leaving-canvas
-// transition exactly once, so the temp brush/fill preview can be cleared on the way out
-// without paying the per-frame clear cost while the cursor is outside the canvas.
+// Last frame's scroll viewport in physical pixels (latched in `deinit`). Used when the
+// scroll container is not installed yet this frame (e.g. UI chrome before `FileWidget`).
+sample_viewport_physical: ?dvui.Rect.Physical = null,
+// Previous frame's `hovered` (drawable artboard via `pointerOverDrawable`). Lets the tool dispatch
+// detect the cursor-leaving-canvas transition exactly once, so the temp brush/fill preview can be
+// cleared on the way out without paying the per-frame clear cost while the pointer is outside
+// the artboard.
 prev_hovered: bool = false,
 // Previous frame's `gesture_active`. Lets FileWidget detect the moment a 2-finger pan
 // takes over so an in-progress stroke / drag can be finalized (history append) and torn
@@ -325,11 +329,13 @@ pub fn install(self: *CanvasWidget, src: std.builtin.SourceLocation, init_opts: 
     // tail-end `processEvents()` pass also updates it, but by then the brush has already
     // skipped the press because `hovered` was still false from the previous frame.
     self.hovered = !fizzy.dvui.canvasPointerInputSuppressed() and
-        self.rect.contains(dvui.currentWindow().mouse_pt);
+        self.pointerOverDrawable(dvui.currentWindow().mouse_pt);
 
     // Process two-finger gesture BEFORE any drawing tool event loop so we can capture the
     // touches and prevent the brush from drawing during pan/pinch.
     self.updateTouchGesture();
+
+    self.installed = true;
 }
 
 fn activeTouchCount(self: *CanvasWidget) usize {
@@ -600,6 +606,10 @@ pub fn deinit(self: *CanvasWidget) void {
     self.prev_gesture_active = self.gesture_active;
     self.prev_last_input_was_touch = self.last_input_was_touch;
 
+    if (self.installed) {
+        self.sample_viewport_physical = self.scroll_container.data().contentRectScale().r;
+    }
+
     // Snapshot the (post-pan-slack) scroll state on confirmed-stable frames. The next
     // mid-animation install will restore from this snapshot so the canvas's pan/zoom
     // doesn't drift across explorer toggles.
@@ -609,6 +619,8 @@ pub fn deinit(self: *CanvasWidget) void {
         self.stable_origin = self.origin;
         self.has_stable_snapshot = true;
     }
+
+    self.installed = false;
 
     self.scaler.deinit();
     self.scroll.deinit();
@@ -647,6 +659,20 @@ pub fn viewportFromScreenRect(self: *CanvasWidget, screen: dvui.Rect.Physical) d
 
 pub fn screenFromViewportRect(self: *CanvasWidget, viewport: dvui.Rect) dvui.Rect.Physical {
     return self.scroll_rect_scale.rectToPhysical(viewport);
+}
+
+/// True when `p` is inside the scroll area's visible viewport (not the panned image bounds).
+pub fn samplePointerInViewport(self: *const CanvasWidget, p: dvui.Point.Physical) bool {
+    if (self.installed) {
+        return self.scroll_container.data().contentRectScale().r.contains(p);
+    }
+    if (self.sample_viewport_physical) |r| return r.contains(p);
+    return false;
+}
+
+/// True when `p` is over the drawable artboard: inside the viewport and on the scaled image bounds.
+pub fn pointerOverDrawable(self: *const CanvasWidget, p: dvui.Point.Physical) bool {
+    return self.samplePointerInViewport(p) and self.rect.contains(p);
 }
 
 /// If the mouse position is currently contained within the canvas rect,
@@ -722,11 +748,7 @@ pub fn processEvents(self: *CanvasWidget) void {
         switch (e.evt) {
             .mouse => |me| {
                 if (me.action == .position) {
-                    if (self.rect.contains(me.p)) {
-                        self.hovered = true;
-                    } else {
-                        self.hovered = false;
-                    }
+                    self.hovered = self.pointerOverDrawable(me.p);
                 }
 
                 if (me.action == .press and me.button == .middle) {
