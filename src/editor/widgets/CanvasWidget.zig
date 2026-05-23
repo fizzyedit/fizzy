@@ -98,6 +98,12 @@ last_input_was_touch: bool = false,
 // shouldn't linger after the first touch lands, and vice versa).
 prev_last_input_was_touch: bool = false,
 
+// Frame time (ns) of the most recently applied trackpad pinch event. `trackpadPinching()`
+// reports true within a brief window after this so consumers (e.g. sprite bubble drawing)
+// can suppress chrome that doesn't smoothly follow the per-frame scale change — same role
+// `ctrl/cmd` plays for wheel-zoom. 0 means no pinch has ever happened this session.
+trackpad_pinch_last_ns: i128 = 0,
+
 // Two-finger pan + pinch zoom (web/mobile touch). One finger continues to draw — the
 // gesture only kicks in once a second finger touches. We mark the gesture sticky until
 // every finger lifts so the remaining finger after a multi-touch doesn't suddenly start
@@ -133,6 +139,16 @@ const touch_eval_duration_ns: i128 = 80 * std.time.ns_per_ms;
 /// to become a pan.
 pub fn gestureActive(self: *const CanvasWidget) bool {
     return self.gesture_active or self.touch_eval_active;
+}
+
+/// True for a brief window after the most recent macOS trackpad pinch event. The window
+/// (~150ms) spans tiny pauses inside a continuous gesture and the trailing end-of-gesture
+/// frame so toggling UI doesn't flicker. Callers should treat this as "user is actively
+/// zooming" and suppress chrome that doesn't smoothly track the per-frame scale change.
+pub fn trackpadPinching(self: *const CanvasWidget) bool {
+    if (self.trackpad_pinch_last_ns == 0) return false;
+    const window_ns: i128 = 150 * std.time.ns_per_ms;
+    return (dvui.currentWindow().frame_time_ns - self.trackpad_pinch_last_ns) < window_ns;
 }
 
 pub const InitOptions = struct {
@@ -586,8 +602,14 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
             const diff = self.viewportFromScreenPoint(newP).diff(self.viewportFromScreenPoint(cursor_phys));
             self.scroll_info.viewport.x += diff.x;
             self.scroll_info.viewport.y += diff.y;
+            self.trackpad_pinch_last_ns = dvui.currentWindow().frame_time_ns;
             dvui.refresh(null, @src(), self.scroll_container.data().id);
         }
+    } else if (self.trackpadPinching()) {
+        // No pinch event this frame but we're still inside the post-gesture window. Schedule
+        // one more frame so `trackpadPinching()` transitions to false and dependent UI
+        // (sprite bubbles, etc.) gets a chance to re-render in its non-pinching state.
+        dvui.refresh(null, @src(), self.scroll_container.data().id);
     }
 }
 

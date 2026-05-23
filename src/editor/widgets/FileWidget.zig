@@ -808,6 +808,8 @@ pub fn drawSpriteBubbles(self: *FileWidget) void {
     const mod_ctrl_cmd = cw.modifiers.matchBind("ctrl/cmd");
     const radial_visible = fizzy.editor.tools.radial_menu.visible;
     const sample_active = self.sample_data_point != null;
+    const canvas_gesturing = self.init_options.file.editor.canvas.trackpadPinching() or
+        self.init_options.file.editor.canvas.gestureActive();
 
     { // Create animations for closing or opening bubbles
         const bubble_open_hdr = dvui.animationGet(animation_id, "bubble_open");
@@ -815,7 +817,8 @@ pub fn drawSpriteBubbles(self: *FileWidget) void {
 
         if ((drag_sprite_selection or tool_not_pointer or mod_shift or mod_ctrl_cmd) or
             radial_visible or
-            sample_active)
+            sample_active or
+            canvas_gesturing)
         {
             if (bubble_close_hdr) |anim| {
                 if (anim.done()) {
@@ -868,7 +871,7 @@ pub fn drawSpriteBubbles(self: *FileWidget) void {
     const pan_shared: BubblePanShared = .{
         .bubble_open = bubble_open_draw,
         .bubble_close = bubble_close_draw,
-        .peek = drag_sprite_selection or mod_shift or mod_ctrl_cmd or tool_not_pointer or sample_active,
+        .peek = drag_sprite_selection or mod_shift or mod_ctrl_cmd or tool_not_pointer or sample_active or canvas_gesturing,
         .selection_nonempty = selection_nonempty,
         .tool_not_pointer = tool_not_pointer,
     };
