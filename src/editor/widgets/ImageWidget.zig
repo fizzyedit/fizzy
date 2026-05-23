@@ -315,79 +315,72 @@ pub fn drawSampleMagnifier(canvas: *CanvasWidget, source: dvui.ImageSource, data
     } }, .{ .thickness = 2, .color = .black });
 }
 
-/// Checkerboard + content fill behind packed atlas RGBA (matches FileWidget layer backdrop for `transparency_effect == .none`).
+/// Borrow a checkerboard tile texture from an open file (atlas preview has no file of its own).
+fn packedAtlasCheckerboardTexture() ?dvui.Texture {
+    if (fizzy.editor.activeFile()) |file| {
+        return file.editor.checkerboard_tile.getTexture() catch null;
+    }
+    for (fizzy.editor.open_files.values()) |*file| {
+        return file.editor.checkerboard_tile.getTexture() catch null;
+    }
+    return null;
+}
+
 fn drawPackedAtlasCheckerboardBackground(canvas: *CanvasWidget, data_rect: dvui.Rect) void {
     const bg_screen = canvas.screenFromDataRect(data_rect);
-    if (canvas.scale < 0.1) {
-        bg_screen.fill(.all(0), .{ .color = dvui.themeGet().color(.content, .fill), .fade = 1.5 });
-        return;
-    }
     bg_screen.fill(.all(0), .{ .color = dvui.themeGet().color(.content, .fill), .fade = 1.5 });
+    if (canvas.scale < 0.1) return;
 
-    const files = fizzy.editor.open_files.values();
-    const tex = if (files.len > 0)
-        files[0].editor.checkerboard_tile.getTexture() catch null
-    else
-        null;
-    if (tex == null) return;
-
-    // Same 8×8 tile as `File.alpha_checkerboard_count` / `drawCheckerboardCellsBatched`.
-    const tile_w: f32 = 8.0;
-    const tile_h: f32 = 8.0;
+    const tex = packedAtlasCheckerboardTexture() orelse return;
     if (data_rect.w <= 0 or data_rect.h <= 0) return;
 
-    const visible = canvas.dataFromScreenRect(canvas.rect);
-    const draw_rect = visible.intersect(data_rect);
-    if (draw_rect.empty()) return;
+    const target_tiles_per_side: f32 = 16.0;
+    const min_data_tile: f32 = 32.0;
+    const longest = @max(data_rect.w, data_rect.h);
+    const data_tile: f32 = @max(min_data_tile, longest / target_tiles_per_side);
 
-    const est_tiles_x: usize = @intFromFloat(@ceil(draw_rect.w / tile_w));
-    const est_tiles_y: usize = @intFromFloat(@ceil(draw_rect.h / tile_h));
-    if (est_tiles_x == 0 or est_tiles_y == 0) return;
+    const tx_count_f = @max(1.0, @ceil(data_rect.w / data_tile));
+    const ty_count_f = @max(1.0, @ceil(data_rect.h / data_tile));
+    const max_tiles_per_side: f32 = 32.0;
+    if (tx_count_f > max_tiles_per_side or ty_count_f > max_tiles_per_side) return;
+
+    const tx_count: usize = @intFromFloat(tx_count_f);
+    const ty_count: usize = @intFromFloat(ty_count_f);
+    const quad_count = tx_count * ty_count;
+    if (quad_count == 0) return;
 
     const tone = dvui.themeGet().color(.content, .fill).lighten(6.0).opacity(0.5).opacity(dvui.currentWindow().alpha);
     const pma = dvui.Color.PMA.fromColor(tone);
 
-    const arena = dvui.currentWindow().arena();
-    var builder = dvui.Triangles.Builder.init(arena, est_tiles_x * est_tiles_y * 4, est_tiles_x * est_tiles_y * 6) catch return;
-    defer builder.deinit(arena);
-
     const rs = canvas.screen_rect_scale;
-    var quad_idx: usize = 0;
-    const x_start = @floor(draw_rect.x / tile_w) * tile_w;
-    const y_start = @floor(draw_rect.y / tile_h) * tile_h;
-    var y = y_start;
-    while (y < draw_rect.y + draw_rect.h) : (y += tile_h) {
-        var x = x_start;
-        while (x < draw_rect.x + draw_rect.w) : (x += tile_w) {
-            const x0 = @max(x, data_rect.x);
-            const y0 = @max(y, data_rect.y);
-            const x1 = @min(x + tile_w, data_rect.x + data_rect.w);
-            const y1 = @min(y + tile_h, data_rect.y + data_rect.h);
+    const arena = dvui.currentWindow().arena();
+    var builder = dvui.Triangles.Builder.init(arena, quad_count * 4, quad_count * 6) catch return;
+
+    var ty: usize = 0;
+    while (ty < ty_count) : (ty += 1) {
+        const fy: f32 = @floatFromInt(ty);
+        var tx: usize = 0;
+        while (tx < tx_count) : (tx += 1) {
+            const fx: f32 = @floatFromInt(tx);
+            const x0 = data_rect.x + fx * data_tile;
+            const y0 = data_rect.y + fy * data_tile;
+            const x1 = @min(x0 + data_tile, data_rect.x + data_rect.w);
+            const y1 = @min(y0 + data_tile, data_rect.y + data_rect.h);
             if (x1 <= x0 or y1 <= y0) continue;
 
             const sr = Rect{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
             const r = rs.rectToPhysical(sr);
-            const tl = r.topLeft();
-            const tr = r.topRight();
-            const br = r.bottomRight();
-            const bl = r.bottomLeft();
-
-            // UV 0..1 per tile — textures use CLAMP_TO_EDGE; one quad with UV > 1 does not tile.
-            builder.appendVertex(.{ .pos = tl, .col = pma, .uv = .{ 0, 0 } });
-            builder.appendVertex(.{ .pos = tr, .col = pma, .uv = .{ 1, 0 } });
-            builder.appendVertex(.{ .pos = br, .col = pma, .uv = .{ 1, 1 } });
-            builder.appendVertex(.{ .pos = bl, .col = pma, .uv = .{ 0, 1 } });
-
-            const quad_base: dvui.Vertex.Index = @intCast(quad_idx * 4);
+            const quad_base: dvui.Vertex.Index = @intCast(builder.vertexes.items.len);
+            builder.appendVertex(.{ .pos = r.topLeft(), .col = pma, .uv = .{ 0, 0 } });
+            builder.appendVertex(.{ .pos = r.topRight(), .col = pma, .uv = .{ 1, 0 } });
+            builder.appendVertex(.{ .pos = r.bottomRight(), .col = pma, .uv = .{ 1, 1 } });
+            builder.appendVertex(.{ .pos = r.bottomLeft(), .col = pma, .uv = .{ 0, 1 } });
             builder.appendTriangles(&.{ quad_base + 1, quad_base + 0, quad_base + 3, quad_base + 1, quad_base + 3, quad_base + 2 });
-            quad_idx += 1;
         }
     }
 
-    if (quad_idx == 0) return;
-
-    const triangles = builder.build();
-    dvui.renderTriangles(triangles, tex) catch {
+    if (builder.vertexes.items.len == 0) return;
+    dvui.renderTriangles(builder.build(), tex) catch {
         dvui.log.err("Failed to render packed atlas checkerboard", .{});
     };
 }
@@ -423,11 +416,22 @@ pub fn drawImage(self: *ImageWidget) void {
 
     drawPackedAtlasCheckerboardBackground(self.init_options.canvas, image_rect);
 
-    _ = dvui.image(@src(), .{ .source = self.init_options.source }, .{
-        .rect = image_rect,
-        .border = dvui.Rect.all(0),
-        .background = false,
-    });
+    // Render the atlas image into the canvas's cached physical rect (NOT via dvui.image,
+    // which goes through the ScaleWidget — that widget's `screenRectScale` dereferences
+    // `&canvas.scale` live, so any scale mutation in `updateTouchGesture` (e.g. trackpad
+    // pinch) is reflected immediately for the image but NOT for the checkerboard
+    // background and outline, which use `canvas.screen_rect_scale` / `canvas.rect` cached
+    // by `syncTransformCachesFromWidgets` before `updateTouchGesture` runs. The mismatch
+    // is the visible "image moves at a different rate than the alpha layer" jitter on the
+    // packed-atlas preview during pinch zoom. Mirror FileWidget.drawLayers, which renders
+    // its layer textures via `fizzy.render.renderLayers` against the cached `canvas.rect`
+    // for the same reason.
+    dvui.renderImage(self.init_options.source, .{
+        .r = self.init_options.canvas.rect,
+        .s = self.init_options.canvas.scale,
+    }, .{}) catch {
+        std.log.err("Failed to render packed atlas image", .{});
+    };
 
     // Outline the image with a rectangle
     dvui.Path.stroke(.{ .points = &.{
