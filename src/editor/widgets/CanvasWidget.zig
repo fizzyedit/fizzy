@@ -430,7 +430,15 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
                     self.last_centroid = self.touchCentroid();
                     self.last_pinch = self.touchPinchDistance();
                     dvui.captureMouse(self.scaler.data(), e.num);
-                } else if (!self.gesture_active and !self.touch_eval_active and self.activeTouchCount() == 1) {
+                } else if (self.gesture_active) {
+                    // Already in gesture mode and another finger touched down (typical case:
+                    // user dropped to a single-finger pan after a 2-finger start and is now
+                    // bringing a second finger back to resume pinch-zoom). Re-baseline so the
+                    // centroid/pinch jump from the new finger doesn't translate into a pan/zoom
+                    // delta on the next motion event.
+                    self.last_centroid = self.touchCentroid();
+                    self.last_pinch = self.touchPinchDistance();
+                } else if (!self.touch_eval_active and self.activeTouchCount() == 1) {
                     // First (and so far only) finger — start the wait window.
                     self.touch_eval_active = true;
                     self.touch_eval_started_ns = dvui.currentWindow().frame_time_ns;
