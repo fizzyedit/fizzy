@@ -8,6 +8,12 @@ const dvui = @import("dvui");
 
 pub const app_id = "dev.foxnne.fizzy";
 
+pub fn earlyStartup(_: std.mem.Allocator, _: std.process.Init) !void {}
+
+pub fn consumeStartupArgv() []const []const u8 {
+    return &.{};
+}
+
 pub fn acquireLock(_: std.mem.Allocator, _: []const []const u8) !void {}
 
 pub fn registerWindow(_: *dvui.Window, _: []const []const u8) void {}

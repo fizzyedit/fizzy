@@ -25,15 +25,38 @@ const PendingOpen = struct { path: []u8 };
 
 const State = struct {
     instance: ?singleton_app.SingletonApp = null,
-    /// Captured at `acquireLock` time; used by the listener thread to
+    /// Captured at `earlyStartup` time; used by the listener thread to
     /// allocate queued path copies before `fizzy.app` may exist.
     allocator: std.mem.Allocator = undefined,
+    /// Set before dvui/SDL init so secondary instances can exit without
+    /// creating a window. Same as `dvui.io` once the backend starts.
+    io: std.Io = undefined,
+    /// Resolved argv from `earlyStartup`, consumed in `AppInit`.
+    resolved_argv: ?[]const []const u8 = null,
     mutex: std.Io.Mutex = .init,
     pending: std.ArrayListUnmanaged(PendingOpen) = .empty,
     window: ?*dvui.Window = null,
 };
 
 var state: State = .{};
+
+/// Acquire the lock and forward argv before any window exists. Secondary
+/// instances call `exit(0)` here. Primary stashes argv for `consumeStartupArgv`.
+pub fn earlyStartup(gpa: std.mem.Allocator, main_init: std.process.Init) !void {
+    state.io = main_init.io;
+    state.allocator = gpa;
+    const resolved = try collectAndResolveArgv(gpa, main_init);
+    state.resolved_argv = resolved;
+    try acquireLock(gpa, resolved);
+}
+
+/// Take ownership of argv resolved in `earlyStartup`. Empty if `earlyStartup`
+/// was not called (tests) or argv was already consumed.
+pub fn consumeStartupArgv() []const []const u8 {
+    const argv = state.resolved_argv orelse return &.{};
+    state.resolved_argv = null;
+    return argv;
+}
 
 /// Acquire the single-instance lock. If we are the secondary instance, the
 /// supplied `argv` has been forwarded to the primary and this function
@@ -49,7 +72,7 @@ pub fn acquireLock(gpa: std.mem.Allocator, argv: []const []const u8) !void {
     state.instance = try singleton_app.SingletonApp.init(.{
         .app_id = app_id,
         .allocator = gpa,
-        .io = dvui.io,
+        .io = state.io,
         .unix_socket_dir = socket_dir,
         .on_second_instance = onSecondInstance,
     });
@@ -75,11 +98,15 @@ pub fn deinit() void {
     if (state.instance != null) {
         state.instance.?.deinit();
         state.instance = null;
+        state.mutex.lockUncancelable(state.io);
+        defer state.mutex.unlock(state.io);
+        for (state.pending.items) |item| state.allocator.free(item.path);
+        state.pending.deinit(state.allocator);
     }
-    state.mutex.lockUncancelable(dvui.io);
-    defer state.mutex.unlock(dvui.io);
-    for (state.pending.items) |item| state.allocator.free(item.path);
-    state.pending.deinit(state.allocator);
+    if (state.resolved_argv) |argv| {
+        freeResolvedArgv(state.allocator, argv);
+        state.resolved_argv = null;
+    }
     state.window = null;
 }
 
@@ -87,8 +114,8 @@ pub fn deinit() void {
 pub fn drainPending() void {
     var to_open: []PendingOpen = &.{};
     {
-        state.mutex.lockUncancelable(dvui.io);
-        defer state.mutex.unlock(dvui.io);
+        state.mutex.lockUncancelable(state.io);
+        defer state.mutex.unlock(state.io);
         if (state.pending.items.len == 0) return;
         to_open = state.pending.toOwnedSlice(state.allocator) catch return;
     }
@@ -116,8 +143,8 @@ pub fn queuePath(path: []const u8) void {
     if (state.instance == null) return;
     const dup = state.allocator.dupe(u8, path) catch return;
     {
-        state.mutex.lockUncancelable(dvui.io);
-        defer state.mutex.unlock(dvui.io);
+        state.mutex.lockUncancelable(state.io);
+        defer state.mutex.unlock(state.io);
         state.pending.append(state.allocator, .{ .path = dup }) catch {
             state.allocator.free(dup);
             return;
@@ -133,8 +160,8 @@ fn queueArgvPaths(argv: []const []const u8) void {
         // Skip flags so we don't try to open them as files.
         if (arg[0] == '-') continue;
         const path = state.allocator.dupe(u8, arg) catch continue;
-        state.mutex.lockUncancelable(dvui.io);
-        defer state.mutex.unlock(dvui.io);
+        state.mutex.lockUncancelable(state.io);
+        defer state.mutex.unlock(state.io);
         state.pending.append(state.allocator, .{ .path = path }) catch {
             state.allocator.free(path);
         };
@@ -142,7 +169,7 @@ fn queueArgvPaths(argv: []const []const u8) void {
 }
 
 fn dispatchPath(path: []const u8) !void {
-    const io = dvui.io;
+    const io = state.io;
     // Try as directory first: openDirAbsolute succeeds → it's a folder.
     if (std.Io.Dir.openDirAbsolute(io, path, .{})) |dir| {
         var d = dir;
@@ -196,7 +223,7 @@ fn dirHasProjectMarker(gpa: std.mem.Allocator, dir: []const u8) bool {
     for (names) |name| {
         const candidate = std.fs.path.join(gpa, &.{ dir, name }) catch continue;
         defer gpa.free(candidate);
-        if (std.Io.Dir.accessAbsolute(dvui.io, candidate, .{ .read = true })) |_| return true else |_| {}
+        if (std.Io.Dir.accessAbsolute(state.io, candidate, .{ .read = true })) |_| return true else |_| {}
     }
     return false;
 }

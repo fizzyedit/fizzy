@@ -41,8 +41,9 @@
             .hash = "known_folders-0.0.0-Fy-PJk3KAACzUg2us_0JvQQmod1ZA8jBt7MuoKCihq88",
         },
         .velopack_zig = .{
-            .url = "https://github.com/graphl-tech/velopack-zig/archive/2ca1ecccd0a3286620c30eaec29cbc1bba981a31.tar.gz",
-            .hash = "velopack_zig-0.0.1-LzeGccHTAAAYj2eidbi80qHljonogPnwU-uHCMYBa1ag",
+            .url = "https://github.com/graphl-tech/velopack-zig/archive/0c2f20635a97fde38cc8000e9fb1a75f891cf37d.tar.gz",
+            .hash = "velopack_zig-0.0.1-LzeGcengAACU1f33uDAuLKlWXtek0KCC6i_b3XWeJMjd",
+            //.hash = "velopack_zig-0.0.1-LzeGccHTAAAYj2eidbi80qHljonogPnwU-uHCMYBa1ag",
             //.path = "../velopack-zig",
         },
         .dvui_singleton_app = .{

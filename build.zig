@@ -127,7 +127,10 @@ fn macosSdlPathsForExplicitTarget(b: *std.Build, target: std.Build.ResolvedTarge
 
 pub fn build(b: *std.Build) !void {
     const windows_msvc_libc_opt = b.option([]const u8, "windows-msvc-libc", "zig libc manifest for *-windows-msvc when cross-compiling; forwarded by packageall for Windows children") orelse null;
-    const fetch_msvc = b.option(bool, "fetch-msvc", "If *-windows-msvc libc is missing under .velopack-msvc/, run msvcup-setup first (downloads MSVC+SDK; requires network)") orelse false;
+    // Default depends on host+target and is computed below once `target` is resolved.
+    // Pass `-Dfetch-msvc=false` on a Windows host to opt out of the auto-download and
+    // fall back to Zig's system-MSVC auto-detection (if you have Visual Studio installed).
+    const fetch_msvc_opt = b.option(bool, "fetch-msvc", "If *-windows-msvc libc is missing under .velopack-msvc/, run msvcup-setup first (downloads MSVC+SDK; requires network). Defaults to true on Windows hosts targeting *-windows-msvc.");
 
     // macOS `vpk pack` codesigning / notarization. Optional: when omitted, packaging produces an
     // unsigned bundle. Set all three to sign + notarize a release build.
@@ -145,7 +148,17 @@ pub fn build(b: *std.Build) !void {
     const zig_out_subdir = zigOutSubdirForTarget(b, target);
     const zig_out_install_dir: std.Build.InstallDir = .{ .custom = zig_out_subdir };
 
-    const cross_win_msvc = target.result.os.tag == .windows and target.result.abi == .msvc and b.graph.host.result.os.tag != .windows;
+    const target_is_windows_msvc = target.result.os.tag == .windows and target.result.abi == .msvc;
+    const cross_win_msvc = target_is_windows_msvc and b.graph.host.result.os.tag != .windows;
+
+    // Auto-fetch defaults: on Windows hosts targeting *-windows-msvc, downloading the
+    // MSVC SDK into .velopack-msvc/ is the deterministic path — Zig's auto-detection
+    // of a system Visual Studio install picks up whatever's currently installed, which
+    // makes packaged release builds non-reproducible. The same .velopack-msvc/ tree is
+    // used on macOS/Linux cross-compile hosts, so all three triples land on the same
+    // SDK headers + libs. Explicit `-Dfetch-msvc=false` opts out (use system VS); an
+    // explicit `-Dwindows-msvc-libc=...` overrides the discovery entirely.
+    const fetch_msvc = fetch_msvc_opt orelse (target_is_windows_msvc and windows_msvc_libc_opt == null);
 
     const win_libc = velopack.resolveWindowsMsvcLibc(b, target, .{
         .explicit_path = windows_msvc_libc_opt,
@@ -178,12 +191,18 @@ pub fn build(b: *std.Build) !void {
         return error.WindowsMsvcAbiRequired;
     }
 
+    // Fail loudly when the *-windows-msvc target has no headers/libs to compile against.
+    // On a non-Windows host this happens whenever `.velopack-msvc/` is missing and the
+    // user didn't pass `-Dfetch-msvc` or `-Dwindows-msvc-libc=…`. On a Windows host the
+    // auto-fetch default makes this unreachable unless the user explicitly opted out
+    // with `-Dfetch-msvc=false` — in which case Zig falls back to system Visual Studio
+    // auto-detection, which we can't validate here.
     const velopack_required_fail: ?*std.Build.Step = if (cross_win_msvc and effective_win_libc == null)
         &b.addFail(
-            \\Cross-compiling to *-windows-msvc needs MSVC + Windows SDK headers/libs.
+            \\*-windows-msvc needs MSVC + Windows SDK headers/libs.
             \\  One-shot install (macOS/Linux/Windows): zig build msvcup-setup
-            \\  Then: zig build package -Dtarget=x86_64-windows-msvc   (auto-uses .velopack-msvc/zig-libc-x64.ini if present)
-            \\  Or auto-download in this build: add -Dfetch-msvc  (forwards through packageall for Windows targets)
+            \\  Then: zig build package -Dtarget=x86_64-windows-msvc   (auto-uses .velopack-msvc/zig-libc-x64.ini)
+            \\  Or auto-download in this build: add -Dfetch-msvc       (default on Windows hosts; forwards through packageall)
             \\  Or pass: --libc path.ini  /  -Dwindows-msvc-libc=path.ini
         ).step
     else
@@ -475,8 +494,25 @@ pub fn build(b: *std.Build) !void {
     }
 
     const package_step = b.step("package", "Velopack release artifacts (strip + vpk); not part of install or run");
+    // The default native target on a Windows host resolves to x86_64-windows-gnu,
+    // for which `velopack_supported_for_target` is false — exe_for_package falls
+    // back to the plain (Velopack-less) exe. vpk would still wrap it as a Velopack
+    // installer, but the install hook never runs: Setup.exe hangs with "the
+    // application install hook failed". Fail loudly instead of shipping that trap.
+    const windows_non_msvc = target.result.os.tag == .windows and target.result.abi != .msvc;
     if (velopack_required_fail) |fail_step| {
         package_step.dependOn(fail_step);
+    } else if (windows_non_msvc) {
+        package_step.dependOn(&b.addFail(
+            \\`zig build package` for Windows requires the MSVC ABI so Velopack is linked.
+            \\The default native target resolves to x86_64-windows-gnu, which builds a binary
+            \\WITHOUT the Velopack runtime. vpk would still wrap it as a Velopack installer, but
+            \\the install hook never runs and Setup.exe hangs ("the application install hook failed").
+            \\
+            \\Build with the MSVC target instead:
+            \\  zig build package -Dtarget=x86_64-windows-msvc -Dfetch-msvc
+            \\(needs Windows SDK 10.0.26100+ for SDL's GameInput backend.)
+        ).step);
     } else if (no_emit) {
         package_step.dependOn(&b.addFail("cannot run `package` with -Dno-emit").step);
     } else switch (target.result.os.tag) {
@@ -486,11 +522,21 @@ pub fn build(b: *std.Build) !void {
             // Same-OS / different-arch (e.g. aarch64-linux from x86_64-linux) also
             // breaks host strip — it errors with "Unable to recognise the format".
             const cross_for_strip = cross_os or target.result.cpu.arch != b.graph.host.result.cpu.arch;
-            const strip_release_sh = b.addSystemCommand(&.{switch (optimize) {
-                .Debug => "touch",
-                else => if (cross_for_strip) "touch" else "strip",
-            }});
-            strip_release_sh.addFileArg(exe_for_package.getEmittedBin());
+            // Windows hosts don't ship `strip` or `touch`. Skip the external strip
+            // step entirely there — Zig's linker already drops debug info in
+            // release builds. Use `cmd /c exit 0` as the no-op and keep the
+            // dependency on exe_for_package via the step graph.
+            const host_is_windows = b.graph.host.result.os.tag == .windows;
+            const skip_strip = host_is_windows or optimize == .Debug or cross_for_strip;
+            const strip_release_sh = if (host_is_windows) blk: {
+                const sh = b.addSystemCommand(&.{ "cmd", "/c", "exit", "0" });
+                sh.step.dependOn(&exe_for_package.step);
+                break :blk sh;
+            } else blk: {
+                const sh = b.addSystemCommand(&.{if (skip_strip) "touch" else "strip"});
+                sh.addFileArg(exe_for_package.getEmittedBin());
+                break :blk sh;
+            };
 
             //const dotnet_tool_restore = velopack.addDotnetToolRestoreStep(b);
             //const vpk_vendor_repair = velopack.addVpkVendorRepairStep(b);
@@ -529,10 +575,27 @@ pub fn build(b: *std.Build) !void {
             vpk_pkg_sh.addArg("--yes");
 
             vpk_pkg_sh.addArg("--outputDir");
-            const vpk_pkg_out_dir = vpk_pkg_sh.addOutputDirectoryArg(b.getInstallPath(zig_out_install_dir, "desktop"));
+            // `addOutputDirectoryArg` takes a basename — Zig manages the actual
+            // path under the run step's cache dir. The `addInstallDirectory`
+            // below copies that into zig-out/<channel>/. Previously this passed
+            // the full install path, which produced `.zig-cache\o\<hash>\C:\...`
+            // on Windows (BadPathName).
+            const vpk_pkg_out_dir = vpk_pkg_sh.addOutputDirectoryArg("desktop");
             vpk_pkg_sh.addArg("--packDir");
             vpk_pkg_sh.addDirectoryArg(exe_for_package.getEmittedBin().dirname());
             switch (target.result.os.tag) {
+                .windows => {
+                    // Sets the installer's icon and the Start Menu shortcut icon. The
+                    // exe's own icon is already embedded via assets/windows/fizzy.rc.
+                    vpk_pkg_sh.addArg("--icon");
+                    const ico_path = b.path("assets/windows/fizzy.ico").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("ico path: {}", .{e});
+                    vpk_pkg_sh.addArg(ico_path);
+                    // Velopack's installer is silent (no shortcut-choice UI). Default is
+                    // Desktop,StartMenu; restrict to StartMenu so we don't drop an
+                    // unrequested icon on the user's desktop.
+                    vpk_pkg_sh.addArg("--shortcuts");
+                    vpk_pkg_sh.addArg("StartMenu");
+                },
                 .macos => {
                     vpk_pkg_sh.addArg("--packTitle");
                     vpk_pkg_sh.addArg("fizzy");
@@ -782,9 +845,9 @@ pub fn build(b: *std.Build) !void {
         integration_tests.root_module.linkSystemLibrary("comctl32", .{});
     }
     // Zig's bundled libc++/libcxxabi cannot compile against MSVC headers from
-    // --libc (vcruntime_typeinfo.h vs libc++ type_info, etc.). Native Windows
-    // hosts use detected MSVC without forcing those paths into libc++.
-    integration_tests.root_module.link_libcpp = !cross_win_msvc;
+    // --libc (vcruntime_typeinfo.h vs libc++ type_info, etc.), so libc++ must be
+    // off for the msvc ABI regardless of host (cross or native Windows).
+    integration_tests.root_module.link_libcpp = !target_is_windows_msvc;
     zip.link(integration_tests);
     if (velopack_enabled) {
         try velopack.linkVelopack(b, integration_tests, .{ .target = target, .optimize = optimize });
@@ -833,12 +896,33 @@ pub fn build(b: *std.Build) !void {
             const libc_lp: std.Build.LazyPath = .{ .cwd_relative = ini };
             velopack.applyWindowsMsvcLibcRecursive(b, roots[0..n], libc_lp);
 
-            // Adds explicit MSVC/UCRT/SDK `-isystem` paths from the libc INI to each reachable
-            // translate-c step. Only relevant when cross-compiling with .velopack-msvc/; on a
-            // Windows host with system MSVC, Zig auto-discovers these paths itself.
-            applyMsvcIncludesToReachableTranslateC(b, roots[0..n], ini) catch |e| {
-                std.debug.panic("MSVC translate-c include fixup failed: {s}", .{@errorName(e)});
+            const ini_exists = blk: {
+                b.build_root.handle.access(b.graph.io, ini, .{}) catch break :blk false;
+                break :blk true;
             };
+            if (ini_exists) {
+                // Adds explicit MSVC/UCRT/SDK `-isystem` paths from the libc INI to each reachable
+                // translate-c step. Only relevant when cross-compiling with .velopack-msvc/; on a
+                // Windows host with system MSVC, Zig auto-discovers these paths itself.
+                applyMsvcIncludesToReachableTranslateC(b, roots[0..n], ini) catch |e| {
+                    std.debug.panic("MSVC translate-c include fixup failed: {s}", .{@errorName(e)});
+                };
+            } else {
+                // The INI is written by `msvcup-setup` (a make-phase step), but the translate-c
+                // `-isystem` paths embed the SDK version subdir, which is only known after the SDK
+                // is installed — so they must be wired at configure time, before that step runs.
+                // A one-shot `zig build package -Dfetch-msvc` against a clean .velopack-msvc can't
+                // satisfy that ordering. Fail only the compiles that need it (not `msvcup-setup`,
+                // which has no such dependency), so running setup first still works.
+                const fail = &b.addFail(
+                    \\*-windows-msvc has no .velopack-msvc/zig-libc INI yet, so translate-c can't be wired.
+                    \\The SDK install must run as its own step before packaging (it can't be done in one
+                    \\pass — the translate-c include paths depend on the installed SDK version):
+                    \\  zig build msvcup-setup
+                    \\  zig build package -Dtarget=x86_64-windows-msvc
+                ).step;
+                for (roots[0..n]) |rc| rc.step.dependOn(fail);
+            }
         }
     }
 }
@@ -933,6 +1017,13 @@ fn applyMsvcIncludesToReachableTranslateC(
 
             const rt = tc.target.result;
             if (rt.os.tag == .windows and rt.abi == .msvc) {
+                // `translate-c` has no API to pass `--libc <ini>`, so `-lc` makes Zig
+                // auto-detect a system MSVC/SDK install — which fails on a Windows host
+                // that has no Visual Studio (we use the .velopack-msvc/ tree instead) with
+                // `WindowsSdkNotFound`. Drop `-lc` here: every MSVC/UCRT/SDK include dir is
+                // added explicitly below, so the headers still resolve, and the consuming
+                // exe links libc itself — the translated bindings don't need their own.
+                tc.link_libc = false;
                 // Shim + SIZE_MAX define are applied separately by `applyMsvcTranslateCShim`.
                 // Order matters: MSVC's own headers first (override Windows SDK declarations
                 // when both exist), then UCRT, then the Windows SDK trio.
@@ -1072,12 +1163,25 @@ fn addFizzyExecutableForTarget(
             exe.root_module.addImport("win32", dep.module("win32"));
         }
         exe.root_module.linkSystemLibrary("comctl32", .{});
+
+        // Embed assets/windows/fizzy.rc -> fizzy.ico into the exe so Explorer,
+        // Taskbar, Alt-Tab and the Velopack-generated Start Menu shortcut all
+        // show the right icon without any runtime work. fizzy.ico must be a
+        // multi-resolution ICO with 16/32/48/256 px frames (see the README in
+        // that directory).
+        exe.root_module.addWin32ResourceFile(.{
+            .file = b.path("assets/windows/fizzy.rc"),
+        });
     }
 
-    const cross_win_msvc_exe = resolved_target.result.os.tag == .windows and
-        resolved_target.result.abi == .msvc and
-        b.graph.host.result.os.tag != .windows;
-    exe.root_module.link_libcpp = !cross_win_msvc_exe;
+    // Zig's bundled libc++/libcxxabi cannot compile against MSVC headers
+    // (vcruntime_typeinfo.h's ::type_info vs libc++'s own, redefined bad_cast,
+    // etc.). We always feed MSVC's own STL via --libc for *-windows-msvc — on a
+    // cross host and on a native Windows host using .velopack-msvc alike — so
+    // libc++ must be off for the msvc ABI regardless of host.
+    const exe_is_windows_msvc = resolved_target.result.os.tag == .windows and
+        resolved_target.result.abi == .msvc;
+    exe.root_module.link_libcpp = !exe_is_windows_msvc;
     zip.link(exe);
     if (velopack_enabled) {
         try velopack.linkVelopack(b, exe, .{ .target = resolved_target, .optimize = optimize });

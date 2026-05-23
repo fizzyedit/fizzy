@@ -1,0 +1,42 @@
+// Embedded into fizzy.exe via `module.addWin32ResourceFile` in build.zig for
+// Windows targets. Windows uses the ICON resource with the lowest numeric ID as
+// the application's executable icon. Resource ID 1 is conventional.
+//
+// The companion file `fizzy.ico` must contain at least 16/32/48/256 px frames
+// so Explorer renders crisply at every shell size. If you regenerate it, keep
+// the filename — the build references it by path.
+
+#define IDI_FIZZY 1
+
+IDI_FIZZY ICON "fizzy.ico"
+
+// VERSIONINFO populates the "Details" tab in Explorer's file-properties dialog
+// and the version string Task Manager / process listings show. Strings are
+// fixed at the current VERSION (0.0.15); bump alongside the VERSION file if you
+// want them to match in distributed builds. Velopack writes its own metadata
+// into the installer, so this only affects fizzy.exe itself.
+1 VERSIONINFO
+FILEVERSION    0,0,15,0
+PRODUCTVERSION 0,0,15,0
+FILEOS         0x4 // VOS__WINDOWS32
+FILETYPE       0x1 // VFT_APP
+{
+    BLOCK "StringFileInfo"
+    {
+        BLOCK "040904B0" // U.S. English, Unicode
+        {
+            VALUE "CompanyName",      "foxnne"
+            VALUE "FileDescription",  "fizzy"
+            VALUE "FileVersion",      "0.0.15"
+            VALUE "InternalName",     "fizzy"
+            VALUE "OriginalFilename", "fizzy.exe"
+            VALUE "ProductName",      "fizzy"
+            VALUE "ProductVersion",   "0.0.15"
+            VALUE "LegalCopyright",   "\xA9 foxnne"
+        }
+    }
+    BLOCK "VarFileInfo"
+    {
+        VALUE "Translation", 0x0409, 0x04B0
+    }
+}

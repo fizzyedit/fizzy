@@ -76,6 +76,10 @@ pub fn main(main_init: std.process.Init) !u8 {
 
     main_init_global = main_init;
 
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        try singleton.earlyStartup(appAllocator(), main_init);
+    }
+
     if (@hasDecl(dvui.backend, "main")) {
         return dvui.App.main(main_init);
     }
@@ -96,14 +100,8 @@ pub fn AppInit(win: *dvui.Window) !void {
 
     const allocator = appAllocator();
 
-    // Acquire the single-instance lock before chdir or any fizzy globals are
-    // created. If another fizzy is already running, our argv is forwarded
-    // and we exit(0). Paths are resolved to absolute up-front so the
-    // primary's working directory doesn't matter.
-    const resolved_argv = try singleton.collectAndResolveArgv(allocator, main_init_global);
+    const resolved_argv = singleton.consumeStartupArgv();
     defer singleton.freeResolvedArgv(allocator, resolved_argv);
-
-    try singleton.acquireLock(allocator, resolved_argv);
 
     // Run from the directory where the executable is located so relative assets can be found.
     // No-op on wasm: there's no executable path or working directory in the browser, and

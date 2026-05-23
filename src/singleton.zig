@@ -14,6 +14,8 @@ else
     @import("singleton_native.zig");
 
 pub const app_id = impl.app_id;
+pub const earlyStartup = impl.earlyStartup;
+pub const consumeStartupArgv = impl.consumeStartupArgv;
 pub const acquireLock = impl.acquireLock;
 pub const registerWindow = impl.registerWindow;
 pub const deinit = impl.deinit;

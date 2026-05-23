@@ -14,7 +14,9 @@ web/app/
 *.code-workspace
 zig-pkg/
 .velopack-msvc/
-.velopack-msvc.lock
+.msvc-extra
+*.log
+*.lock
 tools/msvcup-bin/
 tools/msvc-libc*.ini
 .zig-cache/

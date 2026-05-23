@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_opts = @import("build_opts");
+const file_assoc = @import("file_assoc.zig");
 
 pub const impl: bool = build_opts.velopack_enabled and builtin.target.cpu.arch != .wasm32;
 
@@ -169,9 +170,45 @@ pub fn freeUpdateManager(m: ?*anyopaque) void {
     Vpk.vpkc_free_update_manager(castManager(m.?));
 }
 
+/// Set inside a fast-callback hook to record that Velopack dispatched an
+/// install/update/uninstall lifecycle event. `appRunHook` reads this after
+/// `vpkc_app_run` returns and exits the process — Velopack's docs promise an
+/// auto-exit but the runtime we link against doesn't always deliver it,
+/// leaving the installer's "Installing fizzy…" window hanging until its 30 s
+/// timeout marks the hook failed (even though our work succeeded).
+var lifecycle_hook_fired: bool = false;
+
 pub fn appRunHook() void {
     if (!impl) return;
+    // Velopack invokes fizzy with --vpk-install / --vpk-updated / --vpk-uninstall
+    // CLI flags during the install / update / uninstall lifecycle, and the hooks
+    // registered here are dispatched from inside vpkc_app_run() based on which
+    // flag is set. Hooks must be installed *before* vpkc_app_run runs.
+    if (comptime builtin.os.tag == .windows) {
+        Vpk.vpkc_app_set_hook_after_install(hookAfterInstall);
+        Vpk.vpkc_app_set_hook_after_update(hookAfterUpdate);
+        Vpk.vpkc_app_set_hook_before_uninstall(hookBeforeUninstall);
+    }
     Vpk.vpkc_app_run(null);
+    if (lifecycle_hook_fired) std.process.exit(0);
+}
+
+fn hookAfterInstall(_: ?*anyopaque, _: [*c]const u8) callconv(.c) void {
+    file_assoc.registerAll();
+    lifecycle_hook_fired = true;
+}
+
+fn hookAfterUpdate(_: ?*anyopaque, _: [*c]const u8) callconv(.c) void {
+    // Velopack's current\fizzy.exe junction always points at the latest version,
+    // so the registered command stays valid across updates. Re-registering on
+    // update is still cheap and self-healing if a registry value drifted.
+    file_assoc.registerAll();
+    lifecycle_hook_fired = true;
+}
+
+fn hookBeforeUninstall(_: ?*anyopaque, _: [*c]const u8) callconv(.c) void {
+    file_assoc.unregisterAll();
+    lifecycle_hook_fired = true;
 }
 
 /// Startup path: check remote feed and apply+exit when an update is available.
