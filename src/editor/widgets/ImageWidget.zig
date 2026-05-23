@@ -213,35 +213,36 @@ pub fn drawSampleMagnifier(canvas: *CanvasWidget, source: dvui.ImageSource, data
     const sample_box_size: f32 = 200.0 * 1 / canvas.scale;
     const sample_region_size: f32 = sample_box_size / enlarged_scale;
 
-    // Flip placement when the default (up-and-right) would clip the OS window edges.
+    // Home placement: bottom-left corner of the magnifier sits exactly at the sample point.
     const default_magnifier_phys = canvas.screenFromDataRect(.{
         .x = data_point.x,
         .y = data_point.y - sample_box_size,
         .w = sample_box_size,
         .h = sample_box_size,
     });
+
+    // Slide the magnifier inside the OS window without flipping. Only right and top can clip.
     const window_rect = dvui.windowRectPixels();
-    const flip_h = (default_magnifier_phys.x + default_magnifier_phys.w) > (window_rect.x + window_rect.w);
-    const flip_v = default_magnifier_phys.y < window_rect.y;
+    const push_x_phys = @max(0, (default_magnifier_phys.x + default_magnifier_phys.w) - (window_rect.x + window_rect.w));
+    const push_y_phys = @max(0, window_rect.y - default_magnifier_phys.y);
 
-    const magnifier_data = dvui.Rect{
-        .x = if (flip_h) data_point.x - sample_box_size else data_point.x,
-        .y = if (flip_v) data_point.y else data_point.y - sample_box_size,
-        .w = sample_box_size,
-        .h = sample_box_size,
+    const magnifier_phys = dvui.Rect.Physical{
+        .x = default_magnifier_phys.x - push_x_phys,
+        .y = default_magnifier_phys.y + push_y_phys,
+        .w = default_magnifier_phys.w,
+        .h = default_magnifier_phys.h,
     };
-    const magnifier_nat = canvas.screenFromDataRect(magnifier_data).toNatural();
+    const magnifier_nat = magnifier_phys.toNatural();
 
-    // Corner-radius rect maps {x: TL, y: TR, w: BR, h: BL}; the sharp corner points at the sample.
-    const cr = magnifier_nat.w / 2;
-    const corner_radius = if (flip_h and flip_v)
-        dvui.Rect{ .x = cr, .y = 0, .w = cr, .h = cr } // sharp TR
-    else if (flip_h)
-        dvui.Rect{ .x = cr, .y = cr, .w = 0, .h = cr } // sharp BR
-    else if (flip_v)
-        dvui.Rect{ .x = 0, .y = cr, .w = cr, .h = cr } // sharp TL
-    else
-        dvui.Rect{ .x = cr, .y = cr, .w = cr, .h = 0 }; // sharp BL (default)
+    // Corner-radius rect maps {x: TL, y: TR, w: BR, h: BL}. BL is sharp (0) at home so it points at
+    // the sample; as the magnifier is pushed away from home, grow BL so the rectangle's edge slides
+    // tangent to the sample point — fully circular at `cr_max`.
+    const cr_max = magnifier_nat.w / 2;
+    const win_scale = dvui.windowRectScale().s;
+    const push_dist_phys = @sqrt(push_x_phys * push_x_phys + push_y_phys * push_y_phys);
+    const push_dist_nat = if (win_scale > 0) push_dist_phys / win_scale else push_dist_phys;
+    const bl_radius = @min(cr_max, push_dist_nat);
+    const corner_radius = dvui.Rect{ .x = cr_max, .y = cr_max, .w = cr_max, .h = bl_radius };
 
     const ns = dvui.currentWindow().natural_scale;
     const border_nat = 2.0 / ns;
