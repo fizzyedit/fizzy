@@ -2204,6 +2204,7 @@ pub fn processPackJob(editor: *Editor) void {
         } else {
             fizzy.packer.atlas = new_atlas;
         }
+        fizzy.packer.last_packed_at_ns = fizzy.perf.nanoTimestamp();
         job.result_consumed = true;
         editor.explorer.pane = .project;
         const toast_canvas: ?dvui.Id = if (editor.activeFile()) |file| file.editor.canvas.id else null;

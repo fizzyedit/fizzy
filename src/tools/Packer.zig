@@ -40,6 +40,9 @@ target: PackTarget = .project,
 //camera: fizzy.gfx.Camera = .{},
 atlas: ?fizzy.Internal.Atlas = null,
 
+/// Monotonic time (`fizzy.perf.nanoTimestamp`) when the current in-memory atlas was last installed.
+last_packed_at_ns: ?i128 = null,
+
 ldtk: bool = false,
 ldtk_tilesets: std.array_list.Managed(LDTKTileset),
 
@@ -350,6 +353,7 @@ pub fn packAndClear(packer: *Packer) !void {
             };
         }
 
+        packer.last_packed_at_ns = fizzy.perf.nanoTimestamp();
         packer.clearAndFree();
     }
 }

@@ -15,33 +15,7 @@ pub fn draw() !void {
     }
 
     if (fizzy.editor.folder) |folder| {
-        const packing = fizzy.editor.isPackingActive();
-        if (packProjectButton(packing)) {
-            fizzy.editor.startPackProject() catch |err| {
-                dvui.log.err("Failed to start project pack: {any}", .{err});
-            };
-        }
-
-        if (fizzy.editor.project) |project| {
-            if (fizzy.packer.atlas) |atlas| {
-                if (dvui.button(@src(), "Export Project", .{ .draw_focus = false }, .{
-                    .expand = .horizontal,
-                    .style = .highlight,
-                })) {
-                    if (project.packed_atlas_output) |output| {
-                        atlas.save(output, .data) catch {
-                            dvui.log.err("Failed to save atlas data", .{});
-                        };
-                    }
-
-                    if (project.packed_image_output) |image_output| {
-                        atlas.save(image_output, .source) catch {
-                            dvui.log.err("Failed to save atlas image", .{});
-                        };
-                    }
-                }
-            }
-
+        if (fizzy.editor.project) |_| {
             const tl = dvui.textLayout(@src(), .{}, .{
                 .expand = .none,
                 .margin = dvui.Rect.all(0),
@@ -56,6 +30,7 @@ pub fn draw() !void {
             defer dvui.currentWindow().lifo().free(project_path);
 
             tl.addText(project_path, .{ .color_text = dvui.themeGet().color(.control, .text) });
+            _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = 6 } });
         } else {
             var box = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .expand = .horizontal,
@@ -74,12 +49,45 @@ pub fn draw() !void {
             return;
         }
 
+        const packing = fizzy.editor.isPackingActive();
+        if (packProjectButton(packing)) {
+            fizzy.editor.startPackProject() catch |err| {
+                dvui.log.err("Failed to start project pack: {any}", .{err});
+            };
+        }
+
+        if (fizzy.packer.atlas != null) {
+            drawPackedAtlasStats();
+        }
+
         pathTextEntry(.atlas) catch {
             dvui.log.err("Failed to draw path text entry", .{});
         };
         pathTextEntry(.image) catch {
             dvui.log.err("Failed to draw path text entry", .{});
         };
+
+        if (fizzy.editor.project) |project| {
+            if (fizzy.packer.atlas) |atlas| {
+                _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = 6 } });
+                if (dvui.button(@src(), "Export Project", .{ .draw_focus = false }, .{
+                    .expand = .horizontal,
+                    .style = .highlight,
+                })) {
+                    if (project.packed_atlas_output) |output| {
+                        atlas.save(output, .data) catch {
+                            dvui.log.err("Failed to save atlas data", .{});
+                        };
+                    }
+
+                    if (project.packed_image_output) |image_output| {
+                        atlas.save(image_output, .source) catch {
+                            dvui.log.err("Failed to save atlas image", .{});
+                        };
+                    }
+                }
+            }
+        }
     }
 
     // {
@@ -342,6 +350,71 @@ fn pathTextEntry(path_type: PathType) !void {
     }
 }
 
+fn drawPackedAtlasStats() void {
+    const atlas = &fizzy.packer.atlas.?;
+    const image_size = fizzy.image.size(atlas.source);
+    const atlas_w: u32 = @intFromFloat(image_size.w);
+    const atlas_h: u32 = @intFromFloat(image_size.h);
+
+    _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = 6 } });
+
+    const tl = dvui.textLayout(@src(), .{}, .{
+        .expand = .horizontal,
+        .margin = dvui.Rect.all(0),
+        .background = false,
+    });
+    defer tl.deinit();
+
+    const body = dvui.Font.theme(.body);
+    const label_color = dvui.themeGet().color(.window, .text);
+    const value_color = dvui.themeGet().color(.control, .text);
+    const label_opts: dvui.Options = .{ .font = body, .color_text = label_color };
+    const value_opts: dvui.Options = .{ .font = body, .color_text = value_color };
+
+    if (fizzy.packer.last_packed_at_ns) |packed_at_ns| {
+        var when_buf: [64]u8 = undefined;
+        const when = formatLastPacked(&when_buf, packed_at_ns);
+        tl.addText("Last packed: ", label_opts);
+        tl.addText(when, value_opts);
+        tl.addText("\n", value_opts);
+    }
+
+    var value_buf: [48]u8 = undefined;
+    const sprites = std.fmt.bufPrint(&value_buf, "{d}", .{atlas.data.sprites.len}) catch "0";
+    tl.addText("Sprites: ", label_opts);
+    tl.addText(sprites, value_opts);
+    tl.addText("\n", value_opts);
+
+    const animations = std.fmt.bufPrint(&value_buf, "{d}", .{atlas.data.animations.len}) catch "0";
+    tl.addText("Animations: ", label_opts);
+    tl.addText(animations, value_opts);
+    tl.addText("\n", value_opts);
+
+    const atlas_size = std.fmt.bufPrint(&value_buf, "{d} px x {d} px", .{ atlas_w, atlas_h }) catch "0 px x 0 px";
+    tl.addText("Atlas size: ", label_opts);
+    tl.addText(atlas_size, value_opts);
+}
+
+fn formatLastPacked(buf: []u8, packed_at_ns: i128) []const u8 {
+    const elapsed_s = @divTrunc(fizzy.perf.nanoTimestamp() - packed_at_ns, std.time.ns_per_s);
+    if (elapsed_s < 10) {
+        return std.fmt.bufPrint(buf, "just now", .{}) catch "recently";
+    }
+    if (elapsed_s < 60) {
+        return std.fmt.bufPrint(buf, "{d}s ago", .{elapsed_s}) catch "recently";
+    }
+    const elapsed_min = @divTrunc(elapsed_s, 60);
+    if (elapsed_min < 60) {
+        return std.fmt.bufPrint(buf, "{d} min ago", .{elapsed_min}) catch "recently";
+    }
+    const elapsed_hr = @divTrunc(elapsed_min, 60);
+    if (elapsed_hr < 48) {
+        return std.fmt.bufPrint(buf, "{d} hr ago", .{elapsed_hr}) catch "recently";
+    }
+    const elapsed_day = @divTrunc(elapsed_hr, 24);
+    return std.fmt.bufPrint(buf, "{d} days ago", .{elapsed_day}) catch "recently";
+}
+
 /// "Pack Project" button. Same look-and-feel as `dvui.button`, but with a bubble spinner
 /// pinned to the right edge while a pack is in flight. Always interactive — rapid clicks /
 /// per-save repack triggers coalesce via `Editor.startPackProject` cancelling predecessors.
@@ -432,6 +505,11 @@ fn drawWeb() !void {
         fizzy.editor.startPackProject() catch |err| {
             dvui.log.err("Failed to pack open files: {any}", .{err});
         };
+    }
+
+    if (fizzy.packer.atlas != null) {
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = 4 } });
+        drawPackedAtlasStats();
     }
 
     if (fizzy.packer.atlas) |atlas| {
