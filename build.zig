@@ -1047,6 +1047,7 @@ fn addFizzyExecutableForTarget(
         }
         exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/FizzyVisualEffectView.m") });
         exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/FizzyMenuTarget.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/FizzyTrackpadGesture.m") });
     } else if (resolved_target.result.os.tag == .windows) {
         if (b.lazyDependency("zigwin32", .{})) |dep| {
             exe.root_module.addImport("win32", dep.module("win32"));

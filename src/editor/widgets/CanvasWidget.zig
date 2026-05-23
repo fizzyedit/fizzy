@@ -565,6 +565,30 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
         self.scroll_info.viewport.y += diff.y;
         dvui.refresh(null, @src(), self.scroll_container.data().id);
     }
+
+    // macOS trackpad pinch-zoom. The native backend accumulates per-event magnification
+    // deltas from an AppKit local monitor; we drain them once per frame and apply the same
+    // scale-around-point math used by wheel/touch zoom. Focal point is the cursor position
+    // (macOS does not move the cursor during a trackpad gesture, so it represents intent).
+    // No-op on Windows/Linux/web (`takeTrackpadPinchRatio` returns 1.0 there).
+    const trackpad_ratio = fizzy.backend.takeTrackpadPinchRatio();
+    if (trackpad_ratio != 1.0) {
+        const cursor_phys = dvui.currentWindow().mouse_pt;
+        // Only honor the gesture when the cursor is over the canvas viewport — otherwise a
+        // user pinching while their pointer sits on a side panel / toolbar would unexpectedly
+        // zoom the canvas.
+        if (self.scroll_container.data().contentRectScale().r.contains(cursor_phys)) {
+            const prevP = self.dataFromScreenPoint(cursor_phys);
+            var pp = prevP.scale(1 / self.scale, dvui.Point);
+            self.scale *= trackpad_ratio;
+            pp = pp.scale(self.scale, dvui.Point);
+            const newP = self.screenFromDataPoint(pp);
+            const diff = self.viewportFromScreenPoint(newP).diff(self.viewportFromScreenPoint(cursor_phys));
+            self.scroll_info.viewport.x += diff.x;
+            self.scroll_info.viewport.y += diff.y;
+            dvui.refresh(null, @src(), self.scroll_container.data().id);
+        }
+    }
 }
 
 /// Re-read scroll/scaler `RectScale` and `rect` from the widget tree. Call at end of `install`, or

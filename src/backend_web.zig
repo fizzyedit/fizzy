@@ -70,6 +70,12 @@ pub fn setSdlAppMetadata(_: [*:0]const u8, _: [*:0]const u8, _: [*:0]const u8) v
 
 pub fn setupMacOSMenuBar() void {}
 
+pub fn installTrackpadGestureMonitor() void {}
+
+pub fn takeTrackpadPinchRatio() f32 {
+    return 1.0;
+}
+
 pub fn pollPendingNativeMenuAction() ?NativeMenuAction {
     return null;
 }
