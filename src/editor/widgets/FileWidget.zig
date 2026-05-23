@@ -3993,6 +3993,7 @@ pub fn drawCursor(self: *FileWidget) void {
     if (fizzy.editor.tools.current == .pointer and self.sample_data_point == null) return;
     if (fizzy.editor.tools.radial_menu.visible) return;
     if (self.init_options.file.editor.transform != null) return;
+    if (self.init_options.file.editor.canvas.gestureActive()) return;
 
     var subtract = false;
     var add = false;
