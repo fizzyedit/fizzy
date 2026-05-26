@@ -202,54 +202,6 @@ pub fn checkRemoteVersionSummary(io: std.Io, allocator: std.mem.Allocator, ver_b
     }
 }
 
-/// Re-checks the feed, downloads, applies, and exits (same behaviour as the silent startup update).
-pub fn checkDownloadApplyAndExit(io: std.Io, allocator: std.mem.Allocator) UpdateInstallError!void {
-    if (!impl) return;
-    if (!installLayoutSupported(io)) return error.InstallLayoutUnsupported;
-
-    const mgr = (try openUpdateManager(io, allocator)) orelse return error.NoFeed;
-    defer freeUpdateManager(mgr);
-
-    var update_info: ?*Vpk.vpkc_update_info_t = null;
-    const result = Vpk.vpkc_check_for_updates(castManager(mgr), &update_info);
-
-    switch (result) {
-        Vpk.UPDATE_AVAILABLE => {
-            const u = update_info.?;
-            defer Vpk.vpkc_free_update_info(u);
-
-            if (!Vpk.vpkc_download_updates(castManager(mgr), u, null, null)) {
-                logVpkError("fizzy autoupdate: download failed");
-                return error.DownloadFailed;
-            }
-            const target_asset = u.TargetFullRelease;
-            // args: manager, asset, silent=false (allow elevation prompt — /Applications
-            // is root-owned so the bundle swap needs admin rights; with silent=true
-            // UpdateMac refuses to ask and aborts), restart=true, restartArgs=null, len=0.
-            const applied = Vpk.vpkc_wait_exit_then_apply_updates(castManager(mgr), target_asset, false, true, null, 0);
-            if (!applied) {
-                // Helper failed to launch / asset rejected. Don't exit — let the
-                // caller surface the failure to the UI instead of silently bouncing
-                // the user back into the same app version (which looks like nothing happened).
-                logVpkError("fizzy autoupdate: wait_exit_then_apply_updates failed");
-                return error.ApplyFailed;
-            }
-            if (builtin.os.tag == .windows) {
-                const win32 = @import("win32");
-                win32.system.threading.Sleep(2000);
-            } else {
-                const ts: std.c.timespec = .{ .sec = 2, .nsec = 0 };
-                _ = std.c.nanosleep(&ts, null);
-            }
-            std.process.exit(0);
-        },
-        Vpk.NO_UPDATE_AVAILABLE => return error.NoUpdateToInstall,
-        Vpk.REMOTE_IS_EMPTY => return error.NoUpdateToInstall,
-        Vpk.UPDATE_ERROR => return error.CheckFailed,
-        else => return error.CheckFailed,
-    }
-}
-
 pub const UpdateInstallError = error{
     NoFeed,
     NoUpdateToInstall,

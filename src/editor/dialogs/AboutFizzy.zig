@@ -4,6 +4,7 @@ const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const build_opts = @import("build_opts");
 const auto_update = @import("../../auto_update.zig");
+const update_notify = @import("../../update_notify.zig");
 const assets = @import("assets");
 
 fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
@@ -191,27 +192,13 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
             _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
 
             if (dialogButton(@src(), "Download and restart", .control, 2, 1)) {
-                setStatus("Downloading…");
+                // Kick the background install (publishes phase + 0–100 progress
+                // through atomics) and close the dialog — the progress toast
+                // anchored above the infobar shows the rest.
                 update_ready_after_check = false;
-                auto_update.checkDownloadApplyAndExit(dvui.io, alloc) catch |err| switch (err) {
-                    error.InstallLayoutUnsupported => setStatus("On macOS, use the packaged .app to install updates."),
-                    error.NoFeed => setStatus("No update feed configured."),
-                    error.NoUpdateToInstall => setStatus("No update to install. Run “Check for updates” first."),
-                    error.CheckFailed, error.DownloadFailed, error.ApplyFailed => {
-                        var eb: [320]u8 = undefined;
-                        const es = auto_update.lastErrorSlice(&eb);
-                        if (es.len > 0) {
-                            if (std.fmt.bufPrint(&status_line_buf, "{s}: {s}", .{ @errorName(err), es })) |s| {
-                                status_line = s;
-                            } else |_| {
-                                setStatus(@errorName(err));
-                            }
-                        } else {
-                            setStatus(@errorName(err));
-                        }
-                    },
-                    error.OutOfMemory => setStatus("Out of memory."),
-                };
+                setStatus(" ");
+                update_notify.kickInstall();
+                fizzy.dvui.closeFloatingDialogAnchored();
             }
         }
     }

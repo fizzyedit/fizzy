@@ -6,6 +6,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const auto_update = @import("auto_update.zig");
+const update_install = @import("update_install.zig");
 const fizzy = @import("fizzy.zig");
 
 const Phase = enum(u8) {
@@ -23,8 +24,16 @@ var remote_ver_len: usize = 0;
 // Latched so we only arm the toast once per app session — calling `toastAdd`
 // every frame would queue an unbounded stack of toasts.
 var toast_armed: bool = false;
+/// Latched while a progress toast is registered. Both the launch toast button and
+/// the About dialog gate their `armProgressToast` calls on this so they can't
+/// queue duplicates.
+var progress_toast_armed: bool = false;
 
 const TOAST_TIMEOUT_US: i32 = 10 * std.time.us_per_s;
+/// Used for the progress toast: well over any plausible download/apply window,
+/// so the toast never fades out before the worker either restarts the process
+/// or moves to `.failed` / `.no_update` and the user dismisses it explicitly.
+const PROGRESS_TOAST_TIMEOUT_US: i32 = std.math.maxInt(i32);
 
 /// Stable, non-null subwindow id for this toast. Using a non-null id makes DVUI's
 /// default `toastsShow(null, …)` (run in `Window.end`) skip it, so we can render
@@ -187,13 +196,11 @@ fn displayUpdateToast(id: dvui.Id) !void {
         .corner_radius = dvui.Rect.all(1000),
         .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
     })) {
-        // `checkDownloadApplyAndExit` blocks while it downloads, then asks the
-        // Velopack updater to relaunch (`b_restart = true`) and `std.process.exit(0)`s.
-        auto_update.checkDownloadApplyAndExit(dvui.io, std.heap.page_allocator) catch |err| {
-            dvui.log.err("update install from toast failed: {any}", .{err});
-            // Surface a follow-up toast so the user knows the button click went somewhere.
-            dvui.toast(@src(), .{ .message = "Update failed — see About → Check for Updates." });
-        };
+        // Kick the background updater on a worker thread and swap the launch
+        // toast for a progress toast in the same slot. The worker runs to either
+        // `std.process.exit(0)` (success) or `.failed`/`.no_update` (the progress
+        // toast lets the user dismiss it).
+        kickInstall();
         dvui.toastRemove(id);
         return;
     }
@@ -204,6 +211,111 @@ fn displayUpdateToast(id: dvui.Id) !void {
 
     if (animator.end()) {
         dvui.toastRemove(id);
+        animator.data().min_size = .{};
+    }
+}
+
+/// Spawn the background install (idempotent) and arm the progress toast.
+/// Safe to call from any GUI-thread event handler (toast click, dialog button).
+pub fn kickInstall() void {
+    if (comptime !auto_update.impl) return;
+    _ = update_install.startOrGet(fizzy.app.allocator, dvui.io) catch |err| {
+        dvui.log.err("update install kick failed: {any}", .{err});
+        dvui.toast(@src(), .{ .message = "Update failed to start — see logs." });
+        return;
+    };
+    armProgressToast();
+}
+
+fn armProgressToast() void {
+    if (progress_toast_armed) return;
+    progress_toast_armed = true;
+    const id_mutex = dvui.toastAdd(null, @src(), 0, SUBWINDOW_ID, displayProgressToast, PROGRESS_TOAST_TIMEOUT_US);
+    id_mutex.mutex.unlock(dvui.io);
+}
+
+/// Progress toast renderer. Reads `update_install.currentJob()` every frame and
+/// renders the phase label plus (during `.downloading`) a progress bar. The toast
+/// removes itself when there's no job, or when the user clicks the dismiss button
+/// after a terminal state (`.failed` / `.no_update`).
+fn displayProgressToast(id: dvui.Id) !void {
+    if (comptime !auto_update.impl) {
+        dvui.toastRemove(id);
+        return;
+    }
+
+    const job_opt = update_install.currentJob();
+    if (job_opt == null) {
+        progress_toast_armed = false;
+        dvui.toastRemove(id);
+        return;
+    }
+    const job = job_opt.?;
+    const cur_phase = job.currentPhase();
+
+    var animator = dvui.animate(@src(), .{ .kind = .alpha, .duration = 500_000 }, .{
+        .id_extra = id.asUsize(),
+        .gravity_x = 0.0,
+    });
+    defer animator.deinit();
+
+    var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .background = true,
+        .corner_radius = dvui.Rect.all(1000),
+        .padding = .{ .x = 16, .y = 8, .w = 8, .h = 8 },
+        .color_fill = dvui.themeGet().color(.content, .fill),
+        .box_shadow = .{
+            .color = .black,
+            .offset = .{ .x = -2.0, .y = 2.0 },
+            .fade = 6.0,
+            .alpha = 0.25,
+            .corner_radius = dvui.Rect.all(1000),
+        },
+    });
+    defer box.deinit();
+
+    const label = update_install.phaseLabel(cur_phase);
+    dvui.labelNoFmt(@src(), label, .{}, .{
+        .gravity_y = 0.5,
+        .color_text = dvui.themeGet().color(.content, .text),
+        .padding = .{ .x = 4, .w = 12 },
+    });
+
+    // Velopack only streams download progress (0–100). Other phases get the
+    // label only — no bar — since we have nothing meaningful to show.
+    if (cur_phase == .downloading) {
+        const pct: f32 = @as(f32, @floatFromInt(job.progressPercent())) / 100.0;
+        dvui.progress(@src(), .{ .percent = pct }, .{
+            .min_size_content = .{ .w = 160, .h = 8 },
+            .gravity_y = 0.5,
+            .padding = .{ .w = 12 },
+            .corner_radius = dvui.Rect.all(1000),
+        });
+    }
+
+    // Terminal states get a dismiss button so the user can clear the toast.
+    // Active phases (`checking`/`downloading`/`applying`) don't — the worker
+    // is in-flight and the process will exit shortly on success.
+    const terminal = cur_phase == .failed or cur_phase == .no_update;
+    if (terminal) {
+        if (dvui.button(@src(), "Dismiss", .{}, .{
+            .gravity_y = 0.5,
+            .style = .control,
+            .corner_radius = dvui.Rect.all(1000),
+            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+        })) {
+            update_install.clearIfFinished();
+            progress_toast_armed = false;
+            dvui.toastRemove(id);
+            return;
+        }
+    } else {
+        // While the worker is running, force a frame each tick so the progress
+        // value updates smoothly even when nothing else triggers a redraw.
+        dvui.refresh(null, @src(), null);
+    }
+
+    if (animator.end()) {
         animator.data().min_size = .{};
     }
 }
