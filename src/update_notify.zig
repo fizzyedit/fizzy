@@ -163,6 +163,13 @@ pub fn drawAbove(infobar_top_y_physical: f32, gap_above_infobar: f32) void {
 /// Custom toast renderer. Mirrors `dvui.toastDisplay` (fade animator + auto-remove
 /// when the dialog timer expires) but lays out a horizontal row with a button.
 fn displayUpdateToast(id: dvui.Id) !void {
+    if (comptime auto_update.impl) {
+        if (update_install.currentJob() != null) {
+            dvui.toastRemove(id);
+            return;
+        }
+    }
+
     var animator = dvui.animate(@src(), .{ .kind = .alpha, .duration = 500_000 }, .{
         .id_extra = id.asUsize(),
         .gravity_x = 0.0,
