@@ -906,7 +906,7 @@ pub fn drawSpriteBubbles(self: *FileWidget) void {
     else
         0;
 
-    const checkerboard_tex = file.editor.checkerboard_tile.getTexture() catch null;
+    const checkerboard_tex = file.checkerboardTileTexture();
     var accs = BubbleAccs.init(dvui.currentWindow().arena());
 
     // Row-based iteration with batched geometry rendering.
@@ -3876,8 +3876,8 @@ fn checkerboardTintAtSpriteCellCenter(file: *fizzy.Internal.File, sprite_index: 
     }
 }
 
-/// Checkerboard behind layers: one batched quad per visible cell (UV 0..1 per cell so the tile repeats
-/// with CLAMP_TO_EDGE textures). Vertex colors vary for rainbow / animation effects.
+/// Checkerboard behind layers: one batched quad per visible cell (UV 0..1 per cell — vertex colors
+/// vary per cell for rainbow / animation effects, which is why this isn't a single wrapped quad).
 fn drawCheckerboardCellsBatched(file: *fizzy.Internal.File) void {
     const n = file.spriteCount();
     if (n == 0) return;
@@ -3887,8 +3887,6 @@ fn drawCheckerboardCellsBatched(file: *fizzy.Internal.File) void {
     const tone = pal.tone;
     const rs = file.editor.canvas.screen_rect_scale;
 
-    // One quad per cell with UV 0..1 so the checker tile repeats correctly (textures use
-    // CLAMP_TO_EDGE on web and desktop; a single quad with UV > 1 would not tile).
     const gp = fileCanvasVisibleGridParams(file) orelse return;
     if (gp.first_vis_row >= gp.last_vis_row or gp.vx1 <= 0) return;
 
@@ -3977,7 +3975,7 @@ fn drawCheckerboardCellsBatched(file: *fizzy.Internal.File) void {
     if (quad_idx == 0) return;
 
     const triangles = builder.build();
-    dvui.renderTriangles(triangles, file.editor.checkerboard_tile.getTexture() catch null) catch {
+    dvui.renderTriangles(triangles, file.checkerboardTileTexture()) catch {
         dvui.log.err("Failed to render batched checkerboard", .{});
     };
 }
@@ -4132,57 +4130,31 @@ fn mapDataRectToPhysicalStrip(sr: dvui.Rect, parent_data: dvui.Rect, parent_phys
     };
 }
 
-/// Draw checkerboard alpha tiles into `dest_phys` (no per-tile corner radius).
+/// Draw the checkerboard alpha pattern into `dest_phys`. Uses wrap=.repeat on the tile texture so
+/// the entire region is one quad with UV scaled so each `cw × ch` of data space spans one tile.
 fn drawSampleMagnifierCheckerboardTiles(
     file: *fizzy.Internal.File,
     region_data: dvui.Rect,
     dest_phys: dvui.Rect.Physical,
     scale: f32,
 ) void {
+    const tile = file.checkerboardTileTexture() orelse return;
     const cw: f32 = @floatFromInt(file.column_width);
     const ch: f32 = @floatFromInt(file.row_height);
     if (region_data.w <= 0 or region_data.h <= 0 or dest_phys.w <= 0 or dest_phys.h <= 0) return;
     if (cw <= 0 or ch <= 0) return;
 
-    const colormod = dvui.themeGet().color(.content, .fill).lighten(12.0);
-
-    const x_end = region_data.x + region_data.w;
-    const y_end = region_data.y + region_data.h;
-    const tx0 = @as(i32, @intFromFloat(@floor(region_data.x / cw)));
-    const ty0 = @as(i32, @intFromFloat(@floor(region_data.y / ch)));
-    const tx1 = @as(i32, @intFromFloat(@ceil(x_end / cw)));
-    const ty1 = @as(i32, @intFromFloat(@ceil(y_end / ch)));
-
-    var ty = ty0;
-    while (ty < ty1) : (ty += 1) {
-        var tx = tx0;
-        while (tx < tx1) : (tx += 1) {
-            const tile_rect = dvui.Rect{
-                .x = @as(f32, @floatFromInt(tx)) * cw,
-                .y = @as(f32, @floatFromInt(ty)) * ch,
-                .w = cw,
-                .h = ch,
-            };
-            const isect = region_data.intersect(tile_rect);
-            if (isect.empty()) continue;
-
-            const phys = mapDataRectToPhysicalStrip(isect, region_data, dest_phys);
-            const tile_rs = dvui.RectScale{ .r = phys, .s = scale };
-            const uv = dvui.Rect{
-                .x = (isect.x - tile_rect.x) / cw,
-                .y = (isect.y - tile_rect.y) / ch,
-                .w = isect.w / cw,
-                .h = isect.h / ch,
-            };
-
-            dvui.renderImage(file.editor.checkerboard_tile, tile_rs, .{
-                .colormod = colormod,
-                .uv = uv,
-            }) catch {
-                dvui.log.err("Failed to render magnifier checkerboard tile", .{});
-            };
-        }
-    }
+    dvui.renderTexture(tile, .{ .r = dest_phys, .s = scale }, .{
+        .colormod = dvui.themeGet().color(.content, .fill).lighten(12.0),
+        .uv = .{
+            .x = region_data.x / cw,
+            .y = region_data.y / ch,
+            .w = region_data.w / cw,
+            .h = region_data.h / ch,
+        },
+    }) catch {
+        dvui.log.err("Failed to render magnifier checkerboard", .{});
+    };
 }
 
 /// Build checkerboard + layers into an offscreen target. Layer composites are synced on the screen
@@ -4211,7 +4183,7 @@ fn drawSampleMagnifierCompositeBuild(
         dvui.log.err("Failed to sync layer composites for magnifier", .{});
     };
 
-    const target = dvui.textureCreateTarget(w, h, .nearest, fizzy.render.compositeTargetPixelFormat()) catch {
+    const target = dvui.textureCreateTarget(.{ .width = w, .height = h, .format = fizzy.render.compositeTargetPixelFormat(), .interpolation = .nearest }) catch {
         dvui.log.err("Failed to create magnifier composite target", .{});
         return null;
     };
@@ -4682,7 +4654,7 @@ fn drawCheckerboardReorderFloatingStrip(
     }
 
     const triangles = builder.build();
-    dvui.renderTriangles(triangles, file.editor.checkerboard_tile.getTexture() catch null) catch {
+    dvui.renderTriangles(triangles, file.checkerboardTileTexture()) catch {
         dvui.log.err("Failed to render reorder floating checkerboard", .{});
     };
 }

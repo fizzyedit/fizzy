@@ -82,6 +82,29 @@ pub fn fromTexture(name: []const u8, texture: dvui.Texture, invalidation: dvui.I
     };
 }
 
+/// Build a nearest-filtered, wrap=.repeat checkerboard texture sized `width × height`.
+/// Caller is responsible for destroying it via `dvui.textureDestroyLater` when done.
+pub fn checkerboardTile(width: u32, height: u32, even: [4]u8, odd: [4]u8) ?dvui.Texture {
+    if (width == 0 or height == 0) return null;
+    const arena = dvui.currentWindow().arena();
+    const buf = arena.alloc(dvui.Color.PMA, width * height) catch return null;
+    defer arena.free(buf);
+
+    const size_f: dvui.Size = .{ .w = @floatFromInt(width), .h = @floatFromInt(height) };
+    for (buf, 0..) |*p, i| {
+        const rgba = if (fizzy.math.checker(size_f, i)) even else odd;
+        p.* = @bitCast(rgba);
+    }
+
+    return dvui.textureCreate(buf, .{
+        .width = width,
+        .height = height,
+        .interpolation = .nearest,
+        .wrap_u = .repeat,
+        .wrap_v = .repeat,
+    }) catch null;
+}
+
 pub fn size(source: dvui.ImageSource) dvui.Size {
     return dvui.imageSize(source) catch .{ .w = 0, .h = 0 };
 }

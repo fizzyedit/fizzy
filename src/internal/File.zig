@@ -73,7 +73,7 @@ pub const EditorData = struct {
     selected_sprites: std.DynamicBitSet = undefined,
 
     checkerboard: std.DynamicBitSet = undefined,
-    checkerboard_tile: dvui.ImageSource = undefined,
+    checkerboard_tile: ?dvui.Texture = null,
 
     /// Flattened visible-layer stack cached as a render target.
     /// Reused across frames; rebuilt only when content or structure changes.
@@ -191,29 +191,6 @@ pub fn init(path: []const u8, options: InitOptions) !fizzy.Internal.File {
         internal.editor.checkerboard.setValue(i, value);
     }
 
-    // Initialize checkerboard tile image source
-    {
-        const alpha_width = alpha_checkerboard_count;
-        const aspect_ratio = @as(f32, @floatFromInt(internal.column_width)) / @as(f32, @floatFromInt(internal.row_height));
-        const alpha_height = @round(alpha_width / aspect_ratio);
-
-        internal.editor.checkerboard_tile = fizzy.image.init(
-            alpha_width,
-            std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
-            .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .ptr,
-        ) catch return error.LayerCreateError;
-
-        for (fizzy.image.pixels(internal.editor.checkerboard_tile), 0..) |*pixel, i| {
-            if (fizzy.math.checker(fizzy.image.size(internal.editor.checkerboard_tile), i)) {
-                pixel.* = fizzy.editor.settings.checker_color_even;
-            } else {
-                pixel.* = fizzy.editor.settings.checker_color_odd;
-            }
-        }
-        dvui.textureInvalidateCache(internal.editor.checkerboard_tile.hash());
-    }
-
     {
         // Create a single layer for the file
         const layer: fizzy.Internal.Layer = try .init(internal.newLayerID(), "Layer", internal.width(), internal.height(), .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .ptr);
@@ -228,6 +205,34 @@ pub fn init(path: []const u8, options: InitOptions) !fizzy.Internal.File {
     }
 
     return internal;
+}
+
+/// Tile pixel dimensions sized so each checker square is roughly square when stretched to a
+/// `column_width × row_height` cell. Width fixed at `alpha_checkerboard_count`; height tracks the
+/// inverse aspect ratio (clamped to a sane range).
+fn checkerboardTileDims(column_width: u32, row_height: u32) struct { w: u32, h: u32 } {
+    const aspect = @as(f32, @floatFromInt(column_width)) / @as(f32, @floatFromInt(row_height));
+    const h_f = @round(@as(f32, @floatFromInt(alpha_checkerboard_count)) / aspect);
+    return .{ .w = alpha_checkerboard_count, .h = std.math.clamp(2, @as(u32, @intFromFloat(h_f)), 1024) };
+}
+
+/// Lazily build (or rebuild on grid resize) the wrap=.repeat checker texture. Called from UI render
+/// paths so it can use the dvui frame context — file load runs on a worker thread, so we can't
+/// touch `dvui.textureCreate` there.
+pub fn checkerboardTileTexture(file: *File) ?dvui.Texture {
+    const want = checkerboardTileDims(file.column_width, file.row_height);
+    if (file.editor.checkerboard_tile) |t| {
+        if (t.width == want.w and t.height == want.h) return t;
+        dvui.textureDestroyLater(t);
+        file.editor.checkerboard_tile = null;
+    }
+    file.editor.checkerboard_tile = fizzy.image.checkerboardTile(
+        want.w,
+        want.h,
+        fizzy.editor.settings.checker_color_even,
+        fizzy.editor.settings.checker_color_odd,
+    );
+    return file.editor.checkerboard_tile;
 }
 
 pub fn width(file: *const File) u32 {
@@ -540,32 +545,6 @@ fn loadFizzyZip(path: []const u8, file_bytes: ?[]const u8) !?fizzy.Internal.File
             internal.editor.checkerboard.setValue(i, value);
         }
 
-        // Initialize checkerboard tile image source
-        {
-            const alpha_width = alpha_checkerboard_count;
-            const aspect_ratio = @as(f32, @floatFromInt(internal.column_width)) / @as(f32, @floatFromInt(internal.row_height));
-            const alpha_height = @round(alpha_width / aspect_ratio);
-
-            internal.editor.checkerboard_tile = fizzy.image.init(
-                alpha_width,
-                std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
-                .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .ptr,
-            ) catch return error.LayerCreateError;
-
-            const checker_color_1: [4]u8 = .{ 255, 255, 255, 255 };
-            const checker_color_2: [4]u8 = .{ 175, 175, 175, 255 };
-
-            for (fizzy.image.pixels(internal.editor.checkerboard_tile), 0..) |*pixel, i| {
-                if (fizzy.math.checker(fizzy.image.size(internal.editor.checkerboard_tile), i)) {
-                    pixel.* = checker_color_1;
-                } else {
-                    pixel.* = checker_color_2;
-                }
-            }
-            //dvui.textureInvalidateCache(internal.editor.checkerboard_tile.hash());
-        }
-
         var set_layer_index: bool = false;
         for (ext.layers, 0..) |l, i| {
             const layer_image_name = std.fmt.allocPrintSentinel(fizzy.app.allocator, "{s}.layer", .{l.name}, 0) catch "Memory Allocation Failed";
@@ -830,31 +809,6 @@ fn finishFlatImageFile(path: []const u8, image_layer: fizzy.Internal.Layer) !?fi
     for (0..internal.width() * internal.height()) |i| {
         const value = fizzy.math.checker(.{ .w = @floatFromInt(internal.width()), .h = @floatFromInt(internal.height()) }, i);
         internal.editor.checkerboard.setValue(i, value);
-    }
-
-    // Initialize checkerboard tile image source
-    {
-        const alpha_width = alpha_checkerboard_count;
-        const aspect_ratio = @as(f32, @floatFromInt(internal.column_width)) / @as(f32, @floatFromInt(internal.row_height));
-        const alpha_height = @round(alpha_width / aspect_ratio);
-
-        internal.editor.checkerboard_tile = fizzy.image.init(
-            alpha_width,
-            std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
-            .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .ptr,
-        ) catch return error.LayerCreateError;
-
-        const checker_color_1: [4]u8 = .{ 255, 255, 255, 255 };
-        const checker_color_2: [4]u8 = .{ 175, 175, 175, 255 };
-
-        for (fizzy.image.pixels(internal.editor.checkerboard_tile), 0..) |*pixel, i| {
-            if (fizzy.math.checker(fizzy.image.size(internal.editor.checkerboard_tile), i)) {
-                pixel.* = checker_color_1;
-            } else {
-                pixel.* = checker_color_2;
-            }
-        }
     }
 
     return internal;
@@ -1344,6 +1298,10 @@ pub fn deinit(file: *File) void {
     file.editor.temporary_layer.deinit();
     file.editor.selection_layer.deinit();
     file.editor.transform_layer.deinit();
+    if (file.editor.checkerboard_tile) |t| {
+        dvui.textureDestroyLater(t);
+        file.editor.checkerboard_tile = null;
+    }
 
     file.editor.selected_layer_indices.deinit(fizzy.app.allocator);
     file.editor.selected_animation_indices.deinit(fizzy.app.allocator);
@@ -2844,8 +2802,8 @@ pub fn savePng(self: *File, window: *dvui.Window) !void {
 
     {
         // `id_extra` is `usize` (u32 on wasm32). File IDs are session-local monotonic
-// u64s; in practice they fit, so an `@intCast` is safe and panics if not.
-const id_mutex = dvui.toastAdd(window, @src(), @as(usize, @intCast(self.id)), fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
+        // u64s; in practice they fit, so an `@intCast` is safe and panics if not.
+        const id_mutex = dvui.toastAdd(window, @src(), @as(usize, @intCast(self.id)), fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
         const id = id_mutex.id;
         const message = std.fmt.allocPrint(window.arena(), "Saved {s} to disk", .{std.fs.path.basename(self.path)}) catch "Saved file";
         dvui.dataSetSlice(window, id, "_message", message);
@@ -2865,8 +2823,8 @@ pub fn saveJpg(self: *File, window: *dvui.Window) !void {
 
     {
         // `id_extra` is `usize` (u32 on wasm32). File IDs are session-local monotonic
-// u64s; in practice they fit, so an `@intCast` is safe and panics if not.
-const id_mutex = dvui.toastAdd(window, @src(), @as(usize, @intCast(self.id)), fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
+        // u64s; in practice they fit, so an `@intCast` is safe and panics if not.
+        const id_mutex = dvui.toastAdd(window, @src(), @as(usize, @intCast(self.id)), fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
         const id = id_mutex.id;
         const message = std.fmt.allocPrint(window.arena(), "Saved {s} to disk", .{std.fs.path.basename(self.path)}) catch "Saved file";
         dvui.dataSetSlice(window, id, "_message", message);
@@ -3228,11 +3186,9 @@ fn reinitEditorSurfaceForFlatDocument(self: *File) !void {
     self.editor.selection_layer.deinit();
     self.editor.transform_layer.deinit();
     self.editor.checkerboard.deinit();
-    switch (self.editor.checkerboard_tile) {
-        .pixelsPMA => |p| fizzy.app.allocator.free(p.rgba),
-        .pixels => |p| fizzy.app.allocator.free(p.rgba),
-        .texture => |t| dvui.textureDestroyLater(t),
-        .imageFile => |i| fizzy.app.allocator.free(i.bytes),
+    if (self.editor.checkerboard_tile) |t| {
+        dvui.textureDestroyLater(t);
+        self.editor.checkerboard_tile = null;
     }
     self.editor.selected_sprites.deinit();
 
@@ -3245,24 +3201,6 @@ fn reinitEditorSurfaceForFlatDocument(self: *File) !void {
     for (0..self.width() * self.height()) |i| {
         const value = fizzy.math.checker(.{ .w = @floatFromInt(self.width()), .h = @floatFromInt(self.height()) }, i);
         self.editor.checkerboard.setValue(i, value);
-    }
-    {
-        const alpha_width = alpha_checkerboard_count;
-        const aspect_ratio = @as(f32, @floatFromInt(self.column_width)) / @as(f32, @floatFromInt(self.row_height));
-        const alpha_height = @round(alpha_width / aspect_ratio);
-        self.editor.checkerboard_tile = fizzy.image.init(
-            alpha_width,
-            std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
-            .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .ptr,
-        ) catch return error.LayerCreateError;
-        for (fizzy.image.pixels(self.editor.checkerboard_tile), 0..) |*pixel, j| {
-            if (fizzy.math.checker(fizzy.image.size(self.editor.checkerboard_tile), j)) {
-                pixel.* = fizzy.editor.settings.checker_color_even;
-            } else {
-                pixel.* = fizzy.editor.settings.checker_color_odd;
-            }
-        }
     }
     self.editor.selected_layer_indices.clearRetainingCapacity();
     try self.editor.selected_layer_indices.append(fizzy.app.allocator, 0);
@@ -3367,8 +3305,8 @@ pub fn saveAsFlattened(self: *File, output_path: []const u8, window: *dvui.Windo
     self.setSaving(false);
     {
         // `id_extra` is `usize` (u32 on wasm32). File IDs are session-local monotonic
-// u64s; in practice they fit, so an `@intCast` is safe and panics if not.
-const id_mutex = dvui.toastAdd(window, @src(), @as(usize, @intCast(self.id)), fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
+        // u64s; in practice they fit, so an `@intCast` is safe and panics if not.
+        const id_mutex = dvui.toastAdd(window, @src(), @as(usize, @intCast(self.id)), fizzy.dvui.save_toast_subwindow_id, fizzy.dvui.saveCompleteToastDisplay, 2_500_000);
         const id = id_mutex.id;
         const message = std.fmt.allocPrint(window.arena(), "Saved {s} to disk", .{std.fs.path.basename(self.path)}) catch "Saved file";
         dvui.dataSetSlice(window, id, "_message", message);
@@ -3497,31 +3435,6 @@ pub fn applyGridLayoutSnapshot(file: *File, snap: fizzy.Internal.History.Change.
         file.editor.checkerboard.setValue(idx, value);
     }
 
-    switch (file.editor.checkerboard_tile) {
-        .pixelsPMA => |p| fizzy.app.allocator.free(p.rgba),
-        .pixels => |p| fizzy.app.allocator.free(p.rgba),
-        else => {},
-    }
-    {
-        const alpha_width: u32 = alpha_checkerboard_count;
-        const aspect_ratio = @as(f32, @floatFromInt(snap.column_width)) / @as(f32, @floatFromInt(snap.row_height));
-        const alpha_height = @round(@as(f32, @floatFromInt(alpha_width)) / aspect_ratio);
-        file.editor.checkerboard_tile = fizzy.image.init(
-            alpha_width,
-            std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
-            .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .ptr,
-        ) catch return error.LayerCreateError;
-        for (fizzy.image.pixels(file.editor.checkerboard_tile), 0..) |*pixel, idx| {
-            if (fizzy.math.checker(fizzy.image.size(file.editor.checkerboard_tile), idx)) {
-                pixel.* = fizzy.editor.settings.checker_color_even;
-            } else {
-                pixel.* = fizzy.editor.settings.checker_color_odd;
-            }
-        }
-        dvui.textureInvalidateCache(file.editor.checkerboard_tile.hash());
-    }
-
     file.editor.transform = null;
     file.selected_animation_index = snap.selected_animation_index;
     file.selected_animation_frame_index = snap.selected_animation_frame_index;
@@ -3610,31 +3523,6 @@ pub fn applyGridSliceOnly(file: *File, options: GridSliceOptions) !void {
     file.row_height = new_rh;
     file.columns = new_cols;
     file.rows = new_rows;
-
-    switch (file.editor.checkerboard_tile) {
-        .pixelsPMA => |p| fizzy.app.allocator.free(p.rgba),
-        .pixels => |p| fizzy.app.allocator.free(p.rgba),
-        else => {},
-    }
-    {
-        const alpha_width: u32 = alpha_checkerboard_count;
-        const aspect_ratio = @as(f32, @floatFromInt(new_cw)) / @as(f32, @floatFromInt(new_rh));
-        const alpha_height = @round(@as(f32, @floatFromInt(alpha_width)) / aspect_ratio);
-        file.editor.checkerboard_tile = fizzy.image.init(
-            alpha_width,
-            std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
-            .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .ptr,
-        ) catch return error.LayerCreateError;
-        for (fizzy.image.pixels(file.editor.checkerboard_tile), 0..) |*pixel, idx| {
-            if (fizzy.math.checker(fizzy.image.size(file.editor.checkerboard_tile), idx)) {
-                pixel.* = fizzy.editor.settings.checker_color_even;
-            } else {
-                pixel.* = fizzy.editor.settings.checker_color_odd;
-            }
-        }
-        dvui.textureInvalidateCache(file.editor.checkerboard_tile.hash());
-    }
 
     fizzy.render.destroyLayerCompositeResources(file);
     file.invalidateActiveLayerTransparencyMaskCache();
@@ -3774,32 +3662,6 @@ pub fn applyGridLayout(file: *File, options: GridLayoutOptions) !void {
     for (0..@as(usize, new_w) * @as(usize, new_h)) |idx| {
         const value = fizzy.math.checker(.{ .w = @floatFromInt(new_w), .h = @floatFromInt(new_h) }, idx);
         file.editor.checkerboard.setValue(idx, value);
-    }
-
-    // The single-cell tile aspect drives the on-canvas alpha checker; rebuild for the new ratio.
-    switch (file.editor.checkerboard_tile) {
-        .pixelsPMA => |p| fizzy.app.allocator.free(p.rgba),
-        .pixels => |p| fizzy.app.allocator.free(p.rgba),
-        else => {},
-    }
-    {
-        const alpha_width: u32 = alpha_checkerboard_count;
-        const aspect_ratio = @as(f32, @floatFromInt(new_cw)) / @as(f32, @floatFromInt(new_rh));
-        const alpha_height = @round(@as(f32, @floatFromInt(alpha_width)) / aspect_ratio);
-        file.editor.checkerboard_tile = fizzy.image.init(
-            alpha_width,
-            std.math.clamp(2, @as(u32, @intFromFloat(alpha_height)), 1024),
-            .{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .ptr,
-        ) catch return error.LayerCreateError;
-        for (fizzy.image.pixels(file.editor.checkerboard_tile), 0..) |*pixel, idx| {
-            if (fizzy.math.checker(fizzy.image.size(file.editor.checkerboard_tile), idx)) {
-                pixel.* = fizzy.editor.settings.checker_color_even;
-            } else {
-                pixel.* = fizzy.editor.settings.checker_color_odd;
-            }
-        }
-        dvui.textureInvalidateCache(file.editor.checkerboard_tile.hash());
     }
 
     // Sprite-bound editor state (animations reference cell indices that may no longer exist; transforms

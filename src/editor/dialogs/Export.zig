@@ -602,8 +602,7 @@ fn drawCheckerboardCell(
     geometry_natural: dvui.Rect,
     rs_box: dvui.RectScale,
 ) void {
-    const tex = file.editor.checkerboard_tile.getTexture() catch null;
-    if (tex == null) return;
+    const tex = file.checkerboardTileTexture() orelse return;
 
     const pal = exportCheckerboardPalette();
     const arena = dvui.currentWindow().arena();
@@ -624,8 +623,7 @@ fn drawCheckerboardFileGrid(file: *fizzy.Internal.File, rs_box: dvui.RectScale) 
     const n = file.spriteCount();
     if (n == 0) return;
 
-    const tex = file.editor.checkerboard_tile.getTexture() catch null;
-    if (tex == null) return;
+    const tex = file.checkerboardTileTexture() orelse return;
 
     const pal = exportCheckerboardPalette();
     const arena = dvui.currentWindow().arena();

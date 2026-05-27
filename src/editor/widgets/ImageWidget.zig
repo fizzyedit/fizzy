@@ -316,11 +316,7 @@ pub fn drawSampleMagnifier(canvas: *CanvasWidget, source: dvui.ImageSource, data
 }
 
 fn packedAtlasCheckerboardTexture() ?dvui.Texture {
-    if (fizzy.packer.atlas) |atlas| {
-        if (atlas.checkerboard_tile_built) {
-            return atlas.checkerboard_tile.getTexture() catch null;
-        }
-    }
+    if (fizzy.packer.atlas) |atlas| return atlas.checkerboard_tile;
     return null;
 }
 
@@ -334,51 +330,15 @@ fn drawPackedAtlasCheckerboardBackground(canvas: *CanvasWidget, data_rect: dvui.
 
     const target_tiles_per_side: f32 = 16.0;
     const min_data_tile: f32 = 32.0;
+    const max_tiles_per_side: f32 = 32.0;
     const longest = @max(data_rect.w, data_rect.h);
     const data_tile: f32 = @max(min_data_tile, longest / target_tiles_per_side);
+    if (data_rect.w / data_tile > max_tiles_per_side or data_rect.h / data_tile > max_tiles_per_side) return;
 
-    const tx_count_f = @max(1.0, @ceil(data_rect.w / data_tile));
-    const ty_count_f = @max(1.0, @ceil(data_rect.h / data_tile));
-    const max_tiles_per_side: f32 = 32.0;
-    if (tx_count_f > max_tiles_per_side or ty_count_f > max_tiles_per_side) return;
-
-    const tx_count: usize = @intFromFloat(tx_count_f);
-    const ty_count: usize = @intFromFloat(ty_count_f);
-    const quad_count = tx_count * ty_count;
-    if (quad_count == 0) return;
-
-    const tone = dvui.themeGet().color(.content, .fill).lighten(6.0).opacity(0.5).opacity(dvui.currentWindow().alpha);
-    const pma = dvui.Color.PMA.fromColor(tone);
-
-    const rs = canvas.screen_rect_scale;
-    const arena = dvui.currentWindow().arena();
-    var builder = dvui.Triangles.Builder.init(arena, quad_count * 4, quad_count * 6) catch return;
-
-    var ty: usize = 0;
-    while (ty < ty_count) : (ty += 1) {
-        const fy: f32 = @floatFromInt(ty);
-        var tx: usize = 0;
-        while (tx < tx_count) : (tx += 1) {
-            const fx: f32 = @floatFromInt(tx);
-            const x0 = data_rect.x + fx * data_tile;
-            const y0 = data_rect.y + fy * data_tile;
-            const x1 = @min(x0 + data_tile, data_rect.x + data_rect.w);
-            const y1 = @min(y0 + data_tile, data_rect.y + data_rect.h);
-            if (x1 <= x0 or y1 <= y0) continue;
-
-            const sr = Rect{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
-            const r = rs.rectToPhysical(sr);
-            const quad_base: dvui.Vertex.Index = @intCast(builder.vertexes.items.len);
-            builder.appendVertex(.{ .pos = r.topLeft(), .col = pma, .uv = .{ 0, 0 } });
-            builder.appendVertex(.{ .pos = r.topRight(), .col = pma, .uv = .{ 1, 0 } });
-            builder.appendVertex(.{ .pos = r.bottomRight(), .col = pma, .uv = .{ 1, 1 } });
-            builder.appendVertex(.{ .pos = r.bottomLeft(), .col = pma, .uv = .{ 0, 1 } });
-            builder.appendTriangles(&.{ quad_base + 1, quad_base + 0, quad_base + 3, quad_base + 1, quad_base + 3, quad_base + 2 });
-        }
-    }
-
-    if (builder.vertexes.items.len == 0) return;
-    dvui.renderTriangles(builder.build(), tex) catch {
+    dvui.renderTexture(tex, .{ .r = bg_screen, .s = canvas.screen_rect_scale.s }, .{
+        .colormod = dvui.themeGet().color(.content, .fill).lighten(6.0).opacity(0.5),
+        .uv = .{ .w = data_rect.w / data_tile, .h = data_rect.h / data_tile },
+    }) catch {
         dvui.log.err("Failed to render packed atlas checkerboard", .{});
     };
 }

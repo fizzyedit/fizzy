@@ -153,7 +153,7 @@ pub fn draw(self: *Sprites) !void {
         _ = fizzy.dvui.sprite(@src(), .{
             .source = file.layers.items(.source)[file.selected_layer_index],
             .file = file,
-            .alpha_source = file.editor.checkerboard_tile,
+            .alpha_source = if (file.checkerboardTileTexture()) |t| dvui.ImageSource{ .texture = t } else null,
             .sprite = .{
                 .source = .{
                     @intFromFloat(src_rect.x),

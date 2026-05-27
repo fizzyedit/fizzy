@@ -2704,7 +2704,7 @@ pub fn paste(editor: *Editor) !void {
                 dst_rect.y = sprite_rect.y + clipboard.offset.y;
 
                 file.editor.transform = .{
-                    .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, fizzy.render.compositeTargetPixelFormat()) catch {
+                    .target_texture = dvui.textureCreateTarget(.{ .width = file.width(), .height = file.height(), .format = fizzy.render.compositeTargetPixelFormat(), .interpolation = .nearest }) catch {
                         dvui.log.err("Failed to create target texture", .{});
                         return;
                     },
@@ -2747,7 +2747,7 @@ pub fn paste(editor: *Editor) !void {
                     dst_rect.y = rect.y + clipboard.offset.y;
 
                     file.editor.transform = .{
-                        .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, fizzy.render.compositeTargetPixelFormat()) catch {
+                        .target_texture = dvui.textureCreateTarget(.{ .width = file.width(), .height = file.height(), .format = fizzy.render.compositeTargetPixelFormat(), .interpolation = .nearest }) catch {
                             dvui.log.err("Failed to create target texture", .{});
                             return;
                         },
@@ -2776,7 +2776,7 @@ pub fn paste(editor: *Editor) !void {
             }
 
             file.editor.transform = .{
-                .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, fizzy.render.compositeTargetPixelFormat()) catch {
+                .target_texture = dvui.textureCreateTarget(.{ .width = file.width(), .height = file.height(), .format = fizzy.render.compositeTargetPixelFormat(), .interpolation = .nearest }) catch {
                     dvui.log.err("Failed to create target texture", .{});
                     return;
                 },
@@ -2897,7 +2897,7 @@ pub fn transform(editor: *Editor) !void {
         if (file.editor.transform_layer.reduce(source_rect)) |reduced_data_rect| {
             defer file.editor.selection_layer.clearMask();
             file.editor.transform = .{
-                .target_texture = dvui.textureCreateTarget(file.width(), file.height(), .nearest, fizzy.render.compositeTargetPixelFormat()) catch {
+                .target_texture = dvui.textureCreateTarget(.{ .width = file.width(), .height = file.height(), .format = fizzy.render.compositeTargetPixelFormat(), .interpolation = .nearest }) catch {
                     dvui.log.err("Failed to create target texture", .{});
                     return;
                 },

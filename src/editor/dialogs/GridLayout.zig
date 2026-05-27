@@ -207,8 +207,7 @@ fn font() dvui.Font {
 }
 
 /// Checkerboard behind the preview: one quad per grid cell with UV 0..1 (same as
-/// `FileWidget.drawCheckerboardCellsBatched`). Textures use CLAMP_TO_EDGE, so a single
-/// quad with UV > 1 only shows the tile correctly in the top-left corner.
+/// `FileWidget.drawCheckerboardCellsBatched`). Per-cell so vertex colors can vary.
 fn drawCheckerboardPreviewTiled(
     file: *fizzy.Internal.File,
     cv: *CanvasWidget,
@@ -286,7 +285,7 @@ fn drawCheckerboardPreviewTiled(
     if (quad_idx == 0) return;
 
     const triangles = builder.build();
-    dvui.renderTriangles(triangles, file.editor.checkerboard_tile.getTexture() catch null) catch {
+    dvui.renderTriangles(triangles, file.checkerboardTileTexture()) catch {
         dvui.log.err("Grid layout preview: failed to render checkerboard", .{});
     };
 }
@@ -523,6 +522,7 @@ fn renderPreview(
     new_rows: u32,
     anchor_vis: fizzy.math.layout_anchor.LayoutAnchor,
     slice_full_layer: bool,
+    host_rect: dvui.Rect,
 ) void {
     if (nw == 0 or nh == 0) return;
 
@@ -531,8 +531,11 @@ fn renderPreview(
     const old_cw = file.column_width;
     const old_rh = file.row_height;
 
-    const vp_host_w = preview_pane_fit_w;
-    const vp_host_h = preview_pane_fit_h;
+    // Prefer the live host rect (this frame's parent contentRect) so resize tracks immediately;
+    // fall back to last frame's viewport before the parent has a real rect (first frame open).
+    const live_host_ok = host_rect.w > 8 and host_rect.h > 8;
+    const vp_host_w = if (live_host_ok) host_rect.w else preview_pane_fit_w;
+    const vp_host_h = if (live_host_ok) host_rect.h else preview_pane_fit_h;
     const host_vp_ok = vp_host_w > 8 and vp_host_h > 8;
 
     const fit_key: u64 = (@as(u64, @intFromBool(slice_full_layer)) << 63) |
@@ -568,6 +571,12 @@ fn renderPreview(
         );
         preview_canvas.scroll_info.viewport.x = 0;
         preview_canvas.scroll_info.viewport.y = 0;
+        // `CanvasWidget.install` restores origin/viewport from this snapshot whenever it sees the
+        // parent rect moving (e.g. during window resize) — without syncing it here, the scaler is
+        // placed at the pre-resize origin and the image looks "stuck" until the resize ends.
+        preview_canvas.stable_origin = preview_canvas.origin;
+        preview_canvas.stable_viewport = preview_canvas.scroll_info.viewport;
+        preview_canvas.stable_virtual_size = preview_canvas.scroll_info.virtual_size;
         if (fit_key_changed) {
             preview_fit_key_cache = fit_key;
         }
@@ -597,11 +606,10 @@ fn renderPreview(
     const vph = preview_canvas.scroll_info.viewport.h;
 
     const vp_ok = vpw > 8 and vph > 8;
-    const layout_mismatch = host_vp_ok and vp_ok and (@abs(vpw - vp_host_w) >= preview_layout_min_delta or @abs(vph - vp_host_h) >= preview_layout_min_delta);
-    const needs_bootstrap_refit = !host_vp_ok and vp_ok and (fit_key_changed or dims_changed);
-
+  
     var did_post_install_refit = false;
-    if (layout_mismatch or needs_bootstrap_refit or (shell_drag_or_resize and vp_ok)) {
+    const needs_bootstrap_refit = !host_vp_ok and vp_ok and (fit_key_changed or dims_changed);
+    if (needs_bootstrap_refit) {
         preview_canvas.fitContentContainInHost(
             preview_data,
             dvui.Rect{ .x = 0, .y = 0, .w = vpw, .h = vph },
@@ -1002,6 +1010,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
         }
 
         if (target_file) |tf| {
+            const host_rect = preview_host.data().contentRect();
             const dims_ok = fizzy.Internal.File.validateGridLayoutProposedDims(pv_cw, pv_rh, pv_cols, pv_rows);
             if (dims_ok) {
                 renderPreview(
@@ -1016,6 +1025,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
                     pv_rows,
                     pv_anchor,
                     mode == .slice,
+                    host_rect,
                 );
             } else {
                 // Keep the preview pane filled: invalid form state still shows the current layer using on-disk grid.
@@ -1031,6 +1041,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
                     tf.rows,
                     .nw,
                     mode == .slice,
+                    host_rect,
                 );
             }
         }

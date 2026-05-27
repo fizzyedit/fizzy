@@ -418,7 +418,7 @@ pub fn syncLayerComposite(file: *fizzy.Internal.File) !void {
     defer perf.syncCompositeEnd(sc_t0);
 
     const target = if (file.editor.layer_composite_target) |t| t else blk: {
-        const nt = try dvui.textureCreateTarget(w, h, .nearest, compositeTargetPixelFormat());
+        const nt = try dvui.textureCreateTarget(.{ .width = w, .height = h, .format = compositeTargetPixelFormat(), .interpolation = .nearest });
         file.editor.layer_composite_target = nt;
         break :blk nt;
     };
@@ -486,13 +486,13 @@ fn syncSplitComposite(file: *fizzy.Internal.File) !void {
     defer perf.syncCompositeEnd(sc_t0);
 
     const below = if (file.editor.split_composite_below) |t| t else blk: {
-        const nt = try dvui.textureCreateTarget(w, h, .nearest, compositeTargetPixelFormat());
+        const nt = try dvui.textureCreateTarget(.{ .width = w, .height = h, .format = compositeTargetPixelFormat(), .interpolation = .nearest });
         file.editor.split_composite_below = nt;
         break :blk nt;
     };
 
     const above = if (file.editor.split_composite_above) |t| t else blk: {
-        const nt = try dvui.textureCreateTarget(w, h, .nearest, compositeTargetPixelFormat());
+        const nt = try dvui.textureCreateTarget(.{ .width = w, .height = h, .format = compositeTargetPixelFormat(), .interpolation = .nearest });
         file.editor.split_composite_above = nt;
         break :blk nt;
     };
@@ -667,7 +667,6 @@ pub fn renderLayers(init_opts: RenderFileOptions) !void {
                 };
             }
         }
-
     }
 
     // Active stroke or transform: split composites (below + active + [transform] + above).
