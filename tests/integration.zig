@@ -33,7 +33,7 @@ fn makeBlankFile(width_: u32, height_: u32) !Internal.File {
 /// paths free the rest via routes we don't take here): specifically
 /// it does NOT release per-layer `mask` bit-sets and pixel buffers
 /// for entries in `file.layers`, nor `editor.selected_sprites`,
-/// `editor.checkerboard`, `editor.checkerboard_tile`. Note also that
+/// `editor.checkerboard`. Note also that
 /// `Internal.File.deinit` already frees each layer's `name`, so
 /// calling `layer.deinit()` here would double-free it. We free the
 /// leaked-in-tests pieces by hand.
@@ -51,7 +51,8 @@ fn deinitFile(file: *Internal.File) void {
     }
     file.editor.selected_sprites.deinit();
     file.editor.checkerboard.deinit();
-    fizzy.app.allocator.free(file.editor.checkerboard_tile.pixelsPMA.rgba);
+    // `file.editor.checkerboard_tile` is an optional GPU `dvui.Texture`
+    // now; `file.deinit()` destroys it (and nulls it) on its own.
     file.deinit();
 }
 

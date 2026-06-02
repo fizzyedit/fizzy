@@ -51,6 +51,10 @@ hold_menu_duration_ms: u32 = 500,
 /// Whether or not to show rulers on each canvas.
 show_rulers: bool = true,
 
+/// Sprites panel: fly side cards away for a single-card focus view and snap
+/// scroll when the focus sprite changes (also toggled from the sprites pane).
+scrolling_cards: bool = false,
+
 /// When true, print frame/draw perf stats to the console (Debug / ReleaseSafe only for tick stats).
 perf_logging: bool = false,
 

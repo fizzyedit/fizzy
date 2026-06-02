@@ -126,19 +126,27 @@ pub fn defaultDialogCallAfter(id: dvui.Id, response: dvui.enums.DialogResponse) 
     }
 }
 
-/// True when the canvas should not hide the OS cursor or draw tool cursors, and should not
-/// treat the pointer as hovering the artboard.
-/// - Modal dialogs: block the entire main pane.
+/// True when the main workspace canvas should not hide the OS cursor, draw tool cursors, or
+/// consume pointer events.
+/// - Modal dialogs: always block the editor canvas (not in-dialog previews).
 /// - Non-modal floating windows (e.g. Export): block only while the cursor is over that window.
 pub fn canvasPointerInputSuppressed() bool {
     const cw = dvui.currentWindow();
     const main_id = cw.data().id;
-    var i = cw.subwindows.stack.items.len;
-    while (i > 1) : (i -= 1) {
-        if (cw.subwindows.stack.items[i - 1].modal) return true;
+    for (cw.subwindows.stack.items[1..]) |sub| {
+        if (sub.modal) return true;
     }
     const target = cw.subwindows.windowFor(cw.mouse_pt);
-    return target != main_id and target != .zero;
+    return target != .zero and target != main_id;
+}
+
+/// In-dialog preview canvases (Grid Layout): allow pan/zoom while the pointer is over the
+/// dialog subwindow that owns the preview.
+pub fn dialogCanvasPointerInputSuppressed() bool {
+    const cw = dvui.currentWindow();
+    const sub = cw.subwindows.current() orelse return true;
+    const target = cw.subwindows.windowFor(cw.mouse_pt);
+    return target != sub.id;
 }
 
 /// Creates a new file dialog with necessary data set and returns the id mutex.
@@ -950,6 +958,13 @@ pub const SpriteInitOptions = struct {
     depth: f32 = 0.0, // -1.0 is front, 1.0 is back
     reflection: bool = false,
     overlap: f32 = 0.0,
+    /// Overall opacity in [0, 1]; 1.0 is fully opaque. Used to fade cards out
+    /// toward the background the further they sit from the focus.
+    opacity: f32 = 1.0,
+    /// Vertical shift (logical px, positive = down) applied to the reflection
+    /// only. Lets the reflection slide away from the card — e.g. as a card flies
+    /// up out of view, its reflection sinks down, like peeling off a waterline.
+    reflection_offset: f32 = 0.0,
 };
 
 pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opts: dvui.Options) dvui.WidgetData {
@@ -1037,14 +1052,27 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
     path.addPoint(bottom_right);
     path.addPoint(bottom_left);
 
+    // Distance fade toward transparent: `fade_white` tints textured draws by the
+    // card opacity, and `op` scales the alpha of solid fills. No-ops at op == 1.
+    const op = std.math.clamp(init_opts.opacity, 0.0, 1.0);
+    const fade_white = dvui.Color.white.opacity(op);
+
     if (init_opts.reflection) {
         var path2: dvui.Path.Builder = .init(dvui.currentWindow().arena());
         defer path2.deinit();
 
-        path2.addPoint(bottom_left.plus(.{ .x = -(top_right.x - top_left.x) * 0.5, .y = (bottom_left.y - top_left.y) * 0.75 }));
-        path2.addPoint(bottom_right.plus(.{ .x = (bottom_right.x - bottom_left.x) * 0.5, .y = (bottom_left.y - top_left.y) * 0.75 }));
-        path2.addPoint(bottom_right);
-        path2.addPoint(bottom_left);
+        // Direct vertical mirror: reflect each (already skewed) top corner straight
+        // down through its bottom corner, so the reflection is a true flip of the
+        // card — same width and skew at every height, sharing the bottom edge —
+        // rather than a trapezoid that flares outward. pathToSubdividedQuad reads
+        // these as (tl, tr, br, bl); the far edge (tl, tr) samples the sprite top
+        // and the near edge (br, bl) the sprite bottom, giving the mirrored uv.
+        // `refl_off` slides the whole reflection down independently of the card.
+        const refl_off = dvui.Point.Physical{ .x = 0.0, .y = init_opts.reflection_offset * wd.contentRectScale().s };
+        path2.addPoint(bottom_left.plus(bottom_left.diff(top_left)).plus(refl_off));
+        path2.addPoint(bottom_right.plus(bottom_right.diff(top_right)).plus(refl_off));
+        path2.addPoint(bottom_right.plus(refl_off));
+        path2.addPoint(bottom_left.plus(refl_off));
 
         const preview_extent = @min(wd.contentRectScale().r.w, wd.contentRectScale().r.h);
         const subdivisions_f = std.math.clamp(preview_extent / 96.0, 2.0, 6.0);
@@ -1052,9 +1080,10 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
 
         if (init_opts.alpha_source) |alpha_source| {
             const reflection_path = path2.build();
+
             var reflection_triangles_bg = pathToSubdividedQuad(reflection_path, dvui.currentWindow().arena(), .{
                 .subdivisions = subdivisions,
-                .color_mod = dvui.themeGet().color(.content, .fill).lighten(4.0),
+                .color_mod = dvui.themeGet().color(.content, .fill).lighten(4.0).opacity(op),
                 .vertical_fade = true,
             }) catch unreachable;
             defer reflection_triangles_bg.deinit(dvui.currentWindow().arena());
@@ -1063,7 +1092,7 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
                 .subdivisions = subdivisions,
                 .uv = uv,
                 .vertical_fade = true,
-                .color_mod = dvui.Color.white,
+                .color_mod = fade_white,
             }) catch unreachable;
             defer reflection_triangles_layers.deinit(dvui.currentWindow().arena());
 
@@ -1117,11 +1146,24 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
     }
 
     if (init_opts.alpha_source) |alpha_source| {
-        wd.contentRectScale().r.fill(.all(0), .{ .color = dvui.themeGet().color(.content, .fill), .fade = 1.5 });
+        if (init_opts.depth != 0.0) {
+            // Skew the opaque base along with the art so no axis-aligned sliver
+            // of fill colour pokes out past the receding edge.
+            var base_triangles = pathToSubdividedQuad(path.build(), dvui.currentWindow().arena(), .{
+                .subdivisions = 8,
+                .color_mod = dvui.themeGet().color(.content, .fill).opacity(op),
+            }) catch unreachable;
+            defer base_triangles.deinit(dvui.currentWindow().arena());
+            dvui.renderTriangles(base_triangles, null) catch {
+                dvui.log.err("Failed to render triangles", .{});
+            };
+        } else {
+            wd.contentRectScale().r.fill(.all(0), .{ .color = dvui.themeGet().color(.content, .fill).opacity(op), .fade = 1.5 });
+        }
 
         const alpha_triangles = pathToSubdividedQuad(path.build(), dvui.currentWindow().arena(), .{
             .subdivisions = 8,
-            .color_mod = dvui.themeGet().color(.content, .fill).lighten(6.0).opacity(0.5),
+            .color_mod = dvui.themeGet().color(.content, .fill).lighten(6.0).opacity(0.5).opacity(op),
         }) catch unreachable;
         dvui.renderTriangles(alpha_triangles, alpha_source.getTexture() catch null) catch {
             dvui.log.err("Failed to render triangles", .{});
@@ -1137,6 +1179,10 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
             },
             .uv = uv,
             .corner_radius = .all(0),
+            .color_mod = fade_white,
+            // When skewed, render the layer stack into the same quad as the
+            // background so the art tilts like a record on a shelf.
+            .quad = if (init_opts.depth != 0.0) .{ top_left, top_right, bottom_right, bottom_left } else null,
         }) catch {
             dvui.log.err("Failed to render layers", .{});
         };
@@ -1144,6 +1190,7 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
         const triangles = pathToSubdividedQuad(path.build(), dvui.currentWindow().arena(), .{
             .subdivisions = 8,
             .uv = uv,
+            .color_mod = fade_white,
         }) catch unreachable;
 
         dvui.renderTriangles(triangles, init_opts.source.getTexture() catch null) catch {

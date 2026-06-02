@@ -204,6 +204,12 @@ pub fn draw() !void {
         })) {
             fizzy.editor.markSettingsDirty();
         }
+
+        if (dvui.checkbox(@src(), &fizzy.editor.settings.scrolling_cards, "Scrolling sprite cards", .{
+            .expand = .none,
+        })) {
+            fizzy.editor.markSettingsDirty();
+        }
     }
 
     {

@@ -50,7 +50,7 @@ pub const InitOptions = struct {
     } = .nudge_once,
 };
 
-const DragPart = enum {
+pub const DragPart = enum {
     middle,
     top,
     bottom,
@@ -60,6 +60,12 @@ const DragPart = enum {
     bottom_right,
     top_right,
     bottom_left,
+
+    pub fn isResizeDrag(widget_id: dvui.Id) bool {
+        if (!dvui.captured(widget_id)) return false;
+        const dp = dvui.dataGet(null, widget_id, "_drag_part", DragPart) orelse return false;
+        return dp != .middle;
+    }
 
     pub fn cursor(self: DragPart) dvui.enums.Cursor {
         return switch (self) {

@@ -12,6 +12,7 @@ const std = @import("std");
 
 const NewFile = @import("NewFile.zig");
 const CanvasWidget = @import("../widgets/CanvasWidget.zig");
+const FloatingWindowWidget = @import("../widgets/FloatingWindowWidget.zig");
 const builtin = @import("builtin");
 
 /// Editable grid fields for one mode (Slice vs Resize each keep their own backing).
@@ -107,7 +108,7 @@ pub fn presetFromFile(file: *fizzy.Internal.File) void {
     // `prev_size` matches `data_size` and `second_center` is false, so `install` skips the
     // rescale/recenter pass and the preview ends up offscreen / at a stale zoom. Resetting to
     // a fresh widget forces a fit-to-pane on the next frame.
-    preview_canvas = .{};
+    preview_canvas = .{ .pointer_scope = .dialog };
     left_scroll = .{ .horizontal = .auto };
     dialog_middle_scroll = .{ .horizontal = .auto, .vertical = .auto };
     preview_pane_fit_w = 0;
@@ -551,17 +552,19 @@ fn renderPreview(
 
     const dims_changed = nw != preview_last_nw or nh != preview_last_nh;
 
-    const shell_drag_or_resize = blk: {
+    const shell_resize_drag = blk: {
         const wid = dvui.dataGet(null, mutex_id, "_grid_layout_float_wd_id", dvui.Id) orelse break :blk false;
-        break :blk dvui.captured(wid);
+        break :blk FloatingWindowWidget.DragPart.isResizeDrag(wid);
     };
 
-    const host_vp_versus_stored = host_vp_ok and (preview_viewport_fit_w < 4 or preview_viewport_fit_h < 4 or
-        @abs(vp_host_w - preview_viewport_fit_w) >= preview_layout_min_delta or
-        @abs(vp_host_h - preview_viewport_fit_h) >= preview_layout_min_delta);
-    const needs_preinstall_refit = host_vp_ok and (fit_key_changed or dims_changed or host_vp_versus_stored or shell_drag_or_resize);
+    const host_changed = host_vp_ok and (preview_pane_fit_w < 4 or preview_pane_fit_h < 4 or
+        @abs(vp_host_w - preview_pane_fit_w) >= preview_layout_min_delta or
+        @abs(vp_host_h - preview_pane_fit_h) >= preview_layout_min_delta);
+    const needs_preinstall_refit = host_vp_ok and (fit_key_changed or dims_changed or host_changed or shell_resize_drag);
 
     const preview_data: dvui.Size = .{ .w = @floatFromInt(nw), .h = @floatFromInt(nh) };
+
+    const reset_viewport_after_fit = fit_key_changed or dims_changed or host_changed or shell_resize_drag;
 
     if (needs_preinstall_refit) {
         preview_canvas.fitContentContainInHost(
@@ -569,14 +572,10 @@ fn renderPreview(
             dvui.Rect{ .x = 0, .y = 0, .w = vp_host_w, .h = vp_host_h },
             1.2,
         );
-        preview_canvas.scroll_info.viewport.x = 0;
-        preview_canvas.scroll_info.viewport.y = 0;
-        // `CanvasWidget.install` restores origin/viewport from this snapshot whenever it sees the
-        // parent rect moving (e.g. during window resize) — without syncing it here, the scaler is
-        // placed at the pre-resize origin and the image looks "stuck" until the resize ends.
-        preview_canvas.stable_origin = preview_canvas.origin;
-        preview_canvas.stable_viewport = preview_canvas.scroll_info.viewport;
-        preview_canvas.stable_virtual_size = preview_canvas.scroll_info.virtual_size;
+        if (reset_viewport_after_fit) {
+            preview_canvas.scroll_info.viewport.x = 0;
+            preview_canvas.scroll_info.viewport.y = 0;
+        }
         if (fit_key_changed) {
             preview_fit_key_cache = fit_key;
         }
@@ -609,14 +608,17 @@ fn renderPreview(
   
     var did_post_install_refit = false;
     const needs_bootstrap_refit = !host_vp_ok and vp_ok and (fit_key_changed or dims_changed);
-    if (needs_bootstrap_refit) {
+    const needs_post_install_host_refit = vp_ok and (host_changed or shell_resize_drag);
+    if (needs_bootstrap_refit or needs_post_install_host_refit) {
         preview_canvas.fitContentContainInHost(
             preview_data,
             dvui.Rect{ .x = 0, .y = 0, .w = vpw, .h = vph },
             1.2,
         );
-        preview_canvas.scroll_info.viewport.x = 0;
-        preview_canvas.scroll_info.viewport.y = 0;
+        if (reset_viewport_after_fit or needs_post_install_host_refit) {
+            preview_canvas.scroll_info.viewport.x = 0;
+            preview_canvas.scroll_info.viewport.y = 0;
+        }
         if (fit_key_changed) {
             preview_fit_key_cache = fit_key;
         }
@@ -629,10 +631,21 @@ fn renderPreview(
         dvui.refresh(null, @src(), preview_canvas.id);
     }
 
+    // `CanvasWidget.install` restores this snapshot while the parent rect is mid-resize; keep
+    // origin and viewport in sync so the preview stays centered, not pinned to the upper-left.
+    if (needs_preinstall_refit or did_post_install_refit) {
+        preview_canvas.stable_origin = preview_canvas.origin;
+        preview_canvas.stable_viewport = preview_canvas.scroll_info.viewport;
+        preview_canvas.stable_virtual_size = preview_canvas.scroll_info.virtual_size;
+        preview_canvas.has_stable_snapshot = true;
+    }
+
     preview_viewport_fit_w = vpw;
     preview_viewport_fit_h = vph;
-    preview_pane_fit_w = vpw;
-    preview_pane_fit_h = vph;
+    if (host_vp_ok) {
+        preview_pane_fit_w = vp_host_w;
+        preview_pane_fit_h = vp_host_h;
+    }
 
     const any_refit = needs_preinstall_refit or did_post_install_refit;
 

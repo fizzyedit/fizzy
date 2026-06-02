@@ -74,6 +74,8 @@ fade_pending: bool = false,
 // Saved between `install` and `deinit` so the parent alpha is restored exactly.
 prev_alpha: f32 = 1.0,
 hovered: bool = false,
+/// `.dialog` for embedded previews (Grid Layout); uses `dialogCanvasPointerInputSuppressed`.
+pointer_scope: enum { main, dialog } = .main,
 // Last frame's scroll viewport in physical pixels (latched in `deinit`). Used when the
 // scroll container is not installed yet this frame (e.g. UI chrome before `FileWidget`).
 sample_viewport_physical: ?dvui.Rect.Physical = null,
@@ -344,7 +346,7 @@ pub fn install(self: *CanvasWidget, src: std.builtin.SourceLocation, init_opts: 
     // read it during the same frame) don't see stale state on the first touch frame. The
     // tail-end `processEvents()` pass also updates it, but by then the brush has already
     // skipped the press because `hovered` was still false from the previous frame.
-    self.hovered = !fizzy.dvui.canvasPointerInputSuppressed() and
+    self.hovered = !self.pointerInputSuppressed() and
         self.pointerOverDrawable(dvui.currentWindow().mouse_pt);
 
     // Process two-finger gesture BEFORE any drawing tool event loop so we can capture the
@@ -765,8 +767,15 @@ pub fn mouse(self: *CanvasWidget) ?dvui.Event.Mouse {
     return null;
 }
 
+fn pointerInputSuppressed(self: *const CanvasWidget) bool {
+    return switch (self.pointer_scope) {
+        .main => fizzy.dvui.canvasPointerInputSuppressed(),
+        .dialog => fizzy.dvui.dialogCanvasPointerInputSuppressed(),
+    };
+}
+
 pub fn processEvents(self: *CanvasWidget) void {
-    if (fizzy.dvui.canvasPointerInputSuppressed()) {
+    if (self.pointerInputSuppressed()) {
         self.hovered = false;
         return;
     }

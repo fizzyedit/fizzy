@@ -15,6 +15,12 @@ pub const RenderFileOptions = struct {
     uv: dvui.Rect = .{ .w = 1.0, .h = 1.0 },
     corner_radius: dvui.Rect = .all(0),
     allow_peek: bool = true,
+    /// Optional skewed quad in physical corner order (tl, tr, br, bl). When set,
+    /// the layer stack renders into this quad instead of the axis-aligned `rs.r`,
+    /// so perspective/depth skew applies to the art itself — not just the
+    /// background. Leave null for normal (canvas) rendering.
+    quad: ?[4]dvui.Point.Physical = null,
+    quad_subdivisions: usize = 8,
 };
 
 /// Web backends without `textureUpdateSubRect` recreate the GPU texture on upload; sync the cache
@@ -335,7 +341,9 @@ fn fullCompositeEligible(
     if (needs_dimmed) return false;
     if (min_layer_index != 0) return false;
     if (init_opts.fade != 0) return false;
-    if (!std.meta.eql(init_opts.color_mod, dvui.Color.white)) return false;
+    // A uniform color_mod (e.g. the cover-flow opacity fade) is correct to apply
+    // once to the flattened composite — and avoids the per-layer translucency
+    // artifacts you'd get fading each layer separately.
     if (init_opts.file.editor.transform != null) return false;
     if (init_opts.file.editor.active_drawing) return false;
     const ce = layerCompositeExtent(init_opts.file);
@@ -352,7 +360,8 @@ fn splitCompositeEligible(
     if (needs_dimmed) return false;
     if (min_layer_index != 0) return false;
     if (init_opts.fade != 0) return false;
-    if (!std.meta.eql(init_opts.color_mod, dvui.Color.white)) return false;
+    // See fullCompositeEligible: a uniform color_mod applies cleanly to the
+    // split composites too, so it no longer forces the per-layer path.
     const ce = layerCompositeExtent(init_opts.file);
     if (ce.w == 0 or ce.h == 0) return false;
     return true;
@@ -626,15 +635,31 @@ pub fn renderLayers(init_opts: RenderFileOptions) !void {
     const min_layer_index = vs.min_layer_index;
     const needs_dimmed = vs.needs_dimmed;
 
-    var path: dvui.Path.Builder = .init(fizzy.app.allocator);
-    defer path.deinit();
+    var triangles = if (init_opts.quad) |q| blk: {
+        // Skewed quad: build a subdivided mesh so the texture follows the
+        // perspective instead of being mapped onto an axis-aligned rect.
+        var qpath: dvui.Path.Builder = .init(fizzy.app.allocator);
+        defer qpath.deinit();
+        qpath.addPoint(q[0]);
+        qpath.addPoint(q[1]);
+        qpath.addPoint(q[2]);
+        qpath.addPoint(q[3]);
+        break :blk try fizzy.dvui.pathToSubdividedQuad(qpath.build(), fizzy.app.allocator, .{
+            .subdivisions = init_opts.quad_subdivisions,
+            .uv = init_opts.uv,
+            .color_mod = init_opts.color_mod,
+        });
+    } else blk: {
+        var path: dvui.Path.Builder = .init(fizzy.app.allocator);
+        defer path.deinit();
 
-    path.addRect(content_rs.r, init_opts.corner_radius.scale(content_rs.s, dvui.Rect.Physical));
+        path.addRect(content_rs.r, init_opts.corner_radius.scale(content_rs.s, dvui.Rect.Physical));
 
-    var triangles = try path.build().fillConvexTriangles(fizzy.app.allocator, .{ .color = init_opts.color_mod, .fade = init_opts.fade });
+        var t = try path.build().fillConvexTriangles(fizzy.app.allocator, .{ .color = init_opts.color_mod, .fade = init_opts.fade });
+        t.uvFromRectuv(content_rs.r, init_opts.uv);
+        break :blk t;
+    };
     defer triangles.deinit(fizzy.app.allocator);
-
-    triangles.uvFromRectuv(content_rs.r, init_opts.uv);
 
     var dimmed_triangles: ?dvui.Triangles = null;
     defer {
