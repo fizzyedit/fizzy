@@ -17,6 +17,15 @@ const sprite_fling: fizzy.Fling.Tuning = .{
     .max = 50.0,
     .idle_s = 0.08,
 };
+/// Touch scrub: browsers often omit the last move before `touchend`, so allow a longer
+/// idle gap and a lower start speed.
+const sprite_fling_touch: fizzy.Fling.Tuning = .{
+    .decay = 4.0,
+    .min_start = 0.6,
+    .stop = 0.6,
+    .max = 50.0,
+    .idle_s = 0.28,
+};
 
 // Animated fit-scale state (shared, like a singleton preview).
 var prev_scale: f32 = 1.0;
@@ -41,6 +50,10 @@ wheel_accum: f32 = 0.0,
 drag_active: bool = false,
 /// Whether the pointer moved between press and release (drag vs. click).
 moved_since_press: bool = false,
+/// Last frame's scrub delta (index units), kept for release when touch skips a final move.
+last_drag_frame_dx: f32 = 0,
+/// True when the active scrub began with a touch press (not mouse).
+drag_was_touch: bool = false,
 /// Release momentum for the scrub: coasts the flow after a flick, then snaps.
 fling: fizzy.Fling = .{},
 /// Set once we've seeded `scroll_pos` from the initial selection.
@@ -688,6 +701,8 @@ fn handleInput(self: *Sprites, file: anytype, mode: ScrollMode, count: usize, px
                     dvui.captureMouse(pane, e.num);
                     dvui.dragPreStart(me.p, .{ .name = "coverflow_drag", .cursor = .hand });
                     self.moved_since_press = false;
+                    self.drag_was_touch = me.button.touch();
+                    self.last_drag_frame_dx = 0;
                     self.wheel_accum = 0.0;
                     // Grabbing again cancels any in-flight coast and its velocity.
                     self.fling.begin();
@@ -703,28 +718,33 @@ fn handleInput(self: *Sprites, file: anytype, mode: ScrollMode, count: usize, px
                 }
             },
             .motion => {
-                if (dvui.captured(id)) {
-                    if (dvui.dragging(me.p, "coverflow_drag")) |dps| {
-                        self.drag_active = true;
-                        self.moved_since_press = true;
-                        if (px_per_index > 0.0) {
-                            const di = -dps.x / rs.s / px_per_index;
-                            if (snap_scroll) {
-                                self.wheel_accum += di;
-                                while (@abs(self.wheel_accum) >= 1.0) {
-                                    const step: f32 = if (self.wheel_accum > 0.0) 1.0 else -1.0;
-                                    self.wheel_accum -= step;
-                                    stepScrollGoal(self, file, mode, count, step);
-                                }
-                            } else {
-                                self.scroll_pos += di;
-                                self.goal = self.scroll_pos;
-                                frame_dx += di;
-                            }
+                if (!dvui.captured(id)) continue;
+                // Touch moves use the event delta directly — waiting for the mouse drag
+                // threshold drops most of the last samples before `touchend`.
+                const dps: dvui.Point.Physical = if (me.button.touch())
+                    me.action.motion
+                else if (dvui.dragging(me.p, "coverflow_drag")) |d|
+                    d
+                else
+                    continue;
+                self.drag_active = true;
+                self.moved_since_press = true;
+                if (px_per_index > 0.0) {
+                    const di = -dps.x / rs.s / px_per_index;
+                    if (snap_scroll) {
+                        self.wheel_accum += di;
+                        while (@abs(self.wheel_accum) >= 1.0) {
+                            const step: f32 = if (self.wheel_accum > 0.0) 1.0 else -1.0;
+                            self.wheel_accum -= step;
+                            stepScrollGoal(self, file, mode, count, step);
                         }
-                        dvui.refresh(null, @src(), id);
+                    } else {
+                        self.scroll_pos += di;
+                        self.goal = self.scroll_pos;
+                        frame_dx += di;
                     }
                 }
+                dvui.refresh(null, @src(), id);
             },
             .wheel_x, .wheel_y => {
                 if (inside) {
@@ -755,24 +775,33 @@ fn handleInput(self: *Sprites, file: anytype, mode: ScrollMode, count: usize, px
         }
     }
 
-    // Sample the flick velocity once per frame the drag moved.
-    if (self.drag_active and !snap_scroll) self.fling.sample(frame_dx);
+    if (!snap_scroll) {
+        if (frame_dx != 0) self.last_drag_frame_dx = frame_dx;
+        // Sample the flick velocity once per frame the drag moved.
+        if (self.drag_active) self.fling.sample(frame_dx);
 
-    // On release, coast with the built-up velocity — unless the pointer had paused
-    // or barely moved, in which case snap straight to the nearest sprite.
-    if (released_moved) {
-        if (snap_scroll) {
-            const v = wrapIndex(@intFromFloat(@round(self.goal)), count);
-            self.goal = @floatFromInt(v);
-            self.scroll_pos = self.goal;
-            self.fling.cancel();
-            if (mode != .all_passive) {
-                self.commitVirtualCenter(file, mode, v);
+        // On release, coast with the built-up velocity — unless the pointer had paused
+        // or barely moved, in which case ease to the nearest sprite.
+        if (released_moved) {
+            // Touch often lifts without a move on the same frame; re-sample the last
+            // delta so `release` sees fresh velocity and near-zero idle time.
+            const release_dx = if (frame_dx != 0) frame_dx else self.last_drag_frame_dx;
+            if (release_dx != 0) self.fling.sample(release_dx);
+
+            const fling_tuning = if (self.drag_was_touch) sprite_fling_touch else sprite_fling;
+            if (!self.fling.release(fling_tuning)) {
+                const snapped: i64 = @intFromFloat(@round(self.scroll_pos));
+                self.goal = @floatFromInt(snapped);
+                dvui.refresh(null, @src(), id);
             }
-        } else if (!self.fling.release(sprite_fling)) {
-            const snapped: i64 = @intFromFloat(@round(self.scroll_pos));
-            self.goal = @floatFromInt(snapped);
-            dvui.refresh(null, @src(), id);
+        }
+    } else if (released_moved) {
+        const v = wrapIndex(@intFromFloat(@round(self.goal)), count);
+        self.goal = @floatFromInt(v);
+        self.scroll_pos = self.goal;
+        self.fling.cancel();
+        if (mode != .all_passive) {
+            self.commitVirtualCenter(file, mode, v);
         }
     }
 }
