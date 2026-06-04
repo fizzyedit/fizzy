@@ -128,12 +128,51 @@ touch_eval_press_p: dvui.Point.Physical = .{},
 touch_eval_released: bool = false,
 touch_eval_release_p: dvui.Point.Physical = .{},
 
+// Momentum for the drag-pan (middle button, or a left/touch drag starting off the
+// artboard). One coast per axis so a flick keeps gliding after release; see Fling.
+pan_fling_x: fizzy.Fling = .{},
+pan_fling_y: fizzy.Fling = .{},
+
+// Pinch / two-finger pan input accumulated during this frame's `updateTouchGesture`.
+// Mutating `scale` / `scroll_info.viewport` mid-frame jitters the canvas because the
+// scaler's own `data().rectScale()` is locked in at scaler creation (before the pinch
+// runs) — scaler-child widgets would render at post-pinch scale relative to pre-pinch
+// origin. Instead we collect the deltas here and apply them at end-of-frame from
+// `processEvents`, so the next frame's install caches everything consistently (this
+// is the same pattern wheel zoom uses, which is why it stays smooth).
+pending_pinch_zoom: f32 = 1.0,
+pending_pinch_zoom_p: dvui.Point.Physical = .{},
+pending_touch_pan: dvui.Point.Physical = .{},
+pending_trackpad_ratio: f32 = 1.0,
+pending_trackpad_cursor: dvui.Point.Physical = .{},
+pending_trackpad: bool = false,
+
+// An off-artboard left/touch press that hasn't resolved yet. It becomes a pan once
+// it moves, a tap (clear selection) on a quick release, or — if held still past the
+// context-menu hold duration — opens the radial tool menu. Middle-button pans never
+// arm this, so they stay pan-only.
+tap_gesture: bool = false,
+tap_press_p: dvui.Point.Physical = .{},
+tap_press_ns: i128 = 0,
+tap_moved: bool = false,
+tap_radial: bool = false,
+
 const TouchSlot = struct {
     active: bool = false,
     p: dvui.Point.Physical = .{},
 };
 
 const touch_eval_duration_ns: i128 = 80 * std.time.ns_per_ms;
+
+/// Drag-pan momentum tuning. Units are viewport (data) pixels per second — the same
+/// units `scroll_info.viewport.x/y` move in — so the feel scales naturally with zoom.
+const pan_fling: fizzy.Fling.Tuning = .{
+    .decay = 4.0,
+    .min_start = 50.0,
+    .stop = 10.0,
+    .max = 8000.0,
+    .idle_s = 0.08,
+};
 
 /// True while a 2-finger pan/pinch is in progress, or while we're still deciding whether
 /// a single touch will become one. Tools should skip their input processing whenever this
@@ -516,8 +555,10 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
                     const dy_centroid = new_c.y - self.last_centroid.y;
                     const rs = self.scroll_rect_scale;
                     if (rs.s > 0) {
-                        self.scroll_info.viewport.x -= dx_centroid / rs.s;
-                        self.scroll_info.viewport.y -= dy_centroid / rs.s;
+                        // Defer the pan to end-of-frame so the canvas widget tree this
+                        // frame stays internally consistent (see field doc).
+                        self.pending_touch_pan.x -= dx_centroid / rs.s;
+                        self.pending_touch_pan.y -= dy_centroid / rs.s;
                     }
 
                     const new_d = self.touchPinchDistance();
@@ -572,15 +613,10 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
     }
 
     if (zoom != 1.0) {
-        // Same scale-around-point math as the wheel-zoom path in processEvents.
-        const prevP = self.dataFromScreenPoint(zoomP);
-        var pp = prevP.scale(1 / self.scale, dvui.Point);
-        self.scale *= zoom;
-        pp = pp.scale(self.scale, dvui.Point);
-        const newP = self.screenFromDataPoint(pp);
-        const diff = self.viewportFromScreenPoint(newP).diff(self.viewportFromScreenPoint(zoomP));
-        self.scroll_info.viewport.x += diff.x;
-        self.scroll_info.viewport.y += diff.y;
+        // Defer the 2-finger pinch zoom to `processEvents` (end-of-frame) — see the
+        // pending field docs for the jitter reason.
+        self.pending_pinch_zoom *= zoom;
+        self.pending_pinch_zoom_p = zoomP;
         dvui.refresh(null, @src(), self.scroll_container.data().id);
     }
 
@@ -596,14 +632,10 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
         // user pinching while their pointer sits on a side panel / toolbar would unexpectedly
         // zoom the canvas.
         if (self.scroll_container.data().contentRectScale().r.contains(cursor_phys)) {
-            const prevP = self.dataFromScreenPoint(cursor_phys);
-            var pp = prevP.scale(1 / self.scale, dvui.Point);
-            self.scale *= trackpad_ratio;
-            pp = pp.scale(self.scale, dvui.Point);
-            const newP = self.screenFromDataPoint(pp);
-            const diff = self.viewportFromScreenPoint(newP).diff(self.viewportFromScreenPoint(cursor_phys));
-            self.scroll_info.viewport.x += diff.x;
-            self.scroll_info.viewport.y += diff.y;
+            // Defer the trackpad pinch zoom to `processEvents` for the same reason.
+            self.pending_trackpad_ratio *= trackpad_ratio;
+            self.pending_trackpad_cursor = cursor_phys;
+            self.pending_trackpad = true;
             self.trackpad_pinch_last_ns = dvui.currentWindow().frame_time_ns;
             dvui.refresh(null, @src(), self.scroll_container.data().id);
         }
@@ -775,8 +807,54 @@ fn pointerInputSuppressed(self: *const CanvasWidget) bool {
 }
 
 pub fn processEvents(self: *CanvasWidget) void {
+    // Apply pinch / two-finger pan deferred from this frame's `updateTouchGesture`.
+    // We do it at end-of-frame so the body above rendered with stable widget state
+    // (matching wheel zoom). The mutations land on `scale` / `scroll_info.viewport`,
+    // and next frame's install picks them up consistently across the image, shadow,
+    // and resize handle. The scale-around-point math here is identical to the wheel
+    // and old inline pinch paths — only the timing changed.
+    if (self.pending_pinch_zoom != 1.0) {
+        const zoom = self.pending_pinch_zoom;
+        const zoomP = self.pending_pinch_zoom_p;
+        const prevP = self.dataFromScreenPoint(zoomP);
+        var pp = prevP.scale(1 / self.scale, dvui.Point);
+        self.scale *= zoom;
+        pp = pp.scale(self.scale, dvui.Point);
+        const newP = self.screenFromDataPoint(pp);
+        const diff = self.viewportFromScreenPoint(newP).diff(self.viewportFromScreenPoint(zoomP));
+        self.scroll_info.viewport.x += diff.x;
+        self.scroll_info.viewport.y += diff.y;
+        self.pending_pinch_zoom = 1.0;
+    }
+    if (self.pending_trackpad) {
+        const ratio = self.pending_trackpad_ratio;
+        const cursor_phys = self.pending_trackpad_cursor;
+        const prevP = self.dataFromScreenPoint(cursor_phys);
+        var pp = prevP.scale(1 / self.scale, dvui.Point);
+        self.scale *= ratio;
+        pp = pp.scale(self.scale, dvui.Point);
+        const newP = self.screenFromDataPoint(pp);
+        const diff = self.viewportFromScreenPoint(newP).diff(self.viewportFromScreenPoint(cursor_phys));
+        self.scroll_info.viewport.x += diff.x;
+        self.scroll_info.viewport.y += diff.y;
+        self.pending_trackpad_ratio = 1.0;
+        self.pending_trackpad = false;
+    }
+    if (self.pending_touch_pan.x != 0 or self.pending_touch_pan.y != 0) {
+        self.scroll_info.viewport.x += self.pending_touch_pan.x;
+        self.scroll_info.viewport.y += self.pending_touch_pan.y;
+        self.pending_touch_pan = .{};
+    }
+
     if (self.pointerInputSuppressed()) {
         self.hovered = false;
+        self.pan_fling_x.cancel();
+        self.pan_fling_y.cancel();
+        // The radial menu (opened on hold below) suppresses canvas input while it's
+        // up; its release/close is handled in Editor.drawRadialMenu, so just drop our
+        // pending gesture state here.
+        self.tap_gesture = false;
+        self.tap_radial = false;
         return;
     }
 
@@ -784,6 +862,13 @@ pub fn processEvents(self: *CanvasWidget) void {
 
     var zoom: f32 = 1;
     var zoomP: dvui.Point.Physical = .{};
+
+    // Drag-pan movement accumulated across this frame's motion events, finalized
+    // after the loop so the fling velocity is sampled once per frame.
+    var pan_dx: f32 = 0;
+    var pan_dy: f32 = 0;
+    var pan_motion = false;
+    var pan_released = false;
 
     // Suppress DVUI's built-in single-touch auto-pan inside the canvas. By this point in the
     // frame the drawing tools have already consumed any single-finger touches, and the scroll
@@ -795,6 +880,13 @@ pub fn processEvents(self: *CanvasWidget) void {
         if (e.evt != .mouse) continue;
         const me = e.evt.mouse;
         if (!me.button.touch()) continue;
+        // Let single-finger touches that belong to an empty-area canvas pan fall
+        // through to the pan handler below instead of being swallowed here: a press
+        // starting off the artboard, or any touch while such a pan is captured.
+        // The pan handler claims those itself, so the built-in scroll pan still
+        // stays suppressed for touches over the drawable (where we want to draw).
+        if (dvui.captured(self.scroll_container.data().id)) continue;
+        if (me.action == .press and !self.pointerOverDrawable(me.p)) continue;
         if (self.scroll_container.matchEvent(e)) {
             e.handle(@src(), self.scroll_container.data());
         }
@@ -814,22 +906,52 @@ pub fn processEvents(self: *CanvasWidget) void {
                     self.hovered = self.pointerOverDrawable(me.p);
                 }
 
-                if (me.action == .press and me.button == .middle) {
+                // Pan the canvas on a middle-button drag, or on a left/touch drag
+                // that starts in the empty scroll area (not over the artboard) —
+                // same scrub-the-viewport feel as the middle-button pan.
+                if (me.action == .press and (me.button == .middle or (me.button.pointer() and !self.pointerOverDrawable(me.p)))) {
                     e.handle(@src(), self.scroll_container.data());
                     dvui.captureMouse(self.scroll_container.data(), e.num);
-                    dvui.dragPreStart(me.p, .{ .name = "scroll_drag" });
-                } else if (me.action == .release and me.button == .middle) {
+                    dvui.dragPreStart(me.p, .{ .name = "scroll_drag", .cursor = .hand });
+                    self.pan_fling_x.begin();
+                    self.pan_fling_y.begin();
+                    // A non-middle (left/touch) off-artboard press may still become a tap
+                    // or a hold — arm the gesture so the release/hold logic can resolve it.
+                    self.tap_gesture = me.button != .middle;
+                    self.tap_press_p = me.p;
+                    self.tap_press_ns = dvui.frameTimeNS();
+                    self.tap_moved = false;
+                    self.tap_radial = false;
+                } else if (me.action == .release and (me.button == .middle or me.button.pointer())) {
                     if (dvui.captured(self.scroll_container.data().id)) {
                         e.handle(@src(), self.scroll_container.data());
                         dvui.captureMouse(null, e.num);
                         dvui.dragEnd();
+                        pan_released = true;
+                        // A press that never moved and never opened the radial menu is a
+                        // plain click on empty space — clear the selection and animation.
+                        if (self.tap_gesture and !self.tap_moved and !self.tap_radial) {
+                            fizzy.editor.cancel() catch {};
+                        }
+                        self.tap_gesture = false;
                     }
                 } else if (me.action == .motion) {
                     if (dvui.captured(self.scroll_container.data().id)) {
+                        // Claim the event so the scroll container's built-in
+                        // touch-to-scroll doesn't also pan from the same finger.
+                        e.handle(@src(), self.scroll_container.data());
                         if (dvui.dragging(me.p, "scroll_drag")) |dps| {
                             const rs = self.scroll_rect_scale;
-                            self.scroll_info.viewport.x -= dps.x / rs.s;
-                            self.scroll_info.viewport.y -= dps.y / rs.s;
+                            const ddx = -dps.x / rs.s;
+                            const ddy = -dps.y / rs.s;
+                            self.scroll_info.viewport.x += ddx;
+                            self.scroll_info.viewport.y += ddy;
+                            pan_dx += ddx;
+                            pan_dy += ddy;
+                            pan_motion = true;
+                            // Movement past the drag threshold means this is a pan, not a
+                            // tap or a hold.
+                            self.tap_moved = true;
                             dvui.refresh(null, @src(), self.scroll_container.data().id);
                         }
                     }
@@ -866,6 +988,46 @@ pub fn processEvents(self: *CanvasWidget) void {
             },
             else => {},
         }
+    }
+
+    // ---- Drag-pan momentum. Sample the flick velocity once per frame, decide on
+    // release whether to coast, and advance an in-flight coast — each axis is
+    // independent so a mostly-horizontal flick doesn't drift vertically. ----
+    if (pan_motion) {
+        self.pan_fling_x.sample(pan_dx);
+        self.pan_fling_y.sample(pan_dy);
+    }
+    if (pan_released) {
+        _ = self.pan_fling_x.release(pan_fling);
+        _ = self.pan_fling_y.release(pan_fling);
+    }
+    if (self.pan_fling_x.coasting or self.pan_fling_y.coasting) {
+        if (self.pan_fling_x.step(pan_fling)) |dx| self.scroll_info.viewport.x += dx;
+        if (self.pan_fling_y.step(pan_fling)) |dy| self.scroll_info.viewport.y += dy;
+        dvui.refresh(null, @src(), self.scroll_container.data().id);
+    }
+
+    // ---- Press-and-hold over empty space opens the radial tool menu (same gesture
+    // as the tools-menu color button). Hand the press over to the menu by releasing
+    // our capture so its buttons can be hovered; Editor keeps it open until a tool
+    // is chosen or the user clicks outside the menu. ----
+    if (self.tap_gesture and !self.tap_moved and !self.tap_radial) {
+        if (dvui.frameTimeNS() - self.tap_press_ns >= dvui.currentWindow().hold_menu_duration_ns) {
+            fizzy.editor.tools.radial_menu.mouse_position = self.tap_press_p;
+            fizzy.editor.tools.radial_menu.center = self.tap_press_p;
+            fizzy.editor.tools.radial_menu.visible = true;
+            fizzy.editor.tools.radial_menu.opened_by_press = true;
+            fizzy.editor.tools.radial_menu.suppress_next_pointer_release = true;
+            fizzy.editor.tools.radial_menu.outside_click_press_p = null;
+            self.tap_radial = true;
+            if (dvui.captured(self.scroll_container.data().id)) {
+                dvui.captureMouse(null, 0);
+                dvui.dragEnd();
+            }
+            self.pan_fling_x.cancel();
+            self.pan_fling_y.cancel();
+        }
+        dvui.refresh(null, @src(), self.scroll_container.data().id);
     }
 
     // scale around mouse point

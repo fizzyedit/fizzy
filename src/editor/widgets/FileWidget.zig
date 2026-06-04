@@ -265,7 +265,16 @@ pub fn sampleColorAtPoint(
     }
 
     if (change_tool) {
-        if (color[3] == 0) {
+        const off_canvas = point.x < 0 or point.y < 0 or
+            point.x >= @as(f32, @floatFromInt(file.width())) or
+            point.y >= @as(f32, @floatFromInt(file.height()));
+        if (off_canvas) {
+            // Sampling the empty margin outside the artboard isn't an erase — drop back
+            // to the pointer tool so the click reads as "leave drawing mode".
+            if (fizzy.editor.tools.current != .pointer) {
+                fizzy.editor.tools.set(.pointer);
+            }
+        } else if (color[3] == 0) {
             if (fizzy.editor.tools.current != .eraser) {
                 fizzy.editor.tools.set(.eraser);
             }
@@ -529,6 +538,16 @@ pub fn processSpriteSelection(self: *FileWidget) void {
                 const current_point = self.init_options.file.editor.canvas.dataFromScreenPoint(me.p);
 
                 if (me.action == .press and me.button.pointer()) {
+                    // A press off the artboard with no selection modifier belongs to
+                    // the canvas pan (handled later in canvas.processEvents) — yield it
+                    // so dragging empty space pans instead of starting a marquee. Holding
+                    // ctrl/cmd (add) or shift (subtract) keeps the selection meaning even
+                    // out in the margins, so those still fall through to the logic below.
+                    const sel_mod = me.mod.matchBind("ctrl/cmd") or me.mod.matchBind("shift");
+                    if (!sel_mod and !file.editor.canvas.pointerOverDrawable(me.p)) {
+                        continue;
+                    }
+
                     if (me.mod.matchBind("shift")) {
                         self.shift_key_down = true;
                         if (file.spriteIndex(self.init_options.file.editor.canvas.dataFromScreenPoint(me.p))) |sprite_index| {
@@ -537,6 +556,7 @@ pub fn processSpriteSelection(self: *FileWidget) void {
                     } else if (me.mod.matchBind("ctrl/cmd")) {
                         if (file.spriteIndex(self.init_options.file.editor.canvas.dataFromScreenPoint(me.p))) |sprite_index| {
                             file.editor.selected_sprites.set(sprite_index);
+                            file.editor.primary_sprite_index = sprite_index;
                         }
                     } else {
                         if (file.spriteIndex(self.init_options.file.editor.canvas.dataFromScreenPoint(me.p))) |sprite_index| {
@@ -545,6 +565,7 @@ pub fn processSpriteSelection(self: *FileWidget) void {
 
                             if (!selected) {
                                 file.editor.selected_sprites.set(sprite_index);
+                                file.editor.primary_sprite_index = sprite_index;
                             }
                         } else if (!file.editor.canvas.hovered) {
                             fizzy.editor.cancel() catch {
@@ -1247,6 +1268,12 @@ pub fn drawSpriteBubble(
                 if (frame.sprite_index != sprite_index and animation_index == ai) {
                     bubble_max_height = @min(sprite_rect.h, sprite_rect.w) * 0.3333;
                 }
+            }
+        }
+    } else if (self.init_options.file.editor.selected_sprites.count() > 1) {
+        if (self.init_options.file.primarySpriteIndex()) |primary| {
+            if (sprite_index != primary) {
+                bubble_max_height = @min(sprite_rect.h, sprite_rect.w) * 0.3333;
             }
         }
     }

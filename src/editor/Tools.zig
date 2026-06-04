@@ -33,6 +33,32 @@ pub const RadialMenu = struct {
     mouse_position: dvui.Point.Physical = .{ .x = 0.0, .y = 0.0 },
     center: dvui.Point.Physical = .{ .x = 0.0, .y = 0.0 },
     visible: bool = false,
+    /// Opened by press-and-hold on empty workspace (not Space / quick-tools). Both paths pin
+    /// `center` at open; this flag only selects hold-specific dismiss behavior.
+    opened_by_press: bool = false,
+    /// Ignore the first pointer release after a hold-open (lifting the opening finger).
+    suppress_next_pointer_release: bool = false,
+    /// Press began outside the menu while it is hold-open; used for click-outside dismiss.
+    outside_click_press_p: ?dvui.Point.Physical = null,
+
+    pub fn close(self: *RadialMenu) void {
+        self.visible = false;
+        self.opened_by_press = false;
+        self.suppress_next_pointer_release = false;
+        self.outside_click_press_p = null;
+    }
+
+    /// Physical hit radius for the radial tool ring (matches `drawRadialMenu` outer disc).
+    pub fn hitRadiusPhysical() f32 {
+        return 165.0;
+    }
+
+    pub fn containsPhysical(self: RadialMenu, p: dvui.Point.Physical) bool {
+        const r = hitRadiusPhysical();
+        const dx = p.x - self.center.x;
+        const dy = p.y - self.center.y;
+        return dx * dx + dy * dy <= r * r;
+    }
 };
 
 pub const default_pencil_stroke_size: u8 = 1;

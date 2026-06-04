@@ -71,6 +71,9 @@ pub const EditorData = struct {
     selection_layer: Layer = undefined,
     transform_layer: Layer = undefined,
     selected_sprites: std.DynamicBitSet = undefined,
+    /// Primary tile among a multi-sprite selection (cover-flow center / tallest bubble).
+    /// When an animation is selected, `selected_animation_frame_index` is kept in sync.
+    primary_sprite_index: ?usize = null,
 
     checkerboard: std.DynamicBitSet = undefined,
     checkerboard_tile: ?dvui.Texture = null,
@@ -1527,6 +1530,53 @@ pub fn rowRect(file: *File, row_index: usize) dvui.Rect {
 }
 pub fn clearSelectedSprites(file: *File) void {
     file.editor.selected_sprites.setRangeValue(.{ .start = 0, .end = file.spriteCount() }, false);
+    file.editor.primary_sprite_index = null;
+}
+
+/// Sprite that should read as primary (tallest frame bubble, cover-flow focus).
+pub fn primarySpriteIndex(file: *const File) ?usize {
+    if (file.editor.primary_sprite_index) |p| {
+        if (p < file.editor.selected_sprites.capacity() and file.editor.selected_sprites.isSet(p)) {
+            return p;
+        }
+    }
+    if (file.selected_animation_index) |ai| {
+        const frames = file.animations.get(ai).frames;
+        if (frames.len > 0 and file.selected_animation_frame_index < frames.len) {
+            return frames[file.selected_animation_frame_index].sprite_index;
+        }
+    }
+    return file.editor.selected_sprites.findLastSet();
+}
+
+/// Move the primary sprite/frame to `sprite_index` without changing the selection set.
+pub fn promotePrimarySprite(file: *File, sprite_index: usize) void {
+    if (sprite_index >= file.editor.selected_sprites.capacity() or
+        !file.editor.selected_sprites.isSet(sprite_index))
+    {
+        return;
+    }
+    file.editor.primary_sprite_index = sprite_index;
+
+    const animation_index = file.selected_animation_index orelse return;
+    const frames = file.animations.get(animation_index).frames;
+    if (frames.len == 0) return;
+
+    if (file.editor.selected_frame_indices.items.len > 0) {
+        for (file.editor.selected_frame_indices.items) |fi| {
+            if (fi < frames.len and frames[fi].sprite_index == sprite_index) {
+                file.selected_animation_frame_index = fi;
+                return;
+            }
+        }
+    }
+
+    for (frames, 0..) |f, fi| {
+        if (f.sprite_index == sprite_index) {
+            file.selected_animation_frame_index = fi;
+            return;
+        }
+    }
 }
 
 /// Collapse animation list multi-selection to the current primary only. Used when the primary is

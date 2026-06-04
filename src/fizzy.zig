@@ -25,6 +25,7 @@ pub const App = @import("App.zig");
 pub const Assets = @import("Assets.zig");
 pub const Editor = @import("editor/Editor.zig");
 pub const Explorer = @import("editor/explorer/Explorer.zig");
+pub const Fling = @import("editor/Fling.zig");
 pub const Packer = @import("tools/Packer.zig");
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");

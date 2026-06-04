@@ -205,7 +205,7 @@ pub fn draw() !void {
             fizzy.editor.markSettingsDirty();
         }
 
-        if (dvui.checkbox(@src(), &fizzy.editor.settings.scrolling_cards, "Scrolling sprite cards", .{
+        if (dvui.checkbox(@src(), &fizzy.editor.settings.scrolling_cards, "Show sprite cover-flow cards", .{
             .expand = .none,
         })) {
             fizzy.editor.markSettingsDirty();

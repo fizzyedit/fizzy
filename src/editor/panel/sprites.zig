@@ -9,6 +9,15 @@ const Sprites = @This();
 /// Side-card fly-out / fly-in master timeline (microseconds, linear 0↔1).
 const fly_anim_duration_us: i64 = 750_000;
 
+/// Cover-flow scrub momentum tuning (sprite-index units). See `fizzy.Fling`.
+const sprite_fling: fizzy.Fling.Tuning = .{
+    .decay = 4.0,
+    .min_start = 1.2,
+    .stop = 0.6,
+    .max = 50.0,
+    .idle_s = 0.08,
+};
+
 // Animated fit-scale state (shared, like a singleton preview).
 var prev_scale: f32 = 1.0;
 var current_scale: f32 = 1.0;
@@ -21,15 +30,19 @@ scroll_pos: f32 = 0.0,
 /// Index the flow is easing toward. Driven either by the editor selection or by
 /// the user scrolling/dragging the flow itself.
 goal: f32 = 0.0,
-/// Last selection index we observed coming from the rest of the editor, so we
+/// Last virtual center index we observed from the rest of the editor, so we
 /// can tell an external selection change apart from one we caused ourselves.
-last_sel_index: usize = std.math.maxInt(usize),
+last_sel_virtual: usize = std.math.maxInt(usize),
+/// Last virtual index we pushed into editor state from the cover flow.
+last_committed_virtual: usize = std.math.maxInt(usize),
 /// Accumulates fractional wheel deltas until they cross a whole step.
 wheel_accum: f32 = 0.0,
 /// True only on frames where the user is actively dragging the flow.
 drag_active: bool = false,
 /// Whether the pointer moved between press and release (drag vs. click).
 moved_since_press: bool = false,
+/// Release momentum for the scrub: coasts the flow after a flick, then snaps.
+fling: fizzy.Fling = .{},
 /// Set once we've seeded `scroll_pos` from the initial selection.
 initialized: bool = false,
 /// Previous "flown" state (see `sideCardsFlown`), so we can fire the fly-out /
@@ -62,7 +75,8 @@ pub fn draw(self: *Sprites) !void {
         const parent = dvui.parentGet().data().rect;
         const parent_height = parent.h;
 
-        const count = file.spriteCount();
+        const mode = scrollMode(file);
+        const count = scrollCount(file, mode);
         if (count == 0) {
             return;
         }
@@ -162,24 +176,26 @@ pub fn draw(self: *Sprites) !void {
         const gap_ramp: f32 = 1.0;
 
         // ---- Seed the flow position from the current selection on first frame. ----
-        const sel_index = currentTargetIndex(file, count);
+        const sel_virtual = currentVirtualTarget(file, mode, count);
         if (!self.initialized) {
-            self.scroll_pos = @floatFromInt(sel_index);
+            self.scroll_pos = @floatFromInt(sel_virtual);
             self.goal = self.scroll_pos;
-            self.last_sel_index = sel_index;
+            self.last_sel_virtual = sel_virtual;
+            self.last_committed_virtual = sel_virtual;
             self.initialized = true;
         }
 
         // ---- User input (wheel / drag) may override the flow and the selection. ----
-        self.handleInput(file, count, front_gap);
+        self.handleInput(file, mode, count, front_gap, flown);
 
         // An external selection change (clicking a sprite, picking an animation,
         // playback advancing a frame) retargets the flow. Pick the wrapped
         // representative nearest the current position so we ease the short way
         // around the loop (e.g. from the first sprite leftwards to the last).
-        if (!self.drag_active and sel_index != self.last_sel_index) {
-            self.goal = nearestWrapped(self.scroll_pos, sel_index, count);
-            self.last_sel_index = sel_index;
+        if (!self.drag_active and sel_virtual != self.last_sel_virtual) {
+            self.goal = nearestWrapped(self.scroll_pos, sel_virtual, count);
+            self.last_sel_virtual = sel_virtual;
+            self.last_committed_virtual = sel_virtual;
         }
 
         // ---- Move toward the goal. While cards are flown (playback, drawing
@@ -188,7 +204,25 @@ pub fn draw(self: *Sprites) !void {
         // Otherwise ease (frame-rate independent). ----
         if (flown or dvui.reduce_motion) {
             self.scroll_pos = self.goal;
-        } else if (!self.drag_active) {
+            self.fling.cancel();
+            self.commitCenteredIfNeeded(file, mode, count);
+        } else if (self.drag_active) {
+            // Position is driven directly by the drag in handleInput.
+            self.fling.cancel();
+        } else if (self.fling.coasting) {
+            // Coast with decaying momentum from the release, then snap to (and
+            // select) the nearest sprite once the coast slows to a stop.
+            if (self.fling.step(sprite_fling)) |d| {
+                self.scroll_pos += d;
+                self.goal = self.scroll_pos;
+            }
+            if (!self.fling.coasting) {
+                const snapped: i64 = @intFromFloat(@round(self.scroll_pos));
+                self.goal = @floatFromInt(snapped);
+                self.commitVirtualCenter(file, mode, wrapIndex(snapped, count));
+            }
+            dvui.refresh(null, @src(), dvui.parentGet().data().id);
+        } else {
             const diff = self.goal - self.scroll_pos;
             if (@abs(diff) > 0.001) {
                 const dt = dvui.secondsSinceLastFrame();
@@ -197,6 +231,8 @@ pub fn draw(self: *Sprites) !void {
                 dvui.refresh(null, @src(), dvui.parentGet().data().id);
             } else {
                 self.scroll_pos = self.goal;
+                // Passive ease finished — sync editor state once at the destination.
+                self.commitCenteredIfNeeded(file, mode, count);
             }
         }
         // Infinite wrap: keep scroll_pos (and the goal it chases) within one loop
@@ -209,6 +245,13 @@ pub fn draw(self: *Sprites) !void {
                 self.scroll_pos -= k * c;
                 self.goal -= k * c;
             }
+        }
+
+        // Only push selection / frame changes while the user is actively scrubbing.
+        // During passive ease toward a goal, scroll_pos lags behind — per-frame
+        // commits would fight wheel/drag commits and retrigger canvas bubble animations.
+        if (self.drag_active or self.fling.coasting) {
+            self.commitCenteredIfNeeded(file, mode, count);
         }
 
         if (parent.h < 32.0) {
@@ -235,7 +278,6 @@ pub fn draw(self: *Sprites) !void {
             break :blk std.math.clamp(fit, 1, max_window);
         };
         const center_i: i64 = @intFromFloat(@round(self.scroll_pos));
-        const count_i: i64 = @intCast(count);
 
         // `slot` is the unwrapped position (so `off` and the skew stay continuous);
         // `idx` is the wrapped sprite it shows; `id` is a per-slot widget id so
@@ -246,8 +288,9 @@ pub fn draw(self: *Sprites) !void {
         var d: i64 = -window;
         while (d <= window) : (d += 1) {
             const slot = center_i + d;
+            const virtual = wrapIndex(slot, count);
             items[n] = .{
-                .idx = @intCast(@mod(slot, count_i)),
+                .idx = virtualToSpriteIndex(file, mode, virtual),
                 .off = @as(f32, @floatFromInt(slot)) - self.scroll_pos,
                 .id = @intCast(d + window),
                 .center = d == 0,
@@ -368,10 +411,9 @@ pub fn draw(self: *Sprites) !void {
 }
 
 /// Side cards lift away during playback, while a drawing tool is active, or when
-/// `settings.scrolling_cards` is enabled (app-wide, toggled in settings or the
-/// sprites pane).
+/// `settings.scrolling_cards` is off (focus mode; toggled in settings or the sprites pane).
 fn sideCardsFlown(playing: bool) bool {
-    return playing or fizzy.editor.settings.scrolling_cards or drawingToolActive();
+    return playing or drawingToolActive() or !fizzy.editor.settings.scrolling_cards;
 }
 
 /// Pencil, eraser, and bucket — not pointer (navigate) or selection (marquee).
@@ -382,48 +424,146 @@ fn drawingToolActive() bool {
     };
 }
 
-/// Sprite index for the active animation's current frame, if any.
-fn animationFrameSpriteIndex(file: anytype) ?usize {
-    const animation_index = file.selected_animation_index orelse return null;
-    const animation = file.animations.get(animation_index);
-    if (animation.frames.len == 0) return null;
-    const frame_index = file.selected_animation_frame_index;
-    if (frame_index >= animation.frames.len) return null;
-    return animation.frames[frame_index].sprite_index;
+/// How the cover-flow loop and scroll-to-editor sync behave.
+const ScrollMode = enum {
+    /// All sprites; scrolling does not change selection or animation frame.
+    all_passive,
+    /// All sprites; the centered sprite becomes the sole selection.
+    all_follow_selection,
+    /// Animation frames only; the active frame follows the center; no sprite selection.
+    animation_passive,
+    /// Animation frames; active frame and a single in-animation sprite follow the center.
+    animation_follow_selection,
+    /// Multi-sprite selection only; primary tile follows the centered sprite.
+    selection_only,
+};
+
+fn scrollMode(file: anytype) ScrollMode {
+    const sel_count = file.editor.selected_sprites.count();
+    if (sel_count > 1) return .selection_only;
+
+    if (file.selected_animation_index) |ai| {
+        const frames = file.animations.get(ai).frames;
+        if (frames.len == 0) return .all_passive;
+        if (sel_count == 1) {
+            const si = file.editor.selected_sprites.findFirstSet() orelse return .all_passive;
+            for (frames) |f| {
+                if (f.sprite_index == si) return .animation_follow_selection;
+            }
+            return .all_follow_selection;
+        }
+        return .animation_passive;
+    }
+
+    if (sel_count == 1) return .all_follow_selection;
+    return .all_passive;
 }
 
-/// The sprite index the cover flow scrolls toward when the user isn't driving
-/// it directly. Matches the old single-sprite preview priority:
-///   1. Playback → current animation frame
-///   2. Drawing (pencil / eraser / bucket) + canvas hover → hovered cell
-///   3. Canvas / grid selection (e.g. last painted cell after Escape) → last selected
-///   4. Animation selected, nothing in the selection set → that frame's sprite
-///   5. Otherwise → sprite 0
-fn currentTargetIndex(file: anytype, count: usize) usize {
+fn scrollCount(file: anytype, mode: ScrollMode) usize {
+    return switch (mode) {
+        .all_passive, .all_follow_selection => file.spriteCount(),
+        .animation_passive, .animation_follow_selection => blk: {
+            const ai = file.selected_animation_index orelse return file.spriteCount();
+            break :blk file.animations.get(ai).frames.len;
+        },
+        .selection_only => file.editor.selected_sprites.count(),
+    };
+}
+
+fn nthSelectedSprite(file: anytype, n: usize) usize {
+    var iter = file.editor.selected_sprites.iterator(.{ .kind = .set, .direction = .forward });
+    var i: usize = 0;
+    while (iter.next()) |si| {
+        if (i == n) return si;
+        i += 1;
+    }
+    return 0;
+}
+
+fn selectedSpriteVirtual(file: anytype, sprite_index: usize) ?usize {
+    var iter = file.editor.selected_sprites.iterator(.{ .kind = .set, .direction = .forward });
+    var i: usize = 0;
+    while (iter.next()) |si| {
+        if (si == sprite_index) return i;
+        i += 1;
+    }
+    return null;
+}
+
+fn virtualToSpriteIndex(file: anytype, mode: ScrollMode, virtual: usize) usize {
+    return switch (mode) {
+        .all_passive, .all_follow_selection => virtual,
+        .animation_passive, .animation_follow_selection => {
+            const ai = file.selected_animation_index orelse return virtual;
+            const frames = file.animations.get(ai).frames;
+            if (frames.len == 0) return virtual;
+            return frames[@min(virtual, frames.len - 1)].sprite_index;
+        },
+        .selection_only => nthSelectedSprite(file, virtual),
+    };
+}
+
+fn virtualFromSprite(file: anytype, mode: ScrollMode, sprite_index: usize) ?usize {
+    return switch (mode) {
+        .all_passive, .all_follow_selection => sprite_index,
+        .animation_passive, .animation_follow_selection => {
+            const ai = file.selected_animation_index orelse return sprite_index;
+            const frames = file.animations.get(ai).frames;
+            for (frames, 0..) |f, i| {
+                if (f.sprite_index == sprite_index) return i;
+            }
+            return null;
+        },
+        .selection_only => selectedSpriteVirtual(file, sprite_index),
+    };
+}
+
+/// Virtual center index the cover flow eases toward when the user isn't driving it.
+fn currentVirtualTarget(file: anytype, mode: ScrollMode, count: usize) usize {
     if (count == 0) return 0;
 
-    if (file.editor.playing) {
-        if (animationFrameSpriteIndex(file)) |idx| return @min(idx, count - 1);
+    if (file.editor.playing and (mode == .animation_passive or mode == .animation_follow_selection)) {
+        return @min(file.selected_animation_frame_index, count - 1);
     }
 
     if (file.editor.canvas.hovered and drawingToolActive()) {
         if (file.spriteIndex(file.editor.canvas.dataFromScreenPoint(dvui.currentWindow().mouse_pt_prev))) |sprite_index| {
-            return @min(sprite_index, count - 1);
+            if (virtualFromSprite(file, mode, sprite_index)) |v| return @min(v, count - 1);
         }
     }
 
-    if (file.editor.selected_sprites.count() > 0) {
-        if (file.editor.selected_sprites.findLastSet()) |last| return @min(last, count - 1);
-    }
-
-    if (animationFrameSpriteIndex(file)) |idx| return @min(idx, count - 1);
-
-    return 0;
+    return switch (mode) {
+        .all_passive, .all_follow_selection => blk: {
+            if (file.editor.selected_sprites.count() > 0) {
+                if (file.editor.selected_sprites.findLastSet()) |last| break :blk @min(last, count - 1);
+            }
+            break :blk 0;
+        },
+        .animation_passive, .animation_follow_selection => @min(file.selected_animation_frame_index, count - 1),
+        .selection_only => blk: {
+            if (file.primarySpriteIndex()) |primary| {
+                if (selectedSpriteVirtual(file, primary)) |v| break :blk @min(v, count - 1);
+            }
+            break :blk 0;
+        },
+    };
 }
 
 /// Wrap an unbounded slot index into a real sprite index in [0, count).
 fn wrapIndex(slot: i64, count: usize) usize {
     return @intCast(@mod(slot, @as(i64, @intCast(count))));
+}
+
+/// Advance the cover flow by one whole item and snap `scroll_pos` to match (flown-out mode).
+fn stepScrollGoal(self: *Sprites, file: anytype, mode: ScrollMode, count: usize, step: f32) void {
+    const next_slot: i64 = @as(i64, @intFromFloat(@round(self.goal))) + @as(i64, @intFromFloat(step));
+    const v = wrapIndex(next_slot, count);
+    self.goal = @floatFromInt(v);
+    self.scroll_pos = self.goal;
+    self.fling.cancel();
+    if (mode != .all_passive) {
+        self.commitVirtualCenter(file, mode, v);
+    }
 }
 
 /// The representative of sprite `target` nearest to `from` in the infinite wrapped
@@ -434,15 +574,59 @@ fn nearestWrapped(from: f32, target: usize, count: usize) f32 {
     return base + @round((from - base) / c) * c;
 }
 
-/// Make `index` the sole selected sprite, and record it so the external-selection
-/// sync doesn't treat our own change as a new target to chase.
-fn commitSelection(self: *Sprites, file: anytype, index: usize) void {
-    file.clearSelectedSprites();
-    if (index < file.editor.selected_sprites.capacity()) {
-        file.editor.selected_sprites.set(index);
+/// Sync editor state to the sprite/frame under the cover-flow center, if it changed.
+fn commitCenteredIfNeeded(self: *Sprites, file: anytype, mode: ScrollMode, count: usize) void {
+    if (mode == .all_passive or count == 0) return;
+    const centered = wrapIndex(@intFromFloat(@round(self.scroll_pos)), count);
+    if (centered == self.last_committed_virtual) return;
+    self.commitVirtualCenter(file, mode, centered);
+}
+
+/// Apply the centered virtual index to editor state. Records the virtual index so
+/// external-selection sync doesn't treat our own change as a new target to chase.
+fn commitVirtualCenter(self: *Sprites, file: anytype, mode: ScrollMode, virtual: usize) void {
+    switch (mode) {
+        .all_passive => return,
+        .all_follow_selection => {
+            const si = virtualToSpriteIndex(file, mode, virtual);
+            if (file.editor.selected_sprites.count() != 1 or
+                si >= file.editor.selected_sprites.capacity() or
+                !file.editor.selected_sprites.isSet(si))
+            {
+                file.clearSelectedSprites();
+                if (si < file.editor.selected_sprites.capacity()) {
+                    file.editor.selected_sprites.set(si);
+                }
+            }
+            file.editor.primary_sprite_index = si;
+        },
+        .selection_only => {
+            const si = virtualToSpriteIndex(file, mode, virtual);
+            file.promotePrimarySprite(si);
+        },
+        .animation_passive => {
+            if (file.selected_animation_frame_index != virtual) {
+                file.selected_animation_frame_index = virtual;
+            }
+        },
+        .animation_follow_selection => {
+            const si = virtualToSpriteIndex(file, mode, virtual);
+            if (file.selected_animation_frame_index != virtual or
+                file.editor.selected_sprites.count() != 1 or
+                si >= file.editor.selected_sprites.capacity() or
+                !file.editor.selected_sprites.isSet(si))
+            {
+                file.selected_animation_frame_index = virtual;
+                file.clearSelectedSprites();
+                if (si < file.editor.selected_sprites.capacity()) {
+                    file.editor.selected_sprites.set(si);
+                }
+            }
+            file.promotePrimarySprite(si);
+        },
     }
-    self.last_sel_index = index;
-    dvui.refresh(null, @src(), dvui.parentGet().data().id);
+    self.last_committed_virtual = virtual;
+    self.last_sel_virtual = virtual;
 }
 
 /// True when pointer events at `p` belong to the main workspace, not a floating
@@ -458,14 +642,21 @@ fn pointerTargetsMainPane(p: dvui.Point.Physical) bool {
     return true;
 }
 
-/// Wheel scrolls one sprite at a time; horizontal drag scrubs the flow freely and
-/// snaps to (and selects) the nearest sprite on release.
-fn handleInput(self: *Sprites, file: anytype, count: usize, px_per_index: f32) void {
+/// Wheel scrolls one step at a time; horizontal drag scrubs the flow freely and
+/// snaps to the nearest item on release. When `snap_scroll` (cards flown out),
+/// every step jumps straight to the next centered sprite with no in-between pan.
+fn handleInput(self: *Sprites, file: anytype, mode: ScrollMode, count: usize, px_per_index: f32, snap_scroll: bool) void {
     const pane = dvui.parentGet().data();
     const rs = pane.rectScale();
     const id = pane.id;
 
     self.drag_active = false;
+
+    // Total drag distance (index units) accumulated across this frame's motion
+    // events, plus whether a drag was released this frame — both finalized after
+    // the loop so velocity is computed once per frame (frameTimeNS is per-frame).
+    var frame_dx: f32 = 0.0;
+    var released_moved = false;
 
     // Dialogs/subwindows stack above the sprites pane in z-order but share the same
     // screen rect — don't capture clicks meant for their footer or chrome.
@@ -494,8 +685,11 @@ fn handleInput(self: *Sprites, file: anytype, count: usize, px_per_index: f32) v
                 if (me.button.pointer()) {
                     e.handle(@src(), pane);
                     dvui.captureMouse(pane, e.num);
-                    dvui.dragPreStart(me.p, .{ .name = "coverflow_drag" });
+                    dvui.dragPreStart(me.p, .{ .name = "coverflow_drag", .cursor = .hand });
                     self.moved_since_press = false;
+                    self.wheel_accum = 0.0;
+                    // Grabbing again cancels any in-flight coast and its velocity.
+                    self.fling.begin();
                 }
             },
             .release => {
@@ -503,11 +697,7 @@ fn handleInput(self: *Sprites, file: anytype, count: usize, px_per_index: f32) v
                     e.handle(@src(), pane);
                     dvui.captureMouse(null, e.num);
                     dvui.dragEnd();
-                    if (self.moved_since_press) {
-                        const snapped: i64 = @intFromFloat(@round(self.scroll_pos));
-                        self.goal = @floatFromInt(snapped);
-                        self.commitSelection(file, wrapIndex(snapped, count));
-                    }
+                    if (self.moved_since_press) released_moved = true;
                     self.moved_since_press = false;
                 }
             },
@@ -517,8 +707,19 @@ fn handleInput(self: *Sprites, file: anytype, count: usize, px_per_index: f32) v
                         self.drag_active = true;
                         self.moved_since_press = true;
                         if (px_per_index > 0.0) {
-                            self.scroll_pos -= dps.x / rs.s / px_per_index;
-                            self.goal = self.scroll_pos;
+                            const di = -dps.x / rs.s / px_per_index;
+                            if (snap_scroll) {
+                                self.wheel_accum += di;
+                                while (@abs(self.wheel_accum) >= 1.0) {
+                                    const step: f32 = if (self.wheel_accum > 0.0) 1.0 else -1.0;
+                                    self.wheel_accum -= step;
+                                    stepScrollGoal(self, file, mode, count, step);
+                                }
+                            } else {
+                                self.scroll_pos += di;
+                                self.goal = self.scroll_pos;
+                                frame_dx += di;
+                            }
                         }
                         dvui.refresh(null, @src(), id);
                     }
@@ -532,14 +733,47 @@ fn handleInput(self: *Sprites, file: anytype, count: usize, px_per_index: f32) v
                     while (@abs(self.wheel_accum) >= 1.0) {
                         const step: f32 = if (self.wheel_accum > 0.0) 1.0 else -1.0;
                         self.wheel_accum -= step;
-                        const ng = @round(self.goal) + step;
-                        self.goal = ng;
-                        self.commitSelection(file, wrapIndex(@intFromFloat(ng), count));
+                        if (snap_scroll) {
+                            stepScrollGoal(self, file, mode, count, step);
+                        } else {
+                            const ng = @round(self.goal) + step;
+                            self.goal = ng;
+                            if (mode != .all_passive) {
+                                const v = wrapIndex(@intFromFloat(ng), count);
+                                self.commitVirtualCenter(file, mode, v);
+                                // scroll_pos may still be easing toward ng; don't let a
+                                // passive-ease commit revert this until we arrive.
+                                self.last_committed_virtual = v;
+                            }
+                        }
                     }
                     dvui.refresh(null, @src(), id);
                 }
             },
             else => {},
+        }
+    }
+
+    // Sample the flick velocity once per frame the drag moved.
+    if (self.drag_active and !snap_scroll) self.fling.sample(frame_dx);
+
+    // On release, coast with the built-up velocity — unless the pointer had paused
+    // or barely moved, in which case snap straight to the nearest sprite.
+    if (released_moved) {
+        if (snap_scroll) {
+            const v = wrapIndex(@intFromFloat(@round(self.goal)), count);
+            self.goal = @floatFromInt(v);
+            self.scroll_pos = self.goal;
+            self.fling.cancel();
+            if (mode != .all_passive) {
+                self.commitVirtualCenter(file, mode, v);
+            }
+        } else if (!self.fling.release(sprite_fling)) {
+            const snapped: i64 = @intFromFloat(@round(self.scroll_pos));
+            self.goal = @floatFromInt(snapped);
+            if (mode != .all_passive) {
+                self.commitVirtualCenter(file, mode, wrapIndex(snapped, count));
+            }
         }
     }
 }

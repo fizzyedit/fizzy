@@ -103,10 +103,20 @@ pub fn tick() !void {
                 }
 
                 if (ke.matchBind("quick_tools")) {
-                    fizzy.editor.tools.radial_menu.visible = switch (ke.action) {
-                        .down, .repeat => true,
-                        .up => false,
-                    };
+                    const rm = &fizzy.editor.tools.radial_menu;
+                    switch (ke.action) {
+                        .down => {
+                            const mp = dvui.currentWindow().mouse_pt;
+                            rm.mouse_position = mp;
+                            rm.center = mp;
+                            rm.opened_by_press = false;
+                            rm.suppress_next_pointer_release = false;
+                            rm.outside_click_press_p = null;
+                            rm.visible = true;
+                        },
+                        .repeat => rm.visible = true,
+                        .up => rm.close(),
+                    }
                     // If we include a refresh here, the underlying gui has a chance to reset the cursor
                     dvui.refresh(null, @src(), dvui.currentWindow().data().id);
                 }

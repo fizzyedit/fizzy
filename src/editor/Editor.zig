@@ -1126,14 +1126,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 dvui.log.err("Failed to tick hotkeys", .{});
             };
 
-            for (dvui.events()) |*e| {
-                switch (e.evt) {
-                    .mouse => |me| {
-                        editor.tools.radial_menu.mouse_position = me.p;
-                    },
-                    else => {},
-                }
-            }
+            processHoldOpenRadialMenu(editor);
 
             if (editor.tools.radial_menu.visible) {
                 editor.drawRadialMenu() catch {
@@ -1333,6 +1326,59 @@ pub fn setWindowStyle(_: *Editor) void {
     fizzy.backend.setWindowStyle(dvui.currentWindow());
 }
 
+/// Dismiss rules for the hold-opened radial menu (empty workspace area): stay open after
+/// the opening finger lifts; close on tool button click or a non-drag click outside.
+fn processHoldOpenRadialMenu(editor: *Editor) void {
+    const rm = &editor.tools.radial_menu;
+    if (!rm.visible or !rm.opened_by_press) {
+        rm.outside_click_press_p = null;
+        return;
+    }
+
+    const dismiss_move_threshold: f32 = dvui.Dragging.threshold;
+
+    for (dvui.events()) |*e| {
+        if (e.evt != .mouse) continue;
+        const me = e.evt.mouse;
+        rm.mouse_position = me.p;
+
+        const primary = me.button.pointer() or me.button.touch();
+        if (!primary) continue;
+
+        switch (me.action) {
+            .press => {
+                if (!rm.containsPhysical(me.p)) {
+                    rm.outside_click_press_p = me.p;
+                } else {
+                    rm.outside_click_press_p = null;
+                }
+            },
+            .motion => {
+                if (rm.outside_click_press_p) |press_p| {
+                    if (me.p.diff(press_p).length() > dismiss_move_threshold) {
+                        rm.outside_click_press_p = null;
+                    }
+                }
+            },
+            .release => {
+                if (rm.suppress_next_pointer_release) {
+                    rm.suppress_next_pointer_release = false;
+                    rm.outside_click_press_p = null;
+                    continue;
+                }
+                if (rm.outside_click_press_p) |press_p| {
+                    const moved = me.p.diff(press_p).length() > dismiss_move_threshold;
+                    if (!moved and !rm.containsPhysical(me.p) and !rm.containsPhysical(press_p)) {
+                        rm.close();
+                    }
+                    rm.outside_click_press_p = null;
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 pub fn drawRadialMenu(editor: *Editor) !void {
     var fw: dvui.FloatingWidget = undefined;
     fw.init(@src(), .{}, .{
@@ -1342,10 +1388,8 @@ pub fn drawRadialMenu(editor: *Editor) !void {
 
     const menu_color = dvui.themeGet().color(.content, .fill).lighten(4.0);
 
-    if (dvui.firstFrame(fw.data().id)) {
-        editor.tools.radial_menu.center = editor.tools.radial_menu.mouse_position;
-    }
-
+    // `center` is set when the menu opens (Space down or hold on empty workspace) and stays
+    // fixed until close so tool buttons remain hoverable/clickable.
     const center = fw.data().rectScale().pointFromPhysical(editor.tools.radial_menu.center);
 
     const tool_count: usize = std.meta.fields(Editor.Tools.Tool).len;
@@ -1493,8 +1537,12 @@ pub fn drawRadialMenu(editor: *Editor) !void {
         };
         angle += step;
 
-        if (button.clicked() or button.hovered()) {
+        if (button.hovered()) {
             editor.tools.set(tool);
+        }
+        if (button.clicked()) {
+            editor.tools.set(tool);
+            editor.tools.radial_menu.close();
         }
 
         button.deinit();
@@ -1530,6 +1578,9 @@ pub fn drawRadialMenu(editor: *Editor) !void {
                     .rect = rect,
                 })) {
                     file.editor.playing = !file.editor.playing;
+                    if (editor.tools.radial_menu.opened_by_press) {
+                        editor.tools.radial_menu.close();
+                    }
                 }
             }
         }

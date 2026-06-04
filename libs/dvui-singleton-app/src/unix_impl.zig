@@ -110,20 +110,67 @@ pub const Primary = struct {
     }
 };
 
-fn trySendArgv(io: std.Io, addr: std.Io.net.UnixAddress, argv: []const []const u8) !bool {
+fn trySendArgv(_: std.Io, addr: std.Io.net.UnixAddress, argv: []const []const u8) !bool {
     // Either the primary accepts us, or the socket file is stale. We can't
     // distinguish between "no listener" and other transient connect errors
     // without enumerating the impl's error set, so treat any failure here
     // as "no live primary" — the caller will fall through to remove the
     // stale socket and retry binding.
-    const stream = addr.connect(io) catch return false;
-    defer stream.close(io);
+    //
+    // Use libc connect directly: std.Io's posixConnectUnix does not map
+    // ECONNREFUSED, so a stale socket triggers unexpectedErrno + stack trace
+    // even though the caller catches the error.
+    const fd = connectUnixClient(addr.path) orelse return false;
+    defer _ = std.c.close(fd);
 
-    var wbuf: [4096]u8 = undefined;
-    var sw = stream.writer(io, &wbuf);
-    try root.writeArgvIo(&sw.interface, argv);
-    try sw.interface.flush();
+    writeArgvFd(fd, argv) catch return false;
     return true;
+}
+
+fn connectUnixClient(path: []const u8) ?std.c.fd_t {
+    const sock = std.c.socket(std.c.AF.UNIX, std.c.SOCK.STREAM, 0);
+    if (sock < 0) return null;
+    errdefer _ = std.c.close(@intCast(sock));
+
+    var storage: std.c.sockaddr.un = .{
+        .family = std.c.AF.UNIX,
+        .path = undefined,
+    };
+    const addr_len: std.c.socklen_t = @intCast(@offsetOf(std.c.sockaddr.un, "path") + path.len + 1);
+    if (path.len >= storage.path.len) return null;
+    @memcpy(storage.path[0..path.len], path);
+    storage.path[path.len] = 0;
+    const rc = std.c.connect(@intCast(sock), @ptrCast(&storage), addr_len);
+    if (rc == 0) return @intCast(sock);
+    _ = std.c.close(@intCast(sock));
+    switch (std.posix.errno(rc)) {
+        .CONNREFUSED => return null,
+        else => return null,
+    }
+}
+
+fn writeArgvFd(fd: std.c.fd_t, argv: []const []const u8) !void {
+    var hdr: [4]u8 = undefined;
+    std.mem.writeInt(u32, &hdr, @intCast(argv.len), .little);
+    try writeAllFd(fd, &hdr);
+    var total: u64 = 4;
+    for (argv) |arg| {
+        if (arg.len > root.max_arg_bytes) return root.Error.ArgTooLong;
+        total += 4 + @as(u64, arg.len);
+        if (total > root.max_total_bytes) return root.Error.PayloadTooLarge;
+        std.mem.writeInt(u32, &hdr, @intCast(arg.len), .little);
+        try writeAllFd(fd, &hdr);
+        if (arg.len > 0) try writeAllFd(fd, arg);
+    }
+}
+
+fn writeAllFd(fd: std.c.fd_t, bytes: []const u8) !void {
+    var index: usize = 0;
+    while (index < bytes.len) {
+        const n = std.c.write(fd, bytes[index..].ptr, bytes.len - index);
+        if (n < 0) return error.WriteFailed;
+        index += @intCast(n);
+    }
 }
 
 fn buildSocketPath(allocator: std.mem.Allocator, dir: []const u8, app_id: []const u8) ![]u8 {
