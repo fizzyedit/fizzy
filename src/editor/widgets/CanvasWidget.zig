@@ -917,24 +917,29 @@ pub fn processEvents(self: *CanvasWidget) void {
                     self.pan_fling_y.begin();
                     // A non-middle (left/touch) off-artboard press may still become a tap
                     // or a hold — arm the gesture so the release/hold logic can resolve it.
-                    self.tap_gesture = me.button != .middle;
-                    self.tap_press_p = me.p;
-                    self.tap_press_ns = dvui.frameTimeNS();
-                    self.tap_moved = false;
-                    self.tap_radial = false;
+                    // Skip while the touch-eval window owns the finger (web): capture often
+                    // stays on the scaler, so we must not leave `tap_gesture` latched after lift.
+                    if (me.button != .middle and !self.touch_eval_active and !self.gesture_active) {
+                        self.tap_gesture = true;
+                        self.tap_press_p = me.p;
+                        self.tap_press_ns = dvui.frameTimeNS();
+                        self.tap_moved = false;
+                        self.tap_radial = false;
+                    }
                 } else if (me.action == .release and (me.button == .middle or me.button.pointer())) {
+                    const had_tap = self.tap_gesture;
                     if (dvui.captured(self.scroll_container.data().id)) {
                         e.handle(@src(), self.scroll_container.data());
                         dvui.captureMouse(null, e.num);
                         dvui.dragEnd();
                         pan_released = true;
-                        // A press that never moved and never opened the radial menu is a
-                        // plain click on empty space — clear the selection and animation.
-                        if (self.tap_gesture and !self.tap_moved and !self.tap_radial) {
-                            fizzy.editor.cancel() catch {};
-                        }
-                        self.tap_gesture = false;
                     }
+                    // Quick tap on empty space clears selection even when capture stayed on
+                    // the scaler during touch-eval (common on web).
+                    if (had_tap and !self.tap_moved and !self.tap_radial) {
+                        fizzy.editor.cancel() catch {};
+                    }
+                    self.tap_gesture = false;
                 } else if (me.action == .motion) {
                     if (dvui.captured(self.scroll_container.data().id)) {
                         // Claim the event so the scroll container's built-in
@@ -1011,7 +1016,8 @@ pub fn processEvents(self: *CanvasWidget) void {
     // as the tools-menu color button). Hand the press over to the menu by releasing
     // our capture so its buttons can be hovered; Editor keeps it open until a tool
     // is chosen or the user clicks outside the menu. ----
-    if (self.tap_gesture and !self.tap_moved and !self.tap_radial) {
+    const tap_still_held = dvui.captured(self.scroll_container.data().id) or self.activeTouchCount() > 0;
+    if (self.tap_gesture and !self.tap_moved and !self.tap_radial and tap_still_held) {
         if (dvui.frameTimeNS() - self.tap_press_ns >= dvui.currentWindow().hold_menu_duration_ns) {
             fizzy.editor.tools.radial_menu.mouse_position = self.tap_press_p;
             fizzy.editor.tools.radial_menu.center = self.tap_press_p;
