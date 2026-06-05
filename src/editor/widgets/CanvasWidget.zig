@@ -186,6 +186,8 @@ const touch_eval_duration_ns: i128 = 80 * std.time.ns_per_ms;
 
 /// Drag-pan momentum tuning. Units are viewport (data) pixels per second — the same
 /// units `scroll_info.viewport.x/y` move in — so the feel scales naturally with zoom.
+/// Release velocity is measured over a wall-clock position/time window
+/// (`releaseWindowed`)
 const pan_fling: fizzy.Fling.Tuning = .{
     .decay = 4.0,
     .min_start = 40.0,
@@ -193,6 +195,8 @@ const pan_fling: fizzy.Fling.Tuning = .{
     .max = 8000.0,
     .idle_s = 0.18,
 };
+/// Window the pan release velocity is averaged over (s).
+const pan_fling_window_s: f32 = 0.08;
 
 /// True while a 2-finger pan/pinch is in progress, or while we're still deciding whether
 /// a single touch will become one. Tools should skip their input processing whenever this
@@ -949,8 +953,8 @@ pub fn processEvents(self: *CanvasWidget) void {
         self.scroll_info.viewport.x += pdx;
         self.scroll_info.viewport.y += pdy;
         if (self.touch_eval_pan_active or self.scroll_pan_touch_slot != null) {
-            self.pan_fling_x.sample(pdx);
-            self.pan_fling_y.sample(pdy);
+            self.pan_fling_x.sampleTimed(pdx);
+            self.pan_fling_y.sampleTimed(pdy);
         }
         self.pending_touch_pan = .{};
     }
@@ -1133,16 +1137,19 @@ pub fn processEvents(self: *CanvasWidget) void {
         }
     }
 
-    // ---- Drag-pan momentum. Sample the flick velocity once per frame, decide on
-    // release whether to coast, and advance an in-flight coast — each axis is
-    // independent so a mostly-horizontal flick doesn't drift vertically. ----
+    // ---- Drag-pan momentum. Record each moved frame into the per-axis position/time
+    // history, decide on release whether to coast from a velocity averaged over a
+    // wall-clock window, and advance an in-flight coast — each axis is independent so a
+    // mostly-horizontal flick doesn't drift vertically. Sampling, release, and the step
+    // happen in sequence here (not split across a draw pass), so a coincident
+    // move+release frame samples the final move before the coast starts — no race. ----
     if (pan_motion) {
-        self.pan_fling_x.sample(pan_dx);
-        self.pan_fling_y.sample(pan_dy);
+        self.pan_fling_x.sampleTimed(pan_dx);
+        self.pan_fling_y.sampleTimed(pan_dy);
     }
     if (pan_released) {
-        _ = self.pan_fling_x.release(pan_fling);
-        _ = self.pan_fling_y.release(pan_fling);
+        _ = self.pan_fling_x.releaseWindowed(pan_fling, pan_fling_window_s);
+        _ = self.pan_fling_y.releaseWindowed(pan_fling, pan_fling_window_s);
     }
     if (self.pan_fling_x.coasting or self.pan_fling_y.coasting) {
         if (self.pan_fling_x.step(pan_fling)) |dx| self.scroll_info.viewport.x += dx;

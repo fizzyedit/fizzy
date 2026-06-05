@@ -10,13 +10,19 @@ const Sprites = @This();
 const fly_anim_duration_us: i64 = 750_000;
 
 /// Cover-flow scrub momentum tuning (sprite-index units). See `fizzy.Fling`.
+/// Mouse/trackpad release velocity is measured over a position/time window
+/// (`releaseWindowed`), not a per-frame EMA — the EMA converged per frame, so a quick
+/// flick built up too little velocity at 60 Hz (e.g. Safari on a deployed build) even
+/// though it worked at 120 Hz. The window is wall-clock based, so it's refresh-independent.
 const sprite_fling: fizzy.Fling.Tuning = .{
     .decay = 4.0,
     .min_start = 1.2,
     .stop = 0.6,
     .max = 50.0,
-    .idle_s = 0.08,
+    .idle_s = 0.12,
 };
+/// Window the mouse/trackpad release velocity is averaged over (s).
+const sprite_fling_window_s: f32 = 0.08;
 /// Touch scrub: a finger flick is short and bursty, so start coasting at a lower
 /// speed and tolerate the small gap the browser leaves before `touchend`. Velocity is
 /// measured over a position/time window (`releaseWindowed`) rather than the last frame.
@@ -56,8 +62,6 @@ wheel_accum: f32 = 0.0,
 drag_active: bool = false,
 /// Whether the pointer moved between press and release (drag vs. click).
 moved_since_press: bool = false,
-/// Last frame's scrub delta (index units), kept for release when touch skips a final move.
-last_drag_frame_dx: f32 = 0,
 /// True when the active scrub began with a touch press (not mouse).
 drag_was_touch: bool = false,
 /// Release momentum for the scrub: coasts the flow after a flick, then snaps.
@@ -719,7 +723,6 @@ fn handleInput(self: *Sprites, file: anytype, mode: ScrollMode, count: usize, px
                     dvui.dragPreStart(me.p, .{ .name = "coverflow_drag", .cursor = .hand });
                     self.moved_since_press = false;
                     self.drag_was_touch = me.button.touch();
-                    self.last_drag_frame_dx = 0;
                     self.wheel_accum = 0.0;
                     // Grabbing again cancels any in-flight coast and its velocity.
                     self.fling.begin();
@@ -793,42 +796,24 @@ fn handleInput(self: *Sprites, file: anytype, mode: ScrollMode, count: usize, px
     }
 
     if (!snap_scroll) {
-        if (self.drag_was_touch) {
-            // Touch path: record movement into the position/time history and, on
-            // release, coast from a windowed velocity. Kept fully separate from the
-            // mouse/trackpad path below so it can't change that proven behavior.
-            if (self.drag_active) self.fling.sampleTimed(frame_dx);
-            if (released_moved) {
-                // A finger flick usually delivers its last `touchmove` and `touchend`
-                // on the same frame, which leaves `drag_active` set. Clear it (after
-                // sampling that final move) so draw()'s `drag_active` branch doesn't
-                // immediately cancel the coast we're about to start — that race was
-                // eating the momentum on ~half of all flicks.
-                self.drag_active = false;
-                if (!self.fling.releaseWindowed(sprite_fling_touch, sprite_fling_touch_window_s)) {
-                    const snapped: i64 = @intFromFloat(@round(self.scroll_pos));
-                    self.goal = @floatFromInt(snapped);
-                    dvui.refresh(null, @src(), id);
-                }
-            }
-        } else {
-            if (frame_dx != 0) self.last_drag_frame_dx = frame_dx;
-            // Sample the flick velocity once per frame the drag moved.
-            if (self.drag_active) self.fling.sample(frame_dx);
-
-            // On release, coast with the built-up velocity — unless the pointer had
-            // paused or barely moved, in which case ease to the nearest sprite.
-            if (released_moved) {
-                // Touch often lifts without a move on the same frame; re-sample the
-                // last delta so `release` sees fresh velocity and near-zero idle time.
-                const release_dx = if (frame_dx != 0) frame_dx else self.last_drag_frame_dx;
-                if (release_dx != 0) self.fling.sample(release_dx);
-
-                if (!self.fling.release(sprite_fling)) {
-                    const snapped: i64 = @intFromFloat(@round(self.scroll_pos));
-                    self.goal = @floatFromInt(snapped);
-                    dvui.refresh(null, @src(), id);
-                }
+        // Touch and mouse/trackpad share one path: record each moved frame into the
+        // position/time history and, on release, coast from a velocity averaged over a
+        // wall-clock window. That window is refresh-independent, so momentum is reliable
+        // at 60 Hz and 120 Hz alike — unlike the old per-frame EMA, which underread short
+        // flicks at lower refresh rates. Only the feel tuning differs per input type.
+        if (self.drag_active) self.fling.sampleTimed(frame_dx);
+        if (released_moved) {
+            // The last move and the release commonly land on the same frame (more so at
+            // low refresh), which leaves `drag_active` set. Clear it after sampling that
+            // final move so draw()'s `drag_active` branch doesn't cancel the coast we
+            // start here — that race was eating momentum on a large share of flicks.
+            self.drag_active = false;
+            const tuning = if (self.drag_was_touch) sprite_fling_touch else sprite_fling;
+            const window_s = if (self.drag_was_touch) sprite_fling_touch_window_s else sprite_fling_window_s;
+            if (!self.fling.releaseWindowed(tuning, window_s)) {
+                const snapped: i64 = @intFromFloat(@round(self.scroll_pos));
+                self.goal = @floatFromInt(snapped);
+                dvui.refresh(null, @src(), id);
             }
         }
     } else if (released_moved) {
