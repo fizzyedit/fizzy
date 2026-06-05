@@ -590,12 +590,116 @@ fn renderLayersIntoTarget(
     }
 }
 
+/// Bakes the cover-flow preview composite — checkerboard backdrop + flattened
+/// layers + selection + temp, all at canvas resolution — into one texture. The
+/// sprite panel then draws each card (front and reflection) as a single textured
+/// pass sampling this, instead of replaying the whole stack as several
+/// overlapping alpha-blended fills per card. Rebuilt at most once per frame.
+pub fn syncPreviewComposite(file: *fizzy.Internal.File) !void {
+    const ce = layerCompositeExtent(file);
+    const w = ce.w;
+    const h = ce.h;
+    if (w == 0 or h == 0) return;
+
+    if (file.editor.preview_composite_frame_built == frame_index) return;
+    file.editor.preview_composite_frame_built = frame_index;
+
+    // The flattened layer stack feeds the bake; build/refresh it first.
+    try syncLayerComposite(file);
+
+    if (file.editor.preview_composite_target) |t| {
+        if (t.width != w or t.height != h) {
+            t.destroyLater();
+            file.editor.preview_composite_target = null;
+        }
+    }
+    const target = if (file.editor.preview_composite_target) |t| t else blk: {
+        const nt = try dvui.textureCreateTarget(.{ .width = w, .height = h, .format = compositeTargetPixelFormat(), .interpolation = .nearest });
+        file.editor.preview_composite_target = nt;
+        break :blk nt;
+    };
+
+    const sc_t0 = perf.syncCompositeBegin();
+    defer perf.syncCompositeEnd(sc_t0);
+
+    const image_rect = dvui.Rect.Physical{ .x = 0, .y = 0, .w = @floatFromInt(w), .h = @floatFromInt(h) };
+
+    target.clear();
+    const prev_target = dvui.renderTarget(.{ .texture = target, .offset = image_rect.topLeft() });
+    defer _ = dvui.renderTarget(prev_target);
+
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    dvui.clipSet(image_rect);
+
+    // 1) Opaque content-fill base — the transparency backdrop, matching the card.
+    {
+        var path: dvui.Path.Builder = .init(fizzy.app.allocator);
+        defer path.deinit();
+        path.addRect(image_rect, dvui.Rect.Physical.all(0));
+        var tris = try path.build().fillConvexTriangles(fizzy.app.allocator, .{ .color = dvui.themeGet().color(.content, .fill), .fade = 0 });
+        defer tris.deinit(fizzy.app.allocator);
+        dvui.renderTriangles(tris, null) catch {};
+    }
+
+    // 2) Checkerboard tile — one tile per sprite cell (uv repeats columns × rows).
+    if (file.checkerboardTileTexture()) |checker| {
+        var path: dvui.Path.Builder = .init(fizzy.app.allocator);
+        defer path.deinit();
+        path.addRect(image_rect, dvui.Rect.Physical.all(0));
+        const tint = dvui.themeGet().color(.content, .fill).lighten(6.0).opacity(0.5);
+        var tris = try path.build().fillConvexTriangles(fizzy.app.allocator, .{ .color = tint, .fade = 0 });
+        defer tris.deinit(fizzy.app.allocator);
+        tris.uvFromRectuv(image_rect, .{ .x = 0, .y = 0, .w = @floatFromInt(file.columns), .h = @floatFromInt(file.rows) });
+        dvui.renderTriangles(tris, checker) catch {};
+    }
+
+    // 3) Flattened layers, then selection + temp overlays — sampled 1:1.
+    var path: dvui.Path.Builder = .init(fizzy.app.allocator);
+    defer path.deinit();
+    path.addRect(image_rect, dvui.Rect.Physical.all(0));
+    var tris = try path.build().fillConvexTriangles(fizzy.app.allocator, .{ .color = .white, .fade = 0 });
+    defer tris.deinit(fizzy.app.allocator);
+    tris.uvFromRectuv(image_rect, .{ .x = 0, .y = 0, .w = 1, .h = 1 });
+
+    if (file.editor.layer_composite_target) |ct| {
+        if (dvui.Texture.fromTargetTemp(ct) catch null) |ctex| {
+            dvui.renderTriangles(tris, ctex) catch {};
+        }
+    }
+    dvui.renderTriangles(tris, file.editor.selection_layer.source.getTexture() catch null) catch {};
+    if (file.editor.temp_layer_has_content) {
+        dvui.renderTriangles(tris, file.editor.temporary_layer.source.getTexture() catch null) catch {};
+    }
+}
+
+/// Returns the baked cover-flow preview composite texture for single-pass card
+/// drawing, or null when the fast path isn't eligible (peek / isolate / dimming /
+/// active drawing / transform). Callers fall back to the multi-pass stack.
+pub fn spritePreviewComposite(file: *fizzy.Internal.File) ?dvui.Texture {
+    if (file.peek_layer_index != null) return null;
+    if (file.editor.isolate_layer) return null;
+    if (file.editor.transform != null) return null;
+    if (file.editor.active_drawing) return null;
+    const ce = layerCompositeExtent(file);
+    if (ce.w == 0 or ce.h == 0) return null;
+    syncPreviewComposite(file) catch return null;
+    const t = file.editor.preview_composite_target orelse return null;
+    return dvui.Texture.fromTargetTemp(t) catch null;
+}
+
 pub fn destroyLayerCompositeResources(file: *fizzy.Internal.File) void {
     if (file.editor.layer_composite_target) |t| {
         t.destroyLater();
         file.editor.layer_composite_target = null;
     }
     file.editor.layer_composite_dirty = true;
+
+    if (file.editor.preview_composite_target) |t| {
+        t.destroyLater();
+        file.editor.preview_composite_target = null;
+    }
+    file.editor.preview_composite_frame_built = 0;
 
     destroySplitCompositeResources(file);
 }

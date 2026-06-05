@@ -94,6 +94,14 @@ pub const EditorData = struct {
     split_composite_dirty: bool = true,
     split_composite_frame_built: u64 = 0,
 
+    /// Sprite-panel cover-flow preview: checkerboard + flattened layers +
+    /// selection + temp baked into one texture, so each card (front and
+    /// reflection) draws in a single textured pass instead of replaying the
+    /// whole stack as several overlapping alpha-blended fills. Rebuilt at most
+    /// once per frame (see `render.syncPreviewComposite`).
+    preview_composite_target: ?dvui.Texture.Target = null,
+    preview_composite_frame_built: u64 = 0,
+
     /// Tracks when the active layer transparency mask was last built,
     /// so we can skip rebuilding it when the layer hasn't changed.
     mask_built_for_layer: ?usize = null,

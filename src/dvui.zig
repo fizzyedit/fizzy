@@ -965,6 +965,25 @@ pub const SpriteInitOptions = struct {
     /// only. Lets the reflection slide away from the card — e.g. as a card flies
     /// up out of view, its reflection sinks down, like peeling off a waterline.
     reflection_offset: f32 = 0.0,
+    /// Depth-lagged reflection grid (logical px); rows shear while scrolling and ripple on settle.
+    reflection_lag: ?ReflectionLagSample = null,
+    /// Reflection mesh density multiplier in (0, 1]. 1.0 = full per-zoom density;
+    /// lower values coarsen the (O(n²)) mesh. Callers pass <1 for distant/skewed
+    /// cards so only the head-on focus cards pay for a fine, high-res reflection.
+    reflection_detail: f32 = 1.0,
+};
+
+/// Columns the reflection mesh samples across a card's width (waterline strip).
+/// Matches `water_surface.cols_per_slot` (+1) so finer ripples render per card.
+pub const reflection_surface_cols = fizzy.water_surface.reflection_surface_cols;
+
+/// Reflection-only waterline sample across the card width (logical px). `cols_dx`
+/// is horizontal refraction from surface slope; `cols_dy` is vertical height at
+/// the seam (positive = down). The card itself stays flat — only the reflection
+/// mesh pins its top edge and propagates ripples downward.
+pub const ReflectionLagSample = struct {
+    cols_dx: [reflection_surface_cols]f32 = .{0} ** reflection_surface_cols,
+    cols_dy: [reflection_surface_cols]f32 = .{0} ** reflection_surface_cols,
 };
 
 pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opts: dvui.Options) dvui.WidgetData {
@@ -1047,6 +1066,12 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
         bottom_right = bottom_right.plus(top_right.diff(bottom_right).normalize().scale(init_opts.depth * wd.contentRectScale().r.w, dvui.Point.Physical));
     }
 
+    const lag_active = init_opts.reflection_lag != null;
+    const reflection_lag_phys: ?ReflectionLagSample = if (lag_active) reflectionLagSamplePhysical(
+        init_opts.reflection_lag.?,
+        wd.contentRectScale().s,
+    ) else null;
+
     path.addPoint(top_left);
     path.addPoint(top_right);
     path.addPoint(bottom_right);
@@ -1056,6 +1081,12 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
     // card opacity, and `op` scales the alpha of solid fills. No-ops at op == 1.
     const op = std.math.clamp(init_opts.opacity, 0.0, 1.0);
     const fade_white = dvui.Color.white.opacity(op);
+
+    // Cover-flow fast path: when a file's layer stack is fully flattenable, the
+    // checker + layers + selection + temp are baked into one texture once per
+    // frame, so each card (front and reflection) is a single textured pass
+    // instead of several overlapping alpha-blended fills. Null → multi-pass path.
+    const preview_tex: ?dvui.Texture = if (init_opts.file) |f| fizzy.render.spritePreviewComposite(f) else null;
 
     if (init_opts.reflection) {
         var path2: dvui.Path.Builder = .init(dvui.currentWindow().arena());
@@ -1075,16 +1106,56 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
         path2.addPoint(bottom_left.plus(refl_off));
 
         const preview_extent = @min(wd.contentRectScale().r.w, wd.contentRectScale().r.h);
-        const subdivisions_f = std.math.clamp(preview_extent / 96.0, 2.0, 6.0);
+        // Subdivide in proportion to on-screen size so the *physical* ripple density
+        // stays constant across zoom — a big (zoomed-in) card gets many more verts,
+        // rendering the fine field detail instead of undersampling it into coarse
+        // waves. (The field already carries dense ripples at `cols_per_slot`.)
+        const base_subdivisions_f = std.math.clamp(preview_extent / 13.0, 14.0, 44.0);
+        // The mesh is O(subdivisions²) and is rebuilt + rendered per layer for every
+        // card. Only the head-on focus cards need the fine, high-res ripple; skewed
+        // shelf cards pass a low `reflection_detail` so they fall to the coarse floor
+        // and stay cheap, which is what keeps the shelf affordable on slower GPUs.
+        const detail = std.math.clamp(init_opts.reflection_detail, 0.0, 1.0);
+        const subdivisions_f = @max(6.0, base_subdivisions_f * detail);
         const subdivisions: usize = @intFromFloat(subdivisions_f);
 
-        if (init_opts.alpha_source) |alpha_source| {
+        if (init_opts.alpha_source) |alpha_source| preview: {
             const reflection_path = path2.build();
 
+            const reflection_lag = reflection_lag_phys orelse ReflectionLagSample{};
+            const displacement_max = wd.contentRectScale().r.h * 0.52;
+            const refl_lag = if (lag_active) reflection_lag else null;
+
+            if (preview_tex) |ptex| {
+                // Single textured pass: checker + layers + selection + temp are
+                // pre-flattened into the preview composite, so the reflection is one
+                // draw instead of replaying the whole stack per card.
+                var refl = pathToSubdividedQuad(reflection_path, dvui.currentWindow().arena(), .{
+                    .subdivisions = subdivisions,
+                    .uv = uv,
+                    .vertical_fade = true,
+                    .color_mod = fade_white,
+                    .reflection_lag = refl_lag,
+                    .waterline_propagate = true,
+                    .displacement_max = displacement_max,
+                }) catch unreachable;
+                defer refl.deinit(dvui.currentWindow().arena());
+                dvui.renderTriangles(refl, ptex) catch {
+                    dvui.log.err("Failed to render reflection preview composite", .{});
+                };
+                break :preview;
+            }
+
+            // Build two meshes from the same path so vertex positions match (shared
+            // ripple) but UVs differ: bg uses the full quad for checkerboard alpha,
+            // layers use the sprite atlas rect.
             var reflection_triangles_bg = pathToSubdividedQuad(reflection_path, dvui.currentWindow().arena(), .{
                 .subdivisions = subdivisions,
                 .color_mod = dvui.themeGet().color(.content, .fill).lighten(4.0).opacity(op),
                 .vertical_fade = true,
+                .reflection_lag = refl_lag,
+                .waterline_propagate = true,
+                .displacement_max = displacement_max,
             }) catch unreachable;
             defer reflection_triangles_bg.deinit(dvui.currentWindow().arena());
 
@@ -1093,6 +1164,9 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
                 .uv = uv,
                 .vertical_fade = true,
                 .color_mod = fade_white,
+                .reflection_lag = refl_lag,
+                .waterline_propagate = true,
+                .displacement_max = displacement_max,
             }) catch unreachable;
             defer reflection_triangles_layers.deinit(dvui.currentWindow().arena());
 
@@ -1145,10 +1219,13 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
         }
     }
 
-    if (init_opts.alpha_source) |alpha_source| {
-        if (init_opts.depth != 0.0) {
-            // Skew the opaque base along with the art so no axis-aligned sliver
-            // of fill colour pokes out past the receding edge.
+    // The preview composite already bakes the content-fill base + checkerboard,
+    // so skip the separate base/checker passes when it's in use.
+    if (preview_tex == null) {
+        if (init_opts.alpha_source) |alpha_source| {
+            if (init_opts.depth != 0.0) {
+                // Skew the opaque base along with the art so no axis-aligned sliver
+                // of fill colour pokes out past the receding edge.
             var base_triangles = pathToSubdividedQuad(path.build(), dvui.currentWindow().arena(), .{
                 .subdivisions = 8,
                 .color_mod = dvui.themeGet().color(.content, .fill).opacity(op),
@@ -1168,9 +1245,31 @@ pub fn sprite(src: std.builtin.SourceLocation, init_opts: SpriteInitOptions, opt
         dvui.renderTriangles(alpha_triangles, alpha_source.getTexture() catch null) catch {
             dvui.log.err("Failed to render triangles", .{});
         };
+        }
     }
 
-    if (init_opts.file) |file| {
+    if (preview_tex) |ptex| {
+        // Front card: one textured pass from the baked preview composite. Skewed
+        // cards build a subdivided quad so the art tilts like a record on a shelf;
+        // head-on cards use the plain quad.
+        const front_path = if (init_opts.depth != 0.0) blk: {
+            var q: dvui.Path.Builder = .init(dvui.currentWindow().arena());
+            q.addPoint(top_left);
+            q.addPoint(top_right);
+            q.addPoint(bottom_right);
+            q.addPoint(bottom_left);
+            break :blk q.build();
+        } else path.build();
+        var tris = pathToSubdividedQuad(front_path, dvui.currentWindow().arena(), .{
+            .subdivisions = 8,
+            .uv = uv,
+            .color_mod = fade_white,
+        }) catch unreachable;
+        defer tris.deinit(dvui.currentWindow().arena());
+        dvui.renderTriangles(tris, ptex) catch {
+            dvui.log.err("Failed to render sprite preview composite", .{});
+        };
+    } else if (init_opts.file) |file| {
         fizzy.render.renderLayers(.{
             .file = file,
             .rs = .{
@@ -1211,7 +1310,107 @@ pub const PathToSubdividedQuadOptions = struct {
     uv: ?dvui.Rect = null,
     vertical_fade: bool = false,
     color_mod: dvui.Color = .white,
+    reflection_lag: ?ReflectionLagSample = null,
+    /// When true, reflection meshes refract ripples deeper below the seam.
+    waterline_propagate: bool = true,
+    /// Cap vertex offset (physical px) so ripples stay inside the reflection.
+    displacement_max: f32 = 0.0,
 };
+
+fn reflectionLagSamplePhysical(sample: ReflectionLagSample, scale: f32) ReflectionLagSample {
+    var out = sample;
+    for (&out.cols_dx) |*c| c.* *= scale;
+    for (&out.cols_dy) |*c| c.* *= scale;
+    return out;
+}
+
+/// Linear interpolation across the column strip by horizontal fraction `t_x`.
+fn interpolateReflectionCols(cols: []const f32, t_x: f32) f32 {
+    if (cols.len == 0) return 0;
+    if (cols.len == 1) return cols[0];
+    const f = std.math.clamp(t_x, 0, 1) * @as(f32, @floatFromInt(cols.len - 1));
+    const idx0: usize = @intFromFloat(@floor(f));
+    const idx1 = @min(idx0 + 1, cols.len - 1);
+    const t = f - @as(f32, @floatFromInt(idx0));
+    return std.math.lerp(cols[idx0], cols[idx1], t);
+}
+
+fn clampDisplacement(d: dvui.Point.Physical, max_mag: f32) dvui.Point.Physical {
+    if (max_mag <= 0.0001) return d;
+    const mag = @sqrt(d.x * d.x + d.y * d.y);
+    if (mag <= max_mag) return d;
+    const s = max_mag / mag;
+    return .{ .x = d.x * s, .y = d.y * s };
+}
+
+/// Depth into the reflection body (0 at the waterline seam, 1 at the far edge).
+fn reflectionSubmergeDepth(t_y: f32) f32 {
+    return 1.0 - std.math.clamp(t_y, 0, 1);
+}
+
+/// Expanding ripple: larger displacement toward the reflection bottom. Rises
+/// quickly just below the seam (so the effect is still strong in the upper region
+/// that stays on-screen when zoomed in and the reflection's bottom is clipped),
+/// then keeps growing toward the far edge for the full zoomed-out slosh.
+fn reflectionDepthAmplitude(submerge: f32) f32 {
+    const d = std.math.clamp(submerge, 0, 1);
+    return 1.0 + d * (1.8 + 1.4 * d);
+}
+
+/// Phase lag vs depth — deeper rows follow the same wave, slower and larger.
+fn reflectionDepthLag(submerge: f32) f32 {
+    const d = std.math.clamp(submerge, 0, 1);
+    return std.math.pow(f32, d, 1.55) * 0.74;
+}
+
+/// Sample the surface field with increasing horizontal phase lag at depth.
+fn reflectionLaggedTx(t_x: f32, cols_dx: []const f32, submerge: f32) f32 {
+    if (submerge <= 0.001) return t_x;
+    const lag = reflectionDepthLag(submerge);
+    const slope = interpolateReflectionCols(cols_dx, t_x);
+    const dir: f32 = if (slope >= 0) 1 else -1;
+    return std.math.clamp(t_x - dir * lag, 0, 1);
+}
+
+/// Reflection mesh: seam pinned at the waterline; the body carries horizontal
+/// refraction ripples (cols_dx) that grow and phase-lag with depth. cols_dy is
+/// not applied — ramping it by depth squished the mesh while the water was active.
+fn reflectionMeshDisplacement(t_x: f32, t_y: f32, sample: ReflectionLagSample) dvui.Point.Physical {
+    const submerge = reflectionSubmergeDepth(t_y);
+    const t_lag = reflectionLaggedTx(t_x, &sample.cols_dx, submerge);
+    const lag_mix = std.math.clamp(submerge * submerge * 0.9, 0, 1);
+
+    const seam_t = std.math.clamp(t_y, 0, 1);
+    const dx_pin = 1.0 - std.math.pow(f32, seam_t, 4.5);
+    const dx_seam = interpolateReflectionCols(&sample.cols_dx, t_x);
+    const dx_lag = interpolateReflectionCols(&sample.cols_dx, t_lag);
+    const dx = std.math.lerp(dx_seam, dx_lag, lag_mix * 0.55) * std.math.lerp(1.0, 1.25, submerge) * dx_pin;
+
+    return .{ .x = dx, .y = 0 };
+}
+
+fn waterlineMeshDisplacement(
+    t_x: f32,
+    t_y: f32,
+    sample: ReflectionLagSample,
+    propagate: bool,
+) dvui.Point.Physical {
+    if (propagate) return reflectionMeshDisplacement(t_x, t_y, sample);
+    const s = std.math.clamp(t_y, 0, 1);
+    const strength = s * (0.1 + 0.9 * s);
+    return .{
+        .x = interpolateReflectionCols(&sample.cols_dx, t_x) * strength,
+        .y = 0,
+    };
+}
+
+fn reflectionCombinedDisplacement(t_x: f32, t_y: f32, options: PathToSubdividedQuadOptions) dvui.Point.Physical {
+    var d: dvui.Point.Physical = .{ .x = 0, .y = 0 };
+    if (options.reflection_lag) |sample| {
+        d = d.plus(waterlineMeshDisplacement(t_x, t_y, sample, options.waterline_propagate));
+    }
+    return clampDisplacement(d, options.displacement_max);
+}
 
 pub fn pathToSubdividedQuad(path: dvui.Path, allocator: std.mem.Allocator, options: PathToSubdividedQuadOptions) std.mem.Allocator.Error!dvui.Triangles {
     if (path.points.len != 4) {
@@ -1250,10 +1449,13 @@ pub fn pathToSubdividedQuad(path: dvui.Path, allocator: std.mem.Allocator, optio
             var x: usize = 0;
             while (x <= subdivs) : (x += 1) { // horizontal
                 const t_x = @as(f32, @floatFromInt(x)) / @as(f32, @floatFromInt(subdivs));
-                const pos = dvui.Point.Physical{
+                var pos = dvui.Point.Physical{
                     .x = left.x + (right.x - left.x) * t_x,
                     .y = left.y + (right.y - left.y) * t_x,
                 };
+                if (options.reflection_lag != null) {
+                    pos = pos.plus(reflectionCombinedDisplacement(t_x, t_y, options));
+                }
 
                 const uv = .{
                     base_uv.x + base_uv.w * t_x,

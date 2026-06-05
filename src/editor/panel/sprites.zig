@@ -3,11 +3,99 @@ const icons = @import("icons");
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
 const Editor = fizzy.Editor;
+const ReflectionLagSample = fizzy.dvui.ReflectionLagSample;
+const reflection_surface_cols = fizzy.dvui.reflection_surface_cols;
+const wsurf = fizzy.water_surface;
 
 const Sprites = @This();
 
 /// Side-card fly-out / fly-in master timeline (microseconds, linear 0↔1).
 const fly_anim_duration_us: i64 = 750_000;
+/// Normalised fly speed below which a card stops stirring the water.
+const ripple_vel_dead: f32 = 0.06;
+/// Per-slot reflection bookkeeping arrays are indexed by `it.d + field_center`.
+const max_refl_ripple_slots: usize = wsurf.max_slots;
+/// Mean per-cell surface energy below which the water is settled (stop refreshing).
+const water_settle_energy: f32 = 0.006;
+/// Fly motion → velocity impulse (normalised fly speed × k).
+const water_stir_k: f32 = 68.0;
+/// Inertial drag wake: velocity impulse per unit change in shelf speed (slots/s),
+/// injected as a localized splash (like fly-in) so it ripples rather than uniformly
+/// shrinking the reflections. Acceleration-driven, so small quick shakes read big
+/// and an abrupt stop throws a forward wake, while a steady drag stays calm.
+const water_drag_k: f32 = 11.0;
+/// Inject radius (field columns) for the drag wake — like the fly-in splash.
+const water_drag_radius: f32 = 0.7;
+/// Fly-out transition splash at the centre (velocity impulse).
+const water_fly_out_impulse: f32 = -10.5;
+/// Fly-in: card bottom is `baseline_y - fly_offset`; ripple only once this close.
+/// Fly-out: stir while the card is still near the line as it lifts away.
+const water_fly_out_near_k: f32 = 0.22;
+/// Downward velocity impulse when a flown-in card splashes back through the waterline.
+const water_land_impulse: f32 = -20.0;
+/// Surface slope → horizontal refraction at the waterline (fraction of card height).
+const water_disp_k: f32 = 1.15;
+/// Fly stir / splash: Gaussian radius as a fraction of one card's field span.
+/// Wider + more taps than a point inject — spreads energy instead of column bars.
+const water_fly_stir_radius_frac: f32 = 0.24;
+/// Fly in/out impulses are scaled down vs scroll/drag — staggered lifts otherwise
+/// over-drive the surface and pull the reflection seam up.
+const water_fly_impulse_scale: f32 = 0.36;
+/// Reflection wobble while `fly_t > 0` (field still ripples, seam rise reads softer).
+const water_fly_refl_scale: f32 = 0.40;
+/// Fly stir velocity dead-zone — higher than scroll so only brisk line contact stirs.
+const water_fly_vel_dead: f32 = 0.11;
+
+const FlowItem = struct { idx: usize, off: f32, d: i64, id: usize, center: bool };
+
+/// Spread a fly velocity impulse across a card's width with per-card phase so
+/// staggered fly-in/out stirs don't line up as slot-column vertical bars.
+fn injectFlyRipple(water: *wsurf.WaterSurface, slot_d: i64, vel_strength: f32, phase: f32) void {
+    const strength = vel_strength * water_fly_impulse_scale;
+    if (@abs(strength) < 0.0001) return;
+    const left = wsurf.slotLeftCol(slot_d);
+    const span: f32 = @as(f32, @floatFromInt(wsurf.cols_per_slot));
+    const r = span * water_fly_stir_radius_frac;
+    const wobble = std.math.sin(phase + @as(f32, @floatFromInt(slot_d)) * 2.17) * span * 0.11;
+    const taps = [_]struct { t: f32, w: f32 }{
+        .{ .t = 0.18, .w = 0.28 },
+        .{ .t = 0.40, .w = 0.26 },
+        .{ .t = 0.62, .w = 0.24 },
+        .{ .t = 0.82, .w = 0.22 },
+    };
+    for (taps) |tap| {
+        water.inject(left + tap.t * span + wobble, r, 0, strength * tap.w);
+    }
+}
+
+/// True once a flying side card's bottom has reached the shared waterline.
+fn flyCardTouchesWater(fly_offset: f32, fly_anim_out: bool, max_fly_off: f32) bool {
+    if (fly_anim_out) return fly_offset < max_fly_off * water_fly_out_near_k;
+    return fly_offset <= 0.0;
+}
+
+const CardDraw = struct {
+    item: FlowItem,
+    rect: dvui.Rect,
+    w: f32,
+    h: f32,
+    depth: f32,
+    opacity: f32,
+    item_scale: f32,
+    fly_offset: f32,
+    off: f32,
+    is_focus: bool,
+};
+
+/// Stable widget id for a cover-flow slot (sprite draw + reflection ripple share this).
+const SpriteSlot = struct {
+    fn src() std.builtin.SourceLocation {
+        return @src();
+    }
+    fn id(id_extra: usize) dvui.Id {
+        return dvui.parentGet().extendId(src(), id_extra);
+    }
+};
 
 /// Cover-flow scrub momentum tuning (sprite-index units). See `fizzy.Fling`.
 /// Mouse/trackpad release velocity is measured over a position/time window
@@ -37,6 +125,20 @@ const sprite_fling_touch: fizzy.Fling.Tuning = .{
 const sprite_fling_touch_window_s: f32 = 0.1;
 /// Upper bound on the per-frame delta fed to the passive cover-flow ease.
 const max_ease_dt: f32 = 1.0 / 30.0;
+/// Extra skewed shelf slots drawn beyond the pane-fit estimate (each side).
+const shelf_edge_extra: i64 = 2;
+/// Slot distance past `flat_zone` over which skewed shelf cards fade out. Kept
+/// short so a wide pane doesn't spread a gentle fade across the whole window.
+const shelf_opacity_fade_span: f32 = 2.5 + @as(f32, @floatFromInt(shelf_edge_extra));
+/// Pane-edge distance (in card widths) over which cards fade to transparent.
+const shelf_edge_fade_w: f32 = 2.5;
+/// Below this opacity a non-focus card is invisible — skip building/rendering its
+/// (expensive O(n²)) reflection mesh entirely rather than drawing it transparent.
+const card_cull_opacity: f32 = 0.012;
+/// Reflection mesh density for a fully-skewed shelf card, as a fraction of the
+/// head-on (focus) density. The head-on three cards render at full detail; skewed
+/// cards ramp down to this so the off-axis shelf stays cheap on slower GPUs.
+const skewed_reflection_detail: f32 = 0.3;
 /// Draw an on-screen readout of the last touch fling decision (velocity / idle / coast)
 /// so the touch-only momentum can be tuned on a real device. Set false to hide.
 const debug_touch_fling = false;
@@ -76,6 +178,18 @@ initialized: bool = false,
 was_flown: bool = false,
 /// Direction of the in-flight `play_fly` animation (outBack vs inBack).
 fly_anim_out: bool = false,
+/// Shared water surface (slot space) all reflections ripple in. See `water_surface.zig`.
+water: wsurf.WaterSurface = .{},
+/// Focused slot index last frame — re-anchors the water field as the shelf scrolls.
+prev_center_i: i64 = 0,
+/// Per-slot previous fly offset for velocity estimation (indexed by `d + field_center`).
+prev_fly_offset: [max_refl_ripple_slots]f32 = .{0} ** max_refl_ripple_slots,
+/// Per-slot: card dipped below the waterline (fly-in inBack overshoot), awaiting a splash.
+was_dipping: [max_refl_ripple_slots]bool = .{false} ** max_refl_ripple_slots,
+/// Previous `scroll_pos` — the per-frame delta drives the inertial slosh.
+prev_scroll_pos: f32 = 0.0,
+/// Smoothed shelf velocity (slots/s); its per-frame change tilts the water.
+shelf_vel: f32 = 0.0,
 
 pub fn draw(self: *Sprites) !void {
     if (fizzy.editor.activeFile()) |file| {
@@ -122,6 +236,15 @@ pub fn draw(self: *Sprites) !void {
                 .start_val = cur,
                 .end_val = if (flown) 1.0 else 0.0,
             });
+            if (flown) {
+                @memset(&self.water.height, 0);
+                @memset(&self.water.vel, 0);
+                if (!dvui.reduce_motion) {
+                    injectFlyRipple(&self.water, 0, water_fly_out_impulse, cur);
+                }
+            } else {
+                @memset(&self.was_dipping, false);
+            }
             self.was_flown = flown;
         }
         const fly_t: f32 = if (dvui.animationGet(panel_id, "play_fly")) |a|
@@ -205,6 +328,8 @@ pub fn draw(self: *Sprites) !void {
         if (!self.initialized) {
             self.scroll_pos = @floatFromInt(sel_virtual);
             self.goal = self.scroll_pos;
+            self.prev_scroll_pos = self.scroll_pos;
+            self.prev_center_i = @intFromFloat(@floor(self.scroll_pos));
             self.last_sel_virtual = sel_virtual;
             self.last_committed_virtual = sel_virtual;
             self.initialized = true;
@@ -281,6 +406,7 @@ pub fn draw(self: *Sprites) !void {
             if (k != 0.0) {
                 self.scroll_pos -= k * c;
                 self.goal -= k * c;
+                self.prev_scroll_pos -= k * c;
             }
         }
 
@@ -301,6 +427,9 @@ pub fn draw(self: *Sprites) !void {
         const center_x = parent.center().x;
         // Lift the row a little so the reflection has room below it.
         const center_y = parent.center().y - item_h * 0.10;
+        // The waterline: the shared bottom edge every card stands on (the focus
+        // card's full-height bottom). Side cards pin their bottom here too.
+        const baseline_y = center_y + item_h / 2.0;
 
         // ---- Collect a window of sprites around the centre and draw them back
         // to front so the focused sprite lands on top. The window grows with the
@@ -311,18 +440,64 @@ pub fn draw(self: *Sprites) !void {
             const front_extent = flat_zone * front_gap + shelf_gap;
             if (far_spread <= 0.0 or half_visible <= front_extent) break :blk @max(1, @as(i64, @intFromFloat(flat_zone)));
             const extra = @floor((half_visible - front_extent) / far_spread);
-            const fit = @as(i64, @intFromFloat(flat_zone)) + 1 + @as(i64, @intFromFloat(extra));
+            const fit = @as(i64, @intFromFloat(flat_zone)) + 1 + @as(i64, @intFromFloat(extra)) + shelf_edge_extra;
             break :blk std.math.clamp(fit, 1, max_window);
         };
+
         // Floor (not round) so the focused slot doesn't swap at half-integers while
         // scroll_pos eases toward goal after a slow release.
         const center_i: i64 = @intFromFloat(@floor(self.scroll_pos));
 
+        const scroll_dt = @max(dvui.secondsSinceLastFrame(), 0.0001);
+        // Signed slots the shelf moved this frame — covers drag, ease, and fling
+        // coast alike (they all move scroll_pos). This single delta drives the wake.
+        const scroll_travel = self.scroll_pos - self.prev_scroll_pos;
+        self.prev_scroll_pos = self.scroll_pos;
+
+        // ---- Advance the shared water surface. Ripples live in cover-flow slot
+        // space anchored to the focused card. While side cards are flown out,
+        // scroll snaps instantly (playback / focus mode) — skip stir and reset on
+        // slot change so frame advances don't retrigger endless waves. ----
+        const water_live = !dvui.reduce_motion;
+        const water_scroll_stir = water_live and !flown;
+        if (water_live) {
+            if (flown) {
+                if (center_i != self.prev_center_i) {
+                    @memset(&self.water.height, 0);
+                    @memset(&self.water.vel, 0);
+                }
+            } else {
+                self.water.reanchor(center_i - self.prev_center_i);
+            }
+            self.water.step(scroll_dt);
+
+            if (water_scroll_stir) {
+                // Inertial drag wake: the same localized splash the fly-in uses, but
+                // triggered by the *change* in shelf speed (≈ acceleration) rather
+                // than a bulk tilt. A localized impulse makes curved, propagating
+                // ripples — the watery look — whereas tilting the whole field just
+                // shifts each reflection uniformly. Driving by velocity-change means
+                // a small quick shake fires a big ripple and an abrupt stop throws a
+                // forward wake, while a steady drag stays calm. Zero-mean over a
+                // gesture, so it settles on its own.
+                const v_raw = scroll_travel / scroll_dt; // signed slots/s
+                const v_new = std.math.lerp(self.shelf_vel, v_raw, 1.0 - @exp(-30.0 * scroll_dt));
+                const dv = v_new - self.shelf_vel;
+                self.shelf_vel = v_new;
+                if (@abs(dv) > 0.0001) {
+                    const frac = self.scroll_pos - @as(f32, @floatFromInt(center_i));
+                    self.water.inject(wsurf.colForOffset(frac), water_drag_radius, 0, -dv * water_drag_k);
+                }
+            } else {
+                self.shelf_vel = 0;
+            }
+        }
+        self.prev_center_i = center_i;
+
         // `slot` is the unwrapped position (so `off` and the skew stay continuous);
         // `idx` is the wrapped sprite it shows; `id` is a per-slot widget id so
         // duplicate sprites (loop shorter than the window) don't collide.
-        const Item = struct { idx: usize, off: f32, id: usize, center: bool };
-        var items: [2 * 12 + 1]Item = undefined;
+        var items: [2 * 12 + 1]FlowItem = undefined;
         var n: usize = 0;
         var d: i64 = -window;
         while (d <= window) : (d += 1) {
@@ -331,6 +506,7 @@ pub fn draw(self: *Sprites) !void {
             items[n] = .{
                 .idx = virtualToSpriteIndex(file, mode, virtual),
                 .off = @as(f32, @floatFromInt(slot)) - self.scroll_pos,
+                .d = d,
                 .id = @intCast(d + window),
                 .center = d == 0,
             };
@@ -338,11 +514,11 @@ pub fn draw(self: *Sprites) !void {
         }
 
         const SortCtx = struct {
-            fn lessThan(_: void, a: Item, b: Item) bool {
+            fn lessThan(_: void, a: FlowItem, b: FlowItem) bool {
                 return @abs(a.off) > @abs(b.off);
             }
         };
-        std.sort.pdq(Item, items[0..n], {}, SortCtx.lessThan);
+        std.sort.pdq(FlowItem, items[0..n], {}, SortCtx.lessThan);
 
         // Cull side cards only once the fly-out has finished — not when outBack
         // crosses 1 mid-animation (that overshoot is the visible fling).
@@ -351,66 +527,138 @@ pub fn draw(self: *Sprites) !void {
             break :blk flown;
         };
 
+        var draws: [max_refl_ripple_slots]CardDraw = undefined;
+        var draw_n: usize = 0;
+        // Pass 1 — layout, then inject this card's motion into the shared water.
         for (items[0..n]) |it| {
             const off = it.off;
             const a = std.math.clamp(off, -flat_zone, flat_zone);
             const beyond = off - a;
 
-            // Tilt eases in over `tilt_ramp` cards (so the flat/skewed boundary is
-            // soft); the separation gap eases in faster, over `gap_ramp`. Both
-            // ramps start at 0 at the edge of the flat group, keeping x continuous
-            // so cards never pop as you scroll.
             const tilt = std.math.clamp((@abs(off) - flat_zone) / tilt_ramp, 0.0, 1.0);
             const gap_t = std.math.clamp((@abs(off) - flat_zone) / gap_ramp, 0.0, 1.0);
             const x_off = a * front_gap + beyond * far_spread + std.math.sign(off) * gap_t * shelf_gap;
 
-            // Left side recedes on its left edge, right side on its right edge.
             const depth = -std.math.sign(off) * tilt * max_depth;
 
-            // Subtle shrink with distance to reinforce depth.
-            const dist = @min(@abs(off), 4.0);
-            const item_scale = 1.0 - 0.05 * dist;
+            // Every card is the same size: the three head-on cards match, and each
+            // skewed card's standing (baseline) edge is full height too. Depth reads
+            // from the perspective fold, shelf spacing, and opacity fade — not from
+            // shrinking the cards (which would also distort the sprite's aspect).
+            const item_scale: f32 = 1.0;
             const w = item_w * item_scale;
             const h = item_h * item_scale;
 
-            // Fade cards out toward the background the further they sit from the
-            // focus; the front card and its immediate neighbours stay opaque.
-            const opacity = std.math.clamp(1.0 - 0.28 * (@abs(off) - 1.0), 0.0, 1.0);
-
+            // Head-on cards (inside `flat_zone`) stay fully opaque. Skewed shelf
+            // cards fade over `shelf_opacity_fade_span` slots — not the full window
+            // — so outer cards fall off quickly on wide panes. Pane-edge clipping
+            // fades further when cards actually run into the sides.
+            const card_x = center_x + x_off;
+            const abs_off = @abs(off);
+            const opacity: f32 = if (abs_off <= flat_zone) 1.0 else blk: {
+                const skew_t = std.math.clamp((abs_off - flat_zone) / shelf_opacity_fade_span, 0.0, 1.0);
+                const slot_op = 1.0 - skew_t;
+                const edge_dist = @min(card_x - parent.x, (parent.x + parent.w) - card_x);
+                const edge_op = std.math.clamp(edge_dist / (item_w * shelf_edge_fade_w), 0.0, 1.0);
+                break :blk @min(slot_op, edge_op);
+            };
             const is_focus = it.center;
 
-            // Side cards lift up and out of view (staggered by distance from the
-            // focus) and drop back on fly-in. The focus card never moves. `local`
-            // is this card's slice of the master `fly_t` clock; outBack flings out,
-            // inBack settles back with a matching overshoot.
+            const si: usize = @intCast(it.d + @as(i64, @intCast(wsurf.field_center)));
+            const max_fly_off = parent.h + item_h;
+
             var fly_offset: f32 = 0.0;
             if (!is_focus and fly_t > 0.0) {
                 const s = std.math.clamp((@abs(off) - 1.0) / @as(f32, @floatFromInt(window)), 0.0, 1.0);
                 const stagger_span: f32 = 0.5;
                 const local = std.math.clamp((fly_t - s * stagger_span) / (1.0 - stagger_span), 0.0, 1.0);
                 const f = if (self.fly_anim_out) dvui.easing.outBack(local) else dvui.easing.inBack(local);
-                if (fly_cull_side_cards and f >= 1.0) continue;
-                fly_offset = f * (parent.h + item_h);
+                fly_offset = f * max_fly_off;
+                if (fly_cull_side_cards and f >= 1.0) {
+                    self.prev_fly_offset[si] = fly_offset;
+                    continue;
+                }
             }
 
+            // Index per-slot bookkeeping by slot position (d + field_center), so the
+            // arrays track the card currently at each screen slot as the shelf flows.
+            const fly_delta = fly_offset - self.prev_fly_offset[si];
+            // Cards culled during fly-out reappear with a huge position jump — don't
+            // treat that as velocity or the water ripples before they reach the line.
+            const fly_teleport = @abs(fly_delta) > max_fly_off * 0.4;
+            const fly_vel: f32 = if (fly_teleport) 0 else fly_delta / scroll_dt;
+            self.prev_fly_offset[si] = fly_offset;
+
+            // Stand every card on a shared waterline: pin the bottom edge to the
+            // baseline (so shrunk side cards drop to the same line as the focus
+            // card). Per-column wobble is applied in the sprite mesh via
+            // `reflection_lag.cols_dy`; the rect stays on the resting line.
             const rect = dvui.Rect{
                 .x = center_x + x_off - w / 2.0,
-                .y = center_y - h / 2.0 - fly_offset,
+                .y = baseline_y - h - fly_offset,
                 .w = w,
                 .h = h,
             };
 
-            // Every card casts a shadow so the stack reads with depth; the shadow
-            // softens and fades as cards recede, the focus card keeps the deepest.
+            if (water_live and !is_focus and fly_t > 0.0) {
+                const fly_speed = fly_vel / @max(parent.h, 1.0);
+                const touches_water = flyCardTouchesWater(fly_offset, self.fly_anim_out, max_fly_off);
+                const ripple_phase = fly_offset * 0.008 + fly_t * 6.28 + @as(f32, @floatFromInt(it.id)) * 0.41;
+
+                if (touches_water and !fly_teleport and @abs(fly_speed) > water_fly_vel_dead) {
+                    injectFlyRipple(&self.water, it.d, -fly_speed * water_stir_k, ripple_phase);
+                }
+
+                const dipping = !self.fly_anim_out and touches_water and fly_offset < -1.0;
+                if (dipping) {
+                    self.was_dipping[si] = true;
+                } else if (self.was_dipping[si] and fly_offset >= -0.3) {
+                    self.was_dipping[si] = false;
+                    injectFlyRipple(&self.water, it.d, water_land_impulse, ripple_phase + 1.9);
+                }
+            } else if (fly_cull_side_cards or fly_t <= 0.0) {
+                self.was_dipping[si] = false;
+            }
+
+            draws[draw_n] = .{
+                .item = it,
+                .rect = rect,
+                .w = w,
+                .h = h,
+                .depth = depth,
+                .opacity = opacity,
+                .item_scale = item_scale,
+                .fly_offset = fly_offset,
+                .off = off,
+                .is_focus = is_focus,
+            };
+            draw_n += 1;
+        }
+
+        const max_fly_off_draw = parent.h + item_h;
+
+        // Pass 2 — draw cards; reflections sample the shared water surface across
+        // each card's slot span, so adjacent reflections distort continuously.
+        for (draws[0..draw_n]) |cd| {
+            // Faded-out edge cards are invisible — skip them so we don't build and
+            // render their reflection meshes (the per-card hot path) for nothing.
+            if (!cd.is_focus and cd.opacity <= card_cull_opacity) continue;
+
+            const it = cd.item;
+
+            // Grow the shadow smoothly as a card nears the centre (1 at the focus,
+            // 0 by one slot out) instead of a hard focus/non-focus switch — so the
+            // heavier shadow doesn't snap between cards as the focus flips on scroll.
+            const focusness = std.math.clamp(1.0 - @abs(cd.off), 0.0, 1.0);
             var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = it.id,
                 .expand = .none,
-                .rect = rect,
+                .rect = cd.rect,
                 .box_shadow = .{
                     .color = .black,
-                    .offset = .{ .x = 0.0, .y = if (is_focus) 8.0 else 5.0 },
-                    .fade = if (is_focus) 12.0 else 8.0,
-                    .alpha = (if (is_focus) @as(f32, 0.25) else @as(f32, 0.2)) * opacity,
+                    .offset = .{ .x = 0.0, .y = std.math.lerp(5.0, 8.0, focusness) },
+                    .fade = std.math.lerp(8.0, 12.0, focusness),
+                    .alpha = std.math.lerp(0.2, 0.25, focusness) * cd.opacity,
                     .corner_radius = dvui.Rect.all(parent_height / 32.0),
                 },
             });
@@ -418,7 +666,34 @@ pub fn draw(self: *Sprites) !void {
 
             const item_src = file.spriteRect(it.idx);
 
-            _ = fizzy.dvui.sprite(@src(), .{
+            // Sample the shared surface once the card bottom is on the waterline.
+            // During fly-in the reflection travels with the card but the surface
+            // field stays flat until contact — avoids the line rising early.
+            var lag_sample: ReflectionLagSample = .{};
+            const touches_water_draw = flyCardTouchesWater(cd.fly_offset, self.fly_anim_out, max_fly_off_draw);
+            const refl_water = !dvui.reduce_motion and (it.center or fly_t <= 0.0 or touches_water_draw);
+            if (refl_water) {
+                const left_col = wsurf.slotLeftCol(it.d);
+                const span: f32 = @floatFromInt(wsurf.cols_per_slot);
+                const refl_scale: f32 = if (fly_t > 0.0) water_fly_refl_scale else 1.0;
+                // Horizontal refraction only — cols_dy is unused (vertical mesh warp squished
+                // the reflection while the field was active).
+                inline for (0..reflection_surface_cols) |c| {
+                    const t = @as(f32, @floatFromInt(c)) / @as(f32, @floatFromInt(reflection_surface_cols - 1));
+                    const col = left_col + t * span;
+                    const slope = self.water.visualSlopeAt(col);
+                    lag_sample.cols_dx[c] = slope * cd.h * water_disp_k * refl_scale;
+                }
+            }
+
+            // Head-on cards (no skew → depth 0) get the full, high-res reflection
+            // mesh; skewed shelf cards ramp down to `skewed_reflection_detail` so the
+            // off-axis cards stay cheap. Ramps with the tilt so there's no pop as a
+            // card scrolls between the flat group and the shelf.
+            const tiltness = if (max_depth > 0.0) std.math.clamp(@abs(cd.depth) / max_depth, 0.0, 1.0) else 0.0;
+            const refl_detail = std.math.lerp(1.0, skewed_reflection_detail, tiltness);
+
+            _ = fizzy.dvui.sprite(SpriteSlot.src(), .{
                 .source = file.layers.items(.source)[file.selected_layer_index],
                 .file = file,
                 .alpha_source = if (file.checkerboardTileTexture()) |t| dvui.ImageSource{ .texture = t } else null,
@@ -431,20 +706,40 @@ pub fn draw(self: *Sprites) !void {
                     },
                     .origin = .{ 0, 0 },
                 },
-                .scale = scale * item_scale,
-                .depth = depth,
-                .opacity = opacity,
+                .scale = scale * cd.item_scale,
+                .depth = cd.depth,
+                .opacity = cd.opacity,
                 .reflection = true,
-                // The card lifts up by `fly_offset`; sink the reflection by twice
-                // that so it mirrors across the resting waterline — the card peels
-                // up and out the top while its reflection sinks down and out the
-                // bottom.
-                .reflection_offset = 2.0 * fly_offset,
+                // Peel the reflection down as the card lifts (2× fly_offset). 1:1 left the
+                // seam at the waterline while the card rose — reflection stayed put and
+                // vanished on cull. Seam pinning + no fly cols_dy keeps 2× from reading
+                // as the old ~⅛-card rise.
+                .reflection_offset = 2.0 * cd.fly_offset,
+                .reflection_lag = if (refl_water) lag_sample else null,
+                .reflection_detail = refl_detail,
             }, .{
                 .id_extra = it.id,
                 .margin = .all(0),
                 .padding = .all(0),
             });
+        }
+
+        // Keep animating until the water settles, so ripples decay smoothly after
+        // the cards stop moving. Crucially, stay awake (and never hard-reset) while
+        // the shelf is still moving: a small drag injects only a little localized
+        // velocity, so its mean energy can sit below `water_settle_energy` for the
+        // first frames — without this, the reset below would wipe the disturbance
+        // the same frame it's injected, before the wave develops into ripples (the
+        // intermittent "sometimes no ripple" bug).
+        if (!dvui.reduce_motion) {
+            const e = self.water.energy();
+            const moving = self.drag_active or self.fling.coasting or @abs(scroll_travel) > 1e-5;
+            if (e > water_settle_energy or moving) {
+                dvui.refresh(null, @src(), panel_id);
+            } else if (e > 0.0001) {
+                @memset(&self.water.height, 0);
+                @memset(&self.water.vel, 0);
+            }
         }
     }
 }
