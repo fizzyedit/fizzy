@@ -31,7 +31,7 @@ const sprite_fling_touch: fizzy.Fling.Tuning = .{
 const sprite_fling_touch_window_s: f32 = 0.1;
 /// Draw an on-screen readout of the last touch fling decision (velocity / idle / coast)
 /// so the touch-only momentum can be tuned on a real device. Set false to hide.
-const debug_touch_fling = true;
+const debug_touch_fling = false;
 
 // Animated fit-scale state (shared, like a singleton preview).
 var prev_scale: f32 = 1.0;
