@@ -83,6 +83,8 @@ pub const backend = if (@import("builtin").target.cpu.arch == .wasm32)
 else
     @import("backend_native.zig");
 
+pub const paths = @import("paths.zig");
+
 /// Returns a `std.process.Environ` populated from the libc `environ` global.
 /// Used to bridge APIs (like `known-folders.getPath`) that require an
 /// `Environ.Map` constructed from the parent process's environment.

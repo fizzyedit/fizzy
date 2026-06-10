@@ -64,6 +64,16 @@ pub fn isMaximized(_: *dvui.Window) bool {
 
 pub fn setWindowStyle(_: *dvui.Window) void {}
 
+/// Symmetric with the native API: no window state to restore on web.
+pub fn restoreWindowState(_: *dvui.Window) void {}
+
+/// Symmetric with the native API: no AppKit pump on web.
+pub fn macosLaunchComplete() void {}
+
+pub fn titlebarStripHeight(_: *dvui.Window) f32 {
+    return 0;
+}
+
 pub fn setTitlebarColor(_: *dvui.Window, _: dvui.Color) void {}
 
 pub fn setSdlAppMetadata(_: [*:0]const u8, _: [*:0]const u8, _: [*:0]const u8) void {}
@@ -88,6 +98,11 @@ export fn FizzyWebTrackpadMagnification(delta: f32) void {
 /// Symmetric with the native API: nothing to install on web because the JS bootstrap wires
 /// the wheel listener at page load.
 pub fn installTrackpadGestureMonitor() void {}
+
+/// Symmetric with the native API.
+pub fn isFullscreenChromeHidden(win: *dvui.Window) bool {
+    return isMaximized(win);
+}
 
 /// Drain and reset the accumulated trackpad pinch ratio. Matches the native API so the canvas
 /// widget can call it unconditionally without per-platform branching.

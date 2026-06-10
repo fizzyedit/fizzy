@@ -11,6 +11,7 @@ const fizzy = @import("fizzy.zig");
 const auto_update = @import("auto_update.zig");
 const update_notify = @import("update_notify.zig");
 const singleton = @import("singleton.zig");
+const paths = @import("paths.zig");
 
 const App = @This();
 const Editor = fizzy.Editor;
@@ -41,27 +42,45 @@ fn appAllocator() std.mem.Allocator {
 // reach argv through this zig's `process.Init` API.
 var main_init_global: ?std.process.Init = null;
 
+var pref_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+var pref_path_len: usize = 0;
+
+const start_options_base: dvui.App.StartOptions = .{
+    .size = .{ .w = 1200.0, .h = 800.0 },
+    .min_size = .{ .w = 640.0, .h = 480.0 },
+    .title = "fizzy",
+    .icon = icon,
+    .transparent = if (builtin.os.tag == .macos or builtin.os.tag == .windows) true else false,
+    // macOS: Cancel-leading dialog/footer order; other platforms: OK-leading (matches dialog header close vs icon).
+    .window_init_options = .{
+        .button_order = if (builtin.os.tag.isDarwin()) .cancel_ok else .ok_cancel,
+    },
+};
+
+fn startOptions() dvui.App.StartOptions {
+    var opts = start_options_base;
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        const main_init = dvui.App.main_init orelse return opts;
+        if (paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.processEnviron(), ".")) |pref_path| {
+            pref_path_len = pref_path.len;
+            opts.pref_path = pref_path_buf[0..pref_path_len :0];
+        }
+    }
+    return opts;
+}
+
 // To be a dvui App:
 // * declare "dvui_app"
 // * expose the backend's main function
 // * use the backend's log function
 pub const dvui_app: dvui.App = .{
-    .config = .{
-        .options = .{
-            .size = .{ .w = 1200.0, .h = 800.0 },
-            .min_size = .{ .w = 640.0, .h = 480.0 },
-            .title = "fizzy",
-            .icon = icon,
-            .transparent = if (builtin.os.tag == .macos or builtin.os.tag == .windows) true else false,
-            // macOS: Cancel-leading dialog/footer order; other platforms: OK-leading (matches dialog header close vs icon).
-            .window_init_options = .{
-                .button_order = if (builtin.os.tag.isDarwin()) .cancel_ok else .ok_cancel,
-            },
-        },
-    },
+    .config = .{ .startFn = &startOptions },
     .frameFn = AppFrame,
     .initFn = AppInit,
     .deinitFn = AppDeinit,
+    // Applies macOS window chrome and restores a saved fullscreen Space
+    // before the first frame (no-op elsewhere).
+    .restoreFn = fizzy.backend.restoreWindowState,
 };
 
 pub fn main(main_init: std.process.Init) !u8 {
@@ -160,7 +179,18 @@ pub fn AppInit(win: *dvui.Window) !void {
     // No-op on Windows/Linux/web.
     fizzy.backend.installTrackpadGestureMonitor();
 
+    // macOS window chrome was already applied in restoreWindowState (dvui
+    // restoreFn) before this first frame; zoom restore is handled by the dvui
+    // backend once the window is shown/focused. Windows chrome goes here.
+    if (builtin.os.tag != .macos) {
+        fizzy.backend.setWindowStyle(win);
+    }
+
     update_notify.startLaunchCheck(dvui.io, fizzy.editor.settings.debug_simulate_update_available);
+
+    // From here on the monitor's pump timer may drive frames during macOS
+    // window animations.
+    fizzy.backend.macosLaunchComplete();
 }
 
 // Run as app is shutting down before dvui.Window.deinit()

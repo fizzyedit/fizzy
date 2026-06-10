@@ -2,9 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const icons = @import("icons");
 const assets = @import("assets");
-const known_folders = @import("known-folders");
 const objc = @import("objc");
-const sdl3 = @import("backend").c;
 
 const cozette_ttf = assets.files.fonts.@"CozetteVector.ttf";
 const cozette_bold_ttf = assets.files.fonts.@"CozetteVectorBold.ttf";
@@ -205,11 +203,9 @@ pub fn init(
     const config_root: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
         app.root_path
     else config_root_blk: {
-        var environ_map = try fizzy.processEnviron().createMap(arena);
-        defer environ_map.deinit();
-        break :config_root_blk try known_folders.getPath(dvui.io, arena, environ_map, .local_configuration) orelse app.root_path;
+        break :config_root_blk try fizzy.paths.configRoot(dvui.io, arena, fizzy.processEnviron(), app.root_path);
     };
-    const config_folder = std.fs.path.join(fizzy.app.allocator, &.{ config_root, "fizzy" }) catch app.root_path;
+    const config_folder = try fizzy.paths.configFolder(fizzy.app.allocator, dvui.io, arena, fizzy.processEnviron(), app.root_path);
 
     // One-time migration: pre-rename builds used `Fizzy/` (capitalized).
     // On case-insensitive filesystems (Windows NTFS, macOS APFS) `fizzy/` already
@@ -805,18 +801,23 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 title_strip_h * scale,
                 @intFromFloat(window_rect_natural.w * scale),
             );
-        } else if (builtin.os.tag == .macos and !fizzy.backend.isMaximized(dvui.currentWindow())) {
-            var titlebar_box = dvui.box(
-                @src(),
-                .{ .dir = .horizontal },
-                .{
-                    .expand = .horizontal,
-                    .background = false,
-                    .min_size_content = .{ .w = 1, .h = fizzy.editor.settings.titlebar_height },
-                    .max_size_content = .{ .w = std.math.floatMax(f32), .h = fizzy.editor.settings.titlebar_height },
-                },
-            );
-            defer titlebar_box.deinit();
+        } else if (builtin.os.tag == .macos) {
+            // Collapse while zoomed/fullscreen (chrome overlays on hover); grow with
+            // AppKit safe-area inset when restoring to a normal window.
+            const title_strip_h = fizzy.backend.titlebarStripHeight(dvui.currentWindow());
+            if (title_strip_h > 0) {
+                var titlebar_box = dvui.box(
+                    @src(),
+                    .{ .dir = .horizontal },
+                    .{
+                        .expand = .horizontal,
+                        .background = false,
+                        .min_size_content = .{ .w = 1, .h = title_strip_h },
+                        .max_size_content = .{ .w = std.math.floatMax(f32), .h = title_strip_h },
+                    },
+                );
+                defer titlebar_box.deinit();
+            }
         }
 
         // Windows-only top-right overlay: minimize / maximize / close. Lives in a FloatingWidget
