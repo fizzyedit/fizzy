@@ -27,8 +27,8 @@
             .lazy = true,
         },
         .dvui = .{
-            .url = "https://github.com/foxnne/dvui-dev/archive/0c9a596fa4362f8cb2cd27b653942ddf3fd7a668.tar.gz",
-            .hash = "dvui-0.5.0-dev-AQFJmahe9wA8Cg9l8-mnlIhigaUqsWEtO3f3X8x3Ei62",
+            .url = "https://github.com/foxnne/dvui-dev/archive/2f81423945d7076796023a7802f2680226dd9bd4.tar.gz",
+            .hash = "dvui-0.5.0-dev-AQFJmdw09wCp9ts4oaBV7Rkn7YuMKxDiaCLaweO-HPuS",
             //.path = "../dvui-dev",
         },
         .assetpack = .{

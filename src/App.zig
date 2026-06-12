@@ -65,6 +65,14 @@ fn startOptions() dvui.App.StartOptions {
             pref_path_len = pref_path.len;
             opts.pref_path = pref_path_buf[0..pref_path_len :0];
         }
+        // Open hidden so AppInit (dvui's initFn) can apply the window chrome and
+        // settle geometry before the window is shown — no unstyled flash. AppInit
+        // calls `fizzy.backend.showWindow` once everything is in place.
+        opts.hidden = true;
+        // fizzy owns geometry for its custom (frame == content) window — dvui's
+        // content-based persistence can't represent it (see backend.restoreWindowState
+        // / saveWindowGeometry). Disable dvui's so the two don't fight.
+        opts.persist_window_geometry = false;
     }
     return opts;
 }
@@ -78,9 +86,6 @@ pub const dvui_app: dvui.App = .{
     .frameFn = AppFrame,
     .initFn = AppInit,
     .deinitFn = AppDeinit,
-    // Applies macOS window chrome and restores a saved fullscreen Space
-    // before the first frame (no-op elsewhere).
-    .restoreFn = fizzy.backend.restoreWindowState,
 };
 
 pub fn main(main_init: std.process.Init) !u8 {
@@ -116,6 +121,12 @@ pub fn AppInit(win: *dvui.Window) !void {
     // Snapshot the platform from DVUI's keybind selection. On native this is a
     // no-op; on wasm it tells `fizzy.platform.isMacOS()` what browser we're in.
     fizzy.platform.cacheFromWindow(win);
+
+    // Apply the macOS window chrome and install the Space monitor while the
+    // window is still hidden (see startOptions: opts.hidden = true), so the
+    // full-size-content-view style mask is in place before the window is shown.
+    // No-op on non-macOS (Windows chrome is applied further below).
+    fizzy.backend.restoreWindowState(win);
 
     const allocator = appAllocator();
 
@@ -179,9 +190,10 @@ pub fn AppInit(win: *dvui.Window) !void {
     // No-op on Windows/Linux/web.
     fizzy.backend.installTrackpadGestureMonitor();
 
-    // macOS window chrome was already applied in restoreWindowState (dvui
-    // restoreFn) before this first frame; zoom restore is handled by the dvui
-    // backend once the window is shown/focused. Windows chrome goes here.
+    // macOS window chrome was already applied in restoreWindowState (called
+    // near the top of AppInit while the window was hidden). The window opens at
+    // its saved windowed geometry; fullscreen/maximize are not restored. Windows
+    // chrome goes here.
     if (builtin.os.tag != .macos) {
         fizzy.backend.setWindowStyle(win);
     }
@@ -191,10 +203,15 @@ pub fn AppInit(win: *dvui.Window) !void {
     // From here on the monitor's pump timer may drive frames during macOS
     // window animations.
     fizzy.backend.macosLaunchComplete();
+
+    // Chrome and geometry are settled — reveal the window (created hidden).
+    fizzy.backend.showWindow(win);
 }
 
 // Run as app is shutting down before dvui.Window.deinit()
 pub fn AppDeinit() void {
+    // Persist the current windowed frame while the window still exists. No-op off macOS.
+    fizzy.backend.saveWindowGeometry(fizzy.app.window);
     fizzy.editor.deinit() catch unreachable;
     // Tear down the singleton listener after the editor so any callback
     // currently in flight finishes before we free state it touches.

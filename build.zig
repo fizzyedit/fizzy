@@ -745,6 +745,7 @@ pub fn build(b: *std.Build) !void {
         .{ "fizzy-reduce", "src/algorithms/reduce.zig" },
         .{ "fizzy-grid-validate", "src/internal/grid_layout_validate.zig" },
         .{ "fizzy-animation", "src/Animation.zig" },
+        .{ "fizzy-window-layout", "src/internal/window_layout.zig" },
     }) |entry| {
         tests_module.addAnonymousImport(entry[0], .{
             .root_source_file = b.path(entry[1]),

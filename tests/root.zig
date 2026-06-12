@@ -15,4 +15,5 @@ comptime {
     _ = @import("fizzy-reduce");
     _ = @import("fizzy-grid-validate");
     _ = @import("fizzy-animation");
+    _ = @import("fizzy-window-layout");
 }

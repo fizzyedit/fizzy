@@ -109,6 +109,13 @@ sprite_clipboard: ?SpriteClipboard = null,
 
 window_opacity: f32 = 1.0,
 
+/// Animated window-background opacity multiplier. Eases toward the windowed
+/// target (translucent, vibrancy shows through) or 1.0 (opaque) when
+/// maximized/fullscreen, so the vibrancy fades in/out across fullscreen
+/// transitions instead of snapping. `< 0` is a sentinel meaning "snap to the
+/// target on the first frame" so there is no fade at launch.
+window_opacity_anim: f32 = -1.0,
+
 pending_native_menu_actions: [16]fizzy.backend.NativeMenuAction = undefined,
 pending_native_menu_actions_len: u8 = 0,
 
@@ -639,6 +646,23 @@ const handle_dist = 60;
 pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.window_opacity = if (dvui.themeGet().dark) editor.settings.window_opacity_dark else editor.settings.window_opacity_light;
 
+    // Ease the window background between translucent (windowed) and fully opaque
+    // (maximized/fullscreen) so the vibrancy fades in/out across fullscreen
+    // transitions rather than snapping. The draw uses `window_opacity_anim`.
+    {
+        const opaque_target: f32 = 1.0;
+        const target: f32 = if (fizzy.backend.isMaximized(dvui.currentWindow())) opaque_target else editor.window_opacity;
+        if (editor.window_opacity_anim < 0) {
+            editor.window_opacity_anim = target;
+        } else if (editor.window_opacity_anim != target) {
+            const dt = dvui.secondsSinceLastFrame();
+            const t = std.math.clamp(dt * 6.0, 0.0, 1.0);
+            editor.window_opacity_anim += (target - editor.window_opacity_anim) * t;
+            if (@abs(target - editor.window_opacity_anim) < 0.004) editor.window_opacity_anim = target;
+            dvui.refresh(null, @src(), null);
+        }
+    }
+
     // Drain any "Save and Close" requests whose async save has settled.
     editor.tickPendingSaveCloses();
     var needs_save_status_anim_tick = false;
@@ -749,11 +773,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         var window_color = dvui.themeGet().color(.content, .fill);
 
         switch (builtin.os.tag) {
-            .macos => {
-                window_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) window_color.opacity(editor.window_opacity).lighten((1.0 - editor.window_opacity) * 4.0) else window_color;
-            },
-            .windows => {
-                window_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) window_color.opacity(editor.window_opacity).lighten((1.0 - editor.window_opacity) * 4.0) else window_color;
+            // `window_opacity_anim` eases between the windowed opacity and 1.0
+            // (opaque) across fullscreen transitions; at 1.0 this is a no-op and
+            // matches the old maximized branch exactly.
+            .macos, .windows => {
+                window_color = window_color.opacity(editor.window_opacity_anim).lighten((1.0 - editor.window_opacity_anim) * 4.0);
             },
             else => {},
         }
