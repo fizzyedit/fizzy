@@ -78,9 +78,6 @@ pub const dvui_app: dvui.App = .{
     .frameFn = AppFrame,
     .initFn = AppInit,
     .deinitFn = AppDeinit,
-    // Applies macOS window chrome and restores a saved fullscreen Space
-    // before the first frame (no-op elsewhere).
-    .restoreFn = fizzy.backend.restoreWindowState,
 };
 
 pub fn main(main_init: std.process.Init) !u8 {
@@ -113,6 +110,13 @@ pub const std_options: std.Options = .{
 
 // Runs before the first frame, after backend and dvui.Window.init()
 pub fn AppInit(win: *dvui.Window) !void {
+
+    // Applies macOS window chrome and restores a saved fullscreen Space
+    // before the first frame (no-op elsewhere).
+    if (builtin.os.tag == .macos) {
+        fizzy.backend.restoreWindowState(win);
+    }
+
     // Snapshot the platform from DVUI's keybind selection. On native this is a
     // no-op; on wasm it tells `fizzy.platform.isMacOS()` what browser we're in.
     fizzy.platform.cacheFromWindow(win);

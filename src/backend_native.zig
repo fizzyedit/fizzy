@@ -223,14 +223,42 @@ pub fn restoreWindowState(win: *dvui.Window) void {
 
         setWindowStyle(win);
 
+        var saved_geometry: ?dvui.backend.WindowGeometry = null;
+        if (back.init_opts_save) |opts| {
+            saved_geometry = .load(opts);
+        }
+
         const cocoa = cocoaWindowOf(window) orelse return;
         macos_monitor_window = window;
-        back.macos_pre_begin_sync = macosAppPreBeginSync;
+        back.begin_hook = macosAppPreBeginSync;
         fizzy_macos_window_install_resize_observer(cocoa);
 
-        if (!back.pending_fullscreen_restore) return;
-        back.pending_fullscreen_restore = false;
-        back.pending_maximize_restore = false;
+        _ = sdl3.SDL_ShowWindow(window);
+        //const flags = sdl3.SDL_GetWindowFlags(window);
+        //if (flags & sdl3.SDL_WINDOW_HIDDEN != 0) {
+        //    if (!sdl3.SDL_ShowWindow(window)) {
+        //        std.log.err("SDL_ShowWindow before launch Space restore failed", .{});
+        //    }
+        //    _ = sdl3.SDL_PumpEvents();
+        //}
+
+        if (saved_geometry) |g| {
+            if (g.state == .normal) return;
+            if (g.state == .maximized) {
+                // Give AppKit a drawable snapshot for the Space enter morph.
+                //_ = win.end(.{}) catch |err| {
+                //    std.log.err("launch restore prep frame end failed: {any}", .{err});
+                //    return;
+                //};
+                //win.begin(win.frame_time_ns) catch |err| {
+                //    std.log.err("launch restore prep frame begin failed: {any}", .{err});
+                //    return;
+                //};
+
+                _ = sdl3.SDL_MaximizeWindow(window);
+                return;
+            }
+        }
 
         // Seed the exit target from raw contentView.bounds (never transition
         // targets) so exiting fullscreen later lands on the windowed size.
@@ -240,28 +268,11 @@ pub fn restoreWindowState(win: *dvui.Window) void {
             fizzy_macos_window_read_windowed_bounds(cocoa, &pw, &ph);
             if (pw >= 1.0 and ph >= 1.0) {
                 fizzy_macos_window_seed_windowed_content_points(pw, ph);
-            } else if (back.normal_geometry) |g| {
+            } else if (saved_geometry) |g| {
                 fizzy_macos_window_seed_windowed_content_points(@floatFromInt(g.w), @floatFromInt(g.h));
             }
         }
 
-        const flags = sdl3.SDL_GetWindowFlags(window);
-        if (flags & sdl3.SDL_WINDOW_HIDDEN != 0) {
-            if (!sdl3.SDL_ShowWindow(window)) {
-                std.log.err("SDL_ShowWindow before launch Space restore failed", .{});
-            }
-            _ = sdl3.SDL_PumpEvents();
-        }
-
-        // Give AppKit a drawable snapshot for the Space enter morph.
-        win.begin(win.frame_time_ns) catch |err| {
-            std.log.err("launch restore prep frame begin failed: {any}", .{err});
-            return;
-        };
-        _ = win.end(.{}) catch |err| {
-            std.log.err("launch restore prep frame end failed: {any}", .{err});
-            return;
-        };
 
         fizzy_macos_window_begin_launch_space_restore();
         defer fizzy_macos_window_end_launch_space_restore();
