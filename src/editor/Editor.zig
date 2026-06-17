@@ -468,16 +468,54 @@ pub fn init(
 /// must run here — not in `init`, where it would point at the stack temporary.
 /// Called from `App.AppInit` right after the heap copy. (The built-in branch
 /// decorators registered in `init` are exempt: they store fn pointers, not `&editor`.)
+/// Stable shell-builtin contribution id.
+pub const view_settings = "shell.settings";
+
 pub fn postInit(editor: *Editor) !void {
+    // Register plugin contributions (sidebar/bottom/center/menus). These are the
+    // near-empty shell's content: it iterates the Host registries rather than
+    // hardcoding panes. Web-safe — the draw fns reach the same inline code the
+    // editor tick already runs on wasm. Order = sidebar order.
+    try @import("../workbench/plugin.zig").register(&editor.host);
+    try @import("../pixelart/plugin.zig").register(&editor.host);
+
+    // Shell built-in: Settings (owner = null; not a plugin).
+    try editor.host.registerSidebarView(.{
+        .id = view_settings,
+        .icon = dvui.entypo.cog,
+        .title = "Settings",
+        .draw = drawSettingsPane,
+    });
+
+    // Menu bar contributions (non-macOS in-app bar). The draw code still lives in
+    // the shell's `Menu.zig`; Phase 3 moves the File/Edit bodies into the workbench
+    // / pixel-art plugins, which will then self-register. Order = bar order.
+    try editor.host.registerMenu(.{ .id = "workbench.menu.file", .draw = Menu.drawFileMenu });
+    try editor.host.registerMenu(.{ .id = "pixelart.menu.edit", .draw = Menu.drawEditMenu });
+    try editor.host.registerMenu(.{ .id = "shell.menu.view", .draw = Menu.drawViewMenu });
+    try editor.host.registerMenu(.{ .id = "shell.menu.help", .draw = Menu.drawHelpMenu });
+
+    // Keybind contributions: each plugin registers its own binds into the window's
+    // keybind map. The shell already registered its global/navigation/region binds
+    // in `Keybinds.register` (during `init`, before this runs), so the two halves
+    // are disjoint — no `putNoClobber` clash. Runs on all targets (web included).
+    const window = dvui.currentWindow();
+    for (editor.host.plugins.items) |plugin| try plugin.contributeKeybinds(window);
+
     // The workbench-api is the file explorer's programmatic surface and drives OS
     // file management (open/create/rename/delete/move on disk). The web build has
-    // no filesystem API, so the file explorer / workbench service is left out there
-    // for now. Keeping the registration behind a comptime gate also keeps the
-    // service's native-only fn bodies out of wasm analysis entirely (the codebase's
-    // dead-branch convention; see `web_main.zig`).
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    editor.workbench.initService(editor);
-    try editor.host.registerService(Workbench.Api.service_name, &editor.workbench.api);
+    // no filesystem API, so the workbench *service* is left out there for now.
+    // Keeping it behind a comptime gate also keeps its native-only fn bodies out of
+    // wasm analysis entirely (the codebase's dead-branch convention; see
+    // `web_main.zig`).
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        editor.workbench.initService(editor);
+        try editor.host.registerService(Workbench.Api.service_name, &editor.workbench.api);
+    }
+}
+
+fn drawSettingsPane(_: ?*anyopaque) anyerror!void {
+    try Explorer.settings.draw();
 }
 
 /// Ensures `{config}/Themes` exists and scans `*.json` for future user themes (loaded entries are prepended before Fizzy themes).
@@ -1176,9 +1214,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             }
 
             if (editor.panel.paned.showFirst()) {
-                const result = try editor.drawWorkspaces(0);
-                if (result != .ok) {
-                    return result;
+                if (editor.host.activeCenter()) |center| {
+                    const result = try center.draw(center.ctx);
+                    if (result != .ok) {
+                        return result;
+                    }
                 }
             }
         } else {
@@ -1943,7 +1983,7 @@ pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     }
     editor.folder = try fizzy.app.allocator.dupe(u8, path);
     try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
-    editor.explorer.pane = .files;
+    editor.host.setActiveSidebarView(@import("../workbench/plugin.zig").view_files);
 
     editor.project = Project.load(fizzy.app.allocator) catch null;
     editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);
@@ -2329,7 +2369,7 @@ pub fn processPackJob(editor: *Editor) void {
         }
         fizzy.packer.last_packed_at_ns = fizzy.perf.nanoTimestamp();
         job.result_consumed = true;
-        editor.explorer.pane = .project;
+        editor.host.setActiveSidebarView(@import("../pixelart/plugin.zig").view_project);
         const toast_canvas: ?dvui.Id = if (editor.activeFile()) |file| file.editor.canvas.id else null;
         showPackToast("Project packed", toast_canvas);
     } else blk: {
@@ -3255,13 +3295,17 @@ fn processPendingSaveAs(editor: *Editor) void {
 
 pub fn undo(editor: *Editor) !void {
     if (editor.activeFile()) |file| {
-        try file.history.undoRedo(file, .undo);
+        if (editor.host.pluginForExtension(std.fs.path.extension(file.path))) |plugin| {
+            try plugin.undo(.{ .ptr = file, .owner = plugin, .id = file.id });
+        }
     }
 }
 
 pub fn redo(editor: *Editor) !void {
     if (editor.activeFile()) |file| {
-        try file.history.undoRedo(file, .redo);
+        if (editor.host.pluginForExtension(std.fs.path.extension(file.path))) |plugin| {
+            try plugin.redo(.{ .ptr = file, .owner = plugin, .id = file.id });
+        }
     }
 }
 

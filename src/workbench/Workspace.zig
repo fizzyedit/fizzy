@@ -119,7 +119,7 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
         }
     }
 
-    if (fizzy.editor.explorer.pane == .project) {
+    if (fizzy.editor.host.isActiveSidebarView(@import("../pixelart/plugin.zig").view_project)) {
         self.drawProject();
     } else {
         self.drawTabs();

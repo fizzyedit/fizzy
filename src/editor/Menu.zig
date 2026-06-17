@@ -24,6 +24,19 @@ pub fn draw() !dvui.App.Result {
         dvui.themeSet(theme);
     }
 
+    // The shell owns only the menu bar container + theme; the top-level menus are
+    // plugin (and shell built-in) contributions, drawn in registration order.
+    for (fizzy.editor.host.menus.items) |*menu| {
+        menu.draw(menu.ctx) catch |err| {
+            dvui.log.err("Menu contribution failed: {any}", .{err});
+        };
+    }
+
+    return .ok;
+}
+
+/// File menu (workbench contribution).
+pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
     if (menuItem(@src(), "File", .{ .submenu = true }, .{
         .expand = .horizontal,
         //.color_accent = dvui.themeGet().color(.window, .fill),
@@ -160,7 +173,10 @@ pub fn draw() !dvui.App.Result {
             fw.close();
         }
     }
+}
 
+/// Edit menu (pixel-art contribution).
+pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
     if (menuItem(
         @src(),
         "Edit",
@@ -280,7 +296,10 @@ pub fn draw() !dvui.App.Result {
             }
         }
     }
+}
 
+/// View menu (shell built-in).
+pub fn drawViewMenu(_: ?*anyopaque) anyerror!void {
     if (menuItem(@src(), "View", .{ .submenu = true }, .{
         .expand = .horizontal,
         .color_text = dvui.themeGet().color(.control, .text),
@@ -322,8 +341,11 @@ pub fn draw() !dvui.App.Result {
             fw.close();
         }
     }
+}
 
-    // Help — matches the macOS native Help menu so the two menubars stay congruent.
+/// Help menu (shell built-in). Matches the macOS native Help menu so the two
+/// menubars stay congruent.
+pub fn drawHelpMenu(_: ?*anyopaque) anyerror!void {
     if (menuItem(@src(), "Help", .{ .submenu = true }, .{
         .expand = .horizontal,
         .color_text = dvui.themeGet().color(.control, .text),
@@ -354,8 +376,6 @@ pub fn draw() !dvui.App.Result {
             fw.close();
         }
     }
-
-    return .ok;
 }
 
 pub fn menuItemWithHotkey(src: std.builtin.SourceLocation, label_str: []const u8, hotkey: dvui.enums.Keybind, enabled: bool, init_opts: dvui.MenuItemWidget.InitOptions, opts: dvui.Options) ?dvui.Rect.Natural {

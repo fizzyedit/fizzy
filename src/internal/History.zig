@@ -1,5 +1,6 @@
 const std = @import("std");
 const fizzy = @import("../fizzy.zig");
+const pixelart = @import("../pixelart/plugin.zig");
 const zgui = @import("zgui");
 const History = @This();
 const Editor = fizzy.Editor;
@@ -387,7 +388,7 @@ fn layerMergeUndo(file: *fizzy.Internal.File, lm: *Change.LayerMerge) !void {
     file.editor.layer_composite_dirty = true;
     file.editor.split_composite_dirty = true;
     file.selected_layer_index = lm.source_index;
-    fizzy.editor.explorer.pane = .tools;
+    fizzy.editor.host.setActiveSidebarView(pixelart.view_tools);
     file.invalidateActiveLayerTransparencyMaskCache();
 }
 
@@ -429,7 +430,7 @@ fn layerMergeRedo(file: *fizzy.Internal.File, lm: *Change.LayerMerge) !void {
         .up => dest_i,
         .down => dest_i - 1,
     };
-    fizzy.editor.explorer.pane = .tools;
+    fizzy.editor.host.setActiveSidebarView(pixelart.view_tools);
     file.invalidateActiveLayerTransparencyMaskCache();
 }
 
@@ -618,7 +619,7 @@ pub fn undoRedo(self: *History, file: *fizzy.Internal.File, action: Action) !voi
 
                 //try file.editor.selected_sprites.append(sprite_index);
             }
-            fizzy.editor.explorer.pane = .sprites;
+            fizzy.editor.host.setActiveSidebarView(pixelart.view_sprites);
         },
         .layers_order => |*layers_order| {
             file.editor.layer_composite_dirty = true;
@@ -673,7 +674,7 @@ pub fn undoRedo(self: *History, file: *fizzy.Internal.File, action: Action) !voi
                     layer_restore_delete.action = .restore;
                 },
             }
-            fizzy.editor.explorer.pane = .tools;
+            fizzy.editor.host.setActiveSidebarView(pixelart.view_tools);
             file.invalidateActiveLayerTransparencyMaskCache();
         },
         .layer_name => |*layer_name| {
@@ -681,7 +682,7 @@ pub fn undoRedo(self: *History, file: *fizzy.Internal.File, action: Action) !voi
             fizzy.app.allocator.free(file.layers.items(.name)[layer_name.index]);
             file.layers.items(.name)[layer_name.index] = try fizzy.app.allocator.dupe(u8, layer_name.name);
             layer_name.name = name;
-            fizzy.editor.explorer.pane = .tools;
+            fizzy.editor.host.setActiveSidebarView(pixelart.view_tools);
         },
         .layer_settings => |*layer_settings| {
             const idx = layer_settings.index;
@@ -700,7 +701,7 @@ pub fn undoRedo(self: *History, file: *fizzy.Internal.File, action: Action) !voi
             if (visibility_changed) {
                 file.editor.split_composite_dirty = true;
             }
-            fizzy.editor.explorer.pane = .tools;
+            fizzy.editor.host.setActiveSidebarView(pixelart.view_tools);
         },
         .animation_restore_delete => |*animation_restore_delete| {
             const a = animation_restore_delete.action;
@@ -726,14 +727,14 @@ pub fn undoRedo(self: *History, file: *fizzy.Internal.File, action: Action) !voi
                     }
                 },
             }
-            fizzy.editor.explorer.pane = .sprites;
+            fizzy.editor.host.setActiveSidebarView(pixelart.view_sprites);
         },
         .animation_name => |*animation_name| {
             const name = try fizzy.app.allocator.dupe(u8, file.animations.items(.name)[animation_name.index]);
             fizzy.app.allocator.free(file.animations.items(.name)[animation_name.index]);
             file.animations.items(.name)[animation_name.index] = try fizzy.app.allocator.dupe(u8, animation_name.name);
             animation_name.name = name;
-            fizzy.editor.explorer.pane = .sprites;
+            fizzy.editor.host.setActiveSidebarView(pixelart.view_sprites);
         },
         .animation_settings => {},
         .animation_order => |*animation_order| {

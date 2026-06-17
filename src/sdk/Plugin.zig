@@ -61,6 +61,24 @@ pub fn fileTypePriority(self: Plugin, ext: []const u8) ?u8 {
     return if (self.vtable.fileTypePriority) |f| f(self.state, ext) else null;
 }
 
+pub fn contributeKeybinds(self: Plugin, win: *dvui.Window) !void {
+    if (self.vtable.contributeKeybinds) |f| try f(self.state, win);
+}
+
+// ---- document lifecycle wrappers (operate on a DocHandle this plugin owns) ----
+
+pub fn isDirty(self: Plugin, doc: DocHandle) bool {
+    return if (self.vtable.isDirty) |f| f(self.state, doc) else false;
+}
+
+pub fn undo(self: Plugin, doc: DocHandle) !void {
+    if (self.vtable.undo) |f| try f(self.state, doc);
+}
+
+pub fn redo(self: Plugin, doc: DocHandle) !void {
+    if (self.vtable.redo) |f| try f(self.state, doc);
+}
+
 pub fn deinit(self: Plugin) void {
     if (self.vtable.deinit) |f| f(self.state);
 }

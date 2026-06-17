@@ -1597,7 +1597,7 @@ pub fn drawSpriteBubble(
                     self.init_options.file.collapseAnimationSelectionToPrimary();
                     self.init_options.file.editor.animations_scroll_to_index = anim_index;
                     fizzy.editor.explorer.sprites.edit_anim_id = self.init_options.file.animations.items(.id)[anim_index];
-                    fizzy.editor.explorer.pane = .sprites;
+                    fizzy.editor.host.setActiveSidebarView(@import("../../pixelart/plugin.zig").view_sprites);
 
                     var anim = self.init_options.file.animations.get(anim_index);
                     if (anim.frames.len == 0) {
@@ -4580,7 +4580,7 @@ pub fn drawLayers(self: *FileWidget) void {
             const sprite_rect_physical = self.init_options.file.editor.canvas.screenFromDataRect(sprite_rect);
 
             // Draw the origins when in the sprites pane
-            if (fizzy.editor.explorer.pane == .sprites) {
+            if (fizzy.editor.host.isActiveSidebarView(@import("../../pixelart/plugin.zig").view_sprites)) {
                 const origin: dvui.Point = .{ .x = sprite_rect.topLeft().x + file.sprites.get(i).origin[0], .y = sprite_rect.topLeft().y + file.sprites.get(i).origin[1] };
 
                 const horizontal_line_start: dvui.Point = .{ .x = sprite_rect.topLeft().x, .y = origin.y };

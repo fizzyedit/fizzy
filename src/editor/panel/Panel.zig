@@ -14,15 +14,10 @@ pub const Panel = @This();
 pub const Sprites = @import("sprites.zig");
 
 sprites: Sprites = .{},
-pane: Pane = .sprites,
 paned: *fizzy.dvui.PanedWidget = undefined,
 scroll_info: dvui.ScrollInfo = .{
     .horizontal = .auto,
 },
-
-pub const Pane = enum(u32) {
-    sprites,
-};
 
 pub fn init() Panel {
     return .{};
@@ -30,7 +25,7 @@ pub fn init() Panel {
 
 pub fn deinit(_: *Panel) void {}
 
-pub fn draw(panel: *Panel) !dvui.App.Result {
+pub fn draw(_: *Panel) !dvui.App.Result {
     // var scroll_area = dvui.scrollArea(@src(), .{ .scroll_info = &panel.scroll_info }, .{
     //     .expand = .both,
     // });
@@ -55,9 +50,35 @@ pub fn draw(panel: *Panel) !dvui.App.Result {
     });
     defer vbox.deinit();
 
-    switch (panel.pane) {
-        .sprites => try panel.sprites.draw(),
+    const host = &fizzy.editor.host;
+
+    // Tab strip across registered bottom views; one active at a time. With a single
+    // view we skip the strip so the panel looks exactly as before (no lone tab).
+    if (host.bottom_views.items.len > 1) try drawTabStrip(host);
+
+    if (host.activeBottomView()) |view| {
+        try view.draw(view.ctx);
     }
 
     return .ok;
+}
+
+fn drawTabStrip(host: *fizzy.Editor.Host) !void {
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .background = false,
+    });
+    defer hbox.deinit();
+
+    const theme = dvui.themeGet();
+    for (host.bottom_views.items, 0..) |*view, i| {
+        const selected = host.isActiveBottomView(view.id);
+        if (dvui.button(@src(), view.title, .{ .draw_focus = false }, .{
+            .id_extra = i,
+            .style = if (selected) .highlight else .window,
+            .color_text = if (selected) theme.color(.highlight, .text) else theme.color(.window, .text),
+        })) {
+            host.setActiveBottomView(view.id);
+        }
+    }
 }

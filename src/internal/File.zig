@@ -1,5 +1,6 @@
 const std = @import("std");
 const fizzy = @import("../fizzy.zig");
+const pixelart = @import("../pixelart/plugin.zig");
 const zip = @import("zip");
 const dvui = @import("dvui");
 
@@ -757,7 +758,7 @@ fn loadFizzyZip(path: []const u8, file_bytes: ?[]const u8) !?fizzy.Internal.File
     return error.FileLoadError;
 }
 
-fn isFlatImageExtension(ext: []const u8) bool {
+pub fn isFlatImageExtension(ext: []const u8) bool {
     return std.mem.eql(u8, ext, ".png") or
         std.mem.eql(u8, ext, ".jpg") or
         std.mem.eql(u8, ext, ".jpeg");
@@ -2678,7 +2679,7 @@ fn mergeLayerInternal(self: *File, kind: History.Change.LayerMerge.Kind, src_i: 
         .dest_pixels_before = dest_pixels_before,
         .dest_mask_before = dest_mask_before,
     } });
-    fizzy.editor.explorer.pane = .tools;
+    fizzy.editor.host.setActiveSidebarView(pixelart.view_tools);
 }
 
 pub fn duplicateLayer(self: *File, index: usize) !u64 {

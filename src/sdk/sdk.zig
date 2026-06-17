@@ -7,3 +7,10 @@
 pub const Host = @import("Host.zig");
 pub const Plugin = @import("Plugin.zig");
 pub const DocHandle = @import("DocHandle.zig");
+
+/// Shell region contribution types (sidebar / bottom / center / menu).
+pub const regions = @import("regions.zig");
+pub const SidebarView = regions.SidebarView;
+pub const BottomView = regions.BottomView;
+pub const CenterProvider = regions.CenterProvider;
+pub const MenuContribution = regions.MenuContribution;
