@@ -17,6 +17,7 @@ const ScaleWidget = dvui.ScaleWidget;
 
 pub const FileWidget = @This();
 const CanvasWidget = @import("CanvasWidget.zig");
+const Workspace = fizzy.Editor.Workspace;
 const icons = @import("icons");
 
 init_options: InitOptions,
@@ -641,12 +642,19 @@ const BubblePanShared = struct {
     tool_not_pointer: bool,
 };
 
+/// The workspace currently drawing this file, recovered from the file's opaque
+/// slot handle. Valid during draw/processEvents — the shell sets the handle each
+/// frame (in `Workspace.drawCanvas`) before invoking the widget.
+fn workspace(self: *FileWidget) *Workspace {
+    return Workspace.ofFile(self.init_options.file).?;
+}
+
 /// Same read-only state as `drawSpriteBubbles` uses for `BubblePanShared` (no animation side effects).
 fn bubblePanSharedForGrid(self: *FileWidget) ?BubblePanShared {
     if (self.init_options.file.editor.transform != null) return null;
     if (self.resize_data_point != null) return null;
-    if (self.init_options.file.editor.workspace.columns_drag_index != null) return null;
-    if (self.init_options.file.editor.workspace.rows_drag_index != null) return null;
+    if (self.workspace().columns_drag_index != null) return null;
+    if (self.workspace().rows_drag_index != null) return null;
     if (self.removed_sprite_indices != null) return null;
     if (!(self.active() or self.hovered())) return null;
 
@@ -4509,7 +4517,7 @@ pub fn drawLayers(self: *FileWidget) void {
         if (self.removed_sprite_indices != null) {
             self.drawCellReorderPreview();
             return;
-        } else if (file.editor.workspace.columns_drag_index != null or file.editor.workspace.rows_drag_index != null) {
+        } else if (self.workspace().columns_drag_index != null or self.workspace().rows_drag_index != null) {
             self.drawColumnRowReorderPreview();
             return;
         } else {
@@ -4709,17 +4717,17 @@ fn drawCanvasCheckerboardBackground(self: *FileWidget) void {
 
 fn drawColumnRowReorderPreview(self: *FileWidget) void {
     const file = self.init_options.file;
-    const workspace = file.editor.workspace;
-    if (workspace.columns_drag_index == null and workspace.rows_drag_index == null) return;
+    const ws = self.workspace();
+    if (ws.columns_drag_index == null and ws.rows_drag_index == null) return;
 
-    const axis: ReorderAxis = if (workspace.columns_drag_index != null) .columns else .rows;
+    const axis: ReorderAxis = if (ws.columns_drag_index != null) .columns else .rows;
     const target_index = switch (axis) {
-        .columns => workspace.columns_target_index,
-        .rows => workspace.rows_target_index,
+        .columns => ws.columns_target_index,
+        .rows => ws.rows_target_index,
     };
     const removed_index = switch (axis) {
-        .columns => workspace.columns_drag_index,
-        .rows => workspace.rows_drag_index,
+        .columns => ws.columns_drag_index,
+        .rows => ws.rows_drag_index,
     } orelse return;
 
     self.drawReorderPreviewForAxis(file, axis, target_index, removed_index);
@@ -5629,7 +5637,7 @@ pub fn processResize(self: *FileWidget) void {
 
 pub fn processEvents(self: *FileWidget) void {
     const transform = self.init_options.file.editor.transform != null;
-    const reorder = self.init_options.file.editor.workspace.columns_drag_index != null or self.init_options.file.editor.workspace.rows_drag_index != null or self.removed_sprite_indices != null;
+    const reorder = self.workspace().columns_drag_index != null or self.workspace().rows_drag_index != null or self.removed_sprite_indices != null;
 
     // Try to ensure that selected animation frame index is valid
     if (self.init_options.file.selected_animation_index) |ai| {

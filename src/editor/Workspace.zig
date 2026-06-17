@@ -61,6 +61,14 @@ pub fn init(grouping: u64) Workspace {
     };
 }
 
+/// Recover the typed workspace currently drawing `file` from its opaque slot
+/// handle (`File.EditorData.workspace_handle`, set each frame in `drawCanvas`).
+/// Returns null before the file has been laid out this session.
+pub fn ofFile(file: *fizzy.Internal.File) ?*Workspace {
+    const handle = file.editor.workspace_handle orelse return null;
+    return @ptrCast(@alignCast(handle));
+}
+
 const handle_size = 10;
 const handle_dist = 60;
 
@@ -877,7 +885,7 @@ pub fn drawCanvas(self: *Workspace) !void {
 
         const file = &fizzy.editor.open_files.values()[self.open_file_index];
         file.editor.canvas.id = canvas_vbox.data().id;
-        file.editor.workspace = self;
+        file.editor.workspace_handle = self;
 
         if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(canvas_vbox.data().id)) {
             defer fizzy.dvui.drawEdgeShadow(canvas_vbox.data().rectScale(), .top, .{});

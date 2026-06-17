@@ -52,8 +52,12 @@ editor: EditorData = .{},
 ///
 /// Also, the fields here tend to be directly coupled with the UI library
 pub const EditorData = struct {
-    // Only valid while file widget is drawing the file
-    workspace: *fizzy.Editor.Workspace = undefined,
+    /// Opaque slot handle to the workspace currently drawing this file. Set by the
+    /// shell each frame before the file is drawn; recovered in the editor layer via
+    /// `Editor.Workspace.ofFile`. Opaque so this internal data type does not
+    /// type-depend on the editor's `Workspace` (lets `File` move into a plugin).
+    /// Only valid while the file widget is drawing the file.
+    workspace_handle: ?*anyopaque = null,
     canvas: fizzy.dvui.CanvasWidget = .{},
     layers_scroll_info: dvui.ScrollInfo = .{ .horizontal = .auto },
     sprites_scroll_info: dvui.ScrollInfo = .{ .horizontal = .auto },
