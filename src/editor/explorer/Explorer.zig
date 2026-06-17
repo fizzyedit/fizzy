@@ -13,7 +13,7 @@ const nfd = @import("nfd");
 
 pub const Explorer = @This();
 
-pub const files = @import("files.zig");
+pub const files = @import("../../workbench/files.zig");
 pub const Tools = @import("tools.zig");
 pub const Sprites = @import("sprites.zig");
 // pub const animations = @import("animations.zig");

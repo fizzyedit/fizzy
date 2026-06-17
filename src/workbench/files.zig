@@ -1,5 +1,5 @@
 const std = @import("std");
-const fizzy = @import("../../fizzy.zig");
+const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const Editor = fizzy.Editor;
 const builtin = @import("builtin");
@@ -408,31 +408,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             }
 
             if (!std.mem.eql(u8, label, te.getText()) and te.getText().len > 0 and valid_path) {
-                switch (kind) {
-                    .directory => {
-                        std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename folder: {s} to {s}", .{ label, te.getText() });
-
-                        for (fizzy.editor.open_files.values()) |*file| {
-                            if (std.mem.containsAtLeast(u8, file.path, 1, full_path)) {
-                                const file_name = dvui.currentWindow().arena().dupe(u8, std.fs.path.basename(file.path)) catch "Failed to duplicate path";
-                                fizzy.app.allocator.free(file.path);
-                                file.path = try std.fs.path.join(fizzy.app.allocator, &.{ new_path, file_name });
-                            }
-                        }
-                    },
-                    .file => {
-                        std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename file: {s} to {s}", .{ label, te.getText() });
-
-                        if (fizzy.editor.getFileFromPath(full_path)) |file| {
-                            fizzy.app.allocator.free(file.path);
-                            file.path = fizzy.app.allocator.dupe(u8, new_path) catch {
-                                dvui.log.err("Failed to duplicate path: {s}", .{new_path});
-                                return error.FailedToDuplicatePath;
-                            };
-                        }
-                    },
-                    else => {},
-                }
+                try renamePath(full_path, new_path, kind);
             }
         }
     } else if (kind == .file) {
@@ -774,13 +750,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                                     dvui.log.err("Failed to collect selection paths: {any}", .{err});
                                     break :blk &[_][]const u8{};
                                 };
-                                for (top) |del_path| {
-                                    if (pathIsDirAbsolute(del_path)) {
-                                        std.Io.Dir.deleteDirAbsolute(dvui.io, del_path) catch dvui.log.err("Failed to delete folder: {s}", .{del_path});
-                                    } else {
-                                        std.Io.Dir.deleteFileAbsolute(dvui.io, del_path) catch dvui.log.err("Failed to delete file: {s}", .{del_path});
-                                    }
-                                }
+                                for (top) |del_path| deletePath(del_path);
                             }
                         }
                     }
@@ -1256,7 +1226,7 @@ fn applyFileMove(unique_id: dvui.Id, tree: *fizzy.dvui.TreeWidget, target_dir: [
     dvui.dataRemove(null, unique_id, "removed_path");
 }
 
-fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.mem.Allocator) !bool {
+pub fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.mem.Allocator) !bool {
     const base = std.fs.path.basename(source_path);
     const new_path = try std.fs.path.join(arena, &.{ target_dir, base });
     if (std.mem.eql(u8, source_path, new_path)) return false;
@@ -1274,6 +1244,63 @@ fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.mem.A
         };
     }
     return true;
+}
+
+// ---- workbench-api file-tree operations -------------------------------------
+// The functions below are the disk-mutating primitives behind both the explorer's
+// inline actions (rename/delete above) and the `workbench-api` Host service. They
+// keep any matching open document's `path` field in sync so tabs don't dangle.
+
+/// Rename `full_path` to `new_path`. A directory rename rewrites the `path` of
+/// every open document beneath it; a file rename rewrites that document. Logs and
+/// continues on a filesystem failure (matches the explorer's inline behavior).
+pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File.Kind) !void {
+    switch (kind) {
+        .directory => {
+            std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename folder: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
+
+            for (fizzy.editor.open_files.values()) |*file| {
+                if (std.mem.containsAtLeast(u8, file.path, 1, full_path)) {
+                    const file_name = dvui.currentWindow().arena().dupe(u8, std.fs.path.basename(file.path)) catch "Failed to duplicate path";
+                    fizzy.app.allocator.free(file.path);
+                    file.path = try std.fs.path.join(fizzy.app.allocator, &.{ new_path, file_name });
+                }
+            }
+        },
+        .file => {
+            std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename file: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
+
+            if (fizzy.editor.getFileFromPath(full_path)) |file| {
+                fizzy.app.allocator.free(file.path);
+                file.path = fizzy.app.allocator.dupe(u8, new_path) catch {
+                    dvui.log.err("Failed to duplicate path: {s}", .{new_path});
+                    return error.FailedToDuplicatePath;
+                };
+            }
+        },
+        else => {},
+    }
+}
+
+/// Delete `path` from disk (a directory must be empty — mirrors the explorer's
+/// inline Delete). Logs and continues on failure.
+pub fn deletePath(path: []const u8) void {
+    if (pathIsDirAbsolute(path)) {
+        std.Io.Dir.deleteDirAbsolute(dvui.io, path) catch dvui.log.err("Failed to delete folder: {s}", .{path});
+    } else {
+        std.Io.Dir.deleteFileAbsolute(dvui.io, path) catch dvui.log.err("Failed to delete file: {s}", .{path});
+    }
+}
+
+/// Create an empty file at absolute `path`.
+pub fn createFilePath(path: []const u8) !void {
+    var handle = try std.Io.Dir.createFileAbsolute(dvui.io, path, .{});
+    handle.close(dvui.io);
+}
+
+/// Create a directory at absolute `path` (parents must already exist).
+pub fn createDirPath(path: []const u8) !void {
+    try std.Io.Dir.createDirAbsolute(dvui.io, path, .default_dir);
 }
 
 /// Remove stale selections whose underlying file no longer exists (e.g. moved by a multi-drag).

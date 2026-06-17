@@ -30,14 +30,14 @@ pub const Dialogs = @import("dialogs/Dialogs.zig");
 pub const Transform = @import("Transform.zig");
 pub const Keybinds = @import("Keybinds.zig");
 
-pub const Workspace = @import("Workspace.zig");
+pub const Workspace = @import("../workbench/Workspace.zig");
 pub const Explorer = @import("explorer/Explorer.zig");
 pub const IgnoreRules = @import("explorer/IgnoreRules.zig");
 pub const Panel = @import("panel/Panel.zig");
 pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
-pub const FileLoadJob = @import("FileLoadJob.zig");
+pub const FileLoadJob = @import("../workbench/FileLoadJob.zig");
 pub const PackJob = @import("PackJob.zig");
 
 pub const sdk = fizzy.sdk;
@@ -460,6 +460,24 @@ pub fn init(
     editor.settings_last_saved_json = try std.json.Stringify.valueAlloc(fizzy.app.allocator, &editor.settings, .{});
 
     return editor;
+}
+
+/// Second-stage init that needs the editor at its FINAL heap address. `init`
+/// builds an `Editor` by value and the caller copies it to the heap, so anything
+/// that captures `&editor.*` (e.g. a service whose `ctx` is the editor pointer)
+/// must run here — not in `init`, where it would point at the stack temporary.
+/// Called from `App.AppInit` right after the heap copy. (The built-in branch
+/// decorators registered in `init` are exempt: they store fn pointers, not `&editor`.)
+pub fn postInit(editor: *Editor) !void {
+    // The workbench-api is the file explorer's programmatic surface and drives OS
+    // file management (open/create/rename/delete/move on disk). The web build has
+    // no filesystem API, so the file explorer / workbench service is left out there
+    // for now. Keeping the registration behind a comptime gate also keeps the
+    // service's native-only fn bodies out of wasm analysis entirely (the codebase's
+    // dead-branch convention; see `web_main.zig`).
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    editor.workbench.initService(editor);
+    try editor.host.registerService(Workbench.Api.service_name, &editor.workbench.api);
 }
 
 /// Ensures `{config}/Themes` exists and scans `*.json` for future user themes (loaded entries are prepended before Fizzy themes).

@@ -160,6 +160,9 @@ pub fn AppInit(win: *dvui.Window) !void {
 
     fizzy.editor = try allocator.create(Editor);
     fizzy.editor.* = Editor.init(fizzy.app) catch unreachable;
+    // Second-stage init that needs the editor at its final heap address (e.g.
+    // registering the workbench-api service whose `ctx` is this pointer).
+    fizzy.editor.postInit() catch unreachable;
 
     // `Packer` works on web now that `zstbi.c` compiles for wasm32-freestanding
     // (`STBI_NO_STDLIB` + the `fizzy_stbi_libc.c` shims). The web pack flow
