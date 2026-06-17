@@ -71,6 +71,9 @@ pub const Sprite = @import("Sprite.zig");
 /// builds, where `builtin.os.tag` is always `.freestanding`.
 pub const platform = @import("platform.zig");
 
+/// Plugin SDK surface
+pub const sdk = @import("sdk/sdk.zig");
+
 /// Custom dvui stuff
 pub const dvui = @import("dvui.zig");
 

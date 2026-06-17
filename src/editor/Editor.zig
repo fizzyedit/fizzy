@@ -40,6 +40,9 @@ pub const Menu = @import("Menu.zig");
 pub const FileLoadJob = @import("FileLoadJob.zig");
 pub const PackJob = @import("PackJob.zig");
 
+pub const sdk = fizzy.sdk;
+pub const Host = sdk.Host;
+
 /// This arena is for small per-frame editor allocations, such as path joins, null terminations and labels.
 /// Do not free these allocations, instead, this allocator will be .reset(.retain_capacity) each frame
 arena: std.heap.ArenaAllocator,
@@ -48,6 +51,9 @@ config_folder: []const u8,
 palette_folder: []const u8,
 
 atlas: fizzy.Internal.Atlas,
+
+/// Plugin registry + service locator exposed to plugins
+host: Host,
 
 settings: Settings = undefined,
 recents: Recents = undefined,
@@ -260,6 +266,7 @@ pub fn init(
         },
         .tools = try .init(app.allocator),
         .themes = .empty,
+        .host = .init(app.allocator),
     };
 
     editor.settings = try Settings.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.config_folder, "settings.json" }));
@@ -3371,6 +3378,8 @@ pub fn deinit(editor: *Editor) !void {
     }
 
     editor.explorer.deinit();
+
+    editor.host.deinit();
 
     editor.tools.deinit(fizzy.app.allocator);
 

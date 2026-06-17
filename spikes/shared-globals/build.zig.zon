@@ -1,0 +1,14 @@
+.{
+    .name = .shared_globals_spike,
+    .version = "0.0.0",
+    .fingerprint = 0xc23fd395f515e0c8,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "core.zig",
+        "host.zig",
+        "plugin.zig",
+    },
+    .dependencies = .{},
+}
