@@ -43,6 +43,10 @@ pub const PackJob = @import("PackJob.zig");
 pub const sdk = fizzy.sdk;
 pub const Host = sdk.Host;
 
+/// Workbench (Phase 1): file-management home — currently the per-branch
+/// decoration registry for the explorer; grows to own files + tabs/splits.
+pub const Workbench = @import("../workbench/Workbench.zig");
+
 /// This arena is for small per-frame editor allocations, such as path joins, null terminations and labels.
 /// Do not free these allocations, instead, this allocator will be .reset(.retain_capacity) each frame
 arena: std.heap.ArenaAllocator,
@@ -54,6 +58,9 @@ atlas: fizzy.Internal.Atlas,
 
 /// Plugin registry + service locator exposed to plugins
 host: Host,
+
+/// File-management workbench (per-branch explorer decorations, …)
+workbench: Workbench,
 
 settings: Settings = undefined,
 recents: Recents = undefined,
@@ -267,7 +274,10 @@ pub fn init(
         .tools = try .init(app.allocator),
         .themes = .empty,
         .host = .init(app.allocator),
+        .workbench = .init(app.allocator),
     };
+
+    try editor.workbench.registerBuiltins();
 
     editor.settings = try Settings.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.config_folder, "settings.json" }));
 
@@ -3380,6 +3390,7 @@ pub fn deinit(editor: *Editor) !void {
     editor.explorer.deinit();
 
     editor.host.deinit();
+    editor.workbench.deinit();
 
     editor.tools.deinit(fizzy.app.allocator);
 

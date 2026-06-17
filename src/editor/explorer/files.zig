@@ -435,6 +435,27 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
                 }
             }
         }
+    } else if (kind == .file) {
+        // File row: label expands and pushes plugin-registered decorations
+        // (e.g. the unsaved dot) to the right edge of the row.
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .background = false,
+            .padding = dvui.Rect.all(0),
+            .margin = dvui.Rect.all(0),
+            .id_extra = id_extra,
+        });
+        defer row.deinit();
+        dvui.label(@src(), "{s}", .{label}, .{
+            .color_text = color,
+            .padding = padding,
+            .margin = dvui.Rect.all(0),
+            .id_extra = id_extra,
+            .font = font,
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+        });
+        fizzy.editor.workbench.drawBranchDecorations(full_path, id_extra);
     } else {
         dvui.label(@src(), "{s}", .{label}, .{
             .color_text = color,
