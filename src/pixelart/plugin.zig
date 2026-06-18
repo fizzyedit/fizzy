@@ -137,6 +137,92 @@ fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
     }
 }
 
+/// Take over a workspace pane to show the pixel-art packed-atlas preview (the "Project"
+/// sidebar view's `draw_workspace`). The workbench owns the pane frame and routes here when
+/// `view_project` is the active sidebar view; we cast the opaque handle back to the document
+/// host's `Workspace` and render the whole content region (atlas image or empty-state hint).
+/// Mirrors what `Workspace.drawCanvas` does for documents: reuses the workbench's shared
+/// canvas vbox / empty-state card helpers so switching project ↔ canvas keeps stable widget ids,
+/// and stamps `canvas_rect_physical` (read by the editor's load/save toast overlays).
+fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
+    const Workspace = fizzy.Editor.Workspace;
+    const ws: *Workspace = @ptrCast(@alignCast(workspace_handle));
+
+    var content_color = dvui.themeGet().color(.window, .fill);
+
+    switch (builtin.os.tag) {
+        .macos => {
+            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
+        },
+        .windows => {
+            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
+        },
+        else => {},
+    }
+
+    const show_packed_atlas = if (comptime builtin.target.cpu.arch == .wasm32)
+        fizzy.packer.atlas != null
+    else
+        fizzy.editor.folder != null and fizzy.packer.atlas != null;
+
+    // Match `drawCanvas`: no outer fill when showing centered card (transparency shows through like homepage).
+    var canvas_vbox = Workspace.workspaceMainCanvasVbox(content_color, show_packed_atlas, ws.grouping);
+    defer {
+        ws.canvas_rect_physical = canvas_vbox.data().contentRectScale().r;
+        dvui.toastsShow(canvas_vbox.data().id, canvas_vbox.data().contentRectScale().r.toNatural());
+        canvas_vbox.deinit();
+    }
+
+    if (show_packed_atlas) {
+        const atlas = &fizzy.packer.atlas.?;
+        var image_widget = fizzy.dvui.ImageWidget.init(@src(), .{
+            .source = atlas.source,
+            .canvas = &atlas.canvas,
+            .grouping = ws.grouping,
+        }, .{
+            .id_extra = @intCast(ws.grouping),
+            .expand = .both,
+            .background = false,
+            .color_fill = .transparent,
+        });
+        defer image_widget.deinit();
+
+        image_widget.processEvents();
+
+        if (dvui.dataGet(null, atlas.canvas.id, "sample_data_point", dvui.Point)) |data_pt| {
+            if (atlas.canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) {
+                fizzy.dvui.ImageWidget.drawSampleMagnifier(&atlas.canvas, atlas.source, data_pt);
+            }
+        }
+    } else {
+        var box = Workspace.workspaceEmptyStateCard(content_color, ws.grouping);
+        defer box.deinit();
+
+        const alpha = dvui.alpha(1.0);
+        dvui.alphaSet(1.0);
+        defer dvui.alphaSet(alpha);
+
+        const hint: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
+            "Pack open files to see the preview."
+        else if (fizzy.editor.folder == null)
+            "Open a project folder, then pack to see the preview."
+        else
+            "Pack the project to see the preview.";
+
+        dvui.labelNoFmt(
+            @src(),
+            hint,
+            .{ .align_x = 0.5 },
+            .{
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
+                .color_text = dvui.themeGet().color(.control, .text),
+                .font = dvui.Font.theme(.body),
+            },
+        );
+    }
+}
+
 fn undo(_: *anyopaque, doc: DocHandle) anyerror!void {
     const file = docFile(doc);
     try file.history.undoRedo(file, .undo);
@@ -169,6 +255,7 @@ pub fn register(host: *sdk.Host) !void {
         .icon = dvui.entypo.box,
         .title = "Project",
         .draw = drawProject,
+        .draw_workspace = drawProjectView,
     });
     try host.registerBottomView(.{
         .id = bottom_sprites,

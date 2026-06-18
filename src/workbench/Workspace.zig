@@ -48,7 +48,8 @@ vertical_ruler_width: f32 = 0.0,
 edit_pill_expanded: bool = false,
 
 /// Physical-pixel content rect of this workspace's canvas vbox, captured each frame during
-/// `drawCanvas` / `drawProject`. `null` until the workspace has rendered at least once. Used
+/// `drawCanvas` (or a sidebar view's `draw_workspace` takeover, e.g. pixel art's Project view).
+/// `null` until the workspace has rendered at least once. Used
 /// by the editor-level load/save toast overlays to center cards over the area the user is
 /// actually looking at (rather than the OS window rect).
 canvas_rect_physical: ?dvui.Rect.Physical = null,
@@ -119,8 +120,12 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
         }
     }
 
-    if (fizzy.editor.host.isActiveSidebarView(@import("../pixelart/plugin.zig").view_project)) {
-        self.drawProject();
+    // A sidebar view may optionally take over this workspace pane's content region (e.g. pixel
+    // art's "Project" view renders the packed atlas here instead of document tabs+canvas). The
+    // workbench owns only the pane frame; it hands the active view the opaque workspace handle.
+    const active = fizzy.editor.host.activeSidebarView();
+    if (active != null and active.?.draw_workspace != null) {
+        try active.?.draw_workspace.?(active.?.ctx, self);
     } else {
         self.drawTabs();
         try self.drawCanvas();
@@ -130,8 +135,11 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
 }
 
 /// Same `@src()` for every call so DVUI sees one stable id when switching between `drawCanvas` and
-/// `drawProject` (avoids first-frame min-size / layout flash). Use `grouping` so multi-workspace panes stay distinct.
-fn workspaceMainCanvasVbox(content_color: dvui.Color, background: bool, grouping: u64) *dvui.BoxWidget {
+/// a plugin's `draw_workspace` takeover (avoids first-frame min-size / layout flash). Use `grouping`
+/// so multi-workspace panes stay distinct.
+/// `pub` so a plugin's `draw_workspace` takeover (pixel art's Project view) can reuse the exact same
+/// vbox so switching project ↔ canvas does not churn the widget id.
+pub fn workspaceMainCanvasVbox(content_color: dvui.Color, background: bool, grouping: u64) *dvui.BoxWidget {
     return dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = background,
@@ -142,7 +150,8 @@ fn workspaceMainCanvasVbox(content_color: dvui.Color, background: bool, grouping
 
 /// Rounded “card” behind the project empty state and the homepage. Shared id base + `grouping` so
 /// switching project tab ↔ file pane (no open files) does not create a new widget each time.
-fn workspaceEmptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.BoxWidget {
+/// `pub` so pixel art's Project-view takeover (`draw_workspace`) reuses the identical empty-state card.
+pub fn workspaceEmptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.BoxWidget {
     return dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .both,
         .background = true,
@@ -151,82 +160,6 @@ fn workspaceEmptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.BoxWi
         .margin = .{ .y = 10 },
         .id_extra = @intCast(grouping),
     });
-}
-
-fn drawProject(self: *Workspace) void {
-    var content_color = dvui.themeGet().color(.window, .fill);
-
-    switch (builtin.os.tag) {
-        .macos => {
-            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
-        },
-        .windows => {
-            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
-        },
-        else => {},
-    }
-
-    const show_packed_atlas = if (comptime builtin.target.cpu.arch == .wasm32)
-        fizzy.packer.atlas != null
-    else
-        fizzy.editor.folder != null and fizzy.packer.atlas != null;
-
-    // Match `drawCanvas`: no outer fill when showing centered card (transparency shows through like homepage).
-    var canvas_vbox = workspaceMainCanvasVbox(content_color, show_packed_atlas, self.grouping);
-    defer {
-        self.canvas_rect_physical = canvas_vbox.data().contentRectScale().r;
-        dvui.toastsShow(canvas_vbox.data().id, canvas_vbox.data().contentRectScale().r.toNatural());
-        canvas_vbox.deinit();
-    }
-
-    if (show_packed_atlas) {
-        const atlas = &fizzy.packer.atlas.?;
-        var image_widget = fizzy.dvui.ImageWidget.init(@src(), .{
-            .source = atlas.source,
-            .canvas = &atlas.canvas,
-            .grouping = self.grouping,
-        }, .{
-            .id_extra = @intCast(self.grouping),
-            .expand = .both,
-            .background = false,
-            .color_fill = .transparent,
-        });
-        defer image_widget.deinit();
-
-        image_widget.processEvents();
-
-        if (dvui.dataGet(null, atlas.canvas.id, "sample_data_point", dvui.Point)) |data_pt| {
-            if (atlas.canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) {
-                fizzy.dvui.ImageWidget.drawSampleMagnifier(&atlas.canvas, atlas.source, data_pt);
-            }
-        }
-    } else {
-        var box = workspaceEmptyStateCard(content_color, self.grouping);
-        defer box.deinit();
-
-        const alpha = dvui.alpha(1.0);
-        dvui.alphaSet(1.0);
-        defer dvui.alphaSet(alpha);
-
-        const hint: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
-            "Pack open files to see the preview."
-        else if (fizzy.editor.folder == null)
-            "Open a project folder, then pack to see the preview."
-        else
-            "Pack the project to see the preview.";
-
-        dvui.labelNoFmt(
-            @src(),
-            hint,
-            .{ .align_x = 0.5 },
-            .{
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
-                .color_text = dvui.themeGet().color(.control, .text),
-                .font = dvui.Font.theme(.body),
-            },
-        );
-    }
 }
 
 fn drawTabs(self: *Workspace) void {
