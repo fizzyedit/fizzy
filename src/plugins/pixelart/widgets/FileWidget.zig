@@ -3896,7 +3896,7 @@ fn spriteAnimationPaletteColor(file: *fizzy.Internal.File, sprite_index: usize) 
 }
 
 fn checkerboardCellCornerColor(
-    effect: fizzy.Editor.Settings.TransparencyEffect,
+    effect: fizzy.PixelArt.Settings.TransparencyEffect,
     file: *fizzy.Internal.File,
     sprite_index: usize,
     c_tl: dvui.Color,
@@ -3941,7 +3941,7 @@ fn checkerboardGridPalette() struct { tone: dvui.Color, c_tl: dvui.Color, c_tr: 
 fn checkerboardTintAtSpriteCellCenter(file: *fizzy.Internal.File, sprite_index: usize) dvui.Color {
     const pal = checkerboardGridPalette();
     const tone = pal.tone;
-    switch (fizzy.editor.settings.transparency_effect) {
+    switch (fizzy.pixelart.settings.transparency_effect) {
         .none => return tone,
         .rainbow => {
             const mu_mv = dvui.dataGet(null, file.editor.canvas.id, "checkerboard_mouse_uv", dvui.Point) orelse dvui.Point{ .x = 0.5, .y = 0.5 };
@@ -3964,7 +3964,7 @@ fn drawCheckerboardCellsBatched(file: *fizzy.Internal.File) void {
     const n = file.spriteCount();
     if (n == 0) return;
 
-    const te = fizzy.editor.settings.transparency_effect;
+    const te = fizzy.pixelart.settings.transparency_effect;
     const pal = checkerboardGridPalette();
     const tone = pal.tone;
     const rs = file.editor.canvas.screen_rect_scale;
@@ -4689,7 +4689,7 @@ fn drawCheckerboardReorderFloatingStrip(
     const c_tr = pal.c_tr;
     const c_bl = pal.c_bl;
     const c_br = pal.c_br;
-    const te = fizzy.editor.settings.transparency_effect;
+    const te = fizzy.pixelart.settings.transparency_effect;
 
     const cols_f = @max(@as(f32, @floatFromInt(file.columns)), 1.0);
     const rows_f = @max(@as(f32, @floatFromInt(file.rows)), 1.0);

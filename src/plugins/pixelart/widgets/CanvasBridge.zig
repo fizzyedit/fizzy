@@ -6,7 +6,7 @@ const CanvasWidget = fizzy.dvui.CanvasWidget;
 
 /// Map the user's resolved pan/zoom preference onto the canvas's own scheme enum.
 pub fn scheme() CanvasWidget.PanZoomScheme {
-    return switch (fizzy.Editor.Settings.resolvedPanZoomScheme(&fizzy.editor.settings)) {
+    return switch (fizzy.PixelArt.Settings.resolvedPanZoomScheme(&fizzy.pixelart.settings)) {
         .mouse => .mouse,
         .trackpad => .trackpad,
     };

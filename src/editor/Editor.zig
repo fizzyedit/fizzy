@@ -260,7 +260,14 @@ pub fn init(
 
     try editor.workbench.registerBuiltins();
 
-    editor.settings = try Settings.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.config_folder, "settings.json" }));
+    {
+        const settings_path = try std.fs.path.join(app.allocator, &.{ editor.config_folder, "settings.json" });
+        editor.settings = try Settings.load(app.allocator, settings_path);
+        // Load the opaque per-plugin settings blobs into the Host so plugins (created
+        // right after this `Editor.init` returns) can read their own settings. Runs a
+        // one-time migration of legacy flat settings; see `Settings.loadPluginStore`.
+        Settings.loadPluginStore(app.allocator, settings_path, &editor.host.plugin_settings);
+    }
 
     // Start the long-lived save-queue worker. All .fiz async saves get
     // serialized through this single thread (see `File.SaveQueue`); concurrent
@@ -437,8 +444,8 @@ pub fn init(
 
     try Keybinds.register();
 
-    // Collect the initial settings json
-    editor.settings_last_saved_json = try std.json.Stringify.valueAlloc(fizzy.app.allocator, &editor.settings, .{});
+    // Collect the initial settings json (shell fields + per-plugin blobs) for autosave dedup.
+    editor.settings_last_saved_json = try Settings.serialize(&editor.settings, &editor.host.plugin_settings, fizzy.app.allocator);
 
     return editor;
 }
@@ -453,6 +460,20 @@ pub fn init(
 pub const view_settings = "shell.settings";
 
 pub fn postInit(editor: *Editor) !void {
+    // Install the shell's read/utility surface so plugins reach shared shell state
+    // (per-frame arena, project folder, content opacity, settings dirty-mark) through
+    // the Host instead of importing the concrete Editor.
+    editor.host.installShell(.{ .ctx = editor, .vtable = &shell_api_vtable });
+
+    // The shell's own settings section, registered first so "Editor" leads the list;
+    // plugins append theirs in their `register` (the Settings view renders each grouped
+    // by owner, VSCode-style).
+    try editor.host.registerSettingsSection(.{
+        .id = "shell.settings.editor",
+        .title = "Editor",
+        .draw = drawShellSettingsSection,
+    });
+
     // Register plugin contributions (sidebar/bottom/center/menus). These are the
     // near-empty shell's content: it iterates the Host registries rather than
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
@@ -495,8 +516,61 @@ pub fn postInit(editor: *Editor) !void {
     }
 }
 
+/// The Settings sidebar view: render every registered settings section under its title
+/// heading, grouped by owner (VSCode-style). The shell registers its own "Editor"
+/// section; plugins add theirs.
 fn drawSettingsPane(_: ?*anyopaque) anyerror!void {
+    var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    defer vbox.deinit();
+
+    for (fizzy.editor.host.settings_sections.items, 0..) |*section, i| {
+        var sbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .id_extra = i });
+        defer sbox.deinit();
+
+        dvui.labelNoFmt(@src(), section.title, .{}, .{
+            .font = dvui.Font.theme(.heading),
+            .margin = .{ .x = 2, .y = 6, .w = 2, .h = 2 },
+        });
+        try section.draw(section.ctx);
+
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 12 } });
+    }
+}
+
+/// Shell-owned settings controls (theme, fonts, window/content opacity, input timing,
+/// debugging). Pixel-art-specific controls live in the pixel-art plugin's own section.
+fn drawShellSettingsSection(_: ?*anyopaque) anyerror!void {
     try Explorer.settings.draw();
+}
+
+// ---- ShellApi: the shell-provided read/utility surface for plugins ----------
+// Installed on the Host in `postInit`; `ctx` is this `*Editor`.
+
+const shell_api_vtable: sdk.ShellApi.VTable = .{
+    .arena = shellArena,
+    .folder = shellFolder,
+    .paletteFolder = shellPaletteFolder,
+    .markSettingsDirty = shellMarkSettingsDirty,
+    .contentOpacity = shellContentOpacity,
+};
+
+fn shellCtx(ctx: *anyopaque) *Editor {
+    return @ptrCast(@alignCast(ctx));
+}
+fn shellArena(ctx: *anyopaque) std.mem.Allocator {
+    return shellCtx(ctx).arena.allocator();
+}
+fn shellFolder(ctx: *anyopaque) ?[]const u8 {
+    return shellCtx(ctx).folder;
+}
+fn shellPaletteFolder(ctx: *anyopaque) ?[]const u8 {
+    return shellCtx(ctx).palette_folder;
+}
+fn shellMarkSettingsDirty(ctx: *anyopaque) void {
+    shellCtx(ctx).markSettingsDirty();
+}
+fn shellContentOpacity(ctx: *anyopaque) f32 {
+    return shellCtx(ctx).settings.content_opacity;
 }
 
 /// Ensures `{config}/Themes` exists and scans `*.json` for future user themes (loaded entries are prepended before Fizzy themes).
@@ -643,7 +717,7 @@ fn saveSettingsGuarded(editor: *Editor) !void {
     if (editor.activelyDrawing())
         return;
 
-    const serialized = try std.json.Stringify.valueAlloc(fizzy.app.allocator, &editor.settings, .{});
+    const serialized = try Settings.serialize(&editor.settings, &editor.host.plugin_settings, fizzy.app.allocator);
     defer fizzy.app.allocator.free(serialized);
 
     if (editor.settings_last_saved_json) |old| {
@@ -656,7 +730,7 @@ fn saveSettingsGuarded(editor: *Editor) !void {
     const settings_path = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.json" });
     defer fizzy.app.allocator.free(settings_path);
 
-    try Settings.save(&editor.settings, fizzy.app.allocator, settings_path);
+    try Settings.save(&editor.settings, &editor.host.plugin_settings, fizzy.app.allocator, settings_path);
 
     if (editor.settings_last_saved_json) |blob| {
         fizzy.app.allocator.free(blob);
@@ -668,7 +742,7 @@ fn saveSettingsGuarded(editor: *Editor) !void {
 
 /// Flush to disk regardless of idle/drawing deferral — used during shutdown only.
 fn saveSettingsRaw(editor: *Editor) !void {
-    const serialized = try std.json.Stringify.valueAlloc(fizzy.app.allocator, &editor.settings, .{});
+    const serialized = try Settings.serialize(&editor.settings, &editor.host.plugin_settings, fizzy.app.allocator);
     defer fizzy.app.allocator.free(serialized);
 
     const need_disk = blk: {
@@ -682,7 +756,7 @@ fn saveSettingsRaw(editor: *Editor) !void {
     defer fizzy.app.allocator.free(settings_path);
 
     if (need_disk)
-        try Settings.save(&editor.settings, fizzy.app.allocator, settings_path);
+        try Settings.save(&editor.settings, &editor.host.plugin_settings, fizzy.app.allocator, settings_path);
 
     if (need_disk) {
         if (editor.settings_last_saved_json) |blob| {

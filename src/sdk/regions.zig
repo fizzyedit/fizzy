@@ -57,3 +57,16 @@ pub const MenuContribution = struct {
     ctx: ?*anyopaque = null,
     draw: *const fn (ctx: ?*anyopaque) anyerror!void,
 };
+
+/// A settings section. The Settings view renders each registered section under its
+/// own `title` heading, grouped by plugin (VSCode-style). The shell registers its
+/// own "Editor" section; plugins register theirs (e.g. pixel art's canvas/ruler
+/// prefs). `draw` fills the section body with that owner's controls.
+pub const SettingsSection = struct {
+    id: []const u8,
+    owner: ?*Plugin = null,
+    /// Heading shown above this section's controls.
+    title: []const u8,
+    ctx: ?*anyopaque = null,
+    draw: *const fn (ctx: ?*anyopaque) anyerror!void,
+};

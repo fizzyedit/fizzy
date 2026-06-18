@@ -275,7 +275,7 @@ pub fn draw(self: *Sprites) !void {
         // ---- Animated fit-scale: aim the front sprite at a fraction of the
         // pane so several neighbours are visible at once. ----
         const scale = blk: {
-            const steps = fizzy.editor.settings.zoom_steps;
+            const steps = fizzy.pixelart.settings.zoom_steps;
             const sprite_width = src_rect.w;
             const sprite_height = src_rect.h;
             const target_width = parent.w * 0.34;
@@ -803,7 +803,7 @@ pub fn draw(self: *Sprites) !void {
 /// Side cards lift away during playback, while a drawing tool is active, or when
 /// `settings.scrolling_cards` is off (focus mode; toggled in settings or the sprites pane).
 fn sideCardsFlown(playing: bool) bool {
-    return playing or drawingToolActive() or !fizzy.editor.settings.scrolling_cards;
+    return playing or drawingToolActive() or !fizzy.pixelart.settings.scrolling_cards;
 }
 
 /// Pencil, eraser, and bucket — not pointer (navigate) or selection (marquee).
@@ -1237,8 +1237,8 @@ pub fn drawAnimationControlsDialog(_: *Sprites) void {
             !fly_forced,
             flown,
         ) and !fly_forced) {
-            fizzy.editor.settings.scrolling_cards = !fizzy.editor.settings.scrolling_cards;
-            fizzy.editor.markSettingsDirty();
+            fizzy.pixelart.settings.scrolling_cards = !fizzy.pixelart.settings.scrolling_cards;
+            fizzy.pixelart.settings.save(fizzy.pixelart.host);
             dvui.refresh(null, @src(), dvui.parentGet().data().id);
         }
     }

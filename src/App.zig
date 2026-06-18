@@ -169,7 +169,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     // before `postInit` so the pixel-art plugin's `register` can adopt it as its
     // `state`. Owned here for the app's lifetime; torn down in `AppDeinit`.
     fizzy.pixelart = try allocator.create(fizzy.PixelArt);
-    fizzy.pixelart.* = fizzy.PixelArt.init(allocator) catch unreachable;
+    fizzy.pixelart.* = fizzy.PixelArt.init(allocator, &fizzy.editor.host) catch unreachable;
 
     // Second-stage init that needs the editor at its final heap address (e.g.
     // registering the workbench-api service whose `ctx` is this pointer).

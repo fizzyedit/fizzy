@@ -99,15 +99,15 @@ pub fn drawRuler(self: *CanvasData, file: *File, orientation: RulerOrientation) 
     const largest_label_size = font.textSize(largest_label);
     const natural_scale = dvui.currentWindow().natural_scale;
     const largest_label_phys = largest_label_size.scale(natural_scale, dvui.Size.Physical);
-    const base_ruler_size = largest_label_size.w + fizzy.editor.settings.ruler_padding;
+    const base_ruler_size = largest_label_size.w + fizzy.pixelart.settings.ruler_padding;
 
     const ruler_thickness: f32 = switch (orientation) {
         .horizontal => blk: {
-            self.horizontal_ruler_height = font.textSize("M").h + fizzy.editor.settings.ruler_padding;
+            self.horizontal_ruler_height = font.textSize("M").h + fizzy.pixelart.settings.ruler_padding;
             break :blk self.horizontal_ruler_height;
         },
         .vertical => blk: {
-            self.vertical_ruler_width = @max(base_ruler_size, font.textSize("M").h + fizzy.editor.settings.ruler_padding);
+            self.vertical_ruler_width = @max(base_ruler_size, font.textSize("M").h + fizzy.pixelart.settings.ruler_padding);
             break :blk self.vertical_ruler_width;
         },
     };
@@ -591,7 +591,7 @@ pub fn drawRulerLabel(_: *CanvasData, options: TextLabelOptions) void {
     else
         font.textSize(label).scale(natural, dvui.Size.Physical);
 
-    const padding = fizzy.editor.settings.ruler_padding * natural;
+    const padding = fizzy.pixelart.settings.ruler_padding * natural;
 
     var label_rect = rect;
 
@@ -864,8 +864,8 @@ pub fn drawEditPill(self: *CanvasData, container: *dvui.WidgetData) void {
     // shrinks, and once it's narrower than the pill we bail and draw nothing this frame —
     // so closing splits cleanly hides the menu.
     const wb = container.rectScale().r.toNatural();
-    const ruler_top: f32 = if (fizzy.editor.settings.show_rulers) self.horizontal_ruler_height else 0;
-    const ruler_left: f32 = if (fizzy.editor.settings.show_rulers) self.vertical_ruler_width else 0;
+    const ruler_top: f32 = if (fizzy.pixelart.settings.show_rulers) self.horizontal_ruler_height else 0;
+    const ruler_left: f32 = if (fizzy.pixelart.settings.show_rulers) self.vertical_ruler_width else 0;
     const canvas_nat = dvui.Rect{
         .x = wb.x + ruler_left,
         .y = wb.y + ruler_top,
@@ -1102,8 +1102,8 @@ pub fn drawSampleButton(self: *CanvasData, container: *dvui.WidgetData) void {
 
     // Anchor against the same canvas-scroll-area rect the pill uses.
     const wb = container.rectScale().r.toNatural();
-    const ruler_top: f32 = if (fizzy.editor.settings.show_rulers) self.horizontal_ruler_height else 0;
-    const ruler_left: f32 = if (fizzy.editor.settings.show_rulers) self.vertical_ruler_width else 0;
+    const ruler_top: f32 = if (fizzy.pixelart.settings.show_rulers) self.horizontal_ruler_height else 0;
+    const ruler_left: f32 = if (fizzy.pixelart.settings.show_rulers) self.vertical_ruler_width else 0;
     const canvas_nat = dvui.Rect{
         .x = wb.x + ruler_left,
         .y = wb.y + ruler_top,

@@ -12,25 +12,8 @@ pub const autosave_timeout_ns: i128 = 500 * 1_000_000;
 
 pub var parsed: ?std.json.Parsed(Settings) = null;
 
-pub const InputScheme = enum { auto, mouse, trackpad };
-
-/// Resolved zoom/pan control style after applying `auto` (`dvui.getMouseTypeHint`).
-pub const ResolvedPanZoomScheme = enum {
-    mouse,
-    trackpad,
-};
 pub const FlipbookView = enum { sequential, grid };
 pub const Compatibility = enum { none, ldtk };
-
-/// How sprite-cell transparency (checkerboard) is tinted behind the canvas.
-pub const TransparencyEffect = enum {
-    /// Uniform default tone only (no hue gradient).
-    none,
-    /// Mouse-smoothed corner gradient (current default).
-    rainbow,
-    /// Per-cell tone shifted toward the animation’s palette color (when the sprite belongs to an animation).
-    animation,
-};
 
 /// The ratio of the explorer to the artboard.
 explorer_ratio: f32 = 0.35,
@@ -42,37 +25,14 @@ min_window_size: [2]f32 = .{ 640, 480 },
 
 initial_window_size: [2]f32 = .{ 1280, 720 },
 
-/// Zoom/pan control scheme (`auto` picks mouse vs trackpad gestures from `dvui.getMouseTypeHint` after scroll events).
-input_scheme: InputScheme = .auto,
-
 /// Touch or long-press duration (ms) before a context menu opens instead of a normal click.
 hold_menu_duration_ms: u32 = 500,
-
-/// Whether or not to show rulers on each canvas.
-show_rulers: bool = true,
-
-/// Sprites panel: when true, show side cards in the cover-flow strip; when false,
-/// fly them away for single-card focus (snap scroll)
-scrolling_cards: bool = true,
 
 /// When true, print frame/draw perf stats to the console (Debug / ReleaseSafe only for tick stats).
 perf_logging: bool = false,
 
 /// Pretend an app update is available (badge + launch toast). Restart after toggling.
 debug_simulate_update_available: bool = false,
-
-/// Padding to include in the size of the ruler outside of the font height.
-ruler_padding: f32 = 4.0,
-
-/// Setting to control overall zoom sensitivity
-/// 0 - 1
-zoom_sensitivity: f32 = 1.0,
-
-/// Predetermined zoom steps, each is pixel perfect.
-zoom_steps: [23]f32 = [_]f32{ 0.125, 0.167, 0.2, 0.25, 0.333, 0.5, 1, 2, 3, 4, 5, 6, 8, 12, 18, 28, 38, 50, 70, 90, 128, 256, 512 },
-
-/// Maximum file size
-max_file_size: [2]i32 = .{ 4096, 4096 },
 
 /// Maximum number of recents before removing oldest
 max_recents: usize = 10,
@@ -86,38 +46,18 @@ font_title_size: f32 = 9,
 font_heading_size: f32 = 8,
 font_mono_size: f32 = 10,
 
-/// Color for the even squares of the checkerboard pattern
-checker_color_even: [4]u8 = .{ 255, 255, 255, 255 },
-/// Color for the odd squares of the checkerboard pattern
-checker_color_odd: [4]u8 = .{ 175, 175, 175, 255 },
-
 /// Opacity of the background window
 /// CURRENTLY ONLY SUPPORTED ON MACOS and Windows
 window_opacity_dark: f32 = 0.7,
 window_opacity_light: f32 = 0.3,
-content_opacity: f32 = 0.7,
 
-/// Checkerboard / transparency tint behind sprites (grid cells).
-transparency_effect: TransparencyEffect = .none,
+/// Opacity of the content area (also drives plugin panes that match the shell chrome).
+content_opacity: f32 = 0.7,
 
 titlebar_height: f32 = 26.0, // This is the height of the titlebar in pixels
 
 /// Empty strip below the top window edge (non-macOS), above the main title row (in-window menu, etc.).
 titlebar_top_buffer: f32 = 10.0,
-
-pub fn resolvedPanZoomScheme(settings: *const Settings) ResolvedPanZoomScheme {
-    return switch (settings.input_scheme) {
-        .auto => switch (dvui.mouseType()) {
-            // Use runtime platform detection so macOS web users get the trackpad
-            // default. `builtin.os.tag == .macos` is false on wasm32-freestanding.
-            .unknown => if (fizzy.platform.isMacOS()) .trackpad else .mouse,
-            .mouse => .mouse,
-            .trackpad => .trackpad,
-        },
-        .mouse => .mouse,
-        .trackpad => .trackpad,
-    };
-}
 
 fn default(allocator: std.mem.Allocator) !Settings {
     return .{
@@ -133,6 +73,7 @@ pub fn setThemeName(settings: *Settings, allocator: std.mem.Allocator, name: []c
 }
 
 /// Loads settings (`theme` is always heap-owned after successful return — see `setThemeName` / `deinit`).
+/// Unknown keys (e.g. the "plugins" object, parsed separately by `loadPluginStore`) are ignored.
 pub fn load(allocator: std.mem.Allocator, path: []const u8) !Settings {
     // Wasm: no on-disk config; `fizzy.fs.read` uses `Io.Dir.cwd()` (posix.AT).
     if (comptime builtin.target.cpu.arch == .wasm32) return default(allocator);
@@ -157,11 +98,103 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Settings {
     return result;
 }
 
-pub fn save(settings: *Settings, allocator: std.mem.Allocator, path: []const u8) !void {
-    const str = try std.json.Stringify.valueAlloc(allocator, settings, .{});
+/// Serialize the shell settings plus the opaque per-plugin store into a single
+/// settings.json document: `{ <shell fields…>, "plugins": { <id>: <blob>, … } }`. The
+/// plugin blobs are already-serialized JSON objects, spliced in verbatim — the shell
+/// never interprets them.
+pub fn serialize(
+    settings: *const Settings,
+    plugin_settings: *const std.StringArrayHashMapUnmanaged([]const u8),
+    allocator: std.mem.Allocator,
+) ![]u8 {
+    const fields = try std.json.Stringify.valueAlloc(allocator, settings, .{});
+    defer allocator.free(fields);
+    // `fields` is a `{…}` object with at least one member, so dropping the trailing
+    // brace and appending `,"plugins":{…}}` always yields valid JSON.
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, fields[0 .. fields.len - 1]);
+    try out.appendSlice(allocator, ",\"plugins\":{");
+    var first = true;
+    var it = plugin_settings.iterator();
+    while (it.next()) |e| {
+        if (!first) try out.append(allocator, ',');
+        first = false;
+        const key = try std.json.Stringify.valueAlloc(allocator, e.key_ptr.*, .{});
+        defer allocator.free(key);
+        try out.appendSlice(allocator, key);
+        try out.append(allocator, ':');
+        try out.appendSlice(allocator, e.value_ptr.*);
+    }
+    try out.appendSlice(allocator, "}}");
+    return out.toOwnedSlice(allocator);
+}
+
+pub fn save(
+    settings: *Settings,
+    plugin_settings: *const std.StringArrayHashMapUnmanaged([]const u8),
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) !void {
+    const str = try serialize(settings, plugin_settings, allocator);
     defer allocator.free(str);
 
     try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = str });
+}
+
+/// Populate `store` (id -> owned JSON blob) from the "plugins" object in settings.json.
+/// One-time migration: a legacy flat settings.json (no "plugins" object) seeds the
+/// pixel-art blob from the whole root so its moved fields (show_rulers, input_scheme, …)
+/// survive the format change — pixel art ignores unknown keys, and the next save rewrites
+/// the blob cleanly.
+pub fn loadPluginStore(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    store: *std.StringArrayHashMapUnmanaged([]const u8),
+) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const data = fizzy.fs.read(allocator, dvui.io, path) catch return;
+    defer allocator.free(data);
+
+    var parsed_v = std.json.parseFromSlice(std.json.Value, allocator, data, .{}) catch return;
+    defer parsed_v.deinit();
+
+    const root = switch (parsed_v.value) {
+        .object => |o| o,
+        else => return,
+    };
+
+    if (root.get("plugins")) |plugins_val| {
+        switch (plugins_val) {
+            .object => |plugins| {
+                var it = plugins.iterator();
+                while (it.next()) |e| {
+                    const blob = std.json.Stringify.valueAlloc(allocator, e.value_ptr.*, .{}) catch continue;
+                    const key = allocator.dupe(u8, e.key_ptr.*) catch {
+                        allocator.free(blob);
+                        continue;
+                    };
+                    store.put(allocator, key, blob) catch {
+                        allocator.free(key);
+                        allocator.free(blob);
+                    };
+                }
+                return;
+            },
+            else => {},
+        }
+    }
+
+    // Legacy flat settings.json: seed the pixel-art blob from the whole root.
+    const legacy_blob = std.json.Stringify.valueAlloc(allocator, parsed_v.value, .{}) catch return;
+    const key = allocator.dupe(u8, "pixelart") catch {
+        allocator.free(legacy_blob);
+        return;
+    };
+    store.put(allocator, key, legacy_blob) catch {
+        allocator.free(key);
+        allocator.free(legacy_blob);
+    };
 }
 
 pub fn deinit(settings: *Settings, allocator: std.mem.Allocator) void {

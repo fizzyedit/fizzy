@@ -10,6 +10,7 @@ const sdk = fizzy.sdk;
 const CanvasData = @import("CanvasData.zig");
 const FileWidget = @import("widgets/FileWidget.zig");
 const ImageWidget = @import("widgets/ImageWidget.zig");
+const PixelArtSettings = @import("Settings.zig");
 
 const DocHandle = sdk.DocHandle;
 const Internal = fizzy.Internal;
@@ -112,7 +113,7 @@ fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
 
     fizzy.perf.canvasPaneDrawn();
 
-    if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(container.id)) {
+    if (fizzy.pixelart.settings.show_rulers and !dvui.firstFrame(container.id)) {
         defer fizzy.dvui.drawEdgeShadow(container.rectScale(), .top, .{});
         chrome.drawRuler(file, .horizontal);
     }
@@ -120,7 +121,7 @@ fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
     var canvas_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer canvas_hbox.deinit();
 
-    if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(container.id)) {
+    if (fizzy.pixelart.settings.show_rulers and !dvui.firstFrame(container.id)) {
         defer fizzy.dvui.drawEdgeShadow(container.rectScale(), .left, .{});
         chrome.drawRuler(file, .vertical);
     }
@@ -165,10 +166,10 @@ fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
 
     switch (builtin.os.tag) {
         .macos => {
-            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
+            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.pixelart.host.contentOpacity()) else content_color;
         },
         .windows => {
-            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
+            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.pixelart.host.contentOpacity()) else content_color;
         },
         else => {},
     }
@@ -279,6 +280,12 @@ pub fn register(host: *sdk.Host) !void {
         .owner = &plugin,
         .title = "Sprites",
         .draw = drawSpritesPanel,
+    });
+    try host.registerSettingsSection(.{
+        .id = "pixelart.settings",
+        .owner = &plugin,
+        .title = "Pixel Art",
+        .draw = PixelArtSettings.draw,
     });
 }
 

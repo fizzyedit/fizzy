@@ -25,8 +25,8 @@ pub fn initCheckerboardTile(atlas: *Atlas) void {
     atlas.checkerboard_tile = fizzy.image.checkerboardTile(
         alpha_checkerboard_count,
         alpha_checkerboard_count,
-        fizzy.editor.settings.checker_color_even,
-        fizzy.editor.settings.checker_color_odd,
+        fizzy.pixelart.settings.checker_color_even,
+        fizzy.pixelart.settings.checker_color_odd,
     );
 }
 

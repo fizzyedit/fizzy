@@ -263,8 +263,8 @@ pub fn checkerboardTileTexture(file: *File) ?dvui.Texture {
     file.editor.checkerboard_tile = fizzy.image.checkerboardTile(
         want.w,
         want.h,
-        fizzy.editor.settings.checker_color_even,
-        fizzy.editor.settings.checker_color_odd,
+        fizzy.pixelart.settings.checker_color_even,
+        fizzy.pixelart.settings.checker_color_odd,
     );
     return file.editor.checkerboard_tile;
 }

@@ -128,7 +128,7 @@ fn workspaceCanvasChromeColor() dvui.Color {
     switch (builtin.os.tag) {
         .macos, .windows => {
             content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow()))
-                content_color.opacity(fizzy.editor.settings.content_opacity)
+                content_color.opacity(fizzy.pixelart.host.contentOpacity())
             else
                 content_color;
         },
@@ -222,7 +222,7 @@ fn drawCheckerboardPreviewTiled(
     if (cell_w <= 0 or cell_h <= 0 or cols == 0 or rows == 0) return;
 
     const pal = previewCheckerboardPalette();
-    const te = fizzy.editor.settings.transparency_effect;
+    const te = fizzy.pixelart.settings.transparency_effect;
     const cols_f = @max(@as(f32, @floatFromInt(cols)), 1.0);
     const rows_f = @max(@as(f32, @floatFromInt(rows)), 1.0);
     const nw = cell_w * cols_f;

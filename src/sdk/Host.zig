@@ -8,6 +8,7 @@
 const std = @import("std");
 const Plugin = @import("Plugin.zig");
 const regions = @import("regions.zig");
+const ShellApi = @import("ShellApi.zig");
 
 pub const Host = @This();
 
@@ -15,6 +16,12 @@ pub const SidebarView = regions.SidebarView;
 pub const BottomView = regions.BottomView;
 pub const CenterProvider = regions.CenterProvider;
 pub const MenuContribution = regions.MenuContribution;
+pub const SettingsSection = regions.SettingsSection;
+
+/// Per-plugin opaque settings blobs: plugin id -> serialized JSON. The Host owns the
+/// key + value strings; the shell persists them verbatim under "plugins" in
+/// settings.json and never interprets them.
+pub const PluginSettings = std.StringArrayHashMapUnmanaged([]const u8);
 
 allocator: std.mem.Allocator,
 
@@ -25,6 +32,13 @@ plugins: std.ArrayListUnmanaged(*Plugin) = .empty,
 /// workbench plugin registers "workbench" so editor plugins can place tabs and
 /// draw per-branch explorer decorations without a compile-time dependency on it.
 services: std.StringHashMapUnmanaged(*anyopaque) = .empty,
+
+/// The shell's read/utility surface (arena, folder, shared settings, dirty mark),
+/// installed by the shell during startup. Null until installed (headless/test).
+shell_api: ?ShellApi = null,
+
+/// Opaque per-plugin settings store (see `PluginSettings`).
+plugin_settings: PluginSettings = .empty,
 
 // ---- shell region registries (Phase 2) -------------------------------------
 // The shell iterates these instead of hardcoded enums/switches. Items keep their
@@ -38,6 +52,8 @@ bottom_views: std.ArrayListUnmanaged(BottomView) = .empty,
 center_providers: std.ArrayListUnmanaged(CenterProvider) = .empty,
 /// Menubar contributions (non-macOS in-app menu bar).
 menus: std.ArrayListUnmanaged(MenuContribution) = .empty,
+/// Settings sections (Settings view renders each under its title, grouped by owner).
+settings_sections: std.ArrayListUnmanaged(SettingsSection) = .empty,
 
 /// Active selection by contribution id (null = use the first registered).
 active_sidebar_view: ?[]const u8 = null,
@@ -55,6 +71,70 @@ pub fn deinit(self: *Host) void {
     self.bottom_views.deinit(self.allocator);
     self.center_providers.deinit(self.allocator);
     self.menus.deinit(self.allocator);
+    self.settings_sections.deinit(self.allocator);
+    {
+        var it = self.plugin_settings.iterator();
+        while (it.next()) |e| {
+            self.allocator.free(e.key_ptr.*);
+            self.allocator.free(e.value_ptr.*);
+        }
+        self.plugin_settings.deinit(self.allocator);
+    }
+}
+
+// ---- shell services (installed by the shell during startup) ----------------
+
+/// Install the shell's read/utility surface. Called once during startup.
+pub fn installShell(self: *Host, api: ShellApi) void {
+    self.shell_api = api;
+}
+
+/// Per-frame arena allocator (reset every frame; do not free). Asserts the shell is installed.
+pub fn arena(self: *Host) std.mem.Allocator {
+    return self.shell_api.?.arena();
+}
+
+/// Open project root folder, or null when none is open.
+pub fn folder(self: *Host) ?[]const u8 {
+    return if (self.shell_api) |a| a.folder() else null;
+}
+
+/// User palettes folder (config), or null on platforms without one.
+pub fn paletteFolder(self: *Host) ?[]const u8 {
+    return if (self.shell_api) |a| a.paletteFolder() else null;
+}
+
+/// Mark shell settings dirty so the debounced autosave persists them.
+pub fn markSettingsDirty(self: *Host) void {
+    if (self.shell_api) |a| a.markSettingsDirty();
+}
+
+/// Shell-owned content-area opacity (matches the shell chrome). 1.0 if no shell installed.
+pub fn contentOpacity(self: *Host) f32 {
+    return if (self.shell_api) |a| a.contentOpacity() else 1.0;
+}
+
+// ---- per-plugin settings store ---------------------------------------------
+
+/// The stored settings blob for `id` (serialized JSON), or null if none. The returned
+/// slice is owned by the Host and valid until the next `storePluginSettings` for `id`.
+pub fn loadPluginSettings(self: *Host, id: []const u8) ?[]const u8 {
+    return self.plugin_settings.get(id);
+}
+
+/// Store `json` as `id`'s settings blob (replacing any previous), and mark the shell
+/// settings dirty so it persists. The Host copies both `id` and `json`.
+pub fn storePluginSettings(self: *Host, id: []const u8, json: []const u8) !void {
+    const dup = try self.allocator.dupe(u8, json);
+    errdefer self.allocator.free(dup);
+    if (self.plugin_settings.getPtr(id)) |slot| {
+        self.allocator.free(slot.*);
+        slot.* = dup;
+    } else {
+        const key = try self.allocator.dupe(u8, id);
+        try self.plugin_settings.put(self.allocator, key, dup);
+    }
+    self.markSettingsDirty();
 }
 
 pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
@@ -88,6 +168,10 @@ pub fn registerCenterProvider(self: *Host, provider: CenterProvider) !void {
 
 pub fn registerMenu(self: *Host, menu: MenuContribution) !void {
     try self.menus.append(self.allocator, menu);
+}
+
+pub fn registerSettingsSection(self: *Host, section: SettingsSection) !void {
+    try self.settings_sections.append(self.allocator, section);
 }
 
 // ---- active selection ------------------------------------------------------

@@ -14,10 +14,12 @@ const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const assets = @import("assets");
 
+const sdk = fizzy.sdk;
 const Colors = @import("Colors.zig");
 const Project = @import("Project.zig");
 const Tools = @import("Tools.zig");
 const PackJob = @import("PackJob.zig");
+pub const Settings = @import("Settings.zig");
 
 const PixelArt = @This();
 
@@ -26,6 +28,12 @@ pub const SpriteClipboard = struct {
     source: dvui.ImageSource,
     offset: dvui.Point,
 };
+
+/// The shell host (service locator + per-plugin settings store). Set in `init`.
+host: *sdk.Host,
+
+/// Pixel-art editing preferences, loaded from the host's per-plugin settings store.
+settings: Settings = .{},
 
 tools: Tools,
 colors: Colors = .{},
@@ -42,8 +50,10 @@ sprite_clipboard: ?SpriteClipboard = null,
 /// most recent request produces a visible atlas update.
 pack_jobs: std.ArrayListUnmanaged(*PackJob) = .empty,
 
-pub fn init(allocator: std.mem.Allocator) !PixelArt {
+pub fn init(allocator: std.mem.Allocator, host: *sdk.Host) !PixelArt {
     var pa: PixelArt = .{
+        .host = host,
+        .settings = Settings.load(host),
         .tools = try .init(allocator),
     };
     pa.colors.file_tree_palette = fizzy.Internal.Palette.loadFromBytes(allocator, "fizzy.hex", assets.files.palettes.@"fizzy.hex") catch null;
