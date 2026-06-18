@@ -497,7 +497,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                 try visible_file_rows_order.append(fizzy.app.allocator, .{ .id = inner_id_extra.*, .path = abs_path });
 
                 var color = dvui.themeGet().color(.control, .fill);
-                if (fizzy.pixelart.colors.palette) |*palette| {
+                if (fizzy.editor.pixelart_state.colors.palette) |*palette| {
                     color = palette.getDVUIColor(color_id.*);
                 }
 

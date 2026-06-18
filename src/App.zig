@@ -8,6 +8,7 @@ const assets = @import("assets");
 const icon = assets.files.@"icon.png";
 
 const fizzy = @import("fizzy.zig");
+const pixelart = @import("pixelart");
 const auto_update = @import("backend/auto_update.zig");
 const update_notify = @import("backend/update_notify.zig");
 const singleton = @import("backend/singleton.zig");
@@ -15,7 +16,7 @@ const paths = fizzy.paths;
 
 const App = @This();
 const Editor = fizzy.Editor;
-const Packer = fizzy.Packer;
+const Packer = pixelart.Packer;
 
 // App fields
 allocator: std.mem.Allocator = undefined,
@@ -168,10 +169,11 @@ pub fn AppInit(win: *dvui.Window) !void {
     // Pixel-art plugin state (tools/colors/project/clipboard/pack jobs). Created
     // before `postInit` so the pixel-art plugin's `register` can adopt it as its
     // `state`. Owned here for the app's lifetime; torn down in `AppDeinit`.
-    fizzy.pixelart = try allocator.create(fizzy.State);
-    fizzy.pixelart_mod.Globals.gpa = allocator;
-    fizzy.pixelart_mod.Globals.state = fizzy.pixelart;
-    fizzy.pixelart.* = fizzy.State.init(allocator, &fizzy.editor.host) catch unreachable;
+    fizzy.pixelart = try allocator.create(pixelart.State);
+    pixelart.Globals.gpa = allocator;
+    pixelart.Globals.state = fizzy.pixelart;
+    fizzy.pixelart.* = pixelart.State.init(allocator, &fizzy.editor.host) catch unreachable;
+    fizzy.editor.pixelart_state = fizzy.pixelart;
 
     // Second-stage init that needs the editor at its final heap address (e.g.
     // registering the workbench-api service whose `ctx` is this pointer).
@@ -183,7 +185,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.packer = try allocator.create(Packer);
     fizzy.packer.* = Packer.init(allocator) catch unreachable;
 
-    fizzy.pixelart_mod.Globals.packer = fizzy.packer;
+    pixelart.Globals.packer = fizzy.packer;
 
     // Hand the window to the listener thread and queue our own argv so the
     // first frame opens any files / project folder supplied on the command line.
@@ -231,7 +233,7 @@ pub fn AppDeinit() void {
     // Persist the current windowed frame while the window still exists. No-op off macOS.
     fizzy.backend.saveWindowGeometry(fizzy.app.window);
     // Persist `.fizproject` while `editor.host` and `editor.folder` are still live.
-    fizzy.State.persistProject(fizzy.pixelart);
+    pixelart.State.persistProject(fizzy.pixelart);
     fizzy.editor.deinit() catch unreachable;
     // Pixel-art teardown (persists the .fizproject, frees tools/palettes/pack jobs).
     // After the editor so any editor teardown that still reads pixel-art state runs first.

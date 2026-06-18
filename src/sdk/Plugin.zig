@@ -57,6 +57,12 @@ pub const VTable = struct {
     // ---- shell contributions ----
     contributeMenu: ?*const fn (state: *anyopaque) anyerror!void = null,
     contributeKeybinds: ?*const fn (state: *anyopaque, win: *dvui.Window) anyerror!void = null,
+
+    // ---- per-frame shell hooks (global keybinds, overlays) ----
+    tickKeybinds: ?*const fn (state: *anyopaque) anyerror!void = null,
+    processRadialMenuInput: ?*const fn (state: *anyopaque) void = null,
+    radialMenuVisible: ?*const fn (state: *anyopaque) bool = null,
+    drawRadialMenu: ?*const fn (state: *anyopaque) anyerror!void = null,
 };
 
 // Thin wrappers so callers don't repeat the optional-vtable dance.
@@ -67,6 +73,22 @@ pub fn fileTypePriority(self: Plugin, ext: []const u8) ?u8 {
 
 pub fn contributeKeybinds(self: Plugin, win: *dvui.Window) !void {
     if (self.vtable.contributeKeybinds) |f| try f(self.state, win);
+}
+
+pub fn tickKeybinds(self: Plugin) !void {
+    if (self.vtable.tickKeybinds) |f| try f(self.state);
+}
+
+pub fn processRadialMenuInput(self: Plugin) void {
+    if (self.vtable.processRadialMenuInput) |f| f(self.state);
+}
+
+pub fn radialMenuVisible(self: Plugin) bool {
+    return if (self.vtable.radialMenuVisible) |f| f(self.state) else false;
+}
+
+pub fn drawRadialMenu(self: Plugin) !void {
+    if (self.vtable.drawRadialMenu) |f| try f(self.state);
 }
 
 // ---- document lifecycle wrappers (operate on a DocHandle this plugin owns) ----

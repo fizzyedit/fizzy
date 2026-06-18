@@ -1,16 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const pixelart = @import("pixelart");
 const dvui = @import("dvui");
-const fizzy = @import("../../fizzy.zig");
 
 const Dialogs = @This();
 
-pub const NewFile = fizzy.pixelart_mod.dialogs.NewFile;
-pub const Export = fizzy.pixelart_mod.dialogs.Export;
+pub const NewFile = pixelart.dialogs.NewFile;
+pub const Export = pixelart.dialogs.Export;
 pub const UnsavedClose = @import("UnsavedClose.zig");
 pub const AppQuitUnsaved = @import("AppQuitUnsaved.zig");
-pub const GridLayout = fizzy.pixelart_mod.dialogs.GridLayout;
-pub const FlatRasterSaveWarning = fizzy.pixelart_mod.dialogs.FlatRasterSaveWarning;
+pub const GridLayout = pixelart.dialogs.GridLayout;
+pub const FlatRasterSaveWarning = pixelart.dialogs.FlatRasterSaveWarning;
 pub const AboutFizzy = @import("AboutFizzy.zig");
 pub const WebFolderUnavailable = if (builtin.target.cpu.arch == .wasm32)
     @import("WebFolderUnavailable.zig")
@@ -40,5 +40,5 @@ pub fn drawDimensionsLabel(
     unit: []const u8,
     opts: dvui.Options,
 ) void {
-    fizzy.pixelart_mod.dialogs.DimensionsLabel.drawDimensionsLabel(src, width, height, font, unit, opts);
+    pixelart.dialogs.DimensionsLabel.drawDimensionsLabel(src, width, height, font, unit, opts);
 }

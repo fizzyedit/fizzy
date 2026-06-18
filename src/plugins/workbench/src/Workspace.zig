@@ -3,6 +3,8 @@ const builtin = @import("builtin");
 
 const dvui = @import("dvui");
 const sdk = @import("sdk");
+const pixelart = @import("pixelart");
+const Internal = pixelart.internal;
 const fizzy = @import("../../../fizzy.zig");
 const icons = @import("icons");
 
@@ -38,13 +40,13 @@ pub fn init(grouping: u64) Workspace {
 /// Release any plugin-owned per-pane canvas chrome. Called when a pane is removed
 /// (`Editor.rebuildWorkspaces`) and for each pane at editor shutdown.
 pub fn deinit(self: *Workspace) void {
-    fizzy.State.removeCanvasPane(fizzy.pixelart, fizzy.app.allocator, self.grouping);
+    pixelart.State.removeCanvasPane(fizzy.editor.pixelart_state, fizzy.app.allocator, self.grouping);
 }
 
 /// Recover the typed workspace currently drawing `file` from its opaque slot
 /// handle (`File.EditorData.workspace_handle`, set each frame in `drawCanvas`).
 /// Returns null before the file has been laid out this session.
-pub fn ofFile(file: *fizzy.Internal.File) ?*Workspace {
+pub fn ofFile(file: *Internal.File) ?*Workspace {
     const handle = file.editor.workspace_handle orelse return null;
     return @ptrCast(@alignCast(handle));
 }
@@ -200,7 +202,7 @@ fn drawTabs(self: *Workspace) void {
 
             for (0..files_len) |i| {
                 const file = fizzy.editor.fileAt(i) orelse continue;
-                const is_fizzy_file = fizzy.Internal.File.isFizzyExtension(std.fs.path.extension(file.path));
+                const is_fizzy_file = Internal.File.isFizzyExtension(std.fs.path.extension(file.path));
 
                 if (file.editor.grouping != self.grouping) continue;
 

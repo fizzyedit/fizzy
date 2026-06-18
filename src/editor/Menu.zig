@@ -1,5 +1,7 @@
 const std = @import("std");
 const fizzy = @import("../fizzy.zig");
+const pixelart = @import("pixelart");
+const Internal = pixelart.internal;
 const dvui = @import("dvui");
 const Editor = fizzy.Editor;
 const settings = fizzy.settings;
@@ -134,7 +136,7 @@ pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
         _ = dvui.separator(@src(), .{ .expand = .horizontal });
 
         if (menuItemWithHotkey(@src(), "Save", dvui.currentWindow().keybinds.get("save") orelse .{}, if (fizzy.editor.activeFile()) |file|
-            (file.dirty() or !fizzy.Internal.File.hasRecognizedSaveExtension(file.path))
+            (file.dirty() or !Internal.File.hasRecognizedSaveExtension(file.path))
         else
             false, .{}, .{
             .expand = .horizontal,
@@ -159,7 +161,7 @@ pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
         const any_dirty = blk: {
             for (fizzy.editor.open_files.values()) |doc| {
                 const f = fizzy.editor.fileFromDoc(doc);
-                if (f.dirty() and fizzy.Internal.File.hasRecognizedSaveExtension(f.path)) break :blk true;
+                if (f.dirty() and Internal.File.hasRecognizedSaveExtension(f.path)) break :blk true;
             }
             break :blk false;
         };

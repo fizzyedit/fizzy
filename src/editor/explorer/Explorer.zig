@@ -7,7 +7,7 @@ const icons = @import("icons");
 const Core = @import("mach").Core;
 const App = fizzy.App;
 const Editor = fizzy.Editor;
-const Packer = fizzy.Packer;
+const pixelart = @import("pixelart");
 
 const nfd = @import("nfd");
 
@@ -16,7 +16,7 @@ pub const Explorer = @This();
 pub const files = @import("../../plugins/workbench/src/files.zig");
 // pub const animations = @import("animations.zig");
 // pub const keyframe_animations = @import("keyframe_animations.zig");
-pub const project = fizzy.pixelart_mod.explorer.project;
+pub const project = pixelart.explorer.project;
 pub const settings = @import("settings.zig");
 
 paned: *fizzy.dvui.PanedWidget = undefined,

@@ -17,13 +17,6 @@ pub const version: std.SemanticVersion = .{
 pub const atlas = core.atlas;
 
 // Other helpers and namespaces
-pub const pixelart_mod = @import("pixelart");
-pub const algorithms = pixelart_mod.algorithms;
-pub const render = pixelart_mod.render;
-pub const sprite_render = pixelart_mod.sprite_render;
-pub const Tools = pixelart_mod.Tools;
-pub const Transform = pixelart_mod.Transform;
-pub const PackJob = pixelart_mod.PackJob;
 pub const fs = core.fs;
 pub const image = core.image;
 pub const perf = core.perf;
@@ -34,28 +27,19 @@ pub const App = @import("App.zig");
 pub const Editor = @import("editor/Editor.zig");
 pub const Explorer = @import("editor/explorer/Explorer.zig");
 pub const Fling = core.Fling;
-pub const Packer = pixelart_mod.Packer;
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
 
-/// Pixel-art plugin state (Phase 4 Stage B/D): reached via `fizzy.pixelart` global.
-pub const State = pixelart_mod.State;
+/// Pixel-art plugin module. Shell code should `@import("pixelart")` directly;
+/// this alias exists only for `App.zig` lifecycle wiring (can't name it `pixelart`
+/// — that name is the runtime `*State` global below).
+pub const pixelart_mod = @import("pixelart");
 
 // Global pointers
 pub var app: *App = undefined;
 pub var editor: *Editor = undefined;
-pub var packer: *Packer = undefined;
-pub var pixelart: *State = undefined;
-
-/// Internal runtime types for open documents (cameras, history, buffers, …).
-pub const Internal = pixelart_mod.internal;
-
-/// On-disk / JSON pixel-art types.
-pub const Animation = pixelart_mod.Animation;
-pub const Atlas = pixelart_mod.Atlas;
-pub const File = pixelart_mod.File;
-pub const Layer = pixelart_mod.Layer;
-pub const Sprite = pixelart_mod.Sprite;
+pub var packer: *pixelart_mod.Packer = undefined;
+pub var pixelart: *pixelart_mod.State = undefined;
 
 /// Runtime platform detection (`isMacOS()` etc.) that's accurate on wasm web
 /// builds, where `builtin.os.tag` is always `.freestanding`.

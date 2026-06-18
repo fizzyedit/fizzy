@@ -13,6 +13,8 @@ const CanvasData = @import("CanvasData.zig");
 const FileWidget = @import("widgets/FileWidget.zig");
 const ImageWidget = @import("widgets/ImageWidget.zig");
 const PixelArtSettings = @import("Settings.zig");
+const KeybindTicks = @import("keybind_ticks.zig");
+const RadialMenu = @import("radial_menu.zig");
 
 const DocHandle = sdk.DocHandle;
 const Internal = pixelart.internal;
@@ -41,6 +43,10 @@ const vtable: sdk.Plugin.VTable = .{
     .undo = undo,
     .redo = redo,
     .drawDocument = drawDocument,
+    .tickKeybinds = tickKeybinds,
+    .processRadialMenuInput = processRadialMenuInput,
+    .radialMenuVisible = radialMenuVisible,
+    .drawRadialMenu = drawRadialMenu,
 };
 
 /// A `DocHandle` for one of this plugin's open `*Internal.File`s. Resolved by `doc.id`
@@ -295,6 +301,22 @@ fn drawProject(_: ?*anyopaque) anyerror!void {
 }
 fn drawSpritesPanel(_: ?*anyopaque) anyerror!void {
     try Globals.state.sprites_panel.draw();
+}
+
+fn tickKeybinds(_: *anyopaque) anyerror!void {
+    try KeybindTicks.tick();
+}
+
+fn processRadialMenuInput(_: *anyopaque) void {
+    RadialMenu.processHoldOpenInput();
+}
+
+fn radialMenuVisible(_: *anyopaque) bool {
+    return RadialMenu.visible();
+}
+
+fn drawRadialMenu(_: *anyopaque) anyerror!void {
+    try RadialMenu.draw();
 }
 
 /// Pixel-art editing + tool keybinds. The shell registers its own global/region

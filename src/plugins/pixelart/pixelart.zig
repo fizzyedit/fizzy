@@ -3,7 +3,7 @@
 //! Files inside `src/plugins/pixelart/src/**` import this as `../pixelart.zig` (or
 //! `../../pixelart.zig` from nested dirs) instead of `fizzy.zig` for sdk/core/Globals
 //! and shared plugin types. The compile-time module root for the build is `module.zig`
-//! (`@import("pixelart")`); shell code reaches the plugin through `fizzy.pixelart_mod`.
+//! (`@import("pixelart")`); shell code imports the module directly.
 const std = @import("std");
 
 pub const sdk = @import("sdk");

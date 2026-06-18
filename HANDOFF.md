@@ -14,7 +14,7 @@ lift, sprites bottom-panel lift.
 **In progress:** **Stage D (substantially complete)** — module scaffold, `Globals` injection,
 Workspace decoupling, zero `fizzy.zig` imports in plugin, `b.addModule("pixelart")` wired.
 
-**Next:** Stage E — strip remaining `fizzy.pixelart.*` from shell `Editor.zig`.
+**Next:** Stage E — trim `fizzy.zig` re-exports; route copy/paste/pack through plugin vtable.
 
 > **Read this first if you're a fresh agent:** start at "Stage D — remaining work"
 > below. All three build configs are green right now.
@@ -252,14 +252,22 @@ app code until the build module is fully wired.
 
 ---
 
-## Stage E — strip pixel-art names from shell hubs (later)
+## Stage E — strip pixel-art names from shell hubs (in progress)
 
-- Remove pixel-art type names from `fizzy.zig` hub (consumers import `pixelart` module).
-- Remove `editor/dialogs/` pixel-art dialog aliases (plugins register dialogs via SDK).
-- Shell `Editor` radial-menu / copy-paste / pack code still touches `fizzy.pixelart.tools` —
-  route through plugin vtable or EditorAPI.
-- Shell still uses `fizzy.Internal.File` directly in several `Editor.zig` helpers — shrink
-  as doc ownership solidifies.
+**Done this session:**
+- **`Editor.pixelart_state`** — shell reaches plugin state through the editor, not scattered `fizzy.pixelart.*` (53 → 0 direct field accesses in shell code; `fizzy.pixelart` global remains only in `App.zig` lifecycle).
+- **Plugin vtable hooks** — `tickKeybinds`, `processRadialMenuInput`, `radialMenuVisible`, `drawRadialMenu`; radial menu + tool keybind ticks moved to `pixelart/src/radial_menu.zig` and `keybind_ticks.zig`.
+- **Shell `Keybinds.tick`** — pixel-art handlers removed (shell-only binds remain).
+- **`editor/dialogs/Dialogs.zig`** — imports `@import("pixelart")` directly.
+- **Explorer, UnsavedClose, files, Workspace** — use `fizzy.editor.pixelart_state` or `@import("pixelart")`.
+- **`fizzy.zig` hub trimmed** — removed re-export aliases (`Tools`, `Internal`, `render`, `Packer`, on-disk types, …). Shell/workbench/tests/web probes now `@import("pixelart")` (or `fizzy.pixelart_mod` in integration tests). `fizzy.zig` keeps only `pixelart_mod` alias + lifecycle globals (`app`, `editor`, `packer`, `pixelart`).
+- **`App.zig`** — wires `pixelart.Globals` directly (not `fizzy.pixelart_mod.Globals`).
+
+**Still remaining:**
+- `fizzy.pixelart` global — fold into `Editor.pixelart_state` + `Globals` only.
+- Shell `Editor` copy/paste/pack/project still touch `editor.pixelart_state` fields directly — route through plugin vtable or EditorAPI.
+- `pixelart.internal.File` in workbench + shell helpers — shrink as doc ownership solidifies.
+- Integration test shim updated for `pixelart.State` settings; `check-integration` still blocked on native `backend_native` SDL import under dvui-testing (pre-existing).
 
 ---
 

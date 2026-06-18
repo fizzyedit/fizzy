@@ -16,6 +16,8 @@
 
 const std = @import("std");
 const fizzy = @import("../../../fizzy.zig");
+const pixelart = @import("pixelart");
+const Internal = pixelart.internal;
 const dvui = @import("dvui");
 const perf = fizzy.perf;
 
@@ -67,7 +69,7 @@ cancelled: std.atomic.Value(bool) = .init(false),
 done: std.atomic.Value(bool) = .init(false),
 
 /// Filled by worker iff load succeeds AND wasn't cancelled. Safe to read after `done.load(.acquire)`.
-result: ?fizzy.Internal.File = null,
+result: ?Internal.File = null,
 
 /// Filled by worker iff load failed. Safe to read after `done.load(.acquire)`.
 err: ?anyerror = null,
@@ -117,7 +119,7 @@ pub fn workerMain(job: *FileLoadJob) void {
     // Route the actual load through the owning plugin (filled into a stack buffer the
     // shell owns; the plugin knows its concrete document type). Mirrors the inline-value
     // model below — no heap handoff.
-    var file: fizzy.Internal.File = undefined;
+    var file: Internal.File = undefined;
     const handled = job.owner.loadDocument(job.path, &file) catch |e| {
         job.err = e;
         job.phase.store(@intFromEnum(Phase.failed), .release);

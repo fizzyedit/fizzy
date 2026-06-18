@@ -71,34 +71,6 @@ pub fn tick() !void {
                     }
                 }
 
-                if (ke.matchBind("quick_tools")) {
-                    const rm = &fizzy.pixelart.tools.radial_menu;
-                    switch (ke.action) {
-                        .down => {
-                            const mp = dvui.currentWindow().mouse_pt;
-                            rm.mouse_position = mp;
-                            rm.center = mp;
-                            rm.opened_by_press = false;
-                            rm.suppress_next_pointer_release = false;
-                            rm.outside_click_press_p = null;
-                            rm.visible = true;
-                        },
-                        .repeat => rm.visible = true,
-                        .up => rm.close(),
-                    }
-                    // If we include a refresh here, the underlying gui has a chance to reset the cursor
-                    dvui.refresh(null, @src(), dvui.currentWindow().data().id);
-                }
-
-                if (ke.matchBind("increase_stroke_size") and (ke.action == .down or ke.action == .repeat)) {
-                    if (fizzy.pixelart.tools.current != .selection or fizzy.pixelart.tools.selection_mode == .pixel) {
-                        if (fizzy.pixelart.tools.stroke_size < fizzy.Tools.max_brush_size - 1)
-                            fizzy.pixelart.tools.stroke_size += 1;
-
-                        fizzy.pixelart.tools.setStrokeSize(fizzy.pixelart.tools.stroke_size);
-                    }
-                }
-
                 if (ke.matchBind("save_as") and ke.action == .down) {
                     fizzy.editor.requestSaveAs();
                 }
@@ -107,32 +79,6 @@ pub fn tick() !void {
                     fizzy.editor.saveAll() catch {
                         std.log.err("Failed to save all", .{});
                     };
-                }
-
-                if (ke.matchBind("export") and ke.action == .down) {
-                    // Create a generic dialog that contains typical okay and cancel buttons and header
-                    // The displayFn will be called during the drawing of the dialog, prior to ok and cancel buttons
-                    var mutex = fizzy.dvui.dialog(@src(), .{
-                        .displayFn = fizzy.Editor.Dialogs.Export.dialog,
-                        .callafterFn = fizzy.Editor.Dialogs.Export.callAfter,
-                        .title = "Export...",
-                        .ok_label = "Export",
-                        .cancel_label = "Cancel",
-                        .resizeable = false,
-                        .modal = false,
-                        .header_kind = .info,
-                        .default = .ok,
-                    });
-                    mutex.mutex.unlock(dvui.io);
-                }
-
-                if (ke.matchBind("decrease_stroke_size") and (ke.action == .down or ke.action == .repeat)) {
-                    if (fizzy.pixelart.tools.current != .selection or fizzy.pixelart.tools.selection_mode == .pixel) {
-                        if (fizzy.pixelart.tools.stroke_size > 1)
-                            fizzy.pixelart.tools.stroke_size -= 1;
-
-                        fizzy.pixelart.tools.setStrokeSize(fizzy.pixelart.tools.stroke_size);
-                    }
                 }
 
                 if (ke.matchBind("delete_selection_contents")) {
@@ -209,22 +155,6 @@ pub fn tick() !void {
                             fizzy.editor.requestGridLayoutDialog();
                         }
                     }
-                }
-
-                if (ke.matchBind("pencil") and ke.action == .down) {
-                    fizzy.pixelart.tools.set(.pencil);
-                }
-                if (ke.matchBind("eraser") and ke.action == .down) {
-                    fizzy.pixelart.tools.set(.eraser);
-                }
-                if (ke.matchBind("bucket") and ke.action == .down) {
-                    fizzy.pixelart.tools.set(.bucket);
-                }
-                if (ke.matchBind("pointer") and ke.action == .down) {
-                    fizzy.pixelart.tools.set(.pointer);
-                }
-                if (ke.matchBind("selection") and ke.action == .down) {
-                    fizzy.pixelart.tools.set(.selection);
                 }
             },
             else => {},

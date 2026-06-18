@@ -2,12 +2,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const dvui = @import("dvui");
+const pixelart = @import("pixelart");
 const fizzy = @import("../../fizzy.zig");
 
 const Core = @import("mach").Core;
 const App = fizzy.App;
 const Editor = fizzy.Editor;
-const Packer = fizzy.Packer;
+const Packer = pixelart.Packer;
 
 pub const Panel = @This();
 
