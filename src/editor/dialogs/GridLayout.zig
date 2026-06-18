@@ -12,6 +12,7 @@ const std = @import("std");
 
 const NewFile = @import("NewFile.zig");
 const CanvasWidget = @import("../widgets/CanvasWidget.zig");
+const CanvasBridge = @import("../widgets/CanvasBridge.zig");
 const FloatingWindowWidget = @import("../widgets/FloatingWindowWidget.zig");
 const builtin = @import("builtin");
 
@@ -108,7 +109,7 @@ pub fn presetFromFile(file: *fizzy.Internal.File) void {
     // `prev_size` matches `data_size` and `second_center` is false, so `install` skips the
     // rescale/recenter pass and the preview ends up offscreen / at a stale zoom. Resetting to
     // a fresh widget forces a fit-to-pane on the next frame.
-    preview_canvas = .{ .pointer_scope = .dialog };
+    preview_canvas = .{};
     left_scroll = .{ .horizontal = .auto };
     dialog_middle_scroll = .{ .horizontal = .auto, .vertical = .auto };
     preview_pane_fit_w = 0;
@@ -594,6 +595,8 @@ fn renderPreview(
         .id = dlg_id.update("glp_cv"),
         .data_size = .{ .w = @floatFromInt(nw), .h = @floatFromInt(nh) },
         .center = false,
+        .pan_zoom_scheme = CanvasBridge.scheme(),
+        .hooks = .{ .pointerInputSuppressed = CanvasBridge.dialogSuppressed },
     }, .{
         .expand = .both,
         .background = true,

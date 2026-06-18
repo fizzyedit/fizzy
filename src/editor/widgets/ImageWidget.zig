@@ -1,5 +1,6 @@
 pub const ImageWidget = @This();
 const CanvasWidget = @import("CanvasWidget.zig");
+const CanvasBridge = @import("CanvasBridge.zig");
 
 init_options: InitOptions,
 options: Options,
@@ -35,6 +36,8 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Optio
             .w = size.w,
             .h = size.h,
         },
+        .pan_zoom_scheme = CanvasBridge.scheme(),
+        .hooks = .{ .pointerInputSuppressed = CanvasBridge.mainSuppressed },
     }, opts);
 
     return iw;

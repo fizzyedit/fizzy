@@ -17,8 +17,35 @@ const ScaleWidget = dvui.ScaleWidget;
 
 pub const FileWidget = @This();
 const CanvasWidget = @import("CanvasWidget.zig");
+const CanvasBridge = @import("CanvasBridge.zig");
 const Workspace = fizzy.Editor.Workspace;
 const icons = @import("icons");
+
+// ---- Canvas hooks: pixel-art reactions to off-artboard viewport gestures. The canvas is
+// otherwise a generic viewport; these supply the editor's behavior at install time. ----
+
+/// Off-artboard tap (no move, no hold) → clear the current selection.
+fn onEmptyTap(_: ?*anyopaque) void {
+    fizzy.editor.cancel() catch {};
+}
+
+/// Off-artboard hold past the hold-menu duration → open the radial tool menu at the press
+/// point. The canvas releases its own capture afterward so the menu buttons can be hovered.
+fn onEmptyHold(_: ?*anyopaque, press_p: dvui.Point.Physical) void {
+    const rm = &fizzy.editor.tools.radial_menu;
+    rm.mouse_position = press_p;
+    rm.center = press_p;
+    rm.visible = true;
+    rm.opened_by_press = true;
+    rm.suppress_next_pointer_release = true;
+    rm.outside_click_press_p = null;
+}
+
+/// A modified (ctrl/cmd or shift) off-artboard press is the sprite-selection marquee's
+/// while the pointer tool is active — yield it instead of starting a viewport pan.
+fn yieldModifiedEmptyPress(_: ?*anyopaque) bool {
+    return fizzy.editor.tools.current == .pointer;
+}
 
 init_options: InitOptions,
 options: Options,
@@ -79,6 +106,13 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Optio
             .h = @floatFromInt(init_opts.file.height()),
         },
         .center = init_opts.center,
+        .pan_zoom_scheme = CanvasBridge.scheme(),
+        .hooks = .{
+            .onEmptyTap = onEmptyTap,
+            .onEmptyHold = onEmptyHold,
+            .yieldModifiedEmptyPress = yieldModifiedEmptyPress,
+            .pointerInputSuppressed = CanvasBridge.mainSuppressed,
+        },
     }, opts);
 
     return fw;

@@ -74,8 +74,6 @@ fade_pending: bool = false,
 // Saved between `install` and `deinit` so the parent alpha is restored exactly.
 prev_alpha: f32 = 1.0,
 hovered: bool = false,
-/// `.dialog` for embedded previews (Grid Layout); uses `dialogCanvasPointerInputSuppressed`.
-pointer_scope: enum { main, dialog } = .main,
 // Last frame's scroll viewport in physical pixels (latched in `deinit`). Used when the
 // scroll container is not installed yet this frame (e.g. UI chrome before `FileWidget`).
 sample_viewport_physical: ?dvui.Rect.Physical = null,
@@ -253,10 +251,38 @@ pub fn trackpadPinching(self: *const CanvasWidget) bool {
     return (dvui.currentWindow().frame_time_ns - self.trackpad_pinch_last_ns) < window_ns;
 }
 
+/// How wheel/scroll input maps to pan vs. zoom. The owner resolves its own user
+/// preference (mouse vs. trackpad) and passes the result; the canvas stays unaware of
+/// any settings system.
+pub const PanZoomScheme = enum { mouse, trackpad };
+
+/// Owner-supplied reactions to viewport gestures the canvas itself has no opinion about.
+/// Every field is optional: a plain pan/zoom viewport (e.g. an image preview) supplies
+/// none, while an editor supplies hooks that act on its own document/tool state. `ctx` is
+/// passed back to each callback so a plugin can reach its state without globals.
+pub const Hooks = struct {
+    ctx: ?*anyopaque = null,
+    /// An off-artboard press that released without moving or holding (a "tap" on empty
+    /// space). Pixel art uses this to clear the current selection.
+    onEmptyTap: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// An off-artboard press held in place past the hold-menu duration. Pixel art opens
+    /// its radial tool menu at `press_p`.
+    onEmptyHold: ?*const fn (ctx: ?*anyopaque, press_p: dvui.Point.Physical) void = null,
+    /// Whether a modified (ctrl/cmd or shift) off-artboard press should be yielded to the
+    /// owner instead of starting a viewport pan. Pixel art yields it to the selection
+    /// marquee when the pointer tool is active.
+    yieldModifiedEmptyPress: ?*const fn (ctx: ?*anyopaque) bool = null,
+    /// Whether pointer input to this canvas is currently suppressed (e.g. a modal overlay
+    /// owns input this frame). Replaces the old built-in main/dialog scope switch.
+    pointerInputSuppressed: ?*const fn (ctx: ?*anyopaque) bool = null,
+};
+
 pub const InitOptions = struct {
     id: dvui.Id,
     data_size: dvui.Size,
     center: bool = false,
+    pan_zoom_scheme: PanZoomScheme = .mouse,
+    hooks: Hooks = .{},
 };
 
 pub fn recenter(self: *CanvasWidget) void {
@@ -695,10 +721,10 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
                 dvui.captureMouse(null, 0);
             }
 
-            // Quick off-artboard tap: finger lifted during the eval window. Resolve as
-            // clear-selection here so we never arm hold state from the replayed press.
+            // Quick off-artboard tap: finger lifted during the eval window. Hand it to the
+            // owner (pixel art clears selection) so we never arm hold state from the replayed press.
             if (released and !self.pointerOverDrawable(press_p)) {
-                fizzy.editor.cancel() catch {};
+                if (self.init_opts.hooks.onEmptyTap) |f| f(self.init_opts.hooks.ctx);
             }
 
             // `addEventPointer` uses `win.mouse_pt` for the event position. Push the press
@@ -906,10 +932,8 @@ pub fn mouse(self: *CanvasWidget) ?dvui.Event.Mouse {
 }
 
 fn pointerInputSuppressed(self: *const CanvasWidget) bool {
-    return switch (self.pointer_scope) {
-        .main => fizzy.dvui.canvasPointerInputSuppressed(),
-        .dialog => fizzy.dvui.dialogCanvasPointerInputSuppressed(),
-    };
+    const hooks = self.init_opts.hooks;
+    return if (hooks.pointerInputSuppressed) |f| f(hooks.ctx) else false;
 }
 
 pub fn processEvents(self: *CanvasWidget) void {
@@ -1042,15 +1066,19 @@ pub fn processEvents(self: *CanvasWidget) void {
                 // same scrub-the-viewport feel as the middle-button pan.
                 //
                 // Exception: a left/touch off-artboard press holding ctrl/cmd (add)
-                // or shift (subtract) while the pointer tool is active belongs to the
-                // sprite-selection marquee — it already claimed the press earlier in
-                // FileWidget.processSpriteSelection. Yielding it here keeps our
+                // or shift (subtract) that the owner wants to claim (pixel art: the
+                // sprite-selection marquee, which already claimed the press earlier in
+                // FileWidget.processSpriteSelection). Yielding it here keeps our
                 // `dragPreStart("scroll_drag")` from clobbering the marquee's drag, so
                 // the hotkey draws a selection box instead of panning. Middle-button
                 // pans are never affected.
+                const owner_yields = if (self.init_opts.hooks.yieldModifiedEmptyPress) |f|
+                    f(self.init_opts.hooks.ctx)
+                else
+                    false;
                 const sel_marquee_press = me.button.pointer() and me.button != .middle and
                     (me.mod.matchBind("ctrl/cmd") or me.mod.matchBind("shift")) and
-                    fizzy.editor.tools.current == .pointer;
+                    owner_yields;
                 if (me.action == .press and !sel_marquee_press and (me.button == .middle or (me.button.pointer() and !self.pointerOverDrawable(me.p)))) {
                     e.handle(@src(), self.scroll_container.data());
                     dvui.captureMouse(self.scroll_container.data(), e.num);
@@ -1114,7 +1142,7 @@ pub fn processEvents(self: *CanvasWidget) void {
                         }
                     }
                 } else if (me.action == .wheel_y or me.action == .wheel_x) {
-                    switch (fizzy.Editor.Settings.resolvedPanZoomScheme(&fizzy.editor.settings)) {
+                    switch (self.init_opts.pan_zoom_scheme) {
                         .mouse => {
                             const base: f32 = if (me.mod.matchBind("shift")) 1.005 else 1.005;
                             if ((me.mod.matchBind("shift") and me.mod.matchBind("ctrl/cmd")) or !me.mod.matchBind("shift") and !me.mod.matchBind("ctrl/cmd")) {
@@ -1182,20 +1210,15 @@ pub fn processEvents(self: *CanvasWidget) void {
         switch (self.empty) {
             .pending => {
                 if (!still_down) {
-                    // Lifted without moving or holding → a tap: clear the selection.
-                    fizzy.editor.cancel() catch {};
+                    // Lifted without moving or holding → a tap: hand to the owner (pixel
+                    // art clears the selection).
+                    if (self.init_opts.hooks.onEmptyTap) |f| f(self.init_opts.hooks.ctx);
                     self.empty = .idle;
                 } else if (dvui.frameTimeNS() - self.empty_press_ns >= dvui.currentWindow().hold_menu_duration_ns) {
-                    // Held in place past the hold duration → open the radial tool menu and
-                    // release our capture so its buttons can be hovered. Editor keeps it
-                    // open until a tool is chosen or the user taps outside.
-                    const rm = &fizzy.editor.tools.radial_menu;
-                    rm.mouse_position = self.empty_press_p;
-                    rm.center = self.empty_press_p;
-                    rm.visible = true;
-                    rm.opened_by_press = true;
-                    rm.suppress_next_pointer_release = true;
-                    rm.outside_click_press_p = null;
+                    // Held in place past the hold duration → tell the owner (pixel art opens
+                    // its radial tool menu at the press point) and release our capture so its
+                    // buttons can be hovered.
+                    if (self.init_opts.hooks.onEmptyHold) |f| f(self.init_opts.hooks.ctx, self.empty_press_p);
                     self.empty = .holding;
                     if (dvui.captured(self.scroll_container.data().id)) {
                         dvui.captureMouse(null, 0);
