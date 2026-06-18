@@ -151,15 +151,15 @@ fn sample(self: *ImageWidget, point: dvui.Point, screen_p: dvui.Point.Physical) 
         }
     }
 
-    fizzy.editor.colors.primary = color;
+    fizzy.pixelart.colors.primary = color;
     self.sample_data_point = point;
 
     if (color[3] == 0) {
-        if (fizzy.editor.tools.current != .eraser) {
-            fizzy.editor.tools.set(.eraser);
+        if (fizzy.pixelart.tools.current != .eraser) {
+            fizzy.pixelart.tools.set(.eraser);
         }
     } else {
-        fizzy.editor.tools.set(fizzy.editor.tools.previous_drawing_tool);
+        fizzy.pixelart.tools.set(fizzy.pixelart.tools.previous_drawing_tool);
     }
 }
 

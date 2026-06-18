@@ -266,8 +266,8 @@ pub fn invalidate(self: *Layer) void {
 /// Only used for handling getting the pixels surrounding the origin
 /// for stroke sizes larger than 1
 pub fn getIndexShapeOffset(self: *Layer, origin: dvui.Point, current_index: usize) ?ShapeOffsetResult {
-    const shape = fizzy.editor.tools.stroke_shape;
-    const s: i32 = @intCast(fizzy.editor.tools.stroke_size);
+    const shape = fizzy.pixelart.tools.stroke_shape;
+    const s: i32 = @intCast(fizzy.pixelart.tools.stroke_size);
 
     if (s == 1) {
         if (current_index != 0)

@@ -829,7 +829,7 @@ pub fn drawAnimations(self: *Sprites) !void {
             const selected = if (self.edit_anim_id) |id| id == anim_id else (is_primary_row or in_multi);
 
             var color = dvui.themeGet().color(.control, .fill_hover);
-            if (fizzy.editor.colors.file_tree_palette) |*palette| {
+            if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
                 color = palette.getDVUIColor(@intCast(anim_id));
             }
 
@@ -1600,7 +1600,7 @@ pub fn drawFrames(self: *Sprites) !void {
 
             for (animation.frames, 0..) |*frame, frame_index| {
                 var anim_color = dvui.themeGet().color(.control, .fill_hover);
-                if (fizzy.editor.colors.file_tree_palette) |*palette| {
+                if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
                     anim_color = palette.getDVUIColor(@intCast(animation.id));
                 }
 

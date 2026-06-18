@@ -164,6 +164,13 @@ pub fn AppInit(win: *dvui.Window) !void {
 
     fizzy.editor = try allocator.create(Editor);
     fizzy.editor.* = Editor.init(fizzy.app) catch unreachable;
+
+    // Pixel-art plugin state (tools/colors/project/clipboard/pack jobs). Created
+    // before `postInit` so the pixel-art plugin's `register` can adopt it as its
+    // `state`. Owned here for the app's lifetime; torn down in `AppDeinit`.
+    fizzy.pixelart = try allocator.create(fizzy.PixelArt);
+    fizzy.pixelart.* = fizzy.PixelArt.init(allocator) catch unreachable;
+
     // Second-stage init that needs the editor at its final heap address (e.g.
     // registering the workbench-api service whose `ctx` is this pointer).
     fizzy.editor.postInit() catch unreachable;
@@ -220,6 +227,10 @@ pub fn AppDeinit() void {
     // Persist the current windowed frame while the window still exists. No-op off macOS.
     fizzy.backend.saveWindowGeometry(fizzy.app.window);
     fizzy.editor.deinit() catch unreachable;
+    // Pixel-art teardown (persists the .fizproject, frees tools/palettes/pack jobs).
+    // After the editor so any editor teardown that still reads pixel-art state runs first.
+    fizzy.pixelart.deinit(fizzy.app.allocator);
+    fizzy.app.allocator.destroy(fizzy.pixelart);
     // Tear down the singleton listener after the editor so any callback
     // currently in flight finishes before we free state it touches.
     singleton.deinit();

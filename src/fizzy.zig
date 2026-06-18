@@ -37,10 +37,15 @@ pub const Packer = @import("plugins/pixelart/Packer.zig");
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
 
+/// Pixel-art plugin state (Phase 4 Stage B): the tools/colors/project/clipboard/
+/// pack-job fields formerly hung off the shell `Editor`.
+pub const PixelArt = @import("plugins/pixelart/PixelArt.zig");
+
 // Global pointers
 pub var app: *App = undefined;
 pub var editor: *Editor = undefined;
 pub var packer: *Packer = undefined;
+pub var pixelart: *PixelArt = undefined;
 
 /// Internal types
 /// These types contain additional data to support the editor

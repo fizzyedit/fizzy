@@ -194,8 +194,8 @@ pub fn getIndex(_: *Tools, point: dvui.Point) ?usize {
 /// Only used for handling getting the pixels surrounding the origin
 /// for stroke sizes larger than 1
 pub fn getIndexShapeOffset(self: *Tools, origin: dvui.Point, current_index: usize) ?usize {
-    const shape = fizzy.editor.tools.stroke_shape;
-    const s: i32 = @intCast(fizzy.editor.tools.stroke_size);
+    const shape = fizzy.pixelart.tools.stroke_shape;
+    const s: i32 = @intCast(fizzy.pixelart.tools.stroke_size);
 
     if (s == 1) {
         if (current_index != 0)
@@ -337,7 +337,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
             const atlas_size: dvui.Size = dvui.imageSize(fizzy.editor.atlas.source) catch .{ .w = 0, .h = 0 };
 
             var mode_color = dvui.themeGet().color(.control, .fill_hover);
-            if (fizzy.editor.colors.file_tree_palette) |*palette| {
+            if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
                 mode_color = palette.getDVUIColor(4);
             }
 
@@ -367,7 +367,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
                         2 => "COLOR",
                         else => unreachable,
                     };
-                    const selected = fizzy.editor.tools.selection_mode == mode;
+                    const selected = fizzy.pixelart.tools.selection_mode == mode;
 
                     var mode_col = dvui.box(@src(), .{ .dir = .vertical }, .{
                         .expand = .none,
@@ -438,7 +438,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
                     };
 
                     if (mode_button.clicked()) {
-                        fizzy.editor.tools.selection_mode = mode;
+                        fizzy.pixelart.tools.selection_mode = mode;
                     }
                 }
             }

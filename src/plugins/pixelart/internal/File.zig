@@ -1678,9 +1678,9 @@ pub fn selectPoint(file: *File, point: dvui.Point, select_options: SelectOptions
             }
         }
     } else {
-        var iter = fizzy.editor.tools.stroke.iterator(.{ .kind = .set, .direction = .forward });
+        var iter = fizzy.pixelart.tools.stroke.iterator(.{ .kind = .set, .direction = .forward });
         while (iter.next()) |i| {
-            const offset = fizzy.editor.tools.offset_table[i];
+            const offset = fizzy.pixelart.tools.offset_table[i];
             const new_point: dvui.Point = .{ .x = point.x + offset[0], .y = point.y + offset[1] };
 
             if (select_options.constrain_to_tile) {
@@ -1727,11 +1727,11 @@ pub fn selectLine(file: *File, point1: dvui.Point, point2: dvui.Point, select_op
     const stroke_size: usize = @intCast(fizzy.Editor.Tools.max_brush_size);
 
     const center: dvui.Point = .{ .x = @floor(fizzy.Editor.Tools.max_brush_size_float / 2), .y = @floor(fizzy.Editor.Tools.max_brush_size_float / 2) };
-    var mask = fizzy.editor.tools.stroke;
+    var mask = fizzy.pixelart.tools.stroke;
 
     if (select_options.stroke_size > fizzy.Editor.Tools.min_full_stroke_size) {
         for (0..(stroke_size * stroke_size)) |index| {
-            if (fizzy.editor.tools.getIndexShapeOffset(center.diff(diff), index)) |i| {
+            if (fizzy.pixelart.tools.getIndexShapeOffset(center.diff(diff), index)) |i| {
                 mask.unset(i);
             }
         }
@@ -1742,11 +1742,11 @@ pub fn selectLine(file: *File, point1: dvui.Point, point2: dvui.Point, select_op
             if (select_options.stroke_size < fizzy.Editor.Tools.min_full_stroke_size) {
                 selectPoint(file, point, select_options);
             } else {
-                var stroke = if (point_i == 0) fizzy.editor.tools.stroke else mask;
+                var stroke = if (point_i == 0) fizzy.pixelart.tools.stroke else mask;
 
                 var iter = stroke.iterator(.{ .kind = .set, .direction = .forward });
                 while (iter.next()) |i| {
-                    const offset = fizzy.editor.tools.offset_table[i];
+                    const offset = fizzy.pixelart.tools.offset_table[i];
                     const new_point: dvui.Point = .{ .x = point.x + offset[0], .y = point.y + offset[1] };
 
                     if (select_options.constrain_to_tile) {
@@ -2339,9 +2339,9 @@ pub fn drawPoint(file: *File, point: dvui.Point, layer: DrawLayer, draw_options:
             }
         }
     } else {
-        var iter = fizzy.editor.tools.stroke.iterator(.{ .kind = .set, .direction = .forward });
+        var iter = fizzy.pixelart.tools.stroke.iterator(.{ .kind = .set, .direction = .forward });
         while (iter.next()) |i| {
-            const offset = fizzy.editor.tools.offset_table[i];
+            const offset = fizzy.pixelart.tools.offset_table[i];
             const new_point: dvui.Point = .{ .x = point.x + offset[0], .y = point.y + offset[1] };
 
             if (clip_rect) |cr| {
@@ -2430,11 +2430,11 @@ pub fn drawLine(file: *File, point1: dvui.Point, point2: dvui.Point, layer: Draw
     const stroke_size: usize = @intCast(fizzy.Editor.Tools.max_brush_size);
 
     const center: dvui.Point = .{ .x = @floor(fizzy.Editor.Tools.max_brush_size_float / 2), .y = @floor(fizzy.Editor.Tools.max_brush_size_float / 2) };
-    var mask = fizzy.editor.tools.stroke;
+    var mask = fizzy.pixelart.tools.stroke;
 
     if (draw_options.stroke_size > fizzy.Editor.Tools.min_full_stroke_size) {
         for (0..(stroke_size * stroke_size)) |index| {
-            if (fizzy.editor.tools.getIndexShapeOffset(center.diff(diff), index)) |i| {
+            if (fizzy.pixelart.tools.getIndexShapeOffset(center.diff(diff), index)) |i| {
                 mask.unset(i);
             }
         }
@@ -2457,11 +2457,11 @@ pub fn drawLine(file: *File, point1: dvui.Point, point2: dvui.Point, layer: Draw
                     .clip_rect = draw_options.clip_rect,
                 });
             } else {
-                var stroke = if (point_i == 0) fizzy.editor.tools.stroke else mask;
+                var stroke = if (point_i == 0) fizzy.pixelart.tools.stroke else mask;
 
                 var iter = stroke.iterator(.{ .kind = .set, .direction = .forward });
                 while (iter.next()) |i| {
-                    const offset = fizzy.editor.tools.offset_table[i];
+                    const offset = fizzy.pixelart.tools.offset_table[i];
                     const new_point: dvui.Point = .{ .x = point.x + offset[0], .y = point.y + offset[1] };
 
                     if (clip_rect) |cr| {

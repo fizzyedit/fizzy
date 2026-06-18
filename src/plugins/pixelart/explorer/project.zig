@@ -15,7 +15,7 @@ pub fn draw() !void {
     }
 
     if (fizzy.editor.folder) |folder| {
-        if (fizzy.editor.project) |_| {
+        if (fizzy.pixelart.project) |_| {
             const tl = dvui.textLayout(@src(), .{}, .{
                 .expand = .none,
                 .margin = dvui.Rect.all(0),
@@ -44,7 +44,7 @@ pub fn draw() !void {
             tl.deinit();
 
             if (dvui.button(@src(), "Create Project", .{}, .{ .expand = .horizontal })) {
-                fizzy.editor.project = .{};
+                fizzy.pixelart.project = .{};
             }
             return;
         }
@@ -67,7 +67,7 @@ pub fn draw() !void {
             dvui.log.err("Failed to draw path text entry", .{});
         };
 
-        if (fizzy.editor.project) |project| {
+        if (fizzy.pixelart.project) |project| {
             if (fizzy.packer.atlas) |atlas| {
                 _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = 6 } });
                 if (dvui.button(@src(), "Export Project", .{ .draw_focus = false }, .{
@@ -258,7 +258,7 @@ const PathType = enum {
 };
 
 fn pathTextEntry(path_type: PathType) !void {
-    if (fizzy.editor.project) |*project| {
+    if (fizzy.pixelart.project) |*project| {
         const output_path = switch (path_type) {
             .atlas => &project.packed_atlas_output,
             .image => &project.packed_image_output,
@@ -455,7 +455,7 @@ fn packProjectButton(packing: bool) bool {
 }
 
 pub fn packedAtlasOutputCallback(paths: ?[][:0]const u8) void {
-    if (fizzy.editor.project) |*project| {
+    if (fizzy.pixelart.project) |*project| {
         const output_path = &project.packed_atlas_output;
 
         if (paths) |paths_| {
@@ -467,7 +467,7 @@ pub fn packedAtlasOutputCallback(paths: ?[][:0]const u8) void {
 }
 
 pub fn packedImageOutputCallback(paths: ?[][:0]const u8) void {
-    if (fizzy.editor.project) |*project| {
+    if (fizzy.pixelart.project) |*project| {
         const output_path = &project.packed_image_output;
 
         if (paths) |paths_| {

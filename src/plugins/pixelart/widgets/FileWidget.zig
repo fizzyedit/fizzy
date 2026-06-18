@@ -33,7 +33,7 @@ fn onEmptyTap(_: ?*anyopaque) void {
 /// Off-artboard hold past the hold-menu duration → open the radial tool menu at the press
 /// point. The canvas releases its own capture afterward so the menu buttons can be hovered.
 fn onEmptyHold(_: ?*anyopaque, press_p: dvui.Point.Physical) void {
-    const rm = &fizzy.editor.tools.radial_menu;
+    const rm = &fizzy.pixelart.tools.radial_menu;
     rm.mouse_position = press_p;
     rm.center = press_p;
     rm.visible = true;
@@ -45,7 +45,7 @@ fn onEmptyHold(_: ?*anyopaque, press_p: dvui.Point.Physical) void {
 /// A modified (ctrl/cmd or shift) off-artboard press is the sprite-selection marquee's
 /// while the pointer tool is active — yield it instead of starting a viewport pan.
 fn yieldModifiedEmptyPress(_: ?*anyopaque) bool {
-    return fizzy.editor.tools.current == .pointer;
+    return fizzy.pixelart.tools.current == .pointer;
 }
 
 init_options: InitOptions,
@@ -307,23 +307,23 @@ pub fn sampleColorAtPoint(
         if (off_canvas) {
             // Sampling the empty margin outside the artboard isn't an erase — drop back
             // to the pointer tool so the click reads as "leave drawing mode".
-            if (fizzy.editor.tools.current != .pointer) {
-                fizzy.editor.tools.set(.pointer);
+            if (fizzy.pixelart.tools.current != .pointer) {
+                fizzy.pixelart.tools.set(.pointer);
             }
         } else if (color[3] == 0) {
-            if (fizzy.editor.tools.current != .eraser) {
-                fizzy.editor.tools.set(.eraser);
+            if (fizzy.pixelart.tools.current != .eraser) {
+                fizzy.pixelart.tools.set(.eraser);
             }
         } else {
-            fizzy.editor.colors.primary = color;
-            if (switch (fizzy.editor.tools.current) {
+            fizzy.pixelart.colors.primary = color;
+            if (switch (fizzy.pixelart.tools.current) {
                 .pencil, .bucket => false,
                 else => true,
             })
-                fizzy.editor.tools.set(fizzy.editor.tools.previous_drawing_tool);
+                fizzy.pixelart.tools.set(fizzy.pixelart.tools.previous_drawing_tool);
         }
     } else if (apply_primary and color[3] > 0) {
-        fizzy.editor.colors.primary = color;
+        fizzy.pixelart.colors.primary = color;
     }
 }
 
@@ -349,7 +349,7 @@ pub fn processAnimationSelection(self: *FileWidget) void {
 
         switch (e.evt) {
             .mouse => |me| {
-                if ((me.button.pointer() and me.action == .press and !me.mod.matchBind("ctrl/cmd") and !me.mod.matchBind("shift")) or (fizzy.editor.tools.current != .pointer and self.sample_data_point == null)) {
+                if ((me.button.pointer() and me.action == .press and !me.mod.matchBind("ctrl/cmd") and !me.mod.matchBind("shift")) or (fizzy.pixelart.tools.current != .pointer and self.sample_data_point == null)) {
                     if (file.spriteIndex(self.init_options.file.editor.canvas.dataFromScreenPoint(me.p))) |sprite_index| {
                         var found: bool = false;
                         for (file.animations.items(.frames), 0..) |frames, anim_index| {
@@ -378,7 +378,7 @@ pub fn processAnimationSelection(self: *FileWidget) void {
 }
 
 pub fn processCellReorder(self: *FileWidget) void {
-    if (fizzy.editor.tools.current != .pointer) return;
+    if (fizzy.pixelart.tools.current != .pointer) return;
     if (self.init_options.file.editor.transform != null) return;
     if (self.sample_data_point != null) return;
     if (self.drag_data_point != null) return;
@@ -529,7 +529,7 @@ pub fn processCellReorder(self: *FileWidget) void {
 ///
 /// Supports add/remove, drag selection, etc.
 pub fn processSpriteSelection(self: *FileWidget) void {
-    if (fizzy.editor.tools.current != .pointer) return;
+    if (fizzy.pixelart.tools.current != .pointer) return;
     if (self.init_options.file.editor.transform != null) return;
     if (self.sample_data_point != null) return;
 
@@ -706,7 +706,7 @@ fn bubblePanSharedForGrid(self: *FileWidget) ?BubblePanShared {
 
     const animation_id = self.init_options.file.editor.canvas.scroll_container.data().id;
     const cw = dvui.currentWindow();
-    const tool_not_pointer = fizzy.editor.tools.current != .pointer;
+    const tool_not_pointer = fizzy.pixelart.tools.current != .pointer;
     const mod_shift = cw.modifiers.matchBind("shift");
     const mod_ctrl_cmd = cw.modifiers.matchBind("ctrl/cmd");
     const sample_active = self.sample_data_point != null;
@@ -878,10 +878,10 @@ pub fn drawSpriteBubbles(self: *FileWidget) void {
     const animation_id = self.init_options.file.editor.canvas.scroll_container.data().id;
     const cw = dvui.currentWindow();
     const drag_sprite_selection = dvui.dragName("sprite_selection_drag");
-    const tool_not_pointer = fizzy.editor.tools.current != .pointer;
+    const tool_not_pointer = fizzy.pixelart.tools.current != .pointer;
     const mod_shift = cw.modifiers.matchBind("shift");
     const mod_ctrl_cmd = cw.modifiers.matchBind("ctrl/cmd");
-    const radial_visible = fizzy.editor.tools.radial_menu.visible;
+    const radial_visible = fizzy.pixelart.tools.radial_menu.visible;
     const sample_active = self.sample_data_point != null;
     const canvas_gesturing = self.init_options.file.editor.canvas.trackpadPinching() or
         self.init_options.file.editor.canvas.gestureActive();
@@ -1134,7 +1134,7 @@ fn drawSpriteBubbleForRow(
 
     if (animation_index) |ai| {
         const id = file.animations.get(ai).id;
-        if (fizzy.editor.colors.file_tree_palette) |*palette| {
+        if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
             color = palette.getDVUIColor(@intCast(id));
         }
         if (file.selected_animation_index == ai) {
@@ -1440,7 +1440,7 @@ pub fn drawSpriteBubble(
         var add_rem_message: ?[]const u8 = null;
 
         var border_color = dvui.themeGet().color(.control, .fill_hover);
-        if (fizzy.editor.colors.file_tree_palette) |*palette| {
+        if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
             if (self.init_options.file.selected_animation_index) |index| {
                 border_color = palette.getDVUIColor(@intCast(self.init_options.file.animations.get(index).id));
                 add_rem_message = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s}", .{self.init_options.file.animations.get(index).name}) catch {
@@ -1781,7 +1781,7 @@ pub fn drawSpriteBubble(
 
 /// Draw the highlight colored selection box for each selected sprite.
 pub fn drawSpriteSelection(self: *FileWidget) void {
-    if (fizzy.editor.tools.current != .pointer) return;
+    if (fizzy.pixelart.tools.current != .pointer) return;
     if (self.init_options.file.editor.transform != null) return;
     if (self.sample_data_point != null) return;
 
@@ -1911,8 +1911,8 @@ fn strokePolylineDashedPhysical(
 }
 
 fn drawBoxSelectionMarqueeOutline(self: *FileWidget) void {
-    if (fizzy.editor.tools.current != .selection) return;
-    if (fizzy.editor.tools.selection_mode != .box) return;
+    if (fizzy.pixelart.tools.current != .selection) return;
+    if (fizzy.pixelart.tools.selection_mode != .box) return;
     const start = self.drag_data_point orelse return;
     if (dvui.dragging(dvui.currentWindow().mouse_pt, "stroke_drag") == null) return;
 
@@ -2001,7 +2001,7 @@ fn applySelectionBoxPreview(
 /// This selection is pixel-based, and includes shift/ctrl/cmd modifiers to support add/remove.
 /// The selection uses the same logic as the stroke tool to brush the selection over existing pixels.
 pub fn processSelection(self: *FileWidget) void {
-    if (switch (fizzy.editor.tools.current) {
+    if (switch (fizzy.pixelart.tools.current) {
         .selection,
         => false,
         else => true,
@@ -2024,7 +2024,7 @@ pub fn processSelection(self: *FileWidget) void {
     // Pixel mode: draw the committed selection before handling events (brush preview layers on top).
     // Box mode: skip — the mask is updated on mouse release in the same frame as this paint; drawing
     // here would use stale data until the next frame. Box repaints from the current mask after events.
-    if (fizzy.editor.tools.selection_mode == .pixel or fizzy.editor.tools.selection_mode == .color) {
+    if (fizzy.pixelart.tools.selection_mode == .pixel or fizzy.pixelart.tools.selection_mode == .color) {
         @memset(file.editor.temporary_layer.pixels(), .{ 0, 0, 0, 0 });
         file.editor.temporary_layer.clearMask();
 
@@ -2044,21 +2044,21 @@ pub fn processSelection(self: *FileWidget) void {
         switch (e.evt) {
             .key => |ke| {
                 var update: bool = false;
-                if (fizzy.editor.tools.selection_mode == .pixel) {
+                if (fizzy.pixelart.tools.selection_mode == .pixel) {
                     if (ke.matchBind("increase_stroke_size") and (ke.action == .down or ke.action == .repeat)) {
-                        if (fizzy.editor.tools.stroke_size < fizzy.Editor.Tools.max_brush_size - 1)
-                            fizzy.editor.tools.stroke_size += 1;
+                        if (fizzy.pixelart.tools.stroke_size < fizzy.Editor.Tools.max_brush_size - 1)
+                            fizzy.pixelart.tools.stroke_size += 1;
 
-                        fizzy.editor.tools.setStrokeSize(fizzy.editor.tools.stroke_size);
+                        fizzy.pixelart.tools.setStrokeSize(fizzy.pixelart.tools.stroke_size);
                         e.handle(@src(), self.init_options.file.editor.canvas.scroll_container.data());
                         update = true;
                     }
 
                     if (ke.matchBind("decrease_stroke_size") and (ke.action == .down or ke.action == .repeat)) {
-                        if (fizzy.editor.tools.stroke_size > 1)
-                            fizzy.editor.tools.stroke_size -= 1;
+                        if (fizzy.pixelart.tools.stroke_size > 1)
+                            fizzy.pixelart.tools.stroke_size -= 1;
 
-                        fizzy.editor.tools.setStrokeSize(fizzy.editor.tools.stroke_size);
+                        fizzy.pixelart.tools.setStrokeSize(fizzy.pixelart.tools.stroke_size);
                         e.handle(@src(), self.init_options.file.editor.canvas.scroll_container.data());
                         update = true;
                     }
@@ -2081,7 +2081,7 @@ pub fn processSelection(self: *FileWidget) void {
                             .temporary,
                             .{
                                 .mask_only = true,
-                                .stroke_size = fizzy.editor.tools.stroke_size,
+                                .stroke_size = fizzy.pixelart.tools.stroke_size,
                             },
                         );
 
@@ -2099,8 +2099,8 @@ pub fn processSelection(self: *FileWidget) void {
                 const current_point = self.init_options.file.editor.canvas.dataFromScreenPoint(me.p);
 
                 if (me.action == .position) {
-                    const box_mode = fizzy.editor.tools.selection_mode == .box;
-                    const color_mode = fizzy.editor.tools.selection_mode == .color;
+                    const box_mode = fizzy.pixelart.tools.selection_mode == .box;
+                    const color_mode = fizzy.pixelart.tools.selection_mode == .color;
                     const is_drag = dvui.dragging(me.p, "stroke_drag") != null;
                     const box_drag = box_mode and is_drag and self.drag_data_point != null;
 
@@ -2151,7 +2151,7 @@ pub fn processSelection(self: *FileWidget) void {
                                 .temporary,
                                 .{
                                     .mask_only = true,
-                                    .stroke_size = fizzy.editor.tools.stroke_size,
+                                    .stroke_size = fizzy.pixelart.tools.stroke_size,
                                 },
                             );
 
@@ -2182,7 +2182,7 @@ pub fn processSelection(self: *FileWidget) void {
                     if (!widget_active) continue;
                     e.handle(@src(), self.init_options.file.editor.canvas.scroll_container.data());
 
-                    if (fizzy.editor.tools.selection_mode == .color) {
+                    if (fizzy.pixelart.tools.selection_mode == .color) {
                         // Only clear the mask if we don't have ctrl/cmd pressed
                         if (!me.mod.matchBind("ctrl/cmd") and !me.mod.matchBind("shift"))
                             file.editor.selection_layer.clearMask();
@@ -2200,14 +2200,14 @@ pub fn processSelection(self: *FileWidget) void {
                     if (!me.mod.matchBind("ctrl/cmd") and !me.mod.matchBind("shift"))
                         file.editor.selection_layer.clearMask();
 
-                    if (fizzy.editor.tools.selection_mode == .box) {
+                    if (fizzy.pixelart.tools.selection_mode == .box) {
                         self.drag_data_point = current_point;
                     } else {
                         file.selectPoint(
                             current_point,
                             .{
                                 .value = !me.mod.matchBind("shift"),
-                                .stroke_size = fizzy.editor.tools.stroke_size,
+                                .stroke_size = fizzy.pixelart.tools.stroke_size,
                             },
                         );
 
@@ -2220,23 +2220,23 @@ pub fn processSelection(self: *FileWidget) void {
                         dvui.captureMouse(null, e.num);
                         dvui.dragEnd();
 
-                        if (fizzy.editor.tools.selection_mode == .box) {
+                        if (fizzy.pixelart.tools.selection_mode == .box) {
                             if (self.drag_data_point) |start| {
                                 file.selectRectBetweenPoints(
                                     start,
                                     current_point,
                                     .{
                                         .value = !me.mod.matchBind("shift"),
-                                        .stroke_size = fizzy.editor.tools.stroke_size,
+                                        .stroke_size = fizzy.pixelart.tools.stroke_size,
                                     },
                                 );
                             }
-                        } else if (fizzy.editor.tools.selection_mode != .color) {
+                        } else if (fizzy.pixelart.tools.selection_mode != .color) {
                             file.selectPoint(
                                 current_point,
                                 .{
                                     .value = !me.mod.matchBind("shift"),
-                                    .stroke_size = fizzy.editor.tools.stroke_size,
+                                    .stroke_size = fizzy.pixelart.tools.stroke_size,
                                 },
                             );
                         }
@@ -2268,14 +2268,14 @@ pub fn processSelection(self: *FileWidget) void {
                                 });
                             }
 
-                            if (fizzy.editor.tools.selection_mode == .pixel) {
+                            if (fizzy.pixelart.tools.selection_mode == .pixel) {
                                 if (self.drag_data_point) |previous_point| {
                                     file.selectLine(
                                         previous_point,
                                         current_point,
                                         .{
                                             .value = !me.mod.matchBind("shift"),
-                                            .stroke_size = fizzy.editor.tools.stroke_size,
+                                            .stroke_size = fizzy.pixelart.tools.stroke_size,
                                         },
                                     );
                                 }
@@ -2290,7 +2290,7 @@ pub fn processSelection(self: *FileWidget) void {
         }
     }
 
-    if (fizzy.editor.tools.selection_mode == .box) {
+    if (fizzy.pixelart.tools.selection_mode == .box) {
         const mouse_pt = dvui.currentWindow().mouse_pt;
         const is_drag = dvui.dragging(mouse_pt, "stroke_drag") != null;
         if (!(is_drag and self.drag_data_point != null)) {
@@ -2388,7 +2388,7 @@ fn processStrokeDragSegment(
     {
         if (self.sample_data_point == null or color[3] == 0) {
             clearTempPreview(&file.editor);
-            const temp_color = if (fizzy.editor.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
+            const temp_color = if (fizzy.pixelart.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
             file.drawPoint(
                 current_point,
                 .temporary,
@@ -2409,12 +2409,12 @@ fn processStrokeDragSegment(
 /// Supports using shift to draw a line between two points, and increasing/decreasing stroke size
 pub fn processStroke(self: *FileWidget) void {
     const file = self.init_options.file;
-    const stroke_size = fizzy.editor.tools.stroke_size;
+    const stroke_size = fizzy.pixelart.tools.stroke_size;
     const widget_active = self.active();
 
     if (self.cell_reorder_point != null) return;
 
-    if (switch (fizzy.editor.tools.current) {
+    if (switch (fizzy.pixelart.tools.current) {
         .pencil,
         .eraser,
         => false,
@@ -2423,8 +2423,8 @@ pub fn processStroke(self: *FileWidget) void {
 
     if (self.sample_key_down or self.right_mouse_down) return;
 
-    const color: [4]u8 = switch (fizzy.editor.tools.current) {
-        .pencil => fizzy.editor.colors.primary,
+    const color: [4]u8 = switch (fizzy.pixelart.tools.current) {
+        .pencil => fizzy.pixelart.colors.primary,
         .eraser => [_]u8{ 0, 0, 0, 0 },
         else => unreachable,
     };
@@ -2569,7 +2569,7 @@ pub fn processStroke(self: *FileWidget) void {
                             self.sample_data_point == null)
                         {
                             clearTempPreview(&file.editor);
-                            const temp_color = if (fizzy.editor.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
+                            const temp_color = if (fizzy.pixelart.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
                             file.drawPoint(
                                 current_point,
                                 .temporary,
@@ -2595,10 +2595,10 @@ pub fn processStroke(self: *FileWidget) void {
 /// Supports using ctrl/cmd to replace all existing pixels of the same color with the new color,
 /// or without modifiers to flood fill the layer with the new color.
 pub fn processFill(self: *FileWidget) void {
-    if (fizzy.editor.tools.current != .bucket) return;
+    if (fizzy.pixelart.tools.current != .bucket) return;
     if (self.sample_key_down) return;
     const file = self.init_options.file;
-    const color = fizzy.editor.colors.primary;
+    const color = fizzy.pixelart.colors.primary;
     const widget_active = self.active();
 
     // Skip the cursor-follow temp preview on touch: the finger occludes the pixel and
@@ -2608,7 +2608,7 @@ pub fn processFill(self: *FileWidget) void {
         self.sample_data_point == null)
     {
         clearTempPreview(&file.editor);
-        const temp_color = if (fizzy.editor.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
+        const temp_color = if (fizzy.pixelart.tools.current != .eraser) color else [_]u8{ 255, 255, 255, 255 };
         const fill_preview_pt = self.init_options.file.editor.canvas.dataFromScreenPoint(dvui.currentWindow().mouse_pt);
         file.drawPoint(
             fill_preview_pt,
@@ -3864,7 +3864,7 @@ fn checkerboardVertexColor(
 
 /// Animation color for transparency tint; matches bubble arc palette lookup order (selected animation first, else first containing animation).
 fn spriteAnimationPaletteColor(file: *fizzy.Internal.File, sprite_index: usize) ?dvui.Color {
-    if (fizzy.editor.colors.file_tree_palette) |*palette| {
+    if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
         var animation_index: ?usize = null;
 
         if (file.selected_animation_index) |selected_animation_index| {
@@ -4073,8 +4073,8 @@ pub fn active(self: *FileWidget) bool {
 
 pub fn drawCursor(self: *FileWidget) void {
     if (fizzy.dvui.canvasPointerInputSuppressed()) return;
-    if (fizzy.editor.tools.current == .pointer and self.sample_data_point == null) return;
-    if (fizzy.editor.tools.radial_menu.visible) return;
+    if (fizzy.pixelart.tools.current == .pointer and self.sample_data_point == null) return;
+    if (fizzy.pixelart.tools.radial_menu.visible) return;
     if (self.init_options.file.editor.transform != null) return;
     if (self.init_options.file.editor.canvas.gestureActive()) return;
     if (self.init_options.file.editor.canvas.trackpadPinching()) return;
@@ -4113,13 +4113,13 @@ pub fn drawCursor(self: *FileWidget) void {
 
     const data_point = self.init_options.file.editor.canvas.dataFromScreenPoint(mouse_point);
 
-    const selection_sprite = switch (fizzy.editor.tools.selection_mode) {
+    const selection_sprite = switch (fizzy.pixelart.tools.selection_mode) {
         .box => if (subtract) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_rem_default] else if (add) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_add_default] else fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_default],
         .pixel => if (subtract) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_rem_default] else if (add) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_add_default] else fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_default],
         .color => if (subtract) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_rem_default] else if (add) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_add_default] else fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_default],
     };
 
-    if (switch (fizzy.editor.tools.current) {
+    if (switch (fizzy.pixelart.tools.current) {
         .pencil => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pencil_default],
         .eraser => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.eraser_default],
         .bucket => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.bucket_default],
@@ -4619,7 +4619,7 @@ pub fn drawLayers(self: *FileWidget) void {
     }
 
     // Draw the selection box for the selected sprites
-    if (fizzy.editor.tools.current == .pointer and file.editor.transform == null and self.resize_data_point == null) {
+    if (fizzy.pixelart.tools.current == .pointer and file.editor.transform == null and self.resize_data_point == null) {
         var iter = file.editor.selected_sprites.iterator(.{ .kind = .set, .direction = .forward });
         while (iter.next()) |i| {
             const sprite_rect = file.spriteRect(i);
@@ -5483,7 +5483,7 @@ fn autoPanForResize(self: *FileWidget, mouse_pt: dvui.Point.Physical) void {
 }
 
 pub fn processResize(self: *FileWidget) void {
-    if (fizzy.editor.tools.current != .pointer) return;
+    if (fizzy.pixelart.tools.current != .pointer) return;
     if (self.init_options.file.editor.transform != null) return;
     if (self.sample_data_point != null) return;
 
@@ -5818,7 +5818,7 @@ pub fn processEvents(self: *FileWidget) void {
             self.updateActiveLayerMask();
         }
 
-        if (fizzy.editor.tools.current == .selection) {
+        if (fizzy.pixelart.tools.current == .selection) {
             if (dvui.timerDoneOrNone(self.init_options.file.editor.canvas.scroll_container.data().id)) {
                 self.init_options.file.editor.checkerboard.toggleAll();
 
@@ -5828,7 +5828,7 @@ pub fn processEvents(self: *FileWidget) void {
 
         if (self.init_options.file.editor.transform == null) {
             const tool_t0 = fizzy.perf.toolProcessBegin();
-            switch (fizzy.editor.tools.current) {
+            switch (fizzy.pixelart.tools.current) {
                 .bucket => self.processFill(),
                 .pencil, .eraser => self.processStroke(),
                 .selection => self.processSelection(),

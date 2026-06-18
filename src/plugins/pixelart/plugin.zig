@@ -247,6 +247,10 @@ fn redo(_: *anyopaque, doc: DocHandle) anyerror!void {
 }
 
 pub fn register(host: *sdk.Host) !void {
+    // Adopt the app-owned pixel-art state as this plugin's `state`. Stage B keeps
+    // it reachable through the `fizzy.pixelart` global too; Stage D drops the global
+    // and routes plugin access through `state` + the SDK.
+    plugin.state = fizzy.pixelart;
     try host.registerPlugin(&plugin);
     try host.registerSidebarView(.{
         .id = view_tools,

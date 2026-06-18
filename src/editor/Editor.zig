@@ -77,7 +77,6 @@ infobar: Infobar,
 
 /// The root folder that will be searched for files and a .fizproject file
 folder: ?[]const u8 = null,
-project: ?Project = null,
 /// From `.fizignore` (preferred) or `.gitignore` at the project root; used by the Files explorer.
 ignore: IgnoreRules = .{},
 
@@ -91,12 +90,6 @@ open_files: std.AutoArrayHashMapUnmanaged(u64, fizzy.Internal.File) = .empty,
 /// `path` allocation; the StringHashMap stores key slices that point into job memory.
 loading_jobs: std.StringHashMapUnmanaged(*FileLoadJob) = .empty,
 
-/// Background project-pack jobs. Each `startPackProject` cancels any predecessors and pushes a
-/// new job; only the newest job's result is installed. Cancelled jobs are still kept here
-/// until their worker observes the flag and publishes `done`, at which point
-/// `processPackJob` reaps them. This way rapid Pack-Project clicks (or future per-save
-/// repacks) coalesce: only the most recent request produces a visible atlas update.
-pack_jobs: std.ArrayListUnmanaged(*PackJob) = .empty,
 /// True iff a loading job should set its target file as the active file once it lands.
 /// `setActiveFile`-on-completion respects the most recent open request — multiple in-flight
 /// loads only auto-focus the most recently requested one.
@@ -111,13 +104,8 @@ tab_drag_from_tree_path: ?[]u8 = null,
 /// `drawFiles` data id for `removed_path`; clear after drop on workspace canvas.
 file_tree_data_id: ?dvui.Id = null,
 
-tools: Tools,
-colors: Colors = .{},
-
 grouping_id_counter: u64 = 0,
 file_id_counter: u64 = 0,
-
-sprite_clipboard: ?SpriteClipboard = null,
 
 window_opacity: f32 = 1.0,
 
@@ -174,11 +162,6 @@ settings_save_deadline_ns: i128 = 0,
 /// grace window so `dvui.ContextWidget.updateHold` actually re-runs and gets a chance
 /// to open the hold-to-context menu on touch-only hardware.
 last_touch_press_ns: ?i128 = null,
-
-pub const SpriteClipboard = struct {
-    source: dvui.ImageSource,
-    offset: dvui.Point,
-};
 
 const embedded_fonts: []const dvui.Font.Source = &.{
     .{
@@ -270,7 +253,6 @@ pub fn init(
             .data = try .loadFromBytes(app.allocator, assets.files.@"fizzy.atlas"),
             .source = try fizzy.image.fromImageFileBytes("fizzy.png", assets.files.@"fizzy.png", .ptr),
         },
-        .tools = try .init(app.allocator),
         .themes = .empty,
         .host = .init(app.allocator),
         .workbench = .init(app.allocator),
@@ -450,8 +432,8 @@ pub fn init(
         return err;
     };
 
-    editor.colors.file_tree_palette = fizzy.Internal.Palette.loadFromBytes(app.allocator, "fizzy.hex", assets.files.palettes.@"fizzy.hex") catch null;
-    editor.colors.palette = fizzy.Internal.Palette.loadFromBytes(app.allocator, "fizzy.hex", assets.files.palettes.@"fizzy.hex") catch null;
+    // Pixel-art tools/colors/palettes now init in `PixelArt.init` (App owns the
+    // `fizzy.pixelart` instance, created just after this `Editor.init` returns).
 
     try Keybinds.register();
 
@@ -1236,7 +1218,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
             processHoldOpenRadialMenu(editor);
 
-            if (editor.tools.radial_menu.visible) {
+            if (fizzy.pixelart.tools.radial_menu.visible) {
                 editor.drawRadialMenu() catch {
                     dvui.log.err("Failed to draw radial menu", .{});
                 };
@@ -1436,8 +1418,8 @@ pub fn setWindowStyle(_: *Editor) void {
 
 /// Dismiss rules for the hold-opened radial menu (empty workspace area): stay open after
 /// the opening finger lifts; close on tool button click or a non-drag click outside.
-fn processHoldOpenRadialMenu(editor: *Editor) void {
-    const rm = &editor.tools.radial_menu;
+fn processHoldOpenRadialMenu(_: *Editor) void {
+    const rm = &fizzy.pixelart.tools.radial_menu;
     if (!rm.visible or !rm.opened_by_press) {
         rm.outside_click_press_p = null;
         return;
@@ -1498,7 +1480,7 @@ pub fn drawRadialMenu(editor: *Editor) !void {
 
     // `center` is set when the menu opens (Space down or hold on empty workspace) and stays
     // fixed until close so tool buttons remain hoverable/clickable.
-    const center = fw.data().rectScale().pointFromPhysical(editor.tools.radial_menu.center);
+    const center = fw.data().rectScale().pointFromPhysical(fizzy.pixelart.tools.radial_menu.center);
 
     const tool_count: usize = std.meta.fields(Editor.Tools.Tool).len;
 
@@ -1549,7 +1531,7 @@ pub fn drawRadialMenu(editor: *Editor) !void {
         }
 
         var color = dvui.themeGet().color(.control, .fill_hover);
-        if (fizzy.editor.colors.file_tree_palette) |*palette| {
+        if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
             color = palette.getDVUIColor(i);
         }
 
@@ -1584,8 +1566,8 @@ pub fn drawRadialMenu(editor: *Editor) !void {
             .rect = rect,
             .id_extra = i,
             .corner_radius = dvui.Rect.all(1000.0),
-            .color_fill = if (tool == editor.tools.current) dvui.themeGet().color(.content, .fill) else .transparent,
-            .box_shadow = if (tool == editor.tools.current) .{
+            .color_fill = if (tool == fizzy.pixelart.tools.current) dvui.themeGet().color(.content, .fill) else .transparent,
+            .box_shadow = if (tool == fizzy.pixelart.tools.current) .{
                 .color = .black,
                 .offset = .{ .x = -2.5, .y = 2.5 },
                 .fade = 4.0,
@@ -1597,10 +1579,10 @@ pub fn drawRadialMenu(editor: *Editor) !void {
         });
 
         {
-            editor.tools.drawTooltip(tool, button.data().rectScale().r, i) catch {};
+            fizzy.pixelart.tools.drawTooltip(tool, button.data().rectScale().r, i) catch {};
         }
 
-        const selection_sprite = switch (editor.tools.selection_mode) {
+        const selection_sprite = switch (fizzy.pixelart.tools.selection_mode) {
             .box => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_default],
             .pixel => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_default],
             .color => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_default],
@@ -1646,11 +1628,11 @@ pub fn drawRadialMenu(editor: *Editor) !void {
         angle += step;
 
         if (button.hovered()) {
-            editor.tools.set(tool);
+            fizzy.pixelart.tools.set(tool);
         }
         if (button.clicked()) {
-            editor.tools.set(tool);
-            editor.tools.radial_menu.close();
+            fizzy.pixelart.tools.set(tool);
+            fizzy.pixelart.tools.radial_menu.close();
         }
 
         button.deinit();
@@ -1686,8 +1668,8 @@ pub fn drawRadialMenu(editor: *Editor) !void {
                     .rect = rect,
                 })) {
                     file.editor.playing = !file.editor.playing;
-                    if (editor.tools.radial_menu.opened_by_press) {
-                        editor.tools.radial_menu.close();
+                    if (fizzy.pixelart.tools.radial_menu.opened_by_press) {
+                        fizzy.pixelart.tools.radial_menu.close();
                     }
                 }
             }
@@ -1974,7 +1956,7 @@ pub fn close(app: *App, editor: *Editor) void {
 pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     if (editor.folder) |folder| {
         editor.ignore.deinit(fizzy.app.allocator);
-        if (editor.project) |*project| {
+        if (fizzy.pixelart.project) |*project| {
             project.save() catch {
                 dvui.log.err("Failed to save project", .{});
             };
@@ -1985,7 +1967,7 @@ pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
     editor.host.setActiveSidebarView(@import("../plugins/workbench/plugin.zig").view_files);
 
-    editor.project = Project.load(fizzy.app.allocator) catch null;
+    fizzy.pixelart.project = Project.load(fizzy.app.allocator) catch null;
     editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);
 }
 
@@ -2225,7 +2207,7 @@ pub fn startPackProject(editor: *Editor) !void {
     // predecessor publishes `done` between append and cancel: `processPackJob` walks the list
     // newest-first and would otherwise see an old non-cancelled ready job and install its
     // (stale) atlas. Cancelled predecessors are skipped during install selection.
-    for (editor.pack_jobs.items) |old| {
+    for (fizzy.pixelart.pack_jobs.items) |old| {
         old.cancelled.store(true, .monotonic);
     }
 
@@ -2233,8 +2215,8 @@ pub fn startPackProject(editor: *Editor) !void {
     owned_inputs = null;
     errdefer job.destroy();
 
-    try editor.pack_jobs.append(fizzy.app.allocator, job);
-    errdefer _ = editor.pack_jobs.pop();
+    try fizzy.pixelart.pack_jobs.append(fizzy.app.allocator, job);
+    errdefer _ = fizzy.pixelart.pack_jobs.pop();
 
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Worker runs at end of `tick` (after the explorer draws) so the Pack
@@ -2248,8 +2230,8 @@ pub fn startPackProject(editor: *Editor) !void {
 
 /// True while a pack is queued, running, or finished but not yet installed into
 /// `fizzy.packer.atlas`. Drives the explorer Pack button spinner.
-pub fn isPackingActive(editor: *const Editor) bool {
-    for (editor.pack_jobs.items) |job| {
+pub fn isPackingActive(_: *const Editor) bool {
+    for (fizzy.pixelart.pack_jobs.items) |job| {
         if (job.cancelled.load(.monotonic)) continue;
         if (!job.done.load(.acquire)) return true;
         if (!job.result_consumed) return true;
@@ -2258,8 +2240,8 @@ pub fn isPackingActive(editor: *const Editor) bool {
 }
 
 /// Run queued wasm pack workers after UI has drawn so `isPackingActive` can show feedback.
-fn runWasmPackWorkers(editor: *Editor) void {
-    for (editor.pack_jobs.items) |job| {
+fn runWasmPackWorkers(_: *Editor) void {
+    for (fizzy.pixelart.pack_jobs.items) |job| {
         if (job.cancelled.load(.monotonic)) continue;
         if (job.done.load(.acquire)) continue;
         PackJob.workerMain(job);
@@ -2342,17 +2324,17 @@ fn showPackToast(message: []const u8, canvas_id: ?dvui.Id) void {
 /// rest. Older or cancelled jobs' results — even successful ones — are freed without affecting
 /// `fizzy.packer.atlas` so coalesced re-triggers can't briefly flicker stale atlases.
 pub fn processPackJob(editor: *Editor) void {
-    if (editor.pack_jobs.items.len == 0) return;
+    if (fizzy.pixelart.pack_jobs.items.len == 0) return;
 
     // Identify the newest (last appended) job that finished with a `.ready` result and was
     // not cancelled. Only its result is installed; older successful results are stale and
     // get discarded along with cancelled / failed ones.
     var install_index: ?usize = null;
     {
-        var i = editor.pack_jobs.items.len;
+        var i = fizzy.pixelart.pack_jobs.items.len;
         while (i > 0) {
             i -= 1;
-            const job = editor.pack_jobs.items[i];
+            const job = fizzy.pixelart.pack_jobs.items[i];
             if (!job.done.load(.acquire)) continue;
             if (job.cancelled.load(.monotonic)) continue;
             if (job.currentPhase() == .ready and job.result_atlas != null) {
@@ -2363,7 +2345,7 @@ pub fn processPackJob(editor: *Editor) void {
     }
 
     if (install_index) |idx| {
-        const job = editor.pack_jobs.items[idx];
+        const job = fizzy.pixelart.pack_jobs.items[idx];
         const new_atlas = job.result_atlas.?;
         // Free the previously-installed atlas's allocations so the new one can take its
         // place — matches the synchronous `packAndClear` cleanup ordering.
@@ -2389,10 +2371,10 @@ pub fn processPackJob(editor: *Editor) void {
     } else blk: {
         // Newest finished job had no atlas (empty inputs / no packable frames). Tell the user
         // so the Pack button doesn't look like it silently did nothing.
-        var i = editor.pack_jobs.items.len;
+        var i = fizzy.pixelart.pack_jobs.items.len;
         while (i > 0) {
             i -= 1;
-            const job = editor.pack_jobs.items[i];
+            const job = fizzy.pixelart.pack_jobs.items[i];
             if (!job.done.load(.acquire)) continue;
             if (job.cancelled.load(.monotonic)) continue;
             if (job.currentPhase() == .ready and job.result_atlas == null) {
@@ -2405,9 +2387,9 @@ pub fn processPackJob(editor: *Editor) void {
     // Reap everything that has published `done`. Successful-but-superseded jobs leave their
     // `result_atlas` un-consumed; `destroy()` frees those allocations for us.
     var write: usize = 0;
-    for (editor.pack_jobs.items) |job| {
+    for (fizzy.pixelart.pack_jobs.items) |job| {
         if (!job.done.load(.acquire)) {
-            editor.pack_jobs.items[write] = job;
+            fizzy.pixelart.pack_jobs.items[write] = job;
             write += 1;
             continue;
         }
@@ -2422,7 +2404,7 @@ pub fn processPackJob(editor: *Editor) void {
         }
         job.destroy();
     }
-    editor.pack_jobs.shrinkRetainingCapacity(write);
+    fizzy.pixelart.pack_jobs.shrinkRetainingCapacity(write);
 }
 
 /// Returns the active workspace's canvas content rect (physical pixels) captured from the
@@ -2768,15 +2750,15 @@ pub fn copy(editor: *Editor) !void {
     if (editor.activeFile()) |file| {
         if (file.editor.transform != null) return;
 
-        if (editor.sprite_clipboard) |*clipboard| {
+        if (fizzy.pixelart.sprite_clipboard) |*clipboard| {
             fizzy.app.allocator.free(fizzy.image.bytes(clipboard.source));
-            editor.sprite_clipboard = null;
+            fizzy.pixelart.sprite_clipboard = null;
         }
 
         file.editor.transform_layer.clear();
 
         var selected_layer = file.layers.get(file.selected_layer_index);
-        switch (editor.tools.current) {
+        switch (fizzy.pixelart.tools.current) {
             .selection => {
                 // We are in the selection tool, so we should assume that the user has painted a selection
                 // into the selection layer mask, we need to copy the pixels into the transform layer itself for reducing
@@ -2841,7 +2823,7 @@ pub fn copy(editor: *Editor) !void {
         if (file.editor.transform_layer.reduce(source_rect)) |reduced_data_rect| {
             const sprite_tl = file.spritePoint(reduced_data_rect.topLeft());
 
-            editor.sprite_clipboard = .{
+            fizzy.pixelart.sprite_clipboard = .{
                 .source = fizzy.image.fromPixelsPMA(
                     @ptrCast(file.editor.transform_layer.pixelsFromRect(fizzy.app.allocator, reduced_data_rect)),
                     @intFromFloat(reduced_data_rect.w),
@@ -2864,7 +2846,7 @@ pub fn copy(editor: *Editor) !void {
 }
 
 pub fn paste(editor: *Editor) !void {
-    if (editor.sprite_clipboard) |*clipboard| {
+    if (fizzy.pixelart.sprite_clipboard) |*clipboard| {
         if (editor.activeFile()) |file| {
             const active_layer = file.layers.get(file.selected_layer_index);
 
@@ -2992,7 +2974,7 @@ pub fn transform(editor: *Editor) !void {
 
         var selected_layer = file.layers.get(file.selected_layer_index);
 
-        switch (editor.tools.current) {
+        switch (fizzy.pixelart.tools.current) {
             .selection => {
                 file.editor.transform_layer.clear();
                 // We are in the selection tool, so we should assume that the user has painted a selection
@@ -3425,13 +3407,6 @@ pub fn deinit(editor: *Editor) !void {
         editor.loading_jobs.deinit(fizzy.app.allocator);
     }
 
-    for (editor.pack_jobs.items) |job| {
-        // Detached workers still reference each job. Signal cancellation and leak the structs
-        // on hard quit — better than a use-after-free if a worker hasn't yet observed it.
-        job.cancelled.store(true, .monotonic);
-    }
-    editor.pack_jobs.deinit(fizzy.app.allocator);
-
     if (editor.tab_drag_from_tree_path) |p| {
         fizzy.app.allocator.free(p);
         editor.tab_drag_from_tree_path = null;
@@ -3445,9 +3420,6 @@ pub fn deinit(editor: *Editor) !void {
     editor.quit_save_all_ids.deinit(fizzy.app.allocator);
     editor.quit_saves_in_flight.deinit(fizzy.app.allocator);
     editor.pending_close_after_save.deinit(fizzy.app.allocator);
-
-    if (editor.colors.palette) |*palette| palette.deinit();
-    if (editor.colors.file_tree_palette) |*palette| palette.deinit();
 
     // Recents persist via Io.Dir.cwd writes — no FS on wasm; skip persist.
     if (comptime builtin.target.cpu.arch != .wasm32) {
@@ -3464,18 +3436,6 @@ pub fn deinit(editor: *Editor) !void {
     }
     editor.settings.deinit(fizzy.app.allocator);
 
-    if (editor.project) |*project| {
-        // Wasm: skip project.save() — it walks std.Io.Dir.cwd() which pulls in
-        // posix.AT (unavailable on freestanding). Browser tabs have no
-        // persistent on-disk project anyway.
-        if (comptime builtin.target.cpu.arch != .wasm32) {
-            project.save() catch {
-                dvui.log.err("Failed to save project file", .{});
-            };
-        }
-        project.deinit(fizzy.app.allocator);
-    }
-
     editor.explorer.deinit();
 
     for (editor.workspaces.values()) |*workspace| workspace.deinit();
@@ -3484,7 +3444,8 @@ pub fn deinit(editor: *Editor) !void {
     editor.host.deinit();
     editor.workbench.deinit();
 
-    editor.tools.deinit(fizzy.app.allocator);
+    // Pixel-art state (tools/colors/project/pack jobs) is torn down by
+    // `PixelArt.deinit` in `App.AppDeinit`, after this returns.
 
     editor.ignore.deinit(fizzy.app.allocator);
 

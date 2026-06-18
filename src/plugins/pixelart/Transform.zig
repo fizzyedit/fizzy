@@ -70,7 +70,7 @@ pub fn accept(self: *Transform) void {
         // Paste / transform accept writes new pixels but does not go through `processSelection`; the
         // overlay uses `selection_layer.mask ∩ active_layer.mask`. Keep the mask aligned with the
         // committed transform so copied/pasted (and moved) pixels show the selection outline.
-        if (fizzy.editor.tools.current == .selection) {
+        if (fizzy.pixelart.tools.current == .selection) {
             file.editor.selection_layer.clearMask();
             for (pix, 0..) |temp_pixel, pixel_index| {
                 if (temp_pixel.a != 0) {

@@ -49,7 +49,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     // Export stays non-modal so the user can click the canvas to adjust selections. Switch to
     // the pointer tool on open so marquee/sprite picks work; drawing tools stay off until close.
     if (dvui.firstFrame(id)) {
-        fizzy.editor.tools.set(.pointer);
+        fizzy.pixelart.tools.set(.pointer);
     }
 
     var outer_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
@@ -498,7 +498,7 @@ fn exportCheckerboardVertexColor(
 }
 
 fn exportSpriteAnimationPaletteColor(file: *fizzy.Internal.File, sprite_index: usize) ?dvui.Color {
-    if (fizzy.editor.colors.file_tree_palette) |*palette| {
+    if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
         var animation_index: ?usize = null;
 
         if (file.selected_animation_index) |selected_animation_index| {

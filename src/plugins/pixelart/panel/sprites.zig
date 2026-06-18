@@ -808,7 +808,7 @@ fn sideCardsFlown(playing: bool) bool {
 
 /// Pencil, eraser, and bucket — not pointer (navigate) or selection (marquee).
 fn drawingToolActive() bool {
-    return switch (fizzy.editor.tools.current) {
+    return switch (fizzy.pixelart.tools.current) {
         .pointer, .selection => false,
         .pencil, .eraser, .bucket => true,
     };

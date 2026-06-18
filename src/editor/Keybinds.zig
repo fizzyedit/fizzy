@@ -72,7 +72,7 @@ pub fn tick() !void {
                 }
 
                 if (ke.matchBind("quick_tools")) {
-                    const rm = &fizzy.editor.tools.radial_menu;
+                    const rm = &fizzy.pixelart.tools.radial_menu;
                     switch (ke.action) {
                         .down => {
                             const mp = dvui.currentWindow().mouse_pt;
@@ -91,11 +91,11 @@ pub fn tick() !void {
                 }
 
                 if (ke.matchBind("increase_stroke_size") and (ke.action == .down or ke.action == .repeat)) {
-                    if (fizzy.editor.tools.current != .selection or fizzy.editor.tools.selection_mode == .pixel) {
-                        if (fizzy.editor.tools.stroke_size < fizzy.Editor.Tools.max_brush_size - 1)
-                            fizzy.editor.tools.stroke_size += 1;
+                    if (fizzy.pixelart.tools.current != .selection or fizzy.pixelart.tools.selection_mode == .pixel) {
+                        if (fizzy.pixelart.tools.stroke_size < fizzy.Editor.Tools.max_brush_size - 1)
+                            fizzy.pixelart.tools.stroke_size += 1;
 
-                        fizzy.editor.tools.setStrokeSize(fizzy.editor.tools.stroke_size);
+                        fizzy.pixelart.tools.setStrokeSize(fizzy.pixelart.tools.stroke_size);
                     }
                 }
 
@@ -127,11 +127,11 @@ pub fn tick() !void {
                 }
 
                 if (ke.matchBind("decrease_stroke_size") and (ke.action == .down or ke.action == .repeat)) {
-                    if (fizzy.editor.tools.current != .selection or fizzy.editor.tools.selection_mode == .pixel) {
-                        if (fizzy.editor.tools.stroke_size > 1)
-                            fizzy.editor.tools.stroke_size -= 1;
+                    if (fizzy.pixelart.tools.current != .selection or fizzy.pixelart.tools.selection_mode == .pixel) {
+                        if (fizzy.pixelart.tools.stroke_size > 1)
+                            fizzy.pixelart.tools.stroke_size -= 1;
 
-                        fizzy.editor.tools.setStrokeSize(fizzy.editor.tools.stroke_size);
+                        fizzy.pixelart.tools.setStrokeSize(fizzy.pixelart.tools.stroke_size);
                     }
                 }
 
@@ -212,19 +212,19 @@ pub fn tick() !void {
                 }
 
                 if (ke.matchBind("pencil") and ke.action == .down) {
-                    fizzy.editor.tools.set(.pencil);
+                    fizzy.pixelart.tools.set(.pencil);
                 }
                 if (ke.matchBind("eraser") and ke.action == .down) {
-                    fizzy.editor.tools.set(.eraser);
+                    fizzy.pixelart.tools.set(.eraser);
                 }
                 if (ke.matchBind("bucket") and ke.action == .down) {
-                    fizzy.editor.tools.set(.bucket);
+                    fizzy.pixelart.tools.set(.bucket);
                 }
                 if (ke.matchBind("pointer") and ke.action == .down) {
-                    fizzy.editor.tools.set(.pointer);
+                    fizzy.pixelart.tools.set(.pointer);
                 }
                 if (ke.matchBind("selection") and ke.action == .down) {
-                    fizzy.editor.tools.set(.selection);
+                    fizzy.pixelart.tools.set(.selection);
                 }
             },
             else => {},

@@ -163,14 +163,14 @@ pub fn drawTools() !void {
         const tool: fizzy.Editor.Tools.Tool = @enumFromInt(i);
         const id_extra = i;
 
-        const selected = fizzy.editor.tools.current == tool;
+        const selected = fizzy.pixelart.tools.current == tool;
 
         var color = dvui.themeGet().color(.control, .fill_hover);
-        if (fizzy.editor.colors.file_tree_palette) |*palette| {
+        if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
             color = palette.getDVUIColor(i);
         }
 
-        const selection_sprite = switch (fizzy.editor.tools.selection_mode) {
+        const selection_sprite = switch (fizzy.pixelart.tools.selection_mode) {
             .pixel => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_default],
             .box => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_default],
             .color => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_default],
@@ -204,7 +204,7 @@ pub fn drawTools() !void {
         });
         defer button.deinit();
 
-        fizzy.editor.tools.drawTooltip(tool, button.data().rectScale().r, id_extra) catch {};
+        fizzy.pixelart.tools.drawTooltip(tool, button.data().rectScale().r, id_extra) catch {};
 
         if (button.hovered()) {
             button.data().options.color_border = color;
@@ -240,7 +240,7 @@ pub fn drawTools() !void {
         };
 
         if (button.clicked()) {
-            fizzy.editor.tools.set(tool);
+            fizzy.pixelart.tools.set(tool);
         }
     }
 }
@@ -539,7 +539,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
             const font = if (visible) dvui.Font.theme(.body) else dvui.Font.theme(.body).withStyle(.italic);
 
             var color = dvui.themeGet().color(.control, .fill_hover);
-            if (fizzy.editor.colors.file_tree_palette) |*palette| {
+            if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
                 color = palette.getDVUIColor(@intCast(layer_id));
             }
 
@@ -945,8 +945,8 @@ pub fn drawColors() !void {
     });
     defer hbox.deinit();
 
-    const primary: dvui.Color = .{ .r = fizzy.editor.colors.primary[0], .g = fizzy.editor.colors.primary[1], .b = fizzy.editor.colors.primary[2], .a = fizzy.editor.colors.primary[3] };
-    const secondary: dvui.Color = .{ .r = fizzy.editor.colors.secondary[0], .g = fizzy.editor.colors.secondary[1], .b = fizzy.editor.colors.secondary[2], .a = fizzy.editor.colors.secondary[3] };
+    const primary: dvui.Color = .{ .r = fizzy.pixelart.colors.primary[0], .g = fizzy.pixelart.colors.primary[1], .b = fizzy.pixelart.colors.primary[2], .a = fizzy.pixelart.colors.primary[3] };
+    const secondary: dvui.Color = .{ .r = fizzy.pixelart.colors.secondary[0], .g = fizzy.pixelart.colors.secondary[1], .b = fizzy.pixelart.colors.secondary[2], .a = fizzy.pixelart.colors.secondary[3] };
 
     const button_opts: dvui.Options = .{
         .expand = .both,
@@ -978,7 +978,7 @@ pub fn drawColors() !void {
         primary_button.init(@src(), .{}, button_opts);
         defer primary_button.deinit();
 
-        try drawColorPicker(primary_button.data().rectScale().r, &fizzy.editor.colors.primary, 0);
+        try drawColorPicker(primary_button.data().rectScale().r, &fizzy.pixelart.colors.primary, 0);
 
         primary_button.processEvents();
         primary_button.drawBackground();
@@ -991,7 +991,7 @@ pub fn drawColors() !void {
         secondary_button.init(@src(), .{}, button_opts.override(secondary_overrider));
         defer secondary_button.deinit();
 
-        try drawColorPicker(secondary_button.data().rectScale().r, &fizzy.editor.colors.secondary, 1);
+        try drawColorPicker(secondary_button.data().rectScale().r, &fizzy.pixelart.colors.secondary, 1);
 
         secondary_button.processEvents();
         secondary_button.drawBackground();
@@ -1000,7 +1000,7 @@ pub fn drawColors() !void {
     }
 
     if (clicked) {
-        std.mem.swap([4]u8, &fizzy.editor.colors.primary, &fizzy.editor.colors.secondary);
+        std.mem.swap([4]u8, &fizzy.pixelart.colors.primary, &fizzy.pixelart.colors.secondary);
     }
 }
 
@@ -1103,7 +1103,7 @@ pub fn drawPalettes() !void {
             .gravity_x = 1.0,
         });
 
-        if (fizzy.editor.colors.palette) |*palette| {
+        if (fizzy.pixelart.colors.palette) |*palette| {
             dvui.label(@src(), "{s}", .{palette.name}, .{ .margin = .all(0), .padding = .all(0) });
         } else {
             dvui.label(@src(), "Palette Search", .{}, .{ .margin = .all(0), .padding = .all(0) });
@@ -1133,7 +1133,7 @@ pub fn drawPalettes() !void {
                         const ext = std.fs.path.extension(entry.name);
                         if (std.mem.eql(u8, ext, ".hex")) {
                             if (dropdown.addChoiceLabel(entry.name)) {
-                                fizzy.editor.colors.palette = fizzy.Internal.Palette.loadFromBytes(fizzy.app.allocator, entry.name, data) catch |err| {
+                                fizzy.pixelart.colors.palette = fizzy.Internal.Palette.loadFromBytes(fizzy.app.allocator, entry.name, data) catch |err| {
                                     dvui.log.err("Failed to load palette: {s}", .{@errorName(err)});
                                     return error.FailedToLoadPalette;
                                 };
@@ -1157,7 +1157,7 @@ pub fn drawPalettes() !void {
     }
 
     {
-        if (fizzy.editor.colors.palette) |*palette| {
+        if (fizzy.pixelart.colors.palette) |*palette| {
             var flex_box = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
                 .expand = .horizontal,
                 .max_size_content = .{
@@ -1244,9 +1244,9 @@ pub fn drawPalettes() !void {
                     switch (evt) {
                         .mouse => |mouse_evt| {
                             if (mouse_evt.button.pointer() or mouse_evt.button.touch()) {
-                                @memcpy(&fizzy.editor.colors.primary, &color);
+                                @memcpy(&fizzy.pixelart.colors.primary, &color);
                             } else if (mouse_evt.button == .right) {
-                                @memcpy(&fizzy.editor.colors.secondary, &color);
+                                @memcpy(&fizzy.pixelart.colors.secondary, &color);
                             }
                         },
                         else => {},
@@ -1279,10 +1279,10 @@ fn searchPalettes(dropdown: *dvui.DropdownWidget) !void {
                     if (dropdown.addChoiceLabel(label)) {
                         const abs_path = try std.fs.path.join(dvui.currentWindow().arena(), &.{ fizzy.editor.palette_folder, entry.name });
 
-                        if (fizzy.editor.colors.palette) |*palette|
+                        if (fizzy.pixelart.colors.palette) |*palette|
                             palette.deinit();
 
-                        fizzy.editor.colors.palette = fizzy.Internal.Palette.loadFromFile(fizzy.app.allocator, abs_path) catch |err| {
+                        fizzy.pixelart.colors.palette = fizzy.Internal.Palette.loadFromFile(fizzy.app.allocator, abs_path) catch |err| {
                             dvui.log.err("Failed to load palette: {s}", .{@errorName(err)});
                             return error.FailedToLoadPalette;
                         };
