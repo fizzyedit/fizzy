@@ -1739,6 +1739,7 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
                 }
             }
 
+            workspace.deinit();
             _ = editor.workspaces.orderedRemove(workspace.grouping);
             break;
         }
@@ -3477,6 +3478,9 @@ pub fn deinit(editor: *Editor) !void {
     }
 
     editor.explorer.deinit();
+
+    for (editor.workspaces.values()) |*workspace| workspace.deinit();
+    editor.workspaces.deinit(fizzy.app.allocator);
 
     editor.host.deinit();
     editor.workbench.deinit();

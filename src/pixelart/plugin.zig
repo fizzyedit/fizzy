@@ -7,6 +7,7 @@ const builtin = @import("builtin");
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const sdk = fizzy.sdk;
+const CanvasData = @import("CanvasData.zig");
 
 const DocHandle = sdk.DocHandle;
 const Internal = fizzy.Internal;
@@ -90,18 +91,28 @@ fn closeDocument(_: *anyopaque, doc: DocHandle) void {
 /// current dvui parent). The workbench owns only the container + tab/split frame and sets
 /// `canvas.id` / `workspace_handle` / `center` before routing here; pixel art owns the
 /// entire region: rulers, the canvas hbox, the transform/edit/sample overlays, the editing
-/// widget, and the sample magnifier. The per-workspace ruler/overlay state + draw helpers
-/// still live on `Workspace` for now (recovered via `ofFile`); they relocate here in 3C/2b.
+/// widget, and the sample magnifier. The per-pane ruler/overlay/reorder state + draw helpers
+/// live on the pixel-art-owned `CanvasData` (stashed in the pane's `plugin_view_state`).
 fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
     const file = docFile(doc);
     const ws = fizzy.Editor.Workspace.ofFile(file) orelse return;
+    const chrome = CanvasData.ensure(ws);
     const container = dvui.parentGet().data();
+
+    // Grid (column/row) reorder is driven by the rulers and consumed by `FileWidget`; commit
+    // the pending reorder and clear the per-frame drag indices after the whole document (incl.
+    // the file widget) has drawn. Registered first so they run last, matching the order the
+    // workbench `Workspace.draw` used before this view was relocated here.
+    defer chrome.columns_drag_index = null;
+    defer chrome.rows_drag_index = null;
+    defer chrome.processColumnReorder(file);
+    defer chrome.processRowReorder(file);
 
     fizzy.perf.canvasPaneDrawn();
 
     if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(container.id)) {
         defer fizzy.dvui.drawEdgeShadow(container.rectScale(), .top, .{});
-        ws.drawRuler(.horizontal);
+        chrome.drawRuler(file, .horizontal);
     }
 
     var canvas_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
@@ -109,13 +120,13 @@ fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
 
     if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(container.id)) {
         defer fizzy.dvui.drawEdgeShadow(container.rectScale(), .left, .{});
-        ws.drawRuler(.vertical);
+        chrome.drawRuler(file, .vertical);
     }
 
-    ws.drawTransformDialog(container);
-    ws.drawEditPill(container);
+    chrome.drawTransformDialog(file, container);
+    chrome.drawEditPill(container);
     // Before the file widget so FloatingWidget uses window-scale coords (not canvas zoom).
-    ws.drawSampleButton(container);
+    chrome.drawSampleButton(container);
 
     if (ws.grouping != file.editor.grouping) return;
 

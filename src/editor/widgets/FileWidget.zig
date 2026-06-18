@@ -19,6 +19,7 @@ pub const FileWidget = @This();
 const CanvasWidget = @import("CanvasWidget.zig");
 const CanvasBridge = @import("CanvasBridge.zig");
 const Workspace = fizzy.Editor.Workspace;
+const CanvasData = @import("../../pixelart/CanvasData.zig");
 const icons = @import("icons");
 
 // ---- Canvas hooks: pixel-art reactions to off-artboard viewport gestures. The canvas is
@@ -683,12 +684,23 @@ fn workspace(self: *FileWidget) *Workspace {
     return Workspace.ofFile(self.init_options.file).?;
 }
 
+/// The pixel-art per-pane `CanvasData` for the pane drawing this file, or null if none is
+/// attached yet. Holds the column/row reorder drag state this widget reads while previewing.
+fn canvasData(self: *FileWidget) ?*CanvasData {
+    return CanvasData.fromWorkspace(self.workspace());
+}
+
+/// True while a column or row is mid-drag in this pane's rulers.
+fn columnRowReorderActive(self: *FileWidget) bool {
+    const cd = self.canvasData() orelse return false;
+    return cd.columns_drag_index != null or cd.rows_drag_index != null;
+}
+
 /// Same read-only state as `drawSpriteBubbles` uses for `BubblePanShared` (no animation side effects).
 fn bubblePanSharedForGrid(self: *FileWidget) ?BubblePanShared {
     if (self.init_options.file.editor.transform != null) return null;
     if (self.resize_data_point != null) return null;
-    if (self.workspace().columns_drag_index != null) return null;
-    if (self.workspace().rows_drag_index != null) return null;
+    if (self.columnRowReorderActive()) return null;
     if (self.removed_sprite_indices != null) return null;
     if (!(self.active() or self.hovered())) return null;
 
@@ -4551,7 +4563,7 @@ pub fn drawLayers(self: *FileWidget) void {
         if (self.removed_sprite_indices != null) {
             self.drawCellReorderPreview();
             return;
-        } else if (self.workspace().columns_drag_index != null or self.workspace().rows_drag_index != null) {
+        } else if (self.columnRowReorderActive()) {
             self.drawColumnRowReorderPreview();
             return;
         } else {
@@ -4751,17 +4763,17 @@ fn drawCanvasCheckerboardBackground(self: *FileWidget) void {
 
 fn drawColumnRowReorderPreview(self: *FileWidget) void {
     const file = self.init_options.file;
-    const ws = self.workspace();
-    if (ws.columns_drag_index == null and ws.rows_drag_index == null) return;
+    const cd = self.canvasData() orelse return;
+    if (cd.columns_drag_index == null and cd.rows_drag_index == null) return;
 
-    const axis: ReorderAxis = if (ws.columns_drag_index != null) .columns else .rows;
+    const axis: ReorderAxis = if (cd.columns_drag_index != null) .columns else .rows;
     const target_index = switch (axis) {
-        .columns => ws.columns_target_index,
-        .rows => ws.rows_target_index,
+        .columns => cd.columns_target_index,
+        .rows => cd.rows_target_index,
     };
     const removed_index = switch (axis) {
-        .columns => ws.columns_drag_index,
-        .rows => ws.rows_drag_index,
+        .columns => cd.columns_drag_index,
+        .rows => cd.rows_drag_index,
     } orelse return;
 
     self.drawReorderPreviewForAxis(file, axis, target_index, removed_index);
@@ -5671,7 +5683,7 @@ pub fn processResize(self: *FileWidget) void {
 
 pub fn processEvents(self: *FileWidget) void {
     const transform = self.init_options.file.editor.transform != null;
-    const reorder = self.workspace().columns_drag_index != null or self.workspace().rows_drag_index != null or self.removed_sprite_indices != null;
+    const reorder = self.columnRowReorderActive() or self.removed_sprite_indices != null;
 
     // Try to ensure that selected animation frame index is valid
     if (self.init_options.file.selected_animation_index) |ai| {
