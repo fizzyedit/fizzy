@@ -1009,8 +1009,8 @@ test "drawPoint with to_change records history; undo restores pixels" {
 
     // `drawPoint` reads plugin tools stroke size for stamps smaller than `min_full_stroke_size`;
     // the shim zero-fills the editor, so brush size must be set explicitly.
-    fizzy.editor.pixelart_state.tools.stroke_size = 1;
-    fizzy.editor.pixelart_state.tools.pencil_stroke_size = 1;
+    pixelart.Globals.state.tools.stroke_size = 1;
+    pixelart.Globals.state.tools.pencil_stroke_size = 1;
 
     const idx: usize = 3 * 8 + 4;
 

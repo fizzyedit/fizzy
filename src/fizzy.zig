@@ -30,16 +30,13 @@ pub const Fling = core.Fling;
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
 
-/// Pixel-art plugin module. Shell code should `@import("pixelart")` directly;
-/// this alias exists only for `App.zig` lifecycle wiring (can't name it `pixelart`
-/// — that name is the runtime `*State` global below).
+/// Pixel-art plugin module. Shell code should `@import("pixelart")` directly.
 pub const pixelart_mod = @import("pixelart");
 
 // Global pointers
 pub var app: *App = undefined;
 pub var editor: *Editor = undefined;
 pub var packer: *pixelart_mod.Packer = undefined;
-pub var pixelart: *pixelart_mod.State = undefined;
 
 /// Runtime platform detection (`isMacOS()` etc.) that's accurate on wasm web
 /// builds, where `builtin.os.tag` is always `.freestanding`.

@@ -23,7 +23,7 @@ pub fn request(file_id: u64) void {
 }
 
 fn fileBasename(file_id: u64) []const u8 {
-    const file = fizzy.editor.pixelart_state.docs.fileById(file_id) orelse return "?";
+    const file = fizzy.editor.fileById(file_id) orelse return "?";
     return std.fs.path.basename(file.path);
 }
 
@@ -113,7 +113,7 @@ fn beginSaveAndClose(file: *Internal.File, file_id: u64) !void {
 }
 
 fn onSaveAndClose(file_id: u64) !void {
-    const file = fizzy.editor.pixelart_state.docs.fileById(file_id) orelse return;
+    const file = fizzy.editor.fileById(file_id) orelse return;
     if (!Internal.File.hasRecognizedSaveExtension(file.path)) {
         const idx = fizzy.editor.open_files.getIndex(file_id) orelse return;
         fizzy.editor.setActiveFile(idx);

@@ -262,11 +262,13 @@ app code until the build module is fully wired.
 - **Explorer, UnsavedClose, files, Workspace** — use `fizzy.editor.pixelart_state` or `@import("pixelart")`.
 - **`fizzy.zig` hub trimmed** — removed re-export aliases (`Tools`, `Internal`, `render`, `Packer`, on-disk types, …). Shell/workbench/tests/web probes now `@import("pixelart")` (or `fizzy.pixelart_mod` in integration tests). `fizzy.zig` keeps only `pixelart_mod` alias + lifecycle globals (`app`, `editor`, `packer`, `pixelart`).
 - **`App.zig`** — wires `pixelart.Globals` directly (not `fizzy.pixelart_mod.Globals`).
+- **Copy/paste + pack/project** — moved to `pixelart/src/clipboard.zig` and `pack_project.zig`; plugin vtable hooks (`copy`, `paste`, `startPackProject`, `isPackingActive`, `tickPackJobs`, `runPackWorkers`). Shell `Editor` delegates; `setProjectFolder` uses plugin `persistProjectFolder` / `reloadProjectFolder`.
+- **Transform + doc registry** — `transform_op.zig` + `docs_registry.zig`; vtable hooks (`transform`, `registerOpenDocument`, `documentPtr`, `documentByPath`, `unregisterDocument`). Shell `fileFromDoc` / `insertOpenDoc` / `fileById` route through `doc.owner`; no direct `pixelart_state.docs` access in `Editor.zig`.
+- **`fizzy.pixelart` global removed** — single ownership on `Editor.pixelart_state` + `Globals.state`; `App.zig` alloc/deinit via `fizzy.editor.pixelart_state` only.
 
 **Still remaining:**
-- `fizzy.pixelart` global — fold into `Editor.pixelart_state` + `Globals` only.
-- Shell `Editor` copy/paste/pack/project still touch `editor.pixelart_state` fields directly — route through plugin vtable or EditorAPI.
-- `pixelart.internal.File` in workbench + shell helpers — shrink as doc ownership solidifies.
+- Shell `Editor` still types `*Internal.File` in helpers (`activeFile`, `fileFromDoc`) — shrink as multi-plugin doc types arrive.
+- `pixelart.internal.File` in workbench tab paths — type-agnostic `DocHandle` only at boundary.
 - Integration test shim updated for `pixelart.State` settings; `check-integration` still blocked on native `backend_native` SDL import under dvui-testing (pre-existing).
 
 ---

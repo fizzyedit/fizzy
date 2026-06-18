@@ -5,7 +5,7 @@
 //! project's pack config, the sprite clipboard, and the background pack-job queue.
 //!
 //! Each plugin has a `State.zig` holding its live state. The shell still reaches
-//! this through `fizzy.pixelart` during migration; plugin code uses `Globals.state`.
+//! plugin code uses `Globals.state`.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -109,6 +109,11 @@ pub fn persistProject(st: *State) void {
             dvui.log.err("Failed to save project file", .{});
         };
     }
+}
+
+/// Load `.fizproject` for the shell's currently-open project folder.
+pub fn reloadProjectForFolder(st: *State, allocator: std.mem.Allocator) void {
+    st.project = Project.load(allocator) catch null;
 }
 
 pub fn deinit(st: *State, allocator: std.mem.Allocator) void {

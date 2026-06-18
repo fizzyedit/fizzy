@@ -22,7 +22,6 @@ const update_notify = @import("../backend/update_notify.zig");
 const App = fizzy.App;
 const Editor = @This();
 
-const Project = pixelart.Project;
 pub const Recents = @import("Recents.zig");
 pub const Settings = @import("Settings.zig");
 pub const Dialogs = @import("dialogs/Dialogs.zig");
@@ -37,7 +36,6 @@ pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
 pub const FileLoadJob = @import("../plugins/workbench/src/FileLoadJob.zig");
-const PackJob = pixelart.PackJob;
 
 pub const sdk = fizzy.sdk;
 pub const Host = sdk.Host;
@@ -58,7 +56,7 @@ atlas: fizzy.core.Atlas,
 /// Plugin registry + service locator exposed to plugins
 host: Host,
 
-/// Pixel-art plugin runtime state (owned by App; shell reaches it here instead of `fizzy.pixelart`).
+/// Pixel-art plugin runtime state (owned by App; wired into `Globals.state`).
 pixelart_state: *pixelart.State,
 
 /// File-management workbench (per-branch explorer decorations, …)
@@ -442,8 +440,8 @@ pub fn init(
         return err;
     };
 
-    // Pixel-art tools/colors/palettes now init in `State.init` (App owns the
-    // `fizzy.pixelart` instance, created just after this `Editor.init` returns).
+    // Pixel-art tools/colors/palettes now init in `State.init` (App allocates
+    // `editor.pixelart_state` just after this `Editor.init` returns).
 
     try Keybinds.register();
 
@@ -750,9 +748,17 @@ fn shellIsPackingActive(ctx: *anyopaque) bool {
 }
 
 /// Resolve a shell `DocHandle` to the plugin-owned file. Uses `doc.id`, not `doc.ptr`:
-/// `docs.files` may reallocate and invalidate pointers stored at insert time.
+/// the plugin registry may reallocate and invalidate pointers stored at insert time.
 pub fn fileFromDoc(editor: *Editor, doc: sdk.DocHandle) *Internal.File {
-    return editor.pixelart_state.docs.fileById(doc.id).?;
+    _ = editor;
+    return @ptrCast(@alignCast(doc.owner.documentPtr(doc.id).?));
+}
+
+/// Resolve an open document id to the plugin-owned file, or null when not open.
+pub fn fileById(editor: *Editor, id: u64) ?*Internal.File {
+    const doc = editor.docById(id) orelse return null;
+    const ptr = doc.owner.documentPtr(doc.id) orelse return null;
+    return @ptrCast(@alignCast(ptr));
 }
 
 pub fn docAt(editor: *Editor, index: usize) ?sdk.DocHandle {
@@ -773,8 +779,8 @@ pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
 
 /// Store a loaded/created document in the plugin registry and register its handle.
 pub fn insertOpenDoc(editor: *Editor, file: Internal.File, owner: *sdk.Plugin) !void {
-    try editor.pixelart_state.docs.files.put(fizzy.app.allocator, file.id, file);
-    const ptr = editor.pixelart_state.docs.files.getPtr(file.id).?;
+    var file_mut = file;
+    const ptr = try owner.registerOpenDocument(&file_mut);
     try editor.open_files.put(fizzy.app.allocator, file.id, .{
         // `ptr` is a hint only; consumers must resolve via `fileFromDoc` / `doc.id`.
         .ptr = ptr,
@@ -1541,7 +1547,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     };
 
     if (comptime builtin.target.cpu.arch == .wasm32) {
-        runWasmPackWorkers(editor);
+        pixelart.plugin.pluginPtr().runPackWorkers();
     }
 
     _ = editor.arena.reset(.retain_capacity);
@@ -1858,7 +1864,7 @@ fn tickPendingSaveCloses(editor: *Editor) void {
     var i: usize = 0;
     while (i < editor.pending_close_after_save.count()) {
         const id = editor.pending_close_after_save.keys()[i];
-        if (editor.pixelart_state.docs.fileById(id)) |f| {
+        if (editor.fileById(id)) |f| {
             if (f.isSaving()) {
                 i += 1;
                 continue;
@@ -1888,7 +1894,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
     // Pass 1: kick off any queued saves we haven't started yet.
     while (editor.quit_save_all_ids.items.len > 0) {
         const id = editor.quit_save_all_ids.items[0];
-        const file_ptr = editor.pixelart_state.docs.fileById(id) orelse {
+        const file_ptr = editor.fileById(id) orelse {
             _ = editor.quit_save_all_ids.swapRemove(0);
             continue;
         };
@@ -1937,7 +1943,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
         var i: usize = 0;
         while (i < editor.quit_saves_in_flight.count()) {
             const id = editor.quit_saves_in_flight.keys()[i];
-            if (editor.pixelart_state.docs.fileById(id)) |f| {
+            if (editor.fileById(id)) |f| {
                 if (f.isSaving()) {
                     i += 1;
                     continue;
@@ -1981,18 +1987,14 @@ pub fn close(app: *App, editor: *Editor) void {
 pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     if (editor.folder) |folder| {
         editor.ignore.deinit(fizzy.app.allocator);
-        if (editor.pixelart_state.project) |*project| {
-            project.save() catch {
-                dvui.log.err("Failed to save project", .{});
-            };
-        }
+        pixelart.plugin.pluginPtr().persistProjectFolder();
         fizzy.app.allocator.free(folder);
     }
     editor.folder = try fizzy.app.allocator.dupe(u8, path);
     try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
     editor.host.setActiveSidebarView(@import("../plugins/workbench/src/plugin.zig").view_files);
 
-    editor.pixelart_state.project = Project.load(fizzy.app.allocator) catch null;
+    pixelart.plugin.pluginPtr().reloadProjectFolder(fizzy.app.allocator);
     editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);
 }
 
@@ -2190,264 +2192,24 @@ pub fn processLoadingJobs(editor: *Editor) void {
     }
 }
 
-/// Kick off an async project-pack. Walks the project directory once on the main thread to
-/// gather inputs: open files contribute a thread-isolated snapshot (so unsaved edits make it
-/// into the pack); unopened files just contribute their paths and the worker reads them. Once
-/// inputs are gathered the heavy work — pixel reduction, rect packing, atlas blit — runs on a
-/// worker thread.
-///
-/// Rapid re-triggers (e.g. save-all-then-repack, or rapid button clicks) coalesce: any
-/// in-flight jobs are cancelled before the new one spawns. The cancelled workers continue
-/// running long enough to observe the flag and exit cleanly; their results are discarded by
-/// `processPackJob`. Only the most recently-started job's result is installed.
+/// Kick off an async project-pack via the pixel-art plugin vtable.
 pub fn startPackProject(editor: *Editor) !void {
-    var inputs: std.ArrayListUnmanaged(PackJob.PackInput) = .empty;
-    errdefer {
-        for (inputs.items) |*input| input.deinit(fizzy.app.allocator);
-        inputs.deinit(fizzy.app.allocator);
-    }
-
-    if (comptime builtin.target.cpu.arch == .wasm32) {
-        // Web: no project folder to walk — pack every open document (fiz, pixi, png,
-        // jpg, in-memory untitled, etc.). Saved-path tracking is not available in the
-        // browser, so the open tab set is the only source of truth.
-        try appendOpenPackInputs(editor, &inputs);
-    } else {
-        const root = editor.folder orelse return;
-        // Snapshot open files first so unsaved edits are included and gather can skip
-        // duplicates when it walks the project tree.
-        try appendOpenPackInputs(editor, &inputs);
-        try gatherPackInputs(editor, &inputs, root);
-    }
-
-    if (inputs.items.len == 0) {
-        const msg = if (comptime builtin.target.cpu.arch == .wasm32)
-            "No open files to pack"
-        else
-            "No .fiz or .pixi files to pack";
-        showPackToast(msg, null);
-        return;
-    }
-
-    // `owned_inputs` is nulled out once ownership transfers into the job, so the errdefer
-    // below is a no-op on the success path and avoids the double-free of letting both this
-    // and `job.destroy()` reclaim the same allocations.
-    var owned_inputs: ?[]PackJob.PackInput = try inputs.toOwnedSlice(fizzy.app.allocator);
-    errdefer if (owned_inputs) |o| {
-        for (o) |*input| input.deinit(fizzy.app.allocator);
-        fizzy.app.allocator.free(o);
-    };
-
-    // Cancel every predecessor BEFORE appending the new job. This avoids a race where a
-    // predecessor publishes `done` between append and cancel: `processPackJob` walks the list
-    // newest-first and would otherwise see an old non-cancelled ready job and install its
-    // (stale) atlas. Cancelled predecessors are skipped during install selection.
-    for (editor.pixelart_state.pack_jobs.items) |old| {
-        old.cancelled.store(true, .monotonic);
-    }
-
-    const job = try PackJob.create(fizzy.app.allocator, owned_inputs.?);
-    owned_inputs = null;
-    errdefer job.destroy();
-
-    try editor.pixelart_state.pack_jobs.append(fizzy.app.allocator, job);
-    errdefer _ = editor.pixelart_state.pack_jobs.pop();
-
-    if (comptime builtin.target.cpu.arch == .wasm32) {
-        // Worker runs at end of `tick` (after the explorer draws) so the Pack
-        // button can show a spinner for at least one frame before work starts.
-        dvui.refresh(dvui.currentWindow(), @src(), null);
-    } else {
-        const thread = try std.Thread.spawn(.{}, PackJob.workerMain, .{job});
-        thread.detach();
-    }
+    _ = editor;
+    try pixelart.plugin.pluginPtr().startPackProject();
 }
 
-/// True while a pack is queued, running, or finished but not yet installed into
-/// `fizzy.packer.atlas`. Drives the explorer Pack button spinner.
+/// True while a pack is queued, running, or finished but not yet installed.
 pub fn isPackingActive(editor: *const Editor) bool {
-    for (editor.pixelart_state.pack_jobs.items) |job| {
-        if (job.cancelled.load(.monotonic)) continue;
-        if (!job.done.load(.acquire)) return true;
-        if (!job.result_consumed) return true;
-    }
-    return false;
+    _ = editor;
+    return pixelart.plugin.pluginPtr().isPackingActive();
 }
 
-/// Run queued wasm pack workers after UI has drawn so `isPackingActive` can show feedback.
-fn runWasmPackWorkers(editor: *Editor) void {
-    for (editor.pixelart_state.pack_jobs.items) |job| {
-        if (job.cancelled.load(.monotonic)) continue;
-        if (job.done.load(.acquire)) continue;
-        PackJob.workerMain(job);
-        return;
-    }
-}
-
-fn appendOpenPackInputs(editor: *Editor, inputs: *std.ArrayListUnmanaged(PackJob.PackInput)) !void {
-    for (editor.open_files.values()) |doc| {
-        const open_file = editor.fileFromDoc(doc);
-        const snapshot = try PackJob.PackFile.fromOpenFile(fizzy.app.allocator, open_file);
-        try inputs.append(fizzy.app.allocator, .{ .open = snapshot });
-    }
-}
-
-fn gatherPackInputs(
-    editor: *Editor,
-    inputs: *std.ArrayListUnmanaged(PackJob.PackInput),
-    directory: []const u8,
-) !void {
-    const io = dvui.io;
-    var dir = try std.Io.Dir.cwd().openDir(io, directory, .{ .access_sub_paths = true, .iterate = true });
-    defer dir.close(io);
-
-    var iter = dir.iterate();
-    while (try iter.next(io)) |entry| {
-        if (entry.kind == .file) {
-            const ext = std.fs.path.extension(entry.name);
-            if (!Internal.File.isFizzyExtension(ext)) continue;
-
-            const abs_path = try std.fs.path.join(fizzy.app.allocator, &.{ directory, entry.name });
-            defer fizzy.app.allocator.free(abs_path);
-
-            // Open files were snapshotted in `appendOpenPackInputs` (including unsaved edits).
-            if (findOpenFileForPackPath(editor, abs_path) != null) continue;
-
-            const owned_path = try fizzy.app.allocator.dupe(u8, abs_path);
-            try inputs.append(fizzy.app.allocator, .{ .path = owned_path });
-        } else if (entry.kind == .directory) {
-            const abs_path = try std.fs.path.join(fizzy.app.allocator, &.{ directory, entry.name });
-            defer fizzy.app.allocator.free(abs_path);
-            try gatherPackInputs(editor, inputs, abs_path);
-        }
-    }
-}
-
-/// Match a project-tree path to an open file (`file.path` may differ in normalization from `join` vs `joinZ`).
-fn findOpenFileForPackPath(editor: *Editor, path: []const u8) ?*Internal.File {
-    if (editor.getFileFromPath(path)) |file| return file;
-
-    const basename = std.fs.path.basename(path);
-    for (editor.open_files.values()) |doc| {
-        const file = editor.fileFromDoc(doc);
-        if (!std.mem.eql(u8, std.fs.path.basename(file.path), basename)) continue;
-        if (std.mem.eql(u8, file.path, path)) return file;
-        if (editor.folder) |folder| {
-            const joined = std.fs.path.join(fizzy.app.allocator, &.{ folder, basename }) catch continue;
-            defer fizzy.app.allocator.free(joined);
-            if (std.mem.eql(u8, file.path, joined)) return file;
-        }
-    }
-    return null;
-}
-
-fn showPackToast(message: []const u8, canvas_id: ?dvui.Id) void {
-    const anchor = canvas_id orelse blk: {
-        if (fizzy.editor.activeWorkspaceCanvasRectPhysical()) |r| {
-            if (fizzy.editor.activeFile()) |file| break :blk file.editor.canvas.id;
-            _ = r;
-        }
-        break :blk dvui.currentWindow().data().id;
-    };
-    const id_mutex = dvui.toastAdd(dvui.currentWindow(), @src(), 0, anchor, fizzy.dvui.toastDisplay, 2_500_000);
-    const id = id_mutex.id;
-    const msg_copy = std.fmt.allocPrint(dvui.currentWindow().arena(), "{s}", .{message}) catch message;
-    dvui.dataSetSlice(dvui.currentWindow(), id, "_message", msg_copy);
-    id_mutex.mutex.unlock(dvui.io);
-}
-
-/// Per-frame sweep called from `tick`. Reaps any pack jobs whose worker has published `done`,
-/// installs the result of the newest non-cancelled job (and only that one), and discards the
-/// rest. Older or cancelled jobs' results — even successful ones — are freed without affecting
-/// `fizzy.packer.atlas` so coalesced re-triggers can't briefly flicker stale atlases.
+/// Per-frame pack-job sweep (delegates to the pixel-art plugin).
 pub fn processPackJob(editor: *Editor) void {
-    if (editor.pixelart_state.pack_jobs.items.len == 0) return;
-
-    // Identify the newest (last appended) job that finished with a `.ready` result and was
-    // not cancelled. Only its result is installed; older successful results are stale and
-    // get discarded along with cancelled / failed ones.
-    var install_index: ?usize = null;
-    {
-        var i = editor.pixelart_state.pack_jobs.items.len;
-        while (i > 0) {
-            i -= 1;
-            const job = editor.pixelart_state.pack_jobs.items[i];
-            if (!job.done.load(.acquire)) continue;
-            if (job.cancelled.load(.monotonic)) continue;
-            if (job.currentPhase() == .ready and job.result_atlas != null) {
-                install_index = i;
-                break;
-            }
-        }
-    }
-
-    if (install_index) |idx| {
-        const job = editor.pixelart_state.pack_jobs.items[idx];
-        const new_atlas = job.result_atlas.?;
-        // Free the previously-installed atlas's allocations so the new one can take its
-        // place — matches the synchronous `packAndClear` cleanup ordering.
-        if (fizzy.packer.atlas) |*current_atlas| {
-            current_atlas.deinitCheckerboardTile();
-            for (current_atlas.data.animations) |*anim| fizzy.app.allocator.free(anim.name);
-            fizzy.app.allocator.free(current_atlas.data.sprites);
-            fizzy.app.allocator.free(current_atlas.data.animations);
-            fizzy.app.allocator.free(fizzy.image.bytes(current_atlas.source));
-
-            current_atlas.source = new_atlas.source;
-            current_atlas.data = new_atlas.data;
-            current_atlas.initCheckerboardTile();
-        } else {
-            fizzy.packer.atlas = new_atlas;
-            fizzy.packer.atlas.?.initCheckerboardTile();
-        }
-        fizzy.packer.last_packed_at_ns = fizzy.perf.nanoTimestamp();
-        job.result_consumed = true;
-        editor.host.setActiveSidebarView(pixelart.plugin.view_project);
-        const toast_canvas: ?dvui.Id = if (editor.activeFile()) |file| file.editor.canvas.id else null;
-        showPackToast("Project packed", toast_canvas);
-    } else blk: {
-        // Newest finished job had no atlas (empty inputs / no packable frames). Tell the user
-        // so the Pack button doesn't look like it silently did nothing.
-        var i = editor.pixelart_state.pack_jobs.items.len;
-        while (i > 0) {
-            i -= 1;
-            const job = editor.pixelart_state.pack_jobs.items[i];
-            if (!job.done.load(.acquire)) continue;
-            if (job.cancelled.load(.monotonic)) continue;
-            if (job.currentPhase() == .ready and job.result_atlas == null) {
-                showPackToast("Nothing to pack in the selected files", null);
-                break :blk;
-            }
-        }
-    }
-
-    // Reap everything that has published `done`. Successful-but-superseded jobs leave their
-    // `result_atlas` un-consumed; `destroy()` frees those allocations for us.
-    var write: usize = 0;
-    for (editor.pixelart_state.pack_jobs.items) |job| {
-        if (!job.done.load(.acquire)) {
-            editor.pixelart_state.pack_jobs.items[write] = job;
-            write += 1;
-            continue;
-        }
-        const phase = job.currentPhase();
-        switch (phase) {
-            .ready, .cancelled => {},
-            .failed => {
-                dvui.log.err("Pack project failed: {any}", .{job.err});
-                showPackToast("Pack failed", null);
-            },
-            else => dvui.log.err("Pack job finished in unexpected phase {s}", .{@tagName(phase)}),
-        }
-        job.destroy();
-    }
-    editor.pixelart_state.pack_jobs.shrinkRetainingCapacity(write);
+    _ = editor;
+    pixelart.plugin.pluginPtr().tickPackJobs();
 }
 
-/// Returns the active workspace's canvas content rect (physical pixels) captured from the
-/// previous frame's draw, if available. Falls back to `null` before the first workspace draw.
-/// Used by `drawLoadingOverlay` / `drawSaveToasts` to center their cards over the canvas area
-/// the user is currently looking at, instead of the raw OS window rect.
 pub fn activeWorkspaceCanvasRectPhysical(editor: *Editor) ?dvui.Rect.Physical {
     const workspace = editor.workspaces.getPtr(editor.open_workspace_grouping) orelse return null;
     return workspace.canvas_rect_physical;
@@ -2652,7 +2414,7 @@ pub fn newFile(editor: *Editor, path: []const u8, options: Internal.File.InitOpt
     editor.setActiveFile(editor.open_files.count() - 1);
     editor.pending_composite_warmup = true;
 
-    return editor.pixelart_state.docs.fileById(file.id) orelse return error.FailedToCreateFile;
+    return editor.fileById(file.id) orelse return error.FailedToCreateFile;
 }
 
 /// Heap-owned path like `untitled-1`, unique among open-document basenames.
@@ -2741,7 +2503,12 @@ pub fn fileAt(editor: *Editor, index: usize) ?*Internal.File {
 }
 
 pub fn getFileFromPath(editor: *Editor, path: []const u8) ?*Internal.File {
-    return editor.pixelart_state.docs.fileFromPath(path);
+    for (editor.open_files.values()) |doc| {
+        if (doc.owner.documentByPath(path)) |ptr| {
+            return @ptrCast(@alignCast(ptr));
+        }
+    }
+    return null;
 }
 
 pub fn forceCloseFile(editor: *Editor, index: usize) !void {
@@ -2775,216 +2542,13 @@ pub fn cancel(editor: *Editor) !void {
 }
 
 pub fn copy(editor: *Editor) !void {
-    if (editor.activeFile()) |file| {
-        if (file.editor.transform != null) return;
-
-        if (editor.pixelart_state.sprite_clipboard) |*clipboard| {
-            fizzy.app.allocator.free(fizzy.image.bytes(clipboard.source));
-            editor.pixelart_state.sprite_clipboard = null;
-        }
-
-        file.editor.transform_layer.clear();
-
-        var selected_layer = file.layers.get(file.selected_layer_index);
-        switch (editor.pixelart_state.tools.current) {
-            .selection => {
-                // We are in the selection tool, so we should assume that the user has painted a selection
-                // into the selection layer mask, we need to copy the pixels into the transform layer itself for reducing
-                var pixel_iterator = file.editor.selection_layer.mask.iterator(.{ .kind = .set, .direction = .forward });
-                while (pixel_iterator.next()) |pixel_index| {
-                    @memcpy(&file.editor.transform_layer.pixels()[pixel_index], &selected_layer.pixels()[pixel_index]);
-                    file.editor.transform_layer.mask.set(pixel_index);
-                }
-            },
-            else => {
-                if (file.editor.selected_sprites.count() > 0) {
-                    var sprite_iterator = file.editor.selected_sprites.iterator(.{ .kind = .set, .direction = .forward });
-                    while (sprite_iterator.next()) |index| {
-                        const source_rect = file.spriteRect(index);
-                        if (selected_layer.pixelsFromRect(
-                            dvui.currentWindow().arena(),
-                            source_rect,
-                        )) |source_pixels| {
-                            file.editor.transform_layer.blit(
-                                source_pixels,
-                                source_rect,
-                                .{ .transparent = true, .mask = true },
-                            );
-                        }
-                    }
-                } else {
-                    if (file.editor.canvas.hovered) {
-                        if (file.spriteIndex(file.editor.canvas.dataFromScreenPoint(dvui.currentWindow().mouse_pt))) |sprite_index| {
-                            const rect = file.spriteRect(sprite_index);
-                            if (selected_layer.pixelsFromRect(
-                                dvui.currentWindow().arena(),
-                                rect,
-                            )) |source_pixels| {
-                                file.editor.transform_layer.blit(
-                                    source_pixels,
-                                    rect,
-                                    .{ .transparent = true, .mask = true },
-                                );
-                            }
-                        }
-                    } else if (file.selected_animation_index) |animation_index| {
-                        const animation = file.animations.get(animation_index);
-                        if (file.selected_animation_frame_index < animation.frames.len) {
-                            const rect = file.spriteRect(animation.frames[file.selected_animation_frame_index].sprite_index);
-                            if (selected_layer.pixelsFromRect(
-                                dvui.currentWindow().arena(),
-                                rect,
-                            )) |source_pixels| {
-                                file.editor.transform_layer.blit(
-                                    source_pixels,
-                                    rect,
-                                    .{ .transparent = true, .mask = true },
-                                );
-                            }
-                        }
-                    }
-                }
-            },
-        }
-
-        const source_rect = dvui.Rect.fromSize(file.editor.transform_layer.size());
-        if (file.editor.transform_layer.reduce(source_rect)) |reduced_data_rect| {
-            const sprite_tl = file.spritePoint(reduced_data_rect.topLeft());
-
-            editor.pixelart_state.sprite_clipboard = .{
-                .source = fizzy.image.fromPixelsPMA(
-                    @ptrCast(file.editor.transform_layer.pixelsFromRect(fizzy.app.allocator, reduced_data_rect)),
-                    @intFromFloat(reduced_data_rect.w),
-                    @intFromFloat(reduced_data_rect.h),
-                    .ptr,
-                ) catch return error.MemoryAllocationFailed,
-                .offset = reduced_data_rect.topLeft().diff(sprite_tl),
-            };
-
-            // Show a toast so its evident a copy action was completed
-            {
-                const id_mutex = dvui.toastAdd(dvui.currentWindow(), @src(), 0, file.editor.canvas.id, fizzy.dvui.toastDisplay, 2_000_000);
-                const id = id_mutex.id;
-                const message = std.fmt.allocPrint(dvui.currentWindow().arena(), "Copied selection", .{}) catch "Copied selection.";
-                dvui.dataSetSlice(dvui.currentWindow(), id, "_message", message);
-                id_mutex.mutex.unlock(dvui.io);
-            }
-        }
-    }
+    _ = editor;
+    try pixelart.plugin.pluginPtr().copy();
 }
 
 pub fn paste(editor: *Editor) !void {
-    if (editor.pixelart_state.sprite_clipboard) |*clipboard| {
-        if (editor.activeFile()) |file| {
-            const active_layer = file.layers.get(file.selected_layer_index);
-
-            var dst_rect: dvui.Rect = .fromSize(fizzy.image.size(clipboard.source));
-
-            var sprite_iterator = file.editor.selected_sprites.iterator(.{ .kind = .set, .direction = .forward });
-            while (sprite_iterator.next()) |sprite_index| {
-                const sprite_rect = file.spriteRect(sprite_index);
-
-                dst_rect.x = sprite_rect.x + clipboard.offset.x;
-                dst_rect.y = sprite_rect.y + clipboard.offset.y;
-
-                file.editor.transform = .{
-                    .target_texture = dvui.textureCreateTarget(.{ .width = file.width(), .height = file.height(), .format = pixelart.render.compositeTargetPixelFormat(), .interpolation = .nearest }) catch {
-                        dvui.log.err("Failed to create target texture", .{});
-                        return;
-                    },
-                    .file_id = file.id,
-                    .layer_id = active_layer.id,
-                    .data_points = .{
-                        dst_rect.topLeft(),
-                        dst_rect.topRight(),
-                        dst_rect.bottomRight(),
-                        dst_rect.bottomLeft(),
-                        dst_rect.center(),
-                        dst_rect.center(),
-                    },
-                    .source = clipboard.source,
-                };
-
-                for (file.editor.transform.?.data_points[0..4]) |*point| {
-                    const d = point.diff(file.editor.transform.?.point(.pivot).*);
-                    if (d.length() > file.editor.transform.?.radius) {
-                        file.editor.transform.?.radius = d.length() + 4;
-                    }
-                }
-
-                return;
-            }
-
-            dst_rect.x = clipboard.offset.x;
-            dst_rect.y = clipboard.offset.y;
-
-            if (file.spriteIndex(file.editor.canvas.dataFromScreenPoint(dvui.currentWindow().mouse_pt))) |sprite_index| {
-                const rect = file.spriteRect(sprite_index);
-                dst_rect.x = rect.x + clipboard.offset.x;
-                dst_rect.y = rect.y + clipboard.offset.y;
-            } else if (file.selected_animation_index) |animation_index| {
-                const animation = file.animations.get(animation_index);
-
-                if (file.selected_animation_frame_index < animation.frames.len) {
-                    const rect = file.spriteRect(animation.frames[file.selected_animation_frame_index].sprite_index);
-                    dst_rect.x = rect.x + clipboard.offset.x;
-                    dst_rect.y = rect.y + clipboard.offset.y;
-
-                    file.editor.transform = .{
-                        .target_texture = dvui.textureCreateTarget(.{ .width = file.width(), .height = file.height(), .format = pixelart.render.compositeTargetPixelFormat(), .interpolation = .nearest }) catch {
-                            dvui.log.err("Failed to create target texture", .{});
-                            return;
-                        },
-                        .file_id = file.id,
-                        .layer_id = active_layer.id,
-                        .data_points = .{
-                            dst_rect.topLeft(),
-                            dst_rect.topRight(),
-                            dst_rect.bottomRight(),
-                            dst_rect.bottomLeft(),
-                            dst_rect.center(),
-                            dst_rect.center(),
-                        },
-                        .source = clipboard.source,
-                    };
-
-                    for (file.editor.transform.?.data_points[0..4]) |*point| {
-                        const d = point.diff(file.editor.transform.?.point(.pivot).*);
-                        if (d.length() > file.editor.transform.?.radius) {
-                            file.editor.transform.?.radius = d.length() + 4;
-                        }
-                    }
-
-                    return;
-                }
-            }
-
-            file.editor.transform = .{
-                .target_texture = dvui.textureCreateTarget(.{ .width = file.width(), .height = file.height(), .format = pixelart.render.compositeTargetPixelFormat(), .interpolation = .nearest }) catch {
-                    dvui.log.err("Failed to create target texture", .{});
-                    return;
-                },
-                .file_id = file.id,
-                .layer_id = active_layer.id,
-                .data_points = .{
-                    dst_rect.topLeft(),
-                    dst_rect.topRight(),
-                    dst_rect.bottomRight(),
-                    dst_rect.bottomLeft(),
-                    dst_rect.center(),
-                    dst_rect.center(),
-                },
-                .source = clipboard.source,
-            };
-
-            for (file.editor.transform.?.data_points[0..4]) |*point| {
-                const d = point.diff(file.editor.transform.?.point(.pivot).*);
-                if (d.length() > file.editor.transform.?.radius) {
-                    file.editor.transform.?.radius = d.length() + 4;
-                }
-            }
-        }
-    }
+    _ = editor;
+    try pixelart.plugin.pluginPtr().paste();
 }
 
 pub fn deleteSelectedContents(editor: *Editor) void {
@@ -2995,122 +2559,8 @@ pub fn deleteSelectedContents(editor: *Editor) void {
 
 /// Begins a transform operation on the currently active file.
 pub fn transform(editor: *Editor) !void {
-    if (editor.activeFile()) |file| {
-        if (file.editor.transform) |*t| {
-            t.cancel();
-        }
-
-        var selected_layer = file.layers.get(file.selected_layer_index);
-
-        switch (editor.pixelart_state.tools.current) {
-            .selection => {
-                file.editor.transform_layer.clear();
-                // We are in the selection tool, so we should assume that the user has painted a selection
-                // into the selection layer mask, we need to copy the pixels into the transform layer itself for reducing
-                var pixel_iterator = file.editor.selection_layer.mask.iterator(.{ .kind = .set, .direction = .forward });
-                while (pixel_iterator.next()) |pixel_index| {
-                    @memcpy(&file.editor.transform_layer.pixels()[pixel_index], &selected_layer.pixels()[pixel_index]);
-                    selected_layer.pixels()[pixel_index] = .{ 0, 0, 0, 0 };
-                    file.editor.transform_layer.mask.set(pixel_index);
-                }
-                selected_layer.invalidate();
-            },
-            else => {
-                // Current tool is the pointer, so we potentially have a sprite selection in
-                // selected sprites that we need to copy to the selection layer.
-                file.editor.transform_layer.clear();
-
-                if (file.editor.selected_sprites.count() > 0) {
-                    var sprite_iterator = file.editor.selected_sprites.iterator(.{ .kind = .set, .direction = .forward });
-
-                    while (sprite_iterator.next()) |index| {
-                        const source_rect = file.spriteRect(index);
-                        if (selected_layer.pixelsFromRect(
-                            dvui.currentWindow().arena(),
-                            source_rect,
-                        )) |source_pixels| {
-                            file.editor.transform_layer.blit(
-                                source_pixels,
-                                source_rect,
-                                .{ .transparent = true, .mask = true },
-                            );
-                            selected_layer.clearRect(source_rect);
-                        }
-                    }
-                } else {
-                    if (file.editor.canvas.hovered) {
-                        if (file.spriteIndex(file.editor.canvas.dataFromScreenPoint(dvui.currentWindow().mouse_pt))) |sprite_index| {
-                            const rect = file.spriteRect(sprite_index);
-                            if (selected_layer.pixelsFromRect(
-                                dvui.currentWindow().arena(),
-                                rect,
-                            )) |source_pixels| {
-                                file.editor.transform_layer.blit(
-                                    source_pixels,
-                                    rect,
-                                    .{ .transparent = true, .mask = true },
-                                );
-                                selected_layer.clearRect(rect);
-                            }
-                        }
-                    } else if (file.selected_animation_index) |animation_index| {
-                        const animation = file.animations.get(animation_index);
-                        if (file.selected_animation_frame_index < animation.frames.len) {
-                            const source_rect = file.spriteRect(animation.frames[file.selected_animation_frame_index].sprite_index);
-                            if (selected_layer.pixelsFromRect(
-                                dvui.currentWindow().arena(),
-                                source_rect,
-                            )) |source_pixels| {
-                                file.editor.transform_layer.blit(
-                                    source_pixels,
-                                    source_rect,
-                                    .{ .transparent = true, .mask = true },
-                                );
-                                selected_layer.clearRect(source_rect);
-                            }
-                        }
-                    }
-                }
-            },
-        }
-
-        // We now have a transform layer that contains:
-        // 1. the unaltered colored pixels of the active transform
-        // 2. a mask containing bits for the pixels of the selection being transformed
-        const source_rect = dvui.Rect.fromSize(file.editor.transform_layer.size());
-        if (file.editor.transform_layer.reduce(source_rect)) |reduced_data_rect| {
-            defer file.editor.selection_layer.clearMask();
-            file.editor.transform = .{
-                .target_texture = dvui.textureCreateTarget(.{ .width = file.width(), .height = file.height(), .format = pixelart.render.compositeTargetPixelFormat(), .interpolation = .nearest }) catch {
-                    dvui.log.err("Failed to create target texture", .{});
-                    return;
-                },
-                .file_id = file.id,
-                .layer_id = selected_layer.id,
-                .data_points = .{
-                    reduced_data_rect.topLeft(),
-                    reduced_data_rect.topRight(),
-                    reduced_data_rect.bottomRight(),
-                    reduced_data_rect.bottomLeft(),
-                    reduced_data_rect.center(),
-                    reduced_data_rect.center(), // This point constantly moves
-                },
-                .source = fizzy.image.fromPixelsPMA(
-                    @ptrCast(file.editor.transform_layer.pixelsFromRect(fizzy.app.allocator, reduced_data_rect)),
-                    @intFromFloat(reduced_data_rect.w),
-                    @intFromFloat(reduced_data_rect.h),
-                    .ptr,
-                ) catch return error.MemoryAllocationFailed,
-            };
-
-            for (file.editor.transform.?.data_points[0..4]) |*point| {
-                const d = point.diff(file.editor.transform.?.point(.pivot).*);
-                if (d.length() > file.editor.transform.?.radius) {
-                    file.editor.transform.?.radius = d.length() + 4;
-                }
-            }
-        }
-    }
+    _ = editor;
+    try pixelart.plugin.pluginPtr().transform();
 }
 
 /// Performs a save operation on the currently open file.
@@ -3196,7 +2646,7 @@ pub fn cancelPendingSaveDialog(editor: *Editor) void {
 
     if (file_id) |id| {
         _ = editor.pending_close_after_save.swapRemove(id);
-        if (editor.pixelart_state.docs.fileById(id)) |f| {
+        if (editor.fileById(id)) |f| {
             f.resetSaveUIState();
         }
     } else if (editor.activeFile()) |f| {
@@ -3346,12 +2796,10 @@ pub fn openInFileBrowser(_: *Editor, path: []const u8) !void {
 }
 
 pub fn closeFileID(editor: *Editor, id: u64) !void {
-    if (editor.open_files.contains(id)) {
-        if (editor.pixelart_state.docs.fileById(id)) |file| {
-            if (file.dirty()) {
-                Dialogs.UnsavedClose.request(id);
-                return;
-            }
+    if (editor.open_files.get(id)) |doc| {
+        if (doc.owner.isDirty(doc)) {
+            Dialogs.UnsavedClose.request(id);
+            return;
         }
         try editor.rawCloseFileID(id);
     }
@@ -3367,11 +2815,11 @@ pub fn closeFile(editor: *Editor, index: usize) !void {
 /// the matching `DocHandle` from `open_files`.
 fn closeDocumentResources(editor: *Editor, doc: sdk.DocHandle) void {
     if (doc.owner.closeDocument(doc)) {
-        _ = editor.pixelart_state.docs.files.swapRemove(doc.id);
+        doc.owner.unregisterDocument(doc.id);
         return;
     }
     editor.fileFromDoc(doc).deinit();
-    _ = editor.pixelart_state.docs.files.swapRemove(doc.id);
+    doc.owner.unregisterDocument(doc.id);
 }
 
 pub fn rawCloseFile(editor: *Editor, index: usize) !void {

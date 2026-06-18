@@ -1,5 +1,6 @@
 const std = @import("std");
 const fizzy = @import("../../../fizzy.zig");
+const pixelart = @import("pixelart");
 const dvui = @import("dvui");
 const Editor = fizzy.Editor;
 const builtin = @import("builtin");
@@ -497,7 +498,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                 try visible_file_rows_order.append(fizzy.app.allocator, .{ .id = inner_id_extra.*, .path = abs_path });
 
                 var color = dvui.themeGet().color(.control, .fill);
-                if (fizzy.editor.pixelart_state.colors.palette) |*palette| {
+                if (pixelart.Globals.state.colors.palette) |*palette| {
                     color = palette.getDVUIColor(color_id.*);
                 }
 

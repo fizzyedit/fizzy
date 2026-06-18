@@ -40,7 +40,7 @@ pub fn init(grouping: u64) Workspace {
 /// Release any plugin-owned per-pane canvas chrome. Called when a pane is removed
 /// (`Editor.rebuildWorkspaces`) and for each pane at editor shutdown.
 pub fn deinit(self: *Workspace) void {
-    pixelart.State.removeCanvasPane(fizzy.editor.pixelart_state, fizzy.app.allocator, self.grouping);
+    pixelart.State.removeCanvasPane(pixelart.Globals.state, fizzy.app.allocator, self.grouping);
 }
 
 /// Recover the typed workspace currently drawing `file` from its opaque slot

@@ -168,12 +168,12 @@ pub fn AppInit(win: *dvui.Window) !void {
 
     // Pixel-art plugin state (tools/colors/project/clipboard/pack jobs). Created
     // before `postInit` so the pixel-art plugin's `register` can adopt it as its
-    // `state`. Owned here for the app's lifetime; torn down in `AppDeinit`.
-    fizzy.pixelart = try allocator.create(pixelart.State);
+    // `state`. Owned on `Editor`; torn down in `AppDeinit`.
+    const pixelart_state = try allocator.create(pixelart.State);
     pixelart.Globals.gpa = allocator;
-    pixelart.Globals.state = fizzy.pixelart;
-    fizzy.pixelart.* = pixelart.State.init(allocator, &fizzy.editor.host) catch unreachable;
-    fizzy.editor.pixelart_state = fizzy.pixelart;
+    pixelart.Globals.state = pixelart_state;
+    pixelart_state.* = pixelart.State.init(allocator, &fizzy.editor.host) catch unreachable;
+    fizzy.editor.pixelart_state = pixelart_state;
 
     // Second-stage init that needs the editor at its final heap address (e.g.
     // registering the workbench-api service whose `ctx` is this pointer).
@@ -233,12 +233,12 @@ pub fn AppDeinit() void {
     // Persist the current windowed frame while the window still exists. No-op off macOS.
     fizzy.backend.saveWindowGeometry(fizzy.app.window);
     // Persist `.fizproject` while `editor.host` and `editor.folder` are still live.
-    pixelart.State.persistProject(fizzy.pixelart);
+    pixelart.State.persistProject(fizzy.editor.pixelart_state);
     fizzy.editor.deinit() catch unreachable;
     // Pixel-art teardown (persists the .fizproject, frees tools/palettes/pack jobs).
     // After the editor so any editor teardown that still reads pixel-art state runs first.
-    fizzy.pixelart.deinit(fizzy.app.allocator);
-    fizzy.app.allocator.destroy(fizzy.pixelart);
+    fizzy.editor.pixelart_state.deinit(fizzy.app.allocator);
+    fizzy.app.allocator.destroy(fizzy.editor.pixelart_state);
     // Tear down the singleton listener after the editor so any callback
     // currently in flight finishes before we free state it touches.
     singleton.deinit();

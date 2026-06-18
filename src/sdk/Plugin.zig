@@ -46,6 +46,17 @@ pub const VTable = struct {
     undo: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
     redo: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
 
+    /// Register a loaded/created document in the plugin's open-doc map. `file` points at
+    /// the plugin's document type (for pixel art, `*Internal.File` on the caller's stack).
+    /// Returns the stable registry pointer for `DocHandle.ptr`.
+    registerOpenDocument: ?*const fn (state: *anyopaque, file: *anyopaque) anyerror!*anyopaque = null,
+    /// Resolve a document id to the plugin's registry pointer, or null when not open.
+    documentPtr: ?*const fn (state: *anyopaque, id: u64) ?*anyopaque = null,
+    /// Lookup an open document by absolute path.
+    documentByPath: ?*const fn (state: *anyopaque, path: []const u8) ?*anyopaque = null,
+    /// Drop the registry entry after `closeDocument` has torn down resources.
+    unregisterDocument: ?*const fn (state: *anyopaque, id: u64) void = null,
+
     // ---- render hooks (the plugin draws its own dvui UI into the host window) ----
     /// Draw the plugin's explorer/sidebar pane (left region).
     drawExplorerPane: ?*const fn (state: *anyopaque) anyerror!void = null,
@@ -63,6 +74,17 @@ pub const VTable = struct {
     processRadialMenuInput: ?*const fn (state: *anyopaque) void = null,
     radialMenuVisible: ?*const fn (state: *anyopaque) bool = null,
     drawRadialMenu: ?*const fn (state: *anyopaque) anyerror!void = null,
+
+    // ---- editing + project pack (pixel-art today; future plugins opt in) ----
+    transform: ?*const fn (state: *anyopaque) anyerror!void = null,
+    copy: ?*const fn (state: *anyopaque) anyerror!void = null,
+    paste: ?*const fn (state: *anyopaque) anyerror!void = null,
+    startPackProject: ?*const fn (state: *anyopaque) anyerror!void = null,
+    isPackingActive: ?*const fn (state: *const anyopaque) bool = null,
+    tickPackJobs: ?*const fn (state: *anyopaque) void = null,
+    runPackWorkers: ?*const fn (state: *anyopaque) void = null,
+    persistProjectFolder: ?*const fn (state: *anyopaque) void = null,
+    reloadProjectFolder: ?*const fn (state: *anyopaque, allocator: std.mem.Allocator) void = null,
 };
 
 // Thin wrappers so callers don't repeat the optional-vtable dance.
@@ -89,6 +111,58 @@ pub fn radialMenuVisible(self: Plugin) bool {
 
 pub fn drawRadialMenu(self: Plugin) !void {
     if (self.vtable.drawRadialMenu) |f| try f(self.state);
+}
+
+pub fn copy(self: Plugin) !void {
+    if (self.vtable.copy) |f| try f(self.state);
+}
+
+pub fn paste(self: Plugin) !void {
+    if (self.vtable.paste) |f| try f(self.state);
+}
+
+pub fn startPackProject(self: Plugin) !void {
+    if (self.vtable.startPackProject) |f| try f(self.state);
+}
+
+pub fn isPackingActive(self: Plugin) bool {
+    return if (self.vtable.isPackingActive) |f| f(self.state) else false;
+}
+
+pub fn tickPackJobs(self: Plugin) void {
+    if (self.vtable.tickPackJobs) |f| f(self.state);
+}
+
+pub fn runPackWorkers(self: Plugin) void {
+    if (self.vtable.runPackWorkers) |f| f(self.state);
+}
+
+pub fn transform(self: Plugin) !void {
+    if (self.vtable.transform) |f| try f(self.state);
+}
+
+pub fn registerOpenDocument(self: Plugin, file: *anyopaque) !*anyopaque {
+    return if (self.vtable.registerOpenDocument) |f| try f(self.state, file) else error.Unsupported;
+}
+
+pub fn documentPtr(self: Plugin, id: u64) ?*anyopaque {
+    return if (self.vtable.documentPtr) |f| f(self.state, id) else null;
+}
+
+pub fn documentByPath(self: Plugin, path: []const u8) ?*anyopaque {
+    return if (self.vtable.documentByPath) |f| f(self.state, path) else null;
+}
+
+pub fn unregisterDocument(self: Plugin, id: u64) void {
+    if (self.vtable.unregisterDocument) |f| f(self.state, id);
+}
+
+pub fn persistProjectFolder(self: Plugin) void {
+    if (self.vtable.persistProjectFolder) |f| f(self.state);
+}
+
+pub fn reloadProjectFolder(self: Plugin, allocator: std.mem.Allocator) void {
+    if (self.vtable.reloadProjectFolder) |f| f(self.state, allocator);
 }
 
 // ---- document lifecycle wrappers (operate on a DocHandle this plugin owns) ----

@@ -15,6 +15,10 @@ const ImageWidget = @import("widgets/ImageWidget.zig");
 const PixelArtSettings = @import("Settings.zig");
 const KeybindTicks = @import("keybind_ticks.zig");
 const RadialMenu = @import("radial_menu.zig");
+const Clipboard = @import("clipboard.zig");
+const PackProject = @import("pack_project.zig");
+const TransformOp = @import("transform_op.zig");
+const DocsRegistry = @import("docs_registry.zig");
 
 const DocHandle = sdk.DocHandle;
 const Internal = pixelart.internal;
@@ -42,11 +46,24 @@ const vtable: sdk.Plugin.VTable = .{
     .closeDocument = closeDocument,
     .undo = undo,
     .redo = redo,
+    .registerOpenDocument = registerOpenDocument,
+    .documentPtr = documentPtr,
+    .documentByPath = documentByPath,
+    .unregisterDocument = unregisterDocument,
     .drawDocument = drawDocument,
     .tickKeybinds = tickKeybinds,
     .processRadialMenuInput = processRadialMenuInput,
     .radialMenuVisible = radialMenuVisible,
     .drawRadialMenu = drawRadialMenu,
+    .transform = pluginTransform,
+    .copy = pluginCopy,
+    .paste = pluginPaste,
+    .startPackProject = pluginStartPackProject,
+    .isPackingActive = pluginIsPackingActive,
+    .tickPackJobs = pluginTickPackJobs,
+    .runPackWorkers = pluginRunPackWorkers,
+    .persistProjectFolder = pluginPersistProjectFolder,
+    .reloadProjectFolder = pluginReloadProjectFolder,
 };
 
 /// A `DocHandle` for one of this plugin's open `*Internal.File`s. Resolved by `doc.id`
@@ -319,7 +336,74 @@ fn drawRadialMenu(_: *anyopaque) anyerror!void {
     try RadialMenu.draw();
 }
 
-/// Pixel-art editing + tool keybinds. The shell registers its own global/region
+fn pluginCopy(state: *anyopaque) anyerror!void {
+    const st: *State = @ptrCast(@alignCast(state));
+    try Clipboard.copy(st);
+}
+
+fn pluginTransform(state: *anyopaque) anyerror!void {
+    const st: *State = @ptrCast(@alignCast(state));
+    try TransformOp.begin(st);
+}
+
+fn registerOpenDocument(state: *anyopaque, file: *anyopaque) anyerror!*anyopaque {
+    const st: *State = @ptrCast(@alignCast(state));
+    const internal_file: *Internal.File = @ptrCast(@alignCast(file));
+    const ptr = try DocsRegistry.registerOpenDocument(st, internal_file);
+    return ptr;
+}
+
+fn documentPtr(state: *anyopaque, id: u64) ?*anyopaque {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocsRegistry.documentPtr(st, id);
+}
+
+fn documentByPath(state: *anyopaque, path: []const u8) ?*anyopaque {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocsRegistry.documentByPath(st, path);
+}
+
+fn unregisterDocument(state: *anyopaque, id: u64) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocsRegistry.unregisterDocument(st, id);
+}
+
+fn pluginPersistProjectFolder(state: *anyopaque) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocsRegistry.persistProjectFolder(st);
+}
+
+fn pluginReloadProjectFolder(state: *anyopaque, allocator: std.mem.Allocator) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocsRegistry.reloadProjectFolder(st, allocator);
+}
+
+fn pluginPaste(state: *anyopaque) anyerror!void {
+    const st: *State = @ptrCast(@alignCast(state));
+    try Clipboard.paste(st);
+}
+
+fn pluginStartPackProject(state: *anyopaque) anyerror!void {
+    const st: *State = @ptrCast(@alignCast(state));
+    try PackProject.start(st);
+}
+
+fn pluginIsPackingActive(state: *const anyopaque) bool {
+    const st: *const State = @ptrCast(@alignCast(state));
+    return PackProject.isActive(st);
+}
+
+fn pluginTickPackJobs(state: *anyopaque) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    PackProject.tick(st);
+}
+
+fn pluginRunPackWorkers(state: *anyopaque) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    PackProject.runWasmWorkers(st);
+}
+
+/// Pixel-art editing + tool keybinds.
 /// binds in `Keybinds.register`; this fills in the pixel-art half. Platform: see
 /// `Keybinds.register` for why `host.isMacOS()` (not `builtin`) is used.
 fn contributeKeybinds(state: *anyopaque, win: *dvui.Window) anyerror!void {
