@@ -574,6 +574,7 @@ const shell_api_vtable: sdk.EditorAPI.VTable = .{
     .requestGridLayoutDialog = shellRequestGridLayoutDialog,
     .allocUntitledPath = shellAllocUntitledPath,
     .createDocument = shellCreateDocument,
+    .setExplorerNewFilePath = shellSetExplorerNewFilePath,
     .requestSaveAs = shellRequestSaveAs,
     .requestWebSave = shellRequestWebSave,
     .cancelPendingSaveDialog = shellCancelPendingSaveDialog,
@@ -698,6 +699,14 @@ fn shellCreateDocument(ctx: *anyopaque, path: []const u8, grid: sdk.EditorAPI.Ne
     });
     const owner = fizzy.pixelart_mod.plugin.pluginPtr();
     return .{ .ptr = file, .owner = owner, .id = file.id };
+}
+fn shellSetExplorerNewFilePath(ctx: *anyopaque, path: []const u8) anyerror!void {
+    const Files = fizzy.Explorer.files;
+    if (Files.new_file_path) |old| {
+        fizzy.app.allocator.free(old);
+    }
+    Files.new_file_path = try fizzy.app.allocator.dupe(u8, path);
+    _ = ctx;
 }
 fn shellRequestSaveAs(ctx: *anyopaque) void {
     shellCtx(ctx).requestSaveAs();

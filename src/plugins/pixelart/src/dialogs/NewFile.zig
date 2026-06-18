@@ -1,10 +1,9 @@
 const std = @import("std");
 const dvui = @import("dvui");
 
-const Dialogs = @import("../../../../editor/dialogs/Dialogs.zig");
+const DimensionsLabel = @import("dimensions_label.zig");
 const pixelart = @import("../../pixelart.zig");
 const Globals = pixelart.Globals;
-const fizzy = @import("../../../../fizzy.zig");
 
 pub var mode: enum(usize) {
     single,
@@ -176,7 +175,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
         const width = column_width * (if (mode == .single) 1 else columns);
         const height = row_height * (if (mode == .single) 1 else rows);
 
-        Dialogs.drawDimensionsLabel(@src(), width, height, entry_font, "px", .{ .gravity_x = 0.5 });
+        DimensionsLabel.drawDimensionsLabel(@src(), width, height, entry_font, "px", .{ .gravity_x = 0.5 });
 
         return valid;
     }
@@ -208,10 +207,7 @@ pub fn callAfter(id: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void
                     return error.FailedToSaveFile;
                 };
 
-                if (fizzy.Editor.Explorer.files.new_file_path) |old| {
-                    Globals.allocator().free(old);
-                }
-                fizzy.Editor.Explorer.files.new_file_path = try Globals.allocator().dupe(u8, file.path);
+                try Globals.state.host.setExplorerNewFilePath(file.path);
                 dvui.refresh(null, @src(), dvui.currentWindow().data().id);
             } else {
                 const new_path = try Globals.state.host.allocUntitledPath();

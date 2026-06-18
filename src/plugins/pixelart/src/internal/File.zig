@@ -3153,15 +3153,15 @@ pub fn saveToDownload(self: *File, window: *dvui.Window) !void {
         defer snap.deinit(Globals.allocator());
         const bytes = try writeSnapshotToZipBytes(&snap, Globals.allocator());
         defer Globals.allocator().free(bytes);
-        try @import("../../../../editor/WebFileIo.zig").downloadBytesWithExtension(basename, ".fiz", bytes);
+        try @import("../web_file_io.zig").downloadBytesWithExtension(basename, ".fiz", bytes);
     } else if (std.mem.eql(u8, ext, ".png")) {
         const bytes = try flattenedImageBytes(self, window, .png);
         defer Globals.allocator().free(bytes);
-        try @import("../../../../editor/WebFileIo.zig").downloadBytesWithExtension(basename, ".png", bytes);
+        try @import("../web_file_io.zig").downloadBytesWithExtension(basename, ".png", bytes);
     } else if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) {
         const bytes = try flattenedImageBytes(self, window, .jpg);
         defer Globals.allocator().free(bytes);
-        try @import("../../../../editor/WebFileIo.zig").downloadBytesWithExtension(basename, ".jpg", bytes);
+        try @import("../web_file_io.zig").downloadBytesWithExtension(basename, ".jpg", bytes);
     } else {
         return;
     }
@@ -3343,7 +3343,7 @@ pub fn saveAsFlattened(self: *File, output_path: []const u8, window: *dvui.Windo
         };
         defer Globals.allocator().free(bytes);
         const dl_ext = if (is_png) ".png" else ".jpg";
-        try @import("../../../../editor/WebFileIo.zig").downloadBytesWithExtension(std.fs.path.basename(output_path), dl_ext, bytes);
+        try @import("../web_file_io.zig").downloadBytesWithExtension(std.fs.path.basename(output_path), dl_ext, bytes);
     } else if (is_png) {
         const r: u32 = @intFromFloat(@round(window.natural_scale * 72.0 / 0.0254));
         try pixelart.image.writeToPngResolution(single_layer.source, output_path, r);

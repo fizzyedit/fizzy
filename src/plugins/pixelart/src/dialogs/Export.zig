@@ -1,17 +1,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const zigimg = @import("zigimg");
 const msf_gif = @import("msf_gif");
 const zstbi = @import("zstbi");
 
-const WebFileIo = if (builtin.target.cpu.arch == .wasm32) @import("../../../../editor/WebFileIo.zig") else struct {};
-
-const ExportImageFormat = enum { png, jpg };
-
-const Dialogs = @import("../../../../editor/dialogs/Dialogs.zig");
+const DimensionsLabel = @import("dimensions_label.zig");
+const WebFileIo = @import("../web_file_io.zig");
 const pixelart = @import("../../pixelart.zig");
 const Globals = pixelart.Globals;
+
+const ExportImageFormat = enum { png, jpg };
 
 pub var mode: enum(usize) {
     single,
@@ -443,7 +441,7 @@ fn exportScaleSlider(max_scale_val: f32) void {
 
 fn exportDimensionsLabelForExport(column_w: u32, row_h: u32) void {
     const entry_font = dvui.Font.theme(.mono).larger(-2);
-    Dialogs.drawDimensionsLabel(@src(), column_w, row_h, entry_font, "px", .{ .gravity_x = 0.5 });
+    DimensionsLabel.drawDimensionsLabel(@src(), column_w, row_h, entry_font, "px", .{ .gravity_x = 0.5 });
 }
 
 const ExportFullPreviewKind = enum { layer, composite };

@@ -17,7 +17,7 @@ pub const version: std.SemanticVersion = .{
 pub const atlas = core.atlas;
 
 // Other helpers and namespaces
-pub const pixelart_mod = @import("plugins/pixelart/module.zig");
+pub const pixelart_mod = @import("pixelart");
 pub const algorithms = pixelart_mod.algorithms;
 pub const render = pixelart_mod.render;
 pub const sprite_render = pixelart_mod.sprite_render;

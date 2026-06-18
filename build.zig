@@ -358,7 +358,7 @@ pub fn build(b: *std.Build) !void {
             core_module_web.addImport("icons", dep.module("icons"));
         }
         web_exe.root_module.addImport("core", core_module_web);
-        wireSdkModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), web_exe.root_module);
+        const sdk_module_web = wireSdkModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), web_exe.root_module);
 
         // Three editor files have `const sdl3 = @import("backend").c;` at file
         // scope. After refactoring all `sdl3.SDL_DialogFileFilter` references
@@ -411,6 +411,18 @@ pub fn build(b: *std.Build) !void {
             .flags = &msf_gif_wasm_cflags,
         });
         web_exe.root_module.addImport("msf_gif", msf_gif_web_lib.root_module);
+
+        wirePixelartModule(b, web_target, optimize, .{
+            .dvui = dvui_web_dep.module("dvui_web"),
+            .core = core_module_web,
+            .sdk = sdk_module_web,
+            .assets = assets_module,
+            .zip = zip_pkg.module,
+            .zstbi = zstbi_web_lib.root_module,
+            .msf_gif = msf_gif_web_lib.root_module,
+            .icons = if (b.lazyDependency("icons", .{ .target = web_target, .optimize = optimize })) |dep| dep.module("icons") else null,
+            .backend = null,
+        }, web_exe.root_module);
 
         const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
         const install_wasm = b.addInstallArtifact(web_exe, .{
@@ -847,7 +859,18 @@ pub fn build(b: *std.Build) !void {
         core_module_test.addImport("icons", dep.module("icons"));
     }
     fizzy_test_module.addImport("core", core_module_test);
-    wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), fizzy_test_module);
+    const sdk_module_test = wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), fizzy_test_module);
+    wirePixelartModule(b, target, optimize, .{
+        .dvui = dvui_testing_dep.module("dvui_testing"),
+        .core = core_module_test,
+        .sdk = sdk_module_test,
+        .assets = assets_module,
+        .zip = zip_pkg.module,
+        .zstbi = zstbi_module,
+        .msf_gif = msf_gif_module,
+        .icons = if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| dep.module("icons") else null,
+        .backend = dvui_testing_dep.module("testing"),
+    }, fizzy_test_module);
 
     if (target.result.os.tag == .macos) {
         if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |dep| {
@@ -1172,18 +1195,30 @@ fn addFizzyExecutableForTarget(
     core_module.addImport("dvui", dvui_dep.module("dvui_sdl3"));
     core_module.addImport("known-folders", known_folders);
     exe.root_module.addImport("core", core_module);
-    wireSdkModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), exe.root_module);
+    const sdk_module = wireSdkModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), exe.root_module);
+    var icons_module: ?*std.Build.Module = null;
+    if (b.lazyDependency("icons", .{ .target = resolved_target, .optimize = optimize })) |dep| {
+        exe.root_module.addImport("icons", dep.module("icons"));
+        core_module.addImport("icons", dep.module("icons"));
+        icons_module = dep.module("icons");
+    }
+    wirePixelartModule(b, resolved_target, optimize, .{
+        .dvui = dvui_dep.module("dvui_sdl3"),
+        .core = core_module,
+        .sdk = sdk_module,
+        .assets = assets_module,
+        .zip = zip_pkg.module,
+        .zstbi = zstbi_module,
+        .msf_gif = msf_gif_module,
+        .icons = icons_module,
+        .backend = dvui_dep.module("sdl3"),
+    }, exe.root_module);
 
     const singleton_app_dep = b.dependency("dvui_singleton_app", .{
         .target = resolved_target,
         .optimize = optimize,
     });
     exe.root_module.addImport("singleton_app", singleton_app_dep.module("singleton_app"));
-
-    if (b.lazyDependency("icons", .{ .target = resolved_target, .optimize = optimize })) |dep| {
-        exe.root_module.addImport("icons", dep.module("icons"));
-        core_module.addImport("icons", dep.module("icons"));
-    }
 
     if (resolved_target.result.os.tag == .macos) {
         if (macos_sdl_paths) |p| {
@@ -1248,7 +1283,7 @@ fn wireSdkModule(
     optimize: std.builtin.OptimizeMode,
     dvui_module: *std.Build.Module,
     consumer: *std.Build.Module,
-) void {
+) *std.Build.Module {
     const sdk_module = b.createModule(.{
         .target = target,
         .optimize = optimize,
@@ -1256,6 +1291,46 @@ fn wireSdkModule(
     });
     sdk_module.addImport("dvui", dvui_module);
     consumer.addImport("sdk", sdk_module);
+    return sdk_module;
+}
+
+const PixelartModuleDeps = struct {
+    dvui: *std.Build.Module,
+    core: *std.Build.Module,
+    sdk: *std.Build.Module,
+    assets: *std.Build.Module,
+    zip: *std.Build.Module,
+    zstbi: *std.Build.Module,
+    msf_gif: *std.Build.Module,
+    icons: ?*std.Build.Module,
+    backend: ?*std.Build.Module,
+};
+
+/// Pixel-art plugin (`src/plugins/pixelart/module.zig`).
+fn wirePixelartModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: PixelartModuleDeps,
+    consumer: *std.Build.Module,
+) void {
+    const pixelart_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/plugins/pixelart/module.zig"),
+        .link_libc = target.result.cpu.arch != .wasm32,
+        .single_threaded = target.result.cpu.arch == .wasm32,
+    });
+    pixelart_module.addImport("dvui", deps.dvui);
+    pixelart_module.addImport("core", deps.core);
+    pixelart_module.addImport("sdk", deps.sdk);
+    pixelart_module.addImport("assets", deps.assets);
+    pixelart_module.addImport("zip", deps.zip);
+    pixelart_module.addImport("zstbi", deps.zstbi);
+    pixelart_module.addImport("msf_gif", deps.msf_gif);
+    if (deps.icons) |icons| pixelart_module.addImport("icons", icons);
+    if (deps.backend) |backend| pixelart_module.addImport("backend", backend);
+    consumer.addImport("pixelart", pixelart_module);
 }
 
 inline fn thisDir() []const u8 {

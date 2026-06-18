@@ -224,6 +224,10 @@ pub fn createDocument(self: *Host, path: []const u8, grid: EditorAPI.NewDocGrid)
     return if (self.shell_api) |a| try a.createDocument(path, grid) else error.ShellNotInstalled;
 }
 
+pub fn setExplorerNewFilePath(self: *Host, path: []const u8) !void {
+    return if (self.shell_api) |a| try a.setExplorerNewFilePath(path) else error.ShellNotInstalled;
+}
+
 pub fn requestSaveAs(self: *Host) void {
     if (self.shell_api) |a| a.requestSaveAs();
 }

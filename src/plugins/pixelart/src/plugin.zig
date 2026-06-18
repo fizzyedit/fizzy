@@ -1,10 +1,9 @@
 //! The pixel-art editor plugin. Phase 2 thin shim — the pixel-art stack still
 //! lives inline under `src/editor/` (Phase 3 relocates it whole behind this
 //! plugin). For now its contributions point at the existing draw entry points
-//! through the `fizzy.*` globals. Registered from `Editor.postInit`.
+//! through the `Globals` injection. Registered from `Editor.postInit`.
 const std = @import("std");
 const builtin = @import("builtin");
-const fizzy = @import("../../../fizzy.zig");
 const dvui = @import("dvui");
 const pixelart = @import("../pixelart.zig");
 const sdk = pixelart.sdk;
@@ -97,11 +96,10 @@ fn closeDocument(_: *anyopaque, doc: DocHandle) void {
 /// `canvas.id` / `workspace_handle` / `center` before routing here; pixel art owns the
 /// entire region: rulers, the canvas hbox, the transform/edit/sample overlays, the editing
 /// widget, and the sample magnifier. The per-pane ruler/overlay/reorder state + draw helpers
-/// live on the pixel-art-owned `CanvasData` (stashed in the pane's `plugin_view_state`).
+/// live on the pixel-art-owned `CanvasData` (keyed by workbench pane `grouping` on `State`).
 fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
     const file = docFile(doc);
-    const ws = fizzy.Editor.Workspace.ofFile(file) orelse return;
-    const chrome = CanvasData.ensure(ws);
+    const chrome = CanvasData.forGrouping(file.editor.grouping);
     const container = dvui.parentGet().data();
 
     // Grid (column/row) reorder is driven by the rulers and consumed by `FileWidget`; commit
@@ -133,7 +131,8 @@ fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
     // Before the file widget so FloatingWidget uses window-scale coords (not canvas zoom).
     chrome.drawSampleButton(container);
 
-    if (ws.grouping != file.editor.grouping) return;
+    const pane_grouping = container.options.id_extra orelse return;
+    if (@as(u64, @intCast(pane_grouping)) != file.editor.grouping) return;
 
     var file_widget = FileWidget.init(@src(), .{
         .file = file,
@@ -155,15 +154,8 @@ fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
 
 /// Take over a workspace pane to show the pixel-art packed-atlas preview (the "Project"
 /// sidebar view's `draw_workspace`). The workbench owns the pane frame and routes here when
-/// `view_project` is the active sidebar view; we cast the opaque handle back to the document
-/// host's `Workspace` and render the whole content region (atlas image or empty-state hint).
-/// Mirrors what `Workspace.drawCanvas` does for documents: reuses the workbench's shared
-/// canvas vbox / empty-state card helpers so switching project ↔ canvas keeps stable widget ids,
-/// and stamps `canvas_rect_physical` (read by the editor's load/save toast overlays).
-fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
-    const Workspace = fizzy.Editor.Workspace;
-    const ws: *Workspace = @ptrCast(@alignCast(workspace_handle));
-
+/// `view_project` is the active sidebar view.
+fn drawProjectView(_: ?*anyopaque, pane: *sdk.WorkbenchPaneView) anyerror!void {
     var content_color = dvui.themeGet().color(.window, .fill);
 
     if (Globals.state.host.appliesNativeWindowOpacity()) {
@@ -178,10 +170,9 @@ fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
     else
         Globals.state.host.folder() != null and Globals.packer.atlas != null;
 
-    // Match `drawCanvas`: no outer fill when showing centered card (transparency shows through like homepage).
-    var canvas_vbox = Workspace.workspaceMainCanvasVbox(content_color, show_packed_atlas, ws.grouping);
+    var canvas_vbox = sdk.pane_layout.mainCanvasVbox(content_color, show_packed_atlas, pane.grouping);
     defer {
-        ws.canvas_rect_physical = canvas_vbox.data().contentRectScale().r;
+        pane.canvas_rect_physical.* = canvas_vbox.data().contentRectScale().r;
         dvui.toastsShow(canvas_vbox.data().id, canvas_vbox.data().contentRectScale().r.toNatural());
         canvas_vbox.deinit();
     }
@@ -191,9 +182,9 @@ fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
         var image_widget = ImageWidget.init(@src(), .{
             .source = atlas.source,
             .canvas = &atlas.canvas,
-            .grouping = ws.grouping,
+            .grouping = pane.grouping,
         }, .{
-            .id_extra = @intCast(ws.grouping),
+            .id_extra = @intCast(pane.grouping),
             .expand = .both,
             .background = false,
             .color_fill = .transparent,
@@ -208,7 +199,7 @@ fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
             }
         }
     } else {
-        var box = Workspace.workspaceEmptyStateCard(content_color, ws.grouping);
+        var box = sdk.pane_layout.emptyStateCard(content_color, pane.grouping);
         defer box.deinit();
 
         const alpha = dvui.alpha(1.0);
@@ -250,8 +241,7 @@ pub fn register(host: *sdk.Host) !void {
     // Adopt the app-owned pixel-art state as this plugin's `state`. Wire Globals
     // here too so plugin code and the shell share one injection site (App also sets
     // these before State.init, but register re-syncs after postInit ordering).
-    Globals.state = fizzy.pixelart;
-    plugin.state = @ptrCast(@alignCast(fizzy.pixelart));
+    plugin.state = @ptrCast(@alignCast(Globals.state));
     try host.registerPlugin(&plugin);
     try host.registerSidebarView(.{
         .id = view_tools,
@@ -301,7 +291,7 @@ fn drawSprites(_: ?*anyopaque) anyerror!void {
     try Globals.state.sprites_pane.draw();
 }
 fn drawProject(_: ?*anyopaque) anyerror!void {
-    try fizzy.Editor.Explorer.project.draw();
+    try pixelart.explorer.project.draw();
 }
 fn drawSpritesPanel(_: ?*anyopaque) anyerror!void {
     try Globals.state.sprites_panel.draw();

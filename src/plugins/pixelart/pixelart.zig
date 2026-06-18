@@ -2,11 +2,8 @@
 //!
 //! Files inside `src/plugins/pixelart/src/**` import this as `../pixelart.zig` (or
 //! `../../pixelart.zig` from nested dirs) instead of `fizzy.zig` for sdk/core/Globals
-//! and shared plugin types. The compile-time module root for the build is `module.zig`;
-//! shell code reaches the plugin through `@import("pixelart")`.
-//!
-//! Files that still need shell workbench types (`Editor.Workspace`) keep a local
-//! `fizzy` import until that surface moves behind EditorAPI.
+//! and shared plugin types. The compile-time module root for the build is `module.zig`
+//! (`@import("pixelart")`); shell code reaches the plugin through `fizzy.pixelart_mod`.
 const std = @import("std");
 
 pub const sdk = @import("sdk");
@@ -38,6 +35,10 @@ pub const File = @import("src/File.zig");
 pub const render = @import("src/render.zig");
 pub const sprite_render = @import("src/sprite_render.zig");
 pub const algorithms = @import("src/algorithms/algorithms.zig");
+
+pub const explorer = struct {
+    pub const project = @import("src/explorer/project.zig");
+};
 
 pub const internal = struct {
     pub const File = @import("src/internal/File.zig");

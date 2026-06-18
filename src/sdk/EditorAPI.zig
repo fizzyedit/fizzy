@@ -116,6 +116,8 @@ pub const VTable = struct {
     allocUntitledPath: *const fn (ctx: *anyopaque) anyerror![]u8,
     /// Create and open a new document at `path` (path ownership transfers to the shell).
     createDocument: *const fn (ctx: *anyopaque, path: []const u8, grid: NewDocGrid) anyerror!DocHandle,
+    /// Hint the files tree to scroll/highlight a path just created (e.g. New File dialog).
+    setExplorerNewFilePath: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
 
     // ---- save / quit flow ----
     requestSaveAs: *const fn (ctx: *anyopaque) void,
@@ -252,6 +254,10 @@ pub fn allocUntitledPath(self: EditorAPI) ![]u8 {
 
 pub fn createDocument(self: EditorAPI, path: []const u8, grid: NewDocGrid) !DocHandle {
     return self.vtable.createDocument(self.ctx, path, grid);
+}
+
+pub fn setExplorerNewFilePath(self: EditorAPI, path: []const u8) !void {
+    return self.vtable.setExplorerNewFilePath(self.ctx, path);
 }
 
 pub fn requestSaveAs(self: EditorAPI) void {

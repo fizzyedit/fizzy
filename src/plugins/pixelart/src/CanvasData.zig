@@ -4,20 +4,19 @@
 //! the column/row rulers, the floating Edit pill and color-sample button, the transform dialog,
 //! and the grid (column/row) reorder drag state, plus the matching draw helpers.
 //!
-//! It is pixel-art-owned and lives per pane. The plugin lazily allocates one (`ensure`) and
-//! stashes the pointer in the workbench `Workspace.plugin_view_state` opaque slot; the workbench
-//! never dereferences it and frees it through `plugin_view_destroy` when the pane is torn down.
+//! It is pixel-art-owned and lives per workspace pane (keyed by workbench `grouping` id on
+//! `State.canvas_by_grouping`). The workbench never dereferences it; `State.removeCanvasPane`
+//! frees it when a pane is torn down.
 //! State the shell itself needs (the pane's physical content rect, used to center load/save
-//! toasts) intentionally stays on `Workspace`.
+//! toasts) stays on the workbench `Workspace` and is exposed through `WorkbenchPaneView`.
 const std = @import("std");
 const dvui = @import("dvui");
-const fizzy = @import("../../../fizzy.zig");
 const icons = @import("icons");
 const FileWidget = @import("widgets/FileWidget.zig");
+const Export = @import("dialogs/Export.zig");
 const pixelart = @import("../pixelart.zig");
 const Globals = pixelart.Globals;
 
-const Workspace = fizzy.Editor.Workspace;
 const File = pixelart.internal.File;
 
 const CanvasData = @This();
@@ -60,30 +59,9 @@ pub fn init(grouping: u64) CanvasData {
 /// the pre-relocation behavior where the names lived on `Workspace` and were never freed.
 pub fn deinit(_: *CanvasData) void {}
 
-/// Get the pixel-art chrome for `ws`, lazily allocating it and registering its teardown on
-/// first use. Called from the plugin's `drawDocument` each frame a document pane renders.
-pub fn ensure(ws: *Workspace) *CanvasData {
-    if (ws.plugin_view_state) |p| return @ptrCast(@alignCast(p));
-    const self = Globals.allocator().create(CanvasData) catch @panic("OOM allocating CanvasData");
-    self.* = CanvasData.init(ws.grouping);
-    ws.plugin_view_state = self;
-    ws.plugin_view_destroy = destroyOpaque;
-    return self;
-}
-
-/// The data already attached to `ws`, or null if none exists yet (e.g. the pane has not
-/// drawn a document this session). `FileWidget` uses this for its read-only reorder checks.
-/// Only pixel art writes `plugin_view_state`, so the cast is sound.
-pub fn fromWorkspace(ws: *Workspace) ?*CanvasData {
-    const p = ws.plugin_view_state orelse return null;
-    return @ptrCast(@alignCast(p));
-}
-
-/// `plugin_view_destroy` target: free the chrome when the workbench tears down its pane.
-fn destroyOpaque(state: *anyopaque) void {
-    const self: *CanvasData = @ptrCast(@alignCast(state));
-    self.deinit();
-    Globals.allocator().destroy(self);
+/// Per-pane chrome for `grouping`, lazily allocated on first document draw.
+pub fn forGrouping(grouping: u64) *CanvasData {
+    return Globals.state.canvasForGrouping(grouping);
 }
 
 pub const RulerOrientation = enum {
@@ -1049,8 +1027,8 @@ pub fn drawEditPill(self: *CanvasData, container: *dvui.WidgetData) void {
                 .exportd => {
                     // Open the Export dialog (same configuration the `export` keybind uses).
                     var mutex = pixelart.core.dvui.dialog(@src(), .{
-                        .displayFn = fizzy.Editor.Dialogs.Export.dialog,
-                        .callafterFn = fizzy.Editor.Dialogs.Export.callAfter,
+                        .displayFn = Export.dialog,
+                        .callafterFn = Export.callAfter,
                         .title = "Export...",
                         .ok_label = "Export",
                         .cancel_label = "Cancel",

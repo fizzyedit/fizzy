@@ -10,6 +10,7 @@
 //! cross-plugin references survive without a compile-time dependency.
 const dvui = @import("dvui");
 const Plugin = @import("Plugin.zig");
+const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
 
 /// A left-region (explorer) view, selected by its sidebar icon. Exactly one
 /// sidebar view is active at a time; its `draw` fills the left pane.
@@ -24,9 +25,8 @@ pub const SidebarView = struct {
     draw: *const fn (ctx: ?*anyopaque) anyerror!void,
     /// Optional: while this view is the active sidebar view, it takes over the workspace
     /// content region instead of the normal document tabs+canvas. The workbench calls this
-    /// per workspace pane, passing the opaque workspace handle (cast back to the document
-    /// host's `Workspace`). Used by pixel art's "Project" view to show the packed atlas.
-    draw_workspace: ?*const fn (ctx: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void = null,
+    /// per workspace pane with a `WorkbenchPaneView` (grouping + toast rect slot).
+    draw_workspace: ?*const fn (ctx: ?*anyopaque, pane: *WorkbenchPaneView) anyerror!void = null,
 };
 
 /// A bottom-panel view. The panel shows a tab strip across all registered views;

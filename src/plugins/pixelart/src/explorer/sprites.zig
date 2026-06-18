@@ -3,9 +3,6 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const pixelart = @import("../../pixelart.zig");
 const Globals = pixelart.Globals;
-const fizzy = @import("../../../../fizzy.zig");
-
-const Editor = fizzy.Editor;
 
 const Sprites = @This();
 

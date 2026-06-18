@@ -11,12 +11,10 @@ it can become its own compile-time module.
 storage inversion, save/pack/editor-action decoupling, platform detection, explorer pane
 lift, sprites bottom-panel lift.
 
-**In progress:** **Stage D** — module scaffold (`module.zig`, `State.zig`, `pixelart.zig`,
-`Globals.zig`), hub consolidation through `fizzy.pixelart_mod`, plugin import migration off
-`fizzy.zig`.
+**In progress:** **Stage D (substantially complete)** — module scaffold, `Globals` injection,
+Workspace decoupling, zero `fizzy.zig` imports in plugin, `b.addModule("pixelart")` wired.
 
-**Next:** wire `b.addModule("pixelart", …)` in `build.zig`, break `plugin.zig` →
-`Editor.Workspace` dep. Then Stage E.
+**Next:** Stage E — strip remaining `fizzy.pixelart.*` from shell `Editor.zig`.
 
 > **Read this first if you're a fresh agent:** start at "Stage D — remaining work"
 > below. All three build configs are green right now.
@@ -196,6 +194,39 @@ remaining `fizzy.app.allocator` refs in `src/plugins/pixelart/**`.
 `wireSdkModule` adds `@import("sdk")` to native, web, and test roots. `fizzy.zig` imports
 sdk via `@import("sdk")` (not a duplicate file-path import).
 
+### SDK pane layout + workspace decoupling (done)
+
+- **`src/sdk/pane_layout.zig`** — shared `mainCanvasVbox` / `emptyStateCard` helpers.
+- **`src/sdk/WorkbenchPane.zig`** — `WorkbenchPaneView { grouping, canvas_rect_physical }`
+  passed to sidebar `draw_workspace` hooks (plugins no longer cast back to `Workspace`).
+- **`State.canvas_by_grouping`** — pixel-art owns per-pane `CanvasData`; `canvasForGrouping` /
+  `removeCanvasPane` replace the old `Workspace.plugin_view_state` opaque slot.
+- **`plugin.zig`** — `drawDocument` uses `CanvasData.forGrouping`; `drawProjectView` uses
+  `sdk.WorkbenchPaneView` + `sdk.pane_layout`; no `fizzy` import.
+- **`FileWidget.zig`** — `canvasData()` reads `Globals.state.canvas_by_grouping`; no `fizzy`.
+- **`workbench/Workspace.zig`** — passes `WorkbenchPaneView` to `draw_workspace`; `deinit`
+  calls `fizzy.State.removeCanvasPane`; layout helpers delegate to `sdk.pane_layout`.
+
+### Runtime fixes (session)
+
+| Bug | Fix |
+|-----|-----|
+| Startup crash in `Tools.init` | Use `self.stroke_shape/size`; set `Globals` before `State.init` |
+| Duplicate `Globals` module | `module.zig`: `pub const Globals = pixelart.Globals` |
+| Crash opening multiple files | Resolve docs by `doc.id`, not cached `doc.ptr` |
+| Crash on close with files open | `State.persistProject()` before `editor.deinit` |
+
+### Build module wired (done)
+
+- **`wirePixelartModule`** in `build.zig` — native, web, and test roots import
+  `@import("pixelart")` with deps: `core`, `sdk`, `dvui`, `assets`, `zip`, `zstbi`,
+  `msf_gif`, `icons`, `backend` (native/test only).
+- **`fizzy.zig`** — `pixelart_mod = @import("pixelart")` (no path import).
+- **Zero `@import("fizzy.zig")` in plugin** — last shell leaks removed:
+  - `dialogs/dimensions_label.zig` + `web_file_io.zig` (plugin-local helpers)
+  - `EditorAPI.setExplorerNewFilePath` (replaces `Explorer.files.new_file_path` touch)
+  - `web_main.zig` probes `FileWidget` via `@import("pixelart")`
+
 ### Still direct-importing pixel-art files (shell)
 
 ```
@@ -207,19 +238,13 @@ src/web_main.zig               → FileWidget.zig force-import (wasm link — mi
 
 ## Stage D — remaining work (start here)
 
-1. **Wire `b.addModule("pixelart", …)` in `build.zig`** (native, web, test) with deps:
-   `core`, `sdk`, `dvui`, `assets`, `zip`, `zstbi`, etc. — mirroring how `core` is wired.
-   Point the module root at `module.zig`. Today the plugin compiles through path imports
-   in `fizzy.zig`; the build module is scaffold-only.
+1. **Route any straggler shell path imports** of pixel-art files through `pixelart_mod`
+   or `@import("pixelart")` (mostly done; `process_assets.zig` stays separate).
 
-2. **Break `plugin.zig` dependency on `fizzy.Editor.Workspace`** (project view drawing
-   still reaches into shell types).
+2. **Optional:** wire `b.addModule("workbench", …)` the same way.
 
-3. **Route `web_main.zig` FileWidget import** through `pixelart_mod` or the future build
-   module.
-
-4. **Optional cleanup:** shell `Editor.zig` still uses `fizzy.pixelart.*` extensively —
-   shrink as plugin vtable / EditorAPI surface grows (Stage E).
+3. **Stage E cleanup:** shell `Editor.zig` still uses `fizzy.pixelart.*` extensively —
+   shrink as plugin vtable / EditorAPI surface grows.
 
 Do **not** re-introduce a duplicate `@import("plugins/pixelart/module.zig")` from both
 `App.zig` and `fizzy.zig` via a third path; always go through `fizzy.pixelart_mod` in
@@ -299,7 +324,8 @@ grep -rn 'fizzy\.editor\.' src/plugins/pixelart     → 0 live
 grep -rn 'fizzy\.platform' src/plugins/pixelart     → 0
 grep -rn 'fizzy\.app\.allocator' src/plugins/pixelart → 0
 grep -rn 'bridge\.' src/plugins/pixelart            → 0
-grep -rn 'plugins/pixelart/' src --include='*.zig'  → process_assets, fizzy module import, web_main
+grep -rn '@import.*fizzy' src/plugins/pixelart  → 0
+grep -rn 'editor/(dialogs|WebFileIo)' src/plugins/pixelart  → 0
 ```
 
 All three configs green: `zig build`, `zig build check-web`, `zig build test`.

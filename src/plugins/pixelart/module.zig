@@ -21,10 +21,17 @@ pub const dialogs = struct {
     pub const Export = @import("src/dialogs/Export.zig");
     pub const GridLayout = @import("src/dialogs/GridLayout.zig");
     pub const FlatRasterSaveWarning = @import("src/dialogs/FlatRasterSaveWarning.zig");
+    pub const DimensionsLabel = @import("src/dialogs/dimensions_label.zig");
 };
 
 pub const explorer = struct {
     pub const project = @import("src/explorer/project.zig");
+};
+
+pub const widgets = struct {
+    pub const FileWidget = @import("src/widgets/FileWidget.zig");
+    pub const ImageWidget = @import("src/widgets/ImageWidget.zig");
+    pub const CanvasBridge = @import("src/widgets/CanvasBridge.zig");
 };
 
 pub const render = @import("src/render.zig");

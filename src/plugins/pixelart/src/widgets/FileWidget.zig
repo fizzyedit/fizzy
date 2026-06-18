@@ -1,7 +1,6 @@
 const std = @import("std");
 const math = std.math;
 const dvui = @import("dvui");
-const fizzy = @import("../../../../fizzy.zig");
 const builtin = @import("builtin");
 const sdl3 = @import("backend").c;
 
@@ -18,7 +17,6 @@ const ScaleWidget = dvui.ScaleWidget;
 pub const FileWidget = @This();
 const CanvasWidget = pixelart.core.dvui.CanvasWidget;
 const CanvasBridge = @import("CanvasBridge.zig");
-const Workspace = fizzy.Editor.Workspace;
 const CanvasData = @import("../CanvasData.zig");
 const icons = @import("icons");
 const pixelart = @import("../../pixelart.zig");
@@ -679,17 +677,10 @@ const BubblePanShared = struct {
     tool_not_pointer: bool,
 };
 
-/// The workspace currently drawing this file, recovered from the file's opaque
-/// slot handle. Valid during draw/processEvents — the shell sets the handle each
-/// frame (in `Workspace.drawCanvas`) before invoking the widget.
-fn workspace(self: *FileWidget) *Workspace {
-    return Workspace.ofFile(self.init_options.file).?;
-}
-
 /// The pixel-art per-pane `CanvasData` for the pane drawing this file, or null if none is
-/// attached yet. Holds the column/row reorder drag state this widget reads while previewing.
+/// allocated yet. Holds the column/row reorder drag state this widget reads while previewing.
 fn canvasData(self: *FileWidget) ?*CanvasData {
-    return CanvasData.fromWorkspace(self.workspace());
+    return Globals.state.canvas_by_grouping.get(self.init_options.file.editor.grouping);
 }
 
 /// True while a column or row is mid-drag in this pane's rulers.

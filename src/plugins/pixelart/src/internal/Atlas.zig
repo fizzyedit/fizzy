@@ -65,7 +65,7 @@ pub fn save(atlas: Atlas, path: []const u8, selector: Selector) !void {
                 }
                 const bytes = try out.toOwnedSlice();
                 defer allocator.free(bytes);
-                try @import("../../../../editor/WebFileIo.zig").downloadBytes(path, bytes);
+                try @import("../web_file_io.zig").downloadBytes(path, bytes);
             },
             .data => {
                 if (!std.mem.eql(u8, ".atlas", std.fs.path.extension(path))) {
@@ -75,7 +75,7 @@ pub fn save(atlas: Atlas, path: []const u8, selector: Selector) !void {
                 const options: std.json.Stringify.Options = .{};
                 const output = try std.json.Stringify.valueAlloc(allocator, atlas.data, options);
                 defer allocator.free(output);
-                try @import("../../../../editor/WebFileIo.zig").downloadBytes(path, output);
+                try @import("../web_file_io.zig").downloadBytes(path, output);
             },
         }
         return;

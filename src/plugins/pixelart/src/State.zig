@@ -19,6 +19,8 @@ const ToolsPane = @import("explorer/tools.zig");
 const SpritesPane = @import("explorer/sprites.zig");
 const SpritesPanel = @import("panel/sprites.zig");
 const Palette = @import("internal/Palette.zig");
+const CanvasData = @import("CanvasData.zig");
+const Globals = @import("Globals.zig");
 pub const Settings = @import("Settings.zig");
 pub const Docs = @import("Docs.zig");
 
@@ -68,6 +70,25 @@ sprite_clipboard: ?SpriteClipboard = null,
 /// most recent request produces a visible atlas update.
 pack_jobs: std.ArrayListUnmanaged(*PackJob) = .empty,
 
+/// Per-workspace-pane canvas chrome (rulers, edit pill, grid reorder), keyed by grouping id.
+canvas_by_grouping: std.AutoArrayHashMapUnmanaged(u64, *CanvasData) = .{},
+
+pub fn canvasForGrouping(st: *State, grouping: u64) *CanvasData {
+    const gpa = Globals.allocator();
+    if (st.canvas_by_grouping.get(grouping)) |existing| return existing;
+    const cd = gpa.create(CanvasData) catch @panic("OOM allocating CanvasData");
+    cd.* = CanvasData.init(grouping);
+    st.canvas_by_grouping.put(gpa, grouping, cd) catch @panic("OOM allocating CanvasData");
+    return cd;
+}
+
+pub fn removeCanvasPane(st: *State, allocator: std.mem.Allocator, grouping: u64) void {
+    const cd = st.canvas_by_grouping.get(grouping) orelse return;
+    cd.deinit();
+    allocator.destroy(cd);
+    _ = st.canvas_by_grouping.swapRemove(grouping);
+}
+
 pub fn init(allocator: std.mem.Allocator, host: *sdk.Host) !State {
     var st: State = .{
         .host = host,
@@ -104,6 +125,13 @@ pub fn deinit(st: *State, allocator: std.mem.Allocator) void {
     if (st.project) |*project| {
         project.deinit(allocator);
     }
+
+    var canvas_it = st.canvas_by_grouping.iterator();
+    while (canvas_it.next()) |entry| {
+        entry.value_ptr.*.deinit();
+        allocator.destroy(entry.value_ptr.*);
+    }
+    st.canvas_by_grouping.deinit(allocator);
 
     st.tools.deinit(allocator);
     st.docs.deinit(allocator);

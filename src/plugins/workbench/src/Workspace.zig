@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const dvui = @import("dvui");
+const sdk = @import("sdk");
 const fizzy = @import("../../../fizzy.zig");
 const icons = @import("icons");
 
@@ -23,15 +24,6 @@ tabs_drag_index: ?usize = null,
 tabs_removed_index: ?usize = null,
 tabs_insert_before_index: ?usize = null,
 
-/// Opaque per-pane state owned by the plugin that renders documents into this pane (today
-/// only pixel art, via `CanvasData`: rulers, edit pill, grid-reorder drag, etc.). The
-/// workbench never dereferences it — it just frees it through `plugin_view_destroy` when the
-/// pane is torn down (`deinit`). Lazily created by the owning plugin on first document draw.
-plugin_view_state: ?*anyopaque = null,
-/// Teardown for `plugin_view_state`, set by the owner alongside the state. Null when no
-/// plugin view has been attached.
-plugin_view_destroy: ?*const fn (state: *anyopaque) void = null,
-
 /// Physical-pixel content rect of this workspace's canvas vbox, captured each frame during
 /// `drawCanvas` (or a sidebar view's `draw_workspace` takeover, e.g. pixel art's Project view).
 /// `null` until the workspace has rendered at least once. Used
@@ -43,14 +35,10 @@ pub fn init(grouping: u64) Workspace {
     return .{ .grouping = grouping };
 }
 
-/// Release any plugin-owned per-pane view state. Called when a pane is removed
+/// Release any plugin-owned per-pane canvas chrome. Called when a pane is removed
 /// (`Editor.rebuildWorkspaces`) and for each pane at editor shutdown.
 pub fn deinit(self: *Workspace) void {
-    if (self.plugin_view_state) |state| {
-        if (self.plugin_view_destroy) |destroy| destroy(state);
-        self.plugin_view_state = null;
-        self.plugin_view_destroy = null;
-    }
+    fizzy.State.removeCanvasPane(fizzy.pixelart, fizzy.app.allocator, self.grouping);
 }
 
 /// Recover the typed workspace currently drawing `file` from its opaque slot
@@ -109,7 +97,11 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     // workbench owns only the pane frame; it hands the active view the opaque workspace handle.
     const active = fizzy.editor.host.activeSidebarView();
     if (active != null and active.?.draw_workspace != null) {
-        try active.?.draw_workspace.?(active.?.ctx, self);
+        var pane_view: sdk.WorkbenchPaneView = .{
+            .grouping = self.grouping,
+            .canvas_rect_physical = &self.canvas_rect_physical,
+        };
+        try active.?.draw_workspace.?(active.?.ctx, &pane_view);
     } else {
         self.drawTabs();
         try self.drawCanvas();
@@ -120,30 +112,14 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
 
 /// Same `@src()` for every call so DVUI sees one stable id when switching between `drawCanvas` and
 /// a plugin's `draw_workspace` takeover (avoids first-frame min-size / layout flash). Use `grouping`
-/// so multi-workspace panes stay distinct.
-/// `pub` so a plugin's `draw_workspace` takeover (pixel art's Project view) can reuse the exact same
-/// vbox so switching project ↔ canvas does not churn the widget id.
+/// so multi-workspace panes stay distinct. Delegates to `sdk.pane_layout` for a single definition.
 pub fn workspaceMainCanvasVbox(content_color: dvui.Color, background: bool, grouping: u64) *dvui.BoxWidget {
-    return dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .both,
-        .background = background,
-        .color_fill = content_color,
-        .id_extra = @intCast(grouping),
-    });
+    return sdk.pane_layout.mainCanvasVbox(content_color, background, grouping);
 }
 
-/// Rounded “card” behind the project empty state and the homepage. Shared id base + `grouping` so
-/// switching project tab ↔ file pane (no open files) does not create a new widget each time.
-/// `pub` so pixel art's Project-view takeover (`draw_workspace`) reuses the identical empty-state card.
+/// Rounded “card” behind the project empty state and the homepage. Delegates to `sdk.pane_layout`.
 pub fn workspaceEmptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.BoxWidget {
-    return dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .both,
-        .background = true,
-        .color_fill = content_color,
-        .corner_radius = dvui.Rect.all(16),
-        .margin = .{ .y = 10 },
-        .id_extra = @intCast(grouping),
-    });
+    return sdk.pane_layout.emptyStateCard(content_color, grouping);
 }
 
 fn drawTabs(self: *Workspace) void {
