@@ -2044,8 +2044,16 @@ pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
         return false;
     }
 
+    // Resolve the owning plugin from the file-type registry before spawning. No owner
+    // means no plugin claims this extension — reject here rather than spawning a worker
+    // that would only fail with InvalidFile.
+    const owner = editor.host.pluginForExtension(std.fs.path.extension(path)) orelse {
+        dvui.log.warn("No plugin handles file: {s}", .{path});
+        return false;
+    };
+
     // Spawn a worker. The job owns the path string we'll key the map by.
-    const job = try FileLoadJob.create(fizzy.app.allocator, path, grouping);
+    const job = try FileLoadJob.create(fizzy.app.allocator, path, owner, grouping);
     errdefer job.destroy();
 
     try editor.loading_jobs.put(fizzy.app.allocator, job.path, job);
@@ -2082,14 +2090,20 @@ pub fn openFileFromBytes(editor: *Editor, path: []u8, bytes: []const u8, groupin
         }
     }
 
-    const loaded = fizzy.Internal.File.fromBytes(path, bytes) catch |err| {
+    const owner = editor.host.pluginForExtension(std.fs.path.extension(path)) orelse {
+        fizzy.app.allocator.free(path);
+        return error.InvalidExtension;
+    };
+
+    var file: fizzy.Internal.File = undefined;
+    const handled = owner.loadDocumentFromBytes(path, bytes, &file) catch |err| {
         fizzy.app.allocator.free(path);
         return err;
     };
-    var file = loaded orelse {
+    if (!handled) {
         fizzy.app.allocator.free(path);
         return error.InvalidFile;
-    };
+    }
     file.editor.grouping = grouping;
     return file;
 }
@@ -3105,7 +3119,9 @@ pub fn save(editor: *Editor) !void {
         editor.requestWebSaveDialog(.save);
         return;
     }
-    try file.saveAsync();
+    if (editor.host.pluginForExtension(std.fs.path.extension(file.path))) |plugin| {
+        try plugin.saveDocument(.{ .ptr = file, .owner = plugin, .id = file.id });
+    }
 }
 
 /// Browser: pick download filename/extension before encoding (`processPendingSaveAs`).
@@ -3125,7 +3141,8 @@ pub fn saveAll(editor: *Editor) !void {
         if (!file.dirty()) continue;
         if (!fizzy.Internal.File.hasRecognizedSaveExtension(file.path)) continue;
         if (file.shouldConfirmFlatRasterSave()) continue;
-        file.saveAsync() catch |err| {
+        const plugin = editor.host.pluginForExtension(std.fs.path.extension(file.path)) orelse continue;
+        plugin.saveDocument(.{ .ptr = file, .owner = plugin, .id = file.id }) catch |err| {
             dvui.log.err("Save All: file {s} failed: {s}", .{ file.path, @errorName(err) });
         };
     }
@@ -3332,6 +3349,16 @@ pub fn closeFile(editor: *Editor, index: usize) !void {
     try editor.closeFileID(file.id);
 }
 
+/// Tear down a file's resources via its owning plugin, falling back to a direct
+/// `deinit` when no plugin claims the extension. The shell still owns removing the
+/// entry from `open_files`; this only releases the document's own resources.
+fn closeDocumentResources(editor: *Editor, file: *fizzy.Internal.File) void {
+    if (editor.host.pluginForExtension(std.fs.path.extension(file.path))) |plugin| {
+        if (plugin.closeDocument(.{ .ptr = file, .owner = plugin, .id = file.id })) return;
+    }
+    file.deinit();
+}
+
 pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     //editor.open_file_index = 0;
     var file = editor.open_files.values()[index];
@@ -3347,7 +3374,7 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
         }
     }
 
-    file.deinit();
+    editor.closeDocumentResources(&file);
     editor.open_files.orderedRemoveAt(index);
 }
 
@@ -3365,7 +3392,7 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
                 }
             }
         }
-        file.deinit();
+        editor.closeDocumentResources(file);
         _ = editor.open_files.orderedRemove(id);
     }
 }

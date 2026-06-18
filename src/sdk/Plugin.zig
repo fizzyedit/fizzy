@@ -1,15 +1,12 @@
 //! A feature module that plugs into the editor shell. Today plugins are compiled
 //! in and registered statically; the same vtable shape is what a prebuilt plugin
-//! dylib will expose at runtime (validated in `spikes/shared-globals/`). All hooks
-//! are optional function pointers taking the plugin's own opaque `state`, so a
-//! plugin implements only what it needs (e.g. the workbench plugin has no
-//! `drawDocument`; an editor plugin does).
+//! dylib will expose at runtime. All hooks are optional function pointers taking
+//! the plugin's own opaque `state`, so a plugin implements only what it needs
+//! (e.g. the workbench plugin has no `drawDocument`; an editor plugin does).
 //!
 //! Cross-boundary types may be normal Zig types (not strict C-ABI): host and
 //! plugins are pinned to the same SDK build, so layouts match. Only the dlopen
-//! entry symbols (added in Phase 4) need `callconv(.c)`.
-//!
-//! Phase 0: type definition only; nothing constructs or calls plugins yet.
+//! entry symbols need `callconv(.c)`.
 const std = @import("std");
 const dvui = @import("dvui");
 const DocHandle = @import("DocHandle.zig");
@@ -31,11 +28,18 @@ pub const VTable = struct {
 
     /// Priority for opening files with extension `ext` (including the dot, e.g.
     /// ".fiz"); lower value wins. `null` = this plugin does not handle `ext`.
-    /// Mirrors dvui-editor's fileTypePriority. A plugin may claim many extensions.
+    /// A plugin may claim many extensions.
     fileTypePriority: ?*const fn (state: *anyopaque, ext: []const u8) ?u8 = null,
 
     // ---- document lifecycle (operates on the plugin's own type via DocHandle) ----
-    openDocument: ?*const fn (state: *anyopaque, path: []const u8) anyerror!DocHandle = null,
+    /// Load the document at `path`, constructing the plugin's own document value in
+    /// place at `out_doc`. The shell owns the typed buffer behind `out_doc` (for pixel
+    /// art a `*Internal.File`); the SDK stays type-agnostic. Runs on the shell's load
+    /// worker thread, so it must only touch the host allocator + the given buffer.
+    loadDocument: ?*const fn (state: *anyopaque, path: []const u8, out_doc: *anyopaque) anyerror!void = null,
+    /// `loadDocument`, but from in-memory bytes (browser file picker). `path` is used
+    /// for extension detection + display name. Synchronous (web has no load worker).
+    loadDocumentFromBytes: ?*const fn (state: *anyopaque, path: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void = null,
     saveDocument: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
     closeDocument: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
     isDirty: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
@@ -67,8 +71,42 @@ pub fn contributeKeybinds(self: Plugin, win: *dvui.Window) !void {
 
 // ---- document lifecycle wrappers (operate on a DocHandle this plugin owns) ----
 
+/// Load `path` into the shell-owned buffer at `out_doc`. Returns whether the plugin
+/// handled it; `false` means this plugin exposes no loader (the shell should treat the
+/// open as failed). See the `loadDocument` vtable field for the threading contract.
+pub fn loadDocument(self: Plugin, path: []const u8, out_doc: *anyopaque) !bool {
+    if (self.vtable.loadDocument) |f| {
+        try f(self.state, path, out_doc);
+        return true;
+    }
+    return false;
+}
+
+/// `loadDocument`, but from in-memory `bytes` (browser file picker).
+pub fn loadDocumentFromBytes(self: Plugin, path: []const u8, bytes: []const u8, out_doc: *anyopaque) !bool {
+    if (self.vtable.loadDocumentFromBytes) |f| {
+        try f(self.state, path, bytes, out_doc);
+        return true;
+    }
+    return false;
+}
+
 pub fn isDirty(self: Plugin, doc: DocHandle) bool {
     return if (self.vtable.isDirty) |f| f(self.state, doc) else false;
+}
+
+pub fn saveDocument(self: Plugin, doc: DocHandle) !void {
+    if (self.vtable.saveDocument) |f| try f(self.state, doc);
+}
+
+/// Tear down an open document. Returns whether the plugin handled it, so the shell
+/// can fall back to its own teardown when no plugin claims the document.
+pub fn closeDocument(self: Plugin, doc: DocHandle) bool {
+    if (self.vtable.closeDocument) |f| {
+        f(self.state, doc);
+        return true;
+    }
+    return false;
 }
 
 pub fn undo(self: Plugin, doc: DocHandle) !void {

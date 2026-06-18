@@ -1,10 +1,11 @@
-//! Background file-load job. Owns a worker thread that runs `Internal.File.fromPath` off the
-//! main thread so large files don't stall the editor. The main thread polls `done` each frame
-//! via `Editor.processLoadingJobs`; once true, the result is moved into `editor.open_files`.
+//! Background file-load job. Owns a worker thread that runs the owning plugin's loader
+//! (`owner.loadDocument`) off the main thread so large files don't stall the editor. The
+//! main thread polls `done` each frame via `Editor.processLoadingJobs`; once true, the
+//! result is moved into `editor.open_files`.
 //!
-//! Cancellation is best-effort: `Internal.File.fromPath` is monolithic, so we can only
-//! observe cancellation AFTER it returns. The worker checks the flag, frees the loaded file
-//! if cancelled, and exits.
+//! Cancellation is best-effort: the plugin loader is monolithic, so we can only observe
+//! cancellation AFTER it returns. The worker checks the flag, frees the loaded file if
+//! cancelled, and exits.
 //!
 //! Ownership / threading model:
 //!   - `path` is owned by the job, freed in `destroy()`.
@@ -32,6 +33,11 @@ allocator: std.mem.Allocator,
 
 /// Absolute path. Owned by this job.
 path: []u8,
+
+/// Plugin that owns this file's extension (resolved on the main thread before spawn).
+/// The worker routes the load through `owner.loadDocument` instead of hardcoding the
+/// pixel-art loader, so open is decoupled from any one editor plugin.
+owner: *fizzy.sdk.Plugin,
 
 /// Workspace grouping the file should land in once loaded.
 target_grouping: u64,
@@ -66,7 +72,7 @@ result: ?fizzy.Internal.File = null,
 /// Filled by worker iff load failed. Safe to read after `done.load(.acquire)`.
 err: ?anyerror = null,
 
-pub fn create(allocator: std.mem.Allocator, path: []const u8, target_grouping: u64) !*FileLoadJob {
+pub fn create(allocator: std.mem.Allocator, path: []const u8, owner: *fizzy.sdk.Plugin, target_grouping: u64) !*FileLoadJob {
     const path_copy = try allocator.dupe(u8, path);
     errdefer allocator.free(path_copy);
 
@@ -74,6 +80,7 @@ pub fn create(allocator: std.mem.Allocator, path: []const u8, target_grouping: u
     job.* = .{
         .allocator = allocator,
         .path = path_copy,
+        .owner = owner,
         .target_grouping = target_grouping,
         .window = dvui.currentWindow(),
         .started_at_ns = perf.nanoTimestamp(),
@@ -107,17 +114,20 @@ pub fn workerMain(job: *FileLoadJob) void {
 
     job.phase.store(@intFromEnum(Phase.reading), .release);
 
-    const maybe_file = fizzy.Internal.File.fromPath(job.path) catch |e| {
+    // Route the actual load through the owning plugin (filled into a stack buffer the
+    // shell owns; the plugin knows its concrete document type). Mirrors the inline-value
+    // model below — no heap handoff.
+    var file: fizzy.Internal.File = undefined;
+    const handled = job.owner.loadDocument(job.path, &file) catch |e| {
         job.err = e;
         job.phase.store(@intFromEnum(Phase.failed), .release);
         return;
     };
-
-    const file = maybe_file orelse {
+    if (!handled) {
         job.err = error.InvalidFile;
         job.phase.store(@intFromEnum(Phase.failed), .release);
         return;
-    };
+    }
 
     // Cancellation check post-load: if the user closed the tab / quit while we were loading,
     // discard the file rather than publishing it.

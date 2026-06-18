@@ -3,6 +3,7 @@
 //! plugin). For now its contributions point at the existing draw entry points
 //! through the `fizzy.*` globals. Registered from `Editor.postInit`.
 const std = @import("std");
+const builtin = @import("builtin");
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const sdk = fizzy.sdk;
@@ -26,7 +27,11 @@ var plugin: sdk.Plugin = .{
 const vtable: sdk.Plugin.VTable = .{
     .fileTypePriority = fileTypePriority,
     .contributeKeybinds = contributeKeybinds,
+    .loadDocument = loadDocument,
+    .loadDocumentFromBytes = loadDocumentFromBytes,
     .isDirty = isDirty,
+    .saveDocument = saveDocument,
+    .closeDocument = closeDocument,
     .undo = undo,
     .redo = redo,
 };
@@ -47,8 +52,37 @@ fn fileTypePriority(_: *anyopaque, ext: []const u8) ?u8 {
     return null;
 }
 
+/// Load `path` into the shell-owned `*Internal.File` at `out_doc`. Runs on the shell's
+/// load worker thread; `File.fromPath` is the pixel-art loader (still resident in the
+/// editor tree, relocated whole into this plugin in Phase 3b/3c).
+fn loadDocument(_: *anyopaque, path: []const u8, out_doc: *anyopaque) anyerror!void {
+    // Web loads via bytes only (`loadDocumentFromBytes`); the comptime guard keeps the
+    // disk-reading `File.fromPath` path (Dir.cwd / posix.AT) out of the wasm binary.
+    if (comptime builtin.target.cpu.arch == .wasm32) return error.Unsupported;
+    const file = try Internal.File.fromPath(path) orelse return error.InvalidFile;
+    @as(*Internal.File, @ptrCast(@alignCast(out_doc))).* = file;
+}
+
+/// As `loadDocument`, from in-memory bytes (browser file picker; synchronous).
+fn loadDocumentFromBytes(_: *anyopaque, path: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void {
+    const file = try Internal.File.fromBytes(path, bytes) orelse return error.InvalidFile;
+    @as(*Internal.File, @ptrCast(@alignCast(out_doc))).* = file;
+}
+
 fn isDirty(_: *anyopaque, doc: DocHandle) bool {
     return docFile(doc).dirty();
+}
+
+/// Persist the document. The shell handles the Save-As / flat-raster / web-download
+/// policy before routing here; this just runs the pixel-art async save.
+fn saveDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
+    try docFile(doc).saveAsync();
+}
+
+/// Release the document's resources. The shell removes it from `open_files` and
+/// fixes up the active-tab index; this just frees the pixel-art `File`.
+fn closeDocument(_: *anyopaque, doc: DocHandle) void {
+    docFile(doc).deinit();
 }
 
 fn undo(_: *anyopaque, doc: DocHandle) anyerror!void {
