@@ -13,12 +13,12 @@ const nfd = @import("nfd");
 
 pub const Explorer = @This();
 
-pub const files = @import("../../workbench/files.zig");
-pub const Tools = @import("tools.zig");
-pub const Sprites = @import("sprites.zig");
+pub const files = @import("../../plugins/workbench/files.zig");
+pub const Tools = @import("../../plugins/pixelart/explorer/tools.zig");
+pub const Sprites = @import("../../plugins/pixelart/explorer/sprites.zig");
 // pub const animations = @import("animations.zig");
 // pub const keyframe_animations = @import("keyframe_animations.zig");
-pub const project = @import("project.zig");
+pub const project = @import("../../plugins/pixelart/explorer/project.zig");
 pub const settings = @import("settings.zig");
 
 sprites: Sprites = .{},
@@ -113,7 +113,7 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
         .background = false,
     });
 
-    if (!fizzy.editor.host.isActiveSidebarView(@import("../../workbench/plugin.zig").view_files)) {
+    if (!fizzy.editor.host.isActiveSidebarView(@import("../../plugins/workbench/plugin.zig").view_files)) {
         fizzy.editor.file_tree_data_id = null;
         if (fizzy.editor.tab_drag_from_tree_path) |p| {
             fizzy.app.allocator.free(p);

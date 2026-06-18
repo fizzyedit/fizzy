@@ -20,32 +20,32 @@ const update_notify = @import("../update_notify.zig");
 const App = fizzy.App;
 const Editor = @This();
 
-pub const Colors = @import("Colors.zig");
-pub const Project = @import("Project.zig");
+pub const Colors = @import("../plugins/pixelart/Colors.zig");
+pub const Project = @import("../plugins/pixelart/Project.zig");
 pub const Recents = @import("Recents.zig");
 pub const Settings = @import("Settings.zig");
-pub const Tools = @import("Tools.zig");
+pub const Tools = @import("../plugins/pixelart/Tools.zig");
 pub const Dialogs = @import("dialogs/Dialogs.zig");
 
-pub const Transform = @import("Transform.zig");
+pub const Transform = @import("../plugins/pixelart/Transform.zig");
 pub const Keybinds = @import("Keybinds.zig");
 
-pub const Workspace = @import("../workbench/Workspace.zig");
+pub const Workspace = @import("../plugins/workbench/Workspace.zig");
 pub const Explorer = @import("explorer/Explorer.zig");
 pub const IgnoreRules = @import("explorer/IgnoreRules.zig");
 pub const Panel = @import("panel/Panel.zig");
 pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
-pub const FileLoadJob = @import("../workbench/FileLoadJob.zig");
-pub const PackJob = @import("PackJob.zig");
+pub const FileLoadJob = @import("../plugins/workbench/FileLoadJob.zig");
+pub const PackJob = @import("../plugins/pixelart/PackJob.zig");
 
 pub const sdk = fizzy.sdk;
 pub const Host = sdk.Host;
 
 /// Workbench (Phase 1): file-management home — currently the per-branch
 /// decoration registry for the explorer; grows to own files + tabs/splits.
-pub const Workbench = @import("../workbench/Workbench.zig");
+pub const Workbench = @import("../plugins/workbench/Workbench.zig");
 
 /// This arena is for small per-frame editor allocations, such as path joins, null terminations and labels.
 /// Do not free these allocations, instead, this allocator will be .reset(.retain_capacity) each frame
@@ -476,8 +476,8 @@ pub fn postInit(editor: *Editor) !void {
     // near-empty shell's content: it iterates the Host registries rather than
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
     // editor tick already runs on wasm. Order = sidebar order.
-    try @import("../workbench/plugin.zig").register(&editor.host);
-    try @import("../pixelart/plugin.zig").register(&editor.host);
+    try @import("../plugins/workbench/plugin.zig").register(&editor.host);
+    try @import("../plugins/pixelart/plugin.zig").register(&editor.host);
 
     // Shell built-in: Settings (owner = null; not a plugin).
     try editor.host.registerSidebarView(.{
@@ -1984,7 +1984,7 @@ pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     }
     editor.folder = try fizzy.app.allocator.dupe(u8, path);
     try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
-    editor.host.setActiveSidebarView(@import("../workbench/plugin.zig").view_files);
+    editor.host.setActiveSidebarView(@import("../plugins/workbench/plugin.zig").view_files);
 
     editor.project = Project.load(fizzy.app.allocator) catch null;
     editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);
@@ -2384,7 +2384,7 @@ pub fn processPackJob(editor: *Editor) void {
         }
         fizzy.packer.last_packed_at_ns = fizzy.perf.nanoTimestamp();
         job.result_consumed = true;
-        editor.host.setActiveSidebarView(@import("../pixelart/plugin.zig").view_project);
+        editor.host.setActiveSidebarView(@import("../plugins/pixelart/plugin.zig").view_project);
         const toast_canvas: ?dvui.Id = if (editor.activeFile()) |file| file.editor.canvas.id else null;
         showPackToast("Project packed", toast_canvas);
     } else blk: {

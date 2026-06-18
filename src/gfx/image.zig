@@ -1,7 +1,6 @@
 const std = @import("std");
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
-const zip = @import("zip");
 
 pub fn init(width: u32, height: u32, default_color: dvui.Color.PMA, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
     const num_pixels = width * height;
@@ -329,29 +328,9 @@ pub fn blitData(src_pixels: [][4]u8, src_width: usize, src_height: usize, dst_pi
     }
 }
 
-fn ensurePngWriterBuffer(writer: *std.Io.Writer) !void {
+pub fn ensurePngWriterBuffer(writer: *std.Io.Writer) !void {
     if (writer.buffer.len < dvui.PNGEncoder.min_buffer_size) {
         try writer.rebase(0, dvui.PNGEncoder.min_buffer_size);
-    }
-}
-
-pub fn writeToZip(
-    source: dvui.ImageSource,
-    zip_file: ?*anyopaque,
-    resolution: u32,
-) !void {
-    const s: dvui.Size = dvui.imageSize(source) catch .{ .w = 0, .h = 0 };
-
-    const w = @as(c_int, @intFromFloat(s.w));
-    const h = @as(c_int, @intFromFloat(s.h));
-
-    var writer = std.Io.Writer.Allocating.init(fizzy.editor.arena.allocator());
-
-    try ensurePngWriterBuffer(&writer.writer);
-    try dvui.PNGEncoder.writeWithResolution(&writer.writer, fizzy.image.bytes(source), @intCast(w), @intCast(h), resolution);
-
-    if (@as(?*zip.struct_zip_t, @ptrCast(zip_file))) |z| {
-        _ = zip.zip_entry_write(z, writer.written().ptr, @as(usize, writer.written().len));
     }
 }
 

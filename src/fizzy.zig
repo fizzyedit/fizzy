@@ -13,7 +13,7 @@ pub const version: std.SemanticVersion = .{
 pub const atlas = @import("generated/atlas.zig");
 
 // Other helpers and namespaces
-pub const algorithms = @import("algorithms/algorithms.zig");
+pub const algorithms = @import("plugins/pixelart/algorithms/algorithms.zig");
 pub const fa = @import("tools/font_awesome.zig");
 pub const fs = @import("tools/fs.zig");
 pub const image = @import("gfx/image.zig");
@@ -26,7 +26,7 @@ pub const App = @import("App.zig");
 pub const Editor = @import("editor/Editor.zig");
 pub const Explorer = @import("editor/explorer/Explorer.zig");
 pub const Fling = @import("editor/Fling.zig");
-pub const Packer = @import("tools/Packer.zig");
+pub const Packer = @import("plugins/pixelart/Packer.zig");
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
 
@@ -40,30 +40,30 @@ pub var packer: *Packer = undefined;
 /// An example of this is File. fizzy.File matches the file type to read from JSON,
 /// while the fizzy.Internal.File contains cameras, timers, file-specific editor fields.
 pub const Internal = struct {
-    pub const Animation = @import("internal/Animation.zig");
-    pub const Atlas = @import("internal/Atlas.zig");
-    pub const Buffers = @import("internal/Buffers.zig");
-    pub const File = @import("internal/File.zig");
-    pub const History = @import("internal/History.zig");
-    pub const Layer = @import("internal/Layer.zig");
-    pub const Palette = @import("internal/Palette.zig");
-    pub const Sprite = @import("internal/Sprite.zig");
+    pub const Animation = @import("plugins/pixelart/internal/Animation.zig");
+    pub const Atlas = @import("plugins/pixelart/internal/Atlas.zig");
+    pub const Buffers = @import("plugins/pixelart/internal/Buffers.zig");
+    pub const File = @import("plugins/pixelart/internal/File.zig");
+    pub const History = @import("plugins/pixelart/internal/History.zig");
+    pub const Layer = @import("plugins/pixelart/internal/Layer.zig");
+    pub const Palette = @import("plugins/pixelart/internal/Palette.zig");
+    pub const Sprite = @import("plugins/pixelart/internal/Sprite.zig");
 };
 
 /// Frame-by-frame sprite animation
-pub const Animation = @import("Animation.zig");
+pub const Animation = @import("plugins/pixelart/Animation.zig");
 
 /// Contains lists of sprites and animations
-pub const Atlas = @import("Atlas.zig");
+pub const Atlas = @import("plugins/pixelart/Atlas.zig");
 
 /// The data that gets written to disk in a .pixi file and read back into this type
-pub const File = @import("File.zig");
+pub const File = @import("plugins/pixelart/File.zig");
 
 /// Contains information such as the name, visibility and collapse settings of a texture layer
-pub const Layer = @import("Layer.zig");
+pub const Layer = @import("plugins/pixelart/Layer.zig");
 
 /// Source location within the atlas texture and origin location
-pub const Sprite = @import("Sprite.zig");
+pub const Sprite = @import("plugins/pixelart/Sprite.zig");
 
 /// Runtime platform detection (`isMacOS()` etc.) that's accurate on wasm web
 /// builds, where `builtin.os.tag` is always `.freestanding`.

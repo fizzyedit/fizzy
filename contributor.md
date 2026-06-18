@@ -15,9 +15,9 @@ to have a conversation about Fizzy, please reach out to me on discord or add an 
 Fizzy is built using several game development libraries by others in the Zig community, as well as a C library for handling zipped files. The dependencies are as follows: 
   - ***mach-core***: Handles windowing and input, and uses the new zig package manager. This library and dependencies will be downloaded to the cache on build.
   - ***nfd_zig***: Native file dialogs wrapper, copied into the src/deps folder.
-  - ***zgui***: Wrapper for Dear Imgui, which is copied into the src/deps/zig-gamedev folder.
-  - ***zmath***: Math library, primarily using this for vector math and matrices. As above, this is copied into the src/deps/zig-gamedev folder.
-  - ***zstbi***: Wrapper for stbi provided by zig-gamedev. This handles loading and resizing images. As above, this is copied into the src/deps/zig-gamedev folder.
+  - ***zgui***: Wrapper for Dear Imgui, which is copied into the src/plugins/pixelart/deps/zig-gamedev folder.
+  - ***zmath***: Math library, primarily using this for vector math and matrices. As above, this is copied into the src/plugins/pixelart/deps/zig-gamedev folder.
+  - ***zstbi***: Wrapper for stbi provided by zig-gamedev. This handles loading and resizing images. As above, this is copied into the src/plugins/pixelart/deps/zig-gamedev folder.
   - ***zip***: Wrapper for the zip library, copied into the src/deps folder.
 
 Outside of the `src` folder, we have `assets` which contain all assets that we would like to be copied over next to the executable and used by Fizzy at runtime.

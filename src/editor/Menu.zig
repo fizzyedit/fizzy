@@ -3,7 +3,6 @@ const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const Editor = fizzy.Editor;
 const settings = fizzy.settings;
-const zstbi = @import("zstbi");
 const builtin = @import("builtin");
 
 pub var mouse_distance: f32 = std.math.floatMax(f32);

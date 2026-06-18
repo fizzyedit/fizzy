@@ -1,7 +1,7 @@
 const std = @import("std");
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
-const FlatRasterSaveWarning = @import("FlatRasterSaveWarning.zig");
+const FlatRasterSaveWarning = @import("../../plugins/pixelart/dialogs/FlatRasterSaveWarning.zig");
 
 pub fn request(file_id: u64) void {
     var mutex = fizzy.dvui.dialog(@src(), .{

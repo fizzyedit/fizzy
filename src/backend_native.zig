@@ -7,7 +7,7 @@ const sdl3 = @import("backend").c;
 const objc = @import("objc");
 const win32 = @import("win32");
 const singleton = @import("singleton.zig");
-const window_layout = @import("internal/window_layout.zig");
+const window_layout = @import("window_layout.zig");
 
 // AppKit geometry types for NSView frame/bounds (same layout as Foundation).
 const NSPoint = extern struct { x: f64, y: f64 };

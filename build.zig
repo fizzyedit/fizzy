@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const zip = @import("src/deps/zip/build.zig");
+const zip = @import("src/plugins/pixelart/deps/zip/build.zig");
 
 const dvui = @import("dvui");
 const velopack = @import("velopack_zig");
@@ -360,7 +360,7 @@ pub fn build(b: *std.Build) !void {
             .root_module = b.addModule("zstbi_web", .{
                 .target = web_target,
                 .optimize = optimize,
-                .root_source_file = b.path("src/deps/stbi/zstbi.zig"),
+                .root_source_file = b.path("src/plugins/pixelart/deps/stbi/zstbi.zig"),
                 .link_libc = false,
                 .single_threaded = true,
             }),
@@ -370,11 +370,11 @@ pub fn build(b: *std.Build) !void {
             "-DSTBI_NO_SIMD=1",
         };
         zstbi_web_lib.root_module.addCSourceFile(.{
-            .file = std.Build.path(b, "src/deps/stbi/zstbi.c"),
+            .file = std.Build.path(b, "src/plugins/pixelart/deps/stbi/zstbi.c"),
             .flags = &zstbi_web_cflags,
         });
         zstbi_web_lib.root_module.addCSourceFile(.{
-            .file = std.Build.path(b, "src/deps/stbi/fizzy_stbi_libc.c"),
+            .file = std.Build.path(b, "src/plugins/pixelart/deps/stbi/fizzy_stbi_libc.c"),
             .flags = &zstbi_web_cflags,
         });
         web_exe.root_module.addImport("zstbi", zstbi_web_lib.root_module);
@@ -384,14 +384,14 @@ pub fn build(b: *std.Build) !void {
             .root_module = b.addModule("msf_gif_web", .{
                 .target = web_target,
                 .optimize = optimize,
-                .root_source_file = b.path("src/deps/msf_gif/msf_gif.zig"),
+                .root_source_file = b.path("src/plugins/pixelart/deps/msf_gif/msf_gif.zig"),
                 .link_libc = false,
                 .single_threaded = true,
             }),
         });
-        const msf_gif_wasm_cflags = [_][]const u8{"-Isrc/deps/msf_gif/wasm_shim"};
+        const msf_gif_wasm_cflags = [_][]const u8{"-Isrc/plugins/pixelart/deps/msf_gif/wasm_shim"};
         msf_gif_web_lib.root_module.addCSourceFile(.{
-            .file = std.Build.path(b, "src/deps/msf_gif/fizzy_msf_gif_wasm.c"),
+            .file = std.Build.path(b, "src/plugins/pixelart/deps/msf_gif/fizzy_msf_gif_wasm.c"),
             .flags = &msf_gif_wasm_cflags,
         });
         web_exe.root_module.addImport("msf_gif", msf_gif_web_lib.root_module);
@@ -739,13 +739,13 @@ pub fn build(b: *std.Build) !void {
     inline for (.{
         .{ "fizzy-direction", "src/math/direction.zig" },
         .{ "fizzy-easing", "src/math/easing.zig" },
-        .{ "fizzy-layer-order", "src/internal/layer_order.zig" },
-        .{ "fizzy-palette-parse", "src/internal/palette_parse.zig" },
+        .{ "fizzy-layer-order", "src/plugins/pixelart/internal/layer_order.zig" },
+        .{ "fizzy-palette-parse", "src/plugins/pixelart/internal/palette_parse.zig" },
         .{ "fizzy-layout-anchor", "src/math/layout_anchor.zig" },
-        .{ "fizzy-reduce", "src/algorithms/reduce.zig" },
-        .{ "fizzy-grid-validate", "src/internal/grid_layout_validate.zig" },
-        .{ "fizzy-animation", "src/Animation.zig" },
-        .{ "fizzy-window-layout", "src/internal/window_layout.zig" },
+        .{ "fizzy-reduce", "src/plugins/pixelart/algorithms/reduce.zig" },
+        .{ "fizzy-grid-validate", "src/plugins/pixelart/internal/grid_layout_validate.zig" },
+        .{ "fizzy-animation", "src/plugins/pixelart/Animation.zig" },
+        .{ "fizzy-window-layout", "src/window_layout.zig" },
     }) |entry| {
         tests_module.addAnonymousImport(entry[0], .{
             .root_source_file = b.path(entry[1]),
@@ -1075,22 +1075,22 @@ fn addFizzyExecutableForTarget(
         .root_module = b.addModule("zstbi", .{
             .target = resolved_target,
             .optimize = optimize,
-            .root_source_file = .{ .cwd_relative = "src/deps/stbi/zstbi.zig" },
+            .root_source_file = .{ .cwd_relative = "src/plugins/pixelart/deps/stbi/zstbi.zig" },
         }),
     });
     const zstbi_module = zstbi_lib.root_module;
-    zstbi_module.addCSourceFile(.{ .file = std.Build.path(b, "src/deps/stbi/zstbi.c") });
+    zstbi_module.addCSourceFile(.{ .file = std.Build.path(b, "src/plugins/pixelart/deps/stbi/zstbi.c") });
 
     const msf_gif_lib = b.addLibrary(.{
         .name = "msf_gif",
         .root_module = b.addModule("msf_gif", .{
             .target = resolved_target,
             .optimize = optimize,
-            .root_source_file = .{ .cwd_relative = "src/deps/msf_gif/msf_gif.zig" },
+            .root_source_file = .{ .cwd_relative = "src/plugins/pixelart/deps/msf_gif/msf_gif.zig" },
         }),
     });
     const msf_gif_module = msf_gif_lib.root_module;
-    msf_gif_module.addCSourceFile(.{ .file = std.Build.path(b, "src/deps/msf_gif/msf_gif.c") });
+    msf_gif_module.addCSourceFile(.{ .file = std.Build.path(b, "src/plugins/pixelart/deps/msf_gif/msf_gif.c") });
 
     const exe = b.addExecutable(.{
         .name = "fizzy",

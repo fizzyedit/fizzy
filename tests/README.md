@@ -67,9 +67,9 @@ covered:
 direction encoding, `fromRadians`, rotation inverses.
 - `[src/math/easing.zig](../src/math/easing.zig)` — `lerp`, `ease`,
 endpoint pinning, midpoint bias.
-- `[src/internal/layer_order.zig](../src/internal/layer_order.zig)` —
+- `[src/plugins/pixelart/internal/layer_order.zig](../src/plugins/pixelart/internal/layer_order.zig)` —
 the layer-reorder algorithm used by the layers tree drag-and-drop.
-- `[src/internal/palette_parse.zig](../src/internal/palette_parse.zig)`
+- `[src/plugins/pixelart/internal/palette_parse.zig](../src/plugins/pixelart/internal/palette_parse.zig)`
 — `.hex` palette file parser (valid hex, comments/blanks, malformed
 input, CRLF).
 

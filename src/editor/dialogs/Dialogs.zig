@@ -4,12 +4,12 @@ const dvui = @import("dvui");
 
 const Dialogs = @This();
 
-pub const NewFile = @import("NewFile.zig");
-pub const Export = @import("Export.zig");
+pub const NewFile = @import("../../plugins/pixelart/dialogs/NewFile.zig");
+pub const Export = @import("../../plugins/pixelart/dialogs/Export.zig");
 pub const UnsavedClose = @import("UnsavedClose.zig");
 pub const AppQuitUnsaved = @import("AppQuitUnsaved.zig");
-pub const GridLayout = @import("GridLayout.zig");
-pub const FlatRasterSaveWarning = @import("FlatRasterSaveWarning.zig");
+pub const GridLayout = @import("../../plugins/pixelart/dialogs/GridLayout.zig");
+pub const FlatRasterSaveWarning = @import("../../plugins/pixelart/dialogs/FlatRasterSaveWarning.zig");
 pub const AboutFizzy = @import("AboutFizzy.zig");
 pub const WebFolderUnavailable = if (builtin.target.cpu.arch == .wasm32)
     @import("WebFolderUnavailable.zig")
