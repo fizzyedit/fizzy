@@ -86,12 +86,38 @@ fn closeDocument(_: *anyopaque, doc: DocHandle) void {
     docFile(doc).deinit();
 }
 
-/// Render the open pixel-art document into the workbench-provided container (the current
-/// dvui parent). The workbench sets `canvas.id` / `workspace_handle` and draws the canvas
-/// chrome around this; here we instantiate the editing widget and the sample magnifier.
+/// Render the open pixel-art document into the workbench-provided content region (the
+/// current dvui parent). The workbench owns only the container + tab/split frame and sets
+/// `canvas.id` / `workspace_handle` / `center` before routing here; pixel art owns the
+/// entire region: rulers, the canvas hbox, the transform/edit/sample overlays, the editing
+/// widget, and the sample magnifier. The per-workspace ruler/overlay state + draw helpers
+/// still live on `Workspace` for now (recovered via `ofFile`); they relocate here in 3C/2b.
 fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
     const file = docFile(doc);
+    const ws = fizzy.Editor.Workspace.ofFile(file) orelse return;
+    const container = dvui.parentGet().data();
+
     fizzy.perf.canvasPaneDrawn();
+
+    if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(container.id)) {
+        defer fizzy.dvui.drawEdgeShadow(container.rectScale(), .top, .{});
+        ws.drawRuler(.horizontal);
+    }
+
+    var canvas_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+    defer canvas_hbox.deinit();
+
+    if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(container.id)) {
+        defer fizzy.dvui.drawEdgeShadow(container.rectScale(), .left, .{});
+        ws.drawRuler(.vertical);
+    }
+
+    ws.drawTransformDialog(container);
+    ws.drawEditPill(container);
+    // Before the file widget so FloatingWidget uses window-scale coords (not canvas zoom).
+    ws.drawSampleButton(container);
+
+    if (ws.grouping != file.editor.grouping) return;
 
     var file_widget = fizzy.dvui.FileWidget.init(@src(), .{
         .file = file,

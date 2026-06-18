@@ -884,32 +884,13 @@ pub fn drawCanvas(self: *Workspace) !void {
         }
 
         const file = &fizzy.editor.open_files.values()[self.open_file_index];
+        // The workbench owns only the content region (this container) + tab/split frame;
+        // bind it to the document and route the entire in-region render to the owning
+        // plugin (pixel art draws its rulers, overlays, and editing widget itself).
         file.editor.canvas.id = canvas_vbox.data().id;
         file.editor.workspace_handle = self;
         file.editor.center = self.center;
 
-        if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(canvas_vbox.data().id)) {
-            defer fizzy.dvui.drawEdgeShadow(canvas_vbox.data().rectScale(), .top, .{});
-            self.drawRuler(.horizontal);
-        }
-
-        var canvas_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
-        defer canvas_hbox.deinit();
-
-        if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(canvas_vbox.data().id)) {
-            defer fizzy.dvui.drawEdgeShadow(canvas_vbox.data().rectScale(), .left, .{});
-            self.drawRuler(.vertical);
-        }
-
-        self.drawTransformDialog(canvas_vbox);
-        self.drawEditPill(canvas_vbox);
-        // Before the file widget so FloatingWidget uses window-scale coords (not canvas zoom).
-        self.drawSampleButton(canvas_vbox);
-
-        if (self.grouping != file.editor.grouping) return;
-
-        // Route the document render to its owning plugin (pixel art builds its own
-        // FileWidget). The workbench owns only the container + canvas chrome above.
         if (fizzy.editor.host.pluginForExtension(std.fs.path.extension(file.path))) |plugin| {
             _ = try plugin.drawDocument(.{ .ptr = file, .owner = plugin, .id = file.id });
         }
@@ -1560,16 +1541,16 @@ pub fn processRowReorder(self: *Workspace) void {
     }
 }
 
-pub fn drawTransformDialog(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
+pub fn drawTransformDialog(self: *Workspace, container: *dvui.WidgetData) void {
     const file = &fizzy.editor.open_files.values()[self.open_file_index];
     if (file.editor.transform) |*transform| {
-        var rect = canvas_vbox.data().rect;
+        var rect = container.rect;
         rect.w = 0;
         rect.h = 0;
 
         var fw: dvui.FloatingWidget = undefined;
         fw.init(@src(), .{}, .{
-            .rect = .{ .x = canvas_vbox.data().rectScale().r.toNatural().x + 10, .y = canvas_vbox.data().rectScale().r.toNatural().y + 10, .w = 0, .h = 0 },
+            .rect = .{ .x = container.rectScale().r.toNatural().x + 10, .y = container.rectScale().r.toNatural().y + 10, .w = 0, .h = 0 },
             .expand = .none,
             .background = true,
             .color_fill = dvui.themeGet().color(.control, .fill),
@@ -1653,7 +1634,7 @@ pub fn drawTransformDialog(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void 
 /// with icon-only round buttons sized to match the toolbox buttons. Starts collapsed as a
 /// single hamburger circle; tapping toggles the row of action buttons in/out with a
 /// width animation.
-pub fn drawEditPill(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
+pub fn drawEditPill(self: *Workspace, container: *dvui.WidgetData) void {
     const file = fizzy.editor.activeFile() orelse return;
 
     const button_size: f32 = 36;
@@ -1699,7 +1680,7 @@ pub fn drawEditPill(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
 
     // Drive the expand/collapse with a dvui animation. Look up the current value, and on
     // a toggle click kick off a new animation between the current value and the target.
-    const anim_id = dvui.Id.update(canvas_vbox.data().id, "edit_pill_expand");
+    const anim_id = dvui.Id.update(container.id, "edit_pill_expand");
     var anim_value: f32 = if (self.edit_pill_expanded) 1.0 else 0.0;
     if (dvui.animationGet(anim_id, "_t")) |a| anim_value = std.math.clamp(a.value(), 0.0, 1.0);
 
@@ -1711,7 +1692,7 @@ pub fn drawEditPill(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
     // the pill follows the workspace exactly: as a split is dragged shut the canvas area
     // shrinks, and once it's narrower than the pill we bail and draw nothing this frame —
     // so closing splits cleanly hides the menu.
-    const wb = canvas_vbox.data().rectScale().r.toNatural();
+    const wb = container.rectScale().r.toNatural();
     const ruler_top: f32 = if (fizzy.editor.settings.show_rulers) self.horizontal_ruler_height else 0;
     const ruler_left: f32 = if (fizzy.editor.settings.show_rulers) self.vertical_ruler_width else 0;
     const canvas_nat = dvui.Rect{
@@ -1935,7 +1916,7 @@ pub fn drawEditPill(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
 /// through to `file.editor.canvas.sample_data_point` so `FileWidget.drawSample` renders
 /// the existing color-dropper magnifier at the touch location. On release we read the
 /// color underneath the sample point and apply it to the primary color slot.
-pub fn drawSampleButton(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
+pub fn drawSampleButton(self: *Workspace, container: *dvui.WidgetData) void {
     const file = fizzy.editor.activeFile() orelse return;
 
     const pill_button_size: f32 = 36;
@@ -1949,7 +1930,7 @@ pub fn drawSampleButton(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
     const gap: f32 = 6;
 
     // Anchor against the same canvas-scroll-area rect the pill uses.
-    const wb = canvas_vbox.data().rectScale().r.toNatural();
+    const wb = container.rectScale().r.toNatural();
     const ruler_top: f32 = if (fizzy.editor.settings.show_rulers) self.horizontal_ruler_height else 0;
     const ruler_left: f32 = if (fizzy.editor.settings.show_rulers) self.vertical_ruler_width else 0;
     const canvas_nat = dvui.Rect{
@@ -2002,7 +1983,7 @@ pub fn drawSampleButton(self: *Workspace, canvas_vbox: *dvui.BoxWidget) void {
 
     // Persistent drag state (a press is "drag-sampling" once motion clears the dvui drag
     // threshold). Stored via dataSet because the button widget is recreated each frame.
-    const drag_state_id = dvui.Id.update(canvas_vbox.data().id, "sample_button_drag");
+    const drag_state_id = dvui.Id.update(container.id, "sample_button_drag");
     var is_drag_sampling = dvui.dataGet(null, drag_state_id, "active", bool) orelse false;
     var did_sample = dvui.dataGet(null, drag_state_id, "did_sample", bool) orelse false;
 
