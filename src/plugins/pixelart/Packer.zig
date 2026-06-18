@@ -249,7 +249,7 @@ pub fn append(self: *Packer, file: *fizzy.Internal.File) !void {
 }
 
 pub fn appendProject(packer: *Packer) !void {
-    if (fizzy.editor.folder) |root_directory| {
+    if (fizzy.pixelart.host.folder()) |root_directory| {
         try recurseFiles(packer, root_directory);
     }
 }

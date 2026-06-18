@@ -6,9 +6,10 @@
 //! Phase 0: holds the plugin registry + service locator. Nothing is registered
 //! yet — the existing pixel-art code still uses globals directly.
 const std = @import("std");
+const dvui = @import("dvui");
 const Plugin = @import("Plugin.zig");
 const regions = @import("regions.zig");
-const ShellApi = @import("ShellApi.zig");
+const EditorAPI = @import("EditorAPI.zig");
 
 pub const Host = @This();
 
@@ -35,7 +36,7 @@ services: std.StringHashMapUnmanaged(*anyopaque) = .empty,
 
 /// The shell's read/utility surface (arena, folder, shared settings, dirty mark),
 /// installed by the shell during startup. Null until installed (headless/test).
-shell_api: ?ShellApi = null,
+shell_api: ?EditorAPI = null,
 
 /// Opaque per-plugin settings store (see `PluginSettings`).
 plugin_settings: PluginSettings = .empty,
@@ -85,7 +86,7 @@ pub fn deinit(self: *Host) void {
 // ---- shell services (installed by the shell during startup) ----------------
 
 /// Install the shell's read/utility surface. Called once during startup.
-pub fn installShell(self: *Host, api: ShellApi) void {
+pub fn installShell(self: *Host, api: EditorAPI) void {
     self.shell_api = api;
 }
 
@@ -112,6 +113,21 @@ pub fn markSettingsDirty(self: *Host) void {
 /// Shell-owned content-area opacity (matches the shell chrome). 1.0 if no shell installed.
 pub fn contentOpacity(self: *Host) f32 {
     return if (self.shell_api) |a| a.contentOpacity() else 1.0;
+}
+
+/// Whether the OS window is currently maximized. False if no shell installed (headless/web).
+pub fn isMaximized(self: *Host) bool {
+    return if (self.shell_api) |a| a.isMaximized() else false;
+}
+
+/// The explorer pane's content rect (shell layout). Zero rect if no shell installed.
+pub fn explorerRect(self: *Host) dvui.Rect {
+    return if (self.shell_api) |a| a.explorerRect() else .{};
+}
+
+/// The explorer scroll area's virtual content size (shell layout). Zero size if no shell installed.
+pub fn explorerVirtualSize(self: *Host) dvui.Size {
+    return if (self.shell_api) |a| a.explorerVirtualSize() else .{};
 }
 
 // ---- per-plugin settings store ---------------------------------------------

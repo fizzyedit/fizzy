@@ -81,7 +81,7 @@ pub fn draw(self: *Tools) !void {
 
     if (paned.dragging) {
         max_split_ratio = paned.split_ratio.*;
-        fizzy.editor.explorer.layers_ratio = paned.split_ratio.*;
+        fizzy.pixelart.layers_ratio = paned.split_ratio.*;
     }
 
     if (paned.showFirst()) {
@@ -97,7 +97,7 @@ pub fn draw(self: *Tools) !void {
     const autofit = !paned.dragging and !paned.collapsed_state and !paned.animating;
 
     // Refit must be done between showFirst and showSecond
-    if (((dvui.firstFrame(paned.data().id) or prev_layer_count != layer_count) or autofit) and !fizzy.editor.explorer.pinned_palettes) {
+    if (((dvui.firstFrame(paned.data().id) or prev_layer_count != layer_count) or autofit) and !fizzy.pixelart.pinned_palettes) {
         if (dvui.firstFrame(paned.data().id) and layer_count == 0)
             paned.split_ratio.* = 0.0;
 
@@ -108,7 +108,7 @@ pub fn draw(self: *Tools) !void {
         // next frame when min sizes are valid.
         if (dvui.firstFrame(paned.data().id) and layer_count > 0) {
             paned.split_ratio.* = 0.01;
-            //fizzy.editor.explorer.layers_ratio = paned.split_ratio.*;
+            //fizzy.pixelart.layers_ratio = paned.split_ratio.*;
         } else {
             const ratio = paned.getFirstFittedRatio(
                 .{
@@ -129,9 +129,9 @@ pub fn draw(self: *Tools) !void {
             if (layer_count == 0)
                 paned.split_ratio.* = 0.0
             else
-                paned.split_ratio.* = fizzy.editor.explorer.layers_ratio;
+                paned.split_ratio.* = fizzy.pixelart.layers_ratio;
 
-            fizzy.editor.explorer.layers_ratio = paned.split_ratio.*;
+            fizzy.pixelart.layers_ratio = paned.split_ratio.*;
         }
     }
 
@@ -589,7 +589,7 @@ pub fn drawLayers(tools: *Tools) !?dvui.Rect.Physical {
             if (file.editor.isolate_layer) {
                 if (file.peek_layer_index) |peek_layer_index| {
                     min_layer_index = peek_layer_index;
-                } else if (!fizzy.editor.explorer.tools.layersHovered()) {
+                } else if (!fizzy.pixelart.tools_pane.layersHovered()) {
                     min_layer_index = file.selected_layer_index;
                 }
             }
@@ -1069,9 +1069,9 @@ pub fn drawPaletteControls() !void {
             .corner_radius = dvui.Rect.all(1000),
         },
         .rotation = std.math.pi * 0.25,
-        .style = if (fizzy.editor.explorer.pinned_palettes) .highlight else .control,
+        .style = if (fizzy.pixelart.pinned_palettes) .highlight else .control,
     })) {
-        fizzy.editor.explorer.pinned_palettes = !fizzy.editor.explorer.pinned_palettes;
+        fizzy.pixelart.pinned_palettes = !fizzy.pixelart.pinned_palettes;
     }
 }
 
@@ -1161,8 +1161,8 @@ pub fn drawPalettes() !void {
             var flex_box = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
                 .expand = .horizontal,
                 .max_size_content = .{
-                    .w = fizzy.editor.explorer.rect.w - 20 * dvui.currentWindow().natural_scale,
-                    .h = fizzy.editor.explorer.rect.h - 20 * dvui.currentWindow().natural_scale,
+                    .w = fizzy.pixelart.host.explorerRect().w - 20 * dvui.currentWindow().natural_scale,
+                    .h = fizzy.pixelart.host.explorerRect().h - 20 * dvui.currentWindow().natural_scale,
                 },
             });
 
@@ -1267,7 +1267,8 @@ pub fn drawPalettes() !void {
 }
 fn searchPalettes(dropdown: *dvui.DropdownWidget) !void {
     const io = dvui.io;
-    var dir_opt = std.Io.Dir.cwd().openDir(io, fizzy.editor.palette_folder, .{ .access_sub_paths = false, .iterate = true }) catch null;
+    const palette_folder = fizzy.pixelart.host.paletteFolder() orelse return;
+    var dir_opt = std.Io.Dir.cwd().openDir(io, palette_folder, .{ .access_sub_paths = false, .iterate = true }) catch null;
     if (dir_opt) |*dir| {
         defer dir.close(io);
         var iter = dir.iterate();
@@ -1277,7 +1278,7 @@ fn searchPalettes(dropdown: *dvui.DropdownWidget) !void {
                 if (std.mem.eql(u8, ext, ".hex")) {
                     const label = try std.fmt.allocPrint(dvui.currentWindow().arena(), "{s}", .{entry.name});
                     if (dropdown.addChoiceLabel(label)) {
-                        const abs_path = try std.fs.path.join(dvui.currentWindow().arena(), &.{ fizzy.editor.palette_folder, entry.name });
+                        const abs_path = try std.fs.path.join(dvui.currentWindow().arena(), &.{ palette_folder, entry.name });
 
                         if (fizzy.pixelart.colors.palette) |*palette|
                             palette.deinit();

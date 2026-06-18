@@ -48,7 +48,7 @@ pub fn save(atlas: Atlas, path: []const u8, selector: Selector) !void {
     // below writes through `std.Io.Dir.cwd()` which requires `posix.AT` (not
     // available on `wasm32-freestanding`).
     if (comptime @import("builtin").target.cpu.arch == .wasm32) {
-        const allocator = fizzy.editor.arena.allocator();
+        const allocator = fizzy.pixelart.host.arena();
         switch (selector) {
             .source => {
                 const ext = std.fs.path.extension(path);
@@ -83,7 +83,7 @@ pub fn save(atlas: Atlas, path: []const u8, selector: Selector) !void {
     switch (selector) {
         .source => {
             const ext = std.fs.path.extension(path);
-            const write_path = std.fmt.allocPrintSentinel(fizzy.editor.arena.allocator(), "{s}", .{path}, 0) catch unreachable;
+            const write_path = std.fmt.allocPrintSentinel(fizzy.pixelart.host.arena(), "{s}", .{path}, 0) catch unreachable;
 
             if (std.mem.eql(u8, ext, ".png")) {
                 try fizzy.image.writeToPng(atlas.source, write_path);
@@ -101,7 +101,7 @@ pub fn save(atlas: Atlas, path: []const u8, selector: Selector) !void {
             }
             const options: std.json.Stringify.Options = .{};
 
-            const output = try std.json.Stringify.valueAlloc(fizzy.editor.arena.allocator(), atlas.data, options);
+            const output = try std.json.Stringify.valueAlloc(fizzy.pixelart.host.arena(), atlas.data, options);
 
             std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = output }) catch return error.CouldNotWriteAtlasData;
         },

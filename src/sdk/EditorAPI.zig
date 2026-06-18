@@ -7,8 +7,9 @@
 //! owned settings plugins read, and the dirty-mark hook — without leaking the concrete
 //! `Editor` type across the SDK boundary.
 const std = @import("std");
+const dvui = @import("dvui");
 
-const ShellApi = @This();
+const EditorAPI = @This();
 
 ctx: *anyopaque,
 vtable: *const VTable,
@@ -25,24 +26,44 @@ pub const VTable = struct {
     /// Shell-owned content-area opacity (also drives the shell's own panes); plugins
     /// read it to match the shell chrome.
     contentOpacity: *const fn (ctx: *anyopaque) f32,
+    /// Whether the OS window is currently maximized (always false on web).
+    isMaximized: *const fn (ctx: *anyopaque) bool,
+    /// The explorer pane's content rect (shell layout); plugins drawn inside the explorer
+    /// read it to size their content. Zero rect when no shell is installed.
+    explorerRect: *const fn (ctx: *anyopaque) dvui.Rect,
+    /// The explorer scroll area's virtual content size (shell layout). Zero size when no
+    /// shell is installed.
+    explorerVirtualSize: *const fn (ctx: *anyopaque) dvui.Size,
 };
 
-pub fn arena(self: ShellApi) std.mem.Allocator {
+pub fn arena(self: EditorAPI) std.mem.Allocator {
     return self.vtable.arena(self.ctx);
 }
 
-pub fn folder(self: ShellApi) ?[]const u8 {
+pub fn folder(self: EditorAPI) ?[]const u8 {
     return self.vtable.folder(self.ctx);
 }
 
-pub fn paletteFolder(self: ShellApi) ?[]const u8 {
+pub fn paletteFolder(self: EditorAPI) ?[]const u8 {
     return self.vtable.paletteFolder(self.ctx);
 }
 
-pub fn markSettingsDirty(self: ShellApi) void {
+pub fn markSettingsDirty(self: EditorAPI) void {
     self.vtable.markSettingsDirty(self.ctx);
 }
 
-pub fn contentOpacity(self: ShellApi) f32 {
+pub fn contentOpacity(self: EditorAPI) f32 {
     return self.vtable.contentOpacity(self.ctx);
+}
+
+pub fn isMaximized(self: EditorAPI) bool {
+    return self.vtable.isMaximized(self.ctx);
+}
+
+pub fn explorerRect(self: EditorAPI) dvui.Rect {
+    return self.vtable.explorerRect(self.ctx);
+}
+
+pub fn explorerVirtualSize(self: EditorAPI) dvui.Size {
+    return self.vtable.explorerVirtualSize(self.ctx);
 }

@@ -273,7 +273,7 @@ pub fn sampleColorAtPoint(
     if (file.editor.isolate_layer) {
         if (file.peek_layer_index) |peek_layer_index| {
             min_layer_index = peek_layer_index;
-        } else if (!fizzy.editor.explorer.tools.layersHovered()) {
+        } else if (!fizzy.pixelart.tools_pane.layersHovered()) {
             min_layer_index = file.selected_layer_index;
         }
     }
@@ -1642,8 +1642,8 @@ pub fn drawSpriteBubble(
                     self.init_options.file.selected_animation_index = anim_index;
                     self.init_options.file.collapseAnimationSelectionToPrimary();
                     self.init_options.file.editor.animations_scroll_to_index = anim_index;
-                    fizzy.editor.explorer.sprites.edit_anim_id = self.init_options.file.animations.items(.id)[anim_index];
-                    fizzy.editor.host.setActiveSidebarView(@import("../plugin.zig").view_sprites);
+                    fizzy.pixelart.sprites_pane.edit_anim_id = self.init_options.file.animations.items(.id)[anim_index];
+                    fizzy.pixelart.host.setActiveSidebarView(@import("../plugin.zig").view_sprites);
 
                     var anim = self.init_options.file.animations.get(anim_index);
                     if (anim.frames.len == 0) {
@@ -4626,7 +4626,7 @@ pub fn drawLayers(self: *FileWidget) void {
             const sprite_rect_physical = self.init_options.file.editor.canvas.screenFromDataRect(sprite_rect);
 
             // Draw the origins when in the sprites pane
-            if (fizzy.editor.host.isActiveSidebarView(@import("../plugin.zig").view_sprites)) {
+            if (fizzy.pixelart.host.isActiveSidebarView(@import("../plugin.zig").view_sprites)) {
                 const origin: dvui.Point = .{ .x = sprite_rect.topLeft().x + file.sprites.get(i).origin[0], .y = sprite_rect.topLeft().y + file.sprites.get(i).origin[1] };
 
                 const horizontal_line_start: dvui.Point = .{ .x = sprite_rect.topLeft().x, .y = origin.y };

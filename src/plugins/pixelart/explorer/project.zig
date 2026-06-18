@@ -14,7 +14,7 @@ pub fn draw() !void {
         return;
     }
 
-    if (fizzy.editor.folder) |folder| {
+    if (fizzy.pixelart.host.folder()) |folder| {
         if (fizzy.pixelart.project) |_| {
             const tl = dvui.textLayout(@src(), .{}, .{
                 .expand = .none,
@@ -34,7 +34,7 @@ pub fn draw() !void {
         } else {
             var box = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .expand = .horizontal,
-                .max_size_content = .{ .w = fizzy.editor.explorer.scroll_info.virtual_size.w, .h = std.math.floatMax(f32) },
+                .max_size_content = .{ .w = fizzy.pixelart.host.explorerVirtualSize().w, .h = std.math.floatMax(f32) },
             });
             defer box.deinit();
 

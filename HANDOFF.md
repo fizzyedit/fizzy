@@ -63,9 +63,9 @@ interprets them.
     opaque per-plugin blob store (id → serialized JSON). `loadPluginSettings(id)` /
     `storePluginSettings(id, json)` (the latter dupes + marks shell settings dirty). Host
     owns + frees the key/value strings in `deinit`.
-  - `shell_api: ?ShellApi` + `installShell(api)` + thin forwarders: `arena()`, `folder()`,
+  - `shell_api: ?EditorAPI` + `installShell(api)` + thin forwarders: `arena()`, `folder()`,
     `paletteFolder()`, `markSettingsDirty()`, `contentOpacity()`.
-- **`ShellApi`** (`ShellApi.zig`): vtable + ctx the shell installs so plugins reach shared
+- **`EditorAPI`** (`EditorAPI.zig`): vtable + ctx the shell installs so plugins reach shared
   shell state without importing `Editor`. The shell's vtable impl lives in `Editor.zig`
   (`shell_api_vtable` + `shellArena`/`shellFolder`/… ; ctx is `*Editor`), installed in
   `Editor.postInit`.
@@ -112,7 +112,7 @@ three enums + `resolvedPanZoomScheme`). All ~27 pixel-art read sites repointed t
 
 **`content_opacity` deliberately stays on the shell** — it's also read by `workbench/
 Workspace.zig` and `panel/Panel.zig`, so it's genuinely shell-level. Pixel art's 3 reads
-go through `fizzy.pixelart.host.contentOpacity()` (the ShellApi). The pixel-art settings
+go through `fizzy.pixelart.host.contentOpacity()` (the EditorAPI). The pixel-art settings
 *UI controls* were removed from `editor/explorer/settings.zig` (the shell "Editor" section
 now only has theme/fonts/window+content opacity/hold-timing/debugging).
 
@@ -258,12 +258,12 @@ backend: showSaveFileDialog ×5, DialogFileFilter ×4, isMaximized ×3 ; platfor
 1. **`host` (11) — trivial now.** `PixelArt` already holds `host: *sdk.Host` (set in
    `init`). Repoint `fizzy.editor.host.setActiveSidebarView/isActiveSidebarView` →
    `fizzy.pixelart.host.…`. Pure mechanical, no SDK change.
-2. **`arena` (10), `folder` (6), `palette_folder` (2) — done-for-you.** The ShellApi
+2. **`arena` (10), `folder` (6), `palette_folder` (2) — done-for-you.** The EditorAPI
    forwarders already exist: `fizzy.pixelart.host.arena()` / `.folder()` /
    `.paletteFolder()`. Repoint `fizzy.editor.arena.allocator()` → `fizzy.pixelart.host.arena()`,
    etc. (mind that `arena` callers use `.allocator()`; the forwarder already returns the
    `Allocator`).
-3. **`backend.isMaximized` (3), `platform.isMacOS` (3).** Add `isMaximized()` to ShellApi
+3. **`backend.isMaximized` (3), `platform.isMacOS` (3).** Add `isMaximized()` to EditorAPI
    (shell calls `fizzy.backend.isMaximized(dvui.currentWindow())`). `isMacOS` is just
    `core.platform.isMacOS()` — pixel art can call `fizzy.platform.isMacOS()` until Stage D
    repoints it to `core` directly; low priority.
@@ -272,7 +272,7 @@ backend: showSaveFileDialog ×5, DialogFileFilter ×4, isMaximized ×3 ; platfor
    `.scroll_info`). `tools`/`sprites` are pixel-art pane modules; `pinned_palettes`/
    `layers_ratio` are pixel-art UI state. These should **move onto `PixelArt`** (like the
    settings did), not get an SDK accessor. `rect`/`scroll_info` are shell explorer layout —
-   expose via ShellApi or pass into the draw.
+   expose via EditorAPI or pass into the draw.
 5. **Native save dialogs (`backend.showSaveFileDialog` ×5, `DialogFileFilter` ×4).** Add a
    small SDK surface for "ask the host to run a native save dialog" (native-only; web has
    its own path). The save-flow tail (`requestSaveAs`, `pending_*`, `quit_*`, `accept`,
@@ -328,10 +328,10 @@ request). Beyond the Stage A3 changes, the working tree now also has:
 - **Stage B:** new `src/plugins/pixelart/PixelArt.zig`; `fizzy.pixelart` global in
   `fizzy.zig`; init/deinit wiring in `App.zig`; field removals + ~190 repoints in
   `Editor.zig`, `Keybinds.zig`, `workbench/files.zig`, and the pixel-art tree.
-- **Stage C part 1 (settings):** new `src/sdk/ShellApi.zig`,
+- **Stage C part 1 (settings):** new `src/sdk/EditorAPI.zig`,
   `src/plugins/pixelart/Settings.zig`; `SettingsSection` in `sdk/regions.zig` + `sdk.zig`;
   Host store/forwarders/section-registry in `sdk/Host.zig`; persistence rework in
-  `editor/Settings.zig`; ShellApi impl + section iteration in `editor/Editor.zig`; trimmed
+  `editor/Settings.zig`; EditorAPI impl + section iteration in `editor/Editor.zig`; trimmed
   `editor/explorer/settings.zig`; settings repoints across the pixel-art tree;
   `App.zig` passes the host to `PixelArt.init`.
 

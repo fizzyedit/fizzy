@@ -127,7 +127,7 @@ fn workspaceCanvasChromeColor() dvui.Color {
     var content_color = dvui.themeGet().color(.window, .fill);
     switch (builtin.os.tag) {
         .macos, .windows => {
-            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow()))
+            content_color = if (!fizzy.pixelart.host.isMaximized())
                 content_color.opacity(fizzy.pixelart.host.contentOpacity())
             else
                 content_color;

@@ -14,15 +14,11 @@ const nfd = @import("nfd");
 pub const Explorer = @This();
 
 pub const files = @import("../../plugins/workbench/files.zig");
-pub const Tools = @import("../../plugins/pixelart/explorer/tools.zig");
-pub const Sprites = @import("../../plugins/pixelart/explorer/sprites.zig");
 // pub const animations = @import("animations.zig");
 // pub const keyframe_animations = @import("keyframe_animations.zig");
 pub const project = @import("../../plugins/pixelart/explorer/project.zig");
 pub const settings = @import("settings.zig");
 
-sprites: Sprites = .{},
-tools: Tools = .{},
 paned: *fizzy.dvui.PanedWidget = undefined,
 scroll_info: dvui.ScrollInfo = .{
     .horizontal = .auto,
@@ -30,8 +26,6 @@ scroll_info: dvui.ScrollInfo = .{
 rect: dvui.Rect = .{},
 rect_screen: dvui.Rect.Physical = .{},
 open_branches: std.AutoHashMap(dvui.Id, void) = undefined,
-pinned_palettes: bool = false,
-layers_ratio: f32 = 0.5,
 animations_ratio: f32 = 0.5,
 closed: bool = false,
 

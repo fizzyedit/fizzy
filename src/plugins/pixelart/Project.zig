@@ -22,8 +22,8 @@ pack_on_save: bool = false,
 
 pub fn load(allocator: std.mem.Allocator) !?Project {
     if (comptime builtin.target.cpu.arch == .wasm32) return null;
-    if (fizzy.editor.folder) |folder| {
-        const file = try std.fs.path.join(fizzy.editor.arena.allocator(), &.{ folder, ".fizproject" });
+    if (fizzy.pixelart.host.folder()) |folder| {
+        const file = try std.fs.path.join(fizzy.pixelart.host.arena(), &.{ folder, ".fizproject" });
 
         if (fizzy.fs.read(allocator, dvui.io, file) catch null) |r| {
             read = r;
@@ -60,8 +60,8 @@ pub fn load(allocator: std.mem.Allocator) !?Project {
 
 pub fn save(project: *Project) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    if (fizzy.editor.folder) |folder| {
-        const file = try std.fs.path.join(fizzy.editor.arena.allocator(), &.{ folder, ".fizproject" });
+    if (fizzy.pixelart.host.folder()) |folder| {
+        const file = try std.fs.path.join(fizzy.pixelart.host.arena(), &.{ folder, ".fizproject" });
         const options = std.json.Stringify.Options{};
 
         const str = try std.json.Stringify.valueAlloc(fizzy.app.allocator, Project{
@@ -90,7 +90,7 @@ pub fn exportAssets(project: *Project) !void {
     }
 
     // if (project.packed_heightmap_output) |packed_heightmap_output| {
-    //     const path = try std.fs.path.joinZ(fizzy.editor.arena.allocator(), &.{ parent_folder, packed_heightmap_output });
+    //     const path = try std.fs.path.joinZ(fizzy.pixelart.host.arena(), &.{ parent_folder, packed_heightmap_output });
     //     try fizzy.editor.atlas.save(path, .heightmap);
     // }
 }

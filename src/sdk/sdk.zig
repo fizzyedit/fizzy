@@ -18,4 +18,4 @@ pub const SettingsSection = regions.SettingsSection;
 
 /// Shell-provided read/utility surface plugins reach through the `Host`
 /// (arena, folder, shared settings, dirty-marking).
-pub const ShellApi = @import("ShellApi.zig");
+pub const EditorAPI = @import("EditorAPI.zig");

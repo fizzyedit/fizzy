@@ -543,15 +543,18 @@ fn drawShellSettingsSection(_: ?*anyopaque) anyerror!void {
     try Explorer.settings.draw();
 }
 
-// ---- ShellApi: the shell-provided read/utility surface for plugins ----------
+// ---- EditorAPI: the shell-provided read/utility surface for plugins ----------
 // Installed on the Host in `postInit`; `ctx` is this `*Editor`.
 
-const shell_api_vtable: sdk.ShellApi.VTable = .{
+const shell_api_vtable: sdk.EditorAPI.VTable = .{
     .arena = shellArena,
     .folder = shellFolder,
     .paletteFolder = shellPaletteFolder,
     .markSettingsDirty = shellMarkSettingsDirty,
     .contentOpacity = shellContentOpacity,
+    .isMaximized = shellIsMaximized,
+    .explorerRect = shellExplorerRect,
+    .explorerVirtualSize = shellExplorerVirtualSize,
 };
 
 fn shellCtx(ctx: *anyopaque) *Editor {
@@ -571,6 +574,16 @@ fn shellMarkSettingsDirty(ctx: *anyopaque) void {
 }
 fn shellContentOpacity(ctx: *anyopaque) f32 {
     return shellCtx(ctx).settings.content_opacity;
+}
+fn shellIsMaximized(ctx: *anyopaque) bool {
+    _ = ctx;
+    return fizzy.backend.isMaximized(dvui.currentWindow());
+}
+fn shellExplorerRect(ctx: *anyopaque) dvui.Rect {
+    return shellCtx(ctx).explorer.rect;
+}
+fn shellExplorerVirtualSize(ctx: *anyopaque) dvui.Size {
+    return shellCtx(ctx).explorer.scroll_info.virtual_size;
 }
 
 /// Ensures `{config}/Themes` exists and scans `*.json` for future user themes (loaded entries are prepended before Fizzy themes).

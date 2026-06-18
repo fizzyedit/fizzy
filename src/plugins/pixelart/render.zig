@@ -112,7 +112,7 @@ fn layerViewStateForRender(init_opts: RenderFileOptions) struct { min_layer_inde
         if (init_opts.file.editor.isolate_layer) {
             if (init_opts.file.peek_layer_index) |peek_layer_index| {
                 min_layer_index = peek_layer_index;
-            } else if (!fizzy.editor.explorer.tools.layersHovered()) {
+            } else if (!fizzy.pixelart.tools_pane.layersHovered()) {
                 min_layer_index = init_opts.file.selected_layer_index;
             }
         }

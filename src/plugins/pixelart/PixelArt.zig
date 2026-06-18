@@ -19,6 +19,8 @@ const Colors = @import("Colors.zig");
 const Project = @import("Project.zig");
 const Tools = @import("Tools.zig");
 const PackJob = @import("PackJob.zig");
+const ToolsPane = @import("explorer/tools.zig");
+const SpritesPane = @import("explorer/sprites.zig");
 pub const Settings = @import("Settings.zig");
 
 const PixelArt = @This();
@@ -37,6 +39,17 @@ settings: Settings = .{},
 
 tools: Tools,
 colors: Colors = .{},
+
+/// Explorer sidebar panes (lifted off the shell `Explorer` in Phase 4 Stage C). The "tools"
+/// view (layers + palette) and the "sprites" view (animations/frames) are pixel-art-specific
+/// UI state; the shell only routes the registered sidebar view's `draw` to them.
+tools_pane: ToolsPane = .{},
+sprites_pane: SpritesPane = .{},
+
+/// Whether the palette pane is pinned open in the tools sidebar (pixel-art UI state).
+pinned_palettes: bool = false,
+/// Split ratio between the layers list and the palette in the tools sidebar.
+layers_ratio: f32 = 0.5,
 
 /// The open project's `.fizproject` pack config, or null when no project folder is open.
 project: ?Project = null,

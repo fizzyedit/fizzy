@@ -2682,7 +2682,7 @@ fn mergeLayerInternal(self: *File, kind: History.Change.LayerMerge.Kind, src_i: 
         .dest_pixels_before = dest_pixels_before,
         .dest_mask_before = dest_mask_before,
     } });
-    fizzy.editor.host.setActiveSidebarView(pixelart.view_tools);
+    fizzy.pixelart.host.setActiveSidebarView(pixelart.view_tools);
 }
 
 pub fn duplicateLayer(self: *File, index: usize) !u64 {
@@ -2798,7 +2798,7 @@ pub fn saveTar(self: *File, window: *dvui.Window) !void {
     var ext = try self.external(fizzy.app.allocator);
     defer ext.deinit(fizzy.app.allocator);
 
-    const output_path = try fizzy.editor.arena.allocator().dupeZ(u8, self.path);
+    const output_path = try fizzy.pixelart.host.arena().dupeZ(u8, self.path);
 
     var handle = try std.fs.cwd().createFile(output_path, .{});
     defer handle.close();
@@ -2826,7 +2826,7 @@ pub fn saveTar(self: *File, window: *dvui.Window) !void {
                 else => return error.InvalidImageSource,
             };
 
-            try wrt.writeFileBytes(try std.fmt.allocPrintZ(fizzy.editor.arena.allocator(), "{s}.layer", .{layer.name}), data, .{});
+            try wrt.writeFileBytes(try std.fmt.allocPrintZ(fizzy.pixelart.host.arena(), "{s}.layer", .{layer.name}), data, .{});
         }
     }
 

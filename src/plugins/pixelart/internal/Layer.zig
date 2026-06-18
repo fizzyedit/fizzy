@@ -412,7 +412,7 @@ pub fn writeSourceToZip(
     const w = @as(c_int, @intFromFloat(s.w));
     const h = @as(c_int, @intFromFloat(s.h));
 
-    var writer = std.Io.Writer.Allocating.init(fizzy.editor.arena.allocator());
+    var writer = std.Io.Writer.Allocating.init(fizzy.pixelart.host.arena());
 
     try fizzy.image.ensurePngWriterBuffer(&writer.writer);
     try dvui.PNGEncoder.writeWithResolution(&writer.writer, fizzy.image.bytes(source), @intCast(w), @intCast(h), resolution);

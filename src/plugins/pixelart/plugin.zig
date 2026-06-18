@@ -166,10 +166,10 @@ fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
 
     switch (builtin.os.tag) {
         .macos => {
-            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.pixelart.host.contentOpacity()) else content_color;
+            content_color = if (!fizzy.pixelart.host.isMaximized()) content_color.opacity(fizzy.pixelart.host.contentOpacity()) else content_color;
         },
         .windows => {
-            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.pixelart.host.contentOpacity()) else content_color;
+            content_color = if (!fizzy.pixelart.host.isMaximized()) content_color.opacity(fizzy.pixelart.host.contentOpacity()) else content_color;
         },
         else => {},
     }
@@ -177,7 +177,7 @@ fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
     const show_packed_atlas = if (comptime builtin.target.cpu.arch == .wasm32)
         fizzy.packer.atlas != null
     else
-        fizzy.editor.folder != null and fizzy.packer.atlas != null;
+        fizzy.pixelart.host.folder() != null and fizzy.packer.atlas != null;
 
     // Match `drawCanvas`: no outer fill when showing centered card (transparency shows through like homepage).
     var canvas_vbox = Workspace.workspaceMainCanvasVbox(content_color, show_packed_atlas, ws.grouping);
@@ -218,7 +218,7 @@ fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
 
         const hint: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
             "Pack open files to see the preview."
-        else if (fizzy.editor.folder == null)
+        else if (fizzy.pixelart.host.folder() == null)
             "Open a project folder, then pack to see the preview."
         else
             "Pack the project to see the preview.";
@@ -290,10 +290,10 @@ pub fn register(host: *sdk.Host) !void {
 }
 
 fn drawTools(_: ?*anyopaque) anyerror!void {
-    try fizzy.editor.explorer.tools.draw();
+    try fizzy.pixelart.tools_pane.draw();
 }
 fn drawSprites(_: ?*anyopaque) anyerror!void {
-    try fizzy.editor.explorer.sprites.draw();
+    try fizzy.pixelart.sprites_pane.draw();
 }
 fn drawProject(_: ?*anyopaque) anyerror!void {
     try fizzy.Editor.Explorer.project.draw();
