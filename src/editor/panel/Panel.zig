@@ -11,9 +11,6 @@ const Packer = fizzy.Packer;
 
 pub const Panel = @This();
 
-pub const Sprites = @import("../../plugins/pixelart/panel/sprites.zig");
-
-sprites: Sprites = .{},
 paned: *fizzy.dvui.PanedWidget = undefined,
 scroll_info: dvui.ScrollInfo = .{
     .horizontal = .auto,

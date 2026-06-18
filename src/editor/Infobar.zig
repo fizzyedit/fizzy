@@ -2,7 +2,7 @@ const std = @import("std");
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
-const update_notify = @import("../update_notify.zig");
+const update_notify = @import("../backend/update_notify.zig");
 const Dialogs = fizzy.Editor.Dialogs;
 
 pub const Infobar = @This();

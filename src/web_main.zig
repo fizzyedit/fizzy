@@ -57,7 +57,7 @@ comptime {
 
     // Custom dvui wrapper + widgets — types compile even though the widget files
     // contain dead `@import("backend")` SDL3 imports at file scope.
-    _ = @import("plugins/pixelart/widgets/FileWidget.zig");
+    _ = @import("plugins/pixelart/src/widgets/FileWidget.zig");
     _ = fizzy.dvui.CanvasWidget;
 
     // The big ones: Editor + App. Type-level reference only — passes because Zig

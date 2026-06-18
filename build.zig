@@ -1,13 +1,13 @@
 const std = @import("std");
 
-const zip = @import("src/plugins/pixelart/deps/zip/build.zig");
+const zip = @import("src/plugins/pixelart/src/deps/zip/build.zig");
 
 const dvui = @import("dvui");
 const velopack = @import("velopack_zig");
 
 const content_dir = "assets/";
 
-const ProcessAssetsStep = @import("src/tools/process_assets.zig");
+const ProcessAssetsStep = @import("process_assets.zig");
 
 const update = @import("update.zig");
 const GitDependency = update.GitDependency;
@@ -358,6 +358,7 @@ pub fn build(b: *std.Build) !void {
             core_module_web.addImport("icons", dep.module("icons"));
         }
         web_exe.root_module.addImport("core", core_module_web);
+        wireSdkModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), web_exe.root_module);
 
         // Three editor files have `const sdl3 = @import("backend").c;` at file
         // scope. After refactoring all `sdl3.SDL_DialogFileFilter` references
@@ -375,7 +376,7 @@ pub fn build(b: *std.Build) !void {
             .root_module = b.addModule("zstbi_web", .{
                 .target = web_target,
                 .optimize = optimize,
-                .root_source_file = b.path("src/plugins/pixelart/deps/stbi/zstbi.zig"),
+                .root_source_file = b.path("src/plugins/pixelart/src/deps/stbi/zstbi.zig"),
                 .link_libc = false,
                 .single_threaded = true,
             }),
@@ -385,11 +386,11 @@ pub fn build(b: *std.Build) !void {
             "-DSTBI_NO_SIMD=1",
         };
         zstbi_web_lib.root_module.addCSourceFile(.{
-            .file = std.Build.path(b, "src/plugins/pixelart/deps/stbi/zstbi.c"),
+            .file = std.Build.path(b, "src/plugins/pixelart/src/deps/stbi/zstbi.c"),
             .flags = &zstbi_web_cflags,
         });
         zstbi_web_lib.root_module.addCSourceFile(.{
-            .file = std.Build.path(b, "src/plugins/pixelart/deps/stbi/fizzy_stbi_libc.c"),
+            .file = std.Build.path(b, "src/plugins/pixelart/src/deps/stbi/fizzy_stbi_libc.c"),
             .flags = &zstbi_web_cflags,
         });
         web_exe.root_module.addImport("zstbi", zstbi_web_lib.root_module);
@@ -399,14 +400,14 @@ pub fn build(b: *std.Build) !void {
             .root_module = b.addModule("msf_gif_web", .{
                 .target = web_target,
                 .optimize = optimize,
-                .root_source_file = b.path("src/plugins/pixelart/deps/msf_gif/msf_gif.zig"),
+                .root_source_file = b.path("src/plugins/pixelart/src/deps/msf_gif/msf_gif.zig"),
                 .link_libc = false,
                 .single_threaded = true,
             }),
         });
-        const msf_gif_wasm_cflags = [_][]const u8{"-Isrc/plugins/pixelart/deps/msf_gif/wasm_shim"};
+        const msf_gif_wasm_cflags = [_][]const u8{"-Isrc/plugins/pixelart/src/deps/msf_gif/wasm_shim"};
         msf_gif_web_lib.root_module.addCSourceFile(.{
-            .file = std.Build.path(b, "src/plugins/pixelart/deps/msf_gif/fizzy_msf_gif_wasm.c"),
+            .file = std.Build.path(b, "src/plugins/pixelart/src/deps/msf_gif/fizzy_msf_gif_wasm.c"),
             .flags = &msf_gif_wasm_cflags,
         });
         web_exe.root_module.addImport("msf_gif", msf_gif_web_lib.root_module);
@@ -754,13 +755,13 @@ pub fn build(b: *std.Build) !void {
     inline for (.{
         .{ "fizzy-direction", "src/core/math/direction.zig" },
         .{ "fizzy-easing", "src/core/math/easing.zig" },
-        .{ "fizzy-layer-order", "src/plugins/pixelart/internal/layer_order.zig" },
-        .{ "fizzy-palette-parse", "src/plugins/pixelart/internal/palette_parse.zig" },
+        .{ "fizzy-layer-order", "src/plugins/pixelart/src/internal/layer_order.zig" },
+        .{ "fizzy-palette-parse", "src/plugins/pixelart/src/internal/palette_parse.zig" },
         .{ "fizzy-layout-anchor", "src/core/math/layout_anchor.zig" },
-        .{ "fizzy-reduce", "src/plugins/pixelart/algorithms/reduce.zig" },
-        .{ "fizzy-grid-validate", "src/plugins/pixelart/internal/grid_layout_validate.zig" },
-        .{ "fizzy-animation", "src/plugins/pixelart/Animation.zig" },
-        .{ "fizzy-window-layout", "src/window_layout.zig" },
+        .{ "fizzy-reduce", "src/plugins/pixelart/src/algorithms/reduce.zig" },
+        .{ "fizzy-grid-validate", "src/plugins/pixelart/src/internal/grid_layout_validate.zig" },
+        .{ "fizzy-animation", "src/plugins/pixelart/src/Animation.zig" },
+        .{ "fizzy-window-layout", "src/backend/window_layout.zig" },
     }) |entry| {
         tests_module.addAnonymousImport(entry[0], .{
             .root_source_file = b.path(entry[1]),
@@ -846,6 +847,7 @@ pub fn build(b: *std.Build) !void {
         core_module_test.addImport("icons", dep.module("icons"));
     }
     fizzy_test_module.addImport("core", core_module_test);
+    wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), fizzy_test_module);
 
     if (target.result.os.tag == .macos) {
         if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |dep| {
@@ -980,7 +982,7 @@ fn applyMsvcTranslateCShim(b: *std.Build, roots: []const *std.Build.Step.Compile
             const rt = tc.target.result;
             if (rt.os.tag != .windows or rt.abi != .msvc) continue;
             // `-I` searches before `-isystem`, so this shim wins over MSVC's <stdint.h>.
-            tc.addIncludePath(b.path("src/tools/msvc_translatec_shim"));
+            tc.addIncludePath(b.path("src/backend/msvc_translatec_shim"));
             // Pre-define SIZE_MAX so MSVC's stdint.h `#ifndef SIZE_MAX` block — which would
             // otherwise install a `0xff…ui64` literal — skips itself. Belt-and-suspenders
             // to the shim: covers the case where another header includes <stdint.h> through
@@ -1104,22 +1106,22 @@ fn addFizzyExecutableForTarget(
         .root_module = b.addModule("zstbi", .{
             .target = resolved_target,
             .optimize = optimize,
-            .root_source_file = .{ .cwd_relative = "src/plugins/pixelart/deps/stbi/zstbi.zig" },
+            .root_source_file = .{ .cwd_relative = "src/plugins/pixelart/src/deps/stbi/zstbi.zig" },
         }),
     });
     const zstbi_module = zstbi_lib.root_module;
-    zstbi_module.addCSourceFile(.{ .file = std.Build.path(b, "src/plugins/pixelart/deps/stbi/zstbi.c") });
+    zstbi_module.addCSourceFile(.{ .file = std.Build.path(b, "src/plugins/pixelart/src/deps/stbi/zstbi.c") });
 
     const msf_gif_lib = b.addLibrary(.{
         .name = "msf_gif",
         .root_module = b.addModule("msf_gif", .{
             .target = resolved_target,
             .optimize = optimize,
-            .root_source_file = .{ .cwd_relative = "src/plugins/pixelart/deps/msf_gif/msf_gif.zig" },
+            .root_source_file = .{ .cwd_relative = "src/plugins/pixelart/src/deps/msf_gif/msf_gif.zig" },
         }),
     });
     const msf_gif_module = msf_gif_lib.root_module;
-    msf_gif_module.addCSourceFile(.{ .file = std.Build.path(b, "src/plugins/pixelart/deps/msf_gif/msf_gif.c") });
+    msf_gif_module.addCSourceFile(.{ .file = std.Build.path(b, "src/plugins/pixelart/src/deps/msf_gif/msf_gif.c") });
 
     const exe = b.addExecutable(.{
         .name = "fizzy",
@@ -1170,6 +1172,7 @@ fn addFizzyExecutableForTarget(
     core_module.addImport("dvui", dvui_dep.module("dvui_sdl3"));
     core_module.addImport("known-folders", known_folders);
     exe.root_module.addImport("core", core_module);
+    wireSdkModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), exe.root_module);
 
     const singleton_app_dep = b.dependency("dvui_singleton_app", .{
         .target = resolved_target,
@@ -1197,10 +1200,10 @@ fn addFizzyExecutableForTarget(
         })) |dep| {
             exe.root_module.addImport("objc", dep.module("objc"));
         }
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/FizzyVisualEffectView.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/FizzyMenuTarget.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/FizzyTrackpadGesture.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/objc/FizzyWindowMonitor.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyVisualEffectView.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyMenuTarget.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyTrackpadGesture.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyWindowMonitor.m") });
     } else if (resolved_target.result.os.tag == .windows) {
         if (b.lazyDependency("zigwin32", .{})) |dep| {
             exe.root_module.addImport("win32", dep.module("win32"));
@@ -1236,6 +1239,23 @@ fn addFizzyExecutableForTarget(
         .msf_gif_module = msf_gif_module,
         .known_folders = known_folders,
     };
+}
+
+/// Plugin SDK (`src/sdk/sdk.zig`). Depends only on `dvui`.
+fn wireSdkModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    dvui_module: *std.Build.Module,
+    consumer: *std.Build.Module,
+) void {
+    const sdk_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/sdk/sdk.zig"),
+    });
+    sdk_module.addImport("dvui", dvui_module);
+    consumer.addImport("sdk", sdk_module);
 }
 
 inline fn thisDir() []const u8 {

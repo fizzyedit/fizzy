@@ -17,14 +17,15 @@ pub const version: std.SemanticVersion = .{
 pub const atlas = core.atlas;
 
 // Other helpers and namespaces
-pub const algorithms = @import("plugins/pixelart/algorithms/algorithms.zig");
+pub const pixelart_mod = @import("plugins/pixelart/module.zig");
+pub const algorithms = pixelart_mod.algorithms;
+pub const render = pixelart_mod.render;
+pub const sprite_render = pixelart_mod.sprite_render;
+pub const Tools = pixelart_mod.Tools;
+pub const Transform = pixelart_mod.Transform;
+pub const PackJob = pixelart_mod.PackJob;
 pub const fs = core.fs;
 pub const image = core.image;
-pub const render = @import("plugins/pixelart/render.zig");
-
-/// Pixel-art sprite renderer (layer compositing, reflections, cover-flow). Shell UI
-/// icons use `fizzy.core.Sprite.draw` from core instead.
-pub const sprite_render = @import("plugins/pixelart/sprite_render.zig");
 pub const perf = core.perf;
 pub const water_surface = core.water_surface;
 pub const math = core.math;
@@ -33,56 +34,35 @@ pub const App = @import("App.zig");
 pub const Editor = @import("editor/Editor.zig");
 pub const Explorer = @import("editor/explorer/Explorer.zig");
 pub const Fling = core.Fling;
-pub const Packer = @import("plugins/pixelart/Packer.zig");
+pub const Packer = pixelart_mod.Packer;
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
 
-/// Pixel-art plugin state (Phase 4 Stage B): the tools/colors/project/clipboard/
-/// pack-job fields formerly hung off the shell `Editor`.
-pub const PixelArt = @import("plugins/pixelart/PixelArt.zig");
+/// Pixel-art plugin state (Phase 4 Stage B/D): reached via `fizzy.pixelart` global.
+pub const State = pixelart_mod.State;
 
 // Global pointers
 pub var app: *App = undefined;
 pub var editor: *Editor = undefined;
 pub var packer: *Packer = undefined;
-pub var pixelart: *PixelArt = undefined;
+pub var pixelart: *State = undefined;
 
-/// Internal types
-/// These types contain additional data to support the editor
-/// An example of this is File. fizzy.File matches the file type to read from JSON,
-/// while the fizzy.Internal.File contains cameras, timers, file-specific editor fields.
-pub const Internal = struct {
-    pub const Animation = @import("plugins/pixelart/internal/Animation.zig");
-    pub const Atlas = @import("plugins/pixelart/internal/Atlas.zig");
-    pub const Buffers = @import("plugins/pixelart/internal/Buffers.zig");
-    pub const File = @import("plugins/pixelart/internal/File.zig");
-    pub const History = @import("plugins/pixelart/internal/History.zig");
-    pub const Layer = @import("plugins/pixelart/internal/Layer.zig");
-    pub const Palette = @import("plugins/pixelart/internal/Palette.zig");
-    pub const Sprite = @import("plugins/pixelart/internal/Sprite.zig");
-};
+/// Internal runtime types for open documents (cameras, history, buffers, …).
+pub const Internal = pixelart_mod.internal;
 
-/// Frame-by-frame sprite animation
-pub const Animation = @import("plugins/pixelart/Animation.zig");
-
-/// Contains lists of sprites and animations
-pub const Atlas = @import("plugins/pixelart/Atlas.zig");
-
-/// The data that gets written to disk in a .pixi file and read back into this type
-pub const File = @import("plugins/pixelart/File.zig");
-
-/// Contains information such as the name, visibility and collapse settings of a texture layer
-pub const Layer = @import("plugins/pixelart/Layer.zig");
-
-/// Source location within the atlas texture and origin location
-pub const Sprite = @import("plugins/pixelart/Sprite.zig");
+/// On-disk / JSON pixel-art types.
+pub const Animation = pixelart_mod.Animation;
+pub const Atlas = pixelart_mod.Atlas;
+pub const File = pixelart_mod.File;
+pub const Layer = pixelart_mod.Layer;
+pub const Sprite = pixelart_mod.Sprite;
 
 /// Runtime platform detection (`isMacOS()` etc.) that's accurate on wasm web
 /// builds, where `builtin.os.tag` is always `.freestanding`.
 pub const platform = core.platform;
 
 /// Plugin SDK surface
-pub const sdk = @import("sdk/sdk.zig");
+pub const sdk = @import("sdk");
 
 /// Custom dvui stuff
 pub const dvui = core.dvui;
@@ -90,11 +70,11 @@ pub const dvui = core.dvui;
 /// Custom backend stuff. Split per-arch: native uses SDL3 + objc + win32; web is a
 /// no-op stub layer (no window chrome, no native dialogs, no native menu bar).
 /// Zig only semantically analyzes the chosen branch, so the wasm build never sees
-/// the SDL3 / objc / win32 imports inside `backend_native.zig`.
+/// the SDL3 / objc / win32 imports inside `backend/backend_native.zig`.
 pub const backend = if (@import("builtin").target.cpu.arch == .wasm32)
-    @import("backend_web.zig")
+    @import("backend/backend_web.zig")
 else
-    @import("backend_native.zig");
+    @import("backend/backend_native.zig");
 
 pub const paths = core.paths;
 

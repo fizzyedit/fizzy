@@ -10,6 +10,7 @@ const dvui = @import("dvui");
 const Plugin = @import("Plugin.zig");
 const regions = @import("regions.zig");
 const EditorAPI = @import("EditorAPI.zig");
+const DocHandle = @import("DocHandle.zig");
 
 pub const Host = @This();
 
@@ -120,6 +121,14 @@ pub fn isMaximized(self: *Host) bool {
     return if (self.shell_api) |a| a.isMaximized() else false;
 }
 
+pub fn isMacOS(self: *Host) bool {
+    return if (self.shell_api) |a| a.isMacOS() else false;
+}
+
+pub fn appliesNativeWindowOpacity(self: *Host) bool {
+    return if (self.shell_api) |a| a.appliesNativeWindowOpacity() else false;
+}
+
 /// The explorer pane's content rect (shell layout). Zero rect if no shell installed.
 pub fn explorerRect(self: *Host) dvui.Rect {
     return if (self.shell_api) |a| a.explorerRect() else .{};
@@ -144,6 +153,115 @@ pub fn showSaveDialog(
 /// Shell-owned UI icon spritesheet. Asserts the shell is installed.
 pub fn uiAtlas(self: *Host) EditorAPI.UiAtlasView {
     return self.shell_api.?.uiAtlas();
+}
+
+/// The actively focused open document, or null when none.
+pub fn activeDoc(self: *Host) ?DocHandle {
+    return if (self.shell_api) |a| a.activeDoc() else null;
+}
+
+pub fn docByIndex(self: *Host, index: usize) ?DocHandle {
+    return if (self.shell_api) |a| a.docByIndex(index) else null;
+}
+
+pub fn docById(self: *Host, id: u64) ?DocHandle {
+    return if (self.shell_api) |a| a.docById(id) else null;
+}
+
+pub fn docIndex(self: *Host, id: u64) ?usize {
+    return if (self.shell_api) |a| a.docIndex(id) else null;
+}
+
+pub fn openDocCount(self: *Host) usize {
+    return if (self.shell_api) |a| a.openDocCount() else 0;
+}
+
+pub fn setActiveDocIndex(self: *Host, index: usize) void {
+    if (self.shell_api) |a| a.setActiveDocIndex(index);
+}
+
+pub fn allocDocId(self: *Host) u64 {
+    return if (self.shell_api) |a| a.allocDocId() else 0;
+}
+
+pub fn accept(self: *Host) !void {
+    if (self.shell_api) |a| return a.accept();
+}
+
+pub fn cancel(self: *Host) !void {
+    if (self.shell_api) |a| return a.cancel();
+}
+
+pub fn copy(self: *Host) !void {
+    if (self.shell_api) |a| return a.copy();
+}
+
+pub fn paste(self: *Host) !void {
+    if (self.shell_api) |a| return a.paste();
+}
+
+pub fn transform(self: *Host) !void {
+    if (self.shell_api) |a| return a.transform();
+}
+
+pub fn save(self: *Host) !void {
+    if (self.shell_api) |a| return a.save();
+}
+
+pub fn requestCompositeWarmup(self: *Host) void {
+    if (self.shell_api) |a| a.requestCompositeWarmup();
+}
+
+pub fn requestGridLayoutDialog(self: *Host) void {
+    if (self.shell_api) |a| a.requestGridLayoutDialog();
+}
+
+pub fn allocUntitledPath(self: *Host) ![]u8 {
+    return if (self.shell_api) |a| try a.allocUntitledPath() else error.ShellNotInstalled;
+}
+
+pub fn createDocument(self: *Host, path: []const u8, grid: EditorAPI.NewDocGrid) !DocHandle {
+    return if (self.shell_api) |a| try a.createDocument(path, grid) else error.ShellNotInstalled;
+}
+
+pub fn requestSaveAs(self: *Host) void {
+    if (self.shell_api) |a| a.requestSaveAs();
+}
+
+pub fn requestWebSave(self: *Host, kind: EditorAPI.WebSaveKind) void {
+    if (self.shell_api) |a| a.requestWebSave(kind);
+}
+
+pub fn cancelPendingSaveDialog(self: *Host) void {
+    if (self.shell_api) |a| a.cancelPendingSaveDialog();
+}
+
+pub fn setPendingCloseDocId(self: *Host, id: u64) void {
+    if (self.shell_api) |a| a.setPendingCloseDocId(id);
+}
+
+pub fn queueCloseAfterSave(self: *Host, id: u64) !void {
+    if (self.shell_api) |a| return a.queueCloseAfterSave(id);
+}
+
+pub fn trackQuitSaveInFlight(self: *Host, id: u64) !void {
+    if (self.shell_api) |a| return a.trackQuitSaveInFlight(id);
+}
+
+pub fn resumeSaveAllQuit(self: *Host) void {
+    if (self.shell_api) |a| a.resumeSaveAllQuit();
+}
+
+pub fn abortSaveAllQuit(self: *Host) void {
+    if (self.shell_api) |a| a.abortSaveAllQuit();
+}
+
+pub fn startPackProject(self: *Host) !void {
+    if (self.shell_api) |a| return a.startPackProject();
+}
+
+pub fn isPackingActive(self: *Host) bool {
+    return if (self.shell_api) |a| a.isPackingActive() else false;
 }
 
 // ---- per-plugin settings store ---------------------------------------------

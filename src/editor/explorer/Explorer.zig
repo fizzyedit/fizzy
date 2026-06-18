@@ -13,10 +13,10 @@ const nfd = @import("nfd");
 
 pub const Explorer = @This();
 
-pub const files = @import("../../plugins/workbench/files.zig");
+pub const files = @import("../../plugins/workbench/src/files.zig");
 // pub const animations = @import("animations.zig");
 // pub const keyframe_animations = @import("keyframe_animations.zig");
-pub const project = @import("../../plugins/pixelart/explorer/project.zig");
+pub const project = fizzy.pixelart_mod.explorer.project;
 pub const settings = @import("settings.zig");
 
 paned: *fizzy.dvui.PanedWidget = undefined,
@@ -107,7 +107,7 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
         .background = false,
     });
 
-    if (!fizzy.editor.host.isActiveSidebarView(@import("../../plugins/workbench/plugin.zig").view_files)) {
+    if (!fizzy.editor.host.isActiveSidebarView(@import("../../plugins/workbench/src/plugin.zig").view_files)) {
         fizzy.editor.file_tree_data_id = null;
         if (fizzy.editor.tab_drag_from_tree_path) |p| {
             fizzy.app.allocator.free(p);

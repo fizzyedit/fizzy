@@ -92,7 +92,7 @@ pub fn tick() !void {
 
                 if (ke.matchBind("increase_stroke_size") and (ke.action == .down or ke.action == .repeat)) {
                     if (fizzy.pixelart.tools.current != .selection or fizzy.pixelart.tools.selection_mode == .pixel) {
-                        if (fizzy.pixelart.tools.stroke_size < fizzy.Editor.Tools.max_brush_size - 1)
+                        if (fizzy.pixelart.tools.stroke_size < fizzy.Tools.max_brush_size - 1)
                             fizzy.pixelart.tools.stroke_size += 1;
 
                         fizzy.pixelart.tools.setStrokeSize(fizzy.pixelart.tools.stroke_size);

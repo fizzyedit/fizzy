@@ -1,4 +1,4 @@
-# Fizzy Modular-Plugin Refactor — Handoff (Phase 4, mid Stage C)
+# Fizzy Modular-Plugin Refactor — Handoff (Phase 4, Stage D in progress)
 
 ## TL;DR
 
@@ -7,127 +7,21 @@ makes `core` a real, separately-wired Zig module with no dependency on the `fizz
 app hub, then (Stages B–E) lifts the pixel-art editor fully behind the plugin SDK so
 it can become its own compile-time module.
 
-**Done:** Stage A1, A2, A3, B, and **Stage C part 1 (per-plugin settings)**.
-**Next:** Stage C remainder (doc/tab/host/arena/folder decoupling) + the sprite/atlas →
-`core` extraction. Then D, E.
+**Done:** Stage A1, A2, A3, B, and **Stage C (full)** — per-plugin settings, docs/tabs
+storage inversion, save/pack/editor-action decoupling, platform detection, explorer pane
+lift, sprites bottom-panel lift.
 
-> **Read this first if you're a fresh agent:** the immediately actionable work is in
-> "Stage C — remaining work" and "Next big rock: sprite/atlas → core" near the bottom.
-> Several items there are now low-effort because the SDK surface they need already exists.
+**In progress:** **Stage D** — module scaffold (`module.zig`, `State.zig`, `pixelart.zig`,
+`Globals.zig`), hub consolidation through `fizzy.pixelart_mod`, plugin import migration off
+`fizzy.zig`.
 
-## What Stage B did
+**Next:** wire `b.addModule("pixelart", …)` in `build.zig`, break `plugin.zig` →
+`Editor.Workspace` dep. Then Stage E.
 
-Lifted the pixel-art editor state off the shell `Editor` into a plugin-owned
-`PixelArt` struct (`src/plugins/pixelart/PixelArt.zig`), reached via a new
-`fizzy.pixelart: *PixelArt` global (mirrors the existing `fizzy.packer`).
+> **Read this first if you're a fresh agent:** start at "Stage D — remaining work"
+> below. All three build configs are green right now.
 
-- **Fields moved:** `tools`, `colors`, `project`, `sprite_clipboard`, `pack_jobs`
-  (plus the `SpriteClipboard` type). ~190 `editor.<field>` / `fizzy.editor.<field>`
-  call sites repointed to `fizzy.pixelart.<field>` across `Editor.zig`, `Keybinds.zig`,
-  `workbench/files.zig`, and the pixel-art tree.
-- **`atlas` deliberately stayed on the shell** — it's the shared UI icon spritesheet
-  (cursor/pencil/logo/selection icons) the shell uses for its own logo
-  (`workbench/files.zig`, `Workspace.zig`), not pixel-art-specific. Moving it would
-  invert the dependency. (Its type is still `Internal.Atlas`; relocating that type to
-  core is a later structural question, not Stage B.)
-- **Lifecycle:** `fizzy.pixelart` is allocated + `PixelArt.init`'d in `App.AppInit`
-  *before* `editor.postInit()` so the pixel-art `plugin.register` adopts it as
-  `plugin.state`. `PixelArt.init` now owns the tools init + the two `fizzy.hex` palette
-  loads (moved out of `Editor.init`). `PixelArt.deinit` (pack-job cancel, palette free,
-  project save, tools free) runs from `App.AppDeinit` right after `editor.deinit()`;
-  the old interleaved pixel-art teardown blocks were removed from `Editor.deinit`.
-- Three Editor helpers (`processHoldOpenRadialMenu`, `isPackingActive`,
-  `runWasmPackWorkers`) now ignore their `editor` param (`_: *Editor`) since they only
-  reach `fizzy.pixelart`. The pack methods (`startPackProject`/`processPackJob`/…) and
-  the copy-paste / radial-menu draw code still live on `Editor` — they relocate later.
-- Type aliases on `Editor` (`pub const Tools/Colors/Project/Transform`) were left in
-  place; they're used as type paths (`Editor.Tools.Tool`) and move in Stage D.
-
-Verified green: `zig build`, `zig build check-web`, `zig build test`. (No live GUI
-run — pure refactor.)
-
-## What Stage C part 1 did — per-plugin settings (VSCode-style)
-
-Goal (set by the user): pixel-art-specific settings should **belong to the pixel-art
-plugin**, and the Settings tab should be a registry that each plugin contributes its own
-section to, grouped by plugin. The shell stores plugin settings opaquely but never
-interprets them.
-
-### New SDK surface (all in `src/sdk/`)
-
-- **`SettingsSection`** (`regions.zig`, exported from `sdk.zig`): `{ id, owner, title, draw }`.
-  The Settings sidebar view renders each registered section under its `title` heading.
-- **`Host` additions** (`Host.zig`):
-  - `settings_sections` registry + `registerSettingsSection`.
-  - `plugin_settings: PluginSettings` (= `StringArrayHashMapUnmanaged([]const u8)`): the
-    opaque per-plugin blob store (id → serialized JSON). `loadPluginSettings(id)` /
-    `storePluginSettings(id, json)` (the latter dupes + marks shell settings dirty). Host
-    owns + frees the key/value strings in `deinit`.
-  - `shell_api: ?EditorAPI` + `installShell(api)` + thin forwarders: `arena()`, `folder()`,
-    `paletteFolder()`, `markSettingsDirty()`, `contentOpacity()`.
-- **`EditorAPI`** (`EditorAPI.zig`): vtable + ctx the shell installs so plugins reach shared
-  shell state without importing `Editor`. The shell's vtable impl lives in `Editor.zig`
-  (`shell_api_vtable` + `shellArena`/`shellFolder`/… ; ctx is `*Editor`), installed in
-  `Editor.postInit`.
-
-### Storage / persistence (`src/editor/Settings.zig`)
-
-- On-disk format gained a `"plugins"` object: `{ <shell fields…>, "plugins": { id: <blob> } }`.
-- `Settings.serialize(settings, plugin_store, alloc)` serializes the struct, drops the
-  trailing `}`, and **textually splices** `,"plugins":{…}}` with each plugin's already-
-  serialized blob inline. (Robust — avoids `std.json.Value` lifetime hazards. Round-trip
-  validated with a standalone test: valid JSON, shell parses back via `ignore_unknown_fields`,
-  blobs re-extract cleanly.)
-- `Settings.save(...)` and the autosave **dedup snapshot** (`settings_last_saved_json`) and
-  the three Editor save sites all now go through `serialize` so plugin-only changes still
-  trigger a write. (Watch: `Settings.save` is called from `saveSettingsGuarded`,
-  `saveSettingsRaw`, and the init snapshot — all four-arg now.)
-- `Settings.loadPluginStore(alloc, path, store)` re-parses settings.json as a `Value`,
-  extracts the `"plugins"` object into the store. Called from `Editor.init` right after
-  `Settings.load`, before `PixelArt.init` runs (so the plugin can read its blob).
-- **One-time migration:** a legacy *flat* settings.json (no `"plugins"`) seeds the
-  `"pixelart"` blob from the **whole root** — pixel art ignores unknown keys, so its moved
-  fields (`show_rulers`, `input_scheme`, …) survive; the next save rewrites the blob clean.
-  (Self-healing, no data loss. The blob is temporarily bloated with shell keys until then.)
-
-### Pixel-art side
-
-- New **`src/plugins/pixelart/Settings.zig`** (`PixelArt.Settings`, `pub`): owns the moved
-  fields + `InputScheme`/`ResolvedPanZoomScheme`/`TransparencyEffect` enums +
-  `resolvedPanZoomScheme`. `load(host)` parses its blob (defaults if absent/garbage; no
-  heap fields so returning by value after `parsed.deinit()` is safe). `save(host)`
-  serializes + `host.storePluginSettings`. `draw(_)` renders the section (Canvas group:
-  transparency effect, show rulers, cover-flow cards; Controls group: control scheme).
-- `PixelArt` struct gained `host: *sdk.Host` and `settings: Settings`, both set in
-  `PixelArt.init(allocator, host)` (App now passes `&fizzy.editor.host`).
-- `plugin.register` registers the `"pixelart"` settings section ("Pixel Art").
-
-### Fields moved off shell `Settings` → `PixelArt.Settings`
-
-`input_scheme`, `show_rulers`, `scrolling_cards`, `ruler_padding`, `zoom_sensitivity`,
-`zoom_steps`, `max_file_size`, `checker_color_even/odd`, `transparency_effect` (+ the
-three enums + `resolvedPanZoomScheme`). All ~27 pixel-art read sites repointed to
-`fizzy.pixelart.settings.<field>`; type refs (`fizzy.Editor.Settings.TransparencyEffect`,
-`…resolvedPanZoomScheme`) → `fizzy.PixelArt.Settings.…`.
-
-**`content_opacity` deliberately stays on the shell** — it's also read by `workbench/
-Workspace.zig` and `panel/Panel.zig`, so it's genuinely shell-level. Pixel art's 3 reads
-go through `fizzy.pixelart.host.contentOpacity()` (the EditorAPI). The pixel-art settings
-*UI controls* were removed from `editor/explorer/settings.zig` (the shell "Editor" section
-now only has theme/fonts/window+content opacity/hold-timing/debugging).
-
-### Settings UI
-
-`Editor.drawSettingsPane` now iterates `host.settings_sections` and renders each under a
-heading label (registration order = display order; shell "Editor" registered first in
-`postInit`, before plugins). The shell section draw = `Explorer.settings.draw` (trimmed);
-the pixel-art section draw = `PixelArt.Settings.draw`.
-
-Verified green: `zig build`, `zig build check-web`, `zig build test`. Persistence splice
-round-trip checked with a throwaway `zig run` harness (valid JSON + clean extraction). No
-live GUI run.
-
-All three build configs are green right now:
+All three build configs are green:
 
 ```
 zig build            # native exe
@@ -135,209 +29,277 @@ zig build check-web  # wasm
 zig build test       # unit/integration tests
 ```
 
-Run all three after every stage. Note: `zig build` for this repo currently needs to
-run outside the sandbox (network/file access), so expect to pass elevated permissions.
+Run all three after every stage. `zig build` for this repo currently needs to run outside
+the sandbox (network/file access).
 
 ---
 
-## What `core` is now (Stage A3 result)
+## Plugin directory layout (convention)
 
-`src/core/` is a standalone module (`src/core/core.zig` is its root). It holds shared
-infrastructure and **never imports `src/fizzy.zig`**:
+Every plugin follows the same shape:
 
 ```
-src/core/
-  core.zig            # module root: gpa + trackpad hook + re-exports
-  dvui.zig            # generic dvui hub: dialog framework, helpers, generic widgets
-  fs.zig  paths.zig  platform.zig  Fling.zig
-  gfx/    image.zig  perf.zig  water_surface.zig
-  math/   math.zig  color.zig  direction.zig  easing.zig  layout_anchor.zig
-  widgets/ CanvasWidget  PanedWidget  ReorderWidget  FloatingWindowWidget
-           TreeWidget  TreeSelection
-  generated/ atlas.zig   # written by the build's process-assets step
+src/plugins/<name>/
+  module.zig       # build module root / shell import surface
+  <name>.zig       # intra-plugin hub (sdk, core, Globals, shared types)
+  src/             # all implementation code
 ```
 
-### Decoupling mechanisms (important invariants)
+**pixelart** and **workbench** both use this layout now.
 
-- **Allocator injection.** `core.gpa` is a `std.mem.Allocator` set once at startup in
-  `App.init` (`fizzy.core.gpa = allocator;`). Core code (e.g. `gfx/image.zig`) allocates
-  through `core.gpa` instead of reaching into `fizzy.app.allocator`.
-- **Trackpad hook.** `core.takeTrackpadPinchRatio` is a `*const fn () f32` set in
-  `App.init` to `fizzy.backend.takeTrackpadPinchRatio`. `CanvasWidget` calls the hook so
-  it doesn't depend on the heavy native backend. Defaults to a `1.0` no-op for headless/test.
-- **Dialog chrome state moved into core.** `core.dvui.modal_dim_titlebar: bool` and
-  `core.dvui.dialog_close_rect_override: ?dvui.Rect.Physical` replaced the old
-  `Editor.dim_titlebar` field and `workbench/files.zig: new_file_close_rect` var. The
-  shell reads `fizzy.dvui.modal_dim_titlebar` in `Editor.setTitlebarColor`.
-- **`fizzy.zig` re-exports core** so existing `fizzy.<x>` call sites keep working:
-  `fizzy.image/fs/perf/water_surface/math/platform/paths/dvui/Fling/atlas` all alias
-  `core.*`, plus `pub const core = @import("core");`.
-- **Widget split.** Generic widgets live in `core/widgets/` and are exposed as
-  `core.dvui.CanvasWidget` etc. The **pixel-art** `FileWidget` and `ImageWidget` stayed
-  in `src/plugins/pixelart/widgets/` (ImageWidget is still pixel-art-coupled). Consumers
-  import them locally, not via the hub. `src/editor/widgets/Widgets.zig` was deleted.
+| File | Role |
+|------|------|
+| `module.zig` | Compile-time module root; shell reaches it via `fizzy.pixelart_mod` / future `@import("pixelart")` |
+| `pixelart.zig` / `workbench.zig` | Hub named after the plugin folder; files in `src/**` import as `../<name>.zig` or `../../<name>.zig` |
+| `src/State.zig` | Plugin runtime state (`pixelart` only) |
+| `src/Globals.zig` | Runtime injection: `gpa`, `state`, `packer` (`pixelart` only) |
+| `src/plugin.zig` | Plugin registration + draw entry points |
+| `src/deps/` | Third-party deps (`pixelart` only) |
 
-### Build wiring
+Shell still uses `fizzy.pixelart: *State` global during migration; plugin code uses
+`Globals.state`.
 
-`core` is created three times (one per target/backend variant) in `build.zig`:
-- native exe: `core_module` (dvui_sdl3) — search `addImport("core"`
-- web exe: `core_module_web` (dvui_web)
-- test: `core_module_test` (dvui_testing)
+### macOS case-insensitive rename protocol
 
-Each gets `dvui`, `known-folders`, and (lazy) `icons`. The generated atlas now writes to
-`src/core/generated/`, and the inline test modules point at `src/core/math/*`.
+On APFS (default, case-insensitive), `PixelArt.zig` and `pixelart.zig` are the **same
+file**. Never create `pixelart.zig` while `PixelArt.zig` is still in git — it silently
+overwrites the state struct.
 
-### Gotchas discovered (don't repeat these)
+**Two-step git rename (Option A):**
 
-- **Build-script / module file-ownership trap.** `build.zig` imports
-  `src/tools/process_assets.zig`, which imports `src/plugins/pixelart/Atlas.zig` to
-  generate the atlas index *at build time*. A file may belong to only one module within a
-  single compilation. Routing `Atlas.zig`'s file read through `fizzy.fs`/`core.fs` (a)
-  dragged the whole `fizzy`+`core` graph into the build-runner compilation (no `core`
-  module there) and (b) caused "file exists in modules 'core' and 'root'". **Fix applied:**
-  `Atlas.zig` now imports nothing but `std` and inlines its file read. Keep build-time
-  tools (`process_assets.zig` and anything it imports) free of `fizzy`/`core` module imports.
-- **macOS case-insensitive FS.** `sprite.zig` vs `Sprite.zig` collide. The atlas-render
-  library is named `sprite_render.zig` for this reason.
-- **Lazy top-level imports.** An unused `const fizzy = @import(...)` is fine (never
-  analyzed). Problems only appear when build-*reachable* code forces analysis.
+```bash
+git mv src/plugins/pixelart/PixelArt.zig src/plugins/pixelart/__legacy_remove__.zig
+git rm -f src/plugins/pixelart/__legacy_remove__.zig
+# now safe to add src/plugins/pixelart/pixelart.zig and State.zig
+```
+
+**Import paths inside `src/`:**
+
+- `src/foo.zig` → `@import("../pixelart.zig")`
+- `src/widgets/bar.zig` → `@import("../../pixelart.zig")`
+- View ids (`view_tools`, `view_sprites`) live in `src/plugin.zig` — import as
+  `@import("../plugin.zig")` from nested dirs, not through the hub.
 
 ---
 
-## Remaining stages
+## What Stage C did (complete)
 
-The plan tasks are tracked as todos `b`, `c`, `d`, `e`. The pixel-art plugin still has a
-large coupling surface to the shell: ~250 `fizzy.editor.` / `fizzy.backend.` /
-`fizzy.platform.` references across `src/plugins/pixelart/**` (biggest offenders:
-`widgets/FileWidget.zig` ~80, `dialogs/Export.zig`, `internal/File.zig`,
-`explorer/tools.zig`). Stages B–D systematically remove these.
+### Part 1 — per-plugin settings (VSCode-style)
 
-### Stage B — lift pixel-art editor state off the shell `Editor`
-Move the pixel-art-specific fields (tools, colors, atlas, project, buffers, transform)
-off `src/editor/Editor.zig` (~83 refs) into a `PixelArt` plugin-state struct owned by the
-plugin. Update `Editor.zig`, `Keybinds` (~15 refs), and the `Menu`, plus the pixel-art
-references that read those fields. Build green (all 3).
+Pixel-art-specific settings belong to the pixel-art plugin; the shell stores them opaquely.
 
-### Stage C — expand the SDK Host (settings done; rest below)
-Grow the SDK Host surface so the plugin reaches shell state via the SDK, not
-`fizzy.editor`. **Part 1 (per-plugin settings) is done** — see "What Stage C part 1 did"
-above. The remaining coupling and a recommended order are in "Stage C — remaining work".
+- **`SettingsSection`** in SDK; `Host` registry + `plugin_settings` blob store.
+- **`EditorAPI`** vtable for shell reach-through (`arena`, `folder`, `paletteFolder`, …).
+- **`Settings`** owns moved fields; `plugin.register` adds the "Pixel Art" section.
+- Shell `Settings.serialize` splices `"plugins": { id: blob }` into settings.json.
 
-### Stage D — make `pixelart` its own module
-Add a `src/plugins/pixelart/pixelart.zig` module root; repoint all pixel-art imports from
-`fizzy.zig` to `core` / `sdk` / `dvui` / local files; wire `b.addModule("pixelart", ...)`
-in `build.zig` (3 configs, mirroring how `core` is wired); have `App` call
-`pixelart.register(host)`. Build native + test + web.
+### Part 2 — docs/tabs storage inversion
 
-### Stage E — strip pixel-art names from shell hubs
-Remove pixel-art names from `fizzy.zig` / Dialogs / `Editor` / Explorer / Panel; route all
-contributions through the SDK only. Final verification across the 3 configs.
+The shell no longer owns `Internal.File` values directly.
+
+- **`Docs.zig`**: plugin owns `files: HashMap(u64, Internal.File)`.
+- **`Editor.open_files`**: `HashMap(u64, sdk.DocHandle)` — opaque handles with `ptr`/`id`/`owner`.
+- **EditorAPI doc surface**: `activeDoc`, `docByIndex`, `docById`, `docIndex`, `openDocCount`,
+  `setActiveDocIndex`, `allocDocId`.
+- Shell helpers: `fileFromDoc`, `docAt`, `fileAt`, `activeDoc`, `insertOpenDoc`, `closeDocumentResources`.
+- Plugin repointed: `fizzy.pixelart.docs.activeFile(host)`, `host.docIndex` / `setActiveDocIndex`,
+  `host.allocDocId()`, `docs.fileById`, etc.
+- **`State.docs`**: field + `docs.deinit` in teardown.
+
+### Part 3 — save/pack/editor-action decoupling
+
+Pixel-art dialogs and actions reach the shell through `host.*` / `EditorAPI`, not `fizzy.editor.*`.
+
+**EditorAPI additions** (all wired in `Editor.zig` shell vtable + `Host.zig` forwarders):
+
+`accept`, `cancel`, `copy`, `paste`, `transform`, `save`, `requestCompositeWarmup`,
+`requestGridLayoutDialog`, `allocUntitledPath`, `createDocument`, `requestSaveAs`,
+`requestWebSave`, `cancelPendingSaveDialog`, `setPendingCloseDocId`, `queueCloseAfterSave`,
+`trackQuitSaveInFlight`, `resumeSaveAllQuit`, `abortSaveAllQuit`, `startPackProject`,
+`isPackingActive`, `showSaveDialog`, `uiAtlas`, `explorerRect`, `explorerVirtualSize`,
+`isMaximized`.
+
+### Part 4 — explorer pane + bottom-panel lift
+
+- **`tools_pane`**, **`sprites_pane`**, **`pinned_palettes`**, **`layers_ratio`** moved onto
+  `State` (were on shell `Explorer`).
+- **`sprites_panel`** moved off `editor.panel.sprites` onto `State`; drawn via
+  `Globals.state.sprites_panel.draw()` from `plugin.zig`.
+
+### Part 5 — platform detection
+
+- **EditorAPI**: `isMacOS()`, `appliesNativeWindowOpacity()`.
+- Plugin repointed: keybinds, window chrome opacity, `Settings.resolvedPanZoomScheme(settings, host)`.
+- **Zero** live `fizzy.platform` / `builtin.os.tag` in `src/plugins/pixelart/**`.
+
+### Stage C sanity greps
+
+```
+grep -rn 'fizzy\.editor\.' src/plugins/pixelart   → 0 live (4 commented-out lines in Tools.zig, Project.zig)
+grep -rn 'fizzy\.platform' src/plugins/pixelart    → 0
+grep -rn 'fizzy\.backend\.' src/plugins/pixelart  → check; native save dialogs go through host.showSaveDialog
+```
 
 ---
 
-## Stage C — remaining work (start here)
+## What Stage D has done so far
 
-Settings is fully decoupled (`grep -r 'fizzy.editor.settings' src/plugins/pixelart` → 0).
-Here is the **current** `fizzy.editor.*` / `fizzy.backend.*` / `fizzy.platform.*` surface
-still in `src/plugins/pixelart/**` (run the greps to refresh):
+### Module root — `src/plugins/pixelart/module.zig`
+
+Canonical export surface for the plugin tree. **`fizzy.zig`** re-exports through
+`fizzy.pixelart_mod = @import("plugins/pixelart/module.zig")` instead of scattering
+direct `@import("plugins/pixelart/…")` across the hub.
+
+Exports: `Globals`, `State`, `Settings`, `Docs`, `Tools`, `Transform`, `Project`,
+`Colors`, `Packer`, `PackJob`, `plugin`, `dialogs.*`, `explorer.project`, `render`,
+`sprite_render`, `algorithms`, on-disk types, `internal.*`.
+
+### Intra-plugin hub — `src/plugins/pixelart/pixelart.zig`
+
+Plugin files import this for `sdk`, `core`, `Globals`, shared types, and `internal.*`.
+**Not** the build module root — that is `module.zig`.
+
+### Plugin state — `src/plugins/pixelart/State.zig`
+
+Renamed from `PixelArt.zig` / `PixelArt` struct → `State.zig` / `State`.
+
+### Globals injection — `src/plugins/pixelart/Globals.zig`
+
+Runtime pointers set once in `App.AppInit`:
+
+```zig
+fizzy.pixelart_mod.Globals.gpa = allocator;
+fizzy.pixelart_mod.Globals.state = fizzy.pixelart;
+fizzy.pixelart_mod.Globals.packer = fizzy.packer;
+```
+
+Plugin tree now uses `Globals.allocator()` / `Globals.state` / `Globals.packer` — **zero**
+remaining `fizzy.app.allocator` refs in `src/plugins/pixelart/**`.
+
+### Hub consolidation (partial)
+
+- **`fizzy.zig`**: `State`, `Packer`, `Internal`, on-disk types, `Tools`, `Transform`,
+  `PackJob`, `algorithms`, `render`, `sprite_render` all alias `pixelart_mod.*`.
+  Global `fizzy.pixelart: *State` kept for shell during migration.
+- **`Editor.zig`**: removed public aliases `Colors`, `Project`, `Tools`, `Transform`;
+  uses `fizzy.Tools`, `fizzy.pixelart_mod.Project`, `fizzy.pixelart_mod.plugin.*`.
+- **Shell imports rerouted** (via `fizzy.pixelart_mod`):
+  - `editor/dialogs/Dialogs.zig` → `dialogs.NewFile/Export/GridLayout/FlatRasterSaveWarning`
+  - `editor/dialogs/UnsavedClose.zig` → `dialogs.FlatRasterSaveWarning`
+  - `editor/explorer/Explorer.zig` → `explorer.project`
+- **`Panel.zig`**: removed dead `Sprites` field/import.
+- **Plugin import migration**: `bridge.zig` → `pixelart.zig`; `Globals.pixelart` →
+  `Globals.state`; subdirectory files use `../pixelart.zig`.
+
+### SDK module wired in `build.zig`
+
+`wireSdkModule` adds `@import("sdk")` to native, web, and test roots. `fizzy.zig` imports
+sdk via `@import("sdk")` (not a duplicate file-path import).
+
+### Still direct-importing pixel-art files (shell)
 
 ```
-33 fizzy.editor.activeFile     11 fizzy.editor.open_files   6 fizzy.editor.newFileID
-31 fizzy.editor.atlas          11 fizzy.editor.host         6 fizzy.editor.folder
-17 fizzy.editor.explorer       10 fizzy.editor.arena        2 fizzy.editor.palette_folder
-+ doc/save-flow tail: setActiveFile, getFile, getFileFromPath, newFile, open_file_index,
-  requestCompositeWarmup, startPackProject, isPackingActive, requestSaveAs,
-  requestWebSaveDialog, requestGridLayoutDialog, cancelPendingSaveDialog, abortSaveAllQuit,
-  copy/paste/accept/cancel, save, transform, buffers, panel, allocNextUntitledPath,
-  pending_*/quit_* (all 1–3 refs each)
-backend: showSaveFileDialog ×5, DialogFileFilter ×4, isMaximized ×3 ; platform: isMacOS ×3
+process_assets.zig (repo root)   → Atlas.zig   (build-time, std-only — OK, separate compilation)
+src/web_main.zig               → FileWidget.zig force-import (wasm link — migrate later)
 ```
 
-**Recommended order (easy → hard):**
+---
 
-1. **`host` (11) — trivial now.** `PixelArt` already holds `host: *sdk.Host` (set in
-   `init`). Repoint `fizzy.editor.host.setActiveSidebarView/isActiveSidebarView` →
-   `fizzy.pixelart.host.…`. Pure mechanical, no SDK change.
-2. **`arena` (10), `folder` (6), `palette_folder` (2) — done-for-you.** The EditorAPI
-   forwarders already exist: `fizzy.pixelart.host.arena()` / `.folder()` /
-   `.paletteFolder()`. Repoint `fizzy.editor.arena.allocator()` → `fizzy.pixelart.host.arena()`,
-   etc. (mind that `arena` callers use `.allocator()`; the forwarder already returns the
-   `Allocator`).
-3. **`backend.isMaximized` (3), `platform.isMacOS` (3).** Add `isMaximized()` to EditorAPI
-   (shell calls `fizzy.backend.isMaximized(dvui.currentWindow())`). `isMacOS` is just
-   `core.platform.isMacOS()` — pixel art can call `fizzy.platform.isMacOS()` until Stage D
-   repoints it to `core` directly; low priority.
-4. **`explorer` (17).** These read pixel-art state that *lives on the shell `Explorer`*
-   (`explorer.tools`, `.sprites`, `.pinned_palettes`, `.layers_ratio`, `.rect`,
-   `.scroll_info`). `tools`/`sprites` are pixel-art pane modules; `pinned_palettes`/
-   `layers_ratio` are pixel-art UI state. These should **move onto `PixelArt`** (like the
-   settings did), not get an SDK accessor. `rect`/`scroll_info` are shell explorer layout —
-   expose via EditorAPI or pass into the draw.
-5. **Native save dialogs (`backend.showSaveFileDialog` ×5, `DialogFileFilter` ×4).** Add a
-   small SDK surface for "ask the host to run a native save dialog" (native-only; web has
-   its own path). The save-flow tail (`requestSaveAs`, `pending_*`, `quit_*`, `accept`,
-   `cancel`, `abortSaveAllQuit`, …) is the shell's save/quit orchestration the pixel-art
-   dialogs poke — needs a deliberate "document save service" vtable, the hardest part.
-6. **Docs/tabs (`activeFile` ×33, `open_files` ×11, `setActiveFile`, `getFile*`, `newFile*`,
-   `open_file_index`, `buffers`, `transform`, `copy/paste`, `requestCompositeWarmup`,
-   `startPackProject`, `isPackingActive`).** This is the **deep coupling**: the shell's
-   `open_files` is literally `AutoArrayHashMapUnmanaged(u64, Internal.File)` — a map of
-   *pixel-art* `Internal.File` values. The shell currently owns and iterates pixel-art docs
-   directly. Fully decoupling means the shell stores **opaque documents (`DocHandle`)** and
-   the pixel-art plugin owns the `Internal.File` storage. That is a large structural change
-   (touches the workspace/tab/save systems) — likely its own stage. Until then, pixel-art
-   can reach the active doc through a `host.activeDoc() ?DocHandle` + cast, but the storage
-   inversion is the real work.
+## Stage D — remaining work (start here)
 
-`atlas` (31) is handled by the sprite/atlas → core extraction below, not by an SDK accessor.
+1. **Wire `b.addModule("pixelart", …)` in `build.zig`** (native, web, test) with deps:
+   `core`, `sdk`, `dvui`, `assets`, `zip`, `zstbi`, etc. — mirroring how `core` is wired.
+   Point the module root at `module.zig`. Today the plugin compiles through path imports
+   in `fizzy.zig`; the build module is scaffold-only.
 
-## Next big rock: sprite / atlas → `core`
+2. **Break `plugin.zig` dependency on `fizzy.Editor.Workspace`** (project view drawing
+   still reaches into shell types).
 
-This resolves the `editor.atlas` (Stage B) and `fizzy.editor.atlas` (×31) coupling and is
-the prerequisite for the shell not depending on the pixel-art plugin for its own UI icons.
+3. **Route `web_main.zig` FileWidget import** through `pixelart_mod` or the future build
+   module.
 
-**Findings (verified in code):**
+4. **Optional cleanup:** shell `Editor.zig` still uses `fizzy.pixelart.*` extensively —
+   shrink as plugin vtable / EditorAPI surface grows (Stage E).
 
-- The shell (`workbench`) only calls `fizzy.sprite_render.sprite(...)` in two places —
-  `workbench/files.zig:~774` and `workbench/Workspace.zig:~300` — both drawing a **static
-  atlas sprite** (the logo / UI icons), passing `file = null`. It never uses the heavy path.
-- But `src/plugins/pixelart/sprite_render.zig` lives in the plugin and is tangled: the same
-  `sprite()` also does layer compositing, file previews, reflections, and `water_surface`
-  (all need a full pixel-art `Internal.File`). So today the shell reaches *backwards* into
-  the plugin just to draw an icon. `editor.atlas` is typed `Internal.Atlas` (pixel art's).
+Do **not** re-introduce a duplicate `@import("plugins/pixelart/module.zig")` from both
+`App.zig` and `fizzy.zig` via a third path; always go through `fizzy.pixelart_mod` in
+app code until the build module is fully wired.
 
-**Plan:** split by responsibility with `core` as the shared floor.
+---
 
-- → **`core`:** a generic atlas data type + a "draw sprite N (sub-rect of a texture)"
-  primitive (the slice the shell's logo/icons need; essentially `dvui.renderImage` + sprite
-  rect math). The shell's `editor.atlas` becomes a `core` atlas type drawn via the `core`
-  helper, depending on `core` not the plugin.
-- → **stays in pixel-art plugin:** `renderSprite` / `render.renderLayers` / composites /
-  reflections / `water_surface` — all the editing rendering on top of the primitive.
+## Stage E — strip pixel-art names from shell hubs (later)
 
-End-state dependency graph: **shell → core**, **plugin → core**, neither depends on the
-other. (User has signed off on this direction; sequenced *after* settings.)
+- Remove pixel-art type names from `fizzy.zig` hub (consumers import `pixelart` module).
+- Remove `editor/dialogs/` pixel-art dialog aliases (plugins register dialogs via SDK).
+- Shell `Editor` radial-menu / copy-paste / pack code still touches `fizzy.pixelart.tools` —
+  route through plugin vtable or EditorAPI.
+- Shell still uses `fizzy.Internal.File` directly in several `Editor.zig` helpers — shrink
+  as doc ownership solidifies.
+
+---
+
+## Next big rock: sprite / atlas → `core` (parallel track)
+
+Resolves `editor.atlas` coupling and the shell reaching into the plugin for UI icons.
+
+- Shell only needs a static atlas sprite draw (logo/icons) — `workbench/files.zig`,
+  `workbench/Workspace.zig`.
+- **`core`:** generic atlas type + "draw sprite N" primitive.
+- **Plugin:** `renderSprite`, composites, reflections, `water_surface`.
+- End-state: **shell → core**, **plugin → core**, neither depends on the other.
+
+(User signed off; sequenced after settings, can proceed alongside late Stage D.)
+
+---
+
+## What `core` is (Stage A3 — unchanged)
+
+`src/core/` is a standalone module; never imports `src/fizzy.zig`. See prior handoff
+sections for allocator injection, trackpad hook, dialog chrome state, build wiring, and
+the **build-script file-ownership trap** (`process_assets.zig` → std-only `Atlas.zig`).
+
+**macOS case-insensitive FS gotchas:**
+- `sprite.zig` vs `Sprite.zig` → use `sprite_render.zig`.
+- `pixelart.zig` vs `PixelArt.zig` / `State.zig` → use `module.zig` for the build module
+  root; use the two-step git rename when introducing `pixelart.zig` hub.
+
+---
+
+## Key paths
+
+| Path | Role |
+|------|------|
+| `HANDOFF.md` | This file |
+| `src/plugins/pixelart/module.zig` | Pixel-art build module root |
+| `src/plugins/pixelart/pixelart.zig` | Pixel-art intra-plugin hub |
+| `src/plugins/pixelart/src/` | Pixel-art implementation tree |
+| `src/plugins/workbench/module.zig` | Workbench build module root |
+| `src/plugins/workbench/workbench.zig` | Workbench intra-plugin hub |
+| `src/plugins/workbench/src/` | Workbench implementation tree |
+| `src/sdk/EditorAPI.zig`, `Host.zig` | Full shell API surface |
+| `src/editor/Editor.zig` | Shell; still uses `fizzy.pixelart.*` and `Internal.File` helpers |
+| `src/fizzy.zig` | App hub; mid-migration to `pixelart_mod` re-exports |
+| `process_assets.zig` | Build-time asset atlas generator (repo root, beside `build.zig`) |
+| `src/backend/` | Platform backend: native/web stubs, singleton, auto-update, objc, MSVC shim |
 
 ---
 
 ## State of the tree
 
-**Uncommitted** (nothing in this whole Phase-4 effort has been committed — commit on
-request). Beyond the Stage A3 changes, the working tree now also has:
+**Uncommitted** — nothing in this Phase-4 effort has been committed (commit on request).
 
-- **Stage B:** new `src/plugins/pixelart/PixelArt.zig`; `fizzy.pixelart` global in
-  `fizzy.zig`; init/deinit wiring in `App.zig`; field removals + ~190 repoints in
-  `Editor.zig`, `Keybinds.zig`, `workbench/files.zig`, and the pixel-art tree.
-- **Stage C part 1 (settings):** new `src/sdk/EditorAPI.zig`,
-  `src/plugins/pixelart/Settings.zig`; `SettingsSection` in `sdk/regions.zig` + `sdk.zig`;
-  Host store/forwarders/section-registry in `sdk/Host.zig`; persistence rework in
-  `editor/Settings.zig`; EditorAPI impl + section iteration in `editor/Editor.zig`; trimmed
-  `editor/explorer/settings.zig`; settings repoints across the pixel-art tree;
-  `App.zig` passes the host to `PixelArt.init`.
+Beyond Stages A–C, the working tree now also has Stage D scaffold changes:
+`module.zig`, `pixelart.zig`, `State.zig`, `Globals.zig`, hub re-exports in `fizzy.zig`,
+shell import migration, `State.docs` + explorer/bottom-panel fields, `bridge.zig` removed.
 
-Sanity greps for the next agent:
-- `grep -rn 'fizzy.editor.settings' src/plugins/pixelart` → **0** (settings decoupled).
-- `grep -rhoE 'fizzy\.editor\.[a-zA-Z_]+' src/plugins/pixelart | sort | uniq -c | sort -rn`
-  → the remaining Stage C surface (see "Stage C — remaining work").
+Sanity greps:
+
+```
+grep -rn 'fizzy\.editor\.' src/plugins/pixelart     → 0 live
+grep -rn 'fizzy\.platform' src/plugins/pixelart     → 0
+grep -rn 'fizzy\.app\.allocator' src/plugins/pixelart → 0
+grep -rn 'bridge\.' src/plugins/pixelart            → 0
+grep -rn 'plugins/pixelart/' src --include='*.zig'  → process_assets, fizzy module import, web_main
+```
 
 All three configs green: `zig build`, `zig build check-web`, `zig build test`.

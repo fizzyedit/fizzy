@@ -1,15 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
+const fizzy = @import("../../fizzy.zig");
 
 const Dialogs = @This();
 
-pub const NewFile = @import("../../plugins/pixelart/dialogs/NewFile.zig");
-pub const Export = @import("../../plugins/pixelart/dialogs/Export.zig");
+pub const NewFile = fizzy.pixelart_mod.dialogs.NewFile;
+pub const Export = fizzy.pixelart_mod.dialogs.Export;
 pub const UnsavedClose = @import("UnsavedClose.zig");
 pub const AppQuitUnsaved = @import("AppQuitUnsaved.zig");
-pub const GridLayout = @import("../../plugins/pixelart/dialogs/GridLayout.zig");
-pub const FlatRasterSaveWarning = @import("../../plugins/pixelart/dialogs/FlatRasterSaveWarning.zig");
+pub const GridLayout = fizzy.pixelart_mod.dialogs.GridLayout;
+pub const FlatRasterSaveWarning = fizzy.pixelart_mod.dialogs.FlatRasterSaveWarning;
 pub const AboutFizzy = @import("AboutFizzy.zig");
 pub const WebFolderUnavailable = if (builtin.target.cpu.arch == .wasm32)
     @import("WebFolderUnavailable.zig")

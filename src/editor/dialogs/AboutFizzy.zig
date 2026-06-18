@@ -3,8 +3,8 @@ const builtin = @import("builtin");
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const build_opts = @import("build_opts");
-const auto_update = @import("../../auto_update.zig");
-const update_notify = @import("../../update_notify.zig");
+const auto_update = @import("../../backend/auto_update.zig");
+const update_notify = @import("../../backend/update_notify.zig");
 const assets = @import("assets");
 
 fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {

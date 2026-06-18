@@ -80,7 +80,13 @@ pub fn pollOpenPicker(editor: *fizzy.Editor) void {
 
         const path_owned = fizzy.app.allocator.dupe(u8, wasm_file.name) catch continue;
         if (editor.openFileFromBytes(path_owned, bytes, open_grouping)) |file| {
-            editor.open_files.put(fizzy.app.allocator, file.id, file) catch {
+            const owner = editor.host.pluginForExtension(std.fs.path.extension(file.path)) orelse {
+                var f = file;
+                f.deinit();
+                fizzy.app.allocator.free(path_owned);
+                continue;
+            };
+            editor.insertOpenDoc(file, owner) catch {
                 var f = file;
                 f.deinit();
                 fizzy.app.allocator.free(path_owned);

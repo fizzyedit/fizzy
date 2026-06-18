@@ -15,37 +15,35 @@ const plus_jakarta_sans_bold_ttf = assets.files.fonts.@"PlusJakartaSans-Bold.ttf
 
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
-const update_notify = @import("../update_notify.zig");
+const update_notify = @import("../backend/update_notify.zig");
 
 const App = fizzy.App;
 const Editor = @This();
 
-pub const Colors = @import("../plugins/pixelart/Colors.zig");
-pub const Project = @import("../plugins/pixelart/Project.zig");
+const Project = fizzy.pixelart_mod.Project;
 pub const Recents = @import("Recents.zig");
 pub const Settings = @import("Settings.zig");
-pub const Tools = @import("../plugins/pixelart/Tools.zig");
+const Tools = fizzy.Tools;
 pub const Dialogs = @import("dialogs/Dialogs.zig");
 
-pub const Transform = @import("../plugins/pixelart/Transform.zig");
 pub const Keybinds = @import("Keybinds.zig");
 
-pub const Workspace = @import("../plugins/workbench/Workspace.zig");
+pub const Workspace = @import("../plugins/workbench/src/Workspace.zig");
 pub const Explorer = @import("explorer/Explorer.zig");
 pub const IgnoreRules = @import("explorer/IgnoreRules.zig");
 pub const Panel = @import("panel/Panel.zig");
 pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
-pub const FileLoadJob = @import("../plugins/workbench/FileLoadJob.zig");
-pub const PackJob = @import("../plugins/pixelart/PackJob.zig");
+pub const FileLoadJob = @import("../plugins/workbench/src/FileLoadJob.zig");
+const PackJob = fizzy.PackJob;
 
 pub const sdk = fizzy.sdk;
 pub const Host = sdk.Host;
 
 /// Workbench (Phase 1): file-management home — currently the per-branch
 /// decoration registry for the explorer; grows to own files + tabs/splits.
-pub const Workbench = @import("../plugins/workbench/Workbench.zig");
+pub const Workbench = @import("../plugins/workbench/src/Workbench.zig");
 
 /// This arena is for small per-frame editor allocations, such as path joins, null terminations and labels.
 /// Do not free these allocations, instead, this allocator will be .reset(.retain_capacity) each frame
@@ -82,7 +80,7 @@ ignore: IgnoreRules = .{},
 
 themes: std.ArrayList(dvui.Theme) = .empty,
 
-open_files: std.AutoArrayHashMapUnmanaged(u64, fizzy.Internal.File) = .empty,
+open_files: std.AutoArrayHashMapUnmanaged(u64, sdk.DocHandle) = .empty,
 
 /// Background file-load jobs in flight. Keyed by absolute path. Each job's worker thread runs
 /// `Internal.File.fromPath` off the main thread; the main thread polls via `processLoadingJobs`
@@ -439,7 +437,7 @@ pub fn init(
         return err;
     };
 
-    // Pixel-art tools/colors/palettes now init in `PixelArt.init` (App owns the
+    // Pixel-art tools/colors/palettes now init in `State.init` (App owns the
     // `fizzy.pixelart` instance, created just after this `Editor.init` returns).
 
     try Keybinds.register();
@@ -478,8 +476,8 @@ pub fn postInit(editor: *Editor) !void {
     // near-empty shell's content: it iterates the Host registries rather than
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
     // editor tick already runs on wasm. Order = sidebar order.
-    try @import("../plugins/workbench/plugin.zig").register(&editor.host);
-    try @import("../plugins/pixelart/plugin.zig").register(&editor.host);
+    try @import("../plugins/workbench/src/plugin.zig").register(&editor.host);
+    try fizzy.pixelart_mod.plugin.register(&editor.host);
 
     // Shell built-in: Settings (owner = null; not a plugin).
     try editor.host.registerSidebarView(.{
@@ -553,10 +551,39 @@ const shell_api_vtable: sdk.EditorAPI.VTable = .{
     .markSettingsDirty = shellMarkSettingsDirty,
     .contentOpacity = shellContentOpacity,
     .isMaximized = shellIsMaximized,
+    .isMacOS = shellIsMacOS,
+    .appliesNativeWindowOpacity = shellAppliesNativeWindowOpacity,
     .explorerRect = shellExplorerRect,
     .explorerVirtualSize = shellExplorerVirtualSize,
     .showSaveDialog = shellShowSaveDialog,
     .uiAtlas = shellUiAtlas,
+    .activeDoc = shellActiveDoc,
+    .docByIndex = shellDocByIndex,
+    .docById = shellDocById,
+    .docIndex = shellDocIndex,
+    .openDocCount = shellOpenDocCount,
+    .setActiveDocIndex = shellSetActiveDocIndex,
+    .allocDocId = shellAllocDocId,
+    .accept = shellAccept,
+    .cancel = shellCancel,
+    .copy = shellCopy,
+    .paste = shellPaste,
+    .transform = shellTransform,
+    .save = shellSave,
+    .requestCompositeWarmup = shellRequestCompositeWarmup,
+    .requestGridLayoutDialog = shellRequestGridLayoutDialog,
+    .allocUntitledPath = shellAllocUntitledPath,
+    .createDocument = shellCreateDocument,
+    .requestSaveAs = shellRequestSaveAs,
+    .requestWebSave = shellRequestWebSave,
+    .cancelPendingSaveDialog = shellCancelPendingSaveDialog,
+    .setPendingCloseDocId = shellSetPendingCloseDocId,
+    .queueCloseAfterSave = shellQueueCloseAfterSave,
+    .trackQuitSaveInFlight = shellTrackQuitSaveInFlight,
+    .resumeSaveAllQuit = shellResumeSaveAllQuit,
+    .abortSaveAllQuit = shellAbortSaveAllQuit,
+    .startPackProject = shellStartPackProject,
+    .isPackingActive = shellIsPackingActive,
 };
 
 fn shellCtx(ctx: *anyopaque) *Editor {
@@ -580,6 +607,13 @@ fn shellContentOpacity(ctx: *anyopaque) f32 {
 fn shellIsMaximized(ctx: *anyopaque) bool {
     _ = ctx;
     return fizzy.backend.isMaximized(dvui.currentWindow());
+}
+fn shellIsMacOS(_: *anyopaque) bool {
+    return fizzy.platform.isMacOS();
+}
+fn shellAppliesNativeWindowOpacity(_: *anyopaque) bool {
+    if (comptime builtin.target.cpu.arch == .wasm32) return false;
+    return builtin.os.tag == .macos or builtin.os.tag == .windows;
 }
 fn shellExplorerRect(ctx: *anyopaque) dvui.Rect {
     return shellCtx(ctx).explorer.rect;
@@ -605,6 +639,133 @@ fn shellUiAtlas(ctx: *anyopaque) sdk.EditorAPI.UiAtlasView {
         .source = atlas.source,
         .sprites = @as([]const sdk.EditorAPI.UiSprite, @ptrCast(atlas.sprites)),
     };
+}
+fn shellActiveDoc(ctx: *anyopaque) ?sdk.DocHandle {
+    return shellCtx(ctx).activeDoc();
+}
+fn shellDocByIndex(ctx: *anyopaque, index: usize) ?sdk.DocHandle {
+    return shellCtx(ctx).docAt(index);
+}
+fn shellDocById(ctx: *anyopaque, id: u64) ?sdk.DocHandle {
+    return shellCtx(ctx).docById(id);
+}
+fn shellDocIndex(ctx: *anyopaque, id: u64) ?usize {
+    return shellCtx(ctx).open_files.getIndex(id);
+}
+fn shellOpenDocCount(ctx: *anyopaque) usize {
+    return shellCtx(ctx).open_files.count();
+}
+fn shellSetActiveDocIndex(ctx: *anyopaque, index: usize) void {
+    shellCtx(ctx).setActiveFile(index);
+}
+fn shellAllocDocId(ctx: *anyopaque) u64 {
+    return shellCtx(ctx).newFileID();
+}
+fn shellAccept(ctx: *anyopaque) anyerror!void {
+    return shellCtx(ctx).accept();
+}
+fn shellCancel(ctx: *anyopaque) anyerror!void {
+    return shellCtx(ctx).cancel();
+}
+fn shellCopy(ctx: *anyopaque) anyerror!void {
+    return shellCtx(ctx).copy();
+}
+fn shellPaste(ctx: *anyopaque) anyerror!void {
+    return shellCtx(ctx).paste();
+}
+fn shellTransform(ctx: *anyopaque) anyerror!void {
+    return shellCtx(ctx).transform();
+}
+fn shellSave(ctx: *anyopaque) anyerror!void {
+    return shellCtx(ctx).save();
+}
+fn shellRequestCompositeWarmup(ctx: *anyopaque) void {
+    shellCtx(ctx).requestCompositeWarmup();
+}
+fn shellRequestGridLayoutDialog(ctx: *anyopaque) void {
+    shellCtx(ctx).requestGridLayoutDialog();
+}
+fn shellAllocUntitledPath(ctx: *anyopaque) anyerror![]u8 {
+    return shellCtx(ctx).allocNextUntitledPath();
+}
+fn shellCreateDocument(ctx: *anyopaque, path: []const u8, grid: sdk.EditorAPI.NewDocGrid) anyerror!sdk.DocHandle {
+    const editor = shellCtx(ctx);
+    const file = try editor.newFile(path, .{
+        .columns = grid.columns,
+        .rows = grid.rows,
+        .column_width = grid.column_width,
+        .row_height = grid.row_height,
+    });
+    const owner = fizzy.pixelart_mod.plugin.pluginPtr();
+    return .{ .ptr = file, .owner = owner, .id = file.id };
+}
+fn shellRequestSaveAs(ctx: *anyopaque) void {
+    shellCtx(ctx).requestSaveAs();
+}
+fn shellRequestWebSave(ctx: *anyopaque, kind: sdk.EditorAPI.WebSaveKind) void {
+    const native_kind: Dialogs.WebSaveAs.Kind = switch (kind) {
+        .save => .save,
+        .save_as => .save_as,
+    };
+    shellCtx(ctx).requestWebSaveDialog(native_kind);
+}
+fn shellCancelPendingSaveDialog(ctx: *anyopaque) void {
+    shellCtx(ctx).cancelPendingSaveDialog();
+}
+fn shellSetPendingCloseDocId(ctx: *anyopaque, id: u64) void {
+    shellCtx(ctx).pending_close_file_id = id;
+}
+fn shellQueueCloseAfterSave(ctx: *anyopaque, id: u64) anyerror!void {
+    try shellCtx(ctx).pending_close_after_save.put(fizzy.app.allocator, id, {});
+}
+fn shellTrackQuitSaveInFlight(ctx: *anyopaque, id: u64) anyerror!void {
+    try shellCtx(ctx).quit_saves_in_flight.put(fizzy.app.allocator, id, {});
+}
+fn shellResumeSaveAllQuit(ctx: *anyopaque) void {
+    shellCtx(ctx).pending_quit_continue = true;
+}
+fn shellAbortSaveAllQuit(ctx: *anyopaque) void {
+    shellCtx(ctx).abortSaveAllQuit();
+}
+fn shellStartPackProject(ctx: *anyopaque) anyerror!void {
+    return shellCtx(ctx).startPackProject();
+}
+fn shellIsPackingActive(ctx: *anyopaque) bool {
+    return shellCtx(ctx).isPackingActive();
+}
+
+/// Resolve a shell `DocHandle` to the plugin-owned file. Uses `doc.id`, not `doc.ptr`:
+/// `docs.files` may reallocate and invalidate pointers stored at insert time.
+pub fn fileFromDoc(_: *Editor, doc: sdk.DocHandle) *fizzy.Internal.File {
+    return fizzy.pixelart.docs.fileById(doc.id).?;
+}
+
+pub fn docAt(editor: *Editor, index: usize) ?sdk.DocHandle {
+    if (index >= editor.open_files.values().len) return null;
+    return editor.open_files.values()[index];
+}
+
+pub fn docById(editor: *Editor, id: u64) ?sdk.DocHandle {
+    return editor.open_files.get(id);
+}
+
+pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
+    if (editor.workspaces.get(editor.open_workspace_grouping)) |workspace| {
+        return editor.docAt(workspace.open_file_index);
+    }
+    return null;
+}
+
+/// Store a loaded/created document in the plugin registry and register its handle.
+pub fn insertOpenDoc(editor: *Editor, file: fizzy.Internal.File, owner: *sdk.Plugin) !void {
+    try fizzy.pixelart.docs.files.put(fizzy.app.allocator, file.id, file);
+    const ptr = fizzy.pixelart.docs.files.getPtr(file.id).?;
+    try editor.open_files.put(fizzy.app.allocator, file.id, .{
+        // `ptr` is a hint only; consumers must resolve via `fileFromDoc` / `doc.id`.
+        .ptr = ptr,
+        .owner = owner,
+        .id = file.id,
+    });
 }
 
 /// Ensures `{config}/Themes` exists and scans `*.json` for future user themes (loaded entries are prepended before Fizzy themes).
@@ -733,8 +894,8 @@ pub fn markSettingsDirty(editor: *Editor) void {
 }
 
 fn activelyDrawing(editor: *Editor) bool {
-    for (editor.open_files.values()) |*file| {
-        if (file.editor.active_drawing) return true;
+    for (editor.open_files.values()) |doc| {
+        if (editor.fileFromDoc(doc).editor.active_drawing) return true;
     }
     return false;
 }
@@ -828,7 +989,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Drain any "Save and Close" requests whose async save has settled.
     editor.tickPendingSaveCloses();
     var needs_save_status_anim_tick = false;
-    for (editor.open_files.values()) |*f| {
+    for (editor.open_files.values()) |doc| {
+        const f = editor.fileFromDoc(doc);
         f.tickSaveDoneFlash();
         if (f.showsSaveStatusIndicator()) needs_save_status_anim_tick = true;
     }
@@ -853,8 +1015,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         if (!want_quit) continue;
 
         var dirty_n: usize = 0;
-        for (editor.open_files.values()) |f| {
-            if (f.dirty()) dirty_n += 1;
+        for (editor.open_files.values()) |doc| {
+            if (editor.fileFromDoc(doc).dirty()) dirty_n += 1;
         }
         if (dirty_n == 0) continue;
 
@@ -910,7 +1072,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     {
         var any_drawing = false;
         fizzy.perf.draw_stroke_buf_count = 0; // no active stroke → 0; else first active file's map size
-        for (editor.open_files.values()) |*file| {
+        for (editor.open_files.values()) |doc| {
+            const file = editor.fileFromDoc(doc);
             if (file.editor.active_drawing) {
                 any_drawing = true;
                 fizzy.perf.draw_stroke_buf_count = file.buffers.stroke.pixels.count();
@@ -1126,7 +1289,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
         // Always reset the peek layer index back, but we need to do this outside of the file widget so
         // other editor windows can use it
-        defer for (editor.open_files.values()) |*file| {
+        defer for (editor.open_files.values()) |doc| {
+            const file = editor.fileFromDoc(doc);
             if (file.editor.isolate_layer) {
                 file.peek_layer_index = file.selected_layer_index;
             } else {
@@ -1590,7 +1754,7 @@ pub fn drawRadialMenu(editor: *Editor) !void {
     // fixed until close so tool buttons remain hoverable/clickable.
     const center = fw.data().rectScale().pointFromPhysical(fizzy.pixelart.tools.radial_menu.center);
 
-    const tool_count: usize = std.meta.fields(Editor.Tools.Tool).len;
+    const tool_count: usize = std.meta.fields(Tools.Tool).len;
 
     const radius: f32 = 50.0;
     const width: f32 = radius * 2.0;
@@ -1667,7 +1831,7 @@ pub fn drawRadialMenu(editor: *Editor) !void {
         rect.x -= rect.w / 2.0;
         rect.y -= rect.h / 2.0;
 
-        const tool = @as(Editor.Tools.Tool, @enumFromInt(i));
+        const tool = @as(Tools.Tool, @enumFromInt(i));
 
         var button: dvui.ButtonWidget = undefined;
         button.init(@src(), .{}, .{
@@ -1696,7 +1860,7 @@ pub fn drawRadialMenu(editor: *Editor) !void {
             .color => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.color_selection_default],
         };
 
-        const sprite = switch (@as(Editor.Tools.Tool, @enumFromInt(i))) {
+        const sprite = switch (@as(Tools.Tool, @enumFromInt(i))) {
             .pointer => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.cursor_default],
             .pencil => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.pencil_default],
             .eraser => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.eraser_default],
@@ -1788,10 +1952,12 @@ pub fn drawRadialMenu(editor: *Editor) !void {
 pub fn rebuildWorkspaces(editor: *Editor) !void {
 
     // Create workspaces for each grouping ID
-    for (editor.open_files.values()) |*file| {
+    for (editor.open_files.values()) |doc| {
+        const file = editor.fileFromDoc(doc);
         if (!editor.workspaces.contains(file.editor.grouping)) {
             var workspace: fizzy.Editor.Workspace = .init(file.editor.grouping);
-            for (editor.open_files.values()) |*f| {
+            for (editor.open_files.values()) |d| {
+                const f = editor.fileFromDoc(d);
                 if (f.editor.grouping == file.editor.grouping) {
                     workspace.open_file_index = editor.open_files.getIndex(f.id) orelse 0;
                 }
@@ -1811,7 +1977,8 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
         }
 
         var contains: bool = false;
-        for (editor.open_files.values()) |*file| {
+        for (editor.open_files.values()) |doc| {
+            const file = editor.fileFromDoc(doc);
             if (file.editor.grouping == workspace.grouping) {
                 contains = true;
                 break;
@@ -1939,8 +2106,7 @@ fn tickPendingSaveCloses(editor: *Editor) void {
     var i: usize = 0;
     while (i < editor.pending_close_after_save.count()) {
         const id = editor.pending_close_after_save.keys()[i];
-        const file_ptr = editor.open_files.getPtr(id);
-        if (file_ptr) |f| {
+        if (fizzy.pixelart.docs.fileById(id)) |f| {
             if (f.isSaving()) {
                 i += 1;
                 continue;
@@ -1970,7 +2136,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
     // Pass 1: kick off any queued saves we haven't started yet.
     while (editor.quit_save_all_ids.items.len > 0) {
         const id = editor.quit_save_all_ids.items[0];
-        const file_ptr = editor.open_files.getPtr(id) orelse {
+        const file_ptr = fizzy.pixelart.docs.fileById(id) orelse {
             _ = editor.quit_save_all_ids.swapRemove(0);
             continue;
         };
@@ -2019,8 +2185,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
         var i: usize = 0;
         while (i < editor.quit_saves_in_flight.count()) {
             const id = editor.quit_saves_in_flight.keys()[i];
-            const file_ptr = editor.open_files.getPtr(id);
-            if (file_ptr) |f| {
+            if (fizzy.pixelart.docs.fileById(id)) |f| {
                 if (f.isSaving()) {
                     i += 1;
                     continue;
@@ -2051,8 +2216,8 @@ pub fn close(app: *App, editor: *Editor) void {
         return;
     }
     var dirty_n: usize = 0;
-    for (editor.open_files.values()) |f| {
-        if (f.dirty()) dirty_n += 1;
+    for (editor.open_files.values()) |doc| {
+        if (editor.fileFromDoc(doc).dirty()) dirty_n += 1;
     }
     if (dirty_n > 0) {
         Dialogs.AppQuitUnsaved.request();
@@ -2073,15 +2238,15 @@ pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     }
     editor.folder = try fizzy.app.allocator.dupe(u8, path);
     try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
-    editor.host.setActiveSidebarView(@import("../plugins/workbench/plugin.zig").view_files);
+    editor.host.setActiveSidebarView(@import("../plugins/workbench/src/plugin.zig").view_files);
 
     fizzy.pixelart.project = Project.load(fizzy.app.allocator) catch null;
     editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);
 }
 
 pub fn saving(editor: *Editor) bool {
-    for (editor.open_files.values()) |file| {
-        if (file.saving) return true;
+    for (editor.open_files.values()) |doc| {
+        if (editor.fileFromDoc(doc).saving) return true;
     }
     return false;
 }
@@ -2098,7 +2263,7 @@ pub fn saving(editor: *Editor) bool {
 pub fn openOrFocusFileAtGrouping(editor: *Editor, path: []const u8, grouping: u64) !?usize {
     if (editor.getFileFromPath(path)) |file| {
         const idx = editor.open_files.getIndex(file.id) orelse return error.Unexpected;
-        editor.open_files.values()[idx].editor.grouping = grouping;
+        editor.fileAt(idx).?.editor.grouping = grouping;
         editor.setActiveFile(idx);
         return idx;
     }
@@ -2121,7 +2286,8 @@ pub fn clearFileTreeTabDragDropState(editor: *Editor) void {
 
 pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
     // Already open? Just focus it.
-    for (editor.open_files.values(), 0..) |*file, i| {
+    for (editor.open_files.values(), 0..) |doc, i| {
+        const file = editor.fileFromDoc(doc);
         if (std.mem.eql(u8, file.path, path)) {
             editor.setActiveFile(i);
             return false;
@@ -2170,7 +2336,8 @@ pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
 
 /// Synchronous open from browser file-picker bytes. Caller owns `path` on success (stored in `File.path`).
 pub fn openFileFromBytes(editor: *Editor, path: []u8, bytes: []const u8, grouping: u64) !fizzy.Internal.File {
-    for (editor.open_files.values()) |*file| {
+    for (editor.open_files.values()) |doc| {
+        const file = editor.fileFromDoc(doc);
         if (std.mem.eql(u8, file.path, path)) {
             if (editor.open_files.getIndex(file.id)) |idx| {
                 editor.setActiveFile(idx);
@@ -2224,7 +2391,15 @@ pub fn processLoadingJobs(editor: *Editor) void {
                     var file = result;
                     file.editor.grouping = job.target_grouping;
 
-                    editor.open_files.put(fizzy.app.allocator, file.id, file) catch {
+                    const owner = editor.host.pluginForExtension(std.fs.path.extension(file.path)) orelse {
+                        dvui.log.err("No plugin for loaded file: {s}", .{job.path});
+                        var f = file;
+                        f.deinit();
+                        job.destroy();
+                        continue;
+                    };
+
+                    editor.insertOpenDoc(file, owner) catch {
                         dvui.log.err("Failed to insert loaded file into open_files: {s}", .{job.path});
                         // We still own `file` here — clean it up.
                         var f = file;
@@ -2358,7 +2533,8 @@ fn runWasmPackWorkers(_: *Editor) void {
 }
 
 fn appendOpenPackInputs(editor: *Editor, inputs: *std.ArrayListUnmanaged(PackJob.PackInput)) !void {
-    for (editor.open_files.values()) |*open_file| {
+    for (editor.open_files.values()) |doc| {
+        const open_file = editor.fileFromDoc(doc);
         const snapshot = try PackJob.PackFile.fromOpenFile(fizzy.app.allocator, open_file);
         try inputs.append(fizzy.app.allocator, .{ .open = snapshot });
     }
@@ -2400,7 +2576,8 @@ fn findOpenFileForPackPath(editor: *Editor, path: []const u8) ?*fizzy.Internal.F
     if (editor.getFileFromPath(path)) |file| return file;
 
     const basename = std.fs.path.basename(path);
-    for (editor.open_files.values()) |*file| {
+    for (editor.open_files.values()) |doc| {
+        const file = editor.fileFromDoc(doc);
         if (!std.mem.eql(u8, std.fs.path.basename(file.path), basename)) continue;
         if (std.mem.eql(u8, file.path, path)) return file;
         if (editor.folder) |folder| {
@@ -2473,7 +2650,7 @@ pub fn processPackJob(editor: *Editor) void {
         }
         fizzy.packer.last_packed_at_ns = fizzy.perf.nanoTimestamp();
         job.result_consumed = true;
-        editor.host.setActiveSidebarView(@import("../plugins/pixelart/plugin.zig").view_project);
+        editor.host.setActiveSidebarView(fizzy.pixelart_mod.plugin.view_project);
         const toast_canvas: ?dvui.Id = if (editor.activeFile()) |file| file.editor.canvas.id else null;
         showPackToast("Project packed", toast_canvas);
     } else blk: {
@@ -2719,17 +2896,18 @@ pub fn newFile(editor: *Editor, path: []const u8, options: fizzy.Internal.File.I
         return error.FailedToCreateFile;
     };
 
-    try editor.open_files.put(fizzy.app.allocator, file.id, file);
+    try editor.insertOpenDoc(file, fizzy.pixelart_mod.plugin.pluginPtr());
     editor.setActiveFile(editor.open_files.count() - 1);
     editor.pending_composite_warmup = true;
 
-    return editor.open_files.getPtr(file.id) orelse return error.FailedToCreateFile;
+    return fizzy.pixelart.docs.fileById(file.id) orelse return error.FailedToCreateFile;
 }
 
-/// Heap-owned path like `untitled-1`, unique among `open_files` basenames.
+/// Heap-owned path like `untitled-1`, unique among open-document basenames.
 pub fn allocNextUntitledPath(editor: *Editor) ![]u8 {
     var max_n: u32 = 0;
-    for (editor.open_files.values()) |f| {
+    for (editor.open_files.values()) |doc| {
+        const f = editor.fileFromDoc(doc);
         const base = std.fs.path.basename(f.path);
         if (std.mem.startsWith(u8, base, "untitled-")) {
             const suffix = base["untitled-".len..];
@@ -2786,8 +2964,7 @@ pub fn requestNewFileDialog(_: *Editor) void {
 }
 
 pub fn setActiveFile(editor: *Editor, index: usize) void {
-    if (index >= editor.open_files.values().len) return;
-    const file = editor.open_files.values()[index];
+    const file = editor.fileAt(index) orelse return;
     const grouping = file.editor.grouping;
 
     if (editor.workspaces.getPtr(grouping)) |workspace| {
@@ -2798,30 +2975,21 @@ pub fn setActiveFile(editor: *Editor, index: usize) void {
 
 /// Returns the actively focused file, through workspace grouping.
 pub fn activeFile(editor: *Editor) ?*fizzy.Internal.File {
-    if (editor.workspaces.get(editor.open_workspace_grouping)) |workspace| {
-        return editor.getFile(workspace.open_file_index);
-    }
-
-    return null;
+    const doc = editor.activeDoc() orelse return null;
+    return editor.fileFromDoc(doc);
 }
 
 pub fn getFile(editor: *Editor, index: usize) ?*fizzy.Internal.File {
-    if (editor.open_files.values().len == 0) return null;
-    if (index >= editor.open_files.values().len) return null;
-
-    return &editor.open_files.values()[index];
+    return editor.fileAt(index);
 }
 
-pub fn getFileFromPath(editor: *Editor, path: []const u8) ?*fizzy.Internal.File {
-    if (editor.open_files.values().len == 0) return null;
+pub fn fileAt(editor: *Editor, index: usize) ?*fizzy.Internal.File {
+    const doc = editor.docAt(index) orelse return null;
+    return editor.fileFromDoc(doc);
+}
 
-    for (editor.open_files.values()) |*file| {
-        if (std.mem.eql(u8, file.path, path)) {
-            return file;
-        }
-    }
-
-    return null;
+pub fn getFileFromPath(_: *Editor, path: []const u8) ?*fizzy.Internal.File {
+    return fizzy.pixelart.docs.fileFromPath(path);
 }
 
 pub fn forceCloseFile(editor: *Editor, index: usize) !void {
@@ -3227,7 +3395,8 @@ pub fn requestWebSaveDialog(editor: *Editor, kind: Dialogs.WebSaveAs.Kind) void 
 /// or flat-raster confirmation are skipped — the user can save those individually.
 /// Files that are already saving are also skipped (their `saveAsync` no-ops).
 pub fn saveAll(editor: *Editor) !void {
-    for (editor.open_files.values()) |*file| {
+    for (editor.open_files.values()) |doc| {
+        const file = editor.fileFromDoc(doc);
         if (!file.dirty()) continue;
         if (!fizzy.Internal.File.hasRecognizedSaveExtension(file.path)) continue;
         if (file.shouldConfirmFlatRasterSave()) continue;
@@ -3275,7 +3444,7 @@ pub fn cancelPendingSaveDialog(editor: *Editor) void {
 
     if (file_id) |id| {
         _ = editor.pending_close_after_save.swapRemove(id);
-        if (editor.open_files.getPtr(id)) |f| {
+        if (fizzy.pixelart.docs.fileById(id)) |f| {
             f.resetSaveUIState();
         }
     } else if (editor.activeFile()) |f| {
@@ -3425,38 +3594,43 @@ pub fn openInFileBrowser(_: *Editor, path: []const u8) !void {
 }
 
 pub fn closeFileID(editor: *Editor, id: u64) !void {
-    if (editor.open_files.get(id)) |file| {
-        if (file.dirty()) {
-            Dialogs.UnsavedClose.request(id);
-            return;
+    if (editor.open_files.contains(id)) {
+        if (fizzy.pixelart.docs.fileById(id)) |file| {
+            if (file.dirty()) {
+                Dialogs.UnsavedClose.request(id);
+                return;
+            }
         }
         try editor.rawCloseFileID(id);
     }
 }
 
 pub fn closeFile(editor: *Editor, index: usize) !void {
-    const file = editor.open_files.values()[index];
-    try editor.closeFileID(file.id);
+    const doc = editor.docAt(index) orelse return;
+    try editor.closeFileID(doc.id);
 }
 
-/// Tear down a file's resources via its owning plugin, falling back to a direct
-/// `deinit` when no plugin claims the extension. The shell still owns removing the
-/// entry from `open_files`; this only releases the document's own resources.
-fn closeDocumentResources(editor: *Editor, file: *fizzy.Internal.File) void {
-    if (editor.host.pluginForExtension(std.fs.path.extension(file.path))) |plugin| {
-        if (plugin.closeDocument(.{ .ptr = file, .owner = plugin, .id = file.id })) return;
+/// Tear down a document via its owning plugin, falling back to a direct `deinit`.
+/// Removes the entry from the plugin's document registry; the shell still removes
+/// the matching `DocHandle` from `open_files`.
+fn closeDocumentResources(editor: *Editor, doc: sdk.DocHandle) void {
+    if (doc.owner.closeDocument(doc)) {
+        _ = fizzy.pixelart.docs.files.swapRemove(doc.id);
+        return;
     }
-    file.deinit();
+    editor.fileFromDoc(doc).deinit();
+    _ = fizzy.pixelart.docs.files.swapRemove(doc.id);
 }
 
 pub fn rawCloseFile(editor: *Editor, index: usize) !void {
-    //editor.open_file_index = 0;
-    var file = editor.open_files.values()[index];
+    const doc = editor.docAt(index) orelse return;
+    const file = editor.fileFromDoc(doc);
 
     if (editor.workspaces.getPtr(file.editor.grouping)) |workspace| {
-        if (workspace.open_file_index == fizzy.editor.open_files.getIndex(file.id)) {
-            for (fizzy.editor.open_files.values(), 0..) |f, i| {
-                if (f.grouping == workspace.grouping and f.id != file.id) {
+        if (workspace.open_file_index == index) {
+            for (editor.open_files.values(), 0..) |d, i| {
+                const f = editor.fileFromDoc(d);
+                if (f.editor.grouping == workspace.grouping and f.id != file.id) {
                     workspace.open_file_index = i;
                     break;
                 }
@@ -3464,27 +3638,28 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
         }
     }
 
-    editor.closeDocumentResources(&file);
+    editor.closeDocumentResources(doc);
     editor.open_files.orderedRemoveAt(index);
 }
 
 pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
-    if (editor.open_files.getPtr(id)) |file| {
+    const doc = editor.open_files.get(id) orelse return;
+    const file = editor.fileFromDoc(doc);
 
-        //editor.open_file_index = 0;
-        if (editor.workspaces.getPtr(file.editor.grouping)) |workspace| {
-            if (workspace.open_file_index == fizzy.editor.open_files.getIndex(file.id)) {
-                for (fizzy.editor.open_files.values(), 0..) |f, i| {
-                    if (f.editor.grouping == workspace.grouping and f.id != file.id) {
-                        workspace.open_file_index = i;
-                        break;
-                    }
+    if (editor.workspaces.getPtr(file.editor.grouping)) |workspace| {
+        if (workspace.open_file_index == editor.open_files.getIndex(file.id)) {
+            for (editor.open_files.values(), 0..) |d, i| {
+                const f = editor.fileFromDoc(d);
+                if (f.editor.grouping == workspace.grouping and f.id != file.id) {
+                    workspace.open_file_index = i;
+                    break;
                 }
             }
         }
-        editor.closeDocumentResources(file);
-        _ = editor.open_files.orderedRemove(id);
     }
+
+    editor.closeDocumentResources(doc);
+    _ = editor.open_files.orderedRemove(id);
 }
 
 pub fn closeReference(editor: *Editor, index: usize) !void {
@@ -3553,7 +3728,7 @@ pub fn deinit(editor: *Editor) !void {
     editor.workbench.deinit();
 
     // Pixel-art state (tools/colors/project/pack jobs) is torn down by
-    // `PixelArt.deinit` in `App.AppDeinit`, after this returns.
+    // `State.deinit` in `App.AppDeinit`, after this returns.
 
     editor.ignore.deinit(fizzy.app.allocator);
 

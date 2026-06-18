@@ -157,7 +157,8 @@ pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
         // Save All is enabled whenever any open file is dirty with a recognized
         // extension. Worker queue handles them serially; UI stays responsive.
         const any_dirty = blk: {
-            for (fizzy.editor.open_files.values()) |*f| {
+            for (fizzy.editor.open_files.values()) |doc| {
+                const f = fizzy.editor.fileFromDoc(doc);
                 if (f.dirty() and fizzy.Internal.File.hasRecognizedSaveExtension(f.path)) break :blk true;
             }
             break :blk false;
