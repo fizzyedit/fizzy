@@ -1,6 +1,4 @@
 const std = @import("std");
-const fs = @import("../../tools/fs.zig");
-const fizzy = @import("../../fizzy.zig");
 
 const Atlas = @This();
 
@@ -25,7 +23,13 @@ const AtlasV1 = struct {
 };
 
 pub fn loadFromFile(allocator: std.mem.Allocator, io: std.Io, file: []const u8) !Atlas {
-    const read = try fs.read(allocator, io, file);
+    const cwd = std.Io.Dir.cwd();
+    const handle = try cwd.openFile(io, file, .{});
+    defer handle.close(io);
+
+    var buf: [4096]u8 = undefined;
+    var rdr = handle.reader(io, &buf);
+    const read = try rdr.interface.allocRemaining(allocator, .unlimited);
     defer allocator.free(read);
 
     return loadFromBytes(allocator, read);

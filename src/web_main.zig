@@ -23,7 +23,6 @@ const fizzy = @import("fizzy.zig");
 comptime {
     // Pure constants / re-exports
     _ = fizzy.version;
-    _ = fizzy.fa.adjust;
     _ = fizzy.atlas;
 
     // Algorithms — pure Zig + dvui
@@ -58,7 +57,7 @@ comptime {
 
     // Custom dvui wrapper + widgets — types compile even though the widget files
     // contain dead `@import("backend")` SDL3 imports at file scope.
-    _ = fizzy.dvui.FileWidget;
+    _ = @import("plugins/pixelart/widgets/FileWidget.zig");
     _ = fizzy.dvui.CanvasWidget;
 
     // The big ones: Editor + App. Type-level reference only — passes because Zig

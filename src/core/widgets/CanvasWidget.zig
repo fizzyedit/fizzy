@@ -1,6 +1,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
-const fizzy = @import("../../fizzy.zig");
+const core = @import("../core.zig");
+const Fling = @import("../Fling.zig");
 
 pub const CanvasWidget = @This();
 
@@ -134,8 +135,8 @@ scroll_pan_end_pending: bool = false,
 
 // Momentum for the drag-pan (middle button, or a left/touch drag starting off the
 // artboard). One coast per axis so a flick keeps gliding after release; see Fling.
-pan_fling_x: fizzy.Fling = .{},
-pan_fling_y: fizzy.Fling = .{},
+pan_fling_x: Fling = .{},
+pan_fling_y: Fling = .{},
 
 // Pinch / two-finger pan input accumulated during this frame's `updateTouchGesture`.
 // Mutating `scale` / `scroll_info.viewport` mid-frame jitters the canvas because the
@@ -186,7 +187,7 @@ const touch_eval_duration_ns: i128 = 80 * std.time.ns_per_ms;
 /// units `scroll_info.viewport.x/y` move in — so the feel scales naturally with zoom.
 /// Release velocity is measured over a wall-clock position/time window
 /// (`releaseWindowed`)
-const pan_fling: fizzy.Fling.Tuning = .{
+const pan_fling: Fling.Tuning = .{
     .decay = 4.0,
     .min_start = 40.0,
     .stop = 10.0,
@@ -757,7 +758,7 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
     // scale-around-point math used by wheel/touch zoom. Focal point is the cursor position
     // (macOS does not move the cursor during a trackpad gesture, so it represents intent).
     // No-op on Windows/Linux/web (`takeTrackpadPinchRatio` returns 1.0 there).
-    const trackpad_ratio = fizzy.backend.takeTrackpadPinchRatio();
+    const trackpad_ratio = core.takeTrackpadPinchRatio();
     if (trackpad_ratio != 1.0) {
         const cursor_phys = dvui.currentWindow().mouse_pt;
         // Only honor the gesture when the cursor is over the canvas viewport — otherwise a

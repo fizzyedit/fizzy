@@ -13,6 +13,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
 const icons = @import("icons");
+const FileWidget = @import("widgets/FileWidget.zig");
 
 const Workspace = fizzy.Editor.Workspace;
 const File = fizzy.Internal.File;
@@ -1206,7 +1207,7 @@ pub fn drawSampleButton(self: *CanvasData, container: *dvui.WidgetData) void {
 
                 if (is_drag_sampling and did_sample and file.editor.canvas.samplePointerInViewport(me.p)) {
                     const data_pt = file.editor.canvas.dataFromScreenPoint(me.p);
-                    fizzy.dvui.FileWidget.sampleColorAtPoint(file, data_pt, false, true, true);
+                    FileWidget.sampleColorAtPoint(file, data_pt, false, true, true);
                 }
 
                 // Clear sample state so the magnifier disappears on the next frame.

@@ -17,7 +17,7 @@
 const std = @import("std");
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
-const perf = @import("../../gfx/perf.zig");
+const perf = fizzy.perf;
 
 const FileLoadJob = @This();
 

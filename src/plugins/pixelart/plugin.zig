@@ -8,6 +8,8 @@ const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const sdk = fizzy.sdk;
 const CanvasData = @import("CanvasData.zig");
+const FileWidget = @import("widgets/FileWidget.zig");
+const ImageWidget = @import("widgets/ImageWidget.zig");
 
 const DocHandle = sdk.DocHandle;
 const Internal = fizzy.Internal;
@@ -130,7 +132,7 @@ fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
 
     if (ws.grouping != file.editor.grouping) return;
 
-    var file_widget = fizzy.dvui.FileWidget.init(@src(), .{
+    var file_widget = FileWidget.init(@src(), .{
         .file = file,
         .center = file.editor.center,
     }, .{
@@ -143,7 +145,7 @@ fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
 
     if (dvui.dataGet(null, file.editor.canvas.id, "sample_data_point", dvui.Point)) |data_pt| {
         if (file.editor.canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) {
-            fizzy.dvui.FileWidget.drawSampleMagnifier(file, data_pt);
+            FileWidget.drawSampleMagnifier(file, data_pt);
         }
     }
 }
@@ -186,7 +188,7 @@ fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
 
     if (show_packed_atlas) {
         const atlas = &fizzy.packer.atlas.?;
-        var image_widget = fizzy.dvui.ImageWidget.init(@src(), .{
+        var image_widget = ImageWidget.init(@src(), .{
             .source = atlas.source,
             .canvas = &atlas.canvas,
             .grouping = ws.grouping,
@@ -202,7 +204,7 @@ fn drawProjectView(_: ?*anyopaque, workspace_handle: *anyopaque) anyerror!void {
 
         if (dvui.dataGet(null, atlas.canvas.id, "sample_data_point", dvui.Point)) |data_pt| {
             if (atlas.canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) {
-                fizzy.dvui.ImageWidget.drawSampleMagnifier(&atlas.canvas, atlas.source, data_pt);
+                ImageWidget.drawSampleMagnifier(&atlas.canvas, atlas.source, data_pt);
             }
         }
     } else {

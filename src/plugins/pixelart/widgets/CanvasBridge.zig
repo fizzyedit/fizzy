@@ -2,7 +2,7 @@
 //! pan/zoom scheme as config and input-suppression as a hook so it stays a reusable
 //! viewport; these helpers supply the pixel-art editor's wiring at the install sites.
 const fizzy = @import("../../../fizzy.zig");
-const CanvasWidget = @import("../../../editor/widgets/CanvasWidget.zig");
+const CanvasWidget = fizzy.dvui.CanvasWidget;
 
 /// Map the user's resolved pan/zoom preference onto the canvas's own scheme enum.
 pub fn scheme() CanvasWidget.PanZoomScheme {

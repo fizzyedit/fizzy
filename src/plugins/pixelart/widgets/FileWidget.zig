@@ -16,7 +16,7 @@ const ScrollContainerWidget = dvui.ScrollContainerWidget;
 const ScaleWidget = dvui.ScaleWidget;
 
 pub const FileWidget = @This();
-const CanvasWidget = @import("../../../editor/widgets/CanvasWidget.zig");
+const CanvasWidget = fizzy.dvui.CanvasWidget;
 const CanvasBridge = @import("CanvasBridge.zig");
 const Workspace = fizzy.Editor.Workspace;
 const CanvasData = @import("../CanvasData.zig");

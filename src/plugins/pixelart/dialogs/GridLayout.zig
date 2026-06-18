@@ -11,9 +11,9 @@ const dvui = @import("dvui");
 const std = @import("std");
 
 const NewFile = @import("NewFile.zig");
-const CanvasWidget = @import("../../../editor/widgets/CanvasWidget.zig");
+const CanvasWidget = fizzy.dvui.CanvasWidget;
 const CanvasBridge = @import("../widgets/CanvasBridge.zig");
-const FloatingWindowWidget = @import("../../../editor/widgets/FloatingWindowWidget.zig");
+const FloatingWindowWidget = fizzy.dvui.FloatingWindowWidget;
 const builtin = @import("builtin");
 
 /// Editable grid fields for one mode (Slice vs Resize each keep their own backing).
@@ -1479,7 +1479,7 @@ pub fn windowFn(id: dvui.Id) anyerror!void {
     };
 
     if (modal) {
-        fizzy.editor.dim_titlebar = true;
+        fizzy.dvui.modal_dim_titlebar = true;
     }
 
     const title = dvui.dataGetSlice(null, id, "_title", []u8) orelse {
@@ -1533,12 +1533,12 @@ pub fn windowFn(id: dvui.Id) anyerror!void {
 
     if (dvui.animationGet(win.data().id, "_close_x")) |a| {
         if (a.done()) {
-            fizzy.Editor.Explorer.files.new_file_close_rect = null;
+            fizzy.dvui.dialog_close_rect_override = null;
             dvui.dialogRemove(id);
         }
-    } else if (fizzy.Editor.Explorer.files.new_file_close_rect) |close_rect| {
+    } else if (fizzy.dvui.dialog_close_rect_override) |close_rect| {
         dvui.dataSet(null, win.data().id, "_close_rect", close_rect);
-        fizzy.Editor.Explorer.files.new_file_close_rect = null;
+        fizzy.dvui.dialog_close_rect_override = null;
     } else {
         // Call `autoSize` only while opening. Doing it every frame leaves `auto_size` true and the
         // window keeps animating/snapping to content min size — user resize appears "locked".

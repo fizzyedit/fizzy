@@ -69,7 +69,6 @@ explorer: *Explorer,
 panel: *Panel,
 
 last_titlebar_color: dvui.Color,
-dim_titlebar: bool = false,
 
 /// Workspaces stored by their grouping ID
 workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
@@ -779,7 +778,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         editor.queueNativeMenuAction(action);
     }
 
-    defer editor.dim_titlebar = false;
+    defer fizzy.dvui.modal_dim_titlebar = false;
     editor.setTitlebarColor();
     editor.setWindowStyle();
 
@@ -1423,7 +1422,7 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
 }
 
 pub fn setTitlebarColor(editor: *Editor) void {
-    const color = if (editor.dim_titlebar) dvui.themeGet().color(.control, .fill).lerp(.black, if (dvui.themeGet().dark) 60.0 / 255.0 else 80.0 / 255.0) else dvui.themeGet().color(.control, .fill);
+    const color = if (fizzy.dvui.modal_dim_titlebar) dvui.themeGet().color(.control, .fill).lerp(.black, if (dvui.themeGet().dark) 60.0 / 255.0 else 80.0 / 255.0) else dvui.themeGet().color(.control, .fill);
 
     if (!std.mem.eql(u8, &editor.last_titlebar_color.toRGBA(), &color.toRGBA())) {
         editor.last_titlebar_color = color;
@@ -2514,7 +2513,7 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
     // unrelated input (mouse move, etc.) ticks a frame. Schedule a wakeup at the threshold
     // boundary so the overlay shows on time even with the cursor parked.
     if (earliest_pending_start_ns) |start_ns| {
-        const elapsed_ms = @divTrunc(@import("../gfx/perf.zig").nanoTimestamp() - start_ns, std.time.ns_per_ms);
+        const elapsed_ms = @divTrunc(fizzy.perf.nanoTimestamp() - start_ns, std.time.ns_per_ms);
         const remaining_ms: i64 = toast_threshold_ms - @as(i64, @intCast(elapsed_ms));
         if (remaining_ms > 0) {
             dvui.timer(dvui.currentWindow().data().id, @intCast(remaining_ms * std.time.us_per_ms));

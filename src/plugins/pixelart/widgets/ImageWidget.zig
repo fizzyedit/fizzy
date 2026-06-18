@@ -1,5 +1,5 @@
 pub const ImageWidget = @This();
-const CanvasWidget = @import("../../../editor/widgets/CanvasWidget.zig");
+const CanvasWidget = fizzy.dvui.CanvasWidget;
 const CanvasBridge = @import("CanvasBridge.zig");
 
 init_options: InitOptions,

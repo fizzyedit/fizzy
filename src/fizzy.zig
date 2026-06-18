@@ -2,6 +2,10 @@ const std = @import("std");
 const mach = @import("mach");
 const Core = mach.Core;
 
+/// Shared infrastructure module (gfx, math, fs, generated atlas, platform,
+/// paths, the generic dvui hub + widgets). Consumed by the shell and plugins.
+pub const core = @import("core");
+
 pub const version: std.SemanticVersion = .{
     .major = 0,
     .minor = 2,
@@ -10,26 +14,25 @@ pub const version: std.SemanticVersion = .{
 
 // Generated files, these contain helpers for autocomplete
 // So you can get a named index into atlas.sprites
-pub const atlas = @import("generated/atlas.zig");
+pub const atlas = core.atlas;
 
 // Other helpers and namespaces
 pub const algorithms = @import("plugins/pixelart/algorithms/algorithms.zig");
-pub const fa = @import("tools/font_awesome.zig");
-pub const fs = @import("tools/fs.zig");
-pub const image = @import("gfx/image.zig");
+pub const fs = core.fs;
+pub const image = core.image;
 pub const render = @import("plugins/pixelart/render.zig");
 
 /// Atlas-consumer sprite rendering library (lives in the pixel-art plugin,
 /// consumed by the shell/workbench to draw sprites from a packed atlas).
 pub const sprite_render = @import("plugins/pixelart/sprite_render.zig");
-pub const perf = @import("gfx/perf.zig");
-pub const water_surface = @import("gfx/water_surface.zig");
-pub const math = @import("math/math.zig");
+pub const perf = core.perf;
+pub const water_surface = core.water_surface;
+pub const math = core.math;
 
 pub const App = @import("App.zig");
 pub const Editor = @import("editor/Editor.zig");
 pub const Explorer = @import("editor/explorer/Explorer.zig");
-pub const Fling = @import("editor/Fling.zig");
+pub const Fling = core.Fling;
 pub const Packer = @import("plugins/pixelart/Packer.zig");
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
@@ -71,13 +74,13 @@ pub const Sprite = @import("plugins/pixelart/Sprite.zig");
 
 /// Runtime platform detection (`isMacOS()` etc.) that's accurate on wasm web
 /// builds, where `builtin.os.tag` is always `.freestanding`.
-pub const platform = @import("platform.zig");
+pub const platform = core.platform;
 
 /// Plugin SDK surface
 pub const sdk = @import("sdk/sdk.zig");
 
 /// Custom dvui stuff
-pub const dvui = @import("dvui.zig");
+pub const dvui = core.dvui;
 
 /// Custom backend stuff. Split per-arch: native uses SDL3 + objc + win32; web is a
 /// no-op stub layer (no window chrome, no native dialogs, no native menu bar).
@@ -88,7 +91,7 @@ pub const backend = if (@import("builtin").target.cpu.arch == .wasm32)
 else
     @import("backend_native.zig");
 
-pub const paths = @import("paths.zig");
+pub const paths = core.paths;
 
 /// Returns a `std.process.Environ` populated from the libc `environ` global.
 /// Used to bridge APIs (like `known-folders.getPath`) that require an

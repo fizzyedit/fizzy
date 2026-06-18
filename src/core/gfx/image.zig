@@ -1,11 +1,13 @@
 const std = @import("std");
-const fizzy = @import("../fizzy.zig");
+const core = @import("../core.zig");
+const fs = @import("../fs.zig");
+const math = @import("../math/math.zig");
 const dvui = @import("dvui");
 
 pub fn init(width: u32, height: u32, default_color: dvui.Color.PMA, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
     const num_pixels = width * height;
     if (num_pixels == 0) return error.InvalidImageSize;
-    const p = fizzy.app.allocator.alloc(dvui.Color.PMA, num_pixels) catch return error.MemoryAllocationFailed;
+    const p = core.gpa.alloc(dvui.Color.PMA, num_pixels) catch return error.MemoryAllocationFailed;
 
     @memset(p, default_color);
 
@@ -33,7 +35,7 @@ pub fn fromImageFileBytes(name: []const u8, file_bytes: []const u8, invalidation
 
     return .{
         .pixelsPMA = .{
-            .rgba = dvui.Color.PMA.sliceFromRGBA(fizzy.app.allocator.dupe(u8, data[0..@intCast(w * h * @sizeOf(dvui.Color.PMA))]) catch return error.MemoryAllocationFailed),
+            .rgba = dvui.Color.PMA.sliceFromRGBA(core.gpa.dupe(u8, data[0..@intCast(w * h * @sizeOf(dvui.Color.PMA))]) catch return error.MemoryAllocationFailed),
             .width = @as(u32, @intCast(w)),
             .height = @as(u32, @intCast(h)),
             .interpolation = .nearest,
@@ -43,15 +45,15 @@ pub fn fromImageFileBytes(name: []const u8, file_bytes: []const u8, invalidation
 }
 
 pub fn fromImageFilePath(name: []const u8, path: []const u8, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
-    const file_byes = try fizzy.fs.read(fizzy.app.allocator, dvui.io, path);
-    defer fizzy.app.allocator.free(file_byes);
+    const file_byes = try fs.read(core.gpa, dvui.io, path);
+    defer core.gpa.free(file_byes);
     return fromImageFileBytes(name, file_byes, invalidation);
 }
 
 pub fn fromPixelsPMA(pixel_data: []dvui.Color.PMA, width: u32, height: u32, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
     return .{
         .pixelsPMA = .{
-            .rgba = fizzy.app.allocator.dupe(dvui.Color.PMA, pixel_data) catch return error.MemoryAllocationFailed,
+            .rgba = core.gpa.dupe(dvui.Color.PMA, pixel_data) catch return error.MemoryAllocationFailed,
             .interpolation = .nearest,
             .invalidation = invalidation,
             .width = width,
@@ -63,7 +65,7 @@ pub fn fromPixelsPMA(pixel_data: []dvui.Color.PMA, width: u32, height: u32, inva
 pub fn fromPixels(pixel_data: []u8, width: u32, height: u32, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
     return .{
         .pixels = .{
-            .rgba = fizzy.app.allocator.dupe(u8, pixel_data) catch return error.MemoryAllocationFailed,
+            .rgba = core.gpa.dupe(u8, pixel_data) catch return error.MemoryAllocationFailed,
             .interpolation = .nearest,
             .invalidation = invalidation,
             .width = width,
@@ -74,7 +76,7 @@ pub fn fromPixels(pixel_data: []u8, width: u32, height: u32, invalidation: dvui.
 
 pub fn fromTexture(name: []const u8, texture: dvui.Texture, invalidation: dvui.ImageSource.InvalidationStrategy) dvui.ImageSource {
     return .{
-        .name = fizzy.app.allocator.dupe(u8, name) catch name,
+        .name = core.gpa.dupe(u8, name) catch name,
         .texture = texture,
         .invalidation = invalidation,
         .interpolation = .nearest,
@@ -91,7 +93,7 @@ pub fn checkerboardTile(width: u32, height: u32, even: [4]u8, odd: [4]u8) ?dvui.
 
     const size_f: dvui.Size = .{ .w = @floatFromInt(width), .h = @floatFromInt(height) };
     for (buf, 0..) |*p, i| {
-        const rgba = if (fizzy.math.checker(size_f, i)) even else odd;
+        const rgba = if (math.checker(size_f, i)) even else odd;
         p.* = @bitCast(rgba);
     }
 
@@ -311,7 +313,7 @@ pub fn blitData(src_pixels: [][4]u8, src_width: usize, src_height: usize, dst_pi
                 const bot_c = dvui.Color{ .r = bot_px[0], .g = bot_px[1], .b = bot_px[2], .a = bot_px[3] };
                 const tpm = dvui.Color.PMA.fromColor(top_c);
                 const bpm = dvui.Color.PMA.fromColor(bot_c);
-                const out_pma = fizzy.math.blendPmaSrcOver(@bitCast(tpm), @bitCast(bpm));
+                const out_pma = math.blendPmaSrcOver(@bitCast(tpm), @bitCast(bpm));
                 top_px.* = @as(dvui.Color.PMA, @bitCast(out_pma)).toColor().toRGBA();
             }
         }

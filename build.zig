@@ -258,7 +258,7 @@ pub fn build(b: *std.Build) !void {
     // unconditionally by `fizzy.zig`, so the process-assets step has to
     // run before any target that touches fizzy.zig — exe, integration
     // tests, etc.
-    const assets_processing = try ProcessAssetsStep.init(b, "assets", "src/generated/");
+    const assets_processing = try ProcessAssetsStep.init(b, "assets", "src/core/generated/");
     const process_assets_step = b.step("process-assets", "generates struct for all assets");
     process_assets_step.dependOn(&assets_processing.step);
 
@@ -343,6 +343,21 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         }).module("known-folders");
         web_exe.root_module.addImport("known-folders", known_folders_web);
+
+        // Shared `core` module for the wasm build (dvui web backend variant).
+        const core_module_web = b.createModule(.{
+            .target = web_target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/core/core.zig"),
+            .link_libc = false,
+            .single_threaded = true,
+        });
+        core_module_web.addImport("dvui", dvui_web_dep.module("dvui_web"));
+        core_module_web.addImport("known-folders", known_folders_web);
+        if (b.lazyDependency("icons", .{ .target = web_target, .optimize = optimize })) |dep| {
+            core_module_web.addImport("icons", dep.module("icons"));
+        }
+        web_exe.root_module.addImport("core", core_module_web);
 
         // Three editor files have `const sdl3 = @import("backend").c;` at file
         // scope. After refactoring all `sdl3.SDL_DialogFileFilter` references
@@ -737,11 +752,11 @@ pub fn build(b: *std.Build) !void {
     // name. Each of these files imports only `std`, so they remain free
     // of dvui / SDL / globals.
     inline for (.{
-        .{ "fizzy-direction", "src/math/direction.zig" },
-        .{ "fizzy-easing", "src/math/easing.zig" },
+        .{ "fizzy-direction", "src/core/math/direction.zig" },
+        .{ "fizzy-easing", "src/core/math/easing.zig" },
         .{ "fizzy-layer-order", "src/plugins/pixelart/internal/layer_order.zig" },
         .{ "fizzy-palette-parse", "src/plugins/pixelart/internal/palette_parse.zig" },
-        .{ "fizzy-layout-anchor", "src/math/layout_anchor.zig" },
+        .{ "fizzy-layout-anchor", "src/core/math/layout_anchor.zig" },
         .{ "fizzy-reduce", "src/plugins/pixelart/algorithms/reduce.zig" },
         .{ "fizzy-grid-validate", "src/plugins/pixelart/internal/grid_layout_validate.zig" },
         .{ "fizzy-animation", "src/plugins/pixelart/Animation.zig" },
@@ -818,6 +833,20 @@ pub fn build(b: *std.Build) !void {
     if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| {
         fizzy_test_module.addImport("icons", dep.module("icons"));
     }
+
+    // Shared `core` module for the test build (dvui testing backend variant).
+    const core_module_test = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/core/core.zig"),
+    });
+    core_module_test.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+    core_module_test.addImport("known-folders", known_folders);
+    if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| {
+        core_module_test.addImport("icons", dep.module("icons"));
+    }
+    fizzy_test_module.addImport("core", core_module_test);
+
     if (target.result.os.tag == .macos) {
         if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |dep| {
             fizzy_test_module.addImport("objc", dep.module("objc"));
@@ -1131,6 +1160,17 @@ fn addFizzyExecutableForTarget(
     exe.root_module.addImport("dvui", dvui_dep.module("dvui_sdl3"));
     exe.root_module.addImport("backend", dvui_dep.module("sdl3"));
 
+    // Shared `core` module (gfx/math/fs/generated atlas/platform/paths/dvui hub +
+    // generic widgets). Imports only `dvui`, `icons`, and `known-folders`.
+    const core_module = b.createModule(.{
+        .target = resolved_target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/core/core.zig"),
+    });
+    core_module.addImport("dvui", dvui_dep.module("dvui_sdl3"));
+    core_module.addImport("known-folders", known_folders);
+    exe.root_module.addImport("core", core_module);
+
     const singleton_app_dep = b.dependency("dvui_singleton_app", .{
         .target = resolved_target,
         .optimize = optimize,
@@ -1139,6 +1179,7 @@ fn addFizzyExecutableForTarget(
 
     if (b.lazyDependency("icons", .{ .target = resolved_target, .optimize = optimize })) |dep| {
         exe.root_module.addImport("icons", dep.module("icons"));
+        core_module.addImport("icons", dep.module("icons"));
     }
 
     if (resolved_target.result.os.tag == .macos) {

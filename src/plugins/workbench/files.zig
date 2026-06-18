@@ -30,10 +30,8 @@ var pending_file_shift_range: ?struct {
     clicked_path: []const u8,
 } = null;
 
-/// Set from New File dialog when creating on disk; tree uses this to expand parents, focus rename, and set `new_file_close_rect`.
+/// Set from New File dialog when creating on disk; tree uses this to expand parents, focus rename, and set the dialog close-rect override.
 pub var new_file_path: ?[]const u8 = null;
-/// When set, the dialog animates into this rect (explorer row) then closes.
-pub var new_file_close_rect: ?dvui.Rect.Physical = null;
 
 const open_message = if (builtin.os.tag == .macos) "Reveal in Finder" else "Reveal in File Browser";
 
@@ -551,7 +549,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                                 selected_id = inner_id_extra.*;
                                 var close_rect = branch.button.data().borderRectScale().r;
                                 close_rect.h = @max(10.0, close_rect.h);
-                                new_file_close_rect = close_rect;
+                                fizzy.dvui.dialog_close_rect_override = close_rect;
                                 new_file_path = null;
                             }
                         }

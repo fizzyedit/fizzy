@@ -20,7 +20,7 @@ const std = @import("std");
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const zstbi = @import("zstbi");
-const perf = @import("../../gfx/perf.zig");
+const perf = fizzy.perf;
 const reduce_alg = @import("algorithms/reduce.zig");
 
 const PackJob = @This();

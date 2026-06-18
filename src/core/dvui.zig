@@ -1,19 +1,22 @@
 const std = @import("std");
-const fizzy = @import("fizzy.zig");
 const dvui = @import("dvui");
 const builtin = @import("builtin");
 const icons = @import("icons");
-const Widgets = @import("editor/widgets/Widgets.zig");
+const platform = @import("platform.zig");
 
-pub const FileWidget = Widgets.FileWidget;
-pub const TabsWidget = Widgets.TabsWidget;
-pub const ImageWidget = Widgets.ImageWidget;
-pub const CanvasWidget = Widgets.CanvasWidget;
-pub const ReorderWidget = Widgets.ReorderWidget;
-pub const PanedWidget = Widgets.PanedWidget;
-pub const FloatingWindowWidget = Widgets.FloatingWindowWidget;
-pub const TreeWidget = Widgets.TreeWidget;
-pub const TreeSelection = Widgets.TreeSelection;
+pub const CanvasWidget = @import("widgets/CanvasWidget.zig");
+pub const ReorderWidget = @import("widgets/ReorderWidget.zig");
+pub const PanedWidget = @import("widgets/PanedWidget.zig");
+pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
+pub const TreeWidget = @import("widgets/TreeWidget.zig");
+pub const TreeSelection = @import("widgets/TreeSelection.zig");
+
+/// Core-owned dialog chrome state, set by the dialog framework and read by the
+/// shell so core stays decoupled from the editor. When a modal is open the shell
+/// dims the titlebar; the optional close-rect overrides the dialog's close
+/// animation origin (e.g. the New File flow animating from the tree row).
+pub var modal_dim_titlebar: bool = false;
+pub var dialog_close_rect_override: ?dvui.Rect.Physical = null;
 
 /// Currently this is specialized for the layers paned widget, just includes icon and dragging flag so we know when the pane is dragging
 pub fn paned(src: std.builtin.SourceLocation, init_opts: PanedWidget.InitOptions, opts: dvui.Options) *PanedWidget {
@@ -186,7 +189,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
     };
 
     if (modal) {
-        fizzy.editor.dim_titlebar = true;
+        modal_dim_titlebar = true;
     }
 
     const title = dvui.dataGetSlice(null, id, "_title", []u8) orelse {
@@ -214,7 +217,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
     const maxSize = dvui.dataGet(null, id, "_max_size", dvui.Options.MaxSize);
     const hide_footer = dvui.dataGet(null, id, "_hide_footer", bool) orelse false;
 
-    var win = fizzy.dvui.floatingWindow(@src(), .{
+    var win = floatingWindow(@src(), .{
         .modal = modal,
         .center_on = center_on,
         .window_avoid = .nudge,
@@ -238,12 +241,12 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
 
     if (dvui.animationGet(win.data().id, "_close_x")) |a| {
         if (a.done()) {
-            fizzy.Editor.Explorer.files.new_file_close_rect = null;
+            dialog_close_rect_override = null;
             dvui.dialogRemove(id);
         }
-    } else if (fizzy.Editor.Explorer.files.new_file_close_rect) |close_rect| {
+    } else if (dialog_close_rect_override) |close_rect| {
         dvui.dataSet(null, win.data().id, "_close_rect", close_rect);
-        fizzy.Editor.Explorer.files.new_file_close_rect = null;
+        dialog_close_rect_override = null;
     } else {
         win.autoSize();
     }
@@ -261,7 +264,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
         };
 
         var header_openflag = true;
-        win.dragAreaSet(fizzy.dvui.windowHeader(title, "", &header_openflag, header_kind));
+        win.dragAreaSet(windowHeader(title, "", &header_openflag, header_kind));
         if (!header_openflag) {
             if (callafter) |ca| {
                 ca(id, .cancel) catch {
@@ -1001,7 +1004,7 @@ pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.
             if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip());
             //if (needs_plus) dvui.labelNoFmt(@src(), "+", .{}, opts.strip()) else needs_plus = true;
             //if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip()) else needs_space = true;
-            if (fizzy.platform.isMacOS()) {
+            if (platform.isMacOS()) {
                 dvui.icon(@src(), "cmd", icons.tvg.lucide.command, .{ .stroke_color = color }, .{ .gravity_y = 0.5 });
             } else {
                 dvui.labelNoFmt(@src(), "cmd", .{}, second_opts);
@@ -1015,7 +1018,7 @@ pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.
             if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip());
             //if (needs_plus) dvui.labelNoFmt(@src(), "+", .{}, opts.strip()) else needs_plus = true;
             //if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip()) else needs_space = true;
-            if (fizzy.platform.isMacOS()) {
+            if (platform.isMacOS()) {
                 dvui.icon(@src(), "option", icons.tvg.lucide.option, .{ .stroke_color = color }, .{ .gravity_y = 0.5 });
             } else {
                 dvui.labelNoFmt(@src(), "alt", .{}, second_opts);

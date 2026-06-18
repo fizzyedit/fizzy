@@ -11,7 +11,7 @@ const fizzy = @import("fizzy.zig");
 const auto_update = @import("auto_update.zig");
 const update_notify = @import("update_notify.zig");
 const singleton = @import("singleton.zig");
-const paths = @import("paths.zig");
+const paths = fizzy.paths;
 
 const App = @This();
 const Editor = fizzy.Editor;
@@ -128,6 +128,11 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.backend.restoreWindowState(win);
 
     const allocator = appAllocator();
+
+    // Inject shared infrastructure context into `core` so it stays decoupled from
+    // the App hub (allocator for gfx, trackpad input for the canvas widget).
+    fizzy.core.gpa = allocator;
+    fizzy.core.takeTrackpadPinchRatio = fizzy.backend.takeTrackpadPinchRatio;
 
     const resolved_argv = singleton.consumeStartupArgv();
     defer singleton.freeResolvedArgv(allocator, resolved_argv);
