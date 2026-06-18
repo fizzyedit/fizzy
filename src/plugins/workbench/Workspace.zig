@@ -297,7 +297,7 @@ fn drawTabs(self: *Workspace) void {
                 }
 
                 if (is_fizzy_file) {
-                    _ = fizzy.dvui.sprite(@src(), .{
+                    _ = fizzy.sprite_render.sprite(@src(), .{
                         .source = fizzy.editor.atlas.source,
                         .sprite = fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.logo_default],
                         .scale = 2.0,

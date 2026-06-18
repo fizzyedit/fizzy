@@ -1,6 +1,21 @@
 //const zm = @import("zmath");
 const imgui = @import("zig-imgui");
 
+/// Porter-Duff "source over" for premultiplied RGBA (`pixelsPMA` byte layout).
+/// `top` is composited over `bottom`. Generic byte math, no pixel-art types.
+pub fn blendPmaSrcOver(top: [4]u8, bottom: [4]u8) [4]u8 {
+    const sa: u32 = @intCast(top[3]);
+    const inv: u32 = 255 - sa;
+    var out: [4]u8 = undefined;
+    inline for (0..3) |c| {
+        const v: u32 = @as(u32, @intCast(top[c])) + @as(u32, @intCast(bottom[c])) * inv / 255;
+        out[c] = @intCast(@min(255, v));
+    }
+    const a: u32 = sa + @as(u32, @intCast(bottom[3])) * inv / 255;
+    out[3] = @intCast(@min(255, a));
+    return out;
+}
+
 pub const Color = struct {
     value: [4]f32,
 

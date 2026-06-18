@@ -311,7 +311,7 @@ pub fn blitData(src_pixels: [][4]u8, src_width: usize, src_height: usize, dst_pi
                 const bot_c = dvui.Color{ .r = bot_px[0], .g = bot_px[1], .b = bot_px[2], .a = bot_px[3] };
                 const tpm = dvui.Color.PMA.fromColor(top_c);
                 const bpm = dvui.Color.PMA.fromColor(bot_c);
-                const out_pma = fizzy.Internal.Layer.blendPmaSrcOver(@bitCast(tpm), @bitCast(bpm));
+                const out_pma = fizzy.math.blendPmaSrcOver(@bitCast(tpm), @bitCast(bpm));
                 top_px.* = @as(dvui.Color.PMA, @bitCast(out_pma)).toColor().toRGBA();
             }
         }

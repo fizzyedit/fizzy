@@ -39,6 +39,7 @@ pub const Direction = @import("direction.zig").Direction;
 const color = @import("color.zig");
 pub const Color = color.Color;
 pub const Colors = color.Colors;
+pub const blendPmaSrcOver = color.blendPmaSrcOver;
 
 pub const Point = struct { x: i32, y: i32 };
 

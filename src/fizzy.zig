@@ -17,7 +17,11 @@ pub const algorithms = @import("plugins/pixelart/algorithms/algorithms.zig");
 pub const fa = @import("tools/font_awesome.zig");
 pub const fs = @import("tools/fs.zig");
 pub const image = @import("gfx/image.zig");
-pub const render = @import("gfx/render.zig");
+pub const render = @import("plugins/pixelart/render.zig");
+
+/// Atlas-consumer sprite rendering library (lives in the pixel-art plugin,
+/// consumed by the shell/workbench to draw sprites from a packed atlas).
+pub const sprite_render = @import("plugins/pixelart/sprite_render.zig");
 pub const perf = @import("gfx/perf.zig");
 pub const water_surface = @import("gfx/water_surface.zig");
 pub const math = @import("math/math.zig");

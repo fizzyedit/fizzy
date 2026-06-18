@@ -320,19 +320,9 @@ pub fn getIndexShapeOffset(self: *Layer, origin: dvui.Point, current_index: usiz
 }
 
 /// Porter–Duff "source over" for premultiplied RGBA (`pixelsPMA` byte layout).
-/// `top` is composited over `bottom`.
-pub fn blendPmaSrcOver(top: [4]u8, bottom: [4]u8) [4]u8 {
-    const sa: u32 = @intCast(top[3]);
-    const inv: u32 = 255 - sa;
-    var out: [4]u8 = undefined;
-    inline for (0..3) |c| {
-        const v: u32 = @as(u32, @intCast(top[c])) + @as(u32, @intCast(bottom[c])) * inv / 255;
-        out[c] = @intCast(@min(255, v));
-    }
-    const a: u32 = sa + @as(u32, @intCast(bottom[3])) * inv / 255;
-    out[3] = @intCast(@min(255, a));
-    return out;
-}
+/// `top` is composited over `bottom`. The implementation is generic byte math and
+/// lives in `core` math; re-exported here for the pixel-art call sites.
+pub const blendPmaSrcOver = fizzy.math.blendPmaSrcOver;
 
 pub fn clearRect(self: *Layer, rect: dvui.Rect) void {
     fizzy.image.clearRect(self.source, rect);

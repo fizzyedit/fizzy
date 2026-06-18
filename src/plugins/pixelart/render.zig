@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const fizzy = @import("../fizzy.zig");
+const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const perf = fizzy.perf;
 
@@ -772,7 +772,7 @@ pub fn renderLayers(init_opts: RenderFileOptions) !void {
         qpath.addPoint(q[1]);
         qpath.addPoint(q[2]);
         qpath.addPoint(q[3]);
-        break :blk try fizzy.dvui.pathToSubdividedQuad(qpath.build(), fizzy.app.allocator, .{
+        break :blk try fizzy.sprite_render.pathToSubdividedQuad(qpath.build(), fizzy.app.allocator, .{
             .subdivisions = init_opts.quad_subdivisions,
             .uv = init_opts.uv,
             .color_mod = init_opts.color_mod,

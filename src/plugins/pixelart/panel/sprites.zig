@@ -3,8 +3,8 @@ const icons = @import("icons");
 const dvui = @import("dvui");
 const fizzy = @import("../../../fizzy.zig");
 const Editor = fizzy.Editor;
-const ReflectionLagSample = fizzy.dvui.ReflectionLagSample;
-const reflection_surface_cols = fizzy.dvui.reflection_surface_cols;
+const ReflectionLagSample = fizzy.sprite_render.ReflectionLagSample;
+const reflection_surface_cols = fizzy.sprite_render.reflection_surface_cols;
 const wsurf = fizzy.water_surface;
 
 const Sprites = @This();
@@ -749,7 +749,7 @@ pub fn draw(self: *Sprites) !void {
             const tiltness = if (max_depth > 0.0) std.math.clamp(@abs(cd.depth) / max_depth, 0.0, 1.0) else 0.0;
             const refl_detail = std.math.lerp(1.0, skewed_reflection_detail, tiltness);
 
-            _ = fizzy.dvui.sprite(SpriteSlot.src(), .{
+            _ = fizzy.sprite_render.sprite(SpriteSlot.src(), .{
                 .source = file.layers.items(.source)[file.selected_layer_index],
                 .file = file,
                 .alpha_source = if (file.checkerboardTileTexture()) |t| dvui.ImageSource{ .texture = t } else null,
