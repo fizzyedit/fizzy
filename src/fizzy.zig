@@ -22,8 +22,8 @@ pub const fs = core.fs;
 pub const image = core.image;
 pub const render = @import("plugins/pixelart/render.zig");
 
-/// Atlas-consumer sprite rendering library (lives in the pixel-art plugin,
-/// consumed by the shell/workbench to draw sprites from a packed atlas).
+/// Pixel-art sprite renderer (layer compositing, reflections, cover-flow). Shell UI
+/// icons use `fizzy.core.Sprite.draw` from core instead.
 pub const sprite_render = @import("plugins/pixelart/sprite_render.zig");
 pub const perf = core.perf;
 pub const water_surface = core.water_surface;

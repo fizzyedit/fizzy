@@ -37,3 +37,9 @@ pub const dvui = @import("dvui.zig");
 
 /// Generic momentum/fling helper (pan, scrub, cover-flow).
 pub const Fling = @import("Fling.zig");
+
+/// Generic sprite sub-rect within an atlas texture.
+pub const Sprite = @import("Sprite.zig");
+
+/// Generic loaded spritesheet (`source` texture + sprite table).
+pub const Atlas = @import("Atlas.zig");

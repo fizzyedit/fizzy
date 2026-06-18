@@ -81,17 +81,19 @@ pub fn save(project: *Project) !void {
 
 /// Project output assets will be exported to a join of parent_folder and the individual output paths for each asset
 pub fn exportAssets(project: *Project) !void {
+    const atlas = fizzy.packer.atlas orelse return;
+
     if (project.packed_atlas_output) |packed_atlas_output| {
-        try fizzy.editor.atlas.save(packed_atlas_output, .data);
+        try atlas.save(packed_atlas_output, .data);
     }
 
     if (project.packed_image_output) |packed_image_output| {
-        try fizzy.editor.atlas.save(packed_image_output, .source);
+        try atlas.save(packed_image_output, .source);
     }
 
     // if (project.packed_heightmap_output) |packed_heightmap_output| {
     //     const path = try std.fs.path.joinZ(fizzy.pixelart.host.arena(), &.{ parent_folder, packed_heightmap_output });
-    //     try fizzy.editor.atlas.save(path, .heightmap);
+    //     try atlas.save(path, .heightmap);
     // }
 }
 

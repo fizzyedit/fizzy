@@ -315,7 +315,7 @@ fn pathTextEntry(path_type: PathType) !void {
                 break :blk true;
             };
 
-            fizzy.backend.showSaveFileDialog(if (path_type == .atlas) packedAtlasOutputCallback else packedImageOutputCallback, &.{
+            fizzy.pixelart.host.showSaveDialog(if (path_type == .atlas) packedAtlasOutputCallback else packedImageOutputCallback, &.{
                 if (path_type == .atlas) .{ .name = "Atlas Data", .pattern = "atlas" } else .{ .name = "Atlas Image", .pattern = "png;jpg;jpeg" },
             }, "", if (valid_path) output_path.* else null);
             set_text = true;

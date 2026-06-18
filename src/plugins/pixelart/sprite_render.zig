@@ -1,9 +1,8 @@
 //! Sprite/atlas rendering library for the pixel-art plugin.
 //!
-//! Consumes packed-atlas output (Atlas/Sprite types) and renders sprites
-//! (including the cover-flow water reflection mesh). Lives in the pixel-art
-//! plugin but is consumed by the shell/workbench to draw sprites from a
-//! packed atlas (cursors, icons, document previews).
+//! Heavy rendering on top of `core.Sprite` rects: layer compositing, file previews,
+//! reflections, and water-surface meshes. Shell/workbench UI icons use
+//! `fizzy.core.Sprite.draw` from core instead of this module.
 const std = @import("std");
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
@@ -12,7 +11,7 @@ pub const SpriteInitOptions = struct {
     source: dvui.ImageSource,
     file: ?*fizzy.Internal.File = null,
     alpha_source: ?dvui.ImageSource = null,
-    sprite: fizzy.Atlas.Sprite,
+    sprite: fizzy.core.Sprite,
     scale: f32 = 1.0,
     depth: f32 = 0.0, // -1.0 is front, 1.0 is back
     reflection: bool = false,
@@ -647,7 +646,7 @@ pub fn pathToSubdividedQuad(path: dvui.Path, allocator: std.mem.Allocator, optio
     return builder.build();
 }
 
-pub fn renderSprite(source: dvui.ImageSource, s: fizzy.Sprite, data_point: dvui.Point, scale: f32, opts: dvui.RenderTextureOptions) !void {
+pub fn renderSprite(source: dvui.ImageSource, s: fizzy.core.Sprite, data_point: dvui.Point, scale: f32, opts: dvui.RenderTextureOptions) !void {
     const atlas_size = dvui.imageSize(source) catch {
         std.log.err("Failed to get atlas size", .{});
         return;

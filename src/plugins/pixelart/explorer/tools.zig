@@ -171,16 +171,16 @@ pub fn drawTools() !void {
         }
 
         const selection_sprite = switch (fizzy.pixelart.tools.selection_mode) {
-            .pixel => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_default],
-            .box => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_default],
-            .color => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_default],
+            .pixel => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.pixel_selection_default],
+            .box => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.box_selection_default],
+            .color => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.color_selection_default],
         };
 
         const sprite = switch (tool) {
-            .pointer => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.cursor_default],
-            .pencil => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pencil_default],
-            .eraser => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.eraser_default],
-            .bucket => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.bucket_default],
+            .pointer => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.cursor_default],
+            .pencil => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.pencil_default],
+            .eraser => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.eraser_default],
+            .bucket => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.bucket_default],
             .selection => selection_sprite,
         };
         var button: dvui.ButtonWidget = undefined;
@@ -210,7 +210,7 @@ pub fn drawTools() !void {
             button.data().options.color_border = color;
         }
 
-        const size: dvui.Size = dvui.imageSize(fizzy.editor.atlas.source) catch .{ .w = 0, .h = 0 };
+        const size: dvui.Size = dvui.imageSize(fizzy.pixelart.host.uiAtlas().source) catch .{ .w = 0, .h = 0 };
 
         const uv = dvui.Rect{
             .x = @as(f32, @floatFromInt(sprite.source[0])) / size.w,
@@ -232,7 +232,7 @@ pub fn drawTools() !void {
         rs.r.w = width;
         rs.r.h = height;
 
-        dvui.renderImage(fizzy.editor.atlas.source, rs, .{
+        dvui.renderImage(fizzy.pixelart.host.uiAtlas().source, rs, .{
             .uv = uv,
             .fade = 0.0,
         }) catch {

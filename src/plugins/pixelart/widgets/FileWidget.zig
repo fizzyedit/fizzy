@@ -4114,19 +4114,19 @@ pub fn drawCursor(self: *FileWidget) void {
     const data_point = self.init_options.file.editor.canvas.dataFromScreenPoint(mouse_point);
 
     const selection_sprite = switch (fizzy.pixelart.tools.selection_mode) {
-        .box => if (subtract) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_rem_default] else if (add) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_add_default] else fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_default],
-        .pixel => if (subtract) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_rem_default] else if (add) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_add_default] else fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_default],
-        .color => if (subtract) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_rem_default] else if (add) fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_add_default] else fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_default],
+        .box => if (subtract) fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.box_selection_rem_default] else if (add) fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.box_selection_add_default] else fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.box_selection_default],
+        .pixel => if (subtract) fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.pixel_selection_rem_default] else if (add) fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.pixel_selection_add_default] else fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.pixel_selection_default],
+        .color => if (subtract) fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.color_selection_rem_default] else if (add) fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.color_selection_add_default] else fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.color_selection_default],
     };
 
     if (switch (fizzy.pixelart.tools.current) {
-        .pencil => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pencil_default],
-        .eraser => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.eraser_default],
-        .bucket => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.bucket_default],
+        .pencil => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.pencil_default],
+        .eraser => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.eraser_default],
+        .bucket => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.bucket_default],
         .selection => selection_sprite,
         else => null,
     }) |sprite| {
-        const atlas_size = dvui.imageSize(fizzy.editor.atlas.source) catch {
+        const atlas_size = dvui.imageSize(fizzy.pixelart.host.uiAtlas().source) catch {
             dvui.log.err("Failed to get atlas size", .{});
             return;
         };
@@ -4164,7 +4164,7 @@ pub fn drawCursor(self: *FileWidget) void {
 
         const rs = box.data().rectScale();
 
-        dvui.renderImage(fizzy.editor.atlas.source, rs, .{
+        dvui.renderImage(fizzy.pixelart.host.uiAtlas().source, rs, .{
             .uv = uv,
         }) catch {
             dvui.log.err("Failed to render cursor image", .{});

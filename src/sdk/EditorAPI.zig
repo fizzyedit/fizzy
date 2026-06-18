@@ -11,6 +11,30 @@ const dvui = @import("dvui");
 
 const EditorAPI = @This();
 
+/// Sub-rect within the shell UI spritesheet. Layout matches `core.Sprite`.
+pub const UiSprite = struct {
+    origin: [2]f32 = .{ 0.0, 0.0 },
+    source: [4]u32,
+};
+
+/// Read-only view of the shell's UI icon atlas (source texture + sprite table).
+pub const UiAtlasView = struct {
+    source: dvui.ImageSource,
+    sprites: []const UiSprite,
+};
+
+/// A name/extension-pattern pair for a native save dialog. Layout matches the backend's
+/// `DialogFileFilter` (which mirrors `SDL_DialogFileFilter`), so the shell forwards a slice
+/// of these straight to the backend without a copy. `pattern` is a `;`-separated extension
+/// list, e.g. `"png;jpg;jpeg"`.
+pub const SaveDialogFilter = extern struct {
+    name: [*:0]const u8,
+    pattern: [*:0]const u8,
+};
+
+/// Invoked when a native save dialog resolves: the chosen paths, or null if cancelled.
+pub const SaveDialogCallback = *const fn (?[][:0]const u8) void;
+
 ctx: *anyopaque,
 vtable: *const VTable,
 
@@ -34,6 +58,18 @@ pub const VTable = struct {
     /// The explorer scroll area's virtual content size (shell layout). Zero size when no
     /// shell is installed.
     explorerVirtualSize: *const fn (ctx: *anyopaque) dvui.Size,
+    /// Run the platform's native "save file" dialog (native: OS dialog; web: download
+    /// picker). `cb` is invoked when it resolves. No-op when no shell is installed.
+    showSaveDialog: *const fn (
+        ctx: *anyopaque,
+        cb: SaveDialogCallback,
+        filters: []const SaveDialogFilter,
+        default_filename: []const u8,
+        default_folder: ?[]const u8,
+    ) void,
+    /// Shell-owned UI icon spritesheet (cursors, tool icons, logo). Stable for the
+    /// editor lifetime; plugins read `.source` / `.sprites` but never mutate it.
+    uiAtlas: *const fn (ctx: *anyopaque) UiAtlasView,
 };
 
 pub fn arena(self: EditorAPI) std.mem.Allocator {
@@ -66,4 +102,18 @@ pub fn explorerRect(self: EditorAPI) dvui.Rect {
 
 pub fn explorerVirtualSize(self: EditorAPI) dvui.Size {
     return self.vtable.explorerVirtualSize(self.ctx);
+}
+
+pub fn showSaveDialog(
+    self: EditorAPI,
+    cb: SaveDialogCallback,
+    filters: []const SaveDialogFilter,
+    default_filename: []const u8,
+    default_folder: ?[]const u8,
+) void {
+    self.vtable.showSaveDialog(self.ctx, cb, filters, default_filename, default_folder);
+}
+
+pub fn uiAtlas(self: EditorAPI) UiAtlasView {
+    return self.vtable.uiAtlas(self.ctx);
 }

@@ -19,3 +19,7 @@ pub const SettingsSection = regions.SettingsSection;
 /// Shell-provided read/utility surface plugins reach through the `Host`
 /// (arena, folder, shared settings, dirty-marking).
 pub const EditorAPI = @import("EditorAPI.zig");
+pub const SaveDialogFilter = EditorAPI.SaveDialogFilter;
+pub const SaveDialogCallback = EditorAPI.SaveDialogCallback;
+pub const UiSprite = EditorAPI.UiSprite;
+pub const UiAtlasView = EditorAPI.UiAtlasView;

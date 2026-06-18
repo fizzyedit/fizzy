@@ -771,11 +771,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                         const file_icon_color: dvui.Color = if (ext == .fizzy) .transparent else icon_color;
 
                         if (ext == .fizzy) {
-                            _ = fizzy.sprite_render.sprite(
-                                @src(),
-                                .{ .source = fizzy.editor.atlas.source, .sprite = fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.logo_default], .scale = 2.0 },
-                                .{ .gravity_y = 0.5, .margin = padding, .padding = padding, .background = false },
-                            );
+                    _ = fizzy.core.Sprite.draw(
+                        fizzy.editor.atlas.sprites[fizzy.atlas.sprites.logo_default],
+                        @src(),
+                        fizzy.editor.atlas.source,
+                        2.0,
+                        .{ .gravity_y = 0.5, .margin = padding, .padding = padding, .background = false },
+                    );
                         } else {
                             dvui.icon(
                                 @src(),

@@ -54,7 +54,7 @@ arena: std.heap.ArenaAllocator,
 config_folder: []const u8,
 palette_folder: []const u8,
 
-atlas: fizzy.Internal.Atlas,
+atlas: fizzy.core.Atlas,
 
 /// Plugin registry + service locator exposed to plugins
 host: Host,
@@ -250,7 +250,7 @@ pub fn init(
         .arena = .init(std.heap.page_allocator),
         .last_titlebar_color = dvui.themeGet().color(.control, .fill),
         .atlas = .{
-            .data = try .loadFromBytes(app.allocator, assets.files.@"fizzy.atlas"),
+            .sprites = try fizzy.core.Atlas.loadSpritesFromBytes(app.allocator, assets.files.@"fizzy.atlas"),
             .source = try fizzy.image.fromImageFileBytes("fizzy.png", assets.files.@"fizzy.png", .ptr),
         },
         .themes = .empty,
@@ -555,6 +555,8 @@ const shell_api_vtable: sdk.EditorAPI.VTable = .{
     .isMaximized = shellIsMaximized,
     .explorerRect = shellExplorerRect,
     .explorerVirtualSize = shellExplorerVirtualSize,
+    .showSaveDialog = shellShowSaveDialog,
+    .uiAtlas = shellUiAtlas,
 };
 
 fn shellCtx(ctx: *anyopaque) *Editor {
@@ -584,6 +586,25 @@ fn shellExplorerRect(ctx: *anyopaque) dvui.Rect {
 }
 fn shellExplorerVirtualSize(ctx: *anyopaque) dvui.Size {
     return shellCtx(ctx).explorer.scroll_info.virtual_size;
+}
+fn shellShowSaveDialog(
+    ctx: *anyopaque,
+    cb: sdk.EditorAPI.SaveDialogCallback,
+    filters: []const sdk.EditorAPI.SaveDialogFilter,
+    default_filename: []const u8,
+    default_folder: ?[]const u8,
+) void {
+    _ = ctx;
+    // `SaveDialogFilter` shares `DialogFileFilter`'s layout, so the slice forwards as-is.
+    const native_filters: [*]const fizzy.backend.DialogFileFilter = @ptrCast(filters.ptr);
+    fizzy.backend.showSaveFileDialog(cb, native_filters[0..filters.len], default_filename, default_folder);
+}
+fn shellUiAtlas(ctx: *anyopaque) sdk.EditorAPI.UiAtlasView {
+    const atlas = &shellCtx(ctx).atlas;
+    return .{
+        .source = atlas.source,
+        .sprites = @as([]const sdk.EditorAPI.UiSprite, @ptrCast(atlas.sprites)),
+    };
 }
 
 /// Ensures `{config}/Themes` exists and scans `*.json` for future user themes (loaded entries are prepended before Fizzy themes).
@@ -1670,16 +1691,16 @@ pub fn drawRadialMenu(editor: *Editor) !void {
         }
 
         const selection_sprite = switch (fizzy.pixelart.tools.selection_mode) {
-            .box => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_default],
-            .pixel => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_default],
-            .color => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_default],
+            .box => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.box_selection_default],
+            .pixel => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.pixel_selection_default],
+            .color => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.color_selection_default],
         };
 
         const sprite = switch (@as(Editor.Tools.Tool, @enumFromInt(i))) {
-            .pointer => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.cursor_default],
-            .pencil => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pencil_default],
-            .eraser => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.eraser_default],
-            .bucket => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.bucket_default],
+            .pointer => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.cursor_default],
+            .pencil => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.pencil_default],
+            .eraser => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.eraser_default],
+            .bucket => fizzy.editor.atlas.sprites[fizzy.atlas.sprites.bucket_default],
             .selection => selection_sprite,
         };
         const size: dvui.Size = dvui.imageSize(fizzy.editor.atlas.source) catch .{ .w = 1, .h = 1 };
@@ -3535,6 +3556,8 @@ pub fn deinit(editor: *Editor) !void {
     // `PixelArt.deinit` in `App.AppDeinit`, after this returns.
 
     editor.ignore.deinit(fizzy.app.allocator);
+
+    editor.atlas.deinit(fizzy.app.allocator);
 
     if (editor.folder) |folder| fizzy.app.allocator.free(folder);
     editor.arena.deinit();

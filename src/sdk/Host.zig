@@ -130,6 +130,22 @@ pub fn explorerVirtualSize(self: *Host) dvui.Size {
     return if (self.shell_api) |a| a.explorerVirtualSize() else .{};
 }
 
+/// Run the platform's native "save file" dialog. No-op if no shell installed (headless/test).
+pub fn showSaveDialog(
+    self: *Host,
+    cb: EditorAPI.SaveDialogCallback,
+    filters: []const EditorAPI.SaveDialogFilter,
+    default_filename: []const u8,
+    default_folder: ?[]const u8,
+) void {
+    if (self.shell_api) |a| a.showSaveDialog(cb, filters, default_filename, default_folder);
+}
+
+/// Shell-owned UI icon spritesheet. Asserts the shell is installed.
+pub fn uiAtlas(self: *Host) EditorAPI.UiAtlasView {
+    return self.shell_api.?.uiAtlas();
+}
+
 // ---- per-plugin settings store ---------------------------------------------
 
 /// The stored settings blob for `id` (serialized JSON), or null if none. The returned

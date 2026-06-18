@@ -281,9 +281,9 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
                         break :blk default_filename;
                     };
 
-                    fizzy.backend.showSaveFileDialog(
+                    fizzy.pixelart.host.showSaveDialog(
                         saveAnimationCallback,
-                        &[_]fizzy.backend.DialogFileFilter{.{ .name = "GIF", .pattern = "gif" }},
+                        &[_]fizzy.sdk.SaveDialogFilter{.{ .name = "GIF", .pattern = "gif" }},
                         default,
                         null, // Passing null here means use the last save folder location
                     );
@@ -304,9 +304,9 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
                     };
                     defer fizzy.app.allocator.free(default);
 
-                    fizzy.backend.showSaveFileDialog(
+                    fizzy.pixelart.host.showSaveDialog(
                         exportCurrentSpriteCallback,
-                        &[_]fizzy.backend.DialogFileFilter{
+                        &[_]fizzy.sdk.SaveDialogFilter{
                             .{ .name = "PNG", .pattern = "png" },
                             .{ .name = "JPEG", .pattern = "jpg;jpeg" },
                         },
@@ -328,9 +328,9 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
                     };
                     defer fizzy.app.allocator.free(default);
 
-                    fizzy.backend.showSaveFileDialog(
+                    fizzy.pixelart.host.showSaveDialog(
                         exportLayerCallback,
-                        &[_]fizzy.backend.DialogFileFilter{
+                        &[_]fizzy.sdk.SaveDialogFilter{
                             .{ .name = "PNG", .pattern = "png" },
                             .{ .name = "JPEG", .pattern = "jpg;jpeg" },
                         },
@@ -352,9 +352,9 @@ pub fn callAfter(_: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void 
                     };
                     defer fizzy.app.allocator.free(default);
 
-                    fizzy.backend.showSaveFileDialog(
+                    fizzy.pixelart.host.showSaveDialog(
                         exportAllCallback,
-                        &[_]fizzy.backend.DialogFileFilter{
+                        &[_]fizzy.sdk.SaveDialogFilter{
                             .{ .name = "PNG", .pattern = "png" },
                             .{ .name = "JPEG", .pattern = "jpg;jpeg" },
                         },

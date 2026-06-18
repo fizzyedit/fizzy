@@ -334,7 +334,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
             });
             defer mode_row.deinit();
 
-            const atlas_size: dvui.Size = dvui.imageSize(fizzy.editor.atlas.source) catch .{ .w = 0, .h = 0 };
+            const atlas_size: dvui.Size = dvui.imageSize(fizzy.pixelart.host.uiAtlas().source) catch .{ .w = 0, .h = 0 };
 
             var mode_color = dvui.themeGet().color(.control, .fill_hover);
             if (fizzy.pixelart.colors.file_tree_palette) |*palette| {
@@ -377,9 +377,9 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
                     defer mode_col.deinit();
 
                     const sprite = switch (mode) {
-                        .box => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.box_selection_default],
-                        .pixel => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.pixel_selection_default],
-                        .color => fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.color_selection_default],
+                        .box => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.box_selection_default],
+                        .pixel => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.pixel_selection_default],
+                        .color => fizzy.pixelart.host.uiAtlas().sprites[fizzy.atlas.sprites.color_selection_default],
                     };
                     const uv = dvui.Rect{
                         .x = @as(f32, @floatFromInt(sprite.source[0])) / atlas_size.w,
@@ -430,7 +430,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
                     rs.r.w = width;
                     rs.r.h = height;
 
-                    dvui.renderImage(fizzy.editor.atlas.source, rs, .{
+                    dvui.renderImage(fizzy.pixelart.host.uiAtlas().source, rs, .{
                         .uv = uv,
                         .fade = 0.0,
                     }) catch {

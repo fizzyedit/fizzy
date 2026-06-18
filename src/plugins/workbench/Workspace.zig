@@ -297,11 +297,7 @@ fn drawTabs(self: *Workspace) void {
                 }
 
                 if (is_fizzy_file) {
-                    _ = fizzy.sprite_render.sprite(@src(), .{
-                        .source = fizzy.editor.atlas.source,
-                        .sprite = fizzy.editor.atlas.data.sprites[fizzy.atlas.sprites.logo_default],
-                        .scale = 2.0,
-                    }, .{
+                    _ = fizzy.core.Sprite.draw(fizzy.editor.atlas.sprites[fizzy.atlas.sprites.logo_default], @src(), fizzy.editor.atlas.source, 2.0, .{
                         .gravity_y = 0.5,
                         .padding = dvui.Rect.all(4),
                     });
