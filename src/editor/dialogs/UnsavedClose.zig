@@ -23,8 +23,8 @@ pub fn request(file_id: u64) void {
 }
 
 fn fileBasename(file_id: u64) []const u8 {
-    const file = fizzy.editor.fileById(file_id) orelse return "?";
-    return std.fs.path.basename(file.path);
+    const doc = fizzy.editor.docById(file_id) orelse return "?";
+    return std.fs.path.basename(fizzy.editor.docPath(doc));
 }
 
 fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
@@ -95,12 +95,8 @@ fn onCancel() void {
     fizzy.dvui.closeFloatingDialogAnchored();
 }
 
-/// Start an async save for the file (`.fizzy` runs on a worker, PNG/JPG runs sync
-/// on the GUI thread) and queue the close for once `File.isSaving()` clears.
-/// `Editor.tickPendingSaveCloses` does the actual close on the next frame after
-/// the worker settles, so the GUI thread never blocks on the save.
-fn beginSaveAndClose(file: *Internal.File, file_id: u64) !void {
-    if (file.isSaving()) return;
+fn beginSaveAndClose(doc: fizzy.sdk.DocHandle, file_id: u64) !void {
+    if (doc.owner.isDocumentSaving(doc)) return;
     if (comptime @import("builtin").target.cpu.arch == .wasm32) {
         const idx = fizzy.editor.open_files.getIndex(file_id) orelse return;
         fizzy.editor.setActiveFile(idx);
@@ -108,13 +104,13 @@ fn beginSaveAndClose(file: *Internal.File, file_id: u64) !void {
         fizzy.editor.requestWebSaveDialog(.save);
         return;
     }
-    try file.saveAsync();
+    try doc.owner.saveDocumentAsync(doc);
     try fizzy.editor.pending_close_after_save.put(fizzy.app.allocator, file_id, {});
 }
 
 fn onSaveAndClose(file_id: u64) !void {
-    const file = fizzy.editor.fileById(file_id) orelse return;
-    if (!Internal.File.hasRecognizedSaveExtension(file.path)) {
+    const doc = fizzy.editor.docById(file_id) orelse return;
+    if (!Internal.File.hasRecognizedSaveExtension(fizzy.editor.docPath(doc))) {
         const idx = fizzy.editor.open_files.getIndex(file_id) orelse return;
         fizzy.editor.setActiveFile(idx);
         fizzy.editor.pending_close_file_id = file_id;
@@ -122,16 +118,13 @@ fn onSaveAndClose(file_id: u64) !void {
         fizzy.editor.requestSaveAs();
         return;
     }
-    if (file.shouldConfirmFlatRasterSave()) {
+    if (doc.owner.shouldConfirmFlatRasterSave(doc)) {
         FlatRasterSaveWarning.pending_from_save_all_quit = false;
         fizzy.dvui.closeFloatingDialogAnchored();
         FlatRasterSaveWarning.request(file_id, .save_and_close);
         return;
     }
-    beginSaveAndClose(file, file_id) catch |err| {
-        dvui.log.err("Save and Close failed: {s}", .{@errorName(err)});
-        return;
-    };
+    try beginSaveAndClose(doc, file_id);
     fizzy.dvui.closeFloatingDialogAnchored();
 }
 

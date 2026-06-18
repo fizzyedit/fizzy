@@ -57,6 +57,19 @@ pub const VTable = struct {
     /// Drop the registry entry after `closeDocument` has torn down resources.
     unregisterDocument: ?*const fn (state: *anyopaque, id: u64) void = null,
 
+    /// Bind a document to a workbench pane before `drawDocument` (canvas id, workspace handle, center flag).
+    bindDocumentToPane: ?*const fn (state: *anyopaque, doc: DocHandle, canvas_id: dvui.Id, workspace_handle: *anyopaque, center: bool) void = null,
+    documentGrouping: ?*const fn (state: *anyopaque, doc: DocHandle) u64 = null,
+    setDocumentGrouping: ?*const fn (state: *anyopaque, doc: DocHandle, grouping: u64) void = null,
+    documentPath: ?*const fn (state: *anyopaque, doc: DocHandle) []const u8 = null,
+    setDocumentPath: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8) anyerror!void = null,
+    documentHasNativeExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
+    showsSaveStatusIndicator: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
+    isDocumentSaving: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
+    shouldConfirmFlatRasterSave: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
+    saveDocumentAsync: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
+    timeSinceSaveCompleteNs: ?*const fn (state: *anyopaque, doc: DocHandle) ?i128 = null,
+
     // ---- render hooks (the plugin draws its own dvui UI into the host window) ----
     /// Draw the plugin's explorer/sidebar pane (left region).
     drawExplorerPane: ?*const fn (state: *anyopaque) anyerror!void = null,
@@ -163,6 +176,50 @@ pub fn persistProjectFolder(self: Plugin) void {
 
 pub fn reloadProjectFolder(self: Plugin, allocator: std.mem.Allocator) void {
     if (self.vtable.reloadProjectFolder) |f| f(self.state, allocator);
+}
+
+pub fn bindDocumentToPane(self: Plugin, doc: DocHandle, canvas_id: dvui.Id, workspace_handle: *anyopaque, center: bool) void {
+    if (self.vtable.bindDocumentToPane) |f| f(self.state, doc, canvas_id, workspace_handle, center);
+}
+
+pub fn documentGrouping(self: Plugin, doc: DocHandle) u64 {
+    return if (self.vtable.documentGrouping) |f| f(self.state, doc) else 0;
+}
+
+pub fn setDocumentGrouping(self: Plugin, doc: DocHandle, grouping: u64) void {
+    if (self.vtable.setDocumentGrouping) |f| f(self.state, doc, grouping);
+}
+
+pub fn documentPath(self: Plugin, doc: DocHandle) []const u8 {
+    return if (self.vtable.documentPath) |f| f(self.state, doc) else "";
+}
+
+pub fn setDocumentPath(self: Plugin, doc: DocHandle, path: []const u8) !void {
+    if (self.vtable.setDocumentPath) |f| try f(self.state, doc, path);
+}
+
+pub fn documentHasNativeExtension(self: Plugin, doc: DocHandle) bool {
+    return if (self.vtable.documentHasNativeExtension) |f| f(self.state, doc) else false;
+}
+
+pub fn showsSaveStatusIndicator(self: Plugin, doc: DocHandle) bool {
+    return if (self.vtable.showsSaveStatusIndicator) |f| f(self.state, doc) else false;
+}
+
+pub fn isDocumentSaving(self: Plugin, doc: DocHandle) bool {
+    return if (self.vtable.isDocumentSaving) |f| f(self.state, doc) else false;
+}
+
+pub fn shouldConfirmFlatRasterSave(self: Plugin, doc: DocHandle) bool {
+    return if (self.vtable.shouldConfirmFlatRasterSave) |f| f(self.state, doc) else false;
+}
+
+pub fn saveDocumentAsync(self: Plugin, doc: DocHandle) !void {
+    if (self.vtable.saveDocumentAsync) |f| try f(self.state, doc);
+}
+
+pub fn timeSinceSaveCompleteNs(self: Plugin, doc: DocHandle) ?i128 {
+    return if (self.vtable.timeSinceSaveCompleteNs) |f| f(self.state, doc) else null;
 }
 
 // ---- document lifecycle wrappers (operate on a DocHandle this plugin owns) ----

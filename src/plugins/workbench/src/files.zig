@@ -796,22 +796,16 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                         editableLabel(
                             inner_id_extra.*,
                             if (filter_text.len > 0) std.fs.path.relativePosix(dvui.currentWindow().arena(), ".", fizzy.editor.folder.?, abs_path) catch entry.name else entry.name,
-                            if (fizzy.editor.getFileFromPath(abs_path) != null) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
+                            if (fizzy.editor.docFromPath(abs_path) != null) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
                             entry.kind,
                             abs_path,
                         ) catch {
                             dvui.log.err("Failed to draw editable label", .{});
                         };
 
-                        if (fizzy.editor.getFileFromPath(abs_path)) |file| {
-                            // Save spinner takes priority over the dirty dot: while a file is
-                            // mid-save it's no longer "dirty waiting to be saved", it's "saving
-                            // right now", and the user needs that distinction at a glance when
-                            // multiple files are flushing in parallel. `isSaving` reads via an
-                            // atomic load so the background `saveZip` worker can flip the flag
-                            // safely from another thread.
-                            const save_flash_elapsed = file.timeSinceSaveComplete();
-                            if (file.showsSaveStatusIndicator()) {
+                        if (fizzy.editor.docFromPath(abs_path)) |doc| {
+                            const save_flash_elapsed = doc.owner.timeSinceSaveCompleteNs(doc);
+                            if (doc.owner.showsSaveStatusIndicator(doc)) {
                                 fizzy.dvui.bubbleSpinner(@src(), .{
                                     .id_extra = inner_id_extra.* +% 4001,
                                     .expand = .none,
@@ -822,7 +816,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                                 }, .{
                                     .complete_elapsed_ns = save_flash_elapsed,
                                 });
-                            } else if (file.dirty()) {
+                            } else if (doc.owner.isDirty(doc)) {
                                 _ = dvui.icon(
                                     @src(),
                                     "DirtyIcon",
@@ -1236,9 +1230,8 @@ pub fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.m
         return false;
     };
 
-    if (fizzy.editor.getFileFromPath(source_path)) |file| {
-        fizzy.app.allocator.free(file.path);
-        file.path = fizzy.app.allocator.dupe(u8, new_path) catch {
+    if (fizzy.editor.docFromPath(source_path)) |doc| {
+        doc.owner.setDocumentPath(doc, new_path) catch {
             dvui.log.err("Failed to duplicate path: {s}", .{new_path});
             return error.FailedToDuplicatePath;
         };
@@ -1260,20 +1253,21 @@ pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File
             std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename folder: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
 
             for (fizzy.editor.open_files.values()) |doc| {
-                const file = fizzy.editor.fileFromDoc(doc);
-                if (std.mem.containsAtLeast(u8, file.path, 1, full_path)) {
-                    const file_name = dvui.currentWindow().arena().dupe(u8, std.fs.path.basename(file.path)) catch "Failed to duplicate path";
-                    fizzy.app.allocator.free(file.path);
-                    file.path = try std.fs.path.join(fizzy.app.allocator, &.{ new_path, file_name });
+                const path = fizzy.editor.docPath(doc);
+                if (std.mem.containsAtLeast(u8, path, 1, full_path)) {
+                    const file_name = dvui.currentWindow().arena().dupe(u8, std.fs.path.basename(path)) catch "Failed to duplicate path";
+                    const new_full = try std.fs.path.join(fizzy.app.allocator, &.{ new_path, file_name });
+                    doc.owner.setDocumentPath(doc, new_full) catch {
+                        dvui.log.err("Failed to update open document path", .{});
+                    };
                 }
             }
         },
         .file => {
             std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename file: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
 
-            if (fizzy.editor.getFileFromPath(full_path)) |file| {
-                fizzy.app.allocator.free(file.path);
-                file.path = fizzy.app.allocator.dupe(u8, new_path) catch {
+            if (fizzy.editor.docFromPath(full_path)) |doc| {
+                doc.owner.setDocumentPath(doc, new_path) catch {
                     dvui.log.err("Failed to duplicate path: {s}", .{new_path});
                     return error.FailedToDuplicatePath;
                 };

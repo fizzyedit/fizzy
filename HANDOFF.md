@@ -265,11 +265,12 @@ app code until the build module is fully wired.
 - **Copy/paste + pack/project** — moved to `pixelart/src/clipboard.zig` and `pack_project.zig`; plugin vtable hooks (`copy`, `paste`, `startPackProject`, `isPackingActive`, `tickPackJobs`, `runPackWorkers`). Shell `Editor` delegates; `setProjectFolder` uses plugin `persistProjectFolder` / `reloadProjectFolder`.
 - **Transform + doc registry** — `transform_op.zig` + `docs_registry.zig`; vtable hooks (`transform`, `registerOpenDocument`, `documentPtr`, `documentByPath`, `unregisterDocument`). Shell `fileFromDoc` / `insertOpenDoc` / `fileById` route through `doc.owner`; no direct `pixelart_state.docs` access in `Editor.zig`.
 - **`fizzy.pixelart` global removed** — single ownership on `Editor.pixelart_state` + `Globals.state`; `App.zig` alloc/deinit via `fizzy.editor.pixelart_state` only.
+- **DocHandle at workbench boundary** — `doc_bridge.zig` + plugin vtable metadata hooks (`bindDocumentToPane`, `documentGrouping`, `documentPath`, `setDocumentPath`, save/dirty indicators, …). `Workspace.zig` + `files.zig` use `DocHandle` + `doc.owner` only (no `Internal.File`). Shell helpers `docFromPath`, `docPath`, `setDocGrouping`, `bindDocToPane`; `fileFromDoc`/`fileById` are shell-internal.
 
 **Still remaining:**
-- Shell `Editor` still types `*Internal.File` in helpers (`activeFile`, `fileFromDoc`) — shrink as multi-plugin doc types arrive.
-- `pixelart.internal.File` in workbench tab paths — type-agnostic `DocHandle` only at boundary.
-- Integration test shim updated for `pixelart.State` settings; `check-integration` still blocked on native `backend_native` SDL import under dvui-testing (pre-existing).
+- Shell `Editor` still types `*Internal.File` in internal save/new-file paths (`newFile`, `openFileFromBytes`, save queue).
+- `FileLoadJob` staging buffer still uses `Internal.File` (loader contract).
+- Menu/Infobar still use `activeFile()` for pixel-art-specific UI (undo stacks, save enabled).
 
 ---
 

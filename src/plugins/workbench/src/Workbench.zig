@@ -65,8 +65,8 @@ pub fn drawBranchDecorations(self: *Workbench, path: []const u8, id_extra: usize
 /// Built-in: a dot on rows whose file is open with unsaved changes. Mirrors the
 /// tab dirty indicator (`Workspace.zig` ~:528) so the two stay visually consistent.
 fn drawUnsavedDot(_: ?*anyopaque, path: []const u8, id_extra: usize) void {
-    const file = fizzy.editor.getFileFromPath(path) orelse return;
-    if (!file.dirty()) return;
+    const doc = fizzy.editor.docFromPath(path) orelse return;
+    if (!doc.owner.isDirty(doc)) return;
     dvui.icon(@src(), "explorer_dirty", icons.tvg.lucide.@"circle-small", .{
         .stroke_color = dvui.themeGet().color(.window, .text),
     }, .{
@@ -213,15 +213,15 @@ fn svcSave(ctx: *anyopaque) anyerror!void {
     return editorOf(ctx).save();
 }
 fn svcIsOpen(ctx: *anyopaque, path: []const u8) bool {
-    return editorOf(ctx).getFileFromPath(path) != null;
+    return editorOf(ctx).docFromPath(path) != null;
 }
 fn svcOpenCount(ctx: *anyopaque) usize {
     return editorOf(ctx).open_files.count();
 }
 fn svcOpenPathAt(ctx: *anyopaque, index: usize) ?[]const u8 {
     const editor = editorOf(ctx);
-    if (index >= editor.open_files.count()) return null;
-    return if (editor.fileAt(index)) |file| file.path else null;
+    const doc = editor.docAt(index) orelse return null;
+    return editor.docPath(doc);
 }
 fn svcCreateFile(_: *anyopaque, path: []const u8) anyerror!void {
     return files.createFilePath(path);

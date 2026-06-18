@@ -19,6 +19,7 @@ const Clipboard = @import("clipboard.zig");
 const PackProject = @import("pack_project.zig");
 const TransformOp = @import("transform_op.zig");
 const DocsRegistry = @import("docs_registry.zig");
+const DocBridge = @import("doc_bridge.zig");
 
 const DocHandle = sdk.DocHandle;
 const Internal = pixelart.internal;
@@ -50,6 +51,17 @@ const vtable: sdk.Plugin.VTable = .{
     .documentPtr = documentPtr,
     .documentByPath = documentByPath,
     .unregisterDocument = unregisterDocument,
+    .bindDocumentToPane = bindDocumentToPane,
+    .documentGrouping = documentGrouping,
+    .setDocumentGrouping = setDocumentGrouping,
+    .documentPath = documentPath,
+    .setDocumentPath = setDocumentPath,
+    .documentHasNativeExtension = documentHasNativeExtension,
+    .showsSaveStatusIndicator = showsSaveStatusIndicator,
+    .isDocumentSaving = isDocumentSaving,
+    .shouldConfirmFlatRasterSave = shouldConfirmFlatRasterSave,
+    .saveDocumentAsync = saveDocumentAsync,
+    .timeSinceSaveCompleteNs = timeSinceSaveCompleteNs,
     .drawDocument = drawDocument,
     .tickKeybinds = tickKeybinds,
     .processRadialMenuInput = processRadialMenuInput,
@@ -366,6 +378,61 @@ fn documentByPath(state: *anyopaque, path: []const u8) ?*anyopaque {
 fn unregisterDocument(state: *anyopaque, id: u64) void {
     const st: *State = @ptrCast(@alignCast(state));
     DocsRegistry.unregisterDocument(st, id);
+}
+
+fn bindDocumentToPane(state: *anyopaque, doc: DocHandle, canvas_id: dvui.Id, workspace_handle: *anyopaque, center: bool) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocBridge.bindDocumentToPane(st, doc, canvas_id, workspace_handle, center);
+}
+
+fn documentGrouping(state: *anyopaque, doc: DocHandle) u64 {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.documentGrouping(st, doc);
+}
+
+fn setDocumentGrouping(state: *anyopaque, doc: DocHandle, grouping: u64) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocBridge.setDocumentGrouping(st, doc, grouping);
+}
+
+fn documentPath(state: *anyopaque, doc: DocHandle) []const u8 {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.documentPath(st, doc);
+}
+
+fn setDocumentPath(state: *anyopaque, doc: DocHandle, path: []const u8) anyerror!void {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.setDocumentPath(st, doc, path);
+}
+
+fn documentHasNativeExtension(state: *anyopaque, doc: DocHandle) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.documentHasNativeExtension(st, doc);
+}
+
+fn showsSaveStatusIndicator(state: *anyopaque, doc: DocHandle) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.showsSaveStatusIndicator(st, doc);
+}
+
+fn isDocumentSaving(state: *anyopaque, doc: DocHandle) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.isDocumentSaving(st, doc);
+}
+
+fn shouldConfirmFlatRasterSave(state: *anyopaque, doc: DocHandle) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.shouldConfirmFlatRasterSave(st, doc);
+}
+
+fn saveDocumentAsync(state: *anyopaque, doc: DocHandle) anyerror!void {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.saveDocumentAsync(st, doc);
+}
+
+fn timeSinceSaveCompleteNs(state: *anyopaque, doc: DocHandle) ?i128 {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.timeSinceSaveCompleteNs(st, doc);
 }
 
 fn pluginPersistProjectFolder(state: *anyopaque) void {

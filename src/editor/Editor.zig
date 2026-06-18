@@ -747,15 +747,14 @@ fn shellIsPackingActive(ctx: *anyopaque) bool {
     return shellCtx(ctx).isPackingActive();
 }
 
-/// Resolve a shell `DocHandle` to the plugin-owned file. Uses `doc.id`, not `doc.ptr`:
-/// the plugin registry may reallocate and invalidate pointers stored at insert time.
-pub fn fileFromDoc(editor: *Editor, doc: sdk.DocHandle) *Internal.File {
+/// Resolve a shell `DocHandle` to the plugin-owned file (shell-internal; workbench uses `DocHandle` + owner hooks).
+fn fileFromDoc(editor: *Editor, doc: sdk.DocHandle) *Internal.File {
     _ = editor;
     return @ptrCast(@alignCast(doc.owner.documentPtr(doc.id).?));
 }
 
-/// Resolve an open document id to the plugin-owned file, or null when not open.
-pub fn fileById(editor: *Editor, id: u64) ?*Internal.File {
+/// Resolve an open document id to the plugin-owned file (shell-internal).
+fn fileById(editor: *Editor, id: u64) ?*Internal.File {
     const doc = editor.docById(id) orelse return null;
     const ptr = doc.owner.documentPtr(doc.id) orelse return null;
     return @ptrCast(@alignCast(ptr));
@@ -775,6 +774,30 @@ pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
         return editor.docAt(workspace.open_file_index);
     }
     return null;
+}
+
+/// Workbench routing helpers (type-agnostic; dispatch through `doc.owner`).
+pub fn docGrouping(_: *Editor, doc: sdk.DocHandle) u64 {
+    return doc.owner.documentGrouping(doc);
+}
+
+pub fn setDocGrouping(_: *Editor, doc: sdk.DocHandle, grouping: u64) void {
+    doc.owner.setDocumentGrouping(doc, grouping);
+}
+
+pub fn docPath(_: *Editor, doc: sdk.DocHandle) []const u8 {
+    return doc.owner.documentPath(doc);
+}
+
+pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
+    for (editor.open_files.values()) |doc| {
+        if (doc.owner.documentByPath(path) != null) return doc;
+    }
+    return null;
+}
+
+pub fn bindDocToPane(_: *Editor, doc: sdk.DocHandle, canvas_id: dvui.Id, workspace: *anyopaque, center: bool) void {
+    doc.owner.bindDocumentToPane(doc, canvas_id, workspace, center);
 }
 
 /// Store a loaded/created document in the plugin registry and register its handle.
@@ -2015,9 +2038,9 @@ pub fn saving(editor: *Editor) bool {
 /// worker hasn't landed it yet and there is no valid `open_files` index to act on. The async
 /// load will auto-focus once the worker completes (see `processLoadingJobs`).
 pub fn openOrFocusFileAtGrouping(editor: *Editor, path: []const u8, grouping: u64) !?usize {
-    if (editor.getFileFromPath(path)) |file| {
-        const idx = editor.open_files.getIndex(file.id) orelse return error.Unexpected;
-        editor.fileAt(idx).?.editor.grouping = grouping;
+    if (editor.docFromPath(path)) |doc| {
+        const idx = editor.open_files.getIndex(doc.id) orelse return error.Unexpected;
+        editor.setDocGrouping(doc, grouping);
         editor.setActiveFile(idx);
         return idx;
     }
@@ -2503,12 +2526,8 @@ pub fn fileAt(editor: *Editor, index: usize) ?*Internal.File {
 }
 
 pub fn getFileFromPath(editor: *Editor, path: []const u8) ?*Internal.File {
-    for (editor.open_files.values()) |doc| {
-        if (doc.owner.documentByPath(path)) |ptr| {
-            return @ptrCast(@alignCast(ptr));
-        }
-    }
-    return null;
+    const doc = editor.docFromPath(path) orelse return null;
+    return editor.fileFromDoc(doc);
 }
 
 pub fn forceCloseFile(editor: *Editor, index: usize) !void {

@@ -160,8 +160,7 @@ pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
         // extension. Worker queue handles them serially; UI stays responsive.
         const any_dirty = blk: {
             for (fizzy.editor.open_files.values()) |doc| {
-                const f = fizzy.editor.fileFromDoc(doc);
-                if (f.dirty() and Internal.File.hasRecognizedSaveExtension(f.path)) break :blk true;
+                if (doc.owner.isDirty(doc) and Internal.File.hasRecognizedSaveExtension(fizzy.editor.docPath(doc))) break :blk true;
             }
             break :blk false;
         };
