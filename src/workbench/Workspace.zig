@@ -886,6 +886,7 @@ pub fn drawCanvas(self: *Workspace) !void {
         const file = &fizzy.editor.open_files.values()[self.open_file_index];
         file.editor.canvas.id = canvas_vbox.data().id;
         file.editor.workspace_handle = self;
+        file.editor.center = self.center;
 
         if (fizzy.editor.settings.show_rulers and !dvui.firstFrame(canvas_vbox.data().id)) {
             defer fizzy.dvui.drawEdgeShadow(canvas_vbox.data().rectScale(), .top, .{});
@@ -907,24 +908,10 @@ pub fn drawCanvas(self: *Workspace) !void {
 
         if (self.grouping != file.editor.grouping) return;
 
-        fizzy.perf.canvasPaneDrawn();
-
-        var file_widget = fizzy.dvui.FileWidget.init(@src(), .{
-            .file = file,
-            .center = self.center,
-        }, .{
-            .expand = .both,
-            .background = false,
-            .color_fill = .transparent,
-        });
-
-        defer file_widget.deinit();
-        file_widget.processEvents();
-
-        if (dvui.dataGet(null, file.editor.canvas.id, "sample_data_point", dvui.Point)) |data_pt| {
-            if (file.editor.canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) {
-                fizzy.dvui.FileWidget.drawSampleMagnifier(file, data_pt);
-            }
+        // Route the document render to its owning plugin (pixel art builds its own
+        // FileWidget). The workbench owns only the container + canvas chrome above.
+        if (fizzy.editor.host.pluginForExtension(std.fs.path.extension(file.path))) |plugin| {
+            _ = try plugin.drawDocument(.{ .ptr = file, .owner = plugin, .id = file.id });
         }
     } else {
         var box = workspaceEmptyStateCard(content_color, self.grouping);

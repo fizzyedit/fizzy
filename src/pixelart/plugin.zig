@@ -34,6 +34,7 @@ const vtable: sdk.Plugin.VTable = .{
     .closeDocument = closeDocument,
     .undo = undo,
     .redo = redo,
+    .drawDocument = drawDocument,
 };
 
 /// A `DocHandle` whose `ptr` is one of this plugin's `*Internal.File`s. The shell
@@ -83,6 +84,31 @@ fn saveDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
 /// fixes up the active-tab index; this just frees the pixel-art `File`.
 fn closeDocument(_: *anyopaque, doc: DocHandle) void {
     docFile(doc).deinit();
+}
+
+/// Render the open pixel-art document into the workbench-provided container (the current
+/// dvui parent). The workbench sets `canvas.id` / `workspace_handle` and draws the canvas
+/// chrome around this; here we instantiate the editing widget and the sample magnifier.
+fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
+    const file = docFile(doc);
+    fizzy.perf.canvasPaneDrawn();
+
+    var file_widget = fizzy.dvui.FileWidget.init(@src(), .{
+        .file = file,
+        .center = file.editor.center,
+    }, .{
+        .expand = .both,
+        .background = false,
+        .color_fill = .transparent,
+    });
+    defer file_widget.deinit();
+    file_widget.processEvents();
+
+    if (dvui.dataGet(null, file.editor.canvas.id, "sample_data_point", dvui.Point)) |data_pt| {
+        if (file.editor.canvas.samplePointerInViewport(dvui.currentWindow().mouse_pt)) {
+            fizzy.dvui.FileWidget.drawSampleMagnifier(file, data_pt);
+        }
+    }
 }
 
 fn undo(_: *anyopaque, doc: DocHandle) anyerror!void {

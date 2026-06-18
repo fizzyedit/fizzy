@@ -117,6 +117,18 @@ pub fn redo(self: Plugin, doc: DocHandle) !void {
     if (self.vtable.redo) |f| try f(self.state, doc);
 }
 
+// ---- render hook wrappers ----
+
+/// Draw an open document into the current dvui parent (the workbench sets up the
+/// container, then routes here). Returns whether the plugin drew anything.
+pub fn drawDocument(self: Plugin, doc: DocHandle) !bool {
+    if (self.vtable.drawDocument) |f| {
+        try f(self.state, doc);
+        return true;
+    }
+    return false;
+}
+
 pub fn deinit(self: Plugin) void {
     if (self.vtable.deinit) |f| f(self.state);
 }

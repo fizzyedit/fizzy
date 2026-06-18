@@ -59,6 +59,9 @@ pub const EditorData = struct {
     /// type-depend on the editor's `Workspace` (lets `File` move into a plugin).
     /// Only valid while the file widget is drawing the file.
     workspace_handle: ?*anyopaque = null,
+    /// Set by the shell each frame before draw: request the canvas recenter this frame
+    /// (true while a workspace/panel pane is mid-animation). Read by the document render.
+    center: bool = false,
     canvas: fizzy.dvui.CanvasWidget = .{},
     layers_scroll_info: dvui.ScrollInfo = .{ .horizontal = .auto },
     sprites_scroll_info: dvui.ScrollInfo = .{ .horizontal = .auto },
