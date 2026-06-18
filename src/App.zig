@@ -16,7 +16,6 @@ const paths = @import("paths.zig");
 const App = @This();
 const Editor = fizzy.Editor;
 const Packer = fizzy.Packer;
-//const Assets = fizzy.Assets;
 
 // App fields
 allocator: std.mem.Allocator = undefined,

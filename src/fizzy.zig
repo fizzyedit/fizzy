@@ -23,7 +23,6 @@ pub const water_surface = @import("gfx/water_surface.zig");
 pub const math = @import("math/math.zig");
 
 pub const App = @import("App.zig");
-pub const Assets = @import("Assets.zig");
 pub const Editor = @import("editor/Editor.zig");
 pub const Explorer = @import("editor/explorer/Explorer.zig");
 pub const Fling = @import("editor/Fling.zig");
@@ -35,7 +34,6 @@ pub const Sidebar = @import("editor/Sidebar.zig");
 pub var app: *App = undefined;
 pub var editor: *Editor = undefined;
 pub var packer: *Packer = undefined;
-pub var assets: *Assets = undefined;
 
 /// Internal types
 /// These types contain additional data to support the editor
