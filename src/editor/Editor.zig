@@ -462,19 +462,73 @@ fn loadPixelartFromDylibEnabled() bool {
     return true;
 }
 
+fn loadWorkbenchFromDylibEnabled() bool {
+    if (comptime builtin.target.cpu.arch == .wasm32) return false;
+    if (comptime build_opts.static_workbench) return false;
+    if (std.process.Environ.getAlloc(fizzy.processEnviron(), fizzy.app.allocator, "FIZZY_STATIC_WORKBENCH")) |v| {
+        defer fizzy.app.allocator.free(v);
+        return v.len == 0 or v[0] == '0';
+    } else |_| {}
+    return true;
+}
+
+/// Stable workbench sidebar view id (matches `workbench.plugin.view_files`).
+pub const workbench_files_view = workbench_mod.plugin.view_files;
+
+/// Registered workbench plugin (dylib or static). Panics if missing after `postInit`.
+pub fn workbenchPlugin(editor: *Editor) *sdk.Plugin {
+    return editor.host.pluginById("workbench") orelse @panic("workbench plugin not registered");
+}
+
 /// Registered pixelart plugin (dylib or static). Panics if missing after `postInit`.
 pub fn pixelartPlugin(editor: *Editor) *sdk.Plugin {
     return editor.host.pluginById("pixelart") orelse @panic("pixelart plugin not registered");
 }
 
+/// Mechanism B: push host dvui state into every loaded plugin dylib image.
+pub fn syncLoadedPluginDvuiContexts(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    for (editor.loaded_plugin_libs.items) |loaded| {
+        sdk.dvui_context.syncHostIntoPlugin(loaded.set_dvui_context);
+    }
+}
+
+fn syncLoadedPluginGlobals(editor: *Editor, plugin_id: []const u8, arg_b: *anyopaque, arg_c: ?*anyopaque) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    for (editor.loaded_plugin_libs.items) |loaded| {
+        if (!std.mem.eql(u8, loaded.plugin_id, plugin_id)) continue;
+        loaded.set_globals(@ptrCast(&fizzy.app.allocator), arg_b, arg_c);
+    }
+}
+
 /// Re-inject host-owned Globals into a loaded pixelart dylib (e.g. after `Packer` init).
 pub fn syncLoadedPixelartGlobals(editor: *Editor) void {
+    syncLoadedPluginGlobals(editor, "pixelart", @ptrCast(editor.pixelart_state), @ptrCast(fizzy.packer));
+}
+
+/// Re-inject host-owned Globals into a loaded workbench dylib.
+pub fn syncLoadedWorkbenchGlobals(editor: *Editor) void {
+    syncLoadedPluginGlobals(editor, "workbench", @ptrCast(&editor.host), @ptrCast(&editor.workbench));
+}
+
+fn appendLoadedPluginLib(editor: *Editor, loaded: PluginLoader.LoadedLib) !void {
+    try editor.loaded_plugin_libs.append(fizzy.app.allocator, loaded);
+    editor.host.plugin_set_globals = loaded.set_globals;
+    editor.host.plugin_set_dvui_context = loaded.set_dvui_context;
+}
+
+/// Load `{exe_dir}/plugins/libworkbench.*` and register via dylib entry.
+pub fn loadWorkbenchDylib(editor: *Editor, exe_dir: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    editor.host.syncPluginGlobals(
-        &fizzy.app.allocator,
-        @ptrCast(editor.pixelart_state),
-        @ptrCast(fizzy.packer),
-    );
+    const path = try PluginLoader.builtinPluginPath(fizzy.app.allocator, exe_dir, "workbench");
+    errdefer fizzy.app.allocator.free(path);
+    const loaded = try PluginLoader.loadAndRegister(&editor.host, path, "workbench", .{
+        .gpa = &fizzy.app.allocator,
+        .state = @ptrCast(&editor.host),
+        .packer = @ptrCast(&editor.workbench),
+    });
+    try appendLoadedPluginLib(editor, loaded);
+    syncLoadedPluginDvuiContexts(editor);
 }
 
 /// Load `{exe_dir}/plugins/libpixelart.*` (or `FIZZY_PLUGIN_PATH`) and register via dylib entry.
@@ -482,13 +536,13 @@ pub fn loadPixelartDylib(editor: *Editor, exe_dir: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const path = try PluginLoader.resolvePluginPath(fizzy.app.allocator, exe_dir, "pixelart");
     errdefer fizzy.app.allocator.free(path);
-    const loaded = try PluginLoader.loadAndRegister(&editor.host, path, .{
+    const loaded = try PluginLoader.loadAndRegister(&editor.host, path, "pixelart", .{
         .gpa = &fizzy.app.allocator,
         .state = @ptrCast(editor.pixelart_state),
         .packer = null,
     });
-    try editor.loaded_plugin_libs.append(fizzy.app.allocator, loaded);
-    editor.host.installPluginDylibHooks(loaded.set_globals, loaded.set_dvui_context);
+    try appendLoadedPluginLib(editor, loaded);
+    syncLoadedPluginDvuiContexts(editor);
 }
 
 fn unloadPluginLibs(editor: *Editor) void {
@@ -521,7 +575,14 @@ pub fn postInit(editor: *Editor) !void {
     // near-empty shell's content: it iterates the Host registries rather than
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
     // editor tick already runs on wasm. Order = sidebar order.
-    try workbench_mod.plugin.register(&editor.host);
+    if (loadWorkbenchFromDylibEnabled()) {
+        editor.loadWorkbenchDylib(fizzy.app.root_path) catch |err| {
+            dvui.log.warn("workbench dylib load failed ({s}); falling back to static plugin", .{@errorName(err)});
+            try workbench_mod.plugin.register(&editor.host);
+        };
+    } else {
+        try workbench_mod.plugin.register(&editor.host);
+    }
     if (loadPixelartFromDylibEnabled()) {
         editor.loadPixelartDylib(fizzy.app.root_path) catch |err| {
             dvui.log.warn("pixelart dylib load failed ({s}); falling back to static plugin", .{@errorName(err)});
@@ -553,7 +614,7 @@ pub fn postInit(editor: *Editor) !void {
     // keybind map. The shell already registered its global/navigation/region binds
     // in `Keybinds.register` (during `init`, before this runs), so the two halves
     // are disjoint — no `putNoClobber` clash. Runs on all targets (web included).
-    editor.host.syncPluginDvuiContext();
+    syncLoadedPluginDvuiContexts(editor);
     const window = dvui.currentWindow();
     for (editor.host.plugins.items) |plugin| try plugin.contributeKeybinds(window);
 
@@ -1201,7 +1262,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.setTitlebarColor();
     editor.setWindowStyle();
 
-    editor.host.syncPluginDvuiContext();
+    syncLoadedPluginDvuiContexts(editor);
     for (editor.host.plugins.items) |plugin| plugin.beginFrame();
     if (fizzy.perf.record) fizzy.perf.beginFrame();
     defer if (fizzy.perf.record) fizzy.perf.endFrameAndMaybeLog();
@@ -1971,7 +2032,7 @@ pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     }
     editor.folder = try fizzy.app.allocator.dupe(u8, path);
     try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
-    editor.host.setActiveSidebarView(workbench_mod.plugin.view_files);
+    editor.host.setActiveSidebarView(workbench_files_view);
 
     pixelartPlugin(editor).reloadProjectFolder(fizzy.app.allocator);
     editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);

@@ -36,8 +36,10 @@ pub const FileRowFillColor = struct {
 };
 
 /// Mechanism B: setter from a loaded plugin dylib; null when all plugins are static.
+/// Deprecated: prefer `Editor.syncLoadedPluginDvuiContexts` when multiple dylibs are loaded.
 plugin_set_dvui_context: ?dvui_context.SetContextFn = null,
 /// Host-owned Globals injection into a loaded plugin image (pixelart today).
+/// Deprecated: prefer per-lib `LoadedLib.set_globals` when multiple dylibs are loaded.
 plugin_set_globals: ?dylib_api.SetGlobalsFn = null,
 
 allocator: std.mem.Allocator,

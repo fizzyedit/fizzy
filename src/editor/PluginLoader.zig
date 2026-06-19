@@ -26,6 +26,8 @@ pub const LoadError = error{
 pub const LoadedLib = struct {
     lib: std.DynLib,
     path: []const u8,
+    /// Built-in plugin id (`"pixelart"`, `"workbench"`, …).
+    plugin_id: []const u8,
     set_globals: dylib_api.SetGlobalsFn,
     set_dvui_context: dvui_context.SetContextFn,
 };
@@ -74,7 +76,12 @@ fn nativeEnviron() std.process.Environ {
     return .{ .block = .{ .slice = slice } };
 }
 
-pub fn loadAndRegister(host: *Host, path: []const u8, pre: ?PreRegister) LoadError!LoadedLib {
+pub fn loadAndRegister(
+    host: *Host,
+    path: []const u8,
+    plugin_id: []const u8,
+    pre: ?PreRegister,
+) LoadError!LoadedLib {
     var lib = std.DynLib.open(path) catch return error.DylibOpenFailed;
     errdefer lib.close();
 
@@ -117,6 +124,7 @@ pub fn loadAndRegister(host: *Host, path: []const u8, pre: ?PreRegister) LoadErr
     return .{
         .lib = lib,
         .path = path,
+        .plugin_id = plugin_id,
         .set_globals = set_globals,
         .set_dvui_context = set_ctx,
     };

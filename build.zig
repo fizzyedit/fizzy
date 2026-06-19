@@ -245,6 +245,12 @@ pub fn build(b: *std.Build) !void {
         "Keep pixelart statically registered on native (skip built-in dylib load)",
     ) orelse false;
     build_opts.addOption(bool, "static_pixelart", static_pixelart);
+    const static_workbench = b.option(
+        bool,
+        "static-workbench",
+        "Keep workbench statically registered on native (skip built-in dylib load)",
+    ) orelse false;
+    build_opts.addOption(bool, "static_workbench", static_workbench);
 
     const step = b.step("update", "update git dependencies");
     step.makeFn = update_step;
@@ -528,6 +534,13 @@ pub fn build(b: *std.Build) !void {
             });
             b.getInstallStep().dependOn(&install_pixelart_dylib.step);
         }
+        if (main_fizzy.workbench_dylib) |workbench_dylib| {
+            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
+            const install_workbench_dylib = b.addInstallArtifact(workbench_dylib, .{
+                .dest_dir = .{ .override = plugins_install_dir },
+            });
+            b.getInstallStep().dependOn(&install_workbench_dylib.step);
+        }
     } else {
         const install_artifact = b.addInstallArtifact(exe, .{
             .dest_dir = .{ .override = zig_out_install_dir },
@@ -548,6 +561,26 @@ pub fn build(b: *std.Build) !void {
             b.getInstallStep().dependOn(&install_pixelart_dylib.step);
             run_cmd.step.dependOn(&install_pixelart_dylib.step);
         }
+        if (main_fizzy.workbench_dylib) |workbench_dylib| {
+            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
+            const install_workbench_dylib = b.addInstallArtifact(workbench_dylib, .{
+                .dest_dir = .{ .override = plugins_install_dir },
+            });
+            b.getInstallStep().dependOn(&install_workbench_dylib.step);
+            run_cmd.step.dependOn(&install_workbench_dylib.step);
+        }
+    }
+
+    if (main_fizzy.workbench_dylib) |workbench_dylib| {
+        const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
+        const install_workbench_dylib = b.addInstallArtifact(workbench_dylib, .{
+            .dest_dir = .{ .override = plugins_install_dir },
+        });
+        const workbench_dylib_step = b.step(
+            "workbench-dylib",
+            "Build the workbench plugin as a dynamic library into zig-out/<target>/plugins/ (native only)",
+        );
+        workbench_dylib_step.dependOn(&install_workbench_dylib.step);
     }
 
     if (main_fizzy.pixelart_dylib) |pixelart_dylib| {
@@ -1182,6 +1215,7 @@ const FizzyExecutable = struct {
     sdk_module: *std.Build.Module,
     /// Native-only; `null` on wasm targets.
     pixelart_dylib: ?*std.Build.Step.Compile = null,
+    workbench_dylib: ?*std.Build.Step.Compile = null,
 };
 
 fn addFizzyExecutableForTarget(
@@ -1320,6 +1354,16 @@ fn addFizzyExecutableForTarget(
         });
     } else null;
 
+    const workbench_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
+        break :blk addWorkbenchDylib(b, resolved_target, optimize, .{
+            .dvui = dvui_dep.module("dvui_sdl3"),
+            .core = core_module,
+            .sdk = sdk_module,
+            .icons = icons_module,
+            .backend = dvui_dep.module("sdl3"),
+        });
+    } else null;
+
     const singleton_app_dep = b.dependency("dvui_singleton_app", .{
         .target = resolved_target,
         .optimize = optimize,
@@ -1381,6 +1425,7 @@ fn addFizzyExecutableForTarget(
         .known_folders = known_folders,
         .sdk_module = sdk_module,
         .pixelart_dylib = pixelart_dylib,
+        .workbench_dylib = workbench_dylib,
     };
 }
 
@@ -1423,6 +1468,14 @@ const WorkbenchModuleDeps = struct {
 };
 
 /// Workbench plugin (`src/plugins/workbench/module.zig`).
+fn applyWorkbenchModuleImports(module: *std.Build.Module, deps: WorkbenchModuleDeps) void {
+    module.addImport("dvui", deps.dvui);
+    module.addImport("core", deps.core);
+    module.addImport("sdk", deps.sdk);
+    if (deps.icons) |icons| module.addImport("icons", icons);
+    if (deps.backend) |backend| module.addImport("backend", backend);
+}
+
 fn wireWorkbenchModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -1437,12 +1490,37 @@ fn wireWorkbenchModule(
         .link_libc = target.result.cpu.arch != .wasm32,
         .single_threaded = target.result.cpu.arch == .wasm32,
     });
-    workbench_module.addImport("dvui", deps.dvui);
-    workbench_module.addImport("core", deps.core);
-    workbench_module.addImport("sdk", deps.sdk);
-    if (deps.icons) |icons| workbench_module.addImport("icons", icons);
-    if (deps.backend) |backend| workbench_module.addImport("backend", backend);
+    applyWorkbenchModuleImports(workbench_module, deps);
     consumer.addImport("workbench", workbench_module);
+}
+
+/// Native dynamic library for the workbench plugin (`src/plugins/workbench/dylib.zig`).
+fn addWorkbenchDylib(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: WorkbenchModuleDeps,
+) *std.Build.Step.Compile {
+    const dylib_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/plugins/workbench/dylib.zig"),
+        .link_libc = true,
+    });
+    applyWorkbenchModuleImports(dylib_module, deps);
+    const lib = b.addLibrary(.{
+        .name = "workbench",
+        .linkage = .dynamic,
+        .root_module = dylib_module,
+    });
+    lib.linker_allow_shlib_undefined = true;
+    lib.root_module.export_symbol_names = &[_][]const u8{
+        "fizzy_plugin_abi_version",
+        "fizzy_plugin_register",
+        "fizzy_plugin_set_dvui_context",
+        "fizzy_plugin_set_globals",
+    };
+    return lib;
 }
 
 /// Pixel-art plugin (`src/plugins/pixelart/module.zig`).

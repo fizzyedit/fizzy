@@ -192,7 +192,7 @@ lands; linkage suffixes differ (`.dylib` / `.so` / `.dll`) but the loader API is
 | Step | Work | Done when |
 |------|------|-----------|
 | **5c.1** | Built-in pixelart dylib loaded by host on native; static on web; Editor routes via `pixelartPlugin()` / `host.pluginById` | ✅ Done |
-| **5c.2** | Built-in workbench dylib (or keep static until pixelart path is stable — workbench owns center layout) | Tabs/splits work from loaded workbench |
+| **5c.2** | Built-in workbench dylib loaded by host on native; `workbenchPlugin()` / `workbench_files_view` routing | ✅ Done |
 | **5c.3** | Install step bundles built-in dylibs next to exe (same `zig-out` / Velopack tree) | Release package contains exe + `pixelart.{dylib,so,dll}` etc.; single update channel |
 
 Built-ins can remain **statically linked during 5b** and flip to dylib in 5c — the
@@ -267,7 +267,7 @@ Repo source tree `src/plugins/` is **build layout only** — unrelated to these 
 
 ### Where to begin (next session)
 
-**5c.1** — done (native default dylib load + Globals injection + `pixelartPlugin()` routing). **Next: 5c.2** (workbench dylib) or **5c.3** (Velopack bundle polish).
+**5c.1–5c.2** — done (pixelart + workbench built-in dylibs on native). **Next: 5c.3** (Velopack bundle polish) or **5d**.
 
 ---
 
@@ -667,6 +667,7 @@ the **build-script file-ownership trap** (`process_assets.zig` → std-only `Atl
 | `src/sdk/dvui_context.zig` | Mechanism B — inject host dvui globals into plugin dylib copy |
 | `src/sdk/dylib.zig` | Dylib ABI version + entry symbol names (`fizzy_plugin_*`) |
 | `src/plugins/pixelart/dylib.zig` | Pixelart dynamic-library root (exports only) |
+| `src/plugins/workbench/dylib.zig` | Workbench dynamic-library root (exports only) |
 | `src/sdk/Plugin.zig` | Plugin vtable; dylib entry wraps `register()` |
 | `src/plugins/pixelart/module.zig` | Pixel-art build module root |
 | `src/plugins/pixelart/pixelart.zig` | Pixel-art intra-plugin hub |

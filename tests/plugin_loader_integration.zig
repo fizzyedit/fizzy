@@ -16,7 +16,7 @@ test "load pixelart dylib and register" {
     var state_buf: [8192]u8 align(16) = undefined;
 
     const before = host.plugins.items.len;
-    var loaded = try PluginLoader.loadAndRegister(&host, test_opts.pixelart_dylib, .{
+    var loaded = try PluginLoader.loadAndRegister(&host, test_opts.pixelart_dylib, "pixelart", .{
         .gpa = &std.testing.allocator,
         .state = &state_buf,
         .packer = null,

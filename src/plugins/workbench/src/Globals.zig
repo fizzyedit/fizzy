@@ -15,3 +15,14 @@ pub var workbench: *Workbench = undefined;
 pub fn allocator() std.mem.Allocator {
     return gpa;
 }
+
+/// Mechanism B: host calls `fizzy_plugin_set_globals` on the dylib image before `register`.
+pub fn installRuntime(
+    gpa_ptr: ?*const std.mem.Allocator,
+    host_ptr: ?*sdk.Host,
+    workbench_ptr: ?*Workbench,
+) void {
+    if (gpa_ptr) |a| gpa = a.*;
+    if (host_ptr) |h| host = h;
+    if (workbench_ptr) |w| workbench = w;
+}

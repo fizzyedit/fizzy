@@ -108,7 +108,7 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
         .background = false,
     });
 
-    if (!fizzy.editor.host.isActiveSidebarView(workbench.plugin.view_files)) {
+    if (!fizzy.editor.host.isActiveSidebarView(fizzy.Editor.workbench_files_view)) {
         fizzy.editor.resetFileTreeWhenFilesHidden();
     }
 
