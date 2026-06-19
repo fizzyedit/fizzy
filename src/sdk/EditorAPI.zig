@@ -109,7 +109,6 @@ pub const VTable = struct {
     transform: *const fn (ctx: *anyopaque) anyerror!void,
     save: *const fn (ctx: *anyopaque) anyerror!void,
     requestCompositeWarmup: *const fn (ctx: *anyopaque) void,
-    requestGridLayoutDialog: *const fn (ctx: *anyopaque) void,
 
     // ---- new document ----
     /// Heap-owned unique basename like `untitled-1`; caller frees with the app allocator.
@@ -242,10 +241,6 @@ pub fn save(self: EditorAPI) !void {
 
 pub fn requestCompositeWarmup(self: EditorAPI) void {
     self.vtable.requestCompositeWarmup(self.ctx);
-}
-
-pub fn requestGridLayoutDialog(self: EditorAPI) void {
-    self.vtable.requestGridLayoutDialog(self.ctx);
 }
 
 pub fn allocUntitledPath(self: EditorAPI) ![]u8 {

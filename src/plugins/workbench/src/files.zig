@@ -288,20 +288,7 @@ fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u
     if ((dvui.menuItemLabel(@src(), "New File...", .{}, .{ .expand = .horizontal })) != null) {
         defer fw2.close();
 
-        const parent_owned = try dvui.currentWindow().arena().dupe(u8, project_path);
-        var mutex = fizzy.dvui.dialog(@src(), .{
-            .displayFn = fizzy.Editor.Dialogs.NewFile.dialog,
-            .callafterFn = fizzy.Editor.Dialogs.NewFile.callAfter,
-            .title = "New File...",
-            .ok_label = "Create",
-            .cancel_label = "Cancel",
-            .resizeable = false,
-            .header_kind = .info,
-            .default = .ok,
-            .id_extra = root_branch_id.asUsize(),
-        });
-        dvui.dataSetSlice(null, mutex.id, "_parent_path", parent_owned);
-        mutex.mutex.unlock(dvui.io);
+        fizzy.editor.host.requestNewDocument(project_path, root_branch_id.asUsize());
     }
 
     if ((dvui.menuItemLabel(@src(), "New Folder...", .{}, .{ .expand = .horizontal })) != null) {
@@ -696,22 +683,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                             defer fw2.close();
 
                             const parent_dir: []const u8 = if (entry.kind == .directory) abs_path else directory;
-                            const parent_owned = try dvui.currentWindow().arena().dupe(u8, parent_dir);
-                            // Create a generic dialog that contains typical okay and cancel buttons and header
-                            // The displayFn will be called during the drawing of the dialog, prior to ok and cancel buttons
-                            var mutex = fizzy.dvui.dialog(@src(), .{
-                                .displayFn = fizzy.Editor.Dialogs.NewFile.dialog,
-                                .callafterFn = fizzy.Editor.Dialogs.NewFile.callAfter,
-                                .title = "New File...",
-                                .ok_label = "Create",
-                                .cancel_label = "Cancel",
-                                .resizeable = false,
-                                .header_kind = .info,
-                                .default = .ok,
-                                .id_extra = branch_id.asUsize(),
-                            });
-                            dvui.dataSetSlice(null, mutex.id, "_parent_path", parent_owned);
-                            mutex.mutex.unlock(dvui.io);
+                            fizzy.editor.host.requestNewDocument(parent_dir, branch_id.asUsize());
                         }
 
                         if ((dvui.menuItemLabel(@src(), "New Folder...", .{}, .{ .expand = .horizontal })) != null) {

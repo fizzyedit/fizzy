@@ -20,12 +20,15 @@ Workspace decoupling, zero `fizzy.zig` imports in plugin, `b.addModule("pixelart
 **Sprite/atlas → `core` big rock: DONE** (verified — generic atlas type + sprite-draw
 primitive + sprite-id index all in `core`; neither shell nor plugin reaches the other's atlas).
 
-**Next:** the only remaining shell→plugin concrete reaches are `pixelart.dialogs.*` +
-`pixelart.explorer.project` — needs a generic dialog-registry vtable to lift (deferred).
-Then: wire `b.addModule("workbench", …)` + lift workbench off `fizzy.editor` (logo atlas draw).
+**Dialog-registry lift — DONE** (see "Multi-plugin readiness"): the shell no longer names any
+pixel-art dialog. `pixelart.dialogs` is gone from `src/editor` + `src/plugins/workbench`.
 
-> **Read this first if you're a fresh agent:** Stage D/E are done bar the dialog-registry
-> lift. All three build configs are green right now.
+**Next:** wire `b.addModule("workbench", …)` + lift workbench off `fizzy.editor`
+(logo atlas draw, `fizzy.editor.host.requestNewDocument`, etc.).
+
+> **Read this first if you're a fresh agent:** Stage D/E + the dialog-registry lift are done.
+> Shell→pixelart surface is now only `pixelart.plugin` (vtable) + `State`/`Globals` (lifecycle).
+> All three build configs are green right now.
 
 All three build configs are green:
 
@@ -289,15 +292,66 @@ app code until the build module is fully wired.
   directly. `Editor.frame` now calls `plugin.beginFrame()` for every registered plugin; the
   pixel-art impl advances its own composite-cache frame clock. **No `pixelart.render` in shell.**
 - ✅ Removed dead `pixelart`/`Packer` imports from `editor/panel/Panel.zig`.
+- ✅ Removed dead `pixelart.explorer.project` re-export from `editor/explorer/Explorer.zig`
+  (the project view is contributed via `Host.registerSidebarView`, not the shell hub).
+- ✅ Removed dead `Plugin.drawBottomPanel` / `drawExplorerPane` vtable hooks — superseded by
+  the `registerSidebarView` / `registerBottomView` registries (see "Multi-plugin readiness").
+
+- ✅ **Dialog-registry lift** (see "Multi-plugin readiness"): all pixel-art dialogs lifted off
+  the shell hub onto plugin vtable hooks. `editor/dialogs/Dialogs.zig` no longer imports
+  `pixelart`; owns only shell-level dialogs (UnsavedClose, AppQuitUnsaved, AboutFizzy, Web*).
 
 **Shell → plugin surface now (grep `pixelart\.X` in `src/editor` + `src/plugins/workbench`):**
-`pixelart.plugin` ×15 (the vtable boundary — intended), `pixelart.dialogs` ×6,
-`pixelart.State` ×2, `pixelart.Globals` ×2, `pixelart.explorer` ×1,
-`"pixelart.menu.edit"` ×1 (a registered-menu **id string**, not a symbol ref).
-The remaining real reaches are `pixelart.dialogs.*` (NewFile/Export/GridLayout/
-FlatRasterSaveWarning/DimensionsLabel re-exported by `editor/dialogs/Dialogs.zig` +
-`UnsavedClose.zig`) and `pixelart.explorer.project` — concrete pixel-art UI the shell still
-constructs directly. Lifting these needs a generic dialog-registry vtable; deferred, not blocking.
+`pixelart.plugin` ×15 (the vtable boundary — intended), `pixelart.State` ×2,
+`pixelart.Globals` ×2, `"pixelart.menu.edit"` ×1 (a registered-menu **id string**, not a
+symbol ref). **No concrete pixel-art type (dialogs/render/explorer/Packer) is named in the
+shell anymore** — only the plugin vtable boundary + lifecycle.
+
+---
+
+## Multi-plugin readiness (context for the upcoming **textedit** plugin)
+
+> Direction (user, 2026-06-19): a textedit plugin will render `.txt`/`.atlas`/`.json` etc.,
+> coexisting in tabs/splits beside pixel-art docs. The bottom panel should likewise host
+> per-plugin tabs (a console plugin one day). **This is NOT current scope** — captured here
+> so the decoupling doesn't bake in single-plugin assumptions.
+
+**Audit result (this session): the architecture is already positioned for all of it.**
+
+| Concern | Mechanism today | textedit slots in by |
+|---------|-----------------|----------------------|
+| Which plugin owns an opened file | `Host.pluginForExtension(ext)` picks lowest `fileTypePriority` across **all** plugins (`Host.zig`) | registering `.txt/.atlas/.json` with a priority |
+| Per-document ops (save/dirty/undo/path/grouping/…) | all route through `DocHandle.owner` vtable (opaque handle; shell never inspects `ptr`) | implementing the doc vtable hooks |
+| Rendering a doc into a tab/split | `Workspace.zig` calls `doc.owner.drawDocument(doc)` — type-agnostic | implementing `drawDocument` |
+| Sidebar/explorer panes | `Host.registerSidebarView(.{id,owner,title,draw[,draw_workspace]})`; shell renders the set (`Sidebar.zig`) | calling `registerSidebarView` |
+| **Bottom panel tabs** | `Host.registerBottomView(.{id,owner,title,draw})`; `Panel.zig` draws a **tab strip when >1 view** + active-view get/set on `Host` | calling `registerBottomView` (a console is just another bottom view) |
+| Menus | `Host.registerMenu` + `contributeMenu` | registering its menus |
+
+So tabs/splits and multi-plugin bottom panels are **already** registry-driven, not
+pixelart-hardcoded. No corner-painting risk found.
+
+**Dialogs — lifted (was the one single-plugin seam, now DONE).** All pixel-art dialog launches
+moved out of the shell hub onto the plugin; the shell never names a plugin dialog:
+
+- **Doc-scoped dialogs** route through `DocHandle.owner` vtable hooks (added to `sdk/Plugin.zig`):
+  - `requestGridLayoutDialog(doc)` — shell `Editor.requestGridLayoutDialog` resolves the active
+    doc and dispatches; launch + `presetFromFile` now live in `dialogs/GridLayout.request`.
+    Removed the old `prepareGridLayoutDialog` hook and the `EditorAPI.requestGridLayoutDialog`
+    round-trip (plugin `CanvasData` calls `GridLayout.request` directly now).
+  - `requestFlatRasterSaveWarning(doc, mode, from_save_all_quit)` — `mode` is the new SDK enum
+    `Plugin.FlatRasterSaveMode {editor_save, save_and_close}`. The save/quit flag is now captured
+    per-dialog in a `_flat_raster_from_quit` data slot instead of an externally-reset module var,
+    so `Editor.abortSaveAllQuit` no longer pokes dialog state.
+- **Type-selecting dialog** (not doc-scoped): `Host.requestNewDocument(parent_path, id_extra)`
+  dispatches to the first plugin advertising `requestNewDocumentDialog` (vtable). Shell
+  `Editor.requestNewFileDialog` and `workbench/files.zig` "New File…" call the Host method;
+  launch lives in `dialogs/NewFile.request`.
+  **TODO(multi-plugin):** with textedit registered, "New File" is ambiguous — turn this into a
+  typed `New > <kind>` chooser (each editor plugin contributes a new-doc kind) instead of
+  first-provider dispatch. The seam (shell decoupled from the dialog impl) is already in place.
+
+Dead dialog re-exports removed in the same pass: `Dialogs.Export`, `Dialogs.drawDimensionsLabel`
+(both had zero shell callers).
 
 ---
 

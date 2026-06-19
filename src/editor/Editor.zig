@@ -572,7 +572,6 @@ const shell_api_vtable: sdk.EditorAPI.VTable = .{
     .transform = shellTransform,
     .save = shellSave,
     .requestCompositeWarmup = shellRequestCompositeWarmup,
-    .requestGridLayoutDialog = shellRequestGridLayoutDialog,
     .allocUntitledPath = shellAllocUntitledPath,
     .createDocument = shellCreateDocument,
     .setExplorerNewFilePath = shellSetExplorerNewFilePath,
@@ -683,9 +682,6 @@ fn shellSave(ctx: *anyopaque) anyerror!void {
 }
 fn shellRequestCompositeWarmup(ctx: *anyopaque) void {
     shellCtx(ctx).requestCompositeWarmup();
-}
-fn shellRequestGridLayoutDialog(ctx: *anyopaque) void {
-    shellCtx(ctx).requestGridLayoutDialog();
 }
 fn shellAllocUntitledPath(ctx: *anyopaque) anyerror![]u8 {
     return shellCtx(ctx).allocNextUntitledPath();
@@ -1792,7 +1788,6 @@ pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
 }
 
 pub fn abortSaveAllQuit(editor: *Editor) void {
-    Dialogs.FlatRasterSaveWarning.pending_from_save_all_quit = false;
     editor.quit_save_all_ids.clearAndFree(fizzy.app.allocator);
     editor.quit_saves_in_flight.clearRetainingCapacity();
     editor.quit_in_progress = false;
@@ -1866,8 +1861,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
             // Flat-raster prompt is a modal dialog — same reason as Save As, do
             // it serially and rejoin afterwards.
             if (editor.open_files.getIndex(id)) |idx| editor.setActiveFile(idx);
-            Dialogs.FlatRasterSaveWarning.pending_from_save_all_quit = true;
-            Dialogs.FlatRasterSaveWarning.request(id, .save_and_close);
+            doc.owner.requestFlatRasterSaveWarning(doc, .save_and_close, true);
             return;
         }
 
@@ -2375,46 +2369,17 @@ pub fn allocNextUntitledPath(editor: *Editor) ![]u8 {
     return std.fmt.allocPrint(fizzy.app.allocator, "untitled-{d}", .{max_n + 1});
 }
 
-/// Opens the Grid Layout dialog for the active file. Uses a custom `windowFn` that matches
-/// `dialogWindow`'s open animation while capping the window to half the main window size; the
-/// dialog can still be resized afterward.
-/// The dialog rebinds the active file via the `_grid_layout_file_id` data slot so the form and
-/// preview can survive frames where `fizzy.editor.activeFile()` momentarily returns null.
+/// Opens the active document owner's grid-layout dialog. The shell only resolves the active
+/// document and dispatches to `doc.owner`; the dialog itself is owned by the plugin.
 pub fn requestGridLayoutDialog(editor: *Editor) void {
     const doc = editor.activeDoc() orelse return;
-    doc.owner.prepareGridLayoutDialog(doc);
-
-    var mutex = fizzy.dvui.dialog(@src(), .{
-        .displayFn = Dialogs.GridLayout.dialog,
-        .callafterFn = Dialogs.GridLayout.callAfter,
-        .windowFn = Dialogs.GridLayout.windowFn,
-        .title = "Grid Layout...",
-        .ok_label = "Apply",
-        .cancel_label = "Cancel",
-        .resizeable = true,
-        .header_kind = .info,
-        .default = .ok,
-    });
-    dvui.dataSet(null, mutex.id, "_grid_layout_file_id", doc.id);
-    // Let `GridLayout.windowFn` run `autoSize` only until the open animation finishes; otherwise
-    // `auto_size` stays true every frame and the shell snaps back to content min (user resize breaks).
-    dvui.dataSet(null, mutex.id, "_grid_dialog_open_done", false);
-    mutex.mutex.unlock(dvui.io);
+    doc.owner.requestGridLayoutDialog(doc);
 }
 
-/// Opens the New File dimensions dialog; on confirm, creates an in-memory `untitled-n` document (or on-disk from explorer when `_parent_path` is set).
-pub fn requestNewFileDialog(_: *Editor) void {
-    var mutex = fizzy.dvui.dialog(@src(), .{
-        .displayFn = Dialogs.NewFile.dialog,
-        .callafterFn = Dialogs.NewFile.callAfter,
-        .title = "New File...",
-        .ok_label = "Create",
-        .cancel_label = "Cancel",
-        .resizeable = false,
-        .header_kind = .info,
-        .default = .ok,
-    });
-    mutex.mutex.unlock(dvui.io);
+/// Opens the New File dialog via the plugin that provides one (dispatched by `Host`); on confirm
+/// the owner creates an in-memory `untitled-n` document (or on-disk when a parent folder is set).
+pub fn requestNewFileDialog(editor: *Editor) void {
+    editor.host.requestNewDocument(null, 0);
 }
 
 pub fn setActiveFile(editor: *Editor, index: usize) void {
@@ -2473,7 +2438,7 @@ pub fn save(editor: *Editor) !void {
         return;
     }
     if (doc.owner.shouldConfirmFlatRasterSave(doc)) {
-        Dialogs.FlatRasterSaveWarning.request(doc.id, .editor_save);
+        doc.owner.requestFlatRasterSaveWarning(doc, .editor_save, false);
         return;
     }
     if (comptime builtin.target.cpu.arch == .wasm32) {

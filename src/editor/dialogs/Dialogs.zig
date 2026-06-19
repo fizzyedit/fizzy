@@ -1,16 +1,13 @@
-const std = @import("std");
 const builtin = @import("builtin");
-const pixelart = @import("pixelart");
 const dvui = @import("dvui");
 
 const Dialogs = @This();
 
-pub const NewFile = pixelart.dialogs.NewFile;
-pub const Export = pixelart.dialogs.Export;
+// Plugin-owned dialogs (New File, Grid Layout, Export, Flat-raster save warning) are no longer
+// re-exported here. The shell triggers them through plugin vtable hooks / `Host.requestNewDocument`
+// so it never names a plugin's dialog implementation. This hub owns only shell-level dialogs.
 pub const UnsavedClose = @import("UnsavedClose.zig");
 pub const AppQuitUnsaved = @import("AppQuitUnsaved.zig");
-pub const GridLayout = pixelart.dialogs.GridLayout;
-pub const FlatRasterSaveWarning = pixelart.dialogs.FlatRasterSaveWarning;
 pub const AboutFizzy = @import("AboutFizzy.zig");
 pub const WebFolderUnavailable = if (builtin.target.cpu.arch == .wasm32)
     @import("WebFolderUnavailable.zig")
@@ -31,14 +28,3 @@ else
             return false;
         }
     };
-
-pub fn drawDimensionsLabel(
-    src: std.builtin.SourceLocation,
-    width: u32,
-    height: u32,
-    font: dvui.Font,
-    unit: []const u8,
-    opts: dvui.Options,
-) void {
-    pixelart.dialogs.DimensionsLabel.drawDimensionsLabel(src, width, height, font, unit, opts);
-}

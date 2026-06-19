@@ -212,9 +212,6 @@ pub fn requestCompositeWarmup(self: *Host) void {
     if (self.shell_api) |a| a.requestCompositeWarmup();
 }
 
-pub fn requestGridLayoutDialog(self: *Host) void {
-    if (self.shell_api) |a| a.requestGridLayoutDialog();
-}
 
 pub fn allocUntitledPath(self: *Host) ![]u8 {
     return if (self.shell_api) |a| try a.allocUntitledPath() else error.ShellNotInstalled;
@@ -397,4 +394,18 @@ pub fn pluginForExtension(self: *Host, ext: []const u8) ?*Plugin {
         }
     }
     return best;
+}
+
+/// Open a "new document" dialog. `parent_path` (when set) targets an on-disk folder; `id_extra`
+/// disambiguates launches from distinct explorer rows. Dispatches to the first plugin that
+/// provides a new-document dialog.
+/// TODO(multi-plugin): with >1 editor plugin, present a typed "New > <kind>" chooser instead of
+/// picking the first provider.
+pub fn requestNewDocument(self: *Host, parent_path: ?[]const u8, id_extra: usize) void {
+    for (self.plugins.items) |plugin| {
+        if (plugin.vtable.requestNewDocumentDialog) |f| {
+            f(plugin.state, parent_path, id_extra);
+            return;
+        }
+    }
 }

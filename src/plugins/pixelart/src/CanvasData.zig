@@ -14,6 +14,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const FileWidget = @import("widgets/FileWidget.zig");
 const Export = @import("dialogs/Export.zig");
+const GridLayout = @import("dialogs/GridLayout.zig");
 const pixelart = @import("../pixelart.zig");
 const Globals = pixelart.Globals;
 
@@ -1054,7 +1055,9 @@ pub fn drawEditPill(self: *CanvasData, container: *dvui.WidgetData) void {
                 .transform => Globals.state.host.transform() catch {
                     dvui.log.err("Failed to start transform", .{});
                 },
-                .grid_layout => Globals.state.host.requestGridLayoutDialog(),
+                .grid_layout => {
+                    if (Globals.state.host.activeDoc()) |doc| GridLayout.request(doc.id);
+                },
             }
         }
     }

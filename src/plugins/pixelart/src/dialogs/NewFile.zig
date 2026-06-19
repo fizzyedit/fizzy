@@ -18,6 +18,27 @@ pub var row_height: u32 = 32;
 pub const max_size: [2]u32 = .{ 4096, 4096 };
 pub const min_size: [2]u32 = .{ 1, 1 };
 
+/// Open the "New File" dimensions dialog. When `parent_path` is set the new document is created
+/// on disk inside that folder (explorer-initiated); otherwise an in-memory `untitled-n` is made.
+/// `id_extra` disambiguates dialogs launched from distinct explorer rows.
+pub fn request(parent_path: ?[]const u8, id_extra: usize) void {
+    var mutex = pixelart.core.dvui.dialog(@src(), .{
+        .displayFn = dialog,
+        .callafterFn = callAfter,
+        .title = "New File...",
+        .ok_label = "Create",
+        .cancel_label = "Cancel",
+        .resizeable = false,
+        .header_kind = .info,
+        .default = .ok,
+        .id_extra = id_extra,
+    });
+    // `dataSetSlice` copies the bytes into dvui's per-widget store, so the borrowed slice
+    // only needs to be valid for this call.
+    if (parent_path) |p| dvui.dataSetSlice(null, mutex.id, "_parent_path", p);
+    mutex.mutex.unlock(dvui.io);
+}
+
 pub fn dialog(id: dvui.Id) anyerror!bool {
     const entry_font = dvui.Font.theme(.mono).larger(-2);
 

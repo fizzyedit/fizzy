@@ -3,21 +3,15 @@ const dvui = @import("dvui");
 const pixelart = @import("../../pixelart.zig");
 const Globals = pixelart.Globals;
 
-/// When `pending_mode == .save_and_close`, resume `Editor.advanceSaveAllQuit` after flat save.
-pub var pending_from_save_all_quit: bool = false;
+pub const Mode = pixelart.sdk.Plugin.FlatRasterSaveMode;
 
 pub var pending_mode: Mode = .editor_save;
 
-pub const Mode = enum {
-    editor_save,
-    save_and_close,
-};
-
-pub fn request(file_id: u64, mode: Mode) void {
+/// Open the flat-raster save confirmation for `file_id`. `from_save_all_quit` (whether this
+/// request was issued during the shell's quit walk) is captured per-dialog in a data slot so
+/// no externally-mutated module flag has to be reset when the quit walk aborts.
+pub fn request(file_id: u64, mode: Mode, from_save_all_quit: bool) void {
     pending_mode = mode;
-    if (mode == .editor_save) {
-        pending_from_save_all_quit = false;
-    }
     var mutex = pixelart.core.dvui.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
@@ -31,6 +25,7 @@ pub fn request(file_id: u64, mode: Mode) void {
         .header_kind = .warning,
     });
     dvui.dataSet(null, mutex.id, "_flat_raster_file_id", file_id);
+    dvui.dataSet(null, mutex.id, "_flat_raster_from_quit", from_save_all_quit);
     mutex.mutex.unlock(dvui.io);
 }
 
@@ -62,6 +57,7 @@ fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: 
 
 pub fn dialog(id: dvui.Id) anyerror!bool {
     const file_id = dvui.dataGet(null, id, "_flat_raster_file_id", u64) orelse return false;
+    const from_quit = dvui.dataGet(null, id, "_flat_raster_from_quit", bool) orelse false;
     const file = fileRef(file_id) orelse return false;
 
     const ext_raw = std.fs.path.extension(file.path);
@@ -103,7 +99,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
     if (dialogButton(@src(), ext_disp, .control, 2, 1)) {
-        try onChooseFlatRaster(file_id);
+        try onChooseFlatRaster(file_id, from_quit);
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
     if (dialogButton(@src(), "Cancel", .control, 3, 2)) {
@@ -123,7 +119,7 @@ fn onChooseFizzy(file_id: u64) !void {
     Globals.state.host.requestSaveAs();
 }
 
-fn onChooseFlatRaster(file_id: u64) !void {
+fn onChooseFlatRaster(file_id: u64, from_save_all_quit: bool) !void {
     const f = fileRef(file_id) orelse return;
     switch (pending_mode) {
         .editor_save => {
@@ -144,10 +140,10 @@ fn onChooseFlatRaster(file_id: u64) !void {
             // otherwise this is a single-doc save-and-close.
             f.saveAsync() catch |err| {
                 dvui.log.err("Save failed: {s}", .{@errorName(err)});
-                if (pending_from_save_all_quit) Globals.state.host.abortSaveAllQuit();
+                if (from_save_all_quit) Globals.state.host.abortSaveAllQuit();
                 return;
             };
-            if (pending_from_save_all_quit) {
+            if (from_save_all_quit) {
                 Globals.state.host.trackQuitSaveInFlight(file_id) catch |err| {
                     dvui.log.err("Save all quit track: {s}", .{@errorName(err)});
                     Globals.state.host.abortSaveAllQuit();

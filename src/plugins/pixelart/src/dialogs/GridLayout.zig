@@ -85,6 +85,33 @@ const anchors: [9]pixelart.math.layout_anchor.LayoutAnchor = .{
 
 const anchor_labels = [_][]const u8{ "NW", "N", "NE", "W", "C", "E", "SW", "S", "SE" };
 
+/// Open the Grid Layout dialog for the document `file_id`. Seeds the form from the file's
+/// current grid, then launches the floating dialog. Uses a custom `windowFn` that matches
+/// `dialogWindow`'s open animation while capping the window to half the main window size.
+/// The `_grid_layout_file_id` slot rebinds the active file so the form/preview survive frames
+/// where the active document momentarily resolves null.
+pub fn request(file_id: u64) void {
+    const file = Globals.state.docs.fileById(file_id) orelse return;
+    presetFromFile(file);
+
+    var mutex = pixelart.core.dvui.dialog(@src(), .{
+        .displayFn = dialog,
+        .callafterFn = callAfter,
+        .windowFn = windowFn,
+        .title = "Grid Layout...",
+        .ok_label = "Apply",
+        .cancel_label = "Cancel",
+        .resizeable = true,
+        .header_kind = .info,
+        .default = .ok,
+    });
+    dvui.dataSet(null, mutex.id, "_grid_layout_file_id", file_id);
+    // Let `windowFn` run `autoSize` only until the open animation finishes; otherwise
+    // `auto_size` stays true every frame and the shell snaps back to content min (user resize breaks).
+    dvui.dataSet(null, mutex.id, "_grid_dialog_open_done", false);
+    mutex.mutex.unlock(dvui.io);
+}
+
 /// Seed both mode forms with the active file's current grid so the dialog opens "no-op" by default.
 pub fn presetFromFile(file: *pixelart.internal.File) void {
     resize_form = .{

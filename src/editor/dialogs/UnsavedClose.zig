@@ -1,8 +1,6 @@
 const std = @import("std");
 const fizzy = @import("../../fizzy.zig");
-const pixelart = @import("pixelart");
 const dvui = @import("dvui");
-const FlatRasterSaveWarning = pixelart.dialogs.FlatRasterSaveWarning;
 
 pub fn request(file_id: u64) void {
     var mutex = fizzy.dvui.dialog(@src(), .{
@@ -118,9 +116,8 @@ fn onSaveAndClose(file_id: u64) !void {
         return;
     }
     if (doc.owner.shouldConfirmFlatRasterSave(doc)) {
-        FlatRasterSaveWarning.pending_from_save_all_quit = false;
         fizzy.dvui.closeFloatingDialogAnchored();
-        FlatRasterSaveWarning.request(file_id, .save_and_close);
+        doc.owner.requestFlatRasterSaveWarning(doc, .save_and_close, false);
         return;
     }
     try beginSaveAndClose(doc, file_id);

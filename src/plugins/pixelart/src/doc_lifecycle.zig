@@ -8,7 +8,6 @@ const State = pixelart.State;
 const Internal = pixelart.internal;
 const DocHandle = pixelart.sdk.DocHandle;
 const NewDocGrid = pixelart.sdk.EditorAPI.NewDocGrid;
-const GridLayout = @import("dialogs/GridLayout.zig");
 
 fn docFile(st: *State, doc: DocHandle) ?*Internal.File {
     return st.docs.fileById(doc.id);
@@ -72,11 +71,6 @@ pub fn saveDocumentAs(st: *State, doc: DocHandle, path: []const u8, window: *dvu
 pub fn resetDocumentSaveUIState(st: *State, doc: DocHandle) void {
     const file = docFile(st, doc) orelse return;
     file.resetSaveUIState();
-}
-
-pub fn prepareGridLayoutDialog(st: *State, doc: DocHandle) void {
-    const file = docFile(st, doc) orelse return;
-    GridLayout.presetFromFile(file);
 }
 
 pub fn tickOpenDocuments(st: *State) bool {

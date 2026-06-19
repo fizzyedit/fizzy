@@ -23,6 +23,11 @@ id: []const u8,
 /// User-facing name shown in UI.
 display_name: []const u8,
 
+/// Context for an owner's "save would flatten lossy data" confirmation
+/// (`requestFlatRasterSaveWarning`). `editor_save` is a plain in-place save; `save_and_close`
+/// is part of a close/quit flow and resumes the shell close walk once the save settles.
+pub const FlatRasterSaveMode = enum { editor_save, save_and_close };
+
 pub const VTable = struct {
     /// Tear down `state`. Called when the plugin is unregistered / app shuts down.
     deinit: ?*const fn (state: *anyopaque) void = null,
@@ -86,15 +91,26 @@ pub const VTable = struct {
     documentDefaultSaveAsFilename: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 = null,
     saveDocumentAs: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8, window: *dvui.Window) anyerror!void = null,
     resetDocumentSaveUIState: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
-    prepareGridLayoutDialog: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
+    /// Open the owner's "new document" dialog. Not doc-scoped — the host dispatches to a plugin
+    /// that provides one (see `Host.requestNewDocument`). `parent_path` (when set) creates the
+    /// document on disk in that folder; `id_extra` disambiguates per-explorer-row launches.
+    /// TODO(multi-plugin): with >1 editor plugin this becomes a typed "New > <kind>" chooser.
+    requestNewDocumentDialog: ?*const fn (state: *anyopaque, parent_path: ?[]const u8, id_extra: usize) void = null,
+    /// Open the owner's grid-layout dialog for `doc` (pixel-art specific; the shell only
+    /// resolves the active doc and dispatches here so it never names the plugin's dialog).
+    requestGridLayoutDialog: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
+    /// Open the owner's "save would flatten lossy data" confirmation for `doc`. The shell calls
+    /// this when `shouldConfirmFlatRasterSave(doc)` is true; the dialog drives the save through
+    /// the shell save/close API. `from_save_all_quit` marks requests issued during the quit walk.
+    requestFlatRasterSaveWarning: ?*const fn (state: *anyopaque, doc: DocHandle, mode: FlatRasterSaveMode, from_save_all_quit: bool) void = null,
 
     // ---- render hooks (the plugin draws its own dvui UI into the host window) ----
-    /// Draw the plugin's explorer/sidebar pane (left region).
-    drawExplorerPane: ?*const fn (state: *anyopaque) anyerror!void = null,
-    /// Draw an open document (center/workspace region).
+    // Sidebar/explorer panes and bottom-panel tabs are NOT vtable hooks — plugins
+    // contribute them as named, owned views via `Host.registerSidebarView` /
+    // `Host.registerBottomView`, which the shell renders as tab strips when more than
+    // one is registered. Only per-document rendering routes through the vtable below.
+    /// Draw an open document (center/workspace region), dispatched via `DocHandle.owner`.
     drawDocument: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
-    /// Draw the plugin's bottom panel content.
-    drawBottomPanel: ?*const fn (state: *anyopaque) anyerror!void = null,
     /// Draw active-document status into the shell infobar (dimensions, cursor, etc.).
     drawDocumentInfobar: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
 
@@ -373,8 +389,16 @@ pub fn resetDocumentSaveUIState(self: Plugin, doc: DocHandle) void {
     if (self.vtable.resetDocumentSaveUIState) |f| f(self.state, doc);
 }
 
-pub fn prepareGridLayoutDialog(self: Plugin, doc: DocHandle) void {
-    if (self.vtable.prepareGridLayoutDialog) |f| f(self.state, doc);
+pub fn requestFlatRasterSaveWarning(self: Plugin, doc: DocHandle, mode: FlatRasterSaveMode, from_save_all_quit: bool) void {
+    if (self.vtable.requestFlatRasterSaveWarning) |f| f(self.state, doc, mode, from_save_all_quit);
+}
+
+pub fn requestNewDocumentDialog(self: Plugin, parent_path: ?[]const u8, id_extra: usize) void {
+    if (self.vtable.requestNewDocumentDialog) |f| f(self.state, parent_path, id_extra);
+}
+
+pub fn requestGridLayoutDialog(self: Plugin, doc: DocHandle) void {
+    if (self.vtable.requestGridLayoutDialog) |f| f(self.state, doc);
 }
 
 pub fn beginFrame(self: Plugin) void {

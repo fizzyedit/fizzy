@@ -22,6 +22,9 @@ const DocsRegistry = @import("docs_registry.zig");
 const DocBridge = @import("doc_bridge.zig");
 const DocLifecycle = @import("doc_lifecycle.zig");
 const InfobarStatus = @import("infobar_status.zig");
+const GridLayout = @import("dialogs/GridLayout.zig");
+const FlatRasterSaveWarning = @import("dialogs/FlatRasterSaveWarning.zig");
+const NewFile = @import("dialogs/NewFile.zig");
 
 const DocHandle = sdk.DocHandle;
 const Internal = pixelart.internal;
@@ -78,7 +81,9 @@ const vtable: sdk.Plugin.VTable = .{
     .documentDefaultSaveAsFilename = documentDefaultSaveAsFilename,
     .saveDocumentAs = saveDocumentAs,
     .resetDocumentSaveUIState = resetDocumentSaveUIState,
-    .prepareGridLayoutDialog = prepareGridLayoutDialog,
+    .requestNewDocumentDialog = requestNewDocumentDialog,
+    .requestGridLayoutDialog = requestGridLayoutDialog,
+    .requestFlatRasterSaveWarning = requestFlatRasterSaveWarning,
     .drawDocument = drawDocument,
     .drawDocumentInfobar = drawDocumentInfobar,
     .beginFrame = beginFrame,
@@ -537,9 +542,16 @@ fn resetDocumentSaveUIState(state: *anyopaque, doc: DocHandle) void {
     DocLifecycle.resetDocumentSaveUIState(st, doc);
 }
 
-fn prepareGridLayoutDialog(state: *anyopaque, doc: DocHandle) void {
-    const st: *State = @ptrCast(@alignCast(state));
-    DocLifecycle.prepareGridLayoutDialog(st, doc);
+fn requestNewDocumentDialog(_: *anyopaque, parent_path: ?[]const u8, id_extra: usize) void {
+    NewFile.request(parent_path, id_extra);
+}
+
+fn requestGridLayoutDialog(_: *anyopaque, doc: DocHandle) void {
+    GridLayout.request(doc.id);
+}
+
+fn requestFlatRasterSaveWarning(_: *anyopaque, doc: DocHandle, mode: sdk.Plugin.FlatRasterSaveMode, from_save_all_quit: bool) void {
+    FlatRasterSaveWarning.request(doc.id, mode, from_save_all_quit);
 }
 
 fn beginFrame(state: *anyopaque) void {
