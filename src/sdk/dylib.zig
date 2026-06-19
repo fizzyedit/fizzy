@@ -12,6 +12,8 @@ pub const abi_version: u32 = 1;
 /// `std.DynLib.lookup` names for the host loader (5b.3+).
 pub const symbol_abi_version = "fizzy_plugin_abi_version";
 pub const symbol_register = "fizzy_plugin_register";
+/// Mechanism B — host calls each frame (and once at init) before plugin draw/tick.
+pub const symbol_set_dvui_context = "fizzy_plugin_set_dvui_context";
 
 /// Returned by `fizzy_plugin_register`. Stable unsigned values for C callers.
 pub const RegisterStatus = enum(u32) {

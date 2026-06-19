@@ -13,6 +13,8 @@ const comfortaa_bold_ttf = assets.files.fonts.@"Comfortaa-Bold.ttf";
 const plus_jakarta_sans_ttf = assets.files.fonts.@"PlusJakartaSans-Regular.ttf";
 const plus_jakarta_sans_bold_ttf = assets.files.fonts.@"PlusJakartaSans-Bold.ttf";
 
+const build_opts = @import("build_opts");
+
 const fizzy = @import("../fizzy.zig");
 const pixelart = @import("pixelart");
 const dvui = @import("dvui");
@@ -28,6 +30,10 @@ pub const Dialogs = @import("dialogs/Dialogs.zig");
 pub const Keybinds = @import("Keybinds.zig");
 
 const workbench_mod = @import("workbench");
+const PluginLoader = if (builtin.target.cpu.arch == .wasm32)
+    @import("PluginLoader_stub.zig")
+else
+    @import("PluginLoader.zig");
 
 pub const Workspace = workbench_mod.Workspace;
 pub const Explorer = @import("explorer/Explorer.zig");
@@ -62,6 +68,9 @@ pixelart_state: *pixelart.State,
 
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
+
+/// Keeps plugin dylibs mapped while their vtables are live (Phase 5b.3+; native only).
+loaded_plugin_libs: std.ArrayListUnmanaged(PluginLoader.LoadedLib) = .empty,
 
 settings: Settings = undefined,
 recents: Recents = undefined,
@@ -443,6 +452,35 @@ pub fn init(
 /// Stable shell-builtin contribution id.
 pub const view_settings = "shell.settings";
 
+fn loadPixelartFromDylibEnabled() bool {
+    if (comptime builtin.target.cpu.arch == .wasm32) return false;
+    if (comptime build_opts.load_pixelart_dylib) return true;
+    if (std.process.getEnvVar("FIZZY_LOAD_PIXELART_DYLIB")) |v| {
+        return v.len > 0 and v[0] != '0';
+    }
+    return false;
+}
+
+/// Load `{exe_dir}/plugins/libpixelart.*` (or `FIZZY_PLUGIN_PATH`) and register via dylib entry.
+pub fn loadPixelartDylib(editor: *Editor, exe_dir: []const u8) !void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const path = try PluginLoader.resolvePluginPath(fizzy.app.allocator, exe_dir, "pixelart");
+    errdefer fizzy.app.allocator.free(path);
+    const loaded = try PluginLoader.loadAndRegister(&editor.host, path);
+    try editor.loaded_plugin_libs.append(fizzy.app.allocator, loaded);
+    editor.host.installPluginDvuiContext(loaded.set_dvui_context);
+}
+
+fn unloadPluginLibs(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    editor.host.plugin_set_dvui_context = null;
+    for (editor.loaded_plugin_libs.items) |*entry| {
+        entry.lib.close();
+        fizzy.app.allocator.free(entry.path);
+    }
+    editor.loaded_plugin_libs.deinit(fizzy.app.allocator);
+}
+
 pub fn postInit(editor: *Editor) !void {
     // Install the shell's read/utility surface so plugins reach shared shell state
     // (per-frame arena, project folder, content opacity, settings dirty-mark) through
@@ -463,9 +501,15 @@ pub fn postInit(editor: *Editor) !void {
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
     // editor tick already runs on wasm. Order = sidebar order.
     try workbench_mod.plugin.register(&editor.host);
-const pixelart_plugin = pixelart.plugin;
-    try pixelart_plugin.register(&editor.host);
-    try pixelart_plugin.pluginPtr().initPlugin();
+    if (loadPixelartFromDylibEnabled()) {
+        try editor.loadPixelartDylib(fizzy.app.root_path);
+        const pa = editor.host.pluginById("pixelart") orelse return error.MissingPlugin;
+        try pa.initPlugin();
+    } else {
+        const pixelart_plugin = pixelart.plugin;
+        try pixelart_plugin.register(&editor.host);
+        try pixelart_plugin.pluginPtr().initPlugin();
+    }
 
     // Shell built-in: Settings (owner = null; not a plugin).
     try editor.host.registerSidebarView(.{
@@ -487,6 +531,7 @@ const pixelart_plugin = pixelart.plugin;
     // keybind map. The shell already registered its global/navigation/region binds
     // in `Keybinds.register` (during `init`, before this runs), so the two halves
     // are disjoint — no `putNoClobber` clash. Runs on all targets (web included).
+    editor.host.syncPluginDvuiContext();
     const window = dvui.currentWindow();
     for (editor.host.plugins.items) |plugin| try plugin.contributeKeybinds(window);
 
@@ -1134,6 +1179,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.setTitlebarColor();
     editor.setWindowStyle();
 
+    editor.host.syncPluginDvuiContext();
     for (editor.host.plugins.items) |plugin| plugin.beginFrame();
     if (fizzy.perf.record) fizzy.perf.beginFrame();
     defer if (fizzy.perf.record) fizzy.perf.endFrameAndMaybeLog();
@@ -2682,6 +2728,7 @@ pub fn deinit(editor: *Editor) !void {
     editor.explorer.deinit();
 
     editor.workbench.deinitWorkspaces();
+    editor.unloadPluginLibs();
     editor.host.deinit();
     editor.workbench.deinit();
 

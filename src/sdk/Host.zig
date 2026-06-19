@@ -8,6 +8,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const Plugin = @import("Plugin.zig");
+const dvui_context = @import("dvui_context.zig");
 const regions = @import("regions.zig");
 const EditorAPI = @import("EditorAPI.zig");
 const DocHandle = @import("DocHandle.zig");
@@ -32,6 +33,9 @@ pub const FileRowFillColor = struct {
     ctx: ?*anyopaque = null,
     color: *const fn (ctx: ?*anyopaque, color_index: usize) ?dvui.Color,
 };
+
+/// Mechanism B: setter from a loaded plugin dylib; null when all plugins are static.
+plugin_set_dvui_context: ?dvui_context.SetContextFn = null,
 
 allocator: std.mem.Allocator,
 
@@ -101,6 +105,20 @@ pub fn deinit(self: *Host) void {
 /// Install the shell's read/utility surface. Called once during startup.
 pub fn installShell(self: *Host, api: EditorAPI) void {
     self.shell_api = api;
+}
+
+/// Wire a loaded plugin dylib's dvui globals to the host (Mechanism B). Called once
+/// after `dlopen` + `fizzy_plugin_register`; also primes `io` / `ft2lib` / `debug`.
+pub fn installPluginDvuiContext(self: *Host, setter: dvui_context.SetContextFn) void {
+    self.plugin_set_dvui_context = setter;
+    dvui_context.syncHostIntoPlugin(setter);
+}
+
+/// Re-push host dvui pointers into the loaded plugin image. Call at the top of each
+/// frame before plugin draw/tick (updates `current_window` every frame).
+pub fn syncPluginDvuiContext(self: *Host) void {
+    const setter = self.plugin_set_dvui_context orelse return;
+    dvui_context.syncHostIntoPlugin(setter);
 }
 
 /// Per-frame arena allocator (reset every frame; do not free). Asserts the shell is installed.
@@ -382,6 +400,14 @@ pub fn storePluginSettings(self: *Host, id: []const u8, json: []const u8) !void 
 
 pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
     try self.plugins.append(self.allocator, plugin);
+}
+
+/// Lookup a registered plugin by stable id (`"pixelart"`, `"workbench"`, …).
+pub fn pluginById(self: *Host, id: []const u8) ?*Plugin {
+    for (self.plugins.items) |plugin| {
+        if (std.mem.eql(u8, plugin.id, id)) return plugin;
+    }
+    return null;
 }
 
 pub fn registerFileRowFillColor(self: *Host, resolver: FileRowFillColor) !void {

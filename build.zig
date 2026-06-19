@@ -239,6 +239,12 @@ pub fn build(b: *std.Build) !void {
     build_opts.addOption([]const u8, "app_repo_url", app_repo_url);
     build_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
+    const load_pixelart_dylib = b.option(
+        bool,
+        "load-pixelart-dylib",
+        "Load pixelart from plugins/libpixelart.{dylib,so,dll} instead of static register (native dev)",
+    ) orelse false;
+    build_opts.addOption(bool, "load_pixelart_dylib", load_pixelart_dylib);
 
     const step = b.step("update", "update git dependencies");
     step.makeFn = update_step;
@@ -538,6 +544,38 @@ pub fn build(b: *std.Build) !void {
             "Build the pixelart plugin as a dynamic library into zig-out/<target>/plugins/ (native only)",
         );
         pixelart_dylib_step.dependOn(&install_pixelart_dylib.step);
+
+        const plugin_loader_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/editor/PluginLoader.zig"),
+        });
+        plugin_loader_module.addImport("sdk", main_fizzy.sdk_module);
+
+        const plugin_loader_test_opts = b.addOptions();
+        plugin_loader_test_opts.addOptionPath("pixelart_dylib", pixelart_dylib.getEmittedBin());
+
+        const plugin_loader_test_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/plugin_loader_integration.zig"),
+        });
+        plugin_loader_test_module.addImport("sdk", main_fizzy.sdk_module);
+        plugin_loader_test_module.addImport("plugin_loader", plugin_loader_module);
+        plugin_loader_test_module.addOptions("plugin_loader_test_opts", plugin_loader_test_opts);
+
+        const plugin_loader_tests = b.addTest(.{
+            .name = "plugin-loader-tests",
+            .root_module = plugin_loader_test_module,
+        });
+        const run_plugin_loader_tests = b.addRunArtifact(plugin_loader_tests);
+        run_plugin_loader_tests.step.dependOn(&pixelart_dylib.step);
+
+        const test_plugin_loader_step = b.step(
+            "test-plugin-loader",
+            "Build pixelart dylib and run dlopen/register integration test",
+        );
+        test_plugin_loader_step.dependOn(&run_plugin_loader_tests.step);
     }
 
     const package_step = b.step("package", "Velopack release artifacts (strip + vpk); not part of install or run");
@@ -1124,6 +1162,7 @@ const FizzyExecutable = struct {
     zstbi_module: *std.Build.Module,
     msf_gif_module: *std.Build.Module,
     known_folders: *std.Build.Module,
+    sdk_module: *std.Build.Module,
     /// Native-only; `null` on wasm targets.
     pixelart_dylib: ?*std.Build.Step.Compile = null,
 };
@@ -1323,6 +1362,7 @@ fn addFizzyExecutableForTarget(
         .zstbi_module = zstbi_module,
         .msf_gif_module = msf_gif_module,
         .known_folders = known_folders,
+        .sdk_module = sdk_module,
         .pixelart_dylib = pixelart_dylib,
     };
 }
@@ -1425,6 +1465,7 @@ fn addPixelartDylib(
     lib.root_module.export_symbol_names = &[_][]const u8{
         "fizzy_plugin_abi_version",
         "fizzy_plugin_register",
+        "fizzy_plugin_set_dvui_context",
     };
     return lib;
 }
