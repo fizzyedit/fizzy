@@ -15,7 +15,6 @@ const plus_jakarta_sans_bold_ttf = assets.files.fonts.@"PlusJakartaSans-Bold.ttf
 
 const fizzy = @import("../fizzy.zig");
 const pixelart = @import("pixelart");
-const Internal = pixelart.internal;
 const dvui = @import("dvui");
 const update_notify = @import("../backend/update_notify.zig");
 
@@ -84,8 +83,8 @@ themes: std.ArrayList(dvui.Theme) = .empty,
 
 open_files: std.AutoArrayHashMapUnmanaged(u64, sdk.DocHandle) = .empty,
 
-/// Background file-load jobs in flight. Keyed by absolute path. Each job's worker thread runs
-/// `Internal.File.fromPath` off the main thread; the main thread polls via `processLoadingJobs`
+/// Background file-load jobs in flight. Keyed by absolute path. Each job's worker thread loads
+/// the document bytes off the main thread; the main thread polls via `processLoadingJobs`
 /// and moves completed results into `open_files`. The map owns its key strings via each job's
 /// `path` allocation; the StringHashMap stores key slices that point into job memory.
 loading_jobs: std.StringHashMapUnmanaged(*FileLoadJob) = .empty,
@@ -270,10 +269,7 @@ pub fn init(
         Settings.loadPluginStore(app.allocator, settings_path, &editor.host.plugin_settings);
     }
 
-    // Start the long-lived save-queue worker. All .fiz async saves get
-    // serialized through this single thread (see `File.SaveQueue`); concurrent
-    // worker spawns were causing one save to wedge under contention.
-    try Internal.File.initSaveQueue();
+    // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
 
     { // Setup themes
         var fizzy_dark = dvui.themeGet();
@@ -482,6 +478,7 @@ pub fn postInit(editor: *Editor) !void {
     try @import("../plugins/workbench/src/plugin.zig").register(&editor.host);
 const pixelart_plugin = pixelart.plugin;
     try pixelart_plugin.register(&editor.host);
+    try pixelart_plugin.pluginPtr().initPlugin();
 
     // Shell built-in: Settings (owner = null; not a plugin).
     try editor.host.registerSidebarView(.{
@@ -694,15 +691,7 @@ fn shellAllocUntitledPath(ctx: *anyopaque) anyerror![]u8 {
     return shellCtx(ctx).allocNextUntitledPath();
 }
 fn shellCreateDocument(ctx: *anyopaque, path: []const u8, grid: sdk.EditorAPI.NewDocGrid) anyerror!sdk.DocHandle {
-    const editor = shellCtx(ctx);
-    const file = try editor.newFile(path, .{
-        .columns = grid.columns,
-        .rows = grid.rows,
-        .column_width = grid.column_width,
-        .row_height = grid.row_height,
-    });
-    const owner = pixelart.plugin.pluginPtr();
-    return .{ .ptr = file, .owner = owner, .id = file.id };
+    return shellCtx(ctx).newFile(path, grid);
 }
 fn shellSetExplorerNewFilePath(ctx: *anyopaque, path: []const u8) anyerror!void {
     const Files = fizzy.Explorer.files;
@@ -747,19 +736,15 @@ fn shellIsPackingActive(ctx: *anyopaque) bool {
     return shellCtx(ctx).isPackingActive();
 }
 
-/// Resolve a shell `DocHandle` to the plugin-owned file (shell-internal; workbench uses `DocHandle` + owner hooks).
-fn fileFromDoc(editor: *Editor, doc: sdk.DocHandle) *Internal.File {
-    _ = editor;
-    return @ptrCast(@alignCast(doc.owner.documentPtr(doc.id).?));
+/// Store a loaded/created document in the plugin registry and register its handle.
+pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
+    const ptr = try owner.registerOpenDocument(doc_buf);
+    try editor.open_files.put(fizzy.app.allocator, id, .{
+        .ptr = ptr,
+        .owner = owner,
+        .id = id,
+    });
 }
-
-/// Resolve an open document id to the plugin-owned file (shell-internal).
-fn fileById(editor: *Editor, id: u64) ?*Internal.File {
-    const doc = editor.docById(id) orelse return null;
-    const ptr = doc.owner.documentPtr(doc.id) orelse return null;
-    return @ptrCast(@alignCast(ptr));
-}
-
 pub fn docAt(editor: *Editor, index: usize) ?sdk.DocHandle {
     if (index >= editor.open_files.values().len) return null;
     return editor.open_files.values()[index];
@@ -798,18 +783,6 @@ pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
 
 pub fn bindDocToPane(_: *Editor, doc: sdk.DocHandle, canvas_id: dvui.Id, workspace: *anyopaque, center: bool) void {
     doc.owner.bindDocumentToPane(doc, canvas_id, workspace, center);
-}
-
-/// Store a loaded/created document in the plugin registry and register its handle.
-pub fn insertOpenDoc(editor: *Editor, file: Internal.File, owner: *sdk.Plugin) !void {
-    var file_mut = file;
-    const ptr = try owner.registerOpenDocument(&file_mut);
-    try editor.open_files.put(fizzy.app.allocator, file.id, .{
-        // `ptr` is a hint only; consumers must resolve via `fileFromDoc` / `doc.id`.
-        .ptr = ptr,
-        .owner = owner,
-        .id = file.id,
-    });
 }
 
 /// Ensures `{config}/Themes` exists and scans `*.json` for future user themes (loaded entries are prepended before Fizzy themes).
@@ -938,8 +911,8 @@ pub fn markSettingsDirty(editor: *Editor) void {
 }
 
 fn activelyDrawing(editor: *Editor) bool {
-    for (editor.open_files.values()) |doc| {
-        if (editor.fileFromDoc(doc).editor.active_drawing) return true;
+    for (editor.host.plugins.items) |plugin| {
+        if (plugin.isAnyDocumentActivelyDrawing()) return true;
     }
     return false;
 }
@@ -1033,10 +1006,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Drain any "Save and Close" requests whose async save has settled.
     editor.tickPendingSaveCloses();
     var needs_save_status_anim_tick = false;
-    for (editor.open_files.values()) |doc| {
-        const f = editor.fileFromDoc(doc);
-        f.tickSaveDoneFlash();
-        if (f.showsSaveStatusIndicator()) needs_save_status_anim_tick = true;
+    for (editor.host.plugins.items) |plugin| {
+        if (plugin.tickOpenDocuments()) needs_save_status_anim_tick = true;
     }
     // Re-poll the quit walker while saves are in flight on worker threads.
     if (editor.quit_saves_in_flight.count() > 0) editor.pending_quit_continue = true;
@@ -1060,7 +1031,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
         var dirty_n: usize = 0;
         for (editor.open_files.values()) |doc| {
-            if (editor.fileFromDoc(doc).dirty()) dirty_n += 1;
+            if (doc.owner.isDirty(doc)) dirty_n += 1;
         }
         if (dirty_n == 0) continue;
 
@@ -1078,7 +1049,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.setTitlebarColor();
     editor.setWindowStyle();
 
-    pixelart.render.frame_index +%= 1;
+    for (editor.host.plugins.items) |plugin| plugin.beginFrame();
     if (fizzy.perf.record) fizzy.perf.beginFrame();
     defer if (fizzy.perf.record) fizzy.perf.endFrameAndMaybeLog();
 
@@ -1098,31 +1069,14 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
     if (editor.pending_composite_warmup) {
         editor.pending_composite_warmup = false;
-        if (editor.activeFile()) |file| {
-            const w = file.width();
-            const h = file.height();
-            if (w > 0 and h > 0) {
-                const area = @as(u64, w) * @as(u64, h);
-                // Skip tiny canvases; large docs benefit most from moving split-target work off the first stroke.
-                if (area >= 512 * 512) {
-                    pixelart.render.warmupDrawingComposites(file) catch |err| {
-                        dvui.log.err("Composite warmup failed: {any}", .{err});
-                    };
-                }
-            }
-        }
+        for (editor.host.plugins.items) |plugin| plugin.warmupActiveDocumentComposites();
     }
 
     {
         var any_drawing = false;
-        fizzy.perf.draw_stroke_buf_count = 0; // no active stroke → 0; else first active file's map size
-        for (editor.open_files.values()) |doc| {
-            const file = editor.fileFromDoc(doc);
-            if (file.editor.active_drawing) {
-                any_drawing = true;
-                fizzy.perf.draw_stroke_buf_count = file.buffers.stroke.pixels.count();
-                break;
-            }
+        fizzy.perf.draw_stroke_buf_count = 0;
+        for (editor.host.plugins.items) |plugin| {
+            if (plugin.isAnyDocumentActivelyDrawing()) any_drawing = true;
         }
         fizzy.perf.drawFrameBegin(any_drawing);
     }
@@ -1309,38 +1263,13 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         );
         defer base_box.deinit();
 
-        // Advance the animation frame if we are in play mode
-        if (editor.activeFile()) |file| {
-            if (file.editor.playing) {
-                if (file.selected_animation_index) |index| {
-                    const animation = file.animations.get(index);
-
-                    if (animation.frames.len > 0) {
-                        if (dvui.timerDoneOrNone(base_box.data().id)) {
-                            if (file.selected_animation_frame_index >= animation.frames.len - 1) {
-                                file.selected_animation_frame_index = 0;
-                            } else {
-                                file.selected_animation_frame_index += 1;
-                            }
-                            const millis_per_frame = animation.frames[file.selected_animation_frame_index].ms;
-
-                            dvui.timer(base_box.data().id, @intCast(millis_per_frame * 1000));
-                        }
-                    }
-                }
-            }
+        for (editor.host.plugins.items) |plugin| {
+            plugin.tickActiveDocumentPlayback(base_box.data().id);
         }
 
         // Always reset the peek layer index back, but we need to do this outside of the file widget so
         // other editor windows can use it
-        defer for (editor.open_files.values()) |doc| {
-            const file = editor.fileFromDoc(doc);
-            if (file.editor.isolate_layer) {
-                file.peek_layer_index = file.selected_layer_index;
-            } else {
-                file.peek_layer_index = null;
-            }
-        };
+        defer for (editor.host.plugins.items) |plugin| plugin.resetDocumentPeekLayers();
 
         // Sidebar area
         // Since sidebar is drawn before the explorer, and we want to allow expanding the explorer
@@ -1482,7 +1411,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             defer editor.panel.paned.deinit();
 
             if (!editor.panel.paned.dragging) {
-                if (editor.activeFile()) |_| {
+                if (editor.activeDoc() != null) {
                     if ((editor.panel.paned.split_ratio.* == 1.0 and !editor.panel.paned.collapsed()) and fizzy.editor.settings.panel_ratio > 0.0) {
                         editor.panel.paned.animateSplit(1.0 - fizzy.editor.settings.panel_ratio, dvui.easing.outQuint);
                     }
@@ -1653,42 +1582,42 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
             editor.requestSaveAs();
         },
         .copy => {
-            if (editor.activeFile() != null) {
+            if (editor.activeDoc() != null) {
                 editor.copy() catch {
                     std.log.err("Failed to copy", .{});
                 };
             }
         },
         .paste => {
-            if (editor.activeFile() != null) {
+            if (editor.activeDoc() != null) {
                 editor.paste() catch {
                     std.log.err("Failed to paste", .{});
                 };
             }
         },
         .undo => {
-            if (editor.activeFile()) |file| {
-                file.history.undoRedo(file, .undo) catch {
+            if (editor.activeDoc()) |doc| {
+                doc.owner.undo(doc) catch {
                     std.log.err("Failed to undo", .{});
                 };
             }
         },
         .redo => {
-            if (editor.activeFile()) |file| {
-                file.history.undoRedo(file, .redo) catch {
+            if (editor.activeDoc()) |doc| {
+                doc.owner.redo(doc) catch {
                     std.log.err("Failed to redo", .{});
                 };
             }
         },
         .transform => {
-            if (editor.activeFile() != null) {
+            if (editor.activeDoc() != null) {
                 editor.transform() catch {
                     std.log.err("Failed to transform", .{});
                 };
             }
         },
         .grid_layout => {
-            if (editor.activeFile() != null) {
+            if (editor.activeDoc() != null) {
                 editor.requestGridLayoutDialog();
             }
         },
@@ -1734,17 +1663,16 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
 
     // Create workspaces for each grouping ID
     for (editor.open_files.values()) |doc| {
-        const file = editor.fileFromDoc(doc);
-        if (!editor.workspaces.contains(file.editor.grouping)) {
-            var workspace: fizzy.Editor.Workspace = .init(file.editor.grouping);
+        const grouping = editor.docGrouping(doc);
+        if (!editor.workspaces.contains(grouping)) {
+            var workspace: fizzy.Editor.Workspace = .init(grouping);
             for (editor.open_files.values()) |d| {
-                const f = editor.fileFromDoc(d);
-                if (f.editor.grouping == file.editor.grouping) {
-                    workspace.open_file_index = editor.open_files.getIndex(f.id) orelse 0;
+                if (editor.docGrouping(d) == grouping) {
+                    workspace.open_file_index = editor.open_files.getIndex(d.id) orelse 0;
                 }
             }
 
-            editor.workspaces.put(fizzy.app.allocator, file.editor.grouping, workspace) catch |err| {
+            editor.workspaces.put(fizzy.app.allocator, grouping, workspace) catch |err| {
                 std.log.err("Failed to create workspace: {s}", .{@errorName(err)});
                 return err;
             };
@@ -1759,8 +1687,7 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
 
         var contains: bool = false;
         for (editor.open_files.values()) |doc| {
-            const file = editor.fileFromDoc(doc);
-            if (file.editor.grouping == workspace.grouping) {
+            if (editor.docGrouping(doc) == workspace.grouping) {
                 contains = true;
                 break;
             }
@@ -1784,8 +1711,8 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
 
     // Ensure the selected file for each workspace is still valid
     for (editor.workspaces.values()) |*workspace| {
-        if (editor.getFile(workspace.open_file_index)) |file| {
-            if (file.editor.grouping == workspace.grouping) {
+        if (editor.docAt(workspace.open_file_index)) |doc| {
+            if (editor.docGrouping(doc) == workspace.grouping) {
                 continue;
             }
         }
@@ -1793,9 +1720,8 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
         var i: usize = editor.open_files.count();
         while (i > 0) {
             i -= 1;
-
-            if (editor.getFile(i)) |file| {
-                if (file.editor.grouping == workspace.grouping) {
+            if (editor.docAt(i)) |d| {
+                if (editor.docGrouping(d) == workspace.grouping) {
                     workspace.open_file_index = i;
                     break;
                 }
@@ -1887,8 +1813,8 @@ fn tickPendingSaveCloses(editor: *Editor) void {
     var i: usize = 0;
     while (i < editor.pending_close_after_save.count()) {
         const id = editor.pending_close_after_save.keys()[i];
-        if (editor.fileById(id)) |f| {
-            if (f.isSaving()) {
+        if (editor.docById(id)) |doc| {
+            if (doc.owner.isDocumentSaving(doc)) {
                 i += 1;
                 continue;
             }
@@ -1917,16 +1843,16 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
     // Pass 1: kick off any queued saves we haven't started yet.
     while (editor.quit_save_all_ids.items.len > 0) {
         const id = editor.quit_save_all_ids.items[0];
-        const file_ptr = editor.fileById(id) orelse {
+        const doc = editor.docById(id) orelse {
             _ = editor.quit_save_all_ids.swapRemove(0);
             continue;
         };
-        if (!file_ptr.dirty()) {
+        if (!doc.owner.isDirty(doc)) {
             _ = editor.quit_save_all_ids.swapRemove(0);
             continue;
         }
 
-        if (!Internal.File.hasRecognizedSaveExtension(file_ptr.path)) {
+        if (!doc.owner.documentHasRecognizedSaveExtension(doc)) {
             // Save As dialog needs a single active file — bail out of the parallel
             // kickoff for this one and let the existing Save As + pending_close_file_id
             // flow handle it. Next frame, pending_quit_continue will re-enter us.
@@ -1936,7 +1862,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
             editor.requestSaveAs();
             return;
         }
-        if (file_ptr.shouldConfirmFlatRasterSave()) {
+        if (doc.owner.shouldConfirmFlatRasterSave(doc)) {
             // Flat-raster prompt is a modal dialog — same reason as Save As, do
             // it serially and rejoin afterwards.
             if (editor.open_files.getIndex(id)) |idx| editor.setActiveFile(idx);
@@ -1946,7 +1872,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
         }
 
         // Async-safe path: kick off, move to in-flight, drop from queue.
-        file_ptr.saveAsync() catch |err| {
+        doc.owner.saveDocumentAsync(doc) catch |err| {
             dvui.log.err("Save all quit kickoff: {s}", .{@errorName(err)});
             editor.abortSaveAllQuit();
             return;
@@ -1966,8 +1892,8 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
         var i: usize = 0;
         while (i < editor.quit_saves_in_flight.count()) {
             const id = editor.quit_saves_in_flight.keys()[i];
-            if (editor.fileById(id)) |f| {
-                if (f.isSaving()) {
+            if (editor.docById(id)) |doc| {
+                if (doc.owner.isDocumentSaving(doc)) {
                     i += 1;
                     continue;
                 }
@@ -1998,7 +1924,7 @@ pub fn close(app: *App, editor: *Editor) void {
     }
     var dirty_n: usize = 0;
     for (editor.open_files.values()) |doc| {
-        if (editor.fileFromDoc(doc).dirty()) dirty_n += 1;
+        if (doc.owner.isDirty(doc)) dirty_n += 1;
     }
     if (dirty_n > 0) {
         Dialogs.AppQuitUnsaved.request();
@@ -2023,7 +1949,7 @@ pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
 
 pub fn saving(editor: *Editor) bool {
     for (editor.open_files.values()) |doc| {
-        if (editor.fileFromDoc(doc).saving) return true;
+        if (doc.owner.isDocumentSaving(doc)) return true;
     }
     return false;
 }
@@ -2064,8 +1990,7 @@ pub fn clearFileTreeTabDragDropState(editor: *Editor) void {
 pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
     // Already open? Just focus it.
     for (editor.open_files.values(), 0..) |doc, i| {
-        const file = editor.fileFromDoc(doc);
-        if (std.mem.eql(u8, file.path, path)) {
+        if (std.mem.eql(u8, editor.docPath(doc), path)) {
             editor.setActiveFile(i);
             return false;
         }
@@ -2111,17 +2036,14 @@ pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
     return true;
 }
 
-/// Synchronous open from browser file-picker bytes. Caller owns `path` on success (stored in `File.path`).
-pub fn openFileFromBytes(editor: *Editor, path: []u8, bytes: []const u8, grouping: u64) !Internal.File {
-    for (editor.open_files.values()) |doc| {
-        const file = editor.fileFromDoc(doc);
-        if (std.mem.eql(u8, file.path, path)) {
-            if (editor.open_files.getIndex(file.id)) |idx| {
-                editor.setActiveFile(idx);
-            }
-            fizzy.app.allocator.free(path);
-            return error.AlreadyOpen;
+/// Synchronous open from browser file-picker bytes. Registers the document and returns its id.
+pub fn openFileFromBytes(editor: *Editor, path: []u8, bytes: []const u8, grouping: u64) !u64 {
+    if (editor.docFromPath(path)) |existing| {
+        if (editor.open_files.getIndex(existing.id)) |idx| {
+            editor.setActiveFile(idx);
         }
+        fizzy.app.allocator.free(path);
+        return error.AlreadyOpen;
     }
 
     const owner = editor.host.pluginForExtension(std.fs.path.extension(path)) orelse {
@@ -2129,8 +2051,10 @@ pub fn openFileFromBytes(editor: *Editor, path: []u8, bytes: []const u8, groupin
         return error.InvalidExtension;
     };
 
-    var file: Internal.File = undefined;
-    const handled = owner.loadDocumentFromBytes(path, bytes, &file) catch |err| {
+    const staging = try owner.allocDocumentBuffer(fizzy.app.allocator);
+    defer fizzy.app.allocator.free(staging.backing);
+
+    const handled = owner.loadDocumentFromBytes(path, bytes, staging.buf.ptr) catch |err| {
         fizzy.app.allocator.free(path);
         return err;
     };
@@ -2138,8 +2062,11 @@ pub fn openFileFromBytes(editor: *Editor, path: []u8, bytes: []const u8, groupin
         fizzy.app.allocator.free(path);
         return error.InvalidFile;
     }
-    file.editor.grouping = grouping;
-    return file;
+
+    owner.setDocumentGroupingOnBuffer(staging.buf.ptr, grouping);
+    const id = owner.documentIdFromBuffer(staging.buf.ptr);
+    try editor.insertOpenDoc(staging.buf.ptr, owner, id);
+    return id;
 }
 
 /// Per-frame sweep called from `tick`. Moves completed load jobs into `open_files`, cleans up
@@ -2164,47 +2091,33 @@ pub fn processLoadingJobs(editor: *Editor) void {
         const phase = job.currentPhase();
         switch (phase) {
             .ready => {
-                if (job.result) |result| {
-                    var file = result;
-                    file.editor.grouping = job.target_grouping;
+                const owner = job.owner;
+                owner.setDocumentGroupingOnBuffer(job.doc_buf.ptr, job.target_grouping);
+                const id = owner.documentIdFromBuffer(job.doc_buf.ptr);
 
-                    const owner = editor.host.pluginForExtension(std.fs.path.extension(file.path)) orelse {
-                        dvui.log.err("No plugin for loaded file: {s}", .{job.path});
-                        var f = file;
-                        f.deinit();
-                        job.destroy();
-                        continue;
-                    };
+                editor.insertOpenDoc(job.doc_buf.ptr, owner, id) catch {
+                    dvui.log.err("Failed to insert loaded file into open_files: {s}", .{job.path});
+                    owner.deinitDocumentBuffer(job.doc_buf.ptr);
+                    job.destroy();
+                    continue;
+                };
 
-                    editor.insertOpenDoc(file, owner) catch {
-                        dvui.log.err("Failed to insert loaded file into open_files: {s}", .{job.path});
-                        // We still own `file` here — clean it up.
-                        var f = file;
-                        f.deinit();
-                        job.destroy();
-                        continue;
-                    };
-
-                    // Focus this file iff it's the most recently requested load. Multiple
-                    // simultaneous loads only auto-focus the latest; others land silently.
-                    const should_focus = editor.last_load_request_path != null and
-                        std.mem.eql(u8, editor.last_load_request_path.?, job.path);
-                    if (should_focus) {
-                        if (editor.open_files.getIndex(file.id)) |idx| {
-                            editor.setActiveFile(idx);
-                            editor.last_load_request_path = null;
-                        }
-                        editor.pending_composite_warmup = true;
+                const should_focus = editor.last_load_request_path != null and
+                    std.mem.eql(u8, editor.last_load_request_path.?, job.path);
+                if (should_focus) {
+                    if (editor.open_files.getIndex(id)) |idx| {
+                        editor.setActiveFile(idx);
+                        editor.last_load_request_path = null;
                     }
-                } else {
-                    dvui.log.err("Load job reported ready but result was null: {s}", .{job.path});
+                    editor.pending_composite_warmup = true;
                 }
             },
             .failed => {
                 dvui.log.err("Failed to open file: {s} ({any})", .{ job.path, job.err });
+                job.owner.deinitDocumentBuffer(job.doc_buf.ptr);
             },
             .cancelled => {
-                // No-op: result already discarded by the worker.
+                job.owner.deinitDocumentBuffer(job.doc_buf.ptr);
             },
             else => {
                 dvui.log.err("Load job finished in unexpected phase {s}: {s}", .{ @tagName(phase), job.path });
@@ -2423,29 +2336,34 @@ pub fn requestCompositeWarmup(editor: *Editor) void {
     editor.pending_composite_warmup = true;
 }
 
-pub fn newFile(editor: *Editor, path: []const u8, options: Internal.File.InitOptions) !*Internal.File {
-    if (editor.getFileFromPath(path)) |_| {
+pub fn newFile(editor: *Editor, path: []const u8, grid: sdk.EditorAPI.NewDocGrid) !sdk.DocHandle {
+    if (editor.docFromPath(path) != null) {
         return error.FileAlreadyExists;
     }
 
-    const file = Internal.File.init(path, options) catch {
+    const owner = pixelart.plugin.pluginPtr();
+    const staging = try owner.allocDocumentBuffer(fizzy.app.allocator);
+    defer fizzy.app.allocator.free(staging.backing);
+
+    owner.createDocument(path, grid, staging.buf.ptr) catch {
+        owner.deinitDocumentBuffer(staging.buf.ptr);
         dvui.log.err("Failed to create file: {s}", .{path});
         return error.FailedToCreateFile;
     };
 
-    try editor.insertOpenDoc(file, pixelart.plugin.pluginPtr());
+    const id = owner.documentIdFromBuffer(staging.buf.ptr);
+    try editor.insertOpenDoc(staging.buf.ptr, owner, id);
     editor.setActiveFile(editor.open_files.count() - 1);
     editor.pending_composite_warmup = true;
 
-    return editor.fileById(file.id) orelse return error.FailedToCreateFile;
+    return editor.docById(id) orelse return error.FailedToCreateFile;
 }
 
 /// Heap-owned path like `untitled-1`, unique among open-document basenames.
 pub fn allocNextUntitledPath(editor: *Editor) ![]u8 {
     var max_n: u32 = 0;
     for (editor.open_files.values()) |doc| {
-        const f = editor.fileFromDoc(doc);
-        const base = std.fs.path.basename(f.path);
+        const base = std.fs.path.basename(editor.docPath(doc));
         if (std.mem.startsWith(u8, base, "untitled-")) {
             const suffix = base["untitled-".len..];
             const n = std.fmt.parseUnsigned(u32, suffix, 10) catch continue;
@@ -2463,9 +2381,8 @@ pub fn allocNextUntitledPath(editor: *Editor) ![]u8 {
 /// The dialog rebinds the active file via the `_grid_layout_file_id` data slot so the form and
 /// preview can survive frames where `fizzy.editor.activeFile()` momentarily returns null.
 pub fn requestGridLayoutDialog(editor: *Editor) void {
-    const file = editor.activeFile() orelse return;
-
-    Dialogs.GridLayout.presetFromFile(file);
+    const doc = editor.activeDoc() orelse return;
+    doc.owner.prepareGridLayoutDialog(doc);
 
     var mutex = fizzy.dvui.dialog(@src(), .{
         .displayFn = Dialogs.GridLayout.dialog,
@@ -2478,7 +2395,7 @@ pub fn requestGridLayoutDialog(editor: *Editor) void {
         .header_kind = .info,
         .default = .ok,
     });
-    dvui.dataSet(null, mutex.id, "_grid_layout_file_id", file.id);
+    dvui.dataSet(null, mutex.id, "_grid_layout_file_id", doc.id);
     // Let `GridLayout.windowFn` run `autoSize` only until the open animation finishes; otherwise
     // `auto_size` stays true every frame and the shell snaps back to content min (user resize breaks).
     dvui.dataSet(null, mutex.id, "_grid_dialog_open_done", false);
@@ -2501,8 +2418,8 @@ pub fn requestNewFileDialog(_: *Editor) void {
 }
 
 pub fn setActiveFile(editor: *Editor, index: usize) void {
-    const file = editor.fileAt(index) orelse return;
-    const grouping = file.editor.grouping;
+    const doc = editor.docAt(index) orelse return;
+    const grouping = editor.docGrouping(doc);
 
     if (editor.workspaces.getPtr(grouping)) |workspace| {
         editor.open_workspace_grouping = grouping;
@@ -2510,54 +2427,20 @@ pub fn setActiveFile(editor: *Editor, index: usize) void {
     }
 }
 
-/// Returns the actively focused file, through workspace grouping.
-pub fn activeFile(editor: *Editor) ?*Internal.File {
-    const doc = editor.activeDoc() orelse return null;
-    return editor.fileFromDoc(doc);
-}
-
-pub fn getFile(editor: *Editor, index: usize) ?*Internal.File {
-    return editor.fileAt(index);
-}
-
-pub fn fileAt(editor: *Editor, index: usize) ?*Internal.File {
-    const doc = editor.docAt(index) orelse return null;
-    return editor.fileFromDoc(doc);
-}
-
-pub fn getFileFromPath(editor: *Editor, path: []const u8) ?*Internal.File {
-    const doc = editor.docFromPath(path) orelse return null;
-    return editor.fileFromDoc(doc);
-}
-
 pub fn forceCloseFile(editor: *Editor, index: usize) !void {
-    if (editor.getFile(index) != null) {
+    if (editor.docAt(index) != null) {
         return editor.rawCloseFile(index);
     }
 }
 
 pub fn accept(editor: *Editor) !void {
-    if (editor.activeFile()) |file| {
-        if (file.editor.transform) |*t| {
-            t.accept();
-        }
-    }
+    _ = editor;
+    pixelart.plugin.pluginPtr().acceptEdit();
 }
 
 pub fn cancel(editor: *Editor) !void {
-    if (editor.activeFile()) |file| {
-        if (file.editor.transform) |*t| {
-            t.cancel();
-        }
-
-        if (file.editor.selected_sprites.count() > 0) {
-            file.clearSelectedSprites();
-        }
-
-        if (file.selected_animation_index != null) {
-            file.selected_animation_index = null;
-        }
-    }
+    _ = editor;
+    pixelart.plugin.pluginPtr().cancelEdit();
 }
 
 pub fn copy(editor: *Editor) !void {
@@ -2571,9 +2454,8 @@ pub fn paste(editor: *Editor) !void {
 }
 
 pub fn deleteSelectedContents(editor: *Editor) void {
-    if (editor.activeFile()) |file| {
-        file.deleteSelectedContents();
-    }
+    _ = editor;
+    pixelart.plugin.pluginPtr().deleteSelection();
 }
 
 /// Begins a transform operation on the currently active file.
@@ -2585,29 +2467,27 @@ pub fn transform(editor: *Editor) !void {
 /// Performs a save operation on the currently open file.
 /// Paths without a recognized on-disk extension (e.g. in-memory `untitled-n`) open Save As instead.
 pub fn save(editor: *Editor) !void {
-    const file = editor.activeFile() orelse return;
-    if (!Internal.File.hasRecognizedSaveExtension(file.path)) {
+    const doc = editor.activeDoc() orelse return;
+    if (!doc.owner.documentHasRecognizedSaveExtension(doc)) {
         editor.requestSaveAs();
         return;
     }
-    if (file.shouldConfirmFlatRasterSave()) {
-        Dialogs.FlatRasterSaveWarning.request(file.id, .editor_save);
+    if (doc.owner.shouldConfirmFlatRasterSave(doc)) {
+        Dialogs.FlatRasterSaveWarning.request(doc.id, .editor_save);
         return;
     }
     if (comptime builtin.target.cpu.arch == .wasm32) {
         editor.requestWebSaveDialog(.save);
         return;
     }
-    if (editor.host.pluginForExtension(std.fs.path.extension(file.path))) |plugin| {
-        try plugin.saveDocument(.{ .ptr = file, .owner = plugin, .id = file.id });
-    }
+    try doc.owner.saveDocument(doc);
 }
 
 /// Browser: pick download filename/extension before encoding (`processPendingSaveAs`).
 pub fn requestWebSaveDialog(editor: *Editor, kind: Dialogs.WebSaveAs.Kind) void {
     if (comptime builtin.target.cpu.arch != .wasm32) return;
-    const file = editor.activeFile() orelse return;
-    Dialogs.WebSaveAs.request(std.fs.path.basename(file.path), kind);
+    const doc = editor.activeDoc() orelse return;
+    Dialogs.WebSaveAs.request(std.fs.path.basename(editor.docPath(doc)), kind);
 }
 
 /// Kick off an async save for every dirty file with a recognized extension.
@@ -2617,13 +2497,11 @@ pub fn requestWebSaveDialog(editor: *Editor, kind: Dialogs.WebSaveAs.Kind) void 
 /// Files that are already saving are also skipped (their `saveAsync` no-ops).
 pub fn saveAll(editor: *Editor) !void {
     for (editor.open_files.values()) |doc| {
-        const file = editor.fileFromDoc(doc);
-        if (!file.dirty()) continue;
-        if (!Internal.File.hasRecognizedSaveExtension(file.path)) continue;
-        if (file.shouldConfirmFlatRasterSave()) continue;
-        const plugin = editor.host.pluginForExtension(std.fs.path.extension(file.path)) orelse continue;
-        plugin.saveDocument(.{ .ptr = file, .owner = plugin, .id = file.id }) catch |err| {
-            dvui.log.err("Save All: file {s} failed: {s}", .{ file.path, @errorName(err) });
+        if (!doc.owner.isDirty(doc)) continue;
+        if (!doc.owner.documentHasRecognizedSaveExtension(doc)) continue;
+        if (doc.owner.shouldConfirmFlatRasterSave(doc)) continue;
+        doc.owner.saveDocument(doc) catch |err| {
+            dvui.log.err("Save All: file {s} failed: {s}", .{ editor.docPath(doc), @errorName(err) });
         };
     }
 }
@@ -2636,13 +2514,13 @@ const save_as_dialog_filters: [3]fizzy.backend.DialogFileFilter = .{
 
 /// Opens a Save As dialog: `.fiz` (all layers; `.pixi` also accepted for legacy) or flat `.png` / `.jpg` / `.jpeg` (visible layers composited).
 pub fn requestSaveAs(_: *Editor) void {
-    const active = fizzy.editor.activeFile() orelse return;
-    const def = Internal.File.defaultSaveAsFilename(fizzy.app.allocator, active.path) catch {
+    const doc = fizzy.editor.activeDoc() orelse return;
+    const def = doc.owner.documentDefaultSaveAsFilename(doc, fizzy.app.allocator) catch {
         std.log.err("Failed to build default save-as name", .{});
         return;
     };
     defer fizzy.app.allocator.free(def);
-    const current_file_dir: ?[]const u8 = std.fs.path.dirname(active.path);
+    const current_file_dir: ?[]const u8 = std.fs.path.dirname(fizzy.editor.docPath(doc));
     fizzy.backend.showSaveFileDialog(saveAsDialogCallback, &save_as_dialog_filters, def, current_file_dir);
 }
 
@@ -2660,16 +2538,16 @@ pub fn cancelPendingSaveDialog(editor: *Editor) void {
         }
     }
 
-    const file_id = editor.pending_close_file_id orelse if (editor.activeFile()) |f| f.id else null;
+    const file_id = editor.pending_close_file_id orelse if (editor.activeDoc()) |doc| doc.id else null;
     editor.pending_close_file_id = null;
 
     if (file_id) |id| {
         _ = editor.pending_close_after_save.swapRemove(id);
-        if (editor.fileById(id)) |f| {
-            f.resetSaveUIState();
+        if (editor.docById(id)) |doc| {
+            doc.owner.resetDocumentSaveUIState(doc);
         }
-    } else if (editor.activeFile()) |f| {
-        f.resetSaveUIState();
+    } else if (editor.activeDoc()) |doc| {
+        doc.owner.resetDocumentSaveUIState(doc);
     }
 
     if (editor.quit_save_all_ids.items.len > 0 or editor.quit_in_progress) {
@@ -2697,85 +2575,40 @@ pub fn saveAsDialogCallback(paths: ?[][:0]const u8) void {
 }
 
 fn processPendingSaveAs(editor: *Editor) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) {
-        const path = blk: {
-            if (editor.pending_save_as_path) |p| break :blk p;
+    const path = blk: {
+        if (editor.pending_save_as_path) |p| break :blk p;
+        if (comptime builtin.target.cpu.arch == .wasm32) {
             const WebFileIo = @import("WebFileIo.zig");
             if (WebFileIo.pending_save_filename) |p| break :blk p;
-            return;
-        };
-        const owned_by_editor = editor.pending_save_as_path != null;
-        editor.pending_save_as_path = null;
+        }
+        return;
+    };
+    const owned_by_editor = editor.pending_save_as_path != null;
+    editor.pending_save_as_path = null;
+    if (comptime builtin.target.cpu.arch == .wasm32) {
         if (!owned_by_editor) {
             const WebFileIo = @import("WebFileIo.zig");
             WebFileIo.pending_save_filename = null;
         }
-        defer fizzy.app.allocator.free(path);
-
-        const file = editor.activeFile() orelse return;
-        const ext = std.fs.path.extension(path);
-        const saved: bool = blk: {
-            if (Internal.File.isFizzyExtension(ext)) {
-                file.saveAsFizzy(path, dvui.currentWindow()) catch |err| {
-                    dvui.log.err("Save As: {any}", .{err});
-                    break :blk false;
-                };
-            } else if (std.mem.eql(u8, ext, ".png") or std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) {
-                file.saveAsFlattened(path, dvui.currentWindow()) catch |err| {
-                    dvui.log.err("Save As: {any}", .{err});
-                    break :blk false;
-                };
-            } else {
-                dvui.log.err("Save As: choose extension .fiz, .png, .jpg, or .jpeg (got {s})", .{ext});
-                break :blk false;
-            }
-            break :blk true;
-        };
-        if (!saved) return;
-        if (editor.pending_close_file_id) |cid| {
-            if (file.id == cid) {
-                editor.pending_close_file_id = null;
-                editor.rawCloseFileID(cid) catch |err| {
-                    dvui.log.err("Failed to close file after Save As: {s}", .{@errorName(err)});
-                };
-            }
-        }
-        return;
     }
-    const path = editor.pending_save_as_path orelse return;
-    editor.pending_save_as_path = null;
     defer fizzy.app.allocator.free(path);
 
-    const ext = std.fs.path.extension(path);
-    const file = editor.activeFile() orelse {
+    const doc = editor.activeDoc() orelse {
         editor.pending_close_file_id = null;
         return;
     };
 
-    const saved: bool = blk: {
-        if (Internal.File.isFizzyExtension(ext)) {
-            file.saveAsFizzy(path, dvui.currentWindow()) catch |err| {
-                dvui.log.err("Save As: {any}", .{err});
-                break :blk false;
-            };
-        } else if (std.mem.eql(u8, ext, ".png") or
-            std.mem.eql(u8, ext, ".jpg") or
-            std.mem.eql(u8, ext, ".jpeg"))
-        {
-            file.saveAsFlattened(path, dvui.currentWindow()) catch |err| {
-                dvui.log.err("Save As: {any}", .{err});
-                break :blk false;
-            };
+    doc.owner.saveDocumentAs(doc, path, dvui.currentWindow()) catch |err| {
+        if (err == error.UnsupportedSaveExtension) {
+            dvui.log.err("Save As: choose extension .fiz, .png, .jpg, or .jpeg (got {s})", .{std.fs.path.extension(path)});
         } else {
-            dvui.log.err("Save As: choose extension .fiz, .png, .jpg, or .jpeg (got {s})", .{ext});
-            break :blk false;
+            dvui.log.err("Save As: {any}", .{err});
         }
-        break :blk true;
+        return;
     };
-    if (!saved) return;
 
     if (editor.pending_close_file_id) |cid| {
-        if (file.id == cid) {
+        if (doc.id == cid) {
             editor.pending_close_file_id = null;
             editor.rawCloseFileID(cid) catch |err| {
                 dvui.log.err("Failed to close file after Save As: {s}", .{@errorName(err)});
@@ -2791,19 +2624,13 @@ fn processPendingSaveAs(editor: *Editor) void {
 }
 
 pub fn undo(editor: *Editor) !void {
-    if (editor.activeFile()) |file| {
-        if (editor.host.pluginForExtension(std.fs.path.extension(file.path))) |plugin| {
-            try plugin.undo(.{ .ptr = file, .owner = plugin, .id = file.id });
-        }
-    }
+    const doc = editor.activeDoc() orelse return;
+    try doc.owner.undo(doc);
 }
 
 pub fn redo(editor: *Editor) !void {
-    if (editor.activeFile()) |file| {
-        if (editor.host.pluginForExtension(std.fs.path.extension(file.path))) |plugin| {
-            try plugin.redo(.{ .ptr = file, .owner = plugin, .id = file.id });
-        }
-    }
+    const doc = editor.activeDoc() orelse return;
+    try doc.owner.redo(doc);
 }
 
 pub fn openInFileBrowser(_: *Editor, path: []const u8) !void {
@@ -2832,24 +2659,19 @@ pub fn closeFile(editor: *Editor, index: usize) !void {
 /// Tear down a document via its owning plugin, falling back to a direct `deinit`.
 /// Removes the entry from the plugin's document registry; the shell still removes
 /// the matching `DocHandle` from `open_files`.
-fn closeDocumentResources(editor: *Editor, doc: sdk.DocHandle) void {
-    if (doc.owner.closeDocument(doc)) {
-        doc.owner.unregisterDocument(doc.id);
-        return;
-    }
-    editor.fileFromDoc(doc).deinit();
+fn closeDocumentResources(_: *Editor, doc: sdk.DocHandle) void {
+    _ = doc.owner.closeDocument(doc);
     doc.owner.unregisterDocument(doc.id);
 }
 
 pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     const doc = editor.docAt(index) orelse return;
-    const file = editor.fileFromDoc(doc);
+    const grouping = editor.docGrouping(doc);
 
-    if (editor.workspaces.getPtr(file.editor.grouping)) |workspace| {
+    if (editor.workspaces.getPtr(grouping)) |workspace| {
         if (workspace.open_file_index == index) {
             for (editor.open_files.values(), 0..) |d, i| {
-                const f = editor.fileFromDoc(d);
-                if (f.editor.grouping == workspace.grouping and f.id != file.id) {
+                if (editor.docGrouping(d) == workspace.grouping and d.id != doc.id) {
                     workspace.open_file_index = i;
                     break;
                 }
@@ -2863,13 +2685,12 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
 
 pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     const doc = editor.open_files.get(id) orelse return;
-    const file = editor.fileFromDoc(doc);
+    const grouping = editor.docGrouping(doc);
 
-    if (editor.workspaces.getPtr(file.editor.grouping)) |workspace| {
-        if (workspace.open_file_index == editor.open_files.getIndex(file.id)) {
+    if (editor.workspaces.getPtr(grouping)) |workspace| {
+        if (workspace.open_file_index == editor.open_files.getIndex(doc.id)) {
             for (editor.open_files.values(), 0..) |d, i| {
-                const f = editor.fileFromDoc(d);
-                if (f.editor.grouping == workspace.grouping and f.id != file.id) {
+                if (editor.docGrouping(d) == workspace.grouping and d.id != doc.id) {
                     workspace.open_file_index = i;
                     break;
                 }
@@ -2881,16 +2702,10 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     _ = editor.open_files.orderedRemove(id);
 }
 
-pub fn closeReference(editor: *Editor, index: usize) !void {
-    editor.open_reference_index = 0;
-    var reference: Internal.Reference = editor.open_references.orderedRemove(index);
-    reference.deinit();
-}
-
 pub fn deinit(editor: *Editor) !void {
     // Drain & join the save-queue worker before tearing anything else down. Any
     // queued jobs need to finish writing or be dropped before File data is freed.
-    Internal.File.deinitSaveQueue();
+    for (editor.host.plugins.items) |plugin| plugin.deinit();
     // Signal cancel to any in-flight load workers. They check the flag after `fromPath` returns
     // and discard the result; we can't synchronously join them without blocking quit, so we
     // accept a brief window where a worker may still be running with a discardable result.

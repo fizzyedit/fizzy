@@ -20,6 +20,8 @@ const PackProject = @import("pack_project.zig");
 const TransformOp = @import("transform_op.zig");
 const DocsRegistry = @import("docs_registry.zig");
 const DocBridge = @import("doc_bridge.zig");
+const DocLifecycle = @import("doc_lifecycle.zig");
+const InfobarStatus = @import("infobar_status.zig");
 
 const DocHandle = sdk.DocHandle;
 const Internal = pixelart.internal;
@@ -38,15 +40,25 @@ var plugin: sdk.Plugin = .{
 };
 
 const vtable: sdk.Plugin.VTable = .{
+    .deinit = pluginDeinit,
+    .initPlugin = pluginInit,
     .fileTypePriority = fileTypePriority,
     .contributeKeybinds = contributeKeybinds,
     .loadDocument = loadDocument,
     .loadDocumentFromBytes = loadDocumentFromBytes,
+    .documentStackSize = documentStackSize,
+    .documentStackAlign = documentStackAlign,
+    .documentIdFromBuffer = documentIdFromBuffer,
+    .deinitDocumentBuffer = deinitDocumentBuffer,
+    .setDocumentGroupingOnBuffer = setDocumentGroupingOnBuffer,
+    .createDocument = createDocument,
     .isDirty = isDirty,
     .saveDocument = saveDocument,
     .closeDocument = closeDocument,
     .undo = undo,
     .redo = redo,
+    .canUndo = canUndo,
+    .canRedo = canRedo,
     .registerOpenDocument = registerOpenDocument,
     .documentPtr = documentPtr,
     .documentByPath = documentByPath,
@@ -57,19 +69,34 @@ const vtable: sdk.Plugin.VTable = .{
     .documentPath = documentPath,
     .setDocumentPath = setDocumentPath,
     .documentHasNativeExtension = documentHasNativeExtension,
+    .documentHasRecognizedSaveExtension = documentHasRecognizedSaveExtension,
     .showsSaveStatusIndicator = showsSaveStatusIndicator,
     .isDocumentSaving = isDocumentSaving,
     .shouldConfirmFlatRasterSave = shouldConfirmFlatRasterSave,
     .saveDocumentAsync = saveDocumentAsync,
     .timeSinceSaveCompleteNs = timeSinceSaveCompleteNs,
+    .documentDefaultSaveAsFilename = documentDefaultSaveAsFilename,
+    .saveDocumentAs = saveDocumentAs,
+    .resetDocumentSaveUIState = resetDocumentSaveUIState,
+    .prepareGridLayoutDialog = prepareGridLayoutDialog,
     .drawDocument = drawDocument,
+    .drawDocumentInfobar = drawDocumentInfobar,
+    .beginFrame = beginFrame,
     .tickKeybinds = tickKeybinds,
+    .tickOpenDocuments = tickOpenDocuments,
+    .tickActiveDocumentPlayback = tickActiveDocumentPlayback,
+    .resetDocumentPeekLayers = resetDocumentPeekLayers,
+    .warmupActiveDocumentComposites = warmupActiveDocumentComposites,
+    .isAnyDocumentActivelyDrawing = isAnyDocumentActivelyDrawing,
     .processRadialMenuInput = processRadialMenuInput,
     .radialMenuVisible = radialMenuVisible,
     .drawRadialMenu = drawRadialMenu,
     .transform = pluginTransform,
     .copy = pluginCopy,
     .paste = pluginPaste,
+    .acceptEdit = pluginAcceptEdit,
+    .cancelEdit = pluginCancelEdit,
+    .deleteSelection = pluginDeleteSelection,
     .startPackProject = pluginStartPackProject,
     .isPackingActive = pluginIsPackingActive,
     .tickPackJobs = pluginTickPackJobs,
@@ -262,6 +289,11 @@ fn drawProjectView(_: ?*anyopaque, pane: *sdk.WorkbenchPaneView) anyerror!void {
     }
 }
 
+fn drawDocumentInfobar(state: *anyopaque, doc: DocHandle) anyerror!void {
+    const st: *State = @ptrCast(@alignCast(state));
+    return InfobarStatus.drawDocumentInfobar(st, doc);
+}
+
 fn undo(_: *anyopaque, doc: DocHandle) anyerror!void {
     const file = docFile(doc);
     try file.history.undoRedo(file, .undo);
@@ -270,6 +302,16 @@ fn undo(_: *anyopaque, doc: DocHandle) anyerror!void {
 fn redo(_: *anyopaque, doc: DocHandle) anyerror!void {
     const file = docFile(doc);
     try file.history.undoRedo(file, .redo);
+}
+
+fn canUndo(state: *anyopaque, doc: DocHandle) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.canUndo(st, doc);
+}
+
+fn canRedo(state: *anyopaque, doc: DocHandle) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.canRedo(st, doc);
 }
 
 pub fn register(host: *sdk.Host) !void {
@@ -410,6 +452,11 @@ fn documentHasNativeExtension(state: *anyopaque, doc: DocHandle) bool {
     return DocBridge.documentHasNativeExtension(st, doc);
 }
 
+fn documentHasRecognizedSaveExtension(state: *anyopaque, doc: DocHandle) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocBridge.documentHasRecognizedSaveExtension(st, doc);
+}
+
 fn showsSaveStatusIndicator(state: *anyopaque, doc: DocHandle) bool {
     const st: *State = @ptrCast(@alignCast(state));
     return DocBridge.showsSaveStatusIndicator(st, doc);
@@ -433,6 +480,112 @@ fn saveDocumentAsync(state: *anyopaque, doc: DocHandle) anyerror!void {
 fn timeSinceSaveCompleteNs(state: *anyopaque, doc: DocHandle) ?i128 {
     const st: *State = @ptrCast(@alignCast(state));
     return DocBridge.timeSinceSaveCompleteNs(st, doc);
+}
+
+fn pluginDeinit(state: *anyopaque) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.deinitPlugin(st);
+}
+
+fn pluginInit(state: *anyopaque) anyerror!void {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocLifecycle.initPlugin(st);
+}
+
+fn documentStackSize(state: *anyopaque) usize {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocLifecycle.documentStackSize(st);
+}
+
+fn documentStackAlign(state: *anyopaque) usize {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocLifecycle.documentStackAlign(st);
+}
+
+fn documentIdFromBuffer(state: *anyopaque, doc: *anyopaque) u64 {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocLifecycle.documentIdFromBuffer(st, doc);
+}
+
+fn deinitDocumentBuffer(state: *anyopaque, doc: *anyopaque) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.deinitDocumentBuffer(st, doc);
+}
+
+fn setDocumentGroupingOnBuffer(state: *anyopaque, doc: *anyopaque, grouping: u64) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.setDocumentGroupingOnBuffer(st, doc, grouping);
+}
+
+fn createDocument(state: *anyopaque, path: []const u8, grid: sdk.EditorAPI.NewDocGrid, out_doc: *anyopaque) anyerror!void {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocLifecycle.createDocument(st, path, grid, out_doc);
+}
+
+fn documentDefaultSaveAsFilename(state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocLifecycle.documentDefaultSaveAsFilename(st, doc, allocator);
+}
+
+fn saveDocumentAs(state: *anyopaque, doc: DocHandle, path: []const u8, window: *dvui.Window) anyerror!void {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocLifecycle.saveDocumentAs(st, doc, path, window);
+}
+
+fn resetDocumentSaveUIState(state: *anyopaque, doc: DocHandle) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.resetDocumentSaveUIState(st, doc);
+}
+
+fn prepareGridLayoutDialog(state: *anyopaque, doc: DocHandle) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.prepareGridLayoutDialog(st, doc);
+}
+
+fn beginFrame(state: *anyopaque) void {
+    _ = state;
+    // Advance the per-frame render clock used as a composite-cache invalidation key.
+    pixelart.render.frame_index +%= 1;
+}
+
+fn tickOpenDocuments(state: *anyopaque) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocLifecycle.tickOpenDocuments(st);
+}
+
+fn tickActiveDocumentPlayback(state: *anyopaque, timer_host_id: dvui.Id) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.tickActiveDocumentPlayback(st, timer_host_id);
+}
+
+fn resetDocumentPeekLayers(state: *anyopaque) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.resetDocumentPeekLayers(st);
+}
+
+fn warmupActiveDocumentComposites(state: *anyopaque) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.warmupActiveDocumentComposites(st);
+}
+
+fn isAnyDocumentActivelyDrawing(state: *anyopaque) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    return DocLifecycle.isAnyDocumentActivelyDrawing(st);
+}
+
+fn pluginAcceptEdit(state: *anyopaque) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.acceptEdit(st);
+}
+
+fn pluginCancelEdit(state: *anyopaque) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.cancelEdit(st);
+}
+
+fn pluginDeleteSelection(state: *anyopaque) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    DocLifecycle.deleteSelection(st);
 }
 
 fn pluginPersistProjectFolder(state: *anyopaque) void {

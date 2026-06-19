@@ -9,15 +9,13 @@
 //!
 //! Ownership / threading model:
 //!   - `path` is owned by the job, freed in `destroy()`.
-//!   - `result` is written by the worker, read by the main thread only after `done.load(.acquire)`.
+//!   - `doc_buf` is written by the worker, read by the main thread only after `done.load(.acquire)`.
 //!   - `phase` / `cancelled` are written by either side, read by either side.
 //!   - The job pointer itself is owned by `Editor.loading_jobs`. Worker holds a borrowed pointer
-//!     but only writes through atomic fields + the worker-only `result`/`err`/`canvas_target_grouping` fields.
+//!     but only writes through atomic fields + the worker-only `doc_buf`/`err` fields.
 
 const std = @import("std");
 const fizzy = @import("../../../fizzy.zig");
-const pixelart = @import("pixelart");
-const Internal = pixelart.internal;
 const dvui = @import("dvui");
 const perf = fizzy.perf;
 
@@ -37,48 +35,36 @@ allocator: std.mem.Allocator,
 path: []u8,
 
 /// Plugin that owns this file's extension (resolved on the main thread before spawn).
-/// The worker routes the load through `owner.loadDocument` instead of hardcoding the
-/// pixel-art loader, so open is decoupled from any one editor plugin.
 owner: *fizzy.sdk.Plugin,
 
 /// Workspace grouping the file should land in once loaded.
 target_grouping: u64,
 
-/// Captured at create time on the GUI thread. The worker uses this to wake the main loop
-/// (`dvui.refresh(window, ...)`) the instant the load finishes, so small files don't sit
-/// completed-but-unconsumed waiting for an unrelated input event to tick the editor.
 window: *dvui.Window,
-
-/// Monotonic timestamp (boot clock, nanos) captured on the main thread at job creation.
-/// Compared against the main thread's current `perf.nanoTimestamp` to gate the 150ms toast
-/// threshold. Only read on the main thread.
 started_at_ns: i128,
 
-/// Atomic phase, written by worker, read by main. Cast through `Phase`.
 phase: std.atomic.Value(u8) = .init(@intFromEnum(Phase.queued)),
-
-/// Optional progress hint, written by worker. `den == 0` means indeterminate.
 progress_num: std.atomic.Value(u32) = .init(0),
 progress_den: std.atomic.Value(u32) = .init(0),
-
-/// Main thread sets true on close-while-loading / quit. Worker checks after `fromPath` returns
-/// and discards the result instead of publishing.
 cancelled: std.atomic.Value(bool) = .init(false),
-
-/// Worker → main publish flag. `release` on write, `acquire` on read.
 done: std.atomic.Value(bool) = .init(false),
 
-/// Filled by worker iff load succeeds AND wasn't cancelled. Safe to read after `done.load(.acquire)`.
-result: ?Internal.File = null,
+/// Plugin-document staging buffer (size/align from `owner.documentStackSize/Align`).
+doc_slab: []u8,
+doc_buf: []u8,
 
-/// Filled by worker iff load failed. Safe to read after `done.load(.acquire)`.
 err: ?anyerror = null,
 
 pub fn create(allocator: std.mem.Allocator, path: []const u8, owner: *fizzy.sdk.Plugin, target_grouping: u64) !*FileLoadJob {
     const path_copy = try allocator.dupe(u8, path);
     errdefer allocator.free(path_copy);
 
+    const staging = try owner.allocDocumentBuffer(allocator);
+    errdefer allocator.free(staging.backing);
+
     const job = try allocator.create(FileLoadJob);
+    errdefer allocator.destroy(job);
+
     job.* = .{
         .allocator = allocator,
         .path = path_copy,
@@ -86,6 +72,8 @@ pub fn create(allocator: std.mem.Allocator, path: []const u8, owner: *fizzy.sdk.
         .target_grouping = target_grouping,
         .window = dvui.currentWindow(),
         .started_at_ns = perf.nanoTimestamp(),
+        .doc_slab = staging.backing,
+        .doc_buf = staging.buf,
     };
     return job;
 }
@@ -93,19 +81,13 @@ pub fn create(allocator: std.mem.Allocator, path: []const u8, owner: *fizzy.sdk.
 pub fn destroy(job: *FileLoadJob) void {
     const a = job.allocator;
     a.free(job.path);
+    a.free(job.doc_slab);
     a.destroy(job);
 }
 
-/// Worker entry point. Spawn with `std.Thread.spawn(.{}, FileLoadJob.workerMain, .{job})`.
 pub fn workerMain(job: *FileLoadJob) void {
     defer {
-        // Publish before waking the GUI thread so `done.load(.acquire)` on the consumer side
-        // sees `result` / `err` / `phase` already in place.
         job.done.store(true, .release);
-        // Wake the GUI thread from this thread. `dvui.refresh` with a non-null Window pointer
-        // is the documented thread-safe entry — it goes through the backend to interrupt the
-        // event-driven idle loop, so the editor processes our completion immediately instead
-        // of waiting for the next unrelated input event.
         dvui.refresh(job.window, @src(), null);
     }
 
@@ -116,11 +98,7 @@ pub fn workerMain(job: *FileLoadJob) void {
 
     job.phase.store(@intFromEnum(Phase.reading), .release);
 
-    // Route the actual load through the owning plugin (filled into a stack buffer the
-    // shell owns; the plugin knows its concrete document type). Mirrors the inline-value
-    // model below — no heap handoff.
-    var file: Internal.File = undefined;
-    const handled = job.owner.loadDocument(job.path, &file) catch |e| {
+    const handled = job.owner.loadDocument(job.path, job.doc_buf.ptr) catch |e| {
         job.err = e;
         job.phase.store(@intFromEnum(Phase.failed), .release);
         return;
@@ -131,22 +109,15 @@ pub fn workerMain(job: *FileLoadJob) void {
         return;
     }
 
-    // Cancellation check post-load: if the user closed the tab / quit while we were loading,
-    // discard the file rather than publishing it.
     if (job.cancelled.load(.monotonic)) {
-        var f = file;
-        f.deinit();
+        job.owner.deinitDocumentBuffer(job.doc_buf.ptr);
         job.phase.store(@intFromEnum(Phase.cancelled), .release);
         return;
     }
 
-    job.result = file;
     job.phase.store(@intFromEnum(Phase.ready), .release);
 }
 
-/// True iff at least `threshold_ms` of wall-clock time has elapsed since job creation. Used
-/// to delay the toast appearance so sub-threshold loads don't flash a UI element. Must be
-/// called from the main thread (uses `dvui.io` via `perf.nanoTimestamp`).
 pub fn elapsedExceeds(job: *const FileLoadJob, threshold_ms: i64) bool {
     const elapsed_ns = perf.nanoTimestamp() - job.started_at_ns;
     return @divTrunc(elapsed_ns, std.time.ns_per_ms) >= threshold_ms;

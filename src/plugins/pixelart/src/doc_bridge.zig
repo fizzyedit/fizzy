@@ -52,6 +52,21 @@ pub fn documentHasNativeExtension(st: *State, doc: DocHandle) bool {
     return Internal.File.isFizzyExtension(std.fs.path.extension(file.path));
 }
 
+pub fn documentHasRecognizedSaveExtension(st: *State, doc: DocHandle) bool {
+    const file = docFile(st, doc) orelse return false;
+    return Internal.File.hasRecognizedSaveExtension(file.path);
+}
+
+pub fn canUndo(st: *State, doc: DocHandle) bool {
+    const file = docFile(st, doc) orelse return false;
+    return file.history.undo_stack.items.len > 0;
+}
+
+pub fn canRedo(st: *State, doc: DocHandle) bool {
+    const file = docFile(st, doc) orelse return false;
+    return file.history.redo_stack.items.len > 0;
+}
+
 pub fn showsSaveStatusIndicator(st: *State, doc: DocHandle) bool {
     const file = docFile(st, doc) orelse return false;
     return file.showsSaveStatusIndicator();

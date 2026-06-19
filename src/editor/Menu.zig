@@ -1,7 +1,5 @@
 const std = @import("std");
 const fizzy = @import("../fizzy.zig");
-const pixelart = @import("pixelart");
-const Internal = pixelart.internal;
 const dvui = @import("dvui");
 const Editor = fizzy.Editor;
 const settings = fizzy.settings;
@@ -135,8 +133,8 @@ pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
 
         _ = dvui.separator(@src(), .{ .expand = .horizontal });
 
-        if (menuItemWithHotkey(@src(), "Save", dvui.currentWindow().keybinds.get("save") orelse .{}, if (fizzy.editor.activeFile()) |file|
-            (file.dirty() or !Internal.File.hasRecognizedSaveExtension(file.path))
+        if (menuItemWithHotkey(@src(), "Save", dvui.currentWindow().keybinds.get("save") orelse .{}, if (fizzy.editor.activeDoc()) |doc|
+            (doc.owner.isDirty(doc) or !doc.owner.documentHasRecognizedSaveExtension(doc))
         else
             false, .{}, .{
             .expand = .horizontal,
@@ -148,7 +146,7 @@ pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
             fw.close();
         }
 
-        if (menuItemWithHotkey(@src(), "Save As…", dvui.currentWindow().keybinds.get("save_as") orelse .{}, fizzy.editor.activeFile() != null, .{}, .{
+        if (menuItemWithHotkey(@src(), "Save As…", dvui.currentWindow().keybinds.get("save_as") orelse .{}, fizzy.editor.activeDoc() != null, .{}, .{
             .expand = .horizontal,
             .color_text = dvui.themeGet().color(.window, .text),
         }) != null) {
@@ -160,7 +158,7 @@ pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
         // extension. Worker queue handles them serially; UI stays responsive.
         const any_dirty = blk: {
             for (fizzy.editor.open_files.values()) |doc| {
-                if (doc.owner.isDirty(doc) and Internal.File.hasRecognizedSaveExtension(fizzy.editor.docPath(doc))) break :blk true;
+                if (doc.owner.isDirty(doc) and doc.owner.documentHasRecognizedSaveExtension(doc)) break :blk true;
             }
             break :blk false;
         };
@@ -203,11 +201,11 @@ pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
             @src(),
             "Copy",
             dvui.currentWindow().keybinds.get("copy") orelse .{},
-            if (fizzy.editor.activeFile() != null) true else false,
+            fizzy.editor.activeDoc() != null,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (fizzy.editor.activeFile() != null) {
+            if (fizzy.editor.activeDoc() != null) {
                 fizzy.editor.copy() catch {
                     std.log.err("Failed to copy", .{});
                 };
@@ -219,11 +217,11 @@ pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
             @src(),
             "Paste",
             dvui.currentWindow().keybinds.get("paste") orelse .{},
-            if (fizzy.editor.activeFile() != null) true else false,
+            fizzy.editor.activeDoc() != null,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (fizzy.editor.activeFile() != null) {
+            if (fizzy.editor.activeDoc() != null) {
                 fizzy.editor.paste() catch {
                     std.log.err("Failed to paste", .{});
                 };
@@ -237,12 +235,12 @@ pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
             @src(),
             "Undo",
             dvui.currentWindow().keybinds.get("undo") orelse .{},
-            if (fizzy.editor.activeFile()) |file| if (file.history.undo_stack.items.len > 0) true else false else false,
+            if (fizzy.editor.activeDoc()) |doc| doc.owner.canUndo(doc) else false,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (fizzy.editor.activeFile()) |file| {
-                file.history.undoRedo(file, .undo) catch {
+            if (fizzy.editor.activeDoc()) |doc| {
+                doc.owner.undo(doc) catch {
                     std.log.err("Failed to undo", .{});
                 };
             }
@@ -252,12 +250,12 @@ pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
             @src(),
             "Redo",
             dvui.currentWindow().keybinds.get("redo") orelse .{},
-            if (fizzy.editor.activeFile()) |file| if (file.history.redo_stack.items.len > 0) true else false else false,
+            if (fizzy.editor.activeDoc()) |doc| doc.owner.canRedo(doc) else false,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (fizzy.editor.activeFile()) |file| {
-                file.history.undoRedo(file, .redo) catch {
+            if (fizzy.editor.activeDoc()) |doc| {
+                doc.owner.redo(doc) catch {
                     std.log.err("Failed to redo", .{});
                 };
             }
@@ -269,11 +267,11 @@ pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
             @src(),
             "Transform",
             dvui.currentWindow().keybinds.get("transform") orelse .{},
-            if (fizzy.editor.activeFile() != null) true else false,
+            fizzy.editor.activeDoc() != null,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (fizzy.editor.activeFile() != null) {
+            if (fizzy.editor.activeDoc() != null) {
                 fizzy.editor.transform() catch {
                     std.log.err("Failed to transform", .{});
                 };
@@ -287,11 +285,11 @@ pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
             @src(),
             "Grid Layout…",
             dvui.currentWindow().keybinds.get("grid_layout") orelse .{},
-            if (fizzy.editor.activeFile() != null) true else false,
+            fizzy.editor.activeDoc() != null,
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (fizzy.editor.activeFile() != null) {
+            if (fizzy.editor.activeDoc() != null) {
                 fizzy.editor.requestGridLayoutDialog();
                 fw.close();
             }

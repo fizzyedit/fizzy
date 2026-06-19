@@ -23,7 +23,6 @@ pub fn deinit() void {
 
 pub fn draw(_: Infobar) !void {
     const font = dvui.Font.theme(.body).larger(-1.0);
-    const font_mono = dvui.Font.theme(.mono).larger(-3.0);
 
     var scrollarea = dvui.scrollArea(@src(), .{}, .{
         .expand = .horizontal,
@@ -106,60 +105,9 @@ pub fn draw(_: Infobar) !void {
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 12 } });
 
-    if (fizzy.editor.activeFile()) |file| {
-        dvui.icon(
-            @src(),
-            "file_icon",
-            icons.tvg.lucide.file,
-            .{ .stroke_color = dvui.themeGet().color(.window, .text) },
-            .{ .gravity_y = 0.5 },
-        );
-        dvui.label(@src(), "{s}", .{std.fs.path.basename(file.path)}, .{ .font = font, .gravity_y = 0.5 });
-
-        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 12 } });
-
-        dvui.icon(
-            @src(),
-            "width_icon",
-            icons.tvg.lucide.@"ruler-dimension-line",
-            .{ .stroke_color = dvui.themeGet().color(.window, .text) },
-            .{ .gravity_y = 0.5 },
-        );
-
-        fizzy.Editor.Dialogs.drawDimensionsLabel(@src(), file.width(), file.height(), font_mono, "px", .{ .gravity_y = 0.5, .margin = .{ .x = 4 } });
-
-        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 12 } });
-
-        dvui.icon(
-            @src(),
-            "sprite_icon",
-            dvui.entypo.grid,
-            .{ .fill_color = dvui.themeGet().color(.window, .text) },
-            .{ .gravity_y = 0.5 },
-        );
-
-        fizzy.Editor.Dialogs.drawDimensionsLabel(@src(), file.column_width, file.row_height, font_mono, "px", .{ .gravity_y = 0.5, .margin = .{ .x = 4 } });
-
-        //dvui.label(@src(), "{d}x{d} - {d}x{d}", .{ file.width(), file.height(), file.column_width, file.row_height }, .{ .font = font, .gravity_y = 0.5 });
-
-        const mouse_pt = dvui.currentWindow().mouse_pt;
-        const data_pt = file.editor.canvas.dataFromScreenPoint(mouse_pt);
-
-        const file_rect = dvui.Rect.fromSize(.{ .w = @floatFromInt(file.width()), .h = @floatFromInt(file.height()) });
-
-        if (file_rect.contains(data_pt)) {
-            _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 12 } });
-
-            dvui.icon(
-                @src(),
-                "mouse_icon",
-                icons.tvg.lucide.@"mouse-pointer",
-                .{ .stroke_color = dvui.themeGet().color(.window, .text) },
-                .{ .gravity_y = 0.5 },
-            );
-
-            const sprite_pt = file.spritePoint(data_pt);
-            dvui.label(@src(), "{d:0.0},{d:0.0} - {d:0.0},{d:0.0}", .{ @floor(data_pt.x), @floor(data_pt.y), @floor(sprite_pt.x / @as(f32, @floatFromInt(file.column_width))), @floor(sprite_pt.y / @as(f32, @floatFromInt(file.row_height))) }, .{ .gravity_y = 0.5, .font = font_mono });
-        }
+    if (fizzy.editor.activeDoc()) |doc| {
+        doc.owner.drawDocumentInfobar(doc) catch {
+            dvui.log.err("Failed to draw document infobar", .{});
+        };
     }
 }

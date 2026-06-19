@@ -10,6 +10,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const DocHandle = @import("DocHandle.zig");
+const EditorAPI = @import("EditorAPI.zig");
 
 pub const Plugin = @This();
 
@@ -25,6 +26,8 @@ display_name: []const u8,
 pub const VTable = struct {
     /// Tear down `state`. Called when the plugin is unregistered / app shuts down.
     deinit: ?*const fn (state: *anyopaque) void = null,
+    /// One-time plugin setup (e.g. background worker threads).
+    initPlugin: ?*const fn (state: *anyopaque) anyerror!void = null,
 
     /// Priority for opening files with extension `ext` (including the dot, e.g.
     /// ".fiz"); lower value wins. `null` = this plugin does not handle `ext`.
@@ -40,11 +43,20 @@ pub const VTable = struct {
     /// `loadDocument`, but from in-memory bytes (browser file picker). `path` is used
     /// for extension detection + display name. Synchronous (web has no load worker).
     loadDocumentFromBytes: ?*const fn (state: *anyopaque, path: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void = null,
+    /// Size of the plugin's document type for stack/heap staging buffers (`loadDocument`, etc.).
+    documentStackSize: ?*const fn (state: *anyopaque) usize = null,
+    documentStackAlign: ?*const fn (state: *anyopaque) usize = null,
+    documentIdFromBuffer: ?*const fn (state: *anyopaque, doc: *anyopaque) u64 = null,
+    deinitDocumentBuffer: ?*const fn (state: *anyopaque, doc: *anyopaque) void = null,
+    setDocumentGroupingOnBuffer: ?*const fn (state: *anyopaque, doc: *anyopaque, grouping: u64) void = null,
+    createDocument: ?*const fn (state: *anyopaque, path: []const u8, grid: EditorAPI.NewDocGrid, out_doc: *anyopaque) anyerror!void = null,
     saveDocument: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
     closeDocument: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
     isDirty: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     undo: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
     redo: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
+    canUndo: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
+    canRedo: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
 
     /// Register a loaded/created document in the plugin's open-doc map. `file` points at
     /// the plugin's document type (for pixel art, `*Internal.File` on the caller's stack).
@@ -64,11 +76,17 @@ pub const VTable = struct {
     documentPath: ?*const fn (state: *anyopaque, doc: DocHandle) []const u8 = null,
     setDocumentPath: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8) anyerror!void = null,
     documentHasNativeExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
+    /// True when `saveDocument` can write the document without Save As (e.g. `.fiz` or flat image).
+    documentHasRecognizedSaveExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     showsSaveStatusIndicator: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     isDocumentSaving: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     shouldConfirmFlatRasterSave: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     saveDocumentAsync: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
     timeSinceSaveCompleteNs: ?*const fn (state: *anyopaque, doc: DocHandle) ?i128 = null,
+    documentDefaultSaveAsFilename: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 = null,
+    saveDocumentAs: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8, window: *dvui.Window) anyerror!void = null,
+    resetDocumentSaveUIState: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
+    prepareGridLayoutDialog: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
 
     // ---- render hooks (the plugin draws its own dvui UI into the host window) ----
     /// Draw the plugin's explorer/sidebar pane (left region).
@@ -77,13 +95,23 @@ pub const VTable = struct {
     drawDocument: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
     /// Draw the plugin's bottom panel content.
     drawBottomPanel: ?*const fn (state: *anyopaque) anyerror!void = null,
+    /// Draw active-document status into the shell infobar (dimensions, cursor, etc.).
+    drawDocumentInfobar: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
 
     // ---- shell contributions ----
     contributeMenu: ?*const fn (state: *anyopaque) anyerror!void = null,
     contributeKeybinds: ?*const fn (state: *anyopaque, win: *dvui.Window) anyerror!void = null,
 
     // ---- per-frame shell hooks (global keybinds, overlays) ----
+    /// Called once at the top of every shell frame, before any document drawing. Plugins
+    /// use this to advance their internal frame clock / invalidate per-frame caches.
+    beginFrame: ?*const fn (state: *anyopaque) void = null,
     tickKeybinds: ?*const fn (state: *anyopaque) anyerror!void = null,
+    tickOpenDocuments: ?*const fn (state: *anyopaque) bool = null,
+    tickActiveDocumentPlayback: ?*const fn (state: *anyopaque, timer_host_id: dvui.Id) void = null,
+    resetDocumentPeekLayers: ?*const fn (state: *anyopaque) void = null,
+    warmupActiveDocumentComposites: ?*const fn (state: *anyopaque) void = null,
+    isAnyDocumentActivelyDrawing: ?*const fn (state: *anyopaque) bool = null,
     processRadialMenuInput: ?*const fn (state: *anyopaque) void = null,
     radialMenuVisible: ?*const fn (state: *anyopaque) bool = null,
     drawRadialMenu: ?*const fn (state: *anyopaque) anyerror!void = null,
@@ -92,6 +120,9 @@ pub const VTable = struct {
     transform: ?*const fn (state: *anyopaque) anyerror!void = null,
     copy: ?*const fn (state: *anyopaque) anyerror!void = null,
     paste: ?*const fn (state: *anyopaque) anyerror!void = null,
+    acceptEdit: ?*const fn (state: *anyopaque) void = null,
+    cancelEdit: ?*const fn (state: *anyopaque) void = null,
+    deleteSelection: ?*const fn (state: *anyopaque) void = null,
     startPackProject: ?*const fn (state: *anyopaque) anyerror!void = null,
     isPackingActive: ?*const fn (state: *const anyopaque) bool = null,
     tickPackJobs: ?*const fn (state: *anyopaque) void = null,
@@ -202,6 +233,10 @@ pub fn documentHasNativeExtension(self: Plugin, doc: DocHandle) bool {
     return if (self.vtable.documentHasNativeExtension) |f| f(self.state, doc) else false;
 }
 
+pub fn documentHasRecognizedSaveExtension(self: Plugin, doc: DocHandle) bool {
+    return if (self.vtable.documentHasRecognizedSaveExtension) |f| f(self.state, doc) else false;
+}
+
 pub fn showsSaveStatusIndicator(self: Plugin, doc: DocHandle) bool {
     return if (self.vtable.showsSaveStatusIndicator) |f| f(self.state, doc) else false;
 }
@@ -270,6 +305,14 @@ pub fn redo(self: Plugin, doc: DocHandle) !void {
     if (self.vtable.redo) |f| try f(self.state, doc);
 }
 
+pub fn canUndo(self: Plugin, doc: DocHandle) bool {
+    return if (self.vtable.canUndo) |f| f(self.state, doc) else false;
+}
+
+pub fn canRedo(self: Plugin, doc: DocHandle) bool {
+    return if (self.vtable.canRedo) |f| f(self.state, doc) else false;
+}
+
 // ---- render hook wrappers ----
 
 /// Draw an open document into the current dvui parent (the workbench sets up the
@@ -282,6 +325,101 @@ pub fn drawDocument(self: Plugin, doc: DocHandle) !bool {
     return false;
 }
 
+pub fn drawDocumentInfobar(self: Plugin, doc: DocHandle) !void {
+    if (self.vtable.drawDocumentInfobar) |f| try f(self.state, doc);
+}
+
 pub fn deinit(self: Plugin) void {
     if (self.vtable.deinit) |f| f(self.state);
+}
+
+pub fn initPlugin(self: Plugin) !void {
+    if (self.vtable.initPlugin) |f| try f(self.state);
+}
+
+pub fn documentStackSize(self: Plugin) usize {
+    return if (self.vtable.documentStackSize) |f| f(self.state) else 0;
+}
+
+pub fn documentStackAlign(self: Plugin) usize {
+    return if (self.vtable.documentStackAlign) |f| f(self.state) else 1;
+}
+
+pub fn documentIdFromBuffer(self: Plugin, doc: *anyopaque) u64 {
+    return if (self.vtable.documentIdFromBuffer) |f| f(self.state, doc) else 0;
+}
+
+pub fn deinitDocumentBuffer(self: Plugin, doc: *anyopaque) void {
+    if (self.vtable.deinitDocumentBuffer) |f| f(self.state, doc);
+}
+
+pub fn setDocumentGroupingOnBuffer(self: Plugin, doc: *anyopaque, grouping: u64) void {
+    if (self.vtable.setDocumentGroupingOnBuffer) |f| f(self.state, doc, grouping);
+}
+
+pub fn createDocument(self: Plugin, path: []const u8, grid: EditorAPI.NewDocGrid, out_doc: *anyopaque) !void {
+    if (self.vtable.createDocument) |f| try f(self.state, path, grid, out_doc) else return error.Unsupported;
+}
+
+pub fn documentDefaultSaveAsFilename(self: Plugin, doc: DocHandle, allocator: std.mem.Allocator) ![]const u8 {
+    return if (self.vtable.documentDefaultSaveAsFilename) |f| try f(self.state, doc, allocator) else error.Unsupported;
+}
+
+pub fn saveDocumentAs(self: Plugin, doc: DocHandle, path: []const u8, window: *dvui.Window) !void {
+    if (self.vtable.saveDocumentAs) |f| try f(self.state, doc, path, window) else return error.Unsupported;
+}
+
+pub fn resetDocumentSaveUIState(self: Plugin, doc: DocHandle) void {
+    if (self.vtable.resetDocumentSaveUIState) |f| f(self.state, doc);
+}
+
+pub fn prepareGridLayoutDialog(self: Plugin, doc: DocHandle) void {
+    if (self.vtable.prepareGridLayoutDialog) |f| f(self.state, doc);
+}
+
+pub fn beginFrame(self: Plugin) void {
+    if (self.vtable.beginFrame) |f| f(self.state);
+}
+
+pub fn tickOpenDocuments(self: Plugin) bool {
+    return if (self.vtable.tickOpenDocuments) |f| f(self.state) else false;
+}
+
+pub fn tickActiveDocumentPlayback(self: Plugin, timer_host_id: dvui.Id) void {
+    if (self.vtable.tickActiveDocumentPlayback) |f| f(self.state, timer_host_id);
+}
+
+pub fn resetDocumentPeekLayers(self: Plugin) void {
+    if (self.vtable.resetDocumentPeekLayers) |f| f(self.state);
+}
+
+pub fn warmupActiveDocumentComposites(self: Plugin) void {
+    if (self.vtable.warmupActiveDocumentComposites) |f| f(self.state);
+}
+
+pub fn isAnyDocumentActivelyDrawing(self: Plugin) bool {
+    return if (self.vtable.isAnyDocumentActivelyDrawing) |f| f(self.state) else false;
+}
+
+pub fn acceptEdit(self: Plugin) void {
+    if (self.vtable.acceptEdit) |f| f(self.state);
+}
+
+pub fn cancelEdit(self: Plugin) void {
+    if (self.vtable.cancelEdit) |f| f(self.state);
+}
+
+pub fn deleteSelection(self: Plugin) void {
+    if (self.vtable.deleteSelection) |f| f(self.state);
+}
+
+/// Allocate a buffer suitable for staging `loadDocument` / `createDocument`. Caller frees `backing`.
+pub fn allocDocumentBuffer(self: Plugin, allocator: std.mem.Allocator) !struct { backing: []u8, buf: []u8 } {
+    const size = self.documentStackSize();
+    const align_req = self.documentStackAlign();
+    if (size == 0 or align_req == 0) return error.Unsupported;
+    const pad = align_req - 1;
+    const backing = try allocator.alloc(u8, size + pad);
+    const offset = std.mem.alignForward(usize, @intFromPtr(backing.ptr), align_req) - @intFromPtr(backing.ptr);
+    return .{ .backing = backing, .buf = backing[offset..][0..size] };
 }

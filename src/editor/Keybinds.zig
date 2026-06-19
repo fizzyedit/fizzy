@@ -151,7 +151,7 @@ pub fn tick() !void {
                     }
 
                     if (ke.matchBind("grid_layout") and ke.action == .down) {
-                        if (fizzy.editor.activeFile() != null) {
+                        if (fizzy.editor.activeDoc() != null) {
                             fizzy.editor.requestGridLayoutDialog();
                         }
                     }

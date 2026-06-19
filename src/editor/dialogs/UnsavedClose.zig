@@ -1,7 +1,6 @@
 const std = @import("std");
 const fizzy = @import("../../fizzy.zig");
 const pixelart = @import("pixelart");
-const Internal = pixelart.internal;
 const dvui = @import("dvui");
 const FlatRasterSaveWarning = pixelart.dialogs.FlatRasterSaveWarning;
 
@@ -110,7 +109,7 @@ fn beginSaveAndClose(doc: fizzy.sdk.DocHandle, file_id: u64) !void {
 
 fn onSaveAndClose(file_id: u64) !void {
     const doc = fizzy.editor.docById(file_id) orelse return;
-    if (!Internal.File.hasRecognizedSaveExtension(fizzy.editor.docPath(doc))) {
+    if (!doc.owner.documentHasRecognizedSaveExtension(doc)) {
         const idx = fizzy.editor.open_files.getIndex(file_id) orelse return;
         fizzy.editor.setActiveFile(idx);
         fizzy.editor.pending_close_file_id = file_id;

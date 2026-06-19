@@ -14,10 +14,18 @@ lift, sprites bottom-panel lift.
 **In progress:** **Stage D (substantially complete)** — module scaffold, `Globals` injection,
 Workspace decoupling, zero `fizzy.zig` imports in plugin, `b.addModule("pixelart")` wired.
 
-**Next:** Stage E — trim `fizzy.zig` re-exports; route copy/paste/pack through plugin vtable.
+**Stage E — polish complete** (see "Stage E polish — DONE" below): shell no longer imports
+`pixelart.internal`; `pixelart_state` field access fully routed to lifecycle + vtable;
+`Plugin.beginFrame` hook removes the last shell→`pixelart.render` poke; dead imports pruned.
+**Sprite/atlas → `core` big rock: DONE** (verified — generic atlas type + sprite-draw
+primitive + sprite-id index all in `core`; neither shell nor plugin reaches the other's atlas).
 
-> **Read this first if you're a fresh agent:** start at "Stage D — remaining work"
-> below. All three build configs are green right now.
+**Next:** the only remaining shell→plugin concrete reaches are `pixelart.dialogs.*` +
+`pixelart.explorer.project` — needs a generic dialog-registry vtable to lift (deferred).
+Then: wire `b.addModule("workbench", …)` + lift workbench off `fizzy.editor` (logo atlas draw).
+
+> **Read this first if you're a fresh agent:** Stage D/E are done bar the dialog-registry
+> lift. All three build configs are green right now.
 
 All three build configs are green:
 
@@ -266,25 +274,51 @@ app code until the build module is fully wired.
 - **Transform + doc registry** — `transform_op.zig` + `docs_registry.zig`; vtable hooks (`transform`, `registerOpenDocument`, `documentPtr`, `documentByPath`, `unregisterDocument`). Shell `fileFromDoc` / `insertOpenDoc` / `fileById` route through `doc.owner`; no direct `pixelart_state.docs` access in `Editor.zig`.
 - **`fizzy.pixelart` global removed** — single ownership on `Editor.pixelart_state` + `Globals.state`; `App.zig` alloc/deinit via `fizzy.editor.pixelart_state` only.
 - **DocHandle at workbench boundary** — `doc_bridge.zig` + plugin vtable metadata hooks (`bindDocumentToPane`, `documentGrouping`, `documentPath`, `setDocumentPath`, save/dirty indicators, …). `Workspace.zig` + `files.zig` use `DocHandle` + `doc.owner` only (no `Internal.File`). Shell helpers `docFromPath`, `docPath`, `setDocGrouping`, `bindDocToPane`; `fileFromDoc`/`fileById` are shell-internal.
+- **Menu/Infobar off `activeFile()`** — `Menu.zig` + `Infobar.zig` route through `activeDoc()` + plugin hooks (`canUndo`/`canRedo`, `documentHasRecognizedSaveExtension`, `drawDocumentInfobar`). Active-doc infobar UI moved to `pixelart/src/infobar_status.zig`. Shell save/keybind paths (`save`, `saveAll`, quit-save-all, `UnsavedClose`) use `DocHandle` + owner hooks.
+- **Shell `Internal.File` removed** — `Editor.zig` no longer types `*Internal.File` (removed `activeFile`, `fileFromDoc`, `fileById`, `getFile`, …). Document create/load/save-as routed through plugin vtable + `doc_lifecycle.zig` (`createDocument`, `saveDocumentAs`, `documentDefaultSaveAsFilename`, frame ticks, accept/cancel/delete). `insertOpenDoc` takes `*anyopaque` + id; `newFile` returns `DocHandle`; `openFileFromBytes` returns doc id. `FileLoadJob` uses opaque staging buffer via `Plugin.allocDocumentBuffer`. Save-queue worker owned by plugin (`initPlugin`/`deinit`).
 
-**Still remaining:**
-- Shell `Editor` still types `*Internal.File` in internal save/new-file paths (`newFile`, `openFileFromBytes`, save queue).
-- `FileLoadJob` staging buffer still uses `Internal.File` (loader contract).
-- Menu/Infobar still use `activeFile()` for pixel-art-specific UI (undo stacks, save enabled).
+**Stage E polish — DONE:**
+- ✅ Removed dead `Editor.closeReference` (referenced a non-existent `open_references`
+  field + `Internal.Reference` type; survived only via Zig lazy analysis). With it gone,
+  the `const Internal = pixelart.internal;` import is dropped — **shell no longer imports
+  `pixelart.internal` at all.**
+- ✅ `editor.pixelart_state` direct field access already routed away: `pixelart_state`
+  now appears only as the `Editor` field declaration + `App.zig` lifecycle
+  (create/init/persist/deinit/destroy). No shell member access remains.
+- ✅ **`Plugin.beginFrame` vtable hook** — shell no longer pokes `pixelart.render.frame_index`
+  directly. `Editor.frame` now calls `plugin.beginFrame()` for every registered plugin; the
+  pixel-art impl advances its own composite-cache frame clock. **No `pixelart.render` in shell.**
+- ✅ Removed dead `pixelart`/`Packer` imports from `editor/panel/Panel.zig`.
+
+**Shell → plugin surface now (grep `pixelart\.X` in `src/editor` + `src/plugins/workbench`):**
+`pixelart.plugin` ×15 (the vtable boundary — intended), `pixelart.dialogs` ×6,
+`pixelart.State` ×2, `pixelart.Globals` ×2, `pixelart.explorer` ×1,
+`"pixelart.menu.edit"` ×1 (a registered-menu **id string**, not a symbol ref).
+The remaining real reaches are `pixelart.dialogs.*` (NewFile/Export/GridLayout/
+FlatRasterSaveWarning/DimensionsLabel re-exported by `editor/dialogs/Dialogs.zig` +
+`UnsavedClose.zig`) and `pixelart.explorer.project` — concrete pixel-art UI the shell still
+constructs directly. Lifting these needs a generic dialog-registry vtable; deferred, not blocking.
 
 ---
 
-## Next big rock: sprite / atlas → `core` (parallel track)
+## Next big rock: sprite / atlas → `core` — DONE
 
-Resolves `editor.atlas` coupling and the shell reaching into the plugin for UI icons.
+End-state achieved. Verified this session:
 
-- Shell only needs a static atlas sprite draw (logo/icons) — `workbench/files.zig`,
-  `workbench/Workspace.zig`.
-- **`core`:** generic atlas type + "draw sprite N" primitive.
-- **Plugin:** `renderSprite`, composites, reflections, `water_surface`.
-- End-state: **shell → core**, **plugin → core**, neither depends on the other.
+- **`core.Atlas`** (`src/core/Atlas.zig`) — generic atlas type, `loadSpritesFromBytes`.
+- **`core.atlas`** (`src/core/generated/atlas.zig`) — generated sprite-id index
+  (`sprites.logo_default`, …). `fizzy.atlas = core.atlas`.
+- **`core.Sprite.draw`** — the "draw sprite N" primitive.
+- **Shell** holds its own static atlas instance (`editor.atlas`, loaded via
+  `core.Atlas.loadSpritesFromBytes`) for logo/icons and exposes it to plugins as
+  `EditorAPI.UiSprite`. Draws via `core.Sprite.draw`.
+- **Plugin** consumes `core.Atlas`/`core.Sprite` for its own rendering (composites,
+  reflections, `water_surface`) and builds its own packed `internal/Atlas.zig` at pack time.
+- **Neither side reaches the other's atlas** — `grep 'editor.atlas|fizzy.atlas' src/plugins/pixelart/src` → 0.
 
-(User signed off; sequenced after settings, can proceed alongside late Stage D.)
+Residual: `workbench/files.zig` + `workbench/Workspace.zig` draw the logo via
+`fizzy.editor.atlas` — that's the workbench plugin still routing through `fizzy.editor`
+(a separate "workbench off the app hub" concern), not a sprite/atlas-in-core gap.
 
 ---
 
@@ -313,7 +347,7 @@ the **build-script file-ownership trap** (`process_assets.zig` → std-only `Atl
 | `src/plugins/workbench/workbench.zig` | Workbench intra-plugin hub |
 | `src/plugins/workbench/src/` | Workbench implementation tree |
 | `src/sdk/EditorAPI.zig`, `Host.zig` | Full shell API surface |
-| `src/editor/Editor.zig` | Shell; still uses `fizzy.pixelart.*` and `Internal.File` helpers |
+| `src/editor/Editor.zig` | Shell; `DocHandle`-only at UI boundary; no `Internal.File` |
 | `src/fizzy.zig` | App hub; mid-migration to `pixelart_mod` re-exports |
 | `process_assets.zig` | Build-time asset atlas generator (repo root, beside `build.zig`) |
 | `src/backend/` | Platform backend: native/web stubs, singleton, auto-update, objc, MSVC shim |
