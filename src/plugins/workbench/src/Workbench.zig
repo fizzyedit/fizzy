@@ -13,6 +13,10 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const fizzy = @import("../../../fizzy.zig");
 const files = @import("files.zig");
+const Workspace = @import("Workspace.zig");
+const Globals = @import("Globals.zig");
+const workbench_layout = @import("workbench_layout.zig");
+const sdk = @import("sdk");
 
 pub const Workbench = @This();
 
@@ -27,6 +31,13 @@ pub const BranchDecorator = struct {
 allocator: std.mem.Allocator,
 decorators: std.ArrayListUnmanaged(BranchDecorator) = .empty,
 
+/// Workspaces keyed by tab-grouping id (Stage W2: owned here, not on the shell Editor).
+workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
+open_workspace_grouping: u64 = 0,
+grouping_id_counter: u64 = 0,
+tab_drag_from_tree_path: ?[]u8 = null,
+file_tree_data_id: ?dvui.Id = null,
+
 /// The `workbench-api` service instance handed to plugins. Its `ctx` must be the
 /// editor's FINAL heap address, so it's filled in by `initService` from
 /// `Editor.postInit` (after `Editor.init`'s by-value result is copied to the heap),
@@ -39,6 +50,61 @@ pub fn init(allocator: std.mem.Allocator) Workbench {
 
 pub fn deinit(self: *Workbench) void {
     self.decorators.deinit(self.allocator);
+}
+
+pub fn initDefaultWorkspace(self: *Workbench) !void {
+    self.workspaces = .empty;
+    try self.workspaces.put(self.allocator, 0, Workspace.init(0));
+}
+
+pub fn deinitWorkspaces(self: *Workbench) void {
+    for (self.workspaces.values()) |*workspace| workspace.deinit();
+    self.workspaces.deinit(self.allocator);
+}
+
+pub fn currentGroupingID(self: *Workbench) u64 {
+    return self.open_workspace_grouping;
+}
+
+pub fn newGroupingID(self: *Workbench) u64 {
+    self.grouping_id_counter += 1;
+    return self.grouping_id_counter;
+}
+
+pub fn clearFileTreeTabDragDropState(self: *Workbench) void {
+    if (self.tab_drag_from_tree_path) |p| {
+        self.allocator.free(p);
+        self.tab_drag_from_tree_path = null;
+    }
+}
+
+pub fn rebuildWorkspaces(self: *Workbench) !void {
+    return workbench_layout.rebuildWorkspaces(self);
+}
+
+pub fn drawWorkspaces(self: *Workbench, panel: workbench_layout.PanelPanedState, index: usize) !dvui.App.Result {
+    return workbench_layout.drawWorkspaces(self, panel, index);
+}
+
+pub fn activeDoc(self: *Workbench) ?sdk.DocHandle {
+    if (self.workspaces.get(self.open_workspace_grouping)) |workspace| {
+        return Globals.host.docByIndex(workspace.open_file_index);
+    }
+    return null;
+}
+
+pub fn setActiveDocIndex(self: *Workbench, index: usize) void {
+    const doc = Globals.host.docByIndex(index) orelse return;
+    const grouping = doc.owner.documentGrouping(doc);
+    if (self.workspaces.getPtr(grouping)) |workspace| {
+        self.open_workspace_grouping = grouping;
+        workspace.open_file_index = index;
+    }
+}
+
+pub fn activeWorkspaceCanvasRectPhysical(self: *Workbench) ?dvui.Rect.Physical {
+    const workspace = self.workspaces.getPtr(self.open_workspace_grouping) orelse return null;
+    return workspace.canvas_rect_physical;
 }
 
 /// Build the `workbench-api` service. `editor_ctx` is the host's heap `*Editor`,
@@ -201,10 +267,10 @@ fn svcOpen(ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!bool {
     return editorOf(ctx).openFilePath(path, grouping);
 }
 fn svcCurrentGrouping(ctx: *anyopaque) u64 {
-    return editorOf(ctx).currentGroupingID();
+    return editorOf(ctx).workbench.currentGroupingID();
 }
 fn svcNewGrouping(ctx: *anyopaque) u64 {
-    return editorOf(ctx).newGroupingID();
+    return editorOf(ctx).workbench.newGroupingID();
 }
 fn svcClose(ctx: *anyopaque, id: u64) anyerror!void {
     return editorOf(ctx).closeFileID(id);

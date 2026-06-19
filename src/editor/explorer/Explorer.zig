@@ -108,11 +108,8 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
     });
 
     if (!fizzy.editor.host.isActiveSidebarView(@import("../../plugins/workbench/src/plugin.zig").view_files)) {
-        fizzy.editor.file_tree_data_id = null;
-        if (fizzy.editor.tab_drag_from_tree_path) |p| {
-            fizzy.app.allocator.free(p);
-            fizzy.editor.tab_drag_from_tree_path = null;
-        }
+        fizzy.editor.workbench.file_tree_data_id = null;
+        fizzy.editor.workbench.clearFileTreeTabDragDropState();
     }
 
     if (fizzy.editor.host.activeSidebarView()) |view| {

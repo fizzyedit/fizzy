@@ -4,11 +4,13 @@
 //! app allocator and the Host (EditorAPI surface) without importing `fizzy.zig`.
 //! Mirrors `plugins/pixelart/src/Globals.zig`.
 const std = @import("std");
-const workbench = @import("../workbench.zig");
-const sdk = workbench.sdk;
+const wb_mod = @import("../workbench.zig");
+const sdk = wb_mod.sdk;
+const Workbench = @import("Workbench.zig");
 
 pub var gpa: std.mem.Allocator = undefined;
 pub var host: *sdk.Host = undefined;
+pub var workbench: *Workbench = undefined;
 
 pub fn allocator() std.mem.Allocator {
     return gpa;

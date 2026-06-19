@@ -63,7 +63,7 @@ pub fn tick() !void {
                             .{ .title = "Open Files...", .filter_description = ".fiz, .pixi, .png, .jpg, .jpeg", .filters = &.{ "*.fiz", "*.pixi", "*.png", "*.jpg", "*.jpeg" } },
                         )) |files| {
                             for (files) |file| {
-                                _ = fizzy.editor.openFilePath(file, fizzy.editor.open_workspace_grouping) catch {
+                                _ = fizzy.editor.openFilePath(file, fizzy.editor.workbench.open_workspace_grouping) catch {
                                     std.log.err("Failed to open file: {s}", .{file});
                                 };
                             }

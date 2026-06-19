@@ -69,6 +69,7 @@ const vtable: sdk.Plugin.VTable = .{
     .bindDocumentToPane = bindDocumentToPane,
     .documentGrouping = documentGrouping,
     .setDocumentGrouping = setDocumentGrouping,
+    .removeCanvasPane = removeCanvasPane,
     .documentPath = documentPath,
     .setDocumentPath = setDocumentPath,
     .documentHasNativeExtension = documentHasNativeExtension,
@@ -440,6 +441,11 @@ fn documentGrouping(state: *anyopaque, doc: DocHandle) u64 {
 fn setDocumentGrouping(state: *anyopaque, doc: DocHandle, grouping: u64) void {
     const st: *State = @ptrCast(@alignCast(state));
     DocBridge.setDocumentGrouping(st, doc, grouping);
+}
+
+fn removeCanvasPane(state: *anyopaque, grouping: u64, allocator: std.mem.Allocator) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    State.removeCanvasPane(st, allocator, grouping);
 }
 
 fn documentPath(state: *anyopaque, doc: DocHandle) []const u8 {

@@ -374,10 +374,13 @@ values/keys at `Workspace.zig:467+`) — that's the deep coupling.
   → `Globals.host.openDocCount()`, `open_files.values()[i]`/`docAt` → `docByIndex`,
   `open_files.getIndex` → `docIndex`, `setActiveFile` → `setActiveDocIndex`,
   `fizzy.editor.host` → `Globals.host`. **Workbench `fizzy.editor` refs: 163 → 106.**
-- **W2 — workspace/grouping ownership.** Move `workspaces`, `open_workspace_grouping`,
-  grouping-id counters (`newGroupingID`/`currentGroupingID`), and file-tree tab drag-drop
-  state (`tab_drag_from_tree_path`/`file_tree_data_id`/`clearFileTreeTabDragDropState`, today
-  shared with shell `Explorer`/`Editor`) onto the `Workbench` struct; shell routes through it.
+- **W2 — workspace/grouping ownership — DONE.** Moved `workspaces`, `open_workspace_grouping`,
+  `grouping_id_counter`, `tab_drag_from_tree_path`, `file_tree_data_id` onto `Workbench`;
+  added `Globals.workbench`, `workbench_layout.zig` (`rebuildWorkspaces`/`drawWorkspaces`),
+  and `Plugin.removeCanvasPane` (pixelart implements; `Workspace.deinit` iterates host plugins).
+  Shell `Editor` delegates `activeDoc`/`setActiveFile`/`rebuildWorkspaces`/`drawWorkspaces`/
+  grouping helpers through `editor.workbench`. Workbench plugin code uses `Globals.workbench`
+  for workspace state; `setDocGrouping` → `doc.owner.setDocumentGrouping` in tab-drag paths.
 - **W3 — remaining `fizzy.editor.*` (doc ops, folder/settings/recents/atlas) → EditorAPI/Host.**
   Add missing EditorAPI surface as needed (`folder`, `setProjectFolder`, `openFilePath`, …).
 - **W4 — `fizzy.dvui`/`fizzy.app`/`fizzy.math`/`fizzy.backend` → sdk/core**; then

@@ -40,7 +40,9 @@ pub fn init(grouping: u64) Workspace {
 /// Release any plugin-owned per-pane canvas chrome. Called when a pane is removed
 /// (`Editor.rebuildWorkspaces`) and for each pane at editor shutdown.
 pub fn deinit(self: *Workspace) void {
-    pixelart.State.removeCanvasPane(pixelart.Globals.state, fizzy.app.allocator, self.grouping);
+    for (Globals.host.plugins.items) |plugin| {
+        plugin.removeCanvasPane(self.grouping, Globals.allocator());
+    }
 }
 
 const handle_size = 10;
@@ -81,7 +83,7 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
 
         if (e.evt == .mouse) {
             if (e.evt.mouse.action == .press or (e.evt.mouse.action == .position and e.evt.mouse.mod.matchBind("ctrl/cmd"))) {
-                fizzy.editor.open_workspace_grouping = self.grouping;
+                Globals.workbench.open_workspace_grouping = self.grouping;
             }
         }
     }
@@ -160,10 +162,10 @@ fn drawTabs(self: *Workspace) void {
             var next_same_group_index: ?usize = null;
 
             const active_in_this_group = blk: {
-                if (fizzy.editor.open_workspace_grouping != self.grouping) break :blk false;
+                if (Globals.workbench.open_workspace_grouping != self.grouping) break :blk false;
                 if (self.open_file_index >= files_len) break :blk false;
                 const active_doc = Globals.host.docByIndex(self.open_file_index) orelse break :blk false;
-                if (fizzy.editor.docGrouping(active_doc) != self.grouping) break :blk false;
+                if (active_doc.owner.documentGrouping(active_doc) != self.grouping) break :blk false;
                 break :blk true;
             };
 
@@ -174,7 +176,7 @@ fn drawTabs(self: *Workspace) void {
                 while (j > 0) {
                     j -= 1;
                     const tab_doc = Globals.host.docByIndex(j) orelse continue;
-                    if (fizzy.editor.docGrouping(tab_doc) == self.grouping) {
+                    if (tab_doc.owner.documentGrouping(tab_doc) == self.grouping) {
                         prev_same_group_index = j;
                         break;
                     }
@@ -183,7 +185,7 @@ fn drawTabs(self: *Workspace) void {
                 j = active_index + 1;
                 while (j < files_len) : (j += 1) {
                     const tab_doc = Globals.host.docByIndex(j) orelse continue;
-                    if (fizzy.editor.docGrouping(tab_doc) == self.grouping) {
+                    if (tab_doc.owner.documentGrouping(tab_doc) == self.grouping) {
                         next_same_group_index = j;
                         break;
                     }
@@ -194,7 +196,7 @@ fn drawTabs(self: *Workspace) void {
                 const doc = Globals.host.docByIndex(i) orelse continue;
                 const is_fizzy_file = doc.owner.documentHasNativeExtension(doc);
 
-                if (fizzy.editor.docGrouping(doc) != self.grouping) continue;
+                if (doc.owner.documentGrouping(doc) != self.grouping) continue;
 
                 var reorderable = tabs.reorderable(@src(), .{}, .{
                     .expand = .vertical,
@@ -204,7 +206,7 @@ fn drawTabs(self: *Workspace) void {
                 });
                 defer reorderable.deinit();
 
-                const selected = self.open_file_index == i and fizzy.editor.open_workspace_grouping == self.grouping;
+                const selected = self.open_file_index == i and Globals.workbench.open_workspace_grouping == self.grouping;
 
                 var anim = dvui.animate(@src(), .{ .duration = 400_000, .kind = .horizontal, .easing = dvui.easing.outBack }, .{});
                 defer anim.deinit();
@@ -480,20 +482,26 @@ pub fn processTabsDrag(self: *Workspace) void {
             self.tabs_removed_index = null;
             self.tabs_insert_before_index = null;
         } else { // Dragging from another workspace
-            for (fizzy.editor.workspaces.values()) |*workspace| {
+            for (Globals.workbench.workspaces.values()) |*workspace| {
                 if (workspace.tabs_removed_index) |removed| {
                     if (removed > insert_before) {
                         Globals.host.swapDocs(removed, insert_before);
-                        fizzy.editor.setDocGrouping(Globals.host.docByIndex(insert_before).?, self.grouping);
+                        if (Globals.host.docByIndex(insert_before)) |d| {
+                            d.owner.setDocumentGrouping(d, self.grouping);
+                        }
                         Globals.host.setActiveDocIndex(insert_before);
                     } else {
                         if (insert_before > 0) {
                             Globals.host.swapDocs(removed, insert_before - 1);
-                            fizzy.editor.setDocGrouping(Globals.host.docByIndex(insert_before - 1).?, self.grouping);
+                            if (Globals.host.docByIndex(insert_before - 1)) |d| {
+                                d.owner.setDocumentGrouping(d, self.grouping);
+                            }
                             Globals.host.setActiveDocIndex(insert_before - 1);
                         } else {
                             Globals.host.swapDocs(removed, insert_before);
-                            fizzy.editor.setDocGrouping(Globals.host.docByIndex(insert_before).?, self.grouping);
+                            if (Globals.host.docByIndex(insert_before)) |d| {
+                                d.owner.setDocumentGrouping(d, self.grouping);
+                            }
                             Globals.host.setActiveDocIndex(insert_before);
                         }
                     }
@@ -510,23 +518,27 @@ pub fn processTabsDrag(self: *Workspace) void {
 }
 
 /// Repoint `open_file_index` on workspaces that were showing the dragged tab as active.
-fn repointWorkspacesAfterTabDrag(editor: *Editor, tab_bar_workspace: ?*Workspace, drag_index: usize) void {
-    const dragged_doc = editor.docAt(drag_index) orelse return;
+fn repointWorkspacesAfterTabDrag(tab_bar_workspace: ?*Workspace, drag_index: usize) void {
+    const dragged_doc = Globals.host.docByIndex(drag_index) orelse return;
     if (tab_bar_workspace) |workspace| {
-        if (workspace.open_file_index == editor.open_files.getIndex(dragged_doc.id)) {
-            for (editor.open_files.values()) |doc| {
-                if (editor.docGrouping(doc) == workspace.grouping and doc.id != dragged_doc.id) {
-                    workspace.open_file_index = editor.open_files.getIndex(doc.id) orelse 0;
+        if (workspace.open_file_index == Globals.host.docIndex(dragged_doc.id)) {
+            var i: usize = 0;
+            while (i < Globals.host.openDocCount()) : (i += 1) {
+                const doc = Globals.host.docByIndex(i).?;
+                if (doc.owner.documentGrouping(doc) == workspace.grouping and doc.id != dragged_doc.id) {
+                    workspace.open_file_index = i;
                     break;
                 }
             }
         }
     } else {
-        for (editor.workspaces.values()) |*w| {
+        for (Globals.workbench.workspaces.values()) |*w| {
             if (w.open_file_index == drag_index) {
-                for (editor.open_files.values()) |doc| {
-                    if (editor.docGrouping(doc) == w.grouping and doc.id != dragged_doc.id) {
-                        w.open_file_index = editor.open_files.getIndex(doc.id) orelse 0;
+                var i: usize = 0;
+                while (i < Globals.host.openDocCount()) : (i += 1) {
+                    const doc = Globals.host.docByIndex(i).?;
+                    if (doc.owner.documentGrouping(doc) == w.grouping and doc.id != dragged_doc.id) {
+                        w.open_file_index = i;
                         break;
                     }
                 }
@@ -541,14 +553,17 @@ const WorkspaceTabDragSrc = union(enum) {
     tree_closed: []const u8,
     none,
 
-    fn resolve(editor: *Editor) WorkspaceTabDragSrc {
-        for (editor.workspaces.values()) |*w| {
+    fn resolve() WorkspaceTabDragSrc {
+        for (Globals.workbench.workspaces.values()) |*w| {
             if (w.tabs_drag_index) |i| return .{ .tab_bar = .{ .ws = w, .index = i } };
         }
-        if (editor.tab_drag_from_tree_path) |p| {
-            if (editor.docFromPath(p)) |doc| {
-                const idx = editor.open_files.getIndex(doc.id) orelse return .none;
-                return .{ .tree_open = idx };
+        if (Globals.workbench.tab_drag_from_tree_path) |p| {
+            var i: usize = 0;
+            while (i < Globals.host.openDocCount()) : (i += 1) {
+                const doc = Globals.host.docByIndex(i).?;
+                if (doc.owner.documentByPath(p) != null) {
+                    return .{ .tree_open = i };
+                }
             }
             return .{ .tree_closed = p };
         }
@@ -560,11 +575,11 @@ const WorkspaceTabDragSrc = union(enum) {
 /// Also handles the same `tab_drag` from the Files tree (see `files.zig` + DVUI reorder_tree cross-widget pattern).
 pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
     if (!dvui.dragName("tab_drag")) {
-        fizzy.editor.clearFileTreeTabDragDropState();
+        Globals.workbench.clearFileTreeTabDragDropState();
         return;
     }
 
-    const drag_src = WorkspaceTabDragSrc.resolve(fizzy.editor);
+    const drag_src = WorkspaceTabDragSrc.resolve();
     switch (drag_src) {
         .none => return,
         else => {},
@@ -583,7 +598,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                 right_side.w /= 2;
                 right_side.x += right_side.w;
 
-                if (right_side.contains(e.evt.mouse.p) and fizzy.editor.workspaces.keys()[fizzy.editor.workspaces.keys().len - 1] == self.grouping) {
+                if (right_side.contains(e.evt.mouse.p) and Globals.workbench.workspaces.keys()[Globals.workbench.workspaces.keys().len - 1] == self.grouping) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
                         right_side.fill(dvui.Rect.Physical.all(right_side.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
@@ -595,13 +610,13 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        fizzy.editor.clearFileTreeTabDragDropState();
+                        Globals.workbench.clearFileTreeTabDragDropState();
 
-                        repointWorkspacesAfterTabDrag(fizzy.editor, workspace, drag_index);
+                        repointWorkspacesAfterTabDrag(workspace, drag_index);
                         const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
-                        const new_g = fizzy.editor.newGroupingID();
-                        fizzy.editor.setDocGrouping(dragged_doc, new_g);
-                        fizzy.editor.open_workspace_grouping = new_g;
+                        const new_g = Globals.workbench.newGroupingID();
+                        dragged_doc.owner.setDocumentGrouping(dragged_doc, new_g);
+                        Globals.workbench.open_workspace_grouping = new_g;
                     }
                 } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
@@ -615,12 +630,12 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        fizzy.editor.clearFileTreeTabDragDropState();
+                        Globals.workbench.clearFileTreeTabDragDropState();
 
-                        repointWorkspacesAfterTabDrag(fizzy.editor, workspace, drag_index);
+                        repointWorkspacesAfterTabDrag(workspace, drag_index);
                         const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
-                        fizzy.editor.setDocGrouping(dragged_doc, self.grouping);
-                        fizzy.editor.open_workspace_grouping = self.grouping;
+                        dragged_doc.owner.setDocumentGrouping(dragged_doc, self.grouping);
+                        Globals.workbench.open_workspace_grouping = self.grouping;
                         self.open_file_index = Globals.host.docIndex(dragged_doc.id) orelse 0;
                     }
                 }
@@ -630,7 +645,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                 right_side.w /= 2;
                 right_side.x += right_side.w;
 
-                if (right_side.contains(e.evt.mouse.p) and fizzy.editor.workspaces.keys()[fizzy.editor.workspaces.keys().len - 1] == self.grouping) {
+                if (right_side.contains(e.evt.mouse.p) and Globals.workbench.workspaces.keys()[Globals.workbench.workspaces.keys().len - 1] == self.grouping) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
                         right_side.fill(dvui.Rect.Physical.all(right_side.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
@@ -641,13 +656,13 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        fizzy.editor.clearFileTreeTabDragDropState();
+                        Globals.workbench.clearFileTreeTabDragDropState();
 
-                        repointWorkspacesAfterTabDrag(fizzy.editor, null, drag_index);
+                        repointWorkspacesAfterTabDrag(null, drag_index);
                         const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
-                        const new_g = fizzy.editor.newGroupingID();
-                        fizzy.editor.setDocGrouping(dragged_doc, new_g);
-                        fizzy.editor.open_workspace_grouping = new_g;
+                        const new_g = Globals.workbench.newGroupingID();
+                        dragged_doc.owner.setDocumentGrouping(dragged_doc, new_g);
+                        Globals.workbench.open_workspace_grouping = new_g;
                     }
                 } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
@@ -660,12 +675,12 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        fizzy.editor.clearFileTreeTabDragDropState();
+                        Globals.workbench.clearFileTreeTabDragDropState();
 
-                        repointWorkspacesAfterTabDrag(fizzy.editor, null, drag_index);
+                        repointWorkspacesAfterTabDrag(null, drag_index);
                         const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
-                        fizzy.editor.setDocGrouping(dragged_doc, self.grouping);
-                        fizzy.editor.open_workspace_grouping = self.grouping;
+                        dragged_doc.owner.setDocumentGrouping(dragged_doc, self.grouping);
+                        Globals.workbench.open_workspace_grouping = self.grouping;
                         self.open_file_index = Globals.host.docIndex(dragged_doc.id) orelse 0;
                     }
                 }
@@ -675,7 +690,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                 right_side.w /= 2;
                 right_side.x += right_side.w;
 
-                if (right_side.contains(e.evt.mouse.p) and fizzy.editor.workspaces.keys()[fizzy.editor.workspaces.keys().len - 1] == self.grouping) {
+                if (right_side.contains(e.evt.mouse.p) and Globals.workbench.workspaces.keys()[Globals.workbench.workspaces.keys().len - 1] == self.grouping) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
                         right_side.fill(dvui.Rect.Physical.all(right_side.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
@@ -686,23 +701,23 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        const new_g = fizzy.editor.newGroupingID();
+                        const new_g = Globals.workbench.newGroupingID();
                         const maybe_idx = fizzy.editor.openOrFocusFileAtGrouping(path, new_g) catch {
-                            fizzy.editor.clearFileTreeTabDragDropState();
+                            Globals.workbench.clearFileTreeTabDragDropState();
                             continue :events_loop;
                         };
                         if (maybe_idx) |idx| {
                             // File was already open and moved between groupings — repoint the
                             // workspaces that were showing it, and focus the new pane now.
-                            repointWorkspacesAfterTabDrag(fizzy.editor, null, idx);
-                            fizzy.editor.open_workspace_grouping = new_g;
+                            repointWorkspacesAfterTabDrag(null, idx);
+                            Globals.workbench.open_workspace_grouping = new_g;
                         }
                         // Else: async load — leave `open_workspace_grouping` alone. Switching
                         // to the not-yet-extant workspace would make `activeFile()` null and
                         // collapse the bottom panel mid-load; `processLoadingJobs` will focus
                         // the new pane once the worker lands the file, matching the
                         // "Open to the side" menu action.
-                        fizzy.editor.clearFileTreeTabDragDropState();
+                        Globals.workbench.clearFileTreeTabDragDropState();
                     }
                 } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
@@ -716,17 +731,17 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
                         const maybe_idx = fizzy.editor.openOrFocusFileAtGrouping(path, self.grouping) catch {
-                            fizzy.editor.clearFileTreeTabDragDropState();
+                            Globals.workbench.clearFileTreeTabDragDropState();
                             continue :events_loop;
                         };
                         if (maybe_idx) |idx| {
-                            repointWorkspacesAfterTabDrag(fizzy.editor, null, idx);
+                            repointWorkspacesAfterTabDrag(null, idx);
                             self.open_file_index = idx;
                         }
                         // Else: async load into this workspace's existing grouping. The
                         // worker's `processLoadingJobs` focus handler will set the active
                         // file once it lands.
-                        fizzy.editor.clearFileTreeTabDragDropState();
+                        Globals.workbench.clearFileTreeTabDragDropState();
                     }
                 }
             },
@@ -936,7 +951,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
             //     .filters = &.{ "*.pixi", "*.png" },
             // })) |files| {
             //     for (files) |file| {
-            //         _ = fizzy.editor.openFilePath(file, fizzy.editor.open_workspace_grouping) catch {
+            //         _ = fizzy.editor.openFilePath(file, Globals.workbench.open_workspace_grouping) catch {
             //             std.log.err("Failed to open file: {s}", .{file});
             //         };
             //     }
@@ -1064,7 +1079,7 @@ pub fn setProjectFolderCallback(folder: ?[][:0]const u8) void {
 pub fn openFilesCallback(files: ?[][:0]const u8) void {
     if (files) |f| {
         for (f) |file| {
-            _ = fizzy.editor.openFilePath(file, fizzy.editor.open_workspace_grouping) catch {
+            _ = fizzy.editor.openFilePath(file, Globals.workbench.open_workspace_grouping) catch {
                 dvui.log.err("Failed to open file: {s}", .{file});
             };
         }

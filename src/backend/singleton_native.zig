@@ -197,7 +197,7 @@ fn dispatchPath(path: []const u8) !void {
         return err;
     };
     file.close(io);
-    _ = try fizzy.editor.openFilePath(path, fizzy.editor.open_workspace_grouping);
+    _ = try fizzy.editor.openFilePath(path, fizzy.editor.workbench.open_workspace_grouping);
 }
 
 /// Walk upward from `file_path`'s parent directory, returning the first

@@ -83,7 +83,7 @@ pub fn draw() !void {
     if (fizzy.editor.folder) |path| {
         try drawFiles(path, tree);
     } else {
-        fizzy.editor.file_tree_data_id = null;
+        Globals.workbench.file_tree_data_id = null;
         dvui.labelNoFmt(
             @src(),
             "Open a project folder to begin.",
@@ -143,7 +143,7 @@ fn drawWeb() !void {
 
 pub fn drawFiles(path: []const u8, tree: *fizzy.dvui.TreeWidget) !void {
     const unique_id = dvui.parentGet().extendId(@src(), 0);
-    fizzy.editor.file_tree_data_id = unique_id;
+    Globals.workbench.file_tree_data_id = unique_id;
 
     var filter_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     dvui.icon(
@@ -580,13 +580,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                         dvui.dataSetSlice(null, inner_unique_id, "removed_path", abs_path);
 
                     if (entry.kind == .file and tree.id_branch == inner_id_extra.*) {
-                        if (fizzy.editor.tab_drag_from_tree_path) |old| {
+                        if (Globals.workbench.tab_drag_from_tree_path) |old| {
                             if (!std.mem.eql(u8, old, abs_path)) {
                                 fizzy.app.allocator.free(old);
-                                fizzy.editor.tab_drag_from_tree_path = fizzy.app.allocator.dupe(u8, abs_path) catch null;
+                                Globals.workbench.tab_drag_from_tree_path = fizzy.app.allocator.dupe(u8, abs_path) catch null;
                             }
                         } else {
-                            fizzy.editor.tab_drag_from_tree_path = fizzy.app.allocator.dupe(u8, abs_path) catch null;
+                            Globals.workbench.tab_drag_from_tree_path = fizzy.app.allocator.dupe(u8, abs_path) catch null;
                         }
                     }
                 }
@@ -635,7 +635,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                                     break :blk &[_][]const u8{};
                                 };
                                 for (to_open) |p| {
-                                    _ = fizzy.editor.openFilePath(p, fizzy.editor.currentGroupingID()) catch |e| {
+                                    _ = fizzy.editor.openFilePath(p, Globals.workbench.currentGroupingID()) catch |e| {
                                         dvui.log.err("Failed to open file: {any} ({s})", .{ e, p });
                                     };
                                 }
@@ -656,9 +656,9 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                                 for (to_open) |p| {
                                     if (!have_grouping) {
                                         side_grouping = if (Globals.host.openDocCount() == 0)
-                                            fizzy.editor.currentGroupingID()
+                                            Globals.workbench.currentGroupingID()
                                         else
-                                            fizzy.editor.newGroupingID();
+                                            Globals.workbench.newGroupingID();
                                         have_grouping = true;
                                     }
                                     _ = fizzy.editor.openFilePath(p, side_grouping) catch {
@@ -810,7 +810,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                             if (mode == .replace) {
                                 switch (ext) {
                                     .fizzy, .png, .jpg => {
-                                        _ = fizzy.editor.openFilePath(abs_path, fizzy.editor.currentGroupingID()) catch |err| {
+                                        _ = fizzy.editor.openFilePath(abs_path, Globals.workbench.currentGroupingID()) catch |err| {
                                             dvui.log.err("{any}: {s}", .{ err, abs_path });
                                         };
                                     },

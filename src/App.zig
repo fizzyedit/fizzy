@@ -172,6 +172,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     // reaches the EditorAPI surface without importing `fizzy.zig`. Mirrors pixelart.Globals.
     WorkbenchGlobals.gpa = allocator;
     WorkbenchGlobals.host = &fizzy.editor.host;
+    WorkbenchGlobals.workbench = &fizzy.editor.workbench;
 
     // Pixel-art plugin state (tools/colors/project/clipboard/pack jobs). Created
     // before `postInit` so the pixel-art plugin's `register` can adopt it as its

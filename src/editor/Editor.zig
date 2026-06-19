@@ -69,8 +69,7 @@ panel: *Panel,
 
 last_titlebar_color: dvui.Color,
 
-/// Workspaces stored by their grouping ID
-workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
+/// Workspaces stored by their grouping ID (owned by `workbench`, Stage W2).
 sidebar: Sidebar,
 infobar: Infobar,
 
@@ -94,16 +93,6 @@ loading_jobs: std.StringHashMapUnmanaged(*FileLoadJob) = .empty,
 /// loads only auto-focus the most recently requested one.
 last_load_request_path: ?[]const u8 = null,
 
-// The actively focused workspace grouping ID
-// This will contain tabs for all open files with a matching grouping ID
-open_workspace_grouping: u64 = 0,
-
-/// Files tree cross-workspace drag (`tab_drag`): heap copy of absolute path. See `files.zig`.
-tab_drag_from_tree_path: ?[]u8 = null,
-/// `drawFiles` data id for `removed_path`; clear after drop on workspace canvas.
-file_tree_data_id: ?dvui.Id = null,
-
-grouping_id_counter: u64 = 0,
 file_id_counter: u64 = 0,
 
 window_opacity: f32 = 1.0,
@@ -430,11 +419,7 @@ pub fn init(
     editor.explorer.* = .init();
     editor.panel.* = .init();
     editor.open_files = .empty;
-    editor.workspaces = .empty;
-    editor.workspaces.put(fizzy.app.allocator, 0, .init(0)) catch |err| {
-        std.log.err("Failed to create workspace: {s}", .{@errorName(err)});
-        return err;
-    };
+    try editor.workbench.initDefaultWorkspace();
 
     // Pixel-art tools/colors/palettes now init in `State.init` (App allocates
     // `editor.pixelart_state` just after this `Editor.init` returns).
@@ -757,10 +742,7 @@ pub fn docById(editor: *Editor, id: u64) ?sdk.DocHandle {
 }
 
 pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
-    if (editor.workspaces.get(editor.open_workspace_grouping)) |workspace| {
-        return editor.docAt(workspace.open_file_index);
-    }
-    return null;
+    return editor.workbench.activeDoc();
 }
 
 /// Workbench routing helpers (type-agnostic; dispatch through `doc.owner`).
@@ -894,12 +876,11 @@ pub fn applyHoldMenuDuration(editor: *Editor) void {
 }
 
 pub fn currentGroupingID(editor: *Editor) u64 {
-    return editor.open_workspace_grouping;
+    return editor.workbench.currentGroupingID();
 }
 
 pub fn newGroupingID(editor: *Editor) u64 {
-    editor.grouping_id_counter += 1;
-    return editor.grouping_id_counter;
+    return editor.workbench.newGroupingID();
 }
 
 pub fn newFileID(editor: *Editor) u64 {
@@ -1452,7 +1433,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         } else {
             // Explorer peek/collapse hides the workspace subtree, so `drawWorkspaces` does not
             // run and `workspace.center` would otherwise stay latched from a prior panel animation.
-            for (editor.workspaces.values()) |*ws| {
+            for (editor.workbench.workspaces.values()) |*ws| {
                 ws.center = false;
             }
         }
@@ -1561,7 +1542,7 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
                 .filters = &.{ "*.fiz", "*.pixi", "*.png", "*.jpg", "*.jpeg" },
             })) |files| {
                 for (files) |file| {
-                    _ = editor.openFilePath(file, editor.open_workspace_grouping) catch {
+                    _ = editor.openFilePath(file, editor.workbench.open_workspace_grouping) catch {
                         std.log.err("Failed to open file: {s}", .{file});
                     };
                 }
@@ -1662,135 +1643,16 @@ pub fn setWindowStyle(_: *Editor) void {
 }
 
 pub fn rebuildWorkspaces(editor: *Editor) !void {
-
-    // Create workspaces for each grouping ID
-    for (editor.open_files.values()) |doc| {
-        const grouping = editor.docGrouping(doc);
-        if (!editor.workspaces.contains(grouping)) {
-            var workspace: fizzy.Editor.Workspace = .init(grouping);
-            for (editor.open_files.values()) |d| {
-                if (editor.docGrouping(d) == grouping) {
-                    workspace.open_file_index = editor.open_files.getIndex(d.id) orelse 0;
-                }
-            }
-
-            editor.workspaces.put(fizzy.app.allocator, grouping, workspace) catch |err| {
-                std.log.err("Failed to create workspace: {s}", .{@errorName(err)});
-                return err;
-            };
-        }
-    }
-
-    // Remove workspaces that are no longer needed
-    for (editor.workspaces.values()) |*workspace| {
-        if (editor.workspaces.count() == 1) {
-            break;
-        }
-
-        var contains: bool = false;
-        for (editor.open_files.values()) |doc| {
-            if (editor.docGrouping(doc) == workspace.grouping) {
-                contains = true;
-                break;
-            }
-        }
-
-        if (!contains) {
-            if (editor.open_workspace_grouping == workspace.grouping) {
-                for (editor.workspaces.values()) |*w| {
-                    if (w.grouping != workspace.grouping) {
-                        editor.open_workspace_grouping = w.grouping;
-                        break;
-                    }
-                }
-            }
-
-            workspace.deinit();
-            _ = editor.workspaces.orderedRemove(workspace.grouping);
-            break;
-        }
-    }
-
-    // Ensure the selected file for each workspace is still valid
-    for (editor.workspaces.values()) |*workspace| {
-        if (editor.docAt(workspace.open_file_index)) |doc| {
-            if (editor.docGrouping(doc) == workspace.grouping) {
-                continue;
-            }
-        }
-
-        var i: usize = editor.open_files.count();
-        while (i > 0) {
-            i -= 1;
-            if (editor.docAt(i)) |d| {
-                if (editor.docGrouping(d) == workspace.grouping) {
-                    workspace.open_file_index = i;
-                    break;
-                }
-            }
-        }
-    }
+    try editor.workbench.rebuildWorkspaces();
 }
 
 pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
-    if (index >= editor.workspaces.count()) return .ok;
-
-    var s = fizzy.dvui.paned(@src(), .{
-        .direction = .horizontal,
-        .collapsed_size = if (index == editor.workspaces.count() - 1) std.math.floatMax(f32) else 0,
-        .handle_size = handle_size,
-        .handle_dynamic = .{ .handle_size_max = handle_size, .distance_max = handle_dist },
-    }, .{
-        .expand = .both,
-        .background = false,
-    });
-    defer s.deinit();
-
-    const dragging = editor.panel.paned.dragging or s.dragging;
-
-    if (!dragging) {
-        const should_center = (s.animating and s.split_ratio.* < 1.0) or
-            (editor.panel.paned.animating and editor.panel.paned.split_ratio.* < 1.0);
-        if (index + 1 < editor.workspaces.count()) {
-            editor.workspaces.values()[index + 1].center = should_center;
-        } else if (editor.workspaces.count() == 1) {
-            editor.workspaces.values()[index].center = should_center;
-        }
-    }
-
-    // Ens
-    if (s.collapsing and s.split_ratio.* < 0.5) {
-        s.animateSplit(1.0, dvui.easing.outBack);
-    }
-
-    if (!s.dragging and !s.animating and !s.collapsing and !s.collapsed_state) {
-        if (index == editor.workspaces.count() - 1) {
-            if (s.split_ratio.* != 1.0) {
-                s.animateSplit(1.0, dvui.easing.outBack);
-            }
-        } else {
-            if (dvui.firstFrame(s.wd.id)) {
-                s.split_ratio.* = 1.0;
-                s.animateSplit(0.5, dvui.easing.outBack);
-            }
-        }
-    }
-
-    if (s.showFirst()) {
-        const result = try editor.workspaces.values()[index].draw();
-        if (result != .ok) {
-            return result;
-        }
-    }
-
-    if (s.showSecond()) {
-        const result = try drawWorkspaces(editor, index + 1);
-        if (result != .ok) {
-            return result;
-        }
-    }
-
-    return .ok;
+    const panel = editor.panel.paned;
+    return editor.workbench.drawWorkspaces(.{
+        .dragging = panel.dragging,
+        .animating = panel.animating,
+        .split_ratio = panel.split_ratio,
+    }, index);
 }
 
 pub fn abortSaveAllQuit(editor: *Editor) void {
@@ -1976,11 +1838,8 @@ pub fn openOrFocusFileAtGrouping(editor: *Editor, path: []const u8, grouping: u6
 
 /// After a workspace drop from the Files tree or when `tab_drag` ends; frees path and clears tree reorder stash.
 pub fn clearFileTreeTabDragDropState(editor: *Editor) void {
-    if (editor.tab_drag_from_tree_path) |p| {
-        fizzy.app.allocator.free(p);
-        editor.tab_drag_from_tree_path = null;
-    }
-    if (editor.file_tree_data_id) |id| {
+    editor.workbench.clearFileTreeTabDragDropState();
+    if (editor.workbench.file_tree_data_id) |id| {
         dvui.dataRemove(null, id, "removed_path");
     }
     // `file_tree_data_id` is reassigned each `drawFiles` frame; do not clear the id here so
@@ -2147,8 +2006,7 @@ pub fn processPackJob(editor: *Editor) void {
 }
 
 pub fn activeWorkspaceCanvasRectPhysical(editor: *Editor) ?dvui.Rect.Physical {
-    const workspace = editor.workspaces.getPtr(editor.open_workspace_grouping) orelse return null;
-    return workspace.canvas_rect_physical;
+    return editor.workbench.activeWorkspaceCanvasRectPhysical();
 }
 
 /// Cancel every in-flight load. Workers exit at the next cancellation checkpoint (after
@@ -2389,13 +2247,7 @@ pub fn requestNewFileDialog(editor: *Editor) void {
 }
 
 pub fn setActiveFile(editor: *Editor, index: usize) void {
-    const doc = editor.docAt(index) orelse return;
-    const grouping = editor.docGrouping(doc);
-
-    if (editor.workspaces.getPtr(grouping)) |workspace| {
-        editor.open_workspace_grouping = grouping;
-        workspace.open_file_index = index;
-    }
+    editor.workbench.setActiveDocIndex(index);
 }
 
 pub fn forceCloseFile(editor: *Editor, index: usize) !void {
@@ -2639,7 +2491,7 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     const doc = editor.docAt(index) orelse return;
     const grouping = editor.docGrouping(doc);
 
-    if (editor.workspaces.getPtr(grouping)) |workspace| {
+    if (editor.workbench.workspaces.getPtr(grouping)) |workspace| {
         if (workspace.open_file_index == index) {
             for (editor.open_files.values(), 0..) |d, i| {
                 if (editor.docGrouping(d) == workspace.grouping and d.id != doc.id) {
@@ -2658,7 +2510,7 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     const doc = editor.open_files.get(id) orelse return;
     const grouping = editor.docGrouping(doc);
 
-    if (editor.workspaces.getPtr(grouping)) |workspace| {
+    if (editor.workbench.workspaces.getPtr(grouping)) |workspace| {
         if (workspace.open_file_index == editor.open_files.getIndex(doc.id)) {
             for (editor.open_files.values(), 0..) |d, i| {
                 if (editor.docGrouping(d) == workspace.grouping and d.id != doc.id) {
@@ -2695,10 +2547,7 @@ pub fn deinit(editor: *Editor) !void {
         editor.loading_jobs.deinit(fizzy.app.allocator);
     }
 
-    if (editor.tab_drag_from_tree_path) |p| {
-        fizzy.app.allocator.free(p);
-        editor.tab_drag_from_tree_path = null;
-    }
+    editor.workbench.clearFileTreeTabDragDropState();
 
     if (editor.pending_save_as_path) |p| {
         fizzy.app.allocator.free(p);
@@ -2726,9 +2575,7 @@ pub fn deinit(editor: *Editor) !void {
 
     editor.explorer.deinit();
 
-    for (editor.workspaces.values()) |*workspace| workspace.deinit();
-    editor.workspaces.deinit(fizzy.app.allocator);
-
+    editor.workbench.deinitWorkspaces();
     editor.host.deinit();
     editor.workbench.deinit();
 

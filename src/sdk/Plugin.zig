@@ -78,6 +78,7 @@ pub const VTable = struct {
     bindDocumentToPane: ?*const fn (state: *anyopaque, doc: DocHandle, canvas_id: dvui.Id, workspace_handle: *anyopaque, center: bool) void = null,
     documentGrouping: ?*const fn (state: *anyopaque, doc: DocHandle) u64 = null,
     setDocumentGrouping: ?*const fn (state: *anyopaque, doc: DocHandle, grouping: u64) void = null,
+    removeCanvasPane: ?*const fn (state: *anyopaque, grouping: u64, allocator: std.mem.Allocator) void = null,
     documentPath: ?*const fn (state: *anyopaque, doc: DocHandle) []const u8 = null,
     setDocumentPath: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8) anyerror!void = null,
     documentHasNativeExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
@@ -235,6 +236,10 @@ pub fn documentGrouping(self: Plugin, doc: DocHandle) u64 {
 
 pub fn setDocumentGrouping(self: Plugin, doc: DocHandle, grouping: u64) void {
     if (self.vtable.setDocumentGrouping) |f| f(self.state, doc, grouping);
+}
+
+pub fn removeCanvasPane(self: Plugin, grouping: u64, allocator: std.mem.Allocator) void {
+    if (self.vtable.removeCanvasPane) |f| f(self.state, grouping, allocator);
 }
 
 pub fn documentPath(self: Plugin, doc: DocHandle) []const u8 {
