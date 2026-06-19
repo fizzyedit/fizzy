@@ -381,8 +381,14 @@ values/keys at `Workspace.zig:467+`) — that's the deep coupling.
   Shell `Editor` delegates `activeDoc`/`setActiveFile`/`rebuildWorkspaces`/`drawWorkspaces`/
   grouping helpers through `editor.workbench`. Workbench plugin code uses `Globals.workbench`
   for workspace state; `setDocGrouping` → `doc.owner.setDocumentGrouping` in tab-drag paths.
-- **W3 — remaining `fizzy.editor.*` (doc ops, folder/settings/recents/atlas) → EditorAPI/Host.**
-  Add missing EditorAPI surface as needed (`folder`, `setProjectFolder`, `openFilePath`, …).
+- **W3 — remaining `fizzy.editor.*` → EditorAPI/Host — DONE.** Extended `EditorAPI`/`Host`
+  with doc/file ops (`docFromPath`, `openFilePath`, `openOrFocusFileAtGrouping`,
+  `closeDocById`), project folder (`setProjectFolder`, `closeProjectFolder`, `isPathIgnored`,
+  `recentFolderCount`/`recentFolderAt`, `openInFileBrowser`), explorer state
+  (`explorerViewportWidth`, `explorerBranchIsOpen`, `setExplorerBranchOpen`), and
+  `drawWorkspaces`. Workbench `files.zig`/`Workspace.zig`/`Workbench.zig`/`plugin.zig`
+  now route through `Globals.host` + `Globals.workbench`; zero runtime `fizzy.editor`
+  refs remain in workbench draw paths (comments only).
 - **W4 — `fizzy.dvui`/`fizzy.app`/`fizzy.math`/`fizzy.backend` → sdk/core**; then
   **W5 — `b.addModule("workbench")`** + `@import("workbench")`, drop the shell path imports
   (`Editor.zig` re-exports of `Workspace`/`FileLoadJob`/`Workbench`) and the `fizzy` import.

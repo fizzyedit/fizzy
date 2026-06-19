@@ -188,6 +188,68 @@ pub fn allocDocId(self: *Host) u64 {
     return if (self.shell_api) |a| a.allocDocId() else 0;
 }
 
+pub fn explorerViewportWidth(self: *Host) f32 {
+    return if (self.shell_api) |a| a.explorerViewportWidth() else 0;
+}
+
+pub fn docFromPath(self: *Host, path: []const u8) ?DocHandle {
+    return if (self.shell_api) |a| a.docFromPath(path) else null;
+}
+
+pub fn openFilePath(self: *Host, path: []const u8, grouping: u64) !bool {
+    return if (self.shell_api) |a| try a.openFilePath(path, grouping) else false;
+}
+
+pub fn openOrFocusFileAtGrouping(self: *Host, path: []const u8, grouping: u64) !?usize {
+    return if (self.shell_api) |a| try a.openOrFocusFileAtGrouping(path, grouping) else null;
+}
+
+pub fn closeDocById(self: *Host, id: u64) !void {
+    if (self.shell_api) |a| return a.closeDocById(id);
+}
+
+pub fn setProjectFolder(self: *Host, path: []const u8) !void {
+    return if (self.shell_api) |a| try a.setProjectFolder(path) else error.ShellNotInstalled;
+}
+
+pub fn closeProjectFolder(self: *Host) void {
+    if (self.shell_api) |a| a.closeProjectFolder();
+}
+
+pub fn recentFolderCount(self: *Host) usize {
+    return if (self.shell_api) |a| a.recentFolderCount() else 0;
+}
+
+pub fn recentFolderAt(self: *Host, index: usize) ?[]const u8 {
+    return if (self.shell_api) |a| a.recentFolderAt(index) else null;
+}
+
+pub fn openInFileBrowser(self: *Host, path: []const u8) !void {
+    return if (self.shell_api) |a| try a.openInFileBrowser(path) else error.ShellNotInstalled;
+}
+
+pub fn isPathIgnored(
+    self: *Host,
+    project_root: []const u8,
+    abs_path: []const u8,
+    name: []const u8,
+    kind: std.Io.File.Kind,
+) bool {
+    return if (self.shell_api) |a| a.isPathIgnored(project_root, abs_path, name, kind) else false;
+}
+
+pub fn explorerBranchIsOpen(self: *Host, branch_id: dvui.Id) bool {
+    return if (self.shell_api) |a| a.explorerBranchIsOpen(branch_id) else false;
+}
+
+pub fn setExplorerBranchOpen(self: *Host, branch_id: dvui.Id, open: bool) void {
+    if (self.shell_api) |a| a.setExplorerBranchOpen(branch_id, open);
+}
+
+pub fn drawWorkspaces(self: *Host, index: usize) !dvui.App.Result {
+    return if (self.shell_api) |a| try a.drawWorkspaces(index) else .ok;
+}
+
 pub fn accept(self: *Host) !void {
     if (self.shell_api) |a| return a.accept();
 }

@@ -215,7 +215,7 @@ fn drawTabs(self: *Workspace) void {
                 hbox.init(@src(), .{ .dir = .horizontal }, .{
                     .expand = .none,
                     .border = .all(0),
-                    .color_fill = if (selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(fizzy.editor.settings.content_opacity),
+                    .color_fill = if (selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(Globals.host.contentOpacity()),
                     .background = true,
                     .id_extra = i,
                     .padding = dvui.Rect.all(2),
@@ -270,7 +270,10 @@ fn drawTabs(self: *Workspace) void {
                 }
 
                 if (is_fizzy_file) {
-                    _ = fizzy.core.Sprite.draw(fizzy.editor.atlas.sprites[fizzy.atlas.sprites.logo_default], @src(), fizzy.editor.atlas.source, 2.0, .{
+                    const ui_atlas = Globals.host.uiAtlas();
+                    const ui_sprite = ui_atlas.sprites[fizzy.atlas.sprites.logo_default];
+                    const logo_sprite = fizzy.core.Sprite{ .origin = ui_sprite.origin, .source = ui_sprite.source };
+                    _ = fizzy.core.Sprite.draw(logo_sprite, @src(), ui_atlas.source, 2.0, .{
                         .gravity_y = 0.5,
                         .padding = dvui.Rect.all(4),
                     });
@@ -283,7 +286,7 @@ fn drawTabs(self: *Workspace) void {
                     });
                 }
 
-                dvui.label(@src(), "{s}", .{std.fs.path.basename(fizzy.editor.docPath(doc))}, .{
+                dvui.label(@src(), "{s}", .{std.fs.path.basename(doc.owner.documentPath(doc))}, .{
                     .color_text = if (selected) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
                     .padding = dvui.Rect.all(4),
                     .gravity_y = 0.5,
@@ -361,7 +364,7 @@ fn drawTabs(self: *Workspace) void {
                     }
 
                     if (tab_close_button.clicked()) {
-                        fizzy.editor.closeFileID(doc.id) catch |err| {
+                        Globals.host.closeDocById(doc.id) catch |err| {
                             dvui.log.err("closeFile: {d} failed: {s}", .{ i, @errorName(err) });
                         };
                         break;
@@ -406,7 +409,7 @@ fn drawTabs(self: *Workspace) void {
                     });
 
                     if (ghost_close.clicked()) {
-                        fizzy.editor.closeFileID(doc.id) catch |err| {
+                        Globals.host.closeDocById(doc.id) catch |err| {
                             dvui.log.err("closeFile: {d} failed: {s}", .{ i, @errorName(err) });
                         };
                         break;
@@ -702,7 +705,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
                         const new_g = Globals.workbench.newGroupingID();
-                        const maybe_idx = fizzy.editor.openOrFocusFileAtGrouping(path, new_g) catch {
+                        const maybe_idx = Globals.host.openOrFocusFileAtGrouping(path, new_g) catch {
                             Globals.workbench.clearFileTreeTabDragDropState();
                             continue :events_loop;
                         };
@@ -730,7 +733,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        const maybe_idx = fizzy.editor.openOrFocusFileAtGrouping(path, self.grouping) catch {
+                        const maybe_idx = Globals.host.openOrFocusFileAtGrouping(path, self.grouping) catch {
                             Globals.workbench.clearFileTreeTabDragDropState();
                             continue :events_loop;
                         };
@@ -754,10 +757,10 @@ pub fn drawCanvas(self: *Workspace) !void {
 
     switch (builtin.os.tag) {
         .macos => {
-            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
+            content_color = if (!Globals.host.isMaximized()) content_color.opacity(Globals.host.contentOpacity()) else content_color;
         },
         .windows => {
-            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color.opacity(fizzy.editor.settings.content_opacity) else content_color;
+            content_color = if (!Globals.host.isMaximized()) content_color.opacity(Globals.host.contentOpacity()) else content_color;
         },
         else => {},
     }
@@ -778,7 +781,7 @@ pub fn drawCanvas(self: *Workspace) !void {
         }
 
         if (Globals.host.docByIndex(self.open_file_index)) |doc| {
-        fizzy.editor.bindDocToPane(doc, canvas_vbox.data().id, self, self.center);
+        doc.owner.bindDocumentToPane(doc, canvas_vbox.data().id, self, self.center);
         _ = try doc.owner.drawDocument(doc);
         }
     } else {
@@ -890,7 +893,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         );
 
         if (button.clicked()) {
-            fizzy.editor.requestNewFileDialog();
+            Globals.host.requestNewDocument(null, 0);
         }
     }
     {
@@ -982,7 +985,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         });
         defer scroll_area.deinit();
 
-        var i: usize = fizzy.editor.recents.folders.items.len;
+        var i: usize = Globals.host.recentFolderCount();
         while (i > 0) : (i -= 1) {
             var anim = dvui.animate(@src(), .{
                 .kind = .horizontal,
@@ -994,7 +997,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
             });
             defer anim.deinit();
 
-            const folder = fizzy.editor.recents.folders.items[i - 1];
+            const folder = Globals.host.recentFolderAt(i - 1) orelse continue;
             if (dvui.button(@src(), folder, .{
                 .draw_focus = false,
             }, .{
@@ -1008,7 +1011,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
                 .color_fill_press = dvui.themeGet().color(.window, .fill_press),
                 .color_text = dvui.themeGet().color(.control, .text).opacity(0.5),
             })) {
-                try fizzy.editor.setProjectFolder(folder);
+                try Globals.host.setProjectFolder(folder);
             }
         }
     }
@@ -1070,7 +1073,7 @@ pub fn drawBubble(rect: dvui.Rect, rs: dvui.RectScale, color: [4]u8, _: usize) !
 // This should never be able to return more than one folder
 pub fn setProjectFolderCallback(folder: ?[][:0]const u8) void {
     if (folder) |f| {
-        fizzy.editor.setProjectFolder(f[0]) catch {
+        Globals.host.setProjectFolder(f[0]) catch {
             dvui.log.err("Failed to set project folder: {s}", .{f[0]});
         };
     }
@@ -1079,7 +1082,7 @@ pub fn setProjectFolderCallback(folder: ?[][:0]const u8) void {
 pub fn openFilesCallback(files: ?[][:0]const u8) void {
     if (files) |f| {
         for (f) |file| {
-            _ = fizzy.editor.openFilePath(file, Globals.workbench.open_workspace_grouping) catch {
+            _ = Globals.host.openFilePath(file, Globals.workbench.open_workspace_grouping) catch {
                 dvui.log.err("Failed to open file: {s}", .{file});
             };
         }

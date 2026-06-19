@@ -551,6 +551,20 @@ const shell_api_vtable: sdk.EditorAPI.VTable = .{
     .setActiveDocIndex = shellSetActiveDocIndex,
     .swapDocs = shellSwapDocs,
     .allocDocId = shellAllocDocId,
+    .explorerViewportWidth = shellExplorerViewportWidth,
+    .docFromPath = shellDocFromPath,
+    .openFilePath = shellOpenFilePath,
+    .openOrFocusFileAtGrouping = shellOpenOrFocusFileAtGrouping,
+    .closeDocById = shellCloseDocById,
+    .setProjectFolder = shellSetProjectFolder,
+    .closeProjectFolder = shellCloseProjectFolder,
+    .recentFolderCount = shellRecentFolderCount,
+    .recentFolderAt = shellRecentFolderAt,
+    .openInFileBrowser = shellOpenInFileBrowser,
+    .isPathIgnored = shellIsPathIgnored,
+    .explorerBranchIsOpen = shellExplorerBranchIsOpen,
+    .setExplorerBranchOpen = shellSetExplorerBranchOpen,
+    .drawWorkspaces = shellDrawWorkspaces,
     .accept = shellAccept,
     .cancel = shellCancel,
     .copy = shellCopy,
@@ -652,6 +666,61 @@ fn shellSwapDocs(ctx: *anyopaque, a: usize, b: usize) void {
 }
 fn shellAllocDocId(ctx: *anyopaque) u64 {
     return shellCtx(ctx).newFileID();
+}
+fn shellExplorerViewportWidth(ctx: *anyopaque) f32 {
+    return shellCtx(ctx).explorer.scroll_info.viewport.w;
+}
+fn shellDocFromPath(ctx: *anyopaque, path: []const u8) ?sdk.DocHandle {
+    return shellCtx(ctx).docFromPath(path);
+}
+fn shellOpenFilePath(ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!bool {
+    return shellCtx(ctx).openFilePath(path, grouping);
+}
+fn shellOpenOrFocusFileAtGrouping(ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!?usize {
+    return shellCtx(ctx).openOrFocusFileAtGrouping(path, grouping);
+}
+fn shellCloseDocById(ctx: *anyopaque, id: u64) anyerror!void {
+    return shellCtx(ctx).closeFileID(id);
+}
+fn shellSetProjectFolder(ctx: *anyopaque, path: []const u8) anyerror!void {
+    return shellCtx(ctx).setProjectFolder(path);
+}
+fn shellCloseProjectFolder(ctx: *anyopaque) void {
+    shellCtx(ctx).closeProjectFolder();
+}
+fn shellRecentFolderCount(ctx: *anyopaque) usize {
+    return shellCtx(ctx).recents.folders.items.len;
+}
+fn shellRecentFolderAt(ctx: *anyopaque, index: usize) ?[]const u8 {
+    const editor = shellCtx(ctx);
+    if (index >= editor.recents.folders.items.len) return null;
+    return editor.recents.folders.items[index];
+}
+fn shellOpenInFileBrowser(ctx: *anyopaque, path: []const u8) anyerror!void {
+    return shellCtx(ctx).openInFileBrowser(path);
+}
+fn shellIsPathIgnored(
+    ctx: *anyopaque,
+    project_root: []const u8,
+    abs_path: []const u8,
+    name: []const u8,
+    kind: std.Io.File.Kind,
+) bool {
+    return shellCtx(ctx).ignore.isIgnored(project_root, abs_path, name, kind);
+}
+fn shellExplorerBranchIsOpen(ctx: *anyopaque, branch_id: dvui.Id) bool {
+    return shellCtx(ctx).explorer.open_branches.contains(branch_id);
+}
+fn shellSetExplorerBranchOpen(ctx: *anyopaque, branch_id: dvui.Id, open: bool) void {
+    const editor = shellCtx(ctx);
+    if (open) {
+        editor.explorer.open_branches.put(branch_id, {}) catch {};
+    } else {
+        _ = editor.explorer.open_branches.remove(branch_id);
+    }
+}
+fn shellDrawWorkspaces(ctx: *anyopaque, index: usize) anyerror!dvui.App.Result {
+    return drawWorkspaces(shellCtx(ctx), index);
 }
 fn shellAccept(ctx: *anyopaque) anyerror!void {
     return shellCtx(ctx).accept();
@@ -1807,6 +1876,15 @@ pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
 
     pixelart.plugin.pluginPtr().reloadProjectFolder(fizzy.app.allocator);
     editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);
+}
+
+pub fn closeProjectFolder(editor: *Editor) void {
+    if (editor.folder) |folder| {
+        editor.ignore.deinit(fizzy.app.allocator);
+        pixelart.plugin.pluginPtr().persistProjectFolder();
+        fizzy.app.allocator.free(folder);
+        editor.folder = null;
+    }
 }
 
 pub fn saving(editor: *Editor) bool {

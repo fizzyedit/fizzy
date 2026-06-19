@@ -104,6 +104,39 @@ pub const VTable = struct {
     /// Allocate the next shell document id (monotonic).
     allocDocId: *const fn (ctx: *anyopaque) u64,
 
+    /// Explorer scroll viewport width (0 when unavailable).
+    explorerViewportWidth: *const fn (ctx: *anyopaque) f32,
+    /// Lookup an open document by absolute path.
+    docFromPath: *const fn (ctx: *anyopaque, path: []const u8) ?DocHandle,
+    /// Open `path` in `grouping` (async load when needed). Returns true when a new load started.
+    openFilePath: *const fn (ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!bool,
+    /// Focus an open doc or queue load; returns index when already open, null when loading.
+    openOrFocusFileAtGrouping: *const fn (ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!?usize,
+    /// Close document `id` (may prompt when dirty).
+    closeDocById: *const fn (ctx: *anyopaque, id: u64) anyerror!void,
+    /// Open/switch the project root folder.
+    setProjectFolder: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
+    /// Close the current project folder (no-op when none open).
+    closeProjectFolder: *const fn (ctx: *anyopaque) void,
+    /// Recent project folders (most recent last).
+    recentFolderCount: *const fn (ctx: *anyopaque) usize,
+    recentFolderAt: *const fn (ctx: *anyopaque, index: usize) ?[]const u8,
+    /// Reveal `path` in the OS file browser.
+    openInFileBrowser: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
+    /// True when `abs_path` is ignored by `.fizignore`/`.gitignore` at `project_root`.
+    isPathIgnored: *const fn (
+        ctx: *anyopaque,
+        project_root: []const u8,
+        abs_path: []const u8,
+        name: []const u8,
+        kind: std.Io.File.Kind,
+    ) bool,
+    /// Explorer tree branch expanded state.
+    explorerBranchIsOpen: *const fn (ctx: *anyopaque, branch_id: dvui.Id) bool,
+    setExplorerBranchOpen: *const fn (ctx: *anyopaque, branch_id: dvui.Id, open: bool) void,
+    /// Draw workspace panes (center region); `index` is the root pane (usually 0).
+    drawWorkspaces: *const fn (ctx: *anyopaque, index: usize) anyerror!dvui.App.Result,
+
     // ---- document editing (active file) ----
     accept: *const fn (ctx: *anyopaque) anyerror!void,
     cancel: *const fn (ctx: *anyopaque) anyerror!void,
@@ -220,6 +253,68 @@ pub fn swapDocs(self: EditorAPI, a: usize, b: usize) void {
 
 pub fn allocDocId(self: EditorAPI) u64 {
     return self.vtable.allocDocId(self.ctx);
+}
+
+pub fn explorerViewportWidth(self: EditorAPI) f32 {
+    return self.vtable.explorerViewportWidth(self.ctx);
+}
+
+pub fn docFromPath(self: EditorAPI, path: []const u8) ?DocHandle {
+    return self.vtable.docFromPath(self.ctx, path);
+}
+
+pub fn openFilePath(self: EditorAPI, path: []const u8, grouping: u64) !bool {
+    return self.vtable.openFilePath(self.ctx, path, grouping);
+}
+
+pub fn openOrFocusFileAtGrouping(self: EditorAPI, path: []const u8, grouping: u64) !?usize {
+    return self.vtable.openOrFocusFileAtGrouping(self.ctx, path, grouping);
+}
+
+pub fn closeDocById(self: EditorAPI, id: u64) !void {
+    return self.vtable.closeDocById(self.ctx, id);
+}
+
+pub fn setProjectFolder(self: EditorAPI, path: []const u8) !void {
+    return self.vtable.setProjectFolder(self.ctx, path);
+}
+
+pub fn closeProjectFolder(self: EditorAPI) void {
+    self.vtable.closeProjectFolder(self.ctx);
+}
+
+pub fn recentFolderCount(self: EditorAPI) usize {
+    return self.vtable.recentFolderCount(self.ctx);
+}
+
+pub fn recentFolderAt(self: EditorAPI, index: usize) ?[]const u8 {
+    return self.vtable.recentFolderAt(self.ctx, index);
+}
+
+pub fn openInFileBrowser(self: EditorAPI, path: []const u8) !void {
+    return self.vtable.openInFileBrowser(self.ctx, path);
+}
+
+pub fn isPathIgnored(
+    self: EditorAPI,
+    project_root: []const u8,
+    abs_path: []const u8,
+    name: []const u8,
+    kind: std.Io.File.Kind,
+) bool {
+    return self.vtable.isPathIgnored(self.ctx, project_root, abs_path, name, kind);
+}
+
+pub fn explorerBranchIsOpen(self: EditorAPI, branch_id: dvui.Id) bool {
+    return self.vtable.explorerBranchIsOpen(self.ctx, branch_id);
+}
+
+pub fn setExplorerBranchOpen(self: EditorAPI, branch_id: dvui.Id, open: bool) void {
+    self.vtable.setExplorerBranchOpen(self.ctx, branch_id, open);
+}
+
+pub fn drawWorkspaces(self: EditorAPI, index: usize) !dvui.App.Result {
+    return self.vtable.drawWorkspaces(self.ctx, index);
 }
 
 pub fn accept(self: EditorAPI) !void {

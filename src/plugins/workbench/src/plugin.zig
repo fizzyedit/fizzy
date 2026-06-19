@@ -6,6 +6,7 @@ const std = @import("std");
 const fizzy = @import("../../../fizzy.zig");
 const dvui = @import("dvui");
 const sdk = fizzy.sdk;
+const Globals = @import("Globals.zig");
 const files = @import("files.zig");
 
 /// Stable contribution ids (plugin-namespaced) referenced across modules.
@@ -45,7 +46,7 @@ fn drawFiles(_: ?*anyopaque) anyerror!void {
 }
 
 fn drawCenter(_: ?*anyopaque) anyerror!dvui.App.Result {
-    return fizzy.editor.drawWorkspaces(0);
+    return Globals.host.drawWorkspaces(0);
 }
 
 /// File-management keybinds (open / save). The shell registers its own

@@ -80,7 +80,7 @@ pub fn draw() !void {
     // Safe as long as `selected_paths` isn't mutated between now and `tree.deinit`.
     tree.selected_branch_ids = selectionBranchIdsForMultiDrag(dvui.currentWindow().arena()) catch selected_paths.keys();
 
-    if (fizzy.editor.folder) |path| {
+    if (Globals.host.folder()) |path| {
         try drawFiles(path, tree);
     } else {
         Globals.workbench.file_tree_data_id = null;
@@ -93,7 +93,7 @@ pub fn draw() !void {
 
         if (dvui.button(@src(), "Open Folder", .{ .draw_focus = false }, .{ .expand = .horizontal, .style = .highlight })) {
             if (try dvui.dialogNativeFolderSelect(dvui.currentWindow().arena(), .{ .title = "Open Project Folder" })) |folder| {
-                try fizzy.editor.setProjectFolder(folder);
+                try Globals.host.setProjectFolder(folder);
             }
         }
     }
@@ -103,7 +103,7 @@ fn drawWeb() !void {
     var tree = fizzy.dvui.TreeWidget.tree(@src(), .{}, .{ .background = false, .expand = .both });
     defer tree.deinit();
 
-    const viewport_w = fizzy.editor.explorer.scroll_info.viewport.w;
+    const viewport_w = Globals.host.explorerViewportWidth();
     const wrap_w: f32 = if (viewport_w > 0) viewport_w else 200;
 
     {
@@ -267,11 +267,7 @@ fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u
     if ((dvui.menuItemLabel(@src(), "Close", .{}, .{
         .expand = .horizontal,
     })) != null) {
-        if (fizzy.editor.folder) |f| {
-            fizzy.editor.ignore.deinit(fizzy.app.allocator);
-            fizzy.app.allocator.free(f);
-            fizzy.editor.folder = null;
-        }
+        Globals.host.closeProjectFolder();
 
         fw2.close();
     }
@@ -279,7 +275,7 @@ fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u
     _ = dvui.separator(@src(), .{ .expand = .horizontal });
 
     if ((dvui.menuItemLabel(@src(), open_message, .{}, .{ .expand = .horizontal })) != null) {
-        fizzy.editor.openInFileBrowser(project_path) catch {
+        Globals.host.openInFileBrowser(project_path) catch {
             dvui.log.err("Failed to open file browser", .{});
         };
 
@@ -417,7 +413,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             .expand = .horizontal,
             .gravity_y = 0.5,
         });
-        fizzy.editor.workbench.drawBranchDecorations(full_path, id_extra);
+        Globals.workbench.drawBranchDecorations(full_path, id_extra);
     } else {
         dvui.label(@src(), "{s}", .{label}, .{
             .color_text = color,
@@ -467,8 +463,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                     &.{ directory, entry.name },
                 );
 
-                if (fizzy.editor.folder) |proj_root| {
-                    if (fizzy.editor.ignore.isIgnored(proj_root, abs_path, entry.name, entry.kind)) {
+                if (Globals.host.folder()) |proj_root| {
+                    if (Globals.host.isPathIgnored(proj_root, abs_path, entry.name, entry.kind)) {
                         continue;
                     }
                 }
@@ -500,7 +496,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                 var expanded = false;
                 const expanded_indent: f32 = 14.0;
 
-                if (fizzy.editor.explorer.open_branches.get(branch_id) != null) {
+                if (Globals.host.explorerBranchIsOpen(branch_id)) {
                     expanded = true;
                 }
 
@@ -599,7 +595,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                 if (branch.dropInto() and entry.kind == .directory) {
                     try applyFileMove(inner_unique_id, tree, abs_path);
                     // Expand the folder so the dropped item is visible
-                    fizzy.editor.explorer.open_branches.put(branch_id, {}) catch {};
+                    Globals.host.setExplorerBranchOpen(branch_id, true);
                 }
 
                 { // Add right click context menu for item options
@@ -635,7 +631,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                                     break :blk &[_][]const u8{};
                                 };
                                 for (to_open) |p| {
-                                    _ = fizzy.editor.openFilePath(p, Globals.workbench.currentGroupingID()) catch |e| {
+                                    _ = Globals.host.openFilePath(p, Globals.workbench.currentGroupingID()) catch |e| {
                                         dvui.log.err("Failed to open file: {any} ({s})", .{ e, p });
                                     };
                                 }
@@ -661,7 +657,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                                             Globals.workbench.newGroupingID();
                                         have_grouping = true;
                                     }
-                                    _ = fizzy.editor.openFilePath(p, side_grouping) catch {
+                                    _ = Globals.host.openFilePath(p, side_grouping) catch {
                                         dvui.log.err("Failed to open file: {s}", .{p});
                                     };
                                 }
@@ -673,7 +669,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                         }
 
                         if ((dvui.menuItemLabel(@src(), open_message, .{}, .{ .expand = .horizontal })) != null) {
-                            fizzy.editor.openInFileBrowser(if (entry.kind == .file) std.fs.path.dirname(abs_path) orelse abs_path else abs_path) catch {
+                            Globals.host.openInFileBrowser(if (entry.kind == .file) std.fs.path.dirname(abs_path) orelse abs_path else abs_path) catch {
                                 dvui.log.err("Failed to open file browser", .{});
                             };
 
@@ -745,13 +741,16 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                         const file_icon_color: dvui.Color = if (ext == .fizzy) .transparent else icon_color;
 
                         if (ext == .fizzy) {
-                    _ = fizzy.core.Sprite.draw(
-                        fizzy.editor.atlas.sprites[fizzy.atlas.sprites.logo_default],
-                        @src(),
-                        fizzy.editor.atlas.source,
-                        2.0,
-                        .{ .gravity_y = 0.5, .margin = padding, .padding = padding, .background = false },
-                    );
+                            const ui_atlas = Globals.host.uiAtlas();
+                            const ui_sprite = ui_atlas.sprites[fizzy.atlas.sprites.logo_default];
+                            const logo_sprite = fizzy.core.Sprite{ .origin = ui_sprite.origin, .source = ui_sprite.source };
+                            _ = fizzy.core.Sprite.draw(
+                                logo_sprite,
+                                @src(),
+                                ui_atlas.source,
+                                2.0,
+                                .{ .gravity_y = 0.5, .margin = padding, .padding = padding, .background = false },
+                            );
                         } else {
                             dvui.icon(
                                 @src(),
@@ -768,15 +767,15 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
 
                         editableLabel(
                             inner_id_extra.*,
-                            if (filter_text.len > 0) std.fs.path.relativePosix(dvui.currentWindow().arena(), ".", fizzy.editor.folder.?, abs_path) catch entry.name else entry.name,
-                            if (fizzy.editor.docFromPath(abs_path) != null) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
+                            if (filter_text.len > 0) std.fs.path.relativePosix(dvui.currentWindow().arena(), ".", Globals.host.folder().?, abs_path) catch entry.name else entry.name,
+                            if (Globals.host.docFromPath(abs_path) != null) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
                             entry.kind,
                             abs_path,
                         ) catch {
                             dvui.log.err("Failed to draw editable label", .{});
                         };
 
-                        if (fizzy.editor.docFromPath(abs_path)) |doc| {
+                        if (Globals.host.docFromPath(abs_path)) |doc| {
                             const save_flash_elapsed = doc.owner.timeSinceSaveCompleteNs(doc);
                             if (doc.owner.showsSaveStatusIndicator(doc)) {
                                 fizzy.dvui.bubbleSpinner(@src(), .{
@@ -810,7 +809,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                             if (mode == .replace) {
                                 switch (ext) {
                                     .fizzy, .png, .jpg => {
-                                        _ = fizzy.editor.openFilePath(abs_path, Globals.workbench.currentGroupingID()) catch |err| {
+                                        _ = Globals.host.openFilePath(abs_path, Globals.workbench.currentGroupingID()) catch |err| {
                                             dvui.log.err("{any}: {s}", .{ err, abs_path });
                                         };
                                     },
@@ -880,9 +879,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                             //     .alpha = 0.15 * t,
                             // },
                         })) {
-                            fizzy.editor.explorer.open_branches.put(branch_id, {}) catch {
-                                dvui.log.debug("Failed to track branch state!", .{});
-                            };
+                            Globals.host.setExplorerBranchOpen(branch_id, true);
                             try search(
                                 abs_path,
                                 tree,
@@ -893,13 +890,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                                 branch,
                             );
                         } else {
-                            if (fizzy.editor.explorer.open_branches.contains(branch_id)) {
-                                _ = fizzy.editor.explorer.open_branches.remove(branch_id);
+                            if (Globals.host.explorerBranchIsOpen(branch_id)) {
+                                Globals.host.setExplorerBranchOpen(branch_id, false);
                             }
                         }
                         // Keep open_branches in sync so hover-expand and drop-into expand persist next frame
                         if (branch.expanded) {
-                            fizzy.editor.explorer.open_branches.put(branch_id, {}) catch {};
+                            Globals.host.setExplorerBranchOpen(branch_id, true);
                         }
                         color_id.* = color_id.* + 1;
                     },
@@ -1203,7 +1200,7 @@ pub fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.m
         return false;
     };
 
-    if (fizzy.editor.docFromPath(source_path)) |doc| {
+    if (Globals.host.docFromPath(source_path)) |doc| {
         doc.owner.setDocumentPath(doc, new_path) catch {
             dvui.log.err("Failed to duplicate path: {s}", .{new_path});
             return error.FailedToDuplicatePath;
@@ -1228,7 +1225,7 @@ pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File
             var di: usize = 0;
             while (di < Globals.host.openDocCount()) : (di += 1) {
                 const doc = Globals.host.docByIndex(di) orelse continue;
-                const path = fizzy.editor.docPath(doc);
+                const path = doc.owner.documentPath(doc);
                 if (std.mem.containsAtLeast(u8, path, 1, full_path)) {
                     const file_name = dvui.currentWindow().arena().dupe(u8, std.fs.path.basename(path)) catch "Failed to duplicate path";
                     const new_full = try std.fs.path.join(fizzy.app.allocator, &.{ new_path, file_name });
@@ -1241,7 +1238,7 @@ pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File
         .file => {
             std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename file: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
 
-            if (fizzy.editor.docFromPath(full_path)) |doc| {
+            if (Globals.host.docFromPath(full_path)) |doc| {
                 doc.owner.setDocumentPath(doc, new_path) catch {
                     dvui.log.err("Failed to duplicate path: {s}", .{new_path});
                     return error.FailedToDuplicatePath;
