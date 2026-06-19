@@ -1,15 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const dvui = @import("dvui");
-const sdk = @import("sdk");
-const pixelart = @import("pixelart");
-const fizzy = @import("../../../fizzy.zig");
+const wb = @import("../workbench.zig");
+const dvui = wb.dvui;
+const wdvui = wb.wdvui;
+const sdk = wb.sdk;
 const Globals = @import("Globals.zig");
 const icons = @import("icons");
-
-const App = fizzy.App;
-const Editor = fizzy.Editor;
 
 /// Workspaces are drawn recursively inside of the explorer paned widget
 /// second pane, and contains drag/drop enabled tabs. Tabs can freely be dragged to
@@ -50,14 +47,14 @@ const handle_dist = 60;
 
 const opacity = 60;
 
-const color_0 = fizzy.math.Color.initBytes(0, 0, 0, 0);
-const color_1 = fizzy.math.Color.initBytes(230, 175, 137, opacity);
-const color_2 = fizzy.math.Color.initBytes(216, 145, 115, opacity);
-const color_3 = fizzy.math.Color.initBytes(41, 23, 41, opacity);
-const color_4 = fizzy.math.Color.initBytes(194, 109, 92, opacity);
-const color_5 = fizzy.math.Color.initBytes(180, 89, 76, opacity);
+const color_0 = wb.math.Color.initBytes(0, 0, 0, 0);
+const color_1 = wb.math.Color.initBytes(230, 175, 137, opacity);
+const color_2 = wb.math.Color.initBytes(216, 145, 115, opacity);
+const color_3 = wb.math.Color.initBytes(41, 23, 41, opacity);
+const color_4 = wb.math.Color.initBytes(194, 109, 92, opacity);
+const color_5 = wb.math.Color.initBytes(180, 89, 76, opacity);
 
-const logo_colors: [12]fizzy.math.Color = [_]fizzy.math.Color{
+const logo_colors: [12]wb.math.Color = [_]wb.math.Color{
     color_1, color_1, color_1,
     color_2, color_2, color_3,
     color_4, color_3, color_0,
@@ -224,7 +221,7 @@ fn drawTabs(self: *Workspace) void {
 
                 defer hbox.deinit();
 
-                const tab_hovered = fizzy.dvui.hovered(hbox.data());
+                const tab_hovered = wdvui.hovered(hbox.data());
 
                 if (selected) {
                     if (!reorderable.floating()) {
@@ -251,14 +248,14 @@ fn drawTabs(self: *Workspace) void {
                     if (prev_same_group_index) |prev_index| {
                         if (i == prev_index) {
                             // This tab is directly to the left of the active tab.
-                            fizzy.dvui.drawEdgeShadow(hbox.data().rectScale(), .right, .{});
+                            wdvui.drawEdgeShadow(hbox.data().rectScale(), .right, .{});
                         }
                     }
 
                     if (next_same_group_index) |next_index| {
                         if (i == next_index) {
                             // This tab is directly to the right of the active tab.
-                            fizzy.dvui.drawEdgeShadow(hbox.data().rectScale(), .left, .{});
+                            wdvui.drawEdgeShadow(hbox.data().rectScale(), .left, .{});
                         }
                     }
                 }
@@ -271,9 +268,9 @@ fn drawTabs(self: *Workspace) void {
 
                 if (is_fizzy_file) {
                     const ui_atlas = Globals.host.uiAtlas();
-                    const ui_sprite = ui_atlas.sprites[fizzy.atlas.sprites.logo_default];
-                    const logo_sprite = fizzy.core.Sprite{ .origin = ui_sprite.origin, .source = ui_sprite.source };
-                    _ = fizzy.core.Sprite.draw(logo_sprite, @src(), ui_atlas.source, 2.0, .{
+                    const ui_sprite = ui_atlas.sprites[wb.atlas.sprites.logo_default];
+                    const logo_sprite = wb.Sprite{ .origin = ui_sprite.origin, .source = ui_sprite.source };
+                    _ = wb.Sprite.draw(logo_sprite, @src(), ui_atlas.source, 2.0, .{
                         .gravity_y = 0.5,
                         .padding = dvui.Rect.all(4),
                     });
@@ -292,8 +289,8 @@ fn drawTabs(self: *Workspace) void {
                     .gravity_y = 0.5,
                 });
 
-                const close_inner = fizzy.dvui.windowHeaderCloseInnerSide();
-                const close_pad = fizzy.dvui.window_header_close_margin;
+                const close_inner = wdvui.windowHeaderCloseInnerSide();
+                const close_pad = wdvui.window_header_close_margin;
                 const tab_status_slot = close_inner + close_pad.x + close_pad.w;
 
                 const status_close_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -310,14 +307,14 @@ fn drawTabs(self: *Workspace) void {
                 // atomic load — the write side uses an atomic store in matching `save*` paths.
                 const save_flash_elapsed = doc.owner.timeSinceSaveCompleteNs(doc);
                 const save_in_check_phase = if (save_flash_elapsed) |elapsed|
-                    fizzy.dvui.bubbleSpinnerSaveInCheckPhase(elapsed)
+                    wdvui.bubbleSpinnerSaveInCheckPhase(elapsed)
                 else
                     false;
                 const save_blocks_tab_close = doc.owner.isDocumentSaving(doc) or
                     (doc.owner.showsSaveStatusIndicator(doc) and !save_in_check_phase);
 
                 if (save_blocks_tab_close) {
-                    fizzy.dvui.bubbleSpinner(@src(), .{
+                    wdvui.bubbleSpinner(@src(), .{
                         .id_extra = i *% 16 + 5,
                         .expand = .none,
                         .min_size_content = .{ .w = close_inner, .h = close_inner },
@@ -328,7 +325,7 @@ fn drawTabs(self: *Workspace) void {
                         .complete_elapsed_ns = save_flash_elapsed,
                     });
                 } else if (save_in_check_phase and !tab_hovered) {
-                    fizzy.dvui.bubbleSpinner(@src(), .{
+                    wdvui.bubbleSpinner(@src(), .{
                         .id_extra = i *% 16 + 5,
                         .expand = .none,
                         .min_size_content = .{ .w = close_inner, .h = close_inner },
@@ -340,7 +337,7 @@ fn drawTabs(self: *Workspace) void {
                     });
                 } else if (tab_hovered) {
                     var tab_close_button: dvui.ButtonWidget = undefined;
-                    tab_close_button.init(@src(), .{ .draw_focus = false }, fizzy.dvui.windowHeaderCloseButtonOptions(.{
+                    tab_close_button.init(@src(), .{ .draw_focus = false }, wdvui.windowHeaderCloseButtonOptions(.{
                         .expand = .none,
                         .min_size_content = .{ .w = close_inner, .h = close_inner },
                         .id_extra = i *% 16 + 1,
@@ -372,7 +369,7 @@ fn drawTabs(self: *Workspace) void {
                 } else if (selected and !doc.owner.isDirty(doc)) {
                     const tab_text = dvui.themeGet().color(.window, .text);
                     var ghost_close: dvui.ButtonWidget = undefined;
-                    ghost_close.init(@src(), .{ .draw_focus = false }, fizzy.dvui.windowHeaderCloseButtonOptions(.{
+                    ghost_close.init(@src(), .{ .draw_focus = false }, wdvui.windowHeaderCloseButtonOptions(.{
                         .expand = .none,
                         .min_size_content = .{ .w = close_inner, .h = close_inner },
                         .id_extra = i *% 16 + 3,
@@ -837,7 +834,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
 
                 if (fizzy_color.value[3] < 1.0 and fizzy_color.value[3] > 0.0) {
                     const theme_bg = dvui.themeGet().color(.window, .fill);
-                    fizzy_color = fizzy_color.lerp(fizzy.math.Color.initBytes(theme_bg.r, theme_bg.g, theme_bg.b, 255), fizzy_color.value[3]);
+                    fizzy_color = fizzy_color.lerp(wb.math.Color.initBytes(theme_bg.r, theme_bg.g, theme_bg.b, 255), fizzy_color.value[3]);
                     fizzy_color.value[3] = 1.0;
                 }
 
@@ -884,7 +881,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         button.processEvents();
         button.drawBackground();
 
-        fizzy.dvui.labelWithKeybind(
+        wdvui.labelWithKeybind(
             "New File",
             dvui.currentWindow().keybinds.get("new_file") orelse .{},
             true,
@@ -911,7 +908,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         button.processEvents();
         button.drawBackground();
 
-        fizzy.dvui.labelWithKeybind(
+        wdvui.labelWithKeybind(
             "Open Folder",
             dvui.currentWindow().keybinds.get("open_folder") orelse .{},
             true,
@@ -920,7 +917,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         );
 
         if (button.clicked()) {
-            fizzy.backend.showOpenFolderDialog(setProjectFolderCallback, null);
+            Globals.host.showOpenFolderDialog(setProjectFolderCallback, null);
         }
     }
 
@@ -939,7 +936,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         button.processEvents();
         button.drawBackground();
 
-        fizzy.dvui.labelWithKeybind(
+        wdvui.labelWithKeybind(
             "Open Files",
             dvui.currentWindow().keybinds.get("open_files") orelse .{},
             true,
@@ -960,7 +957,7 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
             //     }
             // }
 
-            fizzy.backend.showOpenFileDialog(openFilesCallback, &.{
+            Globals.host.showOpenFileDialog(openFilesCallback, &.{
                 .{ .name = "Image Files", .pattern = "fizzy;png;jpg;jpeg" },
             }, "", null);
         }

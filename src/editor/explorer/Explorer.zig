@@ -2,6 +2,7 @@ const std = @import("std");
 
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
+const workbench = @import("workbench");
 const icons = @import("icons");
 
 const Core = @import("mach").Core;
@@ -12,7 +13,7 @@ const nfd = @import("nfd");
 
 pub const Explorer = @This();
 
-pub const files = @import("../../plugins/workbench/src/files.zig");
+pub const files = workbench.files;
 // pub const animations = @import("animations.zig");
 // pub const keyframe_animations = @import("keyframe_animations.zig");
 // The pixel-art project view is contributed by the plugin via `Host.registerSidebarView`,
@@ -107,7 +108,7 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
         .background = false,
     });
 
-    if (!fizzy.editor.host.isActiveSidebarView(@import("../../plugins/workbench/src/plugin.zig").view_files)) {
+    if (!fizzy.editor.host.isActiveSidebarView(workbench.plugin.view_files)) {
         fizzy.editor.workbench.file_tree_data_id = null;
         fizzy.editor.workbench.clearFileTreeTabDragDropState();
     }

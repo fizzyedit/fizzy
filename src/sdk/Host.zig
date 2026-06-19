@@ -250,6 +250,20 @@ pub fn drawWorkspaces(self: *Host, index: usize) !dvui.App.Result {
     return if (self.shell_api) |a| try a.drawWorkspaces(index) else .ok;
 }
 
+pub fn showOpenFolderDialog(self: *Host, cb: EditorAPI.OpenPathsCallback, default_folder: ?[]const u8) void {
+    if (self.shell_api) |a| a.showOpenFolderDialog(cb, default_folder);
+}
+
+pub fn showOpenFileDialog(
+    self: *Host,
+    cb: EditorAPI.OpenPathsCallback,
+    filters: []const EditorAPI.SaveDialogFilter,
+    default_filename: []const u8,
+    default_folder: ?[]const u8,
+) void {
+    if (self.shell_api) |a| a.showOpenFileDialog(cb, filters, default_filename, default_folder);
+}
+
 pub fn accept(self: *Host) !void {
     if (self.shell_api) |a| return a.accept();
 }

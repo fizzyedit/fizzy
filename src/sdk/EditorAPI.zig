@@ -36,6 +36,9 @@ pub const SaveDialogFilter = extern struct {
 /// Invoked when a native save dialog resolves: the chosen paths, or null if cancelled.
 pub const SaveDialogCallback = *const fn (?[][:0]const u8) void;
 
+/// Invoked when a native open-file/folder dialog resolves.
+pub const OpenPathsCallback = *const fn (?[][:0]const u8) void;
+
 /// Grid dimensions for `createDocument`.
 pub const NewDocGrid = struct {
     columns: u32 = 1,
@@ -136,6 +139,16 @@ pub const VTable = struct {
     setExplorerBranchOpen: *const fn (ctx: *anyopaque, branch_id: dvui.Id, open: bool) void,
     /// Draw workspace panes (center region); `index` is the root pane (usually 0).
     drawWorkspaces: *const fn (ctx: *anyopaque, index: usize) anyerror!dvui.App.Result,
+    /// Native open-folder dialog (no-op on web).
+    showOpenFolderDialog: *const fn (ctx: *anyopaque, cb: OpenPathsCallback, default_folder: ?[]const u8) void,
+    /// Native open-file dialog (web: file picker).
+    showOpenFileDialog: *const fn (
+        ctx: *anyopaque,
+        cb: OpenPathsCallback,
+        filters: []const SaveDialogFilter,
+        default_filename: []const u8,
+        default_folder: ?[]const u8,
+    ) void,
 
     // ---- document editing (active file) ----
     accept: *const fn (ctx: *anyopaque) anyerror!void,
@@ -315,6 +328,20 @@ pub fn setExplorerBranchOpen(self: EditorAPI, branch_id: dvui.Id, open: bool) vo
 
 pub fn drawWorkspaces(self: EditorAPI, index: usize) !dvui.App.Result {
     return self.vtable.drawWorkspaces(self.ctx, index);
+}
+
+pub fn showOpenFolderDialog(self: EditorAPI, cb: OpenPathsCallback, default_folder: ?[]const u8) void {
+    self.vtable.showOpenFolderDialog(self.ctx, cb, default_folder);
+}
+
+pub fn showOpenFileDialog(
+    self: EditorAPI,
+    cb: OpenPathsCallback,
+    filters: []const SaveDialogFilter,
+    default_filename: []const u8,
+    default_folder: ?[]const u8,
+) void {
+    self.vtable.showOpenFileDialog(self.ctx, cb, filters, default_filename, default_folder);
 }
 
 pub fn accept(self: EditorAPI) !void {

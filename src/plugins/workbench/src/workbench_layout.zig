@@ -1,8 +1,7 @@
 //! Workspace map maintenance + recursive split drawing (Stage W2).
 const std = @import("std");
 const dvui = @import("dvui");
-const sdk = @import("sdk");
-const fizzy = @import("../../../fizzy.zig");
+const wbench = @import("../workbench.zig");
 const Globals = @import("Globals.zig");
 const Workbench = @import("Workbench.zig");
 const Workspace = @import("Workspace.zig");
@@ -84,7 +83,7 @@ pub const PanelPanedState = struct {
 pub fn drawWorkspaces(wb: *Workbench, panel: PanelPanedState, index: usize) !dvui.App.Result {
     if (index >= wb.workspaces.count()) return .ok;
 
-    var s = fizzy.dvui.paned(@src(), .{
+    var s = wbench.wdvui.paned(@src(), .{
         .direction = .horizontal,
         .collapsed_size = if (index == wb.workspaces.count() - 1) std.math.floatMax(f32) else 0,
         .handle_size = handle_size,

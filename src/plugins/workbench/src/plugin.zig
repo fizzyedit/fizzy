@@ -1,11 +1,8 @@
-//! The workbench plugin: file management. Phase 2 thin shim — its contributions
-//! point at the existing draw entry points through the `fizzy.*` globals rather
-//! than owning new code. Later phases move more behind it until it becomes a
-//! runtime-loaded dylib. Registered from `Editor.postInit`.
+//! The workbench plugin: file management. Registered from `Editor.postInit`.
 const std = @import("std");
-const fizzy = @import("../../../fizzy.zig");
 const dvui = @import("dvui");
-const sdk = fizzy.sdk;
+const wb = @import("../workbench.zig");
+const sdk = wb.sdk;
 const Globals = @import("Globals.zig");
 const files = @import("files.zig");
 
@@ -53,7 +50,7 @@ fn drawCenter(_: ?*anyopaque) anyerror!dvui.App.Result {
 /// global/region binds in `Keybinds.register`; this fills in the file half.
 /// Platform: see `Keybinds.register` for why `fizzy.platform.isMacOS()` is used.
 fn contributeKeybinds(_: *anyopaque, win: *dvui.Window) anyerror!void {
-    if (fizzy.platform.isMacOS()) {
+    if (wb.platform.isMacOS()) {
         try win.keybinds.putNoClobber(win.gpa, "open_folder", .{ .key = .f, .command = true });
         try win.keybinds.putNoClobber(win.gpa, "open_files", .{ .key = .o, .command = true });
         try win.keybinds.putNoClobber(win.gpa, "save", .{ .command = true, .key = .s });

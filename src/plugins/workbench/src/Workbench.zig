@@ -11,7 +11,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
-const fizzy = @import("../../../fizzy.zig");
 const files = @import("files.zig");
 const Workspace = @import("Workspace.zig");
 const Globals = @import("Globals.zig");
@@ -107,10 +106,9 @@ pub fn activeWorkspaceCanvasRectPhysical(self: *Workbench) ?dvui.Rect.Physical {
     return workspace.canvas_rect_physical;
 }
 
-/// Build the `workbench-api` service. `editor_ctx` is the host's heap `*Editor`,
-/// passed opaquely so the API has no compile-time dependency back on the editor.
-pub fn initService(self: *Workbench, editor_ctx: *anyopaque) void {
-    self.api = .{ .ctx = editor_ctx, .vtable = &service_vtable };
+/// Build the `workbench-api` service. `host_ctx` is the shell `*Host`.
+pub fn initService(self: *Workbench, host_ctx: *sdk.Host) void {
+    self.api = .{ .ctx = host_ctx, .vtable = &service_vtable };
 }
 
 /// Register the decorations the shell ships with. Called once after the editor is
@@ -259,35 +257,34 @@ const service_vtable: Api.VTable = .{
     .registerBranchDecorator = svcRegisterBranchDecorator,
 };
 
-inline fn editorOf(ctx: *anyopaque) *fizzy.Editor {
+inline fn hostOf(ctx: *anyopaque) *sdk.Host {
     return @ptrCast(@alignCast(ctx));
 }
 
 fn svcOpen(ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!bool {
-    return editorOf(ctx).openFilePath(path, grouping);
+    return hostOf(ctx).openFilePath(path, grouping);
 }
-fn svcCurrentGrouping(ctx: *anyopaque) u64 {
-    return editorOf(ctx).workbench.currentGroupingID();
+fn svcCurrentGrouping(_: *anyopaque) u64 {
+    return Globals.workbench.currentGroupingID();
 }
-fn svcNewGrouping(ctx: *anyopaque) u64 {
-    return editorOf(ctx).workbench.newGroupingID();
+fn svcNewGrouping(_: *anyopaque) u64 {
+    return Globals.workbench.newGroupingID();
 }
 fn svcClose(ctx: *anyopaque, id: u64) anyerror!void {
-    return editorOf(ctx).closeFileID(id);
+    return hostOf(ctx).closeDocById(id);
 }
 fn svcSave(ctx: *anyopaque) anyerror!void {
-    return editorOf(ctx).save();
+    return hostOf(ctx).save();
 }
 fn svcIsOpen(ctx: *anyopaque, path: []const u8) bool {
-    return editorOf(ctx).docFromPath(path) != null;
+    return hostOf(ctx).docFromPath(path) != null;
 }
 fn svcOpenCount(ctx: *anyopaque) usize {
-    return editorOf(ctx).open_files.count();
+    return hostOf(ctx).openDocCount();
 }
 fn svcOpenPathAt(ctx: *anyopaque, index: usize) ?[]const u8 {
-    const editor = editorOf(ctx);
-    const doc = editor.docAt(index) orelse return null;
-    return editor.docPath(doc);
+    const doc = hostOf(ctx).docByIndex(index) orelse return null;
+    return doc.owner.documentPath(doc);
 }
 fn svcCreateFile(_: *anyopaque, path: []const u8) anyerror!void {
     return files.createFilePath(path);
@@ -304,6 +301,6 @@ fn svcDelete(_: *anyopaque, path: []const u8) void {
 fn svcMove(_: *anyopaque, path: []const u8, target_dir: []const u8) anyerror!bool {
     return files.moveOnePath(path, target_dir, dvui.currentWindow().arena());
 }
-fn svcRegisterBranchDecorator(ctx: *anyopaque, decorator: BranchDecorator) anyerror!void {
-    return editorOf(ctx).workbench.registerBranchDecorator(decorator);
+fn svcRegisterBranchDecorator(_: *anyopaque, decorator: BranchDecorator) anyerror!void {
+    return Globals.workbench.registerBranchDecorator(decorator);
 }

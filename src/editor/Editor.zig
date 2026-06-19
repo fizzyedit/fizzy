@@ -27,21 +27,23 @@ pub const Dialogs = @import("dialogs/Dialogs.zig");
 
 pub const Keybinds = @import("Keybinds.zig");
 
-pub const Workspace = @import("../plugins/workbench/src/Workspace.zig");
+const workbench_mod = @import("workbench");
+
+pub const Workspace = workbench_mod.Workspace;
 pub const Explorer = @import("explorer/Explorer.zig");
 pub const IgnoreRules = @import("explorer/IgnoreRules.zig");
 pub const Panel = @import("panel/Panel.zig");
 pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
-pub const FileLoadJob = @import("../plugins/workbench/src/FileLoadJob.zig");
+pub const FileLoadJob = workbench_mod.FileLoadJob;
 
 pub const sdk = fizzy.sdk;
 pub const Host = sdk.Host;
 
 /// Workbench (Phase 1): file-management home — currently the per-branch
 /// decoration registry for the explorer; grows to own files + tabs/splits.
-pub const Workbench = @import("../plugins/workbench/src/Workbench.zig");
+pub const Workbench = workbench_mod.Workbench;
 
 /// This arena is for small per-frame editor allocations, such as path joins, null terminations and labels.
 /// Do not free these allocations, instead, this allocator will be .reset(.retain_capacity) each frame
@@ -460,7 +462,7 @@ pub fn postInit(editor: *Editor) !void {
     // near-empty shell's content: it iterates the Host registries rather than
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
     // editor tick already runs on wasm. Order = sidebar order.
-    try @import("../plugins/workbench/src/plugin.zig").register(&editor.host);
+    try workbench_mod.plugin.register(&editor.host);
 const pixelart_plugin = pixelart.plugin;
     try pixelart_plugin.register(&editor.host);
     try pixelart_plugin.pluginPtr().initPlugin();
@@ -495,7 +497,7 @@ const pixelart_plugin = pixelart.plugin;
     // wasm analysis entirely (the codebase's dead-branch convention; see
     // `web_main.zig`).
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        editor.workbench.initService(editor);
+        editor.workbench.initService(&editor.host);
         try editor.host.registerService(Workbench.Api.service_name, &editor.workbench.api);
     }
 }
@@ -565,6 +567,8 @@ const shell_api_vtable: sdk.EditorAPI.VTable = .{
     .explorerBranchIsOpen = shellExplorerBranchIsOpen,
     .setExplorerBranchOpen = shellSetExplorerBranchOpen,
     .drawWorkspaces = shellDrawWorkspaces,
+    .showOpenFolderDialog = shellShowOpenFolderDialog,
+    .showOpenFileDialog = shellShowOpenFileDialog,
     .accept = shellAccept,
     .cancel = shellCancel,
     .copy = shellCopy,
@@ -721,6 +725,21 @@ fn shellSetExplorerBranchOpen(ctx: *anyopaque, branch_id: dvui.Id, open: bool) v
 }
 fn shellDrawWorkspaces(ctx: *anyopaque, index: usize) anyerror!dvui.App.Result {
     return drawWorkspaces(shellCtx(ctx), index);
+}
+fn shellShowOpenFolderDialog(ctx: *anyopaque, cb: sdk.EditorAPI.OpenPathsCallback, default_folder: ?[]const u8) void {
+    _ = ctx;
+    fizzy.backend.showOpenFolderDialog(cb, default_folder);
+}
+fn shellShowOpenFileDialog(
+    ctx: *anyopaque,
+    cb: sdk.EditorAPI.OpenPathsCallback,
+    filters: []const sdk.EditorAPI.SaveDialogFilter,
+    default_filename: []const u8,
+    default_folder: ?[]const u8,
+) void {
+    _ = ctx;
+    const native_filters: [*]const fizzy.backend.DialogFileFilter = @ptrCast(filters.ptr);
+    fizzy.backend.showOpenFileDialog(cb, native_filters[0..filters.len], default_filename, default_folder);
 }
 fn shellAccept(ctx: *anyopaque) anyerror!void {
     return shellCtx(ctx).accept();
@@ -1872,7 +1891,7 @@ pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     }
     editor.folder = try fizzy.app.allocator.dupe(u8, path);
     try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
-    editor.host.setActiveSidebarView(@import("../plugins/workbench/src/plugin.zig").view_files);
+    editor.host.setActiveSidebarView(workbench_mod.plugin.view_files);
 
     pixelart.plugin.pluginPtr().reloadProjectFolder(fizzy.app.allocator);
     editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);

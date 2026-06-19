@@ -412,7 +412,7 @@ pub fn build(b: *std.Build) !void {
         });
         web_exe.root_module.addImport("msf_gif", msf_gif_web_lib.root_module);
 
-        wirePixelartModule(b, web_target, optimize, .{
+        const pixelart_module_web = wirePixelartModule(b, web_target, optimize, .{
             .dvui = dvui_web_dep.module("dvui_web"),
             .core = core_module_web,
             .sdk = sdk_module_web,
@@ -421,6 +421,14 @@ pub fn build(b: *std.Build) !void {
             .zstbi = zstbi_web_lib.root_module,
             .msf_gif = msf_gif_web_lib.root_module,
             .icons = if (b.lazyDependency("icons", .{ .target = web_target, .optimize = optimize })) |dep| dep.module("icons") else null,
+            .backend = null,
+        }, web_exe.root_module);
+        wireWorkbenchModule(b, web_target, optimize, .{
+            .dvui = dvui_web_dep.module("dvui_web"),
+            .core = core_module_web,
+            .sdk = sdk_module_web,
+            .icons = if (b.lazyDependency("icons", .{ .target = web_target, .optimize = optimize })) |dep| dep.module("icons") else null,
+            .pixelart = pixelart_module_web,
             .backend = null,
         }, web_exe.root_module);
 
@@ -860,7 +868,7 @@ pub fn build(b: *std.Build) !void {
     }
     fizzy_test_module.addImport("core", core_module_test);
     const sdk_module_test = wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), fizzy_test_module);
-    wirePixelartModule(b, target, optimize, .{
+    const pixelart_module_test = wirePixelartModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
         .sdk = sdk_module_test,
@@ -869,6 +877,14 @@ pub fn build(b: *std.Build) !void {
         .zstbi = zstbi_module,
         .msf_gif = msf_gif_module,
         .icons = if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| dep.module("icons") else null,
+        .backend = dvui_testing_dep.module("testing"),
+    }, fizzy_test_module);
+    wireWorkbenchModule(b, target, optimize, .{
+        .dvui = dvui_testing_dep.module("dvui_testing"),
+        .core = core_module_test,
+        .sdk = sdk_module_test,
+        .icons = if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| dep.module("icons") else null,
+        .pixelart = pixelart_module_test,
         .backend = dvui_testing_dep.module("testing"),
     }, fizzy_test_module);
 
@@ -1202,7 +1218,7 @@ fn addFizzyExecutableForTarget(
         core_module.addImport("icons", dep.module("icons"));
         icons_module = dep.module("icons");
     }
-    wirePixelartModule(b, resolved_target, optimize, .{
+    const pixelart_module = wirePixelartModule(b, resolved_target, optimize, .{
         .dvui = dvui_dep.module("dvui_sdl3"),
         .core = core_module,
         .sdk = sdk_module,
@@ -1211,6 +1227,14 @@ fn addFizzyExecutableForTarget(
         .zstbi = zstbi_module,
         .msf_gif = msf_gif_module,
         .icons = icons_module,
+        .backend = dvui_dep.module("sdl3"),
+    }, exe.root_module);
+    wireWorkbenchModule(b, resolved_target, optimize, .{
+        .dvui = dvui_dep.module("dvui_sdl3"),
+        .core = core_module,
+        .sdk = sdk_module,
+        .icons = icons_module,
+        .pixelart = pixelart_module,
         .backend = dvui_dep.module("sdl3"),
     }, exe.root_module);
 
@@ -1306,6 +1330,39 @@ const PixelartModuleDeps = struct {
     backend: ?*std.Build.Module,
 };
 
+const WorkbenchModuleDeps = struct {
+    dvui: *std.Build.Module,
+    core: *std.Build.Module,
+    sdk: *std.Build.Module,
+    icons: ?*std.Build.Module,
+    pixelart: *std.Build.Module,
+    backend: ?*std.Build.Module,
+};
+
+/// Workbench plugin (`src/plugins/workbench/module.zig`).
+fn wireWorkbenchModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: WorkbenchModuleDeps,
+    consumer: *std.Build.Module,
+) void {
+    const workbench_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/plugins/workbench/module.zig"),
+        .link_libc = target.result.cpu.arch != .wasm32,
+        .single_threaded = target.result.cpu.arch == .wasm32,
+    });
+    workbench_module.addImport("dvui", deps.dvui);
+    workbench_module.addImport("core", deps.core);
+    workbench_module.addImport("sdk", deps.sdk);
+    workbench_module.addImport("pixelart", deps.pixelart);
+    if (deps.icons) |icons| workbench_module.addImport("icons", icons);
+    if (deps.backend) |backend| workbench_module.addImport("backend", backend);
+    consumer.addImport("workbench", workbench_module);
+}
+
 /// Pixel-art plugin (`src/plugins/pixelart/module.zig`).
 fn wirePixelartModule(
     b: *std.Build,
@@ -1313,7 +1370,7 @@ fn wirePixelartModule(
     optimize: std.builtin.OptimizeMode,
     deps: PixelartModuleDeps,
     consumer: *std.Build.Module,
-) void {
+) *std.Build.Module {
     const pixelart_module = b.createModule(.{
         .target = target,
         .optimize = optimize,
@@ -1331,6 +1388,7 @@ fn wirePixelartModule(
     if (deps.icons) |icons| pixelart_module.addImport("icons", icons);
     if (deps.backend) |backend| pixelart_module.addImport("backend", backend);
     consumer.addImport("pixelart", pixelart_module);
+    return pixelart_module;
 }
 
 inline fn thisDir() []const u8 {

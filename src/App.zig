@@ -8,9 +8,9 @@ const assets = @import("assets");
 const icon = assets.files.@"icon.png";
 
 const fizzy = @import("fizzy.zig");
+const workbench = @import("workbench");
 const pixelart = @import("pixelart");
-// Path import until workbench becomes a build module (Stage W5); see HANDOFF "Stage W".
-const WorkbenchGlobals = @import("plugins/workbench/src/Globals.zig");
+const WorkbenchGlobals = workbench.Globals;
 const auto_update = @import("backend/auto_update.zig");
 const update_notify = @import("backend/update_notify.zig");
 const singleton = @import("backend/singleton.zig");

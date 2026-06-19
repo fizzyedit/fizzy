@@ -389,9 +389,14 @@ values/keys at `Workspace.zig:467+`) — that's the deep coupling.
   `drawWorkspaces`. Workbench `files.zig`/`Workspace.zig`/`Workbench.zig`/`plugin.zig`
   now route through `Globals.host` + `Globals.workbench`; zero runtime `fizzy.editor`
   refs remain in workbench draw paths (comments only).
-- **W4 — `fizzy.dvui`/`fizzy.app`/`fizzy.math`/`fizzy.backend` → sdk/core**; then
-  **W5 — `b.addModule("workbench")`** + `@import("workbench")`, drop the shell path imports
-  (`Editor.zig` re-exports of `Workspace`/`FileLoadJob`/`Workbench`) and the `fizzy` import.
+- **W4 — `fizzy.dvui`/`fizzy.app`/`fizzy.math`/`fizzy.backend` → sdk/core — DONE.**
+  Workbench hub (`workbench.zig`) re-exports `wdvui` (= `core.dvui`), `math`, `atlas`,
+  `platform`, `Sprite`, `perf`. Plugin sources use `Globals.allocator()` instead of
+  `fizzy.app`; native open dialogs via `host.showOpenFolderDialog`/`showOpenFileDialog`.
+  `workbench-api` service ctx is `*Host` (no `fizzy.Editor` in workbench).
+- **W5 — `b.addModule("workbench")` + shell `@import("workbench")` — DONE.**
+  `wireWorkbenchModule` in `build.zig` (native, web, test). `Editor.zig`/`App.zig`/
+  `Explorer.zig` import the module; path imports removed.
 
 ---
 

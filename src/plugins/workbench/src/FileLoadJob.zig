@@ -15,9 +15,10 @@
 //!     but only writes through atomic fields + the worker-only `doc_buf`/`err` fields.
 
 const std = @import("std");
-const fizzy = @import("../../../fizzy.zig");
-const dvui = @import("dvui");
-const perf = fizzy.perf;
+const wb = @import("../workbench.zig");
+const dvui = wb.dvui;
+const perf = wb.perf;
+const sdk = wb.sdk;
 
 const FileLoadJob = @This();
 
@@ -35,7 +36,7 @@ allocator: std.mem.Allocator,
 path: []u8,
 
 /// Plugin that owns this file's extension (resolved on the main thread before spawn).
-owner: *fizzy.sdk.Plugin,
+owner: *sdk.Plugin,
 
 /// Workspace grouping the file should land in once loaded.
 target_grouping: u64,
@@ -55,7 +56,7 @@ doc_buf: []u8,
 
 err: ?anyerror = null,
 
-pub fn create(allocator: std.mem.Allocator, path: []const u8, owner: *fizzy.sdk.Plugin, target_grouping: u64) !*FileLoadJob {
+pub fn create(allocator: std.mem.Allocator, path: []const u8, owner: *sdk.Plugin, target_grouping: u64) !*FileLoadJob {
     const path_copy = try allocator.dupe(u8, path);
     errdefer allocator.free(path_copy);
 

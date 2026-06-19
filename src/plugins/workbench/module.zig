@@ -9,3 +9,4 @@ pub const files = @import("src/files.zig");
 pub const Workspace = @import("src/Workspace.zig");
 pub const Workbench = @import("src/Workbench.zig");
 pub const FileLoadJob = @import("src/FileLoadJob.zig");
+pub const Globals = @import("src/Globals.zig");
