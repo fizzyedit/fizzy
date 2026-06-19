@@ -7,8 +7,10 @@ modular separation) is COMPLETE:** `core`, `pixelart`, and `workbench` are all d
 modules; the shell imports plugins only via `@import("pixelart")` / `@import("workbench")` and
 talks to them through the SDK vtable + `Host`/`EditorAPI` registries. All three configs green.
 
-**The next phase (Phase 5) is runtime dylib plugins** — see **"Phase 5 — Runtime dylib plugins"**
-immediately below. Everything under "Phase 4 history" further down is DONE reference material.
+**The next phase (Phase 5) is runtime dylib plugins** — desktop dynamic libraries
+(macOS/Linux/Windows, `arm64` + `x86_64`), web static, built-ins bundled with the app.
+See **"Phase 5 — Runtime dylib plugins"** below. Everything under "Phase 4 history"
+further down is DONE reference material.
 
 ---
 
@@ -46,10 +48,9 @@ state moved onto the `Workbench` struct; doc-collection + folder/settings/etc. r
 > state struct on `Editor` (`pixelart_state`, `workbench`) for lifecycle — the same arrangement
 > for both. All three build configs are green.
 >
-> **Next big rock (not started):** runtime dylib plugins ("one source / two link modes" —
-> dynamic desktop, static web). Optional polish first: route the few remaining
-> `editor.workbench.<field>` / `editor.pixelart_state.<field>` direct reaches through
-> accessors/vtable (a "Stage E" for workbench), and consider symmetry cleanups in `fizzy.zig`.
+> **Next big rock:** Phase 5 runtime dylib plugins — see **"Phase 5 — Runtime dylib plugins"**
+> above. Optional polish first (5a): break workbench→pixelart compile-time link and route
+> remaining `editor.workbench.*` field pokes (workbench Stage E).
 
 All three build configs are green:
 
@@ -61,6 +62,185 @@ zig build test       # unit/integration tests
 
 Run all three after every stage. `zig build` for this repo currently needs to run outside
 the sandbox (network/file access).
+
+---
+
+## Phase 5 — Runtime dylib plugins (NEXT — not started)
+
+### Goal
+
+**One source, two link modes:** each plugin compiles from the same Zig sources, but the
+link mode depends on the target:
+
+| Target | Link mode | Loader |
+|--------|-----------|--------|
+| macOS / Linux / Windows (`arm64` + `x86_64`) | **Dynamic** — plugin is a `.dylib` / `.so` / `.dll` | Host `dlopen`s at startup (built-ins) or on demand (3rd-party) |
+| Web (`wasm32`) | **Static** — plugin is a Zig module linked into the exe | No runtime loader; same as today |
+
+Phase 4 proved the **vtable + `Host` registry boundary** is the right seam. Phase 5 makes
+that boundary cross a real dynamic-library load on desktop without changing plugin logic.
+
+### Product decisions (locked for this phase)
+
+- **Built-in plugins always ship with Fizzy.** Pixelart, workbench, and future built-ins
+  (e.g. textedit) live in this repo under `src/plugins/`. We are **not** planning a
+  "shell-only" Fizzy distribution stripped of plugins.
+- **Built-in dylibs are bundled, not separately versioned.** The release artifact is one
+  Velopack/update unit: the exe plus its built-in plugin dylibs at matching versions.
+  Velopack does **not** sign or distribute each plugin independently; plugin dylibs ride
+  inside the same app package the exe does.
+- **3rd-party plugins are a later concern, but the architecture must allow them.** An
+  external Zig project should eventually be able to `@import` a published Fizzy plugin SDK,
+  write dvui-driven UI through the same `Plugin` vtable, build a dylib, and have Fizzy
+  load it at runtime — registering menus, sidebar views, bottom views, and doc handlers
+  through the same `Host` registries built-ins use today. A plugin store + hot-load path
+  is out of scope for the first Phase-5 milestones but should not be designed away.
+- **Reference plugins to demonstrate complexity:**
+  - **pixelart** — full editor plugin: docs, save/dirty, explorer panes, bottom panel,
+    dialogs, pack jobs; consumes **workbench-api** for tabs/splits (inter-plugin service).
+  - **textedit** (future built-in) — lighter editor plugin for `.txt` / `.json` / `.atlas`
+    etc., coexisting in tabs beside pixel-art docs (see "Multi-plugin readiness").
+  - **workbench** — infrastructure plugin (file tree, workspaces); likely stays a
+    built-in static or early-loaded dylib since it owns the center layout.
+
+### Dylib mechanism — Option 2: context injection (validated)
+
+The `spikes/shared-globals` spike ruled out **Mechanism A** (one shared `libdvui` /
+`rdynamic` symbol interposition — globals are not auto-shared across the dylib boundary on
+macOS two-level namespace, and the same applies on Linux/Windows).
+
+**Mechanism B (context injection) is the chosen approach:**
+
+- Host and plugin each compile their **own copy** of `dvui` + `sdk` + `core` (same pinned
+  Zig + source versions → identical struct layouts).
+- Host owns the live `dvui.Window`, arena, backend, and GPU path.
+- Before calling into a plugin's draw/tick hooks, the host **injects** the plugin-side
+  dvui globals (`current_window` per frame; `io` / `ft2lib` / `debug` at init — all
+  `pub var`, no dvui patch needed) with pointers into the host's live state.
+- Cross-boundary vtable types (`Plugin`, `DocHandle`, `Host`, `EditorAPI`, workbench-api
+  `Api`, …) are normal Zig structs, not strict C-ABI — host and plugin are pinned to the
+  same SDK build. Only the **dlopen entry symbols** need `callconv(.c)`.
+- Load-time **ABI version gate** rejects mismatched plugin builds before any vtable call.
+
+See `spikes/shared-globals/README.md` and `spikes/shared-globals/build.zig` for the
+minimal host+plugin dylib harness.
+
+### What already exists (Phase 4 carry-over)
+
+| Piece | Location | Phase-5 role |
+|-------|----------|--------------|
+| Plugin vtable | `src/sdk/Plugin.zig` | Same shape static or dylib; hooks already optional fn pointers |
+| Host registries | `src/sdk/Host.zig` | Menus / sidebar / bottom / center / settings — hot-load target |
+| EditorAPI | `src/sdk/EditorAPI.zig` | Shell reach-through; plugins never import `fizzy.zig` |
+| Globals injection | `src/plugins/*/src/Globals.zig` | Pattern for post-`dlopen` pointer wiring |
+| Inter-plugin service | `Workbench.Api` in `src/plugins/workbench/src/Workbench.zig` | pixelart → workbench without compile-time coupling (goal) |
+| Static registration | `Editor.postInit` | `workbench_mod.plugin.register` + `pixelart.plugin.register` — replace with loader on native |
+
+**No dylib build targets yet** — `build.zig` has no `addLibrary(.linkage = .dynamic)`.
+Plugins are still compile-time modules on all targets.
+
+### Remaining Phase-4 polish (do before or alongside Phase-5a)
+
+These are not blockers for a spike, but should be cleared so built-in and 3rd-party
+plugins share the same rules:
+
+1. **Break workbench → pixelart compile-time link (blocker for independent dylibs).**
+   - `build.zig` `wireWorkbenchModule` adds `pixelart` as a module dep.
+   - `workbench/src/files.zig` reads `pixelart.Globals.state.colors.palette` for file-row
+     tinting — the only live cross-plugin import in the workbench tree.
+   - Fix: register a file-row color hook via **workbench-api** (or a small `Host` callback
+     registry) that pixelart contributes during `register()`; drop the `pixelart` import
+     from the workbench module.
+
+2. **Workbench "Stage E" — route shell `editor.workbench.*` field pokes.**
+   Pixelart Stage E is done (`pixelart_state` is lifecycle-only in `App.zig`). Workbench
+   still has ~24 direct `editor.workbench.<field>` reaches in `Editor.zig` plus a few in
+   `Explorer.zig`, `Keybinds.zig`, `WebFileIo.zig`, `singleton_native.zig` (mostly
+   `open_workspace_grouping` — callers should use `editor.currentGroupingID()` instead).
+   Extend `EditorAPI` / thin `Editor` delegators so the shell never names workbench internals.
+
+3. **Minor hygiene** (non-blocking): `web_main.zig` force-imports `pixelart.widgets.FileWidget`
+   for wasm link; `fizzy.zig` globals (`app`, `editor`, `packer`) shrink as the loader owns
+   more lifecycle.
+
+### Phase-5 implementation plan (incremental; all three configs green after each step)
+
+Each step ends with `zig build`, `zig build check-web`, `zig build test`.
+
+#### 5a — Pre-dylib decoupling (Phase-4 tail)
+
+| Step | Work | Done when |
+|------|------|-----------|
+| **5a.1** | Break workbench→pixelart link (palette row color via workbench-api hook; remove `pixelart` from `wireWorkbenchModule`) | `grep pixelart src/plugins/workbench` → 0; all configs green |
+| **5a.2** | Workbench Stage E: route `editor.workbench.*` / `fizzy.editor.workbench.*` through EditorAPI | `grep 'editor\.workbench\.' src/` → lifecycle + delegators only |
+
+#### 5b — Dylib scaffolding (native only; web unchanged)
+
+| Step | Work | Done when |
+|------|------|-----------|
+| **5b.1** | SDK **export surface** — `fizzy_plugin_abi_version()` + `fizzy_plugin_register(*Host)` (`callconv(.c)`); document ABI version constant | Spike + one plugin export compile |
+| **5b.2** | **`build.zig` dual link** — add `addLibrary(.dynamic)` target for one plugin (start with pixelart or a minimal `plugins/hello` example); web root keeps static `@import("pixelart")` | Native builds `.dylib`/`.so`/`.dll` beside exe; web still static |
+| **5b.3** | **Host loader module** — `std.DynLib` open, ABI gate, resolve entry, call `register`; wire `Globals` after load | Loader unit test or dev-only flag loads a dylib and registers one sidebar view |
+| **5b.4** | **Dvui context injection** in shell frame loop — set plugin-side globals before plugin draw/tick (per spike Mechanism B) | Plugin draw mutates host `Window` in a loaded dylib (manual or integration test) |
+
+Build all six native release triples (`x86_64`/`arm64` × macOS/Linux/Windows) once 5b.2
+lands; linkage suffixes differ (`.dylib` / `.so` / `.dll`) but the loader API is the same.
+
+#### 5c — Built-in plugins as bundled dylibs (desktop)
+
+| Step | Work | Done when |
+|------|------|-----------|
+| **5c.1** | Built-in pixelart dylib loaded by host on native; static on web | App opens `.fiz` files via loaded dylib on macOS; web unchanged |
+| **5c.2** | Built-in workbench dylib (or keep static until pixelart path is stable — workbench owns center layout) | Tabs/splits work from loaded workbench |
+| **5c.3** | Install step bundles built-in dylibs next to exe (same `zig-out` / Velopack tree) | Release package contains exe + `pixelart.{dylib,so,dll}` etc.; single update channel |
+
+Built-ins can remain **statically linked during 5b** and flip to dylib in 5c — the
+`register()` path is identical either way.
+
+#### 5d — Reference plugins + 3rd-party path (later milestones)
+
+| Step | Work | Notes |
+|------|------|-------|
+| **5d.1** | **textedit** built-in plugin | Exercises multi-editor tabs, `fileTypePriority`, `registerBottomView`; forces "New > kind" chooser |
+| **5d.2** | **Published plugin SDK** (`fizzy-plugin-sdk` or similar) | External Zig project: import SDK + dvui, implement vtable, `zig build` → dylib |
+| **5d.3** | **User plugin directory** + discovery | Scan `~/.fizzy/plugins/` (or platform equivalent); load + ABI-gate |
+| **5d.4** | **Hot load** + plugin store | Reload dylib, refresh Host registries; trust/signing model TBD |
+
+### 3rd-party / distribution considerations (figure out later, don't block 5a–5c)
+
+- **Trust:** built-ins are co-signed with the app; 3rd-party plugins need a separate policy
+  (user opt-in, hash allowlist, dev-mode only, etc.) — not decided yet.
+- **Velopack:** app updates replace the whole `zig-out` tree including built-in dylibs; no
+  per-plugin update channel for built-ins.
+- **Version skew:** ABI gate + documented "built with Fizzy X.Y" requirement for 3rd-party
+  dylibs; plugin store would pin compatible versions.
+- **Hot load:** `Host` registries already support append; unload needs vtable `deinit` +
+  registry removal + no dangling `DocHandle.owner` — design when approaching 5d.4.
+
+### Phase-5 sanity greps (add to the checklist)
+
+```
+# no cross-plugin compile-time imports (after 5a.1)
+grep -rn '@import("pixelart")' src/plugins/workbench     → 0
+grep -rn 'pixelart\.'         src/plugins/workbench     → 0
+
+# shell workbench field pokes routed (after 5a.2)
+grep -rn 'editor\.workbench\.' src/                       → lifecycle/delegators only
+grep -rn 'fizzy\.editor\.workbench\.' src/                → 0
+
+# dylib entry exists (after 5b.1)
+grep -rn 'fizzy_plugin_' src/sdk src/plugins             → export symbols present
+
+# web stays static (always)
+grep -rn 'DynLib\|dlopen' src/                           → 0 on web code paths
+```
+
+### Where to begin (next session)
+
+**Start with 5a.1** — break the workbench→pixelart compile-time link. It is one focused
+change (palette row color hook + `build.zig` dep removal) and is the last hard coupling
+between plugins. Then **5a.2** (workbench Stage E), then **5b.1** (export surface +
+promote the spike pattern into the main tree).
 
 ---
 
@@ -268,23 +448,21 @@ src/web_main.zig               → FileWidget.zig force-import (wasm link — mi
 
 ---
 
-## Stage D — remaining work (start here)
+## Stage D — remaining work — DONE (historical)
 
-1. **Route any straggler shell path imports** of pixel-art files through `pixelart_mod`
-   or `@import("pixelart")` (mostly done; `process_assets.zig` stays separate).
+All items below were completed in Stage D/E/W. Kept for archaeology only.
 
-2. **Optional:** wire `b.addModule("workbench", …)` the same way.
-
-3. **Stage E cleanup:** shell `Editor.zig` still uses `fizzy.pixelart.*` extensively —
-   shrink as plugin vtable / EditorAPI surface grows.
+1. ~~Route straggler shell path imports through `pixelart_mod` / `@import("pixelart")`.~~ DONE
+2. ~~Wire `b.addModule("workbench", …)`.~~ DONE (Stage W5)
+3. ~~Stage E cleanup in shell `Editor.zig`.~~ DONE (pixelart); workbench Stage E → Phase 5a.2
 
 Do **not** re-introduce a duplicate `@import("plugins/pixelart/module.zig")` from both
-`App.zig` and `fizzy.zig` via a third path; always go through `fizzy.pixelart_mod` in
-app code until the build module is fully wired.
+`App.zig` and `fizzy.zig` via a third path; shell code uses `@import("pixelart")` /
+`@import("workbench")` build modules.
 
 ---
 
-## Stage E — strip pixel-art names from shell hubs (in progress)
+## Stage E — strip pixel-art names from shell hubs — COMPLETE
 
 **Done this session:**
 - **`Editor.pixelart_state`** — shell reaches plugin state through the editor, not scattered `fizzy.pixelart.*` (53 → 0 direct field accesses in shell code; `fizzy.pixelart` global remains only in `App.zig` lifecycle).
@@ -436,10 +614,7 @@ End-state achieved. Verified this session:
 - **Plugin** consumes `core.Atlas`/`core.Sprite` for its own rendering (composites,
   reflections, `water_surface`) and builds its own packed `internal/Atlas.zig` at pack time.
 - **Neither side reaches the other's atlas** — `grep 'editor.atlas|fizzy.atlas' src/plugins/pixelart/src` → 0.
-
-Residual: `workbench/files.zig` + `workbench/Workspace.zig` draw the logo via
-`fizzy.editor.atlas` — that's the workbench plugin still routing through `fizzy.editor`
-(a separate "workbench off the app hub" concern), not a sprite/atlas-in-core gap.
+- Workbench draws the logo via `Globals.host.uiAtlas()` (not `fizzy.editor.atlas`).
 
 ---
 
@@ -461,6 +636,8 @@ the **build-script file-ownership trap** (`process_assets.zig` → std-only `Atl
 | Path | Role |
 |------|------|
 | `HANDOFF.md` | This file |
+| `spikes/shared-globals/` | Dylib + dvui context-injection spike (Mechanism B) |
+| `src/sdk/Plugin.zig` | Plugin vtable; dylib entry wraps `register()` |
 | `src/plugins/pixelart/module.zig` | Pixel-art build module root |
 | `src/plugins/pixelart/pixelart.zig` | Pixel-art intra-plugin hub |
 | `src/plugins/pixelart/src/` | Pixel-art implementation tree |
@@ -477,20 +654,23 @@ the **build-script file-ownership trap** (`process_assets.zig` → std-only `Atl
 
 ## State of the tree
 
-**Committed** — Phase-4 is committed through the workbench lift (latest: `stage w4` +
-follow-up). The compile-time modular-separation phase is complete; working tree is clean
-apart from in-flight HANDOFF/cleanup edits.
+**Phase 4 committed** through the workbench lift (`stage w4` + follow-up). **Phase 5
+documented; implementation not started.**
 
-Sanity greps (verified 2026-06-19):
+Sanity greps (verified 2026-06-19; Phase-5 targets in **"Phase 5 sanity greps"** above):
 
 ```
-# pixelart — fully decoupled
-grep -rn 'fizzy\.editor\.' src/plugins/pixelart     → 0 live
+# pixelart — fully decoupled from fizzy
+grep -rn 'fizzy\.editor\.' src/plugins/pixelart     → 0 live (comments only)
 grep -rn '@import.*fizzy'  src/plugins/pixelart     → 0
 
-# workbench — fully decoupled (Stage W)
+# workbench — decoupled from fizzy; one cross-plugin link remains (Phase 5a.1)
 grep -rn 'fizzy\.'         src/plugins/workbench/src → comments only, 0 live
+grep -rn '@import("pixelart")' src/plugins/workbench  → 1 (files.zig — fix in 5a.1)
 grep -rn '@import("workbench")' src/editor src/App.zig → module import (no path imports)
+
+# shell workbench field pokes (Phase 5a.2)
+grep -rn 'editor\.workbench\.' src/editor src/backend → ~24 (route through EditorAPI)
 
 # shell imports plugins only via build modules; only build-time exception:
 grep -rn 'plugins/.*/src' src/ *.zig (excl. src/plugins) → process_assets.zig → Atlas.zig
