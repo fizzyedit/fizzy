@@ -412,7 +412,7 @@ pub fn build(b: *std.Build) !void {
         });
         web_exe.root_module.addImport("msf_gif", msf_gif_web_lib.root_module);
 
-        const pixelart_module_web = wirePixelartModule(b, web_target, optimize, .{
+        _ = wirePixelartModule(b, web_target, optimize, .{
             .dvui = dvui_web_dep.module("dvui_web"),
             .core = core_module_web,
             .sdk = sdk_module_web,
@@ -428,7 +428,6 @@ pub fn build(b: *std.Build) !void {
             .core = core_module_web,
             .sdk = sdk_module_web,
             .icons = if (b.lazyDependency("icons", .{ .target = web_target, .optimize = optimize })) |dep| dep.module("icons") else null,
-            .pixelart = pixelart_module_web,
             .backend = null,
         }, web_exe.root_module);
 
@@ -868,7 +867,7 @@ pub fn build(b: *std.Build) !void {
     }
     fizzy_test_module.addImport("core", core_module_test);
     const sdk_module_test = wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), fizzy_test_module);
-    const pixelart_module_test = wirePixelartModule(b, target, optimize, .{
+    _ = wirePixelartModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
         .sdk = sdk_module_test,
@@ -884,7 +883,6 @@ pub fn build(b: *std.Build) !void {
         .core = core_module_test,
         .sdk = sdk_module_test,
         .icons = if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| dep.module("icons") else null,
-        .pixelart = pixelart_module_test,
         .backend = dvui_testing_dep.module("testing"),
     }, fizzy_test_module);
 
@@ -1218,7 +1216,7 @@ fn addFizzyExecutableForTarget(
         core_module.addImport("icons", dep.module("icons"));
         icons_module = dep.module("icons");
     }
-    const pixelart_module = wirePixelartModule(b, resolved_target, optimize, .{
+    _ = wirePixelartModule(b, resolved_target, optimize, .{
         .dvui = dvui_dep.module("dvui_sdl3"),
         .core = core_module,
         .sdk = sdk_module,
@@ -1234,7 +1232,6 @@ fn addFizzyExecutableForTarget(
         .core = core_module,
         .sdk = sdk_module,
         .icons = icons_module,
-        .pixelart = pixelart_module,
         .backend = dvui_dep.module("sdl3"),
     }, exe.root_module);
 
@@ -1335,7 +1332,6 @@ const WorkbenchModuleDeps = struct {
     core: *std.Build.Module,
     sdk: *std.Build.Module,
     icons: ?*std.Build.Module,
-    pixelart: *std.Build.Module,
     backend: ?*std.Build.Module,
 };
 
@@ -1357,7 +1353,6 @@ fn wireWorkbenchModule(
     workbench_module.addImport("dvui", deps.dvui);
     workbench_module.addImport("core", deps.core);
     workbench_module.addImport("sdk", deps.sdk);
-    workbench_module.addImport("pixelart", deps.pixelart);
     if (deps.icons) |icons| workbench_module.addImport("icons", icons);
     if (deps.backend) |backend| workbench_module.addImport("backend", backend);
     consumer.addImport("workbench", workbench_module);

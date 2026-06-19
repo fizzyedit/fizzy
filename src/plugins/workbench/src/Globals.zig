@@ -2,7 +2,7 @@
 //!
 //! The shell sets these once during `App` startup so workbench code can reach the
 //! app allocator and the Host (EditorAPI surface) without importing `fizzy.zig`.
-//! Mirrors `plugins/pixelart/src/Globals.zig`.
+//! Mirrors the pixel-art plugin's `Globals.zig` injection pattern.
 const std = @import("std");
 const wb_mod = @import("../workbench.zig");
 const sdk = wb_mod.sdk;

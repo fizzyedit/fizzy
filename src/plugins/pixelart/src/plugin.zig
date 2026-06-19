@@ -326,6 +326,7 @@ pub fn register(host: *sdk.Host) !void {
     // these before State.init, but register re-syncs after postInit ordering).
     plugin.state = @ptrCast(@alignCast(Globals.state));
     try host.registerPlugin(&plugin);
+    try host.registerFileRowFillColor(.{ .color = &fileRowFillColor });
     try host.registerSidebarView(.{
         .id = view_tools,
         .owner = &plugin,
@@ -365,6 +366,13 @@ pub fn register(host: *sdk.Host) !void {
 /// Stable `*Plugin` for constructing `DocHandle.owner` fields.
 pub fn pluginPtr() *sdk.Plugin {
     return &plugin;
+}
+
+fn fileRowFillColor(_: ?*anyopaque, color_index: usize) ?dvui.Color {
+    if (Globals.state.colors.palette) |*palette| {
+        return palette.getDVUIColor(color_index);
+    }
+    return null;
 }
 
 fn drawTools(_: ?*anyopaque) anyerror!void {

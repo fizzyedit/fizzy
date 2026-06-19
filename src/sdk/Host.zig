@@ -25,6 +25,14 @@ pub const SettingsSection = regions.SettingsSection;
 /// settings.json and never interprets them.
 pub const PluginSettings = std.StringArrayHashMapUnmanaged([]const u8);
 
+/// Optional tint for a workbench file-tree row background. `color_index` is the row's
+/// stable index during the current tree draw (workbench increments per file). Return
+/// null to defer to the next resolver or the theme default.
+pub const FileRowFillColor = struct {
+    ctx: ?*anyopaque = null,
+    color: *const fn (ctx: ?*anyopaque, color_index: usize) ?dvui.Color,
+};
+
 allocator: std.mem.Allocator,
 
 /// All registered plugins (static today; runtime-loaded dylibs in Phase 4).
@@ -41,6 +49,9 @@ shell_api: ?EditorAPI = null,
 
 /// Opaque per-plugin settings store (see `PluginSettings`).
 plugin_settings: PluginSettings = .empty,
+
+/// File-tree row fill tints (workbench asks the Host; editor plugins register).
+file_row_fill_colors: std.ArrayListUnmanaged(FileRowFillColor) = .empty,
 
 // ---- shell region registries (Phase 2) -------------------------------------
 // The shell iterates these instead of hardcoded enums/switches. Items keep their
@@ -74,6 +85,7 @@ pub fn deinit(self: *Host) void {
     self.center_providers.deinit(self.allocator);
     self.menus.deinit(self.allocator);
     self.settings_sections.deinit(self.allocator);
+    self.file_row_fill_colors.deinit(self.allocator);
     {
         var it = self.plugin_settings.iterator();
         while (it.next()) |e| {
@@ -370,6 +382,18 @@ pub fn storePluginSettings(self: *Host, id: []const u8, json: []const u8) !void 
 
 pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
     try self.plugins.append(self.allocator, plugin);
+}
+
+pub fn registerFileRowFillColor(self: *Host, resolver: FileRowFillColor) !void {
+    try self.file_row_fill_colors.append(self.allocator, resolver);
+}
+
+/// First non-null tint from registered resolvers, or null for the workbench theme default.
+pub fn fileRowFillColor(self: *Host, color_index: usize) ?dvui.Color {
+    for (self.file_row_fill_colors.items) |resolver| {
+        if (resolver.color(resolver.ctx, color_index)) |color| return color;
+    }
+    return null;
 }
 
 pub fn registerService(self: *Host, name: []const u8, service: *anyopaque) !void {

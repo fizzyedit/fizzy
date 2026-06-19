@@ -148,9 +148,10 @@ plugins share the same rules:
    - `build.zig` `wireWorkbenchModule` adds `pixelart` as a module dep.
    - `workbench/src/files.zig` reads `pixelart.Globals.state.colors.palette` for file-row
      tinting — the only live cross-plugin import in the workbench tree.
-   - Fix: register a file-row color hook via **workbench-api** (or a small `Host` callback
-     registry) that pixelart contributes during `register()`; drop the `pixelart` import
-     from the workbench module.
+   - Fix: register a file-row fill-color hook on **`Host`** (`registerFileRowFillColor`) that
+     pixelart contributes during `register()`; drop the `pixelart` import from the workbench
+     module. (Host registry chosen over workbench-api to avoid service init ordering and a
+     pixelart→workbench compile-time dep.)
 
 2. **Workbench "Stage E" — route shell `editor.workbench.*` field pokes.**
    Pixelart Stage E is done (`pixelart_state` is lifecycle-only in `App.zig`). Workbench
@@ -171,7 +172,7 @@ Each step ends with `zig build`, `zig build check-web`, `zig build test`.
 
 | Step | Work | Done when |
 |------|------|-----------|
-| **5a.1** | Break workbench→pixelart link (palette row color via workbench-api hook; remove `pixelart` from `wireWorkbenchModule`) | `grep pixelart src/plugins/workbench` → 0; all configs green |
+| **5a.1** | Break workbench→pixelart link (`Host.registerFileRowFillColor`; remove `pixelart` from `wireWorkbenchModule`) | `grep pixelart src/plugins/workbench` → 0; all configs green |
 | **5a.2** | Workbench Stage E: route `editor.workbench.*` / `fizzy.editor.workbench.*` through EditorAPI | `grep 'editor\.workbench\.' src/` → lifecycle + delegators only |
 
 #### 5b — Dylib scaffolding (native only; web unchanged)
@@ -235,12 +236,38 @@ grep -rn 'fizzy_plugin_' src/sdk src/plugins             → export symbols pres
 grep -rn 'DynLib\|dlopen' src/                           → 0 on web code paths
 ```
 
+### On-disk layout (locked)
+
+Fizzy already separates **install dir** from **user config** (`core/paths.zig` →
+`configFolder()`; `App.zig` chdirs to the executable dir on native). Phase 5 keeps that
+split and adds two plugin locations:
+
+| Kind | Path | Writable | Updated by |
+|------|------|----------|------------|
+| **Built-in dylibs** | `<exe_dir>/plugins/<id>.{dylib,so,dll}` | No (install tree) | Velopack / app update (same unit as exe) |
+| **User / 3rd-party dylibs** | `<config_folder>/plugins/<name>/plugin.{dylib,so,dll}` | Yes | User / future plugin store |
+| **Plugin settings** | `<config_folder>/settings.json` → `"plugins": { … }` | Yes | App (already via `Host.plugin_settings`) |
+
+`<exe_dir>` is where the binary lives (and where the app chdirs on launch). `<config_folder>`
+is the OS user config dir + `fizzy/` (e.g. `~/Library/Application Support/fizzy`,
+`~/.config/fizzy`) — **not** beside the exe.
+
+**Loader search order (native):**
+
+1. Built-ins — fixed list from `{exe_dir}/plugins/<id>.<ext>`
+2. User plugins — scan `{config_folder}/plugins/*/plugin.<ext>`
+3. Dev override — env var e.g. `FIZZY_PLUGIN_PATH` (optional, for local dylib hacking)
+
+Web: no loader; plugins stay statically linked into the wasm binary.
+
+Built-in dylibs ship inside the same Velopack package as the exe (no per-plugin signing or
+update channel). User plugins survive app updates because they live under config, not install.
+
+Repo source tree `src/plugins/` is **build layout only** — unrelated to these runtime paths.
+
 ### Where to begin (next session)
 
-**Start with 5a.1** — break the workbench→pixelart compile-time link. It is one focused
-change (palette row color hook + `build.zig` dep removal) and is the last hard coupling
-between plugins. Then **5a.2** (workbench Stage E), then **5b.1** (export surface +
-promote the spike pattern into the main tree).
+**5a.1** — done. **Next: 5a.2** (workbench Stage E), then **5b.1** (export surface).
 
 ---
 
@@ -655,21 +682,21 @@ the **build-script file-ownership trap** (`process_assets.zig` → std-only `Atl
 ## State of the tree
 
 **Phase 4 committed** through the workbench lift (`stage w4` + follow-up). **Phase 5
-documented; implementation not started.**
+documented; 5a.1 complete** (workbench no longer compile-time imports pixelart).
 
-Sanity greps (verified 2026-06-19; Phase-5 targets in **"Phase 5 sanity greps"** above):
+Sanity greps (Phase-5 targets in **"Phase 5 sanity greps"** above):
 
 ```
 # pixelart — fully decoupled from fizzy
 grep -rn 'fizzy\.editor\.' src/plugins/pixelart     → 0 live (comments only)
 grep -rn '@import.*fizzy'  src/plugins/pixelart     → 0
 
-# workbench — decoupled from fizzy; one cross-plugin link remains (Phase 5a.1)
+# workbench — decoupled from fizzy and pixelart (5a.1 done)
 grep -rn 'fizzy\.'         src/plugins/workbench/src → comments only, 0 live
-grep -rn '@import("pixelart")' src/plugins/workbench  → 1 (files.zig — fix in 5a.1)
+grep -rn 'pixelart'         src/plugins/workbench     → 0
 grep -rn '@import("workbench")' src/editor src/App.zig → module import (no path imports)
 
-# shell workbench field pokes (Phase 5a.2)
+# shell workbench field pokes (Phase 5a.2 — next)
 grep -rn 'editor\.workbench\.' src/editor src/backend → ~24 (route through EditorAPI)
 
 # shell imports plugins only via build modules; only build-time exception:

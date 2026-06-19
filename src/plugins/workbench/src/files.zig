@@ -2,7 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const wb = @import("../workbench.zig");
 const Globals = @import("Globals.zig");
-const pixelart = @import("pixelart");
 const dvui = wb.dvui;
 const wdvui = wb.wdvui;
 const icons = @import("icons");
@@ -479,8 +478,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                 try visible_file_rows_order.append(Globals.allocator(), .{ .id = inner_id_extra.*, .path = abs_path });
 
                 var color = dvui.themeGet().color(.control, .fill);
-                if (pixelart.Globals.state.colors.palette) |*palette| {
-                    color = palette.getDVUIColor(color_id.*);
+                if (Globals.host.fileRowFillColor(color_id.*)) |tint| {
+                    color = tint;
                 }
 
                 const padding = dvui.Rect.all(2);
