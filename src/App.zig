@@ -194,6 +194,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.packer.* = Packer.init(allocator) catch unreachable;
 
     pixelart.Globals.packer = fizzy.packer;
+    fizzy.editor.syncLoadedPixelartGlobals();
 
     // Hand the window to the listener thread and queue our own argv so the
     // first frame opens any files / project folder supplied on the command line.

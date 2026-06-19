@@ -12,8 +12,15 @@ test "load pixelart dylib and register" {
     var host = sdk.Host.init(std.testing.allocator);
     defer host.deinit();
 
+    // Stand-in for app-owned `pixelart.State` — register only stores the pointer.
+    var state_buf: [8192]u8 align(16) = undefined;
+
     const before = host.plugins.items.len;
-    var loaded = try PluginLoader.loadAndRegister(&host, test_opts.pixelart_dylib);
+    var loaded = try PluginLoader.loadAndRegister(&host, test_opts.pixelart_dylib, .{
+        .gpa = &std.testing.allocator,
+        .state = &state_buf,
+        .packer = null,
+    });
     defer loaded.lib.close();
 
     try std.testing.expect(host.plugins.items.len == before + 1);
@@ -21,6 +28,6 @@ test "load pixelart dylib and register" {
     try std.testing.expectEqualStrings("pixelart", pa.id);
     try std.testing.expect(host.sidebar_views.items.len >= 3);
 
-    // Mechanism B: context setter is required and callable (no window needed for init io/debug).
     loaded.set_dvui_context(null, null, null, null);
+    loaded.set_globals(@ptrCast(&std.testing.allocator), &state_buf, null);
 }

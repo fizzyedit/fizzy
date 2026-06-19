@@ -17,6 +17,7 @@ pub const LoadError = error{
     DylibOpenFailed,
     AbiSymbolMissing,
     RegisterSymbolMissing,
+    SetGlobalsSymbolMissing,
     SetDvuiContextSymbolMissing,
     AbiMismatch,
     RegisterRejected,
@@ -25,7 +26,15 @@ pub const LoadError = error{
 pub const LoadedLib = struct {
     lib: std.DynLib,
     path: []const u8,
+    set_globals: dylib_api.SetGlobalsFn,
     set_dvui_context: dvui_context.SetContextFn,
+};
+
+/// Host-owned pointers injected into the plugin image immediately before `register`.
+pub const PreRegister = struct {
+    gpa: ?*const std.mem.Allocator = null,
+    state: ?*anyopaque = null,
+    packer: ?*anyopaque = null,
 };
 
 /// `{exe_dir}/plugins/{pluginFilename(name)}`
@@ -49,13 +58,23 @@ pub fn resolvePluginPath(
     exe_dir: []const u8,
     builtin_name: []const u8,
 ) ![]const u8 {
-    if (std.process.getEnvVarOwned(allocator, "FIZZY_PLUGIN_PATH")) |override| {
+    if (std.process.Environ.getAlloc(nativeEnviron(), allocator, "FIZZY_PLUGIN_PATH")) |override| {
         return override;
     } else |_| {}
     return builtinPluginPath(allocator, exe_dir, builtin_name);
 }
 
-pub fn loadAndRegister(host: *Host, path: []const u8) LoadError!LoadedLib {
+fn nativeEnviron() std.process.Environ {
+    if (builtin.os.tag == .windows) {
+        return .{ .block = .global };
+    }
+    var n: usize = 0;
+    while (std.c.environ[n] != null) : (n += 1) {}
+    const slice: [:null]const ?[*:0]const u8 = @as([*:null]const ?[*:0]const u8, @ptrCast(std.c.environ))[0..n :null];
+    return .{ .block = .{ .slice = slice } };
+}
+
+pub fn loadAndRegister(host: *Host, path: []const u8, pre: ?PreRegister) LoadError!LoadedLib {
     var lib = std.DynLib.open(path) catch return error.DylibOpenFailed;
     errdefer lib.close();
 
@@ -65,10 +84,29 @@ pub fn loadAndRegister(host: *Host, path: []const u8) LoadError!LoadedLib {
     ) orelse return error.AbiSymbolMissing;
     if (!dylib_api.abiMatches(abi_fn())) return error.AbiMismatch;
 
+    const set_globals = lib.lookup(
+        dylib_api.SetGlobalsFn,
+        dylib_api.symbol_set_globals,
+    ) orelse return error.SetGlobalsSymbolMissing;
+
     const reg_fn = lib.lookup(
         *const fn (?*Host) callconv(.c) u32,
         dylib_api.symbol_register,
     ) orelse return error.RegisterSymbolMissing;
+
+    const set_ctx = lib.lookup(
+        dvui_context.SetContextFn,
+        dylib_api.symbol_set_dvui_context,
+    ) orelse return error.SetDvuiContextSymbolMissing;
+
+    if (pre) |inject| {
+        set_globals(
+            if (inject.gpa) |gpa| @ptrCast(gpa) else null,
+            inject.state,
+            inject.packer,
+        );
+    }
+
     const status: dylib_api.RegisterStatus = @enumFromInt(reg_fn(host));
     switch (status) {
         .ok => {},
@@ -76,14 +114,10 @@ pub fn loadAndRegister(host: *Host, path: []const u8) LoadError!LoadedLib {
         else => return error.RegisterRejected,
     }
 
-    const set_ctx = lib.lookup(
-        dvui_context.SetContextFn,
-        dylib_api.symbol_set_dvui_context,
-    ) orelse return error.SetDvuiContextSymbolMissing;
-
     return .{
         .lib = lib,
         .path = path,
+        .set_globals = set_globals,
         .set_dvui_context = set_ctx,
     };
 }

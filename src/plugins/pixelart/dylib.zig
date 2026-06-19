@@ -24,3 +24,16 @@ export fn fizzy_plugin_set_dvui_context(
 ) callconv(.c) void {
     sdk.dvui_context.inject(window, io, ft2lib, debug);
 }
+
+export fn fizzy_plugin_set_globals(
+    gpa: ?*const anyopaque,
+    state: ?*anyopaque,
+    packer: ?*anyopaque,
+) callconv(.c) void {
+    const Globals = @import("src/Globals.zig");
+    Globals.installRuntime(
+        if (gpa) |p| @ptrCast(@alignCast(p)) else null,
+        if (state) |p| @ptrCast(@alignCast(p)) else null,
+        if (packer) |p| @ptrCast(@alignCast(p)) else null,
+    );
+}

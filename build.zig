@@ -239,12 +239,12 @@ pub fn build(b: *std.Build) !void {
     build_opts.addOption([]const u8, "app_repo_url", app_repo_url);
     build_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
-    const load_pixelart_dylib = b.option(
+    const static_pixelart = b.option(
         bool,
-        "load-pixelart-dylib",
-        "Load pixelart from plugins/libpixelart.{dylib,so,dll} instead of static register (native dev)",
+        "static-pixelart",
+        "Keep pixelart statically registered on native (skip built-in dylib load)",
     ) orelse false;
-    build_opts.addOption(bool, "load_pixelart_dylib", load_pixelart_dylib);
+    build_opts.addOption(bool, "static_pixelart", static_pixelart);
 
     const step = b.step("update", "update git dependencies");
     step.makeFn = update_step;
@@ -521,6 +521,13 @@ pub fn build(b: *std.Build) !void {
 
     if (no_emit) {
         b.getInstallStep().dependOn(&exe.step);
+        if (main_fizzy.pixelart_dylib) |pixelart_dylib| {
+            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
+            const install_pixelart_dylib = b.addInstallArtifact(pixelart_dylib, .{
+                .dest_dir = .{ .override = plugins_install_dir },
+            });
+            b.getInstallStep().dependOn(&install_pixelart_dylib.step);
+        }
     } else {
         const install_artifact = b.addInstallArtifact(exe, .{
             .dest_dir = .{ .override = zig_out_install_dir },
@@ -532,6 +539,15 @@ pub fn build(b: *std.Build) !void {
         run_cmd.step.dependOn(&install_artifact.step);
         run_step.dependOn(&run_cmd.step);
         b.getInstallStep().dependOn(&install_artifact.step);
+
+        if (main_fizzy.pixelart_dylib) |pixelart_dylib| {
+            const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
+            const install_pixelart_dylib = b.addInstallArtifact(pixelart_dylib, .{
+                .dest_dir = .{ .override = plugins_install_dir },
+            });
+            b.getInstallStep().dependOn(&install_pixelart_dylib.step);
+            run_cmd.step.dependOn(&install_pixelart_dylib.step);
+        }
     }
 
     if (main_fizzy.pixelart_dylib) |pixelart_dylib| {
@@ -539,6 +555,7 @@ pub fn build(b: *std.Build) !void {
         const install_pixelart_dylib = b.addInstallArtifact(pixelart_dylib, .{
             .dest_dir = .{ .override = plugins_install_dir },
         });
+
         const pixelart_dylib_step = b.step(
             "pixelart-dylib",
             "Build the pixelart plugin as a dynamic library into zig-out/<target>/plugins/ (native only)",
@@ -1466,6 +1483,7 @@ fn addPixelartDylib(
         "fizzy_plugin_abi_version",
         "fizzy_plugin_register",
         "fizzy_plugin_set_dvui_context",
+        "fizzy_plugin_set_globals",
     };
     return lib;
 }

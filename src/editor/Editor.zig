@@ -454,11 +454,27 @@ pub const view_settings = "shell.settings";
 
 fn loadPixelartFromDylibEnabled() bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    if (comptime build_opts.load_pixelart_dylib) return true;
-    if (std.process.getEnvVar("FIZZY_LOAD_PIXELART_DYLIB")) |v| {
-        return v.len > 0 and v[0] != '0';
-    }
-    return false;
+    if (comptime build_opts.static_pixelart) return false;
+    if (std.process.Environ.getAlloc(fizzy.processEnviron(), fizzy.app.allocator, "FIZZY_STATIC_PIXELART")) |v| {
+        defer fizzy.app.allocator.free(v);
+        return v.len == 0 or v[0] == '0';
+    } else |_| {}
+    return true;
+}
+
+/// Registered pixelart plugin (dylib or static). Panics if missing after `postInit`.
+pub fn pixelartPlugin(editor: *Editor) *sdk.Plugin {
+    return editor.host.pluginById("pixelart") orelse @panic("pixelart plugin not registered");
+}
+
+/// Re-inject host-owned Globals into a loaded pixelart dylib (e.g. after `Packer` init).
+pub fn syncLoadedPixelartGlobals(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    editor.host.syncPluginGlobals(
+        &fizzy.app.allocator,
+        @ptrCast(editor.pixelart_state),
+        @ptrCast(fizzy.packer),
+    );
 }
 
 /// Load `{exe_dir}/plugins/libpixelart.*` (or `FIZZY_PLUGIN_PATH`) and register via dylib entry.
@@ -466,14 +482,19 @@ pub fn loadPixelartDylib(editor: *Editor, exe_dir: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const path = try PluginLoader.resolvePluginPath(fizzy.app.allocator, exe_dir, "pixelart");
     errdefer fizzy.app.allocator.free(path);
-    const loaded = try PluginLoader.loadAndRegister(&editor.host, path);
+    const loaded = try PluginLoader.loadAndRegister(&editor.host, path, .{
+        .gpa = &fizzy.app.allocator,
+        .state = @ptrCast(editor.pixelart_state),
+        .packer = null,
+    });
     try editor.loaded_plugin_libs.append(fizzy.app.allocator, loaded);
-    editor.host.installPluginDvuiContext(loaded.set_dvui_context);
+    editor.host.installPluginDylibHooks(loaded.set_globals, loaded.set_dvui_context);
 }
 
 fn unloadPluginLibs(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     editor.host.plugin_set_dvui_context = null;
+    editor.host.plugin_set_globals = null;
     for (editor.loaded_plugin_libs.items) |*entry| {
         entry.lib.close();
         fizzy.app.allocator.free(entry.path);
@@ -502,13 +523,14 @@ pub fn postInit(editor: *Editor) !void {
     // editor tick already runs on wasm. Order = sidebar order.
     try workbench_mod.plugin.register(&editor.host);
     if (loadPixelartFromDylibEnabled()) {
-        try editor.loadPixelartDylib(fizzy.app.root_path);
-        const pa = editor.host.pluginById("pixelart") orelse return error.MissingPlugin;
-        try pa.initPlugin();
+        editor.loadPixelartDylib(fizzy.app.root_path) catch |err| {
+            dvui.log.warn("pixelart dylib load failed ({s}); falling back to static plugin", .{@errorName(err)});
+            try pixelart.plugin.register(&editor.host);
+        };
+        try pixelartPlugin(editor).initPlugin();
     } else {
-        const pixelart_plugin = pixelart.plugin;
-        try pixelart_plugin.register(&editor.host);
-        try pixelart_plugin.pluginPtr().initPlugin();
+        try pixelart.plugin.register(&editor.host);
+        try pixelartPlugin(editor).initPlugin();
     }
 
     // Shell built-in: Settings (owner = null; not a plugin).
@@ -1585,7 +1607,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
 
         { // Radial Menu (pixel-art plugin)
-            const pa = pixelart.plugin.pluginPtr();
+            const pa = pixelartPlugin(editor);
             try pa.tickKeybinds();
             Keybinds.tick() catch {
                 dvui.log.err("Failed to tick hotkeys", .{});
@@ -1628,7 +1650,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     };
 
     if (comptime builtin.target.cpu.arch == .wasm32) {
-        pixelart.plugin.pluginPtr().runPackWorkers();
+        pixelartPlugin(editor).runPackWorkers();
     }
 
     _ = editor.arena.reset(.retain_capacity);
@@ -1944,21 +1966,21 @@ pub fn close(app: *App, editor: *Editor) void {
 pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     if (editor.folder) |folder| {
         editor.ignore.deinit(fizzy.app.allocator);
-        pixelart.plugin.pluginPtr().persistProjectFolder();
+        pixelartPlugin(editor).persistProjectFolder();
         fizzy.app.allocator.free(folder);
     }
     editor.folder = try fizzy.app.allocator.dupe(u8, path);
     try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
     editor.host.setActiveSidebarView(workbench_mod.plugin.view_files);
 
-    pixelart.plugin.pluginPtr().reloadProjectFolder(fizzy.app.allocator);
+    pixelartPlugin(editor).reloadProjectFolder(fizzy.app.allocator);
     editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);
 }
 
 pub fn closeProjectFolder(editor: *Editor) void {
     if (editor.folder) |folder| {
         editor.ignore.deinit(fizzy.app.allocator);
-        pixelart.plugin.pluginPtr().persistProjectFolder();
+        pixelartPlugin(editor).persistProjectFolder();
         fizzy.app.allocator.free(folder);
         editor.folder = null;
     }
@@ -2144,20 +2166,17 @@ pub fn processLoadingJobs(editor: *Editor) void {
 
 /// Kick off an async project-pack via the pixel-art plugin vtable.
 pub fn startPackProject(editor: *Editor) !void {
-    _ = editor;
-    try pixelart.plugin.pluginPtr().startPackProject();
+    try pixelartPlugin(editor).startPackProject();
 }
 
 /// True while a pack is queued, running, or finished but not yet installed.
-pub fn isPackingActive(editor: *const Editor) bool {
-    _ = editor;
-    return pixelart.plugin.pluginPtr().isPackingActive();
+pub fn isPackingActive(editor: *Editor) bool {
+    return pixelartPlugin(editor).isPackingActive();
 }
 
 /// Per-frame pack-job sweep (delegates to the pixel-art plugin).
 pub fn processPackJob(editor: *Editor) void {
-    _ = editor;
-    pixelart.plugin.pluginPtr().tickPackJobs();
+    pixelartPlugin(editor).tickPackJobs();
 }
 
 pub fn activeWorkspaceCanvasRectPhysical(editor: *Editor) ?dvui.Rect.Physical {
@@ -2354,7 +2373,7 @@ pub fn newFile(editor: *Editor, path: []const u8, grid: sdk.EditorAPI.NewDocGrid
         return error.FileAlreadyExists;
     }
 
-    const owner = pixelart.plugin.pluginPtr();
+    const owner = pixelartPlugin(editor);
     const staging = try owner.allocDocumentBuffer(fizzy.app.allocator);
     defer fizzy.app.allocator.free(staging.backing);
 
@@ -2412,34 +2431,28 @@ pub fn forceCloseFile(editor: *Editor, index: usize) !void {
 }
 
 pub fn accept(editor: *Editor) !void {
-    _ = editor;
-    pixelart.plugin.pluginPtr().acceptEdit();
+    pixelartPlugin(editor).acceptEdit();
 }
 
 pub fn cancel(editor: *Editor) !void {
-    _ = editor;
-    pixelart.plugin.pluginPtr().cancelEdit();
+    pixelartPlugin(editor).cancelEdit();
 }
 
 pub fn copy(editor: *Editor) !void {
-    _ = editor;
-    try pixelart.plugin.pluginPtr().copy();
+    try pixelartPlugin(editor).copy();
 }
 
 pub fn paste(editor: *Editor) !void {
-    _ = editor;
-    try pixelart.plugin.pluginPtr().paste();
+    try pixelartPlugin(editor).paste();
 }
 
 pub fn deleteSelectedContents(editor: *Editor) void {
-    _ = editor;
-    pixelart.plugin.pluginPtr().deleteSelection();
+    pixelartPlugin(editor).deleteSelection();
 }
 
 /// Begins a transform operation on the currently active file.
 pub fn transform(editor: *Editor) !void {
-    _ = editor;
-    try pixelart.plugin.pluginPtr().transform();
+    try pixelartPlugin(editor).transform();
 }
 
 /// Performs a save operation on the currently open file.

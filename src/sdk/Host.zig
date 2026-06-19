@@ -9,6 +9,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const Plugin = @import("Plugin.zig");
 const dvui_context = @import("dvui_context.zig");
+const dylib_api = @import("dylib.zig");
 const regions = @import("regions.zig");
 const EditorAPI = @import("EditorAPI.zig");
 const DocHandle = @import("DocHandle.zig");
@@ -36,6 +37,8 @@ pub const FileRowFillColor = struct {
 
 /// Mechanism B: setter from a loaded plugin dylib; null when all plugins are static.
 plugin_set_dvui_context: ?dvui_context.SetContextFn = null,
+/// Host-owned Globals injection into a loaded plugin image (pixelart today).
+plugin_set_globals: ?dylib_api.SetGlobalsFn = null,
 
 allocator: std.mem.Allocator,
 
@@ -107,18 +110,34 @@ pub fn installShell(self: *Host, api: EditorAPI) void {
     self.shell_api = api;
 }
 
-/// Wire a loaded plugin dylib's dvui globals to the host (Mechanism B). Called once
-/// after `dlopen` + `fizzy_plugin_register`; also primes `io` / `ft2lib` / `debug`.
-pub fn installPluginDvuiContext(self: *Host, setter: dvui_context.SetContextFn) void {
-    self.plugin_set_dvui_context = setter;
-    dvui_context.syncHostIntoPlugin(setter);
-}
-
 /// Re-push host dvui pointers into the loaded plugin image. Call at the top of each
 /// frame before plugin draw/tick (updates `current_window` every frame).
 pub fn syncPluginDvuiContext(self: *Host) void {
     const setter = self.plugin_set_dvui_context orelse return;
     dvui_context.syncHostIntoPlugin(setter);
+}
+
+/// Re-push host-owned pixelart Globals (`gpa`, `state`, `packer`) into the dylib.
+pub fn syncPluginGlobals(
+    self: *Host,
+    gpa: *const std.mem.Allocator,
+    state: *anyopaque,
+    packer: ?*anyopaque,
+) void {
+    const setter = self.plugin_set_globals orelse return;
+    setter(@ptrCast(gpa), state, packer);
+}
+
+/// Wire a loaded plugin dylib's dvui globals to the host (Mechanism B). Called once
+/// after `dlopen` + `fizzy_plugin_register`; also primes `io` / `ft2lib` / `debug`.
+pub fn installPluginDylibHooks(
+    self: *Host,
+    set_globals: dylib_api.SetGlobalsFn,
+    set_dvui_context: dvui_context.SetContextFn,
+) void {
+    self.plugin_set_globals = set_globals;
+    self.plugin_set_dvui_context = set_dvui_context;
+    dvui_context.syncHostIntoPlugin(set_dvui_context);
 }
 
 /// Per-frame arena allocator (reset every frame; do not free). Asserts the shell is installed.
