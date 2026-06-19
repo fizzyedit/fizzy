@@ -1,8 +1,8 @@
 //! Workbench plugin compile-time module root.
 //!
-//! Wired in `build.zig` as `b.addModule("workbench", …)` (future). Shell code can
-//! import this as `@import("workbench")`. Plugin files inside `src/` import
-//! `../workbench.zig` for shared sdk/core access.
+//! Wired in `build.zig` via `wireWorkbenchModule` (`b.addModule("workbench", …)`) for the
+//! native, web, and test roots. Shell code imports this as `@import("workbench")`. Plugin
+//! files inside `src/` import `../workbench.zig` for shared sdk/core access.
 pub const workbench = @import("workbench.zig");
 pub const plugin = @import("src/plugin.zig");
 pub const files = @import("src/files.zig");

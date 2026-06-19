@@ -945,18 +945,6 @@ pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
         );
 
         if (button.clicked()) {
-            // if (try dvui.dialogNativeFileOpenMultiple(dvui.currentWindow().arena(), .{
-            //     .title = "Open Files...",
-            //     .filter_description = ".pixi, .png",
-            //     .filters = &.{ "*.pixi", "*.png" },
-            // })) |files| {
-            //     for (files) |file| {
-            //         _ = fizzy.editor.openFilePath(file, Globals.workbench.open_workspace_grouping) catch {
-            //             std.log.err("Failed to open file: {s}", .{file});
-            //         };
-            //     }
-            // }
-
             Globals.host.showOpenFileDialog(openFilesCallback, &.{
                 .{ .name = "Image Files", .pattern = "fizzy;png;jpg;jpeg" },
             }, "", null);

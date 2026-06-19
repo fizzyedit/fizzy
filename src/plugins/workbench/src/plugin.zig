@@ -10,6 +10,10 @@ const files = @import("files.zig");
 pub const view_files = "workbench.files";
 pub const center_workspaces = "workbench.workspaces";
 
+// `state` is intentionally unused: the workbench owns no documents (no doc vtable hooks, so
+// `DocHandle.owner` is never this plugin) and its registered hooks reach the `Workbench`
+// instance + Host through `Globals`, not the vtable `state` arg. Kept `undefined` so a stray
+// dereference fails loudly rather than reading a bogus pointer.
 var plugin: sdk.Plugin = .{
     .state = undefined,
     .vtable = &vtable,

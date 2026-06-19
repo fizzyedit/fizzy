@@ -1,6 +1,4 @@
 const std = @import("std");
-const mach = @import("mach");
-const Core = mach.Core;
 
 /// Shared infrastructure module (gfx, math, fs, generated atlas, platform,
 /// paths, the generic dvui hub + widgets). Consumed by the shell and plugins.
