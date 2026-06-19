@@ -528,6 +528,18 @@ pub fn build(b: *std.Build) !void {
         b.getInstallStep().dependOn(&install_artifact.step);
     }
 
+    if (main_fizzy.pixelart_dylib) |pixelart_dylib| {
+        const plugins_install_dir: std.Build.InstallDir = .{ .custom = b.fmt("{s}/plugins", .{zig_out_subdir}) };
+        const install_pixelart_dylib = b.addInstallArtifact(pixelart_dylib, .{
+            .dest_dir = .{ .override = plugins_install_dir },
+        });
+        const pixelart_dylib_step = b.step(
+            "pixelart-dylib",
+            "Build the pixelart plugin as a dynamic library into zig-out/<target>/plugins/ (native only)",
+        );
+        pixelart_dylib_step.dependOn(&install_pixelart_dylib.step);
+    }
+
     const package_step = b.step("package", "Velopack release artifacts (strip + vpk); not part of install or run");
     // The default native target on a Windows host resolves to x86_64-windows-gnu,
     // for which `velopack_supported_for_target` is false — exe_for_package falls
@@ -781,6 +793,7 @@ pub fn build(b: *std.Build) !void {
         .{ "fizzy-grid-validate", "src/plugins/pixelart/src/internal/grid_layout_validate.zig" },
         .{ "fizzy-animation", "src/plugins/pixelart/src/Animation.zig" },
         .{ "fizzy-window-layout", "src/backend/window_layout.zig" },
+        .{ "fizzy-plugin-dylib", "src/sdk/dylib.zig" },
     }) |entry| {
         tests_module.addAnonymousImport(entry[0], .{
             .root_source_file = b.path(entry[1]),
@@ -1111,6 +1124,8 @@ const FizzyExecutable = struct {
     zstbi_module: *std.Build.Module,
     msf_gif_module: *std.Build.Module,
     known_folders: *std.Build.Module,
+    /// Native-only; `null` on wasm targets.
+    pixelart_dylib: ?*std.Build.Step.Compile = null,
 };
 
 fn addFizzyExecutableForTarget(
@@ -1235,6 +1250,20 @@ fn addFizzyExecutableForTarget(
         .backend = dvui_dep.module("sdl3"),
     }, exe.root_module);
 
+    const pixelart_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
+        break :blk addPixelartDylib(b, resolved_target, optimize, .{
+            .dvui = dvui_dep.module("dvui_sdl3"),
+            .core = core_module,
+            .sdk = sdk_module,
+            .assets = assets_module,
+            .zip = zip_pkg.module,
+            .zstbi = zstbi_module,
+            .msf_gif = msf_gif_module,
+            .icons = icons_module,
+            .backend = dvui_dep.module("sdl3"),
+        });
+    } else null;
+
     const singleton_app_dep = b.dependency("dvui_singleton_app", .{
         .target = resolved_target,
         .optimize = optimize,
@@ -1294,6 +1323,7 @@ fn addFizzyExecutableForTarget(
         .zstbi_module = zstbi_module,
         .msf_gif_module = msf_gif_module,
         .known_folders = known_folders,
+        .pixelart_dylib = pixelart_dylib,
     };
 }
 
@@ -1359,6 +1389,46 @@ fn wireWorkbenchModule(
 }
 
 /// Pixel-art plugin (`src/plugins/pixelart/module.zig`).
+fn applyPixelartModuleImports(module: *std.Build.Module, deps: PixelartModuleDeps) void {
+    module.addImport("dvui", deps.dvui);
+    module.addImport("core", deps.core);
+    module.addImport("sdk", deps.sdk);
+    module.addImport("assets", deps.assets);
+    module.addImport("zip", deps.zip);
+    module.addImport("zstbi", deps.zstbi);
+    module.addImport("msf_gif", deps.msf_gif);
+    if (deps.icons) |icons| module.addImport("icons", icons);
+    if (deps.backend) |backend| module.addImport("backend", backend);
+}
+
+/// Native dynamic library for the pixel-art plugin (`src/plugins/pixelart/dylib.zig`).
+fn addPixelartDylib(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: PixelartModuleDeps,
+) *std.Build.Step.Compile {
+    const dylib_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/plugins/pixelart/dylib.zig"),
+        .link_libc = true,
+    });
+    applyPixelartModuleImports(dylib_module, deps);
+    const lib = b.addLibrary(.{
+        .name = "pixelart",
+        .linkage = .dynamic,
+        .root_module = dylib_module,
+    });
+    // Resolve dvui/sdk symbols from the host at load time (Mechanism B).
+    lib.linker_allow_shlib_undefined = true;
+    lib.root_module.export_symbol_names = &[_][]const u8{
+        "fizzy_plugin_abi_version",
+        "fizzy_plugin_register",
+    };
+    return lib;
+}
+
 fn wirePixelartModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -1373,15 +1443,7 @@ fn wirePixelartModule(
         .link_libc = target.result.cpu.arch != .wasm32,
         .single_threaded = target.result.cpu.arch == .wasm32,
     });
-    pixelart_module.addImport("dvui", deps.dvui);
-    pixelart_module.addImport("core", deps.core);
-    pixelart_module.addImport("sdk", deps.sdk);
-    pixelart_module.addImport("assets", deps.assets);
-    pixelart_module.addImport("zip", deps.zip);
-    pixelart_module.addImport("zstbi", deps.zstbi);
-    pixelart_module.addImport("msf_gif", deps.msf_gif);
-    if (deps.icons) |icons| pixelart_module.addImport("icons", icons);
-    if (deps.backend) |backend| pixelart_module.addImport("backend", backend);
+    applyPixelartModuleImports(pixelart_module, deps);
     consumer.addImport("pixelart", pixelart_module);
     return pixelart_module;
 }

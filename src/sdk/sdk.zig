@@ -27,3 +27,6 @@ pub const UiAtlasView = EditorAPI.UiAtlasView;
 pub const WorkbenchPane = @import("WorkbenchPane.zig");
 pub const WorkbenchPaneView = WorkbenchPane.WorkbenchPaneView;
 pub const pane_layout = @import("pane_layout.zig");
+
+/// Runtime dylib entry contract (`fizzy_plugin_abi_version` / `fizzy_plugin_register`).
+pub const dylib = @import("dylib.zig");

@@ -179,7 +179,7 @@ Each step ends with `zig build`, `zig build check-web`, `zig build test`.
 
 | Step | Work | Done when |
 |------|------|-----------|
-| **5b.1** | SDK **export surface** — `fizzy_plugin_abi_version()` + `fizzy_plugin_register(*Host)` (`callconv(.c)`); document ABI version constant | Spike + one plugin export compile |
+| **5b.1** | SDK **export surface** — `src/sdk/dylib.zig` (`abi_version`, `RegisterStatus`, symbol names); `src/plugins/pixelart/dylib.zig` exports `fizzy_plugin_abi_version` / `fizzy_plugin_register`; `zig build pixelart-dylib` | ✅ Done |
 | **5b.2** | **`build.zig` dual link** — add `addLibrary(.dynamic)` target for one plugin (start with pixelart or a minimal `plugins/hello` example); web root keeps static `@import("pixelart")` | Native builds `.dylib`/`.so`/`.dll` beside exe; web still static |
 | **5b.3** | **Host loader module** — `std.DynLib` open, ABI gate, resolve entry, call `register`; wire `Globals` after load | Loader unit test or dev-only flag loads a dylib and registers one sidebar view |
 | **5b.4** | **Dvui context injection** in shell frame loop — set plugin-side globals before plugin draw/tick (per spike Mechanism B) | Plugin draw mutates host `Window` in a loaded dylib (manual or integration test) |
@@ -267,7 +267,7 @@ Repo source tree `src/plugins/` is **build layout only** — unrelated to these 
 
 ### Where to begin (next session)
 
-**5a.1–5a.2** — done. **Next: 5b.1** (SDK export surface + promote dylib spike).
+**5a.1–5a.2** — done. **5b.1** — done (`sdk/dylib.zig`, `pixelart/dylib.zig`, `zig build pixelart-dylib`). **Next: 5b.2** (formalize dual-link in build; loader stub 5b.3).
 
 ---
 
@@ -664,6 +664,8 @@ the **build-script file-ownership trap** (`process_assets.zig` → std-only `Atl
 |------|------|
 | `HANDOFF.md` | This file |
 | `spikes/shared-globals/` | Dylib + dvui context-injection spike (Mechanism B) |
+| `src/sdk/dylib.zig` | Dylib ABI version + entry symbol names (`fizzy_plugin_*`) |
+| `src/plugins/pixelart/dylib.zig` | Pixelart dynamic-library root (exports only) |
 | `src/sdk/Plugin.zig` | Plugin vtable; dylib entry wraps `register()` |
 | `src/plugins/pixelart/module.zig` | Pixel-art build module root |
 | `src/plugins/pixelart/pixelart.zig` | Pixel-art intra-plugin hub |
