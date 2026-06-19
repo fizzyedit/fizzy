@@ -109,8 +109,7 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
     });
 
     if (!fizzy.editor.host.isActiveSidebarView(workbench.plugin.view_files)) {
-        fizzy.editor.workbench.file_tree_data_id = null;
-        fizzy.editor.workbench.clearFileTreeTabDragDropState();
+        fizzy.editor.resetFileTreeWhenFilesHidden();
     }
 
     if (fizzy.editor.host.activeSidebarView()) |view| {

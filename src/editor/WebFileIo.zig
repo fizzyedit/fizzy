@@ -46,7 +46,7 @@ pub fn showOpenFileDialog(
 ) void {
     if (comptime builtin.target.cpu.arch != .wasm32) return;
     open_callback = cb;
-    open_grouping = fizzy.editor.workbench.open_workspace_grouping;
+    open_grouping = fizzy.editor.currentGroupingID();
     open_picker_id = dvui.Id.extendId(null, @src(), 0);
     dvui.dialogWasmFileOpenMultiple(open_picker_id.?, .{ .accept = open_accept });
 }

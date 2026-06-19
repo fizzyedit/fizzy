@@ -77,6 +77,30 @@ pub fn clearFileTreeTabDragDropState(self: *Workbench) void {
     }
 }
 
+pub fn clearFileTreeDataId(self: *Workbench) void {
+    self.file_tree_data_id = null;
+}
+
+/// Explorer peek/collapse hides the workspace subtree; clear latched center flags.
+pub fn clearAllWorkspaceCenter(self: *Workbench) void {
+    for (self.workspaces.values()) |*ws| {
+        ws.center = false;
+    }
+}
+
+/// When the open doc at `closed_index` closes, pick another tab in the same workspace.
+pub fn adjustOpenFileIndexAfterClose(
+    self: *Workbench,
+    grouping: u64,
+    closed_index: usize,
+    replacement_index: ?usize,
+) void {
+    const workspace = self.workspaces.getPtr(grouping) orelse return;
+    if (workspace.open_file_index == closed_index) {
+        if (replacement_index) |idx| workspace.open_file_index = idx;
+    }
+}
+
 pub fn rebuildWorkspaces(self: *Workbench) !void {
     return workbench_layout.rebuildWorkspaces(self);
 }

@@ -833,6 +833,20 @@ pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
     return editor.workbench.activeDoc();
 }
 
+pub fn clearFileTreeDataId(editor: *Editor) void {
+    editor.workbench.clearFileTreeDataId();
+}
+
+/// Files sidebar inactive — drop tree dvui stash and tab-drag state.
+pub fn resetFileTreeWhenFilesHidden(editor: *Editor) void {
+    editor.clearFileTreeDataId();
+    editor.clearFileTreeTabDragDropState();
+}
+
+pub fn clearAllWorkspaceCenter(editor: *Editor) void {
+    editor.workbench.clearAllWorkspaceCenter();
+}
+
 /// Workbench routing helpers (type-agnostic; dispatch through `doc.owner`).
 pub fn docGrouping(_: *Editor, doc: sdk.DocHandle) u64 {
     return doc.owner.documentGrouping(doc);
@@ -1521,9 +1535,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         } else {
             // Explorer peek/collapse hides the workspace subtree, so `drawWorkspaces` does not
             // run and `workspace.center` would otherwise stay latched from a prior panel animation.
-            for (editor.workbench.workspaces.values()) |*ws| {
-                ws.center = false;
-            }
+            editor.clearAllWorkspaceCenter();
         }
 
         { // Radial Menu (pixel-art plugin)
@@ -1630,7 +1642,7 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
                 .filters = &.{ "*.fiz", "*.pixi", "*.png", "*.jpg", "*.jpeg" },
             })) |files| {
                 for (files) |file| {
-                    _ = editor.openFilePath(file, editor.workbench.open_workspace_grouping) catch {
+                    _ = editor.openFilePath(file, editor.currentGroupingID()) catch {
                         std.log.err("Failed to open file: {s}", .{file});
                     };
                 }
@@ -2588,16 +2600,14 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     const doc = editor.docAt(index) orelse return;
     const grouping = editor.docGrouping(doc);
 
-    if (editor.workbench.workspaces.getPtr(grouping)) |workspace| {
-        if (workspace.open_file_index == index) {
-            for (editor.open_files.values(), 0..) |d, i| {
-                if (editor.docGrouping(d) == workspace.grouping and d.id != doc.id) {
-                    workspace.open_file_index = i;
-                    break;
-                }
-            }
+    const replacement_index: ?usize = blk: {
+        for (editor.open_files.values(), 0..) |d, i| {
+            if (i == index) continue;
+            if (editor.docGrouping(d) == grouping) break :blk i;
         }
-    }
+        break :blk null;
+    };
+    editor.workbench.adjustOpenFileIndexAfterClose(grouping, index, replacement_index);
 
     editor.closeDocumentResources(doc);
     editor.open_files.orderedRemoveAt(index);
@@ -2605,18 +2615,17 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
 
 pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     const doc = editor.open_files.get(id) orelse return;
+    const index = editor.open_files.getIndex(id) orelse return;
     const grouping = editor.docGrouping(doc);
 
-    if (editor.workbench.workspaces.getPtr(grouping)) |workspace| {
-        if (workspace.open_file_index == editor.open_files.getIndex(doc.id)) {
-            for (editor.open_files.values(), 0..) |d, i| {
-                if (editor.docGrouping(d) == workspace.grouping and d.id != doc.id) {
-                    workspace.open_file_index = i;
-                    break;
-                }
-            }
+    const replacement_index: ?usize = blk: {
+        for (editor.open_files.values(), 0..) |d, i| {
+            if (i == index) continue;
+            if (editor.docGrouping(d) == grouping) break :blk i;
         }
-    }
+        break :blk null;
+    };
+    editor.workbench.adjustOpenFileIndexAfterClose(grouping, index, replacement_index);
 
     editor.closeDocumentResources(doc);
     _ = editor.open_files.orderedRemove(id);

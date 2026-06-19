@@ -267,7 +267,7 @@ Repo source tree `src/plugins/` is **build layout only** — unrelated to these 
 
 ### Where to begin (next session)
 
-**5a.1** — done. **Next: 5a.2** (workbench Stage E), then **5b.1** (export surface).
+**5a.1–5a.2** — done. **Next: 5b.1** (SDK export surface + promote dylib spike).
 
 ---
 
@@ -681,8 +681,8 @@ the **build-script file-ownership trap** (`process_assets.zig` → std-only `Atl
 
 ## State of the tree
 
-**Phase 4 committed** through the workbench lift (`stage w4` + follow-up). **Phase 5
-documented; 5a.1 complete** (workbench no longer compile-time imports pixelart).
+**Phase 4 committed** through the workbench lift (`stage w4` + follow-up). **Phase 5a
+(5a.1–5a.2) complete** — plugins decoupled; shell workbench field pokes routed.
 
 Sanity greps (Phase-5 targets in **"Phase 5 sanity greps"** above):
 
@@ -696,8 +696,9 @@ grep -rn 'fizzy\.'         src/plugins/workbench/src → comments only, 0 live
 grep -rn 'pixelart'         src/plugins/workbench     → 0
 grep -rn '@import("workbench")' src/editor src/App.zig → module import (no path imports)
 
-# shell workbench field pokes (Phase 5a.2 — next)
-grep -rn 'editor\.workbench\.' src/editor src/backend → ~24 (route through EditorAPI)
+# shell workbench field pokes routed (5a.2 done)
+grep -rn 'fizzy\.editor\.workbench\.' src/            → 0
+grep -rn 'editor\.workbench\.' src/                  → lifecycle + Editor delegators only (Editor.zig, App.zig Globals inject)
 
 # shell imports plugins only via build modules; only build-time exception:
 grep -rn 'plugins/.*/src' src/ *.zig (excl. src/plugins) → process_assets.zig → Atlas.zig
