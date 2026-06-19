@@ -180,6 +180,10 @@ pub fn setActiveDocIndex(self: *Host, index: usize) void {
     if (self.shell_api) |a| a.setActiveDocIndex(index);
 }
 
+pub fn swapDocs(self: *Host, a_index: usize, b_index: usize) void {
+    if (self.shell_api) |a| a.swapDocs(a_index, b_index);
+}
+
 pub fn allocDocId(self: *Host) u64 {
     return if (self.shell_api) |a| a.allocDocId() else 0;
 }

@@ -564,6 +564,7 @@ const shell_api_vtable: sdk.EditorAPI.VTable = .{
     .docIndex = shellDocIndex,
     .openDocCount = shellOpenDocCount,
     .setActiveDocIndex = shellSetActiveDocIndex,
+    .swapDocs = shellSwapDocs,
     .allocDocId = shellAllocDocId,
     .accept = shellAccept,
     .cancel = shellCancel,
@@ -658,6 +659,11 @@ fn shellOpenDocCount(ctx: *anyopaque) usize {
 }
 fn shellSetActiveDocIndex(ctx: *anyopaque, index: usize) void {
     shellCtx(ctx).setActiveFile(index);
+}
+fn shellSwapDocs(ctx: *anyopaque, a: usize, b: usize) void {
+    const editor = shellCtx(ctx);
+    std.mem.swap(sdk.DocHandle, &editor.open_files.values()[a], &editor.open_files.values()[b]);
+    std.mem.swap(u64, &editor.open_files.keys()[a], &editor.open_files.keys()[b]);
 }
 fn shellAllocDocId(ctx: *anyopaque) u64 {
     return shellCtx(ctx).newFileID();

@@ -355,6 +355,37 @@ Dead dialog re-exports removed in the same pass: `Dialogs.Export`, `Dialogs.draw
 
 ---
 
+## Stage W — workbench lift (IN PROGRESS, user signed off 2026-06-19)
+
+Workbench is the last "half-shell" plugin: 225 `fizzy` refs (163 `fizzy.editor`) across
+`files.zig`, `Workspace.zig`, `Workbench.zig`, `FileLoadJob.zig`, `plugin.zig`. Unlike pixelart
+it has **no state-injection yet** — `plugin.state = undefined`, draw hooks call
+`fizzy.editor.*` directly, and the `Workbench` struct instance lives on `Editor`. Tab order *is*
+the order of `Editor.open_files`, which workbench mutates in place (`std.mem.swap` on
+values/keys at `Workspace.zig:467+`) — that's the deep coupling.
+
+**Plan (mirrors pixelart Stage C–E), each stage builds all 3 configs green:**
+
+- **W1 — host-injection seam + doc-collection routing — DONE.** Added
+  `workbench/src/Globals.zig` (`host: *sdk.Host`, `gpa`), injected in `App.zig` (path import
+  until W5). Added `EditorAPI.swapDocs(a,b)` primitive (+ Host forwarder + shell impl) — the
+  only mutation of open-doc *order* plugins do; replaces workbench's in-place `std.mem.swap`
+  on `open_files`. Converted in `Workspace.zig` + `files.zig`: `open_files.count/.values().len`
+  → `Globals.host.openDocCount()`, `open_files.values()[i]`/`docAt` → `docByIndex`,
+  `open_files.getIndex` → `docIndex`, `setActiveFile` → `setActiveDocIndex`,
+  `fizzy.editor.host` → `Globals.host`. **Workbench `fizzy.editor` refs: 163 → 106.**
+- **W2 — workspace/grouping ownership.** Move `workspaces`, `open_workspace_grouping`,
+  grouping-id counters (`newGroupingID`/`currentGroupingID`), and file-tree tab drag-drop
+  state (`tab_drag_from_tree_path`/`file_tree_data_id`/`clearFileTreeTabDragDropState`, today
+  shared with shell `Explorer`/`Editor`) onto the `Workbench` struct; shell routes through it.
+- **W3 — remaining `fizzy.editor.*` (doc ops, folder/settings/recents/atlas) → EditorAPI/Host.**
+  Add missing EditorAPI surface as needed (`folder`, `setProjectFolder`, `openFilePath`, …).
+- **W4 — `fizzy.dvui`/`fizzy.app`/`fizzy.math`/`fizzy.backend` → sdk/core**; then
+  **W5 — `b.addModule("workbench")`** + `@import("workbench")`, drop the shell path imports
+  (`Editor.zig` re-exports of `Workspace`/`FileLoadJob`/`Workbench`) and the `fizzy` import.
+
+---
+
 ## Next big rock: sprite / atlas → `core` — DONE
 
 End-state achieved. Verified this session:

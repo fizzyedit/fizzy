@@ -1,5 +1,6 @@
 const std = @import("std");
 const fizzy = @import("../../../fizzy.zig");
+const Globals = @import("Globals.zig");
 const pixelart = @import("pixelart");
 const dvui = @import("dvui");
 const Editor = fizzy.Editor;
@@ -288,7 +289,7 @@ fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u
     if ((dvui.menuItemLabel(@src(), "New File...", .{}, .{ .expand = .horizontal })) != null) {
         defer fw2.close();
 
-        fizzy.editor.host.requestNewDocument(project_path, root_branch_id.asUsize());
+        Globals.host.requestNewDocument(project_path, root_branch_id.asUsize());
     }
 
     if ((dvui.menuItemLabel(@src(), "New Folder...", .{}, .{ .expand = .horizontal })) != null) {
@@ -654,7 +655,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                                 var have_grouping = false;
                                 for (to_open) |p| {
                                     if (!have_grouping) {
-                                        side_grouping = if (fizzy.editor.open_files.count() == 0)
+                                        side_grouping = if (Globals.host.openDocCount() == 0)
                                             fizzy.editor.currentGroupingID()
                                         else
                                             fizzy.editor.newGroupingID();
@@ -683,7 +684,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *fizzy.dvui.TreeWidg
                             defer fw2.close();
 
                             const parent_dir: []const u8 = if (entry.kind == .directory) abs_path else directory;
-                            fizzy.editor.host.requestNewDocument(parent_dir, branch_id.asUsize());
+                            Globals.host.requestNewDocument(parent_dir, branch_id.asUsize());
                         }
 
                         if ((dvui.menuItemLabel(@src(), "New Folder...", .{}, .{ .expand = .horizontal })) != null) {
@@ -1224,7 +1225,9 @@ pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File
         .directory => {
             std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename folder: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
 
-            for (fizzy.editor.open_files.values()) |doc| {
+            var di: usize = 0;
+            while (di < Globals.host.openDocCount()) : (di += 1) {
+                const doc = Globals.host.docByIndex(di) orelse continue;
                 const path = fizzy.editor.docPath(doc);
                 if (std.mem.containsAtLeast(u8, path, 1, full_path)) {
                     const file_name = dvui.currentWindow().arena().dupe(u8, std.fs.path.basename(path)) catch "Failed to duplicate path";

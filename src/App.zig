@@ -9,6 +9,8 @@ const icon = assets.files.@"icon.png";
 
 const fizzy = @import("fizzy.zig");
 const pixelart = @import("pixelart");
+// Path import until workbench becomes a build module (Stage W5); see HANDOFF "Stage W".
+const WorkbenchGlobals = @import("plugins/workbench/src/Globals.zig");
 const auto_update = @import("backend/auto_update.zig");
 const update_notify = @import("backend/update_notify.zig");
 const singleton = @import("backend/singleton.zig");
@@ -165,6 +167,11 @@ pub fn AppInit(win: *dvui.Window) !void {
 
     fizzy.editor = try allocator.create(Editor);
     fizzy.editor.* = Editor.init(fizzy.app) catch unreachable;
+
+    // Workbench plugin runtime injection (Stage W): host + allocator, so workbench code
+    // reaches the EditorAPI surface without importing `fizzy.zig`. Mirrors pixelart.Globals.
+    WorkbenchGlobals.gpa = allocator;
+    WorkbenchGlobals.host = &fizzy.editor.host;
 
     // Pixel-art plugin state (tools/colors/project/clipboard/pack jobs). Created
     // before `postInit` so the pixel-art plugin's `register` can adopt it as its

@@ -5,6 +5,7 @@ const dvui = @import("dvui");
 const sdk = @import("sdk");
 const pixelart = @import("pixelart");
 const fizzy = @import("../../../fizzy.zig");
+const Globals = @import("Globals.zig");
 const icons = @import("icons");
 
 const App = fizzy.App;
@@ -88,7 +89,7 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     // A sidebar view may optionally take over this workspace pane's content region (e.g. pixel
     // art's "Project" view renders the packed atlas here instead of document tabs+canvas). The
     // workbench owns only the pane frame; it hands the active view the opaque workspace handle.
-    const active = fizzy.editor.host.activeSidebarView();
+    const active = Globals.host.activeSidebarView();
     if (active != null and active.?.draw_workspace != null) {
         var pane_view: sdk.WorkbenchPaneView = .{
             .grouping = self.grouping,
@@ -116,7 +117,7 @@ pub fn workspaceEmptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.B
 }
 
 fn drawTabs(self: *Workspace) void {
-    if (fizzy.editor.open_files.values().len == 0) return;
+    if (Globals.host.openDocCount() == 0) return;
 
     // Handle dragging of tabs between workspace reorderables (tab bars)
     defer self.processTabsDrag();
@@ -152,7 +153,7 @@ fn drawTabs(self: *Workspace) void {
             });
             defer tabs_hbox.deinit();
 
-            const files_len = fizzy.editor.open_files.count();
+            const files_len = Globals.host.openDocCount();
 
             // Find the neighbouring tabs (within this workspace grouping) of the active tab.
             var prev_same_group_index: ?usize = null;
@@ -161,7 +162,7 @@ fn drawTabs(self: *Workspace) void {
             const active_in_this_group = blk: {
                 if (fizzy.editor.open_workspace_grouping != self.grouping) break :blk false;
                 if (self.open_file_index >= files_len) break :blk false;
-                const active_doc = fizzy.editor.docAt(self.open_file_index) orelse break :blk false;
+                const active_doc = Globals.host.docByIndex(self.open_file_index) orelse break :blk false;
                 if (fizzy.editor.docGrouping(active_doc) != self.grouping) break :blk false;
                 break :blk true;
             };
@@ -172,7 +173,7 @@ fn drawTabs(self: *Workspace) void {
                 var j: usize = active_index;
                 while (j > 0) {
                     j -= 1;
-                    const tab_doc = fizzy.editor.docAt(j) orelse continue;
+                    const tab_doc = Globals.host.docByIndex(j) orelse continue;
                     if (fizzy.editor.docGrouping(tab_doc) == self.grouping) {
                         prev_same_group_index = j;
                         break;
@@ -181,7 +182,7 @@ fn drawTabs(self: *Workspace) void {
 
                 j = active_index + 1;
                 while (j < files_len) : (j += 1) {
-                    const tab_doc = fizzy.editor.docAt(j) orelse continue;
+                    const tab_doc = Globals.host.docByIndex(j) orelse continue;
                     if (fizzy.editor.docGrouping(tab_doc) == self.grouping) {
                         next_same_group_index = j;
                         break;
@@ -190,7 +191,7 @@ fn drawTabs(self: *Workspace) void {
             }
 
             for (0..files_len) |i| {
-                const doc = fizzy.editor.docAt(i) orelse continue;
+                const doc = Globals.host.docByIndex(i) orelse continue;
                 const is_fizzy_file = doc.owner.documentHasNativeExtension(doc);
 
                 if (fizzy.editor.docGrouping(doc) != self.grouping) continue;
@@ -427,7 +428,7 @@ fn drawTabs(self: *Workspace) void {
                     switch (e.evt) {
                         .mouse => |me| {
                             if (me.action == .press and me.button.pointer()) {
-                                fizzy.editor.setActiveFile(i);
+                                Globals.host.setActiveDocIndex(i);
                                 dvui.refresh(null, @src(), hbox.data().id);
 
                                 e.handle(@src(), hbox.data());
@@ -452,7 +453,7 @@ fn drawTabs(self: *Workspace) void {
                 }
             }
             if (tabs.finalSlot()) {
-                self.tabs_insert_before_index = fizzy.editor.open_files.values().len;
+                self.tabs_insert_before_index = Globals.host.openDocCount();
             }
         }
     }
@@ -462,20 +463,17 @@ pub fn processTabsDrag(self: *Workspace) void {
     if (self.tabs_insert_before_index) |insert_before| {
         if (self.tabs_removed_index) |removed| { // Dragging from this workspace
 
-            if (removed > fizzy.editor.open_files.count()) return;
+            if (removed > Globals.host.openDocCount()) return;
             if (removed > insert_before) {
-                std.mem.swap(fizzy.sdk.DocHandle, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before]);
-                std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before]);
-                fizzy.editor.setActiveFile(insert_before);
+                Globals.host.swapDocs(removed, insert_before);
+                Globals.host.setActiveDocIndex(insert_before);
             } else {
                 if (insert_before > 0) {
-                    std.mem.swap(fizzy.sdk.DocHandle, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before - 1]);
-                    std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before - 1]);
-                    fizzy.editor.setActiveFile(insert_before - 1);
+                    Globals.host.swapDocs(removed, insert_before - 1);
+                    Globals.host.setActiveDocIndex(insert_before - 1);
                 } else {
-                    std.mem.swap(fizzy.sdk.DocHandle, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before]);
-                    std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before]);
-                    fizzy.editor.setActiveFile(insert_before);
+                    Globals.host.swapDocs(removed, insert_before);
+                    Globals.host.setActiveDocIndex(insert_before);
                 }
             }
 
@@ -485,22 +483,18 @@ pub fn processTabsDrag(self: *Workspace) void {
             for (fizzy.editor.workspaces.values()) |*workspace| {
                 if (workspace.tabs_removed_index) |removed| {
                     if (removed > insert_before) {
-                        std.mem.swap(fizzy.sdk.DocHandle, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before]);
-                        std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before]);
-
-                        fizzy.editor.setDocGrouping(fizzy.editor.docAt(insert_before).?, self.grouping);
-                        fizzy.editor.setActiveFile(insert_before);
+                        Globals.host.swapDocs(removed, insert_before);
+                        fizzy.editor.setDocGrouping(Globals.host.docByIndex(insert_before).?, self.grouping);
+                        Globals.host.setActiveDocIndex(insert_before);
                     } else {
                         if (insert_before > 0) {
-                            std.mem.swap(fizzy.sdk.DocHandle, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before - 1]);
-                            std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before - 1]);
-                            fizzy.editor.setDocGrouping(fizzy.editor.docAt(insert_before - 1).?, self.grouping);
-                            fizzy.editor.setActiveFile(insert_before - 1);
+                            Globals.host.swapDocs(removed, insert_before - 1);
+                            fizzy.editor.setDocGrouping(Globals.host.docByIndex(insert_before - 1).?, self.grouping);
+                            Globals.host.setActiveDocIndex(insert_before - 1);
                         } else {
-                            std.mem.swap(fizzy.sdk.DocHandle, &fizzy.editor.open_files.values()[removed], &fizzy.editor.open_files.values()[insert_before]);
-                            std.mem.swap(u64, &fizzy.editor.open_files.keys()[removed], &fizzy.editor.open_files.keys()[insert_before]);
-                            fizzy.editor.setDocGrouping(fizzy.editor.docAt(insert_before).?, self.grouping);
-                            fizzy.editor.setActiveFile(insert_before);
+                            Globals.host.swapDocs(removed, insert_before);
+                            fizzy.editor.setDocGrouping(Globals.host.docByIndex(insert_before).?, self.grouping);
+                            Globals.host.setActiveDocIndex(insert_before);
                         }
                     }
 
@@ -604,7 +598,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         fizzy.editor.clearFileTreeTabDragDropState();
 
                         repointWorkspacesAfterTabDrag(fizzy.editor, workspace, drag_index);
-                        const dragged_doc = fizzy.editor.docAt(drag_index) orelse continue;
+                        const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
                         const new_g = fizzy.editor.newGroupingID();
                         fizzy.editor.setDocGrouping(dragged_doc, new_g);
                         fizzy.editor.open_workspace_grouping = new_g;
@@ -624,10 +618,10 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         fizzy.editor.clearFileTreeTabDragDropState();
 
                         repointWorkspacesAfterTabDrag(fizzy.editor, workspace, drag_index);
-                        const dragged_doc = fizzy.editor.docAt(drag_index) orelse continue;
+                        const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
                         fizzy.editor.setDocGrouping(dragged_doc, self.grouping);
                         fizzy.editor.open_workspace_grouping = self.grouping;
-                        self.open_file_index = fizzy.editor.open_files.getIndex(dragged_doc.id) orelse 0;
+                        self.open_file_index = Globals.host.docIndex(dragged_doc.id) orelse 0;
                     }
                 }
             },
@@ -650,7 +644,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         fizzy.editor.clearFileTreeTabDragDropState();
 
                         repointWorkspacesAfterTabDrag(fizzy.editor, null, drag_index);
-                        const dragged_doc = fizzy.editor.docAt(drag_index) orelse continue;
+                        const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
                         const new_g = fizzy.editor.newGroupingID();
                         fizzy.editor.setDocGrouping(dragged_doc, new_g);
                         fizzy.editor.open_workspace_grouping = new_g;
@@ -669,10 +663,10 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         fizzy.editor.clearFileTreeTabDragDropState();
 
                         repointWorkspacesAfterTabDrag(fizzy.editor, null, drag_index);
-                        const dragged_doc = fizzy.editor.docAt(drag_index) orelse continue;
+                        const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
                         fizzy.editor.setDocGrouping(dragged_doc, self.grouping);
                         fizzy.editor.open_workspace_grouping = self.grouping;
-                        self.open_file_index = fizzy.editor.open_files.getIndex(dragged_doc.id) orelse 0;
+                        self.open_file_index = Globals.host.docIndex(dragged_doc.id) orelse 0;
                     }
                 }
             },
@@ -753,7 +747,7 @@ pub fn drawCanvas(self: *Workspace) !void {
         else => {},
     }
 
-    const has_files = fizzy.editor.open_files.values().len > 0;
+    const has_files = Globals.host.openDocCount() > 0;
 
     var canvas_vbox = workspaceMainCanvasVbox(content_color, has_files, self.grouping);
     defer {
@@ -764,11 +758,11 @@ pub fn drawCanvas(self: *Workspace) !void {
     defer self.processTabDrag(canvas_vbox.data());
 
     if (has_files) {
-        if (self.open_file_index >= fizzy.editor.open_files.values().len) {
-            self.open_file_index = fizzy.editor.open_files.values().len - 1;
+        if (self.open_file_index >= Globals.host.openDocCount()) {
+            self.open_file_index = Globals.host.openDocCount() - 1;
         }
 
-        if (fizzy.editor.docAt(self.open_file_index)) |doc| {
+        if (Globals.host.docByIndex(self.open_file_index)) |doc| {
         fizzy.editor.bindDocToPane(doc, canvas_vbox.data().id, self, self.center);
         _ = try doc.owner.drawDocument(doc);
         }

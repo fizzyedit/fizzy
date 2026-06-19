@@ -98,6 +98,9 @@ pub const VTable = struct {
     openDocCount: *const fn (ctx: *anyopaque) usize,
     /// Focus the document at `index` (updates workspace tab selection).
     setActiveDocIndex: *const fn (ctx: *anyopaque, index: usize) void,
+    /// Swap the open documents at indices `a` and `b` (used by tab drag-reorder). The shell
+    /// owns the open-document collection; this is the only mutation of its order plugins do.
+    swapDocs: *const fn (ctx: *anyopaque, a: usize, b: usize) void,
     /// Allocate the next shell document id (monotonic).
     allocDocId: *const fn (ctx: *anyopaque) u64,
 
@@ -209,6 +212,10 @@ pub fn openDocCount(self: EditorAPI) usize {
 
 pub fn setActiveDocIndex(self: EditorAPI, index: usize) void {
     self.vtable.setActiveDocIndex(self.ctx, index);
+}
+
+pub fn swapDocs(self: EditorAPI, a: usize, b: usize) void {
+    self.vtable.swapDocs(self.ctx, a, b);
 }
 
 pub fn allocDocId(self: EditorAPI) u64 {
