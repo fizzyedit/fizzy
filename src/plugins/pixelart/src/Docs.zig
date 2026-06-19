@@ -1,4 +1,4 @@
-//! Open-document registry for the pixel-art plugin (Phase 4 docs/tabs inversion).
+//! Open-document registry for the pixel-art plugin.
 //!
 //! The shell stores opaque `DocHandle`s in `Editor.open_files`; this map owns the
 //! concrete `Internal.File` values their `ptr` fields point at.

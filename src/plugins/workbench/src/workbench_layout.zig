@@ -1,4 +1,4 @@
-//! Workspace map maintenance + recursive split drawing (Stage W2).
+//! Workspace map maintenance + recursive split drawing.
 const std = @import("std");
 const dvui = @import("dvui");
 const wbench = @import("../workbench.zig");

@@ -2,9 +2,6 @@
 //! and never inspects `ptr` — it only routes operations to `owner` (the plugin
 //! that opened the document and knows how to render/save/undo it). For pixel art
 //! `ptr` is a `*pixelart.internal.File`; a text plugin would point it at its own type.
-//!
-//! Phase 0: defined but not yet produced/consumed anywhere (see the modular-editor
-//! plan). Wired into the open/render/save path in Phase 3.
 const Plugin = @import("Plugin.zig");
 
 pub const DocHandle = @This();

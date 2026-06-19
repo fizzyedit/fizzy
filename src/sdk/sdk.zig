@@ -1,9 +1,9 @@
 //! Fizzy plugin SDK — the surface a plugin module depends on.
 //!
-//! Phase 0 of the modular-editor plan: type definitions + registries only.
-//! Nothing routes through these yet; the shell still drives pixel art directly.
-//! Subsequent phases move file management, the workspace/tabs system, and the
-//! pixel-art editor behind this boundary, ending with runtime dylib loading.
+//! A plugin receives a `*Host` and registers its menus, panes, document types, and
+//! settings through these types instead of reaching into editor globals. File
+//! management, the workspace/tabs system, and the editors (pixel art, …) all live
+//! behind this boundary, which also supports loading plugins as runtime dylibs.
 pub const Host = @import("Host.zig");
 pub const Plugin = @import("Plugin.zig");
 pub const DocHandle = @import("DocHandle.zig");
@@ -30,5 +30,5 @@ pub const pane_layout = @import("pane_layout.zig");
 
 /// Runtime dylib entry contract (`fizzy_plugin_abi_version` / `fizzy_plugin_register`).
 pub const dylib = @import("dylib.zig");
-/// Dvui global injection for loaded plugin images (Mechanism B).
+/// Dvui global injection for loaded plugin images.
 pub const dvui_context = @import("dvui_context.zig");

@@ -56,8 +56,8 @@ pub fn init(grouping: u64) CanvasData {
 }
 
 /// The drag names are intentionally not freed here: `init` may have fallen back to a static
-/// string literal on (effectively impossible) OOM, and freeing a literal is UB. This matches
-/// the pre-relocation behavior where the names lived on `Workspace` and were never freed.
+/// string literal on (effectively impossible) OOM, and freeing a literal is UB. The names are
+/// short-lived and never freed.
 pub fn deinit(_: *CanvasData) void {}
 
 /// Per-pane chrome for `grouping`, lazily allocated on first document draw.

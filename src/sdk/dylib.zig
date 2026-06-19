@@ -1,18 +1,18 @@
-//! Runtime dynamic-library contract for Fizzy plugins (Phase 5b).
+//! Runtime dynamic-library contract for Fizzy plugins.
 //!
-//! Host and plugin each compile their own copy of `dvui` + `sdk` + `core` (Mechanism B:
-//! context injection — see `spikes/shared-globals/README.md`). Cross-boundary vtables use
-//! normal Zig layouts pinned to the same Fizzy/SDK build. Only the `dlopen` entry symbols
-//! below use C calling convention.
+//! Host and plugin each compile their own copy of `dvui` + `sdk` + `core`; the host injects
+//! its live dvui context into the plugin image (see `dvui_context.zig`). Cross-boundary
+//! vtables use normal Zig layouts pinned to the same Fizzy/SDK build. Only the `dlopen` entry
+//! symbols below use C calling convention.
 //!
 //! **Bump `abi_version` when any of these change:** `Host`, `Plugin`, `DocHandle`,
 //! `EditorAPI` layouts, or the semantics/signature of an entry symbol.
 pub const abi_version: u32 = 1;
 
-/// `std.DynLib.lookup` names for the host loader (5b.3+).
+/// `std.DynLib.lookup` names for the host loader.
 pub const symbol_abi_version = "fizzy_plugin_abi_version";
 pub const symbol_register = "fizzy_plugin_register";
-/// Mechanism B — host calls each frame (and once at init) before plugin draw/tick.
+/// Host calls each frame (and once at init) before plugin draw/tick.
 pub const symbol_set_dvui_context = "fizzy_plugin_set_dvui_context";
 /// Host-owned pixelart `Globals` (allocator, state, packer) injected before `register`.
 pub const symbol_set_globals = "fizzy_plugin_set_globals";

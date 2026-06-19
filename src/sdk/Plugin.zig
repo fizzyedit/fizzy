@@ -95,7 +95,7 @@ pub const VTable = struct {
     /// Open the owner's "new document" dialog. Not doc-scoped — the host dispatches to a plugin
     /// that provides one (see `Host.requestNewDocument`). `parent_path` (when set) creates the
     /// document on disk in that folder; `id_extra` disambiguates per-explorer-row launches.
-    /// TODO(multi-plugin): with >1 editor plugin this becomes a typed "New > <kind>" chooser.
+    /// TODO: with more than one editor plugin this becomes a typed "New > <kind>" chooser.
     requestNewDocumentDialog: ?*const fn (state: *anyopaque, parent_path: ?[]const u8, id_extra: usize) void = null,
     /// Open the owner's grid-layout dialog for `doc` (pixel-art specific; the shell only
     /// resolves the active doc and dispatches here so it never names the plugin's dialog).

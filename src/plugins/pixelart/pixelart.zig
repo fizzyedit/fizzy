@@ -1,4 +1,4 @@
-//! Intra-plugin import hub for the pixel-art plugin (Phase 4 Stage D).
+//! Intra-plugin import hub for the pixel-art plugin.
 //!
 //! Files inside `src/plugins/pixelart/src/**` import this as `../pixelart.zig` (or
 //! `../../pixelart.zig` from nested dirs) instead of `fizzy.zig` for sdk/core/Globals

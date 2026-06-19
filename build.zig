@@ -513,17 +513,19 @@ pub fn build(b: *std.Build) !void {
     const msf_gif_module = main_fizzy.msf_gif_module;
     const known_folders = main_fizzy.known_folders;
 
-    const exe_for_package: *std.Build.Step.Compile = package_blk: {
-        if (velopack_enabled) break :package_blk exe;
-        if (!velopack_supported_for_target) break :package_blk exe;
+    const package_fizzy: FizzyExecutable = package_blk: {
+        if (velopack_enabled) break :package_blk main_fizzy;
+        if (!velopack_supported_for_target) break :package_blk main_fizzy;
         const pack_opts = b.addOptions();
         pack_opts.addOption([]const u8, "app_version", app_version);
         pack_opts.addOption([]const u8, "app_repo_url", app_repo_url);
         pack_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
         pack_opts.addOption(bool, "velopack_enabled", true);
-        const pack_fizzy = try addFizzyExecutableForTarget(b, target, optimize, accesskit, pack_opts, zip_pkg, assets_module, process_assets_step, macos_sdl_paths, true);
-        break :package_blk pack_fizzy.exe;
+        pack_opts.addOption(bool, "static_pixelart", static_pixelart);
+        pack_opts.addOption(bool, "static_workbench", static_workbench);
+        break :package_blk try addFizzyExecutableForTarget(b, target, optimize, accesskit, pack_opts, zip_pkg, assets_module, process_assets_step, macos_sdl_paths, true);
     };
+    const exe_for_package = package_fizzy.exe;
 
     if (no_emit) {
         b.getInstallStep().dependOn(&exe.step);
@@ -716,8 +718,20 @@ pub fn build(b: *std.Build) !void {
             // the full install path, which produced `.zig-cache\o\<hash>\C:\...`
             // on Windows (BadPathName).
             const vpk_pkg_out_dir = vpk_pkg_sh.addOutputDirectoryArg("desktop");
+            // Stage exe + built-in plugin dylibs under zig-out/<channel>/.pack-input/
+            // so vpk ships plugins/ next to the main binary.
+            const pack_input_subdir = b.fmt("{s}/.pack-input", .{zig_out_subdir});
+            const pack_plugins_subdir = b.fmt("{s}/.pack-input/plugins", .{zig_out_subdir});
+            const pack_stage_tail = addVelopackPackDirInstall(
+                b,
+                exe_for_package,
+                package_fizzy,
+                pack_input_subdir,
+                pack_plugins_subdir,
+                &strip_release_sh.step,
+            );
             vpk_pkg_sh.addArg("--packDir");
-            vpk_pkg_sh.addDirectoryArg(exe_for_package.getEmittedBin().dirname());
+            vpk_pkg_sh.addArg(b.getInstallPath(.{ .custom = pack_input_subdir }, ""));
             switch (target.result.os.tag) {
                 .windows => {
                     // Sets the installer's icon and the Start Menu shortcut icon. The
@@ -773,7 +787,7 @@ pub fn build(b: *std.Build) !void {
             try velopack.attachMksquashfsToVpkRun(b, vpk_pkg_sh, target);
 
             //vpk_pkg_sh.step.dependOn(&vpk_vendor_repair.step);
-            vpk_pkg_sh.step.dependOn(&strip_release_sh.step);
+            vpk_pkg_sh.step.dependOn(pack_stage_tail);
 
             const build_package_install = b.addInstallDirectory(.{
                 .source_dir = vpk_pkg_out_dir,
@@ -847,9 +861,8 @@ pub fn build(b: *std.Build) !void {
     //      modules under test, so it compiles in well under a second
     //      and never needs dvui/SDL/assets.
     //
-    //   2. Integration tests (added in Phase 2 of the testing plan)
-    //      will use dvui's testing backend and exercise real fizzy
-    //      drawing functions in a headless Window.
+    //   2. Integration tests use dvui's testing backend and exercise
+    //      real fizzy drawing functions in a headless Window.
     //
     // Both share the same `zig build test` and `zig build check`
     // entry points.
@@ -1207,6 +1220,43 @@ fn applyMsvcIncludesToReachableTranslateC(
     }
 }
 
+/// Install stripped exe + built-in plugin dylibs for `vpk pack --packDir`.
+fn addVelopackPackDirInstall(
+    b: *std.Build,
+    exe: *std.Build.Step.Compile,
+    fizzy: FizzyExecutable,
+    pack_input_subdir: []const u8,
+    pack_plugins_subdir: []const u8,
+    after_step: *std.Build.Step,
+) *std.Build.Step {
+    const pack_exe_install_dir: std.Build.InstallDir = .{ .custom = pack_input_subdir };
+    const pack_plugins_install_dir: std.Build.InstallDir = .{ .custom = pack_plugins_subdir };
+
+    const install_pack_exe = b.addInstallArtifact(exe, .{
+        .dest_dir = .{ .override = pack_exe_install_dir },
+    });
+    install_pack_exe.step.dependOn(after_step);
+
+    var tail: *std.Build.Step = &install_pack_exe.step;
+
+    if (fizzy.pixelart_dylib) |dylib| {
+        const install_pixelart = b.addInstallArtifact(dylib, .{
+            .dest_dir = .{ .override = pack_plugins_install_dir },
+        });
+        install_pixelart.step.dependOn(tail);
+        tail = &install_pixelart.step;
+    }
+    if (fizzy.workbench_dylib) |dylib| {
+        const install_workbench = b.addInstallArtifact(dylib, .{
+            .dest_dir = .{ .override = pack_plugins_install_dir },
+        });
+        install_workbench.step.dependOn(tail);
+        tail = &install_workbench.step;
+    }
+
+    return tail;
+}
+
 const FizzyExecutable = struct {
     exe: *std.Build.Step.Compile,
     zstbi_module: *std.Build.Module,
@@ -1555,7 +1605,7 @@ fn addPixelartDylib(
         .linkage = .dynamic,
         .root_module = dylib_module,
     });
-    // Resolve dvui/sdk symbols from the host at load time (Mechanism B).
+    // Resolve dvui/sdk symbols from the host at load time.
     lib.linker_allow_shlib_undefined = true;
     lib.root_module.export_symbol_names = &[_][]const u8{
         "fizzy_plugin_abi_version",

@@ -1,15 +1,10 @@
 //! The services the shell exposes to plugins, and the registries it owns. Plugins
-//! receive a `*Host` instead of reaching into editor globals. Today the Host is
-//! embedded in `Editor`; as the shell shrinks (Phases 1-3) more of the editor's
-//! responsibilities move behind it.
-//!
-//! Phase 0: holds the plugin registry + service locator. Nothing is registered
-//! yet — the existing pixel-art code still uses globals directly.
+//! receive a `*Host` instead of reaching into editor globals; it holds the plugin
+//! registry, the shell region registries, and a service locator. The Host is
+//! embedded in `Editor`.
 const std = @import("std");
 const dvui = @import("dvui");
 const Plugin = @import("Plugin.zig");
-const dvui_context = @import("dvui_context.zig");
-const dylib_api = @import("dylib.zig");
 const regions = @import("regions.zig");
 const EditorAPI = @import("EditorAPI.zig");
 const DocHandle = @import("DocHandle.zig");
@@ -35,16 +30,9 @@ pub const FileRowFillColor = struct {
     color: *const fn (ctx: ?*anyopaque, color_index: usize) ?dvui.Color,
 };
 
-/// Mechanism B: setter from a loaded plugin dylib; null when all plugins are static.
-/// Deprecated: prefer `Editor.syncLoadedPluginDvuiContexts` when multiple dylibs are loaded.
-plugin_set_dvui_context: ?dvui_context.SetContextFn = null,
-/// Host-owned Globals injection into a loaded plugin image (pixelart today).
-/// Deprecated: prefer per-lib `LoadedLib.set_globals` when multiple dylibs are loaded.
-plugin_set_globals: ?dylib_api.SetGlobalsFn = null,
-
 allocator: std.mem.Allocator,
 
-/// All registered plugins (static today; runtime-loaded dylibs in Phase 4).
+/// All registered plugins (statically compiled in, or loaded from a runtime dylib).
 plugins: std.ArrayListUnmanaged(*Plugin) = .empty,
 
 /// Service locator for inter-plugin APIs: name -> opaque service vtable. E.g. the
@@ -62,7 +50,7 @@ plugin_settings: PluginSettings = .empty,
 /// File-tree row fill tints (workbench asks the Host; editor plugins register).
 file_row_fill_colors: std.ArrayListUnmanaged(FileRowFillColor) = .empty,
 
-// ---- shell region registries (Phase 2) -------------------------------------
+// ---- shell region registries -----------------------------------------------
 // The shell iterates these instead of hardcoded enums/switches. Items keep their
 // registration order, which is the order they appear in the UI.
 
@@ -110,36 +98,6 @@ pub fn deinit(self: *Host) void {
 /// Install the shell's read/utility surface. Called once during startup.
 pub fn installShell(self: *Host, api: EditorAPI) void {
     self.shell_api = api;
-}
-
-/// Re-push host dvui pointers into the loaded plugin image. Call at the top of each
-/// frame before plugin draw/tick (updates `current_window` every frame).
-pub fn syncPluginDvuiContext(self: *Host) void {
-    const setter = self.plugin_set_dvui_context orelse return;
-    dvui_context.syncHostIntoPlugin(setter);
-}
-
-/// Re-push host-owned pixelart Globals (`gpa`, `state`, `packer`) into the dylib.
-pub fn syncPluginGlobals(
-    self: *Host,
-    gpa: *const std.mem.Allocator,
-    state: *anyopaque,
-    packer: ?*anyopaque,
-) void {
-    const setter = self.plugin_set_globals orelse return;
-    setter(@ptrCast(gpa), state, packer);
-}
-
-/// Wire a loaded plugin dylib's dvui globals to the host (Mechanism B). Called once
-/// after `dlopen` + `fizzy_plugin_register`; also primes `io` / `ft2lib` / `debug`.
-pub fn installPluginDylibHooks(
-    self: *Host,
-    set_globals: dylib_api.SetGlobalsFn,
-    set_dvui_context: dvui_context.SetContextFn,
-) void {
-    self.plugin_set_globals = set_globals;
-    self.plugin_set_dvui_context = set_dvui_context;
-    dvui_context.syncHostIntoPlugin(set_dvui_context);
 }
 
 /// Per-frame arena allocator (reset every frame; do not free). Asserts the shell is installed.
@@ -532,7 +490,7 @@ pub fn activeCenter(self: *Host) ?*CenterProvider {
 }
 
 /// The registered plugin with the highest priority (lowest value) for `ext`, or
-/// null if none claims it. Used in Phase 3 to route file opens to the right plugin.
+/// null if none claims it. Routes file opens to the right plugin.
 pub fn pluginForExtension(self: *Host, ext: []const u8) ?*Plugin {
     var best: ?*Plugin = null;
     var best_priority: u8 = 255;
@@ -550,7 +508,7 @@ pub fn pluginForExtension(self: *Host, ext: []const u8) ?*Plugin {
 /// Open a "new document" dialog. `parent_path` (when set) targets an on-disk folder; `id_extra`
 /// disambiguates launches from distinct explorer rows. Dispatches to the first plugin that
 /// provides a new-document dialog.
-/// TODO(multi-plugin): with >1 editor plugin, present a typed "New > <kind>" chooser instead of
+/// TODO: with more than one editor plugin, present a typed "New > <kind>" chooser instead of
 /// picking the first provider.
 pub fn requestNewDocument(self: *Host, parent_path: ?[]const u8, id_extra: usize) void {
     for (self.plugins.items) |plugin| {

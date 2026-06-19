@@ -1,4 +1,4 @@
-//! Mechanism B: wire the plugin dylib's dvui globals to the host's live state.
+//! Wire a loaded plugin dylib's dvui globals to the host's live state.
 //!
 //! Host and plugin each compile their own `dvui` copy; before plugin draw/tick the host
 //! calls the plugin's `fizzy_plugin_set_dvui_context` export (see `dylib.zig`).

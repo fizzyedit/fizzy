@@ -1,9 +1,8 @@
-//! The Workbench is the file-management home of the editor. Its module now owns
-//! the file tree (`files.zig`), the open/load flow (`FileLoadJob.zig`), and the
-//! workspace/tabs/splits system (`Workspace.zig`); in a later phase it becomes a
-//! standalone plugin. It exposes its capabilities to other plugins through the
-//! `workbench-api` Host service (`Workbench.Api`) so they never reach into the
-//! `fizzy.editor` globals.
+//! The Workbench is the file-management home of the editor. This plugin owns the
+//! file tree (`files.zig`), the open/load flow (`FileLoadJob.zig`), and the
+//! workspace/tabs/splits system (`Workspace.zig`). It exposes its capabilities to
+//! other plugins through the `workbench-api` Host service (`Workbench.Api`) so they
+//! never reach into the editor globals.
 //!
 //! Per-branch decorations let any plugin draw a right-justified icon on a file row
 //! (e.g. the built-in "unsaved" dot). Decorators run inside the row's hbox after
@@ -30,7 +29,7 @@ pub const BranchDecorator = struct {
 allocator: std.mem.Allocator,
 decorators: std.ArrayListUnmanaged(BranchDecorator) = .empty,
 
-/// Workspaces keyed by tab-grouping id (Stage W2: owned here, not on the shell Editor).
+/// Workspaces keyed by tab-grouping id (owned here, not on the shell Editor).
 workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
 open_workspace_grouping: u64 = 0,
 grouping_id_counter: u64 = 0,

@@ -1,4 +1,4 @@
-//! Dynamic-library root for the workbench plugin (Phase 5c).
+//! Dynamic-library root for the workbench plugin.
 //!
 //! Static/desktop and web builds link `module.zig` into the exe. Native dylib builds use
 //! this file as `addLibrary(.dynamic)` root so only the C entry symbols are exported.

@@ -193,7 +193,7 @@ lands; linkage suffixes differ (`.dylib` / `.so` / `.dll`) but the loader API is
 |------|------|-----------|
 | **5c.1** | Built-in pixelart dylib loaded by host on native; static on web; Editor routes via `pixelartPlugin()` / `host.pluginById` | ✅ Done |
 | **5c.2** | Built-in workbench dylib loaded by host on native; `workbenchPlugin()` / `workbench_files_view` routing | ✅ Done |
-| **5c.3** | Install step bundles built-in dylibs next to exe (same `zig-out` / Velopack tree) | Release package contains exe + `pixelart.{dylib,so,dll}` etc.; single update channel |
+| **5c.3** | Install step bundles built-in dylibs next to exe (same `zig-out` / Velopack tree) | ✅ Done |
 
 Built-ins can remain **statically linked during 5b** and flip to dylib in 5c — the
 `register()` path is identical either way.
@@ -267,7 +267,7 @@ Repo source tree `src/plugins/` is **build layout only** — unrelated to these 
 
 ### Where to begin (next session)
 
-**5c.1–5c.2** — done (pixelart + workbench built-in dylibs on native). **Next: 5c.3** (Velopack bundle polish) or **5d**.
+**5c.1–5c.3** — done (built-in dylibs on native + Velopack packDir includes `plugins/`). **Next: 5d**.
 
 ---
 

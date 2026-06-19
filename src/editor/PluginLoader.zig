@@ -1,4 +1,4 @@
-//! Native runtime loader for Fizzy plugin dylibs (Phase 5b.3).
+//! Native runtime loader for Fizzy plugin dylibs.
 //!
 //! Opens a prebuilt plugin library, checks the SDK ABI version, and calls
 //! `fizzy_plugin_register`. The returned `std.DynLib` must stay open for the

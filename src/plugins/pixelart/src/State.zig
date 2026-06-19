@@ -1,4 +1,4 @@
-//! Pixel-art plugin runtime state (Phase 4 Stage B/D).
+//! Pixel-art plugin runtime state.
 //!
 //! Owns the pixel-art-specific editor state that used to live as top-level fields
 //! on `src/editor/Editor.zig`: the active tools, color/palette state, the open
@@ -44,7 +44,7 @@ settings: Settings = .{},
 tools: Tools,
 colors: Colors = .{},
 
-/// Explorer sidebar panes (lifted off the shell `Explorer` in Phase 4 Stage C). The "tools"
+/// Explorer sidebar panes. The "tools"
 /// view (layers + palette) and the "sprites" view (animations/frames) are pixel-art-specific
 /// UI state; the shell only routes the registered sidebar view's `draw` to them.
 tools_pane: ToolsPane = .{},

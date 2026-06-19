@@ -1,4 +1,4 @@
-//! Pixel-art plugin compile-time module root (Phase 4 Stage D).
+//! Pixel-art plugin compile-time module root.
 //!
 //! Wired in `build.zig` as `b.addModule("pixelart", .{ .root_source_file = "module.zig" })`.
 //! Shell code imports this as `@import("pixelart")`. Plugin files inside `src/` import

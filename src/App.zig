@@ -168,7 +168,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.editor = try allocator.create(Editor);
     fizzy.editor.* = Editor.init(fizzy.app) catch unreachable;
 
-    // Workbench plugin runtime injection (Stage W): host + allocator, so workbench code
+    // Workbench plugin runtime injection: host + allocator, so workbench code
     // reaches the EditorAPI surface without importing `fizzy.zig`. Mirrors pixelart.Globals.
     WorkbenchGlobals.gpa = allocator;
     WorkbenchGlobals.host = &fizzy.editor.host;

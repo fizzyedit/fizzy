@@ -1,4 +1,4 @@
-//! Runtime injection points for the workbench plugin (Stage W).
+//! Runtime injection points for the workbench plugin.
 //!
 //! The shell sets these once during `App` startup so workbench code can reach the
 //! app allocator and the Host (EditorAPI surface) without importing `fizzy.zig`.
@@ -16,7 +16,7 @@ pub fn allocator() std.mem.Allocator {
     return gpa;
 }
 
-/// Mechanism B: host calls `fizzy_plugin_set_globals` on the dylib image before `register`.
+/// For a loaded dylib build, the host calls `fizzy_plugin_set_globals` on the image before `register`.
 pub fn installRuntime(
     gpa_ptr: ?*const std.mem.Allocator,
     host_ptr: ?*sdk.Host,

@@ -1,7 +1,6 @@
-//! The pixel-art editor plugin. Phase 2 thin shim — the pixel-art stack still
-//! lives inline under `src/editor/` (Phase 3 relocates it whole behind this
-//! plugin). For now its contributions point at the existing draw entry points
-//! through the `Globals` injection. Registered from `Editor.postInit`.
+//! The pixel-art editor plugin: registration + draw entry points. Its contributions
+//! reach the plugin's state through the `Globals` injection. Registered from
+//! `Editor.postInit`.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -126,9 +125,8 @@ fn fileTypePriority(_: *anyopaque, ext: []const u8) ?u8 {
     return null;
 }
 
-/// Load `path` into the shell-owned `*Internal.File` at `out_doc`. Runs on the shell's
-/// load worker thread; `File.fromPath` is the pixel-art loader (still resident in the
-/// editor tree, relocated whole into this plugin in Phase 3b/3c).
+/// Load `path` into the plugin-owned `*Internal.File` at `out_doc`. Runs on the shell's
+/// load worker thread; `File.fromPath` is the pixel-art loader.
 fn loadDocument(_: *anyopaque, path: []const u8, out_doc: *anyopaque) anyerror!void {
     // Web loads via bytes only (`loadDocumentFromBytes`); the comptime guard keeps the
     // disk-reading `File.fromPath` path (Dir.cwd / posix.AT) out of the wasm binary.
@@ -172,8 +170,7 @@ fn drawDocument(_: *anyopaque, doc: DocHandle) anyerror!void {
 
     // Grid (column/row) reorder is driven by the rulers and consumed by `FileWidget`; commit
     // the pending reorder and clear the per-frame drag indices after the whole document (incl.
-    // the file widget) has drawn. Registered first so they run last, matching the order the
-    // workbench `Workspace.draw` used before this view was relocated here.
+    // the file widget) has drawn. Registered first so they run last.
     defer chrome.columns_drag_index = null;
     defer chrome.rows_drag_index = null;
     defer chrome.processColumnReorder(file);

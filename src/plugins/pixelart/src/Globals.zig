@@ -1,4 +1,4 @@
-//! Runtime injection points for the pixel-art plugin (Phase 4 Stage D).
+//! Runtime injection points for the pixel-art plugin.
 //!
 //! The shell sets these once during `App` startup so plugin code can reach the
 //! app allocator and singletons without importing `fizzy.zig`.
@@ -14,7 +14,7 @@ pub fn allocator() std.mem.Allocator {
     return gpa;
 }
 
-/// Mechanism B: host calls `fizzy_plugin_set_globals` on the dylib image before `register`.
+/// For a loaded dylib build, the host calls `fizzy_plugin_set_globals` on the image before `register`.
 pub fn installRuntime(
     gpa_ptr: ?*const std.mem.Allocator,
     state_ptr: ?*State,

@@ -1,4 +1,4 @@
-//! Dynamic-library root for the pixel-art plugin (Phase 5b).
+//! Dynamic-library root for the pixel-art plugin.
 //!
 //! Static/desktop and web builds link `module.zig` into the exe. Native dylib builds use
 //! this file as `addLibrary(.dynamic)` root so only the C entry symbols are exported.

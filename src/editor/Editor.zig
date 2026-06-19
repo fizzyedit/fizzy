@@ -47,8 +47,8 @@ pub const FileLoadJob = workbench_mod.FileLoadJob;
 pub const sdk = fizzy.sdk;
 pub const Host = sdk.Host;
 
-/// Workbench (Phase 1): file-management home — currently the per-branch
-/// decoration registry for the explorer; grows to own files + tabs/splits.
+/// Workbench: the file-management home — file tree, open/load flow, and the
+/// workspace/tabs/splits system, plus the per-branch explorer decoration registry.
 pub const Workbench = workbench_mod.Workbench;
 
 /// This arena is for small per-frame editor allocations, such as path joins, null terminations and labels.
@@ -69,7 +69,7 @@ pixelart_state: *pixelart.State,
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
 
-/// Keeps plugin dylibs mapped while their vtables are live (Phase 5b.3+; native only).
+/// Keeps plugin dylibs mapped while their vtables are live (native only).
 loaded_plugin_libs: std.ArrayListUnmanaged(PluginLoader.LoadedLib) = .empty,
 
 settings: Settings = undefined,
@@ -80,7 +80,6 @@ panel: *Panel,
 
 last_titlebar_color: dvui.Color,
 
-/// Workspaces stored by their grouping ID (owned by `workbench`, Stage W2).
 sidebar: Sidebar,
 infobar: Infobar,
 
@@ -485,7 +484,7 @@ pub fn pixelartPlugin(editor: *Editor) *sdk.Plugin {
     return editor.host.pluginById("pixelart") orelse @panic("pixelart plugin not registered");
 }
 
-/// Mechanism B: push host dvui state into every loaded plugin dylib image.
+/// Push host dvui state into every loaded plugin dylib image.
 pub fn syncLoadedPluginDvuiContexts(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     for (editor.loaded_plugin_libs.items) |loaded| {
@@ -513,8 +512,6 @@ pub fn syncLoadedWorkbenchGlobals(editor: *Editor) void {
 
 fn appendLoadedPluginLib(editor: *Editor, loaded: PluginLoader.LoadedLib) !void {
     try editor.loaded_plugin_libs.append(fizzy.app.allocator, loaded);
-    editor.host.plugin_set_globals = loaded.set_globals;
-    editor.host.plugin_set_dvui_context = loaded.set_dvui_context;
 }
 
 /// Load `{exe_dir}/plugins/libworkbench.*` and register via dylib entry.
@@ -547,8 +544,6 @@ pub fn loadPixelartDylib(editor: *Editor, exe_dir: []const u8) !void {
 
 fn unloadPluginLibs(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    editor.host.plugin_set_dvui_context = null;
-    editor.host.plugin_set_globals = null;
     for (editor.loaded_plugin_libs.items) |*entry| {
         entry.lib.close();
         fizzy.app.allocator.free(entry.path);
@@ -602,9 +597,9 @@ pub fn postInit(editor: *Editor) !void {
         .draw = drawSettingsPane,
     });
 
-    // Menu bar contributions (non-macOS in-app bar). The draw code still lives in
-    // the shell's `Menu.zig`; Phase 3 moves the File/Edit bodies into the workbench
-    // / pixel-art plugins, which will then self-register. Order = bar order.
+    // Menu bar contributions (non-macOS in-app bar). The File/Edit draw bodies still live
+    // in the shell's `Menu.zig`; a later step could move them into the workbench / pixel-art
+    // plugins so those self-register. Order = bar order.
     try editor.host.registerMenu(.{ .id = "workbench.menu.file", .draw = Menu.drawFileMenu });
     try editor.host.registerMenu(.{ .id = "pixelart.menu.edit", .draw = Menu.drawEditMenu });
     try editor.host.registerMenu(.{ .id = "shell.menu.view", .draw = Menu.drawViewMenu });
