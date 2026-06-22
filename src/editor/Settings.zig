@@ -15,6 +15,13 @@ pub var parsed: ?std.json.Parsed(Settings) = null;
 pub const FlipbookView = enum { sequential, grid };
 pub const Compatibility = enum { none, ldtk };
 
+/// Canvas zoom/pan control preference. `auto` follows `dvui.mouseType()` after scroll events
+/// (macOS defaults to trackpad when still unknown).
+pub const InputScheme = enum { auto, mouse, trackpad };
+
+/// Resolved zoom/pan style after applying `input_scheme`.
+pub const ResolvedPanZoomScheme = enum { mouse, trackpad };
+
 /// The ratio of the explorer to the artboard.
 explorer_ratio: f32 = 0.35,
 
@@ -54,6 +61,16 @@ window_opacity_light: f32 = 0.3,
 /// Opacity of the content area (also drives plugin panes that match the shell chrome).
 content_opacity: f32 = 0.7,
 
+/// Canvas zoom/pan control scheme shared by the image viewer, pixi, and any other
+/// `CanvasWidget` consumer. `auto` picks mouse vs trackpad from `dvui.mouseType()`.
+input_scheme: InputScheme = .auto,
+
+/// Plugin ids the user has disabled in the store. Skipped at startup by
+/// `Editor.loadUserPlugins` and unloaded live by `Editor.setPluginEnabled`. The slice
+/// is pointed at an `Editor`-owned list at runtime (see `Editor.disabled_plugin_ids`);
+/// it is only read here for (de)serialization.
+disabled_plugins: []const []const u8 = &.{},
+
 titlebar_height: f32 = 26.0, // This is the height of the titlebar in pixels
 
 /// Empty strip below the top window edge (non-macOS), above the main title row (in-window menu, etc.).
@@ -62,6 +79,18 @@ titlebar_top_buffer: f32 = 10.0,
 fn default(allocator: std.mem.Allocator) !Settings {
     return .{
         .theme = try allocator.dupe(u8, default_theme),
+    };
+}
+
+pub fn resolvedPanZoomScheme(settings: *const Settings, is_macos: bool) ResolvedPanZoomScheme {
+    return switch (settings.input_scheme) {
+        .auto => switch (dvui.mouseType()) {
+            .unknown => if (is_macos) .trackpad else .mouse,
+            .mouse => .mouse,
+            .trackpad => .trackpad,
+        },
+        .mouse => .mouse,
+        .trackpad => .trackpad,
     };
 }
 
@@ -84,6 +113,8 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Settings {
     const options = std.json.ParseOptions{
         .duplicate_field_behavior = .use_first,
         .ignore_unknown_fields = true,
+        // Copy *every* parsed string into the parse arena (kept alive in `parsed` until `deinit`).
+        .allocate = .alloc_always,
     };
     const p = std.json.parseFromSlice(Settings, allocator, data, options) catch |err| {
         dvui.log.warn("Could not parse settings.json ({s}); using defaults.", .{@errorName(err)});
@@ -187,7 +218,7 @@ pub fn loadPluginStore(
 
     // Legacy flat settings.json: seed the pixel-art blob from the whole root.
     const legacy_blob = std.json.Stringify.valueAlloc(allocator, parsed_v.value, .{}) catch return;
-    const key = allocator.dupe(u8, "pixelart") catch {
+    const key = allocator.dupe(u8, "pixi") catch {
         allocator.free(legacy_blob);
         return;
     };

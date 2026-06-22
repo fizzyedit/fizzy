@@ -58,13 +58,13 @@ pub fn needFinalSlot(self: *ReorderWidget) bool {
     return false;
 }
 
-pub fn finalSlot(self: *ReorderWidget, mode: Reorderable.Mode, corner_radius: dvui.Rect) bool {
+pub fn finalSlot(self: *ReorderWidget, mode: Reorderable.Mode, corners: dvui.CornerRect) bool {
     if (self.needFinalSlot()) {
         var r = self.reorderable(@src(), .{
             .last_slot = true,
             .mode = mode,
         }, .{
-            .corner_radius = corner_radius,
+            .corners = corners,
         });
         defer r.deinit();
 
@@ -341,7 +341,7 @@ pub const Reorderable = struct {
                         },
                         .alpha = 0.25,
                         .fade = 6,
-                        .corner_radius = self.data().options.corner_radiusGet(),
+                        .corners = self.data().options.cornersGet(),
                     },
                 });
             } else {
@@ -375,7 +375,7 @@ pub const Reorderable = struct {
 
                     if (self.init_options.draw_target) {
                         rs.r.fill(
-                            self.data().options.corner_radiusGet().scale(rs.s, Rect.Physical),
+                            self.data().options.cornersGet().scale(rs.s, dvui.CornerRect.Physical),
                             .{ .color = dvui.themeGet().focus, .fade = 1.0 },
                         );
                     }

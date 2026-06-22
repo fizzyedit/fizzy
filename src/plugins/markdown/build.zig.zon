@@ -1,0 +1,19 @@
+.{
+    .name = .markdown,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "markdown.zig",
+        "src",
+        "static",
+    },
+    .fingerprint = 0x0000000000000000,
+    .dependencies = .{
+        .fizzy = .{
+            .path = "../../..",
+        },
+    },
+}

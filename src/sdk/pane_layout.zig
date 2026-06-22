@@ -20,7 +20,7 @@ pub fn emptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.BoxWidget 
         .expand = .both,
         .background = true,
         .color_fill = content_color,
-        .corner_radius = dvui.Rect.all(16),
+        .corners = dvui.CornerRect.all(16),
         .margin = .{ .y = 10 },
         .id_extra = @intCast(grouping),
     });

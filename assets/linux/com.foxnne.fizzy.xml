@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-fizzy">
+    <comment>Fizzy document</comment>
+    <glob pattern="*.fiz"/>
+  </mime-type>
+  <mime-type type="application/x-pixi">
+    <comment>Pixi document</comment>
+    <glob pattern="*.pixi"/>
+  </mime-type>
+</mime-info>

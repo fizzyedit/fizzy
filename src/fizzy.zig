@@ -1,7 +1,7 @@
 const std = @import("std");
 
-/// Shared infrastructure module (gfx, math, fs, generated atlas, platform,
-/// paths, the generic dvui hub + widgets). Consumed by the shell and plugins.
+/// Shared infrastructure module (gfx, math, fs, platform, paths, the generic
+/// dvui hub + widgets). Consumed by the shell and plugins.
 pub const core = @import("core");
 
 pub const version: std.SemanticVersion = .{
@@ -9,10 +9,6 @@ pub const version: std.SemanticVersion = .{
     .minor = 2,
     .patch = 0,
 };
-
-// Generated files, these contain helpers for autocomplete
-// So you can get a named index into atlas.sprites
-pub const atlas = core.atlas;
 
 // Other helpers and namespaces
 pub const fs = core.fs;
@@ -27,14 +23,11 @@ pub const Explorer = @import("editor/explorer/Explorer.zig");
 pub const Fling = core.Fling;
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
-
-/// Pixel-art plugin module. Shell code should `@import("pixelart")` directly.
-pub const pixelart_mod = @import("pixelart");
+pub const OutputLog = @import("editor/OutputLog.zig");
 
 // Global pointers
 pub var app: *App = undefined;
 pub var editor: *Editor = undefined;
-pub var packer: *pixelart_mod.Packer = undefined;
 
 /// Runtime platform detection (`isMacOS()` etc.) that's accurate on wasm web
 /// builds, where `builtin.os.tag` is always `.freestanding`.
@@ -46,14 +39,19 @@ pub const sdk = @import("sdk");
 /// Custom dvui stuff
 pub const dvui = core.dvui;
 
-/// Custom backend stuff. Split per-arch: native uses SDL3 + objc + win32; web is a
-/// no-op stub layer (no window chrome, no native dialogs, no native menu bar).
-/// Zig only semantically analyzes the chosen branch, so the wasm build never sees
-/// the SDL3 / objc / win32 imports inside `backend/backend_native.zig`.
+/// Custom backend stuff. Split per-arch: native uses SDL3 + objc + win32; web (and
+/// headless integration tests, which wire dvui's `testing` backend onto a native
+/// target) get the no-op stub layer (no window chrome, no native dialogs, no native
+/// menu bar). Zig only semantically analyzes the chosen branch, so the wasm build
+/// never sees the SDL3 / objc / win32 imports inside `backend/backend_native.zig`,
+/// and `@import("backend")` (the dvui backend module) is never touched on wasm,
+/// where no module by that name is even wired in.
 pub const backend = if (@import("builtin").target.cpu.arch == .wasm32)
     @import("backend/backend_web.zig")
+else if (@hasDecl(@import("backend"), "c"))
+    @import("backend/backend_native.zig")
 else
-    @import("backend/backend_native.zig");
+    @import("backend/backend_web.zig");
 
 pub const paths = core.paths;
 

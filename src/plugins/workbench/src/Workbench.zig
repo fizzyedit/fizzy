@@ -12,19 +12,14 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const files = @import("files.zig");
 const Workspace = @import("Workspace.zig");
-const Globals = @import("Globals.zig");
+const runtime = @import("runtime.zig");
 const workbench_layout = @import("workbench_layout.zig");
 const sdk = @import("sdk");
 
-pub const Workbench = @This();
+pub const Api = sdk.services.workbench.Api;
+pub const BranchDecorator = Api.BranchDecorator;
 
-/// A hook to draw a decoration on a file row. `ctx` is decorator-owned (null for
-/// stateless built-ins). `path` is the file's absolute path; `id_extra` is the
-/// row's disambiguator (pass through to any dvui widget drawn).
-pub const BranchDecorator = struct {
-    ctx: ?*anyopaque = null,
-    draw: *const fn (ctx: ?*anyopaque, path: []const u8, id_extra: usize) void,
-};
+pub const Workbench = @This();
 
 allocator: std.mem.Allocator,
 decorators: std.ArrayListUnmanaged(BranchDecorator) = .empty,
@@ -42,12 +37,45 @@ file_tree_data_id: ?dvui.Id = null,
 /// not during `init` where `&editor.*` would point at a stack temporary.
 api: Api = undefined,
 
+/// Positions to reveal once their (not-yet-open) path finishes loading, set by
+/// `revealPosition` when the target isn't open yet. Polled once per frame in
+/// `drawWorkspaces` against `host.docFromPath` and cleared once applied. Rare/short-lived
+/// (usually at most one pending reveal at a time from a single goto-definition click), so a
+/// linear per-frame scan is fine — not worth threading through `Editor.zig`'s load-completion
+/// callback for this.
+pending_reveals: std.ArrayListUnmanaged(PendingReveal) = .empty,
+
+const PendingReveal = struct {
+    path: []u8,
+    line: u32,
+    character: u32,
+};
+
 pub fn init(allocator: std.mem.Allocator) Workbench {
     return .{ .allocator = allocator };
 }
 
 pub fn deinit(self: *Workbench) void {
     self.decorators.deinit(self.allocator);
+    for (self.pending_reveals.items) |pr| self.allocator.free(pr.path);
+    self.pending_reveals.deinit(self.allocator);
+}
+
+/// Called once per frame from `drawWorkspaces`. Applies and clears any pending reveal whose
+/// target document has finished loading.
+pub fn pollPendingReveals(self: *Workbench) void {
+    if (self.pending_reveals.items.len == 0) return;
+    var i: usize = 0;
+    while (i < self.pending_reveals.items.len) {
+        const pr = self.pending_reveals.items[i];
+        if (runtime.host().docFromPath(pr.path)) |doc| {
+            doc.owner.revealPosition(doc, pr.line, pr.character);
+            self.allocator.free(pr.path);
+            _ = self.pending_reveals.swapRemove(i);
+        } else {
+            i += 1;
+        }
+    }
 }
 
 pub fn initDefaultWorkspace(self: *Workbench) !void {
@@ -87,16 +115,22 @@ pub fn clearAllWorkspaceCenter(self: *Workbench) void {
     }
 }
 
-/// When the open doc at `closed_index` closes, pick another tab in the same workspace.
+/// When the open doc at `closed_index` closes, pick another tab in the same workspace,
+/// and shift every OTHER workspace's `open_file_index` down by one if it pointed past
+/// the closed slot — `open_files` is a single shared array, so removing an entry moves
+/// every workspace's index into it, not just the one that triggered the close.
 pub fn adjustOpenFileIndexAfterClose(
     self: *Workbench,
     grouping: u64,
     closed_index: usize,
     replacement_index: ?usize,
 ) void {
-    const workspace = self.workspaces.getPtr(grouping) orelse return;
-    if (workspace.open_file_index == closed_index) {
-        if (replacement_index) |idx| workspace.open_file_index = idx;
+    for (self.workspaces.values()) |*workspace| {
+        if (workspace.grouping == grouping and workspace.open_file_index == closed_index) {
+            if (replacement_index) |idx| workspace.open_file_index = idx;
+        } else if (workspace.open_file_index > closed_index) {
+            workspace.open_file_index -= 1;
+        }
     }
 }
 
@@ -105,18 +139,19 @@ pub fn rebuildWorkspaces(self: *Workbench) !void {
 }
 
 pub fn drawWorkspaces(self: *Workbench, panel: workbench_layout.PanelPanedState, index: usize) !dvui.App.Result {
+    self.pollPendingReveals();
     return workbench_layout.drawWorkspaces(self, panel, index);
 }
 
 pub fn activeDoc(self: *Workbench) ?sdk.DocHandle {
     if (self.workspaces.get(self.open_workspace_grouping)) |workspace| {
-        return Globals.host.docByIndex(workspace.open_file_index);
+        return runtime.host().docByIndex(workspace.open_file_index);
     }
     return null;
 }
 
 pub fn setActiveDocIndex(self: *Workbench, index: usize) void {
-    const doc = Globals.host.docByIndex(index) orelse return;
+    const doc = runtime.host().docByIndex(index) orelse return;
     const grouping = doc.owner.documentGrouping(doc);
     if (self.workspaces.getPtr(grouping)) |workspace| {
         self.open_workspace_grouping = grouping;
@@ -152,7 +187,7 @@ pub fn drawBranchDecorations(self: *Workbench, path: []const u8, id_extra: usize
 /// Built-in: a dot on rows whose file is open with unsaved changes. Mirrors the
 /// tab dirty indicator (`Workspace.zig` ~:528) so the two stay visually consistent.
 fn drawUnsavedDot(_: ?*anyopaque, path: []const u8, id_extra: usize) void {
-    const doc = Globals.host.docFromPath(path) orelse return;
+    const doc = runtime.host().docFromPath(path) orelse return;
     if (doc.owner.showsSaveStatusIndicator(doc)) return;
     if (!doc.owner.isDirty(doc)) return;
     dvui.icon(@src(), "explorer_dirty", icons.tvg.lucide.@"circle-small", .{
@@ -166,103 +201,8 @@ fn drawUnsavedDot(_: ?*anyopaque, path: []const u8, id_extra: usize) void {
 }
 
 // ============================================================================
-// workbench-api — the formal Host service
+// workbench-api — the formal Host service (layout defined in sdk/services/workbench.zig)
 // ============================================================================
-
-/// The capabilities the workbench exposes to other plugins, retrieved via
-/// `host.getService(Workbench.Api.service_name)` and `@ptrCast` to `*Api`. Plugins
-/// drive file management through this instead of touching `fizzy.editor`: they open
-/// documents, place them in tab groups/splits, mutate the file tree, and decorate
-/// explorer rows.
-///
-/// Cross-boundary types are normal Zig (host + plugins share one pinned SDK build),
-/// so this is a plain vtable struct; only the dlopen entry symbols need
-/// `callconv(.c)`. The implementation lives below; `ctx` is the host's `*Editor`.
-pub const Api = struct {
-    /// Service-locator key for `host.registerService` / `host.getService`.
-    pub const service_name = "workbench";
-
-    ctx: *anyopaque,
-    vtable: *const VTable,
-
-    pub const VTable = struct {
-        // ---- open documents + tab/split placement ----
-        /// Open `path` into workspace `grouping` (the tab group / split target).
-        /// Returns true if newly opened (false if already open or unowned).
-        open: *const fn (ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!bool,
-        /// The currently focused workspace grouping — the default placement target.
-        currentGrouping: *const fn (ctx: *anyopaque) u64,
-        /// Allocate a fresh grouping id for a new tab group / split.
-        newGrouping: *const fn (ctx: *anyopaque) u64,
-        /// Close the open document whose file id is `id`.
-        close: *const fn (ctx: *anyopaque, id: u64) anyerror!void,
-        /// Save the active document.
-        save: *const fn (ctx: *anyopaque) anyerror!void,
-        /// True if `path` is currently open in some workspace.
-        isOpen: *const fn (ctx: *anyopaque, path: []const u8) bool,
-
-        // ---- list open documents (no plugin-specific type leaks the boundary) ----
-        /// Number of currently open documents.
-        openCount: *const fn (ctx: *anyopaque) usize,
-        /// Absolute path of the open document at `index`, or null if out of range.
-        openPathAt: *const fn (ctx: *anyopaque, index: usize) ?[]const u8,
-
-        // ---- file-tree operations ----
-        createFile: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
-        createDir: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
-        rename: *const fn (ctx: *anyopaque, path: []const u8, new_path: []const u8, kind: std.Io.File.Kind) anyerror!void,
-        delete: *const fn (ctx: *anyopaque, path: []const u8) void,
-        /// Move `path` into directory `target_dir`. Returns true if it moved.
-        move: *const fn (ctx: *anyopaque, path: []const u8, target_dir: []const u8) anyerror!bool,
-
-        // ---- explorer row decorations ----
-        registerBranchDecorator: *const fn (ctx: *anyopaque, decorator: BranchDecorator) anyerror!void,
-    };
-
-    // Thin wrappers so callers skip the `self.vtable.x(self.ctx, …)` dance.
-    pub fn open(self: Api, path: []const u8, grouping: u64) !bool {
-        return self.vtable.open(self.ctx, path, grouping);
-    }
-    pub fn currentGrouping(self: Api) u64 {
-        return self.vtable.currentGrouping(self.ctx);
-    }
-    pub fn newGrouping(self: Api) u64 {
-        return self.vtable.newGrouping(self.ctx);
-    }
-    pub fn close(self: Api, id: u64) !void {
-        return self.vtable.close(self.ctx, id);
-    }
-    pub fn save(self: Api) !void {
-        return self.vtable.save(self.ctx);
-    }
-    pub fn isOpen(self: Api, path: []const u8) bool {
-        return self.vtable.isOpen(self.ctx, path);
-    }
-    pub fn openCount(self: Api) usize {
-        return self.vtable.openCount(self.ctx);
-    }
-    pub fn openPathAt(self: Api, index: usize) ?[]const u8 {
-        return self.vtable.openPathAt(self.ctx, index);
-    }
-    pub fn createFile(self: Api, path: []const u8) !void {
-        return self.vtable.createFile(self.ctx, path);
-    }
-    pub fn createDir(self: Api, path: []const u8) !void {
-        return self.vtable.createDir(self.ctx, path);
-    }
-    pub fn rename(self: Api, path: []const u8, new_path: []const u8, kind: std.Io.File.Kind) !void {
-        return self.vtable.rename(self.ctx, path, new_path, kind);
-    }
-    pub fn delete(self: Api, path: []const u8) void {
-        return self.vtable.delete(self.ctx, path);
-    }
-    pub fn move(self: Api, path: []const u8, target_dir: []const u8) !bool {
-        return self.vtable.move(self.ctx, path, target_dir);
-    }
-    pub fn registerBranchDecorator(self: Api, decorator: BranchDecorator) !void {
-        return self.vtable.registerBranchDecorator(self.ctx, decorator);
-    }
-};
 
 const service_vtable: Api.VTable = .{
     .open = svcOpen,
@@ -279,6 +219,7 @@ const service_vtable: Api.VTable = .{
     .delete = svcDelete,
     .move = svcMove,
     .registerBranchDecorator = svcRegisterBranchDecorator,
+    .revealPosition = svcRevealPosition,
 };
 
 inline fn hostOf(ctx: *anyopaque) *sdk.Host {
@@ -289,10 +230,10 @@ fn svcOpen(ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!bool {
     return hostOf(ctx).openFilePath(path, grouping);
 }
 fn svcCurrentGrouping(_: *anyopaque) u64 {
-    return Globals.workbench.currentGroupingID();
+    return runtime.workbench().currentGroupingID();
 }
 fn svcNewGrouping(_: *anyopaque) u64 {
-    return Globals.workbench.newGroupingID();
+    return runtime.workbench().newGroupingID();
 }
 fn svcClose(ctx: *anyopaque, id: u64) anyerror!void {
     return hostOf(ctx).closeDocById(id);
@@ -326,5 +267,45 @@ fn svcMove(_: *anyopaque, path: []const u8, target_dir: []const u8) anyerror!boo
     return files.moveOnePath(path, target_dir, dvui.currentWindow().arena());
 }
 fn svcRegisterBranchDecorator(_: *anyopaque, decorator: BranchDecorator) anyerror!void {
-    return Globals.workbench.registerBranchDecorator(decorator);
+    return runtime.workbench().registerBranchDecorator(decorator);
+}
+fn svcRevealPosition(ctx: *anyopaque, path: []const u8, line: u32, character: u32, open_side: bool) anyerror!bool {
+    const host = hostOf(ctx);
+    if (host.docFromPath(path)) |doc| {
+        doc.owner.revealPosition(doc, line, character);
+        // `revealPosition` alone only sets `pending_cursor` on the (possibly background-tab)
+        // document — nothing else about this path made it the *visible* one. Without this,
+        // jumping to a definition already open in a non-active tab/pane silently sets the
+        // caret there and stops: the tab never gets focus, so the document is never drawn to
+        // consume `pending_cursor`, and the jump looks like a no-op. `open_side` is ignored
+        // here — an already-open target just gets focused wherever it already lives, the same
+        // way the file tree's "Open to the side" doesn't move an already-open file either.
+        if (host.docIndex(doc.id)) |idx| host.setActiveDocIndex(idx);
+        return true;
+    }
+
+    // No plugin claims this extension at all — `openFilePath` would just reject it below, so
+    // fail fast instead of queuing a pending reveal that could never resolve.
+    if (host.pluginForExtension(std.fs.path.extension(path)) == null) return false;
+
+    const wb = runtime.workbench();
+    const owned_path = try wb.allocator.dupe(u8, path);
+    errdefer wb.allocator.free(owned_path);
+    try wb.pending_reveals.append(wb.allocator, .{ .path = owned_path, .line = line, .character = character });
+    // `openFilePath` returning `false` here (as opposed to an actual error) only ever means
+    // "a load for this exact path is already in flight" — the "already open" case was ruled
+    // out by `docFromPath` above, and "no owner plugin" by the check above. Either way the
+    // file WILL finish loading and `pollPendingReveals` will pick it up once it does, so the
+    // just-queued reveal must stay queued rather than being dropped on a plain `false` (which
+    // previously discarded the goto-definition target whenever a load for it happened to
+    // already be in progress, silently landing on "opened the file, caret never moved").
+    // `open_side`: mint a fresh grouping so the load lands in a new split instead of the
+    // current one — mirrors the file tree's "Open to the side" menu action exactly.
+    const target_grouping = if (open_side) wb.newGroupingID() else wb.currentGroupingID();
+    _ = host.openFilePath(path, target_grouping) catch |err| {
+        wb.pending_reveals.items.len -= 1;
+        wb.allocator.free(owned_path);
+        return err;
+    };
+    return true;
 }

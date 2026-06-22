@@ -115,9 +115,9 @@ fn onSaveAndClose(file_id: u64) !void {
         fizzy.editor.requestSaveAs();
         return;
     }
-    if (doc.owner.shouldConfirmFlatRasterSave(doc)) {
+    if (doc.owner.saveNeedsConfirmation(doc)) {
         fizzy.dvui.closeFloatingDialogAnchored();
-        doc.owner.requestFlatRasterSaveWarning(doc, .save_and_close, false);
+        doc.owner.requestSaveConfirmation(doc, .save_and_close, false);
         return;
     }
     try beginSaveAndClose(doc, file_id);

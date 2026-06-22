@@ -178,7 +178,7 @@ fn displayUpdateToast(id: dvui.Id) !void {
 
     var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .background = true,
-        .corner_radius = dvui.Rect.all(1000),
+        .corners = dvui.CornerRect.all(1000),
         .padding = .{ .x = 16, .y = 8, .w = 8, .h = 8 },
         .color_fill = dvui.themeGet().color(.content, .fill),
         .box_shadow = .{
@@ -186,7 +186,7 @@ fn displayUpdateToast(id: dvui.Id) !void {
             .offset = .{ .x = -2.0, .y = 2.0 },
             .fade = 6.0,
             .alpha = 0.25,
-            .corner_radius = dvui.Rect.all(1000),
+            .corners = dvui.CornerRect.all(1000),
         },
     });
     defer box.deinit();
@@ -200,7 +200,7 @@ fn displayUpdateToast(id: dvui.Id) !void {
     if (dvui.button(@src(), "Relaunch to update", .{}, .{
         .gravity_y = 0.5,
         .style = .highlight,
-        .corner_radius = dvui.Rect.all(1000),
+        .corners = dvui.CornerRect.all(1000),
         .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
     })) {
         // Kick the background updater on a worker thread and swap the launch
@@ -268,7 +268,7 @@ fn displayProgressToast(id: dvui.Id) !void {
 
     var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .background = true,
-        .corner_radius = dvui.Rect.all(1000),
+        .corners = dvui.CornerRect.all(1000),
         .padding = .{ .x = 16, .y = 8, .w = 8, .h = 8 },
         .color_fill = dvui.themeGet().color(.content, .fill),
         .box_shadow = .{
@@ -276,7 +276,7 @@ fn displayProgressToast(id: dvui.Id) !void {
             .offset = .{ .x = -2.0, .y = 2.0 },
             .fade = 6.0,
             .alpha = 0.25,
-            .corner_radius = dvui.Rect.all(1000),
+            .corners = dvui.CornerRect.all(1000),
         },
     });
     defer box.deinit();
@@ -296,7 +296,7 @@ fn displayProgressToast(id: dvui.Id) !void {
             .min_size_content = .{ .w = 160, .h = 8 },
             .gravity_y = 0.5,
             .padding = .{ .w = 12 },
-            .corner_radius = dvui.Rect.all(1000),
+            .corners = dvui.CornerRect.all(1000),
         });
     }
 
@@ -308,7 +308,7 @@ fn displayProgressToast(id: dvui.Id) !void {
         if (dvui.button(@src(), "Dismiss", .{}, .{
             .gravity_y = 0.5,
             .style = .control,
-            .corner_radius = dvui.Rect.all(1000),
+            .corners = dvui.CornerRect.all(1000),
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         })) {
             update_install.clearIfFinished();

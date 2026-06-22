@@ -21,6 +21,8 @@ pub const SidebarView = struct {
     icon: []const u8,
     /// User-facing title (sidebar tooltip + pane header).
     title: []const u8,
+    /// When true the view is registered but omitted from the sidebar icon rail.
+    hidden: bool = false,
     ctx: ?*anyopaque = null,
     draw: *const fn (ctx: ?*anyopaque) anyerror!void,
     /// Optional: while this view is the active sidebar view, it takes over the workspace
@@ -35,6 +37,8 @@ pub const BottomView = struct {
     id: []const u8,
     owner: ?*Plugin = null,
     title: []const u8,
+    /// When true the bottom panel stays visible even with no active document.
+    persistent: bool = false,
     ctx: ?*anyopaque = null,
     draw: *const fn (ctx: ?*anyopaque) anyerror!void,
 };
@@ -54,8 +58,73 @@ pub const CenterProvider = struct {
 pub const MenuContribution = struct {
     id: []const u8,
     owner: ?*Plugin = null,
+    /// User-facing title, e.g. "Example". Unused by the in-app `draw` path (which renders its
+    /// own title text), but read by the native macOS menu builder: when this contribution has
+    /// `NativeMenuItem`s parented to its `id`, the builder creates a real top-level `NSMenu`
+    /// titled from this field. Leave empty to opt this menu out of native representation.
+    title: []const u8 = "",
+    /// When true, this contribution is skipped everywhere (in-app bar + native menu). Plugins
+    /// that toggle visibility without a full load/unload (e.g. a static built-in hidden via the
+    /// plugin store) flip this instead of unregistering.
+    hidden: bool = false,
     ctx: ?*anyopaque = null,
     draw: *const fn (ctx: ?*anyopaque) anyerror!void,
+};
+
+/// Items injected into an already-open parent menu (e.g. shell View). The parent
+/// menu's `draw` iterates sections whose `parent_menu_id` matches and calls `draw`
+/// while its floating submenu is open.
+pub const MenuSectionContribution = struct {
+    id: []const u8,
+    /// Parent top-level menu id, e.g. "shell.menu.view".
+    parent_menu_id: []const u8,
+    owner: ?*Plugin = null,
+    /// When true, this section is skipped by the in-app bar's `drawMenuSections`. See
+    /// `MenuContribution.hidden`.
+    hidden: bool = false,
+    ctx: ?*anyopaque = null,
+    draw: *const fn (ctx: ?*anyopaque) anyerror!void,
+};
+
+/// A single, natively-representable menu leaf item — pure data (title + callback), unlike
+/// `MenuContribution`/`MenuSectionContribution`'s immediate-mode `draw` callbacks. The native
+/// macOS menu builder (`backend_native.zig`'s `rebuildDynamicNativeMenus`) walks these to
+/// construct real `NSMenuItem`s and add/remove them live on plugin load/unload/hide, without
+/// invoking any dvui drawing code. Register one of these *alongside* the matching
+/// `MenuContribution`/`MenuSectionContribution` for an item that should also appear in the
+/// real macOS menu bar (in-app dvui bar contributions alone are macOS-invisible — see
+/// `Editor.zig`'s "on macOS the menu is handled natively" comment).
+pub const NativeMenuItem = struct {
+    id: []const u8,
+    owner: ?*Plugin = null,
+    /// Parent top-level menu: one of the shell's ids ("workbench.menu.file", "shell.menu.edit",
+    /// "shell.menu.view", "shell.menu.help") to append into an existing native menu, or a
+    /// plugin's own `MenuContribution.id` to populate a new top-level menu (created lazily,
+    /// titled from that contribution's `title`).
+    parent_menu_id: []const u8,
+    title: []const u8,
+    /// See `MenuContribution.hidden`.
+    hidden: bool = false,
+    ctx: ?*anyopaque = null,
+    run: *const fn (ctx: ?*anyopaque) anyerror!void,
+};
+
+/// A named, invocable action a plugin registers with the Host. The shell, menus, and
+/// keybindings trigger it by `id` via `Host.runCommand(id)` **without knowing what it
+/// does** — this is how a plugin contributes its own features (atlas pack, raster
+/// transform, a grid-layout dialog, …) without the SDK or shell naming them. Ids are
+/// plugin-namespaced (`"pixelart.packProject"`). The owner resolves any context it needs
+/// (active doc, selection, …) inside `run`; the shell passes only the owner's opaque state.
+pub const Command = struct {
+    id: []const u8,
+    owner: ?*Plugin = null,
+    /// User-facing label (menus / future command palette).
+    title: []const u8,
+    /// Invoke the command. `state` is the owning plugin's opaque state (`owner.state`).
+    run: *const fn (state: *anyopaque) anyerror!void,
+    /// Optional enabled-state query — e.g. grey out while busy or with no active document.
+    /// Absent = always enabled.
+    isEnabled: ?*const fn (state: *anyopaque) bool = null,
 };
 
 /// A settings section. The Settings view renders each registered section under its

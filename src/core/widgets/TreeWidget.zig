@@ -227,7 +227,7 @@ pub fn deinit(self: *TreeWidget) void {
 }
 
 /// `row_size` is the dragged row's natural size (header). Pass `.{}` to use `branch_size` from layout.
-pub fn dragStart(self: *TreeWidget, branch_id: usize, p: dvui.Point.Physical, row_size: Size) void {
+pub fn dragStart(self: *TreeWidget, branch_id: usize, button: dvui.enums.Button, p: dvui.Point.Physical, row_size: Size) void {
     self.id_branch = branch_id;
     self.drag_point = p;
     self.drag_row_size = if (row_size.w > 0 and row_size.h > 0) row_size else self.branch_size;
@@ -237,7 +237,7 @@ pub fn dragStart(self: *TreeWidget, branch_id: usize, p: dvui.Point.Physical, ro
     if (self.init_options.drag_name) |dn| {
         // `dragStart` overwrites the whole `Dragging` options; keep `dragPreStart`'s offset so the
         // floating row stays anchored to the grab point (files tree uses a named "tab" drag here).
-        dvui.dragStart(p, .{ .name = dn, .offset = dvui.dragOffset() });
+        dvui.dragStart(button, p, .{ .name = dn, .offset = dvui.dragOffset() });
         dvui.captureMouse(null, 0);
     }
 }
@@ -250,6 +250,7 @@ pub fn dragStartMulti(
     self: *TreeWidget,
     primary_branch_id: usize,
     branch_ids: []const usize,
+    button: dvui.enums.Button,
     p: dvui.Point.Physical,
     row_size: Size,
 ) void {
@@ -265,7 +266,7 @@ pub fn dragStartMulti(
     }
     dvui.captureMouse(self.data(), 0);
     if (self.init_options.drag_name) |dn| {
-        dvui.dragStart(p, .{ .name = dn, .offset = dvui.dragOffset() });
+        dvui.dragStart(button, p, .{ .name = dn, .offset = dvui.dragOffset() });
         dvui.captureMouse(null, 0);
     }
 }
@@ -446,11 +447,11 @@ pub const Branch = struct {
                         .rect = Rect.fromPoint(.cast(npt)),
                         .min_size_content = drag_min,
                         .background = true,
-                        .corner_radius = dvui.Rect.all(8),
+                        .corners = dvui.CornerRect.all(8),
                         .color_fill = dvui.themeGet().color(.content, .fill).opacity(0.9),
                         .box_shadow = .{
                             .fade = 8,
-                            .corner_radius = dvui.Rect.all(8),
+                            .corners = dvui.CornerRect.all(8),
                             .alpha = 0.25,
                             .color = .black,
                         },
@@ -508,7 +509,7 @@ pub const Branch = struct {
                 const cw = dvui.currentWindow();
                 if (cw.dragging.state != .none) dvui.dragEnd();
                 const tl = self.button.data().rectScale().r.topLeft();
-                dvui.dragPreStart(me.p, .{ .offset = tl.diff(me.p) });
+                dvui.dragPreStart(me.button, me.p, .{ .offset = tl.diff(me.p) });
             }
         }
         self.button.drawBackground();
@@ -573,7 +574,7 @@ pub const Branch = struct {
                             const cw = dvui.currentWindow();
                             if (cw.dragging.state != .none) dvui.dragEnd();
                             const tl = self.button.data().rectScale().r.topLeft();
-                            dvui.dragPreStart(me.p, .{ .offset = tl.diff(me.p) });
+                            dvui.dragPreStart(me.button, me.p, .{ .offset = tl.diff(me.p) });
                         }
                         continue;
                     }
@@ -590,12 +591,12 @@ pub const Branch = struct {
                                         break;
                                     };
                                     if (this_in and ids.len > 1) {
-                                        self.tree.dragStartMulti(bid, ids, me.p, row_size);
+                                        self.tree.dragStartMulti(bid, ids, me.button, me.p, row_size);
                                     } else {
-                                        self.tree.dragStart(bid, me.p, row_size);
+                                        self.tree.dragStart(bid, me.button, me.p, row_size);
                                     }
                                 } else {
-                                    self.tree.dragStart(bid, me.p, row_size);
+                                    self.tree.dragStart(bid, me.button, me.p, row_size);
                                 }
                             }
                         }

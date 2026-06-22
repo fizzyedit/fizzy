@@ -1,8 +1,8 @@
 //! Workspace map maintenance + recursive split drawing.
 const std = @import("std");
 const dvui = @import("dvui");
-const wbench = @import("../workbench.zig");
-const Globals = @import("Globals.zig");
+const wb_mod = @import("../workbench.zig");
+const runtime = @import("runtime.zig");
 const Workbench = @import("Workbench.zig");
 const Workspace = @import("Workspace.zig");
 
@@ -10,7 +10,7 @@ const handle_size = 10;
 const handle_dist = 60;
 
 pub fn rebuildWorkspaces(wb: *Workbench) !void {
-    const host = Globals.host;
+    const host = runtime.host();
 
     var i: usize = 0;
     while (i < host.openDocCount()) : (i += 1) {
@@ -25,7 +25,7 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
                     workspace.open_file_index = host.docIndex(d.id) orelse 0;
                 }
             }
-            try wb.workspaces.put(Globals.allocator(), grouping, workspace);
+            try wb.workspaces.put(runtime.allocator(), grouping, workspace);
         }
     }
 
@@ -83,7 +83,7 @@ pub const PanelPanedState = struct {
 pub fn drawWorkspaces(wb: *Workbench, panel: PanelPanedState, index: usize) !dvui.App.Result {
     if (index >= wb.workspaces.count()) return .ok;
 
-    var s = wbench.wdvui.paned(@src(), .{
+    var s = wb_mod.wdvui.paned(@src(), .{
         .direction = .horizontal,
         .collapsed_size = if (index == wb.workspaces.count() - 1) std.math.floatMax(f32) else 0,
         .handle_size = handle_size,

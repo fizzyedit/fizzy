@@ -28,11 +28,22 @@ id: []const u8,
 /// User-facing name shown in UI.
 display_name: []const u8,
 
-/// Context for an owner's "save would flatten lossy data" confirmation
-/// (`requestFlatRasterSaveWarning`). `editor_save` is a plain in-place save; `save_and_close`
-/// is part of a close/quit flow and resumes the shell close walk once the save settles.
-pub const FlatRasterSaveMode = enum { editor_save, save_and_close };
+/// Mode for an owner's pre-save confirmation (`requestSaveConfirmation`). `editor_save` is a
+/// plain in-place save; `save_and_close` is part of a close/quit flow and resumes the shell
+/// close walk once the save settles.
+pub const SaveConfirmMode = enum { editor_save, save_and_close };
 
+// Every field below is an optional fn pointer, so the type system requires *nothing*. But to
+// function as an **editor** (open / draw / save files) a plugin must implement the document
+// cluster — `fileTypePriority`, the load+staging hooks (`documentStackSize`/`documentStackAlign`/
+// `loadDocument`/`documentIdFromBuffer`/`registerOpenDocument`/`deinitDocumentBuffer`),
+// `drawDocument`, `saveDocument`, `isDirty`, and `documentPtr`. Everything else is genuinely
+// optional. Each hook's doc comment tags how the shell invokes it:
+//   [broadcast]  — the shell calls it for every plugin at a fixed point each frame
+//   [active-doc] — the shell calls `doc.owner.hook(doc)` only for the focused document
+//   [requested]  — only fires after the plugin asks for it via a `host.*` call
+// A plugin that is *not* an editor (the workbench file tree) implements none of the document
+// hooks; it contributes panes + a center provider instead.
 pub const VTable = struct {
     /// Tear down `state`. Called when the plugin is unregistered / app shuts down.
     deinit: ?*const fn (state: *anyopaque) void = null,
@@ -88,12 +99,19 @@ pub const VTable = struct {
     removeCanvasPane: ?*const fn (state: *anyopaque, grouping: u64, allocator: std.mem.Allocator) void = null,
     documentPath: ?*const fn (state: *anyopaque, doc: DocHandle) []const u8 = null,
     setDocumentPath: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8) anyerror!void = null,
+    /// Move the caret to `line`/`character` (0-based; `character` a byte count within the
+    /// line, clamped to its actual length) in `doc`, applied on its next draw (mirrors the
+    /// `pending_cursor` pattern the text editor already uses internally for undo/redo/paste).
+    /// The owner resolves this against its own already-loaded buffer — see
+    /// `sdk.language.DefinitionLocation`'s doc comment for why the line/character-vs-byte-
+    /// offset split is deliberate. Used by `gotoDefinition` navigation via the workbench-api
+    /// `revealPosition` service.
+    revealPosition: ?*const fn (state: *anyopaque, doc: DocHandle, line: u32, character: u32) void = null,
     documentHasNativeExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     /// True when `saveDocument` can write the document without Save As (e.g. `.fiz` or flat image).
     documentHasRecognizedSaveExtension: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     showsSaveStatusIndicator: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     isDocumentSaving: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
-    shouldConfirmFlatRasterSave: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     saveDocumentAsync: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
     timeSinceSaveCompleteNs: ?*const fn (state: *anyopaque, doc: DocHandle) ?i128 = null,
     documentDefaultSaveAsFilename: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 = null,
@@ -104,13 +122,6 @@ pub const VTable = struct {
     /// document on disk in that folder; `id_extra` disambiguates per-explorer-row launches.
     /// TODO: with more than one editor plugin this becomes a typed "New > <kind>" chooser.
     requestNewDocumentDialog: ?*const fn (state: *anyopaque, parent_path: ?[]const u8, id_extra: usize) void = null,
-    /// Open the owner's grid-layout dialog for `doc` (pixel-art specific; the shell only
-    /// resolves the active doc and dispatches here so it never names the plugin's dialog).
-    requestGridLayoutDialog: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
-    /// Open the owner's "save would flatten lossy data" confirmation for `doc`. The shell calls
-    /// this when `shouldConfirmFlatRasterSave(doc)` is true; the dialog drives the save through
-    /// the shell save/close API. `from_save_all_quit` marks requests issued during the quit walk.
-    requestFlatRasterSaveWarning: ?*const fn (state: *anyopaque, doc: DocHandle, mode: FlatRasterSaveMode, from_save_all_quit: bool) void = null,
 
     // ---- render hooks (the plugin draws its own dvui UI into the host window) ----
     // Sidebar/explorer panes and bottom-panel tabs are NOT vtable hooks — plugins
@@ -126,34 +137,90 @@ pub const VTable = struct {
     contributeMenu: ?*const fn (state: *anyopaque) anyerror!void = null,
     contributeKeybinds: ?*const fn (state: *anyopaque, win: *dvui.Window) anyerror!void = null,
 
-    // ---- per-frame shell hooks (global keybinds, overlays) ----
-    /// Called once at the top of every shell frame, before any document drawing. Plugins
-    /// use this to advance their internal frame clock / invalidate per-frame caches.
+    // ---- per-frame shell phases (the shell calls these for every plugin each frame, in
+    //      this order). A plugin does its own per-frame work (caches, playback, overlays)
+    //      inside these generic phases; none carry domain meaning. ----
+    /// [broadcast] Top of frame, before workspace rebuild / any document drawing. Advance the
+    /// frame clock / invalidate per-frame caches.
     beginFrame: ?*const fn (state: *anyopaque) void = null,
+    /// [requested] A one-shot pre-draw pass: runs after layout but before document draw, and
+    /// **only on a frame where the plugin asked for it** via `host.requestPrepareFrame()` (not
+    /// every frame). Use to warm expensive render data for the upcoming draw. A plugin that
+    /// never calls `requestPrepareFrame` never sees this.
+    prepareFrame: ?*const fn (state: *anyopaque) void = null,
+    /// [broadcast] Process the plugin's own per-frame keyboard shortcuts (distinct from
+    /// `contributeKeybinds`, which registers them once). Runs before the shell's global keybinds.
     tickKeybinds: ?*const fn (state: *anyopaque) anyerror!void = null,
+    /// [broadcast] Advance the plugin's open documents; return true to request a follow-up
+    /// animation frame (e.g. an in-progress save-status fade).
     tickOpenDocuments: ?*const fn (state: *anyopaque) bool = null,
-    tickActiveDocumentPlayback: ?*const fn (state: *anyopaque, timer_host_id: dvui.Id) void = null,
-    resetDocumentPeekLayers: ?*const fn (state: *anyopaque) void = null,
-    warmupActiveDocumentComposites: ?*const fn (state: *anyopaque) void = null,
-    isAnyDocumentActivelyDrawing: ?*const fn (state: *anyopaque) bool = null,
-    processRadialMenuInput: ?*const fn (state: *anyopaque) void = null,
-    radialMenuVisible: ?*const fn (state: *anyopaque) bool = null,
-    drawRadialMenu: ?*const fn (state: *anyopaque) anyerror!void = null,
+    /// [broadcast] Advance time-based state for the active document (animation playback, a
+    /// blinking cursor, …). `timer_host_id` is the active document container's widget id, to
+    /// anchor any dvui timer/animation the plugin schedules.
+    tickActiveDocument: ?*const fn (state: *anyopaque, timer_host_id: dvui.Id) void = null,
+    /// [broadcast] Draw a plugin-owned floating overlay (tool menu, HUD) on top of the frame,
+    /// after the center region is drawn.
+    drawOverlay: ?*const fn (state: *anyopaque) anyerror!void = null,
+    /// [broadcast] End of the center draw — reset per-frame scratch state held across the draw
+    /// (symmetric counterpart to `beginFrame`).
+    endFrame: ?*const fn (state: *anyopaque) void = null,
+    /// [broadcast] True while the plugin needs the shell to keep repainting continuously (an
+    /// active stroke, a running animation, a background job) rather than idling until input.
+    needsContinuousRepaint: ?*const fn (state: *anyopaque) bool = null,
 
-    // ---- editing + project pack (pixel-art today; future plugins opt in) ----
-    transform: ?*const fn (state: *anyopaque) anyerror!void = null,
-    copy: ?*const fn (state: *anyopaque) anyerror!void = null,
-    paste: ?*const fn (state: *anyopaque) anyerror!void = null,
-    acceptEdit: ?*const fn (state: *anyopaque) void = null,
-    cancelEdit: ?*const fn (state: *anyopaque) void = null,
-    deleteSelection: ?*const fn (state: *anyopaque) void = null,
-    startPackProject: ?*const fn (state: *anyopaque) anyerror!void = null,
-    isPackingActive: ?*const fn (state: *const anyopaque) bool = null,
-    tickPackJobs: ?*const fn (state: *anyopaque) void = null,
-    runPackWorkers: ?*const fn (state: *anyopaque) void = null,
-    persistProjectFolder: ?*const fn (state: *anyopaque) void = null,
-    reloadProjectFolder: ?*const fn (state: *anyopaque, allocator: std.mem.Allocator) void = null,
+    // ---- folder lifecycle ----
+    /// [broadcast] Fired just before the open root folder changes or closes — a plugin can
+    /// persist any state it keyed to that folder (open tabs, view state, …).
+    onFolderClose: ?*const fn (state: *anyopaque) void = null,
+    /// [broadcast] Fired after a new root folder has opened (read it via `host.folder()`) — a
+    /// plugin can load state it keyed to that folder.
+    onFolderOpen: ?*const fn (state: *anyopaque, allocator: std.mem.Allocator) void = null,
+
+    // ---- save protocol ----
+    /// [active-doc] True when the owner wants a confirmation before `saveDocument` (e.g. a save
+    /// that would flatten lossy data, change encoding, or overwrite an on-disk change). When
+    /// true the shell calls `requestSaveConfirmation` instead of saving directly.
+    saveNeedsConfirmation: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
+    /// [active-doc] Open the owner's pre-save confirmation dialog for `doc` (only called when
+    /// `saveNeedsConfirmation(doc)` is true). The dialog drives the save through the shell
+    /// save/close API. `from_save_all_quit` marks requests issued during the quit walk.
+    requestSaveConfirmation: ?*const fn (state: *anyopaque, doc: DocHandle, mode: SaveConfirmMode, from_save_all_quit: bool) void = null,
+
+    // NOTE: editing actions (copy / paste / transform / accept-edit / cancel-edit /
+    // delete-selection) are deliberately NOT hooks here. They are user-invoked and their meaning
+    // varies per editor, so a plugin registers them as `Command`s (e.g. `"pixelart.copy"`) and
+    // the shell dispatches its Edit-menu / keybinds to `"<active_owner_id>.<action>"`. See the
+    // commands section in docs/PLUGINS.md.
 };
+
+pub fn commandId(comptime plugin_id: []const u8, comptime action: []const u8) [:0]const u8 {
+    return plugin_id ++ "." ++ action;
+}
+
+/// Comptime check that a vtable implements the document cluster required for an editor plugin.
+pub fn assertEditorVTable(comptime vt: VTable) void {
+    comptime {
+        if (vt.loadDocument == null) @compileError("Editor vtable missing required hook: loadDocument");
+        if (vt.documentStackSize == null) @compileError("Editor vtable missing required hook: documentStackSize");
+        if (vt.documentStackAlign == null) @compileError("Editor vtable missing required hook: documentStackAlign");
+        if (vt.registerOpenDocument == null) @compileError("Editor vtable missing required hook: registerOpenDocument");
+        if (vt.drawDocument == null) @compileError("Editor vtable missing required hook: drawDocument");
+        if (vt.documentPtr == null) @compileError("Editor vtable missing required hook: documentPtr");
+        if (vt.isDirty == null) @compileError("Editor vtable missing required hook: isDirty");
+        if (vt.saveDocument == null) @compileError("Editor vtable missing required hook: saveDocument");
+        if (vt.closeDocument == null) @compileError("Editor vtable missing required hook: closeDocument");
+    }
+}
+
+/// Comptime check that a vtable does not implement document hooks (menu-only / utility profile).
+pub fn assertUtilityVTable(comptime vt: VTable) void {
+    comptime {
+        if (vt.loadDocument != null) @compileError("Utility vtable must not implement document hook: loadDocument");
+        if (vt.drawDocument != null) @compileError("Utility vtable must not implement document hook: drawDocument");
+        if (vt.registerOpenDocument != null) @compileError("Utility vtable must not implement document hook: registerOpenDocument");
+        if (vt.createDocument != null) @compileError("Utility vtable must not implement document hook: createDocument");
+    }
+}
 
 // Thin wrappers so callers don't repeat the optional-vtable dance.
 
@@ -169,44 +236,8 @@ pub fn tickKeybinds(self: Plugin) !void {
     if (self.vtable.tickKeybinds) |f| try f(self.state);
 }
 
-pub fn processRadialMenuInput(self: Plugin) void {
-    if (self.vtable.processRadialMenuInput) |f| f(self.state);
-}
-
-pub fn radialMenuVisible(self: Plugin) bool {
-    return if (self.vtable.radialMenuVisible) |f| f(self.state) else false;
-}
-
-pub fn drawRadialMenu(self: Plugin) !void {
-    if (self.vtable.drawRadialMenu) |f| try f(self.state);
-}
-
-pub fn copy(self: Plugin) !void {
-    if (self.vtable.copy) |f| try f(self.state);
-}
-
-pub fn paste(self: Plugin) !void {
-    if (self.vtable.paste) |f| try f(self.state);
-}
-
-pub fn startPackProject(self: Plugin) !void {
-    if (self.vtable.startPackProject) |f| try f(self.state);
-}
-
-pub fn isPackingActive(self: Plugin) bool {
-    return if (self.vtable.isPackingActive) |f| f(self.state) else false;
-}
-
-pub fn tickPackJobs(self: Plugin) void {
-    if (self.vtable.tickPackJobs) |f| f(self.state);
-}
-
-pub fn runPackWorkers(self: Plugin) void {
-    if (self.vtable.runPackWorkers) |f| f(self.state);
-}
-
-pub fn transform(self: Plugin) !void {
-    if (self.vtable.transform) |f| try f(self.state);
+pub fn drawOverlay(self: Plugin) !void {
+    if (self.vtable.drawOverlay) |f| try f(self.state);
 }
 
 pub fn registerOpenDocument(self: Plugin, file: *anyopaque) !*anyopaque {
@@ -225,12 +256,12 @@ pub fn unregisterDocument(self: Plugin, id: u64) void {
     if (self.vtable.unregisterDocument) |f| f(self.state, id);
 }
 
-pub fn persistProjectFolder(self: Plugin) void {
-    if (self.vtable.persistProjectFolder) |f| f(self.state);
+pub fn onFolderClose(self: Plugin) void {
+    if (self.vtable.onFolderClose) |f| f(self.state);
 }
 
-pub fn reloadProjectFolder(self: Plugin, allocator: std.mem.Allocator) void {
-    if (self.vtable.reloadProjectFolder) |f| f(self.state, allocator);
+pub fn onFolderOpen(self: Plugin, allocator: std.mem.Allocator) void {
+    if (self.vtable.onFolderOpen) |f| f(self.state, allocator);
 }
 
 pub fn bindDocumentToPane(self: Plugin, doc: DocHandle, canvas_id: dvui.Id, workspace_handle: *anyopaque, center: bool) void {
@@ -257,6 +288,10 @@ pub fn setDocumentPath(self: Plugin, doc: DocHandle, path: []const u8) !void {
     if (self.vtable.setDocumentPath) |f| try f(self.state, doc, path);
 }
 
+pub fn revealPosition(self: Plugin, doc: DocHandle, line: u32, character: u32) void {
+    if (self.vtable.revealPosition) |f| f(self.state, doc, line, character);
+}
+
 pub fn documentHasNativeExtension(self: Plugin, doc: DocHandle) bool {
     return if (self.vtable.documentHasNativeExtension) |f| f(self.state, doc) else false;
 }
@@ -273,8 +308,8 @@ pub fn isDocumentSaving(self: Plugin, doc: DocHandle) bool {
     return if (self.vtable.isDocumentSaving) |f| f(self.state, doc) else false;
 }
 
-pub fn shouldConfirmFlatRasterSave(self: Plugin, doc: DocHandle) bool {
-    return if (self.vtable.shouldConfirmFlatRasterSave) |f| f(self.state, doc) else false;
+pub fn saveNeedsConfirmation(self: Plugin, doc: DocHandle) bool {
+    return if (self.vtable.saveNeedsConfirmation) |f| f(self.state, doc) else false;
 }
 
 pub fn saveDocumentAsync(self: Plugin, doc: DocHandle) !void {
@@ -401,52 +436,36 @@ pub fn resetDocumentSaveUIState(self: Plugin, doc: DocHandle) void {
     if (self.vtable.resetDocumentSaveUIState) |f| f(self.state, doc);
 }
 
-pub fn requestFlatRasterSaveWarning(self: Plugin, doc: DocHandle, mode: FlatRasterSaveMode, from_save_all_quit: bool) void {
-    if (self.vtable.requestFlatRasterSaveWarning) |f| f(self.state, doc, mode, from_save_all_quit);
+pub fn requestSaveConfirmation(self: Plugin, doc: DocHandle, mode: SaveConfirmMode, from_save_all_quit: bool) void {
+    if (self.vtable.requestSaveConfirmation) |f| f(self.state, doc, mode, from_save_all_quit);
 }
 
 pub fn requestNewDocumentDialog(self: Plugin, parent_path: ?[]const u8, id_extra: usize) void {
     if (self.vtable.requestNewDocumentDialog) |f| f(self.state, parent_path, id_extra);
 }
 
-pub fn requestGridLayoutDialog(self: Plugin, doc: DocHandle) void {
-    if (self.vtable.requestGridLayoutDialog) |f| f(self.state, doc);
-}
-
 pub fn beginFrame(self: Plugin) void {
     if (self.vtable.beginFrame) |f| f(self.state);
+}
+
+pub fn prepareFrame(self: Plugin) void {
+    if (self.vtable.prepareFrame) |f| f(self.state);
+}
+
+pub fn endFrame(self: Plugin) void {
+    if (self.vtable.endFrame) |f| f(self.state);
 }
 
 pub fn tickOpenDocuments(self: Plugin) bool {
     return if (self.vtable.tickOpenDocuments) |f| f(self.state) else false;
 }
 
-pub fn tickActiveDocumentPlayback(self: Plugin, timer_host_id: dvui.Id) void {
-    if (self.vtable.tickActiveDocumentPlayback) |f| f(self.state, timer_host_id);
+pub fn tickActiveDocument(self: Plugin, timer_host_id: dvui.Id) void {
+    if (self.vtable.tickActiveDocument) |f| f(self.state, timer_host_id);
 }
 
-pub fn resetDocumentPeekLayers(self: Plugin) void {
-    if (self.vtable.resetDocumentPeekLayers) |f| f(self.state);
-}
-
-pub fn warmupActiveDocumentComposites(self: Plugin) void {
-    if (self.vtable.warmupActiveDocumentComposites) |f| f(self.state);
-}
-
-pub fn isAnyDocumentActivelyDrawing(self: Plugin) bool {
-    return if (self.vtable.isAnyDocumentActivelyDrawing) |f| f(self.state) else false;
-}
-
-pub fn acceptEdit(self: Plugin) void {
-    if (self.vtable.acceptEdit) |f| f(self.state);
-}
-
-pub fn cancelEdit(self: Plugin) void {
-    if (self.vtable.cancelEdit) |f| f(self.state);
-}
-
-pub fn deleteSelection(self: Plugin) void {
-    if (self.vtable.deleteSelection) |f| f(self.state);
+pub fn needsContinuousRepaint(self: Plugin) bool {
+    return if (self.vtable.needsContinuousRepaint) |f| f(self.state) else false;
 }
 
 /// Allocate a buffer suitable for staging `loadDocument` / `createDocument`. Caller frees `backing`.

@@ -19,13 +19,22 @@ pub const Keybinds = @This();
 pub fn register() !void {
     const window = dvui.currentWindow();
 
-    // Region toggles (explorer / workspace) are platform-dependent.
+    // Region toggles (explorer / workspace) and "New File" — Command on macOS, Control
+    // elsewhere. "New File" is a generic shell action (see `Host.requestNewDocument`),
+    // not owned by whichever editor plugin happens to be installed.
+    //
+    // "zoom" is the trackpad-scheme canvas modifier (cmd/ctrl + scroll to zoom). Shared
+    // by every `CanvasWidget` consumer (image viewer, pixi, etc.) — not plugin-specific.
     if (fizzy.platform.isMacOS()) {
         try window.keybinds.putNoClobber(window.gpa, "explorer", .{ .command = true, .key = .e });
         try window.keybinds.putNoClobber(window.gpa, "workspace", .{ .command = true, .key = .w });
+        try window.keybinds.putNoClobber(window.gpa, "new_file", .{ .command = true, .key = .n });
+        try window.keybinds.putNoClobber(window.gpa, "zoom", .{ .command = true });
     } else {
         try window.keybinds.putNoClobber(window.gpa, "explorer", .{ .control = true, .key = .e });
         try window.keybinds.putNoClobber(window.gpa, "workspace", .{ .control = true, .key = .w });
+        try window.keybinds.putNoClobber(window.gpa, "new_file", .{ .control = true, .key = .n });
+        try window.keybinds.putNoClobber(window.gpa, "zoom", .{ .control = true });
     }
 
     try window.keybinds.putNoClobber(window.gpa, "shift", .{ .shift = true });
@@ -144,17 +153,6 @@ pub fn tick() !void {
                         fizzy.editor.requestNewFileDialog();
                     }
 
-                    if (ke.matchBind("transform") and ke.action == .down) {
-                        fizzy.editor.transform() catch {
-                            std.log.err("Failed to transform", .{});
-                        };
-                    }
-
-                    if (ke.matchBind("grid_layout") and ke.action == .down) {
-                        if (fizzy.editor.activeDoc() != null) {
-                            fizzy.editor.requestGridLayoutDialog();
-                        }
-                    }
                 }
             },
             else => {},

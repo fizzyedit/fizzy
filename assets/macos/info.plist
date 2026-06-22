@@ -9,9 +9,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.foxnne.fizzy</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.0.20</string>
+	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>0.0.20</string>
+	<string>0.1.0</string>
 	<key>CFBundleIconFile</key>
 	<string>fizzy.icns</string>
 	<!--
@@ -47,6 +47,28 @@
 			<string>fizzy art files</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
+		</dict>
+		<!--
+		  Wildcard entry so fizzy shows up in Finder's "Open With" for any file,
+		  not just the extensions above. `LSHandlerRank: Alternate` means it never
+		  contests an existing default for a given extension — the user still has
+		  to explicitly pick "Open With > fizzy > Always Open With" per file type.
+		  This is the same mechanism generic editors (VS Code, Sublime, BBEdit)
+		  use to be settable-as-default for arbitrary/unknown extensions.
+		-->
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>*</string>
+			</array>
+			<key>CFBundleTypeIconFile</key>
+			<string>fizzy.icns</string>
+			<key>CFBundleTypeName</key>
+			<string>All Documents</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
 		</dict>
 	</array>
 </dict>

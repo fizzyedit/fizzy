@@ -5,7 +5,7 @@ const wb = @import("../workbench.zig");
 const dvui = wb.dvui;
 const wdvui = wb.wdvui;
 const sdk = wb.sdk;
-const Globals = @import("Globals.zig");
+const runtime = @import("runtime.zig");
 const icons = @import("icons");
 
 /// Workspaces are drawn recursively inside of the explorer paned widget
@@ -37,8 +37,8 @@ pub fn init(grouping: u64) Workspace {
 /// Release any plugin-owned per-pane canvas chrome. Called when a pane is removed
 /// (`Editor.rebuildWorkspaces`) and for each pane at editor shutdown.
 pub fn deinit(self: *Workspace) void {
-    for (Globals.host.plugins.items) |plugin| {
-        plugin.removeCanvasPane(self.grouping, Globals.allocator());
+    for (runtime.host().plugins.items) |plugin| {
+        plugin.removeCanvasPane(self.grouping, runtime.allocator());
     }
 }
 
@@ -80,7 +80,7 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
 
         if (e.evt == .mouse) {
             if (e.evt.mouse.action == .press or (e.evt.mouse.action == .position and e.evt.mouse.mod.matchBind("ctrl/cmd"))) {
-                Globals.workbench.open_workspace_grouping = self.grouping;
+                runtime.workbench().open_workspace_grouping = self.grouping;
             }
         }
     }
@@ -88,7 +88,7 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     // A sidebar view may optionally take over this workspace pane's content region (e.g. pixel
     // art's "Project" view renders the packed atlas here instead of document tabs+canvas). The
     // workbench owns only the pane frame; it hands the active view the opaque workspace handle.
-    const active = Globals.host.activeSidebarView();
+    const active = runtime.host().activeSidebarView();
     if (active != null and active.?.draw_workspace != null) {
         var pane_view: sdk.WorkbenchPaneView = .{
             .grouping = self.grouping,
@@ -116,7 +116,7 @@ pub fn workspaceEmptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.B
 }
 
 fn drawTabs(self: *Workspace) void {
-    if (Globals.host.openDocCount() == 0) return;
+    if (runtime.host().openDocCount() == 0) return;
 
     // Handle dragging of tabs between workspace reorderables (tab bars)
     defer self.processTabsDrag();
@@ -127,6 +127,8 @@ fn drawTabs(self: *Workspace) void {
 
         var tabs_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .none,
+            .margin = dvui.Rect.all(0),
+            .padding = dvui.Rect.all(0),
             .id_extra = @intCast(self.grouping),
         });
         defer tabs_box.deinit();
@@ -134,7 +136,10 @@ fn drawTabs(self: *Workspace) void {
         var scroll_area = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .hide, .vertical_bar = .hide }, .{
             .expand = .none,
             .background = false,
-            .corner_radius = dvui.Rect.all(0),
+            .margin = dvui.Rect.all(0),
+            .padding = dvui.Rect.all(0),
+            .border = dvui.Rect.all(0),
+            .corners = dvui.CornerRect.all(0),
             .id_extra = @intCast(self.grouping),
         });
         defer scroll_area.deinit();
@@ -148,20 +153,22 @@ fn drawTabs(self: *Workspace) void {
 
             var tabs_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .none,
+                .margin = dvui.Rect.all(0),
+                .padding = dvui.Rect.all(0),
                 .id_extra = @intCast(self.grouping),
             });
             defer tabs_hbox.deinit();
 
-            const files_len = Globals.host.openDocCount();
+            const files_len = runtime.host().openDocCount();
 
             // Find the neighbouring tabs (within this workspace grouping) of the active tab.
             var prev_same_group_index: ?usize = null;
             var next_same_group_index: ?usize = null;
 
             const active_in_this_group = blk: {
-                if (Globals.workbench.open_workspace_grouping != self.grouping) break :blk false;
+                if (runtime.workbench().open_workspace_grouping != self.grouping) break :blk false;
                 if (self.open_file_index >= files_len) break :blk false;
-                const active_doc = Globals.host.docByIndex(self.open_file_index) orelse break :blk false;
+                const active_doc = runtime.host().docByIndex(self.open_file_index) orelse break :blk false;
                 if (active_doc.owner.documentGrouping(active_doc) != self.grouping) break :blk false;
                 break :blk true;
             };
@@ -172,7 +179,7 @@ fn drawTabs(self: *Workspace) void {
                 var j: usize = active_index;
                 while (j > 0) {
                     j -= 1;
-                    const tab_doc = Globals.host.docByIndex(j) orelse continue;
+                    const tab_doc = runtime.host().docByIndex(j) orelse continue;
                     if (tab_doc.owner.documentGrouping(tab_doc) == self.grouping) {
                         prev_same_group_index = j;
                         break;
@@ -181,7 +188,7 @@ fn drawTabs(self: *Workspace) void {
 
                 j = active_index + 1;
                 while (j < files_len) : (j += 1) {
-                    const tab_doc = Globals.host.docByIndex(j) orelse continue;
+                    const tab_doc = runtime.host().docByIndex(j) orelse continue;
                     if (tab_doc.owner.documentGrouping(tab_doc) == self.grouping) {
                         next_same_group_index = j;
                         break;
@@ -190,8 +197,7 @@ fn drawTabs(self: *Workspace) void {
             }
 
             for (0..files_len) |i| {
-                const doc = Globals.host.docByIndex(i) orelse continue;
-                const is_fizzy_file = doc.owner.documentHasNativeExtension(doc);
+                const doc = runtime.host().docByIndex(i) orelse continue;
 
                 if (doc.owner.documentGrouping(doc) != self.grouping) continue;
 
@@ -200,42 +206,26 @@ fn drawTabs(self: *Workspace) void {
                     .id_extra = i,
                     .padding = dvui.Rect.all(0),
                     .margin = dvui.Rect.all(0),
+                    .border = .all(0),
                 });
                 defer reorderable.deinit();
 
-                const selected = self.open_file_index == i and Globals.workbench.open_workspace_grouping == self.grouping;
-
-                var anim = dvui.animate(@src(), .{ .duration = 400_000, .kind = .horizontal, .easing = dvui.easing.outBack }, .{});
-                defer anim.deinit();
+                const selected = self.open_file_index == i and runtime.workbench().open_workspace_grouping == self.grouping;
 
                 var hbox: dvui.BoxWidget = undefined;
                 hbox.init(@src(), .{ .dir = .horizontal }, .{
                     .expand = .none,
-                    .border = .all(0),
-                    .color_fill = if (selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(Globals.host.contentOpacity()),
+                    .border = dvui.Rect.all(0),
+                    .color_fill = if (selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(runtime.host().contentOpacity()),
                     .background = true,
                     .id_extra = i,
-                    .padding = dvui.Rect.all(2),
+                    .padding = .{ .x = 2, .y = 2, .w = 2, .h = 0 },
                     .margin = dvui.Rect.all(0),
                 });
 
                 defer hbox.deinit();
 
                 const tab_hovered = wdvui.hovered(hbox.data());
-
-                if (selected) {
-                    if (!reorderable.floating()) {
-                        dvui.Path.stroke(.{
-                            .points = &.{
-                                hbox.data().rectScale().r.bottomLeft(),
-                                hbox.data().rectScale().r.bottomRight(),
-                            },
-                        }, .{
-                            .color = dvui.themeGet().color(.window, .text),
-                            .thickness = 1,
-                        });
-                    }
-                }
 
                 if (reorderable.floating()) {
                     self.tabs_drag_index = i;
@@ -266,17 +256,13 @@ fn drawTabs(self: *Workspace) void {
                     self.tabs_insert_before_index = i;
                 }
 
-                if (is_fizzy_file) {
-                    const ui_atlas = Globals.host.uiAtlas();
-                    const ui_sprite = ui_atlas.sprites[wb.atlas.sprites.logo_default];
-                    const logo_sprite = wb.Sprite{ .origin = ui_sprite.origin, .source = ui_sprite.source };
-                    _ = wb.Sprite.draw(logo_sprite, @src(), ui_atlas.source, 2.0, .{
-                        .gravity_y = 0.5,
-                        .padding = dvui.Rect.all(4),
-                    });
-                } else {
+                // The owning plugin draws the tab icon for its file types (same hook as the file
+                // tree); the workbench falls back to a generic file glyph.
+                const tab_doc_path = doc.owner.documentPath(doc);
+                const tab_icon_color = dvui.themeGet().color(.control, .text);
+                if (!runtime.host().drawFileIcon(std.fs.path.extension(tab_doc_path), tab_doc_path, tab_icon_color)) {
                     dvui.icon(@src(), "file_icon", icons.tvg.lucide.file, .{
-                        .stroke_color = if (is_fizzy_file) .transparent else dvui.themeGet().color(.control, .text),
+                        .stroke_color = tab_icon_color,
                     }, .{
                         .gravity_y = 0.5,
                         .padding = dvui.Rect.all(4),
@@ -290,13 +276,13 @@ fn drawTabs(self: *Workspace) void {
                 });
 
                 const close_inner = wdvui.windowHeaderCloseInnerSide();
-                const close_pad = wdvui.window_header_close_margin;
-                const tab_status_slot = close_inner + close_pad.x + close_pad.w;
 
                 const status_close_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .none,
                     .gravity_y = 0.5,
-                    .min_size_content = .{ .w = tab_status_slot, .h = tab_status_slot },
+                    .margin = dvui.Rect.all(0),
+                    .padding = wdvui.tab_status_inset,
+                    .min_size_content = .{ .w = close_inner, .h = close_inner },
                 });
                 defer status_close_box.deinit();
 
@@ -335,91 +321,79 @@ fn drawTabs(self: *Workspace) void {
                     }, .{
                         .complete_elapsed_ns = save_flash_elapsed,
                     });
-                } else if (tab_hovered) {
+                } else {
                     var tab_close_button: dvui.ButtonWidget = undefined;
-                    tab_close_button.init(@src(), .{ .draw_focus = false }, wdvui.windowHeaderCloseButtonOptions(.{
+                    tab_close_button.init(@src(), .{ .draw_focus = false }, wdvui.tabCloseButtonOptions(.{
                         .expand = .none,
                         .min_size_content = .{ .w = close_inner, .h = close_inner },
+                        .gravity_x = 0.5,
+                        .gravity_y = 0.5,
                         .id_extra = i *% 16 + 1,
                     }));
                     defer tab_close_button.deinit();
 
                     tab_close_button.processEvents();
-                    tab_close_button.drawBackground();
-                    tab_close_button.drawFocus();
 
-                    if (tab_close_button.hovered()) {
-                        dvui.icon(@src(), "close", icons.tvg.lucide.x, .{
-                            .stroke_color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10),
-                            .fill_color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10),
+                    const dirty = doc.owner.isDirty(doc);
+                    const show_close_visible = tab_hovered or (selected and !dirty);
+                    const err_accent = dvui.themeGet().color(.err, .fill);
+                    const close_hovered = tab_close_button.hovered();
+
+                    if (show_close_visible and (tab_hovered or close_hovered)) {
+                        const rs = tab_close_button.data().borderRectScale();
+                        rs.r.fill(.round(8), .{
+                            .color = err_accent,
+                        });
+                    }
+
+                    if (dirty and !show_close_visible) {
+                        dvui.icon(@src(), "dirty_icon", icons.tvg.lucide.@"circle-small", .{
+                            .stroke_color = dvui.themeGet().color(.window, .text),
                         }, .{
-                            .expand = .ratio,
+                            .expand = .none,
+                            .min_size_content = .{ .w = close_inner, .h = close_inner },
+                            .gravity_x = 0.5,
+                            .gravity_y = 0.5,
+                            .id_extra = i *% 16 + 0,
+                        });
+                    } else {
+                        const icon_color = if (!show_close_visible)
+                            dvui.Color.transparent
+                        else if (tab_hovered or close_hovered)
+                            dvui.Color.white
+                        else
+                            dvui.themeGet().color(.window, .text);
+                        dvui.icon(@src(), "close", icons.tvg.lucide.x, .{
+                            .stroke_color = icon_color,
+                            .fill_color = icon_color,
+                        }, .{
+                            .expand = .none,
+                            .min_size_content = .{ .w = close_inner, .h = close_inner },
                             .gravity_x = 0.5,
                             .gravity_y = 0.5,
                             .id_extra = i *% 16 + 2,
+                            .background = false,
+                            .border = dvui.Rect.all(0),
+                            .box_shadow = null,
+                            .ninepatch_fill = &dvui.Ninepatch.none,
+                            .ninepatch_hover = &dvui.Ninepatch.none,
+                            .ninepatch_press = &dvui.Ninepatch.none,
                         });
                     }
 
                     if (tab_close_button.clicked()) {
-                        Globals.host.closeDocById(doc.id) catch |err| {
+                        runtime.host().closeDocById(doc.id) catch |err| {
                             dvui.log.err("closeFile: {d} failed: {s}", .{ i, @errorName(err) });
                         };
                         break;
                     }
-                } else if (selected and !doc.owner.isDirty(doc)) {
-                    const tab_text = dvui.themeGet().color(.window, .text);
-                    var ghost_close: dvui.ButtonWidget = undefined;
-                    ghost_close.init(@src(), .{ .draw_focus = false }, wdvui.windowHeaderCloseButtonOptions(.{
-                        .expand = .none,
-                        .min_size_content = .{ .w = close_inner, .h = close_inner },
-                        .id_extra = i *% 16 + 3,
-                        .style = .window,
-                        .background = false,
-                        .box_shadow = null,
-                        .border = .all(0),
-                        .color_fill = .transparent,
-                        .color_fill_hover = .transparent,
-                        .color_fill_press = .transparent,
-                        .ninepatch_fill = &dvui.Ninepatch.none,
-                        .ninepatch_hover = &dvui.Ninepatch.none,
-                        .ninepatch_press = &dvui.Ninepatch.none,
-                    }));
-                    defer ghost_close.deinit();
+                }
 
-                    ghost_close.processEvents();
-                    // Invisible hit target only — `drawBackground` would run theme ninepatch.
-
-                    dvui.icon(@src(), "close", icons.tvg.lucide.x, .{
-                        .stroke_color = tab_text,
-                        .fill_color = tab_text,
-                    }, .{
-                        .expand = .ratio,
-                        .gravity_x = 0.5,
-                        .gravity_y = 0.5,
-                        .id_extra = i *% 16 + 4,
-                        .background = false,
-                        .border = .all(0),
-                        .box_shadow = null,
-                        .ninepatch_fill = &dvui.Ninepatch.none,
-                        .ninepatch_hover = &dvui.Ninepatch.none,
-                        .ninepatch_press = &dvui.Ninepatch.none,
-                    });
-
-                    if (ghost_close.clicked()) {
-                        Globals.host.closeDocById(doc.id) catch |err| {
-                            dvui.log.err("closeFile: {d} failed: {s}", .{ i, @errorName(err) });
-                        };
-                        break;
-                    }
-                } else if (doc.owner.isDirty(doc)) {
-                    dvui.icon(@src(), "dirty_icon", icons.tvg.lucide.@"circle-small", .{
-                        .stroke_color = dvui.themeGet().color(.window, .text),
-                    }, .{
-                        .gravity_x = 0.5,
-                        .gravity_y = 0.5,
-                        .padding = dvui.Rect.all(2),
-                        .id_extra = i *% 16 + 0,
-                    });
+                if (selected and !reorderable.floating()) {
+                    wdvui.drawTabActiveIndicator(
+                        reorderable.data().borderRectScale(),
+                        dvui.themeGet().color(.window, .text),
+                    );
                 }
 
                 loop: for (dvui.events()) |*e| {
@@ -430,12 +404,12 @@ fn drawTabs(self: *Workspace) void {
                     switch (e.evt) {
                         .mouse => |me| {
                             if (me.action == .press and me.button.pointer()) {
-                                Globals.host.setActiveDocIndex(i);
+                                runtime.host().setActiveDocIndex(i);
                                 dvui.refresh(null, @src(), hbox.data().id);
 
                                 e.handle(@src(), hbox.data());
                                 dvui.captureMouse(hbox.data(), e.num);
-                                dvui.dragPreStart(me.p, .{ .size = reorderable.data().rectScale().r.size(), .offset = reorderable.data().rectScale().r.topLeft().diff(me.p) });
+                                dvui.dragPreStart(me.button, me.p, .{ .size = reorderable.data().rectScale().r.size(), .offset = reorderable.data().rectScale().r.topLeft().diff(me.p) });
                             } else if (me.action == .release and me.button.pointer()) {
                                 dvui.captureMouse(null, e.num);
                                 dvui.dragEnd();
@@ -455,7 +429,7 @@ fn drawTabs(self: *Workspace) void {
                 }
             }
             if (tabs.finalSlot()) {
-                self.tabs_insert_before_index = Globals.host.openDocCount();
+                self.tabs_insert_before_index = runtime.host().openDocCount();
             }
         }
     }
@@ -465,44 +439,44 @@ pub fn processTabsDrag(self: *Workspace) void {
     if (self.tabs_insert_before_index) |insert_before| {
         if (self.tabs_removed_index) |removed| { // Dragging from this workspace
 
-            if (removed > Globals.host.openDocCount()) return;
+            if (removed > runtime.host().openDocCount()) return;
             if (removed > insert_before) {
-                Globals.host.swapDocs(removed, insert_before);
-                Globals.host.setActiveDocIndex(insert_before);
+                runtime.host().swapDocs(removed, insert_before);
+                runtime.host().setActiveDocIndex(insert_before);
             } else {
                 if (insert_before > 0) {
-                    Globals.host.swapDocs(removed, insert_before - 1);
-                    Globals.host.setActiveDocIndex(insert_before - 1);
+                    runtime.host().swapDocs(removed, insert_before - 1);
+                    runtime.host().setActiveDocIndex(insert_before - 1);
                 } else {
-                    Globals.host.swapDocs(removed, insert_before);
-                    Globals.host.setActiveDocIndex(insert_before);
+                    runtime.host().swapDocs(removed, insert_before);
+                    runtime.host().setActiveDocIndex(insert_before);
                 }
             }
 
             self.tabs_removed_index = null;
             self.tabs_insert_before_index = null;
         } else { // Dragging from another workspace
-            for (Globals.workbench.workspaces.values()) |*workspace| {
+            for (runtime.workbench().workspaces.values()) |*workspace| {
                 if (workspace.tabs_removed_index) |removed| {
                     if (removed > insert_before) {
-                        Globals.host.swapDocs(removed, insert_before);
-                        if (Globals.host.docByIndex(insert_before)) |d| {
+                        runtime.host().swapDocs(removed, insert_before);
+                        if (runtime.host().docByIndex(insert_before)) |d| {
                             d.owner.setDocumentGrouping(d, self.grouping);
                         }
-                        Globals.host.setActiveDocIndex(insert_before);
+                        runtime.host().setActiveDocIndex(insert_before);
                     } else {
                         if (insert_before > 0) {
-                            Globals.host.swapDocs(removed, insert_before - 1);
-                            if (Globals.host.docByIndex(insert_before - 1)) |d| {
+                            runtime.host().swapDocs(removed, insert_before - 1);
+                            if (runtime.host().docByIndex(insert_before - 1)) |d| {
                                 d.owner.setDocumentGrouping(d, self.grouping);
                             }
-                            Globals.host.setActiveDocIndex(insert_before - 1);
+                            runtime.host().setActiveDocIndex(insert_before - 1);
                         } else {
-                            Globals.host.swapDocs(removed, insert_before);
-                            if (Globals.host.docByIndex(insert_before)) |d| {
+                            runtime.host().swapDocs(removed, insert_before);
+                            if (runtime.host().docByIndex(insert_before)) |d| {
                                 d.owner.setDocumentGrouping(d, self.grouping);
                             }
-                            Globals.host.setActiveDocIndex(insert_before);
+                            runtime.host().setActiveDocIndex(insert_before);
                         }
                     }
 
@@ -519,12 +493,12 @@ pub fn processTabsDrag(self: *Workspace) void {
 
 /// Repoint `open_file_index` on workspaces that were showing the dragged tab as active.
 fn repointWorkspacesAfterTabDrag(tab_bar_workspace: ?*Workspace, drag_index: usize) void {
-    const dragged_doc = Globals.host.docByIndex(drag_index) orelse return;
+    const dragged_doc = runtime.host().docByIndex(drag_index) orelse return;
     if (tab_bar_workspace) |workspace| {
-        if (workspace.open_file_index == Globals.host.docIndex(dragged_doc.id)) {
+        if (workspace.open_file_index == runtime.host().docIndex(dragged_doc.id)) {
             var i: usize = 0;
-            while (i < Globals.host.openDocCount()) : (i += 1) {
-                const doc = Globals.host.docByIndex(i).?;
+            while (i < runtime.host().openDocCount()) : (i += 1) {
+                const doc = runtime.host().docByIndex(i).?;
                 if (doc.owner.documentGrouping(doc) == workspace.grouping and doc.id != dragged_doc.id) {
                     workspace.open_file_index = i;
                     break;
@@ -532,11 +506,11 @@ fn repointWorkspacesAfterTabDrag(tab_bar_workspace: ?*Workspace, drag_index: usi
             }
         }
     } else {
-        for (Globals.workbench.workspaces.values()) |*w| {
+        for (runtime.workbench().workspaces.values()) |*w| {
             if (w.open_file_index == drag_index) {
                 var i: usize = 0;
-                while (i < Globals.host.openDocCount()) : (i += 1) {
-                    const doc = Globals.host.docByIndex(i).?;
+                while (i < runtime.host().openDocCount()) : (i += 1) {
+                    const doc = runtime.host().docByIndex(i).?;
                     if (doc.owner.documentGrouping(doc) == w.grouping and doc.id != dragged_doc.id) {
                         w.open_file_index = i;
                         break;
@@ -554,14 +528,19 @@ const WorkspaceTabDragSrc = union(enum) {
     none,
 
     fn resolve() WorkspaceTabDragSrc {
-        for (Globals.workbench.workspaces.values()) |*w| {
+        for (runtime.workbench().workspaces.values()) |*w| {
             if (w.tabs_drag_index) |i| return .{ .tab_bar = .{ .ws = w, .index = i } };
         }
-        if (Globals.workbench.tab_drag_from_tree_path) |p| {
+        if (runtime.workbench().tab_drag_from_tree_path) |p| {
             var i: usize = 0;
-            while (i < Globals.host.openDocCount()) : (i += 1) {
-                const doc = Globals.host.docByIndex(i).?;
-                if (doc.owner.documentByPath(p) != null) {
+            while (i < runtime.host().openDocCount()) : (i += 1) {
+                const doc = runtime.host().docByIndex(i).?;
+                // `documentByPath` is a *plugin-wide* "does this owner have any document at
+                // all with this path" query, not scoped to `doc` — checking it per-loop-entry
+                // picks whichever document this plugin happens to enumerate first once *any*
+                // of its documents matches, not necessarily index `i` itself. Compare `doc`'s
+                // own path instead (see `Editor.docFromPath`'s fix for the same bug).
+                if (std.mem.eql(u8, doc.owner.documentPath(doc), p)) {
                     return .{ .tree_open = i };
                 }
             }
@@ -575,7 +554,7 @@ const WorkspaceTabDragSrc = union(enum) {
 /// Also handles the same `tab_drag` from the Files tree (see `files.zig` + DVUI reorder_tree cross-widget pattern).
 pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
     if (!dvui.dragName("tab_drag")) {
-        Globals.workbench.clearFileTreeTabDragDropState();
+        runtime.workbench().clearFileTreeTabDragDropState();
         return;
     }
 
@@ -598,9 +577,9 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                 right_side.w /= 2;
                 right_side.x += right_side.w;
 
-                if (right_side.contains(e.evt.mouse.p) and Globals.workbench.workspaces.keys()[Globals.workbench.workspaces.keys().len - 1] == self.grouping) {
+                if (right_side.contains(e.evt.mouse.p) and runtime.workbench().workspaces.keys()[runtime.workbench().workspaces.keys().len - 1] == self.grouping) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        right_side.fill(dvui.Rect.Physical.all(right_side.w / 8), .{
+                        right_side.fill(dvui.CornerRect.Physical.all(right_side.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
                         });
                     }
@@ -610,17 +589,17 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        Globals.workbench.clearFileTreeTabDragDropState();
+                        runtime.workbench().clearFileTreeTabDragDropState();
 
                         repointWorkspacesAfterTabDrag(workspace, drag_index);
-                        const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
-                        const new_g = Globals.workbench.newGroupingID();
+                        const dragged_doc = runtime.host().docByIndex(drag_index) orelse continue;
+                        const new_g = runtime.workbench().newGroupingID();
                         dragged_doc.owner.setDocumentGrouping(dragged_doc, new_g);
-                        Globals.workbench.open_workspace_grouping = new_g;
+                        runtime.workbench().open_workspace_grouping = new_g;
                     }
                 } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        data.rectScale().r.fill(dvui.Rect.Physical.all(data.rectScale().r.w / 8), .{
+                        data.rectScale().r.fill(dvui.CornerRect.Physical.all(data.rectScale().r.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
                         });
                     }
@@ -630,13 +609,13 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        Globals.workbench.clearFileTreeTabDragDropState();
+                        runtime.workbench().clearFileTreeTabDragDropState();
 
                         repointWorkspacesAfterTabDrag(workspace, drag_index);
-                        const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
+                        const dragged_doc = runtime.host().docByIndex(drag_index) orelse continue;
                         dragged_doc.owner.setDocumentGrouping(dragged_doc, self.grouping);
-                        Globals.workbench.open_workspace_grouping = self.grouping;
-                        self.open_file_index = Globals.host.docIndex(dragged_doc.id) orelse 0;
+                        runtime.workbench().open_workspace_grouping = self.grouping;
+                        self.open_file_index = runtime.host().docIndex(dragged_doc.id) orelse 0;
                     }
                 }
             },
@@ -645,9 +624,9 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                 right_side.w /= 2;
                 right_side.x += right_side.w;
 
-                if (right_side.contains(e.evt.mouse.p) and Globals.workbench.workspaces.keys()[Globals.workbench.workspaces.keys().len - 1] == self.grouping) {
+                if (right_side.contains(e.evt.mouse.p) and runtime.workbench().workspaces.keys()[runtime.workbench().workspaces.keys().len - 1] == self.grouping) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        right_side.fill(dvui.Rect.Physical.all(right_side.w / 8), .{
+                        right_side.fill(dvui.CornerRect.Physical.all(right_side.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
                         });
                     }
@@ -656,17 +635,17 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        Globals.workbench.clearFileTreeTabDragDropState();
+                        runtime.workbench().clearFileTreeTabDragDropState();
 
                         repointWorkspacesAfterTabDrag(null, drag_index);
-                        const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
-                        const new_g = Globals.workbench.newGroupingID();
+                        const dragged_doc = runtime.host().docByIndex(drag_index) orelse continue;
+                        const new_g = runtime.workbench().newGroupingID();
                         dragged_doc.owner.setDocumentGrouping(dragged_doc, new_g);
-                        Globals.workbench.open_workspace_grouping = new_g;
+                        runtime.workbench().open_workspace_grouping = new_g;
                     }
                 } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        data.rectScale().r.fill(dvui.Rect.Physical.all(data.rectScale().r.w / 8), .{
+                        data.rectScale().r.fill(dvui.CornerRect.Physical.all(data.rectScale().r.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
                         });
                     }
@@ -675,13 +654,13 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        Globals.workbench.clearFileTreeTabDragDropState();
+                        runtime.workbench().clearFileTreeTabDragDropState();
 
                         repointWorkspacesAfterTabDrag(null, drag_index);
-                        const dragged_doc = Globals.host.docByIndex(drag_index) orelse continue;
+                        const dragged_doc = runtime.host().docByIndex(drag_index) orelse continue;
                         dragged_doc.owner.setDocumentGrouping(dragged_doc, self.grouping);
-                        Globals.workbench.open_workspace_grouping = self.grouping;
-                        self.open_file_index = Globals.host.docIndex(dragged_doc.id) orelse 0;
+                        runtime.workbench().open_workspace_grouping = self.grouping;
+                        self.open_file_index = runtime.host().docIndex(dragged_doc.id) orelse 0;
                     }
                 }
             },
@@ -690,9 +669,9 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                 right_side.w /= 2;
                 right_side.x += right_side.w;
 
-                if (right_side.contains(e.evt.mouse.p) and Globals.workbench.workspaces.keys()[Globals.workbench.workspaces.keys().len - 1] == self.grouping) {
+                if (right_side.contains(e.evt.mouse.p) and runtime.workbench().workspaces.keys()[runtime.workbench().workspaces.keys().len - 1] == self.grouping) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        right_side.fill(dvui.Rect.Physical.all(right_side.w / 8), .{
+                        right_side.fill(dvui.CornerRect.Physical.all(right_side.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
                         });
                     }
@@ -701,27 +680,27 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        const new_g = Globals.workbench.newGroupingID();
-                        const maybe_idx = Globals.host.openOrFocusFileAtGrouping(path, new_g) catch {
-                            Globals.workbench.clearFileTreeTabDragDropState();
+                        const new_g = runtime.workbench().newGroupingID();
+                        const maybe_idx = runtime.host().openOrFocusFileAtGrouping(path, new_g) catch {
+                            runtime.workbench().clearFileTreeTabDragDropState();
                             continue :events_loop;
                         };
                         if (maybe_idx) |idx| {
                             // File was already open and moved between groupings — repoint the
                             // workspaces that were showing it, and focus the new pane now.
                             repointWorkspacesAfterTabDrag(null, idx);
-                            Globals.workbench.open_workspace_grouping = new_g;
+                            runtime.workbench().open_workspace_grouping = new_g;
                         }
                         // Else: async load — leave `open_workspace_grouping` alone. Switching
                         // to the not-yet-extant workspace would make `activeFile()` null and
                         // collapse the bottom panel mid-load; `processLoadingJobs` will focus
                         // the new pane once the worker lands the file, matching the
                         // "Open to the side" menu action.
-                        Globals.workbench.clearFileTreeTabDragDropState();
+                        runtime.workbench().clearFileTreeTabDragDropState();
                     }
                 } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
                     if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        data.rectScale().r.fill(dvui.Rect.Physical.all(data.rectScale().r.w / 8), .{
+                        data.rectScale().r.fill(dvui.CornerRect.Physical.all(data.rectScale().r.w / 8), .{
                             .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
                         });
                     }
@@ -730,8 +709,8 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         e.handle(@src(), data);
                         dvui.dragEnd();
                         dvui.refresh(null, @src(), data.id);
-                        const maybe_idx = Globals.host.openOrFocusFileAtGrouping(path, self.grouping) catch {
-                            Globals.workbench.clearFileTreeTabDragDropState();
+                        const maybe_idx = runtime.host().openOrFocusFileAtGrouping(path, self.grouping) catch {
+                            runtime.workbench().clearFileTreeTabDragDropState();
                             continue :events_loop;
                         };
                         if (maybe_idx) |idx| {
@@ -741,7 +720,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
                         // Else: async load into this workspace's existing grouping. The
                         // worker's `processLoadingJobs` focus handler will set the active
                         // file once it lands.
-                        Globals.workbench.clearFileTreeTabDragDropState();
+                        runtime.workbench().clearFileTreeTabDragDropState();
                     }
                 }
             },
@@ -754,15 +733,15 @@ pub fn drawCanvas(self: *Workspace) !void {
 
     switch (builtin.os.tag) {
         .macos => {
-            content_color = if (!Globals.host.isMaximized()) content_color.opacity(Globals.host.contentOpacity()) else content_color;
+            content_color = if (!runtime.host().isMaximized()) content_color.opacity(runtime.host().contentOpacity()) else content_color;
         },
         .windows => {
-            content_color = if (!Globals.host.isMaximized()) content_color.opacity(Globals.host.contentOpacity()) else content_color;
+            content_color = if (!runtime.host().isMaximized()) content_color.opacity(runtime.host().contentOpacity()) else content_color;
         },
         else => {},
     }
 
-    const has_files = Globals.host.openDocCount() > 0;
+    const has_files = runtime.host().openDocCount() > 0;
 
     var canvas_vbox = workspaceMainCanvasVbox(content_color, has_files, self.grouping);
     defer {
@@ -773,230 +752,249 @@ pub fn drawCanvas(self: *Workspace) !void {
     defer self.processTabDrag(canvas_vbox.data());
 
     if (has_files) {
-        if (self.open_file_index >= Globals.host.openDocCount()) {
-            self.open_file_index = Globals.host.openDocCount() - 1;
+        if (self.open_file_index >= runtime.host().openDocCount()) {
+            self.open_file_index = runtime.host().openDocCount() - 1;
         }
 
-        if (Globals.host.docByIndex(self.open_file_index)) |doc| {
-        doc.owner.bindDocumentToPane(doc, canvas_vbox.data().id, self, self.center);
-        _ = try doc.owner.drawDocument(doc);
+        if (runtime.host().docByIndex(self.open_file_index)) |doc| {
+            doc.owner.bindDocumentToPane(doc, canvas_vbox.data().id, self, self.center);
+            _ = try doc.owner.drawDocument(doc);
         }
     } else {
         var box = workspaceEmptyStateCard(content_color, self.grouping);
         defer box.deinit();
 
-        // Make sure alpha is 1 before we draw the homepage, as the logo hover animation breaks if alpha is not 1
         const alpha = dvui.alpha(1.0);
         dvui.alphaSet(1.0);
         defer dvui.alphaSet(alpha);
 
-        try self.drawHomePage(canvas_vbox);
+        try self.drawHomePage();
     }
 }
 
-pub fn drawHomePage(_: *Workspace, canvas_vbox: *dvui.BoxWidget) !void {
+pub fn drawHomePage(_: *Workspace) !void {
     const logo_pixel_size = 32;
     const logo_width = 3;
-    const logo_height = 5;
 
-    const logo_vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
+    var page_scroll = dvui.scrollArea(@src(), .{ .vertical = .auto, .horizontal = .none }, .{
+        .expand = .both,
+        .background = false,
+        .color_fill = .transparent,
+    });
+    defer page_scroll.deinit();
+
+    var content_vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .none,
         .gravity_x = 0.5,
         .gravity_y = 0.5,
         .background = false,
-        .padding = dvui.Rect.all(10),
     });
-    defer logo_vbox.deinit();
+    defer content_vbox.deinit();
 
     { // Logo
 
-        const vbox2 = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .none,
-            .gravity_x = 0.5,
-            .min_size_content = .{ .w = logo_pixel_size * logo_width, .h = logo_pixel_size * logo_height },
-            .padding = dvui.Rect.all(20),
-        });
-        defer vbox2.deinit();
-
-        for (0..4) |i| {
-            const hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        {
+            const vbox2 = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .expand = .none,
-                .min_size_content = .{ .w = logo_pixel_size * logo_width, .h = logo_pixel_size },
-                .margin = dvui.Rect.all(0),
-                .padding = dvui.Rect.all(0),
-                .id_extra = i,
+                .gravity_x = 0.5,
+                .margin = .{ .y = 20 },
             });
-            defer hbox.deinit();
+            defer vbox2.deinit();
 
-            for (0..3) |j| {
-                const index = i * logo_width + j;
-                var fizzy_color = logo_colors[index];
-
-                if (fizzy_color.value[3] < 1.0 and fizzy_color.value[3] > 0.0) {
-                    const theme_bg = dvui.themeGet().color(.window, .fill);
-                    fizzy_color = fizzy_color.lerp(wb.math.Color.initBytes(theme_bg.r, theme_bg.g, theme_bg.b, 255), fizzy_color.value[3]);
-                    fizzy_color.value[3] = 1.0;
-                }
-
-                const color = fizzy_color.bytes();
-
-                const pixel = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            for (0..4) |i| {
+                const hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .none,
-                    .min_size_content = .{ .w = logo_pixel_size, .h = logo_pixel_size },
-                    .id_extra = index,
-                    .background = false,
-                    .color_fill = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] },
+                    .min_size_content = .{ .w = logo_pixel_size * logo_width, .h = logo_pixel_size },
                     .margin = dvui.Rect.all(0),
                     .padding = dvui.Rect.all(0),
+                    .id_extra = i,
                 });
+                defer hbox.deinit();
 
-                const rect = pixel.data().rect.outset(.{ .x = 0, .y = 0 });
-                const rs = pixel.data().rectScale();
-                pixel.deinit();
+                for (0..3) |j| {
+                    const index = i * logo_width + j;
+                    var fizzy_color = logo_colors[index];
 
-                if (fizzy_color.value[3] <= 0.0) continue;
+                    if (fizzy_color.value[3] < 1.0 and fizzy_color.value[3] > 0.0) {
+                        const theme_bg = dvui.themeGet().color(.window, .fill);
+                        fizzy_color = fizzy_color.lerp(wb.math.Color.initBytes(theme_bg.r, theme_bg.g, theme_bg.b, 255), fizzy_color.value[3]);
+                        fizzy_color.value[3] = 1.0;
+                    }
 
-                try drawBubble(rect, rs, color, index);
+                    const color = fizzy_color.bytes();
+
+                    const pixel = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                        .expand = .none,
+                        .min_size_content = .{ .w = logo_pixel_size, .h = logo_pixel_size },
+                        .id_extra = index,
+                        .background = false,
+                        .color_fill = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] },
+                        .margin = dvui.Rect.all(0),
+                        .padding = dvui.Rect.all(0),
+                    });
+
+                    const rect = pixel.data().rect.outset(.{ .x = 0, .y = 0 });
+                    const rs = pixel.data().rectScale();
+                    pixel.deinit();
+
+                    if (fizzy_color.value[3] <= 0.0) continue;
+
+                    try drawBubble(rect, rs, color, index);
+                }
             }
         }
-    }
 
-    var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .none,
-        .gravity_x = 0.5,
-    });
-
-    {
-        var button: dvui.ButtonWidget = undefined;
-        button.init(@src(), .{ .draw_focus = true }, .{
-            .gravity_x = 0.5,
-            .expand = .horizontal,
-            .padding = dvui.Rect.all(2),
-            .color_fill = .transparent,
-            .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
-            .color_fill_press = dvui.themeGet().color(.window, .fill_press),
-        });
-        defer button.deinit();
-
-        button.processEvents();
-        button.drawBackground();
-
-        wdvui.labelWithKeybind(
-            "New File",
-            dvui.currentWindow().keybinds.get("new_file") orelse .{},
-            true,
-            .{ .padding = dvui.Rect.all(4), .expand = .horizontal, .gravity_x = 1.0 },
-            .{ .padding = dvui.Rect.all(4), .expand = .horizontal, .gravity_x = 1.0 },
-        );
-
-        if (button.clicked()) {
-            Globals.host.requestNewDocument(null, 0);
-        }
-    }
-    {
-        var button: dvui.ButtonWidget = undefined;
-        button.init(@src(), .{ .draw_focus = true }, .{
-            .gravity_x = 0.5,
-            .expand = .horizontal,
-            .padding = dvui.Rect.all(2),
-            .color_fill = .transparent,
-            .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
-            .color_fill_press = dvui.themeGet().color(.window, .fill_press),
-        });
-        defer button.deinit();
-
-        button.processEvents();
-        button.drawBackground();
-
-        wdvui.labelWithKeybind(
-            "Open Folder",
-            dvui.currentWindow().keybinds.get("open_folder") orelse .{},
-            true,
-            .{ .padding = dvui.Rect.all(4), .expand = .horizontal, .gravity_x = 1.0 },
-            .{ .padding = dvui.Rect.all(4), .expand = .horizontal, .gravity_x = 1.0 },
-        );
-
-        if (button.clicked()) {
-            Globals.host.showOpenFolderDialog(setProjectFolderCallback, null);
-        }
-    }
-
-    {
-        var button: dvui.ButtonWidget = undefined;
-        button.init(@src(), .{ .draw_focus = true }, .{
-            .gravity_x = 0.5,
-            .expand = .horizontal,
-            .padding = dvui.Rect.all(2),
-            .color_fill = .transparent,
-            .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
-            .color_fill_press = dvui.themeGet().color(.window, .fill_press),
-        });
-        defer button.deinit();
-
-        button.processEvents();
-        button.drawBackground();
-
-        wdvui.labelWithKeybind(
-            "Open Files",
-            dvui.currentWindow().keybinds.get("open_files") orelse .{},
-            true,
-            .{ .padding = dvui.Rect.all(4), .expand = .horizontal, .gravity_x = 1.0 },
-            .{ .padding = dvui.Rect.all(4), .expand = .horizontal, .gravity_x = 1.0, .font = dvui.Font.theme(.heading) },
-        );
-
-        if (button.clicked()) {
-            Globals.host.showOpenFileDialog(openFilesCallback, &.{
-                .{ .name = "Image Files", .pattern = "fizzy;png;jpg;jpeg" },
-            }, "", null);
-        }
-    }
-    vbox.deinit();
-
-    const spacer = dvui.spacer(@src(), .{ .expand = .horizontal, .min_size_content = .{ .h = 30 } });
-
-    {
-        var recents_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .none,
-            .gravity_x = 0.5,
-            .max_size_content = .{ .h = (canvas_vbox.data().rect.h - spacer.rect.y) / 3.0, .w = canvas_vbox.data().rect.w / 2.0 },
-        });
-        defer recents_box.deinit();
-
-        var scroll_area = dvui.scrollArea(@src(), .{}, .{
-            .expand = .both,
-            .color_border = dvui.themeGet().color(.control, .fill),
-            .corner_radius = dvui.Rect.all(8),
-            .color_fill = .transparent,
-        });
-        defer scroll_area.deinit();
-
-        var i: usize = Globals.host.recentFolderCount();
-        while (i > 0) : (i -= 1) {
-            var anim = dvui.animate(@src(), .{
-                .kind = .horizontal,
-                .duration = 150_000 + 150_000 * @as(i32, @intCast(i)),
-                .easing = dvui.easing.outBack,
-            }, .{
-                .id_extra = i,
-                .expand = .horizontal,
+        {
+            var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .expand = .none,
+                .gravity_x = 0.5,
+                .margin = .{ .y = 80 },
             });
-            defer anim.deinit();
 
-            const folder = Globals.host.recentFolderAt(i - 1) orelse continue;
-            if (dvui.button(@src(), folder, .{
-                .draw_focus = false,
-            }, .{
-                .expand = .horizontal,
-                .font = dvui.Font.theme(.mono),
-                .id_extra = i,
-                .margin = dvui.Rect.all(1),
-                .padding = dvui.Rect.all(2),
+            defer vbox.deinit();
+
+            // Dispatches through the same generic `Host.requestNewDocument` the menu item and the
+            // `new_file` hotkey use, so it stays plugin-neutral (single editor plugin: straight to its
+            // dialog/direct-create; 2+: the chooser picker) — see `Host.requestNewDocument`.
+            {
+                var button: dvui.ButtonWidget = undefined;
+                button.init(@src(), .{ .draw_focus = true }, .{
+                    .gravity_x = 0.5,
+                    .expand = .horizontal,
+                    .padding = dvui.Rect.all(2),
+                    .color_fill = .transparent,
+                    .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
+                    .color_fill_press = dvui.themeGet().color(.window, .fill_press),
+                });
+                defer button.deinit();
+
+                button.processEvents();
+                button.drawBackground();
+
+                wdvui.labelWithKeybind(
+                    "New File",
+                    dvui.currentWindow().keybinds.get("new_file") orelse .{},
+                    true,
+                    .{ .padding = dvui.Rect.all(4) },
+                    .{ .padding = dvui.Rect.all(4), .expand = .horizontal },
+                );
+
+                if (button.clicked()) {
+                    runtime.host().requestNewDocument(null, 0);
+                }
+            }
+
+            {
+                var button: dvui.ButtonWidget = undefined;
+                button.init(@src(), .{ .draw_focus = true }, .{
+                    .gravity_x = 0.5,
+                    .expand = .horizontal,
+                    .padding = dvui.Rect.all(2),
+                    .color_fill = .transparent,
+                    .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
+                    .color_fill_press = dvui.themeGet().color(.window, .fill_press),
+                });
+                defer button.deinit();
+
+                button.processEvents();
+                button.drawBackground();
+
+                wdvui.labelWithKeybind(
+                    "Open Folder",
+                    dvui.currentWindow().keybinds.get("open_folder") orelse .{},
+                    true,
+                    .{ .padding = dvui.Rect.all(4) },
+                    .{ .padding = dvui.Rect.all(4), .expand = .horizontal },
+                );
+
+                if (button.clicked()) {
+                    runtime.host().showOpenFolderDialog(setProjectFolderCallback, null);
+                }
+            }
+
+            {
+                var button: dvui.ButtonWidget = undefined;
+                button.init(@src(), .{ .draw_focus = true }, .{
+                    .gravity_x = 0.5,
+                    .expand = .horizontal,
+                    .padding = dvui.Rect.all(2),
+                    .color_fill = .transparent,
+                    .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
+                    .color_fill_press = dvui.themeGet().color(.window, .fill_press),
+                });
+                defer button.deinit();
+
+                button.processEvents();
+                button.drawBackground();
+
+                wdvui.labelWithKeybind(
+                    "Open Files",
+                    dvui.currentWindow().keybinds.get("open_files") orelse .{},
+                    true,
+                    .{ .padding = dvui.Rect.all(4) },
+                    .{ .padding = dvui.Rect.all(4), .expand = .horizontal, .font = dvui.Font.theme(.heading) },
+                );
+
+                if (button.clicked()) {
+                    runtime.host().showOpenFileDialog(openFilesCallback, &.{}, "", null);
+                }
+            }
+        }
+
+        {
+            var recents_box = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .expand = .none,
+                .gravity_x = 0.5,
+                .margin = .{ .y = 40 },
+                .max_size_content = .{ .h = 120, .w = std.math.floatMax(f32) },
+            });
+            defer recents_box.deinit();
+
+            var scroll_area = dvui.scrollArea(@src(), .{ .vertical = .auto, .horizontal = .none }, .{
+                .expand = .both,
+                .background = false,
                 .color_fill = .transparent,
-                .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
-                .color_fill_press = dvui.themeGet().color(.window, .fill_press),
-                .color_text = dvui.themeGet().color(.control, .text).opacity(0.5),
-            })) {
-                try Globals.host.setProjectFolder(folder);
+            });
+            defer scroll_area.deinit();
+
+            // Draw edge shadow for the scroll area content, using the scroll_area's rectScale.
+            if (scroll_area.si.virtual_size.h > scroll_area.si.viewport.h) {
+                if (scroll_area.si.offset(.vertical) + scroll_area.si.viewport.h < scroll_area.si.virtual_size.h) {
+                    wb.wdvui.drawEdgeShadow(scroll_area.data().rectScale(), .bottom, .{ .opacity = 0.15 });
+                }
+                if (scroll_area.si.offset(.vertical) > 0) {
+                    wb.wdvui.drawEdgeShadow(scroll_area.data().rectScale(), .top, .{ .opacity = 0.15 });
+                }
+            }
+
+            var i: usize = runtime.host().recentFolderCount();
+            while (i > 0) : (i -= 1) {
+                var anim = dvui.animate(@src(), .{
+                    .kind = .horizontal,
+                    .duration = 150_000 + 150_000 * @as(i32, @intCast(i)),
+                    .easing = dvui.easing.outBack,
+                }, .{
+                    .id_extra = i,
+                    .expand = .horizontal,
+                });
+                defer anim.deinit();
+
+                const folder = runtime.host().recentFolderAt(i - 1) orelse continue;
+                if (dvui.button(@src(), folder, .{
+                    .draw_focus = false,
+                }, .{
+                    .expand = .horizontal,
+                    .font = dvui.Font.theme(.mono),
+                    .id_extra = i,
+                    .margin = dvui.Rect.all(1),
+                    .padding = dvui.Rect.all(2),
+                    .color_fill = .transparent,
+                    .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
+                    .color_fill_press = dvui.themeGet().color(.window, .fill_press),
+                    .color_text = dvui.themeGet().color(.control, .text).opacity(0.5),
+                })) {
+                    try runtime.host().setProjectFolder(folder);
+                }
             }
         }
     }
@@ -1036,7 +1034,7 @@ pub fn drawBubble(rect: dvui.Rect, rs: dvui.RectScale, color: [4]u8, _: usize) !
     var path = dvui.Path.Builder.init(dvui.currentWindow().lifo());
     defer path.deinit();
 
-    path.addRect(base_phys, dvui.Rect.Physical.all(0));
+    path.addRect(base_phys, dvui.CornerRect.Physical.all(0));
 
     if (bubble_phys.h > 0) {
         const rad_x = rs.r.w / 2.0;
@@ -1058,7 +1056,7 @@ pub fn drawBubble(rect: dvui.Rect, rs: dvui.RectScale, color: [4]u8, _: usize) !
 // This should never be able to return more than one folder
 pub fn setProjectFolderCallback(folder: ?[][:0]const u8) void {
     if (folder) |f| {
-        Globals.host.setProjectFolder(f[0]) catch {
+        runtime.host().setProjectFolder(f[0]) catch {
             dvui.log.err("Failed to set project folder: {s}", .{f[0]});
         };
     }
@@ -1067,7 +1065,7 @@ pub fn setProjectFolderCallback(folder: ?[][:0]const u8) void {
 pub fn openFilesCallback(files: ?[][:0]const u8) void {
     if (files) |f| {
         for (f) |file| {
-            _ = Globals.host.openFilePath(file, Globals.workbench.open_workspace_grouping) catch {
+            _ = runtime.host().openFilePath(file, runtime.workbench().open_workspace_grouping) catch {
                 dvui.log.err("Failed to open file: {s}", .{file});
             };
         }

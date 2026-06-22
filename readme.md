@@ -6,31 +6,23 @@
 ![buildworkflow](https://github.com/fizzyedit/fizzy/actions/workflows/ci.yml/badge.svg)
 
 # 
-**Fizzy** is a cross-platform open-source pixel art editor and animation editor written in [Zig](https://github.com/ziglang/zig).
+**Fizzy** is a cross-platform open-source modular general editor written in [Zig](https://github.com/ziglang/zig).
 
 ### Try it in your browser [here](https://fizzyed.it/app/)
 
 ### Downloads are available [here](https://fizzyed.it)
 
-#### Check out the [user guide](https://github.com/fizzyedit/fizzy/wiki/User-Guide)!
-
-
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R5R4LL2PJ)
 
-## Currently supported features
-- [x] Typical pixel art operations. (draw, erase, dropper, bucket, selection, transformation, etc)
-- [x] Tabs and splits, drag and drop to reorder and reconfigure
-- [x] File explorer with search and drag and drop.
-- [ ] Create animations and preview easily, edit directly on the preview.
-- [ ] View previous and next frames of the animation.
-- [ ] Set sprite origins for drawing sprites easily in game frameworks.
-- [ ] Import and slice existing .png spritesheets.
-- [x] Intuitive and customizeable user interface.
-- [x] Sprite packing
-- [ ] Theming
-- [ ] Automatic packing and export on file save
-- [x] Also a zig library offering modules for handling assets
-- [ ] Export animations as .gifs 
+Fizzy is an empty modular editor shell, which dynamically loads and unloads compiled plugins to provide editor functionality. It includes a store where plugins can be published as well as a store tab to browse and install these plugins.
+
+Fizzy offers a SDK for developing plugins and several plugins already exist that can be installed, which are part of the fizzyedit org. These plugins will always be primary to the development of fizzy and used to exercise the plugin SDK and abilities of the editor.
+
+- [pixi](https://github.com/fizzyedit/pixi) - Pixel art editor. Provides a grid structure for editing and creating animation frames, making use of Lospec palettes, and packing sprites into an atlas. This plugin uses its own workflow, and draws its cursors using its atlas. 
+- [zig](https://github.com/fizzyedit/zig) - Zig language plugin, providing syntax highlighting and ZLS functionality (if compatible ZLS is in PATH) (hover/goto definition/signature help). The builtin `text` plugin is what this works alongside
+- [ghostty](https://github.com/fizzyedit/ghostty) - Plugin adding only a bottom panel, which uses `ghostty_vt` to provide a cross-platform terminal.
+
+By default, when you install fizzy, only builtin plugins are included. This gives you the ability to edit markdown and regular text files. Markdown is included only to render plugin README.md files in the store, though it can be used generally. 
 
 ## User Interface
 - The user interface is driven by [DVUI](https://github.com/david-vanderson/dvui).

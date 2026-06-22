@@ -1,0 +1,39 @@
+---
+description: Language plugin system — LanguageSupport registry, text/markdown/zig/json plugins
+globs:
+  - src/sdk/**
+  - src/plugins/text/**
+  - src/plugins/markdown/**
+  - docs/PLUGINS.md
+---
+
+# Language Plugins
+
+Source of truth: `docs/PLUGINS.md` (markdown lives in `plugins/markdown`, not `core`).
+
+## Invariants
+
+- **`text` owns all text documents** — load/save/draw/undo. Language plugins never implement document vtable hooks.
+- **Language plugins register `LanguageSupport` only** — optional `treeSitterHighlight` and/or `previewPane` hooks looked up by extension via `Host.treeSitterHighlightFor` / `Host.previewProviderFor`.
+- **Plugins never import each other** — they meet only at the SDK registry.
+- **`markdown` is a bundled in-tree utility plugin** — owns cmark renderer + `.md` preview; shell imports `@import("markdown")` plugin hub for store READMEs.
+- **`zig` / `json` are external store plugins** in `~/dev/fizzyedit/zig` and `~/dev/fizzyedit/json`.
+
+## SDK change checklist
+
+When touching the language boundary:
+
+1. `src/sdk/language.zig` — types
+2. `src/sdk/Host.zig` — registry + lookup fns + `unregisterPlugin` cleanup
+3. `src/sdk/dylib.zig` — add types to `sdk_boundary_types`
+4. `src/sdk/version.zig` — bump `sdk_version` + `recorded_sdk_shape_fingerprint`
+5. Run `zig build test-sdk-version`
+
+## Build rule
+
+Plugin builds must not leak app-only deps (Velopack). After build-graph changes:
+
+```sh
+cd src/plugins/image && rm -rf .zig-cache zig-out zig-pkg && zig build -Doptimize=ReleaseFast
+ls zig-pkg | grep -i velo  # must be empty
+```

@@ -30,12 +30,10 @@ pub const NativeMenuAction = enum(c_int) {
     paste = 4,
     undo = 5,
     redo = 6,
-    transform = 7,
     toggle_explorer = 8,
     show_dvui_demo = 9,
     save_as = 10,
     new_file = 11,
-    grid_layout = 12,
     about = 13,
     check_for_updates = 14,
     report_bug = 15,
@@ -75,6 +73,7 @@ pub fn saveWindowGeometry(_: *dvui.Window) void {}
 
 /// Symmetric with the native API: no AppKit pump on web.
 pub fn macosLaunchComplete() void {}
+
 
 pub fn titlebarStripHeight(_: *dvui.Window) f32 {
     return 0;
@@ -121,6 +120,25 @@ pub fn takeTrackpadPinchRatio() f32 {
 pub fn pollPendingNativeMenuAction() ?NativeMenuAction {
     return null;
 }
+
+pub fn pollPendingGenericNativeMenuAction() ?usize {
+    return null;
+}
+
+/// Web's dialog callbacks run synchronously from `WebFileIo` within the frame already, so
+/// there's nothing to drain here. Kept symmetric with the native backend's deferred-dispatch
+/// queue (see `backend_native.pollPendingDialogResult`) so `Editor.tick` can call it unconditionally.
+pub const PendingDialogResult = struct {
+    callback: *const fn (?[][:0]const u8) void,
+    files: ?[][:0]const u8,
+};
+pub fn pollPendingDialogResult() ?PendingDialogResult {
+    return null;
+}
+
+/// Symmetric with the native API: no native menu bar on web (the in-app dvui bar draws
+/// `host.menus`/`host.menu_sections` directly, same as non-macOS native).
+pub fn rebuildDynamicNativeMenus() void {}
 
 pub fn showSimpleMessage(_: [:0]const u8, _: [:0]const u8) void {}
 

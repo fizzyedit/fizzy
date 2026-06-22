@@ -1,0 +1,19 @@
+.{
+    .name = .image,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "image.zig",
+        "src",
+        "static",
+    },
+    .fingerprint = 0xc53d045f81085169,
+    .dependencies = .{
+        .fizzy = .{
+            .path = "../../..",
+        },
+    },
+}

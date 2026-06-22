@@ -65,3 +65,31 @@ jobs:
         env:
           ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
         run: zig build test --summary all
+
+      - name: Fetch wasm dependencies (with retries)
+        shell: bash
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
+        run: |
+          n=0
+          until [ "$n" -ge 5 ]; do
+            zig build --fetch -Dtarget=wasm32-freestanding && break
+            n=$((n+1))
+            echo "Fetch attempt $n failed, sleeping $((n*10))s before retry..."
+            sleep $((n*10))
+          done
+          if [ "$n" -ge 5 ]; then
+            echo "All fetch attempts failed"; exit 1
+          fi
+
+      - name: Compile web (wasm) build
+        shell: bash
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
+        run: zig build check-web
+
+      - name: Verify SDK version / ABI fingerprint lock
+        shell: bash
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
+        run: zig build test-sdk-version --summary all

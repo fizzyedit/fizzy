@@ -23,6 +23,15 @@ pub fn init(width: u32, height: u32, default_color: dvui.Color.PMA, invalidation
 }
 
 pub fn fromImageFileBytes(name: []const u8, file_bytes: []const u8, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
+    return fromImageFileBytesAlloc(core.gpa, name, file_bytes, invalidation);
+}
+
+pub fn fromImageFileBytesAlloc(
+    gpa: std.mem.Allocator,
+    name: []const u8,
+    file_bytes: []const u8,
+    invalidation: dvui.ImageSource.InvalidationStrategy,
+) !dvui.ImageSource {
     var w: c_int = undefined;
     var h: c_int = undefined;
     var channels_in_file: c_int = undefined;
@@ -35,7 +44,7 @@ pub fn fromImageFileBytes(name: []const u8, file_bytes: []const u8, invalidation
 
     return .{
         .pixelsPMA = .{
-            .rgba = dvui.Color.PMA.sliceFromRGBA(core.gpa.dupe(u8, data[0..@intCast(w * h * @sizeOf(dvui.Color.PMA))]) catch return error.MemoryAllocationFailed),
+            .rgba = dvui.Color.PMA.sliceFromRGBA(gpa.dupe(u8, data[0..@intCast(w * h * @sizeOf(dvui.Color.PMA))]) catch return error.MemoryAllocationFailed),
             .width = @as(u32, @intCast(w)),
             .height = @as(u32, @intCast(h)),
             .interpolation = .nearest,
@@ -85,6 +94,18 @@ pub fn fromTexture(name: []const u8, texture: dvui.Texture, invalidation: dvui.I
 
 /// Build a nearest-filtered, wrap=.repeat checkerboard texture sized `width × height`.
 /// Caller is responsible for destroying it via `dvui.textureDestroyLater` when done.
+/// UV scale for a repeating 8×8 checkerboard texture. Exactly `cells_across` square
+/// cells span the rect width; the height axis tiles (or crops) via texture repeat so
+/// cells stay square — cell size is `width / cells_across`, not stretched to fit height.
+pub fn checkerboardUvFixedCells(data_rect: dvui.Rect, cells_across: f32) ?dvui.Rect {
+    if (data_rect.w <= 0 or data_rect.h <= 0) return null;
+    const data_tile = data_rect.w / cells_across;
+    return .{
+        .w = 1,
+        .h = data_rect.h / (cells_across * data_tile),
+    };
+}
+
 pub fn checkerboardTile(width: u32, height: u32, even: [4]u8, odd: [4]u8) ?dvui.Texture {
     if (width == 0 or height == 0) return null;
     const arena = dvui.currentWindow().arena();

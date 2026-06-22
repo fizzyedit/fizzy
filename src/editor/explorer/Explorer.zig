@@ -10,6 +10,7 @@ const App = fizzy.App;
 const Editor = fizzy.Editor;
 
 const nfd = @import("nfd");
+const PluginStore = @import("../PluginStore.zig");
 
 pub const Explorer = @This();
 
@@ -103,13 +104,35 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
         .background = false,
     });
 
+    // The Plugins tab owns its own vertical scroll areas (installed + store panes inside
+    // a paned widget). With the default `.auto` vertical mode, each inner scrollArea
+    // reports its full content height as min_size, which bubbles up here and triggers
+    // a second explorer-level vertical bar on top of the pane scrollbars. Pin vertical
+    // scroll to `.given` for that tab so we fill the viewport and let the panes scroll.
+    const self_vert_scroll = blk: {
+        if (fizzy.editor.host.activeSidebarView()) |view| {
+            break :blk std.mem.eql(u8, view.id, PluginStore.view_id);
+        }
+        break :blk false;
+    };
+    if (self_vert_scroll) {
+        explorer.scroll_info.vertical = .given;
+        if (explorer.scroll_info.viewport.h > 0) {
+            explorer.scroll_info.virtual_size.h = explorer.scroll_info.viewport.h;
+        }
+    } else {
+        explorer.scroll_info.vertical = .auto;
+    }
+
     var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &explorer.scroll_info, .horizontal_bar = .auto_overlay, .vertical_bar = .auto_overlay }, .{
         .expand = .both,
         .background = false,
     });
 
-    if (!fizzy.editor.host.isActiveSidebarView(fizzy.Editor.workbench_files_view)) {
-        fizzy.editor.resetFileTreeWhenFilesHidden();
+    if (comptime workbench.plugin.has_file_tree) {
+        if (!fizzy.editor.host.isActiveSidebarView(fizzy.Editor.workbench_files_view)) {
+            fizzy.editor.resetFileTreeWhenFilesHidden();
+        }
     }
 
     if (fizzy.editor.host.activeSidebarView()) |view| {
@@ -120,6 +143,10 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
     const horizontal_scroll = scroll.si.offset(.horizontal);
 
     scroll.deinit();
+
+    if (self_vert_scroll) {
+        explorer.scroll_info.virtual_size.h = explorer.scroll_info.viewport.h;
+    }
 
     if (vertical_scroll > 0.0) {
         fizzy.dvui.drawEdgeShadow(pane_vbox.data().contentRectScale(), .top, .{});
@@ -188,7 +215,7 @@ fn drawCollapseButton(explorer: *Explorer) void {
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{
         .expand = .both,
-        .corner_radius = dvui.Rect.all(btn_radius),
+        .corners = dvui.CornerRect.all(btn_radius),
         .background = true,
         .color_fill = dvui.themeGet().color(.content, .fill),
         .color_fill_hover = dvui.themeGet().color(.content, .fill).lighten(if (dvui.themeGet().dark) 10.0 else -10.0),
@@ -201,7 +228,7 @@ fn drawCollapseButton(explorer: *Explorer) void {
             .alpha = 0.2,
             .fade = 4,
             .offset = .{ .x = 0, .y = 2 },
-            .corner_radius = dvui.Rect.all(btn_radius),
+            .corners = dvui.CornerRect.all(btn_radius),
         },
     });
     defer bw.deinit();

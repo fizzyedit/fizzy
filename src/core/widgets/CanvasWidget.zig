@@ -986,7 +986,7 @@ pub fn processEvents(self: *CanvasWidget) void {
 
     if (self.touch_eval_pan_active and !dvui.captured(self.scroll_container.data().id)) {
         dvui.captureMouse(self.scroll_container.data(), 0);
-        dvui.dragPreStart(self.touch_eval_press_p, .{ .name = "scroll_drag", .cursor = .hand });
+        dvui.dragPreStart(.none, self.touch_eval_press_p, .{ .name = "scroll_drag", .cursor = .hand });
         self.pan_fling_x.begin();
         self.pan_fling_y.begin();
     }
@@ -1083,7 +1083,7 @@ pub fn processEvents(self: *CanvasWidget) void {
                 if (me.action == .press and !sel_marquee_press and (me.button == .middle or (me.button.pointer() and !self.pointerOverDrawable(me.p)))) {
                     e.handle(@src(), self.scroll_container.data());
                     dvui.captureMouse(self.scroll_container.data(), e.num);
-                    dvui.dragPreStart(me.p, .{ .name = "scroll_drag", .cursor = .hand });
+                    dvui.dragPreStart(me.button, me.p, .{ .name = "scroll_drag", .cursor = .hand });
                     self.pan_fling_x.begin();
                     self.pan_fling_y.begin();
                     if (me.button.touch()) {

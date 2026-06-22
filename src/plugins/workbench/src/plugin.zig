@@ -1,19 +1,25 @@
 //! The workbench plugin: file management. Registered from `Editor.postInit`.
 const std = @import("std");
 const dvui = @import("dvui");
-const wb = @import("../workbench.zig");
-const sdk = wb.sdk;
-const Globals = @import("Globals.zig");
+const internal = @import("../workbench.zig");
+const runtime = @import("runtime.zig");
+const sdk = internal.sdk;
 const files = @import("files.zig");
+
+const workbench_opts = @import("workbench_opts");
+/// Version forwarded from `build.zig.zon` via the build-injected options module — bump it there.
+const plugin_options = @import("fizzy_plugin_options");
+
+pub const manifest = sdk.PluginManifest{
+    .id = "workbench",
+    .name = "Workbench",
+    .version = plugin_options.version,
+};
 
 /// Stable contribution ids (plugin-namespaced) referenced across modules.
 pub const view_files = "workbench.files";
 pub const center_workspaces = "workbench.workspaces";
 
-// `state` is intentionally unused: the workbench owns no documents (no doc vtable hooks, so
-// `DocHandle.owner` is never this plugin) and its registered hooks reach the `Workbench`
-// instance + Host through `Globals`, not the vtable `state` arg. Kept `undefined` so a stray
-// dereference fails loudly rather than reading a bogus pointer.
 var plugin: sdk.Plugin = .{
     .state = undefined,
     .vtable = &vtable,
@@ -25,16 +31,21 @@ const vtable: sdk.Plugin.VTable = .{
     .contributeKeybinds = contributeKeybinds,
 };
 
+/// When false at compile time (`-Dworkbench-file-tree=false`), the Files sidebar is not registered.
+pub const has_file_tree = workbench_opts.file_tree;
+
 pub fn register(host: *sdk.Host) !void {
+    plugin.state = @ptrCast(runtime.workbench());
     try host.registerPlugin(&plugin);
-    try host.registerSidebarView(.{
-        .id = view_files,
-        .owner = &plugin,
-        .icon = dvui.entypo.folder,
-        .title = "Files",
-        .draw = drawFiles,
-    });
-    // The workbench owns the center "main window": the tabs/splits layout + canvas.
+    if (comptime has_file_tree) {
+        try host.registerSidebarView(.{
+            .id = view_files,
+            .owner = &plugin,
+            .icon = dvui.entypo.folder,
+            .title = "Files",
+            .draw = drawFiles,
+        });
+    }
     try host.registerCenterProvider(.{
         .id = center_workspaces,
         .owner = &plugin,
@@ -47,14 +58,13 @@ fn drawFiles(_: ?*anyopaque) anyerror!void {
 }
 
 fn drawCenter(_: ?*anyopaque) anyerror!dvui.App.Result {
-    return Globals.host.drawWorkspaces(0);
+    return runtime.host().drawWorkspaces(0);
 }
 
 /// File-management keybinds (open / save). The shell registers its own
 /// global/region binds in `Keybinds.register`; this fills in the file half.
-/// Platform: see `Keybinds.register` for why `fizzy.platform.isMacOS()` is used.
 fn contributeKeybinds(_: *anyopaque, win: *dvui.Window) anyerror!void {
-    if (wb.platform.isMacOS()) {
+    if (internal.platform.isMacOS()) {
         try win.keybinds.putNoClobber(win.gpa, "open_folder", .{ .key = .f, .command = true });
         try win.keybinds.putNoClobber(win.gpa, "open_files", .{ .key = .o, .command = true });
         try win.keybinds.putNoClobber(win.gpa, "save", .{ .command = true, .key = .s });

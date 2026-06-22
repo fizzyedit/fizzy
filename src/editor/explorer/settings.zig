@@ -25,7 +25,7 @@ pub fn draw() !void {
             var dropdown: dvui.DropdownWidget = undefined;
             dropdown.init(@src(), .{ .label = "Theme" }, .{
                 .expand = .horizontal,
-                .corner_radius = dvui.Rect.all(1000),
+                .corners = dvui.CornerRect.all(1000),
             });
             defer dropdown.deinit();
 
@@ -169,6 +169,52 @@ pub fn draw() !void {
             fizzy.editor.applyHoldMenuDuration();
             fizzy.editor.markSettingsDirty();
             dvui.refresh(null, @src(), vbox.data().id);
+        }
+
+        {
+            var dropdown: dvui.DropdownWidget = undefined;
+            dropdown.init(@src(), .{ .label = "Canvas control scheme" }, .{
+                .expand = .horizontal,
+                .corners = dvui.CornerRect.all(1000),
+            });
+            defer dropdown.deinit();
+
+            var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .vertical,
+                .gravity_x = 1.0,
+            });
+
+            const label_text: []const u8 = switch (fizzy.editor.settings.input_scheme) {
+                .auto => switch (dvui.mouseType()) {
+                    .unknown => "Auto",
+                    .mouse, .trackpad => |hint| try std.fmt.allocPrint(dvui.currentWindow().arena(), "Auto ({s})", .{@tagName(hint)}),
+                },
+                .mouse => "Mouse",
+                .trackpad => "Trackpad",
+            };
+            dvui.label(@src(), "{s}", .{label_text}, .{ .margin = .all(0), .padding = .all(0) });
+
+            dvui.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
+
+            hbox.deinit();
+
+            if (dropdown.dropped()) {
+                if (dropdown.addChoiceLabel("Auto")) {
+                    fizzy.editor.settings.input_scheme = .auto;
+                    fizzy.editor.markSettingsDirty();
+                    dvui.refresh(null, @src(), vbox.data().id);
+                }
+                if (dropdown.addChoiceLabel("Mouse")) {
+                    fizzy.editor.settings.input_scheme = .mouse;
+                    fizzy.editor.markSettingsDirty();
+                    dvui.refresh(null, @src(), vbox.data().id);
+                }
+                if (dropdown.addChoiceLabel("Trackpad")) {
+                    fizzy.editor.settings.input_scheme = .trackpad;
+                    fizzy.editor.markSettingsDirty();
+                    dvui.refresh(null, @src(), vbox.data().id);
+                }
+            }
         }
 
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 10 } });

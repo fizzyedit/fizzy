@@ -61,17 +61,19 @@ need a window pay the integration cost. Both run under a single
 `tests/root.zig` `@import`s a small set of source files that depend
 only on `std` — no dvui, no fizzy globals, no SDL. Every `test "..."`
 block in those files becomes part of the test binary. Currently
-covered:
+covered (named imports wired in `build/app.zig`):
 
-- `[src/math/direction.zig](../src/math/direction.zig)` — 8-way / 4-way
+- `[src/core/math/direction.zig](../src/core/math/direction.zig)` — 8-way / 4-way
 direction encoding, `fromRadians`, rotation inverses.
-- `[src/math/easing.zig](../src/math/easing.zig)` — `lerp`, `ease`,
+- `[src/core/math/easing.zig](../src/core/math/easing.zig)` — `lerp`, `ease`,
 endpoint pinning, midpoint bias.
-- `[src/plugins/pixelart/internal/layer_order.zig](../src/plugins/pixelart/internal/layer_order.zig)` —
-the layer-reorder algorithm used by the layers tree drag-and-drop.
-- `[src/plugins/pixelart/internal/palette_parse.zig](../src/plugins/pixelart/internal/palette_parse.zig)`
-— `.hex` palette file parser (valid hex, comments/blanks, malformed
-input, CRLF).
+- `[src/core/math/layout_anchor.zig](../src/core/math/layout_anchor.zig)` —
+anchor math shared by grid/layout code.
+- `[src/backend/window_layout.zig](../src/backend/window_layout.zig)` —
+macOS window/Space transition geometry helpers.
+- `[src/sdk/dylib.zig](../src/sdk/dylib.zig)` — plugin dylib ABI fingerprint helpers.
+- `[src/backend/plugin_store/store.zig](../src/backend/plugin_store/store.zig)` —
+plugin store manifest/catalog parsing.
 
 The `_ = @import("...")` lines in `tests/root.zig` exist purely so
 their `test` blocks are reachable from the test binary. Each module is
@@ -92,34 +94,23 @@ rather than expanding the shim.
 
 Currently covered:
 
-- `Internal.File.init` — a blank file constructs with the expected
-width/height/layer count.
-- `Internal.File.fillPoint` mask-cache invalidation — regression for
-the bucket-fill / selection-mask desync. After a fill on the
-selected layer, `file.editor.mask_built_for_layer` must be `null` so
-the selection overlay rebuilds from real pixels next frame. The
-inverse case (filling the temporary layer) leaves the cache alone.
-- `Internal.File.selectColorFloodFromPoint` — given a 4×4 layer split
-into two solid color regions, flooding from one region selects
-exactly those pixels and stops at the color boundary; out-of-bounds
-seeds are no-ops.
-- `fizzy.File` JSON parser — current-format parse + round-trip via
-`std.json.Stringify.valueAlloc`, plus small fixtures for `FileV1`,
-`FileV2`, and `FileV3` so that the legacy fallback chain in
-`Internal.File.fromPathFizzy` keeps working as the public types
-evolve.
+- A single smoke test that the shim brings up a working headless
+`dvui.Window` with `fizzy.app` / `fizzy.editor` globals set.
+
+Pixel-art-specific coverage that used to live here (`Internal.File`,
+`Layer`, `Packer`, `Animation`, grid/pack/flood-fill regressions, the
+`.pixi` JSON format-migration fixtures) moved out along with the pixi
+plugin extraction — that logic now lives in the external
+[`fizzyedit/pixi`](https://github.com/fizzyedit/pixi) repo and should
+gain equivalent coverage there, not here.
 
 What's intentionally **not** here yet:
 
-- `History.undoRedo` — its `defer` block calls `dvui.toastAdd` and
-reads `file.editor.canvas.id`, so testing it cleanly requires either
-more shim or a small refactor to lift the toast logic into a
-separate function.
-- Full UI flows (tools, panels, transform, real undo). Driving
-`App.zig` through dvui's testing harness with `dvui.testing.settle`
-is the natural next step but needs asset loading to work in CI
-without a real project root, theme bring-up without a config dir,
-and a way to dismiss startup dialogs.
+- Any pixi-specific coverage (see above — belongs in the pixi repo).
+- Full shell UI flows (workbench tabs/splits, menu/sidebar, real
+undo through `App.zig`) driven via `dvui.testing.settle`. Needs asset
+loading to work in CI without a real project root, theme bring-up
+without a config dir, and a way to dismiss startup dialogs.
 - Anything that goes through SDL (file dialogs, native menus).
 
 ## Adding a new test
@@ -161,12 +152,12 @@ and a way to dismiss startup dialogs.
 
 ## CI
 
-`.github/workflows/build.yml` is modeled on DVUI: **push to `main`**
-(only) runs the fast Ubuntu `test` job (`zig build test`). **Pull
-requests** and **manual** runs (`workflow_dispatch`) run the same
-tests first, then the per-platform `zig build` jobs (`x86_64-linux`,
-`x86_64-windows`, `arm64-macos`); those jobs `needs: test` so a
-failing test stops the run before the matrix. Pushes to other branches
-do not start this workflow unless you open a PR or trigger it
-manually. `paths-ignore` skips doc-only changes on both `push` and
-`pull_request` where applicable.
+`.github/workflows/ci.yml`: **push to `main`** runs only the fast
+Ubuntu job (`zig build test`, `zig build check-web`, `zig build
+test-sdk-version`). **Pull requests** and **manual**
+(`workflow_dispatch`) runs additionally matrix across Linux/Windows/macOS.
+Note `test-integration` / `test-all` are not run by CI at all today —
+run them locally before relying on integration coverage.
+`paths-ignore` skips doc-only changes on both `push` and
+`pull_request`. Releases are handled separately by
+`.github/workflows/release.yml`, triggered by pushing a `v*` tag.

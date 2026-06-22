@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=fizzy
+GenericName=General Editor
+Comment=Cross-platform general editor
+Exec=fizzy %F
+Icon=fizzy
+Terminal=false
+Categories=Utility;TextEditor;Graphics;
+MimeType=text/plain;application/octet-stream;image/png;image/jpeg;application/x-fizzy;application/x-pixi;

@@ -83,7 +83,7 @@ pub fn draw(_: Infobar) !void {
             var dot = dvui.Rect.Physical.fromPoint(center).toSize(.{ .w = 9 * brs.s, .h = 9 * brs.s });
             dot.x -= 4.5 * brs.s;
             dot.y -= 4.5 * brs.s;
-            dot.fill(dvui.Rect.Physical.all(4.5 * brs.s), .{
+            dot.fill(dvui.CornerRect.Physical.all(4.5 * brs.s), .{
                 .color = dvui.themeGet().color(.highlight, .fill),
                 .fade = 0,
             });

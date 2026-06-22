@@ -226,7 +226,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
     }, .{
         .id_extra = id.asUsize(),
         .color_text = .black,
-        .corner_radius = dvui.Rect.all(10),
+        .corners = dvui.CornerRect.all(10),
         .max_size_content = maxSize,
         .border = .all(0),
         .color_fill = dvui.themeGet().color(.content, .fill).opacity(0.85),
@@ -234,7 +234,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
             .color = .black,
             .alpha = 0.35,
             .fade = 10,
-            .corner_radius = dvui.Rect.all(10),
+            .corners = dvui.CornerRect.all(10),
         },
     });
     defer win.deinit();
@@ -267,8 +267,8 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
         win.dragAreaSet(windowHeader(title, "", &header_openflag, header_kind));
         if (!header_openflag) {
             if (callafter) |ca| {
-                ca(id, .cancel) catch {
-                    dvui.log.err("Dialog callafter for {x} returned {any}", .{ id, error.FailedToCallAfter });
+                ca(id, .cancel) catch |err| {
+                    dvui.log.err("Dialog callafter for {x} returned {s}", .{ id, @errorName(err) });
                     return;
                 };
             }
@@ -323,8 +323,8 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
                 },
             })) {
                 if (callafter) |ca| {
-                    ca(id, .cancel) catch {
-                        dvui.log.err("Dialog callafter for {x} returned {any}", .{ id, error.FailedToCallAfter });
+                    ca(id, .cancel) catch |err| {
+                        dvui.log.err("Dialog callafter for {x} returned {s}", .{ id, @errorName(err) });
                         return;
                     };
                 }
@@ -370,21 +370,24 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
 
         if (ok_button.clicked()) {
             if (!valid) return;
-            const fly_to_explorer_row = dvui.dataGetSlice(null, id, "_parent_path", []u8) != null;
             if (callafter) |ca| {
-                ca(id, .ok) catch {
-                    dvui.log.err("Dialog callafter for {x} returned {any}", .{ id, error.FailedToCallAfter });
+                ca(id, .ok) catch |err| {
+                    dvui.log.err("Dialog callafter for {x} returned {s}", .{ id, @errorName(err) });
                     return;
                 };
             }
-            if (!fly_to_explorer_row) {
-                var close_rect_ok = win.data().rectScale().r;
-                close_rect_ok.x = close_rect_ok.center().x;
-                close_rect_ok.y = close_rect_ok.center().y;
-                close_rect_ok.w = 1;
-                close_rect_ok.h = 1;
-                dvui.dataSet(null, win.data().id, "_close_rect", close_rect_ok);
-            }
+            // Always close on OK — including a "New File" dialog created inside an explorer
+            // folder (`_parent_path` set). This used to skip the close here for that case,
+            // relying on the explorer's own tree-scan to later spot the new file and set
+            // `dialog_close_rect_override` (a "fly to the new row" close animation instead of
+            // the default shrink-to-center) — but that scan reliably never fires again once
+            // this dialog is up, permanently wedging the dialog open with no fallback.
+            var close_rect_ok = win.data().rectScale().r;
+            close_rect_ok.x = close_rect_ok.center().x;
+            close_rect_ok.y = close_rect_ok.center().y;
+            close_rect_ok.w = 1;
+            close_rect_ok.h = 1;
+            dvui.dataSet(null, win.data().id, "_close_rect", close_rect_ok);
         }
         if (default != null and dvui.firstFrame(hbox.data().id) and default.? == .ok and valid) {
             dvui.focusWidget(ok_data.id, null, null);
@@ -409,11 +412,32 @@ pub fn windowHeaderCloseInnerSide() f32 {
     return (row_inner + cap_inner) * 0.5;
 }
 
+/// Padding around the close / dirty / save indicator in workspace tabs (fixed every frame).
+pub const tab_status_inset = dvui.Rect{ .x = 4, .y = 2, .w = 4, .h = 2 };
+
+/// Workspace tab close control: fixed size, no margin/shadow (unlike dialog header close).
+pub fn tabCloseButtonOptions(over: dvui.Options) dvui.Options {
+    return windowHeaderCloseButtonOptions(over.override(.{
+        .margin = dvui.Rect.all(0),
+        .padding = dvui.Rect.all(0),
+        .border = dvui.Rect.all(0),
+        .corners = dvui.CornerRect.all(1000),
+        .box_shadow = null,
+        .background = false,
+        .color_fill = .transparent,
+        .color_fill_hover = .transparent,
+        .color_fill_press = .transparent,
+        .ninepatch_fill = &dvui.Ninepatch.none,
+        .ninepatch_hover = &dvui.Ninepatch.none,
+        .ninepatch_press = &dvui.Ninepatch.none,
+    }));
+}
+
 /// Base `Options` for the dialog header close button. Tabs pass `.override(.{ .expand = .none, .min_size_content = …, .id_extra = … })`.
 pub fn windowHeaderCloseButtonOptions(over: dvui.Options) dvui.Options {
     const base: dvui.Options = .{
         .font = .theme(.heading),
-        .corner_radius = dvui.Rect.all(1000),
+        .corners = dvui.CornerRect.all(1000),
         .padding = dvui.Rect.all(0),
         .margin = window_header_close_margin,
         .gravity_y = 0.5,
@@ -502,7 +526,7 @@ pub fn windowHeader(str: []const u8, right_str: []const u8, openflag: ?*bool, he
         .name = "WindowHeader",
         .background = true,
         .color_fill = dvui.themeGet().color(.content, .fill),
-        .corner_radius = .{ .x = 10, .y = 10 },
+        .corners = dvui.CornerRect.all(10),
     });
     defer row.deinit();
 
@@ -609,7 +633,7 @@ pub fn toastDisplay(id: dvui.Id) !void {
     var box = dvui.box(@src(), .{}, .{
         .id_extra = id.asUsize(),
         .background = true,
-        .corner_radius = dvui.Rect.all(1000),
+        .corners = dvui.CornerRect.all(1000),
         .margin = .all(2),
         .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
         .color_fill = dvui.themeGet().color(.control, .fill),
@@ -618,7 +642,7 @@ pub fn toastDisplay(id: dvui.Id) !void {
             .offset = .{ .x = -2.0, .y = 2.0 },
             .fade = 6.0,
             .alpha = 0.25,
-            .corner_radius = dvui.Rect.all(10000),
+            .corners = dvui.CornerRect.all(10000),
         },
         .gravity_x = 0.5,
     });
@@ -910,7 +934,7 @@ pub fn saveCompleteToastDisplay(id: dvui.Id) !void {
     var card = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id.asUsize(),
         .background = true,
-        .corner_radius = dvui.Rect.all(8),
+        .corners = dvui.CornerRect.all(8),
         .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
         .color_fill = dvui.themeGet().color(.content, .fill).opacity(0.85),
         .box_shadow = .{
@@ -918,7 +942,7 @@ pub fn saveCompleteToastDisplay(id: dvui.Id) !void {
             .offset = .{ .x = -2.0, .y = 2.0 },
             .fade = 12.0,
             .alpha = 0.35,
-            .corner_radius = dvui.Rect.all(8),
+            .corners = dvui.CornerRect.all(8),
         },
     });
     defer card.deinit();
@@ -944,7 +968,6 @@ pub fn saveCompleteToastDisplay(id: dvui.Id) !void {
         dvui.toastRemove(id);
     }
 }
-
 
 pub fn labelWithKeybind(label_str: []const u8, hotkey: dvui.enums.Keybind, enabled: bool, label_opts: dvui.Options, opts: dvui.Options) void {
     const box = dvui.box(@src(), .{ .dir = .horizontal }, opts);
@@ -973,7 +996,7 @@ pub fn labelWithKeybind(label_str: []const u8, hotkey: dvui.enums.Keybind, enabl
 }
 
 pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.Options) void {
-    var box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .none, .gravity_x = 1.0 });
+    var box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = opts.expand, .gravity_x = 1.0 });
     defer box.deinit();
 
     var color = if (opts.color_text) |c| c else dvui.themeGet().color(.control, .text);
@@ -1065,9 +1088,9 @@ const EdgeGradient = struct {
     opaque_at_zero: bool,
 };
 
-fn drawGradientRect(r: dvui.Rect.Physical, corner_radius: dvui.Rect.Physical, opts: ShadowOptions, gradient: EdgeGradient) void {
+fn drawGradientRect(r: dvui.Rect.Physical, corners: dvui.CornerRect.Physical, opts: ShadowOptions, gradient: EdgeGradient) void {
     var path: dvui.Path.Builder = .init(dvui.currentWindow().arena());
-    path.addRect(r, corner_radius);
+    path.addRect(r, corners);
     var triangles = path.build().fillConvexTriangles(dvui.currentWindow().arena(), .{ .center = r.center(), .color = .white }) catch {
         path.deinit();
         return;
@@ -1101,30 +1124,43 @@ fn drawGradientRect(r: dvui.Rect.Physical, corner_radius: dvui.Rect.Physical, op
     };
 }
 
+/// Active workspace tab indicator: one snapped physical pixel along the tab bottom edge.
+pub fn drawTabActiveIndicator(tab: dvui.RectScale, color: dvui.Color) void {
+    if (tab.r.empty()) return;
+    const scale = tab.s;
+    var line = tab.r;
+    line.h = scale;
+    line.y = @floor(tab.r.y + tab.r.h - scale);
+    line.x = @floor(line.x);
+    line.w = @ceil(line.w);
+    if (line.w <= 0) return;
+    line.fill(.{}, .{ .color = color });
+}
+
 pub fn drawEdgeShadow(container: dvui.RectScale, shadow: Shadow, opts: ShadowOptions) void {
     var rs = container;
     switch (shadow) {
         .top => {
             rs.r.h = opts.thickness;
             rs.r = rs.r.plus(.cast(opts.offset));
-            drawGradientRect(rs.r, dvui.Rect.Physical.all(opts.radius), opts, .{ .axis = .y, .opaque_at_zero = true });
+            drawGradientRect(rs.r, dvui.CornerRect.Physical.all(opts.radius), opts, .{ .axis = .y, .opaque_at_zero = true });
         },
         .bottom => {
             rs.r.y += rs.r.h - opts.thickness;
             rs.r.h = opts.thickness;
             rs.r = rs.r.plus(.cast(opts.offset));
-            drawGradientRect(rs.r, dvui.Rect.Physical.all(opts.radius), opts, .{ .axis = .y, .opaque_at_zero = false });
+            drawGradientRect(rs.r, dvui.CornerRect.Physical.all(opts.radius), opts, .{ .axis = .y, .opaque_at_zero = false });
         },
         .right => {
             rs.r.x += rs.r.w - opts.thickness;
             rs.r.w = opts.thickness;
             rs.r = rs.r.plus(.cast(opts.offset));
-            drawGradientRect(rs.r, dvui.Rect.Physical.all(opts.radius), opts, .{ .axis = .x, .opaque_at_zero = false });
+            drawGradientRect(rs.r, dvui.CornerRect.Physical.all(opts.radius), opts, .{ .axis = .x, .opaque_at_zero = false });
         },
         .left => {
             rs.r.w = opts.thickness;
             rs.r = rs.r.plus(.cast(opts.offset));
-            drawGradientRect(rs.r, dvui.Rect.Physical.all(opts.radius), opts, .{ .axis = .x, .opaque_at_zero = true });
+            drawGradientRect(rs.r, dvui.CornerRect.Physical.all(opts.radius), opts, .{ .axis = .x, .opaque_at_zero = true });
         },
     }
 }

@@ -388,12 +388,10 @@ pub const NativeMenuAction = enum(c_int) {
     paste = 4,
     undo = 5,
     redo = 6,
-    transform = 7,
     toggle_explorer = 8,
     show_dvui_demo = 9,
     save_as = 10,
     new_file = 11,
-    grid_layout = 12,
     about = 13,
     check_for_updates = 14,
     report_bug = 15,
@@ -407,6 +405,58 @@ var pending_native_menu_action_id: std.atomic.Value(c_int) = .init(-1);
 /// Called from FizzyMenuTarget.m when user picks a native menu item. Runs on main thread.
 export fn FizzyNativeMenuAction(id: c_int) void {
     pending_native_menu_action_id.store(id, .release);
+}
+
+// Queue a single pending generic (plugin `NativeMenuItem`) action tag. Same threading note
+// as `pending_native_menu_action_id` above.
+var pending_generic_native_menu_action_tag: std.atomic.Value(c_int) = .init(-1);
+
+/// Called from FizzyMenuTarget.m's `genericMenuAction:` (shared by every plugin-contributed
+/// native menu item) with the clicked `NSMenuItem`'s `tag` — an index into
+/// `host.native_menu_items`, assigned by `rebuildDynamicNativeMenus`. Runs on main thread.
+export fn FizzyNativeMenuGenericAction(tag: c_int) void {
+    pending_generic_native_menu_action_tag.store(tag, .release);
+}
+
+/// Called from `FizzyMenuTarget.m`'s `validateMenuItem:` (an `NSMenuItemValidation` hook
+/// AppKit calls synchronously, on the main thread, whenever a menu is about to show — this
+/// is the *only* way to grey out a native `NSMenu` item, unlike the in-app DVUI menu bar
+/// (`Menu.zig`), which recomputes "enabled" on every draw) with the clicked item's `tag`,
+/// set to the matching `NativeMenuAction` by `addNativeMenuItem`/`setupMacOSMenuBar`.
+///
+/// Mirrors the exact greying conditions `Menu.zig` already computes for the DVUI menu bar.
+/// Every function this touches (`Editor.activeDoc`, `Plugin.isDirty`/`canUndo`/`canRedo`,
+/// `Editor.activeDocHasCommand`/`activeDocCommandEnabled`, `Editor.open_files`) is plain
+/// `Host`/`Editor` state — none of it touches `dvui.currentWindow()` — so it's safe to call
+/// from outside `Window.begin`/`end`, unlike e.g. the save/open dialog callbacks (see
+/// `pollPendingDialogResult`).
+export fn FizzyNativeMenuActionEnabled(id: c_int) callconv(.c) bool {
+    if (id < 0 or id > @intFromEnum(NativeMenuAction.save_all)) return true;
+    const action: NativeMenuAction = @enumFromInt(id);
+    switch (action) {
+        .save => {
+            const doc = fizzy.editor.activeDoc() orelse return false;
+            return doc.owner.isDirty(doc) or !doc.owner.documentHasRecognizedSaveExtension(doc);
+        },
+        .save_as => return fizzy.editor.activeDoc() != null,
+        .save_all => {
+            for (fizzy.editor.open_files.values()) |doc| {
+                if (doc.owner.isDirty(doc) and doc.owner.documentHasRecognizedSaveExtension(doc)) return true;
+            }
+            return false;
+        },
+        .copy => return fizzy.editor.activeDocHasCommand("copy") and fizzy.editor.activeDocCommandEnabled("copy"),
+        .paste => return fizzy.editor.activeDocHasCommand("paste") and fizzy.editor.activeDocCommandEnabled("paste"),
+        .undo => {
+            const doc = fizzy.editor.activeDoc() orelse return false;
+            return doc.owner.canUndo(doc);
+        },
+        .redo => {
+            const doc = fizzy.editor.activeDoc() orelse return false;
+            return doc.owner.canRedo(doc);
+        },
+        else => return true,
+    }
 }
 
 // Only referenced on macOS (from setupMacOSMenuBar).
@@ -1123,6 +1173,149 @@ pub fn setSdlAppMetadata(name: [*:0]const u8, version: [*:0]const u8, identifier
 
 var macos_menu_bar_set_up: bool = false;
 
+// ---- plugin-contributed native menus (macOS) -------------------------------------------
+// `setupMacOSMenuBar` builds the fixed App/File/Edit/View/Help menus below and stashes
+// handles to them (plus the shared target + Help's insertion point) here, so
+// `rebuildDynamicNativeMenus` can append plugin `NativeMenuItem`s into them, and create
+// whole new top-level menus for plugin-owned `MenuContribution`s, without rebuilding the
+// fixed menus. Called once at startup (from the end of `setupMacOSMenuBar`) and again on
+// every plugin load/unload/hide-toggle (see `Editor.zig`).
+var native_main_menu: ?objc.Object = null;
+var native_menu_target: ?objc.Object = null;
+var native_help_item: ?objc.Object = null;
+var native_file_menu: ?objc.Object = null;
+var native_edit_menu: ?objc.Object = null;
+var native_view_menu: ?objc.Object = null;
+var native_help_menu: ?objc.Object = null;
+
+const DynamicTopLevelMenu = struct { item: objc.Object, menu: objc.Object };
+const DynamicLeafItem = struct { parent_menu: objc.Object, item: objc.Object };
+
+/// Plugin-created top-level menus (main-menu items) from the previous rebuild, torn down
+/// at the start of the next one.
+var dynamic_top_level_menus: std.ArrayListUnmanaged(DynamicTopLevelMenu) = .empty;
+/// Plugin leaf items injected into any menu (built-in or plugin-owned) from the previous
+/// rebuild, torn down at the start of the next one.
+var dynamic_leaf_items: std.ArrayListUnmanaged(DynamicLeafItem) = .empty;
+
+fn isBuiltinNativeMenuId(id: []const u8) bool {
+    return std.mem.eql(u8, id, "workbench.menu.file") or
+        std.mem.eql(u8, id, "shell.menu.edit") or
+        std.mem.eql(u8, id, "shell.menu.view") or
+        std.mem.eql(u8, id, "shell.menu.help");
+}
+
+fn resolveBuiltinNativeMenu(id: []const u8) ?objc.Object {
+    if (std.mem.eql(u8, id, "workbench.menu.file")) return native_file_menu;
+    if (std.mem.eql(u8, id, "shell.menu.edit")) return native_edit_menu;
+    if (std.mem.eql(u8, id, "shell.menu.view")) return native_view_menu;
+    if (std.mem.eql(u8, id, "shell.menu.help")) return native_help_menu;
+    return null;
+}
+
+/// Rebuild every plugin-contributed native menu item from the current `fizzy.editor.host`
+/// registry state. Tears down the previous dynamic set first, so this is safe (and cheap
+/// enough) to call on every plugin load/unload/hide-toggle — a full rebuild avoids diffing
+/// against arbitrary prior state, at the cost of some churn AppKit already expects from
+/// `NSMenu` mutation.
+pub fn rebuildDynamicNativeMenus() void {
+    if (builtin.os.tag != .macos) return;
+    if (!macos_menu_bar_set_up) return;
+    const main_menu = native_main_menu orelse return;
+    const target = native_menu_target orelse return;
+
+    // Teardown: remove everything the previous rebuild added.
+    for (dynamic_leaf_items.items) |entry| {
+        entry.parent_menu.msgSend(void, "removeItem:", .{entry.item.value});
+    }
+    dynamic_leaf_items.clearRetainingCapacity();
+    for (dynamic_top_level_menus.items) |entry| {
+        main_menu.msgSend(void, "removeItem:", .{entry.item.value});
+    }
+    dynamic_top_level_menus.clearRetainingCapacity();
+
+    const host = &fizzy.editor.host;
+
+    const NSMenu = objc.getClass("NSMenu") orelse return;
+    const NSMenuItem = objc.getClass("NSMenuItem") orelse return;
+    const NSString = objc.getClass("NSString") orelse return;
+    const empty = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"".ptr});
+    const generic_sel = fizzy_get_selector("genericMenuAction:") orelse return;
+
+    // Pass 1: create a native top-level menu for every visible, titled, plugin-owned
+    // `MenuContribution` that has at least one visible `NativeMenuItem` targeting it.
+    // Menus with no native leaf items (in-app-bar-only, or untitled) are skipped.
+    var created: std.StringHashMapUnmanaged(objc.Object) = .empty;
+    defer created.deinit(fizzy.app.allocator);
+
+    for (host.menus.items) |mc| {
+        if (mc.hidden or mc.title.len == 0) continue;
+        if (isBuiltinNativeMenuId(mc.id)) continue;
+        const has_items = blk: {
+            for (host.native_menu_items.items) |ni| {
+                if (!ni.hidden and std.mem.eql(u8, ni.parent_menu_id, mc.id)) break :blk true;
+            }
+            break :blk false;
+        };
+        if (!has_items) continue;
+
+        const title_z = fizzy.app.allocator.dupeZ(u8, mc.title) catch continue;
+        defer fizzy.app.allocator.free(title_z);
+        const title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{title_z.ptr});
+
+        const menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{title_str.value});
+        if (menu.value == 0) continue;
+        const item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
+            title_str.value,
+            @as(usize, 0),
+            empty.value,
+        });
+        if (item.value == 0) continue;
+        item.msgSend(void, "setSubmenu:", .{menu.value});
+
+        // Insert right before Help so ordering stays (…, View, <plugin menus…>, Help).
+        if (native_help_item) |help_item| {
+            const idx = main_menu.msgSend(c_long, "indexOfItem:", .{help_item.value});
+            if (idx >= 0) {
+                main_menu.msgSend(void, "insertItem:atIndex:", .{ item.value, @as(c_ulong, @intCast(idx)) });
+            } else {
+                main_menu.msgSend(void, "addItem:", .{item.value});
+            }
+        } else {
+            main_menu.msgSend(void, "addItem:", .{item.value});
+        }
+
+        dynamic_top_level_menus.append(fizzy.app.allocator, .{ .item = item, .menu = menu }) catch {};
+        created.put(fizzy.app.allocator, mc.id, menu) catch {};
+    }
+
+    // Pass 2: append every visible `NativeMenuItem` into its resolved parent menu (either a
+    // built-in one, or one just created above). Items whose parent can't be resolved (e.g.
+    // targeting an untitled/hidden `MenuContribution`) are skipped.
+    for (host.native_menu_items.items, 0..) |ni, idx| {
+        if (ni.hidden) continue;
+        const parent_menu: objc.Object = resolveBuiltinNativeMenu(ni.parent_menu_id) orelse
+            (created.get(ni.parent_menu_id) orelse continue);
+
+        const title_z = fizzy.app.allocator.dupeZ(u8, ni.title) catch continue;
+        defer fizzy.app.allocator.free(title_z);
+        const title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{title_z.ptr});
+
+        const item = parent_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
+            title_str.value,
+            @intFromPtr(generic_sel),
+            empty.value,
+        });
+        if (item.value == 0) continue;
+        item.msgSend(void, "setTarget:", .{target.value});
+        // Tag with the item's index in `host.native_menu_items`, resolved back on click
+        // in `Editor.zig`'s `flushQueuedNativeMenuItems`.
+        item.msgSend(void, "setTag:", .{@as(c_long, @intCast(idx))});
+
+        dynamic_leaf_items.append(fizzy.app.allocator, .{ .parent_menu = parent_menu, .item = item }) catch {};
+    }
+}
+
 /// Inserts a "File" menu into the macOS app menu bar (between Apple and Window). Safe to call multiple times; runs once.
 pub fn setupMacOSMenuBar() void {
     if (builtin.os.tag != .macos) return;
@@ -1132,6 +1325,7 @@ pub fn setupMacOSMenuBar() void {
     if (ns_app.value == 0) return;
     const main_menu = ns_app.msgSend(objc.Object, "mainMenu", .{});
     if (main_menu.value == 0) return;
+    native_main_menu = main_menu;
 
     const NSString = objc.getClass("NSString") orelse return;
     const NSMenu = objc.getClass("NSMenu") orelse return;
@@ -1139,10 +1333,12 @@ pub fn setupMacOSMenuBar() void {
     const FizzyMenuTargetClass = objc.getClass("FizzyMenuTarget") orelse return;
     const target = FizzyMenuTargetClass.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
     if (target.value == 0) return;
+    native_menu_target = target;
 
     const file_menu_title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"File".ptr});
     const file_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{file_menu_title_str.value});
     if (file_menu.value == 0) return;
+    native_file_menu = file_menu;
 
     const empty = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"".ptr});
     const key_f = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"f".ptr});
@@ -1212,6 +1408,7 @@ pub fn setupMacOSMenuBar() void {
     if (save_item.value != 0) {
         save_item.msgSend(void, "setTarget:", .{target.value});
         save_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand});
+        save_item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(NativeMenuAction.save))});
     }
 
     // Save As — ⇧⌘S
@@ -1226,6 +1423,7 @@ pub fn setupMacOSMenuBar() void {
         if (save_as_item.value != 0) {
             save_as_item.msgSend(void, "setTarget:", .{target.value});
             save_as_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand | NSEventModifierFlagShift});
+            save_as_item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(NativeMenuAction.save_as))});
             setMenuItemImage(save_as_item, NSImage, NSString, "arrow.down.doc", "Save As");
         }
     }
@@ -1242,6 +1440,7 @@ pub fn setupMacOSMenuBar() void {
         if (save_all_item.value != 0) {
             save_all_item.msgSend(void, "setTarget:", .{target.value});
             save_all_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand | NSEventModifierFlagOption});
+            save_all_item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(NativeMenuAction.save_all))});
             setMenuItemImage(save_all_item, NSImage, NSString, "square.and.arrow.down.on.square", "Save All");
         }
     }
@@ -1256,27 +1455,24 @@ pub fn setupMacOSMenuBar() void {
     file_item.msgSend(void, "setSubmenu:", .{file_menu.value});
     main_menu.msgSend(void, "insertItem:atIndex:", .{ file_item.value, @as(c_ulong, 1) });
 
-    // Edit menu — Copy, Paste, Undo, Redo, Transform (match DVUI menu)
+    // Edit menu — Copy, Paste, Undo, Redo (match DVUI menu). Plugin-specific verbs (e.g. pixi's
+    // Transform / Grid Layout) inject themselves via `NativeMenuItem`s parented to this menu's
+    // id (see `rebuildDynamicNativeMenus`) instead of being hardcoded here.
     const key_c = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"c".ptr});
     const key_v = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"v".ptr});
     const key_z = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"z".ptr});
-    const key_t = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"t".ptr});
     const key_e = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"e".ptr});
-    const key_g = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"g".ptr});
     const key_m = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"m".ptr});
 
     const edit_menu_title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Edit".ptr});
     const edit_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{edit_menu_title_str.value});
     if (edit_menu.value != 0) {
-        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Copy", "copy:", @intFromPtr(key_c.value), NSEventModifierFlagCommand, @intFromPtr(empty.value));
-        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Paste", "paste:", @intFromPtr(key_v.value), NSEventModifierFlagCommand, @intFromPtr(empty.value));
+        native_edit_menu = edit_menu;
+        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Copy", "copy:", @intFromPtr(key_c.value), NSEventModifierFlagCommand, @intFromPtr(empty.value), .copy);
+        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Paste", "paste:", @intFromPtr(key_v.value), NSEventModifierFlagCommand, @intFromPtr(empty.value), .paste);
         edit_menu.msgSend(void, "addItem:", .{NSMenuItem.msgSend(objc.Object, "separatorItem", .{}).value});
-        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Undo", "undo:", @intFromPtr(key_z.value), NSEventModifierFlagCommand, @intFromPtr(empty.value));
-        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Redo", "redo:", @intFromPtr(key_z.value), NSEventModifierFlagCommand | NSEventModifierFlagShift, @intFromPtr(empty.value));
-        edit_menu.msgSend(void, "addItem:", .{NSMenuItem.msgSend(objc.Object, "separatorItem", .{}).value});
-        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Transform", "transform:", @intFromPtr(key_t.value), NSEventModifierFlagCommand, @intFromPtr(empty.value));
-        edit_menu.msgSend(void, "addItem:", .{NSMenuItem.msgSend(objc.Object, "separatorItem", .{}).value});
-        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Grid Layout…", "gridLayout:", @intFromPtr(key_g.value), NSEventModifierFlagCommand, @intFromPtr(empty.value));
+        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Undo", "undo:", @intFromPtr(key_z.value), NSEventModifierFlagCommand, @intFromPtr(empty.value), .undo);
+        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Redo", "redo:", @intFromPtr(key_z.value), NSEventModifierFlagCommand | NSEventModifierFlagShift, @intFromPtr(empty.value), .redo);
         const edit_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Edit".ptr});
         const edit_item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
             edit_title.value,
@@ -1293,9 +1489,10 @@ pub fn setupMacOSMenuBar() void {
     const view_menu_title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"View".ptr});
     const view_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{view_menu_title_str.value});
     if (view_menu.value != 0) {
-        addNativeMenuItem(view_menu, NSMenuItem, NSString, target, "Show Explorer", "toggleExplorer:", @intFromPtr(key_e.value), NSEventModifierFlagCommand, @intFromPtr(empty.value));
+        native_view_menu = view_menu;
+        addNativeMenuItem(view_menu, NSMenuItem, NSString, target, "Show Explorer", "toggleExplorer:", @intFromPtr(key_e.value), NSEventModifierFlagCommand, @intFromPtr(empty.value), .toggle_explorer);
         view_menu.msgSend(void, "addItem:", .{NSMenuItem.msgSend(objc.Object, "separatorItem", .{}).value});
-        addNativeMenuItem(view_menu, NSMenuItem, NSString, target, "Show DVUI Demo", "showDvuiDemo:", @intFromPtr(empty.value), 0, @intFromPtr(empty.value));
+        addNativeMenuItem(view_menu, NSMenuItem, NSString, target, "Show DVUI Demo", "showDvuiDemo:", @intFromPtr(empty.value), 0, @intFromPtr(empty.value), .show_dvui_demo);
         const view_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"View".ptr});
         const view_item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
             view_title.value,
@@ -1351,7 +1548,8 @@ pub fn setupMacOSMenuBar() void {
     const help_menu_title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Help".ptr});
     const help_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{help_menu_title_str.value});
     if (help_menu.value != 0) {
-        addNativeMenuItem(help_menu, NSMenuItem, NSString, target, "Check for Updates…", "checkForUpdates:", @intFromPtr(empty.value), 0, @intFromPtr(empty.value));
+        native_help_menu = help_menu;
+        addNativeMenuItem(help_menu, NSMenuItem, NSString, target, "Check for Updates…", "checkForUpdates:", @intFromPtr(empty.value), 0, @intFromPtr(empty.value), .check_for_updates);
         help_menu.msgSend(void, "addItem:", .{NSMenuItem.msgSend(objc.Object, "separatorItem", .{}).value});
 
         // Report Bug → opens the GitHub Issues page in the user's browser.
@@ -1380,12 +1578,17 @@ pub fn setupMacOSMenuBar() void {
             main_menu.msgSend(void, "addItem:", .{help_item.value});
             // Tell AppKit this is the Help menu so the system search field is wired in.
             ns_app.msgSend(void, "setHelpMenu:", .{help_menu.value});
+            native_help_item = help_item;
         }
     }
 
     // key_m was previously used by the now-removed nested Window submenu; keep the binding silent.
     _ = key_m;
     macos_menu_bar_set_up = true;
+
+    // Add any plugin-contributed native menus/items already registered by this point
+    // (built-in static plugins register in `postInit`, which runs before this function).
+    rebuildDynamicNativeMenus();
 }
 
 /// Sets an SF Symbol image on a menu item (macOS 11+). No-op if the image cannot be created.
@@ -1402,7 +1605,7 @@ fn setMenuItemImage(menu_item: objc.Object, NSImageClass: objc.Class, NSStringCl
     }
 }
 
-fn addNativeMenuItem(menu: objc.Object, _: objc.Class, NSStringClass: objc.Class, target: objc.Object, title: [*:0]const u8, action_name: [*:0]const u8, key_equiv_value: usize, modifier_mask: c_ulong, empty_str: usize) void {
+fn addNativeMenuItem(menu: objc.Object, _: objc.Class, NSStringClass: objc.Class, target: objc.Object, title: [*:0]const u8, action_name: [*:0]const u8, key_equiv_value: usize, modifier_mask: c_ulong, empty_str: usize, action: NativeMenuAction) void {
     const sel = fizzy_get_selector(action_name) orelse return;
     const title_obj = NSStringClass.msgSend(objc.Object, "stringWithUTF8String:", .{title});
     const item = menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
@@ -1413,6 +1616,11 @@ fn addNativeMenuItem(menu: objc.Object, _: objc.Class, NSStringClass: objc.Class
     if (item.value != 0) {
         item.msgSend(void, "setTarget:", .{target.value});
         if (modifier_mask != 0) item.msgSend(void, "setKeyEquivalentModifierMask:", .{modifier_mask});
+        // Tag mirrors the `NativeMenuAction` this item performs — `validateMenuItem:` (see
+        // `FizzyMenuTarget.m`) reads it back via `FizzyNativeMenuActionEnabled` to grey the
+        // item out when the action wouldn't currently do anything (no active document, empty
+        // selection, empty undo stack, …).
+        item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(action))});
     }
 }
 
@@ -1434,6 +1642,14 @@ pub fn pollPendingNativeMenuAction() ?NativeMenuAction {
     const id = pending_native_menu_action_id.swap(-1, .acq_rel);
     if (id < 0 or id > @intFromEnum(NativeMenuAction.save_all)) return null;
     return @enumFromInt(id);
+}
+
+/// Returns and clears a pending generic native menu item tag (plugin `NativeMenuItem`s).
+/// Call once per frame; on non-macOS always returns null.
+pub fn pollPendingGenericNativeMenuAction() ?usize {
+    const tag = pending_generic_native_menu_action_tag.swap(-1, .acq_rel);
+    if (tag < 0) return null;
+    return @intCast(tag);
 }
 
 pub fn showSimpleMessage(title: [:0]const u8, message: [:0]const u8) void {
@@ -1499,6 +1715,25 @@ fn GenericOpenDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, _: 
     GenericDialogCallback(cb, files, .open);
 }
 
+// Native open/save dialogs on macOS complete asynchronously via the Cocoa run loop, which is
+// pumped from `SDL_WaitEvent` between frames — i.e. outside `dvui.Window.begin`/`end`. Callers
+// (plugin dialog callbacks) routinely touch dvui state that requires `dvui.currentWindow()`
+// (e.g. stashing `dvui.currentWindow()` on a `FileLoadJob`), which panics if invoked directly
+// from here. So we only capture the result here and hand it off; the actual callback runs from
+// `pollPendingDialogResult`, called once per frame from inside the shell's frame tick.
+const PendingDialogResult = struct {
+    callback: *const fn (?[][:0]const u8) void,
+    files: ?[][:0]const u8,
+};
+var pending_dialog_results: std.ArrayListUnmanaged(PendingDialogResult) = .empty;
+
+/// Drain one queued dialog result per call. Call once per frame from inside
+/// `Window.begin`/`end` (e.g. `Editor.tick`) so callbacks are free to touch dvui state.
+pub fn pollPendingDialogResult() ?PendingDialogResult {
+    if (pending_dialog_results.items.len == 0) return null;
+    return pending_dialog_results.orderedRemove(0);
+}
+
 fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: enum { save, open }) void {
     const callback: *const fn (?[][:0]const u8) void = @ptrCast(@alignCast(@constCast(cb)));
 
@@ -1506,18 +1741,28 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: e
     var path_count: usize = 0;
     while (files[path_count] != null) : (path_count += 1) {}
 
-    const zig_files: [][:0]const u8 = blk: {
-        var result: [100][:0]const u8 = undefined; // Arbitrary max; refine as needed
-        var i: usize = 0;
-        while (i < path_count) : (i += 1) {
-            result[i] = std.mem.span(files[i]);
-        }
-        break :blk result[0..path_count];
-    };
-
-    if (zig_files.len == 0) {
-        callback(null);
+    if (path_count == 0) {
+        pending_dialog_results.append(fizzy.app.allocator, .{ .callback = callback, .files = null }) catch {
+            dvui.log.err("Failed to queue dialog result", .{});
+        };
         return;
+    }
+
+    // Dupe every path (and the slice holding them) into memory that outlives this callback,
+    // since the `files` pointers are only valid for the duration of this call.
+    const zig_files: [][:0]const u8 = fizzy.app.allocator.alloc([:0]const u8, path_count) catch {
+        dvui.log.err("Failed to allocate dialog result paths", .{});
+        return;
+    };
+    var allocated: usize = 0;
+    for (0..path_count) |i| {
+        zig_files[i] = fizzy.app.allocator.dupeZ(u8, std.mem.span(files[i])) catch {
+            dvui.log.err("Failed to dupe dialog result path", .{});
+            for (zig_files[0..allocated]) |f| fizzy.app.allocator.free(f);
+            fizzy.app.allocator.free(zig_files);
+            return;
+        };
+        allocated += 1;
     }
 
     { // Save the open or save folder for the next time the dialog is shown
@@ -1542,7 +1787,11 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: e
         }
     }
 
-    callback(zig_files);
+    pending_dialog_results.append(fizzy.app.allocator, .{ .callback = callback, .files = zig_files }) catch {
+        dvui.log.err("Failed to queue dialog result", .{});
+        for (zig_files) |f| fizzy.app.allocator.free(f);
+        fizzy.app.allocator.free(zig_files);
+    };
 }
 
 // ----------------------------------------------------------------------------

@@ -12,18 +12,6 @@ const DocHandle = @import("DocHandle.zig");
 
 const EditorAPI = @This();
 
-/// Sub-rect within the shell UI spritesheet. Layout matches `core.Sprite`.
-pub const UiSprite = struct {
-    origin: [2]f32 = .{ 0.0, 0.0 },
-    source: [4]u32,
-};
-
-/// Read-only view of the shell's UI icon atlas (source texture + sprite table).
-pub const UiAtlasView = struct {
-    source: dvui.ImageSource,
-    sprites: []const UiSprite,
-};
-
 /// A name/extension-pattern pair for a native save dialog. Layout matches the backend's
 /// `DialogFileFilter` (which mirrors `SDL_DialogFileFilter`), so the shell forwards a slice
 /// of these straight to the backend without a copy. `pattern` is a `;`-separated extension
@@ -50,6 +38,10 @@ pub const NewDocGrid = struct {
 /// Web save-dialog kind (wasm only; native ignores).
 pub const WebSaveKind = enum { save, save_as };
 
+/// Resolved canvas zoom/pan control style (mouse: scroll zooms, middle-button pans;
+/// trackpad: scroll pans, ctrl/cmd+scroll zooms). Matches `core.dvui.CanvasWidget.PanZoomScheme`.
+pub const PanZoomScheme = enum { mouse, trackpad };
+
 ctx: *anyopaque,
 vtable: *const VTable,
 
@@ -71,6 +63,8 @@ pub const VTable = struct {
     isMacOS: *const fn (ctx: *anyopaque) bool,
     /// True on native macOS/Windows where unfocused window chrome dims content opacity.
     appliesNativeWindowOpacity: *const fn (ctx: *anyopaque) bool,
+    /// Shell-resolved canvas zoom/pan scheme (mouse vs trackpad wheel mapping).
+    panZoomScheme: *const fn (ctx: *anyopaque) PanZoomScheme,
     /// The explorer pane's content rect (shell layout); plugins drawn inside the explorer
     /// read it to size their content. Zero rect when no shell is installed.
     explorerRect: *const fn (ctx: *anyopaque) dvui.Rect,
@@ -86,9 +80,6 @@ pub const VTable = struct {
         default_filename: []const u8,
         default_folder: ?[]const u8,
     ) void,
-    /// Shell-owned UI icon spritesheet (cursors, tool icons, logo). Stable for the
-    /// editor lifetime; plugins read `.source` / `.sprites` but never mutate it.
-    uiAtlas: *const fn (ctx: *anyopaque) UiAtlasView,
     /// The actively focused open document, or null when none.
     activeDoc: *const fn (ctx: *anyopaque) ?DocHandle,
     /// Open document by ordered index (tab order), or null when out of range.
@@ -150,14 +141,10 @@ pub const VTable = struct {
         default_folder: ?[]const u8,
     ) void,
 
-    // ---- document editing (active file) ----
-    accept: *const fn (ctx: *anyopaque) anyerror!void,
-    cancel: *const fn (ctx: *anyopaque) anyerror!void,
-    copy: *const fn (ctx: *anyopaque) anyerror!void,
-    paste: *const fn (ctx: *anyopaque) anyerror!void,
-    transform: *const fn (ctx: *anyopaque) anyerror!void,
     save: *const fn (ctx: *anyopaque) anyerror!void,
-    requestCompositeWarmup: *const fn (ctx: *anyopaque) void,
+    requestPrepareFrame: *const fn (ctx: *anyopaque) void,
+    /// Wake the app event loop for another frame. Safe from worker threads (PTY readers, etc.).
+    refresh: *const fn (ctx: *anyopaque) void,
 
     // ---- new document ----
     /// Heap-owned unique basename like `untitled-1`; caller frees with the app allocator.
@@ -177,9 +164,29 @@ pub const VTable = struct {
     resumeSaveAllQuit: *const fn (ctx: *anyopaque) void,
     abortSaveAllQuit: *const fn (ctx: *anyopaque) void,
 
-    // ---- project pack ----
-    startPackProject: *const fn (ctx: *anyopaque) anyerror!void,
-    isPackingActive: *const fn (ctx: *anyopaque) bool,
+    /// Append a line to the shell's "Output" bottom panel. `scope` and `message` are plain
+    /// runtime strings (not `comptime`, unlike `std.log`) — a plugin builds `.dylib`/`.so`
+    /// separately from the shell, so it can't share the shell's `std.log` sink; this is the
+    /// cross-ABI equivalent for anything a plugin wants visible there (e.g. a child
+    /// process's stderr).
+    logLine: *const fn (ctx: *anyopaque, level: std.log.Level, scope: []const u8, message: []const u8) void,
+
+    /// Draws a standard menu-item row (separator above, label + keybind hint, click-detect)
+    /// inside whatever menu is currently open, and returns whether it was clicked this frame.
+    /// `keybind_name` looks up a registered shortcut hint (e.g. `"format"`), or pass `null` for
+    /// none. `title` also seeds the widget's id — use a distinct title per call site.
+    ///
+    /// Menu section contributions (`Host.registerMenuSection`) must draw items through this
+    /// rather than calling `dvui.menuItem()`/`dvui.separator()` directly: dvui tracks "the
+    /// currently open menu" via a private module-level variable in `MenuWidget.zig`, and each
+    /// plugin dylib compiles its own separate copy of that variable. A plugin calling dvui's
+    /// menu widgets directly sees its own copy's default (never set, since only the shell opens
+    /// menus), and `MenuItemWidget` unwrapping that stale `null` is a use-after-free-shaped
+    /// crash waiting to happen (safety-panics in Debug, silently corrupts memory in
+    /// ReleaseFast). Routing through this function keeps the actual widget construction in the
+    /// shell's own compiled code, where that state is always valid — the plugin just gets a
+    /// plain bool back, the same shape as every other shell-owned-context call on this vtable.
+    drawMenuItem: *const fn (ctx: *anyopaque, title: []const u8, keybind_name: ?[]const u8) bool,
 };
 
 pub fn arena(self: EditorAPI) std.mem.Allocator {
@@ -214,6 +221,10 @@ pub fn appliesNativeWindowOpacity(self: EditorAPI) bool {
     return self.vtable.appliesNativeWindowOpacity(self.ctx);
 }
 
+pub fn panZoomScheme(self: EditorAPI) PanZoomScheme {
+    return self.vtable.panZoomScheme(self.ctx);
+}
+
 pub fn explorerRect(self: EditorAPI) dvui.Rect {
     return self.vtable.explorerRect(self.ctx);
 }
@@ -232,9 +243,6 @@ pub fn showSaveDialog(
     self.vtable.showSaveDialog(self.ctx, cb, filters, default_filename, default_folder);
 }
 
-pub fn uiAtlas(self: EditorAPI) UiAtlasView {
-    return self.vtable.uiAtlas(self.ctx);
-}
 
 pub fn activeDoc(self: EditorAPI) ?DocHandle {
     return self.vtable.activeDoc(self.ctx);
@@ -344,32 +352,16 @@ pub fn showOpenFileDialog(
     self.vtable.showOpenFileDialog(self.ctx, cb, filters, default_filename, default_folder);
 }
 
-pub fn accept(self: EditorAPI) !void {
-    return self.vtable.accept(self.ctx);
-}
-
-pub fn cancel(self: EditorAPI) !void {
-    return self.vtable.cancel(self.ctx);
-}
-
-pub fn copy(self: EditorAPI) !void {
-    return self.vtable.copy(self.ctx);
-}
-
-pub fn paste(self: EditorAPI) !void {
-    return self.vtable.paste(self.ctx);
-}
-
-pub fn transform(self: EditorAPI) !void {
-    return self.vtable.transform(self.ctx);
-}
-
 pub fn save(self: EditorAPI) !void {
     return self.vtable.save(self.ctx);
 }
 
-pub fn requestCompositeWarmup(self: EditorAPI) void {
-    self.vtable.requestCompositeWarmup(self.ctx);
+pub fn requestPrepareFrame(self: EditorAPI) void {
+    self.vtable.requestPrepareFrame(self.ctx);
+}
+
+pub fn refresh(self: EditorAPI) void {
+    self.vtable.refresh(self.ctx);
 }
 
 pub fn allocUntitledPath(self: EditorAPI) ![]u8 {
@@ -416,10 +408,10 @@ pub fn abortSaveAllQuit(self: EditorAPI) void {
     self.vtable.abortSaveAllQuit(self.ctx);
 }
 
-pub fn startPackProject(self: EditorAPI) !void {
-    return self.vtable.startPackProject(self.ctx);
+pub fn logLine(self: EditorAPI, level: std.log.Level, scope: []const u8, message: []const u8) void {
+    self.vtable.logLine(self.ctx, level, scope, message);
 }
 
-pub fn isPackingActive(self: EditorAPI) bool {
-    return self.vtable.isPackingActive(self.ctx);
+pub fn drawMenuItem(self: EditorAPI, title: []const u8, keybind_name: ?[]const u8) bool {
+    return self.vtable.drawMenuItem(self.ctx, title, keybind_name);
 }

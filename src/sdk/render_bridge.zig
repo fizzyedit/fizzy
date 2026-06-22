@@ -225,6 +225,22 @@ fn prefersReducedMotion(ctx: ?*anyopaque) callconv(.c) u8 {
     return @intFromBool(win.backend.prefersReducedMotion());
 }
 
+/// May be called from a plugin's background thread — forwards to the host's real backend
+/// (e.g. SDL) to wake its blocking event-wait loop, same as every other thunk here forwards
+/// to `win.backend`, just safe to call cross-thread. A single `backend.refresh()` call is
+/// sufficient on its own: it wakes the blocked `SDL_WaitEventTimeout` and produces exactly one
+/// composited frame (verified via a plugin drawing a bg-thread-driven on-screen counter,
+/// screenshotted before/after several wakes with zero real input — frame count advanced by
+/// exactly 1 per wake, content updated every time). An earlier multi-frame follow-up/pump
+/// dance existed here to work around what looked like dropped/uncomposited wakes, but that
+/// symptom traced back to an unrelated dvui SDL backend bug (a 50ms wait cap that pinned the
+/// app at a steady low framerate and confused every earlier observation) — once that was
+/// fixed, the follow-up machinery no longer had anything to compensate for.
+fn refresh(ctx: ?*anyopaque) callconv(.c) void {
+    const win = windowFromCtx(ctx);
+    win.backend.refresh();
+}
+
 fn ensureTable() void {
     if (table_ready) return;
     table = .{
@@ -251,6 +267,7 @@ fn ensureTable() void {
         .text_input_rect = textInputRect,
         .preferred_color_scheme = preferredColorScheme,
         .prefers_reduced_motion = prefersReducedMotion,
+        .refresh = refresh,
     };
     table_ready = true;
 }
