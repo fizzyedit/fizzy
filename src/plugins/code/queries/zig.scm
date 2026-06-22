@@ -68,7 +68,9 @@
       member: (identifier) @variable.member)))
 
 ; Functions
-(builtin_identifier) @function.builtin
+(call_expression
+  function: (builtin_function
+    (builtin_identifier) @function.call))
 
 (call_expression
   function: (identifier) @function.call)
@@ -80,12 +82,12 @@
 (function_declaration
   name: (identifier) @function)
 
-; Modules
+; Modules (@import / @cImport — builtin stays @function.builtin)
 (variable_declaration
   (identifier) @module
   (builtin_function
-    (builtin_identifier) @keyword.import
-    (#any-of? @keyword.import "@import" "@cImport")))
+    (builtin_identifier) @function.builtin
+    (#any-of? @function.builtin "@import" "@cImport")))
 
 ; Builtins
 [
@@ -279,3 +281,9 @@
 ; PascalCase identifiers (last capture wins over @variable)
 ((identifier) @type
   (#lua-match? @type "^[A-Z_][a-zA-Z0-9_]*"))
+
+; @ builtins (must be last — wins over module/import and variable rules)
+(builtin_identifier) @function.builtin
+
+((identifier) @function.builtin
+  (#match? @function.builtin "^@"))
