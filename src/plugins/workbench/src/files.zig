@@ -772,7 +772,6 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                         };
 
                         if (Globals.host.docFromPath(abs_path)) |doc| {
-                            const save_flash_elapsed = doc.owner.timeSinceSaveCompleteNs(doc);
                             if (doc.owner.showsSaveStatusIndicator(doc)) {
                                 wdvui.bubbleSpinner(@src(), .{
                                     .id_extra = inner_id_extra.* +% 4001,
@@ -782,20 +781,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                                     .gravity_y = 0.5,
                                     .color_text = dvui.themeGet().color(.window, .text),
                                 }, .{
-                                    .complete_elapsed_ns = save_flash_elapsed,
+                                    .complete_elapsed_ns = doc.owner.timeSinceSaveCompleteNs(doc),
                                 });
-                            } else if (doc.owner.isDirty(doc)) {
-                                _ = dvui.icon(
-                                    @src(),
-                                    "DirtyIcon",
-                                    icons.tvg.lucide.@"circle-small",
-                                    .{ .stroke_color = dvui.themeGet().color(.window, .text) },
-                                    .{
-                                        .expand = .none,
-                                        .gravity_x = 1.0,
-                                        .gravity_y = 0.5,
-                                    },
-                                );
                             }
                         }
 

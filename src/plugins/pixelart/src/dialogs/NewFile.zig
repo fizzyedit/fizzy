@@ -40,7 +40,7 @@ pub fn request(parent_path: ?[]const u8, id_extra: usize) void {
 }
 
 pub fn dialog(id: dvui.Id) anyerror!bool {
-    const entry_font = dvui.Font.theme(.mono).larger(-2);
+    const entry_font = dvui.Font.theme(.mono);
 
     // Touch explorer target path every frame so dvui does not drop it at Window.end before OK.
     _ = dvui.dataGetSlice(null, id, "_parent_path", []u8);

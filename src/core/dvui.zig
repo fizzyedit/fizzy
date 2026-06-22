@@ -10,6 +10,16 @@ pub const PanedWidget = @import("widgets/PanedWidget.zig");
 pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
 pub const TreeWidget = @import("widgets/TreeWidget.zig");
 pub const TreeSelection = @import("widgets/TreeSelection.zig");
+pub const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
+
+/// Code-editor `textEntry` with Fizzy-specific chromeless + tree-sitter highlighting.
+pub fn textEntry(src: std.builtin.SourceLocation, init_opts: TextEntryWidget.InitOptions, opts: dvui.Options) *TextEntryWidget {
+    var ret = dvui.widgetAlloc(TextEntryWidget);
+    ret.init(src, init_opts, opts);
+    ret.processEvents();
+    ret.draw();
+    return ret;
+}
 
 /// Core-owned dialog chrome state, set by the dialog framework and read by the
 /// shell so core stays decoupled from the editor. When a modal is open the shell
@@ -983,7 +993,7 @@ pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.
 
     var second_opts = opts.strip();
     second_opts.color_text = color;
-    second_opts.font = dvui.Font.theme(.mono).larger(-2.0);
+    second_opts.font = dvui.Font.theme(.mono);
     second_opts.gravity_y = 0.5;
 
     var needs_space = false;

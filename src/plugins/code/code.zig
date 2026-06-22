@@ -11,3 +11,5 @@ pub const dvui = @import("dvui");
 pub const Globals = @import("src/Globals.zig");
 pub const State = @import("src/State.zig");
 pub const Document = @import("src/Document.zig");
+pub const CodeEditor = @import("src/CodeEditor.zig");
+pub const SyntaxHighlight = @import("src/SyntaxHighlight.zig");

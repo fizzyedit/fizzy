@@ -153,6 +153,7 @@ pub fn drawBranchDecorations(self: *Workbench, path: []const u8, id_extra: usize
 /// tab dirty indicator (`Workspace.zig` ~:528) so the two stay visually consistent.
 fn drawUnsavedDot(_: ?*anyopaque, path: []const u8, id_extra: usize) void {
     const doc = Globals.host.docFromPath(path) orelse return;
+    if (doc.owner.showsSaveStatusIndicator(doc)) return;
     if (!doc.owner.isDirty(doc)) return;
     dvui.icon(@src(), "explorer_dirty", icons.tvg.lucide.@"circle-small", .{
         .stroke_color = dvui.themeGet().color(.window, .text),

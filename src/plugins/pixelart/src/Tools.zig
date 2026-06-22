@@ -313,7 +313,7 @@ pub fn drawTooltip(_: Tools, tool: Tool, rect: dvui.Rect.Physical, id_extra: u64
                 .font = dvui.Font.theme(.heading),
             },
             .{
-                .font = dvui.Font.theme(.mono).larger(-2.0),
+                .font = dvui.Font.theme(.mono),
                 .margin = dvui.Rect.all(4),
             },
         );

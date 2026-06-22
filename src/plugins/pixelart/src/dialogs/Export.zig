@@ -440,7 +440,7 @@ fn exportScaleSlider(max_scale_val: f32) void {
 }
 
 fn exportDimensionsLabelForExport(column_w: u32, row_h: u32) void {
-    const entry_font = dvui.Font.theme(.mono).larger(-2);
+    const entry_font = dvui.Font.theme(.mono);
     DimensionsLabel.drawDimensionsLabel(@src(), column_w, row_h, entry_font, "px", .{ .gravity_x = 0.5 });
 }
 

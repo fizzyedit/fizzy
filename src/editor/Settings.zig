@@ -44,7 +44,7 @@ theme: []const u8 = default_theme,
 font_body_size: f32 = 9,
 font_title_size: f32 = 9,
 font_heading_size: f32 = 8,
-font_mono_size: f32 = 10,
+font_mono_size: f32 = 9,
 
 /// Opacity of the background window
 /// CURRENTLY ONLY SUPPORTED ON MACOS and Windows

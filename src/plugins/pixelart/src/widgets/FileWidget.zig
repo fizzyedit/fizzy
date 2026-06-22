@@ -3157,7 +3157,7 @@ pub fn drawTransform(self: *FileWidget) void {
 
             // Dimensions and angle labels
             {
-                const dim_font = dvui.Font.theme(.mono).larger(-2);
+                const dim_font = dvui.Font.theme(.mono);
 
                 if (show_ortho_dims) {
                     const ns = dvui.currentWindow().natural_scale;

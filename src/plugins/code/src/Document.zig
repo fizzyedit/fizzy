@@ -19,6 +19,8 @@ path: []u8,
 grouping: u64 = 0,
 /// File contents. The text-editing widget reads from and writes back to `items`.
 text: std.ArrayList(u8) = .empty,
+/// Cached `\n` count + 1; refreshed on load and when the editor reports edits.
+line_count: usize = 1,
 /// Unsaved-edits flag, set when the editing widget reports a change.
 dirty: bool = false,
 
@@ -33,11 +35,17 @@ pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
     try text.appendSlice(gpa, bytes);
     const path_copy = try gpa.dupe(u8, path);
     errdefer gpa.free(path_copy);
-    return .{
+    var doc = Document{
         .id = Globals.host.allocDocId(),
         .path = path_copy,
         .text = text,
     };
+    doc.refreshLineCount();
+    return doc;
+}
+
+pub fn refreshLineCount(self: *Document) void {
+    self.line_count = if (self.text.items.len == 0) 1 else std.mem.count(u8, self.text.items, "\n") + 1;
 }
 
 /// Build a document by reading `path` from disk. Runs on the shell's load worker thread.

@@ -489,8 +489,9 @@ pub fn activeCenter(self: *Host) ?*CenterProvider {
     return null;
 }
 
-/// The registered plugin with the highest priority (lowest value) for `ext`, or
-/// null if none claims it. Routes file opens to the right plugin.
+/// The registered plugin with the highest priority (lowest numeric value) for `ext`,
+/// or null if none claims it. Specialized plugins claim known types at low values;
+/// the code plugin claims every extension at `Plugin.file_type_fallback_priority`.
 pub fn pluginForExtension(self: *Host, ext: []const u8) ?*Plugin {
     var best: ?*Plugin = null;
     var best_priority: u8 = 255;

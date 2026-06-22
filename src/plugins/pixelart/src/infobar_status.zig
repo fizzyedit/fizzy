@@ -16,7 +16,7 @@ fn docFile(st: *State, doc: DocHandle) ?*Internal.File {
 pub fn drawDocumentInfobar(st: *State, doc: DocHandle) !void {
     const file = docFile(st, doc) orelse return;
     const font = dvui.Font.theme(.body).larger(-1.0);
-    const font_mono = dvui.Font.theme(.mono).larger(-3.0);
+    const font_mono = dvui.Font.theme(.mono);
 
     dvui.icon(
         @src(),

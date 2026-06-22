@@ -14,6 +14,11 @@ const EditorAPI = @import("EditorAPI.zig");
 
 pub const Plugin = @This();
 
+/// Priority for a plugin that opens any file as plain text when no specialized plugin
+/// claims the extension. Must be higher (numerically larger) than every specialized
+/// claim so `Host.pluginForExtension` only picks it as a fallback.
+pub const file_type_fallback_priority: u8 = 100;
+
 /// Opaque, plugin-owned state passed back to every vtable call.
 state: *anyopaque,
 vtable: *const VTable,
@@ -35,8 +40,10 @@ pub const VTable = struct {
     initPlugin: ?*const fn (state: *anyopaque) anyerror!void = null,
 
     /// Priority for opening files with extension `ext` (including the dot, e.g.
-    /// ".fiz"); lower value wins. `null` = this plugin does not handle `ext`.
-    /// A plugin may claim many extensions.
+    /// ".fiz", or `""` when the basename has no extension); lower value wins.
+    /// `null` = this plugin does not handle `ext`. A plugin may claim many extensions.
+    /// A text editor may return `file_type_fallback_priority` for every `ext` so it
+    /// opens anything no other plugin claims.
     fileTypePriority: ?*const fn (state: *anyopaque, ext: []const u8) ?u8 = null,
 
     // ---- document lifecycle (operates on the plugin's own type via DocHandle) ----

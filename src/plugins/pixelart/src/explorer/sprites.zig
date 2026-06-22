@@ -1704,6 +1704,7 @@ pub fn drawFrames(self: *Sprites) !void {
                     return;
                 };
 
+                const frame_font = dvui.Font.theme(.mono);
                 const result = dvui.textEntryNumber(@src(), u32, .{ .value = &frame.ms, .min = 0, .max = 9999999 }, .{
                     .expand = .horizontal,
                     .background = false,
@@ -1711,10 +1712,10 @@ pub fn drawFrames(self: *Sprites) !void {
                     .margin = dvui.Rect.all(0),
                     .border = dvui.Rect.all(0),
                     .min_size_content = .{
-                        .w = dvui.Font.theme(.mono).larger(-2.0).textSize(frame_ms_text).w + 2.0,
-                        .h = dvui.Font.theme(.mono).larger(-2.0).textSize(frame_ms_text).h + 2.0,
+                        .w = frame_font.textSize(frame_ms_text).w + 2.0,
+                        .h = frame_font.textSize(frame_ms_text).h + 2.0,
                     },
-                    .font = dvui.Font.theme(.mono).larger(-2.0),
+                    .font = frame_font,
                     .gravity_y = 0.5,
                 });
 
@@ -1731,7 +1732,7 @@ pub fn drawFrames(self: *Sprites) !void {
                 dvui.labelNoFmt(@src(), "ms", .{}, .{
                     .gravity_y = 0.5,
                     .margin = dvui.Rect.all(0),
-                    .font = dvui.Font.theme(.mono).larger(-4.0),
+                    .font = frame_font,
                     .padding = .{ .x = 2, .w = 6 },
                 });
 

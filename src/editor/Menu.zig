@@ -121,7 +121,7 @@ pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
                 const folder = fizzy.editor.recents.folders.items[i - 1];
                 if (menuItem(@src(), folder, .{}, .{
                     .expand = .horizontal,
-                    .font = dvui.Font.theme(.mono).larger(-2.0),
+                    .font = dvui.Font.theme(.mono),
                     .id_extra = i,
                     .margin = dvui.Rect.all(1),
                     .padding = dvui.Rect.all(2),

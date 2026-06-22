@@ -1,4 +1,4 @@
-//! The code editor plugin: owns text documents (`.zig`/`.json`/…) and renders them as
+//! The code editor plugin: fallback owner for plain-text documents and renders them as
 //! editable, monospace tabs. Registration + the document vtable. Registered from
 //! `Editor.postInit`; document state lives in `State.docs`.
 const std = @import("std");
@@ -8,6 +8,7 @@ const dvui = code.dvui;
 const Globals = code.Globals;
 const State = code.State;
 const Document = code.Document;
+const CodeEditor = code.CodeEditor;
 const DocHandle = sdk.DocHandle;
 
 var plugin: sdk.Plugin = .{
@@ -69,19 +70,12 @@ fn deinit(state: *anyopaque) void {
 
 // ---- file type ownership -----------------------------------------------------
 
-/// Text/source extensions this plugin opens. Lower priority value wins; pixel-art
-/// owns image/`.fiz` extensions, so there is no overlap.
-const text_extensions = [_][]const u8{
-    ".zig",  ".zon", ".json", ".atlas", ".txt", ".md",  ".toml", ".yaml", ".yml",
-    ".glsl", ".c",   ".h",    ".cpp", ".hpp", ".js",   ".ts",   ".css",
-    ".html", ".xml", ".sh",   ".py",  ".lua",
-};
-
+/// Fallback text editor: opens any file when no other plugin claims the extension.
+/// Pixel-art wins for `.fiz`/`.pixi` (0) and flat images (10); everything else
+/// opens here — including extensionless paths and renamed `.txt` → `.foo`.
 fn fileTypePriority(_: *anyopaque, ext: []const u8) ?u8 {
-    for (text_extensions) |e| {
-        if (std.ascii.eqlIgnoreCase(ext, e)) return 50;
-    }
-    return null;
+    _ = ext;
+    return sdk.Plugin.file_type_fallback_priority;
 }
 
 // ---- document staging buffer -------------------------------------------------
@@ -161,23 +155,9 @@ fn documentHasRecognizedSaveExtension(_: *anyopaque, _: DocHandle) bool {
 
 fn drawDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
     const doc = docFrom(handle) orelse return;
-    const gpa = Globals.allocator();
-
-    var te = dvui.textEntry(@src(), .{
-        .multiline = true,
-        .break_lines = false,
-        .text = .{ .array_list = .{ .backing = &doc.text, .allocator = gpa, .limit = max_text_bytes } },
-    }, .{
-        .expand = .both,
-        .font = dvui.Font.theme(.mono),
-        // Key the widget by document id so its cursor/scroll follow the document across
-        // tab switches within a pane, not the pane slot.
-        .id_extra = @intCast(handle.id),
-        .background = false,
-    });
-    defer te.deinit();
-
-    if (te.text_changed) doc.dirty = true;
+    if (try CodeEditor.draw(doc, handle.id, Globals.allocator())) {
+        doc.dirty = true;
+    }
 }
 
 fn closeDocument(_: *anyopaque, handle: DocHandle) void {
@@ -195,8 +175,6 @@ fn documentDefaultSaveAsFilename(_: *anyopaque, handle: DocHandle, allocator: st
 }
 
 // ---- helpers -----------------------------------------------------------------
-
-const max_text_bytes: usize = 64 * 1024 * 1024;
 
 fn docBuf(buf: *anyopaque) *Document {
     return @ptrCast(@alignCast(buf));
