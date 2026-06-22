@@ -72,7 +72,7 @@ fn deinit(state: *anyopaque) void {
 /// Text/source extensions this plugin opens. Lower priority value wins; pixel-art
 /// owns image/`.fiz` extensions, so there is no overlap.
 const text_extensions = [_][]const u8{
-    ".zig",  ".zon", ".json", ".txt", ".md",  ".toml", ".yaml", ".yml",
+    ".zig",  ".zon", ".json", ".atlas", ".txt", ".md",  ".toml", ".yaml", ".yml",
     ".glsl", ".c",   ".h",    ".cpp", ".hpp", ".js",   ".ts",   ".css",
     ".html", ".xml", ".sh",   ".py",  ".lua",
 };

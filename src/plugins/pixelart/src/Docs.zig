@@ -18,7 +18,7 @@ pub fn fileFrom(self: *Docs, doc: sdk.DocHandle) *Internal.File {
 
 pub fn activeFile(self: *Docs, host: *sdk.Host) ?*Internal.File {
     const doc = host.activeDoc() orelse return null;
-    return self.fileFrom(doc);
+    return self.fileById(doc.id);
 }
 
 pub fn fileById(self: *Docs, id: u64) ?*Internal.File {

@@ -802,15 +802,10 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                         if (branch.button.clicked()) {
                             const mode = detectClickMode(branch.button.data().borderRectScale().r);
                             applyFileClick(inner_id_extra.*, abs_path, mode);
-                            if (mode == .replace) {
-                                switch (ext) {
-                                    .fizzy, .png, .jpg => {
-                                        _ = Globals.host.openFilePath(abs_path, Globals.workbench.currentGroupingID()) catch |err| {
-                                            dvui.log.err("{any}: {s}", .{ err, abs_path });
-                                        };
-                                    },
-                                    else => {},
-                                }
+                            if (mode == .replace and openablePath(abs_path)) {
+                                _ = Globals.host.openFilePath(abs_path, Globals.workbench.currentGroupingID()) catch |err| {
+                                    dvui.log.err("{any}: {s}", .{ err, abs_path });
+                                };
                             }
                         }
                     },
@@ -1060,13 +1055,10 @@ fn pathIsDirAbsolute(abs: []const u8) bool {
     return true;
 }
 
-/// Same file kinds as primary-click open in the tree (not directories).
+/// True when some registered plugin claims this file extension (not directories).
 fn openablePath(abs_path: []const u8) bool {
     if (pathIsDirAbsolute(abs_path)) return false;
-    return switch (extension(abs_path)) {
-        .fizzy, .png, .jpg => true,
-        else => false,
-    };
+    return Globals.host.pluginForExtension(std.fs.path.extension(abs_path)) != null;
 }
 
 fn appendOpenableFilesInTree(arena: std.mem.Allocator, root_abs: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {

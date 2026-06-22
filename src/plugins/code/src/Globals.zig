@@ -6,6 +6,7 @@
 const std = @import("std");
 const code = @import("../code.zig");
 const sdk = code.sdk;
+const core = code.core;
 const State = @import("State.zig");
 
 pub var gpa: std.mem.Allocator = undefined;
@@ -22,7 +23,10 @@ pub fn installRuntime(
     host_ptr: ?*sdk.Host,
     state_ptr: ?*State,
 ) void {
-    if (gpa_ptr) |a| gpa = a.*;
+    if (gpa_ptr) |a| {
+        gpa = a.*;
+        core.gpa = a.*;
+    }
     if (host_ptr) |h| host = h;
     if (state_ptr) |s| state = s;
 }
