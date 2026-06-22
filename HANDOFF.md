@@ -192,6 +192,7 @@ lands; linkage suffixes differ (`.dylib` / `.so` / `.dll`) but the loader API is
 | Step | Work | Done when |
 |------|------|-----------|
 | **5c.1** | Built-in pixelart dylib loaded by host on native; static on web; Editor routes via `pixelartPlugin()` / `host.pluginById` | ✅ Done |
+| **5c.x** | dvui fingerprint gate (replaces version string) | ✅ Done — comptime FNV-1a over `@sizeOf` of boundary types (`Window`, `Debug`, `Vertex`, `Texture`, `TextureTarget`, `Rect.Physical`, `Id`) |
 | **5c.2** | Built-in workbench dylib loaded by host on native; `workbenchPlugin()` / `workbench_files_view` routing | ✅ Done |
 | **5c.3** | Install step bundles built-in dylibs next to exe (same `zig-out` / Velopack tree) | ✅ Done |
 
@@ -204,7 +205,7 @@ Built-ins can remain **statically linked during 5b** and flip to dylib in 5c —
 |------|------|-------|
 | **5d.1** | **textedit** built-in plugin | Exercises multi-editor tabs, `fileTypePriority`, `registerBottomView`; forces "New > kind" chooser |
 | **5d.2** | **Published plugin SDK** (`fizzy-plugin-sdk` or similar) | External Zig project: import SDK + dvui, implement vtable, `zig build` → dylib |
-| **5d.3** | **User plugin directory** + discovery | Scan `~/.fizzy/plugins/` (or platform equivalent); load + ABI-gate |
+| **5d.3** | **User plugin directory** + discovery | ✅ Done — `Editor.loadUserPlugins` scans `<config>/plugins/<name>/plugin.<ext>` on launch; ABI + dvui-fingerprint gated; built-in IDs always win; failures logged and skipped |
 | **5d.4** | **Hot load** + plugin store | Reload dylib, refresh Host registries; trust/signing model TBD |
 
 ### 3rd-party / distribution considerations (figure out later, don't block 5a–5c)

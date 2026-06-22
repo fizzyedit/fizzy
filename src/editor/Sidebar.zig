@@ -6,8 +6,19 @@ const App = fizzy.App;
 const Editor = fizzy.Editor;
 
 const SidebarView = fizzy.sdk.SidebarView;
+const PluginStore = @import("PluginStore.zig");
 
 pub const Sidebar = @This();
+
+/// Persisted scroll position for the plugin-icon rail (retained across frames).
+var scroll_info: dvui.ScrollInfo = .{};
+
+/// Shell built-in views pinned to the bottom of the rail (always visible). Everything else —
+/// the plugin-contributed views — scrolls above them in registration (load) order.
+fn isPinned(id: []const u8) bool {
+    return std.mem.eql(u8, id, PluginStore.view_id) or
+        std.mem.eql(u8, id, Editor.view_settings);
+}
 
 pub fn init() !Sidebar {
     return .{};
@@ -34,11 +45,53 @@ pub fn draw(_: Sidebar) !Action {
 
     var ret: Action = .none;
 
-    // One icon per registered sidebar view (plugins contribute these; the shell
-    // owns none of them itself). Registration order is the display order.
-    for (fizzy.editor.host.sidebar_views.items, 0..) |*view, i| {
-        const a = try drawOption(view, i, 20);
-        if (a != .none) ret = a;
+    // Plugin-contributed views scroll in a bounded area (load order). When more icons exist than
+    // fit, an edge shadow hints at the hidden ones — matching the scroll-shadow used elsewhere.
+    {
+        const pane = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .both,
+            .background = false,
+        });
+
+        var scroll = dvui.scrollArea(@src(), .{
+            .scroll_info = &scroll_info,
+            .horizontal_bar = .hide,
+            .vertical_bar = .hide,
+        }, .{
+            .expand = .both,
+            .background = false,
+        });
+
+        for (fizzy.editor.host.sidebar_views.items, 0..) |*view, i| {
+            if (view.hidden or isPinned(view.id)) continue;
+            const a = try drawOption(view, i, 20);
+            if (a != .none) ret = a;
+        }
+
+        const voff = scroll.si.offset(.vertical);
+        const vmax = scroll.si.scrollMax(.vertical);
+        scroll.deinit();
+
+        const cs = pane.data().contentRectScale();
+        if (voff > 0.5) fizzy.dvui.drawEdgeShadow(cs, .top, .{});
+        if (voff < vmax - 0.5) fizzy.dvui.drawEdgeShadow(cs, .bottom, .{});
+
+        pane.deinit();
+    }
+
+    // Plugin store + Settings: pinned to the bottom of the rail, always visible.
+    {
+        var bottom = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .gravity_y = 1.0,
+            .background = false,
+        });
+        defer bottom.deinit();
+
+        for (fizzy.editor.host.sidebar_views.items, 0..) |*view, i| {
+            if (view.hidden or !isPinned(view.id)) continue;
+            const a = try drawOption(view, i, 20);
+            if (a != .none) ret = a;
+        }
     }
 
     return ret;

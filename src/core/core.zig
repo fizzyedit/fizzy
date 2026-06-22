@@ -28,10 +28,6 @@ pub const fs = @import("fs.zig");
 pub const platform = @import("platform.zig");
 pub const paths = @import("paths.zig");
 
-/// Generated atlas index (named sprite lookups). Written by the build's
-/// process-assets step into `src/core/generated/`.
-pub const atlas = @import("generated/atlas.zig");
-
 /// Generic dvui hub: dialog framework, helpers, and the generic widgets.
 pub const dvui = @import("dvui.zig");
 

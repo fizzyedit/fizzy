@@ -108,8 +108,10 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
         .background = false,
     });
 
-    if (!fizzy.editor.host.isActiveSidebarView(fizzy.Editor.workbench_files_view)) {
-        fizzy.editor.resetFileTreeWhenFilesHidden();
+    if (comptime workbench.plugin.has_file_tree) {
+        if (!fizzy.editor.host.isActiveSidebarView(fizzy.Editor.workbench_files_view)) {
+            fizzy.editor.resetFileTreeWhenFilesHidden();
+        }
     }
 
     if (fizzy.editor.host.activeSidebarView()) |view| {

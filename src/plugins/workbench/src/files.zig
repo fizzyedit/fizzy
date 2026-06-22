@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const wb = @import("../workbench.zig");
-const Globals = @import("Globals.zig");
+const runtime = @import("runtime.zig");
 const dvui = wb.dvui;
 const wdvui = wb.wdvui;
 const icons = @import("icons");
@@ -12,7 +12,7 @@ pub var edit_id: ?usize = null;
 
 /// Multi-selection for the file tree. Maps `id_extra` (hash of absolute path) to the heap-owned
 /// absolute path string. The primary `selected_id` is always a key here when set. Paths are
-/// allocated from `Globals.allocator()` so they outlive the dvui arena used during draw.
+/// allocated from `runtime.allocator()` so they outlive the dvui arena used during draw.
 pub var selected_paths: std.AutoArrayHashMapUnmanaged(usize, []u8) = .empty;
 pub var selection_anchor: ?usize = null;
 
@@ -76,10 +76,10 @@ pub fn draw() !void {
     // Safe as long as `selected_paths` isn't mutated between now and `tree.deinit`.
     tree.selected_branch_ids = selectionBranchIdsForMultiDrag(dvui.currentWindow().arena()) catch selected_paths.keys();
 
-    if (Globals.host.folder()) |path| {
+    if (runtime.host().folder()) |path| {
         try drawFiles(path, tree);
     } else {
-        Globals.workbench.file_tree_data_id = null;
+        runtime.workbench().file_tree_data_id = null;
         dvui.labelNoFmt(
             @src(),
             "Open a project folder to begin.",
@@ -89,7 +89,7 @@ pub fn draw() !void {
 
         if (dvui.button(@src(), "Open Folder", .{ .draw_focus = false }, .{ .expand = .horizontal, .style = .highlight })) {
             if (try dvui.dialogNativeFolderSelect(dvui.currentWindow().arena(), .{ .title = "Open Project Folder" })) |folder| {
-                try Globals.host.setProjectFolder(folder);
+                try runtime.host().setProjectFolder(folder);
             }
         }
     }
@@ -99,7 +99,7 @@ fn drawWeb() !void {
     var tree = wdvui.TreeWidget.tree(@src(), .{}, .{ .background = false, .expand = .both });
     defer tree.deinit();
 
-    const viewport_w = Globals.host.explorerViewportWidth();
+    const viewport_w = runtime.host().explorerViewportWidth();
     const wrap_w: f32 = if (viewport_w > 0) viewport_w else 200;
 
     {
@@ -126,7 +126,7 @@ fn drawWeb() !void {
         .style = .highlight,
         .min_size_content = .{ .w = 110, .h = 0 },
     })) {
-        Globals.host.showOpenFileDialog(
+        runtime.host().showOpenFileDialog(
             struct {
                 fn cb(_: ?[][:0]const u8) void {}
             }.cb,
@@ -139,9 +139,10 @@ fn drawWeb() !void {
 
 pub fn drawFiles(path: []const u8, tree: *wdvui.TreeWidget) !void {
     const unique_id = dvui.parentGet().extendId(@src(), 0);
-    Globals.workbench.file_tree_data_id = unique_id;
+    runtime.workbench().file_tree_data_id = unique_id;
 
-    var filter_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    // Right margin keeps the entry clear of the overlay scrollbar that draws over the pane's right edge.
+    var filter_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .w = 10 } });
     dvui.icon(
         @src(),
         "FilterIcon",
@@ -263,7 +264,7 @@ fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u
     if ((dvui.menuItemLabel(@src(), "Close", .{}, .{
         .expand = .horizontal,
     })) != null) {
-        Globals.host.closeProjectFolder();
+        runtime.host().closeProjectFolder();
 
         fw2.close();
     }
@@ -271,7 +272,7 @@ fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u
     _ = dvui.separator(@src(), .{ .expand = .horizontal });
 
     if ((dvui.menuItemLabel(@src(), open_message, .{}, .{ .expand = .horizontal })) != null) {
-        Globals.host.openInFileBrowser(project_path) catch {
+        runtime.host().openInFileBrowser(project_path) catch {
             dvui.log.err("Failed to open file browser", .{});
         };
 
@@ -281,7 +282,7 @@ fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u
     if ((dvui.menuItemLabel(@src(), "New File...", .{}, .{ .expand = .horizontal })) != null) {
         defer fw2.close();
 
-        Globals.host.requestNewDocument(project_path, root_branch_id.asUsize());
+        runtime.host().requestNewDocument(project_path, root_branch_id.asUsize());
     }
 
     if ((dvui.menuItemLabel(@src(), "New Folder...", .{}, .{ .expand = .horizontal })) != null) {
@@ -409,7 +410,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             .expand = .horizontal,
             .gravity_y = 0.5,
         });
-        Globals.workbench.drawBranchDecorations(full_path, id_extra);
+        runtime.workbench().drawBranchDecorations(full_path, id_extra);
     } else {
         dvui.label(@src(), "{s}", .{label}, .{
             .color_text = color,
@@ -459,8 +460,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                     &.{ directory, entry.name },
                 );
 
-                if (Globals.host.folder()) |proj_root| {
-                    if (Globals.host.isPathIgnored(proj_root, abs_path, entry.name, entry.kind)) {
+                if (runtime.host().folder()) |proj_root| {
+                    if (runtime.host().isPathIgnored(proj_root, abs_path, entry.name, entry.kind)) {
                         continue;
                     }
                 }
@@ -475,10 +476,10 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                 }
 
                 inner_id_extra.* = dvui.Id.update(tree.data().id, abs_path).asUsize();
-                try visible_file_rows_order.append(Globals.allocator(), .{ .id = inner_id_extra.*, .path = abs_path });
+                try visible_file_rows_order.append(runtime.allocator(), .{ .id = inner_id_extra.*, .path = abs_path });
 
                 var color = dvui.themeGet().color(.control, .fill);
-                if (Globals.host.fileRowFillColor(color_id.*)) |tint| {
+                if (runtime.host().fileRowFillColor(color_id.*)) |tint| {
                     color = tint;
                 }
 
@@ -492,7 +493,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                 var expanded = false;
                 const expanded_indent: f32 = 14.0;
 
-                if (Globals.host.explorerBranchIsOpen(branch_id)) {
+                if (runtime.host().explorerBranchIsOpen(branch_id)) {
                     expanded = true;
                 }
 
@@ -572,13 +573,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                         dvui.dataSetSlice(null, inner_unique_id, "removed_path", abs_path);
 
                     if (entry.kind == .file and tree.id_branch == inner_id_extra.*) {
-                        if (Globals.workbench.tab_drag_from_tree_path) |old| {
+                        if (runtime.workbench().tab_drag_from_tree_path) |old| {
                             if (!std.mem.eql(u8, old, abs_path)) {
-                                Globals.allocator().free(old);
-                                Globals.workbench.tab_drag_from_tree_path = Globals.allocator().dupe(u8, abs_path) catch null;
+                                runtime.allocator().free(old);
+                                runtime.workbench().tab_drag_from_tree_path = runtime.allocator().dupe(u8, abs_path) catch null;
                             }
                         } else {
-                            Globals.workbench.tab_drag_from_tree_path = Globals.allocator().dupe(u8, abs_path) catch null;
+                            runtime.workbench().tab_drag_from_tree_path = runtime.allocator().dupe(u8, abs_path) catch null;
                         }
                     }
                 }
@@ -591,7 +592,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                 if (branch.dropInto() and entry.kind == .directory) {
                     try applyFileMove(inner_unique_id, tree, abs_path);
                     // Expand the folder so the dropped item is visible
-                    Globals.host.setExplorerBranchOpen(branch_id, true);
+                    runtime.host().setExplorerBranchOpen(branch_id, true);
                 }
 
                 { // Add right click context menu for item options
@@ -627,7 +628,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                                     break :blk &[_][]const u8{};
                                 };
                                 for (to_open) |p| {
-                                    _ = Globals.host.openFilePath(p, Globals.workbench.currentGroupingID()) catch |e| {
+                                    _ = runtime.host().openFilePath(p, runtime.workbench().currentGroupingID()) catch |e| {
                                         dvui.log.err("Failed to open file: {any} ({s})", .{ e, p });
                                     };
                                 }
@@ -647,13 +648,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                                 var have_grouping = false;
                                 for (to_open) |p| {
                                     if (!have_grouping) {
-                                        side_grouping = if (Globals.host.openDocCount() == 0)
-                                            Globals.workbench.currentGroupingID()
+                                        side_grouping = if (runtime.host().openDocCount() == 0)
+                                            runtime.workbench().currentGroupingID()
                                         else
-                                            Globals.workbench.newGroupingID();
+                                            runtime.workbench().newGroupingID();
                                         have_grouping = true;
                                     }
-                                    _ = Globals.host.openFilePath(p, side_grouping) catch {
+                                    _ = runtime.host().openFilePath(p, side_grouping) catch {
                                         dvui.log.err("Failed to open file: {s}", .{p});
                                     };
                                 }
@@ -665,7 +666,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                         }
 
                         if ((dvui.menuItemLabel(@src(), open_message, .{}, .{ .expand = .horizontal })) != null) {
-                            Globals.host.openInFileBrowser(if (entry.kind == .file) std.fs.path.dirname(abs_path) orelse abs_path else abs_path) catch {
+                            runtime.host().openInFileBrowser(if (entry.kind == .file) std.fs.path.dirname(abs_path) orelse abs_path else abs_path) catch {
                                 dvui.log.err("Failed to open file browser", .{});
                             };
 
@@ -676,7 +677,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                             defer fw2.close();
 
                             const parent_dir: []const u8 = if (entry.kind == .directory) abs_path else directory;
-                            Globals.host.requestNewDocument(parent_dir, branch_id.asUsize());
+                            runtime.host().requestNewDocument(parent_dir, branch_id.asUsize());
                         }
 
                         if ((dvui.menuItemLabel(@src(), "New Folder...", .{}, .{ .expand = .horizontal })) != null) {
@@ -723,36 +724,22 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                     .file => {
                         const ext = extension(entry.name);
                         //if (ext == .hidden) continue;
-                        const icon = switch (ext) {
-                            .fizzy, .psd => icons.tvg.lucide.@"file-pen-line",
-                            .jpg, .png, .aseprite, .pyxel, .gif => icons.tvg.entypo.picture,
-                            .pdf => icons.tvg.entypo.@"doc-text",
-                            .json, .zig, .txt, .atlas => icons.tvg.entypo.code,
-                            .tar, ._7z, .zip => icons.tvg.entypo.archive,
-                            else => icons.tvg.entypo.archive,
-                        };
-
                         const icon_color = color;
 
-                        const file_icon_color: dvui.Color = if (ext == .fizzy) .transparent else icon_color;
-
-                        if (ext == .fizzy) {
-                            const ui_atlas = Globals.host.uiAtlas();
-                            const ui_sprite = ui_atlas.sprites[wb.atlas.sprites.logo_default];
-                            const logo_sprite = wb.Sprite{ .origin = ui_sprite.origin, .source = ui_sprite.source };
-                            _ = wb.Sprite.draw(
-                                logo_sprite,
-                                @src(),
-                                ui_atlas.source,
-                                2.0,
-                                .{ .gravity_y = 0.5, .margin = padding, .padding = padding, .background = false },
-                            );
-                        } else {
+                        // The plugin that owns this file type draws its own icon (see
+                        // `Host.registerFileIcon`); the workbench only falls back to generic
+                        // filesystem icons when no plugin claims it.
+                        if (!runtime.host().drawFileIcon(std.fs.path.extension(entry.name), abs_path, icon_color)) {
+                            const icon = switch (ext) {
+                                .pdf => icons.tvg.entypo.@"doc-text",
+                                .tar, ._7z, .zip => icons.tvg.entypo.archive,
+                                else => icons.tvg.entypo.archive,
+                            };
                             dvui.icon(
                                 @src(),
                                 "FileIcon",
                                 icon,
-                                .{ .stroke_color = file_icon_color, .fill_color = file_icon_color },
+                                .{ .stroke_color = icon_color, .fill_color = icon_color },
                                 .{
                                     .gravity_y = 0.5,
                                     .padding = padding,
@@ -763,15 +750,15 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
 
                         editableLabel(
                             inner_id_extra.*,
-                            if (filter_text.len > 0) std.fs.path.relativePosix(dvui.currentWindow().arena(), ".", Globals.host.folder().?, abs_path) catch entry.name else entry.name,
-                            if (Globals.host.docFromPath(abs_path) != null) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
+                            if (filter_text.len > 0) std.fs.path.relativePosix(dvui.currentWindow().arena(), ".", runtime.host().folder().?, abs_path) catch entry.name else entry.name,
+                            if (runtime.host().docFromPath(abs_path) != null) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
                             entry.kind,
                             abs_path,
                         ) catch {
                             dvui.log.err("Failed to draw editable label", .{});
                         };
 
-                        if (Globals.host.docFromPath(abs_path)) |doc| {
+                        if (runtime.host().docFromPath(abs_path)) |doc| {
                             if (doc.owner.showsSaveStatusIndicator(doc)) {
                                 wdvui.bubbleSpinner(@src(), .{
                                     .id_extra = inner_id_extra.* +% 4001,
@@ -790,7 +777,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                             const mode = detectClickMode(branch.button.data().borderRectScale().r);
                             applyFileClick(inner_id_extra.*, abs_path, mode);
                             if (mode == .replace and openablePath(abs_path)) {
-                                _ = Globals.host.openFilePath(abs_path, Globals.workbench.currentGroupingID()) catch |err| {
+                                _ = runtime.host().openFilePath(abs_path, runtime.workbench().currentGroupingID()) catch |err| {
                                     dvui.log.err("{any}: {s}", .{ err, abs_path });
                                 };
                             }
@@ -857,7 +844,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                             //     .alpha = 0.15 * t,
                             // },
                         })) {
-                            Globals.host.setExplorerBranchOpen(branch_id, true);
+                            runtime.host().setExplorerBranchOpen(branch_id, true);
                             try search(
                                 abs_path,
                                 tree,
@@ -868,13 +855,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                                 branch,
                             );
                         } else {
-                            if (Globals.host.explorerBranchIsOpen(branch_id)) {
-                                Globals.host.setExplorerBranchOpen(branch_id, false);
+                            if (runtime.host().explorerBranchIsOpen(branch_id)) {
+                                runtime.host().setExplorerBranchOpen(branch_id, false);
                             }
                         }
                         // Keep open_branches in sync so hover-expand and drop-into expand persist next frame
                         if (branch.expanded) {
-                            Globals.host.setExplorerBranchOpen(branch_id, true);
+                            runtime.host().setExplorerBranchOpen(branch_id, true);
                         }
                         color_id.* = color_id.* + 1;
                     },
@@ -897,26 +884,26 @@ pub fn isFileSelected(id: usize) bool {
 
 fn selectionFreeAll() void {
     var it = selected_paths.iterator();
-    while (it.next()) |e| Globals.allocator().free(e.value_ptr.*);
+    while (it.next()) |e| runtime.allocator().free(e.value_ptr.*);
     selected_paths.clearRetainingCapacity();
 }
 
 fn selectionPut(id: usize, path: []const u8) void {
     if (selected_paths.getPtr(id)) |existing| {
         if (std.mem.eql(u8, existing.*, path)) return;
-        Globals.allocator().free(existing.*);
-        existing.* = Globals.allocator().dupe(u8, path) catch return;
+        runtime.allocator().free(existing.*);
+        existing.* = runtime.allocator().dupe(u8, path) catch return;
         return;
     }
-    const copy = Globals.allocator().dupe(u8, path) catch return;
-    selected_paths.put(Globals.allocator(), id, copy) catch {
-        Globals.allocator().free(copy);
+    const copy = runtime.allocator().dupe(u8, path) catch return;
+    selected_paths.put(runtime.allocator(), id, copy) catch {
+        runtime.allocator().free(copy);
     };
 }
 
 fn selectionRemove(id: usize) bool {
     if (selected_paths.fetchSwapRemove(id)) |kv| {
-        Globals.allocator().free(kv.value);
+        runtime.allocator().free(kv.value);
         return true;
     }
     return false;
@@ -1045,7 +1032,7 @@ fn pathIsDirAbsolute(abs: []const u8) bool {
 /// True when some registered plugin claims this file extension (not directories).
 fn openablePath(abs_path: []const u8) bool {
     if (pathIsDirAbsolute(abs_path)) return false;
-    return Globals.host.pluginForExtension(std.fs.path.extension(abs_path)) != null;
+    return runtime.host().pluginForExtension(std.fs.path.extension(abs_path)) != null;
 }
 
 fn appendOpenableFilesInTree(arena: std.mem.Allocator, root_abs: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
@@ -1175,7 +1162,7 @@ pub fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.m
         return false;
     };
 
-    if (Globals.host.docFromPath(source_path)) |doc| {
+    if (runtime.host().docFromPath(source_path)) |doc| {
         doc.owner.setDocumentPath(doc, new_path) catch {
             dvui.log.err("Failed to duplicate path: {s}", .{new_path});
             return error.FailedToDuplicatePath;
@@ -1198,12 +1185,12 @@ pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File
             std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename folder: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
 
             var di: usize = 0;
-            while (di < Globals.host.openDocCount()) : (di += 1) {
-                const doc = Globals.host.docByIndex(di) orelse continue;
+            while (di < runtime.host().openDocCount()) : (di += 1) {
+                const doc = runtime.host().docByIndex(di) orelse continue;
                 const path = doc.owner.documentPath(doc);
                 if (std.mem.containsAtLeast(u8, path, 1, full_path)) {
                     const file_name = dvui.currentWindow().arena().dupe(u8, std.fs.path.basename(path)) catch "Failed to duplicate path";
-                    const new_full = try std.fs.path.join(Globals.allocator(), &.{ new_path, file_name });
+                    const new_full = try std.fs.path.join(runtime.allocator(), &.{ new_path, file_name });
                     doc.owner.setDocumentPath(doc, new_full) catch {
                         dvui.log.err("Failed to update open document path", .{});
                     };
@@ -1213,7 +1200,7 @@ pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File
         .file => {
             std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename file: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
 
-            if (Globals.host.docFromPath(full_path)) |doc| {
+            if (runtime.host().docFromPath(full_path)) |doc| {
                 doc.owner.setDocumentPath(doc, new_path) catch {
                     dvui.log.err("Failed to duplicate path: {s}", .{new_path});
                     return error.FailedToDuplicatePath;
@@ -1256,7 +1243,7 @@ pub fn pruneMissingSelections() void {
                 continue;
             };
             if (selected_id == removed.key) selected_id = null;
-            Globals.allocator().free(removed.value);
+            runtime.allocator().free(removed.value);
             continue;
         };
         i += 1;

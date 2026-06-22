@@ -174,7 +174,7 @@ pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
     }
 }
 
-/// Edit menu (pixel-art contribution).
+/// Edit menu (pixi contribution).
 pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
     if (menuItem(
         @src(),
@@ -183,7 +183,6 @@ pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
         .{
             .expand = .horizontal,
             .color_text = dvui.themeGet().color(.control, .text),
-            //.style = .control,
         },
     )) |r| {
         var animator = dvui.animate(@src(), .{
@@ -201,32 +200,28 @@ pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
             @src(),
             "Copy",
             dvui.currentWindow().keybinds.get("copy") orelse .{},
-            fizzy.editor.activeDoc() != null,
+            fizzy.editor.activeDocCommandEnabled("copy"),
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (fizzy.editor.activeDoc() != null) {
-                fizzy.editor.copy() catch {
-                    std.log.err("Failed to copy", .{});
-                };
-                fw.close();
-            }
+            fizzy.editor.copy() catch {
+                std.log.err("Failed to copy", .{});
+            };
+            fw.close();
         }
 
         if (menuItemWithHotkey(
             @src(),
             "Paste",
             dvui.currentWindow().keybinds.get("paste") orelse .{},
-            fizzy.editor.activeDoc() != null,
+            fizzy.editor.activeDocCommandEnabled("paste"),
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (fizzy.editor.activeDoc() != null) {
-                fizzy.editor.paste() catch {
-                    std.log.err("Failed to paste", .{});
-                };
-                fw.close();
-            }
+            fizzy.editor.paste() catch {
+                std.log.err("Failed to paste", .{});
+            };
+            fw.close();
         }
 
         _ = dvui.separator(@src(), .{ .expand = .horizontal });
@@ -267,16 +262,14 @@ pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
             @src(),
             "Transform",
             dvui.currentWindow().keybinds.get("transform") orelse .{},
-            fizzy.editor.activeDoc() != null,
+            fizzy.editor.activeDocCommandEnabled("transform"),
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (fizzy.editor.activeDoc() != null) {
-                fizzy.editor.transform() catch {
-                    std.log.err("Failed to transform", .{});
-                };
-                fw.close();
-            }
+            fizzy.editor.transform() catch {
+                std.log.err("Failed to transform", .{});
+            };
+            fw.close();
         }
 
         _ = dvui.separator(@src(), .{ .expand = .horizontal });
@@ -285,15 +278,15 @@ pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
             @src(),
             "Grid Layout…",
             dvui.currentWindow().keybinds.get("grid_layout") orelse .{},
-            fizzy.editor.activeDoc() != null,
+            fizzy.editor.activeDocCommandEnabled("gridLayout"),
             .{},
             .{ .expand = .horizontal },
         ) != null) {
-            if (fizzy.editor.activeDoc() != null) {
-                fizzy.editor.requestGridLayoutDialog();
-                fw.close();
-            }
+            fizzy.editor.requestGridLayoutDialog();
+            fw.close();
         }
+
+        try drawMenuSections("shell.menu.edit");
     }
 }
 
@@ -332,6 +325,8 @@ pub fn drawViewMenu(_: ?*anyopaque) anyerror!void {
 
             fw.close();
         }
+
+        try drawMenuSections("shell.menu.view");
 
         _ = dvui.separator(@src(), .{ .expand = .horizontal });
 
@@ -456,4 +451,14 @@ pub fn menuItemWithChevron(src: std.builtin.SourceLocation, label_str: []const u
     mi.deinit();
 
     return ret;
+}
+
+/// Draw registered menu sections for an open parent menu.
+pub fn drawMenuSections(parent_menu_id: []const u8) !void {
+    for (fizzy.editor.host.menu_sections.items) |*section| {
+        if (!std.mem.eql(u8, section.parent_menu_id, parent_menu_id)) continue;
+        section.draw(section.ctx) catch |err| {
+            dvui.log.err("Menu section '{s}' failed: {any}", .{ section.id, err });
+        };
+    }
 }

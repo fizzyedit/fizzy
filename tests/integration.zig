@@ -12,9 +12,9 @@ const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("fizzy");
 const shim = @import("fizzy_shim.zig");
-const pixelart = fizzy.pixelart_mod;
+const pixi = fizzy.pixi_mod;
 
-const Internal = pixelart.internal;
+const Internal = pixi.internal;
 
 /// Create a small in-memory `Internal.File` suitable for tests. The
 /// caller must already have a live shim context (so `fizzy.app` /
@@ -207,15 +207,15 @@ test "selectColorFloodFromPoint out-of-bounds is a no-op" {
 
 // -------------------------------------------------------------------
 // `.pixi` JSON parser fallbacks. The on-disk format has been bumped
-// three times. `fromPathFizzy` first tries the current `pixelart.File`
+// three times. `fromPathFizzy` first tries the current `pixi.File`
 // shape and, on failure, retries against `FileV3`, `FileV2`, and
 // `FileV1`. This test exercises just the JSON layer (no zip, no
 // `Internal.File` materialization) by parsing a small in-memory
 // fixture for each version. It catches the kind of bug where someone
-// renames or retypes a field on the public `pixelart.File` types and
+// renames or retypes a field on the public `pixi.File` types and
 // silently breaks loading older saves.
 // -------------------------------------------------------------------
-test "pixelart.File parses current-format JSON and round-trips" {
+test "pixi.File parses current-format JSON and round-trips" {
     const json =
         \\{
         \\  "version": { "major": 1, "minor": 0, "patch": 0, "pre": null, "build": null },
@@ -235,7 +235,7 @@ test "pixelart.File parses current-format JSON and round-trips" {
     ;
 
     const parsed = try std.json.parseFromSlice(
-        pixelart.File,
+        pixi.File,
         std.testing.allocator,
         json,
         .{ .ignore_unknown_fields = true },
@@ -259,7 +259,7 @@ test "pixelart.File parses current-format JSON and round-trips" {
     defer std.testing.allocator.free(round_tripped);
 
     const reparsed = try std.json.parseFromSlice(
-        pixelart.File,
+        pixi.File,
         std.testing.allocator,
         round_tripped,
         .{ .ignore_unknown_fields = true },
@@ -276,7 +276,7 @@ test "pixelart.File parses current-format JSON and round-trips" {
     try std.testing.expectEqual(parsed.value.animations[0].frames[0].ms, reparsed.value.animations[0].frames[0].ms);
 }
 
-test "pixelart.File.FileV3 fixture parses" {
+test "pixi.File.FileV3 fixture parses" {
     // V3 keeps the columns/rows shape but uses the older `AnimationV2`
     // (frame indices + fps) form.
     const json =
@@ -296,7 +296,7 @@ test "pixelart.File.FileV3 fixture parses" {
     ;
 
     const parsed = try std.json.parseFromSlice(
-        pixelart.File.FileV3,
+        pixi.File.FileV3,
         std.testing.allocator,
         json,
         .{ .ignore_unknown_fields = true },
@@ -308,7 +308,7 @@ test "pixelart.File.FileV3 fixture parses" {
     try std.testing.expectEqual(@as(f32, 10.0), parsed.value.animations[0].fps);
 }
 
-test "pixelart.File.FileV2 fixture parses (width/height + tile_size shape)" {
+test "pixi.File.FileV2 fixture parses (width/height + tile_size shape)" {
     const json =
         \\{
         \\  "version": { "major": 0, "minor": 5, "patch": 0, "pre": null, "build": null },
@@ -326,7 +326,7 @@ test "pixelart.File.FileV2 fixture parses (width/height + tile_size shape)" {
     ;
 
     const parsed = try std.json.parseFromSlice(
-        pixelart.File.FileV2,
+        pixi.File.FileV2,
         std.testing.allocator,
         json,
         .{ .ignore_unknown_fields = true },
@@ -337,7 +337,7 @@ test "pixelart.File.FileV2 fixture parses (width/height + tile_size shape)" {
     try std.testing.expectEqual(@as(u32, 8), parsed.value.tile_width);
 }
 
-test "pixelart.File.FileV1 fixture parses (start/length animation shape)" {
+test "pixi.File.FileV1 fixture parses (start/length animation shape)" {
     const json =
         \\{
         \\  "version": { "major": 0, "minor": 1, "patch": 0, "pre": null, "build": null },
@@ -355,7 +355,7 @@ test "pixelart.File.FileV1 fixture parses (start/length animation shape)" {
     ;
 
     const parsed = try std.json.parseFromSlice(
-        pixelart.File.FileV1,
+        pixi.File.FileV1,
         std.testing.allocator,
         json,
         .{ .ignore_unknown_fields = true },
@@ -470,7 +470,7 @@ test "Packer.append reduces painted sprite and offsets origin to keep anchor ali
     px[3 * 16 + 3] = .{ 255, 0, 0, 255 };
     // Cell 1: leave fully transparent so the packer skips the bitmap (image == null).
 
-    var packer = try pixelart.Packer.init(std.testing.allocator);
+    var packer = try pixi.Packer.init(std.testing.allocator);
     defer packer.deinit();
 
     try packer.append(&file);
@@ -518,7 +518,7 @@ test "Packer.append: tighten preserves world-space anchor across cells" {
         }
     }
 
-    var packer = try pixelart.Packer.init(std.testing.allocator);
+    var packer = try pixi.Packer.init(std.testing.allocator);
     defer packer.deinit();
     try packer.append(&file);
 
@@ -553,7 +553,7 @@ test "Packer.append: tightened bitmap content matches the source pixels" {
     px[5 * 8 + 3] = .{ 21, 22, 23, 255 };
     px[5 * 8 + 4] = .{ 31, 32, 33, 255 };
 
-    var packer = try pixelart.Packer.init(std.testing.allocator);
+    var packer = try pixi.Packer.init(std.testing.allocator);
     defer packer.deinit();
     try packer.append(&file);
 
@@ -591,7 +591,7 @@ test "Packer.append skips invisible layers" {
         .dirty = layer.dirty,
     });
 
-    var packer = try pixelart.Packer.init(std.testing.allocator);
+    var packer = try pixi.Packer.init(std.testing.allocator);
     defer packer.deinit();
     try packer.append(&file);
 
@@ -634,7 +634,7 @@ test "Packer.packRects: produced rects fit inside the texture and never overlap"
         }
     }
 
-    var packer = try pixelart.Packer.init(std.testing.allocator);
+    var packer = try pixi.Packer.init(std.testing.allocator);
     defer packer.deinit();
     try packer.append(&file);
 
@@ -812,7 +812,7 @@ test "fillPoint on temporary layer leaves selected-layer mask cache alone" {
 test "Internal.Animation appendFrame, insertFrame, removeFrame" {
     const alloc = std.testing.allocator;
 
-    var initial_frames = [_]pixelart.Animation.Frame{.{
+    var initial_frames = [_]pixi.Animation.Frame{.{
         .sprite_index = 0,
         .ms = 100,
     }};
@@ -820,14 +820,14 @@ test "Internal.Animation appendFrame, insertFrame, removeFrame" {
     defer anim.deinit(alloc);
 
     try anim.appendFrame(alloc, .{ .sprite_index = 1, .ms = 50 });
-    var expect_two = [_]pixelart.Animation.Frame{
+    var expect_two = [_]pixi.Animation.Frame{
         .{ .sprite_index = 0, .ms = 100 },
         .{ .sprite_index = 1, .ms = 50 },
     };
     try std.testing.expect(anim.eqlFrames(expect_two[0..]));
 
     try anim.insertFrame(alloc, 1, .{ .sprite_index = 9, .ms = 12 });
-    var expect_three = [_]pixelart.Animation.Frame{
+    var expect_three = [_]pixi.Animation.Frame{
         .{ .sprite_index = 0, .ms = 100 },
         .{ .sprite_index = 9, .ms = 12 },
         .{ .sprite_index = 1, .ms = 50 },
@@ -835,7 +835,7 @@ test "Internal.Animation appendFrame, insertFrame, removeFrame" {
     try std.testing.expect(anim.eqlFrames(expect_three[0..]));
 
     anim.removeFrame(alloc, 0);
-    var expect_after_remove = [_]pixelart.Animation.Frame{
+    var expect_after_remove = [_]pixi.Animation.Frame{
         .{ .sprite_index = 9, .ms = 12 },
         .{ .sprite_index = 1, .ms = 50 },
     };
@@ -984,7 +984,7 @@ test "Packer.append merges collapsed layer stack before reducing sprites" {
     file.layers.get(0).pixels()[0] = .{ 255, 0, 0, 255 };
     file.layers.get(1).pixels()[7 * 8 + 7] = .{ 0, 255, 0, 255 };
 
-    var packer = try pixelart.Packer.init(std.testing.allocator);
+    var packer = try pixi.Packer.init(std.testing.allocator);
     defer packer.deinit();
 
     try packer.append(&file);
@@ -1009,8 +1009,8 @@ test "drawPoint with to_change records history; undo restores pixels" {
 
     // `drawPoint` reads plugin tools stroke size for stamps smaller than `min_full_stroke_size`;
     // the shim zero-fills the editor, so brush size must be set explicitly.
-    pixelart.Globals.state.tools.stroke_size = 1;
-    pixelart.Globals.state.tools.pencil_stroke_size = 1;
+    ctx.editor.pixi_state.tools.stroke_size = 1;
+    ctx.editor.pixi_state.tools.pencil_stroke_size = 1;
 
     const idx: usize = 3 * 8 + 4;
 

@@ -1,7 +1,7 @@
 const std = @import("std");
 
-/// Shared infrastructure module (gfx, math, fs, generated atlas, platform,
-/// paths, the generic dvui hub + widgets). Consumed by the shell and plugins.
+/// Shared infrastructure module (gfx, math, fs, platform, paths, the generic
+/// dvui hub + widgets). Consumed by the shell and plugins.
 pub const core = @import("core");
 
 pub const version: std.SemanticVersion = .{
@@ -9,10 +9,6 @@ pub const version: std.SemanticVersion = .{
     .minor = 2,
     .patch = 0,
 };
-
-// Generated files, these contain helpers for autocomplete
-// So you can get a named index into atlas.sprites
-pub const atlas = core.atlas;
 
 // Other helpers and namespaces
 pub const fs = core.fs;
@@ -28,13 +24,9 @@ pub const Fling = core.Fling;
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
 
-/// Pixel-art plugin module. Shell code should `@import("pixelart")` directly.
-pub const pixelart_mod = @import("pixelart");
-
 // Global pointers
 pub var app: *App = undefined;
 pub var editor: *Editor = undefined;
-pub var packer: *pixelart_mod.Packer = undefined;
 
 /// Runtime platform detection (`isMacOS()` etc.) that's accurate on wasm web
 /// builds, where `builtin.os.tag` is always `.freestanding`.

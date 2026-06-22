@@ -8,6 +8,7 @@ const Plugin = @import("Plugin.zig");
 const regions = @import("regions.zig");
 const EditorAPI = @import("EditorAPI.zig");
 const DocHandle = @import("DocHandle.zig");
+const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
 
 pub const Host = @This();
 
@@ -15,7 +16,9 @@ pub const SidebarView = regions.SidebarView;
 pub const BottomView = regions.BottomView;
 pub const CenterProvider = regions.CenterProvider;
 pub const MenuContribution = regions.MenuContribution;
+pub const MenuSectionContribution = regions.MenuSectionContribution;
 pub const SettingsSection = regions.SettingsSection;
+pub const Command = regions.Command;
 
 /// Per-plugin opaque settings blobs: plugin id -> serialized JSON. The Host owns the
 /// key + value strings; the shell persists them verbatim under "plugins" in
@@ -26,8 +29,31 @@ pub const PluginSettings = std.StringArrayHashMapUnmanaged([]const u8);
 /// stable index during the current tree draw (workbench increments per file). Return
 /// null to defer to the next resolver or the theme default.
 pub const FileRowFillColor = struct {
+    /// Contributing plugin (null = shell built-in). Used to scope teardown in
+    /// `unregisterPlugin` when a plugin is unloaded at runtime.
+    owner: ?*Plugin = null,
     ctx: ?*anyopaque = null,
     color: *const fn (ctx: ?*anyopaque, color_index: usize) ?dvui.Color,
+};
+
+/// A registered inter-plugin service plus the plugin that owns it, so a runtime
+/// unload can remove the owner's services. `owner` is null for shell-registered
+/// services with no single plugin owner.
+pub const ServiceEntry = struct {
+    ptr: *anyopaque,
+    owner: ?*Plugin = null,
+};
+
+/// A file-tree row icon drawer. The workbench file tree calls registered drawers in order at
+/// each file row's icon slot; the first that returns `true` wins, otherwise the workbench draws
+/// a generic filesystem default. This lets the plugin that owns a file type draw its own icon (a
+/// glyph, a thumbnail, anything) instead of the shell hardcoding per-extension icons. `ext` is
+/// the extension including the dot, as on disk (compare case-insensitively); `path` is absolute;
+/// `color` is the row's themed icon color.
+pub const FileIcon = struct {
+    owner: ?*Plugin = null,
+    ctx: ?*anyopaque = null,
+    draw: *const fn (ctx: ?*anyopaque, ext: []const u8, path: []const u8, color: dvui.Color) bool,
 };
 
 allocator: std.mem.Allocator,
@@ -38,7 +64,7 @@ plugins: std.ArrayListUnmanaged(*Plugin) = .empty,
 /// Service locator for inter-plugin APIs: name -> opaque service vtable. E.g. the
 /// workbench plugin registers "workbench" so editor plugins can place tabs and
 /// draw per-branch explorer decorations without a compile-time dependency on it.
-services: std.StringHashMapUnmanaged(*anyopaque) = .empty,
+services: std.StringHashMapUnmanaged(ServiceEntry) = .empty,
 
 /// The shell's read/utility surface (arena, folder, shared settings, dirty mark),
 /// installed by the shell during startup. Null until installed (headless/test).
@@ -49,6 +75,9 @@ plugin_settings: PluginSettings = .empty,
 
 /// File-tree row fill tints (workbench asks the Host; editor plugins register).
 file_row_fill_colors: std.ArrayListUnmanaged(FileRowFillColor) = .empty,
+
+/// File-tree row icon drawers (workbench asks the Host; plugins register for their file types).
+file_icons: std.ArrayListUnmanaged(FileIcon) = .empty,
 
 // ---- shell region registries -----------------------------------------------
 // The shell iterates these instead of hardcoded enums/switches. Items keep their
@@ -62,8 +91,12 @@ bottom_views: std.ArrayListUnmanaged(BottomView) = .empty,
 center_providers: std.ArrayListUnmanaged(CenterProvider) = .empty,
 /// Menubar contributions (non-macOS in-app menu bar).
 menus: std.ArrayListUnmanaged(MenuContribution) = .empty,
+/// Nested items contributed into an open parent menu (e.g. View > Example).
+menu_sections: std.ArrayListUnmanaged(MenuSectionContribution) = .empty,
 /// Settings sections (Settings view renders each under its title, grouped by owner).
 settings_sections: std.ArrayListUnmanaged(SettingsSection) = .empty,
+/// Plugin-contributed commands, invoked by id (menus, keybinds, palette) — see `Command`.
+commands: std.ArrayListUnmanaged(Command) = .empty,
 
 /// Active selection by contribution id (null = use the first registered).
 active_sidebar_view: ?[]const u8 = null,
@@ -81,8 +114,11 @@ pub fn deinit(self: *Host) void {
     self.bottom_views.deinit(self.allocator);
     self.center_providers.deinit(self.allocator);
     self.menus.deinit(self.allocator);
+    self.menu_sections.deinit(self.allocator);
     self.settings_sections.deinit(self.allocator);
+    self.commands.deinit(self.allocator);
     self.file_row_fill_colors.deinit(self.allocator);
+    self.file_icons.deinit(self.allocator);
     {
         var it = self.plugin_settings.iterator();
         while (it.next()) |e| {
@@ -157,11 +193,6 @@ pub fn showSaveDialog(
     default_folder: ?[]const u8,
 ) void {
     if (self.shell_api) |a| a.showSaveDialog(cb, filters, default_filename, default_folder);
-}
-
-/// Shell-owned UI icon spritesheet. Asserts the shell is installed.
-pub fn uiAtlas(self: *Host) EditorAPI.UiAtlasView {
-    return self.shell_api.?.uiAtlas();
 }
 
 /// The actively focused open document, or null when none.
@@ -273,34 +304,17 @@ pub fn showOpenFileDialog(
     if (self.shell_api) |a| a.showOpenFileDialog(cb, filters, default_filename, default_folder);
 }
 
-pub fn accept(self: *Host) !void {
-    if (self.shell_api) |a| return a.accept();
-}
-
-pub fn cancel(self: *Host) !void {
-    if (self.shell_api) |a| return a.cancel();
-}
-
-pub fn copy(self: *Host) !void {
-    if (self.shell_api) |a| return a.copy();
-}
-
-pub fn paste(self: *Host) !void {
-    if (self.shell_api) |a| return a.paste();
-}
-
-pub fn transform(self: *Host) !void {
-    if (self.shell_api) |a| return a.transform();
-}
-
 pub fn save(self: *Host) !void {
     if (self.shell_api) |a| return a.save();
 }
 
-pub fn requestCompositeWarmup(self: *Host) void {
-    if (self.shell_api) |a| a.requestCompositeWarmup();
+pub fn requestPrepareFrame(self: *Host) void {
+    if (self.shell_api) |a| a.requestPrepareFrame();
 }
 
+pub fn refresh(self: *Host) void {
+    if (self.shell_api) |a| a.refresh();
+}
 
 pub fn allocUntitledPath(self: *Host) ![]u8 {
     return if (self.shell_api) |a| try a.allocUntitledPath() else error.ShellNotInstalled;
@@ -346,14 +360,6 @@ pub fn abortSaveAllQuit(self: *Host) void {
     if (self.shell_api) |a| a.abortSaveAllQuit();
 }
 
-pub fn startPackProject(self: *Host) !void {
-    if (self.shell_api) |a| return a.startPackProject();
-}
-
-pub fn isPackingActive(self: *Host) bool {
-    return if (self.shell_api) |a| a.isPackingActive() else false;
-}
-
 // ---- per-plugin settings store ---------------------------------------------
 
 /// The stored settings blob for `id` (serialized JSON), or null if none. The returned
@@ -377,14 +383,109 @@ pub fn storePluginSettings(self: *Host, id: []const u8, json: []const u8) !void 
     self.markSettingsDirty();
 }
 
+/// Register a plugin under its self-declared `id`. The `id` is the single source of truth
+/// for routing (`pluginById`, `pluginForExtension`); a folder name or dylib path is not.
+/// Rejects a second plugin claiming an already-registered `id` so routing can never become
+/// ambiguous — the dylib loader turns this into a failed load the user is told about
+/// (built-in ids always win, since they register first).
 pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
+    if (self.pluginById(plugin.id) != null) return error.DuplicatePluginId;
     try self.plugins.append(self.allocator, plugin);
 }
 
-/// Lookup a registered plugin by stable id (`"pixelart"`, `"workbench"`, …).
+/// Remove every contribution, service, and registry entry owned by `plugin`, then drop
+/// the plugin itself. The inverse of `registerPlugin` + the `register*` calls a plugin
+/// makes in its `register`. Used by the runtime unload path (the store's "disable" /
+/// "uninstall"); built-in plugins are never unregistered.
+///
+/// **Ordering matters for the dylib case:** a contribution's `id`/`title` slices and the
+/// `*Plugin` itself live in the plugin image's static memory. The caller must invoke
+/// this *before* `dlclose`, so that the active-selection ids (which may point into that
+/// image) are compared and reset while the memory is still mapped.
+pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
+    removeOwned(SidebarView, &self.sidebar_views, plugin);
+    removeOwned(BottomView, &self.bottom_views, plugin);
+    removeOwned(CenterProvider, &self.center_providers, plugin);
+    removeOwned(MenuContribution, &self.menus, plugin);
+    removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
+    removeOwned(SettingsSection, &self.settings_sections, plugin);
+    removeOwned(Command, &self.commands, plugin);
+    removeOwned(FileRowFillColor, &self.file_row_fill_colors, plugin);
+    removeOwned(FileIcon, &self.file_icons, plugin);
+
+    // Services: free the owned key strings and drop the entries.
+    {
+        var it = self.services.iterator();
+        var doomed: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer doomed.deinit(self.allocator);
+        while (it.next()) |e| {
+            if (e.value_ptr.owner == plugin) doomed.append(self.allocator, e.key_ptr.*) catch {};
+        }
+        for (doomed.items) |name| _ = self.services.remove(name);
+    }
+
+    // Drop the plugin from the registry (pointer identity; no `owner` field here).
+    for (self.plugins.items, 0..) |p, i| {
+        if (p == plugin) {
+            _ = self.plugins.orderedRemove(i);
+            break;
+        }
+    }
+
+    // Active-selection ids may name a now-removed view; reset so the next frame falls
+    // back to a still-registered contribution (or none).
+    if (self.active_sidebar_view) |id| {
+        if (!self.hasSidebarView(id)) self.active_sidebar_view = null;
+    }
+    if (self.active_bottom_view) |id| {
+        if (!self.hasBottomView(id)) self.active_bottom_view = null;
+    }
+    if (self.active_center) |id| {
+        if (!self.hasCenterProvider(id)) self.active_center = null;
+    }
+}
+
+/// Compact a registry in place, dropping every entry whose `owner` is `plugin`.
+/// `T` must have an `owner: ?*Plugin` field (all contribution structs do).
+fn removeOwned(comptime T: type, list: *std.ArrayListUnmanaged(T), plugin: *Plugin) void {
+    var w: usize = 0;
+    for (list.items) |item| {
+        const owned = if (item.owner) |o| o == plugin else false;
+        if (!owned) {
+            list.items[w] = item;
+            w += 1;
+        }
+    }
+    list.items.len = w;
+}
+
+fn hasSidebarView(self: *Host, id: []const u8) bool {
+    for (self.sidebar_views.items) |*v| if (std.mem.eql(u8, v.id, id)) return true;
+    return false;
+}
+
+fn hasBottomView(self: *Host, id: []const u8) bool {
+    for (self.bottom_views.items) |*v| if (std.mem.eql(u8, v.id, id)) return true;
+    return false;
+}
+
+fn hasCenterProvider(self: *Host, id: []const u8) bool {
+    for (self.center_providers.items) |*p| if (std.mem.eql(u8, p.id, id)) return true;
+    return false;
+}
+
+/// Lookup a registered plugin by stable id (`"pixi"`, `"workbench"`, …).
 pub fn pluginById(self: *Host, id: []const u8) ?*Plugin {
     for (self.plugins.items) |plugin| {
         if (std.mem.eql(u8, plugin.id, id)) return plugin;
+    }
+    return null;
+}
+
+/// First registered plugin that implements `createDocument` (for shell New File flows).
+pub fn pluginWithCreateDocument(self: *Host) ?*Plugin {
+    for (self.plugins.items) |plugin| {
+        if (plugin.vtable.createDocument != null) return plugin;
     }
     return null;
 }
@@ -401,12 +502,33 @@ pub fn fileRowFillColor(self: *Host, color_index: usize) ?dvui.Color {
     return null;
 }
 
-pub fn registerService(self: *Host, name: []const u8, service: *anyopaque) !void {
-    try self.services.put(self.allocator, name, service);
+pub fn registerFileIcon(self: *Host, drawer: FileIcon) !void {
+    try self.file_icons.append(self.allocator, drawer);
+}
+
+/// Draw the file-tree row icon for `ext`/`path` via the first registered drawer that handles it.
+/// Returns true if a plugin drew it; false means the caller should draw a generic default.
+pub fn drawFileIcon(self: *Host, ext: []const u8, path: []const u8, color: dvui.Color) bool {
+    for (self.file_icons.items) |drawer| {
+        if (drawer.draw(drawer.ctx, ext, path, color)) return true;
+    }
+    return false;
+}
+
+/// Register an inter-plugin service. `owner` is the contributing plugin (null for a
+/// shell-registered service); it lets `unregisterPlugin` drop the service on unload.
+pub fn registerService(self: *Host, name: []const u8, service: *anyopaque, owner: ?*Plugin) !void {
+    try self.services.put(self.allocator, name, .{ .ptr = service, .owner = owner });
 }
 
 pub fn getService(self: *Host, name: []const u8) ?*anyopaque {
-    return self.services.get(name);
+    return if (self.services.get(name)) |entry| entry.ptr else null;
+}
+
+/// Typed service lookup. `Service` must declare `service_name` and match the registered layout.
+pub fn getServiceTyped(self: *Host, comptime Service: type) ?*Service {
+    const ptr = self.getService(Service.service_name) orelse return null;
+    return @ptrCast(@alignCast(ptr));
 }
 
 // ---- region registration (called from a plugin's register / postInit) -------
@@ -421,6 +543,82 @@ pub fn registerBottomView(self: *Host, view: BottomView) !void {
     if (self.active_bottom_view == null) self.active_bottom_view = view.id;
 }
 
+/// Move a bottom-panel tab from `from_index` to `to_index`.
+pub fn reorderBottomView(self: *Host, from_index: usize, to_index: usize) void {
+    if (from_index >= self.bottom_views.items.len or to_index >= self.bottom_views.items.len) return;
+    if (from_index == to_index) return;
+    const item = self.bottom_views.items[from_index];
+    _ = self.bottom_views.orderedRemove(from_index);
+    self.bottom_views.insert(self.allocator, to_index, item) catch return;
+}
+
+pub fn setSidebarViewHidden(self: *Host, id: []const u8, hidden: bool) void {
+    for (self.sidebar_views.items) |*view| {
+        if (std.mem.eql(u8, view.id, id)) {
+            view.hidden = hidden;
+            return;
+        }
+    }
+}
+
+/// Fluent sugar — same fields as `SidebarView`, without a new ABI type.
+pub fn registerSidebar(
+    self: *Host,
+    spec: struct {
+        id: []const u8,
+        title: []const u8,
+        icon: []const u8,
+        draw: *const fn (ctx: ?*anyopaque) anyerror!void,
+        owner: ?*Plugin = null,
+        hidden: bool = false,
+        draw_workspace: ?*const fn (ctx: ?*anyopaque, pane: *WorkbenchPaneView) anyerror!void = null,
+    },
+) !void {
+    try self.registerSidebarView(.{
+        .id = spec.id,
+        .title = spec.title,
+        .icon = spec.icon,
+        .draw = spec.draw,
+        .owner = spec.owner,
+        .hidden = spec.hidden,
+        .draw_workspace = spec.draw_workspace,
+    });
+}
+
+pub fn registerBottom(
+    self: *Host,
+    spec: struct {
+        id: []const u8,
+        title: []const u8,
+        draw: *const fn (ctx: ?*anyopaque) anyerror!void,
+        owner: ?*Plugin = null,
+        persistent: bool = false,
+    },
+) !void {
+    try self.registerBottomView(.{
+        .id = spec.id,
+        .title = spec.title,
+        .draw = spec.draw,
+        .owner = spec.owner,
+        .persistent = spec.persistent,
+    });
+}
+
+pub fn registerCenter(
+    self: *Host,
+    spec: struct {
+        id: []const u8,
+        draw: *const fn (ctx: ?*anyopaque) anyerror!dvui.App.Result,
+        owner: ?*Plugin = null,
+    },
+) !void {
+    try self.registerCenterProvider(.{
+        .id = spec.id,
+        .draw = spec.draw,
+        .owner = spec.owner,
+    });
+}
+
 pub fn registerCenterProvider(self: *Host, provider: CenterProvider) !void {
     try self.center_providers.append(self.allocator, provider);
     if (self.active_center == null) self.active_center = provider.id;
@@ -430,8 +628,42 @@ pub fn registerMenu(self: *Host, menu: MenuContribution) !void {
     try self.menus.append(self.allocator, menu);
 }
 
+pub fn registerMenuSection(self: *Host, section: MenuSectionContribution) !void {
+    try self.menu_sections.append(self.allocator, section);
+}
+
 pub fn registerSettingsSection(self: *Host, section: SettingsSection) !void {
     try self.settings_sections.append(self.allocator, section);
+}
+
+// ---- commands --------------------------------------------------------------
+
+/// Register a plugin command. Ids should be plugin-namespaced (`"pixelart.packProject"`).
+pub fn registerCommand(self: *Host, cmd: Command) !void {
+    try self.commands.append(self.allocator, cmd);
+}
+
+/// The registered command with `id`, or null.
+pub fn command(self: *Host, id: []const u8) ?*Command {
+    for (self.commands.items) |*c| {
+        if (std.mem.eql(u8, c.id, id)) return c;
+    }
+    return null;
+}
+
+/// Whether `id` is registered and currently enabled (absent `isEnabled` = enabled).
+/// Unknown ids are treated as disabled.
+pub fn commandEnabled(self: *Host, id: []const u8) bool {
+    const c = self.command(id) orelse return false;
+    const owner = c.owner orelse return true;
+    return if (c.isEnabled) |f| f(owner.state) else true;
+}
+
+/// Run the command `id` (no-op when unknown). The owner's opaque `state` is passed to `run`.
+pub fn runCommand(self: *Host, id: []const u8) !void {
+    const c = self.command(id) orelse return;
+    const owner = c.owner orelse return;
+    try c.run(owner.state);
 }
 
 // ---- active selection ------------------------------------------------------
@@ -445,15 +677,28 @@ pub fn isActiveSidebarView(self: *Host, id: []const u8) bool {
     return std.mem.eql(u8, active, id);
 }
 
-/// The currently active sidebar view, or the first registered as a fallback.
+/// The currently active sidebar view, or the first visible registered view as fallback.
 pub fn activeSidebarView(self: *Host) ?*SidebarView {
     if (self.active_sidebar_view) |id| {
         for (self.sidebar_views.items) |*v| {
             if (std.mem.eql(u8, v.id, id)) return v;
         }
     }
-    if (self.sidebar_views.items.len > 0) return &self.sidebar_views.items[0];
+    return self.firstVisibleSidebarView();
+}
+
+pub fn firstVisibleSidebarView(self: *Host) ?*SidebarView {
+    for (self.sidebar_views.items) |*v| {
+        if (!v.hidden) return v;
+    }
     return null;
+}
+
+pub fn hasPersistentBottomView(self: *Host) bool {
+    for (self.bottom_views.items) |*v| {
+        if (v.persistent) return true;
+    }
+    return false;
 }
 
 pub fn setActiveBottomView(self: *Host, id: []const u8) void {
@@ -518,4 +763,86 @@ pub fn requestNewDocument(self: *Host, parent_path: ?[]const u8, id_extra: usize
             return;
         }
     }
+}
+
+// ---- tests -----------------------------------------------------------------
+
+const testing = std.testing;
+
+test "unregisterPlugin removes a plugin's contributions, service, and resets active ids" {
+    const noopDraw = struct {
+        fn f(_: ?*anyopaque) anyerror!void {}
+    }.f;
+    const noopCenter = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    const noopRun = struct {
+        fn f(_: *anyopaque) anyerror!void {}
+    }.f;
+    const noColor = struct {
+        fn f(_: ?*anyopaque, _: usize) ?dvui.Color {
+            return null;
+        }
+    }.f;
+    const noIcon = struct {
+        fn f(_: ?*anyopaque, _: []const u8, _: []const u8, _: dvui.Color) bool {
+            return false;
+        }
+    }.f;
+
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+
+    const vtable = Plugin.VTable{};
+    var plugin = Plugin{ .state = undefined, .vtable = &vtable, .id = "victim", .display_name = "Victim" };
+    var service_obj: u32 = 0;
+
+    // A second, surviving plugin so we can prove only the victim's entries are removed.
+    var keeper = Plugin{ .state = undefined, .vtable = &vtable, .id = "keeper", .display_name = "Keeper" };
+
+    try host.registerPlugin(&keeper);
+    try host.registerPlugin(&plugin);
+    try host.registerSidebarView(.{ .id = "keeper.view", .owner = &keeper, .icon = "", .title = "K", .draw = noopDraw });
+    try host.registerSidebarView(.{ .id = "victim.view", .owner = &plugin, .icon = "", .title = "V", .draw = noopDraw });
+    try host.registerBottomView(.{ .id = "victim.bottom", .owner = &plugin, .title = "V", .draw = noopDraw });
+    try host.registerCenterProvider(.{ .id = "victim.center", .owner = &plugin, .draw = noopCenter });
+    try host.registerMenu(.{ .id = "victim.menu", .owner = &plugin, .draw = noopDraw });
+    try host.registerMenuSection(.{ .id = "victim.section", .parent_menu_id = "shell.menu.view", .owner = &plugin, .draw = noopDraw });
+    try host.registerSettingsSection(.{ .id = "victim.settings", .owner = &plugin, .title = "V", .draw = noopDraw });
+    try host.registerCommand(.{ .id = "victim.cmd", .owner = &plugin, .title = "V", .run = noopRun });
+    try host.registerFileRowFillColor(.{ .owner = &plugin, .color = noColor });
+    try host.registerFileIcon(.{ .owner = &plugin, .draw = noIcon });
+    try host.registerService("victim.svc", &service_obj, &plugin);
+
+    // Active sidebar view points at the victim (keeper registered first, but force it).
+    host.setActiveSidebarView("victim.view");
+    host.setActiveBottomView("victim.bottom");
+    host.setActiveCenter("victim.center");
+
+    host.unregisterPlugin(&plugin);
+
+    // The victim is gone; the keeper survives.
+    try testing.expect(host.pluginById("victim") == null);
+    try testing.expect(host.pluginById("keeper") != null);
+
+    // Every victim contribution is gone; keeper's sidebar view remains.
+    try testing.expectEqual(@as(usize, 1), host.sidebar_views.items.len);
+    try testing.expectEqualStrings("keeper.view", host.sidebar_views.items[0].id);
+    try testing.expectEqual(@as(usize, 0), host.bottom_views.items.len);
+    try testing.expectEqual(@as(usize, 0), host.center_providers.items.len);
+    try testing.expectEqual(@as(usize, 0), host.menus.items.len);
+    try testing.expectEqual(@as(usize, 0), host.menu_sections.items.len);
+    try testing.expectEqual(@as(usize, 0), host.settings_sections.items.len);
+    try testing.expectEqual(@as(usize, 0), host.commands.items.len);
+    try testing.expectEqual(@as(usize, 0), host.file_row_fill_colors.items.len);
+    try testing.expectEqual(@as(usize, 0), host.file_icons.items.len);
+    try testing.expect(host.getService("victim.svc") == null);
+
+    // Active selections that named removed contributions reset to null; the next frame
+    // falls back to a still-registered view.
+    try testing.expect(host.active_sidebar_view == null);
+    try testing.expect(host.active_bottom_view == null);
+    try testing.expect(host.active_center == null);
 }

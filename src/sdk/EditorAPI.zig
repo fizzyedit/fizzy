@@ -12,18 +12,6 @@ const DocHandle = @import("DocHandle.zig");
 
 const EditorAPI = @This();
 
-/// Sub-rect within the shell UI spritesheet. Layout matches `core.Sprite`.
-pub const UiSprite = struct {
-    origin: [2]f32 = .{ 0.0, 0.0 },
-    source: [4]u32,
-};
-
-/// Read-only view of the shell's UI icon atlas (source texture + sprite table).
-pub const UiAtlasView = struct {
-    source: dvui.ImageSource,
-    sprites: []const UiSprite,
-};
-
 /// A name/extension-pattern pair for a native save dialog. Layout matches the backend's
 /// `DialogFileFilter` (which mirrors `SDL_DialogFileFilter`), so the shell forwards a slice
 /// of these straight to the backend without a copy. `pattern` is a `;`-separated extension
@@ -86,9 +74,6 @@ pub const VTable = struct {
         default_filename: []const u8,
         default_folder: ?[]const u8,
     ) void,
-    /// Shell-owned UI icon spritesheet (cursors, tool icons, logo). Stable for the
-    /// editor lifetime; plugins read `.source` / `.sprites` but never mutate it.
-    uiAtlas: *const fn (ctx: *anyopaque) UiAtlasView,
     /// The actively focused open document, or null when none.
     activeDoc: *const fn (ctx: *anyopaque) ?DocHandle,
     /// Open document by ordered index (tab order), or null when out of range.
@@ -150,14 +135,10 @@ pub const VTable = struct {
         default_folder: ?[]const u8,
     ) void,
 
-    // ---- document editing (active file) ----
-    accept: *const fn (ctx: *anyopaque) anyerror!void,
-    cancel: *const fn (ctx: *anyopaque) anyerror!void,
-    copy: *const fn (ctx: *anyopaque) anyerror!void,
-    paste: *const fn (ctx: *anyopaque) anyerror!void,
-    transform: *const fn (ctx: *anyopaque) anyerror!void,
     save: *const fn (ctx: *anyopaque) anyerror!void,
-    requestCompositeWarmup: *const fn (ctx: *anyopaque) void,
+    requestPrepareFrame: *const fn (ctx: *anyopaque) void,
+    /// Wake the app event loop for another frame. Safe from worker threads (PTY readers, etc.).
+    refresh: *const fn (ctx: *anyopaque) void,
 
     // ---- new document ----
     /// Heap-owned unique basename like `untitled-1`; caller frees with the app allocator.
@@ -176,10 +157,6 @@ pub const VTable = struct {
     trackQuitSaveInFlight: *const fn (ctx: *anyopaque, id: u64) anyerror!void,
     resumeSaveAllQuit: *const fn (ctx: *anyopaque) void,
     abortSaveAllQuit: *const fn (ctx: *anyopaque) void,
-
-    // ---- project pack ----
-    startPackProject: *const fn (ctx: *anyopaque) anyerror!void,
-    isPackingActive: *const fn (ctx: *anyopaque) bool,
 };
 
 pub fn arena(self: EditorAPI) std.mem.Allocator {
@@ -232,9 +209,6 @@ pub fn showSaveDialog(
     self.vtable.showSaveDialog(self.ctx, cb, filters, default_filename, default_folder);
 }
 
-pub fn uiAtlas(self: EditorAPI) UiAtlasView {
-    return self.vtable.uiAtlas(self.ctx);
-}
 
 pub fn activeDoc(self: EditorAPI) ?DocHandle {
     return self.vtable.activeDoc(self.ctx);
@@ -344,32 +318,16 @@ pub fn showOpenFileDialog(
     self.vtable.showOpenFileDialog(self.ctx, cb, filters, default_filename, default_folder);
 }
 
-pub fn accept(self: EditorAPI) !void {
-    return self.vtable.accept(self.ctx);
-}
-
-pub fn cancel(self: EditorAPI) !void {
-    return self.vtable.cancel(self.ctx);
-}
-
-pub fn copy(self: EditorAPI) !void {
-    return self.vtable.copy(self.ctx);
-}
-
-pub fn paste(self: EditorAPI) !void {
-    return self.vtable.paste(self.ctx);
-}
-
-pub fn transform(self: EditorAPI) !void {
-    return self.vtable.transform(self.ctx);
-}
-
 pub fn save(self: EditorAPI) !void {
     return self.vtable.save(self.ctx);
 }
 
-pub fn requestCompositeWarmup(self: EditorAPI) void {
-    self.vtable.requestCompositeWarmup(self.ctx);
+pub fn requestPrepareFrame(self: EditorAPI) void {
+    self.vtable.requestPrepareFrame(self.ctx);
+}
+
+pub fn refresh(self: EditorAPI) void {
+    self.vtable.refresh(self.ctx);
 }
 
 pub fn allocUntitledPath(self: EditorAPI) ![]u8 {
@@ -414,12 +372,4 @@ pub fn resumeSaveAllQuit(self: EditorAPI) void {
 
 pub fn abortSaveAllQuit(self: EditorAPI) void {
     self.vtable.abortSaveAllQuit(self.ctx);
-}
-
-pub fn startPackProject(self: EditorAPI) !void {
-    return self.vtable.startPackProject(self.ctx);
-}
-
-pub fn isPackingActive(self: EditorAPI) bool {
-    return self.vtable.isPackingActive(self.ctx);
 }
