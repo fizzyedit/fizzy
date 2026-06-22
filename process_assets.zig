@@ -3,7 +3,7 @@ const path = std.fs.path;
 const Step = std.Build.Step;
 const Io = std.Io;
 
-const Atlas = @import("src/plugins/pixelart/src/Atlas.zig");
+const Atlas = @import("src/plugins/pixi/src/Atlas.zig");
 const ProcessAssetsStep = @This();
 
 step: Step,

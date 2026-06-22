@@ -3,9 +3,9 @@
 //! only an opaque `DocHandle` whose `id` maps back to the registered `Document`.
 const std = @import("std");
 const builtin = @import("builtin");
-const code = @import("../code.zig");
-const dvui = code.dvui;
-const Globals = code.Globals;
+const internal = @import("../code.zig");
+const dvui = internal.dvui;
+const sdk = internal.sdk;
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
@@ -29,14 +29,14 @@ const max_file_bytes: usize = 64 * 1024 * 1024;
 
 /// Build a document from in-memory bytes (browser file picker, or after reading from disk).
 pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
-    const gpa = Globals.allocator();
+    const gpa = sdk.allocator();
     var text: std.ArrayList(u8) = .empty;
     errdefer text.deinit(gpa);
     try text.appendSlice(gpa, bytes);
     const path_copy = try gpa.dupe(u8, path);
     errdefer gpa.free(path_copy);
     var doc = Document{
-        .id = Globals.host.allocDocId(),
+        .id = sdk.host().allocDocId(),
         .path = path_copy,
         .text = text,
     };
@@ -52,14 +52,14 @@ pub fn refreshLineCount(self: *Document) void {
 /// Web has no filesystem; documents there are opened from bytes (`fromBytes`) instead.
 pub fn fromPath(path: []const u8) !Document {
     if (comptime is_wasm) return error.Unsupported;
-    const gpa = Globals.allocator();
+    const gpa = sdk.allocator();
     const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(max_file_bytes));
     defer gpa.free(bytes);
     return fromBytes(path, bytes);
 }
 
 pub fn deinit(self: *Document) void {
-    const gpa = Globals.allocator();
+    const gpa = sdk.allocator();
     gpa.free(self.path);
     self.text.deinit(gpa);
 }

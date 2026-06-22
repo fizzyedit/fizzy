@@ -409,6 +409,26 @@ pub fn windowHeaderCloseInnerSide() f32 {
     return (row_inner + cap_inner) * 0.5;
 }
 
+/// Padding around the close / dirty / save indicator in workspace tabs (fixed every frame).
+pub const tab_status_inset = dvui.Rect{ .x = 4, .y = 2, .w = 4, .h = 2 };
+
+/// Workspace tab close control: fixed size, no margin/shadow (unlike dialog header close).
+pub fn tabCloseButtonOptions(over: dvui.Options) dvui.Options {
+    return windowHeaderCloseButtonOptions(over.override(.{
+        .margin = dvui.Rect.all(0),
+        .padding = dvui.Rect.all(0),
+        .border = dvui.Rect.all(0),
+        .box_shadow = null,
+        .background = false,
+        .color_fill = .transparent,
+        .color_fill_hover = .transparent,
+        .color_fill_press = .transparent,
+        .ninepatch_fill = &dvui.Ninepatch.none,
+        .ninepatch_hover = &dvui.Ninepatch.none,
+        .ninepatch_press = &dvui.Ninepatch.none,
+    }));
+}
+
 /// Base `Options` for the dialog header close button. Tabs pass `.override(.{ .expand = .none, .min_size_content = …, .id_extra = … })`.
 pub fn windowHeaderCloseButtonOptions(over: dvui.Options) dvui.Options {
     const base: dvui.Options = .{
@@ -1099,6 +1119,19 @@ fn drawGradientRect(r: dvui.Rect.Physical, corner_radius: dvui.Rect.Physical, op
     dvui.renderTriangles(triangles, null) catch {
         dvui.log.err("Failed to render triangles", .{});
     };
+}
+
+/// Active workspace tab indicator: one snapped physical pixel along the tab bottom edge.
+pub fn drawTabActiveIndicator(tab: dvui.RectScale, color: dvui.Color) void {
+    if (tab.r.empty()) return;
+    const scale = tab.s;
+    var line = tab.r;
+    line.h = scale;
+    line.y = @floor(tab.r.y + tab.r.h - scale);
+    line.x = @floor(line.x);
+    line.w = @ceil(line.w);
+    if (line.w <= 0) return;
+    line.fill(.{}, .{ .color = color });
 }
 
 pub fn drawEdgeShadow(container: dvui.RectScale, shadow: Shadow, opts: ShadowOptions) void {

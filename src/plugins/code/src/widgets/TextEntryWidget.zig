@@ -2,8 +2,8 @@
 //! tree-sitter predicate filtering, query error fallback, optional focus ring.
 const builtin = @import("builtin");
 const std = @import("std");
-const code = @import("../../code.zig");
-const dvui = code.dvui;
+const internal = @import("../../code.zig");
+const dvui = internal.dvui;
 
 const Event = dvui.Event;
 const Options = dvui.Options;

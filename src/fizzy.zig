@@ -28,13 +28,13 @@ pub const Fling = core.Fling;
 //pub const Popups = @import("editor/popups/Popups.zig");
 pub const Sidebar = @import("editor/Sidebar.zig");
 
-/// Pixel-art plugin module. Shell code should `@import("pixelart")` directly.
-pub const pixelart_mod = @import("pixelart");
+/// Pixel-art plugin module. Shell code should `@import("pixi")` directly.
+pub const pixi_mod = @import("pixi");
 
 // Global pointers
 pub var app: *App = undefined;
 pub var editor: *Editor = undefined;
-pub var packer: *pixelart_mod.Packer = undefined;
+pub var packer: *pixi_mod.Packer = undefined;
 
 /// Runtime platform detection (`isMacOS()` etc.) that's accurate on wasm web
 /// builds, where `builtin.os.tag` is always `.freestanding`.

@@ -1,7 +1,7 @@
 //! Tree-sitter syntax highlighting via dvui's built-in TextEntry support.
 const std = @import("std");
-const code = @import("../code.zig");
-const dvui = code.dvui;
+const internal = @import("../code.zig");
+const dvui = internal.dvui;
 const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
 
 const SyntaxHighlight = @This();

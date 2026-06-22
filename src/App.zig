@@ -9,10 +9,8 @@ const icon = assets.files.@"icon.png";
 
 const fizzy = @import("fizzy.zig");
 const workbench = @import("workbench");
-const pixelart = @import("pixelart");
+const pixi = @import("pixi");
 const code = @import("code");
-const WorkbenchGlobals = workbench.Globals;
-const CodeGlobals = code.Globals;
 const auto_update = @import("backend/auto_update.zig");
 const update_notify = @import("backend/update_notify.zig");
 const singleton = @import("backend/singleton.zig");
@@ -20,7 +18,7 @@ const paths = fizzy.paths;
 
 const App = @This();
 const Editor = fizzy.Editor;
-const Packer = pixelart.Packer;
+const Packer = pixi.Packer;
 
 // App fields
 allocator: std.mem.Allocator = undefined,
@@ -63,7 +61,14 @@ const start_options_base: dvui.App.StartOptions = .{
 
 fn startOptions() dvui.App.StartOptions {
     var opts = start_options_base;
+    // Create the dvui window with the *same* allocator the host hands to plugins
+    // (`fizzy.app.allocator`). Without this, dvui defaults the window to the runtime's
+    // `main_init.gpa`, a different allocator instance — so `dvui.currentWindow().gpa`
+    // and `host.allocator` would be distinct, and a plugin that allocated with one and
+    // freed with the other would corrupt the heap. Unifying them makes every allocator a
+    // plugin can reach the same instance. (No-op on wasm, which uses the page allocator.)
     if (comptime builtin.target.cpu.arch != .wasm32) {
+        opts.gpa = appAllocator();
         const main_init = dvui.App.main_init orelse return opts;
         if (paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.processEnviron(), ".")) |pref_path| {
             pref_path_len = pref_path.len;
@@ -170,26 +175,13 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.editor = try allocator.create(Editor);
     fizzy.editor.* = Editor.init(fizzy.app) catch unreachable;
 
-    // Workbench plugin runtime injection: host + allocator, so workbench code
-    // reaches the EditorAPI surface without importing `fizzy.zig`. Mirrors pixelart.Globals.
-    WorkbenchGlobals.gpa = allocator;
-    WorkbenchGlobals.host = &fizzy.editor.host;
-    WorkbenchGlobals.workbench = &fizzy.editor.workbench;
+    // Workbench + pixi shell-owned state: wire before plugin `register`.
+    workbench.runtime.setWorkbench(&fizzy.editor.workbench);
 
-    // Code plugin runtime injection: host + allocator + its open-document registry,
-    // which lives on `Editor.code`. The plugin's `register` adopts it as its `state`.
-    CodeGlobals.gpa = allocator;
-    CodeGlobals.host = &fizzy.editor.host;
-    CodeGlobals.state = &fizzy.editor.code;
-
-    // Pixel-art plugin state (tools/colors/project/clipboard/pack jobs). Created
-    // before `postInit` so the pixel-art plugin's `register` can adopt it as its
-    // `state`. Owned on `Editor`; torn down in `AppDeinit`.
-    const pixelart_state = try allocator.create(pixelart.State);
-    pixelart.Globals.gpa = allocator;
-    pixelart.Globals.state = pixelart_state;
-    pixelart_state.* = pixelart.State.init(allocator, &fizzy.editor.host) catch unreachable;
-    fizzy.editor.pixelart_state = pixelart_state;
+    const pixi_state = try allocator.create(pixi.State);
+    pixi.runtime.adoptShellState(pixi_state);
+    pixi_state.* = pixi.State.init(allocator, &fizzy.editor.host) catch unreachable;
+    fizzy.editor.pixi_state = pixi_state;
 
     // Second-stage init that needs the editor at its final heap address (e.g.
     // registering the workbench-api service whose `ctx` is this pointer).
@@ -201,8 +193,8 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.packer = try allocator.create(Packer);
     fizzy.packer.* = Packer.init(allocator) catch unreachable;
 
-    pixelart.Globals.packer = fizzy.packer;
-    fizzy.editor.syncLoadedPixelartGlobals();
+    pixi.runtime.setPacker(fizzy.packer);
+    fizzy.editor.syncLoadedPixiGlobals();
 
     // Hand the window to the listener thread and queue our own argv so the
     // first frame opens any files / project folder supplied on the command line.
@@ -250,12 +242,12 @@ pub fn AppDeinit() void {
     // Persist the current windowed frame while the window still exists. No-op off macOS.
     fizzy.backend.saveWindowGeometry(fizzy.app.window);
     // Persist `.fizproject` while `editor.host` and `editor.folder` are still live.
-    pixelart.State.persistProject(fizzy.editor.pixelart_state);
+    pixi.State.persistProject(fizzy.editor.pixi_state);
     fizzy.editor.deinit() catch unreachable;
     // Pixel-art teardown (persists the .fizproject, frees tools/palettes/pack jobs).
     // After the editor so any editor teardown that still reads pixel-art state runs first.
-    fizzy.editor.pixelart_state.deinit(fizzy.app.allocator);
-    fizzy.app.allocator.destroy(fizzy.editor.pixelart_state);
+    fizzy.editor.pixi_state.deinit(fizzy.app.allocator);
+    fizzy.app.allocator.destroy(fizzy.editor.pixi_state);
     // Tear down the singleton listener after the editor so any callback
     // currently in flight finishes before we free state it touches.
     singleton.deinit();

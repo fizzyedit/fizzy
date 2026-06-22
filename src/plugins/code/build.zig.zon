@@ -1,0 +1,20 @@
+.{
+    .name = .code,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "code.zig",
+        "src",
+        "queries",
+        "static",
+    },
+    .fingerprint = 0x77153098cc8cce17,
+    .dependencies = .{
+        .fizzy = .{
+            .path = "../../..",
+        },
+    },
+}

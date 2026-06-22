@@ -12,20 +12,20 @@ test "load pixelart dylib and register" {
     var host = sdk.Host.init(std.testing.allocator);
     defer host.deinit();
 
-    // Stand-in for app-owned `pixelart.State` — register only stores the pointer.
+    // Stand-in for app-owned `pixi.State` — register only stores the pointer.
     var state_buf: [8192]u8 align(16) = undefined;
 
     const before = host.plugins.items.len;
-    var loaded = try PluginLoader.loadAndRegister(&host, test_opts.pixelart_dylib, "pixelart", .{
+    var loaded = try PluginLoader.loadAndRegister(&host, test_opts.pixi_dylib, "pixi", .{
         .gpa = &std.testing.allocator,
-        .state = &state_buf,
-        .packer = null,
+        .arg_b = &state_buf, // pixelart convention: arg_b = *State
+        .arg_c = null,
     });
     defer loaded.lib.close();
 
     try std.testing.expect(host.plugins.items.len == before + 1);
-    const pa = host.pluginById("pixelart") orelse return error.TestExpectedEqual;
-    try std.testing.expectEqualStrings("pixelart", pa.id);
+    const pa = host.pluginById("pixi") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("pixi", pa.id);
     try std.testing.expect(host.sidebar_views.items.len >= 3);
 
     loaded.set_dvui_context(null, null, null, null);

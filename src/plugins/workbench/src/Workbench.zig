@@ -12,19 +12,14 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const files = @import("files.zig");
 const Workspace = @import("Workspace.zig");
-const Globals = @import("Globals.zig");
+const runtime = @import("runtime.zig");
 const workbench_layout = @import("workbench_layout.zig");
 const sdk = @import("sdk");
 
-pub const Workbench = @This();
+pub const Api = sdk.services.workbench.Api;
+pub const BranchDecorator = Api.BranchDecorator;
 
-/// A hook to draw a decoration on a file row. `ctx` is decorator-owned (null for
-/// stateless built-ins). `path` is the file's absolute path; `id_extra` is the
-/// row's disambiguator (pass through to any dvui widget drawn).
-pub const BranchDecorator = struct {
-    ctx: ?*anyopaque = null,
-    draw: *const fn (ctx: ?*anyopaque, path: []const u8, id_extra: usize) void,
-};
+pub const Workbench = @This();
 
 allocator: std.mem.Allocator,
 decorators: std.ArrayListUnmanaged(BranchDecorator) = .empty,
@@ -110,13 +105,13 @@ pub fn drawWorkspaces(self: *Workbench, panel: workbench_layout.PanelPanedState,
 
 pub fn activeDoc(self: *Workbench) ?sdk.DocHandle {
     if (self.workspaces.get(self.open_workspace_grouping)) |workspace| {
-        return Globals.host.docByIndex(workspace.open_file_index);
+        return runtime.host().docByIndex(workspace.open_file_index);
     }
     return null;
 }
 
 pub fn setActiveDocIndex(self: *Workbench, index: usize) void {
-    const doc = Globals.host.docByIndex(index) orelse return;
+    const doc = runtime.host().docByIndex(index) orelse return;
     const grouping = doc.owner.documentGrouping(doc);
     if (self.workspaces.getPtr(grouping)) |workspace| {
         self.open_workspace_grouping = grouping;
@@ -152,7 +147,7 @@ pub fn drawBranchDecorations(self: *Workbench, path: []const u8, id_extra: usize
 /// Built-in: a dot on rows whose file is open with unsaved changes. Mirrors the
 /// tab dirty indicator (`Workspace.zig` ~:528) so the two stay visually consistent.
 fn drawUnsavedDot(_: ?*anyopaque, path: []const u8, id_extra: usize) void {
-    const doc = Globals.host.docFromPath(path) orelse return;
+    const doc = runtime.host().docFromPath(path) orelse return;
     if (doc.owner.showsSaveStatusIndicator(doc)) return;
     if (!doc.owner.isDirty(doc)) return;
     dvui.icon(@src(), "explorer_dirty", icons.tvg.lucide.@"circle-small", .{
@@ -166,103 +161,8 @@ fn drawUnsavedDot(_: ?*anyopaque, path: []const u8, id_extra: usize) void {
 }
 
 // ============================================================================
-// workbench-api — the formal Host service
+// workbench-api — the formal Host service (layout defined in sdk/services/workbench.zig)
 // ============================================================================
-
-/// The capabilities the workbench exposes to other plugins, retrieved via
-/// `host.getService(Workbench.Api.service_name)` and `@ptrCast` to `*Api`. Plugins
-/// drive file management through this instead of touching `fizzy.editor`: they open
-/// documents, place them in tab groups/splits, mutate the file tree, and decorate
-/// explorer rows.
-///
-/// Cross-boundary types are normal Zig (host + plugins share one pinned SDK build),
-/// so this is a plain vtable struct; only the dlopen entry symbols need
-/// `callconv(.c)`. The implementation lives below; `ctx` is the host's `*Editor`.
-pub const Api = struct {
-    /// Service-locator key for `host.registerService` / `host.getService`.
-    pub const service_name = "workbench";
-
-    ctx: *anyopaque,
-    vtable: *const VTable,
-
-    pub const VTable = struct {
-        // ---- open documents + tab/split placement ----
-        /// Open `path` into workspace `grouping` (the tab group / split target).
-        /// Returns true if newly opened (false if already open or unowned).
-        open: *const fn (ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!bool,
-        /// The currently focused workspace grouping — the default placement target.
-        currentGrouping: *const fn (ctx: *anyopaque) u64,
-        /// Allocate a fresh grouping id for a new tab group / split.
-        newGrouping: *const fn (ctx: *anyopaque) u64,
-        /// Close the open document whose file id is `id`.
-        close: *const fn (ctx: *anyopaque, id: u64) anyerror!void,
-        /// Save the active document.
-        save: *const fn (ctx: *anyopaque) anyerror!void,
-        /// True if `path` is currently open in some workspace.
-        isOpen: *const fn (ctx: *anyopaque, path: []const u8) bool,
-
-        // ---- list open documents (no plugin-specific type leaks the boundary) ----
-        /// Number of currently open documents.
-        openCount: *const fn (ctx: *anyopaque) usize,
-        /// Absolute path of the open document at `index`, or null if out of range.
-        openPathAt: *const fn (ctx: *anyopaque, index: usize) ?[]const u8,
-
-        // ---- file-tree operations ----
-        createFile: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
-        createDir: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
-        rename: *const fn (ctx: *anyopaque, path: []const u8, new_path: []const u8, kind: std.Io.File.Kind) anyerror!void,
-        delete: *const fn (ctx: *anyopaque, path: []const u8) void,
-        /// Move `path` into directory `target_dir`. Returns true if it moved.
-        move: *const fn (ctx: *anyopaque, path: []const u8, target_dir: []const u8) anyerror!bool,
-
-        // ---- explorer row decorations ----
-        registerBranchDecorator: *const fn (ctx: *anyopaque, decorator: BranchDecorator) anyerror!void,
-    };
-
-    // Thin wrappers so callers skip the `self.vtable.x(self.ctx, …)` dance.
-    pub fn open(self: Api, path: []const u8, grouping: u64) !bool {
-        return self.vtable.open(self.ctx, path, grouping);
-    }
-    pub fn currentGrouping(self: Api) u64 {
-        return self.vtable.currentGrouping(self.ctx);
-    }
-    pub fn newGrouping(self: Api) u64 {
-        return self.vtable.newGrouping(self.ctx);
-    }
-    pub fn close(self: Api, id: u64) !void {
-        return self.vtable.close(self.ctx, id);
-    }
-    pub fn save(self: Api) !void {
-        return self.vtable.save(self.ctx);
-    }
-    pub fn isOpen(self: Api, path: []const u8) bool {
-        return self.vtable.isOpen(self.ctx, path);
-    }
-    pub fn openCount(self: Api) usize {
-        return self.vtable.openCount(self.ctx);
-    }
-    pub fn openPathAt(self: Api, index: usize) ?[]const u8 {
-        return self.vtable.openPathAt(self.ctx, index);
-    }
-    pub fn createFile(self: Api, path: []const u8) !void {
-        return self.vtable.createFile(self.ctx, path);
-    }
-    pub fn createDir(self: Api, path: []const u8) !void {
-        return self.vtable.createDir(self.ctx, path);
-    }
-    pub fn rename(self: Api, path: []const u8, new_path: []const u8, kind: std.Io.File.Kind) !void {
-        return self.vtable.rename(self.ctx, path, new_path, kind);
-    }
-    pub fn delete(self: Api, path: []const u8) void {
-        return self.vtable.delete(self.ctx, path);
-    }
-    pub fn move(self: Api, path: []const u8, target_dir: []const u8) !bool {
-        return self.vtable.move(self.ctx, path, target_dir);
-    }
-    pub fn registerBranchDecorator(self: Api, decorator: BranchDecorator) !void {
-        return self.vtable.registerBranchDecorator(self.ctx, decorator);
-    }
-};
 
 const service_vtable: Api.VTable = .{
     .open = svcOpen,
@@ -289,10 +189,10 @@ fn svcOpen(ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!bool {
     return hostOf(ctx).openFilePath(path, grouping);
 }
 fn svcCurrentGrouping(_: *anyopaque) u64 {
-    return Globals.workbench.currentGroupingID();
+    return runtime.workbench().currentGroupingID();
 }
 fn svcNewGrouping(_: *anyopaque) u64 {
-    return Globals.workbench.newGroupingID();
+    return runtime.workbench().newGroupingID();
 }
 fn svcClose(ctx: *anyopaque, id: u64) anyerror!void {
     return hostOf(ctx).closeDocById(id);
@@ -326,5 +226,5 @@ fn svcMove(_: *anyopaque, path: []const u8, target_dir: []const u8) anyerror!boo
     return files.moveOnePath(path, target_dir, dvui.currentWindow().arena());
 }
 fn svcRegisterBranchDecorator(_: *anyopaque, decorator: BranchDecorator) anyerror!void {
-    return Globals.workbench.registerBranchDecorator(decorator);
+    return runtime.workbench().registerBranchDecorator(decorator);
 }

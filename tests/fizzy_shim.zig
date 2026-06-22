@@ -22,8 +22,8 @@ pub const Ctx = struct {
     editor: *fizzy.Editor,
 
     pub fn deinit(self: *Ctx, gpa: std.mem.Allocator) void {
-        self.editor.pixelart_state.deinit(gpa);
-        gpa.destroy(self.editor.pixelart_state);
+        self.editor.pixi_state.deinit(gpa);
+        gpa.destroy(self.editor.pixi_state);
         self.editor.arena.deinit();
         gpa.destroy(self.editor);
         gpa.destroy(self.app);
@@ -57,12 +57,11 @@ pub fn init(gpa: std.mem.Allocator) !Ctx {
     editor_ptr.host.allocator = gpa;
     fizzy.editor = editor_ptr;
 
-    const pixelart = fizzy.pixelart_mod;
-    const state_ptr = try gpa.create(pixelart.State);
-    pixelart.Globals.gpa = gpa;
-    pixelart.Globals.state = state_ptr;
-    state_ptr.* = pixelart.State.init(gpa, &editor_ptr.host) catch unreachable;
-    editor_ptr.pixelart_state = state_ptr;
+    const pixi = fizzy.pixi_mod;
+    const state_ptr = try gpa.create(pixi.State);
+    pixi.runtime.adoptShellState(state_ptr);
+    state_ptr.* = pixi.State.init(gpa, &editor_ptr.host) catch unreachable;
+    editor_ptr.pixi_state = state_ptr;
     state_ptr.settings.checker_color_even = .{ 200, 200, 200, 255 };
     state_ptr.settings.checker_color_odd = .{ 100, 100, 100, 255 };
 

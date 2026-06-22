@@ -9,6 +9,7 @@ const Dialogs = @This();
 pub const UnsavedClose = @import("UnsavedClose.zig");
 pub const AppQuitUnsaved = @import("AppQuitUnsaved.zig");
 pub const AboutFizzy = @import("AboutFizzy.zig");
+pub const PluginLoadFailures = @import("PluginLoadFailures.zig");
 pub const WebFolderUnavailable = if (builtin.target.cpu.arch == .wasm32)
     @import("WebFolderUnavailable.zig")
 else

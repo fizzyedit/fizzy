@@ -1,10 +1,6 @@
-//! Code plugin runtime state: the registry of open text documents.
-//!
-//! The shell stores opaque `DocHandle`s in `Editor.open_files`; this map owns the
-//! concrete `Document` values their `id`s map back to.
+//! Code plugin runtime state: open text document registry.
 const std = @import("std");
-const code = @import("../code.zig");
-const sdk = code.sdk;
+const sdk = @import("sdk");
 const Document = @import("Document.zig");
 
 const State = @This();

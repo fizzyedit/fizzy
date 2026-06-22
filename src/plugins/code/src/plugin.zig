@@ -2,14 +2,19 @@
 //! editable, monospace tabs. Registration + the document vtable. Registered from
 //! `Editor.postInit`; document state lives in `State.docs`.
 const std = @import("std");
-const code = @import("../code.zig");
-const sdk = code.sdk;
-const dvui = code.dvui;
-const Globals = code.Globals;
-const State = code.State;
-const Document = code.Document;
-const CodeEditor = code.CodeEditor;
+const internal = @import("../code.zig");
+const sdk = internal.sdk;
+const dvui = internal.dvui;
+const State = internal.State;
+const Document = internal.Document;
+const CodeEditor = internal.CodeEditor;
 const DocHandle = sdk.DocHandle;
+
+pub const manifest = sdk.PluginManifest{
+    .id = "code",
+    .name = "Code",
+    .version = .{ .major = 0, .minor = 1, .patch = 0 },
+};
 
 var plugin: sdk.Plugin = .{
     .state = undefined,
@@ -52,9 +57,18 @@ const vtable: sdk.Plugin.VTable = .{
     .documentDefaultSaveAsFilename = documentDefaultSaveAsFilename,
 };
 
+comptime {
+    sdk.Plugin.assertEditorVTable(vtable);
+}
+
 pub fn register(host: *sdk.Host) !void {
-    // Adopt the app-owned state as this plugin's vtable `state` (mirrors pixelart).
-    plugin.state = @ptrCast(Globals.state);
+    const gpa = host.allocator;
+
+    const st = try gpa.create(State);
+    errdefer gpa.destroy(st);
+    st.* = .{};
+    plugin.state = @ptrCast(st);
+
     try host.registerPlugin(&plugin);
 }
 
@@ -65,7 +79,9 @@ pub fn pluginPtr() *sdk.Plugin {
 
 fn deinit(state: *anyopaque) void {
     const st: *State = @ptrCast(@alignCast(state));
-    st.deinit(Globals.allocator());
+    const gpa = sdk.allocator();
+    st.deinit(gpa);
+    gpa.destroy(st);
 }
 
 // ---- file type ownership -----------------------------------------------------
@@ -87,10 +103,10 @@ fn documentStackAlign(_: *anyopaque) usize {
     return @alignOf(Document);
 }
 fn loadDocument(_: *anyopaque, path: []const u8, out_doc: *anyopaque) anyerror!void {
-    docBuf(out_doc).* = try Document.fromPath(path);
+    try sdk.document.loadPathInto(Document, path, docBuf(out_doc));
 }
 fn loadDocumentFromBytes(_: *anyopaque, path: []const u8, bytes: []const u8, out_doc: *anyopaque) anyerror!void {
-    docBuf(out_doc).* = try Document.fromBytes(path, bytes);
+    try sdk.document.loadBytesInto(Document, path, bytes, docBuf(out_doc));
 }
 fn setDocumentGroupingOnBuffer(_: *anyopaque, doc: *anyopaque, grouping: u64) void {
     docBuf(doc).grouping = grouping;
@@ -107,7 +123,7 @@ fn deinitDocumentBuffer(_: *anyopaque, doc: *anyopaque) void {
 fn registerOpenDocument(state: *anyopaque, file: *anyopaque) anyerror!*anyopaque {
     const st: *State = @ptrCast(@alignCast(state));
     const doc = docBuf(file);
-    try st.docs.put(Globals.allocator(), doc.id, doc.*);
+    try st.docs.put(sdk.allocator(), doc.id, doc.*);
     return st.docs.getPtr(doc.id).?;
 }
 fn documentPtr(state: *anyopaque, id: u64) ?*anyopaque {
@@ -136,7 +152,7 @@ fn documentPath(_: *anyopaque, handle: DocHandle) []const u8 {
 }
 fn setDocumentPath(_: *anyopaque, handle: DocHandle, path: []const u8) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
-    const gpa = Globals.allocator();
+    const gpa = sdk.allocator();
     const new_path = try gpa.dupe(u8, path);
     gpa.free(doc.path);
     doc.path = new_path;
@@ -155,7 +171,7 @@ fn documentHasRecognizedSaveExtension(_: *anyopaque, _: DocHandle) bool {
 
 fn drawDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
     const doc = docFrom(handle) orelse return;
-    if (try CodeEditor.draw(doc, handle.id, Globals.allocator())) {
+    if (try CodeEditor.draw(doc, handle.id, sdk.allocator())) {
         doc.dirty = true;
     }
 }
@@ -180,5 +196,6 @@ fn docBuf(buf: *anyopaque) *Document {
     return @ptrCast(@alignCast(buf));
 }
 fn docFrom(handle: DocHandle) ?*Document {
-    return Globals.state.docById(handle.id);
+    const st: *State = @ptrCast(@alignCast(plugin.state));
+    return st.docById(handle.id);
 }

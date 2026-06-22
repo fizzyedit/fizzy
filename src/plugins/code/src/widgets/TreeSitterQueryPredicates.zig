@@ -1,7 +1,7 @@
 //! Evaluate standard tree-sitter query text predicates (#eq?, #match?, #lua-match?, #any-of?).
 const std = @import("std");
-const code = @import("../../code.zig");
-const dvui = code.dvui;
+const internal = @import("../../code.zig");
+const dvui = internal.dvui;
 
 const c = dvui.c;
 

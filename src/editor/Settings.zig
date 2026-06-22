@@ -187,7 +187,7 @@ pub fn loadPluginStore(
 
     // Legacy flat settings.json: seed the pixel-art blob from the whole root.
     const legacy_blob = std.json.Stringify.valueAlloc(allocator, parsed_v.value, .{}) catch return;
-    const key = allocator.dupe(u8, "pixelart") catch {
+    const key = allocator.dupe(u8, "pixi") catch {
         allocator.free(legacy_blob);
         return;
     };

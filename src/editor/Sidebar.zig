@@ -37,6 +37,7 @@ pub fn draw(_: Sidebar) !Action {
     // One icon per registered sidebar view (plugins contribute these; the shell
     // owns none of them itself). Registration order is the display order.
     for (fizzy.editor.host.sidebar_views.items, 0..) |*view, i| {
+        if (view.hidden) continue;
         const a = try drawOption(view, i, 20);
         if (a != .none) ret = a;
     }

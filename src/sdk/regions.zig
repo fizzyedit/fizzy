@@ -21,6 +21,8 @@ pub const SidebarView = struct {
     icon: []const u8,
     /// User-facing title (sidebar tooltip + pane header).
     title: []const u8,
+    /// When true the view is registered but omitted from the sidebar icon rail.
+    hidden: bool = false,
     ctx: ?*anyopaque = null,
     draw: *const fn (ctx: ?*anyopaque) anyerror!void,
     /// Optional: while this view is the active sidebar view, it takes over the workspace
@@ -35,6 +37,8 @@ pub const BottomView = struct {
     id: []const u8,
     owner: ?*Plugin = null,
     title: []const u8,
+    /// When true the bottom panel stays visible even with no active document.
+    persistent: bool = false,
     ctx: ?*anyopaque = null,
     draw: *const fn (ctx: ?*anyopaque) anyerror!void,
 };
@@ -56,6 +60,36 @@ pub const MenuContribution = struct {
     owner: ?*Plugin = null,
     ctx: ?*anyopaque = null,
     draw: *const fn (ctx: ?*anyopaque) anyerror!void,
+};
+
+/// Items injected into an already-open parent menu (e.g. shell View). The parent
+/// menu's `draw` iterates sections whose `parent_menu_id` matches and calls `draw`
+/// while its floating submenu is open.
+pub const MenuSectionContribution = struct {
+    id: []const u8,
+    /// Parent top-level menu id, e.g. "shell.menu.view".
+    parent_menu_id: []const u8,
+    owner: ?*Plugin = null,
+    ctx: ?*anyopaque = null,
+    draw: *const fn (ctx: ?*anyopaque) anyerror!void,
+};
+
+/// A named, invocable action a plugin registers with the Host. The shell, menus, and
+/// keybindings trigger it by `id` via `Host.runCommand(id)` **without knowing what it
+/// does** — this is how a plugin contributes its own features (atlas pack, raster
+/// transform, a grid-layout dialog, …) without the SDK or shell naming them. Ids are
+/// plugin-namespaced (`"pixelart.packProject"`). The owner resolves any context it needs
+/// (active doc, selection, …) inside `run`; the shell passes only the owner's opaque state.
+pub const Command = struct {
+    id: []const u8,
+    owner: ?*Plugin = null,
+    /// User-facing label (menus / future command palette).
+    title: []const u8,
+    /// Invoke the command. `state` is the owning plugin's opaque state (`owner.state`).
+    run: *const fn (state: *anyopaque) anyerror!void,
+    /// Optional enabled-state query — e.g. grey out while busy or with no active document.
+    /// Absent = always enabled.
+    isEnabled: ?*const fn (state: *anyopaque) bool = null,
 };
 
 /// A settings section. The Settings view renders each registered section under its

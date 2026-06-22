@@ -8,6 +8,7 @@ const Plugin = @import("Plugin.zig");
 const regions = @import("regions.zig");
 const EditorAPI = @import("EditorAPI.zig");
 const DocHandle = @import("DocHandle.zig");
+const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
 
 pub const Host = @This();
 
@@ -15,7 +16,9 @@ pub const SidebarView = regions.SidebarView;
 pub const BottomView = regions.BottomView;
 pub const CenterProvider = regions.CenterProvider;
 pub const MenuContribution = regions.MenuContribution;
+pub const MenuSectionContribution = regions.MenuSectionContribution;
 pub const SettingsSection = regions.SettingsSection;
+pub const Command = regions.Command;
 
 /// Per-plugin opaque settings blobs: plugin id -> serialized JSON. The Host owns the
 /// key + value strings; the shell persists them verbatim under "plugins" in
@@ -62,8 +65,12 @@ bottom_views: std.ArrayListUnmanaged(BottomView) = .empty,
 center_providers: std.ArrayListUnmanaged(CenterProvider) = .empty,
 /// Menubar contributions (non-macOS in-app menu bar).
 menus: std.ArrayListUnmanaged(MenuContribution) = .empty,
+/// Nested items contributed into an open parent menu (e.g. View > Example).
+menu_sections: std.ArrayListUnmanaged(MenuSectionContribution) = .empty,
 /// Settings sections (Settings view renders each under its title, grouped by owner).
 settings_sections: std.ArrayListUnmanaged(SettingsSection) = .empty,
+/// Plugin-contributed commands, invoked by id (menus, keybinds, palette) — see `Command`.
+commands: std.ArrayListUnmanaged(Command) = .empty,
 
 /// Active selection by contribution id (null = use the first registered).
 active_sidebar_view: ?[]const u8 = null,
@@ -81,7 +88,9 @@ pub fn deinit(self: *Host) void {
     self.bottom_views.deinit(self.allocator);
     self.center_providers.deinit(self.allocator);
     self.menus.deinit(self.allocator);
+    self.menu_sections.deinit(self.allocator);
     self.settings_sections.deinit(self.allocator);
+    self.commands.deinit(self.allocator);
     self.file_row_fill_colors.deinit(self.allocator);
     {
         var it = self.plugin_settings.iterator();
@@ -273,34 +282,17 @@ pub fn showOpenFileDialog(
     if (self.shell_api) |a| a.showOpenFileDialog(cb, filters, default_filename, default_folder);
 }
 
-pub fn accept(self: *Host) !void {
-    if (self.shell_api) |a| return a.accept();
-}
-
-pub fn cancel(self: *Host) !void {
-    if (self.shell_api) |a| return a.cancel();
-}
-
-pub fn copy(self: *Host) !void {
-    if (self.shell_api) |a| return a.copy();
-}
-
-pub fn paste(self: *Host) !void {
-    if (self.shell_api) |a| return a.paste();
-}
-
-pub fn transform(self: *Host) !void {
-    if (self.shell_api) |a| return a.transform();
-}
-
 pub fn save(self: *Host) !void {
     if (self.shell_api) |a| return a.save();
 }
 
-pub fn requestCompositeWarmup(self: *Host) void {
-    if (self.shell_api) |a| a.requestCompositeWarmup();
+pub fn requestPrepareFrame(self: *Host) void {
+    if (self.shell_api) |a| a.requestPrepareFrame();
 }
 
+pub fn refresh(self: *Host) void {
+    if (self.shell_api) |a| a.refresh();
+}
 
 pub fn allocUntitledPath(self: *Host) ![]u8 {
     return if (self.shell_api) |a| try a.allocUntitledPath() else error.ShellNotInstalled;
@@ -346,14 +338,6 @@ pub fn abortSaveAllQuit(self: *Host) void {
     if (self.shell_api) |a| a.abortSaveAllQuit();
 }
 
-pub fn startPackProject(self: *Host) !void {
-    if (self.shell_api) |a| return a.startPackProject();
-}
-
-pub fn isPackingActive(self: *Host) bool {
-    return if (self.shell_api) |a| a.isPackingActive() else false;
-}
-
 // ---- per-plugin settings store ---------------------------------------------
 
 /// The stored settings blob for `id` (serialized JSON), or null if none. The returned
@@ -377,14 +361,28 @@ pub fn storePluginSettings(self: *Host, id: []const u8, json: []const u8) !void 
     self.markSettingsDirty();
 }
 
+/// Register a plugin under its self-declared `id`. The `id` is the single source of truth
+/// for routing (`pluginById`, `pluginForExtension`); a folder name or dylib path is not.
+/// Rejects a second plugin claiming an already-registered `id` so routing can never become
+/// ambiguous — the dylib loader turns this into a failed load the user is told about
+/// (built-in ids always win, since they register first).
 pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
+    if (self.pluginById(plugin.id) != null) return error.DuplicatePluginId;
     try self.plugins.append(self.allocator, plugin);
 }
 
-/// Lookup a registered plugin by stable id (`"pixelart"`, `"workbench"`, …).
+/// Lookup a registered plugin by stable id (`"pixi"`, `"workbench"`, …).
 pub fn pluginById(self: *Host, id: []const u8) ?*Plugin {
     for (self.plugins.items) |plugin| {
         if (std.mem.eql(u8, plugin.id, id)) return plugin;
+    }
+    return null;
+}
+
+/// First registered plugin that implements `createDocument` (for shell New File flows).
+pub fn pluginWithCreateDocument(self: *Host) ?*Plugin {
+    for (self.plugins.items) |plugin| {
+        if (plugin.vtable.createDocument != null) return plugin;
     }
     return null;
 }
@@ -409,6 +407,12 @@ pub fn getService(self: *Host, name: []const u8) ?*anyopaque {
     return self.services.get(name);
 }
 
+/// Typed service lookup. `Service` must declare `service_name` and match the registered layout.
+pub fn getServiceTyped(self: *Host, comptime Service: type) ?*Service {
+    const ptr = self.getService(Service.service_name) orelse return null;
+    return @ptrCast(@alignCast(ptr));
+}
+
 // ---- region registration (called from a plugin's register / postInit) -------
 
 pub fn registerSidebarView(self: *Host, view: SidebarView) !void {
@@ -421,6 +425,82 @@ pub fn registerBottomView(self: *Host, view: BottomView) !void {
     if (self.active_bottom_view == null) self.active_bottom_view = view.id;
 }
 
+/// Move a bottom-panel tab from `from_index` to `to_index`.
+pub fn reorderBottomView(self: *Host, from_index: usize, to_index: usize) void {
+    if (from_index >= self.bottom_views.items.len or to_index >= self.bottom_views.items.len) return;
+    if (from_index == to_index) return;
+    const item = self.bottom_views.items[from_index];
+    _ = self.bottom_views.orderedRemove(from_index);
+    self.bottom_views.insert(self.allocator, to_index, item) catch return;
+}
+
+pub fn setSidebarViewHidden(self: *Host, id: []const u8, hidden: bool) void {
+    for (self.sidebar_views.items) |*view| {
+        if (std.mem.eql(u8, view.id, id)) {
+            view.hidden = hidden;
+            return;
+        }
+    }
+}
+
+/// Fluent sugar — same fields as `SidebarView`, without a new ABI type.
+pub fn registerSidebar(
+    self: *Host,
+    spec: struct {
+        id: []const u8,
+        title: []const u8,
+        icon: []const u8,
+        draw: *const fn (ctx: ?*anyopaque) anyerror!void,
+        owner: ?*Plugin = null,
+        hidden: bool = false,
+        draw_workspace: ?*const fn (ctx: ?*anyopaque, pane: *WorkbenchPaneView) anyerror!void = null,
+    },
+) !void {
+    try self.registerSidebarView(.{
+        .id = spec.id,
+        .title = spec.title,
+        .icon = spec.icon,
+        .draw = spec.draw,
+        .owner = spec.owner,
+        .hidden = spec.hidden,
+        .draw_workspace = spec.draw_workspace,
+    });
+}
+
+pub fn registerBottom(
+    self: *Host,
+    spec: struct {
+        id: []const u8,
+        title: []const u8,
+        draw: *const fn (ctx: ?*anyopaque) anyerror!void,
+        owner: ?*Plugin = null,
+        persistent: bool = false,
+    },
+) !void {
+    try self.registerBottomView(.{
+        .id = spec.id,
+        .title = spec.title,
+        .draw = spec.draw,
+        .owner = spec.owner,
+        .persistent = spec.persistent,
+    });
+}
+
+pub fn registerCenter(
+    self: *Host,
+    spec: struct {
+        id: []const u8,
+        draw: *const fn (ctx: ?*anyopaque) anyerror!dvui.App.Result,
+        owner: ?*Plugin = null,
+    },
+) !void {
+    try self.registerCenterProvider(.{
+        .id = spec.id,
+        .draw = spec.draw,
+        .owner = spec.owner,
+    });
+}
+
 pub fn registerCenterProvider(self: *Host, provider: CenterProvider) !void {
     try self.center_providers.append(self.allocator, provider);
     if (self.active_center == null) self.active_center = provider.id;
@@ -430,8 +510,42 @@ pub fn registerMenu(self: *Host, menu: MenuContribution) !void {
     try self.menus.append(self.allocator, menu);
 }
 
+pub fn registerMenuSection(self: *Host, section: MenuSectionContribution) !void {
+    try self.menu_sections.append(self.allocator, section);
+}
+
 pub fn registerSettingsSection(self: *Host, section: SettingsSection) !void {
     try self.settings_sections.append(self.allocator, section);
+}
+
+// ---- commands --------------------------------------------------------------
+
+/// Register a plugin command. Ids should be plugin-namespaced (`"pixelart.packProject"`).
+pub fn registerCommand(self: *Host, cmd: Command) !void {
+    try self.commands.append(self.allocator, cmd);
+}
+
+/// The registered command with `id`, or null.
+pub fn command(self: *Host, id: []const u8) ?*Command {
+    for (self.commands.items) |*c| {
+        if (std.mem.eql(u8, c.id, id)) return c;
+    }
+    return null;
+}
+
+/// Whether `id` is registered and currently enabled (absent `isEnabled` = enabled).
+/// Unknown ids are treated as disabled.
+pub fn commandEnabled(self: *Host, id: []const u8) bool {
+    const c = self.command(id) orelse return false;
+    const owner = c.owner orelse return true;
+    return if (c.isEnabled) |f| f(owner.state) else true;
+}
+
+/// Run the command `id` (no-op when unknown). The owner's opaque `state` is passed to `run`.
+pub fn runCommand(self: *Host, id: []const u8) !void {
+    const c = self.command(id) orelse return;
+    const owner = c.owner orelse return;
+    try c.run(owner.state);
 }
 
 // ---- active selection ------------------------------------------------------
@@ -445,15 +559,28 @@ pub fn isActiveSidebarView(self: *Host, id: []const u8) bool {
     return std.mem.eql(u8, active, id);
 }
 
-/// The currently active sidebar view, or the first registered as a fallback.
+/// The currently active sidebar view, or the first visible registered view as fallback.
 pub fn activeSidebarView(self: *Host) ?*SidebarView {
     if (self.active_sidebar_view) |id| {
         for (self.sidebar_views.items) |*v| {
             if (std.mem.eql(u8, v.id, id)) return v;
         }
     }
-    if (self.sidebar_views.items.len > 0) return &self.sidebar_views.items[0];
+    return self.firstVisibleSidebarView();
+}
+
+pub fn firstVisibleSidebarView(self: *Host) ?*SidebarView {
+    for (self.sidebar_views.items) |*v| {
+        if (!v.hidden) return v;
+    }
     return null;
+}
+
+pub fn hasPersistentBottomView(self: *Host) bool {
+    for (self.bottom_views.items) |*v| {
+        if (v.persistent) return true;
+    }
+    return false;
 }
 
 pub fn setActiveBottomView(self: *Host, id: []const u8) void {

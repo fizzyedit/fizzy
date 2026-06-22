@@ -11,8 +11,8 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("fizzy.zig");
-const pixelart = @import("pixelart");
-const Internal = pixelart.internal;
+const pixi = @import("pixi");
+const Internal = pixi.internal;
 
 // Wasm-cleanliness probes. Referencing each symbol forces semantic analysis of its
 // module graph; any compile error pinpoints what to gate next. Zero-cost at runtime.
@@ -28,15 +28,15 @@ comptime {
     _ = fizzy.atlas;
 
     // Algorithms — pure Zig + dvui
-    _ = pixelart.algorithms.brezenham;
-    _ = pixelart.algorithms.reduce;
+    _ = pixi.algorithms.brezenham;
+    _ = pixi.algorithms.reduce;
 
     // Top-level data types (.pixi format on-disk shapes)
-    _ = pixelart.Animation;
-    _ = pixelart.Atlas;
-    _ = pixelart.File;
-    _ = pixelart.Layer;
-    _ = pixelart.Sprite;
+    _ = pixi.Animation;
+    _ = pixi.Atlas;
+    _ = pixi.File;
+    _ = pixi.Layer;
+    _ = pixi.Sprite;
 
     // Internal editor-side data types
     _ = Internal.Animation;
@@ -55,11 +55,11 @@ comptime {
     _ = fizzy.image.init;
     _ = fizzy.image.pixels;
     _ = fizzy.perf.record;
-    _ = pixelart.render;
+    _ = pixi.render;
 
     // Custom dvui wrapper + widgets — types compile even though the widget files
     // contain dead `@import("backend")` SDL3 imports at file scope.
-    _ = pixelart.widgets.FileWidget;
+    _ = pixi.widgets.FileWidget;
     _ = fizzy.dvui.CanvasWidget;
 
     // The big ones: Editor + App. Type-level reference only — passes because Zig
