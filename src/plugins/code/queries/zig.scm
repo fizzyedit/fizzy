@@ -1,32 +1,19 @@
-; Feppz! / vscode-zig aligned captures for tree-sitter highlighting.
-; Capture names mirror TextMate scopes from ziglang.vscode-zig where possible.
+; Variables — catch-all first; more specific rules below override (last capture wins).
+(identifier) @variable
 
-; --- Functions & calls (before generic identifiers) ---
-(function_declaration
-  name: (identifier) @feppz.entity.name.function)
+; Parameters
+(parameter
+  name: (identifier) @variable.parameter)
 
-(call_expression
-  function: (identifier) @feppz.entity.name.function)
+(payload
+  (identifier) @variable.parameter)
 
-(call_expression
-  function: (field_expression
-    member: (identifier) @feppz.entity.name.function))
-
-; const/var name — the identifier immediately after the keyword.
-(variable_declaration
-  [
-    "const"
-    "var"
-  ]
-  (identifier) @feppz.variable.definition)
-
-; PascalCase types only when not a dotted path segment (see field_expression below).
-((identifier) @feppz.entity.name.type
-  (#match? @feppz.entity.name.type "^[A-Z_][a-zA-Z0-9_]*"))
+; Types
+(parameter
+  type: (identifier) @type)
 
 (variable_declaration
-  (identifier) @feppz.entity.name.type
-  (#match? @feppz.entity.name.type "^[A-Z_][a-zA-Z0-9_]*")
+  (identifier) @type
   "="
   [
     (struct_declaration)
@@ -35,185 +22,160 @@
     (opaque_declaration)
   ])
 
-; --- Types ---
-(parameter
-  type: (identifier) @feppz.entity.name.type
-  (#match? @feppz.entity.name.type "^[A-Z_][a-zA-Z0-9_]*"))
-
 [
   (builtin_type)
   "anyframe"
-  "anyopaque"
-] @feppz.keyword.type
+] @type.builtin
 
-; --- Parameters & fields ---
-(parameter
-  name: (identifier) @feppz.variable)
-
-(payload
-  (identifier) @feppz.variable)
-
-; Dotted paths: dvui in dvui.TextureTarget, std/mem in std.mem.Allocator
-(field_expression
-  object: (identifier) @feppz.variable.namespace
-  (#match? @feppz.variable.namespace "^[a-z_][a-zA-Z0-9_]*"))
+; Constants
+[
+  "null"
+  "unreachable"
+  "undefined"
+] @constant.builtin
 
 (field_expression
-  (_)
-  member: (identifier) @feppz.entity.name.type
-  (#match? @feppz.entity.name.type "^[A-Z_][a-zA-Z0-9_]*"))
-
-(field_expression
-  (_)
-  member: (identifier) @feppz.variable.namespace
-  (#match? @feppz.variable.namespace "^[a-z_][a-zA-Z0-9_]*"))
-
-(field_initializer
   .
-  (identifier) @feppz.variable.member)
-
-(container_field
-  name: (identifier) @feppz.variable.member)
+  member: (identifier) @constant)
 
 (enum_declaration
   (container_field
-    type: (identifier) @feppz.variable.enum_member))
+    type: (identifier) @constant))
 
-(initializer_list
-  (assignment_expression
-    left: (field_expression
-      .
-      member: (identifier) @feppz.variable.namespace
-      (#match? @feppz.variable.namespace "^[a-z_][a-zA-Z0-9_]*"))))
-
-(initializer_list
-  (assignment_expression
-    left: (field_expression
-      .
-      member: (identifier) @feppz.entity.name.type
-      (#match? @feppz.entity.name.type "^[A-Z_][a-zA-Z0-9_]*"))))
-
-; --- Constants ---
-((identifier) @feppz.constant
-  (#match? @feppz.constant "^[A-Z][A-Z_0-9]+$"))
-
-[
-  "null"
-  "undefined"
-] @feppz.keyword.constant.default
-
-(boolean) @feppz.keyword.constant.bool
-
-; --- Labels ---
+; Labels
 (block_label
-  (identifier) @feppz.label)
+  (identifier) @label)
 
 (break_label
-  (identifier) @feppz.label)
+  (identifier) @label)
 
-; --- Builtins & modules ---
-(builtin_function
-  (builtin_identifier) @feppz.support.function.builtin)
+; Fields
+(field_initializer
+  .
+  (identifier) @variable.member)
 
-(builtin_identifier) @feppz.support.function.builtin
+(field_expression
+  (_)
+  member: (identifier) @variable.member)
+
+(container_field
+  name: (identifier) @variable.member)
+
+(initializer_list
+  (assignment_expression
+    left: (field_expression
+      .
+      member: (identifier) @variable.member)))
+
+; Functions
+(builtin_identifier) @function.builtin
 
 (call_expression
-  function: (builtin_function
-    (builtin_identifier) @feppz.support.function.builtin))
+  function: (identifier) @function.call)
 
+(call_expression
+  function: (field_expression
+    member: (identifier) @function.call))
+
+(function_declaration
+  name: (identifier) @function)
+
+; Modules
 (variable_declaration
-  (identifier) @feppz.variable.module
+  (identifier) @module
   (builtin_function
-    (builtin_identifier) @feppz.support.function.builtin
-    (#any-of? @feppz.support.function.builtin "@import" "@cImport")))
+    (builtin_identifier) @keyword.import
+    (#any-of? @keyword.import "@import" "@cImport")))
 
+; Builtins
 [
   "c"
   "..."
-] @feppz.variable.builtin
+] @variable.builtin
 
-((identifier) @feppz.variable.builtin
-  (#eq? @feppz.variable.builtin "_"))
+((identifier) @variable.builtin
+  (#eq? @variable.builtin "_"))
 
 (calling_convention
-  (identifier) @feppz.variable.builtin)
+  (identifier) @variable.builtin)
 
-; --- Keywords (vscode-zig scopes) ---
+; Keywords
 [
+  "asm"
+  "defer"
+  "errdefer"
+  "test"
+  "error"
   "const"
   "var"
-  "test"
-  "and"
-  "or"
-] @feppz.keyword.default
-
-"fn" @feppz.storage.type.function
+] @keyword
 
 [
   "struct"
   "union"
   "enum"
   "opaque"
-] @feppz.keyword.structure
+] @keyword.type
 
 [
-  "extern"
-  "packed"
-  "export"
-  "pub"
-  "noalias"
-  "inline"
-  "comptime"
-  "volatile"
-  "align"
-  "linksection"
-  "threadlocal"
-  "allowzero"
-  "noinline"
-  "callconv"
-  "usingnamespace"
-  "addrspace"
-] @feppz.keyword.storage
-
-"asm" @feppz.keyword.control.flow
-
-"error" @feppz.keyword.control.flow
-
-[
-  "break"
-  "return"
-  "continue"
-  "defer"
-  "errdefer"
-  "unreachable"
-] @feppz.keyword.control.flow
-
-[
-  "while"
-  "for"
-] @feppz.keyword.control.flow
-
-[
-  "resume"
-  "suspend"
-  "nosuspend"
   "async"
   "await"
-] @feppz.keyword.control.flow
+  "suspend"
+  "nosuspend"
+  "resume"
+] @keyword.coroutine
+
+"fn" @keyword.function
+
+[
+  "and"
+  "or"
+  "orelse"
+] @keyword.operator
+
+"return" @keyword.return
 
 [
   "if"
   "else"
   "switch"
-  "orelse"
-] @feppz.keyword.control.flow
+] @keyword.conditional
+
+[
+  "for"
+  "while"
+  "break"
+  "continue"
+] @keyword.repeat
+
+[
+  "usingnamespace"
+  "export"
+] @keyword.import
 
 [
   "try"
   "catch"
-] @feppz.keyword.control.flow
+] @keyword.exception
 
-; --- Operators ---
+[
+  "volatile"
+  "allowzero"
+  "noalias"
+  "addrspace"
+  "align"
+  "callconv"
+  "linksection"
+  "pub"
+  "inline"
+  "noinline"
+  "extern"
+  "comptime"
+  "packed"
+  "threadlocal"
+] @keyword.modifier
+
+; Operator
 [
   "="
   "*="
@@ -244,6 +206,7 @@
   ">="
   "<="
   "<"
+  "&"
   "^"
   "|"
   "<<"
@@ -266,50 +229,53 @@
   ".?"
   "?"
   ".."
-] @feppz.operator
+] @operator
 
-; --- Literals ---
-(character) @feppz.string.character
+; Literals
+(character) @character
 
 ([
   (string)
   (multiline_string)
-] @feppz.string
-  (#set! "priority" 1))
+] @string
+  (#set! "priority" 95))
 
-(integer) @feppz.number
+(integer) @number
 
-(float) @feppz.number.float
+(float) @number.float
 
-(escape_sequence) @feppz.string.escape
-  (#set! "priority" 95)
+(boolean) @boolean
 
-; --- Punctuation ---
-["(" ")"] @feppz.punctuation.round
+(escape_sequence) @string.escape
 
-["[" "]"] @feppz.punctuation.square
-
-["{" "}"] @feppz.punctuation.curly
+; Punctuation
+[
+  "["
+  "]"
+  "("
+  ")"
+  "{"
+  "}"
+] @punctuation.bracket
 
 [
   ";"
+  "."
   ","
   ":"
   "=>"
   "->"
-] @feppz.punctuation
-
-"." @feppz.punctuation.accessor
+] @punctuation.delimiter
 
 (payload
-  "|" @feppz.punctuation.square)
+  "|" @punctuation.bracket)
 
-; --- Comments ---
-(comment) @feppz.comment @spell
+; Comments
+(comment) @comment
 
-((comment) @feppz.comment.documentation
-  (#match? @feppz.comment.documentation "^//!"))
+((comment) @comment.documentation
+  (#lua-match? @comment.documentation "^//!"))
 
-; --- Fallback identifiers (lowest priority) ---
-(identifier) @feppz.variable
-  (#set! "priority" 0)
+; PascalCase identifiers (last capture wins over @variable)
+((identifier) @type
+  (#lua-match? @type "^[A-Z_][a-zA-Z0-9_]*"))

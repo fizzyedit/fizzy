@@ -1,11 +1,7 @@
-//! Tree-sitter syntax highlighting for the code editor.
-//!
-//! Capture names in `queries/zig.scm` mirror vscode-zig / Feppz! TextMate scopes.
-//! Colors match the Feppz! theme as shown in VS Code/Cursor.
+//! Tree-sitter syntax highlighting via dvui's built-in TextEntry support.
 const std = @import("std");
 const code = @import("../code.zig");
 const dvui = code.dvui;
-const wdvui = code.core.dvui;
 
 const SyntaxHighlight = @This();
 
@@ -26,134 +22,107 @@ pub const Language = enum {
     }
 };
 
-/// Editor token colors. More specific capture names must appear later in each slice.
-pub const Theme = struct {
-    text: dvui.Color,
-    line_number: dvui.Color,
-    zig_highlights: []const wdvui.TextEntryWidget.SyntaxHighlight,
-    json_highlights: []const wdvui.TextEntryWidget.SyntaxHighlight,
-};
-
 fn rgb(r: u8, g: u8, b: u8) dvui.Color {
     return .{ .r = r, .g = g, .b = b, .a = 255 };
 }
 
-fn hi(name: []const u8, color: dvui.Color) wdvui.TextEntryWidget.SyntaxHighlight {
+const ident_gold = rgb(0xd5, 0xc6, 0x83);
+const keyword_brown = rgb(0x87, 0x65, 0x60);
+const keyword_modifier_brown = rgb(0x61, 0x53, 0x53);
+const type_orange = rgb(0xce, 0xa4, 0x7f);
+const type_color = rgb(199, 140, 122);
+const function_green = rgb(0x4d, 0xa5, 0x86);
+
+fn hi(name: []const u8, color: dvui.Color) dvui.TextEntryWidget.SyntaxHighlight {
     return .{ .name = name, .opts = .{ .color_text = color } };
 }
 
-// Feppz palette (from Feppz!-color-theme.json + vscode-zig scopes)
-const fn_green = rgb(0x4d, 0xa5, 0x86);
-const type_orange = rgb(0xd8, 0x8e, 0x79);
-const var_yellow = rgb(0xd9, 0xc6, 0x79);
-const kw_brown = rgb(0x61, 0x53, 0x53); // keyword.default.zig — const, var
-const kw_decl = rgb(0x87, 0x65, 0x60); // pub, fn, struct, storage
-const kw_pink = rgb(0xce, 0xa4, 0x7f); // if, for, return, orelse, error, …
-
-pub const feppz: Theme = .{
-    .text = rgb(0xdd, 0xdc, 0xd3),
-    .line_number = rgb(0x58, 0x58, 0x5f),
-    .zig_highlights = &feppz_zig_highlights,
-    .json_highlights = &feppz_json_highlights,
+/// Zig — capture names match `queries/zig.scm`.
+const zig_highlights = [_]dvui.TextEntryWidget.SyntaxHighlight{
+    hi("comment", rgb(0x57, 0x5b, 0x65)),
+    hi("keyword", keyword_brown),
+    hi("keyword.type", keyword_brown),
+    hi("keyword.function", keyword_brown),
+    hi("keyword.modifier", keyword_modifier_brown),
+    hi("keyword.conditional", type_orange),
+    hi("keyword.repeat", type_orange),
+    hi("keyword.return", type_orange),
+    hi("keyword.operator", type_orange),
+    hi("keyword.import", keyword_brown),
+    hi("keyword.exception", type_orange),
+    hi("keyword.coroutine", type_orange),
+    hi("variable", ident_gold),
+    hi("variable.parameter", ident_gold),
+    hi("variable.member", ident_gold),
+    hi("variable.builtin", rgb(0x6a, 0x66, 0x56)),
+    hi("module", ident_gold),
+    hi("type", type_color),
+    hi("type.builtin", type_color),
+    hi("function", function_green),
+    hi("function.call", function_green),
+    hi("function.builtin", function_green),
+    hi("constant", rgb(0x60, 0x74, 0xd2)),
+    hi("constant.builtin", rgb(0x53, 0x5c, 0x90)),
+    hi("string", rgb(0x60, 0xc0, 0xd2)),
+    hi("string.escape", rgb(0x58, 0x8e, 0x9a)),
+    hi("character", rgb(0x60, 0xd2, 0xbe)),
+    hi("number", rgb(0x60, 0x9a, 0xd2)),
+    hi("number.float", rgb(0x60, 0x9a, 0xd2)),
+    hi("boolean", rgb(0x53, 0x5c, 0x90)),
+    hi("operator", rgb(0xb9, 0xb9, 0xb5)),
+    hi("label", rgb(0xc8, 0xc8, 0xc8)),
+    hi("punctuation", rgb(0x9c, 0x9d, 0x9d)),
 };
 
-pub const default_theme = feppz;
+/// JSON — inline query (same shape as dvui Examples/text_entry.zig).
+const json_queries =
+    \\(string) @string
+    \\
+    \\(pair
+    \\  key: (_) @string.special.key)
+    \\
+    \\(number) @number
+    \\
+    \\[
+    \\  (null)
+    \\  (true)
+    \\  (false)
+    \\] @constant.builtin
+    \\
+    \\(escape_sequence) @escape
+    \\
+    \\(comment) @comment
+;
 
-const feppz_zig_highlights = [_]wdvui.TextEntryWidget.SyntaxHighlight{
-    hi("feppz.comment", rgb(0x57, 0x5b, 0x65)),
-    hi("feppz.comment.documentation", rgb(0x7a, 0x7a, 0x78)),
-
-    hi("feppz.punctuation", rgb(0x9c, 0x9d, 0x9d)),
-    hi("feppz.punctuation.round", rgb(0x85, 0x87, 0x8a)),
-    hi("feppz.punctuation.square", rgb(0x72, 0x75, 0x7b)),
-    hi("feppz.punctuation.curly", rgb(0x63, 0x67, 0x6f)),
-    hi("feppz.punctuation.accessor", rgb(0x9c, 0x9d, 0x9d)),
-
-    hi("feppz.operator", rgb(0xb9, 0xb9, 0xb5)),
-
-    hi("feppz.string", rgb(0x60, 0xc0, 0xd2)),
-    hi("feppz.string.character", rgb(0x60, 0xd2, 0xbe)),
-    hi("feppz.string.escape", rgb(0x58, 0x8e, 0x9a)),
-    hi("feppz.number", rgb(0x60, 0x9a, 0xd2)),
-    hi("feppz.number.float", rgb(0x60, 0x9a, 0xd2)),
-
-    // Variables, namespace path segments (std.mem), struct fields
-    hi("feppz.variable", var_yellow),
-    hi("feppz.variable.definition", var_yellow),
-    hi("feppz.variable.namespace", var_yellow),
-    hi("feppz.variable.module", var_yellow),
-    hi("feppz.variable.member", var_yellow),
-    hi("feppz.variable.enum_member", rgb(0x53, 0x5c, 0x90)),
-    hi("feppz.variable.builtin", rgb(0x6a, 0x66, 0x56)),
-    hi("feppz.constant", rgb(0x60, 0x74, 0xd2)),
-    hi("feppz.label", rgb(0xc8, 0xc8, 0xc8)),
-
-    hi("feppz.entity.name.function", fn_green),
-    hi("feppz.support.function.builtin", fn_green),
-
-    // Types: PascalCase names, primitives (u32), anyopaque, …
-    hi("feppz.entity.name.type", type_orange),
-    hi("feppz.keyword.type", type_orange),
-
-    // Declaration keywords — brown/tan
-    hi("feppz.keyword.default", kw_brown),
-    hi("feppz.storage.type.function", kw_decl),
-    hi("feppz.keyword.structure", kw_decl),
-    hi("feppz.keyword.storage", kw_decl),
-
-    // Control flow — pink (return, if, for, orelse, error, …)
-    hi("feppz.keyword.control.flow", kw_pink),
-
-    hi("feppz.keyword.constant.default", rgb(0x53, 0x5c, 0x90)),
-    hi("feppz.keyword.constant.bool", rgb(0x53, 0x5c, 0x90)),
-};
-
-const feppz_json_highlights = [_]wdvui.TextEntryWidget.SyntaxHighlight{
-    hi("feppz.comment", rgb(0x57, 0x5b, 0x65)),
-    hi("feppz.number", rgb(0x60, 0x9a, 0xd2)),
-    hi("feppz.constant", rgb(0x60, 0x74, 0xd2)),
-    hi("feppz.string", rgb(0x60, 0xc0, 0xd2)),
-    hi("feppz.string.escape", rgb(0x58, 0x8e, 0x9a)),
-    hi("feppz.keyword.constant.default", rgb(0x53, 0x5c, 0x90)),
-    hi("feppz.string.special.key", rgb(0xb6, 0x77, 0x6b)),
+const json_highlights = [_]dvui.TextEntryWidget.SyntaxHighlight{
+    hi("constant", rgb(0x53, 0x5c, 0x90)),
+    hi("string", rgb(0x60, 0xc0, 0xd2)),
+    hi("string.special.key", rgb(0xb6, 0x77, 0x6b)),
+    hi("comment", rgb(0x57, 0x5b, 0x65)),
+    hi("number", rgb(0x60, 0x9a, 0xd2)),
+    hi("escape", rgb(0x58, 0x8e, 0x9a)),
 };
 
 const zig_queries = @embedFile("../queries/zig.scm");
-const json_queries = @embedFile("../queries/json.scm");
 
 const TreeSitter = if (dvui.useTreeSitter) struct {
     extern fn tree_sitter_zig() callconv(.c) *dvui.c.TSLanguage;
     extern fn tree_sitter_json() callconv(.c) *dvui.c.TSLanguage;
-
-    fn option(
-        language: *dvui.c.TSLanguage,
-        queries: []const u8,
-        highlights: []const wdvui.TextEntryWidget.SyntaxHighlight,
-    ) wdvui.TextEntryWidget.InitOptions.TreeSitterOption {
-        return .{
-            .language = language,
-            .queries = queries,
-            .highlights = highlights,
-        };
-    }
 } else struct {};
 
-pub fn treeSitterOption(
-    path: []const u8,
-    theme: Theme,
-) ?wdvui.TextEntryWidget.InitOptions.TreeSitterOption {
+pub fn treeSitterOption(path: []const u8) ?dvui.TextEntryWidget.InitOptions.TreeSitterOption {
     if (!dvui.useTreeSitter) return null;
     return switch (Language.fromPath(path)) {
-        .zig, .zon => TreeSitter.option(
-            TreeSitter.tree_sitter_zig(),
-            zig_queries,
-            theme.zig_highlights,
-        ),
-        .json, .atlas => TreeSitter.option(
-            TreeSitter.tree_sitter_json(),
-            json_queries,
-            theme.json_highlights,
-        ),
+        .zig, .zon => .{
+            .language = TreeSitter.tree_sitter_zig(),
+            .queries = zig_queries,
+            .highlights = &zig_highlights,
+        },
+        .json, .atlas => .{
+            .language = TreeSitter.tree_sitter_json(),
+            .queries = json_queries,
+            .highlights = &json_highlights,
+        },
         .plain => null,
     };
 }
