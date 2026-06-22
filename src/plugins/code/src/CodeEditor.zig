@@ -2,6 +2,7 @@
 const std = @import("std");
 const code = @import("../code.zig");
 const dvui = code.dvui;
+const core = code.core;
 const Document = code.Document;
 const SyntaxHighlight = @import("SyntaxHighlight.zig");
 const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
@@ -33,7 +34,23 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
     const line_height = font.lineHeight();
     const line_num_col = lineNumberColumnWidth(doc.line_count, font);
 
-    var te = TextEntryWidget.textEntry(@src(), .{
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, chromeless.override(.{
+        .expand = .both,
+        .font = font,
+        .id_extra = @intCast(id_extra),
+    }));
+    defer row.deinit();
+
+    // Reserve fixed width for the line-number gutter before the text entry init.
+    const gutter_wd = dvui.spacer(@src(), chromeless.override(.{
+        .min_size_content = .{ .w = line_num_col, .h = 1 },
+        .expand = .vertical,
+        .id_extra = @intCast(id_extra + 2),
+    }));
+    const gutter_rs = gutter_wd.borderRectScale();
+
+    var te: TextEntryWidget = undefined;
+    te.init(@src(), .{
         .multiline = true,
         .break_lines = false,
         .cache_layout = true,
@@ -48,23 +65,29 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
         .expand = .both,
         .font = font,
         .padding = .{
-            .x = line_num_col,
+            .x = 0,
             .y = editor_pad_y,
             .w = editor_pad_right,
             .h = editor_pad_y,
         },
         .color_text = text_color,
-        .id_extra = @intCast(id_extra),
+        .id_extra = @intCast(id_extra + 1),
     }));
     defer te.deinit();
+    te.processEvents();
+    te.draw();
 
     drawLineNumbers(
-        te.data().borderRectScale(),
+        gutter_rs,
         doc.line_count,
         te.scroll.si.viewport.y,
         font,
         line_height,
     );
+
+    const editor_rs = row.data().borderRectScale();
+    const scroll_rs = te.scroll.data().contentRectScale();
+    drawScrollEdgeShadows(editor_rs, scroll_rs, te.scroll.si);
 
     if (te.text_changed) doc.refreshLineCount();
     return te.text_changed;
@@ -76,6 +99,28 @@ fn lineNumberColumnWidth(line_count: usize, font: dvui.Font) f32 {
     var buf: [16]u8 = undefined;
     const sample = std.fmt.bufPrint(&buf, "{d}", .{line_count}) catch "9999";
     return line_number_pad_left + font.textSize(sample).w + code_gap_after_numbers;
+}
+
+fn drawScrollEdgeShadows(
+    vertical_rs: dvui.RectScale,
+    horizontal_rs: dvui.RectScale,
+    si: *const dvui.ScrollInfo,
+) void {
+    const vertical_scroll = si.offset(.vertical);
+    const horizontal_scroll = si.offset(.horizontal);
+
+    if (vertical_scroll > 0.0 and !vertical_rs.r.empty()) {
+        core.dvui.drawEdgeShadow(vertical_rs, .top, .{});
+    }
+    if (si.virtual_size.h > si.viewport.h and !vertical_rs.r.empty()) {
+        core.dvui.drawEdgeShadow(vertical_rs, .bottom, .{});
+    }
+    if (si.virtual_size.w > si.viewport.w and !horizontal_rs.r.empty()) {
+        core.dvui.drawEdgeShadow(horizontal_rs, .right, .{});
+    }
+    if (horizontal_scroll > 0.0 and !horizontal_rs.r.empty()) {
+        core.dvui.drawEdgeShadow(horizontal_rs, .left, .{});
+    }
 }
 
 fn drawLineNumbers(
