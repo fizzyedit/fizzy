@@ -30,6 +30,7 @@ pub const Dialogs = @import("dialogs/Dialogs.zig");
 pub const Keybinds = @import("Keybinds.zig");
 
 const workbench_mod = @import("workbench");
+const code_mod = @import("code");
 const PluginLoader = if (builtin.target.cpu.arch == .wasm32)
     @import("PluginLoader_stub.zig")
 else
@@ -68,6 +69,10 @@ pixelart_state: *pixelart.State,
 
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
+
+/// Code plugin runtime state (open text documents). Owned here; `code.Globals.state`
+/// points at it. Torn down via the plugin's `deinit` vtable hook.
+code: code_mod.State = .{},
 
 /// Keeps plugin dylibs mapped while their vtables are live (native only).
 loaded_plugin_libs: std.ArrayListUnmanaged(PluginLoader.LoadedLib) = .empty,
@@ -598,6 +603,7 @@ pub fn postInit(editor: *Editor) !void {
         try pixelart.plugin.register(&editor.host);
         try pixelartPlugin(editor).initPlugin();
     }
+    try code_mod.plugin.register(&editor.host);
 
     // Shell built-in: Settings (owner = null; not a plugin).
     try editor.host.registerSidebarView(.{

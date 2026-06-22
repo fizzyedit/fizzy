@@ -443,6 +443,11 @@ pub fn build(b: *std.Build) !void {
             .icons = if (b.lazyDependency("icons", .{ .target = web_target, .optimize = optimize })) |dep| dep.module("icons") else null,
             .backend = null,
         }, web_exe.root_module);
+        wireCodeModule(b, web_target, optimize, .{
+            .dvui = dvui_web_dep.module("dvui_web"),
+            .core = core_module_web,
+            .sdk = sdk_module_web,
+        }, web_exe.root_module);
 
         const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
         const install_wasm = b.addInstallArtifact(web_exe, .{
@@ -1001,6 +1006,11 @@ pub fn build(b: *std.Build) !void {
         .icons = if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| dep.module("icons") else null,
         .backend = dvui_testing_dep.module("testing"),
     }, fizzy_test_module);
+    wireCodeModule(b, target, optimize, .{
+        .dvui = dvui_testing_dep.module("dvui_testing"),
+        .core = core_module_test,
+        .sdk = sdk_module_test,
+    }, fizzy_test_module);
 
     if (target.result.os.tag == .macos) {
         if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |dep| {
@@ -1413,6 +1423,11 @@ fn addFizzyExecutableForTarget(
         .icons = icons_module,
         .backend = dvui_dep.module("sdl3"),
     }, exe.root_module);
+    wireCodeModule(b, resolved_target, optimize, .{
+        .dvui = dvui_dep.module("dvui_sdl3"),
+        .core = core_module,
+        .sdk = sdk_module,
+    }, exe.root_module);
 
     const pixelart_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
         break :blk addPixelartDylib(b, resolved_target, optimize, .{
@@ -1589,6 +1604,37 @@ fn wireWorkbenchModule(
     });
     applyWorkbenchModuleImports(workbench_module, deps);
     consumer.addImport("workbench", workbench_module);
+}
+
+const CodeModuleDeps = struct {
+    dvui: *std.Build.Module,
+    core: *std.Build.Module,
+    sdk: *std.Build.Module,
+};
+
+/// Code plugin (`src/plugins/code/module.zig`).
+fn applyCodeModuleImports(module: *std.Build.Module, deps: CodeModuleDeps) void {
+    module.addImport("dvui", deps.dvui);
+    module.addImport("core", deps.core);
+    module.addImport("sdk", deps.sdk);
+}
+
+fn wireCodeModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: CodeModuleDeps,
+    consumer: *std.Build.Module,
+) void {
+    const code_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/plugins/code/module.zig"),
+        .link_libc = target.result.cpu.arch != .wasm32,
+        .single_threaded = target.result.cpu.arch == .wasm32,
+    });
+    applyCodeModuleImports(code_module, deps);
+    consumer.addImport("code", code_module);
 }
 
 /// Native dynamic library for the workbench plugin (`src/plugins/workbench/dylib.zig`).

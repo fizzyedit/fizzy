@@ -10,7 +10,9 @@ const icon = assets.files.@"icon.png";
 const fizzy = @import("fizzy.zig");
 const workbench = @import("workbench");
 const pixelart = @import("pixelart");
+const code = @import("code");
 const WorkbenchGlobals = workbench.Globals;
+const CodeGlobals = code.Globals;
 const auto_update = @import("backend/auto_update.zig");
 const update_notify = @import("backend/update_notify.zig");
 const singleton = @import("backend/singleton.zig");
@@ -173,6 +175,12 @@ pub fn AppInit(win: *dvui.Window) !void {
     WorkbenchGlobals.gpa = allocator;
     WorkbenchGlobals.host = &fizzy.editor.host;
     WorkbenchGlobals.workbench = &fizzy.editor.workbench;
+
+    // Code plugin runtime injection: host + allocator + its open-document registry,
+    // which lives on `Editor.code`. The plugin's `register` adopts it as its `state`.
+    CodeGlobals.gpa = allocator;
+    CodeGlobals.host = &fizzy.editor.host;
+    CodeGlobals.state = &fizzy.editor.code;
 
     // Pixel-art plugin state (tools/colors/project/clipboard/pack jobs). Created
     // before `postInit` so the pixel-art plugin's `register` can adopt it as its
