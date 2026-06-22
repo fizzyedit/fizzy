@@ -2,6 +2,7 @@
 const std = @import("std");
 const code = @import("../code.zig");
 const dvui = code.dvui;
+const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
 
 const SyntaxHighlight = @This();
 
@@ -33,12 +34,12 @@ const type_orange = rgb(0xce, 0xa4, 0x7f);
 const type_color = rgb(199, 140, 122);
 const function_green = rgb(0x4d, 0xa5, 0x86);
 
-fn hi(name: []const u8, color: dvui.Color) dvui.TextEntryWidget.SyntaxHighlight {
+fn hi(name: []const u8, color: dvui.Color) TextEntryWidget.SyntaxHighlight {
     return .{ .name = name, .opts = .{ .color_text = color } };
 }
 
 /// Zig — capture names match `queries/zig.scm`.
-const zig_highlights = [_]dvui.TextEntryWidget.SyntaxHighlight{
+const zig_highlights = [_]TextEntryWidget.SyntaxHighlight{
     hi("comment", rgb(0x57, 0x5b, 0x65)),
     hi("keyword", keyword_brown),
     hi("keyword.type", keyword_brown),
@@ -94,7 +95,7 @@ const json_queries =
     \\(comment) @comment
 ;
 
-const json_highlights = [_]dvui.TextEntryWidget.SyntaxHighlight{
+const json_highlights = [_]TextEntryWidget.SyntaxHighlight{
     hi("constant", rgb(0x53, 0x5c, 0x90)),
     hi("string", rgb(0x60, 0xc0, 0xd2)),
     hi("string.special.key", rgb(0xb6, 0x77, 0x6b)),
@@ -110,7 +111,7 @@ const TreeSitter = if (dvui.useTreeSitter) struct {
     extern fn tree_sitter_json() callconv(.c) *dvui.c.TSLanguage;
 } else struct {};
 
-pub fn treeSitterOption(path: []const u8) ?dvui.TextEntryWidget.InitOptions.TreeSitterOption {
+pub fn treeSitterOption(path: []const u8) ?TextEntryWidget.InitOptions.TreeSitterOption {
     if (!dvui.useTreeSitter) return null;
     return switch (Language.fromPath(path)) {
         .zig, .zon => .{

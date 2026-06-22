@@ -1,9 +1,10 @@
-//! Monospace code editor: line numbers + dvui `textEntry` with tree-sitter highlighting.
+//! Monospace code editor: line numbers + local `TextEntryWidget` with tree-sitter highlighting.
 const std = @import("std");
 const code = @import("../code.zig");
 const dvui = code.dvui;
 const Document = code.Document;
 const SyntaxHighlight = @import("SyntaxHighlight.zig");
+const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
 
 const editor_pad_y: f32 = 8;
 const editor_pad_right: f32 = 8;
@@ -32,11 +33,12 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
     const line_height = font.lineHeight();
     const line_num_col = lineNumberColumnWidth(doc.line_count, font);
 
-    var te = dvui.textEntry(@src(), .{
+    var te = TextEntryWidget.textEntry(@src(), .{
         .multiline = true,
         .break_lines = false,
         .cache_layout = true,
         .scroll_horizontal = true,
+        .focus_border = false,
         .text = .{ .array_list = .{ .backing = &doc.text, .allocator = gpa, .limit = max_text_bytes } },
         .tree_sitter = if (doc.text.items.len <= syntax_highlight_max_bytes)
             SyntaxHighlight.treeSitterOption(doc.path)
