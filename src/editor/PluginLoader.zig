@@ -19,6 +19,7 @@ pub const LoadError = error{
     RegisterSymbolMissing,
     SetGlobalsSymbolMissing,
     SetDvuiContextSymbolMissing,
+    SetRenderBridgeSymbolMissing,
     AbiMismatch,
     RegisterRejected,
 };
@@ -30,6 +31,7 @@ pub const LoadedLib = struct {
     plugin_id: []const u8,
     set_globals: dylib_api.SetGlobalsFn,
     set_dvui_context: dvui_context.SetContextFn,
+    set_render_bridge: sdk.render_bridge.SetRenderBridgeFn,
 };
 
 /// Host-owned pointers injected into the plugin image immediately before `register`.
@@ -106,6 +108,11 @@ pub fn loadAndRegister(
         dylib_api.symbol_set_dvui_context,
     ) orelse return error.SetDvuiContextSymbolMissing;
 
+    const set_bridge = lib.lookup(
+        sdk.render_bridge.SetRenderBridgeFn,
+        dylib_api.symbol_set_render_bridge,
+    ) orelse return error.SetRenderBridgeSymbolMissing;
+
     if (pre) |inject| {
         set_globals(
             if (inject.gpa) |gpa| @ptrCast(gpa) else null,
@@ -127,6 +134,7 @@ pub fn loadAndRegister(
         .plugin_id = plugin_id,
         .set_globals = set_globals,
         .set_dvui_context = set_ctx,
+        .set_render_bridge = set_bridge,
     };
 }
 

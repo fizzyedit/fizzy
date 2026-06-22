@@ -2,7 +2,6 @@ const std = @import("std");
 const math = std.math;
 const dvui = @import("dvui");
 const builtin = @import("builtin");
-const sdl3 = @import("backend").c;
 
 const Options = dvui.Options;
 const Rect = dvui.Rect;

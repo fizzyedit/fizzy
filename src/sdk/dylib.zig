@@ -7,13 +7,15 @@
 //!
 //! **Bump `abi_version` when any of these change:** `Host`, `Plugin`, `DocHandle`,
 //! `EditorAPI` layouts, or the semantics/signature of an entry symbol.
-pub const abi_version: u32 = 1;
+pub const abi_version: u32 = 2;
 
 /// `std.DynLib.lookup` names for the host loader.
 pub const symbol_abi_version = "fizzy_plugin_abi_version";
 pub const symbol_register = "fizzy_plugin_register";
 /// Host calls each frame (and once at init) before plugin draw/tick.
 pub const symbol_set_dvui_context = "fizzy_plugin_set_dvui_context";
+/// Host calls once at load so plugin proxy backend forwards draws to the shell SDL backend.
+pub const symbol_set_render_bridge = "fizzy_plugin_set_render_bridge";
 /// Host-owned pixelart `Globals` (allocator, state, packer) injected before `register`.
 pub const symbol_set_globals = "fizzy_plugin_set_globals";
 
@@ -39,7 +41,7 @@ pub fn abiMatches(plugin_abi: u32) bool {
 
 test "plugin ABI version is locked" {
     const std = @import("std");
-    try std.testing.expect(abi_version == 1);
+    try std.testing.expect(abi_version == 2);
     try std.testing.expect(abiMatches(abi_version));
     try std.testing.expect(!abiMatches(abi_version + 1));
 }

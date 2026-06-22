@@ -7,6 +7,7 @@ const std = @import("std");
 const wb_mod = @import("../workbench.zig");
 const sdk = wb_mod.sdk;
 const Workbench = @import("Workbench.zig");
+const core = @import("core");
 
 pub var gpa: std.mem.Allocator = undefined;
 pub var host: *sdk.Host = undefined;
@@ -22,7 +23,10 @@ pub fn installRuntime(
     host_ptr: ?*sdk.Host,
     workbench_ptr: ?*Workbench,
 ) void {
-    if (gpa_ptr) |a| gpa = a.*;
+    if (gpa_ptr) |a| {
+        gpa = a.*;
+        core.gpa = a.*;
+    }
     if (host_ptr) |h| host = h;
     if (workbench_ptr) |w| workbench = w;
 }

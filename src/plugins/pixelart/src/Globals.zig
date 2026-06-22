@@ -5,6 +5,7 @@
 const std = @import("std");
 const State = @import("State.zig");
 const Packer = @import("Packer.zig");
+const core = @import("core");
 
 pub var gpa: std.mem.Allocator = undefined;
 pub var state: *State = undefined;
@@ -20,7 +21,10 @@ pub fn installRuntime(
     state_ptr: ?*State,
     packer_ptr: ?*Packer,
 ) void {
-    if (gpa_ptr) |a| gpa = a.*;
+    if (gpa_ptr) |a| {
+        gpa = a.*;
+        core.gpa = a.*;
+    }
     if (state_ptr) |s| state = s;
     if (packer_ptr) |p| packer = p;
 }

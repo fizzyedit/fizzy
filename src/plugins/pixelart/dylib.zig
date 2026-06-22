@@ -25,6 +25,10 @@ export fn fizzy_plugin_set_dvui_context(
     sdk.dvui_context.inject(window, io, ft2lib, debug);
 }
 
+export fn fizzy_plugin_set_render_bridge(bridge: ?*const @import("proxy_bridge").RenderBridge) callconv(.c) void {
+    @import("proxy_bridge").setBridge(bridge);
+}
+
 export fn fizzy_plugin_set_globals(
     gpa: ?*const anyopaque,
     state: ?*anyopaque,

@@ -32,3 +32,5 @@ pub const pane_layout = @import("pane_layout.zig");
 pub const dylib = @import("dylib.zig");
 /// Dvui global injection for loaded plugin images.
 pub const dvui_context = @import("dvui_context.zig");
+/// Host thunks that forward plugin proxy draws to the shell backend.
+pub const render_bridge = @import("render_bridge.zig");

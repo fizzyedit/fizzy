@@ -300,6 +300,7 @@ pub fn build(b: *std.Build) !void {
             .backend = .web,
             .freetype = false,
         });
+        const dvui_web_proxy_bridge = addProxyBridgeModule(b, web_target, optimize, dvui_web_dep, dvui_web_dep.module("dvui_web"));
 
         const web_exe = b.addExecutable(.{
             .name = "web",
@@ -370,7 +371,7 @@ pub fn build(b: *std.Build) !void {
             core_module_web.addImport("icons", dep.module("icons"));
         }
         web_exe.root_module.addImport("core", core_module_web);
-        const sdk_module_web = wireSdkModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), web_exe.root_module);
+        const sdk_module_web = wireSdkModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), dvui_web_proxy_bridge, web_exe.root_module);
 
         // Three editor files have `const sdl3 = @import("backend").c;` at file
         // scope. After refactoring all `sdl3.SDL_DialogFileFilter` references
@@ -944,6 +945,7 @@ pub fn build(b: *std.Build) !void {
         .backend = .testing,
         .accesskit = accesskit,
     });
+    const dvui_test_proxy_bridge = addProxyBridgeModule(b, target, optimize, dvui_testing_dep, dvui_testing_dep.module("dvui_testing"));
 
     // Build a module rooted at `src/fizzy.zig` carrying all the same
     // imports the production exe carries. Because fizzy.zig's transitive
@@ -980,7 +982,7 @@ pub fn build(b: *std.Build) !void {
         core_module_test.addImport("icons", dep.module("icons"));
     }
     fizzy_test_module.addImport("core", core_module_test);
-    const sdk_module_test = wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), fizzy_test_module);
+    const sdk_module_test = wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), dvui_test_proxy_bridge, fizzy_test_module);
     _ = wirePixelartModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
@@ -1293,6 +1295,16 @@ fn addFizzyExecutableForTarget(
     else
         b.dependency("dvui", .{ .target = resolved_target, .optimize = optimize, .backend = .sdl3, .accesskit = accesskit });
 
+    const dvui_proxy_dep = b.dependency("dvui", .{
+        .target = resolved_target,
+        .optimize = optimize,
+        .backend = .proxy,
+        .accesskit = .off,
+    });
+    const dvui_proxy_mod = dvui_proxy_dep.module("dvui_proxy");
+    const proxy_bridge_host_mod = addProxyBridgeModule(b, resolved_target, optimize, dvui_dep, dvui_dep.module("dvui_sdl3"));
+    const proxy_bridge_plugin_mod = dvui_proxy_dep.module("proxy_bridge");
+
     const zstbi_lib = b.addLibrary(.{
         .name = "zstbi",
         .root_module = b.addModule("zstbi", .{
@@ -1364,13 +1376,25 @@ fn addFizzyExecutableForTarget(
     core_module.addImport("dvui", dvui_dep.module("dvui_sdl3"));
     core_module.addImport("known-folders", known_folders);
     exe.root_module.addImport("core", core_module);
-    const sdk_module = wireSdkModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), exe.root_module);
+
     var icons_module: ?*std.Build.Module = null;
     if (b.lazyDependency("icons", .{ .target = resolved_target, .optimize = optimize })) |dep| {
         exe.root_module.addImport("icons", dep.module("icons"));
         core_module.addImport("icons", dep.module("icons"));
         icons_module = dep.module("icons");
     }
+
+    const core_proxy_module = b.createModule(.{
+        .target = resolved_target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/core/core.zig"),
+    });
+    core_proxy_module.addImport("dvui", dvui_proxy_mod);
+    core_proxy_module.addImport("known-folders", known_folders);
+    if (icons_module) |icons| core_proxy_module.addImport("icons", icons);
+
+    const sdk_module = wireSdkModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), proxy_bridge_host_mod, exe.root_module);
+    const sdk_proxy_module = wireSdkModule(b, resolved_target, optimize, dvui_proxy_mod, proxy_bridge_plugin_mod, null);
     _ = wirePixelartModule(b, resolved_target, optimize, .{
         .dvui = dvui_dep.module("dvui_sdl3"),
         .core = core_module,
@@ -1392,25 +1416,27 @@ fn addFizzyExecutableForTarget(
 
     const pixelart_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
         break :blk addPixelartDylib(b, resolved_target, optimize, .{
-            .dvui = dvui_dep.module("dvui_sdl3"),
-            .core = core_module,
-            .sdk = sdk_module,
+            .dvui = dvui_proxy_mod,
+            .core = core_proxy_module,
+            .sdk = sdk_proxy_module,
+            .proxy_bridge = proxy_bridge_plugin_mod,
             .assets = assets_module,
             .zip = zip_pkg.module,
             .zstbi = zstbi_module,
             .msf_gif = msf_gif_module,
             .icons = icons_module,
-            .backend = dvui_dep.module("sdl3"),
+            .backend = null,
         });
     } else null;
 
     const workbench_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
         break :blk addWorkbenchDylib(b, resolved_target, optimize, .{
-            .dvui = dvui_dep.module("dvui_sdl3"),
-            .core = core_module,
-            .sdk = sdk_module,
+            .dvui = dvui_proxy_mod,
+            .core = core_proxy_module,
+            .sdk = sdk_proxy_module,
+            .proxy_bridge = proxy_bridge_plugin_mod,
             .icons = icons_module,
-            .backend = dvui_dep.module("sdl3"),
+            .backend = null,
         });
     } else null;
 
@@ -1480,12 +1506,29 @@ fn addFizzyExecutableForTarget(
 }
 
 /// Plugin SDK (`src/sdk/sdk.zig`). Depends only on `dvui`.
+fn addProxyBridgeModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    dvui_dep: *std.Build.Dependency,
+    dvui_module: *std.Build.Module,
+) *std.Build.Module {
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = dvui_dep.path("src/backends/proxy_bridge.zig"),
+    });
+    mod.addImport("dvui", dvui_module);
+    return mod;
+}
+
 fn wireSdkModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     dvui_module: *std.Build.Module,
-    consumer: *std.Build.Module,
+    proxy_bridge_module: *std.Build.Module,
+    consumer: ?*std.Build.Module,
 ) *std.Build.Module {
     const sdk_module = b.createModule(.{
         .target = target,
@@ -1493,7 +1536,8 @@ fn wireSdkModule(
         .root_source_file = b.path("src/sdk/sdk.zig"),
     });
     sdk_module.addImport("dvui", dvui_module);
-    consumer.addImport("sdk", sdk_module);
+    sdk_module.addImport("proxy_bridge", proxy_bridge_module);
+    if (consumer) |c| c.addImport("sdk", sdk_module);
     return sdk_module;
 }
 
@@ -1501,6 +1545,7 @@ const PixelartModuleDeps = struct {
     dvui: *std.Build.Module,
     core: *std.Build.Module,
     sdk: *std.Build.Module,
+    proxy_bridge: ?*std.Build.Module = null,
     assets: *std.Build.Module,
     zip: *std.Build.Module,
     zstbi: *std.Build.Module,
@@ -1513,6 +1558,7 @@ const WorkbenchModuleDeps = struct {
     dvui: *std.Build.Module,
     core: *std.Build.Module,
     sdk: *std.Build.Module,
+    proxy_bridge: ?*std.Build.Module = null,
     icons: ?*std.Build.Module,
     backend: ?*std.Build.Module,
 };
@@ -1522,6 +1568,7 @@ fn applyWorkbenchModuleImports(module: *std.Build.Module, deps: WorkbenchModuleD
     module.addImport("dvui", deps.dvui);
     module.addImport("core", deps.core);
     module.addImport("sdk", deps.sdk);
+    if (deps.proxy_bridge) |proxy_bridge| module.addImport("proxy_bridge", proxy_bridge);
     if (deps.icons) |icons| module.addImport("icons", icons);
     if (deps.backend) |backend| module.addImport("backend", backend);
 }
@@ -1568,6 +1615,7 @@ fn addWorkbenchDylib(
         "fizzy_plugin_abi_version",
         "fizzy_plugin_register",
         "fizzy_plugin_set_dvui_context",
+        "fizzy_plugin_set_render_bridge",
         "fizzy_plugin_set_globals",
     };
     return lib;
@@ -1578,6 +1626,7 @@ fn applyPixelartModuleImports(module: *std.Build.Module, deps: PixelartModuleDep
     module.addImport("dvui", deps.dvui);
     module.addImport("core", deps.core);
     module.addImport("sdk", deps.sdk);
+    if (deps.proxy_bridge) |proxy_bridge| module.addImport("proxy_bridge", proxy_bridge);
     module.addImport("assets", deps.assets);
     module.addImport("zip", deps.zip);
     module.addImport("zstbi", deps.zstbi);
@@ -1611,6 +1660,7 @@ fn addPixelartDylib(
         "fizzy_plugin_abi_version",
         "fizzy_plugin_register",
         "fizzy_plugin_set_dvui_context",
+        "fizzy_plugin_set_render_bridge",
         "fizzy_plugin_set_globals",
     };
     return lib;

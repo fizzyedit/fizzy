@@ -25,6 +25,10 @@ export fn fizzy_plugin_set_dvui_context(
     sdk.dvui_context.inject(window, io, ft2lib, debug);
 }
 
+export fn fizzy_plugin_set_render_bridge(bridge: ?*const @import("proxy_bridge").RenderBridge) callconv(.c) void {
+    @import("proxy_bridge").setBridge(bridge);
+}
+
 /// Workbench convention: `gpa`, `host`, `workbench` (see `Globals.installRuntime`).
 export fn fizzy_plugin_set_globals(
     gpa: ?*const anyopaque,

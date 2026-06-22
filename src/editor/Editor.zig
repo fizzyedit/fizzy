@@ -492,6 +492,14 @@ pub fn syncLoadedPluginDvuiContexts(editor: *Editor) void {
     }
 }
 
+/// Inject the host render bridge into every loaded plugin dylib (proxy backend).
+pub fn syncLoadedPluginRenderBridge(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    for (editor.loaded_plugin_libs.items) |loaded| {
+        sdk.render_bridge.syncHostIntoPlugin(loaded.set_render_bridge);
+    }
+}
+
 fn syncLoadedPluginGlobals(editor: *Editor, plugin_id: []const u8, arg_b: *anyopaque, arg_c: ?*anyopaque) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     for (editor.loaded_plugin_libs.items) |loaded| {
@@ -526,6 +534,7 @@ pub fn loadWorkbenchDylib(editor: *Editor, exe_dir: []const u8) !void {
     });
     try appendLoadedPluginLib(editor, loaded);
     syncLoadedPluginDvuiContexts(editor);
+    syncLoadedPluginRenderBridge(editor);
 }
 
 /// Load `{exe_dir}/plugins/libpixelart.*` (or `FIZZY_PLUGIN_PATH`) and register via dylib entry.
@@ -540,6 +549,7 @@ pub fn loadPixelartDylib(editor: *Editor, exe_dir: []const u8) !void {
     });
     try appendLoadedPluginLib(editor, loaded);
     syncLoadedPluginDvuiContexts(editor);
+    syncLoadedPluginRenderBridge(editor);
 }
 
 fn unloadPluginLibs(editor: *Editor) void {
