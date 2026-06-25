@@ -1,16 +1,15 @@
-const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 
 const Dialogs = @This();
 
-pub const NewFile = @import("NewFile.zig");
-pub const Export = @import("Export.zig");
+// Plugin-owned dialogs (New File, Grid Layout, Export, Flat-raster save warning) are no longer
+// re-exported here. The shell triggers them through plugin vtable hooks / `Host.requestNewDocument`
+// so it never names a plugin's dialog implementation. This hub owns only shell-level dialogs.
 pub const UnsavedClose = @import("UnsavedClose.zig");
 pub const AppQuitUnsaved = @import("AppQuitUnsaved.zig");
-pub const GridLayout = @import("GridLayout.zig");
-pub const FlatRasterSaveWarning = @import("FlatRasterSaveWarning.zig");
 pub const AboutFizzy = @import("AboutFizzy.zig");
+pub const PluginLoadFailures = @import("PluginLoadFailures.zig");
 pub const WebFolderUnavailable = if (builtin.target.cpu.arch == .wasm32)
     @import("WebFolderUnavailable.zig")
 else
@@ -30,75 +29,3 @@ else
             return false;
         }
     };
-
-pub fn drawDimensionsLabel(src: std.builtin.SourceLocation, width: u32, height: u32, font: dvui.Font, unit: []const u8, opts: dvui.Options) void {
-    {
-        var hbox = dvui.box(src, .{ .dir = .horizontal }, opts);
-        defer hbox.deinit();
-
-        dvui.label(
-            src,
-            "{d}",
-            .{width},
-            .{
-                .font = font,
-                .margin = .{ .x = 1, .w = 1 },
-                .padding = .all(0),
-                .gravity_y = 1.0,
-                .id_extra = 1,
-            },
-        );
-
-        dvui.label(
-            src,
-            "{s}",
-            .{unit},
-            .{
-                .font = dvui.Font.theme(.body).withSize(font.size - 1.0),
-                .margin = .{ .x = 1, .w = 1 },
-                .padding = .all(0),
-                .gravity_y = 0.5,
-                .id_extra = 2,
-            },
-        );
-
-        dvui.label(
-            src,
-            "x",
-            .{},
-            .{
-                .font = dvui.Font.theme(.body).withSize(font.size - 1.0),
-                .margin = .{ .x = 1, .w = 1 },
-                .padding = .all(0),
-                .gravity_y = 0.5,
-                .id_extra = 3,
-            },
-        );
-
-        dvui.label(
-            src,
-            "{d}",
-            .{height},
-            .{
-                .font = font,
-                .margin = .{ .x = 1, .w = 1 },
-                .padding = .all(0),
-                .gravity_y = 0.5,
-                .id_extra = 4,
-            },
-        );
-
-        dvui.label(
-            src,
-            "{s}",
-            .{unit},
-            .{
-                .font = dvui.Font.theme(.body).withSize(font.size - 1.0),
-                .margin = .{ .x = 1, .w = 1 },
-                .padding = .all(0),
-                .gravity_y = 0.5,
-                .id_extra = 5,
-            },
-        );
-    }
-}

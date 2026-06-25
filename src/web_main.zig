@@ -11,6 +11,8 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("fizzy.zig");
+const pixi = @import("pixi");
+const Internal = pixi.internal;
 
 // Wasm-cleanliness probes. Referencing each symbol forces semantic analysis of its
 // module graph; any compile error pinpoints what to gate next. Zero-cost at runtime.
@@ -23,29 +25,28 @@ const fizzy = @import("fizzy.zig");
 comptime {
     // Pure constants / re-exports
     _ = fizzy.version;
-    _ = fizzy.fa.adjust;
     _ = fizzy.atlas;
 
     // Algorithms — pure Zig + dvui
-    _ = fizzy.algorithms.brezenham;
-    _ = fizzy.algorithms.reduce;
+    _ = pixi.algorithms.brezenham;
+    _ = pixi.algorithms.reduce;
 
     // Top-level data types (.pixi format on-disk shapes)
-    _ = fizzy.Animation;
-    _ = fizzy.Atlas;
-    _ = fizzy.File;
-    _ = fizzy.Layer;
-    _ = fizzy.Sprite;
+    _ = pixi.Animation;
+    _ = pixi.Atlas;
+    _ = pixi.File;
+    _ = pixi.Layer;
+    _ = pixi.Sprite;
 
     // Internal editor-side data types
-    _ = fizzy.Internal.Animation;
-    _ = fizzy.Internal.Atlas;
-    _ = fizzy.Internal.Buffers;
-    _ = fizzy.Internal.File.init;
-    _ = fizzy.Internal.History;
-    _ = fizzy.Internal.Layer;
-    _ = fizzy.Internal.Palette;
-    _ = fizzy.Internal.Sprite;
+    _ = Internal.Animation;
+    _ = Internal.Atlas;
+    _ = Internal.Buffers;
+    _ = Internal.File.init;
+    _ = Internal.History;
+    _ = Internal.Layer;
+    _ = Internal.Palette;
+    _ = Internal.Sprite;
 
     // Math + graphics helpers
     _ = fizzy.math.checker;
@@ -54,11 +55,11 @@ comptime {
     _ = fizzy.image.init;
     _ = fizzy.image.pixels;
     _ = fizzy.perf.record;
-    _ = fizzy.render;
+    _ = pixi.render;
 
     // Custom dvui wrapper + widgets — types compile even though the widget files
     // contain dead `@import("backend")` SDL3 imports at file scope.
-    _ = fizzy.dvui.FileWidget;
+    _ = pixi.widgets.FileWidget;
     _ = fizzy.dvui.CanvasWidget;
 
     // The big ones: Editor + App. Type-level reference only — passes because Zig

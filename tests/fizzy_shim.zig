@@ -22,6 +22,8 @@ pub const Ctx = struct {
     editor: *fizzy.Editor,
 
     pub fn deinit(self: *Ctx, gpa: std.mem.Allocator) void {
+        self.editor.pixi_state.deinit(gpa);
+        gpa.destroy(self.editor.pixi_state);
         self.editor.arena.deinit();
         gpa.destroy(self.editor);
         gpa.destroy(self.app);
@@ -51,10 +53,17 @@ pub fn init(gpa: std.mem.Allocator) !Ctx {
     // top of that test rather than expanding the shim.
     const editor_ptr = try gpa.create(fizzy.Editor);
     @memset(@as([*]u8, @ptrCast(editor_ptr))[0..@sizeOf(fizzy.Editor)], 0);
-    editor_ptr.settings.checker_color_even = .{ 200, 200, 200, 255 };
-    editor_ptr.settings.checker_color_odd = .{ 100, 100, 100, 255 };
     editor_ptr.arena = std.heap.ArenaAllocator.init(gpa);
+    editor_ptr.host.allocator = gpa;
     fizzy.editor = editor_ptr;
+
+    const pixi = fizzy.pixi_mod;
+    const state_ptr = try gpa.create(pixi.State);
+    pixi.runtime.adoptShellState(state_ptr);
+    state_ptr.* = pixi.State.init(gpa, &editor_ptr.host) catch unreachable;
+    editor_ptr.pixi_state = state_ptr;
+    state_ptr.settings.checker_color_even = .{ 200, 200, 200, 255 };
+    state_ptr.settings.checker_color_odd = .{ 100, 100, 100, 255 };
 
     return .{ .t = t, .app = app_ptr, .editor = editor_ptr };
 }

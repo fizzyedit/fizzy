@@ -31,8 +31,8 @@ pub fn request() void {
 
 fn dirtyCount() usize {
     var n: usize = 0;
-    for (fizzy.editor.open_files.values()) |f| {
-        if (f.dirty()) n += 1;
+    for (fizzy.editor.open_files.values()) |doc| {
+        if (doc.owner.isDirty(doc)) n += 1;
     }
     return n;
 }
@@ -112,8 +112,8 @@ fn onSaveAllAndQuit() !void {
     fizzy.dvui.closeFloatingDialogAnchored();
 
     fizzy.editor.quit_save_all_ids.clearRetainingCapacity();
-    for (fizzy.editor.open_files.values()) |f| {
-        if (f.dirty()) try fizzy.editor.quit_save_all_ids.append(fizzy.app.allocator, f.id);
+    for (fizzy.editor.open_files.values()) |doc| {
+        if (doc.owner.isDirty(doc)) try fizzy.editor.quit_save_all_ids.append(fizzy.app.allocator, doc.id);
     }
     if (fizzy.editor.quit_save_all_ids.items.len == 0) {
         fizzy.editor.pending_app_close = true;

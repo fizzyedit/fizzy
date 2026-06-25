@@ -1,8 +1,13 @@
 .{
     .paths = .{
         "src",
+        "build",
         "build.zig",
         "build.zig.zon",
+        "process_assets.zig",
+        "update.zig",
+        "build",
+        "plugin_sdk.zig",
         "assets",
         "libs",
     },
@@ -27,8 +32,8 @@
             .lazy = true,
         },
         .dvui = .{
-            .url = "https://github.com/foxnne/dvui-dev/archive/2f81423945d7076796023a7802f2680226dd9bd4.tar.gz",
-            .hash = "dvui-0.5.0-dev-AQFJmdw09wCp9ts4oaBV7Rkn7YuMKxDiaCLaweO-HPuS",
+            .url = "https://github.com/foxnne/dvui-dev/archive/3dec1c1b56f71aff41e36588a715dea085d307f5.tar.gz",
+            .hash = "dvui-0.5.0-dev-AQFJmZhu9wAmUMx9414LO75l0R69z3d8udYXbj72-q3R",
             //.path = "../dvui-dev",
         },
         .assetpack = .{
@@ -47,5 +52,9 @@
         .dvui_singleton_app = .{
             .path = "libs/dvui-singleton-app",
         },
+        // Built-in plugins are NOT package dependencies: the root build embeds them by
+        // importing each plugin's `static/integration.zig` directly (see build/plugins.zig),
+        // which owns the module graph. Each plugin's own `build.zig` is only for the
+        // standalone third-party-shape build under `src/plugins/<name>/`.
     },
 }
