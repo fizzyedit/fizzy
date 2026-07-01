@@ -9,11 +9,8 @@ comptime {
     // Phase 1: pure-logic unit tests.
     _ = @import("fizzy-direction");
     _ = @import("fizzy-easing");
-    _ = @import("fizzy-layer-order");
-    _ = @import("fizzy-palette-parse");
     _ = @import("fizzy-layout-anchor");
-    _ = @import("fizzy-reduce");
-    _ = @import("fizzy-grid-validate");
-    _ = @import("fizzy-animation");
     _ = @import("fizzy-window-layout");
+    _ = @import("fizzy-plugin-dylib");
+    _ = @import("fizzy-plugin-store");
 }

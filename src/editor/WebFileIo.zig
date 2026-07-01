@@ -46,7 +46,7 @@ pub fn showOpenFileDialog(
 ) void {
     if (comptime builtin.target.cpu.arch != .wasm32) return;
     open_callback = cb;
-    open_grouping = fizzy.editor.open_workspace_grouping;
+    open_grouping = fizzy.editor.currentGroupingID();
     open_picker_id = dvui.Id.extendId(null, @src(), 0);
     dvui.dialogWasmFileOpenMultiple(open_picker_id.?, .{ .accept = open_accept });
 }
@@ -79,19 +79,12 @@ pub fn pollOpenPicker(editor: *fizzy.Editor) void {
         defer fizzy.app.allocator.free(bytes);
 
         const path_owned = fizzy.app.allocator.dupe(u8, wasm_file.name) catch continue;
-        if (editor.openFileFromBytes(path_owned, bytes, open_grouping)) |file| {
-            editor.open_files.put(fizzy.app.allocator, file.id, file) catch {
-                var f = file;
-                f.deinit();
-                fizzy.app.allocator.free(path_owned);
-            };
-            if (editor.open_files.getIndex(file.id)) |idx| {
+        if (editor.openFileFromBytes(path_owned, bytes, open_grouping)) |doc_id| {
+            if (editor.open_files.getIndex(doc_id)) |idx| {
                 editor.setActiveFile(idx);
                 editor.pending_composite_warmup = true;
             }
-        } else |_| {
-            fizzy.app.allocator.free(path_owned);
-        }
+        } else |_| {}
     }
 
     open_callback = null;

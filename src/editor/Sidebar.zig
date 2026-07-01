@@ -5,9 +5,20 @@ const dvui = @import("dvui");
 const App = fizzy.App;
 const Editor = fizzy.Editor;
 
-const Pane = @import("explorer/Explorer.zig").Pane;
+const SidebarView = fizzy.sdk.SidebarView;
+const PluginStore = @import("PluginStore.zig");
 
 pub const Sidebar = @This();
+
+/// Persisted scroll position for the plugin-icon rail (retained across frames).
+var scroll_info: dvui.ScrollInfo = .{};
+
+/// Shell built-in views pinned to the bottom of the rail (always visible). Everything else —
+/// the plugin-contributed views — scrolls above them in registration (load) order.
+fn isPinned(id: []const u8) bool {
+    return std.mem.eql(u8, id, PluginStore.view_id) or
+        std.mem.eql(u8, id, Editor.view_settings);
+}
 
 pub fn init() !Sidebar {
     return .{};
@@ -32,28 +43,62 @@ pub fn draw(_: Sidebar) !Action {
     });
     defer vbox.deinit();
 
-    const options = [_]struct { pane: Pane, icon: []const u8 }{
-        .{ .pane = .files, .icon = dvui.entypo.folder },
-        .{ .pane = .tools, .icon = dvui.entypo.pencil },
-        .{ .pane = .sprites, .icon = dvui.entypo.grid },
-        //.{ .pane = .animations, .icon = dvui.entypo.controller_play },
-        //.{ .pane = .keyframe_animations, .icon = dvui.entypo.key },
-        .{ .pane = .project, .icon = dvui.entypo.box },
-        .{ .pane = .settings, .icon = dvui.entypo.cog },
-    };
-
     var ret: Action = .none;
 
-    for (options) |option| {
-        const a = try drawOption(option.pane, option.icon, 20);
-        if (a != .none) ret = a;
+    // Plugin-contributed views scroll in a bounded area (load order). When more icons exist than
+    // fit, an edge shadow hints at the hidden ones — matching the scroll-shadow used elsewhere.
+    {
+        const pane = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .both,
+            .background = false,
+        });
+
+        var scroll = dvui.scrollArea(@src(), .{
+            .scroll_info = &scroll_info,
+            .horizontal_bar = .hide,
+            .vertical_bar = .hide,
+        }, .{
+            .expand = .both,
+            .background = false,
+        });
+
+        for (fizzy.editor.host.sidebar_views.items, 0..) |*view, i| {
+            if (view.hidden or isPinned(view.id)) continue;
+            const a = try drawOption(view, i, 20);
+            if (a != .none) ret = a;
+        }
+
+        const voff = scroll.si.offset(.vertical);
+        const vmax = scroll.si.scrollMax(.vertical);
+        scroll.deinit();
+
+        const cs = pane.data().contentRectScale();
+        if (voff > 0.5) fizzy.dvui.drawEdgeShadow(cs, .top, .{});
+        if (voff < vmax - 0.5) fizzy.dvui.drawEdgeShadow(cs, .bottom, .{});
+
+        pane.deinit();
+    }
+
+    // Plugin store + Settings: pinned to the bottom of the rail, always visible.
+    {
+        var bottom = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .gravity_y = 1.0,
+            .background = false,
+        });
+        defer bottom.deinit();
+
+        for (fizzy.editor.host.sidebar_views.items, 0..) |*view, i| {
+            if (view.hidden or !isPinned(view.id)) continue;
+            const a = try drawOption(view, i, 20);
+            if (a != .none) ret = a;
+        }
     }
 
     return ret;
 }
 
-fn drawOption(option: Pane, icon: []const u8, size: f32) !Action {
-    const selected = option == fizzy.editor.explorer.pane;
+fn drawOption(view: *const SidebarView, index: usize, size: f32) !Action {
+    const selected = fizzy.editor.host.isActiveSidebarView(view.id);
     var ret: Action = .none;
 
     const theme = dvui.themeGet();
@@ -61,7 +106,7 @@ fn drawOption(option: Pane, icon: []const u8, size: f32) !Action {
     var bw: dvui.ButtonWidget = undefined;
 
     bw.init(@src(), .{}, .{
-        .id_extra = @intFromEnum(option),
+        .id_extra = index,
         .min_size_content = .{ .h = size },
     });
     defer bw.deinit();
@@ -80,16 +125,17 @@ fn drawOption(option: Pane, icon: []const u8, size: f32) !Action {
 
     dvui.icon(
         @src(),
-        @tagName(option),
-        icon,
+        view.id,
+        view.icon,
         .{ .fill_color = color },
         .{
+            .id_extra = index,
             .min_size_content = .{ .h = size },
         },
     );
 
     if (bw.clicked()) {
-        // Tapping the icon for the pane that's already showing toggles the explorer
+        // Tapping the icon for the view that's already showing toggles the explorer
         // closed (same effect as the floating collapse button). We *report* the intent
         // here; Editor.zig invokes `peekClose` / `open` after `editor.explorer.paned` has
         // been recreated for this frame. Doing the call directly here would dereference
@@ -98,7 +144,7 @@ fn drawOption(option: Pane, icon: []const u8, size: f32) !Action {
         if (selected and explorer_visible) {
             ret = .close;
         } else {
-            fizzy.editor.explorer.pane = option;
+            fizzy.editor.host.setActiveSidebarView(view.id);
             ret = .open;
         }
         dvui.refresh(null, @src(), null);
@@ -110,7 +156,7 @@ fn drawOption(option: Pane, icon: []const u8, size: f32) !Action {
             .active_rect = bw.data().rectScale().r,
             .delay = 350_000,
         }, .{
-            .id_extra = @intFromEnum(option),
+            .id_extra = index,
             .color_fill = dvui.themeGet().color(.window, .fill),
             .border = dvui.Rect.all(0),
             .box_shadow = .{
@@ -144,7 +190,8 @@ fn drawOption(option: Pane, icon: []const u8, size: f32) !Action {
                 .background = false,
                 .padding = dvui.Rect.all(4),
             });
-            tl2.format("{s}", .{fizzy.Editor.Explorer.title(option, true)}, .{
+            const tip = std.ascii.allocUpperString(dvui.currentWindow().arena(), view.title) catch view.title;
+            tl2.format("{s}", .{tip}, .{
                 .font = dvui.Font.theme(.heading),
             });
             tl2.deinit();

@@ -6,7 +6,7 @@
 ![buildworkflow](https://github.com/fizzyedit/fizzy/actions/workflows/ci.yml/badge.svg)
 
 # 
-**Fizzy** is a cross-platform open-source pixel art editor and animation editor written in [Zig](https://github.com/ziglang/zig).
+**Fizzy** is a cross-platform open-source modular general editor written in [Zig](https://github.com/ziglang/zig).
 
 ### Try it in your browser [here](https://fizzyed.it/app/)
 
@@ -16,21 +16,6 @@
 
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R5R4LL2PJ)
-
-## Currently supported features
-- [x] Typical pixel art operations. (draw, erase, dropper, bucket, selection, transformation, etc)
-- [x] Tabs and splits, drag and drop to reorder and reconfigure
-- [x] File explorer with search and drag and drop.
-- [ ] Create animations and preview easily, edit directly on the preview.
-- [ ] View previous and next frames of the animation.
-- [ ] Set sprite origins for drawing sprites easily in game frameworks.
-- [ ] Import and slice existing .png spritesheets.
-- [x] Intuitive and customizeable user interface.
-- [x] Sprite packing
-- [ ] Theming
-- [ ] Automatic packing and export on file save
-- [x] Also a zig library offering modules for handling assets
-- [ ] Export animations as .gifs 
 
 ## User Interface
 - The user interface is driven by [DVUI](https://github.com/david-vanderson/dvui).

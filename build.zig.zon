@@ -1,8 +1,12 @@
 .{
     .paths = .{
         "src",
+        "build",
         "build.zig",
         "build.zig.zon",
+        "update.zig",
+        "build",
+        "plugin_sdk.zig",
         "assets",
         "libs",
     },
@@ -27,25 +31,24 @@
             .lazy = true,
         },
         .dvui = .{
-            .url = "https://github.com/foxnne/dvui-dev/archive/2f81423945d7076796023a7802f2680226dd9bd4.tar.gz",
-            .hash = "dvui-0.5.0-dev-AQFJmdw09wCp9ts4oaBV7Rkn7YuMKxDiaCLaweO-HPuS",
-            //.path = "../dvui-dev",
+            .url = "https://github.com/foxnne/dvui-dev/archive/3dec1c1b56f71aff41e36588a715dea085d307f5.tar.gz",
+            .hash = "dvui-0.5.0-dev-AQFJmZhu9wAmUMx9414LO75l0R69z3d8udYXbj72-q3R",
         },
         .assetpack = .{
             .url = "https://github.com/foxnne/assetpack/archive/ac7592f3f5988857840d0df4610e1e1fad690e2e.tar.gz",
             .hash = "assetpack-0.2.0-5DA2d1ZkAADJanNVdWrUBOGMhOzUENhrUiqXcHADxY2x",
         },
-        .known_folders = .{
-            .url = "https://github.com/ziglibs/known-folders/archive/d6d03830968cca6b7b9f24fd97ee348346a6905d.tar.gz",
-            .hash = "known_folders-0.0.0-Fy-PJk3KAACzUg2us_0JvQQmod1ZA8jBt7MuoKCihq88",
-        },
         .velopack_zig = .{
             .url = "https://github.com/graphl-tech/velopack-zig/archive/0c2f20635a97fde38cc8000e9fb1a75f891cf37d.tar.gz",
             .hash = "velopack_zig-0.0.1-LzeGcengAACU1f33uDAuLKlWXtek0KCC6i_b3XWeJMjd",
-            //.path = "../velopack-zig",
+            .lazy = true,
         },
         .dvui_singleton_app = .{
             .path = "libs/dvui-singleton-app",
+        },
+        .cmark_gfm = .{
+            .url = "git+https://github.com/kristoff-it/cmark-gfm#cd0aba87cc89f0c8aa9393e59505db271ea30239",
+            .hash = "cmark_gfm-0.1.0-uQgTKymaFwDK0jVZszXfDtQtW6BnS44Bp0GS55TVBD4p",
         },
     },
 }
