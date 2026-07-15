@@ -510,10 +510,16 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         }
         integration_tests.step.dependOn(&msvcup_before_compile.step);
         unit_tests.step.dependOn(&msvcup_before_compile.step);
+        inline for (.{ main_fizzy, package_fizzy }) |fizzy_exe_result| {
+            if (fizzy_exe_result.workbench_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
+            if (fizzy_exe_result.text_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
+            if (fizzy_exe_result.markdown_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
+            if (fizzy_exe_result.image_dylib) |dylib| dylib.step.dependOn(&msvcup_before_compile.step);
+        }
     }
 
     if (target.result.os.tag == .windows and target.result.abi == .msvc) {
-        var roots: [4]*std.Build.Step.Compile = undefined;
+        var roots: [12]*std.Build.Step.Compile = undefined;
         var n: usize = 0;
         roots[n] = exe;
         n += 1;
@@ -524,6 +530,31 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         if (!velopack_enabled and velopack_supported_for_target) {
             roots[n] = exe_for_package;
             n += 1;
+        }
+        // Built-in plugin dylibs (workbench/text/markdown/image) compile against a
+        // `backend = .proxy` dvui dependency — a translate-c step distinct from the
+        // app exe's `sdl3`-backend one above — so they need the same MSVC fixup
+        // applied separately. `main_fizzy` and `package_fizzy` may share dylib
+        // pointers (see `package_blk` above); `applyMsvcTranslateCShim` /
+        // `applyMsvcIncludesToReachableTranslateC` dedup reachable TranslateC steps
+        // via their own `seen` set, so passing the same root twice is harmless.
+        inline for (.{ main_fizzy, package_fizzy }) |fizzy_exe_result| {
+            if (fizzy_exe_result.workbench_dylib) |dylib| {
+                roots[n] = dylib;
+                n += 1;
+            }
+            if (fizzy_exe_result.text_dylib) |dylib| {
+                roots[n] = dylib;
+                n += 1;
+            }
+            if (fizzy_exe_result.markdown_dylib) |dylib| {
+                roots[n] = dylib;
+                n += 1;
+            }
+            if (fizzy_exe_result.image_dylib) |dylib| {
+                roots[n] = dylib;
+                n += 1;
+            }
         }
 
         // Always apply the translate-c shim + SIZE_MAX define for windows-msvc, regardless of
