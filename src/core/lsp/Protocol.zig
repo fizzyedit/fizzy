@@ -38,7 +38,14 @@ pub fn byteOffsetToPosition(text: []const u8, byte_offset: usize, encoding: Posi
     const line_bytes = text[line_start..offset];
     const character: u32 = switch (encoding) {
         .utf8 => @intCast(line_bytes.len),
+        // `byte_offset` comes from UI-side hit-testing, not zls, so it isn't guaranteed to
+        // land on a UTF-8 character boundary — `Utf8View.initUnchecked` trusts its input is
+        // valid UTF-8 and its iterator does `catch unreachable` on a bad byte sequence
+        // (crashed on Windows: "reached unreachable code" on every hover). Validate first and
+        // fall back to a byte count, which is wrong by at most a few units for the rare
+        // misaligned/invalid case, rather than panicking.
         .utf16 => blk: {
+            if (!std.unicode.utf8ValidateSlice(line_bytes)) break :blk @intCast(line_bytes.len);
             var units: u32 = 0;
             var view = std.unicode.Utf8View.initUnchecked(line_bytes);
             var it = view.iterator();
@@ -67,7 +74,10 @@ pub fn positionToByteOffset(text: []const u8, pos: Position, encoding: PositionE
 
     switch (encoding) {
         .utf8 => return line_start + @min(pos.character, line_bytes.len),
+        // See `byteOffsetToPosition`'s matching `.utf16` branch for why this validates first
+        // instead of trusting `initUnchecked`.
         .utf16 => {
+            if (!std.unicode.utf8ValidateSlice(line_bytes)) return line_start + @min(pos.character, line_bytes.len);
             var units: u32 = 0;
             var byte_off: usize = 0;
             var view = std.unicode.Utf8View.initUnchecked(line_bytes);
