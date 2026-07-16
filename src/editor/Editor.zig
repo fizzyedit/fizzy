@@ -2485,6 +2485,12 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
                     std.log.err("Failed to copy", .{});
                 };
             }
+            // Also let whatever widget currently has keyboard focus handle it (Output Panel,
+            // a plugin search box, ...) — see `forwardKeybindToFocusedWidget`. Harmless no-op
+            // for a focused document editor, which already handled it above.
+            editor.forwardKeybindToFocusedWidget("copy") catch |err| {
+                dvui.log.err("Failed to forward copy to focused widget: {any}", .{err});
+            };
         },
         .paste => {
             if (editor.activeDoc() != null) {
@@ -2492,6 +2498,9 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
                     std.log.err("Failed to paste", .{});
                 };
             }
+            editor.forwardKeybindToFocusedWidget("paste") catch |err| {
+                dvui.log.err("Failed to forward paste to focused widget: {any}", .{err});
+            };
         },
         .undo => {
             if (editor.activeDoc()) |doc| {
@@ -3210,6 +3219,28 @@ pub fn copy(editor: *Editor) !void {
 
 pub fn paste(editor: *Editor) !void {
     try editor.runActiveDocCommand("paste");
+}
+
+/// Forwards `name`'s keybind (e.g. "copy"/"paste") as a synthetic key-down event to whichever
+/// widget currently holds dvui keyboard focus. On macOS, Cmd+C/Cmd+V only ever reach us as a
+/// native menu action (see `Keybinds.tick`'s `builtin.os.tag != .macos` guard), and that path
+/// otherwise only knows how to talk to the active *document* (`runActiveDocCommand`). Any other
+/// focused widget with its own copy/paste handling — the shell's Output Panel, a plugin's search
+/// box, dvui's own text-selection widgets — never sees the raw keystroke at all, unlike on
+/// Windows/Linux where the un-marked-handled key event still reaches it normally. Synthesizing
+/// the event here routes it through the same per-widget handling those platforms already use.
+fn forwardKeybindToFocusedWidget(_: *Editor, name: []const u8) !void {
+    const cw = dvui.currentWindow();
+    const kb = cw.keybinds.get(name) orelse return;
+    const key = kb.key orelse return;
+
+    var mod: dvui.enums.Mod = .none;
+    if (kb.shift orelse false) mod.combine(.lshift);
+    if (kb.control orelse false) mod.combine(.lcontrol);
+    if (kb.alt orelse false) mod.combine(.lalt);
+    if (kb.command orelse false) mod.combine(.lcommand);
+
+    _ = try cw.addEventKey(.{ .code = key, .action = .down, .mod = mod });
 }
 
 pub fn deleteSelectedContents(editor: *Editor) void {

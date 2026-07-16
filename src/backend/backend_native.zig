@@ -445,8 +445,14 @@ export fn FizzyNativeMenuActionEnabled(id: c_int) callconv(.c) bool {
             }
             return false;
         },
-        .copy => return fizzy.editor.activeDocHasCommand("copy") and fizzy.editor.activeDocCommandEnabled("copy"),
-        .paste => return fizzy.editor.activeDocHasCommand("paste") and fizzy.editor.activeDocCommandEnabled("paste"),
+        // Always enabled: Copy/Paste no longer only target the active document (see
+        // `Editor.forwardKeybindToFocusedWidget`) — they also reach whichever widget currently
+        // holds dvui keyboard focus (Output Panel, a plugin search box, ...), which this
+        // validator can't see (it runs outside `Window.begin`/`end`, per the doc comment above).
+        // Disabling the item here on the active-document-only condition would prevent the key
+        // equivalent from ever reaching those other widgets. The underlying handlers already
+        // no-op safely when there's nothing to copy/paste.
+        .copy, .paste => return true,
         .undo => {
             const doc = fizzy.editor.activeDoc() orelse return false;
             return doc.owner.canUndo(doc);

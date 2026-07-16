@@ -1051,6 +1051,16 @@ fn ensureStarted(self: *Client, doc_path: []const u8) bool {
 /// `std.process.spawn` on the platform that mattered) and then runs the handshake — both on
 /// this one `Io.Group`-dispatched task, so `ensureStarted` never blocks the draw thread.
 fn startupThreadMain(self: *Client, io: std.Io) void {
+    // Unconditional, regardless of how startup ends (spawn failure, handshake failure, or
+    // success) — same reasoning as `dispatchThreadMain`'s job-completion `defer`. Without
+    // this, any `hover()`/etc. call that arrived while zls was still starting up silently
+    // no-ops via `ensureStarted` returning false (before reaching any of its own logging or
+    // caching logic) and is never retried once startup finishes, since nothing wakes the UI
+    // thread to notice the state flipped to `.ready`/`.unavailable` — it just sits on
+    // whatever placeholder it last drew until an unrelated input event happens to trigger
+    // another frame. zls startup (spawn + handshake + initial indexing) can easily take
+    // several seconds on a large workspace, so this isn't a narrow race.
+    defer self.config.refresh();
     self.spawnProcess(io) catch {
         self.state.store(.unavailable, .release);
         return;
@@ -1739,9 +1749,17 @@ fn runCompletionJob(self: *Client, io: std.Io, pc: PendingCompletion) !void {
         gpa.free(c.raw_json);
     };
 
+    // Diagnostic only — captures the first candidate `resolveCompletionItem` rejects, so a
+    // "completions silently vanished" report can be told apart from "zls sent nothing" (the
+    // `raw_items.len == 0` branch above) without needing a debugger. See its use below.
+    var first_dropped_label: []const u8 = "";
+
     for (raw_items) |item_obj| {
         if (resolved.items.len >= completion_max_items) break;
-        const r = resolveCompletionItem(item_obj, pc.bytes, pc.byte_offset) orelse continue;
+        const r = resolveCompletionItem(item_obj, pc.bytes, pc.byte_offset) orelse {
+            if (first_dropped_label.len == 0) first_dropped_label = jsonString(item_obj, "label") orelse "?";
+            continue;
+        };
         const owned_label = gpa.dupe(u8, r.label) catch continue;
         const owned_text = gpa.dupe(u8, r.insert_text) catch {
             gpa.free(owned_label);
@@ -1787,6 +1805,13 @@ fn runCompletionJob(self: *Client, io: std.Io, pc: PendingCompletion) !void {
     }
 
     if (resolved.items.len == 0) {
+        var msg_buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(
+            &msg_buf,
+            "completion: zls returned {d} candidate(s) (e.g. \"{s}\") but none survived resolveCompletionItem",
+            .{ raw_items.len, first_dropped_label },
+        ) catch "completion: zls candidates were all filtered out";
+        self.config.log(self.config.language_id, .debug, msg);
         self.cacheCompletionResult(gpa, pc.key, null);
         return;
     }
