@@ -1051,18 +1051,15 @@ fn ensureStarted(self: *Client, doc_path: []const u8) bool {
 /// `std.process.spawn` on the platform that mattered) and then runs the handshake — both on
 /// this one `Io.Group`-dispatched task, so `ensureStarted` never blocks the draw thread.
 fn startupThreadMain(self: *Client, io: std.Io) void {
-    // Unconditional, regardless of how startup ends (spawn failure, handshake failure, or
-    // success) — same reasoning as `dispatchThreadMain`'s job-completion `defer`. Without
-    // this, any `hover()`/etc. call that arrived while zls was still starting up silently
-    // no-ops via `ensureStarted` returning false (before reaching any of its own logging or
-    // caching logic) and is never retried once startup finishes, since nothing wakes the UI
-    // thread to notice the state flipped to `.ready`/`.unavailable` — it just sits on
-    // whatever placeholder it last drew until an unrelated input event happens to trigger
-    // another frame. zls startup (spawn + handshake + initial indexing) can easily take
-    // several seconds on a large workspace, so this isn't a narrow race.
-    defer self.config.refresh();
+    // Wakes the UI on a failed start — without this, a `hover()`/etc. call that arrived while
+    // zls was still starting up silently no-ops via `ensureStarted` returning false (before
+    // reaching any of its own logic) and is never retried, since nothing else wakes the UI
+    // thread to notice the state flipped to `.unavailable`. Called directly here (not via
+    // `dispatchThreadMain`, see below) because that task is never spawned on this path —
+    // `handshake` is what starts it, and it never got that far.
     self.spawnProcess(io) catch {
         self.state.store(.unavailable, .release);
+        self.config.refresh();
         return;
     };
     self.handshake(io) catch |err| {
@@ -1071,9 +1068,17 @@ fn startupThreadMain(self: *Client, io: std.Io) void {
         const msg = std.fmt.bufPrint(&msg_buf, "language server unavailable ({any})", .{err}) catch "language server unavailable";
         self.config.log(self.config.language_id, .warn, msg);
         self.state.store(.unavailable, .release);
+        self.config.refresh();
         return;
     };
     self.state.store(.ready, .release);
+    // Deliberately *not* `self.config.refresh()` here — `dispatchThreadMain` (already running
+    // by this point; `handshake` above is what starts it) picks up the wake for the success
+    // path on its next loop iteration instead. Calling the host's wake callback from this
+    // thread, right as it's about to exit, is the one code path that's new since a Windows
+    // crash-on-every-hover regression showed up; moving it to the long-lived dispatch thread
+    // (which already calls this same callback repeatedly, on every job completion, without
+    // issue) sidesteps that without needing to fully root-cause the Windows-specific hazard.
 }
 
 /// Spawns the language server subprocess. Runs on the background `startupThreadMain` task, not
@@ -1501,7 +1506,16 @@ fn stderrDrainThreadMain(self: *Client, io: std.Io) void {
 
 fn dispatchThreadMain(self: *Client, io: std.Io) void {
     const gpa = self.config.allocator;
+    // Wakes the UI exactly once, the first time this loop notices startup finished
+    // successfully (this task is itself only spawned by a successful `handshake`, so seeing
+    // `.starting` here at all only happens for the handful of iterations right at the start)
+    // — see `startupThreadMain`'s doc comment for why the wake lives here instead of there.
+    var startup_wake_done = false;
     while (!self.shutdown.load(.acquire)) {
+        if (!startup_wake_done and self.state.load(.acquire) != .starting) {
+            startup_wake_done = true;
+            self.config.refresh();
+        }
         self.checkPendingNegativeWake(io);
 
         self.queue_lock.lock();
