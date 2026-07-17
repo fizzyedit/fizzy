@@ -37,9 +37,6 @@
 			<array>
 				<string>fiz</string>
 				<string>pixi</string>
-				<string>png</string>
-				<string>jpg</string>
-				<string>jpeg</string>
 			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>fizzy.icns</string>
@@ -48,23 +45,194 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 		</dict>
-		<!--
-		  Wildcard entry so fizzy shows up in Finder's "Open With" for any file,
-		  not just the extensions above. `LSHandlerRank: Alternate` means it never
-		  contests an existing default for a given extension — the user still has
-		  to explicitly pick "Open With > fizzy > Always Open With" per file type.
-		  This is the same mechanism generic editors (VS Code, Sublime, BBEdit)
-		  use to be settable-as-default for arbitrary/unknown extensions.
-		-->
 		<dict>
 			<key>CFBundleTypeExtensions</key>
 			<array>
-				<string>*</string>
+				<string>png</string>
+				<string>jpg</string>
+				<string>jpeg</string>
 			</array>
 			<key>CFBundleTypeIconFile</key>
 			<string>fizzy.icns</string>
 			<key>CFBundleTypeName</key>
-			<string>All Documents</string>
+			<string>Image files</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+		</dict>
+		<!--
+		  `CFBundleTypeExtensions: ["*"]` (the previous approach here) does NOT
+		  make an app appear in Finder's "Open With" for arbitrary files on modern
+		  macOS — verified empirically (LSCopyApplicationURLsForURL never returns
+		  wildcard/public.data-only claimers for an unrecognized extension,
+		  regardless of whether the claim is expressed via the "*" extension or
+		  via LSItemContentTypes: public.data/public.item/public.content). Editors
+		  that appear to "open anything" (VS Code, Cursor) actually just enumerate
+		  a large explicit extension list. This list mirrors Cursor's
+		  CFBundleDocumentTypes extension set so fizzy is a same-tier "Open With"
+		  candidate for code/text/data files. `LSHandlerRank: Alternate` means it
+		  never contests an existing default for a given extension.
+		-->
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>ascx</string>
+				<string>asp</string>
+				<string>aspx</string>
+				<string>bash</string>
+				<string>bash_login</string>
+				<string>bash_logout</string>
+				<string>bash_profile</string>
+				<string>bashrc</string>
+				<string>bat</string>
+				<string>bowerrc</string>
+				<string>c</string>
+				<string>c++</string>
+				<string>cc</string>
+				<string>cfg</string>
+				<string>cjs</string>
+				<string>clj</string>
+				<string>cljs</string>
+				<string>cljx</string>
+				<string>clojure</string>
+				<string>cls</string>
+				<string>cmake</string>
+				<string>cmd</string>
+				<string>code-workspace</string>
+				<string>coffee</string>
+				<string>config</string>
+				<string>containerfile</string>
+				<string>cpp</string>
+				<string>cs</string>
+				<string>cshtml</string>
+				<string>csproj</string>
+				<string>css</string>
+				<string>csv</string>
+				<string>csx</string>
+				<string>ctp</string>
+				<string>cxx</string>
+				<string>dart</string>
+				<string>diff</string>
+				<string>dockerfile</string>
+				<string>dot</string>
+				<string>dtd</string>
+				<string>editorconfig</string>
+				<string>edn</string>
+				<string>erb</string>
+				<string>eyaml</string>
+				<string>eyml</string>
+				<string>fs</string>
+				<string>fsi</string>
+				<string>fsscript</string>
+				<string>fsx</string>
+				<string>gemspec</string>
+				<string>gitattributes</string>
+				<string>gitconfig</string>
+				<string>gitignore</string>
+				<string>go</string>
+				<string>gradle</string>
+				<string>groovy</string>
+				<string>h</string>
+				<string>h++</string>
+				<string>handlebars</string>
+				<string>hbs</string>
+				<string>hh</string>
+				<string>hpp</string>
+				<string>htm</string>
+				<string>html</string>
+				<string>hxx</string>
+				<string>ini</string>
+				<string>ipynb</string>
+				<string>jade</string>
+				<string>jav</string>
+				<string>java</string>
+				<string>js</string>
+				<string>jscsrc</string>
+				<string>jshintrc</string>
+				<string>jshtm</string>
+				<string>json</string>
+				<string>jsp</string>
+				<string>jsx</string>
+				<string>less</string>
+				<string>lock</string>
+				<string>log</string>
+				<string>lua</string>
+				<string>m</string>
+				<string>makefile</string>
+				<string>markdown</string>
+				<string>md</string>
+				<string>mdoc</string>
+				<string>mdown</string>
+				<string>mdtext</string>
+				<string>mdtxt</string>
+				<string>mdwn</string>
+				<string>mjs</string>
+				<string>mk</string>
+				<string>mkd</string>
+				<string>mkdn</string>
+				<string>ml</string>
+				<string>mli</string>
+				<string>mm</string>
+				<string>php</string>
+				<string>phtml</string>
+				<string>pl</string>
+				<string>pl6</string>
+				<string>plist</string>
+				<string>pm</string>
+				<string>pm6</string>
+				<string>pod</string>
+				<string>pp</string>
+				<string>profile</string>
+				<string>properties</string>
+				<string>ps1</string>
+				<string>psd1</string>
+				<string>psgi</string>
+				<string>psm1</string>
+				<string>pug</string>
+				<string>py</string>
+				<string>pyi</string>
+				<string>r</string>
+				<string>rb</string>
+				<string>rhistory</string>
+				<string>rprofile</string>
+				<string>rs</string>
+				<string>rst</string>
+				<string>rt</string>
+				<string>sass</string>
+				<string>scss</string>
+				<string>sh</string>
+				<string>shtml</string>
+				<string>sql</string>
+				<string>svg</string>
+				<string>swift</string>
+				<string>t</string>
+				<string>tex</string>
+				<string>toml</string>
+				<string>ts</string>
+				<string>tsx</string>
+				<string>txt</string>
+				<string>vb</string>
+				<string>vue</string>
+				<string>wxi</string>
+				<string>wxl</string>
+				<string>wxs</string>
+				<string>xaml</string>
+				<string>xcodeproj</string>
+				<string>xcworkspace</string>
+				<string>xhtml</string>
+				<string>xml</string>
+				<string>yaml</string>
+				<string>yml</string>
+				<string>zlogin</string>
+				<string>zlogout</string>
+				<string>zprofile</string>
+				<string>zsh</string>
+				<string>zshenv</string>
+				<string>zshrc</string>
+			</array>
+			<key>CFBundleTypeIconFile</key>
+			<string>fizzy.icns</string>
+			<key>CFBundleTypeName</key>
+			<string>Text and Code</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>

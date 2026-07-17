@@ -16,11 +16,14 @@
 //!     default. These are unknown extensions on a stock Windows, so no
 //!     UserChoice override exists and the ProgID default wins.
 //!
-//!   * `.png`, `.jpg`, `.jpeg` -> registered under
-//!     `Applications\fizzy.exe\SupportedTypes` + the extensions'
-//!     `OpenWithList`. That puts fizzy in the "Open with" menu without
-//!     stealing the user's existing default (Windows enforces UserChoice for
-//!     known extensions, so we couldn't make ourselves default here anyway).
+//!   * `open_with_only_extensions` (images, plus the same code/text/data
+//!     extension set macOS's Info.plist declares — kept in sync with
+//!     `assets/macos/info.plist`'s "Image files" + "Text and Code" entries)
+//!     -> registered under `Applications\fizzy.exe\SupportedTypes` + the
+//!     extensions' `OpenWithList`. That puts fizzy in the "Open with" menu
+//!     without stealing the user's existing default (Windows enforces
+//!     UserChoice for known extensions, so we couldn't make ourselves default
+//!     here anyway).
 //!
 //! No-ops on non-Windows: macOS associations are handled by Info.plist already
 //! and Linux has no equivalent registration step.
@@ -34,7 +37,38 @@ pub const default_progid_extensions = [_]ExtAssoc{
 };
 
 pub const open_with_only_extensions = [_][]const u8{
-    ".png", ".jpg", ".jpeg",
+    ".png",  ".jpg",           ".jpeg",         ".ascx",     ".asp",
+    ".aspx", ".bash",          ".bash_login",   ".bash_logout", ".bash_profile",
+    ".bashrc", ".bat",         ".bowerrc",      ".c",        ".c++",
+    ".cc",   ".cfg",           ".cjs",          ".clj",      ".cljs",
+    ".cljx", ".clojure",       ".cls",          ".cmake",    ".cmd",
+    ".code-workspace", ".coffee", ".config",    ".containerfile", ".cpp",
+    ".cs",   ".cshtml",        ".csproj",       ".css",      ".csv",
+    ".csx",  ".ctp",           ".cxx",          ".dart",     ".diff",
+    ".dockerfile", ".dot",     ".dtd",          ".editorconfig", ".edn",
+    ".erb",  ".eyaml",         ".eyml",         ".fs",       ".fsi",
+    ".fsscript", ".fsx",       ".gemspec",      ".gitattributes", ".gitconfig",
+    ".gitignore", ".go",       ".gradle",       ".groovy",   ".h",
+    ".h++",  ".handlebars",    ".hbs",          ".hh",       ".hpp",
+    ".htm",  ".html",          ".hxx",          ".ini",      ".ipynb",
+    ".jade", ".jav",           ".java",         ".js",       ".jscsrc",
+    ".jshintrc", ".jshtm",     ".json",         ".jsp",      ".jsx",
+    ".less", ".lock",          ".log",          ".lua",      ".m",
+    ".makefile", ".markdown",  ".md",           ".mdoc",     ".mdown",
+    ".mdtext", ".mdtxt",       ".mdwn",         ".mjs",      ".mk",
+    ".mkd",  ".mkdn",          ".ml",           ".mli",      ".mm",
+    ".php",  ".phtml",         ".pl",           ".pl6",      ".plist",
+    ".pm",   ".pm6",           ".pod",          ".pp",       ".profile",
+    ".properties", ".ps1",     ".psd1",         ".psgi",     ".psm1",
+    ".pug",  ".py",            ".pyi",          ".r",        ".rb",
+    ".rhistory", ".rprofile",  ".rs",           ".rst",      ".rt",
+    ".sass", ".scss",          ".sh",           ".shtml",    ".sql",
+    ".svg",  ".swift",         ".t",            ".tex",      ".toml",
+    ".ts",   ".tsx",           ".txt",          ".vb",       ".vue",
+    ".wxi",  ".wxl",           ".wxs",          ".xaml",     ".xcodeproj",
+    ".xcworkspace", ".xhtml",  ".xml",          ".yaml",     ".yml",
+    ".zlogin", ".zlogout",     ".zprofile",     ".zsh",      ".zshenv",
+    ".zshrc",
 };
 
 pub const ExtAssoc = struct {
@@ -75,8 +109,8 @@ const WindowsImpl = struct {
     // All sub-keys passed through `setStringValueRaw` are relative to
     // `HKCU\Software\Classes\…`; the prefix is added once inside that helper.
     const application_key = "Applications\\fizzy.exe";
-    const image_progid = "Fizzy.Image";
-    const image_friendly = "Fizzy Image";
+    const open_with_progid = "Fizzy.Document";
+    const open_with_friendly = "Fizzy Document";
 
     // `std.process.executablePath` now requires an `Io`, which the Velopack C
     // callbacks that drive registration don't have. This path is Windows-only,
@@ -106,9 +140,9 @@ const WindowsImpl = struct {
         }
 
         try writeApplicationKey(open_cmd, icon_ref);
-        try writeImageProgid(icon_ref, open_cmd);
+        try writeOpenWithProgid(icon_ref, open_cmd);
         for (open_with_only_extensions) |ext| {
-            try writeOpenWithEntry(ext, image_progid);
+            try writeOpenWithEntry(ext, open_with_progid);
         }
 
         notifyAssocChanged();
@@ -138,12 +172,12 @@ const WindowsImpl = struct {
         }
 
         _ = registry.RegDeleteTreeW(classes_key, utf16Z("Applications\\fizzy.exe"));
-        _ = registry.RegDeleteTreeW(classes_key, utf16Z(image_progid));
+        _ = registry.RegDeleteTreeW(classes_key, utf16Z(open_with_progid));
 
         for (open_with_only_extensions) |ext| {
             var sub_buf: [64]u8 = undefined;
             const sub = std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithProgids", .{ext}) catch continue;
-            deleteValueIfPresent(classes_key, sub, image_progid);
+            deleteValueIfPresent(classes_key, sub, open_with_progid);
             const sub2 = std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithList", .{ext}) catch continue;
             deleteValueIfPresent(classes_key, sub2, "fizzy.exe");
         }
@@ -177,10 +211,10 @@ const WindowsImpl = struct {
         }
     }
 
-    fn writeImageProgid(icon_ref: []const u8, open_cmd: []const u8) !void {
-        try setStringDefault(image_progid, image_friendly);
-        try setStringDefault(image_progid ++ "\\DefaultIcon", icon_ref);
-        try setStringDefault(image_progid ++ "\\shell\\open\\command", open_cmd);
+    fn writeOpenWithProgid(icon_ref: []const u8, open_cmd: []const u8) !void {
+        try setStringDefault(open_with_progid, open_with_friendly);
+        try setStringDefault(open_with_progid ++ "\\DefaultIcon", icon_ref);
+        try setStringDefault(open_with_progid ++ "\\shell\\open\\command", open_cmd);
     }
 
     fn writeOpenWithEntry(ext: []const u8, progid: []const u8) !void {
