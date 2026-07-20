@@ -1,10 +1,9 @@
 //! Read-only image viewer: zoom/pan canvas with checkerboard transparency background.
 const std = @import("std");
-const internal = @import("../image.zig");
-const dvui = internal.dvui;
-const core = internal.core;
-const sdk = internal.sdk;
-const Document = internal.Document;
+const dvui = @import("dvui");
+const core = @import("core");
+const sdk = @import("fizzy_sdk");
+const Document = @import("Document.zig");
 
 const CanvasWidget = core.dvui.CanvasWidget;
 

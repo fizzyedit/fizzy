@@ -1,0 +1,6 @@
+.{
+    .id = "image",
+    .name = "Image",
+    .version = "0.1.0",
+    .min_sdk_version = "",
+}

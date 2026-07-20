@@ -5,9 +5,8 @@ const helpers = @import("../../shared/build/helpers.zig");
 pub const id = "markdown";
 pub const installDylib = helpers.installDylib;
 
-const module_path = "src/plugins/markdown/markdown.zig";
-const dylib_path = "src/plugins/markdown/root.zig";
-const zon_path = "src/plugins/markdown/build.zig.zon";
+const module_path = "src/plugins/markdown/plugin.zig";
+const zon_path = "src/plugins/markdown/plugin.zig.zon";
 
 pub const ModuleImports = struct {
     dvui: *std.Build.Module,
@@ -16,12 +15,11 @@ pub const ModuleImports = struct {
     proxy_bridge: ?*std.Build.Module = null,
 };
 
-fn applyImports(b: *std.Build, module: *std.Build.Module, imports: ModuleImports) void {
+fn applyImports(module: *std.Build.Module, imports: ModuleImports) void {
     module.addImport("dvui", imports.dvui);
     module.addImport("core", imports.core);
-    module.addImport("sdk", imports.sdk);
+    module.addImport("fizzy_sdk", imports.sdk);
     if (imports.proxy_bridge) |proxy_bridge| module.addImport("proxy_bridge", proxy_bridge);
-    module.addOptions(helpers.plugin_options_import, helpers.pluginOptions(b, id, helpers.pluginVersionFromZon(b, zon_path)));
 }
 
 pub fn linkCmark(
@@ -56,7 +54,10 @@ pub fn addStaticModule(
         .target = target,
         .optimize = optimize,
     }, consumer);
-    applyImports(b, mod, imports);
+    // Shared with `addDylib` below via `pluginOptionsFor`'s per-manifest memoization — both
+    // link modes must attach the *same* options step (see its doc comment for why).
+    mod.addOptions(helpers.plugin_options_import, helpers.pluginOptionsFor(b, zon_path));
+    applyImports(mod, imports);
     linkCmark(b, target, optimize, mod);
     return mod;
 }
@@ -67,13 +68,14 @@ pub fn addDylib(
     optimize: std.builtin.OptimizeMode,
     imports: ModuleImports,
 ) *std.Build.Step.Compile {
-    const lib = helpers.addDylib(b, .{
-        .name = id,
-        .root_source_file = b.path(dylib_path),
+    const created = helpers.addDylib(b, .{
+        .root_source_file = b.path(module_path),
+        .manifest_zon_path = zon_path,
+        .sdk = imports.sdk,
         .target = target,
         .optimize = optimize,
     });
-    applyImports(b, lib.root_module, imports);
-    linkCmark(b, target, optimize, lib.root_module);
-    return lib;
+    applyImports(created.module, imports);
+    linkCmark(b, target, optimize, created.module);
+    return created.lib;
 }

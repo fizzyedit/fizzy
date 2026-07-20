@@ -8,7 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 
-const sdk = @import("sdk");
+const sdk = @import("fizzy_sdk");
 const Host = sdk.Host;
 const dylib_api = sdk.dylib;
 const dvui_context = sdk.dvui_context;
@@ -328,12 +328,20 @@ fn allowAbiWarn() bool {
 }
 
 /// Best-effort read of a plugin's user-facing display name straight from the dylib, **without
-/// registering it**. Opens the image, reads the optional `fizzy_plugin_name` export, copies the
-/// string out (the dylib is closed before returning), and unloads. Returns null when the dylib
-/// can't be opened or predates the `fizzy_plugin_name` symbol. Caller owns the returned slice.
+/// registering it**. Prefers the embedded `plugin.zig.zon` (`fizzy_plugin_manifest_zon`); falls
+/// back to the `fizzy_plugin_name` export. Caller owns the returned slice.
 pub fn probeName(allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
     var lib = DynLib.open(path) catch return null;
     defer lib.close();
+    if (lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon)) |get_zon| {
+        const zon = std.mem.span(get_zon());
+        if (zon.len > 0) {
+            if (sdk.manifest.parse(allocator, zon)) |parsed| {
+                defer sdk.manifest.free(allocator, parsed);
+                if (parsed.name.len > 0) return allocator.dupe(u8, parsed.name) catch null;
+            } else |_| {}
+        }
+    }
     const get_name = lib.lookup(dylib_api.GetPluginNameFn, dylib_api.symbol_plugin_name) orelse return null;
     const name = std.mem.span(get_name());
     if (name.len == 0) return null;
@@ -341,16 +349,28 @@ pub fn probeName(allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
 }
 
 /// Best-effort read of version exports from a dylib (for failure diagnostics).
+/// Prefers semver from the embedded manifest zon when present.
 pub fn probeVersionInfo(path: []const u8) ?PluginVersionInfo {
     var lib = DynLib.open(path) catch return null;
     defer lib.close();
-    const get_sdk_version = lookupVersionFn(&lib, dylib_api.symbol_sdk_version);
-    const get_min_sdk = lookupVersionFn(&lib, dylib_api.symbol_min_sdk_version);
-    const get_plugin_version = lookupVersionFn(&lib, dylib_api.symbol_plugin_version);
+    var plugin_version = readVersionTriplet(lookupVersionFn(&lib, dylib_api.symbol_plugin_version));
+    if (lib.lookup(dylib_api.GetManifestZonFn, dylib_api.symbol_manifest_zon)) |get_zon| {
+        const zon = std.mem.span(get_zon());
+        if (zon.len > 0) {
+            // Stack/arena-free parse: use page allocator for a short-lived Manifest.
+            const gpa = std.heap.page_allocator;
+            if (sdk.manifest.parse(gpa, zon)) |parsed| {
+                defer sdk.manifest.free(gpa, parsed);
+                if (std.SemanticVersion.parse(parsed.version)) |sv| {
+                    plugin_version = .{ .major = @intCast(sv.major), .minor = @intCast(sv.minor), .patch = @intCast(sv.patch) };
+                } else |_| {}
+            } else |_| {}
+        }
+    }
     return .{
-        .plugin_version = readVersionTriplet(get_plugin_version),
-        .built_with_sdk_version = readVersionTriplet(get_sdk_version),
-        .min_sdk_version = readVersionTriplet(get_min_sdk),
+        .plugin_version = plugin_version,
+        .built_with_sdk_version = readVersionTriplet(lookupVersionFn(&lib, dylib_api.symbol_sdk_version)),
+        .min_sdk_version = readVersionTriplet(lookupVersionFn(&lib, dylib_api.symbol_min_sdk_version)),
     };
 }
 

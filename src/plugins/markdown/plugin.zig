@@ -1,22 +1,32 @@
 const std = @import("std");
-const markdown = @import("../markdown.zig");
-const sdk = markdown.sdk;
-const dvui = markdown.dvui;
-const State = markdown.State;
+const sdk = @import("fizzy_sdk");
+const dvui = @import("dvui");
+const State = @import("src/State.zig").State;
+const md = @import("src/markdown.zig");
 
-const plugin_options = @import("fizzy_plugin_options");
+/// Re-exported for the shell's own use of the preview renderer outside this plugin's own
+/// vtable/service surface (e.g. `src/editor/readme.zig` rendering a fetched plugin README) —
+/// see `docs/PLUGIN_MANIFEST_PLAN.md`'s "static module root" decision.
+pub const Preview = md.Preview;
+pub const drawPreview = md.drawPreview;
+pub const drawPreviewForDocument = md.drawPreviewForDocument;
 
-pub const manifest = sdk.PluginManifest{
-    .id = "markdown",
-    .name = "Markdown",
-    .version = plugin_options.version,
-};
+/// Injected at build time from `plugin.zig.zon` (see `static/integration.zig` /
+/// `src/plugins/shared/build/helpers.zig`'s `pluginOptions`) — one source of truth for
+/// identity, not duplicated as string literals here.
+pub const plugin_options = @import("fizzy_plugin_options");
+
+/// This plugin's stable id — the single source of truth other modules (e.g. the shell's
+/// `Editor.isBundledPluginId`) read instead of retyping the string. Distinct from
+/// `language_support.id` below, which happens to share the string but names the *language*
+/// this plugin's `LanguageSupport` provider handles, not the plugin itself.
+pub const plugin_id = plugin_options.id;
 
 var plugin: sdk.Plugin = .{
     .state = undefined,
     .vtable = &vtable,
-    .id = "markdown",
-    .display_name = "Markdown",
+    .id = plugin_id,
+    .display_name = plugin_options.name,
 };
 
 const vtable: sdk.Plugin.VTable = .{
@@ -66,7 +76,7 @@ fn previewPane(state: *anyopaque, ext: []const u8, bytes: []const u8, id_extra: 
     const st: *State = @ptrCast(@alignCast(state));
     const gop = st.previews.getOrPut(gpa, id_extra) catch return error.OutOfMemory;
     if (!gop.found_existing) gop.value_ptr.* = .{};
-    markdown.drawPreviewForDocument(gop.value_ptr, sdk.language.previewDocumentPath(), bytes, gpa, .{
+    md.drawPreviewForDocument(gop.value_ptr, sdk.language.previewDocumentPath(), bytes, gpa, .{
         .io = dvui.io,
         .id_extra = id_extra,
     });
@@ -75,7 +85,7 @@ fn previewPane(state: *anyopaque, ext: []const u8, bytes: []const u8, id_extra: 
 fn svcRender(ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: sdk.services.markdown.Api.RenderOptions) !void {
     const st: *State = @ptrCast(@alignCast(ctx));
     const preview = st.previewFor(gpa, opts.id_extra);
-    markdown.drawPreview(preview, bytes, gpa, .{
+    md.drawPreview(preview, bytes, gpa, .{
         .io = dvui.io,
         .image_base_dir = opts.image_base_dir,
         .id_extra = opts.id_extra,

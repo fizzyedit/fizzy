@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const Io = std.Io;
 
 const dvui = @import("dvui");
-const sdk = @import("sdk");
+const sdk = @import("fizzy_sdk");
 
 const md = @import("cmark_parse.zig");
 

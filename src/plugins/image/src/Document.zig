@@ -1,10 +1,9 @@
 //! A single open image document: path, decoded pixels, and per-document canvas state.
 const std = @import("std");
 const builtin = @import("builtin");
-const internal = @import("../image.zig");
-const dvui = internal.dvui;
-const core = internal.core;
-const sdk = internal.sdk;
+const dvui = @import("dvui");
+const core = @import("core");
+const sdk = @import("fizzy_sdk");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 

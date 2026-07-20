@@ -1,6 +1,6 @@
 //! Runtime accessors — backed by `sdk.runtime` and shell-injected workbench pointer.
 const std = @import("std");
-const sdk = @import("sdk");
+const sdk = @import("fizzy_sdk");
 const Workbench = @import("Workbench.zig");
 
 var shell_workbench: ?*Workbench = null;

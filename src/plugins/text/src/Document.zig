@@ -3,10 +3,9 @@
 //! only an opaque `DocHandle` whose `id` maps back to the registered `Document`.
 const std = @import("std");
 const builtin = @import("builtin");
-const internal = @import("../text.zig");
-const dvui = internal.dvui;
-const sdk = internal.sdk;
-const UndoStack = internal.UndoStack;
+const dvui = @import("dvui");
+const sdk = @import("fizzy_sdk");
+const UndoStack = @import("UndoStack.zig");
 const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;

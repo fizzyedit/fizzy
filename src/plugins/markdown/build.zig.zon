@@ -5,15 +5,20 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "root.zig",
-        "markdown.zig",
+        "plugin.zig",
+        "plugin.zig.zon",
         "src",
         "static",
     },
-    .fingerprint = 0x0000000000000000,
+    .fingerprint = 0x96be88e3e93bcfea,
     .dependencies = .{
         .fizzy = .{
             .path = "../../..",
+        },
+        .cmark_gfm = .{
+            .url = "git+https://github.com/kristoff-it/cmark-gfm#cd0aba87cc89f0c8aa9393e59505db271ea30239",
+            .hash = "cmark_gfm-0.1.0-uQgTKymaFwDK0jVZszXfDtQtW6BnS44Bp0GS55TVBD4p",
+            .lazy = true,
         },
     },
 }

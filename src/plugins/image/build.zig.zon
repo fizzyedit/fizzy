@@ -5,8 +5,8 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "root.zig",
-        "image.zig",
+        "plugin.zig",
+        "plugin.zig.zon",
         "src",
         "static",
     },

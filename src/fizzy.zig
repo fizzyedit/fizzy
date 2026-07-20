@@ -34,7 +34,7 @@ pub var editor: *Editor = undefined;
 pub const platform = core.platform;
 
 /// Plugin SDK surface
-pub const sdk = @import("sdk");
+pub const sdk = @import("fizzy_sdk");
 
 /// Custom dvui stuff
 pub const dvui = core.dvui;

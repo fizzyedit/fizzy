@@ -32,12 +32,19 @@ const workbench_mod = @import("workbench");
 const text_mod = @import("text");
 const markdown_mod = @import("markdown");
 const image_mod = @import("image");
+
+/// The bundled built-in modules, exactly the ones `postInit` imports and registers above.
+/// Each exports its own `pub const plugin_id` (single source of truth — see e.g. `text_mod.plugin_id`)
+/// instead of this list retyping the id strings a second time; adding a 5th built-in is one
+/// line here, alongside its import/registration, not a separately-maintained string list.
+const bundled_modules = .{ workbench_mod, text_mod, image_mod, markdown_mod };
+
 const PluginLoader = if (builtin.target.cpu.arch == .wasm32)
     @import("PluginLoader_stub.zig")
 else
     @import("PluginLoader.zig");
-const InstalledPlugins = @import("InstalledPlugins.zig");
 const PluginStore = @import("PluginStore.zig");
+const PluginSettingsPane = @import("PluginSettingsPane.zig");
 const OutputPanel = @import("OutputPanel.zig");
 
 pub const Workspace = workbench_mod.Workspace;
@@ -164,8 +171,9 @@ pending_quit_continue: bool = false,
 /// End this frame with `App.Result.close` (e.g. quit finished).
 pending_app_close: bool = false,
 
-/// Last serialized JSON written or captured at startup; avoids redundant writes.
-settings_last_saved_json: ?[]u8 = null,
+/// Hash of the last serialized settings.zon text written or captured at startup; avoids
+/// redundant writes without keeping a full duplicate copy of the text around.
+settings_last_saved_hash: ?u64 = null,
 /// True after user-driven settings edits until successfully persisted or snapshot matches disk.
 settings_dirty: bool = false,
 /// Monotonic deadline (`perf.nanoTimestamp()`): autosave runs when dirty and `now >= deadline`.
@@ -270,13 +278,19 @@ pub fn init(
 
     try editor.workbench.registerBuiltins();
 
+    // Each plugin persists its own `<plugins_dir>/<id>.settings.zon` (see `Host.
+    // loadPluginSettings`/`flushPluginSettings`) rather than a blob embedded in settings.zon.
+    // Set before `Settings.load` (which may one-shot migrate a legacy settings.json's plugin
+    // blobs out to these files) and before any plugin registers and reads its own settings.
+    const plugins_dir: ?[]const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
+        null
+    else
+        try std.fs.path.join(app.allocator, &.{ editor.config_folder, "plugins" });
+    editor.host.plugins_dir = plugins_dir;
+
     {
-        const settings_path = try std.fs.path.join(app.allocator, &.{ editor.config_folder, "settings.json" });
-        editor.settings = try Settings.load(app.allocator, settings_path);
-        // Load the opaque per-plugin settings blobs into the Host so plugins (created
-        // right after this `Editor.init` returns) can read their own settings. Runs a
-        // one-time migration of legacy flat settings; see `Settings.loadPluginStore`.
-        Settings.loadPluginStore(app.allocator, settings_path, &editor.host.plugin_settings);
+        const settings_path = try std.fs.path.join(app.allocator, &.{ editor.config_folder, "settings.zon" });
+        editor.settings = try Settings.load(app.allocator, settings_path, plugins_dir);
     }
 
     // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
@@ -431,7 +445,7 @@ pub fn init(
     editor.recents = if (comptime builtin.target.cpu.arch == .wasm32)
         .{ .folders = .init(app.allocator) }
     else
-        Recents.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.config_folder, "recents.json" })) catch .{
+        Recents.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.config_folder, "recents.zon" })) catch .{
             .folders = .init(app.allocator),
         };
 
@@ -444,8 +458,12 @@ pub fn init(
 
     try Keybinds.register();
 
-    // Collect the initial settings json (shell fields + per-plugin blobs) for autosave dedup.
-    editor.settings_last_saved_json = try Settings.serialize(&editor.settings, &editor.host.plugin_settings, fizzy.app.allocator);
+    // Collect the initial settings.zon text for autosave dedup.
+    {
+        const serialized = try Settings.serialize(&editor.settings, fizzy.app.allocator);
+        defer fizzy.app.allocator.free(serialized);
+        editor.settings_last_saved_hash = std.hash.Wyhash.hash(0, serialized);
+    }
 
     return editor;
 }
@@ -498,8 +516,8 @@ fn loadImageFromDylibEnabled() bool {
     return true;
 }
 
-/// Stable workbench sidebar view id (matches `workbench.plugin.view_files`).
-pub const workbench_files_view = workbench_mod.plugin.view_files;
+/// Stable workbench sidebar view id (matches `workbench.view_files`).
+pub const workbench_files_view = workbench_mod.view_files;
 
 /// Registered workbench plugin (dylib or static). Panics if missing after `postInit`.
 pub fn workbenchPlugin(editor: *Editor) *sdk.Plugin {
@@ -749,9 +767,23 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         const path = std.fs.path.join(fizzy.app.allocator, &.{ plugins_dir, entry.name }) catch continue;
 
         if (editor.host.pluginById(plugin_id) != null) {
-            dvui.log.err("user plugin '{s}': id already registered by a built-in; skipped", .{plugin_id});
-            const probe = PluginLoader.probeVersionInfo(path);
-            editor.recordPluginFailure(plugin_id, "id already registered by a built-in plugin", null, if (probe) |info| info.plugin_version else null);
+            // A shell built-in (`text`/`workbench`/`image`/`markdown`) is loaded via its own
+            // static/dylib path (see `postInit` above) and may *also* have its dylib sitting in
+            // this same shared plugins directory — built-ins compile "the same third-party
+            // shape" a real third-party plugin would, and `zig build install` drops every
+            // plugin's dylib here alike (see CLAUDE.md). Rediscovering a built-in's own binary
+            // here is expected, not a failure: recording it as one would surface the same id
+            // twice in the settings pane (once as the loaded built-in, once as a "failed" user
+            // plugin), which collides on the shared heading widget id. Only a genuine third-party
+            // id clash (some other plugin trying to claim an id a built-in already owns) is
+            // worth surfacing.
+            if (isBundledPluginId(plugin_id)) {
+                dvui.log.info("user plugin '{s}': already loaded as a built-in; skipped", .{plugin_id});
+            } else {
+                dvui.log.err("user plugin '{s}': id already registered by a built-in; skipped", .{plugin_id});
+                const probe = PluginLoader.probeVersionInfo(path);
+                editor.recordPluginFailure(plugin_id, "id already registered by a built-in plugin", null, if (probe) |info| info.plugin_version else null);
+            }
             fizzy.app.allocator.free(path);
             continue;
         }
@@ -824,12 +856,14 @@ fn unloadPluginLibs(editor: *Editor) void {
 // code) ship in the app and are never unloaded, even though they also appear in
 // `loaded_plugin_libs` when loaded from their bundled dylibs.
 
-/// Built-in plugin ids that ship in the app and must never be store-managed.
+/// True when `id` names one of the bundled built-ins (ships in the app, must never be
+/// store-managed, and may legitimately be rediscovered under its own id while scanning the
+/// user plugins directory — see `loadUserPlugins`'s already-registered branch).
 fn isBundledPluginId(id: []const u8) bool {
-    return std.mem.eql(u8, id, "workbench") or
-        std.mem.eql(u8, id, "text") or
-        std.mem.eql(u8, id, "markdown") or
-        std.mem.eql(u8, id, "image");
+    inline for (bundled_modules) |m| {
+        if (std.mem.eql(u8, m.plugin_id, id)) return true;
+    }
+    return false;
 }
 
 /// True when `id` names a runtime-loaded user plugin that may be unloaded/disabled.
@@ -1142,15 +1176,6 @@ pub fn postInit(editor: *Editor) !void {
     // the Host instead of importing the concrete Editor.
     editor.host.installShell(.{ .ctx = editor, .vtable = &shell_api_vtable });
 
-    // The shell's own settings section, registered first so "Editor" leads the list;
-    // plugins append theirs in their `register` (the Settings view renders each grouped
-    // by owner, VSCode-style).
-    try editor.host.registerSettingsSection(.{
-        .id = "shell.settings.editor",
-        .title = "Editor",
-        .draw = drawShellSettingsSection,
-    });
-
     // Register plugin contributions (sidebar/bottom/center/menus). These are the
     // near-empty shell's content: it iterates the Host registries rather than
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
@@ -1161,32 +1186,32 @@ pub fn postInit(editor: *Editor) !void {
     // run. Not worth logging until that changes.
     if (loadWorkbenchFromDylibEnabled()) {
         editor.loadWorkbenchDylib(fizzy.app.root_path) catch {
-            try workbench_mod.plugin.register(&editor.host);
+            try workbench_mod.register(&editor.host);
         };
     } else {
-        try workbench_mod.plugin.register(&editor.host);
+        try workbench_mod.register(&editor.host);
     }
     if (loadTextFromDylibEnabled()) {
         editor.loadTextDylib(fizzy.app.root_path) catch {
-            try text_mod.plugin.register(&editor.host);
+            try text_mod.register(&editor.host);
         };
     } else {
-        try text_mod.plugin.register(&editor.host);
+        try text_mod.register(&editor.host);
     }
     if (loadImageFromDylibEnabled()) {
         editor.loadImageDylib(fizzy.app.root_path) catch {
-            try image_mod.plugin.register(&editor.host);
+            try image_mod.register(&editor.host);
         };
     } else {
-        try image_mod.plugin.register(&editor.host);
+        try image_mod.register(&editor.host);
     }
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (loadMarkdownFromDylibEnabled()) {
             editor.loadMarkdownDylib(fizzy.app.root_path) catch {
-                try markdown_mod.plugin.register(&editor.host);
+                try markdown_mod.register(&editor.host);
             };
         } else {
-            try markdown_mod.plugin.register(&editor.host);
+            try markdown_mod.register(&editor.host);
         }
     }
 
@@ -1196,8 +1221,6 @@ pub fn postInit(editor: *Editor) !void {
 
     // User-installed plugins from `<config>/plugins/{id}.{dylib,so,dll}`.
     editor.loadUserPlugins(editor.config_folder);
-
-    try InstalledPlugins.register(&editor.host);
 
     for (editor.host.plugins.items) |p| try p.initPlugin();
 
@@ -1254,31 +1277,20 @@ pub fn postInit(editor: *Editor) !void {
     }
 }
 
-/// The Settings sidebar view: render every registered settings section under its title
-/// heading, grouped by owner (VSCode-style). The shell registers its own "Editor"
-/// section; plugins add theirs.
+/// The Settings sidebar view: the shell's own "Editor" section (theme, fonts,
+/// window/content opacity, input timing, debugging) via `Explorer.settings.draw()`, then every
+/// plugin's own settings via the schema-driven `PluginSettingsPane` (loaded plugins' fields,
+/// disabled plugins' Enabled toggle, failed plugins' failure reason — see its doc comment).
 fn drawSettingsPane(_: ?*anyopaque) anyerror!void {
     var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
     defer vbox.deinit();
 
-    for (fizzy.editor.host.settings_sections.items, 0..) |*section, i| {
-        var sbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .id_extra = i });
-        defer sbox.deinit();
-
-        dvui.labelNoFmt(@src(), section.title, .{}, .{
-            .font = dvui.Font.theme(.heading),
-            .margin = .{ .x = 2, .y = 6, .w = 2, .h = 2 },
-        });
-        try section.draw(section.ctx);
-
-        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 12 } });
-    }
-}
-
-/// Shell-owned settings controls (theme, fonts, window/content opacity, input timing,
-/// debugging). Pixel-art-specific controls live in the pixel-art plugin's own section.
-fn drawShellSettingsSection(_: ?*anyopaque) anyerror!void {
+    dvui.labelNoFmt(@src(), "Editor", .{}, .{
+        .font = dvui.Font.theme(.heading),
+        .margin = .{ .x = 2, .y = 6, .w = 2, .h = 2 },
+    });
     try Explorer.settings.draw();
+    try PluginSettingsPane.draw();
 }
 
 // ---- EditorAPI: the shell-provided read/utility surface for plugins ----------
@@ -1337,6 +1349,7 @@ const shell_api_vtable: sdk.EditorAPI.VTable = .{
     .abortSaveAllQuit = shellAbortSaveAllQuit,
     .logLine = shellLogLine,
     .drawMenuItem = shellDrawMenuItem,
+    .loadPluginSettingsFile = shellLoadPluginSettingsFile,
 };
 
 fn shellLogLine(ctx: *anyopaque, level: std.log.Level, scope: []const u8, message: []const u8) void {
@@ -1363,6 +1376,19 @@ fn shellDrawMenuItem(ctx: *anyopaque, title: []const u8, keybind_name: ?[]const 
         .{};
     fizzy.dvui.labelWithKeybind(title, kb, true, .{ .expand = .horizontal }, .{ .expand = .horizontal });
     return clicked;
+}
+
+/// See `EditorAPI.VTable.loadPluginSettingsFile`'s doc comment for why this must run here
+/// (the shell's own compiled code) rather than inside `Host.loadPluginSettings` directly.
+fn shellLoadPluginSettingsFile(ctx: *anyopaque, id: []const u8) ?[]u8 {
+    // Wasm: no filesystem; `fizzy.fs.read` uses `Io.Dir.cwd()` (posix.AT), which doesn't exist
+    // for this target — `Host.loadPluginSettings` already short-circuits before ever calling
+    // through to here, but this vtable entry is still type-checked for every target regardless.
+    if (comptime builtin.target.cpu.arch == .wasm32) return null;
+    const editor = shellCtx(ctx);
+    const path = editor.host.pluginSettingsPath(id) orelse return null;
+    defer fizzy.app.allocator.free(path);
+    return fizzy.fs.read(editor.host.allocator, dvui.io, path) catch null;
 }
 
 fn shellCtx(ctx: *anyopaque) *Editor {
@@ -1762,7 +1788,10 @@ fn activelyDrawing(editor: *Editor) bool {
     return false;
 }
 
-/// Debounced autosave (defers while a canvas stroke is active).
+/// Debounced autosave (defers while a canvas stroke is active). Also flushes any pending
+/// per-plugin settings writes (`Host.flushPluginSettings`) — those live in their own files
+/// and share this same dirty flag/timer (see `Host.storePluginSettings`), but aren't part of
+/// the dedup below, which only tracks the shell's own settings.zon text.
 fn saveSettingsGuarded(editor: *Editor) !void {
     // Wasm: settings live in memory only; `Settings.save` uses `Io.Dir.cwd()` (posix.AT).
     if (comptime builtin.target.cpu.arch == .wasm32) return;
@@ -1774,53 +1803,40 @@ fn saveSettingsGuarded(editor: *Editor) !void {
     if (editor.activelyDrawing())
         return;
 
-    const serialized = try Settings.serialize(&editor.settings, &editor.host.plugin_settings, fizzy.app.allocator);
-    defer fizzy.app.allocator.free(serialized);
+    editor.host.flushPluginSettings();
 
-    if (editor.settings_last_saved_json) |old| {
-        if (std.mem.eql(u8, old, serialized)) {
-            editor.settings_dirty = false;
-            return;
-        }
+    const serialized = try Settings.serialize(&editor.settings, fizzy.app.allocator);
+    defer fizzy.app.allocator.free(serialized);
+    const hash = std.hash.Wyhash.hash(0, serialized);
+
+    if (editor.settings_last_saved_hash == hash) {
+        editor.settings_dirty = false;
+        return;
     }
 
-    const settings_path = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.json" });
+    const settings_path = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.zon" });
     defer fizzy.app.allocator.free(settings_path);
 
-    try Settings.save(&editor.settings, &editor.host.plugin_settings, fizzy.app.allocator, settings_path);
+    try Settings.save(&editor.settings, fizzy.app.allocator, settings_path);
 
-    if (editor.settings_last_saved_json) |blob| {
-        fizzy.app.allocator.free(blob);
-        editor.settings_last_saved_json = null;
-    }
-    editor.settings_last_saved_json = try fizzy.app.allocator.dupe(u8, serialized);
+    editor.settings_last_saved_hash = hash;
     editor.settings_dirty = false;
 }
 
 /// Flush to disk regardless of idle/drawing deferral — used during shutdown only.
 fn saveSettingsRaw(editor: *Editor) !void {
-    const serialized = try Settings.serialize(&editor.settings, &editor.host.plugin_settings, fizzy.app.allocator);
+    editor.host.flushPluginSettings();
+
+    const serialized = try Settings.serialize(&editor.settings, fizzy.app.allocator);
     defer fizzy.app.allocator.free(serialized);
+    const hash = std.hash.Wyhash.hash(0, serialized);
 
-    const need_disk = blk: {
-        if (editor.settings_last_saved_json) |old| {
-            if (std.mem.eql(u8, old, serialized)) break :blk false;
-        }
-        break :blk true;
-    };
+    if (editor.settings_last_saved_hash != hash) {
+        const settings_path = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.zon" });
+        defer fizzy.app.allocator.free(settings_path);
 
-    const settings_path = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.json" });
-    defer fizzy.app.allocator.free(settings_path);
-
-    if (need_disk)
-        try Settings.save(&editor.settings, &editor.host.plugin_settings, fizzy.app.allocator, settings_path);
-
-    if (need_disk) {
-        if (editor.settings_last_saved_json) |blob| {
-            fizzy.app.allocator.free(blob);
-            editor.settings_last_saved_json = null;
-        }
-        editor.settings_last_saved_json = try fizzy.app.allocator.dupe(u8, serialized);
+        try Settings.save(&editor.settings, fizzy.app.allocator, settings_path);
+        editor.settings_last_saved_hash = hash;
     }
     editor.settings_dirty = false;
 }
@@ -3548,17 +3564,13 @@ pub fn deinit(editor: *Editor) !void {
 
     // Recents persist via Io.Dir.cwd writes — no FS on wasm; skip persist.
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        editor.recents.save(fizzy.app.allocator, try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "recents.json" })) catch {
+        editor.recents.save(fizzy.app.allocator, try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "recents.zon" })) catch {
             dvui.log.err("Failed to save recents", .{});
         };
     }
     editor.recents.deinit(fizzy.app.allocator);
 
     if (comptime builtin.target.cpu.arch != .wasm32) try saveSettingsRaw(editor);
-    if (editor.settings_last_saved_json) |blob| {
-        fizzy.app.allocator.free(blob);
-        editor.settings_last_saved_json = null;
-    }
     editor.settings.deinit(fizzy.app.allocator);
 
     editor.explorer.deinit();

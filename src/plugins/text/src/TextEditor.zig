@@ -1,11 +1,11 @@
 //! Monospace text editor: line numbers + local `TextEntryWidget` with optional tree-sitter
 //! highlighting and an optional raw|preview split when a language plugin registers a preview.
 const std = @import("std");
-const text = @import("../text.zig");
-const dvui = text.dvui;
-const core = text.core;
-const sdk = text.sdk;
-const Document = text.Document;
+const dvui = @import("dvui");
+const core = @import("core");
+const sdk = @import("fizzy_sdk");
+const plugin_impl = @import("../plugin.zig");
+const Document = @import("Document.zig");
 const SyntaxHighlight = @import("SyntaxHighlight.zig");
 const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
 const TooltipWidget = @import("widgets/TooltipWidget.zig");
@@ -189,8 +189,8 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         // setting below only picks *what* it inserts (spaces vs a literal tab), not whether
         // it does so at all.
         .tab_inserts_indent = true,
-        .tab_size = text.plugin.statePtr().tab_size,
-        .insert_spaces = text.plugin.statePtr().insert_spaces_on_tab,
+        .tab_size = @intFromEnum(plugin_impl.statePtr().settings.tab_size),
+        .insert_spaces = plugin_impl.statePtr().settings.insert_spaces_on_tab,
         // Same VSCode-style baseline as Tab above — not gated by a setting.
         .auto_indent_newline = true,
     }, chromeless.override(.{
@@ -1233,13 +1233,13 @@ fn isBaseTypeLabel(label: []const u8) bool {
     if (t.len == 0) return true;
 
     const primitives = [_][]const u8{
-        "u8",         "u16",         "u32",          "u64",          "u128",
-        "i8",         "i16",         "i32",          "i64",          "i128",
-        "f16",        "f32",         "f64",          "f80",          "f128",
-        "usize",      "isize",       "c_char",       "c_short",      "c_ushort",
-        "c_int",      "c_uint",      "c_long",       "c_ulong",      "c_longlong",
-        "c_ulonglong", "c_longdouble", "bool",        "void",         "noreturn",
-        "type",       "anyopaque",   "anyerror",     "anytype",      "comptime_int",
+        "u8",             "u16",          "u32",      "u64",     "u128",
+        "i8",             "i16",          "i32",      "i64",     "i128",
+        "f16",            "f32",          "f64",      "f80",     "f128",
+        "usize",          "isize",        "c_char",   "c_short", "c_ushort",
+        "c_int",          "c_uint",       "c_long",   "c_ulong", "c_longlong",
+        "c_ulonglong",    "c_longdouble", "bool",     "void",    "noreturn",
+        "type",           "anyopaque",    "anyerror", "anytype", "comptime_int",
         "comptime_float",
     };
     for (primitives) |p| {

@@ -1,12 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const wb = @import("../workbench.zig");
-const dvui = wb.dvui;
-const wdvui = wb.wdvui;
-const sdk = wb.sdk;
+const core = @import("core");
+const dvui = @import("dvui");
+const wdvui = core.dvui;
+const sdk = @import("fizzy_sdk");
 const runtime = @import("runtime.zig");
 const icons = @import("icons");
+const math = core.math;
 
 /// Workspaces are drawn recursively inside of the explorer paned widget
 /// second pane, and contains drag/drop enabled tabs. Tabs can freely be dragged to
@@ -47,14 +48,14 @@ const handle_dist = 60;
 
 const opacity = 60;
 
-const color_0 = wb.math.Color.initBytes(0, 0, 0, 0);
-const color_1 = wb.math.Color.initBytes(230, 175, 137, opacity);
-const color_2 = wb.math.Color.initBytes(216, 145, 115, opacity);
-const color_3 = wb.math.Color.initBytes(41, 23, 41, opacity);
-const color_4 = wb.math.Color.initBytes(194, 109, 92, opacity);
-const color_5 = wb.math.Color.initBytes(180, 89, 76, opacity);
+const color_0 = math.Color.initBytes(0, 0, 0, 0);
+const color_1 = math.Color.initBytes(230, 175, 137, opacity);
+const color_2 = math.Color.initBytes(216, 145, 115, opacity);
+const color_3 = math.Color.initBytes(41, 23, 41, opacity);
+const color_4 = math.Color.initBytes(194, 109, 92, opacity);
+const color_5 = math.Color.initBytes(180, 89, 76, opacity);
 
-const logo_colors: [12]wb.math.Color = [_]wb.math.Color{
+const logo_colors: [12]math.Color = [_]math.Color{
     color_1, color_1, color_1,
     color_2, color_2, color_3,
     color_4, color_3, color_0,
@@ -817,7 +818,7 @@ pub fn drawHomePage(_: *Workspace) !void {
 
                     if (fizzy_color.value[3] < 1.0 and fizzy_color.value[3] > 0.0) {
                         const theme_bg = dvui.themeGet().color(.window, .fill);
-                        fizzy_color = fizzy_color.lerp(wb.math.Color.initBytes(theme_bg.r, theme_bg.g, theme_bg.b, 255), fizzy_color.value[3]);
+                        fizzy_color = fizzy_color.lerp(math.Color.initBytes(theme_bg.r, theme_bg.g, theme_bg.b, 255), fizzy_color.value[3]);
                         fizzy_color.value[3] = 1.0;
                     }
 
@@ -960,10 +961,10 @@ pub fn drawHomePage(_: *Workspace) !void {
             // Draw edge shadow for the scroll area content, using the scroll_area's rectScale.
             if (scroll_area.si.virtual_size.h > scroll_area.si.viewport.h) {
                 if (scroll_area.si.offset(.vertical) + scroll_area.si.viewport.h < scroll_area.si.virtual_size.h) {
-                    wb.wdvui.drawEdgeShadow(scroll_area.data().rectScale(), .bottom, .{ .opacity = 0.15 });
+                    wdvui.drawEdgeShadow(scroll_area.data().rectScale(), .bottom, .{ .opacity = 0.15 });
                 }
                 if (scroll_area.si.offset(.vertical) > 0) {
-                    wb.wdvui.drawEdgeShadow(scroll_area.data().rectScale(), .top, .{ .opacity = 0.15 });
+                    wdvui.drawEdgeShadow(scroll_area.data().rectScale(), .top, .{ .opacity = 0.15 });
                 }
             }
 

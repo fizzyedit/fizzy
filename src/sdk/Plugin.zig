@@ -186,6 +186,15 @@ pub const VTable = struct {
     /// save/close API. `from_save_all_quit` marks requests issued during the quit walk.
     requestSaveConfirmation: ?*const fn (state: *anyopaque, doc: DocHandle, mode: SaveConfirmMode, from_save_all_quit: bool) void = null,
 
+    // ---- settings ----
+    /// [requested] The shell's settings pane (Phase 3) edited this plugin's persisted settings
+    /// blob (see `Host.storePluginSettings`) while the plugin is loaded — `blob` is the whole,
+    /// freshly-serialized zon text (same shape `Host.loadPluginSettings` returns), not a diff. A
+    /// plugin that keeps its own in-memory copy of settings (e.g. to avoid re-parsing zon every
+    /// draw) should re-parse and apply it here instead of only reading the blob once at
+    /// `register`. Absent = the plugin only ever reads its settings at `register`/`initPlugin`.
+    settingsChanged: ?*const fn (state: *anyopaque, blob: []const u8) void = null,
+
     // NOTE: editing actions (copy / paste / transform / accept-edit / cancel-edit /
     // delete-selection) are deliberately NOT hooks here. They are user-invoked and their meaning
     // varies per editor, so a plugin registers them as `Command`s (e.g. `"pixelart.copy"`) and
@@ -438,6 +447,10 @@ pub fn resetDocumentSaveUIState(self: Plugin, doc: DocHandle) void {
 
 pub fn requestSaveConfirmation(self: Plugin, doc: DocHandle, mode: SaveConfirmMode, from_save_all_quit: bool) void {
     if (self.vtable.requestSaveConfirmation) |f| f(self.state, doc, mode, from_save_all_quit);
+}
+
+pub fn settingsChanged(self: Plugin, blob: []const u8) void {
+    if (self.vtable.settingsChanged) |f| f(self.state, blob);
 }
 
 pub fn requestNewDocumentDialog(self: Plugin, parent_path: ?[]const u8, id_extra: usize) void {

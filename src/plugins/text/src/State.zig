@@ -1,9 +1,12 @@
 //! Code plugin runtime state: open text document registry.
 const std = @import("std");
-const sdk = @import("sdk");
+const sdk = @import("fizzy_sdk");
 const Document = @import("Document.zig");
+const Settings = @import("Settings.zig");
 
 const State = @This();
+
+const Schema = sdk.settings.Schema(Settings);
 
 /// Heap-allocated per document (not stored by value) so the pointer handed out as
 /// `DocHandle.ptr` stays stable for the document's whole lifetime — a value stored
@@ -11,11 +14,7 @@ const State = @This();
 docs: std.AutoArrayHashMapUnmanaged(u64, *Document) = .empty,
 
 /// Persisted via `Host.loadPluginSettings`/`storePluginSettings` — see `Settings.zig`.
-insert_spaces_on_tab: bool = true,
-tab_size: u8 = 4,
-/// When true, `saveDocument` reformats the document (via the active `LanguageSupport.format`
-/// provider for its extension, if any) immediately before writing it to disk.
-format_on_save: bool = false,
+settings: Settings = .{},
 
 pub fn deinit(self: *State, allocator: std.mem.Allocator) void {
     for (self.docs.values()) |doc| {
@@ -38,4 +37,16 @@ pub fn docByPath(self: *State, path: []const u8) ?*Document {
         if (std.mem.eql(u8, doc.path, path)) return doc;
     }
     return null;
+}
+
+pub fn loadSettings(self: *State, host: *sdk.Host) void {
+    Schema.load(host, "text", &self.settings);
+}
+
+/// Register schema with the Host — shell draws shared controls from `Schema.settings`.
+pub fn registerSettings(self: *State, host: *sdk.Host, plugin: *sdk.Plugin) !void {
+    try Schema.register(host, plugin, .{
+        .title = "Text Editor",
+        .value = &self.settings,
+    });
 }

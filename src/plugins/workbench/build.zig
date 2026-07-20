@@ -18,18 +18,12 @@ pub fn build(b: *std.Build) void {
     const workbench_opts = b.addOptions();
     workbench_opts.addOption(bool, "file_tree", file_tree);
 
-    const lib = fizzy.plugin.create(b, .{
-        .name = "workbench",
-        .version = @import("build.zig.zon").version,
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("root.zig"),
-    });
-    lib.root_module.addOptions("workbench_opts", workbench_opts);
+    const created = fizzy.plugin.create(b, .{ .target = target, .optimize = optimize });
+    created.module.addOptions("workbench_opts", workbench_opts);
 
     if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| {
-        lib.root_module.addImport("icons", dep.module("icons"));
+        created.module.addImport("icons", dep.module("icons"));
     }
 
-    fizzy.plugin.install(b, lib, .{});
+    fizzy.plugin.install(b, created.lib, .{});
 }

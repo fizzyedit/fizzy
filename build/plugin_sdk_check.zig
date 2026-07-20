@@ -1,14 +1,17 @@
 //! `zig build check` for third-party plugins — wired in automatically by `plugin.install()`
-//! (see `plugin_sdk.zig`'s `addSdkCheck`). Prints the fizzy SDK version + ABI fingerprint that
-//! the fizzy commit the plugin has pinned actually computes (built ReleaseFast, matching
-//! fizzy's release CI — see `sdk/dylib.zig`'s `optimize_safety_class`), and diffs them against
-//! the plugin's `.github/workflows/release.yml`. Catches the case where a plugin author bumps
-//! their fizzy pin but leaves release.yml's `fizzy-sdk-version`/`abi-fingerprint`/
-//! `min-sdk-version` stale — the CI dlopen check in `plugin-build-action` only catches that for
-//! the 3 of 6 targets that happen to be a runner's native arch, so this is meant to catch it at
-//! `zig build` time on every target instead.
+//! (see `plugin_sdk.zig`'s `addSdkCheck`).
+//!
+//! Prints the fizzy SDK version + ABI fingerprint that the pinned fizzy commit actually
+//! computes (built ReleaseFast, matching fizzy's release CI — see `sdk/dylib.zig`'s
+//! `optimize_safety_class`).
+//!
+//! As of plugin-build-action v3, caller `release.yml` no longer declares `fizzy-sdk-version` /
+//! `abi-fingerprint` — the action reads them from the built dylib. If a legacy release.yml
+//! still has those keys, this check diffs them against the pin (same as before) so a stale
+//! hand-copy still fails at `zig build` time. If the keys are absent, the check is informational
+//! only.
 const std = @import("std");
-const sdk = @import("sdk");
+const sdk = @import("fizzy_sdk");
 
 /// The full line (sans newline) containing the first occurrence of `key`, or null if absent.
 fn findLine(haystack: []const u8, key: []const u8) ?[]const u8 {
@@ -47,10 +50,16 @@ pub fn main(main_init: std.process.Init) !void {
         std.process.exit(2);
     }
 
+    const v = sdk.version.sdk_version;
+    const want_version = try std.fmt.allocPrint(arena, "{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
+    const want_fingerprint = try std.fmt.allocPrint(arena, "0x{x}", .{sdk.dylib.abi_fingerprint});
+
+    std.debug.print("pinned fizzy SDK: {s}  abi_fingerprint: {s}\n", .{ want_version, want_fingerprint });
+    std.debug.print("(plugin-build-action v3+ derives these from the built dylib — no need to copy them into release.yml)\n", .{});
+
     const file = std.Io.Dir.cwd().openFile(main_init.io, args[1], .{}) catch |err| switch (err) {
         error.FileNotFound => {
-            // Plugin has no release workflow yet (e.g. brand new) — nothing to check.
-            std.debug.print("no release.yml at \"{s}\" — skipping SDK version check.\n", .{args[1]});
+            std.debug.print("no release.yml at \"{s}\" — nothing further to check.\n", .{args[1]});
             return;
         },
         else => return err,
@@ -59,29 +68,33 @@ pub fn main(main_init: std.process.Init) !void {
     var file_reader = file.reader(main_init.io, &.{});
     const contents = try file_reader.interface.allocRemaining(arena, .limited(1 << 20));
 
-    const v = sdk.version.sdk_version;
-    const want_version = try std.fmt.allocPrint(arena, "{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
-    const want_fingerprint = try std.fmt.allocPrint(arena, "0x{x}", .{sdk.dylib.abi_fingerprint});
-
     const fields = [_]Field{
         .{ .key = "fizzy-sdk-version", .search = "fizzy-sdk-version:", .want = want_version },
         .{ .key = "abi-fingerprint", .search = "abi-fingerprint:", .want = want_fingerprint },
-        .{ .key = "min-sdk-version", .search = "min-sdk-version:", .want = want_version },
     };
 
+    var any_legacy = false;
     var ok = true;
     for (fields) |f| {
-        const line = findLine(contents, f.search);
-        const got = if (line) |l| quotedValue(l) else null;
+        const line = findLine(contents, f.search) orelse continue;
+        any_legacy = true;
+        const got = quotedValue(line);
         if (got == null or !std.mem.eql(u8, got.?, f.want)) ok = false;
     }
 
-    if (ok) {
-        std.debug.print("release.yml is in sync with the pinned fizzy SDK ({s}, {s}).\n", .{ want_version, want_fingerprint });
+    if (!any_legacy) {
+        std.debug.print("release.yml has no hand-copied sdk/fingerprint inputs — good.\n", .{});
         return;
     }
 
-    std.debug.print("release.yml is out of sync with the pinned fizzy commit.\n\n", .{});
+    if (ok) {
+        std.debug.print("legacy release.yml sdk/fingerprint inputs match the pinned fizzy commit.\n", .{});
+        std.debug.print("you can delete fizzy-sdk-version / abi-fingerprint / min-sdk-version / id / version\n", .{});
+        std.debug.print("from the workflow `with:` block — see plugin-build-action examples/release.yml (v3).\n", .{});
+        return;
+    }
+
+    std.debug.print("\nlegacy release.yml is out of sync with the pinned fizzy commit.\n\n", .{});
     std.debug.print("current release.yml:\n", .{});
     for (fields) |f| {
         if (findLine(contents, f.search)) |line| {
@@ -91,7 +104,8 @@ pub fn main(main_init: std.process.Init) !void {
         }
     }
 
-    std.debug.print("\nupdated release.yml:\n", .{});
+    std.debug.print("\npreferred fix: drop those inputs entirely (action v3 reads the dylib).\n", .{});
+    std.debug.print("or, if you still need a v2-compatible caller, update to:\n", .{});
     for (fields) |f| {
         const indent = if (findLine(contents, f.search)) |line| leadingWhitespace(line) else "      ";
         std.debug.print("{s}{s}: \"{s}\"\n", .{ indent, f.key, f.want });

@@ -187,6 +187,19 @@ pub const VTable = struct {
     /// shell's own compiled code, where that state is always valid — the plugin just gets a
     /// plain bool back, the same shape as every other shell-owned-context call on this vtable.
     drawMenuItem: *const fn (ctx: *anyopaque, title: []const u8, keybind_name: ?[]const u8) bool,
+
+    /// Reads `<plugins_dir>/<id>.settings.zon`, or null if absent/unavailable. Caller-owned
+    /// (free with the same allocator `Host` uses).
+    ///
+    /// `Host.loadPluginSettings` routes through this instead of reading the file itself for the
+    /// same reason `drawMenuItem` above routes through the shell: it can be called from a
+    /// dynamically-loaded plugin's own `register()`, before the host has synced that dylib's
+    /// per-compilation-unit `dvui` globals (`dvui.io` et al., each a `pub var` duplicated per
+    /// dylib). A direct file read at that point would run against the calling dylib's own
+    /// still-`undefined` `dvui.io` and segfault. This function pointer, like every other one on
+    /// this vtable, always executes as the shell's own compiled code regardless of which dylib
+    /// holds the call site, so it always sees the shell's real, initialized `dvui.io`.
+    loadPluginSettingsFile: *const fn (ctx: *anyopaque, id: []const u8) ?[]u8,
 };
 
 pub fn arena(self: EditorAPI) std.mem.Allocator {
@@ -414,4 +427,8 @@ pub fn logLine(self: EditorAPI, level: std.log.Level, scope: []const u8, message
 
 pub fn drawMenuItem(self: EditorAPI, title: []const u8, keybind_name: ?[]const u8) bool {
     return self.vtable.drawMenuItem(self.ctx, title, keybind_name);
+}
+
+pub fn loadPluginSettingsFile(self: EditorAPI, id: []const u8) ?[]u8 {
+    return self.vtable.loadPluginSettingsFile(self.ctx, id);
 }

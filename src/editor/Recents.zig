@@ -1,13 +1,15 @@
 const std = @import("std");
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
+const RecentsMigration = @import("RecentsMigration.zig");
 
 const Recents = @This();
 
-const RecentsJson = struct {
-    last_save_folder: []const u8,
-    last_open_folder: []const u8,
-    folders: [][]const u8,
+/// On-disk shape of `recents.zon`.
+const Disk = struct {
+    last_save_folder: []const u8 = "",
+    last_open_folder: []const u8 = "",
+    folders: []const []const u8 = &.{},
 };
 
 last_save_folder: ?[]const u8 = null,
@@ -28,14 +30,15 @@ fn trimTrailingPathSeparators(path: []const u8) []const u8 {
 pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
     var folders = std.array_list.Managed([]const u8).init(allocator);
 
-    if (fizzy.fs.read(allocator, dvui.io, path) catch null) |read| {
-        defer allocator.free(read);
+    RecentsMigration.migrateIfNeeded(allocator, path);
 
-        const options = std.json.ParseOptions{ .duplicate_field_behavior = .use_first, .ignore_unknown_fields = true };
-        if (std.json.parseFromSlice(RecentsJson, allocator, read, options) catch null) |parsed| {
-            defer parsed.deinit();
+    if (fizzy.fs.readZ(allocator, dvui.io, path) catch null) |data| {
+        defer allocator.free(data);
 
-            for (parsed.value.folders) |folder| {
+        if (std.zon.parse.fromSliceAlloc(Disk, allocator, data, null, .{ .ignore_unknown_fields = true }) catch null) |disk| {
+            defer std.zon.parse.free(allocator, disk);
+
+            for (disk.folders) |folder| {
                 if (std.Io.Dir.openDirAbsolute(dvui.io, folder, .{})) |d| {
                     var dd = d;
                     dd.close(dvui.io);
@@ -57,12 +60,12 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
 
             return .{
                 .folders = folders,
-                .last_open_folder = if (parsed.value.last_open_folder.len > 0)
-                    try allocator.dupe(u8, trimTrailingPathSeparators(parsed.value.last_open_folder))
+                .last_open_folder = if (disk.last_open_folder.len > 0)
+                    try allocator.dupe(u8, trimTrailingPathSeparators(disk.last_open_folder))
                 else
                     null,
-                .last_save_folder = if (parsed.value.last_save_folder.len > 0)
-                    try allocator.dupe(u8, trimTrailingPathSeparators(parsed.value.last_save_folder))
+                .last_save_folder = if (disk.last_save_folder.len > 0)
+                    try allocator.dupe(u8, trimTrailingPathSeparators(disk.last_save_folder))
                 else
                     null,
             };
@@ -109,16 +112,17 @@ pub fn appendFolder(recents: *Recents, path: []const u8) !void {
 }
 
 pub fn save(recents: *Recents, allocator: std.mem.Allocator, path: []const u8) !void {
-    const recents_json = RecentsJson{
+    const disk: Disk = .{
         .folders = recents.folders.items,
         .last_save_folder = recents.last_save_folder orelse "",
         .last_open_folder = recents.last_open_folder orelse "",
     };
 
-    const str = try std.json.Stringify.valueAlloc(allocator, recents_json, .{});
-    defer allocator.free(str);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
+    try std.zon.stringify.serialize(disk, .{}, &aw.writer);
 
-    try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = str });
+    try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = aw.written() });
 }
 
 pub fn deinit(recents: *Recents, allocator: std.mem.Allocator) void {

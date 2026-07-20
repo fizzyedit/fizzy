@@ -14,7 +14,7 @@ const files = @import("files.zig");
 const Workspace = @import("Workspace.zig");
 const runtime = @import("runtime.zig");
 const workbench_layout = @import("workbench_layout.zig");
-const sdk = @import("sdk");
+const sdk = @import("fizzy_sdk");
 
 pub const Api = sdk.services.workbench.Api;
 pub const BranchDecorator = Api.BranchDecorator;

@@ -15,7 +15,7 @@ Shell (Editor)  ←── Host registries + EditorAPI ──→  Plugin (registe
 - **`src/sdk/`** — the entire contract. `Host` (registries + service locator), `Plugin` (identity + vtable of hooks the shell calls), `DocHandle` (opaque `{ptr, id, owner}` — shell routes every doc op to `owner`, never inspects `ptr`), `EditorAPI` (shell read/util surface plugins reach back through), `regions.zig` (sidebar/bottom/center/menu/settings/command contribution structs), `dylib.zig`/`dvui_context.zig` (runtime-library C-ABI + dvui injection).
 - **`src/editor/`** — the shell itself: `Editor.zig` (frame loop, plugin registration/loading), `PluginLoader.zig` (dlopen), `Menu.zig`, `Sidebar.zig`, `Settings.zig`, etc.
 - **`src/core/`** — shared infra (Atlas/Sprite, math, gfx, fs, paths, platform detection) used by shell *and* plugins. Not plugin-owned; don't move it.
-- **`src/plugins/`** — bundled built-in plugins. Each is file-for-file the **same shape a third-party plugin would use**: `build.zig`, `build.zig.zon`, `root.zig` (dylib entry, copy-only), `src/plugin.zig` (the one file you actually implement: `register(host)` + `Plugin.VTable`), plus fizzy-internal glue isolated in a `static/` subfolder + a root `<name>.zig` hub. Builds standalone with `cd src/plugins/<name> && zig build`.
+- **`src/plugins/`** — bundled built-in plugins. Each is file-for-file the **same shape a third-party plugin would use**: root `plugin.zig` + identity-only `plugin.zig.zon` + `build.zig` + `build.zig.zon` (optional `src/**`), plus fizzy-internal glue in `static/`. No author `root.zig` or `<name>.zig` hub — the build helper generates the dylib entry; files use named imports (`fizzy_sdk`/`dvui`/…). Builds standalone with `cd src/plugins/<name> && zig build`.
 
 **Two link modes, one source:** built-in plugins compile **static** (linked directly, all targets incl. web) or **dynamic** (`.dylib`/`.so`/`.dll`, desktop-only, `dlopen`'d — this is how third-party plugins ship too). `FIZZY_STATIC_<NAME>=1` env var forces static for a given built-in (useful when debugging dylib loading).
 
@@ -32,14 +32,15 @@ Shell (Editor)  ←── Host registries + EditorAPI ──→  Plugin (registe
 ## Writing a plugin
 
 1. Copy `src/plugins/text/` as your template (or `src/plugins/image/` for a document-owning viewer).
-2. Implement `src/plugin.zig`: a `Plugin` value (id, display_name, vtable), `register(host)` (wires state, calls `host.registerPlugin` + any `host.register{SidebarView,BottomView,CenterProvider,Menu,SettingsSection,Command,Service}`), and a `VTable` with only the hooks you need.
-3. Editor plugins (open/save/draw files) implement the document vtable cluster: `fileTypePriority`, `loadDocument`, `drawDocument`, `saveDocument`, `isDirty`, undo/redo, etc. Shell plugins (workbench-style) skip all of that and register a center provider + sidebar views instead.
-4. User-invoked actions (copy/paste/transform/delete, plugin-specific features) are **`Command`s**, not vtable hooks — registered by id, dispatched by the shell via `host.runCommand("<id>")` without knowing what they do. Editing verbs follow the convention `"<active_owner_id>.<action>"`.
-5. `zig build install` builds for the current OS and drops the plugin straight into the fizzy plugins dir (`~/Library/Application Support/fizzy/plugins/` on macOS) — no manual copying, just relaunch.
-6. Memory: `host.allocator` (persistent, you own frees) vs `host.arena()` (per-frame scratch, never hold past the frame). Never touch `dvui.currentWindow().gpa` directly.
-7. There's no ABI version negotiation — a structural **fingerprint** over every boundary type is computed at compile time on both sides; any mismatch is a hard reject at load (`fizzy_plugin_abi_fingerprint`). Fingerprint bumps are meant to be rare/deliberate (pinned dvui + zig version).
+2. Add identity-only `plugin.zig.zon` (`id`/`name`/`version`/`min_sdk_version`). Implement root `plugin.zig`: `Plugin` + `register(host)` + vtable; call `host.register{SidebarView,BottomView,CenterProvider,Menu,Command,Service,…}` as needed.
+3. Plugin prefs: `sdk.settings.Schema(struct { … })` then `.register(host, &plugin, …)` — shell draws them only while the plugin is loaded (no SettingsSection). User config on disk is ZON (`settings.zon` / `recents.zon`).
+4. Editor plugins implement the document vtable cluster; shell plugins (workbench-style) register a center provider + sidebar views instead.
+5. User-invoked actions are **`Command`s** — `"<active_owner_id>.<action>"`.
+6. `zig build install` drops `{id}.dylib` into the fizzy plugins dir (no sidecar `.zon`).
+7. Memory: `host.allocator` vs `host.arena()`; never touch `dvui.currentWindow().gpa` directly.
+8. ABI: structural fingerprint at `dlopen` (`fizzy_plugin_abi_fingerprint`); bumps are rare/deliberate.
 
-Full contract — from an empty `zig init`-style folder through the SDK, ABI/versioning, and publishing to the in-app store — progressively in one doc: **[`docs/PLUGINS.md`](docs/PLUGINS.md)**.
+Full contract: **[`docs/PLUGINS.md`](docs/PLUGINS.md)**. Living reshape plan: **[`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)**.
 
 ## Plugin store: built, not forward-looking
 
@@ -89,3 +90,4 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 ## When you need more than this file
 
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
+- Living reshape plan (identity `plugin.zig.zon`, comptime `settings.Schema`, ZON user config, no sidecars) → [`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)

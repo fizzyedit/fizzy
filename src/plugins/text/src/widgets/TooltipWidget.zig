@@ -29,8 +29,7 @@
 //! window to arrive. Opening fades in over `open_delay_us` for the same reason real tooltips
 //! dwell before appearing: a quick pass-over shouldn't flash one open at all.
 const std = @import("std");
-const internal = @import("../../text.zig");
-const dvui = internal.dvui;
+const dvui = @import("dvui");
 
 const TooltipWidget = @This();
 

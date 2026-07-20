@@ -8,7 +8,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const sdk = @import("sdk");
+const sdk = @import("fizzy_sdk");
 const icons = @import("icons");
 const fizzy = @import("../fizzy.zig");
 const store = @import("../backend/plugin_store/store.zig");
@@ -171,12 +171,21 @@ fn resolveTitle(id: []const u8, fallback: []const u8) []const u8 {
     return name_cache.get(id) orelse fallback;
 }
 
+/// The best-known display name for `id` — the live plugin's `display_name` when loaded,
+/// otherwise whatever `resolveTitle` remembers (a disabled/failed plugin seen earlier this
+/// session), falling back to the bare id. Used by `PluginSettingsPane` to label a disabled
+/// plugin's Enabled-toggle-only row without duplicating this cache's lookup logic.
+pub fn displayName(id: []const u8) []const u8 {
+    if (fizzy.editor.host.pluginById(id)) |p| return p.display_name;
+    return resolveTitle(id, id);
+}
+
 /// Query the real display name + version of every disabled plugin straight from its on-disk
-/// dylib (via the `fizzy_plugin_name`/version exports — no register), seeding `name_cache` and
-/// `version_cache`. This covers plugins that were disabled *before* they were ever loaded this
-/// session, so a disabled card shows its true name (and keeps its A→Z position) and current
-/// version without a fragile on-disk cache. Cheap and bounded: only runs on first draw /
-/// Refresh, and only probes ids whose name or version we don't already know.
+/// dylib (embedded `plugin.zig.zon` via `fizzy_plugin_manifest_zon`, falling back to the
+/// `fizzy_plugin_name`/version exports — no register, no on-disk sidecar), seeding `name_cache`
+/// and `version_cache`. Covers plugins disabled before they were loaded this session. Cheap and
+/// bounded: only runs on first draw / Refresh, and only probes ids whose name or version we
+/// don't already know.
 fn probeDisabledInfo() void {
     const editor = fizzy.editor;
     const a = fizzy.app.allocator;
@@ -1421,7 +1430,12 @@ fn removePendingForId(id: []const u8) void {
     }
 }
 
-fn queueSetEnabled(id: []const u8, enabled: bool) void {
+/// Queue an enable/disable request for `id`, applied on the next `tick()` (see the
+/// `PendingAction`/`pending_actions` doc comment above). Exposed so `PluginSettingsPane`'s
+/// disabled-plugin "Enabled" checkbox can reuse the exact same deferred-apply path the store
+/// tab's own checkbox uses, rather than calling `Editor.setPluginEnabled` directly while a
+/// settings-pane draw pass may itself be iterating Host registries.
+pub fn queueSetEnabled(id: []const u8, enabled: bool) void {
     removePendingForId(id);
     const dup = fizzy.app.allocator.dupe(u8, id) catch {
         setStatus("'{s}' could not be queued", .{id});

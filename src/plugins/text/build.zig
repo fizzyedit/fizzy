@@ -10,12 +10,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = fizzy.plugin.create(b, .{
-        .name = "text",
-        .version = @import("build.zig.zon").version,
-        .target = target,
-        .optimize = optimize,
-        .root_source_file = b.path("root.zig"),
-    });
-    fizzy.plugin.install(b, lib, .{});
+    const plugin = fizzy.plugin.create(b, .{ .target = target, .optimize = optimize });
+    fizzy.plugin.install(b, plugin.lib, .{});
 }

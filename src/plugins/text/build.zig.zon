@@ -5,13 +5,13 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "root.zig",
-        "text.zig",
+        "plugin.zig",
+        "plugin.zig.zon",
         "src",
         "queries",
         "static",
     },
-    .fingerprint = 0x77153098cc8cce17,
+    .fingerprint = 0x3b8ba7c7af3f1a7e,
     .dependencies = .{
         .fizzy = .{
             .path = "../../..",

@@ -14,6 +14,9 @@ pub const Host = @import("Host.zig");
 pub const Plugin = @import("Plugin.zig");
 pub const DocHandle = @import("DocHandle.zig");
 
+/// Comptime settings API (`sdk.settings.Schema(T)`) — see `docs/PLUGIN_MANIFEST_PLAN.md`.
+pub const settings = @import("settings.zig");
+
 pub const language = @import("language.zig");
 pub const LanguageSupport = language.LanguageSupport;
 pub const TreeSitterHighlight = language.TreeSitterHighlight;
@@ -26,7 +29,6 @@ pub const BottomView = regions.BottomView;
 pub const CenterProvider = regions.CenterProvider;
 pub const MenuContribution = regions.MenuContribution;
 pub const MenuSectionContribution = regions.MenuSectionContribution;
-pub const SettingsSection = regions.SettingsSection;
 pub const Command = regions.Command;
 pub const menu = @import("menu.zig");
 
@@ -56,9 +58,9 @@ pub fn refresh() void {
 /// Document staging helpers (`allocStaging`, `loadPathInto`, …).
 pub const document = @import("document.zig");
 
-/// Plugin identity/version metadata for dylib exports.
+/// The declarative `plugin.zig.zon` manifest types (see `docs/PLUGIN_MANIFEST_PLAN.md`).
 pub const manifest = @import("manifest.zig");
-pub const PluginManifest = manifest.PluginManifest;
+pub const Manifest = manifest.Manifest;
 
 /// Inter-plugin services (`"workbench"`, `"markdown"`).
 pub const services = struct {

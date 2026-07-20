@@ -1,6 +1,6 @@
 //! Image plugin runtime state: open image document registry.
 const std = @import("std");
-const sdk = @import("sdk");
+const sdk = @import("fizzy_sdk");
 const Document = @import("Document.zig");
 
 const State = @This();

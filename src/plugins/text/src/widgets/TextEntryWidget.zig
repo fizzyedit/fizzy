@@ -2,10 +2,9 @@
 //! tree-sitter predicate filtering, query error fallback, optional focus ring.
 const builtin = @import("builtin");
 const std = @import("std");
-const internal = @import("../../text.zig");
-const dvui = internal.dvui;
-const sdk = internal.sdk;
-const perf = internal.core.perf;
+const dvui = @import("dvui");
+const sdk = @import("fizzy_sdk");
+const perf = @import("core").perf;
 
 pub const HighlightStyle = sdk.language.HighlightStyle;
 pub const TreeSitterHighlight = sdk.language.TreeSitterHighlight;

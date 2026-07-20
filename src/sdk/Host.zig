@@ -3,6 +3,7 @@
 //! registry, the shell region registries, and a service locator. The Host is
 //! embedded in `Editor`.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const core = @import("core");
 const runtime = @import("runtime.zig");
@@ -12,8 +13,11 @@ const EditorAPI = @import("EditorAPI.zig");
 const DocHandle = @import("DocHandle.zig");
 const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
 const language = @import("language.zig");
+const settings = @import("settings.zig");
 
 pub const Host = @This();
+
+pub const SettingsSchema = settings.SettingsSchema;
 
 pub const LanguageSupport = language.LanguageSupport;
 pub const TreeSitterHighlight = language.TreeSitterHighlight;
@@ -25,12 +29,14 @@ pub const CenterProvider = regions.CenterProvider;
 pub const MenuContribution = regions.MenuContribution;
 pub const MenuSectionContribution = regions.MenuSectionContribution;
 pub const NativeMenuItem = regions.NativeMenuItem;
-pub const SettingsSection = regions.SettingsSection;
 pub const Command = regions.Command;
 
-/// Per-plugin opaque settings blobs: plugin id -> serialized JSON. The Host owns the
-/// key + value strings; the shell persists them verbatim under "plugins" in
-/// settings.json and never interprets them.
+/// Per-plugin opaque settings blobs pending a write: plugin id -> serialized zon text. The
+/// Host owns the key + value strings. This is a write buffer only, not the source of
+/// truth — `flushPluginSettings` writes each entry to its own
+/// `<plugins_dir>/<id>.settings.zon` (a real, human-editable zon file living beside the
+/// plugin itself, not a blob embedded in the shell's own settings.zon) and never
+/// interprets the contents.
 pub const PluginSettings = std.StringArrayHashMapUnmanaged([]const u8);
 
 /// Optional tint for a workbench file-tree row background. `color_index` is the row's
@@ -96,8 +102,21 @@ services: std.StringHashMapUnmanaged(ServiceEntry) = .empty,
 /// installed by the shell during startup. Null until installed (headless/test).
 shell_api: ?EditorAPI = null,
 
-/// Opaque per-plugin settings store (see `PluginSettings`).
-plugin_settings: PluginSettings = .empty,
+/// Not-yet-flushed per-plugin settings writes (see `PluginSettings`); drained by
+/// `flushPluginSettings`.
+plugin_settings_pending: PluginSettings = .empty,
+
+/// Hash of each plugin's last-written (or last-loaded-from-disk) settings text, keyed by
+/// plugin id. Lets `flushPluginSettings` skip a `writeFile` when the pending blob is
+/// byte-identical to what's already on disk, without keeping a full duplicate copy of the
+/// text around per plugin.
+plugin_settings_last_hash: std.StringHashMapUnmanaged(u64) = .empty,
+
+/// `<config_folder>/plugins` — where every plugin's own `<id>.settings.zon` lives beside its
+/// `<id>.{dylib,so,dll}` (built-ins that compile static have no dylib there, but still get a
+/// settings file). Set once by the shell during startup (`Editor.init`); null on wasm
+/// (no filesystem) or in headless/tests, in which case settings load/store are no-ops.
+plugins_dir: ?[]const u8 = null,
 
 /// File-tree row fill tints (workbench asks the Host; editor plugins register).
 file_row_fill_colors: std.ArrayListUnmanaged(FileRowFillColor) = .empty,
@@ -107,6 +126,12 @@ file_icons: std.ArrayListUnmanaged(FileIcon) = .empty,
 
 /// Plugin-store card logo drawers (Plugins tab asks the Host; each plugin registers one for itself).
 plugin_icons: std.ArrayListUnmanaged(PluginIcon) = .empty,
+
+/// Loaded plugins' settings schemas (`sdk.settings.Schema(...)`), drawn by the shell's settings
+/// pane while each owner stays registered — see `settings.zig`'s "loaded-only" module doc note.
+/// Cleared for `plugin`'s entries in `unregisterPlugin`; there is no on-disk/embedded fallback
+/// for a disabled or failed-to-load plugin.
+settings_schemas: std.ArrayListUnmanaged(SettingsSchema) = .empty,
 
 // ---- shell region registries -----------------------------------------------
 // The shell iterates these instead of hardcoded enums/switches. Items keep their
@@ -125,8 +150,6 @@ menu_sections: std.ArrayListUnmanaged(MenuSectionContribution) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
 /// `regions.NativeMenuItem`.
 native_menu_items: std.ArrayListUnmanaged(NativeMenuItem) = .empty,
-/// Settings sections (Settings view renders each under its title, grouped by owner).
-settings_sections: std.ArrayListUnmanaged(SettingsSection) = .empty,
 /// Plugin-contributed commands, invoked by id (menus, keybinds, palette) — see `Command`.
 commands: std.ArrayListUnmanaged(Command) = .empty,
 /// Pluggable language/format support (syntax highlighting, preview panes).
@@ -150,19 +173,24 @@ pub fn deinit(self: *Host) void {
     self.menus.deinit(self.allocator);
     self.menu_sections.deinit(self.allocator);
     self.native_menu_items.deinit(self.allocator);
-    self.settings_sections.deinit(self.allocator);
     self.commands.deinit(self.allocator);
     self.language_support.deinit(self.allocator);
     self.file_row_fill_colors.deinit(self.allocator);
     self.file_icons.deinit(self.allocator);
     self.plugin_icons.deinit(self.allocator);
+    self.settings_schemas.deinit(self.allocator);
     {
-        var it = self.plugin_settings.iterator();
+        var it = self.plugin_settings_pending.iterator();
         while (it.next()) |e| {
             self.allocator.free(e.key_ptr.*);
             self.allocator.free(e.value_ptr.*);
         }
-        self.plugin_settings.deinit(self.allocator);
+        self.plugin_settings_pending.deinit(self.allocator);
+    }
+    {
+        var it = self.plugin_settings_last_hash.keyIterator();
+        while (it.next()) |k| self.allocator.free(k.*);
+        self.plugin_settings_last_hash.deinit(self.allocator);
     }
 }
 
@@ -418,26 +446,102 @@ pub fn drawMenuItem(self: *Host, title: []const u8, keybind_name: ?[]const u8) b
 }
 
 // ---- per-plugin settings store ---------------------------------------------
+//
+// Each plugin's settings live in their own real, human-editable `<id>.settings.zon` file
+// under `plugins_dir` — not an escaped-string blob embedded in the shell's own settings.zon.
+// This is deliberately not cached across calls: `loadPluginSettings` is only ever called once
+// per plugin, at `register()` time, so a fresh read costs nothing and keeps the Host from
+// having to reason about staleness.
 
-/// The stored settings blob for `id` (serialized JSON), or null if none. The returned
-/// slice is owned by the Host and valid until the next `storePluginSettings` for `id`.
-pub fn loadPluginSettings(self: *Host, id: []const u8) ?[]const u8 {
-    return self.plugin_settings.get(id);
+/// Public so `EditorAPI`'s host-side implementation (`Editor.shellLoadPluginSettingsFile`) can
+/// build the same path without duplicating the format string.
+pub fn pluginSettingsPath(self: *Host, id: []const u8) ?[]u8 {
+    const dir = self.plugins_dir orelse return null;
+    return std.fmt.allocPrint(self.allocator, "{s}/{s}.settings.zon", .{ dir, id }) catch null;
 }
 
-/// Store `json` as `id`'s settings blob (replacing any previous), and mark the shell
-/// settings dirty so it persists. The Host copies both `id` and `json`.
-pub fn storePluginSettings(self: *Host, id: []const u8, json: []const u8) !void {
-    const dup = try self.allocator.dupe(u8, json);
+/// Reads `<plugins_dir>/<id>.settings.zon` fresh off disk, or null when unavailable (no shell
+/// installed, no `plugins_dir` set — wasm/headless — or the file doesn't exist yet).
+/// Caller-owned; free with `self.allocator`.
+///
+/// Routed through `shell_api` rather than reading the file directly here: `register()` — the
+/// only caller of this, via `sdk.settings.Schema(T).load` — can run for a *dynamically-loaded*
+/// plugin before the host has synced its per-dylib `dvui` globals (`dvui.io` et al. are
+/// `pub var`s, duplicated per compiled dylib — see `dvui_context.zig`) into that dylib's own
+/// copy. A direct file read here would run against that dylib's still-`undefined` `dvui.io` and
+/// segfault. `shell_api`'s function pointers, by contrast, always execute as the host's own
+/// compiled code no matter which dylib holds the call site, so they see the host's real `dvui.io`.
+pub fn loadPluginSettings(self: *Host, id: []const u8) ?[]u8 {
+    if (comptime builtin.target.cpu.arch == .wasm32) return null;
+    const blob = if (self.shell_api) |a| a.loadPluginSettingsFile(id) else null;
+    // Seed the dedup hash from what's already on disk, so a `store`/`persist` call that
+    // reproduces these exact bytes (without ever going through `storePluginSettings` first)
+    // is still recognized as a no-op by `flushPluginSettings`.
+    if (blob) |b| self.recordSettingsHash(id, std.hash.Wyhash.hash(0, b));
+    return blob;
+}
+
+/// Upserts `id`'s last-known-written settings hash. Best-effort: an allocation failure here
+/// just means the next `flushPluginSettings` writes unconditionally instead of deduping —
+/// no correctness impact, so it's swallowed rather than propagated.
+fn recordSettingsHash(self: *Host, id: []const u8, hash: u64) void {
+    if (self.plugin_settings_last_hash.getPtr(id)) |slot| {
+        slot.* = hash;
+        return;
+    }
+    const key = self.allocator.dupe(u8, id) catch return;
+    self.plugin_settings_last_hash.put(self.allocator, key, hash) catch self.allocator.free(key);
+}
+
+/// Buffers `blob` (serialized zon text) as `id`'s pending settings write and marks the shell
+/// dirty; the debounced autosave calls `flushPluginSettings`, which writes it to
+/// `<plugins_dir>/<id>.settings.zon`. The Host copies both `id` and `blob`.
+pub fn storePluginSettings(self: *Host, id: []const u8, blob: []const u8) !void {
+    const dup = try self.allocator.dupe(u8, blob);
     errdefer self.allocator.free(dup);
-    if (self.plugin_settings.getPtr(id)) |slot| {
+    if (self.plugin_settings_pending.getPtr(id)) |slot| {
         self.allocator.free(slot.*);
         slot.* = dup;
     } else {
         const key = try self.allocator.dupe(u8, id);
-        try self.plugin_settings.put(self.allocator, key, dup);
+        try self.plugin_settings_pending.put(self.allocator, key, dup);
     }
     self.markSettingsDirty();
+}
+
+/// Writes every buffered `storePluginSettings` blob to its own `<plugins_dir>/<id>.settings.zon`
+/// and clears the buffer. Skips the write (but still clears the pending entry) when the blob
+/// hashes the same as the last thing written or loaded for that plugin, so a `persist()`/`save()`
+/// call that didn't actually change anything doesn't touch disk. Called by the shell's debounced
+/// autosave (`Editor.saveSettingsGuarded`/`saveSettingsRaw`) — plugins never call this directly.
+pub fn flushPluginSettings(self: *Host) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    if (self.plugin_settings_pending.count() == 0) return;
+    const dir = self.plugins_dir orelse return;
+    std.Io.Dir.createDirAbsolute(dvui.io, dir, .default_dir) catch {}; // best-effort; exists is fine
+
+    var it = self.plugin_settings_pending.iterator();
+    while (it.next()) |e| {
+        const hash = std.hash.Wyhash.hash(0, e.value_ptr.*);
+        if (self.plugin_settings_last_hash.get(e.key_ptr.*) == hash) continue;
+
+        const path = self.pluginSettingsPath(e.key_ptr.*) orelse continue;
+        defer self.allocator.free(path);
+        std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = e.value_ptr.* }) catch |err| {
+            dvui.log.warn("flushPluginSettings: failed to write '{s}': {s}", .{ e.key_ptr.*, @errorName(err) });
+            continue;
+        };
+        self.recordSettingsHash(e.key_ptr.*, hash);
+    }
+
+    var doomed = self.plugin_settings_pending;
+    self.plugin_settings_pending = .empty;
+    var it2 = doomed.iterator();
+    while (it2.next()) |e| {
+        self.allocator.free(e.key_ptr.*);
+        self.allocator.free(e.value_ptr.*);
+    }
+    doomed.deinit(self.allocator);
 }
 
 /// Register a plugin under its self-declared `id`. The `id` is the single source of truth
@@ -466,12 +570,12 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(MenuContribution, &self.menus, plugin);
     removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
-    removeOwned(SettingsSection, &self.settings_sections, plugin);
     removeOwned(Command, &self.commands, plugin);
     removeOwned(LanguageSupport, &self.language_support, plugin);
     removeOwned(FileRowFillColor, &self.file_row_fill_colors, plugin);
     removeOwned(FileIcon, &self.file_icons, plugin);
     removeOwned(PluginIcon, &self.plugin_icons, plugin);
+    removeOwnedSettingsSchemas(&self.settings_schemas, plugin);
 
     // Services: free the owned key strings and drop the entries.
     {
@@ -512,6 +616,20 @@ fn removeOwned(comptime T: type, list: *std.ArrayListUnmanaged(T), plugin: *Plug
     for (list.items) |item| {
         const owned = if (item.owner) |o| o == plugin else false;
         if (!owned) {
+            list.items[w] = item;
+            w += 1;
+        }
+    }
+    list.items.len = w;
+}
+
+/// `removeOwned`'s counterpart for `SettingsSchema`, whose `owner` is a required (non-optional)
+/// `*Plugin` — every schema belongs to exactly one plugin, unlike the shell-ownable
+/// contribution structs `removeOwned` handles.
+fn removeOwnedSettingsSchemas(list: *std.ArrayListUnmanaged(SettingsSchema), plugin: *Plugin) void {
+    var w: usize = 0;
+    for (list.items) |item| {
+        if (item.owner != plugin) {
             list.items[w] = item;
             w += 1;
         }
@@ -577,6 +695,12 @@ pub fn drawFileIcon(self: *Host, ext: []const u8, path: []const u8, color: dvui.
 
 pub fn registerPluginIcon(self: *Host, drawer: PluginIcon) !void {
     try self.plugin_icons.append(self.allocator, drawer);
+}
+
+/// Register `plugin`'s settings schema (see `settings.zig`'s `make(T).register`). Typically
+/// called once from a plugin's `register(host)`, after loading its persisted values.
+pub fn registerSettingsSchema(self: *Host, schema: SettingsSchema) !void {
+    try self.settings_schemas.append(self.allocator, schema);
 }
 
 /// Draw the plugin-store card logo for `plugin_id` via the registered drawer owned by that
@@ -713,10 +837,6 @@ pub fn registerMenuSection(self: *Host, section: MenuSectionContribution) !void 
 /// no native menu builder (the registry entry just sits unread).
 pub fn registerNativeMenuItem(self: *Host, item: NativeMenuItem) !void {
     try self.native_menu_items.append(self.allocator, item);
-}
-
-pub fn registerSettingsSection(self: *Host, section: SettingsSection) !void {
-    try self.settings_sections.append(self.allocator, section);
 }
 
 // ---- commands --------------------------------------------------------------
@@ -1169,11 +1289,63 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try host.registerMenu(.{ .id = "victim.menu", .owner = &plugin, .draw = noopDraw });
     try host.registerMenuSection(.{ .id = "victim.section", .parent_menu_id = "shell.menu.view", .owner = &plugin, .draw = noopDraw });
     try host.registerNativeMenuItem(.{ .id = "victim.native", .parent_menu_id = "shell.menu.view", .owner = &plugin, .title = "V", .run = noopDraw });
-    try host.registerSettingsSection(.{ .id = "victim.settings", .owner = &plugin, .title = "V", .draw = noopDraw });
     try host.registerCommand(.{ .id = "victim.cmd", .owner = &plugin, .title = "V", .run = noopRun });
     try host.registerFileRowFillColor(.{ .owner = &plugin, .color = noColor });
     try host.registerFileIcon(.{ .owner = &plugin, .draw = noIcon });
     try host.registerPluginIcon(.{ .owner = &plugin, .draw = noPluginIcon });
+    const empty_access: settings.Access = .{
+        .getBool = struct {
+            fn f(_: *anyopaque, _: usize) bool {
+                return false;
+            }
+        }.f,
+        .setBool = struct {
+            fn f(_: *anyopaque, _: usize, _: bool) void {}
+        }.f,
+        .getInt = struct {
+            fn f(_: *anyopaque, _: usize) i64 {
+                return 0;
+            }
+        }.f,
+        .setInt = struct {
+            fn f(_: *anyopaque, _: usize, _: i64) void {}
+        }.f,
+        .getFloat = struct {
+            fn f(_: *anyopaque, _: usize) f64 {
+                return 0;
+            }
+        }.f,
+        .setFloat = struct {
+            fn f(_: *anyopaque, _: usize, _: f64) void {}
+        }.f,
+        .getEnumIndex = struct {
+            fn f(_: *anyopaque, _: usize) usize {
+                return 0;
+            }
+        }.f,
+        .setEnumIndex = struct {
+            fn f(_: *anyopaque, _: usize, _: usize) void {}
+        }.f,
+        .getString = struct {
+            fn f(_: *anyopaque, _: usize) []const u8 {
+                return "";
+            }
+        }.f,
+        .setString = struct {
+            fn f(_: *anyopaque, _: usize, _: []const u8) void {}
+        }.f,
+        .persist = struct {
+            fn f(_: *anyopaque, _: *Plugin) void {}
+        }.f,
+    };
+    var dummy_value: u8 = 0;
+    try host.registerSettingsSchema(.{
+        .owner = &plugin,
+        .title = "Victim",
+        .fields = &.{},
+        .value = &dummy_value,
+        .access = &empty_access,
+    });
     try host.registerService("victim.svc", &service_obj, &plugin);
 
     // Active sidebar view points at the victim (keeper registered first, but force it).
@@ -1195,11 +1367,11 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try testing.expectEqual(@as(usize, 0), host.menus.items.len);
     try testing.expectEqual(@as(usize, 0), host.menu_sections.items.len);
     try testing.expectEqual(@as(usize, 0), host.native_menu_items.items.len);
-    try testing.expectEqual(@as(usize, 0), host.settings_sections.items.len);
     try testing.expectEqual(@as(usize, 0), host.commands.items.len);
     try testing.expectEqual(@as(usize, 0), host.file_row_fill_colors.items.len);
     try testing.expectEqual(@as(usize, 0), host.file_icons.items.len);
     try testing.expectEqual(@as(usize, 0), host.plugin_icons.items.len);
+    try testing.expectEqual(@as(usize, 0), host.settings_schemas.items.len);
     try testing.expect(host.getService("victim.svc") == null);
 
     // Active selections that named removed contributions reset to null; the next frame

@@ -1,10 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const wb = @import("../workbench.zig");
+const dvui = @import("dvui");
+const wdvui = @import("core").dvui;
 const runtime = @import("runtime.zig");
-const dvui = wb.dvui;
-const wdvui = wb.wdvui;
 const icons = @import("icons");
+const Workspace = @import("Workspace.zig");
 
 pub var tree_removed_path: ?[]const u8 = null;
 pub var selected_id: ?usize = null;
@@ -91,7 +91,7 @@ pub fn draw() !void {
             // Route through the backend abstraction (native = OS dialog, web = file input
             // element), not `dvui.dialogNativeFolderSelect`, which has no wasm implementation
             // and silently no-ops — same fix as the homepage button and File menu item.
-            runtime.host().showOpenFolderDialog(wb.Workspace.setProjectFolderCallback, null);
+            runtime.host().showOpenFolderDialog(Workspace.setProjectFolderCallback, null);
         }
     }
 }

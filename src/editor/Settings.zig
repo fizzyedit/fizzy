@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const fizzy = @import("../fizzy.zig");
 const std = @import("std");
 const dvui = @import("dvui");
+const SettingsMigration = @import("SettingsMigration.zig");
 
 const Settings = @This();
 
@@ -10,7 +11,12 @@ pub const default_theme = "Fizzy Dark";
 /// Duration after the last edit before autosave runs (during normal operation).
 pub const autosave_timeout_ns: i128 = 500 * 1_000_000;
 
-pub var parsed: ?std.json.Parsed(Settings) = null;
+/// The zon-parsed on-disk value backing the most recent successful `load`, kept alive
+/// for the process lifetime (freed in `deinit`) because `disabled_plugins` below borrows
+/// straight out of it — see `Editor.seedDisabledPlugins`, which runs well after `load`
+/// returns. `theme` is independently heap-owned (duped in `load`), so it survives even
+/// though this is freed at shutdown rather than right after load.
+var loaded: ?Settings = null;
 
 pub const FlipbookView = enum { sequential, grid };
 pub const Compatibility = enum { none, ldtk };
@@ -102,134 +108,61 @@ pub fn setThemeName(settings: *Settings, allocator: std.mem.Allocator, name: []c
 }
 
 /// Loads settings (`theme` is always heap-owned after successful return — see `setThemeName` / `deinit`).
-/// Unknown keys (e.g. the "plugins" object, parsed separately by `loadPluginStore`) are ignored.
-pub fn load(allocator: std.mem.Allocator, path: []const u8) !Settings {
-    // Wasm: no on-disk config; `fizzy.fs.read` uses `Io.Dir.cwd()` (posix.AT).
+/// One-shot migrates a legacy `settings.json` sibling to `settings.zon` first (see
+/// `SettingsMigration.migrateIfNeeded`), splitting any legacy per-plugin blobs out to their own
+/// `<plugins_dir>/<id>.settings.zon` files. Unknown fields are ignored (forward-compat with
+/// newer on-disk shapes).
+pub fn load(allocator: std.mem.Allocator, path: []const u8, plugins_dir: ?[]const u8) !Settings {
+    // Wasm: no on-disk config; `fizzy.fs` uses `Io.Dir.cwd()` (posix.AT).
     if (comptime builtin.target.cpu.arch == .wasm32) return default(allocator);
-    const maybe_data = fizzy.fs.read(allocator, dvui.io, path) catch null;
-    const data = maybe_data orelse return default(allocator);
+
+    @setEvalBranchQuota(10_000);
+    SettingsMigration.migrateIfNeeded(allocator, path, plugins_dir);
+
+    const data = fizzy.fs.readZ(allocator, dvui.io, path) catch return default(allocator);
     defer allocator.free(data);
 
-    const options = std.json.ParseOptions{
-        .duplicate_field_behavior = .use_first,
-        .ignore_unknown_fields = true,
-        // Copy *every* parsed string into the parse arena (kept alive in `parsed` until `deinit`).
-        .allocate = .alloc_always,
-    };
-    const p = std.json.parseFromSlice(Settings, allocator, data, options) catch |err| {
-        dvui.log.warn("Could not parse settings.json ({s}); using defaults.", .{@errorName(err)});
-        parsed = null;
+    // Older builds embedded each plugin's settings as an escaped-string blob in settings.zon's
+    // own `plugins` list; split any of those out to their own file before parsing (which just
+    // ignores the now-unknown `plugins` key below).
+    SettingsMigration.splitEmbeddedPluginsIfNeeded(allocator, data, plugins_dir);
+
+    const parsed = std.zon.parse.fromSliceAlloc(Settings, allocator, data, null, .{ .ignore_unknown_fields = true }) catch |err| {
+        dvui.log.warn("Could not parse settings.zon ({s}); using defaults.", .{@errorName(err)});
         return default(allocator);
     };
 
-    parsed = p;
-    var result = p.value;
-    // Own theme independently of JSON parse arena (arena is freed in `deinit`).
-    result.theme = try allocator.dupe(u8, p.value.theme);
+    if (loaded) |old| std.zon.parse.free(allocator, old);
+    loaded = parsed;
+
+    var result = parsed;
+    // Own theme independently of `loaded` (freed in `deinit`, long after this returns).
+    result.theme = try allocator.dupe(u8, parsed.theme);
     return result;
 }
 
-/// Serialize the shell settings plus the opaque per-plugin store into a single
-/// settings.json document: `{ <shell fields…>, "plugins": { <id>: <blob>, … } }`. The
-/// plugin blobs are already-serialized JSON objects, spliced in verbatim — the shell
-/// never interprets them.
-pub fn serialize(
-    settings: *const Settings,
-    plugin_settings: *const std.StringArrayHashMapUnmanaged([]const u8),
-    allocator: std.mem.Allocator,
-) ![]u8 {
-    const fields = try std.json.Stringify.valueAlloc(allocator, settings, .{});
-    defer allocator.free(fields);
-    // `fields` is a `{…}` object with at least one member, so dropping the trailing
-    // brace and appending `,"plugins":{…}}` always yields valid JSON.
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer out.deinit(allocator);
-    try out.appendSlice(allocator, fields[0 .. fields.len - 1]);
-    try out.appendSlice(allocator, ",\"plugins\":{");
-    var first = true;
-    var it = plugin_settings.iterator();
-    while (it.next()) |e| {
-        if (!first) try out.append(allocator, ',');
-        first = false;
-        const key = try std.json.Stringify.valueAlloc(allocator, e.key_ptr.*, .{});
-        defer allocator.free(key);
-        try out.appendSlice(allocator, key);
-        try out.append(allocator, ':');
-        try out.appendSlice(allocator, e.value_ptr.*);
-    }
-    try out.appendSlice(allocator, "}}");
-    return out.toOwnedSlice(allocator);
+/// Serialize the shell's own settings into `settings.zon`. Per-plugin settings no longer live
+/// here at all — each plugin persists its own `<plugins_dir>/<id>.settings.zon` directly (see
+/// `Host.flushPluginSettings`), so there is nothing opaque left to splice in.
+pub fn serialize(settings: *const Settings, allocator: std.mem.Allocator) ![]u8 {
+    @setEvalBranchQuota(10_000);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
+    try std.zon.stringify.serialize(settings.*, .{}, &aw.writer);
+    return aw.toOwnedSlice();
 }
 
-pub fn save(
-    settings: *Settings,
-    plugin_settings: *const std.StringArrayHashMapUnmanaged([]const u8),
-    allocator: std.mem.Allocator,
-    path: []const u8,
-) !void {
-    const str = try serialize(settings, plugin_settings, allocator);
+pub fn save(settings: *Settings, allocator: std.mem.Allocator, path: []const u8) !void {
+    const str = try serialize(settings, allocator);
     defer allocator.free(str);
 
     try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = str });
 }
 
-/// Populate `store` (id -> owned JSON blob) from the "plugins" object in settings.json.
-/// One-time migration: a legacy flat settings.json (no "plugins" object) seeds the
-/// pixel-art blob from the whole root so its moved fields (show_rulers, input_scheme, …)
-/// survive the format change — pixel art ignores unknown keys, and the next save rewrites
-/// the blob cleanly.
-pub fn loadPluginStore(
-    allocator: std.mem.Allocator,
-    path: []const u8,
-    store: *std.StringArrayHashMapUnmanaged([]const u8),
-) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const data = fizzy.fs.read(allocator, dvui.io, path) catch return;
-    defer allocator.free(data);
-
-    var parsed_v = std.json.parseFromSlice(std.json.Value, allocator, data, .{}) catch return;
-    defer parsed_v.deinit();
-
-    const root = switch (parsed_v.value) {
-        .object => |o| o,
-        else => return,
-    };
-
-    if (root.get("plugins")) |plugins_val| {
-        switch (plugins_val) {
-            .object => |plugins| {
-                var it = plugins.iterator();
-                while (it.next()) |e| {
-                    const blob = std.json.Stringify.valueAlloc(allocator, e.value_ptr.*, .{}) catch continue;
-                    const key = allocator.dupe(u8, e.key_ptr.*) catch {
-                        allocator.free(blob);
-                        continue;
-                    };
-                    store.put(allocator, key, blob) catch {
-                        allocator.free(key);
-                        allocator.free(blob);
-                    };
-                }
-                return;
-            },
-            else => {},
-        }
-    }
-
-    // Legacy flat settings.json: seed the pixel-art blob from the whole root.
-    const legacy_blob = std.json.Stringify.valueAlloc(allocator, parsed_v.value, .{}) catch return;
-    const key = allocator.dupe(u8, "pixi") catch {
-        allocator.free(legacy_blob);
-        return;
-    };
-    store.put(allocator, key, legacy_blob) catch {
-        allocator.free(key);
-        allocator.free(legacy_blob);
-    };
-}
-
 pub fn deinit(settings: *Settings, allocator: std.mem.Allocator) void {
     allocator.free(settings.theme);
-    defer parsed = null;
-    if (parsed) |pr| pr.deinit();
+    if (loaded) |d| {
+        std.zon.parse.free(allocator, d);
+        loaded = null;
+    }
 }

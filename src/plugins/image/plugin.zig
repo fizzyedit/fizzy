@@ -1,26 +1,28 @@
-//! The image viewer plugin: read-only PNG/JPG/JPEG tabs with zoom/pan. Registration + document vtable.
+//! The image viewer plugin: read-only PNG/JPG/JPEG tabs with zoom/pan. Registration + document
+//! vtable. Module root — the shell resolves `@import("image")` to this file when compiled into
+//! the app (static embed); the generated dylib root imports it as `plugin_impl`.
 const std = @import("std");
-const internal = @import("../image.zig");
-const sdk = internal.sdk;
-const dvui = internal.dvui;
-const State = internal.State;
-const Document = internal.Document;
-const ImageView = internal.ImageView;
+const sdk = @import("fizzy_sdk");
+const dvui = @import("dvui");
+const State = @import("src/State.zig");
+const Document = @import("src/Document.zig");
+const ImageView = @import("src/ImageView.zig");
 const DocHandle = sdk.DocHandle;
 
-const plugin_options = @import("fizzy_plugin_options");
+/// Injected at build time from `plugin.zig.zon` (see `static/integration.zig` /
+/// `src/plugins/shared/build/helpers.zig`'s `pluginOptions`) — one source of truth for
+/// identity, not duplicated as string literals here.
+pub const plugin_options = @import("fizzy_plugin_options");
 
-pub const manifest = sdk.PluginManifest{
-    .id = "image",
-    .name = "Image",
-    .version = plugin_options.version,
-};
+/// This plugin's stable id — the single source of truth other modules (e.g. the shell's
+/// `Editor.isBundledPluginId`) read instead of retyping the string.
+pub const plugin_id = plugin_options.id;
 
 var plugin: sdk.Plugin = .{
     .state = undefined,
     .vtable = &vtable,
-    .id = "image",
-    .display_name = "Image",
+    .id = plugin_id,
+    .display_name = plugin_options.name,
 };
 
 const vtable: sdk.Plugin.VTable = .{

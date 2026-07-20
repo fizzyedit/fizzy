@@ -33,6 +33,6 @@ pub fn wireSdkModule(
     sdk_module.addImport("dvui", dvui_module);
     sdk_module.addImport("proxy_bridge", proxy_bridge_module);
     sdk_module.addImport("core", core_module);
-    if (consumer) |c| c.addImport("sdk", sdk_module);
+    if (consumer) |c| c.addImport("fizzy_sdk", sdk_module);
     return sdk_module;
 }

@@ -15,10 +15,9 @@
 //!     but only writes through atomic fields + the worker-only `doc_buf`/`err` fields.
 
 const std = @import("std");
-const wb = @import("../workbench.zig");
-const dvui = wb.dvui;
-const perf = wb.perf;
-const sdk = wb.sdk;
+const dvui = @import("dvui");
+const perf = @import("core").perf;
+const sdk = @import("fizzy_sdk");
 
 const FileLoadJob = @This();
 

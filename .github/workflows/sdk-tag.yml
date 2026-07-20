@@ -1,0 +1,61 @@
+name: SDK tag
+
+# Auto-pins the plugin ABI contract: on every push to main, if src/sdk/version.zig's
+# `sdk_version` doesn't already have a matching `sdk-v<major>.<minor>.<patch>` tag, create and
+# push one at this commit. This is the pin point third-party plugins' build.zig.zon `fizzy`
+# dependency uses (docs/PLUGINS.md §2.3) instead of an arbitrary commit SHA.
+#
+# `sdk-v*` is a separate namespace from the app's `v*` release tags (release.yml triggers on
+# `tags: ["v*"]`, a glob on the ref's start — `sdk-v...` doesn't start with `v`, so this can
+# never fire the app build/package pipeline). No build/package step here: just a ref push.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/sdk/version.zig"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute sdk_version and tag if missing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          block=$(awk '/pub const sdk_version = std\.SemanticVersion\{/,/\};/' src/sdk/version.zig)
+          major=$(grep -oE '\.major = [0-9]+' <<<"$block" | grep -oE '[0-9]+')
+          minor=$(grep -oE '\.minor = [0-9]+' <<<"$block" | grep -oE '[0-9]+')
+          patch=$(grep -oE '\.patch = [0-9]+' <<<"$block" | grep -oE '[0-9]+')
+
+          if [[ -z "$major" || -z "$minor" || -z "$patch" ]]; then
+            echo "Failed to parse sdk_version out of src/sdk/version.zig" >&2
+            exit 1
+          fi
+
+          tag="sdk-v${major}.${minor}.${patch}"
+          echo "Resolved sdk_version -> $tag"
+
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "Tag $tag already exists, nothing to do."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "SDK $major.$minor.$patch (ABI fingerprint pin point)"
+          git push origin "$tag"
+          echo "Pushed $tag"

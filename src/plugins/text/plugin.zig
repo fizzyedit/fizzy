@@ -2,29 +2,27 @@
 //! editable, monospace tabs. Registration + the document vtable. Registered from
 //! `Editor.postInit`; document state lives in `State.docs`.
 const std = @import("std");
-const internal = @import("../text.zig");
-const sdk = internal.sdk;
-const dvui = internal.dvui;
-const State = internal.State;
-const Document = internal.Document;
-const TextEditor = internal.TextEditor;
-const Settings = internal.Settings;
+const sdk = @import("fizzy_sdk");
+const dvui = @import("dvui");
+const State = @import("src/State.zig");
+const Document = @import("src/Document.zig");
+const TextEditor = @import("src/TextEditor.zig");
 const DocHandle = sdk.DocHandle;
 
-/// Version forwarded from `build.zig.zon` via the build-injected options module — bump it there.
-const plugin_options = @import("fizzy_plugin_options");
+/// Injected at build time from `plugin.zig.zon` (see `static/integration.zig` /
+/// `src/plugins/shared/build/helpers.zig`'s `pluginOptions`) — one source of truth for
+/// identity, not duplicated as string literals here.
+pub const plugin_options = @import("fizzy_plugin_options");
 
-pub const manifest = sdk.PluginManifest{
-    .id = "text",
-    .name = "Text",
-    .version = plugin_options.version,
-};
+/// This plugin's stable id — the single source of truth other modules (e.g. the shell's
+/// `Editor.isBundledPluginId`) read instead of retyping the string.
+pub const plugin_id = plugin_options.id;
 
 var plugin: sdk.Plugin = .{
     .state = undefined,
     .vtable = &vtable,
-    .id = "text",
-    .display_name = "Text",
+    .id = plugin_id,
+    .display_name = plugin_options.name,
 };
 
 const vtable: sdk.Plugin.VTable = .{
@@ -78,11 +76,15 @@ pub fn register(host: *sdk.Host) !void {
     const st = try gpa.create(State);
     errdefer gpa.destroy(st);
     st.* = .{};
-    Settings.load(host, st);
+    st.loadSettings(host);
     plugin.state = @ptrCast(st);
 
     try host.registerPlugin(&plugin);
-    try Settings.registerSection(host, st);
+    // Loaded-only settings UI (see `docs/PLUGIN_MANIFEST_PLAN.md`): the schema lives in the
+    // Host's registry only while this plugin stays registered. Registered directly against
+    // `&st.settings`, so the shell's pane edits land straight on the live struct — no
+    // `settingsChanged` sync hook needed.
+    try st.registerSettings(host, &plugin);
     try host.registerFileIcon(.{ .owner = &plugin, .draw = drawFileIcon });
     try host.registerCommand(.{
         .id = sdk.Plugin.commandId("text", "copy"),
@@ -279,7 +281,7 @@ fn isDirty(_: *anyopaque, handle: DocHandle) bool {
 fn saveDocument(state: *anyopaque, handle: DocHandle) anyerror!void {
     const doc = docFrom(handle) orelse return;
     const st: *State = @ptrCast(@alignCast(state));
-    if (st.format_on_save) formatDocument(doc);
+    if (st.settings.format_on_save) formatDocument(doc);
     try doc.save();
 }
 fn documentDefaultSaveAsFilename(_: *anyopaque, handle: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 {
