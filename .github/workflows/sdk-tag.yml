@@ -1,6 +1,6 @@
 name: SDK tag
 
-# Auto-pins the plugin ABI contract: on every push to main, if src/sdk/version.zig's
+# Auto-pins the plugin ABI contract: on every push to main, if src/sdk/sdk_version.zig's
 # `sdk_version` doesn't already have a matching `sdk-v<major>.<minor>.<patch>` tag, create and
 # push one at this commit. This is the pin point third-party plugins' build.zig.zon `fizzy`
 # dependency uses (docs/PLUGINS.md §2.3) instead of an arbitrary commit SHA.
@@ -13,6 +13,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "src/sdk/sdk_version.zig"
       - "src/sdk/version.zig"
   workflow_dispatch:
 
@@ -36,13 +37,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          block=$(awk '/pub const sdk_version = std\.SemanticVersion\{/,/\};/' src/sdk/version.zig)
+          block=$(awk '/pub const sdk_version = std\.SemanticVersion\{/,/\};/' src/sdk/sdk_version.zig)
           major=$(grep -oE '\.major = [0-9]+' <<<"$block" | grep -oE '[0-9]+')
           minor=$(grep -oE '\.minor = [0-9]+' <<<"$block" | grep -oE '[0-9]+')
           patch=$(grep -oE '\.patch = [0-9]+' <<<"$block" | grep -oE '[0-9]+')
 
           if [[ -z "$major" || -z "$minor" || -z "$patch" ]]; then
-            echo "Failed to parse sdk_version out of src/sdk/version.zig" >&2
+            echo "Failed to parse sdk_version out of src/sdk/sdk_version.zig" >&2
             exit 1
           fi
 
