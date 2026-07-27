@@ -6,8 +6,8 @@
 //!
 //! ```zon
 //! .{
-//!     .shell = .{
-//!         .{ .keys = "ctrl+shift+e", .command = "shell.toggleExplorer" },
+//!     .fizzy = .{
+//!         .{ .keys = "ctrl+shift+e", .command = "fizzy.toggleExplorer" },
 //!         .{ .keys = "ctrl+b",       .command = null },              // unbind
 //!     },
 //!     .plugins = .{
@@ -46,10 +46,10 @@ pub const OwnedBinding = struct {
     command: ?[]u8,
     when: When = .{},
     when_text: ?[]u8 = null,
-    /// Plugin id, or null for the `.shell` block.
+    /// Plugin id, or null for the `.fizzy` block.
     owner_id: ?[]u8 = null,
 
-    fn deinit(self: *OwnedBinding, gpa: Allocator) void {
+    pub fn deinit(self: *OwnedBinding, gpa: Allocator) void {
         gpa.free(self.keys);
         if (self.command) |c| gpa.free(c);
         if (self.when_text) |w| gpa.free(w);
@@ -184,7 +184,7 @@ fn collectBlock(
         .empty_literal => return,
         else => {
             const loc = locationOf(ast, zoir, block);
-            c.diag(loc.line, loc.column, "expected a list of bindings, e.g. .{{ .{{ .keys = \"ctrl+s\", .command = \"shell.save\" }} }}", .{});
+            c.diag(loc.line, loc.column, "expected a list of bindings, e.g. .{{ .{{ .keys = \"ctrl+s\", .command = \"fizzy.save\" }} }}", .{});
             return;
         },
     };
@@ -197,7 +197,7 @@ fn collectBlock(
         switch (entry.get(zoir)) {
             .struct_literal => {},
             else => {
-                c.diag(loc.line, loc.column, "binding must be a struct, e.g. .{{ .keys = \"ctrl+s\", .command = \"shell.save\" }}", .{});
+                c.diag(loc.line, loc.column, "binding must be a struct, e.g. .{{ .keys = \"ctrl+s\", .command = \"fizzy.save\" }}", .{});
                 continue;
             },
         }
@@ -294,7 +294,11 @@ pub fn parse(gpa: Allocator, source: [:0]const u8, platform: Platform) Allocator
         parsed.ast.deinit(gpa);
     }
 
-    if (findField(parsed.zoir, .root, "shell")) |shell_block| {
+    // Fizzy-owned overrides. `.shell` is still accepted so existing keybinds.zon files keep
+    // loading after the command-id rename; writes always use `.fizzy`.
+    if (findField(parsed.zoir, .root, "fizzy")) |fizzy_block| {
+        try collectBlock(&c, parsed.ast, parsed.zoir, fizzy_block, null, platform);
+    } else if (findField(parsed.zoir, .root, "shell")) |shell_block| {
         try collectBlock(&c, parsed.ast, parsed.zoir, shell_block, null, platform);
     }
 
@@ -314,10 +318,22 @@ pub fn parse(gpa: Allocator, source: [:0]const u8, platform: Platform) Allocator
         }
     }
 
+    // `shell.*` command ids were renamed to `fizzy.*` ("shell"/"fizzy" are the same length).
+    for (c.bindings.items) |*b| {
+        if (b.command) |cmd| migrateLegacyShellCommandId(cmd);
+    }
+
     return .{
         .bindings = try c.bindings.toOwnedSlice(gpa),
         .diagnostics = try c.diagnostics.toOwnedSlice(gpa),
     };
+}
+
+/// In-place: `shell.save` → `fizzy.save`. Both prefixes are 5 chars + `.`.
+fn migrateLegacyShellCommandId(cmd: []u8) void {
+    if (cmd.len >= 6 and std.mem.eql(u8, cmd[0..6], "shell.")) {
+        @memcpy(cmd[0..5], "fizzy");
+    }
 }
 
 // -- writing ---------------------------------------------------------------------------------------
@@ -344,16 +360,16 @@ pub fn format(gpa: Allocator, bindings: []const OwnedBinding) ![]u8 {
 
     try w.writeAll(".{\n");
 
-    var wrote_shell = false;
+    var wrote_fizzy = false;
     for (bindings) |b| {
         if (b.owner_id != null) continue;
-        if (!wrote_shell) {
-            try w.writeAll("    .shell = .{\n");
-            wrote_shell = true;
+        if (!wrote_fizzy) {
+            try w.writeAll("    .fizzy = .{\n");
+            wrote_fizzy = true;
         }
         try writeBinding(w, b, "        ");
     }
-    if (wrote_shell) try w.writeAll("    },\n");
+    if (wrote_fizzy) try w.writeAll("    },\n");
 
     // Distinct plugin ids, in first-seen order — stable output, no allocation for a sort.
     var wrote_plugins = false;
@@ -392,12 +408,12 @@ pub fn format(gpa: Allocator, bindings: []const OwnedBinding) ![]u8 {
 
 const t = std.testing;
 
-test "parses shell and plugin blocks" {
+test "parses fizzy and plugin blocks" {
     const a = t.allocator;
     const src =
         \\.{
-        \\    .shell = .{
-        \\        .{ .keys = "ctrl+shift+e", .command = "shell.toggleExplorer" },
+        \\    .fizzy = .{
+        \\        .{ .keys = "ctrl+shift+e", .command = "fizzy.toggleExplorer" },
         \\        .{ .keys = "ctrl+b", .command = null },
         \\    },
         \\    .plugins = .{
@@ -417,7 +433,7 @@ test "parses shell and plugin blocks" {
     try t.expectEqual(@as(usize, 4), f.bindings.len);
 
     try t.expectEqual(@as(?[]u8, null), f.bindings[0].owner_id);
-    try t.expectEqualStrings("shell.toggleExplorer", f.bindings[0].command.?);
+    try t.expectEqualStrings("fizzy.toggleExplorer", f.bindings[0].command.?);
     try t.expectEqual(@as(?[]u8, null), f.bindings[1].command); // unbind
     try t.expectEqualStrings("text", f.bindings[2].owner_id.?);
     try t.expect(f.bindings[2].stroke.isChord());
@@ -446,7 +462,7 @@ test "when clauses parse" {
 test "an unknown when context is kept, with a diagnostic" {
     const a = t.allocator;
     const src =
-        \\.{ .shell = .{ .{ .keys = "f5", .command = "shell.run", .when = "someFutureThing" } } }
+        \\.{ .fizzy = .{ .{ .keys = "f5", .command = "fizzy.run", .when = "someFutureThing" } } }
     ;
     var f = try parse(a, src, .other);
     defer f.deinit(a);
@@ -458,12 +474,12 @@ test "one bad entry does not discard the others" {
     const a = t.allocator;
     const src =
         \\.{
-        \\    .shell = .{
-        \\        .{ .keys = "ctrl+s", .command = "shell.save" },
-        \\        .{ .keys = "ctrl+nope", .command = "shell.broken" },
-        \\        .{ .command = "shell.nokeys" },
+        \\    .fizzy = .{
+        \\        .{ .keys = "ctrl+s", .command = "fizzy.save" },
+        \\        .{ .keys = "ctrl+nope", .command = "fizzy.broken" },
+        \\        .{ .command = "fizzy.nokeys" },
         \\        .{ .keys = "ctrl+q" },
-        \\        .{ .keys = "ctrl+w", .command = "shell.close" },
+        \\        .{ .keys = "ctrl+w", .command = "fizzy.close" },
         \\    },
         \\}
     ;
@@ -471,8 +487,8 @@ test "one bad entry does not discard the others" {
     defer f.deinit(a);
 
     try t.expectEqual(@as(usize, 2), f.bindings.len);
-    try t.expectEqualStrings("shell.save", f.bindings[0].command.?);
-    try t.expectEqualStrings("shell.close", f.bindings[1].command.?);
+    try t.expectEqualStrings("fizzy.save", f.bindings[0].command.?);
+    try t.expectEqualStrings("fizzy.close", f.bindings[1].command.?);
     try t.expectEqual(@as(usize, 3), f.diagnostics.len);
     // Diagnostics carry a usable location.
     try t.expectEqual(@as(u32, 4), f.diagnostics[0].line);
@@ -488,7 +504,7 @@ test "malformed ZON yields a diagnostic, not a crash" {
 
 test "empty and absent blocks are fine" {
     const a = t.allocator;
-    for ([_][:0]const u8{ ".{}", ".{ .shell = .{} }", ".{ .plugins = .{} }" }) |src| {
+    for ([_][:0]const u8{ ".{}", ".{ .fizzy = .{} }", ".{ .shell = .{} }", ".{ .plugins = .{} }" }) |src| {
         var f = try parse(a, src, .other);
         defer f.deinit(a);
         try t.expectEqual(@as(usize, 0), f.bindings.len);
@@ -498,7 +514,7 @@ test "empty and absent blocks are fine" {
 
 test "mod resolves per platform at parse time" {
     const a = t.allocator;
-    const src = ".{ .shell = .{ .{ .keys = \"mod+s\", .command = \"shell.save\" } } }";
+    const src = ".{ .fizzy = .{ .{ .keys = \"mod+s\", .command = \"fizzy.save\" } } }";
 
     var mac = try parse(a, src, .mac);
     defer mac.deinit(a);
@@ -513,8 +529,8 @@ test "format round-trips through parse" {
     const a = t.allocator;
     const src =
         \\.{
-        \\    .shell = .{
-        \\        .{ .keys = "ctrl+shift+e", .command = "shell.toggleExplorer" },
+        \\    .fizzy = .{
+        \\        .{ .keys = "ctrl+shift+e", .command = "fizzy.toggleExplorer" },
         \\        .{ .keys = "ctrl+b", .command = null },
         \\    },
         \\    .plugins = .{
@@ -549,7 +565,7 @@ test "format round-trips through parse" {
 
 test "backslash keys survive a write/read cycle" {
     const a = t.allocator;
-    var f = try parse(a, ".{ .shell = .{ .{ .keys = \"ctrl+\\\\\", .command = \"shell.split\" } } }", .other);
+    var f = try parse(a, ".{ .fizzy = .{ .{ .keys = \"ctrl+\\\\\", .command = \"fizzy.split\" } } }", .other);
     defer f.deinit(a);
     try t.expectEqual(keymap.Key.backslash, f.bindings[0].stroke.first.key);
 
@@ -562,9 +578,17 @@ test "backslash keys survive a write/read cycle" {
     try t.expectEqual(keymap.Key.backslash, again.bindings[0].stroke.first.key);
 }
 
-test "toBindings feeds a Keymap" {
+test "legacy .shell block and shell.* command ids still load" {
     const a = t.allocator;
     var f = try parse(a, ".{ .shell = .{ .{ .keys = \"ctrl+s\", .command = \"shell.save\" } } }", .other);
+    defer f.deinit(a);
+    try t.expectEqual(@as(usize, 0), f.diagnostics.len);
+    try t.expectEqualStrings("fizzy.save", f.bindings[0].command.?);
+}
+
+test "toBindings feeds a Keymap" {
+    const a = t.allocator;
+    var f = try parse(a, ".{ .fizzy = .{ .{ .keys = \"ctrl+s\", .command = \"fizzy.save\" } } }", .other);
     defer f.deinit(a);
 
     const view = try f.toBindings(a, .user);
@@ -574,7 +598,7 @@ test "toBindings feeds a Keymap" {
     defer k.deinit(a);
     for (view) |b| try k.add(a, b);
 
-    const r = k.resolve((try chord_mod.parseKeys("ctrl+s", .other)).first, .{});
-    try t.expectEqualStrings("shell.save", r.command);
+    const r = k.resolve((try chord_mod.parseKeys("ctrl+s", .other)).first, .{}, null);
+    try t.expectEqualStrings("fizzy.save", r.command);
     try t.expectEqual(keymap.Source.user, view[0].source);
 }

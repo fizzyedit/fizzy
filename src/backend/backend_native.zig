@@ -9,6 +9,7 @@ const win32 = @import("win32");
 const singleton = @import("singleton.zig");
 const window_layout = @import("window_layout.zig");
 const Constants = @import("../editor/Constants.zig");
+const KeybindSettings = @import("../editor/KeybindSettings.zig");
 
 // AppKit geometry types for NSView frame/bounds (same layout as Foundation).
 const NSPoint = extern struct { x: f64, y: f64 };
@@ -450,6 +451,45 @@ pub const NativeMenuAction = enum(c_int) {
     save_all = 16,
 };
 
+/// Every fixed menu-bar item, by the action it performs, kept so a rebind can push the new
+/// chord onto the item. Without this the `NSMenu` key equivalent stays whatever it was built
+/// with: `Keybinds.tick` deliberately skips these commands on macOS (the native menu already
+/// ran them), so after rebinding, the new chord had nothing dispatching it and the old one kept
+/// working. See `setNativeMenuShortcut`.
+var native_menu_items: [@intFromEnum(NativeMenuAction.save_all) + 1]?objc.Object = @splat(null);
+
+fn rememberNativeMenuItem(action: NativeMenuAction, item: objc.Object) void {
+    if (item.value == 0) return;
+    native_menu_items[@intCast(@intFromEnum(action))] = item;
+}
+
+/// Point a menu item at a different chord. `key` is the key-equivalent character (lowercase,
+/// as AppKit expects — the shift modifier is carried in the mask, not the case); passing null
+/// clears the shortcut, which is the right outcome for a chord AppKit can't express.
+pub fn setNativeMenuShortcut(action: NativeMenuAction, key: ?[]const u8, modifier_mask: c_ulong) void {
+    if (comptime builtin.os.tag != .macos) return;
+    const item = native_menu_items[@intCast(@intFromEnum(action))] orelse return;
+    const NSString = objc.getClass("NSString") orelse return;
+
+    var buf: [8]u8 = undefined;
+    const text: [:0]const u8 = blk: {
+        const k = key orelse break :blk "";
+        if (k.len >= buf.len) break :blk "";
+        @memcpy(buf[0..k.len], k);
+        buf[k.len] = 0;
+        break :blk buf[0..k.len :0];
+    };
+
+    const str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{text.ptr});
+    item.msgSend(void, "setKeyEquivalent:", .{str.value});
+    item.msgSend(void, "setKeyEquivalentModifierMask:", .{if (key == null) @as(c_ulong, 0) else modifier_mask});
+}
+
+pub const modifier_command: c_ulong = NSEventModifierFlagCommand;
+pub const modifier_shift: c_ulong = NSEventModifierFlagShift;
+pub const modifier_option: c_ulong = NSEventModifierFlagOption;
+pub const modifier_control: c_ulong = NSEventModifierFlagControl;
+
 // Queue a single pending native action id.
 // This may be written from an AppKit callback thread, so use an atomic.
 var pending_native_menu_action_id: std.atomic.Value(c_int) = .init(-1);
@@ -482,7 +522,16 @@ export fn FizzyNativeMenuGenericAction(tag: c_int) void {
 /// `Host`/`Editor` state — none of it touches `dvui.currentWindow()` — so it's safe to call
 /// from outside `Window.begin`/`end`, unlike e.g. the save/open dialog callbacks (see
 /// `pollPendingDialogResult`).
+/// True while the app must not act on key presses at all. AppKit matches an `NSMenu` key
+/// equivalent and fires its action before the key ever reaches SDL, so the only way to stop
+/// `cmd+o` from opening a folder picker while the settings pane is capturing a chord is to
+/// report the menu items disabled — AppKit will not perform a disabled item's key equivalent.
+export fn FizzyNativeMenuInputBlocked() callconv(.c) bool {
+    return KeybindSettings.isRecording();
+}
+
 export fn FizzyNativeMenuActionEnabled(id: c_int) callconv(.c) bool {
+    if (KeybindSettings.isRecording()) return false;
     if (id < 0 or id > @intFromEnum(NativeMenuAction.save_all)) return true;
     const action: NativeMenuAction = @enumFromInt(id);
     switch (action) {
@@ -1419,6 +1468,7 @@ pub fn setupMacOSMenuBar() void {
             new_item.msgSend(void, "setTarget:", .{target.value});
             new_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand});
             setMenuItemImage(new_item, NSImage, NSString, "doc.badge.plus", "New");
+            rememberNativeMenuItem(.new_file, new_item);
         }
     }
     // Open Folder — ⌘F, folder icon
@@ -1434,6 +1484,7 @@ pub fn setupMacOSMenuBar() void {
             open_folder_item.msgSend(void, "setTarget:", .{target.value});
             open_folder_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand});
             setMenuItemImage(open_folder_item, NSImage, NSString, "folder", "Open Folder");
+            rememberNativeMenuItem(.open_folder, open_folder_item);
         }
     }
     // Open Files — ⌘O, doc icon
@@ -1449,6 +1500,7 @@ pub fn setupMacOSMenuBar() void {
             open_files_item.msgSend(void, "setTarget:", .{target.value});
             open_files_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand});
             setMenuItemImage(open_files_item, NSImage, NSString, "doc.on.doc", "Open Files");
+            rememberNativeMenuItem(.open_files, open_files_item);
         }
     }
 
@@ -1467,6 +1519,7 @@ pub fn setupMacOSMenuBar() void {
         save_item.msgSend(void, "setTarget:", .{target.value});
         save_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand});
         save_item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(NativeMenuAction.save))});
+        rememberNativeMenuItem(.save, save_item);
     }
 
     // Save As — ⇧⌘S
@@ -1482,6 +1535,7 @@ pub fn setupMacOSMenuBar() void {
             save_as_item.msgSend(void, "setTarget:", .{target.value});
             save_as_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand | NSEventModifierFlagShift});
             save_as_item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(NativeMenuAction.save_as))});
+            rememberNativeMenuItem(.save_as, save_as_item);
             setMenuItemImage(save_as_item, NSImage, NSString, "arrow.down.doc", "Save As");
         }
     }
@@ -1499,6 +1553,7 @@ pub fn setupMacOSMenuBar() void {
             save_all_item.msgSend(void, "setTarget:", .{target.value});
             save_all_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand | NSEventModifierFlagOption});
             save_all_item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(NativeMenuAction.save_all))});
+            rememberNativeMenuItem(.save_all, save_all_item);
             setMenuItemImage(save_all_item, NSImage, NSString, "square.and.arrow.down.on.square", "Save All");
         }
     }
@@ -1679,6 +1734,7 @@ fn addNativeMenuItem(menu: objc.Object, _: objc.Class, NSStringClass: objc.Class
         // item out when the action wouldn't currently do anything (no active document, empty
         // selection, empty undo stack, …).
         item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(action))});
+        rememberNativeMenuItem(action, item);
     }
 }
 

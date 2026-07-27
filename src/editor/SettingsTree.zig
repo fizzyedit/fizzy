@@ -6,6 +6,7 @@
 //!     ▾ Fizzy            ← the shell's own settings (`explorer/settings.zig`'s `groups`)
 //!       ▾ Appearance
 //!       ▾ Input
+//!       ▾ Keyboard Shortcuts
 //!       ▾ Debugging
 //!     ▾ Text             ← one branch per plugin that registered a settings schema
 //!     ▾ Pixi

@@ -13,6 +13,11 @@ extern void FizzyNativeMenuGenericAction(int tag);
  * that action currently does anything (an active document, a non-empty selection, …). */
 extern bool FizzyNativeMenuActionEnabled(int id);
 
+/* True while the app is capturing a key chord (the Keyboard Shortcuts settings pane). AppKit
+ * fires a menu item's key equivalent before the key reaches SDL, so blocking dvui events is not
+ * enough — every item has to report disabled, which stops the key equivalent from performing. */
+extern bool FizzyNativeMenuInputBlocked(void);
+
 @interface FizzyMenuTarget : NSObject <NSMenuItemValidation>
 - (void)newFile:(id)sender;
 - (void)openFolder:(id)sender;
@@ -53,6 +58,10 @@ extern bool FizzyNativeMenuActionEnabled(int id);
     FizzyNativeMenuGenericAction((int)[item tag]);
 }
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
+    /* Checked before the generic-item shortcut below so plugin items are blocked too. */
+    if (FizzyNativeMenuInputBlocked()) {
+        return NO;
+    }
     /* Plugin-contributed items (Transform, Grid Layout, …) share this same target but tag
      * themselves with an index into `host.native_menu_items`, not a `NativeMenuAction` — greying
      * those out isn't part of this validator. */

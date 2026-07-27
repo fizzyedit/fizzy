@@ -17,6 +17,7 @@ const std = @import("std");
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const Editor = fizzy.Editor;
+const KeybindSettings = @import("../KeybindSettings.zig");
 
 /// One row in the settings tree: a labelled control the user can search for.
 pub const Item = struct {
@@ -54,12 +55,26 @@ pub const groups = [_]Group{
         },
     },
     .{
+        .title = "Keyboard Shortcuts",
+        .items = &.{
+            .{
+                .label = "Bindings",
+                .keywords = "keybind shortcut hotkey chord keyboard remap keys",
+                .draw = drawKeybinds,
+            },
+        },
+    },
+    .{
         .title = "Debugging",
         .items = &.{
             .{ .label = "Frame Rate", .keywords = "fps performance diagnostics", .draw = drawFps },
         },
     },
 };
+
+fn drawKeybinds() void {
+    KeybindSettings.draw();
+}
 
 // ---- Appearance -------------------------------------------------------------------------
 

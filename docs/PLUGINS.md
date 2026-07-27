@@ -525,6 +525,14 @@ focusing a pixi doc runs `"pixi.copy"`; a second editor answers the same shell a
 registering its own `"<its_id>.copy"`, `…transform`, etc. An action the owner didn't register is
 simply a no-op for its documents.
 
+**Command palette flattening.** Document verbs that the shell forwards (`copy`, `paste`, `undo`,
+`redo`, `deleteSelection`, `acceptEdit`, `cancelEdit`) appear **once** in the palette as the
+Fizzy stub (`fizzy.copy`, …) — greyed when no active document offers that action. Plugin
+implementations (`text.copy`, `pixi.copy`, …) stay registered for dispatch/menus/keybinds but are
+hidden from the palette so the same title isn't listed N times. Verbs with no Fizzy stub
+(*Transform*, *Grid Layout*) show only the active owner's command when present. Global commands
+(`pixi.packProject`, `fizzy.save`, …) always appear as their own rows.
+
 ### 3.5 Memory: one allocator, one arena
 
 - **`host.allocator`** (== `sdk.allocator()`) — the persistent heap allocator. Use it for anything

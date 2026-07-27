@@ -179,37 +179,54 @@ pub const Keymap = struct {
     }
 
     /// Best binding for `stroke` in context `ctx`: highest `source`, then most specific `when`.
-    fn best(self: Keymap, stroke: Stroke, ctx: When) ?Binding {
+    /// Bindings with `owner_id` only apply when that id matches `active_owner` (decision 1B:
+    /// active document owner wins on shared chords; otherwise the shell/profile binding fires).
+    fn best(self: Keymap, stroke: Stroke, ctx: When, active_owner: ?[]const u8) ?Binding {
         var winner: ?Binding = null;
         for (self.bindings.items) |b| {
             if (!b.stroke.eql(stroke)) continue;
             if (!b.when.matches(ctx)) continue;
+            if (b.owner_id) |oid| {
+                const ao = active_owner orelse continue;
+                if (!std.mem.eql(u8, oid, ao)) continue;
+            }
             const w = winner orelse {
                 winner = b;
                 continue;
             };
             const b_rank = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
             const w_rank = (@as(u16, @intFromEnum(w.source)) << 8) | w.when.weight();
+            // Owner-scoped bindings beat otherwise equal-rank global ones — that's the whole
+            // point of active-owner conflict resolution (pixi Export vs shell Quick Open).
+            const b_owner_boost: u16 = if (b.owner_id != null) 1 else 0;
+            const w_owner_boost: u16 = if (w.owner_id != null) 1 else 0;
+            const b_total = (b_rank << 1) | b_owner_boost;
+            const w_total = (w_rank << 1) | w_owner_boost;
             // >= so a later entry at equal rank wins: within one layer, last one loaded wins.
-            if (b_rank >= w_rank) winner = b;
+            if (b_total >= w_total) winner = b;
         }
         return winner;
     }
 
     /// Is `c` the opening stroke of some chord that could still apply here?
-    fn opensChord(self: Keymap, c: Chord, ctx: When) bool {
+    fn opensChord(self: Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) bool {
         for (self.bindings.items) |b| {
             if (b.stroke.second == null) continue;
             if (b.command == null) continue;
             if (!b.stroke.first.eql(c)) continue;
             if (!b.when.matches(ctx)) continue;
+            if (b.owner_id) |oid| {
+                const ao = active_owner orelse continue;
+                if (!std.mem.eql(u8, oid, ao)) continue;
+            }
             return true;
         }
         return false;
     }
 
     /// Feed one key press. Stateful: consecutive calls complete a chord.
-    pub fn resolve(self: *Keymap, c: Chord, ctx: When) Resolution {
+    /// `active_owner` is the focused document's plugin id, or null when none.
+    pub fn resolve(self: *Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) Resolution {
         // Modifier keys alone never resolve, and must not cancel a pending chord — otherwise
         // pressing Ctrl for the second half of `ctrl+k ctrl+c` would abort the chord.
         if (keyIsModifier(c.key)) return .none;
@@ -217,7 +234,7 @@ pub const Keymap = struct {
         if (self.pending) |first| {
             self.pending = null;
             const full: Stroke = .{ .first = first, .second = c };
-            if (self.best(full, ctx)) |b| {
+            if (self.best(full, ctx, active_owner)) |b| {
                 return if (b.command) |cmd| .{ .command = cmd } else .unbound;
             }
             // A chord was started but the second stroke matched nothing: swallow it rather than
@@ -228,9 +245,9 @@ pub const Keymap = struct {
         // A single-stroke binding beats an unstarted chord on the same opening key, unless the
         // single-stroke binding is a lower-priority layer.
         const single: Stroke = .{ .first = c };
-        const single_match = self.best(single, ctx);
+        const single_match = self.best(single, ctx, active_owner);
 
-        if (self.opensChord(c, ctx)) {
+        if (self.opensChord(c, ctx, active_owner)) {
             if (single_match) |b| {
                 if (b.source == .user) {
                     return if (b.command) |cmd| .{ .command = cmd } else .unbound;
@@ -258,33 +275,54 @@ pub const Keymap = struct {
         return out.toOwnedSlice(gpa);
     }
 
-    /// Bindings shadowed by a higher-priority entry on the same chord+context. Surfaced in the
-    /// settings pane — a silently-dropped binding is the single most confusing failure mode a
-    /// keymap can have.
+    /// Bindings that share a chord but don't always fire together. Includes classic layer
+    /// shadowing (user beats profile) and active-owner forks (shell Quick Open vs pixi Export
+    /// on `mod+p`) so the settings pane can warn about them.
     pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
         var out: std.ArrayList(Conflict) = .empty;
         errdefer out.deinit(gpa);
         for (self.bindings.items, 0..) |b, i| {
             const b_cmd = b.command orelse continue;
-            const winner = self.best(b.stroke, b.when) orelse continue;
-            const w_cmd = winner.command orelse continue;
-            if (std.mem.eql(u8, w_cmd, b_cmd)) continue;
-            // Only report when something genuinely shadows this exact entry.
-            var shadowed = false;
             for (self.bindings.items, 0..) |o, j| {
-                if (i == j) continue;
+                if (j <= i) continue;
+                const o_cmd = o.command orelse continue;
                 if (!o.stroke.eql(b.stroke)) continue;
                 if (!o.when.eql(b.when)) continue;
-                shadowed = true;
-                break;
+                if (std.mem.eql(u8, b_cmd, o_cmd)) continue;
+
+                // Same owner (or both global) → pure layer conflict; report the lower-ranked
+                // as loser. Different owner_id (or one scoped / one global) → active-owner fork.
+                const same_owner = blk: {
+                    if (b.owner_id == null and o.owner_id == null) break :blk true;
+                    const bo = b.owner_id orelse break :blk false;
+                    const oo = o.owner_id orelse break :blk false;
+                    break :blk std.mem.eql(u8, bo, oo);
+                };
+
+                if (same_owner) {
+                    const b_rank = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
+                    const o_rank = (@as(u16, @intFromEnum(o.source)) << 8) | o.when.weight();
+                    const winner_cmd = if (o_rank >= b_rank) o_cmd else b_cmd;
+                    const loser_cmd = if (o_rank >= b_rank) b_cmd else o_cmd;
+                    try out.append(gpa, .{
+                        .stroke = b.stroke,
+                        .when = b.when,
+                        .winner = winner_cmd,
+                        .loser = loser_cmd,
+                    });
+                } else {
+                    // Context-dependent: either can win. Prefer naming the owner-scoped one as
+                    // winner so the UI reads "Export (when pixi active) shadows Quick Open".
+                    const winner_cmd = if (o.owner_id != null) o_cmd else b_cmd;
+                    const loser_cmd = if (o.owner_id != null) b_cmd else o_cmd;
+                    try out.append(gpa, .{
+                        .stroke = b.stroke,
+                        .when = b.when,
+                        .winner = winner_cmd,
+                        .loser = loser_cmd,
+                    });
+                }
             }
-            if (!shadowed) continue;
-            try out.append(gpa, .{
-                .stroke = b.stroke,
-                .when = b.when,
-                .winner = w_cmd,
-                .loser = b_cmd,
-            });
         }
         return out.toOwnedSlice(gpa);
     }
@@ -307,13 +345,13 @@ fn keys(s: []const u8) Stroke {
 test "single-stroke resolves to its command" {
     const a = t.allocator;
     var k = try km(a, &.{
-        .{ .stroke = keys("ctrl+s"), .command = "shell.save" },
+        .{ .stroke = keys("ctrl+s"), .command = "fizzy.save" },
     });
     defer k.deinit(a);
 
-    const r = k.resolve(keys("ctrl+s").first, .{});
-    try t.expectEqualStrings("shell.save", r.command);
-    try t.expect(k.resolve(keys("ctrl+q").first, .{}) == .none);
+    const r = k.resolve(keys("ctrl+s").first, .{}, null);
+    try t.expectEqualStrings("fizzy.save", r.command);
+    try t.expect(k.resolve(keys("ctrl+q").first, .{}, null) == .none);
 }
 
 test "chord needs both strokes" {
@@ -323,8 +361,8 @@ test "chord needs both strokes" {
     });
     defer k.deinit(a);
 
-    try t.expect(k.resolve(keys("ctrl+k").first, .{}) == .pending);
-    const r = k.resolve(keys("ctrl+c").first, .{});
+    try t.expect(k.resolve(keys("ctrl+k").first, .{}, null) == .pending);
+    const r = k.resolve(keys("ctrl+c").first, .{}, null);
     try t.expectEqualStrings("text.addLineComment", r.command);
     try t.expectEqual(@as(?Chord, null), k.pending);
 }
@@ -333,15 +371,15 @@ test "an unmatched second stroke is swallowed, not misfired" {
     const a = t.allocator;
     var k = try km(a, &.{
         .{ .stroke = keys("ctrl+k ctrl+c"), .command = "text.addLineComment" },
-        .{ .stroke = keys("ctrl+x"), .command = "shell.cut" },
+        .{ .stroke = keys("ctrl+x"), .command = "fizzy.cut" },
     });
     defer k.deinit(a);
 
-    try t.expect(k.resolve(keys("ctrl+k").first, .{}) == .pending);
+    try t.expect(k.resolve(keys("ctrl+k").first, .{}, null) == .pending);
     // `ctrl+x` must NOT run cut here — it was typed as the tail of an abandoned chord.
-    try t.expect(k.resolve(keys("ctrl+x").first, .{}) == .unbound);
+    try t.expect(k.resolve(keys("ctrl+x").first, .{}, null) == .unbound);
     // ...and afterwards it works normally again.
-    try t.expectEqualStrings("shell.cut", k.resolve(keys("ctrl+x").first, .{}).command);
+    try t.expectEqualStrings("fizzy.cut", k.resolve(keys("ctrl+x").first, .{}, null).command);
 }
 
 test "pressing a modifier does not cancel a pending chord" {
@@ -351,45 +389,45 @@ test "pressing a modifier does not cancel a pending chord" {
     });
     defer k.deinit(a);
 
-    try t.expect(k.resolve(keys("ctrl+k").first, .{}) == .pending);
-    try t.expect(k.resolve(.{ .key = .left_control }, .{}) == .none);
+    try t.expect(k.resolve(keys("ctrl+k").first, .{}, null) == .pending);
+    try t.expect(k.resolve(.{ .key = .left_control }, .{}, null) == .none);
     try t.expect(k.pending != null);
-    try t.expectEqualStrings("text.addLineComment", k.resolve(keys("ctrl+c").first, .{}).command);
+    try t.expectEqualStrings("text.addLineComment", k.resolve(keys("ctrl+c").first, .{}, null).command);
 }
 
 test "user layer overrides profile layer" {
     const a = t.allocator;
     var k = try km(a, &.{
-        .{ .stroke = keys("ctrl+b"), .command = "shell.toggleSidebar", .source = .profile },
+        .{ .stroke = keys("ctrl+b"), .command = "fizzy.toggleSidebar", .source = .profile },
         .{ .stroke = keys("ctrl+b"), .command = "text.buildProject", .source = .user },
     });
     defer k.deinit(a);
-    try t.expectEqualStrings("text.buildProject", k.resolve(keys("ctrl+b").first, .{}).command);
+    try t.expectEqualStrings("text.buildProject", k.resolve(keys("ctrl+b").first, .{}, null).command);
 }
 
 test "null command unbinds and claims the key" {
     const a = t.allocator;
     var k = try km(a, &.{
-        .{ .stroke = keys("ctrl+b"), .command = "shell.toggleSidebar", .source = .profile },
+        .{ .stroke = keys("ctrl+b"), .command = "fizzy.toggleSidebar", .source = .profile },
         .{ .stroke = keys("ctrl+b"), .command = null, .source = .user },
     });
     defer k.deinit(a);
     // Not `.none` — the whole point is to stop the profile binding firing.
-    try t.expect(k.resolve(keys("ctrl+b").first, .{}) == .unbound);
+    try t.expect(k.resolve(keys("ctrl+b").first, .{}, null) == .unbound);
 }
 
 test "more specific when wins at equal source" {
     const a = t.allocator;
     var k = try km(a, &.{
-        .{ .stroke = keys("escape"), .command = "shell.cancel" },
+        .{ .stroke = keys("escape"), .command = "fizzy.cancel" },
         .{ .stroke = keys("escape"), .command = "text.dismissCompletion", .when = .{ .completion_visible = true } },
     });
     defer k.deinit(a);
 
-    try t.expectEqualStrings("shell.cancel", k.resolve(keys("escape").first, .{}).command);
+    try t.expectEqualStrings("fizzy.cancel", k.resolve(keys("escape").first, .{}, null).command);
     try t.expectEqualStrings(
         "text.dismissCompletion",
-        k.resolve(keys("escape").first, .{ .completion_visible = true }).command,
+        k.resolve(keys("escape").first, .{ .completion_visible = true }, null).command,
     );
 }
 
@@ -399,10 +437,10 @@ test "a binding whose context is unmet does not match" {
         .{ .stroke = keys("ctrl+/"), .command = "text.toggleLineComment", .when = .{ .editor_focused = true } },
     });
     defer k.deinit(a);
-    try t.expect(k.resolve(keys("ctrl+/").first, .{}) == .none);
+    try t.expect(k.resolve(keys("ctrl+/").first, .{}, null) == .none);
     try t.expectEqualStrings(
         "text.toggleLineComment",
-        k.resolve(keys("ctrl+/").first, .{ .editor_focused = true }).command,
+        k.resolve(keys("ctrl+/").first, .{ .editor_focused = true }, null).command,
     );
 }
 
@@ -410,23 +448,23 @@ test "cancelPending drops a half-entered chord" {
     const a = t.allocator;
     var k = try km(a, &.{
         .{ .stroke = keys("ctrl+k ctrl+c"), .command = "text.addLineComment" },
-        .{ .stroke = keys("ctrl+c"), .command = "shell.copy" },
+        .{ .stroke = keys("ctrl+c"), .command = "fizzy.copy" },
     });
     defer k.deinit(a);
 
-    try t.expect(k.resolve(keys("ctrl+k").first, .{}) == .pending);
+    try t.expect(k.resolve(keys("ctrl+k").first, .{}, null) == .pending);
     k.cancelPending();
-    try t.expectEqualStrings("shell.copy", k.resolve(keys("ctrl+c").first, .{}).command);
+    try t.expectEqualStrings("fizzy.copy", k.resolve(keys("ctrl+c").first, .{}, null).command);
 }
 
 test "a user single-stroke binding beats a profile chord on the same opening key" {
     const a = t.allocator;
     var k = try km(a, &.{
         .{ .stroke = keys("ctrl+k ctrl+c"), .command = "text.addLineComment", .source = .profile },
-        .{ .stroke = keys("ctrl+k"), .command = "shell.killLine", .source = .user },
+        .{ .stroke = keys("ctrl+k"), .command = "fizzy.killLine", .source = .user },
     });
     defer k.deinit(a);
-    try t.expectEqualStrings("shell.killLine", k.resolve(keys("ctrl+k").first, .{}).command);
+    try t.expectEqualStrings("fizzy.killLine", k.resolve(keys("ctrl+k").first, .{}, null).command);
 }
 
 test "when parsing accepts camelCase and snake_case, and reports unknowns" {
@@ -444,13 +482,13 @@ test "when parsing accepts camelCase and snake_case, and reports unknowns" {
 test "bindingsFor lists every chord for a command" {
     const a = t.allocator;
     var k = try km(a, &.{
-        .{ .stroke = keys("ctrl+s"), .command = "shell.save" },
-        .{ .stroke = keys("ctrl+k ctrl+s"), .command = "shell.save" },
-        .{ .stroke = keys("ctrl+q"), .command = "shell.quit" },
+        .{ .stroke = keys("ctrl+s"), .command = "fizzy.save" },
+        .{ .stroke = keys("ctrl+k ctrl+s"), .command = "fizzy.save" },
+        .{ .stroke = keys("ctrl+q"), .command = "fizzy.quit" },
     });
     defer k.deinit(a);
 
-    const found = try k.bindingsFor(a, "shell.save");
+    const found = try k.bindingsFor(a, "fizzy.save");
     defer a.free(found);
     try t.expectEqual(@as(usize, 2), found.len);
 }
@@ -458,9 +496,9 @@ test "bindingsFor lists every chord for a command" {
 test "conflicts reports the shadowed binding" {
     const a = t.allocator;
     var k = try km(a, &.{
-        .{ .stroke = keys("ctrl+b"), .command = "shell.toggleSidebar", .source = .profile },
+        .{ .stroke = keys("ctrl+b"), .command = "fizzy.toggleSidebar", .source = .profile },
         .{ .stroke = keys("ctrl+b"), .command = "text.buildProject", .source = .user },
-        .{ .stroke = keys("ctrl+s"), .command = "shell.save", .source = .profile },
+        .{ .stroke = keys("ctrl+s"), .command = "fizzy.save", .source = .profile },
     });
     defer k.deinit(a);
 
@@ -468,7 +506,26 @@ test "conflicts reports the shadowed binding" {
     defer a.free(c);
     try t.expectEqual(@as(usize, 1), c.len);
     try t.expectEqualStrings("text.buildProject", c[0].winner);
-    try t.expectEqualStrings("shell.toggleSidebar", c[0].loser);
+    try t.expectEqualStrings("fizzy.toggleSidebar", c[0].loser);
+}
+
+test "owner-scoped binding only fires when that owner is active" {
+    const a = t.allocator;
+    var k = try km(a, &.{
+        .{ .stroke = keys("ctrl+p"), .command = "fizzy.quickOpen", .source = .profile },
+        .{ .stroke = keys("ctrl+p"), .command = "pixi.export", .source = .plugin, .owner_id = "pixi" },
+    });
+    defer k.deinit(a);
+
+    try t.expectEqualStrings("fizzy.quickOpen", k.resolve(keys("ctrl+p").first, .{}, null).command);
+    try t.expectEqualStrings("pixi.export", k.resolve(keys("ctrl+p").first, .{}, "pixi").command);
+    try t.expectEqualStrings("fizzy.quickOpen", k.resolve(keys("ctrl+p").first, .{}, "text").command);
+
+    const c = try k.conflicts(a);
+    defer a.free(c);
+    try t.expectEqual(@as(usize, 1), c.len);
+    try t.expectEqualStrings("pixi.export", c[0].winner);
+    try t.expectEqualStrings("fizzy.quickOpen", c[0].loser);
 }
 
 test {

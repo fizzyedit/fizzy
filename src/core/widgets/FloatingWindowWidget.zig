@@ -30,11 +30,54 @@ pub const Resize = enum {
     all,
 };
 
+/// Which edges hold still while `auto_size` animates the window to a new size.
+///
+/// Each field is the fraction of the size change taken off the leading (top/left) edge, so 0.5
+/// splits it across both — a window that grows about its centre, which is what dialogs want and
+/// what this widget has always done. 0 pins the leading edge, so the window grows down/right
+/// from a fixed corner; 1 pins the trailing edge.
+pub const SizeAnchor = struct {
+    x: f32 = 0.5,
+    y: f32 = 0.5,
+
+    pub const center: SizeAnchor = .{};
+    pub const top: SizeAnchor = .{ .y = 0 };
+    pub const top_left: SizeAnchor = .{ .x = 0, .y = 0 };
+};
+
+/// Axes `auto_size` may animate. A window whose width is chosen by the caller rather than by its
+/// contents (the command palette is a fixed column) has to be able to opt one axis out, or the
+/// caller pinning that axis every frame and auto-size pulling it toward the content min size
+/// fight each other forever.
+pub const AutoSizeAxes = enum {
+    both,
+    /// Height only.
+    vertical,
+    /// Width only.
+    horizontal,
+
+    fn animatesWidth(self: AutoSizeAxes) bool {
+        return self != .vertical;
+    }
+    fn animatesHeight(self: AutoSizeAxes) bool {
+        return self != .horizontal;
+    }
+};
+
 pub const InitOptions = struct {
     modal: bool = false,
+    /// Scrim opacity, defaulting to dvui's per-theme value. Set it to animate the dim in and
+    /// out with a window that opens or closes over time (see `CommandPalette`). Same field name
+    /// and meaning as upstream dvui's `FloatingWindowWidget`.
+    modal_alpha: ?u8 = null,
     rect: ?*Rect = null,
     center_on: ?Rect.Natural = null,
     open_flag: ?*bool = null,
+
+    /// Edges held still while `auto_size` animates to a new size. See `SizeAnchor`.
+    size_anchor: SizeAnchor = .center,
+    /// Axes `auto_size` is allowed to animate. See `AutoSizeAxes`.
+    auto_size_axes: AutoSizeAxes = .both,
 
     /// Whether to allow resizing the window by dragging the edges/corners.
     resize: Resize = .all,
@@ -272,13 +315,13 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
     if (dvui.animationGet(self.wd.id, "_auto_height")) |*a| {
         diff_y = self.wd.rect.h - a.value();
         self.wd.rect.h = a.value();
-        self.wd.rect.y += diff_y / 2;
+        self.wd.rect.y += diff_y * self.init_options.size_anchor.y;
     }
 
     if (dvui.animationGet(self.wd.id, "_auto_width")) |*a| {
         diff_x = self.wd.rect.w - a.value();
         self.wd.rect.w = a.value();
-        self.wd.rect.x += diff_x / 2;
+        self.wd.rect.x += diff_x * self.init_options.size_anchor.x;
     }
 
     if (dvui.minSizeGet(self.wd.id)) |min_size| {
@@ -290,7 +333,7 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
 
             const ms = Size.min(Size.max(min_size, self.options.min_sizeGet()), .cast(dvui.windowRect().size()));
 
-            if (ms.w != self.wd.rect.w) {
+            if (self.init_options.auto_size_axes.animatesWidth() and ms.w != self.wd.rect.w) {
                 if (dvui.animationGet(self.wd.id, "_auto_width")) |a| {
                     if (a.end_val != ms.w) {
                         _ = dvui.currentWindow().animations.remove(self.wd.id.update("_auto_width"));
@@ -311,7 +354,7 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
                 }
             }
 
-            if (ms.h != self.wd.rect.h) {
+            if (self.init_options.auto_size_axes.animatesHeight() and ms.h != self.wd.rect.h) {
                 if (dvui.animationGet(self.wd.id, "_auto_height")) |*a| {
                     if (a.end_val != ms.h) {
                         _ = dvui.currentWindow().animations.remove(self.wd.id.update("_auto_height"));
@@ -451,7 +494,7 @@ pub fn drawBackground(self: *FloatingWindowWidget) void {
     if (self.init_options.modal and !dvui.firstFrame(self.data().id)) {
         // paint over everything below
         var col = self.options.color(.text);
-        col.a = if (dvui.themeGet().dark) 60 else 80;
+        col.a = self.init_options.modal_alpha orelse (if (dvui.themeGet().dark) 60 else 80);
         dvui.windowRectPixels().fill(.{}, .{ .color = col });
     }
 
@@ -707,6 +750,25 @@ pub fn autoSize(self: *FloatingWindowWidget) void {
 /// children trigger extra refresh frames).
 pub fn stopAutoSizing(self: *FloatingWindowWidget) void {
     self.auto_size = false;
+}
+
+/// Start the standard close animation, collapsing this window's height onto its `size_anchor`
+/// edge and leaving x/y/w alone — the counterpart to an auto-sized open for a window that grows
+/// from a pinned edge rather than from its centre.
+///
+/// Cancels any in-flight auto-size animation first. `init` applies the auto-size animations
+/// *after* the close ones, so a window closed while still growing would keep being driven by
+/// `_auto_height` and never visibly close.
+pub fn closeAnimateCollapse(self: *FloatingWindowWidget) void {
+    const cw = dvui.currentWindow();
+    _ = cw.animations.remove(self.data().id.update("_auto_width"));
+    _ = cw.animations.remove(self.data().id.update("_auto_height"));
+    self.auto_size = false;
+
+    var close_rect = self.data().rectScale().r;
+    close_rect.y += (close_rect.h - 1) * self.init_options.size_anchor.y;
+    close_rect.h = 1;
+    dvui.dataSet(null, self.data().id, "_close_rect", close_rect);
 }
 
 /// Request that the window center itself on its parent (or

@@ -69,7 +69,20 @@ pub fn load(gpa: std.mem.Allocator, project_root_abs: []const u8) !IgnoreRules {
     return out;
 }
 
+/// Version-control metadata directories, ignored whether or not the project lists them.
+/// A VCS never ignores its own store — `.gitignore` has no reason to mention `.git` — so
+/// anything walking the project from the ignore rules alone descends straight into it. In
+/// this repo that is 8k files for `.git` and 52k for `.jj`: the file index went from ~9k
+/// entries to ~60k, and one keystroke in the explorer filter drew a row for each.
+const always_ignored_dirs = [_][]const u8{ ".git", ".jj", ".hg", ".svn" };
+
 pub fn isIgnored(self: *const IgnoreRules, project_root_abs: []const u8, abs_path: []const u8, entry_name: []const u8, kind: std.Io.File.Kind) bool {
+    if (kind == .directory) {
+        for (always_ignored_dirs) |d| {
+            if (std.mem.eql(u8, entry_name, d)) return true;
+        }
+    }
+
     if (self.lines.items.len == 0) return false;
 
     const rel_unix = relPathUnix(project_root_abs, abs_path);

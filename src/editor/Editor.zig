@@ -27,6 +27,7 @@ pub const Settings = @import("Settings.zig");
 pub const Dialogs = @import("dialogs/Dialogs.zig");
 
 pub const Keybinds = @import("Keybinds.zig");
+const KeybindSettings = @import("KeybindSettings.zig");
 
 const workbench_mod = @import("workbench");
 const text_mod = @import("text");
@@ -108,8 +109,12 @@ keymap: @import("keymap/keymap.zig").Keymap = .{},
 /// Parsed `keybinds.zon`. Held because `keymap` borrows its command-id and owner-id strings —
 /// it must outlive the keymap and is replaced wholesale on every rebuild.
 keybinds_overrides: ?@import("keymap/keymap.zig").zon.File = null,
+/// Cached `Keymap.conflicts()` result from the last rebuild — owned, freed on next rebuild.
+keybind_conflicts: ?[]@import("keymap/keymap.zig").Conflict = null,
 /// Which default keymap the shell starts from.
 keybind_profile: Keybinds.Profile = .vscode,
+/// VSCode-style Quick Open / command palette overlay.
+command_palette: @import("CommandPalette.zig") = .{},
 
 /// User plugins that failed to load this session, so the UI can tell the author what
 /// went wrong instead of failing silently into the log. Populated by `loadUserPlugins`;
@@ -1142,8 +1147,9 @@ fn setPluginEnabledPersisted(editor: *Editor, id: []const u8, enabled: bool) !vo
 
 /// Rebuild the whole window keybind map from scratch: shell binds + every *currently
 /// registered* plugin's `contributeKeybinds`. Used after a plugin is unregistered so its
-/// binds (whose key strings live in the soon-to-be-`dlclose`d image) are dropped.
-fn rebuildKeybinds(editor: *Editor) void {
+/// binds (whose key strings live in the soon-to-be-`dlclose`d image) are dropped. Also
+/// called after the Keyboard Shortcuts pane writes `keybinds.zon`.
+pub fn rebuildKeybinds(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const window = dvui.currentWindow();
     window.keybinds.clearRetainingCapacity();
@@ -2979,10 +2985,17 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
 
         { // Plugin keybinds + per-frame overlays (e.g. pixel-art's radial menu)
-            for (editor.host.plugins.items) |plugin| {
-                plugin.tickKeybinds() catch |err| {
-                    dvui.log.err("Plugin keybind tick failed: {s}", .{@errorName(err)});
-                };
+            // While the palette owns the keyboard, plugin ticks must not run — otherwise a
+            // plugin's `matchBind` (e.g. pixi Export on the same chord as Quick Open) steals
+            // focus before the palette entry can claim it.
+            // Recording a chord in settings blocks these for the same reason the palette does:
+            // the keys are being captured, not invoked.
+            if (!editor.command_palette.open and !KeybindSettings.isRecording()) {
+                for (editor.host.plugins.items) |plugin| {
+                    plugin.tickKeybinds() catch |err| {
+                        dvui.log.err("Plugin keybind tick failed: {s}", .{@errorName(err)});
+                    };
+                }
             }
             Keybinds.tick() catch {
                 dvui.log.err("Failed to tick hotkeys", .{});
@@ -2993,6 +3006,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     dvui.log.err("Plugin overlay draw failed: {s}", .{@errorName(err)});
                 };
             }
+
+            editor.command_palette.draw(editor);
         }
 
         // Arms the launch update toast once the background check reports a newer
@@ -3386,6 +3401,7 @@ pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
         fizzy.app.allocator.free(folder);
     }
     editor.folder = try fizzy.app.allocator.dupe(u8, path);
+    editor.command_palette.invalidate();
     try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
     if (editor.host.firstVisibleSidebarView()) |view| {
         editor.host.setActiveSidebarView(view.id);
@@ -4297,6 +4313,16 @@ pub fn deinit(editor: *Editor) !void {
     // loop above) persists the project and frees its own state + packer.
 
     editor.ignore.deinit(fizzy.app.allocator);
+
+    if (editor.keybind_conflicts) |c| {
+        fizzy.app.allocator.free(c);
+        editor.keybind_conflicts = null;
+    }
+    if (editor.keybinds_overrides) |*f| {
+        f.deinit(fizzy.app.allocator);
+        editor.keybinds_overrides = null;
+    }
+    editor.keymap.deinit(fizzy.app.allocator);
 
     if (editor.folder) |folder| fizzy.app.allocator.free(folder);
     editor.arena.deinit();

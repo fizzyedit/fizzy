@@ -44,6 +44,52 @@ pub fn treeRowIconOptions(over: dvui.Options) dvui.Options {
     return defaults.override(over);
 }
 
+const fuzzy = @import("fuzzy.zig");
+
+/// Draw `text` as a single-line label, tinting the bytes `query` matched with the theme
+/// highlight colour — same treatment as the file-tree filter, settings search, and plugin store.
+///
+/// Falls back to a plain `dvui.label` when the query is empty or nothing matched. `plain`
+/// should match how the row was scored (`false` for paths, `true` for bare names/titles).
+pub fn labelHighlighted(
+    src: std.builtin.SourceLocation,
+    text: []const u8,
+    query: *const fuzzy.Query,
+    plain: bool,
+    opts: dvui.Options,
+) void {
+    const color = opts.color(.text);
+    if (query.isEmpty()) {
+        dvui.label(src, "{s}", .{text}, opts);
+        return;
+    }
+
+    var buf: [fuzzy.highlight_buf_len]usize = undefined;
+    const hits = fuzzy.highlight(text, query, &buf, .{ .plain = plain });
+    if (hits.len == 0) {
+        dvui.label(src, "{s}", .{text}, opts);
+        return;
+    }
+
+    var tl = dvui.textLayout(src, .{ .break_lines = false }, opts.override(.{ .background = false }));
+    defer tl.deinit();
+
+    const matched = dvui.themeGet().color(.highlight, .fill);
+    var i: usize = 0;
+    var h: usize = 0;
+    while (i < text.len) {
+        if (h < hits.len and hits[h] == i) {
+            const start = i;
+            while (h < hits.len and hits[h] == i) : (h += 1) i += 1;
+            tl.addText(text[start..i], .{ .color_text = matched });
+        } else {
+            const start = i;
+            i = if (h < hits.len) hits[h] else text.len;
+            tl.addText(text[start..i], .{ .color_text = color });
+        }
+    }
+}
+
 /// Reserve one tree-row glyph slot: a box of exactly `treeRowGlyphSize()`, into which the caller
 /// draws a caret, an icon, an image, or a letter.
 ///

@@ -352,18 +352,35 @@ var filter_index_stale: bool = true;
 const filter_index_max_files: usize = 200_000;
 const filter_index_max_depth: usize = 32;
 
+/// Hard cap on drawn filtered rows. Every row is a real tree widget — an id, an icon, a
+/// run-split highlighted label — so the list length is a per-frame cost, not just a scroll
+/// length. Uncapped, a one-letter query over a large project matched nearly the whole index
+/// and drew tens of thousands of rows per frame, which froze the app. Past a few hundred hits
+/// the ranking is noise anyway; the answer is to type another character.
+const filter_max_rows: usize = 300;
+
+/// Last ranking, reused while neither the query nor the index has changed. Without this the
+/// whole index is re-scored on every frame the explorer draws, not just on each keystroke.
+var filter_cache_query: []u8 = &.{};
+var filter_cache_rows: std.ArrayListUnmanaged(SimpleEntry) = .empty;
+var filter_cache_valid: bool = false;
+
 /// Drop the cached path index. Called when the filter closes and whenever this module creates,
 /// deletes, renames, or moves something — those are the only mutations that happen while the
 /// explorer is open, and re-walking on the next keystroke is cheap enough to not need finer
 /// invalidation.
 pub fn invalidateFilterIndex() void {
     filter_index_stale = true;
+    filter_cache_valid = false;
 }
 
 fn freeFilterIndex() void {
     const gpa = runtime.allocator();
     for (filter_index.items) |p| gpa.free(p);
     filter_index.clearRetainingCapacity();
+    // Cached rows borrow the index strings.
+    filter_cache_valid = false;
+    filter_cache_rows.clearRetainingCapacity();
 }
 
 pub fn deinitFilterIndex() void {
@@ -373,6 +390,9 @@ pub fn deinitFilterIndex() void {
     if (filter_index_root.len > 0) gpa.free(filter_index_root);
     filter_index_root = &.{};
     filter_index_stale = true;
+    filter_cache_rows.deinit(gpa);
+    if (filter_cache_query.len > 0) gpa.free(filter_cache_query);
+    filter_cache_query = &.{};
 }
 
 /// Rebuild the index for `root` if it's missing, stale, or was built for a different project.
@@ -438,6 +458,13 @@ fn rankedFilterRows(root_directory: []const u8, filter_text: []const u8) []const
     var query = fuzzy.Query.init(filter_text);
     if (query.isEmpty()) return &.{};
 
+    // Ranking depends only on the query and the index, and both change far less often than
+    // frames do — the explorer redraws on hover, scroll, animation, every peer widget.
+    if (filter_cache_valid and std.mem.eql(u8, filter_cache_query, filter_text)) {
+        return filter_cache_rows.items;
+    }
+
+    const gpa = runtime.allocator();
     const arena = dvui.currentWindow().arena();
     const Hit = fuzzy.Ranked(usize);
     var hits: std.ArrayListUnmanaged(Hit) = .empty;
@@ -450,16 +477,25 @@ fn rankedFilterRows(root_directory: []const u8, filter_text: []const u8) []const
     }
     fuzzy.sort(usize, hits.items);
 
-    var rows: std.ArrayListUnmanaged(SimpleEntry) = .empty;
+    // Rows borrow the index strings, so the cache lives exactly as long as the index does —
+    // `freeFilterIndex` drops it.
+    filter_cache_rows.clearRetainingCapacity();
     for (hits.items) |hit| {
+        if (filter_cache_rows.items.len >= filter_max_rows) break;
         const abs_path = filter_index.items[hit.item];
-        rows.append(arena, .{
+        filter_cache_rows.append(gpa, .{
             .name = std.fs.path.basename(abs_path),
             .kind = .file,
             .dir = std.fs.path.dirname(abs_path) orelse root_directory,
         }) catch break;
     }
-    return rows.items;
+
+    if (filter_cache_query.len > 0) gpa.free(filter_cache_query);
+    filter_cache_query = gpa.dupe(u8, filter_text) catch &.{};
+    // A failed dupe just means the next frame re-ranks; never claim a cache we can't key.
+    filter_cache_valid = filter_cache_query.len == filter_text.len;
+
+    return filter_cache_rows.items;
 }
 
 /// One row to draw. `dir` is normally null — the row's parent directory is whichever directory
