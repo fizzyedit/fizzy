@@ -129,12 +129,15 @@ fn hasPaste(editor: *Editor) bool {
     return editor.activeDocHasCommand("paste");
 }
 
+/// Mirrors `Keybinds.cmdCopyEnabled`/`cmdPasteEnabled`: the document owner reports its verb
+/// enabled only while its own editor holds focus, so a focused non-document text input is the
+/// other case where Edit > Copy/Paste still does something (`Keybinds.clipboardVerb`).
 fn copyEnabled(editor: *Editor) bool {
-    return editor.activeDocCommandEnabled("copy");
+    return editor.activeDocCommandEnabled("copy") or editor.text_input_focused;
 }
 
 fn pasteEnabled(editor: *Editor) bool {
-    return editor.activeDocCommandEnabled("paste");
+    return editor.activeDocCommandEnabled("paste") or editor.text_input_focused;
 }
 
 fn explorerTitle(editor: *Editor) [:0]const u8 {

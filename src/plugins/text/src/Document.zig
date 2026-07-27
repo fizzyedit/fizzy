@@ -37,6 +37,14 @@ unsaved: bool = false,
 /// widget instance — have somewhere durable to read "what's currently selected" from.
 sel_start: usize = 0,
 sel_end: usize = 0,
+/// Whether this document's `TextEntryWidget` held dvui keyboard focus as of the last draw,
+/// mirrored alongside the selection above. The shell routes a clipboard verb to the active
+/// document only while the document's owner reports that verb enabled, which is how it tells
+/// "focus is in the editor" from "focus is in some other text input" (a search box, the Output
+/// Panel) without knowing anything about widget ownership — see `Keybinds.clipboardVerb`. A
+/// document that isn't drawn this frame (background tab) keeps its last value, which is
+/// correct: it can't be the active document *and* undrawn.
+editor_focused: bool = false,
 /// Selection the next `TextEditor.draw` should install, set by Paste/Undo/Redo (which all
 /// edit `text` from outside the widget's own frame) and consumed once. A full range rather
 /// than a bare offset so undo can restore what *was* selected — undoing "type over a

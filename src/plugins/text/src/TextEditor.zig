@@ -277,6 +277,10 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
 
     doc.sel_start = te.textLayout.selection.start;
     doc.sel_end = te.textLayout.selection.end;
+    // Read before `te.deinit()` below, same as the selection: the shell's Copy/Paste routing
+    // asks the owner whether the verb is enabled, and this is the owner's answer to "is focus
+    // mine?" (see `Document.editor_focused`).
+    doc.editor_focused = dvui.focusedWidgetId() == te.data().id;
 
     const text_changed = te.text_changed;
     // `si` is a pointer into dvui's persistent per-widget-id data store (not a value owned by

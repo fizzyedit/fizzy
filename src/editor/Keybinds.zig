@@ -194,21 +194,23 @@ fn cmdRedo(state: *anyopaque) anyerror!void {
 /// the command palette, where no such event exists.
 var running_from_key_event: bool = false;
 
-/// Copy/Paste reach both the active document and whatever widget holds dvui keyboard focus.
+/// Copy/Paste must reach exactly one target: the active document's editor, or some other
+/// focused widget (Output Panel, a settings filter, a plugin search box) — never both.
 ///
-/// An earlier attempt gave a focused text input priority and skipped the document entirely, on
-/// the theory that a focused search box should win over an open file. That is wrong for the
-/// case that matters most: in the text editor the focused text input **is** the active
-/// document's editor, so "the widget wins" skipped the document command, and the widget itself
-/// relies on the shell running that command rather than handling the chord on its own. Copy and
-/// Paste stopped working in the text editor entirely.
+/// The discriminator is "does keyboard focus belong to the active document", which the shell
+/// cannot answer on its own: `dvui.wantTextInput` (via `Editor.text_input_focused`) reports that
+/// *a* text input has focus, not which document it belongs to. The document's owner does know,
+/// and its command enablement is already the channel for owner-side answers — so the routing is
+/// a plugin-side convention rather than any new SDK surface:
 ///
-/// Distinguishing "focus is inside the active document" from "focus is some other widget" needs
-/// ownership information the shell doesn't have — `dvui.wantTextInput` reports that *a* text
-/// input has focus, not which document it belongs to. Until a widget can declare its owning
-/// document, running both is the behaviour that works: the document copies its selection, and
-/// the synthetic event reaches a focused non-document widget (Output Panel, a plugin search
-/// box). It is a no-op for a focused document editor, which already handled it.
+/// > A document plugin reports `copy`/`paste` enabled only while its own editor holds keyboard
+/// > focus (in-tree: `text`; out-of-tree: pixi).
+///
+/// Hence the order below. An enabled document verb means focus is in that document, so it wins
+/// outright. Otherwise a focused text input is some other widget's, and the synthetic event is
+/// how it gets the chord. The last clause is the safety net for a document plugin that has *not*
+/// adopted the convention (no `isEnabled`, or one that only tracks selection): it still gets the
+/// verb, preserving the old behaviour rather than silently losing copy in that plugin.
 ///
 /// The forwarding stays conditional. On macOS `cmd+c` never arrives as an SDL key event —
 /// AppKit matches the menu's key equivalent first — so the event must be synthesized. Elsewhere
@@ -216,14 +218,22 @@ var running_from_key_event: bool = false;
 /// make the widget act twice. Menu clicks and palette invocations carry no key event anywhere,
 /// so they always synthesize.
 fn clipboardVerb(editor: *Editor, comptime bind: []const u8) anyerror!void {
-    if (editor.activeDoc() != null) {
-        if (comptime std.mem.eql(u8, bind, "copy")) {
-            try editor.copy();
-        } else {
-            try editor.paste();
-        }
+    if (editor.activeDocCommandEnabled(bind)) return runDocumentClipboardVerb(editor, bind);
+
+    if (editor.text_input_focused) {
+        if (!running_from_key_event) try editor.forwardKeybindToFocusedWidget(bind);
+        return;
     }
-    if (!running_from_key_event) try editor.forwardKeybindToFocusedWidget(bind);
+
+    if (editor.activeDoc() != null) try runDocumentClipboardVerb(editor, bind);
+}
+
+fn runDocumentClipboardVerb(editor: *Editor, comptime bind: []const u8) anyerror!void {
+    if (comptime std.mem.eql(u8, bind, "copy")) {
+        try editor.copy();
+    } else {
+        try editor.paste();
+    }
 }
 
 fn cmdCopy(state: *anyopaque) anyerror!void {
@@ -250,11 +260,17 @@ fn cmdRedoEnabled(state: *anyopaque) bool {
     const doc = editorFromState(state).activeDoc() orelse return false;
     return doc.owner.canRedo(doc);
 }
+/// Enabled when *either* target of `clipboardVerb` can act: the active document, or a focused
+/// text input that the synthetic event would reach. Gating on the document alone would grey out
+/// Copy in the palette exactly when focus sits in a search box, which is when the fallback path
+/// is the whole point.
 fn cmdCopyEnabled(state: *anyopaque) bool {
-    return editorFromState(state).activeDocCommandEnabled("copy");
+    const editor = editorFromState(state);
+    return editor.activeDocCommandEnabled("copy") or editor.text_input_focused;
 }
 fn cmdPasteEnabled(state: *anyopaque) bool {
-    return editorFromState(state).activeDocCommandEnabled("paste");
+    const editor = editorFromState(state);
+    return editor.activeDocCommandEnabled("paste") or editor.text_input_focused;
 }
 fn cmdDeleteSelectionEnabled(state: *anyopaque) bool {
     return editorFromState(state).activeDocCommandEnabled("deleteSelection");

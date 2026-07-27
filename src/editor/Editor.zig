@@ -3340,7 +3340,14 @@ pub fn close(app: *App, editor: *Editor) void {
     }
 }
 
-pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
+/// The single choke point every folder open funnels through (CLI argv, menus, recents, the
+/// SDK's `Host.setProjectFolder`), so `path` is canonicalized here once — plugins, recents and
+/// anything deriving a key from `editor.folder` (a language server's `rootUri`, notably) then
+/// can't disagree about how the same directory is spelled. See `fizzy.paths.normalize`.
+pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
+    const path = try fizzy.paths.normalize(fizzy.app.allocator, path_in);
+    defer fizzy.app.allocator.free(path);
+
     if (editor.folder) |folder| {
         editor.ignore.deinit(fizzy.app.allocator);
         for (editor.host.plugins.items) |plugin| plugin.onFolderClose();

@@ -99,6 +99,7 @@ pub fn register(host: *sdk.Host) !void {
         .owner = &plugin,
         .title = "Paste",
         .run = cmdPaste,
+        .isEnabled = cmdPasteEnabled,
     });
     try host.registerCommand(.{
         .id = sdk.Plugin.commandId("text", "format"),
@@ -322,15 +323,25 @@ fn canRedoDocument(_: *anyopaque, handle: DocHandle) bool {
 }
 
 // ---- copy / paste commands -----------------------------------------------------
+//
+// Both report enabled only while this editor holds keyboard focus. That is the shell's
+// discriminator for routing a clipboard verb here versus to another focused text input — a
+// search box, the Output Panel — which it otherwise has no way to tell apart (see
+// `Keybinds.clipboardVerb` in the shell, and `Document.editor_focused`). Reporting enabled
+// while focus is elsewhere would make Copy in that search box copy this document instead.
 
 fn cmdCopyEnabled(state: *anyopaque) bool {
     const doc = activeTextDoc(state) orelse return false;
-    return doc.sel_start != doc.sel_end;
+    return doc.editor_focused and doc.sel_start != doc.sel_end;
 }
 fn cmdCopy(state: *anyopaque) anyerror!void {
     const doc = activeTextDoc(state) orelse return;
     if (doc.sel_start == doc.sel_end) return;
     dvui.clipboardTextSet(doc.text.items[doc.sel_start..doc.sel_end]);
+}
+fn cmdPasteEnabled(state: *anyopaque) bool {
+    const doc = activeTextDoc(state) orelse return false;
+    return doc.editor_focused;
 }
 fn cmdPaste(state: *anyopaque) anyerror!void {
     const doc = activeTextDoc(state) orelse return;
