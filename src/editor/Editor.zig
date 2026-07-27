@@ -28,6 +28,7 @@ pub const Dialogs = @import("dialogs/Dialogs.zig");
 
 pub const Keybinds = @import("Keybinds.zig");
 const KeybindSettings = @import("KeybindSettings.zig");
+pub const menu_model = @import("menu_model.zig");
 
 const workbench_mod = @import("workbench");
 const text_mod = @import("text");
@@ -135,6 +136,15 @@ infobar: Infobar,
 
 /// The root folder that will be searched for files and a .fizproject file
 folder: ?[]const u8 = null,
+
+/// Whether a text-input widget held keyboard focus at the end of the last frame.
+///
+/// `dvui.wantTextInput` is the cross-cutting signal — dvui's own `TextEntryWidget`, the text
+/// plugin's fork, and any plugin entry all call it on frames they have focus — but it is reset
+/// by `Window.begin` and filled in as widgets draw, so it can only be read as last frame's
+/// answer. That is fine for deciding who owns a clipboard verb: focus doesn't change between
+/// the keystroke and the frame that handles it.
+text_input_focused: bool = false,
 /// From `.fizignore` (preferred) or `.gitignore` at the project root; used by the Files explorer.
 ignore: IgnoreRules = .{},
 
@@ -164,7 +174,8 @@ window_opacity: f32 = 1.0,
 /// target on the first frame" so there is no fade at launch.
 window_opacity_anim: f32 = -1.0,
 
-pending_native_menu_actions: [16]fizzy.backend.NativeMenuAction = undefined,
+/// Menu-bar clicks waiting for a safe point in the frame. Each is a `menu_model` tag.
+pending_native_menu_actions: [16]usize = undefined,
 pending_native_menu_actions_len: u8 = 0,
 
 /// Same queue/flush shape as `pending_native_menu_actions`, but for the generic macOS
@@ -1465,10 +1476,17 @@ pub fn postInit(editor: *Editor) !void {
     // Menu bar contributions (non-macOS in-app bar). The File/Edit draw bodies still live
     // in the shell's `Menu.zig`; a later step could move them into the workbench / pixel-art
     // plugins so those self-register. Order = bar order.
-    try editor.host.registerMenu(.{ .id = "workbench.menu.file", .title = "File", .draw = Menu.drawFileMenu });
-    try editor.host.registerMenu(.{ .id = "shell.menu.edit", .title = "Edit", .draw = Menu.drawEditMenu });
-    try editor.host.registerMenu(.{ .id = "shell.menu.view", .title = "View", .draw = Menu.drawViewMenu });
-    try editor.host.registerMenu(.{ .id = "shell.menu.help", .title = "Help", .draw = Menu.drawHelpMenu });
+    // One registration per `menu_model.menu_bar` entry, all pointing at the same generic
+    // renderer with the model node as `ctx`. There is no longer a per-menu draw function that
+    // could disagree with the macOS builder walking the same tree.
+    inline for (&menu_model.menu_bar) |*sub| {
+        try editor.host.registerMenu(.{
+            .id = sub.id,
+            .title = sub.title,
+            .draw = Menu.drawModelMenu,
+            .ctx = @constCast(@ptrCast(sub)),
+        });
+    }
 
     // Keybind contributions: each plugin registers its own binds into the window's
     // keybind map. The shell already registered its global/navigation/region binds
@@ -2551,6 +2569,20 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
     }
 
+    if (fizzy.backend.pollPendingAbout()) {
+        // The app menu's "About fizzy" is AppKit's own item, so it has no model tag.
+        editor.host.runCommand("fizzy.about") catch |err| {
+            dvui.log.err("about command failed: {s}", .{@errorName(err)});
+        };
+    }
+    if (fizzy.backend.pollPendingRecentFolder()) |i| {
+        if (i < editor.recents.folders.items.len) {
+            const folder = editor.recents.folders.items[i];
+            editor.setProjectFolder(folder) catch |err| {
+                dvui.log.err("open recent folder failed: {s}", .{@errorName(err)});
+            };
+        }
+    }
     if (fizzy.backend.pollPendingNativeMenuAction()) |action| {
         editor.queueNativeMenuAction(action);
     }
@@ -3036,6 +3068,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // out and removes itself when the timer expires.
     editor.drawSaveToasts();
 
+    // Every widget has drawn by now, so this is the frame's final answer about who holds
+    // keyboard focus. Read next frame by the clipboard commands.
+    editor.text_input_focused = dvui.currentWindow().textInputRequested() != null;
+
     editor.saveSettingsGuarded() catch |err| {
         dvui.log.err("Failed to autosave settings ({s})", .{@errorName(err)});
     };
@@ -3051,7 +3087,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     return .ok;
 }
 
-fn queueNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuAction) void {
+fn queueNativeMenuAction(editor: *Editor, action: usize) void {
     if (editor.pending_native_menu_actions_len >= editor.pending_native_menu_actions.len) {
         // If we ever overflow, drop the action rather than crashing.
         return;
@@ -3101,111 +3137,21 @@ fn flushQueuedNativeMenuItems(editor: *Editor) void {
     }
 }
 
-pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuAction) !void {
-    switch (action) {
-        .open_folder => {
-            if (comptime builtin.target.cpu.arch == .wasm32) {
-                Dialogs.WebFolderUnavailable.request();
-            } else if (try dvui.dialogNativeFolderSelect(dvui.currentWindow().arena(), .{ .title = "Open Project Folder" })) |folder| {
-                try editor.setProjectFolder(folder);
-            }
-        },
-        .open_files => {
-            if (comptime builtin.target.cpu.arch == .wasm32) {
-                fizzy.backend.showOpenFileDialog(
-                    struct {
-                        fn cb(_: ?[][:0]const u8) void {}
-                    }.cb,
-                    &.{},
-                    "",
-                    null,
-                );
-            } else if (try dvui.dialogNativeFileOpenMultiple(dvui.currentWindow().arena(), .{
-                .title = "Open Files...",
-            })) |files| {
-                for (files) |file| {
-                    _ = editor.openFilePath(file, editor.currentGroupingID()) catch {
-                        std.log.err("Failed to open file: {s}", .{file});
-                    };
-                }
-            }
-        },
-        .save => {
-            editor.save() catch {
-                std.log.err("Failed to save", .{});
-            };
-        },
-        .save_all => {
-            editor.saveAll() catch {
-                std.log.err("Failed to save all", .{});
-            };
-        },
-        .new_file => {
-            editor.requestNewFileDialog();
-        },
-        .save_as => {
-            editor.requestSaveAs();
-        },
-        .copy => {
-            if (editor.activeDoc() != null) {
-                editor.copy() catch {
-                    std.log.err("Failed to copy", .{});
-                };
-            }
-            // Also let whatever widget currently has keyboard focus handle it (Output Panel,
-            // a plugin search box, ...) — see `forwardKeybindToFocusedWidget`. Harmless no-op
-            // for a focused document editor, which already handled it above.
-            editor.forwardKeybindToFocusedWidget("copy") catch |err| {
-                dvui.log.err("Failed to forward copy to focused widget: {any}", .{err});
-            };
-        },
-        .paste => {
-            if (editor.activeDoc() != null) {
-                editor.paste() catch {
-                    std.log.err("Failed to paste", .{});
-                };
-            }
-            editor.forwardKeybindToFocusedWidget("paste") catch |err| {
-                dvui.log.err("Failed to forward paste to focused widget: {any}", .{err});
-            };
-        },
-        .undo => {
-            if (editor.activeDoc()) |doc| {
-                doc.owner.undo(doc) catch {
-                    std.log.err("Failed to undo", .{});
-                };
-            }
-        },
-        .redo => {
-            if (editor.activeDoc()) |doc| {
-                doc.owner.redo(doc) catch {
-                    std.log.err("Failed to redo", .{});
-                };
-            }
-        },
-        .toggle_explorer => {
-            // Use .closed, not paned.split_ratio — split_ratio is only valid during draw
-            if (editor.explorer.closed) {
-                editor.explorer.open();
-            } else {
-                editor.explorer.close();
-            }
-            // Native menu does not go through SDL events; request a frame so the paned animates immediately.
-            dvui.refresh(null, @src(), dvui.currentWindow().data().id);
-        },
-        .show_dvui_demo => {
-            dvui.Examples.show_demo_window = !dvui.Examples.show_demo_window;
-        },
-        .about, .check_for_updates => {
-            // Mirror the infobar fizzy button: the About dialog displays version, current
-            // update status, and a Check-for-Updates / Install button. Both menu items land
-            // here so the macOS Help → "Check for Updates…" path is congruent with the in-app affordance.
-            Dialogs.AboutFizzy.request();
-        },
-        .report_bug => {
-            _ = dvui.openURL(.{ .url = "https://github.com/fizzyedit/fizzy/issues" });
-        },
-    }
+/// Run the command a menu-bar item stands for.
+///
+/// This used to be a switch that reimplemented every action a third time (`Menu.zig` had its
+/// own inline copy, `Keybinds` had the command body), and the copies had drifted — the menu-bar
+/// Open Folder went through `fizzy.backend` while the command went straight to
+/// `dvui.dialogNative*`, which no-ops on web. The item now names a command and nothing else.
+pub fn handleNativeMenuAction(editor: *Editor, tag: usize) !void {
+    const item = menu_model.byTag(tag) orelse {
+        dvui.log.err("native menu tag {d} is not a model item", .{tag});
+        return;
+    };
+    const id = item.id;
+    editor.host.runCommand(id) catch |err| {
+        dvui.log.err("native menu command '{s}' failed: {s}", .{ id, @errorName(err) });
+    };
 }
 
 pub fn setTitlebarColor(editor: *Editor) void {
@@ -3403,6 +3349,8 @@ pub fn setProjectFolder(editor: *Editor, path: []const u8) !void {
     editor.folder = try fizzy.app.allocator.dupe(u8, path);
     editor.command_palette.invalidate();
     try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
+    // The dvui menu re-reads recents every frame; the macOS submenu is retained state.
+    fizzy.backend.rebuildNativeRecentFolders();
     if (editor.host.firstVisibleSidebarView()) |view| {
         editor.host.setActiveSidebarView(view.id);
     }
@@ -3906,7 +3854,7 @@ pub fn paste(editor: *Editor) !void {
 /// box, dvui's own text-selection widgets — never sees the raw keystroke at all, unlike on
 /// Windows/Linux where the un-marked-handled key event still reaches it normally. Synthesizing
 /// the event here routes it through the same per-widget handling those platforms already use.
-fn forwardKeybindToFocusedWidget(_: *Editor, name: []const u8) !void {
+pub fn forwardKeybindToFocusedWidget(_: *Editor, name: []const u8) !void {
     const cw = dvui.currentWindow();
     const kb = cw.keybinds.get(name) orelse return;
     const key = kb.key orelse return;
@@ -3917,7 +3865,19 @@ fn forwardKeybindToFocusedWidget(_: *Editor, name: []const u8) !void {
     if (kb.alt orelse false) mod.combine(.lalt);
     if (kb.command orelse false) mod.combine(.lcommand);
 
+    // `addEventKey` writes `Window.modifiers` as *persistent* state, not per-event: whatever the
+    // last key event carried is what the window reports as currently held until another key
+    // event replaces it. Injecting a lone key-down therefore leaves the whole app believing
+    // cmd/ctrl is held down forever — which is why pasting from the menu left documents stuck in
+    // ctrl-hover mode, underlining words and treating clicks as go-to-definition. On the real
+    // key path this never happens: the user's own key-up follows and clears it.
+    //
+    // So: send the matching release. Anything tracking press/release pairs sees a complete one,
+    // and because the release carries no modifiers, `addEventKey` resets the window's held-key
+    // state through dvui's own path — no reaching into `cw.modifiers` from out here. `.none` is
+    // the honest value: a menu click means nothing is physically held.
     _ = try cw.addEventKey(.{ .code = key, .action = .down, .mod = mod });
+    _ = try cw.addEventKey(.{ .code = key, .action = .up, .mod = .none });
 }
 
 pub fn deleteSelectedContents(editor: *Editor) void {

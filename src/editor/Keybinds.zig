@@ -26,6 +26,7 @@ pub const Keybinds = @This();
 
 const Editor = @import("Editor.zig");
 const KeybindSettings = @import("KeybindSettings.zig");
+const menu_model = @import("menu_model.zig");
 
 /// Register the shell's own global / navigation / region binds. File-management
 /// binds and pixel-art editing binds are contributed by the workbench and
@@ -95,10 +96,11 @@ fn editorFromState(state: *anyopaque) *Editor {
     return @ptrCast(@alignCast(state));
 }
 
-/// One shell action. `native_menu_on_macos` marks the commands macOS also fires through NSMenu
-/// (`FizzyNativeMenuAction`): SDL still delivers the same key event, so dispatching it here too
-/// would run the action twice. This preserves exactly the `builtin.os.tag != .macos` guards the
-/// old if-chain had, per action rather than in one lump.
+/// One shell action.
+///
+/// Whether macOS also fires this through NSMenu — which matters because SDL delivers the same
+/// key event and dispatching it here too would run the action twice — is no longer a field
+/// here. It is read off `native_menu_bindings`, the menu itself, so the two can't disagree.
 const ShellCommand = struct {
     id: []const u8,
     title: []const u8,
@@ -106,27 +108,31 @@ const ShellCommand = struct {
     bind: ?[]const u8,
     run: *const fn (state: *anyopaque) anyerror!void,
     isEnabled: ?*const fn (state: *anyopaque) bool = null,
-    native_menu_on_macos: bool = false,
 };
 
 const shell_commands = [_]ShellCommand{
-    .{ .id = "fizzy.openFolder", .title = "Open Folder…", .bind = "open_folder", .run = cmdOpenFolder, .native_menu_on_macos = true },
-    .{ .id = "fizzy.openFiles", .title = "Open Files…", .bind = "open_files", .run = cmdOpenFiles, .native_menu_on_macos = true },
-    .{ .id = "fizzy.newFile", .title = "New File…", .bind = "new_file", .run = cmdNewFile, .native_menu_on_macos = true },
-    .{ .id = "fizzy.save", .title = "Save", .bind = "save", .run = cmdSave, .native_menu_on_macos = true },
+    .{ .id = "fizzy.openFolder", .title = "Open Folder…", .bind = "open_folder", .run = cmdOpenFolder },
+    .{ .id = "fizzy.openFiles", .title = "Open Files…", .bind = "open_files", .run = cmdOpenFiles },
+    .{ .id = "fizzy.newFile", .title = "New File…", .bind = "new_file", .run = cmdNewFile },
+    .{ .id = "fizzy.save", .title = "Save", .bind = "save", .run = cmdSave },
     .{ .id = "fizzy.saveAs", .title = "Save As…", .bind = "save_as", .run = cmdSaveAs },
     .{ .id = "fizzy.saveAll", .title = "Save All", .bind = "save_all", .run = cmdSaveAll },
-    .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = cmdUndoEnabled, .native_menu_on_macos = true },
-    .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = cmdRedoEnabled, .native_menu_on_macos = true },
-    .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled, .native_menu_on_macos = true },
-    .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled, .native_menu_on_macos = true },
-    .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .native_menu_on_macos = true },
+    .{ .id = "fizzy.undo", .title = "Undo", .bind = "undo", .run = cmdUndo, .isEnabled = cmdUndoEnabled },
+    .{ .id = "fizzy.redo", .title = "Redo", .bind = "redo", .run = cmdRedo, .isEnabled = cmdRedoEnabled },
+    .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled },
+    .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled },
+    .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer },
     .{ .id = "fizzy.deleteSelection", .title = "Delete Selection", .bind = "delete_selection_contents", .run = cmdDeleteSelection, .isEnabled = cmdDeleteSelectionEnabled },
     .{ .id = "fizzy.accept", .title = "Accept", .bind = "activate", .run = cmdAccept, .isEnabled = cmdAcceptEnabled },
     .{ .id = "fizzy.cancel", .title = "Cancel", .bind = "cancel", .run = cmdCancel, .isEnabled = cmdCancelEnabled },
     // No dvui bind name — these are new, so their defaults come purely from the profile table.
     .{ .id = "fizzy.quickOpen", .title = "Go to File…", .bind = null, .run = cmdQuickOpen },
     .{ .id = "fizzy.commandPalette", .title = "Show All Commands", .bind = null, .run = cmdCommandPalette },
+    // Menu-bar-only actions. They had no command at all before Stage 1 — they existed solely as
+    // `NativeMenuAction` switch arms — so they were unreachable from the palette and unbindable.
+    .{ .id = "fizzy.showDvuiDemo", .title = "Show DVUI Demo", .bind = null, .run = cmdShowDvuiDemo },
+    .{ .id = "fizzy.about", .title = "About Fizzy", .bind = null, .run = cmdAbout },
+    .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug },
 };
 
 // Ids and bind names must both be unique: a duplicate id would make `Host.runCommand`
@@ -149,27 +155,19 @@ comptime {
     }
 }
 
-fn cmdOpenFolder(state: *anyopaque) anyerror!void {
-    const editor = editorFromState(state);
-    if (try dvui.dialogNativeFolderSelect(dvui.currentWindow().arena(), .{
-        .title = "Open Project Folder",
-    })) |folder| {
-        try editor.setProjectFolder(folder);
-    }
+// The canonical body for each shell action. Before Stage 1 of the menu unification these were
+// implemented up to three times — here, inline in `Menu.zig`, and again in
+// `Editor.handleNativeMenuAction` — and had already drifted: the menu-bar versions of Open
+// Folder / Open Files went through `fizzy.backend`, which has a wasm implementation, while
+// these went straight to `dvui.dialogNative*`, which silently no-ops on web. The backend route
+// is the one that survives.
+
+fn cmdOpenFolder(_: *anyopaque) anyerror!void {
+    fizzy.backend.showOpenFolderDialog(Editor.Workspace.setProjectFolderCallback, null);
 }
 
-fn cmdOpenFiles(state: *anyopaque) anyerror!void {
-    const editor = editorFromState(state);
-    if (try dvui.dialogNativeFileOpenMultiple(
-        dvui.currentWindow().arena(),
-        .{ .title = "Open Files..." },
-    )) |files| {
-        for (files) |file| {
-            _ = editor.openFilePath(file, editor.currentGroupingID()) catch {
-                std.log.err("Failed to open file: {s}", .{file});
-            };
-        }
-    }
+fn cmdOpenFiles(_: *anyopaque) anyerror!void {
+    fizzy.backend.showOpenFileDialog(Editor.Workspace.openFilesCallback, &.{}, "", null);
 }
 
 fn cmdNewFile(state: *anyopaque) anyerror!void {
@@ -190,11 +188,49 @@ fn cmdUndo(state: *anyopaque) anyerror!void {
 fn cmdRedo(state: *anyopaque) anyerror!void {
     try editorFromState(state).redo();
 }
+/// Set while `tick` is running a command because of a live key event. That event is never
+/// marked handled, so it goes on to reach the focused widget under its own steam — a clipboard
+/// command that also synthesized one would make the widget act twice. False for menu clicks and
+/// the command palette, where no such event exists.
+var running_from_key_event: bool = false;
+
+/// Copy/Paste reach both the active document and whatever widget holds dvui keyboard focus.
+///
+/// An earlier attempt gave a focused text input priority and skipped the document entirely, on
+/// the theory that a focused search box should win over an open file. That is wrong for the
+/// case that matters most: in the text editor the focused text input **is** the active
+/// document's editor, so "the widget wins" skipped the document command, and the widget itself
+/// relies on the shell running that command rather than handling the chord on its own. Copy and
+/// Paste stopped working in the text editor entirely.
+///
+/// Distinguishing "focus is inside the active document" from "focus is some other widget" needs
+/// ownership information the shell doesn't have — `dvui.wantTextInput` reports that *a* text
+/// input has focus, not which document it belongs to. Until a widget can declare its owning
+/// document, running both is the behaviour that works: the document copies its selection, and
+/// the synthetic event reaches a focused non-document widget (Output Panel, a plugin search
+/// box). It is a no-op for a focused document editor, which already handled it.
+///
+/// The forwarding stays conditional. On macOS `cmd+c` never arrives as an SDL key event —
+/// AppKit matches the menu's key equivalent first — so the event must be synthesized. Elsewhere
+/// the real event is still in flight (dispatch doesn't mark it handled) and synthesizing would
+/// make the widget act twice. Menu clicks and palette invocations carry no key event anywhere,
+/// so they always synthesize.
+fn clipboardVerb(editor: *Editor, comptime bind: []const u8) anyerror!void {
+    if (editor.activeDoc() != null) {
+        if (comptime std.mem.eql(u8, bind, "copy")) {
+            try editor.copy();
+        } else {
+            try editor.paste();
+        }
+    }
+    if (!running_from_key_event) try editor.forwardKeybindToFocusedWidget(bind);
+}
+
 fn cmdCopy(state: *anyopaque) anyerror!void {
-    try editorFromState(state).copy();
+    try clipboardVerb(editorFromState(state), "copy");
 }
 fn cmdPaste(state: *anyopaque) anyerror!void {
-    try editorFromState(state).paste();
+    try clipboardVerb(editorFromState(state), "paste");
 }
 fn cmdDeleteSelection(state: *anyopaque) anyerror!void {
     editorFromState(state).deleteSelectedContents();
@@ -239,7 +275,25 @@ fn cmdCommandPalette(state: *anyopaque) anyerror!void {
 
 fn cmdToggleExplorer(state: *anyopaque) anyerror!void {
     const editor = editorFromState(state);
+    // `.closed`, not `paned.split_ratio` — the latter is only valid during draw.
     if (editor.explorer.closed) editor.explorer.open() else editor.explorer.close();
+    // A native menu click doesn't arrive as an SDL event, so without this nothing requests the
+    // frame the paned needs to animate.
+    dvui.refresh(null, @src(), dvui.currentWindow().data().id);
+}
+
+fn cmdShowDvuiDemo(_: *anyopaque) anyerror!void {
+    dvui.Examples.show_demo_window = !dvui.Examples.show_demo_window;
+}
+
+/// About also carries the update status and the Check-for-Updates / Install button, which is
+/// why Help → "Check for Updates…" is this same command.
+fn cmdAbout(_: *anyopaque) anyerror!void {
+    Editor.Dialogs.AboutFizzy.request();
+}
+
+fn cmdReportBug(_: *anyopaque) anyerror!void {
+    _ = dvui.openURL(.{ .url = "https://github.com/fizzyedit/fizzy/issues" });
 }
 
 /// Register every shell action in the Host command registry. Called once during `Editor.init`.
@@ -372,26 +426,6 @@ fn shellCommandForBind(name: []const u8) ?ShellCommand {
     return null;
 }
 
-/// Shell command ↔ menu-bar item, for the items whose chord the user can rebind. Only these
-/// need syncing: `dispatch` skips exactly this set on macOS (the native menu already ran them),
-/// so their `NSMenu` key equivalent *is* the dispatch, not just the label.
-const native_menu_bindings = [_]struct {
-    command: []const u8,
-    action: fizzy.backend.NativeMenuAction,
-}{
-    .{ .command = "fizzy.openFolder", .action = .open_folder },
-    .{ .command = "fizzy.openFiles", .action = .open_files },
-    .{ .command = "fizzy.newFile", .action = .new_file },
-    .{ .command = "fizzy.save", .action = .save },
-    .{ .command = "fizzy.saveAs", .action = .save_as },
-    .{ .command = "fizzy.saveAll", .action = .save_all },
-    .{ .command = "fizzy.copy", .action = .copy },
-    .{ .command = "fizzy.paste", .action = .paste },
-    .{ .command = "fizzy.undo", .action = .undo },
-    .{ .command = "fizzy.redo", .action = .redo },
-    .{ .command = "fizzy.toggleExplorer", .action = .toggle_explorer },
-};
-
 /// The AppKit key-equivalent character for a key, or null for keys a plain `NSMenuItem`
 /// shortcut can't express (function keys, arrows, keypad). Lowercase throughout: AppKit takes
 /// shift from the modifier mask, and an uppercase character would demand shift on its own.
@@ -411,29 +445,32 @@ fn nsKeyEquivalent(key: keymap.Key) ?[]const u8 {
     };
 }
 
-/// Push each menu-bar item's chord from the keymap onto the `NSMenuItem`. Called at the end of
-/// every keymap rebuild, so a rebind in the settings pane takes effect immediately instead of
-/// only after a restart — and, just as importantly, the *old* chord stops working.
-fn syncNativeMenuShortcuts(editor: *Editor) void {
+/// Push each menu-bar item's chord from the keymap onto its `NSMenuItem`, so a rebind takes
+/// effect immediately — and, just as importantly, the old chord stops working. These items *are*
+/// the dispatch path for their commands on macOS, not just a label.
+///
+/// Walks `menu_model.flat_commands`, whose index is the item's tag. There is no separate
+/// command↔item table to keep in step any more.
+pub fn syncNativeMenuShortcuts(editor: *Editor) void {
     if (comptime builtin.os.tag != .macos) return;
 
-    for (native_menu_bindings) |nb| {
-        const binding = bestBinding(editor, nb.command) orelse {
+    for (menu_model.flat_commands, 0..) |item, tag| {
+        const binding = bestBinding(editor, item.id) orelse {
             // Unbound: clear the shortcut so a stale one can't keep firing.
-            fizzy.backend.setNativeMenuShortcut(nb.action, null, 0);
+            fizzy.backend.setNativeMenuShortcut(tag, null, 0);
             continue;
         };
 
         // A two-stroke chord has nowhere to live on a menu item. Clearing is the honest
         // outcome: `dispatch` stops skipping the command once the menu no longer claims it.
         if (binding.stroke.second != null) {
-            fizzy.backend.setNativeMenuShortcut(nb.action, null, 0);
+            fizzy.backend.setNativeMenuShortcut(tag, null, 0);
             continue;
         }
 
         const chord = binding.stroke.first;
         const key = nsKeyEquivalent(chord.key) orelse {
-            fizzy.backend.setNativeMenuShortcut(nb.action, null, 0);
+            fizzy.backend.setNativeMenuShortcut(tag, null, 0);
             continue;
         };
 
@@ -442,7 +479,7 @@ fn syncNativeMenuShortcuts(editor: *Editor) void {
         if (chord.mods.ctrl) mask |= fizzy.backend.modifier_control;
         if (chord.mods.alt) mask |= fizzy.backend.modifier_option;
         if (chord.mods.shift) mask |= fizzy.backend.modifier_shift;
-        fizzy.backend.setNativeMenuShortcut(nb.action, key, mask);
+        fizzy.backend.setNativeMenuShortcut(tag, key, mask);
     }
 }
 
@@ -459,27 +496,20 @@ fn bestBinding(editor: *Editor, command: []const u8) ?keymap.Binding {
     return best;
 }
 
-/// Whether a macOS menu item currently owns this command's chord. False once the chord is one
-/// AppKit can't express as a key equivalent (a two-stroke chord, a function key), in which case
-/// `dispatch` has to handle it after all — otherwise nothing would.
+/// Whether a macOS menu item currently owns this command's chord, so `dispatch` doesn't run it
+/// a second time. False once the chord is one AppKit can't express as a key equivalent (a
+/// two-stroke chord, a function key), in which case `dispatch` has to handle it after all —
+/// otherwise nothing would.
 pub fn nativeMenuOwnsChord(editor: *Editor, id: []const u8) bool {
     if (comptime builtin.os.tag != .macos) return false;
-    if (!isNativeMenuCommandOnMacOS(id)) return false;
-    for (native_menu_bindings) |nb| {
-        if (!std.mem.eql(u8, nb.command, id)) continue;
-        const binding = bestBinding(editor, id) orelse return false;
-        if (binding.stroke.second != null) return false;
-        return nsKeyEquivalent(binding.stroke.first.key) != null;
-    }
-    // Flagged as a native-menu command but not in the sync table — the menu still owns it.
-    return true;
+    if (!menu_model.contains(id)) return false;
+    const binding = bestBinding(editor, id) orelse return false;
+    if (binding.stroke.second != null) return false;
+    return nsKeyEquivalent(binding.stroke.first.key) != null;
 }
 
 pub fn isNativeMenuCommandOnMacOS(id: []const u8) bool {
-    inline for (shell_commands) |c| {
-        if (std.mem.eql(u8, c.id, id)) return c.native_menu_on_macos;
-    }
-    return false;
+    return menu_model.contains(id);
 }
 
 /// Rebuild `editor.keymap` from the finished `dvui.Window.keybinds` map. Called at the end of
@@ -624,6 +654,10 @@ pub const bind_override_prefix = "bind.";
 
 /// The dvui bind name a shell command's key should be mirrored onto, so rebinding e.g.
 /// `fizzy.save` also updates the accelerator `Menu.zig` renders next to "Save".
+pub fn bindNameForCommand(id: []const u8) ?[]const u8 {
+    return shellBindForCommand(id);
+}
+
 fn shellBindForCommand(id: []const u8) ?[]const u8 {
     inline for (shell_commands) |c| {
         if (std.mem.eql(u8, c.id, id)) return c.bind;
@@ -678,6 +712,9 @@ fn currentContext(editor: *Editor) keymap.When {
         .editor_focused = editor.activeDoc() != null,
         .explorer_focused = !editor.explorer.closed,
         .modal_open = editor.command_palette.open,
+        // Declared by `keymap.When` since it was written but never filled in, so any `when`
+        // clause mentioning text input could not match. `dvui.wantTextInput` is the signal.
+        .text_input_focused = editor.text_input_focused,
     };
 }
 
@@ -729,6 +766,11 @@ pub fn tick() !void {
                             !std.mem.eql(u8, id, "fizzy.undo") and
                             !std.mem.eql(u8, id, "fizzy.redo")) continue;
 
+                        // The event that triggered this is still live and unmarked, so it will
+                        // go on to reach whatever widget has focus by itself. Clipboard
+                        // commands need to know that, or they synthesize a second one.
+                        running_from_key_event = true;
+                        defer running_from_key_event = false;
                         editor.host.runCommand(id) catch |err| {
                             dvui.log.err("command '{s}' failed: {s}", .{ id, @errorName(err) });
                         };

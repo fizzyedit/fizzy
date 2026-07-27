@@ -10,6 +10,7 @@ const singleton = @import("singleton.zig");
 const window_layout = @import("window_layout.zig");
 const Constants = @import("../editor/Constants.zig");
 const KeybindSettings = @import("../editor/KeybindSettings.zig");
+const menu_model = @import("../editor/menu_model.zig");
 
 // AppKit geometry types for NSView frame/bounds (same layout as Foundation).
 const NSPoint = extern struct { x: f64, y: f64 };
@@ -433,42 +434,23 @@ const NSEventModifierFlagControl: c_ulong = 1 << 19;
 pub const DialogFileFilter = sdl3.SDL_DialogFileFilter;
 
 // macOS native menu bar (top bar): action ids match FizzyMenuTarget.m
-pub const NativeMenuAction = enum(c_int) {
-    open_folder = 0,
-    open_files = 1,
-    save = 2,
-    copy = 3,
-    paste = 4,
-    undo = 5,
-    redo = 6,
-    toggle_explorer = 8,
-    show_dvui_demo = 9,
-    save_as = 10,
-    new_file = 11,
-    about = 13,
-    check_for_updates = 14,
-    report_bug = 15,
-    save_all = 16,
-};
 
 /// Every fixed menu-bar item, by the action it performs, kept so a rebind can push the new
 /// chord onto the item. Without this the `NSMenu` key equivalent stays whatever it was built
 /// with: `Keybinds.tick` deliberately skips these commands on macOS (the native menu already
 /// ran them), so after rebinding, the new chord had nothing dispatching it and the old one kept
 /// working. See `setNativeMenuShortcut`.
-var native_menu_items: [@intFromEnum(NativeMenuAction.save_all) + 1]?objc.Object = @splat(null);
+var native_menu_items: [menu_model.flat_commands.len]?objc.Object = @splat(null);
 
-fn rememberNativeMenuItem(action: NativeMenuAction, item: objc.Object) void {
-    if (item.value == 0) return;
-    native_menu_items[@intCast(@intFromEnum(action))] = item;
-}
+
 
 /// Point a menu item at a different chord. `key` is the key-equivalent character (lowercase,
 /// as AppKit expects — the shift modifier is carried in the mask, not the case); passing null
 /// clears the shortcut, which is the right outcome for a chord AppKit can't express.
-pub fn setNativeMenuShortcut(action: NativeMenuAction, key: ?[]const u8, modifier_mask: c_ulong) void {
+pub fn setNativeMenuShortcut(tag: usize, key: ?[]const u8, modifier_mask: c_ulong) void {
     if (comptime builtin.os.tag != .macos) return;
-    const item = native_menu_items[@intCast(@intFromEnum(action))] orelse return;
+    if (tag >= native_menu_items.len) return;
+    const item = native_menu_items[tag] orelse return;
     const NSString = objc.getClass("NSString") orelse return;
 
     var buf: [8]u8 = undefined;
@@ -530,56 +512,69 @@ export fn FizzyNativeMenuInputBlocked() callconv(.c) bool {
     return KeybindSettings.isRecording();
 }
 
-export fn FizzyNativeMenuActionEnabled(id: c_int) callconv(.c) bool {
+export fn FizzyNativeMenuActionEnabled(tag: c_int) callconv(.c) bool {
     if (KeybindSettings.isRecording()) return false;
-    if (id < 0 or id > @intFromEnum(NativeMenuAction.save_all)) return true;
-    const action: NativeMenuAction = @enumFromInt(id);
-    switch (action) {
-        .save => {
-            const doc = fizzy.editor.activeDoc() orelse return false;
-            return doc.owner.isDirty(doc) or !doc.owner.documentHasRecognizedSaveExtension(doc);
-        },
-        .save_as => return fizzy.editor.activeDoc() != null,
-        .save_all => {
-            for (fizzy.editor.open_files.values()) |doc| {
-                if (doc.owner.isDirty(doc) and doc.owner.documentHasRecognizedSaveExtension(doc)) return true;
-            }
-            return false;
-        },
-        // Always enabled: Copy/Paste no longer only target the active document (see
-        // `Editor.forwardKeybindToFocusedWidget`) — they also reach whichever widget currently
-        // holds dvui keyboard focus (Output Panel, a plugin search box, ...), which this
-        // validator can't see (it runs outside `Window.begin`/`end`, per the doc comment above).
-        // Disabling the item here on the active-document-only condition would prevent the key
-        // equivalent from ever reaching those other widgets. The underlying handlers already
-        // no-op safely when there's nothing to copy/paste.
-        .copy, .paste => return true,
-        .undo => {
-            const doc = fizzy.editor.activeDoc() orelse return false;
-            return doc.owner.canUndo(doc);
-        },
-        .redo => {
-            const doc = fizzy.editor.activeDoc() orelse return false;
-            return doc.owner.canRedo(doc);
-        },
-        else => return true,
+    if (tag < 0) return true;
+    const item = menu_model.byTag(@intCast(tag)) orelse return true;
+    // Copy/Paste stay enabled here even when the active document can't do them: a disabled
+    // NSMenuItem does not perform its key equivalent, and on macOS that is the only way the
+    // chord reaches the app at all, including the focused widgets that handle it themselves.
+    if (item.native_always_enabled) return true;
+    // `visible` items that aren't visible are shown greyed rather than removed — rebuilding the
+    // retained NSMenu on every state change isn't worth it for the same information.
+    if (item.visible) |f| {
+        if (!f(fizzy.editor)) return false;
     }
+    const enabled = item.enabled orelse return true;
+    return enabled(fizzy.editor);
 }
 
-// Only referenced on macOS (from setupMacOSMenuBar).
-const fizzy_get_selector = if (builtin.os.tag == .macos) struct {
-    extern fn FizzyGetSelector(name: [*c]const u8) ?*anyopaque;
-    fn get(name: [*c]const u8) ?*anyopaque {
-        return FizzyGetSelector(name);
-    }
-}.get else struct {
-    fn get(_: [*c]const u8) ?*anyopaque {
-        return null;
-    }
-}.get;
+/// Current label for a model item, so state-dependent titles ("Show Explorer" / "Hide
+/// Explorer") track the app. AppKit menus are retained state; validation runs just before a
+/// menu displays, which is when this is called. The macOS View menu used to say "Show
+/// Explorer" permanently, because its title was baked in at construction.
+export fn FizzyNativeMenuItemTitle(tag: c_int) callconv(.c) ?[*:0]const u8 {
+    if (tag < 0) return null;
+    const item = menu_model.byTag(@intCast(tag)) orelse return null;
+    return switch (item.title) {
+        .static => null, // already correct; nothing to rewrite
+        .dynamic => |f| f(fizzy.editor).ptr,
+    };
+}
 
-// macOS trackpad pinch-to-zoom. NSEventTypeMagnify bypasses SDL3 entirely (SDL2's gesture
-// API was removed and never replaced), so an Obj-C local event monitor (see
+/// The app menu's "About fizzy", which AppKit creates rather than the model.
+export fn FizzyNativeMenuAboutAction() callconv(.c) void {
+    pending_native_menu_about.store(true, .release);
+}
+var pending_native_menu_about: std.atomic.Value(bool) = .init(false);
+
+/// A Recent Folders click. The index is into `editor.recents.folders`, newest last.
+export fn FizzyNativeRecentFolderAction(index: c_int) callconv(.c) void {
+    if (index < 0) return;
+    pending_native_recent_folder.store(index, .release);
+}
+var pending_native_recent_folder: std.atomic.Value(c_int) = .init(-1);
+
+/// Returns and clears a pending Recent Folders selection.
+pub fn pollPendingRecentFolder() ?usize {
+    const i = pending_native_recent_folder.swap(-1, .acq_rel);
+    if (i < 0) return null;
+    return @intCast(i);
+}
+
+/// `FizzyGetSelector` from `FizzyMenuTarget.m` — turns a selector name into a SEL without
+/// linking the Objective-C runtime here directly.
+extern fn FizzyGetSelector(name: [*:0]const u8) ?*anyopaque;
+
+fn fizzy_get_selector(name: [*:0]const u8) ?*anyopaque {
+    return FizzyGetSelector(name);
+}
+
+/// Returns and clears a pending app-menu About click.
+pub fn pollPendingAbout() bool {
+    return pending_native_menu_about.swap(false, .acq_rel);
+}
+
 // `objc/FizzyTrackpadGesture.m`) calls back here for each magnification delta. We accumulate
 // a single multiplicative ratio that the canvas widget drains and applies per frame.
 //
@@ -1294,6 +1289,11 @@ var native_file_menu: ?objc.Object = null;
 var native_edit_menu: ?objc.Object = null;
 var native_view_menu: ?objc.Object = null;
 var native_help_menu: ?objc.Object = null;
+/// Top-level NSMenus, indexed like `menu_model.menu_bar`.
+var native_submenus: [menu_model.menu_bar.len]?objc.Object = @splat(null);
+/// The Recent Folders submenu and the item carrying it, rebuilt as the recents list changes.
+var native_recent_folders_menu: ?objc.Object = null;
+var native_recent_folders_item: ?objc.Object = null;
 
 const DynamicTopLevelMenu = struct { item: objc.Object, menu: objc.Object };
 const DynamicLeafItem = struct { parent_menu: objc.Object, item: objc.Object };
@@ -1306,17 +1306,13 @@ var dynamic_top_level_menus: std.ArrayListUnmanaged(DynamicTopLevelMenu) = .empt
 var dynamic_leaf_items: std.ArrayListUnmanaged(DynamicLeafItem) = .empty;
 
 fn isBuiltinNativeMenuId(id: []const u8) bool {
-    return std.mem.eql(u8, id, "workbench.menu.file") or
-        std.mem.eql(u8, id, "shell.menu.edit") or
-        std.mem.eql(u8, id, "shell.menu.view") or
-        std.mem.eql(u8, id, "shell.menu.help");
+    return menu_model.submenuFor(id) != null;
 }
 
 fn resolveBuiltinNativeMenu(id: []const u8) ?objc.Object {
-    if (std.mem.eql(u8, id, "workbench.menu.file")) return native_file_menu;
-    if (std.mem.eql(u8, id, "shell.menu.edit")) return native_edit_menu;
-    if (std.mem.eql(u8, id, "shell.menu.view")) return native_view_menu;
-    if (std.mem.eql(u8, id, "shell.menu.help")) return native_help_menu;
+    for (menu_model.menu_bar, 0..) |sub, i| {
+        if (menu_model.menuMatches(sub, id)) return native_submenus[i];
+    }
     return null;
 }
 
@@ -1442,179 +1438,84 @@ pub fn setupMacOSMenuBar() void {
     if (target.value == 0) return;
     native_menu_target = target;
 
-    const file_menu_title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"File".ptr});
-    const file_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{file_menu_title_str.value});
-    if (file_menu.value == 0) return;
-    native_file_menu = file_menu;
-
     const empty = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"".ptr});
-    const key_f = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"f".ptr});
-    const key_n = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"n".ptr});
-    const key_o = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"o".ptr});
-    const key_s = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"s".ptr});
-
     const NSImage = objc.getClass("NSImage") orelse return;
+    const action_sel = fizzy_get_selector("menuAction:") orelse return;
 
-    // New — ⌘N
-    {
-        const new_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"New".ptr});
-        const new_sel = fizzy_get_selector("newFile:") orelse return;
-        const new_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-            new_title.value,
-            new_sel,
-            key_n.value,
-        });
-        if (new_item.value != 0) {
-            new_item.msgSend(void, "setTarget:", .{target.value});
-            new_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand});
-            setMenuItemImage(new_item, NSImage, NSString, "doc.badge.plus", "New");
-            rememberNativeMenuItem(.new_file, new_item);
-        }
-    }
-    // Open Folder — ⌘F, folder icon
-    {
-        const open_folder_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Open Folder".ptr});
-        const open_folder_sel = fizzy_get_selector("openFolder:") orelse return;
-        const open_folder_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-            open_folder_title.value,
-            open_folder_sel,
-            key_f.value,
-        });
-        if (open_folder_item.value != 0) {
-            open_folder_item.msgSend(void, "setTarget:", .{target.value});
-            open_folder_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand});
-            setMenuItemImage(open_folder_item, NSImage, NSString, "folder", "Open Folder");
-            rememberNativeMenuItem(.open_folder, open_folder_item);
-        }
-    }
-    // Open Files — ⌘O, doc icon
-    {
-        const open_files_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Open Files".ptr});
-        const open_files_sel = fizzy_get_selector("openFiles:") orelse return;
-        const open_files_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-            open_files_title.value,
-            open_files_sel,
-            key_o.value,
-        });
-        if (open_files_item.value != 0) {
-            open_files_item.msgSend(void, "setTarget:", .{target.value});
-            open_files_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand});
-            setMenuItemImage(open_files_item, NSImage, NSString, "doc.on.doc", "Open Files");
-            rememberNativeMenuItem(.open_files, open_files_item);
-        }
-    }
+    // Build every top-level menu from `menu_model`, the same tree `Menu.zig` draws. Each item's
+    // tag is its depth-first index among command items, which is all the C boundary needs: one
+    // integer that resolves back to a command id. The fourteen hand-written Objective-C
+    // forwarding methods and the `NativeMenuAction` enum they switched on existed only to carry
+    // that integer, and are gone.
+    var tag: c_long = 0;
+    inline for (&menu_model.menu_bar, 0..) |*sub, sub_index| {
+        const sub_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{sub.title.ptr});
+        const menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{sub_title.value});
+        if (menu.value != 0) {
+            native_submenus[sub_index] = menu;
 
-    const separator = NSMenuItem.msgSend(objc.Object, "separatorItem", .{});
-    file_menu.msgSend(void, "addItem:", .{separator.value});
+            inline for (sub.items) |item| {
+                switch (item) {
+                    .separator => menu.msgSend(void, "addItem:", .{NSMenuItem.msgSend(objc.Object, "separatorItem", .{}).value}),
 
-    // Save — ⌘S
-    const save_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Save".ptr});
-    const save_sel = fizzy_get_selector("save:") orelse return;
-    const save_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-        save_title.value,
-        save_sel,
-        key_s.value,
-    });
-    if (save_item.value != 0) {
-        save_item.msgSend(void, "setTarget:", .{target.value});
-        save_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand});
-        save_item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(NativeMenuAction.save))});
-        rememberNativeMenuItem(.save, save_item);
-    }
+                    .command => |c| {
+                        const item_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{c.title.resolveStatic().ptr});
+                        const mi = menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
+                            item_title.value,
+                            @intFromPtr(action_sel),
+                            empty.value,
+                        });
+                        if (mi.value != 0) {
+                            mi.msgSend(void, "setTarget:", .{target.value});
+                            mi.msgSend(void, "setTag:", .{tag});
+                            if (c.sf_symbol) |sym| setMenuItemImage(mi, NSImage, NSString, sym, c.title.resolveStatic());
+                            native_menu_items[@intCast(tag)] = mi;
+                        }
+                        tag += 1;
+                    },
 
-    // Save As — ⇧⌘S
-    {
-        const save_as_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Save As…".ptr});
-        const save_as_sel = fizzy_get_selector("saveAs:") orelse return;
-        const save_as_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-            save_as_title.value,
-            save_as_sel,
-            key_s.value,
-        });
-        if (save_as_item.value != 0) {
-            save_as_item.msgSend(void, "setTarget:", .{target.value});
-            save_as_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand | NSEventModifierFlagShift});
-            save_as_item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(NativeMenuAction.save_as))});
-            rememberNativeMenuItem(.save_as, save_as_item);
-            setMenuItemImage(save_as_item, NSImage, NSString, "arrow.down.doc", "Save As");
-        }
-    }
+                    // Populated later: recents aren't loaded when the bar is built, and plugin
+                    // sections arrive as plugins register. Both get a placeholder submenu here
+                    // so their position in the menu is fixed by the model rather than by
+                    // whatever order the rebuilds happen to run in.
+                    .recent_folders => {
+                        const rf_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Recent Folders".ptr});
+                        const rf_item = menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
+                            rf_title.value,
+                            @as(usize, 0),
+                            empty.value,
+                        });
+                        if (rf_item.value != 0) {
+                            const rf_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{rf_title.value});
+                            if (rf_menu.value != 0) {
+                                rf_item.msgSend(void, "setSubmenu:", .{rf_menu.value});
+                                native_recent_folders_menu = rf_menu;
+                                native_recent_folders_item = rf_item;
+                            }
+                        }
+                    },
 
-    // Save All — ⌥⌘S (Option-Command-S, matches the common convention used by Xcode etc.)
-    {
-        const save_all_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Save All".ptr});
-        const save_all_sel = fizzy_get_selector("saveAll:") orelse return;
-        const save_all_item = file_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-            save_all_title.value,
-            save_all_sel,
-            key_s.value,
-        });
-        if (save_all_item.value != 0) {
-            save_all_item.msgSend(void, "setTarget:", .{target.value});
-            save_all_item.msgSend(void, "setKeyEquivalentModifierMask:", .{NSEventModifierFlagCommand | NSEventModifierFlagOption});
-            save_all_item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(NativeMenuAction.save_all))});
-            rememberNativeMenuItem(.save_all, save_all_item);
-            setMenuItemImage(save_all_item, NSImage, NSString, "square.and.arrow.down.on.square", "Save All");
-        }
-    }
+                    .plugin_section, .submenu => {},
+                }
+            }
 
-    const file_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"File".ptr});
-    const file_item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
-        file_title.value,
-        @as(usize, 0),
-        empty.value,
-    });
-    if (file_item.value == 0) return;
-    file_item.msgSend(void, "setSubmenu:", .{file_menu.value});
-    main_menu.msgSend(void, "insertItem:atIndex:", .{ file_item.value, @as(c_ulong, 1) });
-
-    // Edit menu — Copy, Paste, Undo, Redo (match DVUI menu). Plugin-specific verbs (e.g. pixi's
-    // Transform / Grid Layout) inject themselves via `NativeMenuItem`s parented to this menu's
-    // id (see `rebuildDynamicNativeMenus`) instead of being hardcoded here.
-    const key_c = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"c".ptr});
-    const key_v = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"v".ptr});
-    const key_z = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"z".ptr});
-    const key_e = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"e".ptr});
-    const key_m = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"m".ptr});
-
-    const edit_menu_title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Edit".ptr});
-    const edit_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{edit_menu_title_str.value});
-    if (edit_menu.value != 0) {
-        native_edit_menu = edit_menu;
-        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Copy", "copy:", @intFromPtr(key_c.value), NSEventModifierFlagCommand, @intFromPtr(empty.value), .copy);
-        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Paste", "paste:", @intFromPtr(key_v.value), NSEventModifierFlagCommand, @intFromPtr(empty.value), .paste);
-        edit_menu.msgSend(void, "addItem:", .{NSMenuItem.msgSend(objc.Object, "separatorItem", .{}).value});
-        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Undo", "undo:", @intFromPtr(key_z.value), NSEventModifierFlagCommand, @intFromPtr(empty.value), .undo);
-        addNativeMenuItem(edit_menu, NSMenuItem, NSString, target, "Redo", "redo:", @intFromPtr(key_z.value), NSEventModifierFlagCommand | NSEventModifierFlagShift, @intFromPtr(empty.value), .redo);
-        const edit_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Edit".ptr});
-        const edit_item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
-            edit_title.value,
-            @as(usize, 0),
-            empty.value,
-        });
-        if (edit_item.value != 0) {
-            edit_item.msgSend(void, "setSubmenu:", .{edit_menu.value});
-            main_menu.msgSend(void, "insertItem:atIndex:", .{ edit_item.value, @as(c_ulong, 2) });
-        }
-    }
-
-    // View menu — Show/Hide Explorer, Show DVUI Demo
-    const view_menu_title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"View".ptr});
-    const view_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{view_menu_title_str.value});
-    if (view_menu.value != 0) {
-        native_view_menu = view_menu;
-        addNativeMenuItem(view_menu, NSMenuItem, NSString, target, "Show Explorer", "toggleExplorer:", @intFromPtr(key_e.value), NSEventModifierFlagCommand, @intFromPtr(empty.value), .toggle_explorer);
-        view_menu.msgSend(void, "addItem:", .{NSMenuItem.msgSend(objc.Object, "separatorItem", .{}).value});
-        addNativeMenuItem(view_menu, NSMenuItem, NSString, target, "Show DVUI Demo", "showDvuiDemo:", @intFromPtr(empty.value), 0, @intFromPtr(empty.value), .show_dvui_demo);
-        const view_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"View".ptr});
-        const view_item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
-            view_title.value,
-            @as(usize, 0),
-            empty.value,
-        });
-        if (view_item.value != 0) {
-            view_item.msgSend(void, "setSubmenu:", .{view_menu.value});
-            main_menu.msgSend(void, "insertItem:atIndex:", .{ view_item.value, @as(c_ulong, 3) });
+            const bar_item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
+                sub_title.value,
+                @as(usize, 0),
+                empty.value,
+            });
+            if (bar_item.value != 0) {
+                bar_item.msgSend(void, "setSubmenu:", .{menu.value});
+                if (comptime std.mem.eql(u8, sub.id, "fizzy.menu.help")) {
+                    // Help goes last so the conventional order (App, File, Edit, View, …,
+                    // Window, Help) survives, and AppKit wires in its search field.
+                    main_menu.msgSend(void, "addItem:", .{bar_item.value});
+                    ns_app.msgSend(void, "setHelpMenu:", .{menu.value});
+                    native_help_item = bar_item;
+                } else {
+                    main_menu.msgSend(void, "insertItem:atIndex:", .{ bar_item.value, @as(c_ulong, sub_index + 1) });
+                }
+            }
         }
     }
 
@@ -1657,51 +1558,63 @@ pub fn setupMacOSMenuBar() void {
         }
     }
 
-    // Help menu — Check for Updates… (matches the infobar fizzy button: opens the AboutFizzy dialog).
-    const help_menu_title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Help".ptr});
-    const help_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{help_menu_title_str.value});
-    if (help_menu.value != 0) {
-        native_help_menu = help_menu;
-        addNativeMenuItem(help_menu, NSMenuItem, NSString, target, "Check for Updates…", "checkForUpdates:", @intFromPtr(empty.value), 0, @intFromPtr(empty.value), .check_for_updates);
-        help_menu.msgSend(void, "addItem:", .{NSMenuItem.msgSend(objc.Object, "separatorItem", .{}).value});
-
-        // Report Bug → opens the GitHub Issues page in the user's browser.
-        // Inlined (instead of using `addNativeMenuItem`) so we can attach an SF Symbol.
-        if (fizzy_get_selector("reportBug:")) |report_bug_sel| {
-            const bug_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Report Bug…".ptr});
-            const bug_item = help_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-                bug_title.value,
-                report_bug_sel,
-                empty.value,
-            });
-            if (bug_item.value != 0) {
-                bug_item.msgSend(void, "setTarget:", .{target.value});
-                setMenuItemImage(bug_item, NSImage, NSString, "ant.fill", "Report Bug");
-            }
-        }
-
-        const help_item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
-            help_menu_title_str.value,
-            @as(usize, 0),
-            empty.value,
-        });
-        if (help_item.value != 0) {
-            help_item.msgSend(void, "setSubmenu:", .{help_menu.value});
-            // Append at the end so the conventional macOS order (App, File, Edit, View, …, Window, Help) is preserved.
-            main_menu.msgSend(void, "addItem:", .{help_item.value});
-            // Tell AppKit this is the Help menu so the system search field is wired in.
-            ns_app.msgSend(void, "setHelpMenu:", .{help_menu.value});
-            native_help_item = help_item;
-        }
-    }
-
-    // key_m was previously used by the now-removed nested Window submenu; keep the binding silent.
-    _ = key_m;
     macos_menu_bar_set_up = true;
 
     // Add any plugin-contributed native menus/items already registered by this point
     // (built-in static plugins register in `postInit`, which runs before this function).
     rebuildDynamicNativeMenus();
+    rebuildNativeRecentFolders();
+
+    // Items are built with no key equivalent; the chords come from the keymap. `buildKeymap`
+    // also stamps them, but the two run in either order depending on startup path — this ran
+    // first at boot, so every File/Edit shortcut was stamped onto items that did not exist yet
+    // and never restamped. The menus showed no chords, and because `nativeMenuOwnsChord` still
+    // told `dispatch` the native menu owned them, nothing handled those keys at all.
+    fizzy.Editor.Keybinds.syncNativeMenuShortcuts(fizzy.editor);
+}
+
+/// Fill the Recent Folders submenu from the current recents list.
+///
+/// AppKit menus are retained state, so unlike the dvui menu — which just re-reads the list every
+/// frame — this has to be rebuilt whenever the list changes. Recent Folders had no macOS
+/// representation at all before the model; it existed only in the dvui bar.
+pub fn rebuildNativeRecentFolders() void {
+    if (comptime builtin.os.tag != .macos) return;
+    const menu = native_recent_folders_menu orelse return;
+    const target = native_menu_target orelse return;
+    const NSString = objc.getClass("NSString") orelse return;
+    const sel = fizzy_get_selector("recentFolderAction:") orelse return;
+
+    menu.msgSend(void, "removeAllItems", .{});
+
+    const empty = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"".ptr});
+    const folders = fizzy.editor.recents.folders.items;
+
+    // Newest first, matching the dvui menu's reverse walk.
+    var i: usize = folders.len;
+    while (i > 0) : (i -= 1) {
+        const folder = folders[i - 1];
+        // `stringWithUTF8String:` needs a sentinel; recents are plain slices.
+        var buf: [1024]u8 = undefined;
+        if (folder.len >= buf.len) continue;
+        @memcpy(buf[0..folder.len], folder);
+        buf[folder.len] = 0;
+
+        const title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{@as([*:0]const u8, @ptrCast(&buf))});
+        const item = menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
+            title.value,
+            @intFromPtr(sel),
+            empty.value,
+        });
+        if (item.value != 0) {
+            item.msgSend(void, "setTarget:", .{target.value});
+            item.msgSend(void, "setTag:", .{@as(c_long, @intCast(i - 1))});
+        }
+    }
+
+    if (native_recent_folders_item) |it| {
+        it.msgSend(void, "setHidden:", .{folders.len == 0});
+    }
 }
 
 /// Sets an SF Symbol image on a menu item (macOS 11+). No-op if the image cannot be created.
@@ -1715,26 +1628,6 @@ fn setMenuItemImage(menu_item: objc.Object, NSImageClass: objc.Class, NSStringCl
     if (img.value != 0) {
         img.msgSend(void, "setTemplate:", .{true});
         menu_item.msgSend(void, "setImage:", .{img.value});
-    }
-}
-
-fn addNativeMenuItem(menu: objc.Object, _: objc.Class, NSStringClass: objc.Class, target: objc.Object, title: [*:0]const u8, action_name: [*:0]const u8, key_equiv_value: usize, modifier_mask: c_ulong, empty_str: usize, action: NativeMenuAction) void {
-    const sel = fizzy_get_selector(action_name) orelse return;
-    const title_obj = NSStringClass.msgSend(objc.Object, "stringWithUTF8String:", .{title});
-    const item = menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-        title_obj.value,
-        @intFromPtr(sel),
-        if (key_equiv_value != 0) key_equiv_value else empty_str,
-    });
-    if (item.value != 0) {
-        item.msgSend(void, "setTarget:", .{target.value});
-        if (modifier_mask != 0) item.msgSend(void, "setKeyEquivalentModifierMask:", .{modifier_mask});
-        // Tag mirrors the `NativeMenuAction` this item performs — `validateMenuItem:` (see
-        // `FizzyMenuTarget.m`) reads it back via `FizzyNativeMenuActionEnabled` to grey the
-        // item out when the action wouldn't currently do anything (no active document, empty
-        // selection, empty undo stack, …).
-        item.msgSend(void, "setTag:", .{@as(c_long, @intFromEnum(action))});
-        rememberNativeMenuItem(action, item);
     }
 }
 
@@ -1752,10 +1645,10 @@ fn addNativeMenuItemWithTarget(menu: objc.Object, _: objc.Class, NSStringClass: 
 }
 
 /// Returns and clears a pending native menu action (macOS menu bar). Call once per frame; on non-macOS always returns null.
-pub fn pollPendingNativeMenuAction() ?NativeMenuAction {
+pub fn pollPendingNativeMenuAction() ?usize {
     const id = pending_native_menu_action_id.swap(-1, .acq_rel);
-    if (id < 0 or id > @intFromEnum(NativeMenuAction.save_all)) return null;
-    return @enumFromInt(id);
+    if (id < 0 or id >= menu_model.flat_commands.len) return null;
+    return @intCast(id);
 }
 
 /// Returns and clears a pending generic native menu item tag (plugin `NativeMenuItem`s).

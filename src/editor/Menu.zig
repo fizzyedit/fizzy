@@ -5,6 +5,7 @@ const Constants = @import("Constants.zig");
 const Editor = fizzy.Editor;
 const settings = fizzy.settings;
 const builtin = @import("builtin");
+const model = @import("menu_model.zig");
 
 pub var mouse_distance: f32 = std.math.floatMax(f32);
 
@@ -37,10 +38,26 @@ pub fn draw() !dvui.App.Result {
 }
 
 /// File menu (workbench contribution).
-pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
-    if (menuItem(@src(), "File", .{ .submenu = true }, .{
+/// Run the command a menu item stands for.
+///
+/// Every item in both menu bars names a command and does nothing else. Before this, each item's
+/// action was written out here *and* in the macOS menu path *and* as the command body in
+/// `Keybinds` — three copies that had already drifted apart.
+fn run(id: []const u8) void {
+    fizzy.editor.host.runCommand(id) catch |err| {
+        dvui.log.err("menu command '{s}' failed: {s}", .{ id, @errorName(err) });
+    };
+}
+
+/// Draw one top-level menu from `menu_model`. Registered once per `menu_model.menu_bar` entry
+/// with the `Submenu` itself as `ctx`, so there is no per-menu function here to fall out of step
+/// with the macOS builder walking the same tree.
+pub fn drawModelMenu(ctx: ?*anyopaque) anyerror!void {
+    const sub: *const model.Submenu = @ptrCast(@alignCast(ctx orelse return));
+    const editor = fizzy.editor;
+
+    if (menuItem(@src(), sub.title, .{ .submenu = true }, .{
         .expand = .horizontal,
-        //.color_accent = dvui.themeGet().color(.window, .fill),
         .color_text = dvui.themeGet().color(.control, .text),
     })) |r| {
         var animator = dvui.animate(@src(), .{
@@ -54,300 +71,99 @@ pub fn drawFileMenu(_: ?*anyopaque) anyerror!void {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
 
-        if (menuItemWithHotkey(@src(), "Open Folder", dvui.currentWindow().keybinds.get("open_folder") orelse .{}, true, .{}, .{
-            .expand = .horizontal,
-            //.style = .control,
-        }) != null) {
-            // Use the backend abstraction (native = OS dialog, web = file input element
-            // or "folders unavailable" toast) instead of `dvui.dialogNativeFolderSelect`,
-            // which has no implementation on wasm and would silently no-op the menu.
-            fizzy.backend.showOpenFolderDialog(Editor.Workspace.setProjectFolderCallback, null);
-            fw.close();
+        for (sub.items, 0..) |item, i| {
+            try drawModelItem(editor, item, i, fw);
         }
+    }
+}
 
-        if (menuItemWithHotkey(@src(), "New File…", dvui.currentWindow().keybinds.get("new_file") orelse .{}, true, .{}, .{
-            .expand = .horizontal,
-        }) != null) {
-            fizzy.editor.requestNewFileDialog();
-            fw.close();
-        }
+fn drawModelItem(
+    editor: *Editor,
+    item: model.Item,
+    id_extra: usize,
+    fw: *dvui.FloatingMenuWidget,
+) !void {
+    switch (item) {
+        .separator => _ = dvui.separator(@src(), .{ .expand = .horizontal, .id_extra = id_extra }),
 
-        if (menuItemWithHotkey(@src(), "Open Files", dvui.currentWindow().keybinds.get("open_files") orelse .{}, true, .{}, .{
-            .expand = .horizontal,
-            //.style = .control,
-        }) != null) {
-            // Same reason as "Open Folder" above: route through the backend so the web
-            // build actually pops the file picker. The same callback the homepage uses
-            // handles the open-file plumbing on both platforms.
-            fizzy.backend.showOpenFileDialog(
-                Editor.Workspace.openFilesCallback,
-                &.{},
-                "",
-                null,
-            );
-            fw.close();
-        }
+        .plugin_section => |parent| try drawMenuSections(parent),
 
-        _ = dvui.separator(@src(), .{ .expand = .horizontal });
+        .recent_folders => try drawRecentFolders(editor, id_extra),
 
-        if (menuItemWithChevron(
-            @src(),
-            "Recent Folders",
-            .{ .submenu = true },
-            .{
+        .submenu => |nested| {
+            // No nested submenus in the bar today; the model allows them, so handle rather
+            // than silently drop.
+            if (menuItemWithChevron(@src(), nested.title, .{ .submenu = true }, .{
                 .expand = .horizontal,
+                .id_extra = id_extra,
                 .color_text = dvui.themeGet().color(.window, .text),
-                //.style = .control,
-            },
-        )) |recents_item| {
-            var recents_anim = dvui.animate(@src(), .{
-                .kind = .alpha,
-                .duration = 250_000,
-            }, .{
-                .expand = .both,
-            });
-            defer recents_anim.deinit();
-
-            var recents_fw = dvui.floatingMenu(@src(), .{ .from = recents_item }, .{});
-            defer recents_fw.deinit();
-
-            var vert_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .expand = .none,
-            });
-            defer vert_box.deinit();
-
-            var i: usize = fizzy.editor.recents.folders.items.len;
-            while (i > 0) : (i -= 1) {
-                const folder = fizzy.editor.recents.folders.items[i - 1];
-                if (menuItem(@src(), folder, .{}, .{
-                    .expand = .horizontal,
-                    .font = dvui.Font.theme(.mono),
-                    .id_extra = i,
-                    .margin = dvui.Rect.all(1),
-                    .padding = dvui.Rect.all(2),
-                })) |_| {
-                    try fizzy.editor.setProjectFolder(folder);
+            })) |r| {
+                var nested_fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
+                defer nested_fw.deinit();
+                for (nested.items, 0..) |nested_item, j| {
+                    try drawModelItem(editor, nested_item, j, nested_fw);
                 }
             }
-        }
-
-        _ = dvui.separator(@src(), .{ .expand = .horizontal });
-
-        if (menuItemWithHotkey(@src(), "Save", dvui.currentWindow().keybinds.get("save") orelse .{}, if (fizzy.editor.activeDoc()) |doc|
-            (doc.owner.isDirty(doc) or !doc.owner.documentHasRecognizedSaveExtension(doc))
-        else
-            false, .{}, .{
-            .expand = .horizontal,
-            .color_text = dvui.themeGet().color(.window, .text),
-        }) != null) {
-            fizzy.editor.save() catch {
-                std.log.err("Failed to save", .{});
-            };
-            fw.close();
-        }
-
-        if (menuItemWithHotkey(@src(), "Save As…", dvui.currentWindow().keybinds.get("save_as") orelse .{}, fizzy.editor.activeDoc() != null, .{}, .{
-            .expand = .horizontal,
-            .color_text = dvui.themeGet().color(.window, .text),
-        }) != null) {
-            fizzy.editor.requestSaveAs();
-            fw.close();
-        }
-
-        // Save All is enabled whenever any open file is dirty with a recognized
-        // extension. Worker queue handles them serially; UI stays responsive.
-        const any_dirty = blk: {
-            for (fizzy.editor.open_files.values()) |doc| {
-                if (doc.owner.isDirty(doc) and doc.owner.documentHasRecognizedSaveExtension(doc)) break :blk true;
-            }
-            break :blk false;
-        };
-        if (menuItemWithHotkey(@src(), "Save All", dvui.currentWindow().keybinds.get("save_all") orelse .{}, any_dirty, .{}, .{
-            .expand = .horizontal,
-            .color_text = dvui.themeGet().color(.window, .text),
-        }) != null) {
-            fizzy.editor.saveAll() catch {
-                std.log.err("Failed to save all", .{});
-            };
-            fw.close();
-        }
-    }
-}
-
-/// Edit menu. Undo/Redo/Save are vtable-guaranteed for any document-owning plugin; Copy/Paste/
-/// Transform/Grid Layout are Commands, so each is only shown when the active document's owner
-/// actually registered it (see `activeDocHasCommand`) rather than rendered permanently disabled.
-pub fn drawEditMenu(_: ?*anyopaque) anyerror!void {
-    if (menuItem(
-        @src(),
-        "Edit",
-        .{ .submenu = true },
-        .{
-            .expand = .horizontal,
-            .color_text = dvui.themeGet().color(.control, .text),
         },
-    )) |r| {
-        var animator = dvui.animate(@src(), .{
-            .kind = .alpha,
-            .duration = 250_000,
-        }, .{
-            .expand = .both,
-        });
-        defer animator.deinit();
 
-        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
-        defer fw.deinit();
-
-        if (fizzy.editor.activeDocHasCommand("copy")) {
-            if (menuItemWithHotkey(
-                @src(),
-                "Copy",
-                dvui.currentWindow().keybinds.get("copy") orelse .{},
-                fizzy.editor.activeDocCommandEnabled("copy"),
-                .{},
-                .{ .expand = .horizontal },
-            ) != null) {
-                fizzy.editor.copy() catch {
-                    std.log.err("Failed to copy", .{});
-                };
-                fw.close();
+        .command => |c| {
+            if (c.visible) |f| {
+                if (!f(editor)) return;
             }
-        }
+            const enabled = if (c.enabled) |f| f(editor) else true;
+            const hotkey = hotkeyFor(c.id);
 
-        if (fizzy.editor.activeDocHasCommand("paste")) {
-            if (menuItemWithHotkey(
-                @src(),
-                "Paste",
-                dvui.currentWindow().keybinds.get("paste") orelse .{},
-                fizzy.editor.activeDocCommandEnabled("paste"),
-                .{},
-                .{ .expand = .horizontal },
-            ) != null) {
-                fizzy.editor.paste() catch {
-                    std.log.err("Failed to paste", .{});
-                };
-                fw.close();
-            }
-        }
-
-        if (fizzy.editor.activeDocHasCommand("copy") or fizzy.editor.activeDocHasCommand("paste")) {
-            _ = dvui.separator(@src(), .{ .expand = .horizontal });
-        }
-
-        if (menuItemWithHotkey(
-            @src(),
-            "Undo",
-            dvui.currentWindow().keybinds.get("undo") orelse .{},
-            if (fizzy.editor.activeDoc()) |doc| doc.owner.canUndo(doc) else false,
-            .{},
-            .{ .expand = .horizontal },
-        ) != null) {
-            if (fizzy.editor.activeDoc()) |doc| {
-                doc.owner.undo(doc) catch {
-                    std.log.err("Failed to undo", .{});
-                };
-            }
-        }
-
-        if (menuItemWithHotkey(
-            @src(),
-            "Redo",
-            dvui.currentWindow().keybinds.get("redo") orelse .{},
-            if (fizzy.editor.activeDoc()) |doc| doc.owner.canRedo(doc) else false,
-            .{},
-            .{ .expand = .horizontal },
-        ) != null) {
-            if (fizzy.editor.activeDoc()) |doc| {
-                doc.owner.redo(doc) catch {
-                    std.log.err("Failed to redo", .{});
-                };
-            }
-        }
-
-        // Transform / Grid Layout are pixel-art-specific, not shell concepts — pixi injects
-        // them itself via a `MenuSectionContribution` parented to "shell.menu.edit" below.
-        try drawMenuSections("shell.menu.edit");
-    }
-}
-
-/// View menu (shell built-in).
-pub fn drawViewMenu(_: ?*anyopaque) anyerror!void {
-    if (menuItem(@src(), "View", .{ .submenu = true }, .{
-        .expand = .horizontal,
-        .color_text = dvui.themeGet().color(.control, .text),
-    })) |r| {
-        var animator = dvui.animate(@src(), .{
-            .kind = .alpha,
-            .duration = 250_000,
-        }, .{
-            .expand = .both,
-        });
-        defer animator.deinit();
-
-        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
-        defer fw.deinit();
-
-        if (menuItemWithHotkey(
-            @src(),
-            if (fizzy.editor.explorer.paned.split_ratio.* == 0.0) "Show Explorer" else "Hide Explorer",
-            dvui.currentWindow().keybinds.get("explorer") orelse .{},
-            true,
-            .{},
-            .{
+            if (menuItemWithHotkey(@src(), c.title.resolve(editor), hotkey, enabled, .{}, .{
                 .expand = .horizontal,
-            },
-        ) != null) {
-            if (fizzy.editor.explorer.paned.split_ratio.* == 0.0) {
-                fizzy.editor.explorer.open();
-            } else {
-                fizzy.editor.explorer.close();
+                .id_extra = id_extra,
+                .color_text = dvui.themeGet().color(.window, .text),
+            }) != null) {
+                run(c.id);
+                fw.close();
             }
-
-            fw.close();
-        }
-
-        try drawMenuSections("shell.menu.view");
-
-        _ = dvui.separator(@src(), .{ .expand = .horizontal });
-
-        if (menuItem(@src(), "Show DVUI Demo", .{}, .{ .expand = .horizontal }) != null) {
-            dvui.Examples.show_demo_window = !dvui.Examples.show_demo_window;
-            fw.close();
-        }
+        },
     }
 }
 
-/// Help menu (shell built-in). Matches the macOS native Help menu so the two
-/// menubars stay congruent.
-pub fn drawHelpMenu(_: ?*anyopaque) anyerror!void {
-    if (menuItem(@src(), "Help", .{ .submenu = true }, .{
+/// The chord shown beside a row. Reads the same `dvui.Window.keybinds` map the rest of the app
+/// does, via the command's bind name, so a rebind shows up here without a second lookup table.
+fn hotkeyFor(command_id: []const u8) dvui.enums.Keybind {
+    const name = fizzy.Editor.Keybinds.bindNameForCommand(command_id) orelse return .{};
+    return dvui.currentWindow().keybinds.get(name) orelse .{};
+}
+
+fn drawRecentFolders(editor: *Editor, id_extra: usize) !void {
+    if (editor.recents.folders.items.len == 0) return;
+
+    if (menuItemWithChevron(@src(), "Recent Folders", .{ .submenu = true }, .{
         .expand = .horizontal,
-        .color_text = dvui.themeGet().color(.control, .text),
-    })) |r| {
-        var animator = dvui.animate(@src(), .{
+        .id_extra = id_extra,
+        .color_text = dvui.themeGet().color(.window, .text),
+    })) |recents_item| {
+        var recents_anim = dvui.animate(@src(), .{
             .kind = .alpha,
             .duration = 250_000,
-        }, .{
-            .expand = .both,
-        });
-        defer animator.deinit();
+        }, .{ .expand = .both });
+        defer recents_anim.deinit();
 
-        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
-        defer fw.deinit();
+        var recents_fw = dvui.floatingMenu(@src(), .{ .from = recents_item }, .{});
+        defer recents_fw.deinit();
 
-        if (menuItem(@src(), "Check for Updates…", .{}, .{ .expand = .horizontal }) != null) {
-            // The AboutFizzy dialog hosts the actual update check + install controls.
-            // macOS routes "About fizzy" to the same dialog via the native Help menu;
-            // here we only expose the update entry to avoid duplicating it.
-            fizzy.Editor.Dialogs.AboutFizzy.request();
-            fw.close();
-        }
+        var vert_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .none });
+        defer vert_box.deinit();
 
-        _ = dvui.separator(@src(), .{ .expand = .horizontal });
-
-        if (menuItem(@src(), "Report Bug…", .{}, .{ .expand = .horizontal }) != null) {
-            _ = dvui.openURL(.{ .url = "https://github.com/fizzyedit/fizzy/issues" });
-            fw.close();
+        var i: usize = editor.recents.folders.items.len;
+        while (i > 0) : (i -= 1) {
+            const folder = editor.recents.folders.items[i - 1];
+            if (menuItem(@src(), folder, .{}, .{
+                .expand = .horizontal,
+                .font = dvui.Font.theme(.mono),
+                .id_extra = i,
+                .margin = dvui.Rect.all(1),
+                .padding = dvui.Rect.all(2),
+            })) |_| {
+                try editor.setProjectFolder(folder);
+            }
         }
     }
 }

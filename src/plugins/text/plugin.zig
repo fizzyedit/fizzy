@@ -113,14 +113,14 @@ pub fn register(host: *sdk.Host) !void {
     // "Edit" menu (in-app + native) rather than showing a permanently-greyed generic verb.
     try host.registerMenuSection(.{
         .id = "text.menu.edit_section",
-        .parent_menu_id = "shell.menu.edit",
+        .parent_menu_id = "fizzy.menu.edit",
         .owner = &plugin,
         .draw = drawEditMenuSection,
     });
     try host.registerNativeMenuItem(.{
         .id = "text.native.format",
         .owner = &plugin,
-        .parent_menu_id = "shell.menu.edit",
+        .parent_menu_id = "fizzy.menu.edit",
         .title = "Format Document",
         .run = nativeFormat,
     });

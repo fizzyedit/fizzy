@@ -1,72 +1,79 @@
 #import <AppKit/AppKit.h>
 #import <stdbool.h>
 
-/* Called from Zig when a native menu item is chosen. Zig exports this and sets a pending action. */
-extern void FizzyNativeMenuAction(int id);
+/* Called from Zig when a native menu item is chosen. The int is the item's tag: its depth-first
+ * index among `menu_model`'s command items. Zig resolves it back to a command id and runs it.
+ * This replaced fourteen one-line forwarding methods, one per `NativeMenuAction` variant — the
+ * enum and the methods existed only to carry this integer across the boundary. */
+extern void FizzyNativeMenuAction(int tag);
 
 /* Called from Zig for plugin-contributed native menu items (see `genericMenuAction:` below).
  * Zig looks the tag up against `host.native_menu_items`, resolved fresh at click time. */
 extern void FizzyNativeMenuGenericAction(int tag);
 
-/* Called from Zig's `validateMenuItem:` below with the clicked item's `tag` (a `NativeMenuAction`
- * value, set on each fixed item by `addNativeMenuItem`/`setupMacOSMenuBar`) — returns whether
- * that action currently does anything (an active document, a non-empty selection, …). */
-extern bool FizzyNativeMenuActionEnabled(int id);
+/* Whether the model item with this tag is currently actionable (an active document, a non-empty
+ * selection, …). Backed by the same predicate the dvui menu greys its row with. */
+extern bool FizzyNativeMenuActionEnabled(int tag);
+
+/* Current title for the model item with this tag, or NULL to leave it alone. AppKit menus are
+ * retained state, so a label that depends on app state ("Show Explorer" / "Hide Explorer") has
+ * to be refreshed; validation runs just before a menu displays, which is exactly the moment. */
+extern const char *FizzyNativeMenuItemTitle(int tag);
 
 /* True while the app is capturing a key chord (the Keyboard Shortcuts settings pane). AppKit
  * fires a menu item's key equivalent before the key reaches SDL, so blocking dvui events is not
  * enough — every item has to report disabled, which stops the key equivalent from performing. */
 extern bool FizzyNativeMenuInputBlocked(void);
 
+/* Called from Zig when a Recent Folders item is chosen; the tag is an index into the recents. */
+extern void FizzyNativeRecentFolderAction(int index);
+
+/* The app menu's "About fizzy" item is created by AppKit, not from the model, so it has no tag
+ * to carry. It runs the same command as the Help menu's entry. */
+extern void FizzyNativeMenuAboutAction(void);
+
 @interface FizzyMenuTarget : NSObject <NSMenuItemValidation>
-- (void)newFile:(id)sender;
-- (void)openFolder:(id)sender;
-- (void)openFiles:(id)sender;
-- (void)save:(id)sender;
-- (void)saveAs:(id)sender;
-- (void)saveAll:(id)sender;
-- (void)copy:(id)sender;
-- (void)paste:(id)sender;
-- (void)undo:(id)sender;
-- (void)redo:(id)sender;
-- (void)toggleExplorer:(id)sender;
-- (void)showDvuiDemo:(id)sender;
-- (void)about:(id)sender;
-- (void)checkForUpdates:(id)sender;
-- (void)reportBug:(id)sender;
+- (void)menuAction:(id)sender;
 - (void)genericMenuAction:(id)sender;
+- (void)recentFolderAction:(id)sender;
+- (void)about:(id)sender;
 @end
 
 @implementation FizzyMenuTarget
-- (void)newFile:(id)sender       { (void)sender; FizzyNativeMenuAction(11); }
-- (void)openFolder:(id)sender     { (void)sender; FizzyNativeMenuAction(0); }
-- (void)openFiles:(id)sender     { (void)sender; FizzyNativeMenuAction(1); }
-- (void)save:(id)sender          { (void)sender; FizzyNativeMenuAction(2); }
-- (void)saveAs:(id)sender        { (void)sender; FizzyNativeMenuAction(10); }
-- (void)saveAll:(id)sender       { (void)sender; FizzyNativeMenuAction(16); }
-- (void)copy:(id)sender          { (void)sender; FizzyNativeMenuAction(3); }
-- (void)paste:(id)sender         { (void)sender; FizzyNativeMenuAction(4); }
-- (void)undo:(id)sender          { (void)sender; FizzyNativeMenuAction(5); }
-- (void)redo:(id)sender         { (void)sender; FizzyNativeMenuAction(6); }
-- (void)toggleExplorer:(id)sender { (void)sender; FizzyNativeMenuAction(8); }
-- (void)showDvuiDemo:(id)sender  { (void)sender; FizzyNativeMenuAction(9); }
-- (void)about:(id)sender         { (void)sender; FizzyNativeMenuAction(13); }
-- (void)checkForUpdates:(id)sender { (void)sender; FizzyNativeMenuAction(14); }
-- (void)reportBug:(id)sender    { (void)sender; FizzyNativeMenuAction(15); }
+- (void)menuAction:(id)sender {
+    NSMenuItem *item = (NSMenuItem *)sender;
+    FizzyNativeMenuAction((int)[item tag]);
+}
 - (void)genericMenuAction:(id)sender {
     NSMenuItem *item = (NSMenuItem *)sender;
     FizzyNativeMenuGenericAction((int)[item tag]);
 }
+- (void)recentFolderAction:(id)sender {
+    NSMenuItem *item = (NSMenuItem *)sender;
+    FizzyNativeRecentFolderAction((int)[item tag]);
+}
+/* The app menu's "About fizzy" is created by AppKit, not by the model, so it keeps its own
+ * selector. It runs the same command as the Help menu's entry. */
+- (void)about:(id)sender {
+    (void)sender;
+    FizzyNativeMenuAboutAction();
+}
 - (BOOL)validateMenuItem:(NSMenuItem *)menuItem {
-    /* Checked before the generic-item shortcut below so plugin items are blocked too. */
+    /* Checked before anything else so plugin and recents items are blocked too. */
     if (FizzyNativeMenuInputBlocked()) {
         return NO;
     }
-    /* Plugin-contributed items (Transform, Grid Layout, …) share this same target but tag
-     * themselves with an index into `host.native_menu_items`, not a `NativeMenuAction` — greying
-     * those out isn't part of this validator. */
-    if ([menuItem action] == @selector(genericMenuAction:)) {
+    if ([menuItem action] == @selector(genericMenuAction:) ||
+        [menuItem action] == @selector(recentFolderAction:) ||
+        [menuItem action] == @selector(about:)) {
         return YES;
+    }
+    if ([menuItem action] != @selector(menuAction:)) {
+        return YES;
+    }
+    const char *title = FizzyNativeMenuItemTitle((int)[menuItem tag]);
+    if (title != NULL && title[0] != '\0') {
+        [menuItem setTitle:[NSString stringWithUTF8String:title]];
     }
     return FizzyNativeMenuActionEnabled((int)[menuItem tag]) ? YES : NO;
 }
