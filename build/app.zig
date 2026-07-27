@@ -374,6 +374,13 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         // below never reaches it (nothing in the graph forces `sdk.manifest`), so it
         // needs its own root either way.
         .{ "fizzy-sdk-manifest-tests", "src/sdk/manifest.zig" },
+        // The text plugin's headless editing model. Lives under src/plugins/ but is
+        // deliberately dvui-free (see textcore.zig), so it tests as pure logic from the
+        // app build. One root covers every file below it — they're relative imports.
+        .{ "fizzy-textcore-tests", "src/plugins/text/src/textcore/textcore.zig" },
+        // Keybinding parse/resolve core. Deliberately dvui-free (see keymap.zig) — dvui's
+        // keybind map can't express chords and is keyed by bind name, not command.
+        .{ "fizzy-keymap-tests", "src/editor/keymap/keymap.zig" },
     }) |entry| {
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = entry[0],

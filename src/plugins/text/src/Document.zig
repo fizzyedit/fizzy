@@ -5,7 +5,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
-const UndoStack = @import("UndoStack.zig");
+const tc = @import("textcore/textcore.zig");
 const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
@@ -37,9 +37,11 @@ unsaved: bool = false,
 /// widget instance — have somewhere durable to read "what's currently selected" from.
 sel_start: usize = 0,
 sel_end: usize = 0,
-/// Byte offset the next `TextEditor.draw` should move the caret to, set by Paste/Undo/Redo
-/// (which all edit `text` from outside the widget's own frame) and consumed once.
-pending_cursor: ?usize = null,
+/// Selection the next `TextEditor.draw` should install, set by Paste/Undo/Redo (which all
+/// edit `text` from outside the widget's own frame) and consumed once. A full range rather
+/// than a bare offset so undo can restore what *was* selected — undoing "type over a
+/// selection" now re-selects the text it brought back.
+pending_sel: ?tc.Range = null,
 /// Vertical scroll offset, mirrored from the editor's `ScrollInfo` after every draw and
 /// restored on the widget's next `dvui.firstFrame` (see `TextEditor.zig`). dvui garbage-
 /// collects a widget id's persisted per-frame data (including its scroll position) the very
@@ -83,8 +85,8 @@ preview_split_ratio: f32 = 0.5,
 preview_collapsed: bool = false,
 preview_side: PreviewSide = .raw,
 
-/// Undo/redo history — see `UndoStack` for the capture strategy.
-history: UndoStack = .{},
+/// Undo/redo history — see `textcore.History` for the capture + grouping strategy.
+history: tc.History = .{},
 /// `history.topOpId()` as of the last successful save; the document is dirty exactly when
 /// the two differ. Deliberately an id, not `undo.items.len` — a length can return to its
 /// saved value via undo-then-new-edit while content differs from disk, but an id can't:
@@ -216,6 +218,11 @@ pub fn isDirty(self: *const Document) bool {
 pub fn save(self: *Document) !void {
     if (comptime is_wasm) return error.Unsupported;
     try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = self.path, .data = self.text.items });
+    // Close the group *before* snapshotting the id: without this a save landing mid-typing-run
+    // would let the next keystroke merge into the same group, so one undo would jump straight
+    // past the state that was written to disk. VSCode pushes a stack element on save for the
+    // same reason.
+    self.history.closeGroup();
     self.clean_op_id = self.history.topOpId();
 }
 
@@ -234,10 +241,10 @@ pub fn reloadFromDisk(self: *Document) !void {
     self.refreshLineCount();
     self.sel_start = 0;
     self.sel_end = 0;
-    // Non-null `pending_cursor` is what tells `TextEditor.draw` to disable `cache_layout`
+    // Non-null `pending_sel` is what tells `TextEditor.draw` to disable `cache_layout`
     // for the next frame — required after a full buffer replace, otherwise dvui's text
     // layout cache (built against the previous contents) asserts / panics on draw.
-    self.pending_cursor = 0;
+    self.pending_sel = .collapsed(0);
     self.clearCompletionItems();
     self.completion_anchor = null;
     self.completion_selected = 0;
@@ -262,31 +269,32 @@ pub fn saveAs(self: *Document, new_path: []const u8) !void {
 /// edit outside any frame's `TextEntryWidget` instance.
 pub fn replaceRange(self: *Document, start: usize, end: usize, new: []const u8) !void {
     const gpa = sdk.allocator();
-    try self.history.pushComplete(gpa, start, self.text.items[start..end], new);
+    const after: tc.Range = .collapsed(start + new.len);
+    try self.history.pushComplete(gpa, start, self.text.items[start..end], new, .init(start, end), after);
     try self.text.replaceRange(gpa, start, end - start, new);
     self.refreshLineCount();
-    self.sel_start = start + new.len;
-    self.sel_end = self.sel_start;
-    self.pending_cursor = self.sel_start;
+    self.sel_start = after.head;
+    self.sel_end = after.head;
+    self.pending_sel = after;
 }
 
 /// Reverses the most recent edit, if any, and relocates the caret to it (applied on the next
 /// `TextEditor.draw` via `pending_cursor`).
 pub fn undo(self: *Document) void {
     const gpa = sdk.allocator();
-    const cursor = self.history.applyUndo(gpa, &self.text) orelse return;
+    const sel = self.history.applyUndo(gpa, &self.text) orelse return;
     self.refreshLineCount();
-    self.sel_start = cursor;
-    self.sel_end = cursor;
-    self.pending_cursor = cursor;
+    self.sel_start = @min(sel.start(), self.text.items.len);
+    self.sel_end = @min(sel.end(), self.text.items.len);
+    self.pending_sel = sel;
 }
 
 /// Re-applies the most recently undone edit, if any.
 pub fn redo(self: *Document) void {
     const gpa = sdk.allocator();
-    const cursor = self.history.applyRedo(gpa, &self.text) orelse return;
+    const sel = self.history.applyRedo(gpa, &self.text) orelse return;
     self.refreshLineCount();
-    self.sel_start = cursor;
-    self.sel_end = cursor;
-    self.pending_cursor = cursor;
+    self.sel_start = @min(sel.start(), self.text.items.len);
+    self.sel_end = @min(sel.end(), self.text.items.len);
+    self.pending_sel = sel;
 }

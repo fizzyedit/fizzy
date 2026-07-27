@@ -8,6 +8,7 @@ const plugin_impl = @import("../plugin.zig");
 const Document = @import("Document.zig");
 const SyntaxHighlight = @import("SyntaxHighlight.zig");
 const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
+const tc = @import("textcore/textcore.zig");
 const TooltipWidget = @import("widgets/TooltipWidget.zig");
 const fuzzy = core.fuzzy;
 
@@ -151,7 +152,7 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
     }));
     const gutter_rs = gutter_wd.borderRectScale();
 
-    const out_of_band_edit = doc.pending_cursor != null;
+    const out_of_band_edit = doc.pending_sel != null;
     const tree_sitter_option = if (doc.text.items.len <= syntax_highlight_max_bytes)
         SyntaxHighlight.treeSitterOption(doc.path)
     else
@@ -230,10 +231,16 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         te.text_changed = true;
     }
 
-    if (doc.pending_cursor) |pos| {
-        const clamped = @min(pos, doc.text.items.len);
-        te.textLayout.selection.* = .{ .start = clamped, .cursor = clamped, .end = clamped };
-        doc.pending_cursor = null;
+    if (doc.pending_sel) |r| {
+        const len = doc.text.items.len;
+        const head = @min(r.head, len);
+        const anchor = @min(r.anchor, len);
+        te.textLayout.selection.* = .{
+            .start = @min(anchor, head),
+            .cursor = head,
+            .end = @max(anchor, head),
+        };
+        doc.pending_sel = null;
     }
 
     te.processEvents();
@@ -1615,17 +1622,17 @@ fn drawHighlightedCode(tl: *dvui.TextLayoutWidget, code: []const u8, ts: sdk.Tre
 fn docFromCtx(ctx: *anyopaque) *Document {
     return @ptrCast(@alignCast(ctx));
 }
-fn editNotifyBegin(ctx: *anyopaque) void {
-    docFromCtx(ctx).history.begin();
+fn editNotifyBegin(ctx: *anyopaque, sel_before: tc.Range) void {
+    docFromCtx(ctx).history.begin(sel_before);
 }
 fn editNotifyRemoved(ctx: *anyopaque, pos: usize, bytes: []const u8) void {
-    docFromCtx(ctx).history.noteRemoved(sdk.allocator(), pos, bytes);
+    docFromCtx(ctx).history.note(sdk.allocator(), pos, bytes, "");
 }
 fn editNotifyInserted(ctx: *anyopaque, pos: usize, bytes: []const u8) void {
-    docFromCtx(ctx).history.noteInserted(sdk.allocator(), pos, bytes);
+    docFromCtx(ctx).history.note(sdk.allocator(), pos, "", bytes);
 }
-fn editNotifyEnd(ctx: *anyopaque) void {
-    docFromCtx(ctx).history.end(sdk.allocator());
+fn editNotifyEnd(ctx: *anyopaque, sel_after: tc.Range) void {
+    docFromCtx(ctx).history.end(sdk.allocator(), sel_after);
 }
 
 const max_text_bytes: usize = 64 * 1024 * 1024;

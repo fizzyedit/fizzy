@@ -258,7 +258,7 @@ fn setDocumentPath(_: *anyopaque, handle: DocHandle, path: []const u8) anyerror!
 }
 fn revealPosition(_: *anyopaque, handle: DocHandle, line: u32, character: u32) void {
     const doc = docFrom(handle) orelse return;
-    doc.pending_cursor = doc.byteOffsetForLineCharacter(line, character);
+    doc.pending_sel = .collapsed(doc.byteOffsetForLineCharacter(line, character));
     doc.pending_scroll_line = line;
 }
 fn bindDocumentToPane(_: *anyopaque, _: DocHandle, _: dvui.Id, _: *anyopaque, _: bool) void {
@@ -370,7 +370,7 @@ fn formatDocument(doc: *Document) void {
     };
     doc.sel_start = restore_cursor;
     doc.sel_end = restore_cursor;
-    doc.pending_cursor = restore_cursor;
+    doc.pending_sel = .collapsed(restore_cursor);
 }
 
 /// In-app "Edit" menu section (see `Host.registerMenuSection`) — only draws while the active

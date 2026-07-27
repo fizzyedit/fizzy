@@ -5,6 +5,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
 const perf = @import("core").perf;
+const tc = @import("../textcore/textcore.zig");
 
 pub const HighlightStyle = sdk.language.HighlightStyle;
 pub const TreeSitterHighlight = sdk.language.TreeSitterHighlight;
@@ -232,12 +233,16 @@ pub const TreeSitterParser = if (dvui.useTreeSitter) struct {
 /// e.g. typing over a selection replaces it); `endEdit` commits it. Fired at the same points
 /// as the pre-existing `textChangedRemoved`/`textChangedAdded` calls, so `bytes` is always
 /// read before it's overwritten by the mutation that follows.
+/// Undo/redo capture hook. `beginEdit`/`endEdit` carry the selection either side of the
+/// mutation: `beginEdit`'s is what undo restores (so undoing "type over a selection"
+/// re-selects the restored text), and it also tells the history whether a removal was a
+/// backspace or a forward delete, which decides undo grouping.
 pub const EditNotify = struct {
     ctx: *anyopaque,
-    beginEdit: *const fn (ctx: *anyopaque) void,
+    beginEdit: *const fn (ctx: *anyopaque, sel_before: tc.Range) void,
     noteRemoved: *const fn (ctx: *anyopaque, pos: usize, bytes: []const u8) void,
     noteInserted: *const fn (ctx: *anyopaque, pos: usize, bytes: []const u8) void,
-    endEdit: *const fn (ctx: *anyopaque) void,
+    endEdit: *const fn (ctx: *anyopaque, sel_after: tc.Range) void,
 };
 
 pub const InitOptions = struct {
@@ -1203,8 +1208,8 @@ pub fn textTyped(self: *TextEntryWidget, new: []const u8, selected: bool) void {
         return;
     }
 
-    if (self.init_opts.edit_notify) |en| en.beginEdit(en.ctx);
-    defer if (self.init_opts.edit_notify) |en| en.endEdit(en.ctx);
+    if (self.init_opts.edit_notify) |en| en.beginEdit(en.ctx, self.currentRange());
+    defer if (self.init_opts.edit_notify) |en| en.endEdit(en.ctx, self.currentRange());
 
     var sel = self.textLayout.selectionGet(self.len);
     if (!sel.empty()) {
@@ -1495,126 +1500,28 @@ pub fn processEvent(self: *TextEntryWidget, e: *Event) void {
                 break :blk;
             }
 
-            if (ke.action == .down and ke.matchBind("text_start")) {
-                e.handle(@src(), self.data());
-                self.textLayout.selection.moveCursor(0, false);
-                self.textLayout.scroll_to_cursor = true;
-                break :blk;
-            }
-
-            if (ke.action == .down and ke.matchBind("text_end")) {
-                e.handle(@src(), self.data());
-                self.textLayout.selection.moveCursor(std.math.maxInt(usize), false);
-                self.textLayout.scroll_to_cursor = true;
-                break :blk;
-            }
-
-            if (ke.action == .down and ke.matchBind("line_start")) {
-                e.handle(@src(), self.data());
-                if (self.textLayout.sel_move == .none) {
-                    self.textLayout.sel_move = .{ .expand_pt = .{ .select = false, .which = .home } };
-                }
-                break :blk;
-            }
-
-            if (ke.action == .down and ke.matchBind("line_end")) {
-                e.handle(@src(), self.data());
-                if (self.textLayout.sel_move == .none) {
-                    self.textLayout.sel_move = .{ .expand_pt = .{ .select = false, .which = .end } };
-                }
-                break :blk;
-            }
-
-            if ((ke.action == .down or ke.action == .repeat) and ke.matchBind("word_left")) {
-                e.handle(@src(), self.data());
-                if (!self.textLayout.selection.empty()) {
-                    self.textLayout.selection.moveCursor(self.textLayout.selection.start, false);
-                } else {
-                    if (self.textLayout.sel_move == .none) {
-                        self.textLayout.sel_move = .{ .word_left_right = .{ .select = false } };
+            // All keyboard motion, resolved in-model. See `motion_binds` / `applyMotion`.
+            if (ke.action == .down or ke.action == .repeat) {
+                inline for (motion_binds) |m| {
+                    if (ke.matchBind(m.bind)) {
+                        e.handle(@src(), self.data());
+                        self.applyMotion(m.granularity, m.dir, false);
+                        break :blk;
                     }
-                    if (self.textLayout.sel_move == .word_left_right) {
-                        self.textLayout.sel_move.word_left_right.count -= 1;
+                    if (ke.matchBind(m.bind ++ "_select")) {
+                        e.handle(@src(), self.data());
+                        self.applyMotion(m.granularity, m.dir, true);
+                        break :blk;
                     }
                 }
-                break :blk;
-            }
-
-            if ((ke.action == .down or ke.action == .repeat) and ke.matchBind("word_right")) {
-                e.handle(@src(), self.data());
-                if (!self.textLayout.selection.empty()) {
-                    self.textLayout.selection.moveCursor(self.textLayout.selection.end, false);
-                    self.textLayout.selection.affinity = .before;
-                } else {
-                    if (self.textLayout.sel_move == .none) {
-                        self.textLayout.sel_move = .{ .word_left_right = .{ .select = false } };
-                    }
-                    if (self.textLayout.sel_move == .word_left_right) {
-                        self.textLayout.sel_move.word_left_right.count += 1;
-                    }
-                }
-                break :blk;
-            }
-
-            if ((ke.action == .down or ke.action == .repeat) and ke.matchBind("char_left")) {
-                e.handle(@src(), self.data());
-                if (!self.textLayout.selection.empty()) {
-                    self.textLayout.selection.moveCursor(self.textLayout.selection.start, false);
-                } else {
-                    if (self.textLayout.sel_move == .none) {
-                        self.textLayout.sel_move = .{ .char_left_right = .{ .select = false } };
-                    }
-                    if (self.textLayout.sel_move == .char_left_right) {
-                        self.textLayout.sel_move.char_left_right.count -= 1;
-                    }
-                }
-                break :blk;
-            }
-
-            if ((ke.action == .down or ke.action == .repeat) and ke.matchBind("char_right")) {
-                e.handle(@src(), self.data());
-                if (!self.textLayout.selection.empty()) {
-                    self.textLayout.selection.moveCursor(self.textLayout.selection.end, false);
-                    self.textLayout.selection.affinity = .before;
-                } else {
-                    if (self.textLayout.sel_move == .none) {
-                        self.textLayout.sel_move = .{ .char_left_right = .{ .select = false } };
-                    }
-                    if (self.textLayout.sel_move == .char_left_right) {
-                        self.textLayout.sel_move.char_left_right.count += 1;
-                    }
-                }
-                break :blk;
-            }
-
-            if ((ke.action == .down or ke.action == .repeat) and ke.matchBind("char_up")) {
-                e.handle(@src(), self.data());
-                if (self.textLayout.sel_move == .none) {
-                    self.textLayout.sel_move = .{ .cursor_updown = .{ .select = false } };
-                }
-                if (self.textLayout.sel_move == .cursor_updown) {
-                    self.textLayout.sel_move.cursor_updown.count -= 1;
-                }
-                break :blk;
-            }
-
-            if ((ke.action == .down or ke.action == .repeat) and ke.matchBind("char_down")) {
-                e.handle(@src(), self.data());
-                if (self.textLayout.sel_move == .none) {
-                    self.textLayout.sel_move = .{ .cursor_updown = .{ .select = false } };
-                }
-                if (self.textLayout.sel_move == .cursor_updown) {
-                    self.textLayout.sel_move.cursor_updown.count += 1;
-                }
-                break :blk;
             }
 
             switch (ke.code) {
                 .backspace => {
                     if (ke.action == .down or ke.action == .repeat) {
                         e.handle(@src(), self.data());
-                        if (self.init_opts.edit_notify) |en| en.beginEdit(en.ctx);
-                        defer if (self.init_opts.edit_notify) |en| en.endEdit(en.ctx);
+                        if (self.init_opts.edit_notify) |en| en.beginEdit(en.ctx, self.currentRange());
+                        defer if (self.init_opts.edit_notify) |en| en.endEdit(en.ctx, self.currentRange());
                         var sel = self.textLayout.selectionGet(self.len);
                         if (!sel.empty()) {
                             // just delete selection
@@ -1674,8 +1581,8 @@ pub fn processEvent(self: *TextEntryWidget, e: *Event) void {
                 .delete => {
                     if (ke.action == .down or ke.action == .repeat) {
                         e.handle(@src(), self.data());
-                        if (self.init_opts.edit_notify) |en| en.beginEdit(en.ctx);
-                        defer if (self.init_opts.edit_notify) |en| en.endEdit(en.ctx);
+                        if (self.init_opts.edit_notify) |en| en.beginEdit(en.ctx, self.currentRange());
+                        defer if (self.init_opts.edit_notify) |en| en.endEdit(en.ctx, self.currentRange());
                         var sel = self.textLayout.selectionGet(self.len);
                         if (!sel.empty()) {
                             // just delete selection
@@ -1879,6 +1786,91 @@ fn autoInsertCallParens(self: *TextEntryWidget) void {
 /// character over a selection; see `tab_inserts_indent`'s doc comment). Snaps to the next
 /// tab stop when inserting spaces, matching VSCode's default Tab behavior: after 2 typed
 /// characters, Tab adds 2 spaces to reach column 4, not a flat 4 more.
+// -- keyboard motion ---------------------------------------------------------------------------
+//
+// Motion is resolved in `textcore.movement` against the byte buffer, immediately, and only
+// then written into dvui's `Selection`. The previous path instead set
+// `TextLayoutWidget.sel_move` — a **single-slot** union resolved later during the render pass,
+// which meant a second motion arriving in the same frame was dropped on the floor (every
+// handler was guarded by `if (sel_move == .none)`) and up/down round-tripped through
+// `dataSet`/`dataGet` across two frames. dvui's Selection is now a projection, not the source
+// of truth; the only place layout still owns a selection change is mouse hit-testing, which
+// genuinely needs glyph positions.
+
+/// Sticky goal column for vertical motion. Lives in dvui's per-widget store because the
+/// widget struct itself is rebuilt every frame. dvui garbage-collects this the first frame
+/// the widget isn't drawn, which is the behaviour we want — switching tabs should not carry a
+/// stale target column back.
+const goal_col_key = "_textcore_goal_col";
+
+fn currentRange(self: *TextEntryWidget) tc.Range {
+    const sel = self.textLayout.selectionGet(self.len);
+    // dvui stores an ordered {start, end} plus a cursor; recover the anchor/head direction
+    // from which end the cursor sits at, so a backwards selection keeps extending backwards.
+    const r: tc.Range = if (sel.cursor == sel.start and sel.start != sel.end)
+        .init(sel.end, sel.start)
+    else
+        .init(sel.start, sel.end);
+    return .{
+        .anchor = r.anchor,
+        .head = r.head,
+        .goal_col = dvui.dataGet(null, self.data().id, goal_col_key, u32),
+    };
+}
+
+fn setRange(self: *TextEntryWidget, r: tc.Range) void {
+    const sel = self.textLayout.selectionGet(self.len);
+    sel.cursor = r.head;
+    sel.start = r.start();
+    sel.end = r.end();
+    sel.affinity = .after;
+
+    if (r.goal_col) |g| {
+        dvui.dataSet(null, self.data().id, goal_col_key, g);
+    } else {
+        dvui.dataRemove(null, self.data().id, goal_col_key);
+    }
+    self.textLayout.scroll_to_cursor = true;
+}
+
+fn moveOpts(self: *TextEntryWidget) tc.MoveOpts {
+    return .{ .tab_size = if (self.init_opts.tab_size == 0) 4 else @intCast(self.init_opts.tab_size) };
+}
+
+fn applyMotion(self: *TextEntryWidget, g: tc.Granularity, dir: tc.Dir, extend: bool) void {
+    self.setRange(tc.movement.move(
+        self.text[0..self.len],
+        self.currentRange(),
+        g,
+        dir,
+        extend,
+        self.moveOpts(),
+    ));
+}
+
+/// Keyboard motions, as (dvui keybind name, granularity, direction). Each entry also covers
+/// its `<name>_select` shift variant — dvui defines those binds, but neither this widget nor
+/// upstream's ever handled them, so shift+arrow selected nothing at all.
+const motion_binds = [_]struct {
+    bind: []const u8,
+    granularity: tc.Granularity,
+    dir: tc.Dir,
+}{
+    // Most-specific modifiers first. The binds are mutually exclusive on both platforms
+    // (`char_left` requires alt/control *up*, `word_left` requires it down), so this is
+    // ordering for readability rather than correctness.
+    .{ .bind = "text_start", .granularity = .document, .dir = .backward },
+    .{ .bind = "text_end", .granularity = .document, .dir = .forward },
+    .{ .bind = "line_start", .granularity = .line_boundary, .dir = .backward },
+    .{ .bind = "line_end", .granularity = .line_boundary, .dir = .forward },
+    .{ .bind = "word_left", .granularity = .word, .dir = .backward },
+    .{ .bind = "word_right", .granularity = .word, .dir = .forward },
+    .{ .bind = "char_left", .granularity = .char, .dir = .backward },
+    .{ .bind = "char_right", .granularity = .char, .dir = .forward },
+    .{ .bind = "char_up", .granularity = .line, .dir = .backward },
+    .{ .bind = "char_down", .granularity = .line, .dir = .forward },
+};
+
 fn insertIndent(self: *TextEntryWidget) void {
     const tab_size: usize = if (self.init_opts.tab_size == 0) 4 else self.init_opts.tab_size;
     if (!self.init_opts.insert_spaces) {
