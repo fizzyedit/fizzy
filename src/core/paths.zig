@@ -10,8 +10,8 @@ const builtin = @import("builtin");
 /// directory to the OS while comparing unequal to everything that derives a key from it —
 /// recents dedupe, and language servers, which are handed the project folder as a `rootUri`
 /// and quietly fail to locate the build root when it carries a `.` component. Normalize at the
-/// boundary (argv resolution, `setProjectFolder`, recents load/append) so nothing downstream
-/// can ever see the odd spelling.
+/// boundary (argv resolution, `setProjectFolder`, `openFilePath` / `docFromPath`, recents
+/// load/append) so nothing downstream can ever see the odd spelling.
 pub fn normalize(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.fs.path.resolve(allocator, &.{path});
 }
@@ -116,6 +116,10 @@ test normalize {
         .{ .in = "/Users/me/dev//fizzy", .want = "/Users/me/dev/fizzy" },
         .{ .in = "/Users/me/dev/pixi/../fizzy", .want = "/Users/me/dev/fizzy" },
         .{ .in = "/Users/me/dev/fizzy", .want = "/Users/me/dev/fizzy" },
+        // File paths — same collapse `openFilePath` relies on so `a/./b.zig` can't
+        // double-open against an already-loaded `a/b.zig`.
+        .{ .in = "/Users/me/dev/fizzy/./src/editor/Editor.zig", .want = "/Users/me/dev/fizzy/src/editor/Editor.zig" },
+        .{ .in = "/Users/me/dev/fizzy/src/../src/main.zig", .want = "/Users/me/dev/fizzy/src/main.zig" },
         // Root survives as the one path that keeps its separator.
         .{ .in = "/", .want = "/" },
         .{ .in = "/.", .want = "/" },

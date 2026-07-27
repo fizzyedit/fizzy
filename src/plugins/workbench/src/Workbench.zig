@@ -289,7 +289,10 @@ fn svcRevealPosition(ctx: *anyopaque, path: []const u8, line: u32, character: u3
     if (host.pluginForExtension(std.fs.path.extension(path)) == null) return false;
 
     const wb = runtime.workbench();
-    const owned_path = try wb.allocator.dupe(u8, path);
+    // Same canonical spelling `openFilePath` will store on the document (`std.fs.path.resolve`
+    // ≡ `fizzy.paths.normalize`) — otherwise `pollPendingReveals`'s exact `docFromPath` could
+    // miss a `.`-laden URI-derived path on the fast path.
+    const owned_path = try std.fs.path.resolve(wb.allocator, &.{path});
     errdefer wb.allocator.free(owned_path);
     try wb.pending_reveals.append(wb.allocator, .{ .path = owned_path, .line = line, .character = character });
     // `openFilePath` returning `false` here (as opposed to an actual error) only ever means
@@ -302,7 +305,7 @@ fn svcRevealPosition(ctx: *anyopaque, path: []const u8, line: u32, character: u3
     // `open_side`: mint a fresh grouping so the load lands in a new split instead of the
     // current one — mirrors the file tree's "Open to the side" menu action exactly.
     const target_grouping = if (open_side) wb.newGroupingID() else wb.currentGroupingID();
-    _ = host.openFilePath(path, target_grouping) catch |err| {
+    _ = host.openFilePath(owned_path, target_grouping) catch |err| {
         wb.pending_reveals.items.len -= 1;
         wb.allocator.free(owned_path);
         return err;

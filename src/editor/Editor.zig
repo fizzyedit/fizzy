@@ -1914,9 +1914,29 @@ pub fn docPath(_: *Editor, doc: sdk.DocHandle) []const u8 {
     return doc.owner.documentPath(doc);
 }
 
+/// Looks up an open document by path. Exact match first (the hot path — file-tree paint hits
+/// this every frame with already-canonical abs paths); on miss, collapses `.` / `..` /
+/// duplicate separators so a caller holding `a/./b.zig` still finds a doc stored as `a/b.zig`
+/// (and vice versa for anything opened before `openFilePath` started normalizing). See
+/// `fizzy.paths.normalize`.
 pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
     for (editor.open_files.values()) |doc| {
         if (std.mem.eql(u8, editor.docPath(doc), path)) return doc;
+    }
+
+    const key = fizzy.paths.normalize(fizzy.app.allocator, path) catch return null;
+    defer fizzy.app.allocator.free(key);
+
+    for (editor.open_files.values()) |doc| {
+        const stored = editor.docPath(doc);
+        if (std.mem.eql(u8, stored, key)) return doc;
+        // Skip a second normalize when the stored spelling already matched `path` above, or
+        // already equals `key`. Only needed when a pre-normalization doc still carries a `.`
+        // component that the caller's key has already collapsed.
+        if (std.mem.eql(u8, stored, path)) continue;
+        const stored_canon = fizzy.paths.normalize(fizzy.app.allocator, stored) catch continue;
+        defer fizzy.app.allocator.free(stored_canon);
+        if (std.mem.eql(u8, stored_canon, key)) return doc;
     }
     return null;
 }
@@ -3412,16 +3432,26 @@ pub fn clearFileTreeTabDragDropState(editor: *Editor) void {
     // multiple workspace `processTabDrag` calls in one frame do not race.
 }
 
-pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
-    // Already open? Just focus it.
-    for (editor.open_files.values(), 0..) |doc, i| {
-        if (std.mem.eql(u8, editor.docPath(doc), path)) {
+/// Choke point for every file open (CLI argv, file tree, palette, drag-drop, SDK
+/// `Host.openFilePath`). Canonicalizes `path_in` once so `loading_jobs`, the document's stored
+/// path, and later `docFromPath` lookups all agree — otherwise `foo/./bar.zig` and `foo/bar.zig`
+/// would open as two documents. See `fizzy.paths.normalize`.
+pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
+    const path = try fizzy.paths.normalize(fizzy.app.allocator, path_in);
+    defer fizzy.app.allocator.free(path);
+
+    // Already open? Just focus it. (`docFromPath` also collapses lexical variants, so a doc
+    // opened under a pre-normalization spelling is still found.)
+    if (editor.docFromPath(path)) |doc| {
+        if (editor.open_files.getIndex(doc.id)) |i| {
             editor.setActiveFile(i);
-            return false;
         }
+        return false;
     }
 
     // Already loading? Mark this as the most-recent request so it gets focused on completion.
+    // Jobs always key on the canonical path (see `FileLoadJob.create` below), so a second open
+    // with a `.`-suffixed spelling collapses onto the in-flight one rather than spawning two.
     if (editor.loading_jobs.getKey(path)) |existing_key| {
         editor.last_load_request_path = existing_key;
         return false;
@@ -3435,7 +3465,7 @@ pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
         return false;
     };
 
-    // Spawn a worker. The job owns the path string we'll key the map by.
+    // Spawn a worker. The job owns the (already canonical) path string we'll key the map by.
     const io = dvui.io;
     const job = try FileLoadJob.create(fizzy.app.allocator, path, owner, grouping);
     errdefer job.destroy(io);
@@ -3466,32 +3496,39 @@ pub fn openFilePath(editor: *Editor, path: []const u8, grouping: u64) !bool {
     return true;
 }
 
-/// Synchronous open from browser file-picker bytes. Registers the document and returns its id.
-pub fn openFileFromBytes(editor: *Editor, path: []u8, bytes: []const u8, grouping: u64) !u64 {
+/// Synchronous open from browser file-picker bytes. Takes ownership of `path_in` and registers
+/// the document under its canonical spelling (same contract as `openFilePath`). Returns its id.
+pub fn openFileFromBytes(editor: *Editor, path_in: []u8, bytes: []const u8, grouping: u64) !u64 {
+    const path = blk: {
+        defer fizzy.app.allocator.free(path_in);
+        break :blk try fizzy.paths.normalize(fizzy.app.allocator, path_in);
+    };
+
+    // Freed on every exit path below except the success transfer into the plugin document
+    // (loaders dupe `path`). Cleared to null after that free so a later `errdefer` can't
+    // double-free if `insertOpenDoc` fails.
+    var path_owned: ?[]u8 = path;
+    errdefer if (path_owned) |p| fizzy.app.allocator.free(p);
+
     if (editor.docFromPath(path)) |existing| {
         if (editor.open_files.getIndex(existing.id)) |idx| {
             editor.setActiveFile(idx);
         }
-        fizzy.app.allocator.free(path);
         return error.AlreadyOpen;
     }
 
     const owner = editor.host.pluginForExtension(std.fs.path.extension(path)) orelse {
-        fizzy.app.allocator.free(path);
         return error.InvalidExtension;
     };
 
     const staging = try owner.allocDocumentBuffer(fizzy.app.allocator);
     defer fizzy.app.allocator.free(staging.backing);
 
-    const handled = owner.loadDocumentFromBytes(path, bytes, staging.buf.ptr) catch |err| {
-        fizzy.app.allocator.free(path);
-        return err;
-    };
-    if (!handled) {
-        fizzy.app.allocator.free(path);
-        return error.InvalidFile;
-    }
+    const handled = try owner.loadDocumentFromBytes(path, bytes, staging.buf.ptr);
+    if (!handled) return error.InvalidFile;
+
+    fizzy.app.allocator.free(path);
+    path_owned = null;
 
     owner.setDocumentGroupingOnBuffer(staging.buf.ptr, grouping);
     const id = owner.documentIdFromBuffer(staging.buf.ptr);
