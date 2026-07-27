@@ -18,6 +18,7 @@ const std = @import("std");
 pub const Key = @import("Key.zig").Key;
 pub const keyIsModifier = @import("Key.zig").isModifier;
 const chord_mod = @import("chord.zig");
+pub const zon = @import("zon.zig");
 
 pub const Platform = chord_mod.Platform;
 pub const Mods = chord_mod.Mods;
@@ -473,4 +474,5 @@ test "conflicts reports the shadowed binding" {
 test {
     _ = @import("Key.zig");
     _ = chord_mod;
+    _ = zon;
 }

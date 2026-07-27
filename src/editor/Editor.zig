@@ -101,6 +101,15 @@ plugin_enabled_pending: std.StringArrayHashMapUnmanaged(bool) = .empty,
 /// them back or every widget's caret/clipboard handling silently dies after the first plugin
 /// load or unload. Keys are dvui's own static literals; only the map itself is owned here.
 dvui_default_keybinds: std.StringHashMapUnmanaged(dvui.enums.Keybind) = .empty,
+/// Resolved keybinding table: chord -> command id. Rebuilt by `Keybinds.buildKeymap`
+/// whenever `rebuildKeybinds` runs (plugin load/unload), so a plugin's binds never outlive
+/// the image their strings live in.
+keymap: @import("keymap/keymap.zig").Keymap = .{},
+/// Parsed `keybinds.zon`. Held because `keymap` borrows its command-id and owner-id strings —
+/// it must outlive the keymap and is replaced wholesale on every rebuild.
+keybinds_overrides: ?@import("keymap/keymap.zig").zon.File = null,
+/// Which default keymap the shell starts from.
+keybind_profile: Keybinds.Profile = .vscode,
 
 /// User plugins that failed to load this session, so the UI can tell the author what
 /// went wrong instead of failing silently into the log. Populated by `loadUserPlugins`;
@@ -1148,6 +1157,9 @@ fn rebuildKeybinds(editor: *Editor) void {
         plugin.contributeKeybinds(window) catch |err|
             dvui.log.err("keybind rebuild ('{s}') failed: {s}", .{ plugin.id, @errorName(err) });
     }
+    // Lift the finished bind map into the command keymap that `Keybinds.tick` dispatches from.
+    Keybinds.buildKeymap(editor) catch |err|
+        dvui.log.err("keymap rebuild failed: {s}", .{@errorName(err)});
 }
 
 /// True if `plugin` owns any currently-dirty open document.
@@ -1366,6 +1378,10 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
 pub fn postInit(editor: *Editor) !void {
     sdk.installRuntime(&fizzy.app.allocator, &editor.host, null);
 
+    // Shell commands must be registered against the Editor's *final* address — `init` returns
+    // an Editor by value, so a pointer taken there would dangle the moment it's moved.
+    try Keybinds.registerCommands(editor);
+
     // Install the shell's read/utility surface so plugins reach shared shell state
     // (per-frame arena, project folder, content opacity, settings dirty-mark) through
     // the Host instead of importing the concrete Editor.
@@ -1455,6 +1471,10 @@ pub fn postInit(editor: *Editor) !void {
     syncLoadedPluginDvuiContexts(editor);
     const window = dvui.currentWindow();
     for (editor.host.plugins.items) |plugin| try plugin.contributeKeybinds(window);
+    // Startup's only pass over the finished bind map. `rebuildKeybinds` covers later plugin
+    // load/unload, but it never runs during boot — without this the keymap stays empty and no
+    // shell shortcut works until a plugin happens to be reloaded.
+    try Keybinds.buildKeymap(editor);
 
     // The workbench-api is the file explorer's programmatic surface and drives OS
     // file management (open/create/rename/delete/move on disk). The web build has
