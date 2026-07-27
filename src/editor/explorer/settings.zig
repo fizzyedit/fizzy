@@ -16,16 +16,34 @@ const std = @import("std");
 
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
+const core = @import("core");
 const Editor = fizzy.Editor;
 const KeybindSettings = @import("../KeybindSettings.zig");
 
+const fuzzy = core.fuzzy;
+
+/// An item that is a searchable list in its own right rather than one labelled control.
+///
+/// The keybind table is the only one: it holds hundreds of rows, so matching it as a single leaf
+/// labelled "Bindings" would be useless. `score` is run during `SettingsTree`'s data pass (it
+/// returns the best score among the rows the item *would* draw, or null to drop the row from the
+/// tree entirely) and `draw` then renders only what matched, highlighting it itself.
+pub const Search = struct {
+    score: *const fn (query: *const fuzzy.Query) ?f64,
+    draw: *const fn (query: *const fuzzy.Query) void,
+};
+
 /// One row in the settings tree: a labelled control the user can search for.
 pub const Item = struct {
+    /// Also the name the search matches on. Not drawn for a `search` item — those label their
+    /// own rows.
     label: []const u8,
     /// Extra search terms that never appear on screen — synonyms and the words a user is likely
     /// to type instead of the label ("dark" for Theme, "trackpad" for the control scheme).
     keywords: []const u8 = "",
-    draw: *const fn () void,
+    /// The control body, drawn under `label`. Exactly one of this and `search` is set.
+    draw: ?*const fn () void = null,
+    search: ?Search = null,
 };
 
 /// A category branch under "Fizzy".
@@ -60,7 +78,8 @@ pub const groups = [_]Group{
             .{
                 .label = "Bindings",
                 .keywords = "keybind shortcut hotkey chord keyboard remap keys",
-                .draw = drawKeybinds,
+                // Every command is individually searchable — see `KeybindSettings`.
+                .search = .{ .score = KeybindSettings.score, .draw = KeybindSettings.draw },
             },
         },
     },
@@ -71,10 +90,6 @@ pub const groups = [_]Group{
         },
     },
 };
-
-fn drawKeybinds() void {
-    KeybindSettings.draw();
-}
 
 // ---- Appearance -------------------------------------------------------------------------
 

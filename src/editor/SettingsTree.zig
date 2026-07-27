@@ -159,8 +159,12 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
             .key = branchKey(std.fmt.allocPrint(arena, "{s}/{s}", .{ shell_branch_title, group.title }) catch group.title),
         };
         for (group.items, 0..) |item, ii| {
-            const path = std.fmt.allocPrint(arena, "{s}/{s}/{s}", .{ shell_branch_title, group.title, item.label }) catch item.label;
-            const s = scoreLeaf(query, path, item.label, item.keywords) orelse continue;
+            // An item that owns a searchable list scores itself: its rows, not its label, are
+            // what the query is really matching against (`settings.Search`).
+            const s = if (item.search) |sr| sr.score(query) orelse continue else blk: {
+                const path = std.fmt.allocPrint(arena, "{s}/{s}/{s}", .{ shell_branch_title, group.title, item.label }) catch item.label;
+                break :blk scoreLeaf(query, path, item.label, item.keywords) orelse continue;
+            };
             child.leaves.append(arena, .{ .index = ii, .label = item.label, .score = s, .tie = ii }) catch continue;
             if (s < child.score) child.score = s;
         }
@@ -231,7 +235,11 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
 // ---- drawing ------------------------------------------------------------------------------
 
 pub fn draw() !void {
-    var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    // Keep content clear of the pane's right edge (scrollbar / clip).
+    var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .margin = .{ .w = 20 },
+    });
     defer vbox.deinit();
 
     const query_text = drawSearchRow();
@@ -276,7 +284,7 @@ const RowStyle = enum { root, category };
 /// Search row — deliberately the same shape as the file tree's filter (`workbench/src/files.zig`)
 /// so the two read as the same control.
 fn drawSearchRow() []const u8 {
-    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .w = 10 } });
+    var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     defer hbox.deinit();
 
     dvui.icon(
@@ -370,7 +378,12 @@ fn drawLeaves(branch: *const Branch, query: *const fuzzy.Query) !void {
         });
         defer row.deinit();
 
-        {
+        // A `settings.Search` item draws its own rows (each with its own name), so a leaf label
+        // above them would just be a second, redundant heading.
+        const search_item: ?shell_settings.Search =
+            if (branch.group) |group| group.items[leaf.index].search else null;
+
+        if (search_item == null) {
             var tl = dvui.textLayout(@src(), .{ .break_lines = false }, .{
                 .background = false,
                 .expand = .horizontal,
@@ -382,8 +395,10 @@ fn drawLeaves(branch: *const Branch, query: *const fuzzy.Query) !void {
             tl.deinit();
         }
 
-        if (branch.group) |group| {
-            group.items[leaf.index].draw();
+        if (search_item) |sr| {
+            sr.draw(query);
+        } else if (branch.group) |group| {
+            if (group.items[leaf.index].draw) |drawFn| drawFn();
         } else if (branch.schema) |schema| {
             // Same hashing the old pane used: a plugin id that shows up in more than one section
             // must not collide on a widget id.

@@ -4326,6 +4326,7 @@ pub fn deinit(editor: *Editor) !void {
         f.deinit(fizzy.app.allocator);
         editor.keybinds_overrides = null;
     }
+    KeybindSettings.deinit(fizzy.app.allocator);
     editor.keymap.deinit(fizzy.app.allocator);
 
     if (editor.folder) |folder| fizzy.app.allocator.free(folder);

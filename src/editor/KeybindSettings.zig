@@ -2,17 +2,56 @@
 //!
 //! Lists every Host command with its current chord(s), lets the user click to record a new
 //! binding (written to `keybinds.zon`), reset to default, and surfaces `Keymap.conflicts()`.
+//!
+//! Rows are laid out with `dvui.grid` (sortable / drag-resizable headers), one grid per owner
+//! (Fizzy, or a plugin), each inside a collapsible tree branch that starts closed.
+//!
+//! **This pane is part of the settings search.** `score` is the data pass the settings tree runs
+//! before anything is drawn (see `SettingsTree`'s header comment); `draw` re-runs the same
+//! `collectGroups` and renders only the commands that survived, with the matched characters of
+//! each title tinted. A query that matches one keybind draws one branch with one row.
+//!
+//! **The grids never report a width to the explorer.** The explorer pane is a horizontally
+//! scrolling area, so a child that asks for more width than the viewport makes the pane scroll —
+//! and because a scroll container hands its children `max(virtual_size.w, viewport.w)`, a grid
+//! sized from its parent's width would then ask for that new, larger width the next frame and
+//! ratchet wider every frame (leaving the pane's edge shadow and horizontal bar stuck on). The
+//! grid is capped with `max_size_content = .width(0)` so it contributes nothing to the pane's
+//! virtual width; overflow scrolls *inside* the grid instead, and only when the columns can't be
+//! squeezed to fit.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
+const icons = @import("icons");
+const core = @import("core");
 const fizzy = @import("../fizzy.zig");
 const keymap = @import("keymap/keymap.zig");
 const adapter = @import("keymap/dvui_adapter.zig");
 const Keybinds = @import("Keybinds.zig");
 
+const wdvui = core.dvui;
+const fuzzy = core.fuzzy;
+
 /// Command id currently waiting for a key press, or null when idle. Points into
 /// `host.commands` (stable for the session while the plugin stays loaded).
 var recording: ?[]const u8 = null;
+
+/// Shared column widths across every owner grid so a drag-resize applies everywhere.
+var col_widths: [3]f32 = .{ 0, 0, 0 };
+
+/// Owners present in this set are expanded. Default (absent) is collapsed — the pane opens as a
+/// short list of owners rather than a wall of tables.
+var open_owners: std.AutoHashMapUnmanaged(u64, void) = .empty;
+
+/// Terms that name the *table itself* rather than any one command, so searching "shortcuts"
+/// finds the whole list. Scored one term at a time rather than as a single sentence: against one
+/// long string a query only has to be a scattered subsequence of it ("copy" picking up letters
+/// from four different words), and every such accident would flood the pane with every command.
+const table_keywords = [_][]const u8{
+    "keybind",   "keybinding", "keybindings", "keyboard", "shortcut",
+    "shortcuts", "hotkey",     "hotkeys",     "chord",    "chords",
+    "keys",      "remap",      "bindings",
+};
 
 /// Whether a chord is being captured right now.
 ///
@@ -30,7 +69,172 @@ pub fn isRecording() bool {
     return recording != null;
 }
 
-pub fn draw() void {
+pub fn deinit(gpa: std.mem.Allocator) void {
+    open_owners.deinit(gpa);
+}
+
+/// Default / minimum widths. Command column flexes with the pane; shortcut and reset keep a floor.
+const default_shortcut_w: f32 = 140;
+const default_reset_w: f32 = 64;
+const min_command_w: f32 = 80;
+const min_shortcut_w: f32 = 90;
+const min_reset_w: f32 = 48;
+
+// ---- match model --------------------------------------------------------------------------
+
+const Row = struct {
+    cmd: fizzy.sdk.Host.Command,
+    keys: []const u8,
+    score: f64,
+    tie: usize,
+};
+
+const Group = struct {
+    owner: []const u8,
+    title: []const u8,
+    key: u64,
+    /// Best score among this group's rows — drives branch order while searching. Kept separate
+    /// from `owner_hit`: folding the two together made the *first* matching command lower
+    /// `score` below `floatMax`, which then read as "the owner matched" and let every later
+    /// command in the group through the filter.
+    score: f64,
+    /// Set when the query matched the owner's own name — that keeps all of its commands.
+    owner_hit: ?f64,
+    tie: usize,
+    rows: std.ArrayListUnmanaged(Row) = .empty,
+};
+
+fn ownerKey(owner: []const u8) u64 {
+    return std.hash.Wyhash.hash(0xb17d5, owner);
+}
+
+fn isOwnerOpen(key: u64) bool {
+    return open_owners.contains(key);
+}
+
+fn setOwnerOpen(key: u64, open: bool) void {
+    if (open) {
+        open_owners.put(fizzy.app.allocator, key, {}) catch {};
+    } else {
+        _ = open_owners.remove(key);
+    }
+}
+
+fn ownerPrefix(id: []const u8) []const u8 {
+    return if (std.mem.indexOfScalar(u8, id, '.')) |dot| id[0..dot] else id;
+}
+
+fn ownerLabel(owner: []const u8) []const u8 {
+    if (std.mem.eql(u8, owner, "fizzy")) return "Fizzy";
+    const editor = fizzy.editor;
+    if (editor.host.pluginById(owner)) |p| return p.display_name;
+    return owner;
+}
+
+/// Group every command by owner, keeping only what `query` matched. Rebuilt from scratch (into
+/// the frame arena) by both `score` and `draw` so the two can't disagree about what matched.
+fn collectGroups(
+    arena: std.mem.Allocator,
+    query: *const fuzzy.Query,
+    platform: keymap.Platform,
+) std.ArrayListUnmanaged(Group) {
+    const editor = fizzy.editor;
+    var groups: std.ArrayListUnmanaged(Group) = .empty;
+
+    // A hit on the table's own name shows the whole list — but only as a *fallback*, applied
+    // below once it's clear no individual command matched. Applied per row instead, a query that
+    // matched three commands and also happened to brush a keyword would draw all of them.
+    const table_hit = fuzzy.scoreBest(&table_keywords, query, .{ .plain = true });
+    var any_row = false;
+
+    for (editor.host.commands.items, 0..) |c, ci| {
+        const owner = ownerPrefix(c.id);
+        const group = blk: {
+            for (groups.items) |*g| {
+                if (std.mem.eql(u8, g.owner, owner)) break :blk g;
+            }
+            const title = ownerLabel(owner);
+            // A hit on the owner's name ("text") shows all of that plugin's commands.
+            const owner_hit = fuzzy.scoreBest(&.{ title, owner }, query, .{ .plain = true });
+            groups.append(arena, .{
+                .owner = owner,
+                .title = title,
+                .key = ownerKey(owner),
+                .score = owner_hit orelse std.math.floatMax(f64),
+                .owner_hit = owner_hit,
+                .tie = groups.items.len,
+            }) catch continue;
+            break :blk &groups.items[groups.items.len - 1];
+        };
+
+        const cmd_hit = fuzzy.scoreBest(&.{ c.title, c.id }, query, .{ .plain = true });
+        const s = cmd_hit orelse group.owner_hit orelse continue;
+
+        const keys = if (shortcutFor(editor, c.id, platform)) |sc| sc.keys else "";
+        group.rows.append(arena, .{ .cmd = c, .keys = keys, .score = s, .tie = ci }) catch continue;
+        if (s < group.score) group.score = s;
+        any_row = true;
+    }
+
+    // Nothing matched by name, but the query named the table itself ("shortcuts") — then the
+    // whole list is the answer.
+    if (!any_row) {
+        const s = table_hit orelse return .empty;
+        for (groups.items) |*g| {
+            g.score = s;
+            for (editor.host.commands.items, 0..) |c, ci| {
+                if (!std.mem.eql(u8, ownerPrefix(c.id), g.owner)) continue;
+                const keys = if (shortcutFor(editor, c.id, platform)) |sc| sc.keys else "";
+                g.rows.append(arena, .{ .cmd = c, .keys = keys, .score = s, .tie = ci }) catch {};
+            }
+        }
+    }
+
+    // Drop owners whose commands all missed, then rank best-first while searching. With an empty
+    // query every score is 0 and registration order is the intended reading order.
+    var kept: std.ArrayListUnmanaged(Group) = .empty;
+    for (groups.items) |g| {
+        if (g.rows.items.len == 0) continue;
+        kept.append(arena, g) catch {};
+    }
+    if (!query.isEmpty()) {
+        std.sort.block(Group, kept.items, {}, lowerGroup);
+        for (kept.items) |*g| std.sort.block(Row, g.rows.items, {}, lowerRow);
+    }
+    return kept;
+}
+
+fn lowerGroup(_: void, a: Group, b: Group) bool {
+    if (a.score != b.score) return a.score < b.score;
+    return a.tie < b.tie;
+}
+
+fn lowerRow(_: void, a: Row, b: Row) bool {
+    if (a.score != b.score) return a.score < b.score;
+    return a.tie < b.tie;
+}
+
+/// Settings-tree search hook: the best score among the commands this pane would draw, or null
+/// when nothing matches (the whole "Keyboard Shortcuts" row then disappears from the tree).
+pub fn score(query: *const fuzzy.Query) ?f64 {
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        // No keybinds on web — the pane draws an explanatory line, so only match its own name.
+        return fuzzy.scoreBest(&table_keywords, query, .{ .plain = true });
+    }
+    if (query.isEmpty()) return 0;
+
+    const platform: keymap.Platform = if (fizzy.platform.isMacOS()) .mac else .other;
+    const groups = collectGroups(dvui.currentWindow().arena(), query, platform);
+    var best: ?f64 = null;
+    for (groups.items) |g| {
+        if (best == null or g.score < best.?) best = g.score;
+    }
+    return best;
+}
+
+// ---- drawing ------------------------------------------------------------------------------
+
+pub fn draw(query: *const fuzzy.Query) void {
     if (comptime builtin.target.cpu.arch == .wasm32) {
         dvui.label(@src(), "Keybindings are not available on the web build.", .{}, .{
             .color_text = dvui.themeGet().color(.window, .text).opacity(0.6),
@@ -45,46 +249,104 @@ pub fn draw() void {
 
     drawConflicts(editor, platform, theme);
 
+    // No banner: the row being recorded says so itself. A strip appearing above the tree pushed
+    // every row down the moment you clicked one, so the shortcut you were aiming at moved.
     if (recording) |id| {
-        drawRecordingBanner(id, theme);
         if (pollRecording(editor, id, platform)) {
             recording = null;
         }
     }
 
-    // Group by owner id prefix (fizzy / plugin id).
-    var owners: std.ArrayListUnmanaged([]const u8) = .empty;
-    for (editor.host.commands.items) |c| {
-        const owner = ownerPrefix(c.id);
-        var seen = false;
-        for (owners.items) |o| {
-            if (std.mem.eql(u8, o, owner)) {
-                seen = true;
-                break;
-            }
+    const searching = !query.isEmpty();
+    const groups = collectGroups(arena, query, platform);
+    if (groups.items.len == 0) return;
+
+    // Two trees, one per mode: a search force-expands branches and `TreeWidget` keeps expansion
+    // per widget id, so sharing one id space would bleed "expanded because searching" into the
+    // browsing tree's animation state (same split `SettingsTree` uses).
+    var tree = wdvui.TreeWidget.tree(@src(), .{}, .{
+        .id_extra = @intFromBool(searching),
+        .expand = .horizontal,
+        .background = false,
+    });
+    defer tree.deinit();
+
+    for (groups.items, 0..) |*group, gi| {
+        drawOwnerBranch(tree, editor, group, query, searching, gi, platform, theme);
+    }
+}
+
+fn drawOwnerBranch(
+    tree: *wdvui.TreeWidget,
+    editor: *fizzy.Editor,
+    group: *const Group,
+    query: *const fuzzy.Query,
+    searching: bool,
+    id_extra: usize,
+    platform: keymap.Platform,
+    theme: dvui.Theme,
+) void {
+    // While searching every branch is forced open and `open_owners` is left untouched, so
+    // clearing the query drops straight back to whatever the user had expanded.
+    const want_open = searching or isOwnerOpen(group.key);
+
+    const b = tree.branch(@src(), .{
+        .expanded = want_open,
+        .animation_duration = 450_000,
+        .animation_easing = dvui.easing.outBack,
+    }, .{
+        .id_extra = id_extra,
+        .expand = .horizontal,
+        .color_fill_hover = theme.color(.control, .fill).opacity(0.5),
+        .color_fill_press = theme.color(.control, .fill_press),
+        .color_fill = .transparent,
+        .padding = dvui.Rect.all(1),
+    });
+    defer b.deinit();
+
+    {
+        const icon_color = theme.color(.control, .fill);
+        {
+            var slot = wdvui.treeRowGlyph(@src(), .{});
+            defer slot.deinit();
+            _ = dvui.icon(
+                @src(),
+                "KeybindOwnerCaret",
+                if (b.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
+                .{ .fill_color = icon_color, .stroke_color = icon_color },
+                wdvui.treeRowIconOptions(.{}),
+            );
         }
-        if (!seen) owners.append(arena, owner) catch {};
+        {
+            var slot = wdvui.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
+            defer slot.deinit();
+            _ = dvui.icon(
+                @src(),
+                "KeybindOwnerIcon",
+                icons.tvg.entypo.folder,
+                .{ .fill_color = icon_color, .stroke_color = icon_color },
+                wdvui.treeRowIconOptions(.{}),
+            );
+        }
+        // Same text colour and match-tinting as every other row in the pane.
+        wdvui.labelHighlighted(@src(), group.title, query, true, .{
+            .gravity_y = 0.5,
+            .expand = .horizontal,
+            .font = dvui.Font.theme(.body),
+            .color_text = theme.color(.control, .text),
+            .margin = .all(0),
+            .padding = dvui.Rect.all(3),
+        });
     }
 
-    for (owners.items, 0..) |owner, oi| {
-        var section = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = oi,
-            .expand = .horizontal,
-            .margin = .{ .y = 6, .h = 2 },
-        });
-        defer section.deinit();
-
-        dvui.label(@src(), "{s}", .{ownerLabel(owner)}, .{
-            .font = dvui.Font.theme(.heading),
-            .expand = .horizontal,
-            .padding = .{ .y = 4, .h = 2 },
-        });
-
-        for (editor.host.commands.items, 0..) |c, ci| {
-            if (!std.mem.eql(u8, ownerPrefix(c.id), owner)) continue;
-            drawCommandRow(editor, c, ci, platform, theme);
-        }
+    if (b.expander(@src(), .{ .indent = 14 }, .{
+        .expand = .horizontal,
+        .corners = .all(8),
+    })) {
+        drawOwnerGrid(editor, group, query, id_extra, platform, theme);
     }
+
+    if (!searching) setOwnerOpen(group.key, b.expanded);
 }
 
 /// Solid dot, drawn rather than iconified — lucide's circles are stroked outlines, and a
@@ -95,49 +357,13 @@ fn recordingDot() void {
         .min_size_content = .{ .w = size, .h = size },
         .expand = .none,
         .gravity_y = 0.5,
-        .margin = .{ .x = 2, .w = 6 },
+        .margin = .{ .x = 2, .w = 4 },
         .padding = dvui.Rect.all(0),
     });
     defer b.deinit();
 
     const r = b.data().borderRectScale().r;
     r.fill(.all(r.h / 2), .{ .color = dvui.themeGet().color(.err, .fill) });
-}
-
-fn drawRecordingBanner(id: []const u8, theme: dvui.Theme) void {
-    var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .background = true,
-        .color_fill = theme.color(.err, .fill).opacity(0.18),
-        .corners = .all(6),
-        .padding = dvui.Rect.all(6),
-        .margin = .{ .y = 2, .h = 6 },
-    });
-    defer box.deinit();
-
-    recordingDot();
-    dvui.labelNoFmt(@src(), "Recording", .{}, .{
-        .gravity_y = 0.5,
-        .font = dvui.Font.theme(.heading),
-        .color_text = theme.color(.err, .fill),
-    });
-    dvui.label(@src(), "Press a key combination for \"{s}\" — Esc to cancel", .{id}, .{
-        .gravity_y = 0.5,
-        .expand = .horizontal,
-        .margin = .{ .x = 8 },
-        .color_text = theme.color(.window, .text).opacity(0.8),
-    });
-}
-
-fn ownerPrefix(id: []const u8) []const u8 {
-    return if (std.mem.indexOfScalar(u8, id, '.')) |dot| id[0..dot] else id;
-}
-
-fn ownerLabel(owner: []const u8) []const u8 {
-    if (std.mem.eql(u8, owner, "fizzy")) return "Fizzy";
-    const editor = fizzy.editor;
-    if (editor.host.pluginById(owner)) |p| return p.display_name;
-    return owner;
 }
 
 fn drawConflicts(editor: *fizzy.Editor, platform: keymap.Platform, theme: dvui.Theme) void {
@@ -168,88 +394,280 @@ fn drawConflicts(editor: *fizzy.Editor, platform: keymap.Platform, theme: dvui.T
     }
 }
 
-fn drawCommandRow(
+/// Keep `col_widths` fitting `avail`: grow/shrink the command column first, then squeeze
+/// shortcut/reset down to their mins. Only when even the mins don't fit does the grid scroll.
+fn fitColumns(avail: f32) void {
+    if (avail <= 0) return;
+
+    if (col_widths[0] < 1) {
+        dvui.columnLayoutProportional(&.{ -1, default_shortcut_w, default_reset_w }, &col_widths, avail);
+        return;
+    }
+
+    const sum = col_widths[0] + col_widths[1] + col_widths[2];
+    if (sum < avail) {
+        col_widths[0] += avail - sum;
+        return;
+    }
+    if (sum <= avail) return;
+
+    var overflow = sum - avail;
+    const cmd_can = @max(0, col_widths[0] - min_command_w);
+    const cmd_take = @min(cmd_can, overflow);
+    col_widths[0] -= cmd_take;
+    overflow -= cmd_take;
+    if (overflow <= 0) return;
+
+    const sc_can = @max(0, col_widths[1] - min_shortcut_w);
+    const sc_take = @min(sc_can, overflow);
+    col_widths[1] -= sc_take;
+    overflow -= sc_take;
+    if (overflow <= 0) return;
+
+    const rs_can = @max(0, col_widths[2] - min_reset_w);
+    col_widths[2] -= @min(rs_can, overflow);
+}
+
+fn headerResizeOptions(col_num: usize) ?dvui.GridWidget.HeaderResizeWidget.InitOptions {
+    return .{
+        .sizes = &col_widths,
+        .num = col_num,
+        .min_size = switch (col_num) {
+            0 => min_command_w,
+            1 => min_shortcut_w,
+            else => min_reset_w,
+        },
+        .max_size = 480,
+    };
+}
+
+fn drawOwnerGrid(
     editor: *fizzy.Editor,
-    c: fizzy.sdk.Host.Command,
+    group: *const Group,
+    query: *const fuzzy.Query,
     id_extra: usize,
     platform: keymap.Platform,
     theme: dvui.Theme,
 ) void {
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+    // Budget for the columns: what the branch's expander actually gave us this frame. Sized
+    // before the grid installs so its header/body min width already matches.
+    fitColumns(dvui.parentGet().data().contentRect().w);
+
+    var grid = dvui.grid(@src(), .colWidths(&col_widths), .{
+        .scroll_opts = .{
+            // Vertical: none — the grid grows with its rows and the explorer pane scrolls.
+            // Horizontal: only reachable when the columns can't be squeezed into `avail`.
+            .horizontal = .auto,
+            .vertical = .none,
+            .horizontal_bar = .auto_overlay,
+            .vertical_bar = .hide,
+        },
+        .resize_rows = false,
+    }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
-        .padding = .{ .y = 2, .h = 2 },
-        .min_size_content = .{ .w = 0, .h = 28 },
+        // Ask the pane for nothing: see this file's header comment. Height is left unbounded so
+        // the grid still reports its full row stack and grows to fit.
+        .max_size_content = .width(0),
+        .padding = .all(0),
+        .background = true,
+        .color_fill = theme.color(.window, .fill).opacity(0.25),
+        .corners = .all(4),
     });
-    defer row.deinit();
+    defer grid.deinit();
 
-    {
-        var left = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .gravity_y = 0.5 });
-        defer left.deinit();
-        dvui.label(@src(), "{s}", .{c.title}, .{ .expand = .horizontal });
-        dvui.label(@src(), "{s}", .{c.id}, .{
+    // Alphabetical by command until the user clicks a heading. `.unsorted` is only ever the
+    // grid's *initial* state — a click always leaves it ascending or descending, and that is
+    // what the grid persists — so this can't stomp a sort the user picked.
+    if (grid.sort_direction == .unsorted) grid.colSortSet(0, .ascending);
+
+    const banded: dvui.GridWidget.CellStyle.Banded = .{
+        .cell_opts = .{
+            .padding = .{ .x = 6, .y = 2, .w = 4, .h = 2 },
+            .background = true,
+        },
+        .alt_cell_opts = .{
+            .padding = .{ .x = 6, .y = 2, .w = 4, .h = 2 },
+            .background = true,
+            .color_fill = theme.color(.control, .fill).opacity(0.22),
+        },
+    };
+
+    const heading_style: dvui.GridWidget.CellStyle = .{
+        .cell_opts = .{
+            .padding = .{ .x = 6, .y = 2, .w = 4, .h = 2 },
+            .background = true,
+            .color_fill = theme.color(.control, .fill).opacity(0.35),
+        },
+        .opts = .{
             .expand = .horizontal,
-            .color_text = theme.color(.window, .text).opacity(0.45),
-        });
+            .gravity_y = 0.5,
+            .font = dvui.Font.theme(.body).withWeight(.bold),
+            .color_text = theme.color(.window, .text).opacity(0.7),
+        },
+    };
+
+    var plain_heading_style = heading_style;
+    plain_heading_style.opts.background = false;
+
+    // Sortable + drag-resizable headers. `sort_dir` is an out-param; the grid persists which
+    // column is active via its own widget data.
+    var sort_dir: dvui.GridWidget.SortDirection = .unsorted;
+    _ = dvui.gridHeadingSortable(@src(), grid, 0, "Command", &sort_dir, headerResizeOptions(0), heading_style);
+    _ = dvui.gridHeadingSortable(@src(), grid, 1, "Shortcut", &sort_dir, headerResizeOptions(1), heading_style);
+    // `gridHeading` labels default to `background = true`, which paints a second, lighter block
+    // on top of the header cell — the sortable headings' buttons don't. Turn it off so all three
+    // read as one strip.
+    dvui.gridHeading(@src(), grid, 2, "Reset", headerResizeOptions(2), plain_heading_style);
+
+    // Sorting reorders the rows this branch already filtered down to, so it composes with search.
+    const rows = dvui.currentWindow().arena().dupe(Row, group.rows.items) catch group.rows.items;
+    if (sort_dir != .unsorted) {
+        const sort_col = grid.sort_col_number;
+        const asc = sort_dir == .ascending;
+        std.sort.pdq(Row, rows, SortCtx{ .col = sort_col, .asc = asc }, SortCtx.lessThan);
     }
 
+    for (rows, 0..) |row, ri| {
+        drawCommandRow(grid, editor, row.cmd, query, ri, platform, theme, banded);
+    }
+}
+
+const SortCtx = struct {
+    col: usize,
+    asc: bool,
+
+    fn lessThan(ctx: SortCtx, a: Row, b: Row) bool {
+        const order: std.math.Order = switch (ctx.col) {
+            0 => std.ascii.orderIgnoreCase(a.cmd.title, b.cmd.title),
+            1 => std.mem.order(u8, a.keys, b.keys),
+            else => .eq,
+        };
+        return if (ctx.asc) order == .lt else order == .gt;
+    }
+};
+
+fn drawCommandRow(
+    grid: *dvui.GridWidget,
+    editor: *fizzy.Editor,
+    c: fizzy.sdk.Host.Command,
+    query: *const fuzzy.Query,
+    row: usize,
+    platform: keymap.Platform,
+    theme: dvui.Theme,
+    banded: dvui.GridWidget.CellStyle.Banded,
+) void {
     const shortcut = shortcutFor(editor, c.id, platform);
     const keys_text = if (shortcut) |s| s.keys else "—";
     const inherited = if (shortcut) |s| s.inherited else false;
     const is_recording = if (recording) |r| std.mem.eql(u8, r, c.id) else false;
+    const has_override = Keybinds.hasUserOverride(editor, c.id);
 
-    // Hand-built rather than `dvui.button` so the recording state can put a dot next to the
-    // label. Same widget id either way, so starting a recording doesn't reset the button's
-    // hover/press state.
-    const clicked = blk: {
-        var bw: dvui.ButtonWidget = undefined;
-        bw.init(@src(), .{}, .{
+    {
+        const cell_pos: dvui.GridWidget.Cell = .colRow(0, row);
+        var cell = grid.bodyCell(@src(), cell_pos, banded.cellOptions(cell_pos));
+        defer cell.deinit();
+
+        var left = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .both,
             .gravity_y = 0.5,
-            .min_size_content = .{ .w = 120, .h = 0 },
+            .margin = .all(0),
+            .padding = .all(0),
         });
-        defer bw.deinit();
-        bw.processEvents();
-        bw.drawBackground();
-
-        {
-            var inner = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .margin = .all(0),
-                .padding = .all(0),
-            });
-            defer inner.deinit();
-
-            if (is_recording) recordingDot();
-            dvui.labelNoFmt(@src(), if (is_recording) "Recording" else keys_text, .{}, .{
-                .gravity_x = if (is_recording) 0.0 else 0.5,
-                .gravity_y = 0.5,
-                .expand = .horizontal,
-                .color_text = if (is_recording)
-                    theme.color(.err, .fill)
-                else if (inherited)
-                    theme.color(.control, .text).opacity(0.55)
-                else
-                    null,
-            });
-        }
-
-        break :blk bw.clicked();
-    };
-    if (clicked) {
-        recording = if (is_recording) null else c.id;
+        defer left.deinit();
+        wdvui.labelHighlighted(@src(), c.title, query, true, .{
+            .expand = .horizontal,
+            .margin = .all(0),
+            .padding = .all(0),
+        });
+        wdvui.labelHighlighted(@src(), c.id, query, true, .{
+            .expand = .horizontal,
+            .margin = .all(0),
+            .padding = .all(0),
+            .color_text = theme.color(.window, .text).opacity(0.45),
+        });
     }
 
-    if (Keybinds.hasUserOverride(editor, c.id)) {
-        if (dvui.button(@src(), "Reset", .{}, .{
-            .gravity_y = 0.5,
-            .margin = .{ .x = 4 },
-        })) {
-            Keybinds.clearUserBinding(editor, c.id) catch |err| {
-                dvui.log.err("clear keybind for '{s}' failed: {s}", .{ c.id, @errorName(err) });
-            };
-            if (recording) |r| {
-                if (std.mem.eql(u8, r, c.id)) recording = null;
+    {
+        const cell_pos: dvui.GridWidget.Cell = .colRow(1, row);
+        var cell = grid.bodyCell(@src(), cell_pos, banded.cellOptions(cell_pos));
+        defer cell.deinit();
+
+        // Hand-built rather than `dvui.button` so the recording state can put a dot next to the
+        // label. Same widget id either way, so starting a recording doesn't reset the button's
+        // hover/press state. Column width is fixed — only the label text changes.
+        const clicked = blk: {
+            var bw: dvui.ButtonWidget = undefined;
+            bw.init(@src(), .{}, .{
+                .expand = .horizontal,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+                .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+                // Recording is now signalled here and nowhere else (there is no banner), so the
+                // row carries it: a fully-rounded red pill. The radius is deliberately far larger
+                // than the button — dvui clamps it to half the height, which is what makes the
+                // ends semicircular at any row height.
+                .corners = if (is_recording) .all(10_000_000) else null,
+                .color_fill = if (is_recording) theme.color(.err, .fill).opacity(0.18) else null,
+            });
+            defer bw.deinit();
+            bw.processEvents();
+            bw.drawBackground();
+
+            {
+                var inner = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    .expand = .both,
+                    .margin = .all(0),
+                    .padding = .all(0),
+                });
+                defer inner.deinit();
+
+                if (is_recording) recordingDot();
+                dvui.labelNoFmt(@src(), if (is_recording) "Recording…" else keys_text, .{}, .{
+                    .gravity_x = if (is_recording) 0.0 else 0.5,
+                    .gravity_y = 0.5,
+                    .expand = .horizontal,
+                    .color_text = if (is_recording)
+                        theme.color(.err, .fill)
+                    else if (inherited)
+                        theme.color(.control, .text).opacity(0.55)
+                    else
+                        null,
+                });
             }
+
+            break :blk bw.clicked();
+        };
+        if (clicked) {
+            recording = if (is_recording) null else c.id;
+        }
+    }
+
+    {
+        const cell_pos: dvui.GridWidget.Cell = .colRow(2, row);
+        var cell = grid.bodyCell(@src(), cell_pos, banded.cellOptions(cell_pos));
+        defer cell.deinit();
+
+        // Always occupy the reset column so binding/unbinding never shifts column widths.
+        if (has_override) {
+            if (dvui.button(@src(), "Reset", .{}, .{
+                .expand = .horizontal,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+                .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+            })) {
+                Keybinds.clearUserBinding(editor, c.id) catch |err| {
+                    dvui.log.err("clear keybind for '{s}' failed: {s}", .{ c.id, @errorName(err) });
+                };
+                if (recording) |r| {
+                    if (std.mem.eql(u8, r, c.id)) recording = null;
+                }
+            }
+        } else {
+            _ = dvui.spacer(@src(), .{
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 0, .h = 1 },
+            });
         }
     }
 }
@@ -285,18 +703,18 @@ fn directShortcut(editor: *fizzy.Editor, id: []const u8, platform: keymap.Platfo
     return keymap.formatKeys(arena, best.stroke, platform) catch null;
 }
 
-/// Returns true when recording finished (bound or cancelled).
+/// Returns true when recording finished (a chord was captured).
+///
+/// Nothing is exempt: Esc binds like any other key rather than cancelling, so a command *can* be
+/// put on it. The ways out are clicking the row again (which toggles recording off) and the row's
+/// Reset button. The one thing still skipped is a bare modifier — those are waited on, since
+/// every press of one is the start of a chord the user hasn't finished typing.
 fn pollRecording(editor: *fizzy.Editor, command: []const u8, platform: keymap.Platform) bool {
     for (dvui.events()) |*e| {
         if (e.handled) continue;
         if (e.evt != .key) continue;
         const ke = e.evt.key;
         if (ke.action != .down) continue;
-
-        if (ke.code == .escape) {
-            e.handle(@src(), dvui.currentWindow().data());
-            return true;
-        }
 
         const chord = adapter.chordFrom(ke) orelse continue;
         if (keymap.keyIsModifier(chord.key)) continue;
