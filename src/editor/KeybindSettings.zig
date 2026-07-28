@@ -17,8 +17,8 @@
 //! sized from its parent's width would then ask for that new, larger width the next frame and
 //! ratchet wider every frame (leaving the pane's edge shadow and horizontal bar stuck on). The
 //! grid is capped with `max_size_content = .width(0)` so it contributes nothing to the pane's
-//! virtual width; overflow scrolls *inside* the grid instead, and only when the columns can't be
-//! squeezed to fit.
+//! virtual width; overflow scrolls *inside* the grid instead (user-widened columns, or when
+//! the pane shrinks past every column's minimum).
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -476,7 +476,7 @@ fn drawOwnerGrid(
     var grid = dvui.grid(@src(), .colWidths(&col_widths), .{
         .scroll_opts = .{
             // Vertical: none — the grid grows with its rows and the explorer pane scrolls.
-            // Horizontal: only reachable when the columns can't be squeezed into `avail`.
+            // Horizontal: when the user widens a column past the pane, or mins no longer fit.
             .horizontal = .auto,
             .vertical = .none,
             .horizontal_bar = .auto_overlay,

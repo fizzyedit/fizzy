@@ -219,7 +219,10 @@ const CacheEntry = struct {
     /// reference after launch permanently shows nothing, while a freshly typed identical
     /// reference elsewhere — a different cache key — hovers fine). Positive entries never
     /// expire: once zls has real text for a position, that answer isn't going stale the way
-    /// "zls hasn't looked yet" is.
+    /// "zls hasn't looked yet" is. The TTL itself is deliberately short (see the constant):
+    /// while an unconfirmed negative is live, `hover()` reports pending and the tooltip shows
+    /// "Just a moment...", so a multi-second wait feels like a hang even though no request is
+    /// in flight.
     cached_at: std.Io.Clock.Timestamp,
     /// Only meaningful when `text == null`. False means this negative hasn't been retried
     /// yet — per `cached_at`'s doc comment, a *single* negative answer is routinely just zls
@@ -448,8 +451,12 @@ const hover_cache_limit = 256;
 /// How long a *negative* hover cache entry ("zls had no info here") stays trusted before a
 /// re-hover at the same position retries instead of reusing it — see `CacheEntry.cached_at`'s
 /// doc comment for why this needs to expire at all rather than caching forever like everything
-/// else here.
-const hover_negative_cache_ttl_ms: i64 = 5000;
+/// else here. Kept short so a transient "still indexing" null from zls (common for first
+/// touches into large deps like `dvui`) self-corrects in under a second rather than leaving
+/// the tooltip stuck on "Just a moment..." for multi-second stretches — VSCode never surfaces
+/// that wait because it simply doesn't show a loading placeholder; we do, so the retry has to
+/// be snappy. Still long enough that a genuine empty answer isn't re-requested every frame.
+const hover_negative_cache_ttl_ms: i64 = 750;
 const completion_cache_limit = 256;
 const signature_help_cache_limit = 256;
 const resolve_cache_limit = 256;
@@ -458,7 +465,12 @@ const resolve_cache_limit = 256;
 /// not exhaustive.
 const completion_max_items = 50;
 const poll_interval_ms: u64 = 5;
-const hover_timeout_ms: u64 = 2000;
+/// Field-access hovers into large deps (`dvui.App.StartOptions`, stdlib paths, …) routinely
+/// take well over the old 2s budget once zls has to walk a type chain — abandoning at 2s then
+/// immediately re-queueing (and discarding the late reply) was the dominant "Just a moment
+/// for 3–4s even when warm" path: the first attempt timed out just as zls was about to
+/// answer, the retry paid most of that work again. VSCode keeps the request open; match that.
+const hover_timeout_ms: u64 = 15_000;
 const definition_timeout_ms: u64 = 400;
 const completion_timeout_ms: u64 = 2000;
 /// How long a completion request waits, with nothing newer superseding it, before it's
@@ -677,6 +689,12 @@ pub fn hover(self: *Client, path: []const u8, bytes: []const u8, byte_offset: us
     };
 
     self.queue_lock.lock();
+    // Latest hover position wins — anything still queued is for a token the mouse already
+    // left (common when gliding onto a dotted path like `dvui.App.StartOptions`, where each
+    // segment is its own cache key). Running those serially just delays the one the tooltip
+    // is actually waiting on. The job currently in `runHoverJob` (already dequeued) still
+    // finishes and caches; only not-yet-started work is dropped.
+    self.dropQueuedHoverJobsLocked();
     self.queue.append(gpa, .{ .path = owned_path, .bytes = owned_bytes, .byte_offset = byte_offset, .key = key }) catch {
         self.queue_lock.unlock();
         gpa.free(owned_path);
@@ -714,7 +732,7 @@ pub fn gotoDefinition(self: *Client, path: []const u8, bytes: []const u8, byte_o
         return null;
     };
 
-    const body = self.waitForSlot(io, req.id, req.slot, definition_timeout_ms) orelse {
+    const body = self.waitForSlot(io, req.id, req.slot, definition_timeout_ms, .never) orelse {
         dvui.log.warn("{s}: gotoDefinition: request (id={d}) timed out", .{ self.config.language_id, req.id });
         return null;
     };
@@ -788,7 +806,7 @@ pub fn format(self: *Client, path: []const u8, bytes: []const u8) ?[]const u8 {
         return null;
     };
 
-    const body = self.waitForSlot(io, req.id, req.slot, format_timeout_ms) orelse {
+    const body = self.waitForSlot(io, req.id, req.slot, format_timeout_ms, .never) orelse {
         dvui.log.warn("{s}: format: request (id={d}) timed out", .{ self.config.language_id, req.id });
         return null;
     };
@@ -1284,7 +1302,7 @@ fn handshake(self: *Client, io: std.Io) !void {
         // send as `null` for servers (like zls) that don't need it.
         .initializationOptions = self.config.initialization_options orelse .null,
     });
-    const body = self.waitForSlot(io, req.id, req.slot, initialize_timeout_ms) orelse {
+    const body = self.waitForSlot(io, req.id, req.slot, initialize_timeout_ms, .never) orelse {
         return error.InitializeTimeout;
     };
     defer gpa.free(body);
@@ -1413,6 +1431,20 @@ fn clearInFlight(self: *Client, key: CacheKey) void {
     self.hover_cache_lock.lock();
     _ = self.in_flight.remove(key);
     self.hover_cache_lock.unlock();
+}
+
+/// Drops every not-yet-started hover job. Caller must hold `queue_lock`. Used so only the
+/// latest mouse position stays queued — see `hover` / `dispatchThreadMain`. Takes
+/// `hover_cache_lock` per entry to clear `in_flight`; safe because nothing nests
+/// `queue_lock` under `hover_cache_lock`.
+fn dropQueuedHoverJobsLocked(self: *Client) void {
+    const gpa = self.config.allocator;
+    while (self.queue.items.len > 0) {
+        const stale = self.queue.pop().?;
+        gpa.free(stale.path);
+        gpa.free(stale.bytes);
+        self.clearInFlight(stale.key);
+    }
 }
 
 fn clearCompletionInFlight(self: *Client, key: CacheKey) void {
@@ -1572,7 +1604,13 @@ fn dispatchThreadMain(self: *Client, io: std.Io) void {
         self.checkPendingNegativeWake(io);
 
         self.queue_lock.lock();
-        const job: ?HoverJob = if (self.queue.items.len > 0) self.queue.orderedRemove(0) else null;
+        // Prefer the most recently queued hover (see `hover`'s coalesce) — if several slipped
+        // in before this tick, older ones are tokens the mouse already left.
+        var job: ?HoverJob = null;
+        if (self.queue.items.len > 0) {
+            job = self.queue.pop();
+            self.dropQueuedHoverJobsLocked();
+        }
         self.queue_lock.unlock();
 
         if (job) |j| {
@@ -1646,14 +1684,16 @@ fn runHoverJob(self: *Client, io: std.Io, j: HoverJob) !void {
         .textDocument = .{ .uri = uri },
         .position = pos,
     });
-    const body = self.waitForSlot(io, req.id, req.slot, hover_timeout_ms) orelse {
+    const body = self.waitForSlot(io, req.id, req.slot, hover_timeout_ms, .abandon_if_hover_queued) orelse {
         // Deliberately not cached: no response at all is inconclusive (could be a slow
         // first parse of a huge file), unlike the definitive "no hover here" answers below.
-        // `in_flight` for this key is about to be cleared by the dispatch loop's `defer`
-        // (which also wakes the UI thread — see `dispatchThreadMain`), so the client is ready
-        // to retry the instant something re-polls `hover()`. The eventual real response (if
-        // zls answers after all, just late) has nowhere to land by then anyway: `waitForSlot`
-        // already destroyed this request's slot.
+        // Also covers "abandoned because a newer hover position was queued" — see
+        // `waitForSlot`'s `AbandonPolicy`. `in_flight` for this key is about to be cleared by
+        // the dispatch loop's `defer` (which also wakes the UI thread — see
+        // `dispatchThreadMain`), so the client is ready to retry the instant something
+        // re-polls `hover()`. The eventual real response (if zls answers after all, just
+        // late) has nowhere to land by then anyway: `waitForSlot` already destroyed this
+        // request's slot.
         return;
     };
     defer gpa.free(body);
@@ -1771,7 +1811,7 @@ fn runCompletionJob(self: *Client, io: std.Io, pc: PendingCompletion) !void {
         .textDocument = .{ .uri = uri },
         .position = pos,
     });
-    const body = self.waitForSlot(io, req.id, req.slot, completion_timeout_ms) orelse {
+    const body = self.waitForSlot(io, req.id, req.slot, completion_timeout_ms, .never) orelse {
         // Deliberately not cached: no response at all is inconclusive, same rationale as
         // hover's timeout case. The dispatch loop's `defer` wakes the UI thread regardless of
         // how this job ends — see `dispatchThreadMain`.
@@ -1979,7 +2019,7 @@ fn runSignatureHelpJob(self: *Client, io: std.Io, ps: PendingSignatureHelp) !voi
         .textDocument = .{ .uri = uri },
         .position = pos,
     });
-    const body = self.waitForSlot(io, req.id, req.slot, signature_help_timeout_ms) orelse {
+    const body = self.waitForSlot(io, req.id, req.slot, signature_help_timeout_ms, .never) orelse {
         // Deliberately not cached: no response at all is inconclusive, same rationale as
         // hover's/completion's timeout case. The dispatch loop's `defer` wakes the UI thread
         // regardless of how this job ends — see `dispatchThreadMain`.
@@ -2064,7 +2104,7 @@ fn runResolveJob(self: *Client, io: std.Io, rj: ResolveJob) !void {
     // `completionItem/resolve`'s params *are* the completion item itself — no wrapper object,
     // unlike every other request this client sends.
     const req = try self.sendRequest(io, "completionItem/resolve", item_parsed.value);
-    const body = self.waitForSlot(io, req.id, req.slot, completion_resolve_timeout_ms) orelse {
+    const body = self.waitForSlot(io, req.id, req.slot, completion_resolve_timeout_ms, .never) orelse {
         // Deliberately not cached: no response at all is inconclusive, same rationale as
         // hover's/completion's timeout case. The dispatch loop's `defer` wakes the UI thread
         // regardless of how this job ends — see `dispatchThreadMain`.
@@ -2685,11 +2725,26 @@ fn handleLogMessage(self: *Client, params: ?std.json.Value) void {
 
 /// Polls `slot.ready` until it's set or `timeout_ms` elapses. Either way, removes the slot
 /// from `response_map` and frees it — the caller owns the returned body (if any).
-fn waitForSlot(self: *Client, io: std.Io, id: i64, slot: *ResponseSlot, timeout_ms: u64) ?[]u8 {
+///
+/// `abandon`: hover jobs pass `.abandon_if_hover_queued` so a long in-flight request for a
+/// token the mouse already left yields as soon as a newer position is queued, instead of
+/// blocking the tooltip on work nobody is waiting for anymore. Other request kinds leave the
+/// default (`.never`) — completions/signature-help already debounce, and definition/format
+/// are one-shot user actions.
+const AbandonPolicy = enum { never, abandon_if_hover_queued };
+
+fn waitForSlot(self: *Client, io: std.Io, id: i64, slot: *ResponseSlot, timeout_ms: u64, abandon: AbandonPolicy) ?[]u8 {
     const gpa = self.config.allocator;
     var waited: u64 = 0;
     while (!slot.ready.load(.acquire)) {
-        if (self.shutdown.load(.acquire) or waited >= timeout_ms) {
+        var give_up = self.shutdown.load(.acquire) or waited >= timeout_ms;
+        if (!give_up and abandon == .abandon_if_hover_queued) {
+            self.queue_lock.lock();
+            const newer_queued = self.queue.items.len > 0;
+            self.queue_lock.unlock();
+            give_up = newer_queued;
+        }
+        if (give_up) {
             self.response_map_lock.lock();
             _ = self.response_map.remove(id);
             self.response_map_lock.unlock();
