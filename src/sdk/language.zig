@@ -16,11 +16,9 @@ const Plugin = @import("Plugin.zig");
 /// happen to be statically linked into the same binary and so share one copy of this
 /// `threadlocal`. It is NOT a valid way to pass data to a genuinely dynamically-loaded
 /// plugin dylib — each `.dylib` gets its own private compiled copy of every SDK source file,
-/// so a write from the host's copy is invisible from inside the plugin's copy (see
-/// `src/sdk/version.zig`'s 0.13.0 changelog entry for the same class of bug with
-/// `core.dvui.dialog_close_rect_override`). `hover`/`gotoDefinition` take `path` as an
-/// explicit parameter instead, precisely because third-party language plugins (e.g. `zig`)
-/// *are* loaded as separate dylibs.
+/// so a write from the host's copy is invisible from inside the plugin's copy.
+/// `hover`/`gotoDefinition` take `path` as an explicit parameter instead, precisely
+/// because third-party language plugins (e.g. `zig`) *are* loaded as separate dylibs.
 threadlocal var preview_document_path: []const u8 = "";
 
 pub fn setPreviewDocumentPath(path: []const u8) void {
@@ -74,6 +72,13 @@ pub const LanguageSupport = struct {
         /// frame the pane is visible, so a provider should cache its own parse internally
         /// keyed by content hash).
         previewPane: ?*const fn (state: *anyopaque, ext: []const u8, bytes: []const u8, id_extra: u64, gpa: std.mem.Allocator) anyerror!void = null,
+        /// Non-blocking: called when the text editor opens (or reloads) a document. Intended
+        /// for language-server warmup — spawn the server and send `textDocument/didOpen` so
+        /// analysis can start before the first hover/completion, rather than paying cold-start
+        /// latency on first use. Gate on `ext` yourself and no-op when the file isn't yours.
+        /// Must never block; kick off async work as a side effect. `bytes`/`path` are only
+        /// valid for the duration of the call — copy anything the background work will need.
+        documentOpened: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8) void = null,
         /// Non-blocking: return a cached/ready hover result for `byte_offset` in `bytes`
         /// (the document at `path`). Called every frame the mouse dwells over a token, so it
         /// must never block — kick off async work as a side effect. Three-state return:

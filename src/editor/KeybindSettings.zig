@@ -39,6 +39,10 @@ var recording: ?[]const u8 = null;
 /// Shared column widths across every owner grid so a drag-resize applies everywhere.
 var col_widths: [3]f32 = .{ 0, 0, 0 };
 
+/// Pane width `fitColumns` last saw. Used to tell "user dragged a divider" apart from
+/// "the settings pane itself grew/shrank" — only the latter may rewrite `col_widths`.
+var last_fit_avail: f32 = 0;
+
 /// Owners present in this set are expanded. Default (absent) is collapsed — the pane opens as a
 /// short list of owners rather than a wall of tables.
 var open_owners: std.AutoHashMapUnmanaged(u64, void) = .empty;
@@ -73,7 +77,7 @@ pub fn deinit(gpa: std.mem.Allocator) void {
     open_owners.deinit(gpa);
 }
 
-/// Default / minimum widths. Command column flexes with the pane; shortcut and reset keep a floor.
+/// Default / minimum widths. Command flexes when the *pane* resizes; shortcut/reset keep a floor.
 const default_shortcut_w: f32 = 140;
 const default_reset_w: f32 = 64;
 const min_command_w: f32 = 80;
@@ -394,38 +398,54 @@ fn drawConflicts(editor: *fizzy.Editor, platform: keymap.Platform, theme: dvui.T
     }
 }
 
-/// Keep `col_widths` fitting `avail`: grow/shrink the command column first, then squeeze
-/// shortcut/reset down to their mins. Only when even the mins don't fit does the grid scroll.
+/// React to the *pane* changing width — not to `HeaderResizeWidget` mutating a single column.
+///
+/// `HeaderResizeWidget` only writes `sizes[num]`. The old fill/squeeze-every-frame policy then
+/// rewrote the command column to keep `sum == avail`, which made divider 0 snap back, divider 1
+/// appear to shove divider 0, and divider 2 look welded to the pane edge. Leave user widths
+/// alone when `avail` is unchanged; only grow/squeeze when the pane itself moves.
 fn fitColumns(avail: f32) void {
     if (avail <= 0) return;
 
     if (col_widths[0] < 1) {
         dvui.columnLayoutProportional(&.{ -1, default_shortcut_w, default_reset_w }, &col_widths, avail);
+        last_fit_avail = avail;
         return;
     }
 
-    const sum = col_widths[0] + col_widths[1] + col_widths[2];
-    if (sum < avail) {
-        col_widths[0] += avail - sum;
+    if (last_fit_avail < 1) {
+        last_fit_avail = avail;
         return;
     }
-    if (sum <= avail) return;
 
-    var overflow = sum - avail;
-    const cmd_can = @max(0, col_widths[0] - min_command_w);
-    const cmd_take = @min(cmd_can, overflow);
-    col_widths[0] -= cmd_take;
-    overflow -= cmd_take;
-    if (overflow <= 0) return;
+    if (avail > last_fit_avail) {
+        // Pane grew — keep shortcut/reset edges put, stretch command into the new space.
+        col_widths[0] += avail - last_fit_avail;
+    } else if (avail < last_fit_avail) {
+        // Pane shrank — squeeze command first, then shortcut/reset down to mins. Only when even
+        // the mins don't fit does the grid scroll horizontally.
+        const sum = col_widths[0] + col_widths[1] + col_widths[2];
+        if (sum > avail) {
+            var overflow = sum - avail;
+            const cmd_can = @max(0, col_widths[0] - min_command_w);
+            const cmd_take = @min(cmd_can, overflow);
+            col_widths[0] -= cmd_take;
+            overflow -= cmd_take;
+            if (overflow > 0) {
+                const sc_can = @max(0, col_widths[1] - min_shortcut_w);
+                const sc_take = @min(sc_can, overflow);
+                col_widths[1] -= sc_take;
+                overflow -= sc_take;
+            }
+            if (overflow > 0) {
+                const rs_can = @max(0, col_widths[2] - min_reset_w);
+                col_widths[2] -= @min(rs_can, overflow);
+            }
+        }
+    }
+    // avail == last_fit_avail: user may have dragged a divider; leave widths alone.
 
-    const sc_can = @max(0, col_widths[1] - min_shortcut_w);
-    const sc_take = @min(sc_can, overflow);
-    col_widths[1] -= sc_take;
-    overflow -= sc_take;
-    if (overflow <= 0) return;
-
-    const rs_can = @max(0, col_widths[2] - min_reset_w);
-    col_widths[2] -= @min(rs_can, overflow);
+    last_fit_avail = avail;
 }
 
 fn headerResizeOptions(col_num: usize) ?dvui.GridWidget.HeaderResizeWidget.InitOptions {

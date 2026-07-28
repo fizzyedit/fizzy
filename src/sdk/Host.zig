@@ -932,6 +932,16 @@ pub fn previewProviderFor(self: *Host, ext: []const u8) ?*LanguageSupport {
     return null;
 }
 
+/// Notify every language provider that a document was opened/reloaded. Providers gate on
+/// `ext` themselves (see `LanguageSupport.VTable.documentOpened`). Non-blocking.
+pub fn documentOpenedFor(self: *Host, ext: []const u8, path: []const u8, bytes: []const u8) void {
+    for (self.language_support.items) |*ls| {
+        const hook = ls.vtable.documentOpened orelse continue;
+        const owner = ls.owner orelse continue;
+        hook(owner.state, ext, path, bytes);
+    }
+}
+
 /// Non-blocking hover lookup: the first provider with a cached/ready hover result for
 /// `byte_offset` in `bytes` (the document at `path`), or null. See
 /// `LanguageSupport.VTable.hover`.

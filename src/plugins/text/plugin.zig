@@ -234,6 +234,9 @@ fn registerOpenDocument(state: *anyopaque, file: *anyopaque) anyerror!*anyopaque
     errdefer gpa.destroy(heap_doc);
     heap_doc.* = doc.*;
     try st.docs.put(gpa, doc.id, heap_doc);
+    // Kick language-server warmup (spawn + didOpen) before the first hover/completion so
+    // cold-start latency isn't paid on first use — see `LanguageSupport.VTable.documentOpened`.
+    sdk.host().documentOpenedFor(std.fs.path.extension(heap_doc.path), heap_doc.path, heap_doc.text.items);
     return heap_doc;
 }
 fn documentPtr(state: *anyopaque, id: u64) ?*anyopaque {
@@ -296,6 +299,7 @@ fn closeDocument(_: *anyopaque, handle: DocHandle) void {
 fn reloadDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     try doc.reloadFromDisk();
+    sdk.host().documentOpenedFor(std.fs.path.extension(doc.path), doc.path, doc.text.items);
 }
 fn isDirty(_: *anyopaque, handle: DocHandle) bool {
     return (docFrom(handle) orelse return false).isDirty();

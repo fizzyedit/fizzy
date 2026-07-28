@@ -15,5 +15,5 @@ const std = @import("std");
 pub const sdk_version = std.SemanticVersion{
     .major = 0,
     .minor = 1,
-    .patch = 44,
+    .patch = 45,
 };

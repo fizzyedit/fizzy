@@ -612,6 +612,7 @@ Every hook is optional and independent — implement only what your plugin offer
 | `treeSitterHighlight(state, ext) ?TreeSitterHighlight` | Tree-sitter grammar, query, and capture→style table for syntax highlighting |
 | `previewPane(state, ext, bytes, id_extra, gpa) !void` | Draw a read-only preview pane (markdown render, JSON tree, …) |
 | `supportsPreview(state, ext) bool` | Optional gate; defaults to checking whether `previewPane` is populated |
+| `documentOpened(state, ext, path, bytes) void` | Non-blocking; fired when text opens/reloads a document — LSP plugins use this to spawn the server and `didOpen` before first hover |
 | `hover(state, ext, path, bytes, byte_offset) ?HoverResult` | Non-blocking; hover text for the token at `byte_offset`. Called every frame the mouse dwells over a token — see §3.9 |
 | `gotoDefinition(state, ext, path, bytes, byte_offset) ?DefinitionLocation` | May block briefly; Ctrl/Cmd-click jump target |
 | `completion(state, ext, path, bytes, byte_offset) ?[]const CompletionItem` | Non-blocking; ghost-text + dropdown candidates at the cursor |
@@ -620,8 +621,8 @@ Every hook is optional and independent — implement only what your plugin offer
 | `supportsFormat(state, ext) bool` | Non-blocking gate for a "Format Document" menu item |
 | `format(state, ext, path, bytes) ?[]const u8` | May block briefly; whole-document reformat on explicit user action |
 
-The text editor calls `host.treeSitterHighlightFor(ext)` and `host.previewProviderFor(ext)` —
-first registered provider that answers for the extension wins. When a preview provider exists,
+The text editor calls `host.treeSitterHighlightFor(ext)`, `host.previewProviderFor(ext)`, and
+`host.documentOpenedFor(ext, path, bytes)` (on open/reload). When a preview provider exists,
 `TextEditor` splits the tab into raw editor + preview panes. The `hover`/`gotoDefinition`/
 `completion`/`signatureHelp`/`format` hooks follow the same first-registered-provider-wins
 lookup, keyed off `ext`.
@@ -685,14 +686,16 @@ Then:
    `sdk.allocator()`/`sdk.host()` are valid; `Config` can't be a comptime default on the
    file-scope `var client: Client = .{};` every plugin declares for exactly that reason.
 2. Wire `client.onFolderOpen` / `client.onFolderClose` / `client.deinit` into your `Plugin`
-   vtable's `onFolderOpen` / `onFolderClose` / `deinit` — the client spawns/restarts the
-   server against the project root on folder open and tears it down on close/unload.
+   vtable's `onFolderOpen` / `onFolderClose` / `deinit` — the client updates/restarts against
+   the project root on folder open (spawn itself is lazy / warm-up-driven) and tears down on
+   close/unload.
 3. Register a `LanguageSupport` whose hooks are thin wrappers: gate on your extension list,
-   then delegate straight to the matching `client.*` method (`client.hover`, `.gotoDefinition`,
-   `.completion`, `.resolveCompletionDocumentation`, `.signatureHelp`, `.format`) — see
-   [`fizzyedit/zig`](https://github.com/fizzyedit/zig)'s `src/Lsp.zig` for the ~80-line
-   reference wrapper this pattern produces end to end, and its `plugin.zig` for wiring it into
-   `register(host)`.
+   then delegate straight to the matching `client.*` method. Implement `documentOpened` as
+   `client.warmUp(path, bytes)` so the server starts when a matching file is opened (not on
+   first hover). Other hooks map to `client.hover` / `.gotoDefinition` / `.completion` /
+   `.resolveCompletionDocumentation` / `.signatureHelp` / `.format` — see
+   [`fizzyedit/zig`](https://github.com/fizzyedit/zig)'s `src/Lsp.zig` for the reference
+   wrapper, and its `plugin.zig` for wiring it into `register(host)`.
 
 You do not need to handle JSON-RPC framing, threading, request/response id correlation,
 position-encoding negotiation, or server-initiated requests yourself — all of that is generic
@@ -952,7 +955,7 @@ drop straight into the plugins directory, exactly like §2.6.
 | `src/sdk/DocHandle.zig` | Opaque document handle (`owner`-routed) |
 | `src/sdk/EditorAPI.zig` | Shell read/utility surface plugins reach back through |
 | `src/sdk/regions.zig` | Sidebar/bottom/center/menu/settings/command contribution structs |
-| `src/sdk/language.zig` | `LanguageSupport` registry — hover/goto-definition/completion/signature-help/format/highlighting/preview hooks looked up by file extension |
+| `src/sdk/language.zig` | `LanguageSupport` registry — documentOpened/hover/goto-definition/completion/signature-help/format/highlighting/preview hooks looked up by file extension |
 | `src/core/lsp/Client.zig` | Server-agnostic LSP client (JSON-RPC framing, caching, threading) shared by every language plugin — see §3.9 |
 | `src/sdk/dylib.zig`, `dvui_context.zig` | Runtime-library C entry contract + dvui injection |
 | `src/sdk/version.zig` | SDK version + ABI fingerprint CI lock |

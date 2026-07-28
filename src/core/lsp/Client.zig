@@ -7,15 +7,15 @@
 //! extension-gate + `Config` and registers the result as an `sdk.LanguageSupport` provider.
 //!
 //! Threading model (read this before touching anything below):
-//! - `hover`/`gotoDefinition` are called on the **draw thread**, every frame the mouse
-//!   dwells over a token (hover) or on a Ctrl/Cmd+click (gotoDefinition). `hover` must
-//!   never block — it only reads a cache and, on a miss, hands a *copy* of the input off to
-//!   a background worker. `gotoDefinition` is allowed to block briefly (a few hundred ms).
+//! - `hover`/`gotoDefinition`/`warmUp` are called on the **draw/open thread**. `hover` and
+//!   `warmUp` must never block — they only read a cache / queue work and, on a miss, hand a
+//!   *copy* of the input off to a background worker. `gotoDefinition` is allowed to block
+//!   briefly (a few hundred ms).
 //! - The reader thread and dispatch-worker thread are the only places that block on the
 //!   language server's I/O. Neither may call `dvui.*` — they only touch their own copied
 //!   inputs, this struct's fields (behind `SpinLock`), and `self.config.allocator`, mirroring
 //!   the discipline documented on `pixi`'s `PackJob.zig`.
-//! - `bytes` passed into `hover`/`gotoDefinition` is a borrowed slice into the live,
+//! - `bytes` passed into `hover`/`gotoDefinition`/`warmUp` is a borrowed slice into the live,
 //!   mutable document buffer — copy it before handing it to the background queue.
 const std = @import("std");
 const builtin = @import("builtin");
@@ -57,6 +57,11 @@ pub const Config = struct {
     /// `"gopls"`-keyed settings dict — while others (zls) simply ignore it. Caller-owned; must
     /// outlive every call to `onFolderOpen` (this client re-sends it on every server restart).
     initialization_options: ?std.json.Value = null,
+    /// Optional hook invoked on the startup thread immediately before the subprocess is
+    /// spawned. Language plugins use this to resolve the server binary and fill
+    /// `initialization_options` fields that need PATH resolution (e.g. zls's `zig_exe_path`)
+    /// without blocking the UI thread — a login-shell spawn can cost hundreds of ms.
+    beforeInitialize: ?*const fn () void = null,
 };
 
 /// Hover text returned by `hover`. `text` is plain text or markdown, valid only for the
@@ -348,6 +353,12 @@ response_map: std.AutoHashMapUnmanaged(i64, *ResponseSlot) = .empty,
 open_docs_lock: SpinLock = .{},
 open_docs: std.StringHashMapUnmanaged(DocState) = .empty,
 
+/// Documents waiting for a `didOpen`/`didChange` once the server becomes ready — filled by
+/// `warmUp` when called before/during startup so analysis can begin without waiting for the
+/// first hover. Keyed by path; a later `warmUp` for the same path replaces the bytes.
+pending_sync_lock: SpinLock = .{},
+pending_syncs: std.StringHashMapUnmanaged([]u8) = .empty,
+
 hover_cache_lock: SpinLock = .{},
 hover_cache: std.AutoHashMapUnmanaged(CacheKey, CacheEntry) = .empty,
 in_flight: std.AutoHashMapUnmanaged(CacheKey, void) = .empty,
@@ -509,6 +520,20 @@ pub fn deinit(self: *Client) void {
     if (self.signature_help_return_scratch) |t| gpa.free(t);
     if (self.format_return_scratch) |t| gpa.free(t);
     if (self.resolve_return_scratch) |t| gpa.free(t);
+}
+
+/// Non-blocking. Kicks off language-server spawn if needed and ensures `path` is
+/// `didOpen`/`didChange`-synced so the server can start analyzing before the first
+/// hover/completion. Call from `LanguageSupport.documentOpened` (and anywhere else a
+/// matching file becomes available). Safe on the draw/open path — same `dvui.io` capture
+/// rules as `hover`/`ensureStarted`.
+pub fn warmUp(self: *Client, path: []const u8, bytes: []const u8) void {
+    if (path.len == 0) return;
+    self.queuePendingSync(path, bytes);
+    if (!self.ensureStarted(path)) return;
+    // Already running — flush now so we don't wait for the dispatch loop's next 20ms tick.
+    // `syncDocument` is safe on this thread (same as `gotoDefinition`).
+    self.flushPendingSyncs(dvui.io);
 }
 
 /// Replaces `hover_return_scratch` with a fresh copy of `text`, freeing whatever was there —
@@ -1025,8 +1050,8 @@ fn ensureStarted(self: *Client, doc_path: []const u8) bool {
         .not_started => {
             if (self.workspace_root == null) self.deriveFallbackRoot(doc_path);
             if (self.workspace_root == null) return false;
-            // Captured here, on the caller's thread (draw thread — `ensureStarted` is only
-            // ever called from `hover`/`gotoDefinition`/etc.), and handed off by value rather
+            // Captured here, on the caller's thread (draw/open thread — `ensureStarted` is
+            // called from `warmUp`/`hover`/`gotoDefinition`/etc.), and handed off by value rather
             // than read fresh from inside a background thread. `dvui.io` is a plain,
             // non-atomic global the draw thread also *writes* every frame
             // (`Editor.syncLoadedPluginDvuiContexts` → `dvui_context.inject`) — reading it
@@ -1061,6 +1086,11 @@ fn startupThreadMain(self: *Client, io: std.Io) void {
     // thread to notice the state flipped to `.unavailable`. Called directly here (not via
     // `dispatchThreadMain`, see below) because that task is never spawned on this path —
     // `handshake` is what starts it, and it never got that far.
+    //
+    // Resolve server argv / init options *before* spawn — plugins (zls) may rewrite
+    // `command[0]` to an absolute path via a login-shell PATH lookup that must not run on
+    // the UI thread, and on Linux `spawnProcess`'s own resolver has no shell-env fallback.
+    if (self.config.beforeInitialize) |hook| hook();
     self.spawnProcess(io) catch {
         self.state.store(.unavailable, .release);
         self.config.refresh();
@@ -1361,6 +1391,8 @@ fn shutdownProcess(self: *Client) void {
     self.open_docs.clearAndFree(gpa);
     self.open_docs_lock.unlock();
 
+    self.clearPendingSyncs(gpa);
+
     self.queue_lock.lock();
     for (self.queue.items) |j| {
         gpa.free(j.path);
@@ -1531,6 +1563,11 @@ fn dispatchThreadMain(self: *Client, io: std.Io) void {
         if (!startup_wake_done and self.state.load(.acquire) != .starting) {
             startup_wake_done = true;
             self.config.refresh();
+        }
+        // Drain `warmUp` opens queued while the server was still starting — must run once
+        // we're ready so zls can begin analyzing before the first hover asks for anything.
+        if (self.state.load(.acquire) == .ready) {
+            self.flushPendingSyncs(io);
         }
         self.checkPendingNegativeWake(io);
 
@@ -2411,6 +2448,66 @@ fn applyTextEdits(gpa: std.mem.Allocator, bytes: []const u8, edits: []const std.
 }
 
 // ---- document sync ------------------------------------------------------------------------
+
+fn queuePendingSync(self: *Client, path: []const u8, bytes: []const u8) void {
+    const gpa = self.config.allocator;
+    const owned_path = gpa.dupe(u8, path) catch return;
+    errdefer gpa.free(owned_path);
+    const owned_bytes = gpa.dupe(u8, bytes) catch {
+        gpa.free(owned_path);
+        return;
+    };
+
+    self.pending_sync_lock.lock();
+    defer self.pending_sync_lock.unlock();
+    const gop = self.pending_syncs.getOrPut(gpa, owned_path) catch {
+        gpa.free(owned_path);
+        gpa.free(owned_bytes);
+        return;
+    };
+    if (gop.found_existing) {
+        gpa.free(owned_path);
+        gpa.free(gop.value_ptr.*);
+        gop.value_ptr.* = owned_bytes;
+    } else {
+        gop.value_ptr.* = owned_bytes;
+    }
+}
+
+fn flushPendingSyncs(self: *Client, io: std.Io) void {
+    const gpa = self.config.allocator;
+
+    self.pending_sync_lock.lock();
+    var pending = self.pending_syncs;
+    self.pending_syncs = .empty;
+    self.pending_sync_lock.unlock();
+    defer {
+        var it = pending.iterator();
+        while (it.next()) |e| {
+            gpa.free(e.key_ptr.*);
+            gpa.free(e.value_ptr.*);
+        }
+        pending.deinit(gpa);
+    }
+
+    var it = pending.iterator();
+    while (it.next()) |e| {
+        self.syncDocument(io, e.key_ptr.*, e.value_ptr.*) catch |err| {
+            dvui.log.warn("{s}: warmUp syncDocument failed: {any}", .{ self.config.language_id, err });
+        };
+    }
+}
+
+fn clearPendingSyncs(self: *Client, gpa: std.mem.Allocator) void {
+    self.pending_sync_lock.lock();
+    defer self.pending_sync_lock.unlock();
+    var it = self.pending_syncs.iterator();
+    while (it.next()) |e| {
+        gpa.free(e.key_ptr.*);
+        gpa.free(e.value_ptr.*);
+    }
+    self.pending_syncs.clearAndFree(gpa);
+}
 
 fn syncDocument(self: *Client, io: std.Io, path: []const u8, bytes: []const u8) !void {
     const gpa = self.config.allocator;
