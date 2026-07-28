@@ -63,7 +63,7 @@ pub const sdk_version = @import("sdk_version.zig").sdk_version;
 /// why it is a single target/mode-invariant literal rather than a per-target table. Update this
 /// value (from the `@compileError` it triggers) and bump `sdk_version` in the same commit
 /// whenever it changes.
-pub const recorded_sdk_shape_fingerprint: u64 = 0x19f79cb227194111;
+pub const recorded_sdk_shape_fingerprint: u64 = 0x855a502677eadc84;
 
 comptime {
     if (dylib.sdk_shape_fingerprint != recorded_sdk_shape_fingerprint) {

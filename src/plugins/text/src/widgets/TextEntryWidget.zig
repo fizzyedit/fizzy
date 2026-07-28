@@ -326,6 +326,17 @@ pub const InitOptions = struct {
     /// reason as `tab_inserts_indent`; the text plugin turns this on unconditionally since it's
     /// baseline code-editing behavior, not a user preference.
     auto_indent_newline: bool = false,
+    /// When true (and `multiline`), typing one of `auto_pairs`' openers also inserts its closer
+    /// and leaves the cursor between the two, typing a closer that's already sitting right after
+    /// the cursor steps over it instead of inserting a second one, Backspace between an empty
+    /// pair deletes both halves, and typing an opener with a selection active wraps the selection
+    /// instead of replacing it — VSCode's `editor.autoClosingBrackets`/`autoSurround`. Off by
+    /// default for the same reusability reason as `tab_inserts_indent`.
+    auto_close_pairs: bool = false,
+    /// When true, the bracket next to the caret and its partner are drawn with a highlight
+    /// behind them (VSCode's `editor.matchBrackets`). Recomputed every frame from the buffer —
+    /// see `tc.pairs.matchAt`, including what it deliberately doesn't handle.
+    highlight_matching_bracket: bool = false,
 };
 
 /// Byte span of a tree-sitter token, used by `hovered_span` below.
@@ -333,9 +344,10 @@ pub const Span = struct { start: usize, end: usize };
 
 /// One completion candidate, as shown in `CompletionState.items` — either owned by
 /// `Document.completion_items` (which both `TextEditor.zig` and this widget then just borrow
-/// a slice of for the frame) or, in principle, any other caller. `text` is already trimmed to
-/// a pure suffix (never re-shows characters already typed before the cursor) — see
-/// `sdk.language.CompletionItem.insert_text`. `text` must not contain '\n': ghost text is
+/// a slice of for the frame) or, in principle, any other caller. `text` is the **full**
+/// replacement for `[replace_start, replace_end)`, not a suffix of what's already typed — see
+/// `sdk.language.CompletionItem.insert_text`, and `completionGhost` for how the ghost-text
+/// preview derives a suffix from it (and declines to show one when it can't). `text` must not contain '\n': ghost text is
 /// spliced in by rewinding `TextLayoutWidget.bytes_seen`, which only accounts for a
 /// single-line visual advance; multi-line snippets aren't supported by this SDK's
 /// intentionally minimal `CompletionItem` shape in the first place. `label` is the full,
@@ -356,8 +368,9 @@ pub const CompletionCandidate = struct {
     documentation: []const u8,
 };
 
-/// The completion list currently being shown: `items[selected]`'s text is spliced into
-/// `draw()` as ghost text right after `anchor`, and the same list + selection drive the
+/// The completion list currently being shown: the untyped remainder of `items[selected]`'s text
+/// is spliced into `draw()` as ghost text right after `anchor` (when there is one — see
+/// `completionGhost`), and the same list + selection drive the
 /// dropdown rendered by `TextEditor.drawCompletionList`. Up/Down (`processEvents`) change
 /// `selected`; Tab/Enter accept `items[selected]`; Escape clears this entirely.
 pub const CompletionState = struct {
@@ -443,6 +456,11 @@ signature_hint: ?[]const u8 = null,
 /// range and would otherwise splice the ghost text twice (visibly duplicating it, e.g. typing
 /// `s` and seeing `stdtd` instead of `std`). Reset at the top of `draw()`.
 ghost_text_emitted: bool = false,
+/// Byte offsets (ascending) of the matched bracket pair to highlight this frame, or null when
+/// the caret isn't next to one / `highlight_matching_bracket` is off. Computed once at the top
+/// of `draw()` and consumed by `emitChunk`, rather than per chunk — the scan is over the whole
+/// buffer, and every chunk would otherwise redo it.
+bracket_match: ?[2]usize = null,
 
 init_opts: InitOptions,
 text: []u8,
@@ -707,6 +725,16 @@ pub fn draw(self: *TextEntryWidget) void {
         dvui.dataRemove(null, self.data().id, "_hovered_span");
     };
     self.ghost_text_emitted = false;
+    self.bracket_match = blk: {
+        if (!self.init_opts.highlight_matching_bracket) break :blk null;
+        // Only for the focused editor, and only with a collapsed caret: with a split open, two
+        // editors both marking "their" bracket pair reads as though both are live, and while a
+        // selection is up the selection highlight is what the eye is tracking anyway.
+        if (self.data().id != dvui.focusedWidgetId()) break :blk null;
+        const sel = self.textLayout.selectionGet(self.len);
+        if (!sel.empty()) break :blk null;
+        break :blk tc.pairs.matchAt(self.text[0..self.len], sel.cursor);
+    };
     self.drawBeforeText();
 
     if (self.len == 0) {
@@ -894,23 +922,13 @@ pub fn draw(self: *TextEntryWidget) void {
             var iter = ts_parser.queryCursorCaptureIterator(qc.?, self.text);
             iter.debug = ts.log_captures;
 
-            // Restrict the capture walk to the visible byte range instead of the whole document
-            // — this is the dominant per-frame cost (see perf log above). `drawBeforeText`
-            // already computed this exactly, from real measured line heights (not an assumed
-            // bytes-per-pixel density): `cache_layout_bytes` — set via `TextLayoutWidget.
-            // bytesNeeded`, which also extends the range to cover the cursor or an active
-            // selection if either is off-screen. Null on the first frame (before
-            // `byte_heights` exists yet), in which case we don't restrict — same as any frame
-            // `cache_layout` isn't active. Text outside the queried range still renders via the
-            // gap/leftover chunks below — it's just uncolored until scrolled into (padded) range.
-            if (self.textLayout.cache_layout_bytes) |clb| {
-                // Small pad for the *next* frame's scroll movement before this data is
-                // refreshed — much smaller than an estimate-based pad needs, since the base
-                // range itself is exact rather than approximate.
-                const byte_pad: usize = @min(self.len / 20, 8_000);
-                const byte_start = clb.start -| byte_pad;
-                const byte_end = @min(self.len, clb.end + byte_pad);
-                iter.setByteRange(byte_start, byte_end);
+            // Restrict the capture walk to what's actually on screen — this is the dominant
+            // per-frame cost of a highlighted document (see `highlightByteRange` for why it
+            // can't just reuse dvui's layout range). Text outside the queried range still
+            // renders via the gap/leftover chunks below; it's just uncolored until scrolled
+            // into range.
+            if (self.highlightByteRange()) |r| {
+                iter.setByteRange(r.start, r.end);
             }
             while (true) {
                 //const capture_start = perfBegin();
@@ -970,30 +988,95 @@ pub fn draw(self: *TextEntryWidget) void {
     self.drawAfterText();
 }
 
+pub const ByteRange = struct { start: usize, end: usize };
+
+/// Byte range the tree-sitter capture walk should cover this frame: what the viewport shows,
+/// plus a screenful of headroom on each side so a scroll doesn't outrun the highlighting before
+/// the next frame recomputes it. Null means "don't restrict" (first frame, before any layout
+/// data exists, or `cache_layout` off).
+///
+/// Deliberately *not* just `TextLayoutWidget.cache_layout_bytes`, which is what this used to
+/// pass straight through. That range answers a different question — which bytes does *layout*
+/// have to walk — and it is wrong for highlighting in two ways that both scale badly:
+///
+///  1. It stretches to cover the caret whenever the caret is off screen (see `bytesNeeded`'s
+///     `include_cursor`), so scrolling away from the caret in a large file grew the queried
+///     range toward the whole document. Measured on a 3.4k-line file: 2,868 captures per frame
+///     while scrolling versus 1,231 sitting still, for pixels that are identical either way.
+///  2. The old pad around it was `len / 20` (capped at 8KB), i.e. proportional to the
+///     *document*. On that same file it queried ~13.6KB of padding around a ~2KB viewport —
+///     87% of the work thrown away — which is why per-frame cost tracked file size even
+///     though the visible line count never changed.
+///
+/// The result is intersected with the layout range because bytes outside that never get emitted
+/// this frame anyway, so querying them could only produce captures with nothing to color.
+///
+/// `byte_heights` is last frame's data, recorded every `ByteHeight.dist` logical pixels — the
+/// same source and staleness `bytesNeeded` itself works from, and the coarse spacing only ever
+/// makes the range a superset of what's visible.
+pub fn highlightByteRange(self: *TextEntryWidget) ?ByteRange {
+    const clb = self.textLayout.cache_layout_bytes orelse return null;
+    const heights = self.textLayout.byte_heights;
+    if (heights.len == 0) return .{ .start = clb.start, .end = clb.end };
+
+    const viewport = self.scroll.si.viewport;
+    // A full viewport of headroom each way: enough that even a fast scroll or a page jump stays
+    // colored, while staying tied to what's on screen rather than to how big the file is.
+    const pad = viewport.h;
+    const top = viewport.y - pad;
+    const bottom = viewport.y + viewport.h + pad;
+
+    var start: usize = 0;
+    var end: usize = self.len;
+    for (heights) |bh| {
+        if (bh.height <= top) start = bh.byte;
+        if (bh.height >= bottom) {
+            end = bh.byte;
+            break;
+        }
+    }
+
+    return .{
+        .start = @max(start, clb.start),
+        .end = @min(@min(end, clb.end), self.len),
+    };
+}
+
 /// One ghost-text splice resolved for this frame: `text` shown dimmed at byte offset `anchor`.
 /// `emitChunk` sources this from `current_completion` (acceptable via Tab/Enter) when showing,
 /// else `signature_hint` (purely informational, never acceptable) — see `signature_hint`'s doc
 /// comment for why only one of the two ever occupies this slot at once.
 const Ghost = struct { text: []const u8, anchor: usize };
 
+/// The dimmed suffix to show after the cursor for the selected candidate, or null when this
+/// candidate has nothing that can honestly be rendered inline — see `tc.completion.ghostSuffix`
+/// for the rules (and why the answer is often "nothing", by design).
+fn completionGhost(self: *TextEntryWidget, completion: CompletionState) ?Ghost {
+    // `drawCompletion` never sets `current_completion` with an empty `items` — see
+    // `TextEditor.zig` — so `selected` is always a valid index here.
+    const candidate = completion.items[completion.selected];
+    const suffix = tc.completion.ghostSuffix(
+        self.text[0..self.len],
+        completion.anchor,
+        candidate.text,
+        candidate.replace_start,
+        candidate.replace_end,
+    ) orelse return null;
+    return .{ .text = suffix, .anchor = completion.anchor };
+}
+
 /// Emits `chunk` — a slice of `self.text` starting at absolute byte offset `chunk_start` —
 /// into `self.textLayout`, exactly like the plain `addText`/`addTextHover` call it replaces
-/// (`is_hover` selects which, matching the call site), *unless* this frame's `Ghost.anchor`
-/// falls inside this chunk, in which case the chunk is split at the anchor and the ghost text
-/// is spliced in between the two halves, dimmed.
+/// (`is_hover` selects which, matching the call site) — except that the chunk is split wherever
+/// this frame wants something extra drawn inside it:
 ///
-/// The splice needs `TextLayoutWidget.bytes_seen` rewound by the ghost text's length
-/// afterward — `addTextEx` advances it unconditionally, and it must track only *real*
-/// document bytes for cursor/selection hit-testing (`cursor_rect`, click routing) to stay
-/// correct for every real chunk emitted after this one. `bytes_seen` is a plain public field
-/// already reached into directly elsewhere in this codebase (e.g. `selection`, `cursor_rect`
-/// at `TextEditor.zig`), so this isn't reaching past an abstraction that wants to stay
-/// opaque — but the same call path also advances a *second*, independent counter
-/// (`cache_layout_bytes_seen`) whenever `cache_layout` is on, which `addTextDone` asserts
-/// stays equal to `bytes_seen` — rewinding only `bytes_seen` would desync that pair and trip
-/// the assert. Rewinding both in lockstep keeps `cache_layout` usable during a completion —
-/// needed now that tree-sitter-highlighted docs rely on `cache_layout` for viewport culling
-/// (see `TextEditor.zig`).
+/// - this frame's `Ghost.anchor`, where dimmed ghost text is spliced between the two halves;
+/// - either byte of `bracket_match`, re-emitted on its own with a highlight behind it.
+///
+/// Doing both through the same text pipeline (rather than painting rects at computed
+/// coordinates) is what keeps them correct under wrapping, horizontal scrolling, and
+/// `cache_layout`'s viewport culling — a split chunk is still just text runs, laid out by the
+/// same code as everything around it.
 fn emitChunk(self: *TextEntryWidget, chunk_start: usize, chunk: []const u8, opts: dvui.Options, is_hover: bool) void {
     const emitPlain = struct {
         fn call(w: *TextEntryWidget, start: usize, text: []const u8, o: dvui.Options, hover: bool) void {
@@ -1026,53 +1109,119 @@ fn emitChunk(self: *TextEntryWidget, chunk_start: usize, chunk: []const u8, opts
         }
     }.call;
 
+    const chunk_end = chunk_start + chunk.len;
+
+    // Ghost text to splice inside *this* chunk, if any. `ghost_text_emitted` matters because
+    // consecutive chunks touch (one's end byte offset equals the next one's start), so when the
+    // anchor sits exactly on that shared boundary both chunks would otherwise believe the
+    // anchor is theirs and splice the ghost text twice (e.g. typing `s` and seeing `stdtd`
+    // instead of `std` — the ghost suffix `td` spliced in on both sides).
     const ghost: ?Ghost = blk: {
-        if (self.current_completion) |completion| {
-            // `drawCompletion` never sets `current_completion` with an empty `items` — see
-            // `TextEditor.zig` — so `selected` is always a valid index here.
-            break :blk .{ .text = completion.items[completion.selected].text, .anchor = completion.anchor };
-        }
-        if (self.signature_hint) |hint| {
-            break :blk .{ .text = hint, .anchor = self.textLayout.selectionGet(self.len).cursor };
-        }
-        break :blk null;
-    };
-    const g = ghost orelse {
-        emitPlain(self, chunk_start, chunk, opts, is_hover);
-        return;
+        if (self.ghost_text_emitted) break :blk null;
+        const g: Ghost = found: {
+            if (self.current_completion) |completion| {
+                // A completion showing always claims the ghost-text slot, even when it has no
+                // suffix worth drawing (`completionGhost` returning null) — falling through to
+                // the signature hint there would flash a hint under an open completion list.
+                break :found self.completionGhost(completion) orelse break :blk null;
+            }
+            if (self.signature_hint) |hint| {
+                break :found .{ .text = hint, .anchor = self.textLayout.selectionGet(self.len).cursor };
+            }
+            break :blk null;
+        };
+        // Not in this chunk, or unsafe to splice at all (see `CompletionCandidate.text`'s doc
+        // comment on the no-newline requirement).
+        if (g.anchor < chunk_start or g.anchor > chunk_end) break :blk null;
+        if (std.mem.indexOfScalar(u8, g.text, '\n') != null) break :blk null;
+        break :blk g;
     };
 
-    // Fast path: ghost text already spliced elsewhere this draw, anchor not in this chunk, or
-    // ghost text unsafe to splice this frame (see `CompletionCandidate.text`'s doc comment on
-    // the no-newline requirement) — stays branch-cheap for the common case, which is every
-    // chunk on every frame without a completion or signature hint showing. `ghost_text_emitted`
-    // matters because consecutive chunks touch (one's end byte offset equals the next one's
-    // start), so when the anchor sits exactly on that shared boundary both chunks would
-    // otherwise believe the anchor is theirs and splice the ghost text twice (e.g. typing `s`
-    // and seeing `stdtd` instead of `std` — the ghost suffix `td` spliced in on both sides).
-    if (self.ghost_text_emitted or g.anchor < chunk_start or g.anchor > chunk_start + chunk.len or
-        std.mem.indexOfScalar(u8, g.text, '\n') != null)
-    {
+    // Bracket-match bytes falling in this chunk (0, 1, or both — a short chunk like `()` can
+    // hold the whole pair). `< chunk_end` rather than `<=`: a bracket exactly on the shared
+    // boundary belongs to the next chunk, which is where its byte actually gets emitted.
+    var marks_buf: [2]usize = undefined;
+    var marks: []const usize = marks_buf[0..0];
+    if (self.bracket_match) |bm| {
+        var n: usize = 0;
+        for (bm) |m| {
+            if (m >= chunk_start and m < chunk_end) {
+                marks_buf[n] = m;
+                n += 1;
+            }
+        }
+        marks = marks_buf[0..n];
+    }
+
+    // The overwhelmingly common case: nothing to splice or restyle in this chunk. Kept first so
+    // the per-chunk cost of both features is one null check on frames where neither is showing.
+    if (ghost == null and marks.len == 0) {
         emitPlain(self, chunk_start, chunk, opts, is_hover);
         return;
     }
+
+    // Walk the chunk left to right, emitting each plain stretch up to the next splice point.
+    // `matchAt` returns its two offsets ascending, so `marks` is already in order, and a ghost
+    // anchor coinciding with a bracket goes first (it sits *at* the caret, before that byte).
+    var pos = chunk_start;
+    var mark_i: usize = 0;
+    var pending_ghost = ghost;
+    while (mark_i < marks.len or pending_ghost != null) {
+        const ghost_at: ?usize = if (pending_ghost) |g| g.anchor else null;
+        const mark_at: ?usize = if (mark_i < marks.len) marks[mark_i] else null;
+        const take_ghost = if (ghost_at) |ga| (mark_at == null or ga <= mark_at.?) else false;
+        const at = if (take_ghost) ghost_at.? else mark_at.?;
+
+        emitPlain(self, pos, chunk[pos - chunk_start .. at - chunk_start], opts, is_hover);
+        pos = at;
+
+        if (take_ghost) {
+            self.emitGhost(pending_ghost.?.text);
+            pending_ghost = null;
+        } else {
+            // Deliberately not `is_hover`: this is a single bracket byte carved out of the
+            // middle of a token, and registering it as its own hover span would report a
+            // one-byte token to goto-definition/hover. Brackets are never a definition target,
+            // so dropping the hit-test for exactly this byte costs nothing.
+            emitPlain(self, at, chunk[at - chunk_start ..][0..1], opts.override(bracketMatchOptions()), false);
+            pos = at + 1;
+            mark_i += 1;
+        }
+    }
+    emitPlain(self, pos, chunk[pos - chunk_start ..], opts, is_hover);
+}
+
+/// Styling for a matched bracket: a wash of the theme's highlight colour behind the glyph, so
+/// it follows whatever theme (including a user's own) is active rather than hardcoding a colour.
+/// Faint on purpose — this marker sits under the caret constantly while editing, so it has to
+/// read as a hint rather than compete with the selection or with syntax colours.
+fn bracketMatchOptions() dvui.Options {
+    return .{ .color_fill = dvui.themeGet().color(.highlight, .fill).opacity(0.35) };
+}
+
+/// Splices `text` into the layout at the current position, dimmed, without letting it count as
+/// real document bytes.
+///
+/// `addTextEx` advances `TextLayoutWidget.bytes_seen` unconditionally, and that counter must
+/// track only *real* document bytes for cursor/selection hit-testing (`cursor_rect`, click
+/// routing) to stay correct for every chunk emitted after this one — so it gets rewound by the
+/// ghost text's length. `bytes_seen` is a plain public field already reached into directly
+/// elsewhere in this codebase (e.g. `selection`, `cursor_rect` at `TextEditor.zig`), so this
+/// isn't reaching past an abstraction that wants to stay opaque — but the same call path also
+/// advances a *second*, independent counter (`cache_layout_bytes_seen`) whenever `cache_layout`
+/// is on, which `addTextDone` asserts stays equal to `bytes_seen`; rewinding only `bytes_seen`
+/// would desync that pair and trip the assert. Rewinding both in lockstep keeps `cache_layout`
+/// usable during a completion — needed now that tree-sitter-highlighted docs rely on it for
+/// viewport culling (see `TextEditor.zig`).
+fn emitGhost(self: *TextEntryWidget, text: []const u8) void {
     self.ghost_text_emitted = true;
-
-    const split = g.anchor - chunk_start;
-    emitPlain(self, chunk_start, chunk[0..split], opts, is_hover);
-
-    self.textLayout.addText(g.text, .{
+    self.textLayout.addText(text, .{
         .color_text = self.textLayout.data().options.color(.text).opacity(0.5),
     });
-    self.textLayout.bytes_seen -= g.text.len;
+    self.textLayout.bytes_seen -= text.len;
     if (self.textLayout.cache_layout) {
-        // `addTextEx` bumped this by `g.text.len` too (same call path as `bytes_seen`, whenever
-        // cache_layout is on) — rewind it the same amount so it stays equal to `bytes_seen`,
-        // which `addTextDone` asserts.
-        self.textLayout.cache_layout_bytes_seen -= g.text.len;
+        self.textLayout.cache_layout_bytes_seen -= text.len;
     }
-
-    emitPlain(self, g.anchor, chunk[split..], opts, is_hover);
 }
 
 pub fn drawBeforeText(self: *TextEntryWidget) void {
@@ -1558,6 +1707,19 @@ pub fn processEvent(self: *TextEntryWidget, e: *Event) void {
                             sel.end = sel.cursor;
                             sel.start = sel.cursor;
                             self.textLayout.scroll_to_cursor = true;
+                        } else if (self.betweenEmptyPair(sel.cursor)) {
+                            // Take out both halves of an empty pair at once — deleting the `{` of
+                            // `{|}` and leaving the orphaned `}` behind is never what was meant.
+                            const start = sel.cursor - 1;
+                            const end = sel.cursor + 1;
+                            self.textChangedRemoved(start, end);
+                            if (self.init_opts.edit_notify) |en| en.noteRemoved(en.ctx, start, self.text[start..end]);
+                            @memmove(self.text[start..][0 .. self.len - end], self.text[end..self.len]);
+                            self.setLen(self.len - 2);
+                            sel.cursor = start;
+                            sel.start = start;
+                            sel.end = start;
+                            self.textLayout.scroll_to_cursor = true;
                         } else if (sel.cursor > 0) {
                             // delete character just before cursor
                             //
@@ -1661,7 +1823,13 @@ pub fn processEvent(self: *TextEntryWidget, e: *Event) void {
                     e.handle(@src(), self.data());
                     var new = std.mem.sliceTo(set.txt, 0);
                     if (self.init_opts.multiline) {
-                        self.textTyped(new, set.selected);
+                        // Only single, committed characters take the auto-pair path: `set.selected`
+                        // marks in-progress IME composition (which gets replaced wholesale on the
+                        // next event, so inserting a closer mid-composition would strand it), and a
+                        // multi-byte `new` is a paste or a composed sequence, never a keystroke.
+                        const auto_paired = self.init_opts.auto_close_pairs and new.len == 1 and
+                            !set.selected and self.handleAutoPair(new[0]);
+                        if (!auto_paired) self.textTyped(new, set.selected);
                     } else {
                         var i: usize = 0;
                         while (i < new.len) {
@@ -1912,6 +2080,71 @@ fn oneIndentUnit(self: *TextEntryWidget, buf: []u8) []const u8 {
     const n = @min(tab_size, buf.len);
     @memset(buf[0..n], ' ');
     return buf[0..n];
+}
+
+/// Applies `tc.pairs.onTyped`'s decision for a single typed character — see `auto_close_pairs`
+/// for the behavior and `pairs.zig` for the rules. Returns true when it fully handled `ch` (the
+/// caller must not also insert it), false to let the normal insert path run.
+fn handleAutoPair(self: *TextEntryWidget, ch: u8) bool {
+    const sel = self.textLayout.selectionGet(self.len);
+    switch (tc.pairs.onTyped(self.text[0..self.len], sel.start, sel.end, ch)) {
+        .insert => return false,
+        .step_over => {
+            sel.cursor += 1;
+            sel.start = sel.cursor;
+            sel.end = sel.cursor;
+            self.textLayout.scroll_to_cursor = true;
+            return true;
+        },
+        .surround => |p| return self.surroundSelection(p),
+        .close_pair => |p| {
+            const both = [_]u8{ p.open, p.close };
+            self.textTyped(&both, false);
+
+            const after = self.textLayout.selectionGet(self.len);
+            if (after.cursor > 0) {
+                after.cursor -= 1;
+                after.start = after.cursor;
+                after.end = after.cursor;
+            }
+            self.textLayout.scroll_to_cursor = true;
+            return true;
+        },
+    }
+}
+
+/// Wraps the active selection in `p` instead of replacing it (VSCode's `editor.autoSurround`),
+/// leaving the same text selected inside the new pair. Built as one `textTyped` call over an
+/// arena copy so it lands as a single undo step; on allocation failure it returns false and the
+/// caller falls back to the plain "typing replaces the selection" behavior.
+fn surroundSelection(self: *TextEntryWidget, p: tc.pairs.Pair) bool {
+    const sel = self.textLayout.selectionGet(self.len);
+    const start = sel.start;
+    const end = @min(sel.end, self.len);
+    if (end <= start) return false;
+
+    const inner = self.text[start..end];
+    const arena = dvui.currentWindow().arena();
+    const wrapped = arena.alloc(u8, inner.len + 2) catch return false;
+    wrapped[0] = p.open;
+    @memcpy(wrapped[1..][0..inner.len], inner);
+    wrapped[inner.len + 1] = p.close;
+
+    self.textTyped(wrapped, false);
+
+    // `textTyped` can insert less than asked when the buffer hits its limit, so re-derive the
+    // inner span from where the cursor actually ended up rather than trusting `inner.len`.
+    const after = self.textLayout.selectionGet(self.len);
+    const inner_end = after.cursor -| 1;
+    after.start = @min(start + 1, inner_end);
+    after.end = inner_end;
+    after.cursor = inner_end;
+    self.textLayout.scroll_to_cursor = true;
+    return true;
+}
+
+fn betweenEmptyPair(self: *TextEntryWidget, cursor: usize) bool {
+    return self.init_opts.auto_close_pairs and tc.pairs.deletesPair(self.text[0..self.len], cursor);
 }
 
 /// VSCode-style Enter: carries the current line's leading whitespace onto the new line, adds

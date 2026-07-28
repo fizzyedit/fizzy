@@ -1619,8 +1619,8 @@ fn shellLogLine(ctx: *anyopaque, level: std.log.Level, scope: []const u8, messag
 
 /// See `EditorAPI.VTable.drawMenuItem`'s doc comment for why this widget construction has to
 /// happen here (in the shell) rather than in the calling plugin.
-fn shellDrawMenuItem(ctx: *anyopaque, title: []const u8, keybind_name: ?[]const u8) bool {
-    _ = ctx;
+fn shellDrawMenuItem(ctx: *anyopaque, title: []const u8, command_id: ?[]const u8) bool {
+    const editor = shellCtx(ctx);
     _ = dvui.separator(@src(), .{ .expand = .horizontal });
     var mi = dvui.menuItem(@src(), .{}, .{
         .expand = .horizontal,
@@ -1630,8 +1630,10 @@ fn shellDrawMenuItem(ctx: *anyopaque, title: []const u8, keybind_name: ?[]const 
     });
     defer mi.deinit();
     const clicked = mi.activeRect() != null;
-    const kb: dvui.enums.Keybind = if (keybind_name) |name|
-        dvui.currentWindow().keybinds.get(name) orelse .{}
+    // Same resolution the shell's own menu rows use (`Menu.hotkeyFor`), so a plugin row and a
+    // shell row bound to the same chord can never disagree about what to display.
+    const kb: dvui.enums.Keybind = if (command_id) |id|
+        Keybinds.menuKeybindFor(editor, id)
     else
         .{};
     fizzy.dvui.labelWithKeybind(title, kb, true, .{ .expand = .horizontal }, .{ .expand = .horizontal });

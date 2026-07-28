@@ -111,7 +111,7 @@ fn drawModelItem(
                 if (!f(editor)) return;
             }
             const enabled = if (c.enabled) |f| f(editor) else true;
-            const hotkey = hotkeyFor(c.id);
+            const hotkey = hotkeyFor(editor, c.id);
 
             if (menuItemWithHotkey(@src(), c.title.resolve(editor), hotkey, enabled, .{}, .{
                 .expand = .horizontal,
@@ -125,11 +125,15 @@ fn drawModelItem(
     }
 }
 
-/// The chord shown beside a row. Reads the same `dvui.Window.keybinds` map the rest of the app
-/// does, via the command's bind name, so a rebind shows up here without a second lookup table.
-fn hotkeyFor(command_id: []const u8) dvui.enums.Keybind {
-    const name = fizzy.Editor.Keybinds.bindNameForCommand(command_id) orelse return .{};
-    return dvui.currentWindow().keybinds.get(name) orelse .{};
+/// The chord shown beside a row, straight from the keymap `Keybinds.tick` dispatches out of.
+///
+/// This used to go via the command's dvui *bind name* (`dvui.Window.keybinds`), which only
+/// worked for the subset of commands that have one. Anything bound purely through the keymap —
+/// a command with no dvui bind (`fizzy.quickOpen`), or any plugin command the user gave a chord
+/// in the Keyboard Shortcuts pane — resolved to nothing and drew a blank accelerator, even
+/// though the chord worked. Asking the keymap directly is one lookup for every command.
+fn hotkeyFor(editor: *Editor, command_id: []const u8) dvui.enums.Keybind {
+    return fizzy.Editor.Keybinds.menuKeybindFor(editor, command_id);
 }
 
 fn drawRecentFolders(editor: *Editor, id_extra: usize) !void {

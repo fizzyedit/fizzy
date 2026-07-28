@@ -112,9 +112,12 @@ pub const CompletionItem = struct {
     /// unlike `insert_text`. Distinct field because a ghost-text suffix like "else" reads as
     /// confusing/wrong when shown as a list row on its own.
     label: []const u8,
-    /// Suggestion text already trimmed to a pure suffix after what the user has typed —
-    /// ghost text only ever appears after the caret, it never re-shows characters already
-    /// visible before it.
+    /// The full text this candidate inserts, replacing `[replace_start, replace_end)` — *not*
+    /// trimmed against what the user has already typed, because matching is fuzzy (`arlst`
+    /// matches `ArrayList`), so the typed characters aren't generally a removable prefix. A
+    /// caller drawing inline ghost text is responsible for deciding whether a literal suffix
+    /// exists to preview (see `TextEntryWidget.completionGhost`); accepting a candidate is
+    /// always a wholesale replace of the range, which needs no trimming either way.
     insert_text: []const u8,
     /// Byte range in the document this replaces when accepted. Usually `[byte_offset,
     /// byte_offset)` (a pure insertion), but can start earlier when the underlying language

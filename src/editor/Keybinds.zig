@@ -461,42 +461,136 @@ fn nsKeyEquivalent(key: keymap.Key) ?[]const u8 {
     };
 }
 
-/// Push each menu-bar item's chord from the keymap onto its `NSMenuItem`, so a rebind takes
-/// effect immediately — and, just as importantly, the old chord stops working. These items *are*
-/// the dispatch path for their commands on macOS, not just a label.
+/// An AppKit key equivalent: the character plus the modifier mask to stamp on an `NSMenuItem`.
+const NativeShortcut = struct { key: []const u8, mask: c_ulong };
+
+/// The key equivalent for a command, or null when there is nothing AppKit can express — the
+/// command is unbound, its chord is two-stroke, or its key has no key-equivalent character.
+/// Null means *clear* the item's shortcut: a stale one would otherwise keep firing, and
+/// `nativeMenuOwnsChord` (which asks the same question) would keep `dispatch` skipping the
+/// command, leaving nothing to handle those keys at all.
 ///
-/// Walks `menu_model.flat_commands`, whose index is the item's tag. There is no separate
-/// command↔item table to keep in step any more.
+/// The command's *own* binding only — deliberately not `strokeForCommand`'s inherited-chord
+/// fallback. An inherited chord is already stamped on the Fizzy item it belongs to (`cmd+c` on
+/// Edit > Copy), and a second `NSMenuItem` claiming the same key equivalent is a coin flip over
+/// which one AppKit fires. Inheritance is a display affordance; ownership is not inherited.
+fn nativeShortcutFor(editor: *Editor, command_id: []const u8) ?NativeShortcut {
+    const binding = bestBinding(editor, command_id) orelse return null;
+    if (shadowedByHigherLayer(editor, binding, command_id)) return null;
+    const stroke = binding.stroke;
+    if (stroke.second != null) return null;
+
+    const chord = stroke.first;
+    const key = nsKeyEquivalent(chord.key) orelse return null;
+
+    var mask: c_ulong = 0;
+    if (chord.mods.command) mask |= fizzy.backend.modifier_command;
+    if (chord.mods.ctrl) mask |= fizzy.backend.modifier_control;
+    if (chord.mods.alt) mask |= fizzy.backend.modifier_option;
+    if (chord.mods.shift) mask |= fizzy.backend.modifier_shift;
+    return .{ .key = key, .mask = mask };
+}
+
+/// Whether a higher keymap layer has taken `command_id`'s chord away from it — the question
+/// `nativeShortcutFor` asks before stamping an `NSMenuItem`.
+pub fn chordShadowed(editor: *Editor, command_id: []const u8) bool {
+    const binding = bestBinding(editor, command_id) orelse return false;
+    return shadowedByHigherLayer(editor, binding, command_id);
+}
+
+/// Whether another binding outranks `binding` on the same chord, by the same rule
+/// `Keymap.conflicts` reports a shadowing pair with (source layer, then `when` specificity).
+///
+/// AppKit has no such notion: two `NSMenuItem`s holding the same key equivalent are a coin flip
+/// over which one fires, and the loser is whichever the menu happens to list first — not what
+/// the keymap resolves. So the shadowed command's item gives the chord up entirely. Binding
+/// `cmd+f` to Format Document, which the shell's profile hands to Open Folder, has to end with
+/// `cmd+f` formatting: the menu, `Keybinds.tick` and AppKit all agree on the winner, and Open
+/// Folder shows no chord because it no longer has one.
+fn shadowedByHigherLayer(editor: *Editor, binding: keymap.Binding, command_id: []const u8) bool {
+    for (editor.keymap.bindings.items) |other| {
+        const other_cmd = other.command orelse continue;
+        if (std.mem.eql(u8, other_cmd, command_id)) continue;
+        if (!other.stroke.eql(binding.stroke)) continue;
+        if (!other.when.eql(binding.when)) continue;
+        // Owner-scoped bindings (pixi's `mod+p` Export vs the shell's Quick Open) fork on the
+        // active document rather than shadowing outright — either can be the right answer, so
+        // neither gives up its chord here.
+        const same_owner = if (binding.owner_id == null and other.owner_id == null)
+            true
+        else if (binding.owner_id) |b| (if (other.owner_id) |o| std.mem.eql(u8, b, o) else false) else false;
+        if (!same_owner) continue;
+
+        const mine = (@as(u16, @intFromEnum(binding.source)) << 8) | binding.when.weight();
+        const theirs = (@as(u16, @intFromEnum(other.source)) << 8) | other.when.weight();
+        if (theirs > mine) return true;
+    }
+    return false;
+}
+
+/// Push each native menu item's chord from the keymap onto its `NSMenuItem`, so a rebind takes
+/// effect immediately — and, just as importantly, the old chord stops working. The fixed items
+/// *are* the dispatch path for their commands on macOS, not just a label.
+///
+/// Two passes, one rule. The fixed bar walks `menu_model.flat_commands`, whose index is the
+/// item's tag; the plugin-contributed leaves walk `host.native_menu_items`, whose index is
+/// theirs (`backend_native.rebuildDynamicNativeMenus` tags them the same way). Neither needs a
+/// command↔item table: both name a command, and the chord comes from the keymap.
 pub fn syncNativeMenuShortcuts(editor: *Editor) void {
     if (comptime builtin.os.tag != .macos) return;
 
     for (menu_model.flat_commands, 0..) |item, tag| {
-        const binding = bestBinding(editor, item.id) orelse {
-            // Unbound: clear the shortcut so a stale one can't keep firing.
+        if (nativeShortcutFor(editor, item.id)) |s| {
+            fizzy.backend.setNativeMenuShortcut(tag, s.key, s.mask);
+        } else {
             fizzy.backend.setNativeMenuShortcut(tag, null, 0);
-            continue;
-        };
-
-        // A two-stroke chord has nowhere to live on a menu item. Clearing is the honest
-        // outcome: `dispatch` stops skipping the command once the menu no longer claims it.
-        if (binding.stroke.second != null) {
-            fizzy.backend.setNativeMenuShortcut(tag, null, 0);
-            continue;
         }
+    }
 
-        const chord = binding.stroke.first;
-        const key = nsKeyEquivalent(chord.key) orelse {
-            fizzy.backend.setNativeMenuShortcut(tag, null, 0);
+    // Plugin items (`Host.registerNativeMenuItem`). Before this they were built with an empty
+    // key equivalent and never restamped, so a plugin action with a perfectly good chord — the
+    // text plugin's Format Document, pixi's Transform / Grid Layout — showed none in the macOS
+    // Edit menu no matter what the user bound it to.
+    for (editor.host.native_menu_items.items, 0..) |ni, index| {
+        const command_id = ni.command orelse {
+            fizzy.backend.setDynamicNativeMenuShortcut(index, null, 0);
             continue;
         };
-
-        var mask: c_ulong = 0;
-        if (chord.mods.command) mask |= fizzy.backend.modifier_command;
-        if (chord.mods.ctrl) mask |= fizzy.backend.modifier_control;
-        if (chord.mods.alt) mask |= fizzy.backend.modifier_option;
-        if (chord.mods.shift) mask |= fizzy.backend.modifier_shift;
-        fizzy.backend.setNativeMenuShortcut(tag, key, mask);
+        if (nativeShortcutFor(editor, command_id)) |s| {
+            fizzy.backend.setDynamicNativeMenuShortcut(index, s.key, s.mask);
+        } else {
+            fizzy.backend.setDynamicNativeMenuShortcut(index, null, 0);
+        }
     }
+}
+
+/// The chord a menu row should show beside `command_id`, resolved from the keymap — the same
+/// place `tick` dispatches from, so what the menu advertises is what actually runs.
+///
+/// Falls back to the Fizzy command this one inherits its chord from (`inheritedChordSource`):
+/// a plugin's implementation of a document verb (`pixi.copy`) genuinely has no binding of its
+/// own — `cmd+c` is bound to `fizzy.copy`, which forwards — so showing nothing would be wrong.
+///
+/// A binding another layer has taken over (`shadowedByHigherLayer`) shows nothing: the chord is
+/// no longer this command's, in the menu or anywhere else, and advertising it would promise a
+/// key that runs something else.
+pub fn strokeForCommand(editor: *Editor, command_id: []const u8) ?keymap.Stroke {
+    if (bestBinding(editor, command_id)) |b| {
+        return if (shadowedByHigherLayer(editor, b, command_id)) null else b.stroke;
+    }
+    if (inheritedChordSource(command_id)) |source| {
+        if (bestBinding(editor, source)) |b| return b.stroke;
+    }
+    return null;
+}
+
+/// `strokeForCommand` in the shape the in-app menu rows want. An empty `Keybind` means "draw
+/// nothing", which is also what a two-stroke chord gets: `dvui.enums.Keybind` is one key plus
+/// modifier flags, with nowhere to put a second stroke.
+pub fn menuKeybindFor(editor: *Editor, command_id: []const u8) dvui.enums.Keybind {
+    const stroke = strokeForCommand(editor, command_id) orelse return .{};
+    if (stroke.second != null) return .{};
+    return adapter.toKeybind(stroke.first);
 }
 
 /// Highest-precedence binding for `command` (user > plugin > profile > dvui), or null.
@@ -516,12 +610,24 @@ fn bestBinding(editor: *Editor, command: []const u8) ?keymap.Binding {
 /// a second time. False once the chord is one AppKit can't express as a key equivalent (a
 /// two-stroke chord, a function key), in which case `dispatch` has to handle it after all —
 /// otherwise nothing would.
+///
+/// Asks about plugin-contributed items too, not just the fixed bar: now that they carry key
+/// equivalents, AppKit runs them, and a command reachable from both paths would fire twice.
+/// This is the exact condition `syncNativeMenuShortcuts` stamps, so the two cannot disagree.
 pub fn nativeMenuOwnsChord(editor: *Editor, id: []const u8) bool {
     if (comptime builtin.os.tag != .macos) return false;
-    if (!menu_model.contains(id)) return false;
-    const binding = bestBinding(editor, id) orelse return false;
-    if (binding.stroke.second != null) return false;
-    return nsKeyEquivalent(binding.stroke.first.key) != null;
+    if (!menu_model.contains(id) and !nativeMenuItemFor(editor, id)) return false;
+    return nativeShortcutFor(editor, id) != null;
+}
+
+/// Whether a visible plugin `NativeMenuItem` names `command_id`.
+fn nativeMenuItemFor(editor: *Editor, command_id: []const u8) bool {
+    for (editor.host.native_menu_items.items) |ni| {
+        if (ni.hidden) continue;
+        const cmd = ni.command orelse continue;
+        if (std.mem.eql(u8, cmd, command_id)) return true;
+    }
+    return false;
 }
 
 pub fn isNativeMenuCommandOnMacOS(id: []const u8) bool {
@@ -668,12 +774,10 @@ fn loadUserOverrides(editor: *Editor) !void {
 /// rewrites what those names mean.
 pub const bind_override_prefix = "bind.";
 
-/// The dvui bind name a shell command's key should be mirrored onto, so rebinding e.g.
-/// `fizzy.save` also updates the accelerator `Menu.zig` renders next to "Save".
-pub fn bindNameForCommand(id: []const u8) ?[]const u8 {
-    return shellBindForCommand(id);
-}
-
+/// The dvui bind name a shell command's key is mirrored onto, so a rebind also moves the
+/// built-in bind dvui's own widgets match on. The menus no longer go through this — they ask
+/// the keymap directly (`menuKeybindFor`), which answers for every command rather than only the
+/// ones that happen to have a dvui bind name.
 fn shellBindForCommand(id: []const u8) ?[]const u8 {
     inline for (shell_commands) |c| {
         if (std.mem.eql(u8, c.id, id)) return c.bind;

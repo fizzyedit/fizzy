@@ -18,6 +18,12 @@ pub const plugin_options = @import("fizzy_plugin_options");
 /// `Editor.isBundledPluginId`) read instead of retyping the string.
 pub const plugin_id = plugin_options.id;
 
+/// The editing widget, re-exported so `tests/integration.zig` can drive it against dvui's
+/// headless testing backend (a file belongs to exactly one module, so the tests reach it
+/// through this plugin's module rather than rooting their own at the widget). Nothing in the
+/// app imports it this way — `TextEditor.zig` uses the relative path directly.
+pub const TextEntryWidget = @import("src/widgets/TextEntryWidget.zig");
+
 var plugin: sdk.Plugin = .{
     .state = undefined,
     .vtable = &vtable,
@@ -123,6 +129,10 @@ pub fn register(host: *sdk.Host) !void {
         .owner = &plugin,
         .parent_menu_id = "fizzy.menu.edit",
         .title = "Format Document",
+        // Naming the command is what gets this item's chord onto the macOS menu — and keeps it
+        // there across a rebind. `run` is still the click path.
+        .command = sdk.Plugin.commandId("text", "format"),
+        .sf_symbol = "text.alignleft",
         .run = nativeFormat,
     });
 }
@@ -395,7 +405,7 @@ fn drawEditMenuSection(ctx: ?*anyopaque) anyerror!void {
     _ = ctx;
     if (!cmdFormatEnabled(plugin.state)) return;
 
-    if (sdk.host().drawMenuItem("Format Document", "format")) {
+    if (sdk.host().drawMenuItem("Format Document", sdk.Plugin.commandId("text", "format"))) {
         sdk.host().runCommand(sdk.Plugin.commandId("text", "format")) catch |err| {
             dvui.log.err("text: format command failed: {any}", .{err});
         };

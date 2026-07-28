@@ -450,7 +450,23 @@ var native_menu_items: [menu_model.flat_commands.len]?objc.Object = @splat(null)
 pub fn setNativeMenuShortcut(tag: usize, key: ?[]const u8, modifier_mask: c_ulong) void {
     if (comptime builtin.os.tag != .macos) return;
     if (tag >= native_menu_items.len) return;
-    const item = native_menu_items[tag] orelse return;
+    applyKeyEquivalent(native_menu_items[tag] orelse return, key, modifier_mask);
+}
+
+/// `setNativeMenuShortcut` for a plugin-contributed item, keyed by its index in
+/// `Host.native_menu_items` — the same index `rebuildDynamicNativeMenus` stamps as the item's
+/// tag. Silently does nothing when that item isn't currently in the bar (hidden, or its plugin
+/// unloaded), which is the same shape as a stale tag above.
+pub fn setDynamicNativeMenuShortcut(index: usize, key: ?[]const u8, modifier_mask: c_ulong) void {
+    if (comptime builtin.os.tag != .macos) return;
+    for (dynamic_leaf_items.items) |entry| {
+        if (entry.index != index) continue;
+        applyKeyEquivalent(entry.item, key, modifier_mask);
+        return;
+    }
+}
+
+fn applyKeyEquivalent(item: objc.Object, key: ?[]const u8, modifier_mask: c_ulong) void {
     const NSString = objc.getClass("NSString") orelse return;
 
     var buf: [8]u8 = undefined;
@@ -1296,7 +1312,9 @@ var native_recent_folders_menu: ?objc.Object = null;
 var native_recent_folders_item: ?objc.Object = null;
 
 const DynamicTopLevelMenu = struct { item: objc.Object, menu: objc.Object };
-const DynamicLeafItem = struct { parent_menu: objc.Object, item: objc.Object };
+/// `index` is the item's position in `Host.native_menu_items` — its `NSMenuItem` tag, and the
+/// handle `setDynamicNativeMenuShortcut` restamps a rebound chord through.
+const DynamicLeafItem = struct { parent_menu: objc.Object, item: objc.Object, index: usize };
 
 /// Plugin-created top-level menus (main-menu items) from the previous rebuild, torn down
 /// at the start of the next one.
@@ -1342,6 +1360,7 @@ pub fn rebuildDynamicNativeMenus() void {
     const NSMenu = objc.getClass("NSMenu") orelse return;
     const NSMenuItem = objc.getClass("NSMenuItem") orelse return;
     const NSString = objc.getClass("NSString") orelse return;
+    const NSImage = objc.getClass("NSImage") orelse return;
     const empty = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"".ptr});
     const generic_sel = fizzy_get_selector("genericMenuAction:") orelse return;
 
@@ -1414,9 +1433,26 @@ pub fn rebuildDynamicNativeMenus() void {
         // Tag with the item's index in `host.native_menu_items`, resolved back on click
         // in `Editor.zig`'s `flushQueuedNativeMenuItems`.
         item.msgSend(void, "setTag:", .{@as(c_long, @intCast(idx))});
+        if (ni.sf_symbol) |sym| {
+            if (fizzy.app.allocator.dupeZ(u8, sym)) |sym_z| {
+                defer fizzy.app.allocator.free(sym_z);
+                setMenuItemImage(item, NSImage, NSString, sym_z.ptr, title_z.ptr);
+            } else |_| {}
+        }
 
-        dynamic_leaf_items.append(fizzy.app.allocator, .{ .parent_menu = parent_menu, .item = item }) catch {};
+        dynamic_leaf_items.append(fizzy.app.allocator, .{
+            .parent_menu = parent_menu,
+            .item = item,
+            .index = idx,
+        }) catch {};
     }
+
+    // The items above are built with no key equivalent; their chords come from the keymap, and
+    // this is what puts them there. Both callers of this function (startup, and every plugin
+    // load/unload/hide-toggle) reach it *after* the keymap is rebuilt, so nothing else would —
+    // the fixed bar hits the same ordering hazard, which is why `setupMacOSMenuBar` ends with
+    // the same call.
+    fizzy.Editor.Keybinds.syncNativeMenuShortcuts(fizzy.editor);
 }
 
 /// Inserts a "File" menu into the macOS app menu bar (between Apple and Window). Safe to call multiple times; runs once.

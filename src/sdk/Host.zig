@@ -446,11 +446,12 @@ pub fn logLine(self: *Host, level: std.log.Level, scope: []const u8, message: []
 }
 
 /// Draw a standard menu-item row inside the currently open menu; returns whether it was
-/// clicked. False (never drawn/clicked) when no shell is installed. See
+/// clicked. `command_id` names the `Command` the row runs, and the shell draws that command's
+/// current chord beside it. False (never drawn/clicked) when no shell is installed. See
 /// `EditorAPI.VTable.drawMenuItem`'s doc comment — `Host.registerMenuSection` draw callbacks
 /// must go through this instead of calling dvui's menu widgets directly.
-pub fn drawMenuItem(self: *Host, title: []const u8, keybind_name: ?[]const u8) bool {
-    return if (self.shell_api) |a| a.drawMenuItem(title, keybind_name) else false;
+pub fn drawMenuItem(self: *Host, title: []const u8, command_id: ?[]const u8) bool {
+    return if (self.shell_api) |a| a.drawMenuItem(title, command_id) else false;
 }
 
 // ---- per-plugin settings store ---------------------------------------------

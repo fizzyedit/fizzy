@@ -103,6 +103,16 @@ pub const NativeMenuItem = struct {
     /// titled from that contribution's `title`).
     parent_menu_id: []const u8,
     title: []const u8,
+    /// The registered `Command` this item stands for, e.g. `"text.format"`. Optional, and
+    /// purely about the *chord*: `run` is still what a click invokes. The shell stamps this
+    /// command's current binding onto the `NSMenuItem` as its key equivalent and restamps on
+    /// every rebind, so the macOS menu shows the same shortcut as the in-app one instead of
+    /// none at all. Leave null for an item with no command behind it — the item then never
+    /// carries a shortcut.
+    command: ?[]const u8 = null,
+    /// SF Symbol name for the item's icon (e.g. `"wand.and.stars"`), matching what the shell's
+    /// own items use. Null draws no icon.
+    sf_symbol: ?[]const u8 = null,
     /// See `MenuContribution.hidden`.
     hidden: bool = false,
     ctx: ?*anyopaque = null,

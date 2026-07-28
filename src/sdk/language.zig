@@ -98,9 +98,10 @@ pub const LanguageSupport = struct {
         /// trigger — so it must never block; kick off async work as a side effect and return
         /// null until a result is cached. When the cache is populated from a background
         /// thread, call `sdk.refresh()` so the idle GUI wakes. Never returns an empty
-        /// (zero-length) slice — that's the same as null. The editor shows the first
-        /// candidate's `insert_text` as ghost text and all of them in a scrollable dropdown
-        /// list; Up/Down changes which one is "current" for both.
+        /// (zero-length) slice — that's the same as null. The editor shows every candidate in a
+        /// scrollable dropdown list, plus — for the current one, when its `insert_text` literally
+        /// extends what's already typed — the remainder as ghost text after the caret; Up/Down
+        /// changes which one is "current" for both.
         completion: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, byte_offset: usize) ?[]const CompletionItem = null,
         /// Non-blocking, same convention as `hover`/`completion`: many language servers send
         /// completion candidates with an empty/placeholder `documentation` up front (a lazy-load

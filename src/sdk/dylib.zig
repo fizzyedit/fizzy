@@ -91,6 +91,12 @@ const sdk_boundary_types = .{
     regions.CenterProvider,
     regions.MenuContribution,
     regions.MenuSectionContribution,
+    // Reached only through `Host.native_menu_items`' backing slice — a *data* pointer
+    // `hashType` deliberately never follows (see the `HoverResult` note below) — so without
+    // this entry a field added here would change the real cross-plugin layout of that list
+    // without moving the fingerprint, and the shell would read a plugin's differently-shaped
+    // struct. Same lesson as `CompletionItem` / `Setting`.
+    regions.NativeMenuItem,
     regions.Command,
     language_mod.LanguageSupport,
     language_mod.LanguageSupport.VTable,

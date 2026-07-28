@@ -173,8 +173,15 @@ pub const VTable = struct {
 
     /// Draws a standard menu-item row (separator above, label + keybind hint, click-detect)
     /// inside whatever menu is currently open, and returns whether it was clicked this frame.
-    /// `keybind_name` looks up a registered shortcut hint (e.g. `"format"`), or pass `null` for
-    /// none. `title` also seeds the widget's id — use a distinct title per call site.
+    /// `command_id` is the registered `Command` this row runs (e.g. `"text.format"`), or null
+    /// for a row that is not a command; the shell resolves its current chord from the keymap
+    /// and draws it as the accelerator, so a user rebinding it in the Keyboard Shortcuts pane
+    /// updates the row with no further work from the plugin. `title` also seeds the widget's
+    /// id — use a distinct title per call site.
+    ///
+    /// This took a dvui *bind name* before (`"format"`, `"grid_layout"`). Those names are a
+    /// separate, flat namespace that plugin commands generally have no entry in, so the hint was
+    /// blank for every plugin item in practice, and rebinding could not reach it at all.
     ///
     /// Menu section contributions (`Host.registerMenuSection`) must draw items through this
     /// rather than calling `dvui.menuItem()`/`dvui.separator()` directly: dvui tracks "the
@@ -186,7 +193,7 @@ pub const VTable = struct {
     /// ReleaseFast). Routing through this function keeps the actual widget construction in the
     /// shell's own compiled code, where that state is always valid — the plugin just gets a
     /// plain bool back, the same shape as every other shell-owned-context call on this vtable.
-    drawMenuItem: *const fn (ctx: *anyopaque, title: []const u8, keybind_name: ?[]const u8) bool,
+    drawMenuItem: *const fn (ctx: *anyopaque, title: []const u8, command_id: ?[]const u8) bool,
 
     /// Reads `<plugins_dir>/<id>.settings.zon`, or null if absent/unavailable. Caller-owned
     /// (free with the same allocator `Host` uses).
@@ -425,8 +432,8 @@ pub fn logLine(self: EditorAPI, level: std.log.Level, scope: []const u8, message
     self.vtable.logLine(self.ctx, level, scope, message);
 }
 
-pub fn drawMenuItem(self: EditorAPI, title: []const u8, keybind_name: ?[]const u8) bool {
-    return self.vtable.drawMenuItem(self.ctx, title, keybind_name);
+pub fn drawMenuItem(self: EditorAPI, title: []const u8, command_id: ?[]const u8) bool {
+    return self.vtable.drawMenuItem(self.ctx, title, command_id);
 }
 
 pub fn loadPluginSettingsFile(self: EditorAPI, id: []const u8) ?[]u8 {

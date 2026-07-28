@@ -525,6 +525,22 @@ focusing a pixi doc runs `"pixi.copy"`; a second editor answers the same shell a
 registering its own `"<its_id>.copy"`, `…transform`, etc. An action the owner didn't register is
 simply a no-op for its documents.
 
+**Menu rows name a command, and get its chord for free.** A menu item is never told what
+shortcut to display — it names the command it runs and the shell resolves the chord from the
+live keymap, so a rebind in the Keyboard Shortcuts pane shows up in both menu bars immediately:
+
+```zig
+// in-app menu (inside a `registerMenuSection` draw callback)
+if (host.drawMenuItem("Grid Layout…", "pixi.gridLayout")) { … }
+
+// macOS NSMenu leaf
+try host.registerNativeMenuItem(.{ …, .command = "pixi.gridLayout", .sf_symbol = "square.grid.3x3", .run = … });
+```
+
+Both fields are optional; omit them for a row with no command behind it, which then simply
+carries no accelerator. `drawMenuItem`'s second parameter used to be a dvui *bind name* — a
+separate flat namespace plugin commands have no entry in — so it never resolved to anything.
+
 **Command palette flattening.** Document verbs that the shell forwards (`copy`, `paste`, `undo`,
 `redo`, `deleteSelection`, `acceptEdit`, `cancelEdit`) appear **once** in the palette as the
 Fizzy stub (`fizzy.copy`, …) — greyed when no active document offers that action. Plugin

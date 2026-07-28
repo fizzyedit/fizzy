@@ -149,19 +149,23 @@ fn explorerTitle(editor: *Editor) [:0]const u8 {
 const file_items = [_]Item{
     .{ .command = .{ .id = "fizzy.newFile", .title = .{ .static = "New File…" }, .sf_symbol = "doc.badge.plus" } },
     .{ .command = .{ .id = "fizzy.openFolder", .title = .{ .static = "Open Folder" }, .sf_symbol = "folder" } },
-    .{ .command = .{ .id = "fizzy.openFiles", .title = .{ .static = "Open Files" }, .sf_symbol = "doc.on.doc" } },
+    // Not "doc.on.doc": that is the system's Copy glyph, which the Edit menu below uses.
+    .{ .command = .{ .id = "fizzy.openFiles", .title = .{ .static = "Open Files" }, .sf_symbol = "doc.text" } },
     .separator,
     .recent_folders,
     .separator,
-    .{ .command = .{ .id = "fizzy.save", .title = .{ .static = "Save" }, .enabled = canSave } },
+    .{ .command = .{ .id = "fizzy.save", .title = .{ .static = "Save" }, .sf_symbol = "square.and.arrow.down", .enabled = canSave } },
     .{ .command = .{ .id = "fizzy.saveAs", .title = .{ .static = "Save As…" }, .sf_symbol = "arrow.down.doc", .enabled = hasActiveDoc } },
     .{ .command = .{ .id = "fizzy.saveAll", .title = .{ .static = "Save All" }, .sf_symbol = "square.and.arrow.down.on.square", .enabled = canSaveAll } },
 };
 
+// The four SF Symbols below are the ones AppKit's own Edit menus use, so a fizzy Edit menu sits
+// next to Finder's and TextEdit's without looking foreign.
 const edit_items = [_]Item{
     .{ .command = .{
         .id = "fizzy.copy",
         .title = .{ .static = "Copy" },
+        .sf_symbol = "doc.on.doc",
         .visible = hasCopy,
         .enabled = copyEnabled,
         .native_always_enabled = true,
@@ -169,13 +173,14 @@ const edit_items = [_]Item{
     .{ .command = .{
         .id = "fizzy.paste",
         .title = .{ .static = "Paste" },
+        .sf_symbol = "doc.on.clipboard",
         .visible = hasPaste,
         .enabled = pasteEnabled,
         .native_always_enabled = true,
     } },
     .separator,
-    .{ .command = .{ .id = "fizzy.undo", .title = .{ .static = "Undo" }, .enabled = canUndo } },
-    .{ .command = .{ .id = "fizzy.redo", .title = .{ .static = "Redo" }, .enabled = canRedo } },
+    .{ .command = .{ .id = "fizzy.undo", .title = .{ .static = "Undo" }, .sf_symbol = "arrow.uturn.backward", .enabled = canUndo } },
+    .{ .command = .{ .id = "fizzy.redo", .title = .{ .static = "Redo" }, .sf_symbol = "arrow.uturn.forward", .enabled = canRedo } },
     // Transform / Grid Layout are pixel-art concepts, not shell ones — pixi parents its own
     // section here rather than the shell knowing about them.
     .{ .plugin_section = "fizzy.menu.edit" },

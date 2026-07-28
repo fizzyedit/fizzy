@@ -195,6 +195,10 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         .insert_spaces = plugin_impl.statePtr().settings.insert_spaces_on_tab,
         // Same VSCode-style baseline as Tab above — not gated by a setting.
         .auto_indent_newline = true,
+        .auto_close_pairs = plugin_impl.statePtr().settings.auto_close_brackets,
+        // Purely visual — it never changes the document — so it's baseline-on like
+        // `auto_indent_newline` rather than another setting to find and toggle.
+        .highlight_matching_bracket = true,
     }, chromeless.override(.{
         .expand = .both,
         .font = font,
