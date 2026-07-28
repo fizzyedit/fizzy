@@ -11,8 +11,6 @@
 //! this one's.
 const std = @import("std");
 const dvui = @import("dvui");
-const core = @import("core");
-const wdvui = core.dvui;
 const fizzy = @import("../fizzy.zig");
 const settings = fizzy.sdk.settings;
 
@@ -22,9 +20,19 @@ pub fn drawField(schema: *const settings.SettingsSchema, field: settings.Setting
     const value = schema.value;
 
     switch (field.kind) {
+        // Drawn by `SettingRow.beginInlineControl` on the description's line, so it is
+        // deliberately label-less and non-expanding — the description *is* its label.
         .bool => {
             var b = access.getBool(value, field_index);
-            if (wdvui.toggle(@src(), &b, .{ .id_extra = id_extra })) {
+            if (dvui.checkbox(@src(), &b, null, .{
+                .id_extra = id_extra,
+                .expand = .none,
+                .gravity_y = 0.5,
+                // Horizontal margin keeps the box off the row's left edge and off the description
+                // that follows it on the same line.
+                .margin = .{ .x = 4, .w = 4 },
+                .padding = .{ .x = 2, .w = 4, .y = 2, .h = 2 },
+            })) {
                 access.setBool(value, field_index, b);
                 access.persist(value, schema.owner);
             }
@@ -98,7 +106,31 @@ pub fn drawField(schema: *const settings.SettingsSchema, field: settings.Setting
         .color => {
             dvui.label(@src(), "(color picker TBD)", .{}, .{ .id_extra = id_extra });
         },
+        .other => try drawZon(schema, field_index, id_extra),
     }
+}
+
+/// Fallback control for a setting whose type the pane has no dedicated widget for (a struct, an
+/// array, an optional…): the value as zon text, edited in place. Same commit-on-Enter,
+/// re-seed-when-unfocused contract as `drawString` — plus a rejected parse simply doesn't
+/// commit, so the next unfocused frame reverts the entry to the live value.
+fn drawZon(schema: *const settings.SettingsSchema, field_index: usize, id_extra: usize) !void {
+    const access = schema.access;
+    const value = schema.value;
+    const current = access.getZonText(value, field_index, dvui.currentWindow().arena());
+
+    var entry: dvui.TextEntryWidget = undefined;
+    entry.init(@src(), .{}, .{ .id_extra = id_extra, .expand = .horizontal });
+    const focused = dvui.focusedWidgetId() == entry.data().id;
+    if (!focused and !std.mem.eql(u8, entry.getText(), current)) entry.textSet(current, false);
+    entry.processEvents();
+    entry.draw();
+    if (entry.enter_pressed and !std.mem.eql(u8, entry.getText(), current)) {
+        if (access.setZonText(value, field_index, entry.getText())) {
+            access.persist(value, schema.owner);
+        }
+    }
+    entry.deinit();
 }
 
 /// Text entry for a `[]const u8` setting. Committed on Enter only — the entry re-seeds itself

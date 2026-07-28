@@ -47,7 +47,7 @@ the first time; use it as reference after that.
 | `Plugin` | A plugin's identity + **vtable** of optional hooks. The shell calls these; a plugin implements only what it needs. |
 | `DocHandle` | Opaque handle to an open document: `{ ptr, id, owner: *Plugin }`. The shell stores these per tab and **routes every document operation to `owner`** — it never inspects `ptr`. |
 | `regions` | The contribution structs a plugin registers: `SidebarView`, `BottomView`, `CenterProvider`, `MenuContribution`, `Command`, `LanguageSupport`, … There is no settings region here — see `sdk.settings` below. |
-| `sdk.settings` (`settings.zig`) | Comptime settings API: `sdk.settings.Schema(struct { … })` derives a persisted-values type + a `SettingsSchema` you register with the Host. The shell's settings pane draws it for you — no hand-rolled dvui settings section. |
+| `sdk.settings` (`settings.zig`) | Comptime settings API: `sdk.settings.Schema(struct { … })` over `Value(T, .{ .description = … })` cells derives a persisted-values type + a `SettingsSchema` you register with the Host. The shell's settings pane draws it for you — no hand-rolled dvui settings section. |
 | `dylib` / `dvui_context` | The C-ABI entry contract + dvui-context injection used when a plugin is loaded as a runtime library. |
 
 **The shell owns no features.** Each frame it iterates the Host registries and draws whatever
@@ -327,15 +327,22 @@ fallback when a loaded plugin has no fetchable `ICON.png` (e.g. a sideloaded dyl
 
 There is no `registerSettingsSection` and no author-written settings schema in
 `plugin.zig.zon`. Persisted settings are declared as a plain Zig struct (build-options-style,
-comptime-derived), then registered from `register(host)`:
+comptime-derived) whose every field is a self-describing `sdk.settings.Value` cell, then
+registered from `register(host)`:
 
 ```zig
 const MySettings = sdk.settings.Schema(struct {
-    insert_spaces_on_tab: bool = true,
-    tab_size: enum(u8) { two = 2, four = 4, eight = 8 } = .four,
-    format_on_save: bool = false,
+    insert_spaces_on_tab: sdk.settings.Value(bool, .{
+        .description = "Insert spaces instead of a tab character when pressing Tab.",
+    }) = .init(true),
+    tab_size: sdk.settings.Value(enum(u8) { two = 2, four = 4, eight = 8 }, .{
+        .description = "How many columns a tab occupies.",
+    }) = .init(.four),
+    format_on_save: sdk.settings.Value(bool, .{
+        .description = "Reformat the document each time it is saved.",
+    }) = .init(false),
 });
-var settings: MySettings.Value = .{};
+var settings: MySettings.Cells = .{};
 
 pub fn register(host: *sdk.Host) !void {
     plugin.state = @ptrCast(&plugin_state);
@@ -347,17 +354,40 @@ pub fn register(host: *sdk.Host) !void {
         .value = &settings,                                // shell draws shared controls
     });
 }
+
+// Read a value with `.get()`, write one with `.set()`:
+if (settings.format_on_save.get()) formatDocument(doc);
 ```
 
-`Schema(T)` comptime-walks `T`'s fields (`bool`/`int`/`float`/`enum`/`[]const u8`) into a
-`Setting` table — each entry's `kind: Kind` is a `union(TypeTag)` carrying only the metadata that
+**Every setting describes itself.** A cell's second (comptime) parameter is
+`settings.Options{ description, name, min, max, step }`, and `description` has no default — a
+setting declared without one is a compile error. The pane has a permanent place for it (see the
+row shape below), so there is no shell-side table of strings that can drift from the plugin that
+owns the setting. Metadata lives entirely in the *type*: `@sizeOf(Value(T, …)) == @sizeOf(T)`,
+and only the payload is ever stored or persisted.
+
+The shell draws each setting as one group, VSCode-style: the name (derived from the field name —
+`insert_spaces_on_tab` → `Insert spaces on tab`, or `Options.name` to override), the zon key
+underneath in smaller dim mono, the wrapped description, and then the control at full width.
+Booleans are the exception — their checkbox sits before the description on one line. Both the
+name and the key are matched by the settings search, so users can find a row by either.
+
+`Schema(T)` comptime-walks `T`'s cells into a `Setting` table (`key`, `label`, `description`,
+`kind`) — each entry's `kind: Kind` is a `union(TypeTag)` carrying only the metadata that payload
 type actually uses (`IntKind{min,max,choices}`, `FloatKind{min,max,step}`, `EnumKind{choices}`,
-void for bool/string/color), rather than one flat struct with every type's bounds fields present
-on every entry — and generates `Value` (= `T`), `load`/`store` (a zon round-trip through
+void for bool/string/color/other), rather than one flat struct with every type's bounds fields
+present on every entry — and generates `Cells` (= `T`), `Payloads` (the bare-value mirror that is
+what actually round-trips through zon), `load`/`store` (through
 `Host.loadPluginSettings`/`storePluginSettings`), `applyZon` (parse a blob directly into the live
 value — the primitive `Access.applyBlob` wraps with a `settingsChanged` notification, used by
 external-change reconciliation, see below), and `register` (wires a `SettingsSchema` + typed
 `Access` vtable into the Host).
+
+**Any type is a legal setting.** `bool`/int/float/`enum`/`[]const u8` get dedicated controls;
+anything else `std.zon` can round-trip (a struct, an array, an optional) is `TypeTag.other` and
+the pane draws it as its zon text in an editable entry — text that doesn't parse simply doesn't
+commit. The on-disk shape is always the bare payload (`.tab_size = 8`), never the cell, so
+`settings.zon` files written before cells existed keep loading unchanged.
 
 Every plugin's block lives as a real, hand-editable nested ZON struct literal keyed by plugin
 id inside the shell's own `{config}/settings.zon`:
@@ -382,7 +412,7 @@ scalars/enums. Don't free a string field yourself, and don't assign one directly
 persisted — go through the settings pane or `applyZon`, or you'll leak the schema's copy.
 
 Author fields live under `.settings` so they can never collide with the shell-reserved
-`.enabled`. Only fields that differ from `T`'s own declared defaults are written; an all-default
+`.enabled`. Only fields whose payload differs from the cell's declared default is written; an all-default
 value removes that plugin's `.settings` (and if also disabled, the whole `.plugins.<id>` entry).
 `src/editor/SettingsPluginsZon.zig` locates/composes fields by source byte-span via the same
 `std.zig.Ast`/`ZonGen` machinery `std.zon.parse` uses, so nothing else in the file is

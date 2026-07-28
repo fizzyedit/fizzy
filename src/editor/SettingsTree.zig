@@ -26,6 +26,7 @@ const assets = @import("assets");
 const core = @import("core");
 const fizzy = @import("../fizzy.zig");
 const PluginSettingsPane = @import("PluginSettingsPane.zig");
+const SettingRow = @import("SettingRow.zig");
 const PluginStore = @import("PluginStore.zig");
 const shell_settings = @import("explorer/settings.zig");
 
@@ -78,6 +79,12 @@ const Leaf = struct {
     /// Index into the owning source (`Group.items` or `SettingsSchema.fields`).
     index: usize,
     label: []const u8,
+    /// The name this setting has in `settings.zon` — drawn under the label and matched by the
+    /// search, so someone who only knows the zon key can still find the row.
+    key: []const u8 = "",
+    /// Only read for a `settings.Search` leaf, whose own drawer needs it above its table; other
+    /// leaves take theirs straight from the item/field.
+    description: []const u8 = "",
     score: f64,
     tie: usize,
 };
@@ -108,14 +115,20 @@ const Branch = struct {
 /// The path form is why this uses `plain = false`: zf then treats the last `/` segment as a
 /// filename and weights it above the ancestors, so typing `theme` ranks the Theme row above a
 /// plugin whose *branch* happens to contain the letters.
-fn scoreLeaf(query: *const fuzzy.Query, path: []const u8, label: []const u8, keywords: []const u8) ?f64 {
+fn scoreLeaf(query: *const fuzzy.Query, path: []const u8, label: []const u8, key: []const u8, keywords: []const u8) ?f64 {
     if (query.isEmpty()) return 0;
     const by_path = fuzzy.score(path, query, .{ .plain = false });
     const by_label = fuzzy.score(label, query, .{ .plain = true });
+    // The zon key is drawn on the row, so a key hit is as legitimate as a label hit — typing
+    // `insert_spaces_on_tab` (or just `spaces`) has to find the row either way.
+    const by_key = if (key.len > 0) fuzzy.score(key, query, .{ .plain = true }) else null;
     const by_keywords = if (keywords.len > 0) fuzzy.score(keywords, query, .{ .plain = true }) else null;
 
     var best: ?f64 = by_path;
     if (by_label) |s| if (best == null or s < best.?) {
+        best = s;
+    };
+    if (by_key) |s| if (best == null or s < best.?) {
         best = s;
     };
     // A keyword-only hit ("dark" → Theme) is a weaker signal than a visible-text hit, so it is
@@ -163,9 +176,16 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
             // what the query is really matching against (`settings.Search`).
             const s = if (item.search) |sr| sr.score(query) orelse continue else blk: {
                 const path = std.fmt.allocPrint(arena, "{s}/{s}/{s}", .{ shell_branch_title, group.title, item.label }) catch item.label;
-                break :blk scoreLeaf(query, path, item.label, item.keywords) orelse continue;
+                break :blk scoreLeaf(query, path, item.label, item.key, item.keywords) orelse continue;
             };
-            child.leaves.append(arena, .{ .index = ii, .label = item.label, .score = s, .tie = ii }) catch continue;
+            child.leaves.append(arena, .{
+                .index = ii,
+                .label = item.label,
+                .key = item.key,
+                .description = item.description,
+                .score = s,
+                .tie = ii,
+            }) catch continue;
             if (s < child.score) child.score = s;
         }
         if (child.leaves.items.len == 0) continue;
@@ -197,11 +217,18 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
 
         for (schema.fields, 0..) |field, fi| {
             const path = std.fmt.allocPrint(arena, "{s}/{s}", .{ title, field.label }) catch field.label;
-            const leaf_hit = scoreLeaf(query, path, field.label, schema.owner.id);
+            const leaf_hit = scoreLeaf(query, path, field.label, field.key, schema.owner.id);
             // A hit on the plugin itself keeps all of its settings visible — you searched for the
             // plugin, so you want its panel, not a filtered subset of it.
             const s = leaf_hit orelse (branch_hit orelse continue);
-            branch.leaves.append(arena, .{ .index = fi, .label = field.label, .score = s, .tie = fi }) catch continue;
+            branch.leaves.append(arena, .{
+                .index = fi,
+                .label = field.label,
+                .key = field.key,
+                .description = field.description,
+                .score = s,
+                .tie = fi,
+            }) catch continue;
             if (s < branch.score) branch.score = s;
         }
         if (branch.leaves.items.len == 0) continue;
@@ -235,10 +262,24 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
 // ---- drawing ------------------------------------------------------------------------------
 
 pub fn draw() !void {
-    // Keep content clear of the pane's right edge (scrollbar / clip).
+    // Cap the pane at the explorer's viewport width.
+    //
+    // Two things depend on this. The explorer scrolls horizontally (long file paths need it), so
+    // it sizes itself to the widest child min size — and `TextLayoutWidget` documents that with
+    // `break_lines = true` its min *width* is still the width the text would need **unwrapped**.
+    // Left uncapped, every description therefore both widened the pane and, having been handed
+    // that width, never wrapped. Clamping the pane's own reported min size (`max_size_content`
+    // is what `minSizeSetAndRefresh` clamps against) stops descriptions from driving the width,
+    // which in turn gives them a bounded width to wrap inside.
+    const viewport_w = fizzy.editor.explorer.scroll_info.viewport.w;
+    const right_gap: f32 = 20; // clear of the pane's right edge (scrollbar / clip)
+
     var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .margin = .{ .w = 20 },
+        .margin = .{ .w = right_gap },
+        // Zero on the very first frame, before the scroll area has measured itself — no cap that
+        // frame, then it settles.
+        .max_size_content = if (viewport_w > right_gap) .width(viewport_w - right_gap) else null,
     });
     defer vbox.deinit();
 
@@ -374,41 +415,53 @@ fn drawLeaves(branch: *const Branch, query: *const fuzzy.Query) !void {
             .id_extra = leaf.index,
             .expand = .horizontal,
             .background = false,
-            // Settings read as label-over-control pairs, so the gap *between* rows has to be
-            // clearly larger than the gap between a label and the control it names (the label's
-            // padding below plus the control's own top margin).
-            .margin = .{ .y = 3, .h = 3 },
+            // A setting's name, key, description and control read as one group, so the gap
+            // *between* settings has to be clearly larger than any gap inside one. Split evenly
+            // top/bottom rather than loaded onto the bottom: dvui margins don't collapse, so two
+            // adjacent rows still sum to the same separation, but the first row no longer sits
+            // flush under its category header and the last no longer trails a lone wide gap.
+            .margin = .{ .y = 6, .h = 6 },
         });
         defer row.deinit();
 
-        // A `settings.Search` item draws its own rows (each with its own name), so a leaf label
-        // above them would just be a second, redundant heading.
+        // A `settings.Search` item draws its own rows (each with its own name), so the leaf's own
+        // name/key header above them would just be a second, redundant heading — but its
+        // description still belongs at the top, explaining the table that follows.
         const search_item: ?shell_settings.Search =
             if (branch.group) |group| group.items[leaf.index].search else null;
 
-        if (search_item == null) {
-            var tl = dvui.textLayout(@src(), .{ .break_lines = false }, .{
-                .background = false,
-                .expand = .horizontal,
-                .margin = dvui.Rect.all(0),
-                // No padding under the name: the control below carries its own 4px top margin,
-                // which is all the separation the pair needs.
-                .padding = .{ .x = 3, .w = 3, .y = 3, .h = 0 },
-                .font = dvui.Font.theme(.body),
-            });
-            addHighlighted(tl, leaf.label, query);
-            tl.deinit();
-        }
+        if (search_item == null) SettingRow.header(leaf.label, leaf.key, query);
 
         if (search_item) |sr| {
+            SettingRow.description(leaf.description);
             sr.draw(query);
         } else if (branch.group) |group| {
-            if (group.items[leaf.index].draw) |drawFn| drawFn();
+            const item = group.items[leaf.index];
+            if (item.inline_control) {
+                var inline_box = SettingRow.beginInlineControl();
+                defer inline_box.deinit();
+                if (item.draw) |drawFn| drawFn();
+                SettingRow.descriptionInline(item.description);
+            } else {
+                SettingRow.description(item.description);
+                if (item.draw) |drawFn| drawFn();
+            }
         } else if (branch.schema) |schema| {
             // Same hashing the old pane used: a plugin id that shows up in more than one section
             // must not collide on a widget id.
             const id_extra = hashId(schema.owner.id) +% leaf.index +% 1;
-            try PluginSettingsPane.drawField(schema, schema.fields[leaf.index], leaf.index, id_extra);
+            const field = schema.fields[leaf.index];
+            // A checkbox is the one control that shares its line with the description — see
+            // `SettingRow`.
+            if (field.kind == .bool) {
+                var inline_box = SettingRow.beginInlineControl();
+                defer inline_box.deinit();
+                try PluginSettingsPane.drawField(schema, field, leaf.index, id_extra);
+                SettingRow.descriptionInline(field.description);
+            } else {
+                SettingRow.description(field.description);
+                try PluginSettingsPane.drawField(schema, field, leaf.index, id_extra);
+            }
         }
     }
 }
@@ -424,9 +477,14 @@ fn drawFailure(f: fizzy.Editor.FailedPlugin) void {
     else
         std.fmt.bufPrint(&buf, "Failed to load: {s}", .{f.reason}) catch f.reason;
 
-    var tl = dvui.textLayout(@src(), .{}, .{
+    // Wrapped, and with the same insets as a real setting row: an ABI-mismatch reason is a long
+    // sentence, and a single unwrapped line of it would widen the whole pane (see `draw`).
+    var tl = dvui.textLayout(@src(), .{ .break_lines = true }, .{
         .expand = .horizontal,
         .background = false,
+        .margin = dvui.Rect.all(0),
+        .padding = .{ .x = 3, .w = 3, .y = 1, .h = 3 },
+        .font = dvui.Font.theme(.body),
     });
     tl.addText(text, .{ .color_text = dvui.themeGet().color(.err, .text) });
     tl.deinit();
@@ -477,10 +535,14 @@ fn drawRow(b: *wdvui.TreeWidget.Branch, branch: *const Branch, query: *const fuz
 /// Always drawn inside a `treeRowGlyph` slot, so nothing here manages its own size.
 fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) void {
     if (style == .category) {
+        // Each shell category names its own glyph (`Group.icon`) — a palette for Appearance, a
+        // bug for Debugging — so the row says what it configures. A folder would only say
+        // "there are more rows under here", which the caret already does.
+        const glyph = if (branch.group) |g| g.icon else icons.tvg.entypo.folder;
         _ = dvui.icon(
             @src(),
             "CategoryIcon",
-            icons.tvg.entypo.folder,
+            glyph,
             .{ .fill_color = color, .stroke_color = color },
             wdvui.treeRowIconOptions(.{}),
         );

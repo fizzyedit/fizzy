@@ -80,6 +80,10 @@ just_opened: bool = false,
 /// Remaining frames to re-assert entry focus after open (guards against a same-chord dialog
 /// stealing focus before the entry exists).
 focus_frames: u8 = 0,
+/// Remaining frames to park the entry's cursor at the end of the seeded text. The entry keeps its
+/// own selection across opens, so seeding `">"` would otherwise leave the cursor at offset 0 and
+/// every typed character would land in front of the prefix.
+tail_frames: u8 = 0,
 /// Position/size fed to the modal floating window each frame.
 fw_rect: dvui.Rect = .{},
 selected: usize = 0,
@@ -128,6 +132,7 @@ pub fn show(self: *CommandPalette, mode: Mode) void {
     self.activated = null;
     self.just_opened = true;
     self.focus_frames = 3;
+    self.tail_frames = 3;
     self.selected = 0;
     self.scroll_to_selected = true;
     self.setText(switch (mode) {
@@ -143,6 +148,7 @@ pub fn close(self: *CommandPalette) void {
     self.closing = true;
     self.just_opened = false;
     self.focus_frames = 0;
+    self.tail_frames = 0;
     dvui.refresh(null, @src(), null);
 }
 
@@ -509,6 +515,12 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
             dvui.focusWidget(entry.data().id, win.data().id, null);
             self.just_opened = false;
             if (self.focus_frames > 0) self.focus_frames -= 1;
+        }
+        // Same window as the focus claim: park the cursor past the seeded prefix so the first
+        // keystroke appends instead of landing before the `>`.
+        if (self.tail_frames > 0) {
+            self.tail_frames -= 1;
+            entry.textLayout.selection.moveCursor(std.math.maxInt(usize), false);
         }
         entry.deinit();
     }

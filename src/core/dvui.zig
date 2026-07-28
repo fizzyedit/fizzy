@@ -90,6 +90,45 @@ pub fn labelHighlighted(
     }
 }
 
+/// `labelHighlighted`'s body, for callers that already own a `TextLayoutWidget` — appends `text`
+/// to `tl` with the bytes `query` matched tinted, everything else in `plain_color`. Used for the
+/// settings tree's rows, where the caller controls wrapping and font.
+pub fn addHighlightedText(
+    tl: *dvui.TextLayoutWidget,
+    text: []const u8,
+    query: *const fuzzy.Query,
+    plain: bool,
+    plain_color: dvui.Color,
+) void {
+    if (query.isEmpty()) {
+        tl.addText(text, .{ .color_text = plain_color });
+        return;
+    }
+
+    var buf: [fuzzy.highlight_buf_len]usize = undefined;
+    const hits = fuzzy.highlight(text, query, &buf, .{ .plain = plain });
+    if (hits.len == 0) {
+        tl.addText(text, .{ .color_text = plain_color });
+        return;
+    }
+
+    const matched = dvui.themeGet().color(.highlight, .fill);
+    var i: usize = 0;
+    var h: usize = 0;
+    while (i < text.len) {
+        if (h < hits.len and hits[h] == i) {
+            // Consume the whole contiguous run of matched bytes in one addText.
+            const start = i;
+            while (h < hits.len and hits[h] == i) : (h += 1) i += 1;
+            tl.addText(text[start..i], .{ .color_text = matched });
+        } else {
+            const start = i;
+            i = if (h < hits.len) hits[h] else text.len;
+            tl.addText(text[start..i], .{ .color_text = plain_color });
+        }
+    }
+}
+
 /// Reserve one tree-row glyph slot: a box of exactly `treeRowGlyphSize()`, into which the caller
 /// draws a caret, an icon, an image, or a letter.
 ///
@@ -114,69 +153,6 @@ pub fn treeRowGlyph(src: std.builtin.SourceLocation, opts: dvui.Options) *dvui.B
         .margin = dvui.Rect.all(0),
     };
     return dvui.box(src, .{ .dir = .horizontal }, defaults.override(opts));
-}
-
-/// A full-width boolean control shaped like the settings dropdowns and sliders rather than dvui's
-/// bare checkbox: one wide button whose whole surface toggles, with the state word ("Enabled" /
-/// "Disabled") and a purely decorative checkmark parked at the right edge (`gravity_x = 1.0`),
-/// exactly where a dropdown puts its current value and triangle.
-///
-/// The checkmark is drawn with `dvui.checkmark` into a spacer rect, so it picks up the same
-/// theme colours as a real checkbox but takes no events — the button is the only hit target.
-///
-/// Returns true (and flips `target`) on the frame it was clicked.
-pub fn toggle(src: std.builtin.SourceLocation, target: *bool, opts: dvui.Options) bool {
-    const defaults: dvui.Options = .{
-        .name = "Toggle",
-        .role = .check_box,
-        .margin = dvui.Rect.all(4),
-        .padding = dvui.Rect.all(6),
-        .corners = dvui.CornerRect.all(1000),
-        .background = true,
-        .style = .control,
-        .expand = .horizontal,
-    };
-    const options = defaults.override(opts);
-
-    var bw: dvui.ButtonWidget = undefined;
-    bw.init(src, .{}, options);
-    bw.processEvents();
-    bw.drawBackground();
-    bw.drawFocus();
-
-    {
-        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .vertical,
-            .gravity_x = 1.0,
-            .background = false,
-        });
-        defer hbox.deinit();
-
-        dvui.label(@src(), "{s}", .{if (target.*) "Enabled" else "Disabled"}, .{
-            .gravity_y = 0.5,
-            .margin = .all(0),
-            .padding = .all(0),
-        });
-
-        const check_size = options.fontGet().textHeight();
-        const s = dvui.spacer(@src(), .{
-            .min_size_content = dvui.Size.all(check_size),
-            .max_size_content = .size(dvui.Size.all(check_size)),
-            .gravity_y = 0.5,
-            .margin = .{ .x = 6 },
-        });
-        if (bw.data().visible()) {
-            dvui.checkmark(target.*, false, s.borderRectScale(), bw.pressed(), bw.hovered(), .{
-                .corners = dvui.CornerRect.all(2),
-            });
-        }
-    }
-
-    const clicked = bw.clicked();
-    bw.deinit();
-
-    if (clicked) target.* = !target.*;
-    return clicked;
 }
 
 /// Currently this is specialized for the layers paned widget, just includes icon and dragging flag so we know when the pane is dragging

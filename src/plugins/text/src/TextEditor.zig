@@ -191,11 +191,11 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         // setting below only picks *what* it inserts (spaces vs a literal tab), not whether
         // it does so at all.
         .tab_inserts_indent = true,
-        .tab_size = @intFromEnum(plugin_impl.statePtr().settings.tab_size),
-        .insert_spaces = plugin_impl.statePtr().settings.insert_spaces_on_tab,
+        .tab_size = @intFromEnum(plugin_impl.statePtr().settings.tab_size.get()),
+        .insert_spaces = plugin_impl.statePtr().settings.insert_spaces_on_tab.get(),
         // Same VSCode-style baseline as Tab above — not gated by a setting.
         .auto_indent_newline = true,
-        .auto_close_pairs = plugin_impl.statePtr().settings.auto_close_brackets,
+        .auto_close_pairs = plugin_impl.statePtr().settings.auto_close_brackets.get(),
         // Purely visual — it never changes the document — so it's baseline-on like
         // `auto_indent_newline` rather than another setting to find and toggle.
         .highlight_matching_bracket = true,

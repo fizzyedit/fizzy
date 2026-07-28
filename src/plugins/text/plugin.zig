@@ -307,7 +307,7 @@ fn isDirty(_: *anyopaque, handle: DocHandle) bool {
 fn saveDocument(state: *anyopaque, handle: DocHandle) anyerror!void {
     const doc = docFrom(handle) orelse return;
     const st: *State = @ptrCast(@alignCast(state));
-    if (st.settings.format_on_save) formatDocument(doc);
+    if (st.settings.format_on_save.get()) formatDocument(doc);
     try doc.save();
 }
 fn documentDefaultSaveAsFilename(_: *anyopaque, handle: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 {

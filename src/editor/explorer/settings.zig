@@ -15,6 +15,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 
 const fizzy = @import("../../fizzy.zig");
+const icons = @import("icons");
 const dvui = @import("dvui");
 const core = @import("core");
 const Editor = fizzy.Editor;
@@ -33,50 +34,129 @@ pub const Search = struct {
     draw: *const fn (query: *const fuzzy.Query) void,
 };
 
-/// One row in the settings tree: a labelled control the user can search for.
+/// One row in the settings tree: a named, described control the user can search for.
+///
+/// `label`/`key`/`description` are the same three things a plugin's settings cell carries
+/// (`sdk.settings.Setting`), and `SettingRow` draws them identically — a shell setting and a
+/// plugin setting must be indistinguishable in the pane.
 pub const Item = struct {
-    /// Also the name the search matches on. Not drawn for a `search` item — those label their
-    /// own rows.
+    /// One of the two names the search matches on. Not drawn for a `search` item — those label
+    /// their own rows.
     label: []const u8,
+    /// The field's name in `settings.zon`, drawn under `label` and matched by the search. Kept in
+    /// sync with `Editor.Settings` by hand; `search` items that aren't a single field name it
+    /// after the section they configure.
+    key: []const u8,
+    /// What the setting does. Required, exactly as it is for plugin settings.
+    description: []const u8,
     /// Extra search terms that never appear on screen — synonyms and the words a user is likely
     /// to type instead of the label ("dark" for Theme, "trackpad" for the control scheme).
     keywords: []const u8 = "",
-    /// The control body, drawn under `label`. Exactly one of this and `search` is set.
+    /// The control body. Exactly one of this and `search` is set.
     draw: ?*const fn () void = null,
     search: ?Search = null,
+    /// Set for a control small enough to share the description's line rather than take a full
+    /// width of its own — checkboxes, and nothing else so far.
+    inline_control: bool = false,
 };
 
 /// A category branch under "Fizzy".
 pub const Group = struct {
     title: []const u8,
+    /// TVG bytes for the branch's glyph — what the category *is*, not a generic folder. Drawn by
+    /// `SettingsTree.drawIdentityIcon`.
+    icon: []const u8,
     items: []const Item,
 };
 
 pub const groups = [_]Group{
     .{
         .title = "Appearance",
+        .icon = icons.tvg.lucide.palette,
         .items = &.{
-            .{ .label = "Theme", .keywords = "color colour dark light scheme", .draw = drawTheme },
-            .{ .label = "Body Font Size", .keywords = "text size", .draw = drawBodyFontSize },
-            .{ .label = "Heading Font Size", .keywords = "text size", .draw = drawHeadingFontSize },
-            .{ .label = "Title Font Size", .keywords = "text size", .draw = drawTitleFontSize },
-            .{ .label = "Monospace Font Size", .keywords = "text size code mono", .draw = drawMonoFontSize },
-            .{ .label = "Window Opacity", .keywords = "transparency alpha blur", .draw = drawWindowOpacity },
-            .{ .label = "Content Opacity", .keywords = "transparency alpha", .draw = drawContentOpacity },
+            .{
+                .label = "Theme",
+                .key = "theme",
+                .description = "Colour theme used across the whole interface.",
+                .keywords = "color colour dark light scheme",
+                .draw = drawTheme,
+            },
+            .{
+                .label = "Body font size",
+                .key = "font_body_size",
+                .description = "Size of ordinary interface text — labels, tree rows, menus.",
+                .keywords = "text size",
+                .draw = drawBodyFontSize,
+            },
+            .{
+                .label = "Heading font size",
+                .key = "font_heading_size",
+                .description = "Size of section headings, such as the roots of this settings tree.",
+                .keywords = "text size",
+                .draw = drawHeadingFontSize,
+            },
+            .{
+                .label = "Title font size",
+                .key = "font_title_size",
+                .description = "Size of window and dialog titles.",
+                .keywords = "text size",
+                .draw = drawTitleFontSize,
+            },
+            .{
+                .label = "Monospace font size",
+                .key = "font_mono_size",
+                .description = "Size of fixed-width text: code, file paths, and setting keys.",
+                .keywords = "text size code mono",
+                .draw = drawMonoFontSize,
+            },
+            .{
+                .label = "Window opacity",
+                .key = "window_opacity_dark",
+                .description = "How opaque the window background is behind the interface. " ++
+                    "Dark and light themes are remembered separately.",
+                .keywords = "transparency alpha blur",
+                .draw = drawWindowOpacity,
+            },
+            .{
+                .label = "Content opacity",
+                .key = "content_opacity",
+                .description = "How opaque panels drawn over the window background are.",
+                .keywords = "transparency alpha",
+                .draw = drawContentOpacity,
+            },
         },
     },
     .{
         .title = "Input",
+        .icon = icons.tvg.lucide.mouse,
         .items = &.{
-            .{ .label = "Context Menu Hold", .keywords = "right click long press duration delay", .draw = drawHoldMenuDuration },
-            .{ .label = "Canvas Control Scheme", .keywords = "mouse trackpad pan zoom scroll", .draw = drawInputScheme },
+            .{
+                .label = "Context menu hold",
+                .key = "hold_menu_duration_ms",
+                .description = "How long a press has to be held before it opens a context menu, " ++
+                    "in milliseconds.",
+                .keywords = "right click long press duration delay",
+                .draw = drawHoldMenuDuration,
+            },
+            .{
+                .label = "Canvas control scheme",
+                .key = "input_scheme",
+                .description = "Which zoom and pan gestures canvases expect. Auto follows the " ++
+                    "pointing device currently in use.",
+                .keywords = "mouse trackpad pan zoom scroll",
+                .draw = drawInputScheme,
+            },
         },
     },
     .{
         .title = "Keyboard Shortcuts",
+        .icon = icons.tvg.lucide.keyboard,
         .items = &.{
             .{
                 .label = "Bindings",
+                .key = "keybinds",
+                .description = "Every command and the keys that run it. Click a binding to " ++
+                    "record a new one.",
                 .keywords = "keybind shortcut hotkey chord keyboard remap keys",
                 // Every command is individually searchable — see `KeybindSettings`.
                 .search = .{ .score = KeybindSettings.score, .draw = KeybindSettings.draw },
@@ -85,8 +165,15 @@ pub const groups = [_]Group{
     },
     .{
         .title = "Debugging",
+        .icon = icons.tvg.lucide.bug,
         .items = &.{
-            .{ .label = "Frame Rate", .keywords = "fps performance diagnostics", .draw = drawFps },
+            .{
+                .label = "Frame rate",
+                .key = "fps",
+                .description = "Frames per second this window is currently drawing. Read-only.",
+                .keywords = "fps performance diagnostics",
+                .draw = drawFps,
+            },
         },
     },
 };

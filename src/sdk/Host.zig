@@ -1372,6 +1372,16 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
         .setString = struct {
             fn f(_: *anyopaque, _: usize, _: []const u8) void {}
         }.f,
+        .getZonText = struct {
+            fn f(_: *anyopaque, _: usize, _: std.mem.Allocator) []const u8 {
+                return "";
+            }
+        }.f,
+        .setZonText = struct {
+            fn f(_: *anyopaque, _: usize, _: []const u8) bool {
+                return false;
+            }
+        }.f,
         .persist = struct {
             fn f(_: *anyopaque, _: *Plugin) void {}
         }.f,

@@ -22,24 +22,6 @@ pub const DialogFileFilter = extern struct {
 /// Back-compat alias: a few internal callers still use the SDL-style name.
 pub const SDL_DialogFileFilter = DialogFileFilter;
 
-pub const NativeMenuAction = enum(c_int) {
-    open_folder = 0,
-    open_files = 1,
-    save = 2,
-    copy = 3,
-    paste = 4,
-    undo = 5,
-    redo = 6,
-    toggle_explorer = 8,
-    show_dvui_demo = 9,
-    save_as = 10,
-    new_file = 11,
-    about = 13,
-    check_for_updates = 14,
-    report_bug = 15,
-    save_all = 16,
-};
-
 pub const TitleBarButton = enum { minimize, maximize, close };
 
 pub fn resetTitleBarHints() void {}
@@ -126,13 +108,35 @@ pub fn takeTrackpadPinchRatio() f32 {
     return prev;
 }
 
-pub fn pollPendingNativeMenuAction() ?NativeMenuAction {
+/// Mirrors the native signature: a tag into `menu_model.flat_commands`. No native menu bar
+/// on web, so nothing is ever pending.
+pub fn pollPendingNativeMenuAction() ?usize {
     return null;
 }
 
 pub fn pollPendingGenericNativeMenuAction() ?usize {
     return null;
 }
+
+/// No app menu on web, so there is never a pending About click.
+pub fn pollPendingAbout() bool {
+    return false;
+}
+
+/// No native Recent Folders submenu on web — the dvui menu handles the list directly.
+pub fn pollPendingRecentFolder() ?usize {
+    return null;
+}
+
+/// Chords live entirely in the keymap on web; there are no native menu items to stamp.
+pub fn setNativeMenuShortcut(_: usize, _: ?[]const u8, _: c_ulong) void {}
+
+pub fn setDynamicNativeMenuShortcut(_: usize, _: ?[]const u8, _: c_ulong) void {}
+
+pub const modifier_command: c_ulong = 0;
+pub const modifier_shift: c_ulong = 0;
+pub const modifier_option: c_ulong = 0;
+pub const modifier_control: c_ulong = 0;
 
 /// Web's dialog callbacks run synchronously from `WebFileIo` within the frame already, so
 /// there's nothing to drain here. Kept symmetric with the native backend's deferred-dispatch
@@ -148,6 +152,10 @@ pub fn pollPendingDialogResult() ?PendingDialogResult {
 /// Symmetric with the native API: no native menu bar on web (the in-app dvui bar draws
 /// `host.menus`/`host.menu_sections` directly, same as non-macOS native).
 pub fn rebuildDynamicNativeMenus() void {}
+
+/// The dvui menu re-reads the recents list every frame, so there is no retained
+/// native submenu to rebuild here (see `backend_native.rebuildNativeRecentFolders`).
+pub fn rebuildNativeRecentFolders() void {}
 
 pub fn showSimpleMessage(_: [:0]const u8, _: [:0]const u8) void {}
 
