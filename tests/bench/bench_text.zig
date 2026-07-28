@@ -18,12 +18,15 @@ const std = @import("std");
 const dvui = @import("dvui");
 const TextEntryWidget = @import("text").TextEntryWidget;
 
-/// Two real Zig sources: a 3.4k-line one (std.Io) because that is where per-frame costs that
-/// scale with document size actually show up, and a small one to expose which costs *don't*
-/// scale (a fixed per-frame overhead looks the same in both).
-const sample_large = @embedFile("sample_large.zig.txt");
-const sample_small = @embedFile("sample_small.zig.txt");
-const ts_queries = @embedFile("ts_zig_queries.scm");
+/// Two of this repo's own sources — a big one, because that is where per-frame costs that scale
+/// with document size show up, and a small one to expose which costs *don't* scale — plus dvui's
+/// example query file. All three come in as anonymous imports wired in `build/app.zig` rather
+/// than as checked-in fixtures: the repo is already full of Zig, and copies would be ~200KB to
+/// keep in sync for no gain. They do drift as those files are edited, so treat numbers as
+/// comparable within a session (which is what A/B work needs), not across months.
+const sample_large = @embedFile("sample_large");
+const sample_small = @embedFile("sample_small");
+const ts_queries = @embedFile("ts_zig_queries");
 
 /// dvui bundles the Zig grammar for its own examples; the real editor gets one from the
 /// external `zig` language plugin instead. Same grammar, same query shape — what's being timed
@@ -48,6 +51,10 @@ var tree_sitter: bool = true;
 var typing: bool = false;
 /// Lines scrolled per frame, for the scrolling case — 0 keeps the viewport still.
 var scroll_lines_per_frame: f32 = 0;
+/// Wheel ticks sent once before the timed frames, to park the viewport somewhere other than the
+/// very top — where the query range is clipped by the start of the document and so understates
+/// what a mid-document frame really costs.
+var park_scroll_ticks: f32 = 0;
 
 fn frame() !dvui.App.Result {
     var te: TextEntryWidget = undefined;
@@ -85,16 +92,18 @@ fn frame() !dvui.App.Result {
     }
 
     te.processEvents();
-    if (scroll_lines_per_frame != 0) {
-        // Drive the scroll container directly rather than synthesising wheel events: this is
-        // about the cost of drawing a moving viewport, not about event routing.
-        const si = te.scroll.si;
-        si.viewport.y += scroll_lines_per_frame * dvui.Font.theme(.mono).lineHeight();
-        if (si.viewport.y > si.virtual_size.h - si.viewport.h) si.viewport.y = 0;
-    }
     te.draw();
     te.deinit();
     return .ok;
+}
+
+/// Scrolls the way the user does — a real wheel event through dvui's own event routing.
+/// Writing `ScrollInfo.viewport.y` directly instead puts the scroll container in a state its
+/// own code never produces, which trips an overflow check inside dvui in ReleaseSafe.
+fn sendScroll(ticks: f32) !void {
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 200, .y = 200 } });
+    _ = try cw.addEventMouseWheel(ticks, .vertical, null);
 }
 
 fn nowNs() i128 {
@@ -118,13 +127,33 @@ fn run(label: []const u8, sample: []const u8, cursor: usize) !void {
     // cache, none of which recur.
     for (0..15) |_| _ = try dvui.testing.step(frame);
 
-    const iters: usize = 120;
-    const t0 = nowNs();
-    for (0..iters) |_| {
-        if (typing) try dvui.testing.writeText("x");
-        _ = try dvui.testing.step(frame);
+    if (park_scroll_ticks != 0) {
+        try sendScroll(park_scroll_ticks);
+        for (0..5) |_| _ = try dvui.testing.step(frame);
     }
-    const per_frame_us: u64 = @intCast(@divTrunc(nowNs() - t0, iters * 1000));
+
+    // Report the *minimum* of several rounds, not the mean. Anything else on the machine can
+    // only ever make a round slower, so the fastest round is the closest estimate of the work
+    // actually being measured — with the mean, a background compile moved results by 30%,
+    // which is larger than most of the differences worth acting on.
+    const rounds: usize = 5;
+    const iters: usize = 60;
+    var best_ns: i128 = std.math.maxInt(i128);
+    for (0..rounds) |_| {
+        // Every round scrolls the same span, so the min across rounds compares like with like.
+        if (scroll_lines_per_frame != 0) {
+            try sendScroll(10_000);
+            _ = try dvui.testing.step(frame);
+        }
+        const t0 = nowNs();
+        for (0..iters) |_| {
+            if (typing) try dvui.testing.writeText("x");
+            if (scroll_lines_per_frame != 0) try sendScroll(-scroll_lines_per_frame * 20);
+            _ = try dvui.testing.step(frame);
+        }
+        best_ns = @min(best_ns, nowNs() - t0);
+    }
+    const per_frame_us: u64 = @intCast(@divTrunc(best_ns, iters * 1000));
 
     std.debug.print("  {s:<34} {d:>6} us/frame\n", .{ label, per_frame_us });
 }
@@ -133,8 +162,8 @@ test "bench: text editor frame cost" {
     std.debug.print("\n== text editor frame cost — {s} ==\n", .{@tagName(@import("builtin").mode)});
 
     const cases = [_]struct { name: []const u8, text: []const u8 }{
-        .{ .name = "large (std.Io, 3.4k lines)", .text = sample_large },
-        .{ .name = "small (App.zig, 250 lines)", .text = sample_small },
+        .{ .name = "large (Editor.zig)", .text = sample_large },
+        .{ .name = "small (App.zig)", .text = sample_small },
     };
 
     for (cases) |c| {
@@ -145,10 +174,16 @@ test "bench: text editor frame cost" {
         typing = false;
         scroll_lines_per_frame = 0;
         try run("idle, top of file (the app)", c.text, 0);
-        try run("idle, middle of file", c.text, c.text.len / 2);
+        park_scroll_ticks = -400;
+        try run("idle, viewport mid-document", c.text, 0);
+        park_scroll_ticks = 0;
 
         scroll_lines_per_frame = 3;
         try run("scrolling 3 lines/frame", c.text, 0);
+        tree_sitter = false;
+        try run("scrolling, no highlighting", c.text, 0);
+        tree_sitter = true;
+        scroll_lines_per_frame = 0;
         scroll_lines_per_frame = 0;
 
         typing = true;

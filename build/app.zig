@@ -565,6 +565,17 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         });
         bench_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         bench_module.addImport("text", text_module_test);
+        // The tree-sitter Zig queries the benchmark highlights with, taken from dvui's examples
+        // instead of vendoring a copy into the repo. The real editor gets its queries from the
+        // external `zig` language plugin; what the benchmark times (query + per-capture chunk
+        // emission) doesn't depend on which of the two supplied them.
+        bench_module.addAnonymousImport("ts_zig_queries", .{
+            .root_source_file = dvui_testing_dep.path("src/Examples/tree_sitter_zig_queries.scm"),
+        });
+        // The documents it benchmarks are this repo's own sources — `@embedFile` can't reach
+        // outside its package, so they arrive the same way.
+        bench_module.addAnonymousImport("sample_large", .{ .root_source_file = b.path("src/editor/Editor.zig") });
+        bench_module.addAnonymousImport("sample_small", .{ .root_source_file = b.path("src/App.zig") });
 
         const bench_text = b.addTest(.{ .name = "fizzy-bench-text", .root_module = bench_module });
         bench_text.root_module.link_libcpp = !target_is_windows_msvc;

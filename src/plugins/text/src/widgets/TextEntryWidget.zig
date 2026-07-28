@@ -1020,9 +1020,9 @@ pub fn highlightByteRange(self: *TextEntryWidget) ?ByteRange {
     if (heights.len == 0) return .{ .start = clb.start, .end = clb.end };
 
     const viewport = self.scroll.si.viewport;
-    // A full viewport of headroom each way: enough that even a fast scroll or a page jump stays
-    // colored, while staying tied to what's on screen rather than to how big the file is.
-    const pad = viewport.h;
+    // Headroom on each side, sized from the viewport rather than the document: enough that a
+    // normal scroll stays colored between recomputes, without dragging in text nobody can see.
+    const pad = viewport.h / 2;
     const top = viewport.y - pad;
     const bottom = viewport.y + viewport.h + pad;
 
