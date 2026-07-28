@@ -292,8 +292,12 @@ pub fn applyUndo(self: *History, gpa: Allocator, text: *std.ArrayList(u8)) ?Rang
     if (self.undo_stack.items.len == 0) return null;
     var entry = self.undo_stack.pop().?;
     entry.txn.applyInverse(gpa, text) catch |err| {
-        std.log.err("History.applyUndo failed: {s}", .{@errorName(err)});
-        self.undo_stack.append(gpa, entry) catch entry.deinit(gpa);
+        // Don't push the entry back: a desynced transaction will never become valid, and
+        // `fizzy.undo` accepts key-repeat — re-queueing would spam `EditOutOfRange` forever
+        // while the user holds ⌘Z. Drop it and let a later undo try the next group.
+        std.log.err("History.applyUndo failed: {s} (dropping corrupt undo entry)", .{@errorName(err)});
+        entry.deinit(gpa);
+        self.group_open = false;
         return null;
     };
     const sel = entry.txn.sel_before;
@@ -309,8 +313,9 @@ pub fn applyRedo(self: *History, gpa: Allocator, text: *std.ArrayList(u8)) ?Rang
     if (self.redo_stack.items.len == 0) return null;
     var entry = self.redo_stack.pop().?;
     entry.txn.applyForward(gpa, text) catch |err| {
-        std.log.err("History.applyRedo failed: {s}", .{@errorName(err)});
-        self.redo_stack.append(gpa, entry) catch entry.deinit(gpa);
+        std.log.err("History.applyRedo failed: {s} (dropping corrupt redo entry)", .{@errorName(err)});
+        entry.deinit(gpa);
+        self.group_open = false;
         return null;
     };
     const sel = entry.txn.sel_after;
@@ -568,4 +573,22 @@ test "undo/redo round-trips a long mixed session" {
     try t.expectEqualStrings("", h.text.items);
     for (0..depth) |_| _ = h.redo();
     try t.expectEqualStrings(final, h.text.items);
+}
+
+test "cut-shaped deletion is one undoable step" {
+    // Widget cut now goes through begin/noteRemoved/end — same capture shape as this.
+    var h: Harness = .{ .gpa = t.allocator };
+    defer h.deinit();
+
+    try h.type_("hello world");
+    // Cut "world": delete [6, 11).
+    h.hist.begin(.init(6, 11));
+    h.hist.note(h.gpa, 6, "world", "");
+    try h.text.replaceRange(h.gpa, 6, 5, "");
+    h.cursor = 6;
+    h.hist.end(h.gpa, .collapsed(6));
+
+    try t.expectEqualStrings("hello ", h.text.items);
+    _ = h.undo();
+    try t.expectEqualStrings("hello world", h.text.items);
 }

@@ -116,6 +116,69 @@ pub fn treeRowGlyph(src: std.builtin.SourceLocation, opts: dvui.Options) *dvui.B
     return dvui.box(src, .{ .dir = .horizontal }, defaults.override(opts));
 }
 
+/// A full-width boolean control shaped like the settings dropdowns and sliders rather than dvui's
+/// bare checkbox: one wide button whose whole surface toggles, with the state word ("Enabled" /
+/// "Disabled") and a purely decorative checkmark parked at the right edge (`gravity_x = 1.0`),
+/// exactly where a dropdown puts its current value and triangle.
+///
+/// The checkmark is drawn with `dvui.checkmark` into a spacer rect, so it picks up the same
+/// theme colours as a real checkbox but takes no events — the button is the only hit target.
+///
+/// Returns true (and flips `target`) on the frame it was clicked.
+pub fn toggle(src: std.builtin.SourceLocation, target: *bool, opts: dvui.Options) bool {
+    const defaults: dvui.Options = .{
+        .name = "Toggle",
+        .role = .check_box,
+        .margin = dvui.Rect.all(4),
+        .padding = dvui.Rect.all(6),
+        .corners = dvui.CornerRect.all(1000),
+        .background = true,
+        .style = .control,
+        .expand = .horizontal,
+    };
+    const options = defaults.override(opts);
+
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(src, .{}, options);
+    bw.processEvents();
+    bw.drawBackground();
+    bw.drawFocus();
+
+    {
+        var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .vertical,
+            .gravity_x = 1.0,
+            .background = false,
+        });
+        defer hbox.deinit();
+
+        dvui.label(@src(), "{s}", .{if (target.*) "Enabled" else "Disabled"}, .{
+            .gravity_y = 0.5,
+            .margin = .all(0),
+            .padding = .all(0),
+        });
+
+        const check_size = options.fontGet().textHeight();
+        const s = dvui.spacer(@src(), .{
+            .min_size_content = dvui.Size.all(check_size),
+            .max_size_content = .size(dvui.Size.all(check_size)),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 6 },
+        });
+        if (bw.data().visible()) {
+            dvui.checkmark(target.*, false, s.borderRectScale(), bw.pressed(), bw.hovered(), .{
+                .corners = dvui.CornerRect.all(2),
+            });
+        }
+    }
+
+    const clicked = bw.clicked();
+    bw.deinit();
+
+    if (clicked) target.* = !target.*;
+    return clicked;
+}
+
 /// Currently this is specialized for the layers paned widget, just includes icon and dragging flag so we know when the pane is dragging
 pub fn paned(src: std.builtin.SourceLocation, init_opts: PanedWidget.InitOptions, opts: dvui.Options) *PanedWidget {
     var ret = dvui.widgetAlloc(PanedWidget);

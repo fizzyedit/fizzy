@@ -705,13 +705,6 @@ pub fn buildKeymap(editor: *Editor) !void {
         dvui.log.err("keybind conflicts() failed: {s}", .{@errorName(err)});
         break :blk null;
     };
-    if (editor.keybind_conflicts) |cs| {
-        for (cs) |c| {
-            const keys = keymap.formatKeys(gpa, c.stroke, platform) catch continue;
-            defer gpa.free(keys);
-            dvui.log.warn("keybind conflict on '{s}': '{s}' shadows '{s}'", .{ keys, c.winner, c.loser });
-        }
-    }
 }
 
 /// Read and apply `<config>/keybinds.zon`. A missing file is the normal case — defaults are

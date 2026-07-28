@@ -3,22 +3,25 @@
 //! Lists every Host command with its current chord(s), lets the user click to record a new
 //! binding (written to `keybinds.zon`), reset to default, and surfaces `Keymap.conflicts()`.
 //!
-//! Rows are laid out with `dvui.grid` (sortable / drag-resizable headers), one grid per owner
-//! (Fizzy, or a plugin), each inside a collapsible tree branch that starts closed.
+//! Rows are laid out with `dvui.grid` (sortable headers), one grid per owner (Fizzy, or a
+//! plugin), each inside a collapsible tree branch that starts closed.
 //!
 //! **This pane is part of the settings search.** `score` is the data pass the settings tree runs
 //! before anything is drawn (see `SettingsTree`'s header comment); `draw` re-runs the same
 //! `collectGroups` and renders only the commands that survived, with the matched characters of
 //! each title tinted. A query that matches one keybind draws one branch with one row.
 //!
+//! **Column layout matches dvui's grid "fit window" demo:** every frame
+//! `columnLayoutProportional` sizes columns to the grid's content width (Command flexes;
+//! Shortcut/Reset stay fixed). No header resize handles — those are a separate demo mode
+//! (`user_resizable`) and only mutate one column, which fights a fit-to-pane layout.
+//!
 //! **The grids never report a width to the explorer.** The explorer pane is a horizontally
 //! scrolling area, so a child that asks for more width than the viewport makes the pane scroll —
 //! and because a scroll container hands its children `max(virtual_size.w, viewport.w)`, a grid
 //! sized from its parent's width would then ask for that new, larger width the next frame and
-//! ratchet wider every frame (leaving the pane's edge shadow and horizontal bar stuck on). The
-//! grid is capped with `max_size_content = .width(0)` so it contributes nothing to the pane's
-//! virtual width; overflow scrolls *inside* the grid instead (user-widened columns, or when
-//! the pane shrinks past every column's minimum).
+//! ratchet wider every frame. The grid is capped with `max_size_content = .width(0)` so it
+//! contributes nothing to the pane's virtual width.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -36,12 +39,8 @@ const fuzzy = core.fuzzy;
 /// `host.commands` (stable for the session while the plugin stays loaded).
 var recording: ?[]const u8 = null;
 
-/// Shared column widths across every owner grid so a drag-resize applies everywhere.
+/// Shared column widths across every owner grid.
 var col_widths: [3]f32 = .{ 0, 0, 0 };
-
-/// Pane width `fitColumns` last saw. Used to tell "user dragged a divider" apart from
-/// "the settings pane itself grew/shrank" — only the latter may rewrite `col_widths`.
-var last_fit_avail: f32 = 0;
 
 /// Owners present in this set are expanded. Default (absent) is collapsed — the pane opens as a
 /// short list of owners rather than a wall of tables.
@@ -77,12 +76,9 @@ pub fn deinit(gpa: std.mem.Allocator) void {
     open_owners.deinit(gpa);
 }
 
-/// Default / minimum widths. Command flexes when the *pane* resizes; shortcut/reset keep a floor.
-const default_shortcut_w: f32 = 140;
-const default_reset_w: f32 = 64;
-const min_command_w: f32 = 80;
-const min_shortcut_w: f32 = 90;
-const min_reset_w: f32 = 48;
+/// Proportional layout ratios for `columnLayoutProportional`: negative = flex share of leftover,
+/// positive = fixed px. Command takes the remainder; Shortcut/Reset keep a comfortable width.
+const col_ratios = [3]f32{ -1, 140, 64 };
 
 // ---- match model --------------------------------------------------------------------------
 
@@ -398,67 +394,20 @@ fn drawConflicts(editor: *fizzy.Editor, platform: keymap.Platform, theme: dvui.T
     }
 }
 
-/// React to the *pane* changing width — not to `HeaderResizeWidget` mutating a single column.
-///
-/// `HeaderResizeWidget` only writes `sizes[num]`. The old fill/squeeze-every-frame policy then
-/// rewrote the command column to keep `sum == avail`, which made divider 0 snap back, divider 1
-/// appear to shove divider 0, and divider 2 look welded to the pane edge. Leave user widths
-/// alone when `avail` is unchanged; only grow/squeeze when the pane itself moves.
-fn fitColumns(avail: f32) void {
-    if (avail <= 0) return;
+/// Last-column heading with no trailing separator — `gridHeading(…, null, …)` still draws one,
+/// which read as a tiny fourth column.
+fn drawResetHeading(grid: *dvui.GridWidget, cell_style: dvui.GridWidget.CellStyle) void {
+    const cell_pos: dvui.GridWidget.Cell = .colRow(2, 0);
+    var cell = grid.headerCell(@src(), 2, cell_style.cellOptions(cell_pos));
+    defer cell.deinit();
 
-    if (col_widths[0] < 1) {
-        dvui.columnLayoutProportional(&.{ -1, default_shortcut_w, default_reset_w }, &col_widths, avail);
-        last_fit_avail = avail;
-        return;
-    }
-
-    if (last_fit_avail < 1) {
-        last_fit_avail = avail;
-        return;
-    }
-
-    if (avail > last_fit_avail) {
-        // Pane grew — keep shortcut/reset edges put, stretch command into the new space.
-        col_widths[0] += avail - last_fit_avail;
-    } else if (avail < last_fit_avail) {
-        // Pane shrank — squeeze command first, then shortcut/reset down to mins. Only when even
-        // the mins don't fit does the grid scroll horizontally.
-        const sum = col_widths[0] + col_widths[1] + col_widths[2];
-        if (sum > avail) {
-            var overflow = sum - avail;
-            const cmd_can = @max(0, col_widths[0] - min_command_w);
-            const cmd_take = @min(cmd_can, overflow);
-            col_widths[0] -= cmd_take;
-            overflow -= cmd_take;
-            if (overflow > 0) {
-                const sc_can = @max(0, col_widths[1] - min_shortcut_w);
-                const sc_take = @min(sc_can, overflow);
-                col_widths[1] -= sc_take;
-                overflow -= sc_take;
-            }
-            if (overflow > 0) {
-                const rs_can = @max(0, col_widths[2] - min_reset_w);
-                col_widths[2] -= @min(rs_can, overflow);
-            }
-        }
-    }
-    // avail == last_fit_avail: user may have dragged a divider; leave widths alone.
-
-    last_fit_avail = avail;
-}
-
-fn headerResizeOptions(col_num: usize) ?dvui.GridWidget.HeaderResizeWidget.InitOptions {
-    return .{
-        .sizes = &col_widths,
-        .num = col_num,
-        .min_size = switch (col_num) {
-            0 => min_command_w,
-            1 => min_shortcut_w,
-            else => min_reset_w,
-        },
-        .max_size = 480,
-    };
+    dvui.labelNoFmt(@src(), "Reset", .{}, cell_style.options(cell_pos).override(.{
+        .expand = .horizontal,
+        .gravity_x = 0.5,
+        .gravity_y = 0.5,
+        .background = false,
+        .corners = .{},
+    }));
 }
 
 fn drawOwnerGrid(
@@ -469,17 +418,13 @@ fn drawOwnerGrid(
     platform: keymap.Platform,
     theme: dvui.Theme,
 ) void {
-    // Budget for the columns: what the branch's expander actually gave us this frame. Sized
-    // before the grid installs so its header/body min width already matches.
-    fitColumns(dvui.parentGet().data().contentRect().w);
-
     var grid = dvui.grid(@src(), .colWidths(&col_widths), .{
         .scroll_opts = .{
             // Vertical: none — the grid grows with its rows and the explorer pane scrolls.
-            // Horizontal: when the user widens a column past the pane, or mins no longer fit.
-            .horizontal = .auto,
+            // Horizontal: none — columns are fit to the grid width every frame (dvui "fit window").
+            .horizontal = .none,
             .vertical = .none,
-            .horizontal_bar = .auto_overlay,
+            .horizontal_bar = .hide,
             .vertical_bar = .hide,
         },
         .resize_rows = false,
@@ -495,6 +440,18 @@ fn drawOwnerGrid(
         .corners = .all(4),
     });
     defer grid.deinit();
+
+    // Same pattern as dvui's grid demo `.fit_window`: recompute widths from the grid's content
+    // rect every frame so the table tracks the pane. Positive ratios are fixed; `-1` flexes.
+    //
+    // `columnLayoutProportional` always subtracts `scrollbar_padding_defaults.w` (room for a
+    // vertical bar). We hide that bar, so add it back — otherwise a ~10px strip of grid
+    // background shows past the last column and the row/header fills don't reach the edge.
+    dvui.columnLayoutProportional(
+        &col_ratios,
+        &col_widths,
+        grid.data().contentRect().w + dvui.GridWidget.scrollbar_padding_defaults.w,
+    );
 
     // Alphabetical by command until the user clicks a heading. `.unsorted` is only ever the
     // grid's *initial* state — a click always leaves it ascending or descending, and that is
@@ -530,15 +487,11 @@ fn drawOwnerGrid(
     var plain_heading_style = heading_style;
     plain_heading_style.opts.background = false;
 
-    // Sortable + drag-resizable headers. `sort_dir` is an out-param; the grid persists which
-    // column is active via its own widget data.
+    // Sortable headers with static separators only (fit-window mode — not user-resizable).
     var sort_dir: dvui.GridWidget.SortDirection = .unsorted;
-    _ = dvui.gridHeadingSortable(@src(), grid, 0, "Command", &sort_dir, headerResizeOptions(0), heading_style);
-    _ = dvui.gridHeadingSortable(@src(), grid, 1, "Shortcut", &sort_dir, headerResizeOptions(1), heading_style);
-    // `gridHeading` labels default to `background = true`, which paints a second, lighter block
-    // on top of the header cell — the sortable headings' buttons don't. Turn it off so all three
-    // read as one strip.
-    dvui.gridHeading(@src(), grid, 2, "Reset", headerResizeOptions(2), plain_heading_style);
+    _ = dvui.gridHeadingSortable(@src(), grid, 0, "Command", &sort_dir, null, heading_style);
+    _ = dvui.gridHeadingSortable(@src(), grid, 1, "Shortcut", &sort_dir, null, heading_style);
+    drawResetHeading(grid, plain_heading_style);
 
     // Sorting reorders the rows this branch already filtered down to, so it composes with search.
     const rows = dvui.currentWindow().arena().dupe(Row, group.rows.items) catch group.rows.items;

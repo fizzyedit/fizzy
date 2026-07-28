@@ -374,7 +374,10 @@ fn drawLeaves(branch: *const Branch, query: *const fuzzy.Query) !void {
             .id_extra = leaf.index,
             .expand = .horizontal,
             .background = false,
-            .margin = .{ .y = 2, .h = 2 },
+            // Settings read as label-over-control pairs, so the gap *between* rows has to be
+            // clearly larger than the gap between a label and the control it names (the label's
+            // padding below plus the control's own top margin).
+            .margin = .{ .y = 3, .h = 3 },
         });
         defer row.deinit();
 
@@ -388,7 +391,9 @@ fn drawLeaves(branch: *const Branch, query: *const fuzzy.Query) !void {
                 .background = false,
                 .expand = .horizontal,
                 .margin = dvui.Rect.all(0),
-                .padding = dvui.Rect.all(3),
+                // No padding under the name: the control below carries its own 4px top margin,
+                // which is all the separation the pair needs.
+                .padding = .{ .x = 3, .w = 3, .y = 3, .h = 0 },
                 .font = dvui.Font.theme(.body),
             });
             addHighlighted(tl, leaf.label, query);

@@ -278,52 +278,145 @@ pub const Keymap = struct {
     /// Bindings that share a chord but don't always fire together. Includes classic layer
     /// shadowing (user beats profile) and active-owner forks (shell Quick Open vs pixi Export
     /// on `mod+p`) so the settings pane can warn about them.
+    ///
+    /// Collapses before reporting:
+    /// 1. Duplicate entries for the same command (e.g. `fizzy.openFolder` from both the dvui
+    ///    `open_folder` bind and the profile default) keep only the highest-ranked claim.
+    /// 2. Within one owner bucket (all-global, or one plugin), only *adjacent* ranks are
+    ///    reported — if A shadows B and B shadows C, "A shadows C" is omitted because C is
+    ///    already dead under B.
+    /// 3. Owner-scoped claims fork against the top global on that chord (context-dependent).
     pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
+        const Claim = struct {
+            stroke: Stroke,
+            when: When,
+            command: []const u8,
+            owner_id: ?[]const u8,
+            rank: u16,
+            index: usize,
+        };
+
+        var claims: std.ArrayList(Claim) = .empty;
+        defer claims.deinit(gpa);
+
+        for (self.bindings.items, 0..) |b, i| {
+            const cmd = b.command orelse continue;
+            const rank: u16 = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
+            for (claims.items) |*c| {
+                if (!c.stroke.eql(b.stroke) or !c.when.eql(b.when)) continue;
+                if (!std.mem.eql(u8, c.command, cmd)) continue;
+                // Later equal-rank wins — same tie-break `best()` uses.
+                if (rank >= c.rank) {
+                    c.rank = rank;
+                    c.owner_id = b.owner_id;
+                    c.index = i;
+                }
+                break;
+            } else {
+                try claims.append(gpa, .{
+                    .stroke = b.stroke,
+                    .when = b.when,
+                    .command = cmd,
+                    .owner_id = b.owner_id,
+                    .rank = rank,
+                    .index = i,
+                });
+            }
+        }
+
         var out: std.ArrayList(Conflict) = .empty;
         errdefer out.deinit(gpa);
-        for (self.bindings.items, 0..) |b, i| {
-            const b_cmd = b.command orelse continue;
-            for (self.bindings.items, 0..) |o, j| {
-                if (j <= i) continue;
-                const o_cmd = o.command orelse continue;
-                if (!o.stroke.eql(b.stroke)) continue;
-                if (!o.when.eql(b.when)) continue;
-                if (std.mem.eql(u8, b_cmd, o_cmd)) continue;
 
-                // Same owner (or both global) → pure layer conflict; report the lower-ranked
-                // as loser. Different owner_id (or one scoped / one global) → active-owner fork.
-                const same_owner = blk: {
-                    if (b.owner_id == null and o.owner_id == null) break :blk true;
-                    const bo = b.owner_id orelse break :blk false;
-                    const oo = o.owner_id orelse break :blk false;
-                    break :blk std.mem.eql(u8, bo, oo);
-                };
+        var seen_group = try gpa.alloc(bool, claims.items.len);
+        defer gpa.free(seen_group);
+        @memset(seen_group, false);
 
-                if (same_owner) {
-                    const b_rank = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
-                    const o_rank = (@as(u16, @intFromEnum(o.source)) << 8) | o.when.weight();
-                    const winner_cmd = if (o_rank >= b_rank) o_cmd else b_cmd;
-                    const loser_cmd = if (o_rank >= b_rank) b_cmd else o_cmd;
-                    try out.append(gpa, .{
-                        .stroke = b.stroke,
-                        .when = b.when,
-                        .winner = winner_cmd,
-                        .loser = loser_cmd,
-                    });
+        const byRankDesc = struct {
+            fn less(cs: []Claim, a: usize, b: usize) bool {
+                const ca = cs[a];
+                const cb = cs[b];
+                if (ca.rank != cb.rank) return ca.rank > cb.rank;
+                return ca.index > cb.index;
+            }
+        }.less;
+
+        for (claims.items, 0..) |seed, si| {
+            if (seen_group[si]) continue;
+
+            var group: std.ArrayList(usize) = .empty;
+            defer group.deinit(gpa);
+            for (claims.items, 0..) |c, ci| {
+                if (!c.stroke.eql(seed.stroke) or !c.when.eql(seed.when)) continue;
+                seen_group[ci] = true;
+                try group.append(gpa, ci);
+            }
+
+            // Bucket by owner_id (null = global). Chain within a bucket; owner buckets fork
+            // against the global bucket's top claim.
+            var bucket_keys: std.ArrayList(?[]const u8) = .empty;
+            defer bucket_keys.deinit(gpa);
+            var buckets: std.ArrayList(std.ArrayList(usize)) = .empty;
+            defer {
+                for (buckets.items) |*bkt| bkt.deinit(gpa);
+                buckets.deinit(gpa);
+            }
+
+            for (group.items) |ci| {
+                const key = claims.items[ci].owner_id;
+                const bkt_i = for (bucket_keys.items, 0..) |k, bi| {
+                    if (k == null and key == null) break bi;
+                    if (k != null and key != null and std.mem.eql(u8, k.?, key.?)) break bi;
+                } else null;
+                if (bkt_i) |bi| {
+                    try buckets.items[bi].append(gpa, ci);
                 } else {
-                    // Context-dependent: either can win. Prefer naming the owner-scoped one as
-                    // winner so the UI reads "Export (when pixi active) shadows Quick Open".
-                    const winner_cmd = if (o.owner_id != null) o_cmd else b_cmd;
-                    const loser_cmd = if (o.owner_id != null) b_cmd else o_cmd;
+                    try bucket_keys.append(gpa, key);
+                    var bkt: std.ArrayList(usize) = .empty;
+                    try bkt.append(gpa, ci);
+                    try buckets.append(gpa, bkt);
+                }
+            }
+
+            var global_top: ?[]const u8 = null;
+            for (bucket_keys.items, 0..) |key, bi| {
+                const bkt = &buckets.items[bi];
+                std.mem.sort(usize, bkt.items, claims.items, byRankDesc);
+
+                // Adjacent shadow links only.
+                var i: usize = 0;
+                while (i + 1 < bkt.items.len) : (i += 1) {
+                    const w = claims.items[bkt.items[i]];
+                    const l = claims.items[bkt.items[i + 1]];
                     try out.append(gpa, .{
-                        .stroke = b.stroke,
-                        .when = b.when,
-                        .winner = winner_cmd,
-                        .loser = loser_cmd,
+                        .stroke = seed.stroke,
+                        .when = seed.when,
+                        .winner = w.command,
+                        .loser = l.command,
+                    });
+                }
+
+                if (key == null and bkt.items.len > 0) {
+                    global_top = claims.items[bkt.items[0]].command;
+                }
+            }
+
+            // Owner-scoped top vs global top — context-dependent, either can win.
+            if (global_top) |gt| {
+                for (bucket_keys.items, 0..) |key, bi| {
+                    if (key == null) continue;
+                    const bkt = buckets.items[bi];
+                    if (bkt.items.len == 0) continue;
+                    const owner_cmd = claims.items[bkt.items[0]].command;
+                    try out.append(gpa, .{
+                        .stroke = seed.stroke,
+                        .when = seed.when,
+                        .winner = owner_cmd,
+                        .loser = gt,
                     });
                 }
             }
         }
+
         return out.toOwnedSlice(gpa);
     }
 };
@@ -507,6 +600,45 @@ test "conflicts reports the shadowed binding" {
     try t.expectEqual(@as(usize, 1), c.len);
     try t.expectEqualStrings("text.buildProject", c[0].winner);
     try t.expectEqualStrings("fizzy.toggleSidebar", c[0].loser);
+}
+
+test "conflicts dedupes when the same command is bound twice on a chord" {
+    // Mirrors `fizzy.openFolder`: lifted from dvui's `open_folder` bind *and* listed in the
+    // shell profile. A user rebind of another command onto that chord must yield one row, not
+    // one per duplicate loser entry.
+    const a = t.allocator;
+    var k = try km(a, &.{
+        .{ .stroke = keys("ctrl+f"), .command = "fizzy.openFolder", .source = .dvui },
+        .{ .stroke = keys("ctrl+f"), .command = "fizzy.openFolder", .source = .profile },
+        .{ .stroke = keys("ctrl+f"), .command = "text.format", .source = .user },
+    });
+    defer k.deinit(a);
+
+    const c = try k.conflicts(a);
+    defer a.free(c);
+    try t.expectEqual(@as(usize, 1), c.len);
+    try t.expectEqualStrings("text.format", c[0].winner);
+    try t.expectEqualStrings("fizzy.openFolder", c[0].loser);
+}
+
+test "conflicts reports only adjacent ranks in a shadow chain" {
+    // format > quickOpen > openFolder: omit the transitive "format shadows openFolder".
+    const a = t.allocator;
+    var k = try km(a, &.{
+        .{ .stroke = keys("ctrl+f"), .command = "fizzy.openFolder", .source = .dvui },
+        .{ .stroke = keys("ctrl+f"), .command = "fizzy.openFolder", .source = .profile },
+        .{ .stroke = keys("ctrl+f"), .command = "fizzy.quickOpen", .source = .plugin },
+        .{ .stroke = keys("ctrl+f"), .command = "text.format", .source = .user },
+    });
+    defer k.deinit(a);
+
+    const c = try k.conflicts(a);
+    defer a.free(c);
+    try t.expectEqual(@as(usize, 2), c.len);
+    try t.expectEqualStrings("text.format", c[0].winner);
+    try t.expectEqualStrings("fizzy.quickOpen", c[0].loser);
+    try t.expectEqualStrings("fizzy.quickOpen", c[1].winner);
+    try t.expectEqualStrings("fizzy.openFolder", c[1].loser);
 }
 
 test "owner-scoped binding only fires when that owner is active" {

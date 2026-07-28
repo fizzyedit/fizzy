@@ -2279,8 +2279,14 @@ pub fn cut(self: *TextEntryWidget) void {
         // copy selection to clipboard
         dvui.clipboardTextSet(self.text[sel.start..sel.end]);
 
-        // delete selection
+        // Same begin/note/end path as backspace-over-selection — without it the buffer
+        // shrinks while History still thinks the cut bytes are there, and the next undo
+        // either partially applies then hits EditOutOfRange, or key-repeat spams that error.
+        if (self.init_opts.edit_notify) |en| en.beginEdit(en.ctx, self.currentRange());
+        defer if (self.init_opts.edit_notify) |en| en.endEdit(en.ctx, self.currentRange());
+
         self.textChangedRemoved(sel.start, sel.end);
+        if (self.init_opts.edit_notify) |en| en.noteRemoved(en.ctx, sel.start, self.text[sel.start..sel.end]);
         @memmove(self.text[sel.start..][0 .. self.len - sel.end], self.text[sel.end..self.len]);
         self.setLen(self.len - (sel.end - sel.start));
         sel.end = sel.start;

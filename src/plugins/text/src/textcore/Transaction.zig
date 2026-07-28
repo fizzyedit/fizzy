@@ -70,18 +70,39 @@ pub fn append(
     });
 }
 
-/// Re-apply (redo): forward, in order.
+/// Re-apply (redo): forward, in order. Either the whole transaction lands or the buffer is
+/// left unchanged — a mid-list failure used to leave a half-applied state that made every
+/// subsequent undo retry hit `EditOutOfRange`.
 pub fn applyForward(self: Transaction, gpa: Allocator, text: *std.ArrayList(u8)) !void {
+    var applied: usize = 0;
+    errdefer {
+        // Roll back the prefix we already applied (inverse, newest-first).
+        var j = applied;
+        while (j > 0) {
+            j -= 1;
+            const e = self.edits.items[j];
+            text.replaceRange(gpa, e.pos, e.inserted.len, e.removed) catch {};
+        }
+    }
     for (self.edits.items) |e| {
         if (e.pos > text.items.len) return error.EditOutOfRange;
         if (e.pos + e.removed.len > text.items.len) return error.EditOutOfRange;
         try text.replaceRange(gpa, e.pos, e.removed.len, e.inserted);
+        applied += 1;
     }
 }
 
 /// Reverse (undo): inverse of each edit, walked backwards so every `pos` is valid again as we
-/// reach it.
+/// reach it. Atomic with respect to the buffer — see `applyForward`.
 pub fn applyInverse(self: Transaction, gpa: Allocator, text: *std.ArrayList(u8)) !void {
+    var applied: usize = 0;
+    errdefer {
+        // Re-forward the suffix we already inverted (oldest-of-suffix first).
+        const start = self.edits.items.len - applied;
+        for (self.edits.items[start..]) |e| {
+            text.replaceRange(gpa, e.pos, e.removed.len, e.inserted) catch {};
+        }
+    }
     var i = self.edits.items.len;
     while (i > 0) {
         i -= 1;
@@ -89,6 +110,7 @@ pub fn applyInverse(self: Transaction, gpa: Allocator, text: *std.ArrayList(u8))
         if (e.pos > text.items.len) return error.EditOutOfRange;
         if (e.pos + e.inserted.len > text.items.len) return error.EditOutOfRange;
         try text.replaceRange(gpa, e.pos, e.inserted.len, e.removed);
+        applied += 1;
     }
 }
 
@@ -174,6 +196,29 @@ test "out-of-range edits error instead of corrupting the buffer" {
     try txn.append(a, 99, "", "x");
     try t.expectError(error.EditOutOfRange, txn.applyForward(a, &text));
     try t.expectEqualStrings("ab", text.items);
+}
+
+test "inverse failure rolls back a partially-applied group" {
+    // Simulates the cut-without-history desync: a merged group whose later edits no longer
+    // match the buffer. Without atomicity, undoing would strip the matching suffix and leave
+    // the buffer half-rewound when the stale prefix fails.
+    const a = t.allocator;
+    var text = try listOf(a, "hello x");
+    defer text.deinit(a);
+
+    var txn: Transaction = .{};
+    defer txn.deinit(a);
+    // Stale "world" inserts that aren't in the buffer anymore…
+    try txn.append(a, 6, "", "w");
+    try txn.append(a, 7, "", "o");
+    try txn.append(a, 8, "", "r");
+    try txn.append(a, 9, "", "l");
+    try txn.append(a, 10, "", "d");
+    // …followed by a real "x" that is.
+    try txn.append(a, 6, "", "x");
+
+    try t.expectError(error.EditOutOfRange, txn.applyInverse(a, &text));
+    try t.expectEqualStrings("hello x", text.items);
 }
 
 // Property: any sequence of random sequential edits round-trips exactly.

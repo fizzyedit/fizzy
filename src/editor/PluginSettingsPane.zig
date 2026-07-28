@@ -11,6 +11,8 @@
 //! this one's.
 const std = @import("std");
 const dvui = @import("dvui");
+const core = @import("core");
+const wdvui = core.dvui;
 const fizzy = @import("../fizzy.zig");
 const settings = fizzy.sdk.settings;
 
@@ -22,7 +24,7 @@ pub fn drawField(schema: *const settings.SettingsSchema, field: settings.Setting
     switch (field.kind) {
         .bool => {
             var b = access.getBool(value, field_index);
-            if (dvui.checkbox(@src(), &b, null, .{ .id_extra = id_extra, .expand = .none })) {
+            if (wdvui.toggle(@src(), &b, .{ .id_extra = id_extra })) {
                 access.setBool(value, field_index, b);
                 access.persist(value, schema.owner);
             }
