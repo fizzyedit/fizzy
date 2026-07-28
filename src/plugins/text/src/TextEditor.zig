@@ -199,6 +199,9 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         // Purely visual — it never changes the document — so it's baseline-on like
         // `auto_indent_newline` rather than another setting to find and toggle.
         .highlight_matching_bracket = true,
+        // Indent-level rainbow from `core.palette.bracket` — same-kind pairs match; kinds
+        // at the same indent take different slots (and a scrambled walk vs the file tree).
+        .rainbow_brackets = true,
     }, chromeless.override(.{
         .expand = .both,
         .font = font,

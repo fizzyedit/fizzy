@@ -100,6 +100,74 @@ pub fn onTyped(text: []const u8, sel_start: usize, sel_end: usize, ch: u8) Actio
     return .{ .close_pair = p };
 }
 
+/// One bracket inside a nesting-colour pass: the byte of the glyph, and the palette index for
+/// it (indent + kind offset). See `nestMarks`.
+pub const NestMark = struct {
+    byte: usize,
+    /// Palette index: line indent level plus a per-kind stride so `{`, `(`, and `[` at the
+    /// same indent don't share a colour. Matching pairs of the same kind still match.
+    depth: u8,
+};
+
+/// Leading-whitespace indent level of the line containing `pos`, measured in `tab_size`-wide
+/// columns (spaces count 1, tabs jump to the next stop). Trailing content on the line is
+/// ignored — `    if (x) {` and a lone `}` at the same indent both report level 1.
+pub fn indentLevelAt(text: []const u8, pos: usize, tab_size: u8) u8 {
+    const ts: usize = if (tab_size == 0) 4 else tab_size;
+    const line_start = if (std.mem.lastIndexOfScalar(u8, text[0..@min(pos, text.len)], '\n')) |nl| nl + 1 else 0;
+    var col: usize = 0;
+    var i = line_start;
+    while (i < text.len) : (i += 1) {
+        switch (text[i]) {
+            ' ' => col += 1,
+            '\t' => col = (col / ts + 1) * ts,
+            else => break,
+        }
+    }
+    return @truncate(col / ts);
+}
+
+/// Per-kind offset into the palette. Spaced around a 7-colour wheel so braces / parens /
+/// square brackets at the same indent land on visually distinct slots (and stay distinct
+/// after `palette.bracket`'s scramble). Open and close of a kind share the offset, so a
+/// matching pair still paints the same colour.
+fn kindOffset(c: u8) u8 {
+    return switch (c) {
+        '{', '}' => 0,
+        '(', ')' => 3,
+        '[', ']' => 5,
+        else => 0,
+    };
+}
+
+/// Rainbow-bracket scan: every non-quote `{`, `(`, `[` and its closer in
+/// `[range_start, range_end)` gets a mark whose `depth` is **indent level + kind offset**.
+/// Matching pairs of the same kind sit at the same indent in well-formatted code, so they
+/// share a colour; different kinds at that indent take different palette slots; one indent
+/// deeper advances every kind together.
+///
+/// Writes ascending by `byte` into `out` and returns how many were written. Stops appending
+/// when `out` is full rather than allocating — callers size for a screenful of brackets; a
+/// full buffer just leaves later ones uncolored for that frame, never incorrect.
+///
+/// Quote characters themselves are skipped (which `"` closes which needs a lexer). Brackets
+/// *inside* strings still get coloured — same lexical tradeoff as `matchAt`.
+pub fn nestMarks(text: []const u8, range_start: usize, range_end: usize, tab_size: u8, out: []NestMark) usize {
+    if (range_start >= range_end or range_start > text.len) return 0;
+    const end = @min(range_end, text.len);
+
+    var n: usize = 0;
+    var i = range_start;
+    while (i < end and n < out.len) : (i += 1) {
+        const c = text[i];
+        const is_bracket = if (forOpen(c)) |p| !p.is_quote else if (forClose(c)) |p| !p.is_quote else false;
+        if (!is_bracket) continue;
+        out[n] = .{ .byte = i, .depth = indentLevelAt(text, i, tab_size) +% kindOffset(c) };
+        n += 1;
+    }
+    return n;
+}
+
 /// How far `matchAt` will scan in each direction before giving up. A match further away than
 /// this is off-screen by orders of magnitude, so finding it would change nothing on screen —
 /// but scanning for it runs on every frame of every open editor, including 60MB files where an
@@ -284,6 +352,93 @@ test "matchAt gives up past the scan budget" {
     text[far + 1] = ' ';
     text[match_scan_budget] = '}';
     try testing.expectEqual([2]usize{ 0, match_scan_budget }, matchAt(text, 1).?);
+}
+
+test "indentLevelAt counts spaces and tabs in tab_size units" {
+    try testing.expectEqual(@as(u8, 0), indentLevelAt("foo", 0, 4));
+    try testing.expectEqual(@as(u8, 1), indentLevelAt("    foo", 4, 4));
+    try testing.expectEqual(@as(u8, 2), indentLevelAt("        foo", 8, 4));
+    try testing.expectEqual(@as(u8, 1), indentLevelAt("\tfoo", 1, 4));
+    try testing.expectEqual(@as(u8, 2), indentLevelAt("\t\tfoo", 2, 4));
+    // Position mid-line still reads that line's leading whitespace.
+    try testing.expectEqual(@as(u8, 1), indentLevelAt("    if (x) {\n", 10, 4));
+}
+
+test "nestMarks colours by indent level so matching pairs share a colour" {
+    const text =
+        \\{
+        \\    {
+        \\        {
+        \\        }
+        \\    }
+        \\}
+    ;
+    var out: [16]NestMark = undefined;
+    const n = nestMarks(text, 0, text.len, 4, &out);
+    try testing.expectEqual(@as(usize, 6), n);
+    // Braces use kind offset 0 — openers at indent 0, 1, 2; closers reverse at 2, 1, 0.
+    try testing.expectEqual(@as(usize, 0), out[0].byte);
+    try testing.expectEqual(@as(u8, 0), out[0].depth);
+    try testing.expectEqual(@as(u8, 1), out[1].depth);
+    try testing.expectEqual(@as(u8, 2), out[2].depth);
+    try testing.expectEqual(@as(u8, 2), out[3].depth);
+    try testing.expectEqual(@as(u8, 1), out[4].depth);
+    try testing.expectEqual(@as(u8, 0), out[5].depth);
+}
+
+test "nestMarks different kinds at the same indent get different colours" {
+    const text = "{ ( [ ] ) }";
+    var out: [8]NestMark = undefined;
+    const n = nestMarks(text, 0, text.len, 4, &out);
+    try testing.expectEqual(@as(usize, 6), n);
+    // Same indent, three kind offsets — openers disagree, each closer matches its opener.
+    try testing.expect(out[0].depth != out[1].depth); // { vs (
+    try testing.expect(out[1].depth != out[2].depth); // ( vs [
+    try testing.expect(out[0].depth != out[2].depth); // { vs [
+    try testing.expectEqual(out[0].depth, out[5].depth); // { }
+    try testing.expectEqual(out[1].depth, out[4].depth); // ( )
+    try testing.expectEqual(out[2].depth, out[3].depth); // [ ]
+}
+
+test "nestMarks paren and brace at the same indent disagree" {
+    const text =
+        \\fn f(
+        \\    x: u32,
+        \\) void {
+        \\    _ = x;
+        \\}
+    ;
+    var out: [8]NestMark = undefined;
+    const n = nestMarks(text, 0, text.len, 4, &out);
+    try testing.expectEqual(@as(usize, 4), n); // ( ) { }
+    try testing.expectEqual(out[0].depth, out[1].depth); // ( )
+    try testing.expectEqual(out[2].depth, out[3].depth); // { }
+    try testing.expect(out[0].depth != out[2].depth); // ( vs {
+}
+
+test "nestMarks mid-range uses each line's own indent" {
+    const text =
+        \\{
+        \\    { }
+        \\}
+    ;
+    // Inner `{ }` sit on the indented middle line — range covering only that line.
+    const mid = std.mem.indexOf(u8, text, "{ }").?;
+    var out: [4]NestMark = undefined;
+    const n = nestMarks(text, mid, mid + 3, 4, &out);
+    try testing.expectEqual(@as(usize, 2), n);
+    try testing.expectEqual(@as(u8, 1), out[0].depth);
+    try testing.expectEqual(@as(u8, 1), out[1].depth);
+}
+
+test "nestMarks skips quote characters themselves" {
+    var out: [8]NestMark = undefined;
+    const n = nestMarks("\"{}\"", 0, 4, 4, &out);
+    // The braces inside the string are still lexical brackets (same tradeoff as `matchAt`);
+    // the quote characters themselves are not coloured.
+    try testing.expectEqual(@as(usize, 2), n);
+    try testing.expectEqual(@as(usize, 1), out[0].byte);
+    try testing.expectEqual(@as(usize, 2), out[1].byte);
 }
 
 test "deletesPair only between an empty pair" {

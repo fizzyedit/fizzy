@@ -53,3 +53,6 @@ pub const lsp = @import("lsp/lsp.zig");
 /// Shared fuzzy matcher (zf) behind every filter box in the app. See `fuzzy.zig` — note that
 /// lower scores are better.
 pub const fuzzy = @import("fuzzy.zig");
+
+/// Fixed Fizzy accent colours — theme-independent. See `palette.zig`.
+pub const palette = @import("palette.zig");

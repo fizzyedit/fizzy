@@ -5,6 +5,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
 const perf = @import("core").perf;
+const palette = @import("core").palette;
 const tc = @import("../textcore/textcore.zig");
 
 pub const HighlightStyle = sdk.language.HighlightStyle;
@@ -337,6 +338,11 @@ pub const InitOptions = struct {
     /// behind them (VSCode's `editor.matchBrackets`). Recomputed every frame from the buffer —
     /// see `tc.pairs.matchAt`, including what it deliberately doesn't handle.
     highlight_matching_bracket: bool = false,
+    /// When true, every `{`/`(`/`[` (and closer) is tinted from `core.palette.bracket` by
+    /// **indent level + kind offset** — matching pairs of one kind share a colour, but a
+    /// paren and a brace at the same indent do not. Off by default for the same reusability
+    /// reason as `tab_inserts_indent`.
+    rainbow_brackets: bool = false,
 };
 
 /// Byte span of a tree-sitter token, used by `hovered_span` below.
@@ -461,6 +467,9 @@ ghost_text_emitted: bool = false,
 /// of `draw()` and consumed by `emitChunk`, rather than per chunk — the scan is over the whole
 /// buffer, and every chunk would otherwise redo it.
 bracket_match: ?[2]usize = null,
+/// Nesting-depth marks for rainbow brackets this frame (sorted by byte). Points into a stack
+/// buffer owned by `draw()` for the duration of the call; empty when `rainbow_brackets` is off.
+bracket_nests: []const tc.pairs.NestMark = &.{},
 
 init_opts: InitOptions,
 text: []u8,
@@ -737,6 +746,18 @@ pub fn draw(self: *TextEntryWidget) void {
     };
     self.drawBeforeText();
 
+    // Rainbow nesting must run *after* `drawBeforeText` so `cache_layout_bytes` (and therefore
+    // `highlightByteRange`) is valid — otherwise the first frame with `cache_layout` on would
+    // colour the whole document instead of the viewport.
+    var nest_buf: [512]tc.pairs.NestMark = undefined;
+    self.bracket_nests = &.{};
+    if (self.init_opts.rainbow_brackets) {
+        const range = self.highlightByteRange() orelse ByteRange{ .start = 0, .end = self.len };
+        const tab_size: u8 = if (self.init_opts.tab_size == 0) 4 else self.init_opts.tab_size;
+        const n = tc.pairs.nestMarks(self.text[0..self.len], range.start, range.end, tab_size, &nest_buf);
+        self.bracket_nests = nest_buf[0..n];
+    }
+
     if (self.len == 0) {
         if (self.init_opts.placeholder) |placeholder| {
             if (self.data().accesskit_node()) |ak_node| {
@@ -941,7 +962,7 @@ pub fn draw(self: *TextEntryWidget) void {
                 if (start < nstart) {
                     // render non highlighted text up to this node
                     //const shape_start = perfBegin();
-                    self.emitChunk(start, self.text[start..nstart], .{}, false);
+                    self.emitChunk(start, self.text[start..nstart], .{}, false, true);
                     //perfAccumShape(shape_start);
                 } else if (nstart < start) {
                     // this match is inside (or overlapping) the previous match
@@ -960,7 +981,7 @@ pub fn draw(self: *TextEntryWidget) void {
                 }
 
                 //const shape_start = perfBegin();
-                self.emitChunk(nstart, self.text[nstart..nend], opts, true);
+                self.emitChunk(nstart, self.text[nstart..nend], opts, true, captureAllowsRainbow(capture_name));
                 //perfAccumShape(shape_start);
 
                 start = nend;
@@ -969,7 +990,7 @@ pub fn draw(self: *TextEntryWidget) void {
             if (start < self.len) {
                 // any leftover non highlighted text
                 //const shape_start = perfBegin();
-                self.emitChunk(start, self.text[start..self.len], .{}, false);
+                self.emitChunk(start, self.text[start..self.len], .{}, false, true);
                 //perfAccumShape(shape_start);
             }
 
@@ -982,7 +1003,7 @@ pub fn draw(self: *TextEntryWidget) void {
     }
 
     // simple text
-    self.emitChunk(0, self.text[0..self.len], self.data().options.strip(), false);
+    self.emitChunk(0, self.text[0..self.len], self.data().options.strip(), false, true);
     self.textLayout.addTextDone(self.data().options.strip());
 
     self.drawAfterText();
@@ -1065,6 +1086,16 @@ fn completionGhost(self: *TextEntryWidget, completion: CompletionState) ?Ghost {
     return .{ .text = suffix, .anchor = completion.anchor };
 }
 
+/// Tree-sitter highlight captures where brackets are *content*, not structure — rainbow
+/// tint would override the grey comment / green string styling. Names are dotted prefixes
+/// (`comment.line`, `string.special`, …), matching how highlight styles are resolved above.
+fn captureAllowsRainbow(capture_name: []const u8) bool {
+    if (std.mem.startsWith(u8, capture_name, "comment")) return false;
+    if (std.mem.startsWith(u8, capture_name, "string")) return false;
+    if (std.mem.startsWith(u8, capture_name, "character")) return false;
+    return true;
+}
+
 /// Emits `chunk` — a slice of `self.text` starting at absolute byte offset `chunk_start` —
 /// into `self.textLayout`, exactly like the plain `addText`/`addTextHover` call it replaces
 /// (`is_hover` selects which, matching the call site) — except that the chunk is split wherever
@@ -1073,11 +1104,15 @@ fn completionGhost(self: *TextEntryWidget, completion: CompletionState) ?Ghost {
 /// - this frame's `Ghost.anchor`, where dimmed ghost text is spliced between the two halves;
 /// - either byte of `bracket_match`, re-emitted on its own with a highlight behind it.
 ///
+/// `allow_rainbow` is false for comment/string captures so brackets inside them keep the
+/// capture's colour (grey comments, etc.) instead of the rainbow override. The caret-match
+/// wash still applies — it's a fill behind the glyph, not a text-colour steal.
+///
 /// Doing both through the same text pipeline (rather than painting rects at computed
 /// coordinates) is what keeps them correct under wrapping, horizontal scrolling, and
 /// `cache_layout`'s viewport culling — a split chunk is still just text runs, laid out by the
 /// same code as everything around it.
-fn emitChunk(self: *TextEntryWidget, chunk_start: usize, chunk: []const u8, opts: dvui.Options, is_hover: bool) void {
+fn emitChunk(self: *TextEntryWidget, chunk_start: usize, chunk: []const u8, opts: dvui.Options, is_hover: bool, allow_rainbow: bool) void {
     const emitPlain = struct {
         fn call(w: *TextEntryWidget, start: usize, text: []const u8, o: dvui.Options, hover: bool) void {
             if (text.len == 0) return;
@@ -1137,21 +1172,52 @@ fn emitChunk(self: *TextEntryWidget, chunk_start: usize, chunk: []const u8, opts
         break :blk g;
     };
 
-    // Bracket-match bytes falling in this chunk (0, 1, or both — a short chunk like `()` can
-    // hold the whole pair). `< chunk_end` rather than `<=`: a bracket exactly on the shared
-    // boundary belongs to the next chunk, which is where its byte actually gets emitted.
-    var marks_buf: [2]usize = undefined;
-    var marks: []const usize = marks_buf[0..0];
-    if (self.bracket_match) |bm| {
-        var n: usize = 0;
-        for (bm) |m| {
-            if (m >= chunk_start and m < chunk_end) {
-                marks_buf[n] = m;
-                n += 1;
+    // Bracket restyles falling in this chunk — rainbow nesting marks and/or the caret-adjacent
+    // match pair. `< chunk_end` rather than `<=`: a bracket exactly on the shared boundary
+    // belongs to the next chunk, which is where its byte actually gets emitted. Nest marks are
+    // already sorted ascending; the caret pair is at most two bytes and gets merged in.
+    var marks_buf: [256]BracketMark = undefined;
+    var marks_n: usize = 0;
+    {
+        var nest_i: usize = 0;
+        // Skip nests before this chunk so subsequent chunks don't re-walk them.
+        while (nest_i < self.bracket_nests.len and self.bracket_nests[nest_i].byte < chunk_start) : (nest_i += 1) {}
+        while (nest_i < self.bracket_nests.len and marks_n < marks_buf.len) : (nest_i += 1) {
+            const nm = self.bracket_nests[nest_i];
+            if (nm.byte >= chunk_end) break;
+            // Skip rainbow marks inside comments/strings — still walk past them so later
+            // chunks don't re-scan these bytes. Caret-match merge below can still flag them.
+            if (!allow_rainbow) continue;
+            marks_buf[marks_n] = .{ .byte = nm.byte, .depth = nm.depth, .caret_match = false };
+            marks_n += 1;
+        }
+        if (self.bracket_match) |bm| {
+            for (bm) |m| {
+                if (m < chunk_start or m >= chunk_end) continue;
+                // Merge onto an existing nest mark at the same byte, or append.
+                var merged = false;
+                for (marks_buf[0..marks_n]) |*existing| {
+                    if (existing.byte == m) {
+                        existing.caret_match = true;
+                        merged = true;
+                        break;
+                    }
+                }
+                if (!merged and marks_n < marks_buf.len) {
+                    marks_buf[marks_n] = .{ .byte = m, .depth = null, .caret_match = true };
+                    marks_n += 1;
+                    // Keep ascending — caret-only marks are rare (≤2) so a tiny insertion is fine.
+                    var j = marks_n - 1;
+                    while (j > 0 and marks_buf[j].byte < marks_buf[j - 1].byte) : (j -= 1) {
+                        const tmp = marks_buf[j - 1];
+                        marks_buf[j - 1] = marks_buf[j];
+                        marks_buf[j] = tmp;
+                    }
+                }
             }
         }
-        marks = marks_buf[0..n];
     }
+    const marks = marks_buf[0..marks_n];
 
     // The overwhelmingly common case: nothing to splice or restyle in this chunk. Kept first so
     // the per-chunk cost of both features is one null check on frames where neither is showing.
@@ -1161,14 +1227,15 @@ fn emitChunk(self: *TextEntryWidget, chunk_start: usize, chunk: []const u8, opts
     }
 
     // Walk the chunk left to right, emitting each plain stretch up to the next splice point.
-    // `matchAt` returns its two offsets ascending, so `marks` is already in order, and a ghost
-    // anchor coinciding with a bracket goes first (it sits *at* the caret, before that byte).
+    // A ghost anchor coinciding with a bracket goes first (it sits *at* the caret, before that
+    // byte). Nest marks and the caret-match wash share a single emission when they land on the
+    // same glyph.
     var pos = chunk_start;
     var mark_i: usize = 0;
     var pending_ghost = ghost;
     while (mark_i < marks.len or pending_ghost != null) {
         const ghost_at: ?usize = if (pending_ghost) |g| g.anchor else null;
-        const mark_at: ?usize = if (mark_i < marks.len) marks[mark_i] else null;
+        const mark_at: ?usize = if (mark_i < marks.len) marks[mark_i].byte else null;
         const take_ghost = if (ghost_at) |ga| (mark_at == null or ga <= mark_at.?) else false;
         const at = if (take_ghost) ghost_at.? else mark_at.?;
 
@@ -1183,7 +1250,7 @@ fn emitChunk(self: *TextEntryWidget, chunk_start: usize, chunk: []const u8, opts
             // middle of a token, and registering it as its own hover span would report a
             // one-byte token to goto-definition/hover. Brackets are never a definition target,
             // so dropping the hit-test for exactly this byte costs nothing.
-            emitPlain(self, at, chunk[at - chunk_start ..][0..1], opts.override(bracketMatchOptions()), false);
+            emitPlain(self, at, chunk[at - chunk_start ..][0..1], opts.override(bracketStyle(marks[mark_i])), false);
             pos = at + 1;
             mark_i += 1;
         }
@@ -1191,12 +1258,21 @@ fn emitChunk(self: *TextEntryWidget, chunk_start: usize, chunk: []const u8, opts
     emitPlain(self, pos, chunk[pos - chunk_start ..], opts, is_hover);
 }
 
-/// Styling for a matched bracket: a wash of the theme's highlight colour behind the glyph, so
-/// it follows whatever theme (including a user's own) is active rather than hardcoding a colour.
-/// Faint on purpose — this marker sits under the caret constantly while editing, so it has to
-/// read as a hint rather than compete with the selection or with syntax colours.
-fn bracketMatchOptions() dvui.Options {
-    return .{ .color_fill = dvui.themeGet().color(.highlight, .fill).opacity(0.35) };
+const BracketMark = struct {
+    byte: usize,
+    /// Indent-level palette index when rainbow-coloured; null when this mark exists only as a caret match.
+    depth: ?u8,
+    caret_match: bool,
+};
+
+/// Rainbow text colour from the fixed Fizzy palette, plus the caret-match wash when this glyph
+/// is the pair next to the caret. The wash still comes from the active theme's highlight so it
+/// follows the chrome; the glyph colour does not — that's the point of a fixed palette.
+fn bracketStyle(mark: BracketMark) dvui.Options {
+    var o: dvui.Options = .{};
+    if (mark.depth) |d| o.color_text = palette.bracket(d);
+    if (mark.caret_match) o.color_fill = dvui.themeGet().color(.highlight, .fill).opacity(0.35);
+    return o;
 }
 
 /// Splices `text` into the layout at the current position, dimmed, without letting it count as

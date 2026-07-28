@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const wdvui = @import("core").dvui;
 const fuzzy = @import("core").fuzzy;
+const palette = @import("core").palette;
 const runtime = @import("runtime.zig");
 const icons = @import("icons");
 const Workspace = @import("Workspace.zig");
@@ -204,8 +205,8 @@ pub fn drawFiles(path: []const u8, tree: *wdvui.TreeWidget) !void {
     }
 
     const color = dvui.themeGet().color(.control, .fill_hover);
-    // Folder rows tint their caret from the per-row fill (`control.fill`, optionally overridden
-    // by `fileRowFillColor`); the project row has no per-row tint, so it takes the base.
+    // Folder rows tint their caret from the per-row palette colour (optionally overridden
+    // by `fileRowFillColor`); the project row has no per-row tint, so it takes the theme base.
     const caret_color = dvui.themeGet().color(.control, .fill);
 
     {
@@ -730,7 +731,9 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                 inner_id_extra.* = dvui.Id.update(tree.data().id, abs_path).asUsize();
                 try visible_file_rows_order.append(runtime.allocator(), .{ .id = inner_id_extra.*, .path = abs_path });
 
-                var color = dvui.themeGet().color(.control, .fill);
+                // Fixed Fizzy palette (theme-independent) so row accents stay stable across
+                // theme switches and line up with rainbow bracket colours in the editor.
+                var color = palette.at(color_id.*);
                 if (runtime.host().fileRowFillColor(color_id.*)) |tint| {
                     color = tint;
                 }
