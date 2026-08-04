@@ -794,29 +794,31 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                 const rect = branch.data().borderRectScale().r;
                 const max_distance = if (!expanded) rect.h * 3.0 else rect.w / 8.0;
 
-                // Quick bounds check: skip expensive distance calculation if mouse is far
-                var dx: f32 = 0;
-                var dy: f32 = 0;
+                var dx: f32 = std.math.floatMax(f32);
 
                 if (current_point.x < rect.x + if (expanded) (expanded_indent * dvui.currentWindow().natural_scale) else 0.0) {
-                    dx = @abs(current_point.x - (rect.x + if (expanded) (expanded_indent * dvui.currentWindow().natural_scale) else 0.0));
+                    dx = std.math.floatMax(f32);
                 } else if (current_point.x > rect.bottomRight().x) {
                     dx = @abs(current_point.x - rect.bottomRight().x);
+                } else {
+                    dx = 0.0;
                 }
+
+                var dy: f32 = std.math.floatMax(f32);
 
                 if (current_point.y < rect.y) {
                     dy = @abs(current_point.y - rect.y);
                 } else if (current_point.y > rect.bottomRight().y) {
                     dy = @abs(current_point.y - rect.bottomRight().y);
+                } else {
+                    dy = 0.0;
                 }
 
-                // Only compute expensive distance if we're in range (Chebyshev approximation)
-                const chebyshev = @max(dx, dy);
-                if (chebyshev < max_distance) {
-                    const distance = @sqrt(dx * dx + dy * dy);
-                    const t = 1.0 - (distance / max_distance);
-                    color = dvui.themeGet().color(.window, .fill).lerp(color, t);
-                }
+                const distance = @sqrt(dx * dx + dy * dy);
+
+                const t = 1.0 - (distance / max_distance);
+
+                color = dvui.themeGet().color(.window, .fill).lerp(color, t);
 
                 if (branch.floating()) {
                     if (dvui.dataGetSlice(null, inner_unique_id, "removed_path", []u8) == null)

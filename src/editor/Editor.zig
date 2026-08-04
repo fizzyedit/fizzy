@@ -2103,8 +2103,16 @@ pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
         if (std.mem.eql(u8, editor.docPath(doc), path)) return doc;
     }
 
-    const key = fizzy.paths.normalize(fizzy.app.allocator, path) catch return null;
-    defer fizzy.app.allocator.free(key);
+    // The file tree calls this once per row per frame, and the miss (file not open) is by far the
+    // common case — so every allocation below is paid on every non-open row. Both normalizes are
+    // skippable whenever the path is already canonical, which is the norm here: tree rows are
+    // joined onto an absolute project root. Checking costs a scan, not a heap allocation.
+    const path_canonical = fizzy.paths.isNormalizedAbsolute(path);
+    const key: []const u8 = if (path_canonical)
+        path
+    else
+        fizzy.paths.normalize(fizzy.app.allocator, path) catch return null;
+    defer if (!path_canonical) fizzy.app.allocator.free(@constCast(key));
 
     for (editor.open_files.values()) |doc| {
         const stored = editor.docPath(doc);
@@ -2113,6 +2121,9 @@ pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
         // already equals `key`. Only needed when a pre-normalization doc still carries a `.`
         // component that the caller's key has already collapsed.
         if (std.mem.eql(u8, stored, path)) continue;
+        // A canonical `stored` normalizes to itself, and both comparisons above already ruled it
+        // out — no need to allocate a copy just to re-compare it.
+        if (fizzy.paths.isNormalizedAbsolute(stored)) continue;
         const stored_canon = fizzy.paths.normalize(fizzy.app.allocator, stored) catch continue;
         defer fizzy.app.allocator.free(stored_canon);
         if (std.mem.eql(u8, stored_canon, key)) return doc;

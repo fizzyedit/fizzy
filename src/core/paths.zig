@@ -16,6 +16,51 @@ pub fn normalize(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.fs.path.resolve(allocator, &.{path});
 }
 
+/// True when `normalize(path)` would return `path` byte-for-byte, decided without allocating.
+///
+/// `normalize` costs a heap allocation plus a full `resolve` walk, and the hot callers
+/// (`Editor.docFromPath`, once per file-tree row per frame) hand it paths that were built by
+/// joining an already-absolute project root — i.e. canonical the overwhelming majority of the
+/// time. Testing first lets those callers skip the allocation entirely and fall back to
+/// `normalize` only for the odd spellings it exists to repair.
+pub fn isNormalizedAbsolute(path: []const u8) bool {
+    if (!std.fs.path.isAbsolute(path)) return false;
+    // On Windows `resolve` also rewrites separators and drive-letter case; not worth
+    // replicating, so only the POSIX shape claims the fast path.
+    if (builtin.os.tag == .windows) return false;
+
+    if (std.mem.eql(u8, path, "/")) return true;
+    // A trailing separator is always dropped by `resolve`.
+    if (path[path.len - 1] == '/') return false;
+
+    var it = std.mem.splitScalar(u8, path[1..], '/');
+    while (it.next()) |component| {
+        // Empty component == a doubled separator; `.`/`..` get collapsed.
+        if (component.len == 0) return false;
+        if (std.mem.eql(u8, component, ".")) return false;
+        if (std.mem.eql(u8, component, "..")) return false;
+    }
+    return true;
+}
+
+test isNormalizedAbsolute {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+
+    // Canonical shapes take the fast path, and agree with `normalize`.
+    for ([_][]const u8{ "/", "/a", "/a/b.txt", "/a/b/c", "/a/.hidden", "/a/..b", "/a/b../c" }) |p| {
+        try std.testing.expect(isNormalizedAbsolute(p));
+        const n = try normalize(gpa, p);
+        defer gpa.free(n);
+        try std.testing.expectEqualStrings(p, n);
+    }
+
+    // Non-canonical shapes must decline, so the caller still normalizes them.
+    for ([_][]const u8{ "relative", "a/b", "", "/a/", "/a//b", "/a/./b", "/a/../b", "/.", "/.." }) |p| {
+        try std.testing.expect(!isNormalizedAbsolute(p));
+    }
+}
+
 /// `normalize` of `base` joined with `path`; an absolute `path` wins outright (so a
 /// cwd + argv pair resolves the way a shell would).
 pub fn normalizeJoin(allocator: std.mem.Allocator, base: []const u8, path: []const u8) ![]u8 {
