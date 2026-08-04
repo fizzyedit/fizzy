@@ -183,6 +183,22 @@ pub const VTable = struct {
     /// plugin can load state it keyed to that folder.
     onFolderOpen: ?*const fn (state: *anyopaque, allocator: std.mem.Allocator) void = null,
 
+    // ---- document content ----
+    /// [broadcast] An open document's in-memory contents changed. Fired for *every* registered
+    /// plugin, not just the owner — the point is to let a plugin that doesn't own the document
+    /// observe it anyway (a link indexer watching markdown it will never render, say). The
+    /// owner is the one that reports the change, via `Host.notifyDocumentContentChanged`.
+    ///
+    /// Owners are expected to **debounce**: report after a short lull in typing (a few hundred
+    /// ms) and immediately on save, never per keystroke. `path` is the document's path, empty
+    /// for an unsaved buffer. `bytes` is the live buffer and is only valid for the duration of
+    /// the call — copy anything you keep.
+    ///
+    /// This is a hint about *unsaved* state; the file on disk still says something else. A
+    /// consumer that also watches the filesystem should treat this as an overlay it can drop
+    /// once the on-disk version catches up, not as a reason to write anything through.
+    documentContentChanged: ?*const fn (state: *anyopaque, path: []const u8, bytes: []const u8) void = null,
+
     // ---- save protocol ----
     /// [active-doc] True when the owner wants a confirmation before `saveDocument` (e.g. a save
     /// that would flatten lossy data, change encoding, or overwrite an on-disk change). When
@@ -283,6 +299,10 @@ pub fn onFolderClose(self: Plugin) void {
 
 pub fn onFolderOpen(self: Plugin, allocator: std.mem.Allocator) void {
     if (self.vtable.onFolderOpen) |f| f(self.state, allocator);
+}
+
+pub fn documentContentChanged(self: Plugin, path: []const u8, bytes: []const u8) void {
+    if (self.vtable.documentContentChanged) |f| f(self.state, path, bytes);
 }
 
 pub fn bindDocumentToPane(self: Plugin, doc: DocHandle, canvas_id: dvui.Id, workspace_handle: *anyopaque, center: bool) void {

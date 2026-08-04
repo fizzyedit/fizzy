@@ -62,10 +62,11 @@ pub const document = @import("document.zig");
 pub const manifest = @import("manifest.zig");
 pub const Manifest = manifest.Manifest;
 
-/// Inter-plugin services (`"workbench"`, `"markdown"`).
+/// Inter-plugin services (`"workbench"`, `"markdown"`, `"wikilink"`).
 pub const services = struct {
     pub const workbench = @import("services/workbench.zig");
     pub const markdown = @import("services/markdown.zig");
+    pub const wikilink = @import("services/wikilink.zig");
 };
 
 /// SDK version + ABI fingerprint lock (`sdk_version`, `recorded_abi_fingerprints`).

@@ -654,6 +654,20 @@ pub fn pluginById(self: *Host, id: []const u8) ?*Plugin {
     return null;
 }
 
+/// Broadcast an open document's in-memory content change to every registered plugin.
+///
+/// Called by the document's **owner** when its buffer settles after an edit — see
+/// `Plugin.VTable.documentContentChanged` for the debouncing contract. This is how a plugin
+/// that owns nothing (a link indexer, a word counter) sees unsaved text at all: nothing else
+/// in the SDK exposes another plugin's live buffer.
+///
+/// The owner is included in the fan-out. That's deliberate — filtering it out would mean
+/// owners behave differently from everyone else for no reason, and an owner that doesn't want
+/// its own notification simply doesn't implement the hook.
+pub fn notifyDocumentContentChanged(self: *Host, path: []const u8, bytes: []const u8) void {
+    for (self.plugins.items) |plugin| plugin.documentContentChanged(path, bytes);
+}
+
 /// First registered plugin that implements `createDocument` (for fizzy New File flows).
 pub fn pluginWithCreateDocument(self: *Host) ?*Plugin {
     for (self.plugins.items) |plugin| {

@@ -523,7 +523,12 @@ paired `host.*` request. Call sites are in `src/editor/Editor.zig` (verify line 
 | `drawOverlay` | broadcast | right after `tickKeybinds`, on top of the frame |
 
 Outside the frame loop: `onFolderClose` / `onFolderOpen` fire `[broadcast]` from
-`setProjectFolder` / `closeProjectFolder`; `saveNeedsConfirmation` / `requestSaveConfirmation`
+`setProjectFolder` / `closeProjectFolder`; `documentContentChanged` fires `[broadcast]` from
+`host.notifyDocumentContentChanged`, which a document's **owner** calls when its buffer settles
+after an edit (debounced — a lull in typing, and on save; never per keystroke). That hook is how a
+plugin that owns no documents observes *unsaved* text: nothing else in the SDK exposes another
+plugin's live buffer. Treat it as an overlay on what's on disk, not a reason to write anything
+through. `saveNeedsConfirmation` / `requestSaveConfirmation`
 fire `[active-doc]` from the save / close / quit-all paths; `loadDocument` runs on a **background
 load-worker thread** (touch only the host allocator + the given buffer, no dvui).
 
@@ -746,6 +751,43 @@ Then:
 You do not need to handle JSON-RPC framing, threading, request/response id correlation,
 position-encoding negotiation, or server-initiated requests yourself — all of that is generic
 LSP-spec behavior `core.lsp.Client` already implements once, for every server.
+
+### 3.10 Inter-plugin services
+
+`registerService(name, ptr, owner)` publishes an API under a string name;
+`host.getServiceTyped(SomeApi)` looks it up by that API type's `service_name`. Fizzy stores only
+an `*anyopaque` — it never interprets a service — so the API struct's *layout* is part of the ABI
+fingerprint and every service type used across dylibs is listed in `dylib.zig`'s
+`sdk_boundary_types`.
+
+The SDK ships definitions for the services plugins in this ecosystem publish, in
+[`src/sdk/services/`](../src/sdk/services/):
+
+| Service | Provider | What it's for |
+|---|---|---|
+| `"workbench"` | `workbench` | Open/close/save documents, enumerate open tabs, file-tree operations, `revealPosition` |
+| `"markdown"` | `markdown` | Render a markdown byte slice into the current dvui parent (native only — absent on web) |
+| `"wikilink"` | any indexer (e.g. `brain`) | Resolve `[[Note]]` to a file, plus completion candidates and index state |
+
+**Every lookup must tolerate absence.** A service's provider may be uninstalled, disabled, or
+simply not built for this target — `markdown` is missing on web, and `wikilink` is missing unless
+the user installed an indexer. The idiom is one line, and the fallback is a real behavior, not an
+error path:
+
+```zig
+const wl = sdk.host().getServiceTyped(sdk.services.wikilink.Api) orelse {
+    // No resolver: `[[Note]]` is just text. Render it verbatim.
+    return renderPlain(literal);
+};
+```
+
+**`wikilink` splits into a pure half and a service half**, which is worth copying if you define a
+service of your own. `wikilink.tokenize` — *what is a link* — is a plain function in the SDK,
+compiled into both the renderer and the indexer, so the two can never disagree about the syntax.
+Only *which file does this link mean* goes through the vtable, because only that needs an index.
+Resolution results are memoized by the caller against `wikilink.generation()`, which is what makes
+a link flip from broken to live when its target file appears — with no edit to the linking
+document, and so no re-parse of it.
 
 ---
 
