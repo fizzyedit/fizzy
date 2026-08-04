@@ -192,7 +192,12 @@ const dvui_shared_state_types = .{
 /// zero-size it. A host and plugin in different classes have genuinely incompatible offsets even
 /// with an identical boundary shape, so this is folded into `abi_fingerprint` — the one
 /// real-layout axis the shape hash deliberately ignores.
-const optimize_safety_class: []const u8 = switch (builtin.mode) {
+///
+/// Public because it is the *only* fingerprint input a host can explain to the user in isolation:
+/// the plugin store publishes `"fast"` builds exclusively, so a `"safe"` host knows up front that
+/// no store shard can ever match it, whatever the SDK version says (see `PluginStore`'s
+/// `host_optimize_matches_store`).
+pub const optimize_safety_class: []const u8 = switch (builtin.mode) {
     .Debug, .ReleaseSafe => "safe",
     .ReleaseFast, .ReleaseSmall => "fast",
 };
