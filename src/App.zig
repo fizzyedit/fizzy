@@ -58,6 +58,15 @@ const start_options_base: dvui.App.StartOptions = .{
     },
 };
 
+/// macOS only: is the process image inside a `.app` bundle (as opposed to a loose
+/// `zig-out/bin/fizzy` from `zig build run`)? Mirrors `auto_update.installLayoutSupported`'s
+/// probe, minus its Velopack gating.
+fn runningFromAppBundle(io: std.Io) bool {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = std.process.executablePath(io, &buf) catch return false;
+    return std.mem.indexOf(u8, buf[0..n], ".app/") != null;
+}
+
 fn startOptions() dvui.App.StartOptions {
     var opts = start_options_base;
 
@@ -70,6 +79,15 @@ fn startOptions() dvui.App.StartOptions {
     if (comptime builtin.target.cpu.arch != .wasm32) {
         opts.gpa = appAllocator();
         const main_init = dvui.App.main_init orelse return opts;
+        // SDL's Cocoa backend implements SDL_SetWindowIcon as `[NSApp setApplicationIconImage:]`,
+        // i.e. it replaces the whole *application* icon while we run. That hands AppKit a finished
+        // bitmap, skipping the system treatment (rounded-rect backdrop, mask) it applies to the
+        // bundle's `.icns` — so the Dock icon visibly loses its background the moment fizzy
+        // launches. Inside a bundle the `.icns` is already the right icon; leave it alone. Loose
+        // dev builds have no bundle icon at all, so there we still want the runtime one.
+        if (comptime builtin.os.tag == .macos) {
+            if (runningFromAppBundle(main_init.io)) opts.icon = null;
+        }
         if (paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.processEnviron(), ".")) |pref_path| {
             pref_path_len = pref_path.len;
             opts.pref_path = pref_path_buf[0..pref_path_len :0];
