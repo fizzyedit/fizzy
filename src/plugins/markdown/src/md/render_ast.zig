@@ -447,24 +447,99 @@ fn resolveImageBytes(ctx: RenderContext, arena: std.mem.Allocator, raw_url: []co
     return .{ .bytes = fresh };
 }
 
-/// Clickable markdown hyperlink. `file://` URLs (including zls hover's `file:///path#L12`
-/// form) open in the editor via workbench `revealPosition`; everything else falls through to
-/// `dvui.openURL`. Middle-click / Ctrl/Cmd+click requests a side split for file targets (and
-/// a new browser window for http(s)), matching `TextLayoutWidget.addLink`.
-fn addMarkdownLink(tl: *dvui.TextLayoutWidget, url: []const u8, text: ?[]const u8, opts: dvui.Options) void {
+/// Clickable markdown hyperlink. Resolution order:
+/// 1. `file://` URIs (including zls hover's `file:///path#L12`) → editor
+/// 2. Scheme-less relative/absolute paths against the document directory → editor
+///    (brain's `[Title](../note.md)` inserts, and ordinary in-vault markdown links)
+/// 3. Everything else → `dvui.openURL` (http(s), mailto, …)
+///
+/// Middle-click / Ctrl/Cmd+click requests a side split for file targets (and a new browser
+/// window for http(s)), matching `TextLayoutWidget.addLink`.
+fn addMarkdownLink(
+    tl: *dvui.TextLayoutWidget,
+    url: []const u8,
+    text: ?[]const u8,
+    opts: dvui.Options,
+    ctx: RenderContext,
+) void {
     const defs: dvui.Options = .{ .color_text = dvui.themeGet().focus, .font = dvui.Font.theme(.body).withUnderline(.{}) };
     if (tl.addTextClick(text orelse url, defs.override(opts))) |click_event| {
         const open_side = (click_event == .mouse and (click_event.mouse.button == .middle or click_event.mouse.mod.matchBind("ctrl/cmd")));
-        openMarkdownUrl(url, open_side);
+        openMarkdownUrl(url, open_side, ctx);
     }
 }
 
-fn openMarkdownUrl(url: []const u8, open_side: bool) void {
+fn openMarkdownUrl(url: []const u8, open_side: bool, ctx: RenderContext) void {
     if (tryRevealFileUri(url, open_side)) return;
+    if (tryRevealRelativePath(url, open_side, ctx)) return;
     // `untitled://` (zls hover for unsaved buffers) and other non-http schemes have nowhere
     // useful to go via the system opener — skip them rather than hand SDL a junk URL.
     if (std.ascii.startsWithIgnoreCase(url, "untitled:")) return;
     _ = dvui.openURL(.{ .url = url, .new_window = open_side });
+}
+
+/// Resolve a scheme-less link against the document's directory and open it in the editor.
+/// Returns false for URLs with a scheme (`http:`, `mailto:`, …), when there's no local base,
+/// or when resolution fails. Fragments (`#heading`) are stripped for the path lookup; line
+/// stays 0 for now (heading→line needs the brain index and can land later).
+fn tryRevealRelativePath(url: []const u8, open_side: bool, ctx: RenderContext) bool {
+    const trimmed = std.mem.trim(u8, url, " \t\r\n");
+    if (trimmed.len == 0) return false;
+
+    // Anything with `://` is a real URL. A single `:` could be a Windows drive (`C:…`) — we
+    // only treat that as local when it looks like `X:/` or `X:\`; otherwise bail to openURL.
+    if (std.mem.indexOf(u8, trimmed, "://") != null) return false;
+    if (std.mem.indexOfScalar(u8, trimmed, ':')) |colon| {
+        const windows_drive = colon == 1 and std.ascii.isAlphabetic(trimmed[0]) and
+            trimmed.len > 2 and (trimmed[2] == '/' or trimmed[2] == '\\');
+        if (!windows_drive) return false;
+    }
+
+    var path_part = trimmed;
+    if (std.mem.indexOfScalar(u8, path_part, '#')) |hash| path_part = path_part[0..hash];
+    if (path_part.len == 0) return false;
+
+    // Percent-decode `%20` etc. so brain's encoded inserts round-trip.
+    const arena = dvui.currentWindow().arena();
+    const decoded = percentDecode(arena, path_part) catch return false;
+
+    const abs = blk: {
+        if (std.fs.path.isAbsolute(decoded))
+            break :blk std.fs.path.resolve(arena, &.{decoded}) catch return false;
+        const base = ctx.image_base_dir orelse dirnameOf(ctx.document_path) orelse return false;
+        // Remote README bases are URLs — relative *page* links aren't editor targets.
+        if (std.mem.indexOf(u8, base, "://") != null) return false;
+        break :blk std.fs.path.resolve(arena, &.{ base, decoded }) catch return false;
+    };
+
+    return revealPath(abs, 0, 0, open_side);
+}
+
+fn dirnameOf(path: []const u8) ?[]const u8 {
+    if (path.len == 0) return null;
+    return std.fs.path.dirname(path);
+}
+
+fn percentDecode(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, src, '%') == null) return src;
+    var out: std.ArrayList(u8) = .empty;
+    try out.ensureTotalCapacity(arena, src.len);
+    var i: usize = 0;
+    while (i < src.len) {
+        if (src[i] == '%' and i + 2 < src.len) {
+            const byte = std.fmt.parseInt(u8, src[i + 1 .. i + 3], 16) catch {
+                try out.append(arena, src[i]);
+                i += 1;
+                continue;
+            };
+            try out.append(arena, byte);
+            i += 3;
+        } else {
+            try out.append(arena, src[i]);
+            i += 1;
+        }
+    }
+    return out.toOwnedSlice(arena);
 }
 
 /// Opens a `file://` URI (optionally with a `#L<n>` / `#L<n>C<m>` fragment) in the editor.
@@ -637,7 +712,7 @@ fn renderUndecodableImage(alt: []const u8, url: []const u8, ctx: RenderContext, 
         .id_extra = ids.next(),
     });
     defer tl.deinit();
-    addMarkdownLink(tl, url, text, .{ .font = dvui.Font.theme(.mono).larger(-1) });
+    addMarkdownLink(tl, url, text, .{ .font = dvui.Font.theme(.mono).larger(-1) }, ctx);
 }
 
 fn renderMarkdownImagePlaceholder(msg: []const u8, ids: *IdGen) void {
@@ -732,7 +807,7 @@ fn renderImageUrl(raw_url: []const u8, alt: []const u8, want: RequestedSize, ctx
                     .id_extra = ids.next(),
                 });
                 defer tl.deinit();
-                addMarkdownLink(tl, url_trim, "open", .{ .font = dvui.Font.theme(.mono) });
+                addMarkdownLink(tl, url_trim, "open", .{ .font = dvui.Font.theme(.mono) }, ctx);
             }
             return;
         },
@@ -1110,7 +1185,7 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: md.Node, span: dvui.Optio
             } else {
                 const arena = dvui.currentWindow().arena();
                 if (linkLabelPlainText(x, arena)) |display| {
-                    addMarkdownLink(tl, url, if (display.len == 0) null else display, link_opts);
+                    addMarkdownLink(tl, url, if (display.len == 0) null else display, link_opts, ctx);
                 } else |_| {
                     if (x.firstChild()) |_| renderInlines(tl, x, link_opts, ctx, ids);
                 }
