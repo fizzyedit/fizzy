@@ -37,13 +37,16 @@ pub const Preview = struct {
         hasher.update(content);
         const h = hasher.final();
         if (self.content_hash == h and self.ast_root != null) return;
+        // `scanNode` needs the original source, not just the AST: cmark's text nodes have had
+        // backslash escapes applied and adjacent runs merged, so `\[\[A]]` is indistinguishable
+        // from `[[A]]` by then. See `md/wikilink_scan.zig`.
         md_parse.freeCachedRoot(self.ast_root);
         self.ast_root = null;
         self.rs.clear(gpa);
         self.content_hash = h;
         if (md_parse.parseMarkdown(content)) |ast| {
             self.ast_root = @ptrCast(ast.root.n);
-            _ = render_ast.scanNode(ast.root, &self.rs, gpa);
+            _ = render_ast.scanNode(ast.root, &self.rs, gpa, content);
         }
     }
 };
@@ -60,6 +63,14 @@ pub const PreviewOptions = struct {
     image_base_dir: []const u8 = ".",
     /// Seed for widget ids so multiple previews don't collide.
     id_extra: u64 = 0,
+    /// Absolute path of the document being previewed, or `""` when it has none — an unsaved
+    /// buffer, or markdown fetched from the network (the store's README pane).
+    ///
+    /// Distinct from `image_base_dir`, which is a *directory* and may be a URL. This is the file
+    /// itself, and it's what `[[wikilink]]` resolution is relative to. Leaving it empty disables
+    /// wikilinks entirely: a fetched README must not resolve `[[Note]]` against the user's own
+    /// local files, and a link to nowhere is worse than the literal text it was written as.
+    document_path: []const u8 = "",
     /// Whether the preview paints fills behind its text at all — both the scroll area's own and
     /// each text widget's. `false` for a caller (the store's plugin detail page) that already
     /// draws its own background behind this and wants the preview to read as part of that pane
@@ -147,6 +158,7 @@ pub fn drawPreview(
             .rs = &state.rs,
             .id_base = @intCast(opts.id_extra << 16),
             .background = opts.background,
+            .document_path = opts.document_path,
         });
     } else {
         dvui.labelNoFmt(
@@ -184,5 +196,6 @@ pub fn drawPreviewForDocument(
         "."
     else
         std.fs.path.dirname(document_path) orelse ".";
+    merged.document_path = document_path;
     drawPreview(state, bytes, gpa, merged);
 }

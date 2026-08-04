@@ -10,6 +10,24 @@ const net_image = @import("net_image.zig");
 const html_images_mod = @import("html_images.zig");
 const image_format = @import("image_format.zig");
 const url_join = @import("url_join.zig");
+const wikilink_scan = @import("wikilink_scan.zig");
+
+const WikilinkApi = sdk.services.wikilink.Api;
+
+/// Where one `[[wikilink]]` resolved to, memoized per resolver generation.
+pub const ResolvedLink = struct {
+    status: WikilinkApi.Status,
+    /// Absolute target path, gpa-owned. Empty unless `status` is `.resolved`/`.ambiguous`.
+    path: []u8 = &.{},
+    /// 0-based line to reveal (a `#heading` that was found).
+    line: u32 = 0,
+};
+
+/// Memo key for one link: which text node, and which link within it. Node pointers are stable
+/// for the life of the AST, and the whole memo is dropped when the AST is rebuilt.
+fn wikilinkMemoKey(node: md.Node, token_index: usize) u64 {
+    return std.hash.Wyhash.hash(@intFromPtr(node.n), std.mem.asBytes(&token_index));
+}
 
 const is_windows = builtin.target.os.tag == .windows;
 
@@ -45,6 +63,21 @@ pub const RenderState = struct {
     /// @intFromPtr(html_node.n) → every `<img>` in that raw-HTML node (src + requested size), in
     /// document order (gpa-owned). Absent when the node has no `<img>`.
     html_images: std.AutoHashMapUnmanaged(usize, []html_images_mod.Image) = .empty,
+    /// @intFromPtr(text_node.n) → the `[[wikilinks]]` in that node's literal, in document order
+    /// (gpa-owned). Absent when the node has none, which is the common case and the fast path.
+    ///
+    /// Content-derived only — token *positions*, never resolution results. Resolution lives in
+    /// `wikilink_resolved` below and deliberately does not belong here: this map is rebuilt only
+    /// when the document's content hash changes, but a link flips from broken to resolved when
+    /// its *target file* is created, which doesn't touch this document at all.
+    wikilinks: std.AutoHashMapUnmanaged(usize, []wikilink_scan.Token) = .empty,
+    /// `wikilinkMemoKey(node, token_index)` → where that link resolved to. Valid only while
+    /// `wikilink_generation` matches the resolver's `generation()`; cleared wholesale when it
+    /// moves. Owns its paths (gpa).
+    wikilink_resolved: std.AutoHashMapUnmanaged(u64, ResolvedLink) = .empty,
+    /// Resolver generation `wikilink_resolved` was populated against. `maxInt` means "nothing
+    /// memoized yet", which no real generation counter will collide with.
+    wikilink_generation: u64 = std.math.maxInt(u64),
 
     pub fn deinit(self: *RenderState, gpa: std.mem.Allocator) void {
         self.clear(gpa);
@@ -56,6 +89,8 @@ pub const RenderState = struct {
         self.table_col_counts.deinit(gpa);
         self.task_items.deinit(gpa);
         self.html_images.deinit(gpa);
+        self.wikilinks.deinit(gpa);
+        self.wikilink_resolved.deinit(gpa);
     }
 
     pub fn clear(self: *RenderState, gpa: std.mem.Allocator) void {
@@ -74,6 +109,20 @@ pub const RenderState = struct {
         var hi = self.html_images.valueIterator();
         while (hi.next()) |urls| html_images_mod.free(urls.*, gpa);
         self.html_images.clearRetainingCapacity();
+        var wi = self.wikilinks.valueIterator();
+        while (wi.next()) |toks| gpa.free(toks.*);
+        self.wikilinks.clearRetainingCapacity();
+        self.clearResolvedWikilinks(gpa);
+    }
+
+    /// Drop every memoized resolution. Called when the content changes (`clear`) and when the
+    /// resolver's generation moves — a new file appearing is exactly the case that has to
+    /// invalidate a "this link is broken" answer without the document itself changing.
+    pub fn clearResolvedWikilinks(self: *RenderState, gpa: std.mem.Allocator) void {
+        var it = self.wikilink_resolved.valueIterator();
+        while (it.next()) |r| gpa.free(r.path);
+        self.wikilink_resolved.clearRetainingCapacity();
+        self.wikilink_generation = std.math.maxInt(u64);
     }
 };
 
@@ -109,6 +158,13 @@ pub const RenderContext = struct {
     /// block's surrounding panel, the HTML-block tint, table header/row banding, and task
     /// bullets. Those are part of how the element reads, not a background behind the text.
     background: bool = true,
+    /// Absolute path of the document being rendered, `""` when it has none. Wikilinks resolve
+    /// relative to it, and are disabled entirely when it's empty — see `PreviewOptions`.
+    document_path: []const u8 = "",
+    /// The `"wikilink"` resolver, looked up once per document draw rather than per link.
+    /// Null whenever wikilinks are off: no resolver plugin installed, or no `document_path`.
+    /// When null, `[[Note]]` renders as the literal text it always was.
+    wikilink: ?*WikilinkApi = null,
 };
 
 /// Top/bottom margin every paragraph's `textLayout` carries. List markers match the top half so
@@ -135,9 +191,30 @@ inline fn hasImageSubtree(ctx: RenderContext, n: md.Node) bool {
 // AST pre-scan (called once after parsing, results stored in State)
 // ---------------------------------------------------------------------------
 
-/// Walk the AST once, populating rs.ext_node_kinds and rs.subtree_has_image.
+/// Original markdown source, for the one thing the AST can't answer on its own — see
+/// `wikilink_scan.zig`. Built once per parse rather than per node.
+const ScanSource = struct {
+    bytes: []const u8,
+    index: ?wikilink_scan.LineIndex,
+
+    fn spanFor(self: ScanSource, node: md.Node) ?[]const u8 {
+        const index = self.index orelse return null;
+        return wikilink_scan.sourceSpanFor(self.bytes, index, node);
+    }
+};
+
+/// Walk the AST once, populating rs.ext_node_kinds, rs.subtree_has_image, and rs.wikilinks.
 /// Returns true when any node in the subtree rooted at `node` is an IMAGE.
-pub fn scanNode(node: md.Node, rs: *RenderState, gpa: std.mem.Allocator) bool {
+///
+/// `source` is the markdown these nodes were parsed from.
+pub fn scanNode(node: md.Node, rs: *RenderState, gpa: std.mem.Allocator, source: []const u8) bool {
+    // A failed line index only costs escape detection, so scanning continues without it.
+    var index: ?wikilink_scan.LineIndex = wikilink_scan.LineIndex.build(gpa, source) catch null;
+    defer if (index) |*i| i.deinit(gpa);
+    return scanNodeInner(node, rs, gpa, .{ .bytes = source, .index = index });
+}
+
+fn scanNodeInner(node: md.Node, rs: *RenderState, gpa: std.mem.Allocator, source: ScanSource) bool {
     const ts = node.typeString();
     if (std.mem.eql(u8, ts, "table")) {
         rs.ext_node_kinds.put(gpa, @intFromPtr(node.n), .table) catch {};
@@ -167,6 +244,22 @@ pub fn scanNode(node: md.Node, rs: *RenderState, gpa: std.mem.Allocator) bool {
     if (node.nodeType() == md.c.CMARK_NODE_ITEM and node.isTaskListItem())
         rs.task_items.put(gpa, @intFromPtr(node.n), node.taskListItemChecked()) catch {};
 
+    // `[[wikilinks]]`. Only TEXT nodes: inline code (CMARK_NODE_CODE), fenced/indented code
+    // blocks, and raw HTML all have their own node types and never reach here, so "don't link
+    // inside code" needs no work. Link *labels* do — `[see [[A]]](http://x)` puts that text
+    // under a LINK parent, and turning part of a link's own label into a second link is not a
+    // thing a `TextLayoutWidget` can express.
+    if (node.nodeType() == md.c.CMARK_NODE_TEXT and !insideLinkOrImage(node)) {
+        if (node.literal()) |t| {
+            if (wikilink_scan.tokensFor(gpa, t, source.spanFor(node))) |toks| {
+                if (toks.len > 0)
+                    rs.wikilinks.put(gpa, @intFromPtr(node.n), toks) catch gpa.free(toks)
+                else
+                    gpa.free(toks);
+            } else |_| {}
+        }
+    }
+
     var self_has_image = (node.nodeType() == md.c.CMARK_NODE_IMAGE);
 
     // Raw HTML: GitHub READMEs routinely wrap their hero image in `<p align="center"><img …>`,
@@ -185,12 +278,25 @@ pub fn scanNode(node: md.Node, rs: *RenderState, gpa: std.mem.Allocator) bool {
 
     var child = node.firstChild();
     while (child) |ch| : (child = ch.nextSibling()) {
-        if (scanNode(ch, rs, gpa)) self_has_image = true;
+        if (scanNodeInner(ch, rs, gpa, source)) self_has_image = true;
     }
     if (self_has_image)
         rs.subtree_has_image.put(gpa, @intFromPtr(node.n), {}) catch {};
 
     return self_has_image;
+}
+
+/// True when `node` sits inside a markdown link or image, where its text is a label rather than
+/// body prose. Walks parents once per parse, never per frame.
+fn insideLinkOrImage(node: md.Node) bool {
+    var p = node.parent();
+    while (p) |parent| : (p = parent.parent()) {
+        switch (parent.nodeType()) {
+            md.c.CMARK_NODE_LINK, md.c.CMARK_NODE_IMAGE => return true,
+            else => {},
+        }
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -364,17 +470,31 @@ fn openMarkdownUrl(url: []const u8, open_side: bool) void {
 /// Opens a `file://` URI (optionally with a `#L<n>` / `#L<n>C<m>` fragment) in the editor.
 /// Returns false when the URL isn't a file URI or workbench isn't available.
 fn tryRevealFileUri(url: []const u8, open_side: bool) bool {
-    const wb = sdk.host().getServiceTyped(sdk.services.workbench.Api) orelse return false;
     const arena = dvui.currentWindow().arena();
     const parsed = parseFileUri(arena, url) orelse return false;
     // zls (and VS Code-style `#L` fragments) are 1-based; workbench is 0-based.
     const line: u32 = if (parsed.line_1based > 0) parsed.line_1based - 1 else 0;
     const character: u32 = if (parsed.character_1based > 0) parsed.character_1based - 1 else 0;
-    _ = wb.revealPosition(parsed.path, line, character, open_side) catch |err| {
-        dvui.log.err("markdown: revealPosition failed for {s}: {any}", .{ parsed.path, err });
-        return true; // still a file URI — don't fall through to openURL
-    };
+    // Reaching workbench is what actually opens it, but a `file://` URL is *ours* either way —
+    // returning true even when that fails keeps a broken editor link from being handed to the
+    // system browser.
+    _ = revealPath(parsed.path, line, character, open_side);
     return true;
+}
+
+/// Opens `path` (native, absolute) in the editor at a 0-based `line`/`character`, splitting to
+/// the side when `open_side`. Returns false when workbench isn't available or refused.
+///
+/// Split out of `tryRevealFileUri` so a caller that already *has* a path — a resolved wikilink —
+/// doesn't have to encode it into a `file://` URI just to have it decoded straight back. That
+/// round trip isn't merely wasteful: it has to percent-encode, and a path containing a space or
+/// a `#` is exactly where a hand-rolled encoder goes wrong.
+fn revealPath(path: []const u8, line: u32, character: u32, open_side: bool) bool {
+    const wb = sdk.host().getServiceTyped(sdk.services.workbench.Api) orelse return false;
+    return wb.revealPosition(path, line, character, open_side) catch |err| {
+        dvui.log.err("markdown: revealPosition failed for {s}: {any}", .{ path, err });
+        return false;
+    };
 }
 
 const ParsedFileUri = struct {
@@ -880,10 +1000,78 @@ fn renderInlines(tl: *dvui.TextLayoutWidget, n: md.Node, span: dvui.Options, ctx
     }
 }
 
+/// A run of body text, with any `[[wikilinks]]` in it drawn as links.
+///
+/// The no-wikilinks path — no resolver, or none in this node — must produce **exactly** what
+/// this used to: one `addText` of the whole literal, brackets and all. That's not just an
+/// optimization, it's the contract that markdown renders identically with no indexer plugin
+/// installed, and it's why the fast path is a single hash miss.
+fn renderTextWithWikilinks(
+    tl: *dvui.TextLayoutWidget,
+    node: md.Node,
+    literal: []const u8,
+    span: dvui.Options,
+    ctx: RenderContext,
+) void {
+    const plain: dvui.Options = .{ .font = span.font, .color_text = span.color_text };
+    if (ctx.wikilink == null) return tl.addText(literal, plain);
+    const tokens = ctx.rs.wikilinks.get(@intFromPtr(node.n)) orelse return tl.addText(literal, plain);
+
+    var cursor: usize = 0;
+    for (tokens, 0..) |tok, i| {
+        if (tok.start > cursor) tl.addText(literal[cursor..tok.start], plain);
+        renderWikilink(tl, node, i, tok, span, ctx);
+        cursor = tok.end;
+    }
+    if (cursor < literal.len) tl.addText(literal[cursor..], plain);
+}
+
+fn renderWikilink(
+    tl: *dvui.TextLayoutWidget,
+    node: md.Node,
+    token_index: usize,
+    tok: wikilink_scan.Token,
+    span: dvui.Options,
+    ctx: RenderContext,
+) void {
+    const theme = dvui.themeGet();
+    const label = tok.label();
+    const res = resolveWikilink(ctx, node, token_index, tok);
+
+    switch (res.status) {
+        // Still scanning. Deliberately unstyled: painting every link red for the second after a
+        // folder opens, then flipping them all blue, is worse than showing nothing at all.
+        .indexing => tl.addText(label, .{ .font = span.font, .color_text = span.color_text }),
+
+        .resolved, .ambiguous => {
+            const color = if (res.status == .ambiguous) theme.color(.err, .fill) else theme.focus;
+            const opts = span.override(.{
+                .font = span.fontGet().withUnderline(.{}),
+                .color_text = color,
+            });
+            if (tl.addTextClick(label, opts)) |click| {
+                const open_side = click == .mouse and
+                    (click.mouse.button == .middle or click.mouse.mod.matchBind("ctrl/cmd"));
+                _ = revealPath(res.path, res.line, 0, open_side);
+            }
+        },
+
+        // Nothing to open — but a link to a note you haven't written yet is a completely normal
+        // thing to have in a wiki, not an error. So: still visibly a link, just unfinished — a
+        // hairline underline and dimmed text, rather than the error red a broken URL would get.
+        // (dvui's `Underline` carries thickness only, no dash style, so weight is what's
+        // available to say "provisional" with.) Inert until there's a create-note flow.
+        .unresolved => tl.addText(label, .{
+            .font = span.fontGet().withUnderline(.{ .thick = 0.04 }),
+            .color_text = (span.color_text orelse theme.color(.content, .text)).opacity(0.6),
+        }),
+    }
+}
+
 fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: md.Node, span: dvui.Options, ctx: RenderContext, ids: *IdGen) void {
     switch (x.nodeType()) {
         md.c.CMARK_NODE_TEXT => {
-            if (x.literal()) |t| tl.addText(t, .{ .font = span.font, .color_text = span.color_text });
+            if (x.literal()) |t| renderTextWithWikilinks(tl, x, t, span, ctx);
         },
         md.c.CMARK_NODE_SOFTBREAK => {
             tl.addText(" ", .{});
@@ -1311,6 +1499,62 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
 }
 
 pub fn renderDocument(root: md.Node, ctx: RenderContext) void {
+    var resolved_ctx = ctx;
+    resolved_ctx.wikilink = wikilinkResolver(ctx);
+
     var ids: IdGen = .{ .n = ctx.id_base };
-    renderBlock(root, &ids, ctx);
+    renderBlock(root, &ids, resolved_ctx);
+}
+
+/// The wikilink resolver to use for this document draw, or null when wikilinks are off.
+///
+/// Also the point where a stale resolution memo is dropped: the resolver bumps `generation()`
+/// on every committed index change, and a link that was broken a moment ago becomes live the
+/// instant its target file exists — with no edit to *this* document, so nothing else in the
+/// pipeline would notice.
+fn wikilinkResolver(ctx: RenderContext) ?*WikilinkApi {
+    // A document with no path on disk has nothing to resolve *relative to*, and — for the
+    // store's README pane — is remote content that must not reach into the user's own files.
+    if (ctx.document_path.len == 0) return null;
+    const api = sdk.host().getServiceTyped(WikilinkApi) orelse return null;
+
+    const gen = api.generation();
+    if (ctx.rs.wikilink_generation != gen) {
+        ctx.rs.clearResolvedWikilinks(ctx.gpa);
+        ctx.rs.wikilink_generation = gen;
+    }
+    return api;
+}
+
+/// Resolve one link, memoized against the resolver generation. Called every frame for every
+/// visible link, so the steady-state path must be the hash lookup and nothing more.
+fn resolveWikilink(
+    ctx: RenderContext,
+    node: md.Node,
+    token_index: usize,
+    tok: wikilink_scan.Token,
+) ResolvedLink {
+    const api = ctx.wikilink orelse return .{ .status = .unresolved };
+    const key = wikilinkMemoKey(node, token_index);
+    if (ctx.rs.wikilink_resolved.get(key)) |hit| return hit;
+
+    const res = api.resolve(tok.target, tok.heading, ctx.document_path, ctx.gpa) catch
+        return .{ .status = .unresolved };
+    // `resolve` allocates from the allocator we hand it, and we hand it the persistent one so
+    // the memo can outlive the frame. `title` is not kept — nothing renders it yet, and holding
+    // it would mean freeing two strings per entry instead of one.
+    ctx.gpa.free(res.title);
+
+    const entry: ResolvedLink = .{
+        .status = res.status,
+        .path = @constCast(res.path),
+        .line = res.line,
+    };
+    ctx.rs.wikilink_resolved.put(ctx.gpa, key, entry) catch {
+        // Out of memory for the memo only — the answer is still good for this frame, it just
+        // costs a resolve again next frame.
+        ctx.gpa.free(res.path);
+        return .{ .status = res.status, .line = res.line };
+    };
+    return entry;
 }

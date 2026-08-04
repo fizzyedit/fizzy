@@ -5,6 +5,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
+const perf = @import("core").perf;
 const tc = @import("textcore/textcore.zig");
 const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
 
@@ -122,6 +123,22 @@ history: tc.History = .{},
 /// undo/redo move the same `EditOp` (and its id) back and forth, while any genuinely new
 /// edit gets a fresh id that never collides with the one recorded at save time.
 clean_op_id: u64 = 0,
+
+/// Debounce state for `Host.notifyDocumentContentChanged` — see `tickContentChanged`.
+///
+/// Keyed on `history.topOpId()` rather than a hash of the text: the id already changes on
+/// exactly the events we care about (any genuinely new edit) and comparing two integers costs
+/// nothing per frame, whereas hashing a large file every frame to find out it didn't change is
+/// the sort of thing that quietly eats a millisecond on every keystroke.
+notify_seen_op_id: u64 = 0,
+notify_sent_op_id: u64 = 0,
+/// `perf.nanoTimestamp()` after which the current burst counts as settled.
+notify_due_ns: i128 = 0,
+
+/// How long the text has to stop changing before observers hear about it. Long enough that
+/// ordinary typing produces one notification per pause rather than per character, short enough
+/// that it feels immediate when you stop.
+const notify_debounce_ns: i128 = 300 * std.time.ns_per_ms;
 
 /// 64 MiB — generous for source files; guards against opening something huge by mistake.
 const max_file_bytes: usize = 64 * 1024 * 1024;
@@ -243,6 +260,37 @@ pub fn isDirty(self: *const Document) bool {
     return self.history.topOpId() != self.clean_op_id;
 }
 
+/// Broadcast this document's live contents to every plugin, now.
+///
+/// The text plugin owns `.md` (and everything else nothing claimed), so a plugin that indexes
+/// markdown links, counts words, or previews structure can only see unsaved text if we hand it
+/// over — nothing in the SDK exposes another plugin's buffer.
+pub fn notifyContentChanged(self: *Document) void {
+    self.notify_seen_op_id = self.history.topOpId();
+    self.notify_sent_op_id = self.notify_seen_op_id;
+    sdk.host().notifyDocumentContentChanged(self.path, self.text.items);
+}
+
+/// Per-frame half of the debounce. Returns true while a notification is still pending, which
+/// the caller passes up through `tickOpenDocuments` to keep frames coming — otherwise the app
+/// idles the moment you stop typing and the pending notification waits for whatever happens to
+/// wake it next.
+pub fn tickContentChanged(self: *Document) bool {
+    const top = self.history.topOpId();
+    if (top != self.notify_seen_op_id) {
+        // Still changing — restart the clock. A held key or a paste storm therefore produces
+        // one notification at the end, not one per event.
+        self.notify_seen_op_id = top;
+        self.notify_due_ns = perf.nanoTimestamp() + notify_debounce_ns;
+        return true;
+    }
+    if (self.notify_sent_op_id == top) return false;
+    if (perf.nanoTimestamp() < self.notify_due_ns) return true;
+
+    self.notifyContentChanged();
+    return false;
+}
+
 /// Write the current contents back to `path`.
 pub fn save(self: *Document) !void {
     if (comptime is_wasm) return error.Unsupported;
@@ -253,6 +301,10 @@ pub fn save(self: *Document) !void {
     // same reason.
     self.history.closeGroup();
     self.clean_op_id = self.history.topOpId();
+    // Immediately, not on the debounce: an observer that also watches the filesystem is about
+    // to see this write land, and it should have our version of the contents first so it can
+    // recognize the on-disk change as already accounted for.
+    self.notifyContentChanged();
 }
 
 /// Replace in-memory contents from disk and clear undo history (external change / discard).

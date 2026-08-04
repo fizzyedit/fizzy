@@ -87,6 +87,8 @@ fn previewPane(state: *anyopaque, ext: []const u8, path: []const u8, bytes: []co
         .io = dvui.io,
         .id_extra = id_extra,
     });
+    // `drawPreviewForDocument` fills in `document_path` from `path` — that's what enables
+    // `[[wikilinks]]` here but not in the store's README pane, which has no local file.
 }
 
 fn svcRender(ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: sdk.services.markdown.Api.RenderOptions) !void {
