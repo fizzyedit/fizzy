@@ -391,6 +391,10 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         // Sniffing image bytes stb can't decode (SVG badges), so the preview never re-enters
         // stbi for them every frame. std-only, same reasoning as the two above.
         .{ "fizzy-md-image-format-tests", "src/plugins/markdown/src/md/image_format.zig" },
+        // The markdown preview's block height table — placement, height trust, and the
+        // never-blank visible-range guarantee. std-only by design (see block_heights.zig) so
+        // the rules the preview's scroll stability rests on are testable without a Window.
+        .{ "fizzy-md-block-heights-tests", "src/plugins/markdown/src/md/block_heights.zig" },
         // Content-swap reveal phase machine. std-only by design (see reveal.zig) — the dvui
         // half is the thin wrapper in core/dvui.zig.
         .{ "fizzy-reveal-tests", "src/core/reveal.zig" },

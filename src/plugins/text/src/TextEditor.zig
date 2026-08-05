@@ -85,6 +85,7 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
             doc.preview_mode = .split;
             doc.preview_split_ratio_user = paned.split_ratio.*;
         }
+        Document.rememberPreviewMode(doc.preview_mode, doc.preview_split_ratio_user);
     } else {
         // `animateSplit` is a no-op once the ratio is already there, so this is safe every frame.
         // Opening eases with `outBack` and closing with `outQuint`, matching the explorer and
@@ -100,6 +101,10 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
     }
     if (paned.showSecond()) {
         try drawPreviewPane(doc, preview.?, ext, id_extra + 0x2000, gpa);
+    } else {
+        // No preview on screen to consume it. Drop it rather than let it sit until the user
+        // opens the preview and gets yanked to a heading they clicked on ages ago.
+        doc.pending_preview_line = null;
     }
 
     return changed;
@@ -114,6 +119,13 @@ fn drawPreviewPane(
 ) !void {
     const hook = provider.vtable.previewPane orelse return;
     const owner = provider.owner orelse return;
+    // Before the draw, so the provider can apply it on this very frame rather than the next.
+    if (doc.pending_preview_line) |line| {
+        if (provider.vtable.previewReveal) |reveal| {
+            reveal(owner.state, ext, doc.path, line, id_extra);
+        }
+        doc.pending_preview_line = null;
+    }
     try hook(owner.state, ext, doc.path, doc.text.items, id_extra, gpa);
 }
 
@@ -153,6 +165,8 @@ fn drawPreviewPillButton(doc: *Document, label: []const u8, mode: Document.Previ
         // Each button names a mode outright — the old pair toggled *and* selected, so the same
         // click meant different things depending on the state you couldn't see.
         doc.preview_mode = mode;
+        // Sticky: the next document opened starts in whatever was picked here.
+        Document.rememberPreviewMode(mode, doc.preview_split_ratio_user);
     }
 }
 

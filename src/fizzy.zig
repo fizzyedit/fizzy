@@ -14,6 +14,7 @@ pub const version: std.SemanticVersion = .{
 pub const fs = core.fs;
 pub const image = core.image;
 pub const perf = core.perf;
+pub const hitch = core.hitch;
 pub const water_surface = core.water_surface;
 pub const math = core.math;
 

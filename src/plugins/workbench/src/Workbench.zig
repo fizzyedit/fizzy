@@ -56,6 +56,7 @@ pub fn init(allocator: std.mem.Allocator) Workbench {
 }
 
 pub fn deinit(self: *Workbench) void {
+    files.deinitCaches();
     self.decorators.deinit(self.allocator);
     for (self.pending_reveals.items) |pr| self.allocator.free(pr.path);
     self.pending_reveals.deinit(self.allocator);

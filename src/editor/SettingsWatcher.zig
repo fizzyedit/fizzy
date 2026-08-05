@@ -145,4 +145,8 @@ pub fn tick(self: *SettingsWatcher, editor: *fizzy.Editor) void {
     // but never moves `settings.zon`'s hash, so it needs its own pass (which must run after the
     // settings one — an external enable/disable should settle before we consider reloading).
     editor.reconcileChangedPluginBinaries();
+    // Same again for a plugin directory that appeared (a `zig build install` from a plugin repo,
+    // or a hand-copied build): also an event in this tree, also invisible to `settings.zon`'s
+    // hash. Tracks it as disabled — never auto-loads it (R12) — so the Plugins tab can offer it.
+    editor.reconcileDiscoveredPlugins();
 }

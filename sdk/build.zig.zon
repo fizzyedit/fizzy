@@ -31,8 +31,8 @@
         // `fizzy-sdk-v*.tar.gz` and cannot reach anything above its own root, while the app can
         // always reach down into it.
         .dvui = .{
-            .url = "https://github.com/foxnne/dvui-dev/archive/2e8cbb81cc421c363f70079e9be6ba044200c941.tar.gz",
-            .hash = "dvui-0.5.0-dev-AQFJmVulAAEDws4e9-I85OM0EmRJK-IEn8gj3aVJuVJ0",
+            .url = "https://github.com/foxnne/dvui-dev/archive/7f0957ef9e2d81b200694b767a1c6459e1d62403.tar.gz",
+            .hash = "dvui-0.5.0-dev-AQFJmbiLAQHGQ1I2OLlY3BgbEn_N9p1bk82yqM-JbOcE",
             //.path = "../../dvui-dev",
         },
         .zf = .{
@@ -41,4 +41,3 @@
         },
     },
 }
-

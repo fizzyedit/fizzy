@@ -427,31 +427,35 @@ pub fn init(
         strawberry.dark = true;
         strawberry.name = "Strawberry";
         strawberry.window = .{
-            .fill = .{ .r = 84, .g = 12, .b = 26, .a = 255 },
-            .border = .{ .r = 104, .g = 62, .b = 72, .a = 255 },
-            .text = .{ .r = 180, .g = 80, .b = 90, .a = 255 },
+            .fill = .{ .r = 96, .g = 12, .b = 32, .a = 255 },
+            .border = .{ .r = 131, .g = 46, .b = 59, .a = 255 },
+            .text = .{ .r = 205, .g = 25, .b = 48, .a = 255 },
         };
 
         strawberry.control = .{
-            .fill = .{ .r = 130, .g = 54, .b = 76, .a = 255 },
-            // Derived from an already-bright fill, the default hover/press tints wash out
-            // to near-white pink, so pin darker on-es.
+            .fill = .{ .r = 188, .g = 46, .b = 72, .a = 255 },
             .fill_hover = .{ .r = 178, .g = 44, .b = 66, .a = 255 },
             .fill_press = .{ .r = 150, .g = 34, .b = 56, .a = 255 },
-            .border = .{ .r = 104, .g = 20, .b = 28, .a = 255 },
-            .text = .{ .r = 230, .g = 120, .b = 130, .a = 255 },
+            .border = .{ .r = 102, .g = 19, .b = 42, .a = 255 },
+            .text = .{ .r = 251, .g = 188, .b = 193, .a = 255 },
+            .text_hover = .{ .r = 249, .g = 222, .b = 226, .a = 255 },
         };
         strawberry.highlight = .{
-            .fill = .{ .r = 175, .g = 24, .b = 36, .a = 255 },
-            .text = strawberry.window.fill.?,
+            .fill = .{ .r = 205, .g = 25, .b = 48, .a = 255 },
+            .text = .{ .r = 249, .g = 242, .b = 243, .a = 255 },
         };
 
         strawberry.err = .{
-            .fill = .{ .r = 255, .g = 10, .b = 20, .a = 255 },
+            .fill = .{ .r = 199, .g = 17, .b = 20, .a = 255 },
+            .text = .{ .r = 249, .g = 242, .b = 243, .a = 255 },
         };
 
-        strawberry.fill = .{ .r = 124, .g = 24, .b = 52, .a = 255 };
-        strawberry.text = strawberry.control.text.?.lighten(-20);
+        strawberry.fill = .{ .r = 165, .g = 24, .b = 64, .a = 255 };
+        strawberry.fill_hover = .{ .r = 148, .g = 30, .b = 63, .a = 255 };
+        strawberry.fill_press = .{ .r = 104, .g = 18, .b = 42, .a = 255 };
+        strawberry.text = .{ .r = 250, .g = 181, .b = 188, .a = 255 };
+        strawberry.text_hover = .{ .r = 249, .g = 222, .b = 226, .a = 255 };
+        strawberry.border = .{ .r = 131, .g = 46, .b = 59, .a = 255 };
         strawberry.focus = strawberry.highlight.fill.?;
 
         var fizzy_light = fizzy_dark;
@@ -2475,7 +2479,6 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.applyHoldMenuDuration();
 
     editor.reconcilePluginEnabled(data);
-    editor.reconcileDiscoveredPlugins();
     editor.reconcilePluginSettings();
 
     // Mark this content as "known" now that it's fully applied, so neither the next autosave
@@ -2594,7 +2597,14 @@ fn restampLoadedPlugin(editor: *Editor, id: []const u8) void {
 /// Rescans `<config>/plugins/` for directories not already loaded / tracked-disabled / failed,
 /// and adds each as a disabled entry without writing settings.zon — a plugin dropped straight
 /// into the folder must not auto-execute (R12). Store installs write `.enabled = true` themselves.
-fn reconcileDiscoveredPlugins(editor: *Editor) void {
+///
+/// Driven from `SettingsWatcher.tick` and deliberately *outside* `reconcileExternalSettingsChange`,
+/// for the same reason as `reconcileChangedPluginBinaries`: that one returns early unless
+/// `settings.zon`'s content hash moved, and a brand-new `plugins/<id>/` directory never moves it.
+/// Running it there meant a plugin built straight into the folder was only ever discovered at the
+/// next launch — until then it had no `disabled_plugin_ids` entry, so the store drew it as a bare
+/// `.on_disk` card with no way to load it.
+pub fn reconcileDiscoveredPlugins(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = fizzy.app.allocator;
     const plugins_dir = std.fs.path.join(gpa, &.{ editor.config_folder, "plugins" }) catch return;
@@ -2763,6 +2773,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // mid-iteration.
     PluginStore.tick();
 
+    const hitch_watchers = fizzy.hitch.begin(.watchers);
     // Pick up any external edit to settings.zon (see R11 in docs/PLUGIN_MANIFEST_PLAN.md).
     // Cheap no-op unless the watcher thread actually saw a change.
     if (editor.settings_watcher) |*w| w.tick(editor);
@@ -2773,6 +2784,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Fan out on-disk changes under the root folder to plugins. Cheap no-op unless the watcher
     // thread buffered something.
     if (editor.folder_watcher) |*w| w.tick(editor);
+    hitch_watchers.end();
 
     var needs_save_status_anim_tick = false;
     for (editor.host.plugins.items) |plugin| {
@@ -2845,24 +2857,38 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.setWindowStyle();
 
     syncLoadedPluginDvuiContexts(editor);
-    for (editor.host.plugins.items) |plugin| plugin.beginFrame();
+    {
+        const t = fizzy.hitch.begin(.plugin_hooks);
+        defer t.end();
+        for (editor.host.plugins.items) |plugin| plugin.beginFrame();
+    }
     if (fizzy.perf.record) fizzy.perf.beginFrame();
     defer if (fizzy.perf.record) fizzy.perf.endFrameAndMaybeLog();
 
     // Reap completed background file loads. Must run BEFORE `pending_composite_warmup` and any
     // workspace/file iteration so that a just-loaded file is visible to the rest of this frame.
-    editor.processLoadingJobs();
+    {
+        const t = fizzy.hitch.begin(.loading_jobs);
+        defer t.end();
+        editor.processLoadingJobs();
+    }
     if (comptime builtin.target.cpu.arch == .wasm32) fizzy.backend.pollWebFileIo(editor);
 
     // Build workspaces AFTER reaping load jobs so a freshly-loaded file with a new grouping
     // (e.g. "Open to the side") gets its workspace created on the same frame it lands.
     // Otherwise the new pane only appears on the next frame, which won't happen until some
     // unrelated event (mouse move, key) wakes the loop.
-    editor.rebuildWorkspaces() catch {
-        dvui.log.err("Failed to rebuild workspaces", .{});
-    };
+    {
+        const t = fizzy.hitch.begin(.rebuild_workspaces);
+        defer t.end();
+        editor.rebuildWorkspaces() catch {
+            dvui.log.err("Failed to rebuild workspaces", .{});
+        };
+    }
 
     if (editor.pending_composite_warmup) {
+        const t = fizzy.hitch.begin(.plugin_hooks);
+        defer t.end();
         editor.pending_composite_warmup = false;
         for (editor.host.plugins.items) |plugin| plugin.prepareFrame();
     }
@@ -2885,6 +2911,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // );
     // defer scaler.deinit();
 
+    const hitch_draw = fizzy.hitch.begin(.draw);
     {
 
         // First, window color is set to the opaque color.
@@ -3296,6 +3323,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             update_notify.drawAbove(infobar_y_physical, 4.0);
         }
     }
+    hitch_draw.end();
 
     // look at demo() for examples of dvui widgets, shows in a floating window
     dvui.Examples.demo(.full);
@@ -4420,20 +4448,35 @@ fn closeDocumentResources(_: *Editor, doc: sdk.DocHandle) void {
     doc.owner.unregisterDocument(doc.id);
 }
 
+/// Which tab becomes active when the doc at `index` closes: the nearest tab of the same
+/// grouping to its right, else the nearest one to its left. Neighbor-based rather than
+/// open-order/MRU so closing a run of tabs walks steadily in one direction instead of
+/// snapping back to the first tab.
+///
+/// Returned in post-removal coordinates: `orderedRemove` shifts every later entry down by
+/// one, so a neighbor found after `index` is reported one lower than its current position.
+fn replacementIndexAfterClose(editor: *Editor, index: usize, grouping: u64) ?usize {
+    const docs = editor.open_files.values();
+
+    var right = index + 1;
+    while (right < docs.len) : (right += 1) {
+        if (editor.docGrouping(docs[right]) == grouping) return right - 1;
+    }
+
+    var left = index;
+    while (left > 0) {
+        left -= 1;
+        if (editor.docGrouping(docs[left]) == grouping) return left;
+    }
+
+    return null;
+}
+
 pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     const doc = editor.docAt(index) orelse return;
     const grouping = editor.docGrouping(doc);
 
-    // Post-removal coordinates: `orderedRemoveAt(index)` shifts every later entry down
-    // by one, so a neighbor found after `index` must be reported one lower than its
-    // pre-removal position.
-    const replacement_index: ?usize = blk: {
-        for (editor.open_files.values(), 0..) |d, i| {
-            if (i == index) continue;
-            if (editor.docGrouping(d) == grouping) break :blk if (i > index) i - 1 else i;
-        }
-        break :blk null;
-    };
+    const replacement_index = editor.replacementIndexAfterClose(index, grouping);
     editor.workbench.adjustOpenFileIndexAfterClose(grouping, index, replacement_index);
 
     if (editor.document_watcher) |*w| w.untrack(doc.id);
@@ -4446,14 +4489,7 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     const index = editor.open_files.getIndex(id) orelse return;
     const grouping = editor.docGrouping(doc);
 
-    // See `rawCloseFile`: neighbor index is reported in post-removal coordinates.
-    const replacement_index: ?usize = blk: {
-        for (editor.open_files.values(), 0..) |d, i| {
-            if (i == index) continue;
-            if (editor.docGrouping(d) == grouping) break :blk if (i > index) i - 1 else i;
-        }
-        break :blk null;
-    };
+    const replacement_index = editor.replacementIndexAfterClose(index, grouping);
     editor.workbench.adjustOpenFileIndexAfterClose(grouping, index, replacement_index);
 
     if (editor.document_watcher) |*w| w.untrack(doc.id);

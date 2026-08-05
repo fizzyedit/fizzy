@@ -52,6 +52,7 @@ const language_support: sdk.LanguageSupport = .{
 const language_vtable: sdk.LanguageSupport.VTable = .{
     .supportsPreview = supportsPreview,
     .previewPane = previewPane,
+    .previewReveal = previewReveal,
 };
 
 var markdown_api: sdk.services.markdown.Api = .{
@@ -61,11 +62,16 @@ var markdown_api: sdk.services.markdown.Api = .{
 
 const markdown_service_vtable: sdk.services.markdown.Api.VTable = .{
     .render = svcRender,
+    .defaultView = svcDefaultView,
+    .setDefaultView = svcSetDefaultView,
 };
 
 pub fn register(host: *sdk.Host) !void {
+    render_ast.initDiagFromEnv();
     plugin.state = @ptrCast(&plugin_state);
+    plugin_state.loadSettings(host);
     try host.registerPlugin(&plugin);
+    try plugin_state.registerSettings(host, &plugin);
     try host.registerLanguageSupport(language_support);
     try host.registerService("markdown", &markdown_api, &plugin);
 }
@@ -81,6 +87,16 @@ fn supportsPreview(_: *anyopaque, ext: []const u8) bool {
     return std.ascii.eqlIgnoreCase(ext, ".md") or std.ascii.eqlIgnoreCase(ext, ".markdown");
 }
 
+/// Remember the reveal against this pane's own preview state. The pane may never have been
+/// drawn for `id_extra` — `previewFor` creates it either way, and the entry is what the very
+/// next `previewPane` call picks up.
+fn previewReveal(state: *anyopaque, ext: []const u8, path: []const u8, line: u32, id_extra: u64) void {
+    _ = ext;
+    _ = path;
+    const st: *State = @ptrCast(@alignCast(state));
+    st.previewFor(sdk.allocator(), id_extra).revealLine(line);
+}
+
 fn previewPane(state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, id_extra: u64, gpa: std.mem.Allocator) !void {
     _ = ext;
     const st: *State = @ptrCast(@alignCast(state));
@@ -89,6 +105,14 @@ fn previewPane(state: *anyopaque, ext: []const u8, path: []const u8, bytes: []co
     md.drawPreviewForDocument(gop.value_ptr, path, bytes, gpa, .{
         .io = dvui.io,
         .id_extra = id_extra,
+        // Transparent, same as the store's README pane: the document tab already paints the
+        // pane behind this, and the preview's own `.content` fill read as a visibly different
+        // panel sitting beside the editor rather than the other half of one document.
+        .background = false,
+        // This preview owns the full pane, so nothing else insets it: without a margin of its
+        // own the prose runs straight into the sash on one side and the pane edge on the other.
+        // Extra at the top clears the raw|split|preview pill, which floats over the content.
+        .content_padding = .{ .x = 20, .y = 16, .w = 20, .h = 16 },
     });
     // `drawPreviewForDocument` fills in `document_path` from `path` — that's what enables
     // `[[wikilinks]]` here but not in the store's README pane, which has no local file.
@@ -102,6 +126,16 @@ fn svcRender(ctx: *anyopaque, bytes: []const u8, gpa: std.mem.Allocator, opts: s
         .image_base_dir = opts.image_base_dir,
         .id_extra = opts.id_extra,
     });
+}
+
+fn svcDefaultView(ctx: *anyopaque) sdk.services.markdown.Api.DefaultView {
+    const st: *State = @ptrCast(@alignCast(ctx));
+    return st.defaultView();
+}
+
+fn svcSetDefaultView(ctx: *anyopaque, view: sdk.services.markdown.Api.DefaultView) void {
+    const st: *State = @ptrCast(@alignCast(ctx));
+    st.setDefaultView(view);
 }
 
 comptime {

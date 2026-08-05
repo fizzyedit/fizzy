@@ -11,6 +11,7 @@ const html_images_mod = @import("html_images.zig");
 const image_format = @import("image_format.zig");
 const url_join = @import("url_join.zig");
 const wikilink_scan = @import("wikilink_scan.zig");
+const bh = @import("block_heights.zig");
 
 const WikilinkApi = sdk.services.wikilink.Api;
 
@@ -80,26 +81,13 @@ pub const BlockSample = struct {
 pub var block_profile: ?*std.ArrayListUnmanaged(BlockSample) = null;
 pub var block_profile_gpa: ?std.mem.Allocator = null;
 
-/// One top-level block's laid-out height, and whether re-measuring it could still change it.
-///
-/// dvui sizes a widget from what its children reported the frame *before*, so a block's first
-/// draw at a given width is still settling. A block that got skipped from then on would freeze at
-/// that half-settled value forever, pushing everything below it out of place — so `settled` only
-/// goes true once two consecutive draws agree, and until then the block is re-drawn (within
-/// `resettle_budget`) even off screen.
-pub const BlockHeight = struct {
-    h: f32,
-    settled: bool,
-};
-
-/// The span of markdown source one top-level block was parsed from.
-pub const SourceExtent = struct {
-    lines: u32,
-    bytes: u32,
-};
+/// Where a block sits and how much its height can be believed — see `block_heights.zig`. That
+/// bookkeeping is deliberately dvui-free and unit tested; this file owns the half that needs a
+/// layout pass, and feeds measurements back through `Table.record`.
+pub const SourceExtent = bh.SourceExtent;
 
 /// One table cell's measured content size. `settled` follows the same two-agreeing-draws rule as
-/// `BlockHeight`, and for the same reason.
+/// `bh.Height`, and for the same reason.
 pub const CellSize = struct {
     size: dvui.Size,
     /// The column width the size was measured at. A wrapped cell's height is a function of the
@@ -112,11 +100,63 @@ pub const CellSize = struct {
     settled: bool,
 };
 
-/// Escape hatch for tests: with this off, `renderTopLevel` lays out every block, on screen or
-/// not. The integration test that asserts the two produce identical pixels is the only thing
-/// that turns it off — and the reason it can stay a plain global is that the same test is what
-/// would catch a divergence if some future caller ever set it.
+/// One table's column widths, and the inputs they were computed from. Recomputed when either
+/// input moves — the pane resizing, or the theme's body font changing size under it.
+pub const TableLayout = struct {
+    /// What each column wants on one unwrapped line, padding included (gpa-owned).
+    ///
+    /// Held separately from `widths` because it depends only on the table's *content* and the
+    /// fonts — never on how much room the table has. Measuring it means walking every cell in the
+    /// table and shaping its text, which on a 45KB table is milliseconds; recomputing that on
+    /// every frame of a sash drag (where only `avail` is moving) was most of what made dragging
+    /// the splitter crawl.
+    natural: []f32,
+    /// `natural` squeezed into `avail` (gpa-owned). Recomputed whenever `avail` moves, which is
+    /// cheap — `fitColumns` is a couple of passes over one float per column.
+    widths: []f32,
+    /// Width the table had to fit into.
+    avail: f32,
+    /// The width of an "M" in each font the widths were measured with, body and mono. A probe
+    /// rather than `Font.size`, because the size is not what moves: the app installs its themed
+    /// fonts a few frames into startup, so a table measured before that was measured in a
+    /// different *family* at the same nominal size, and every column came out too narrow.
+    body_m: f32,
+    mono_m: f32,
+};
+
+/// Escape hatch for tests: with this off, `renderTopLevel` lays out every block (and every table
+/// row), on screen or not.
+///
+/// Turned off only by `tests/integration.zig`'s "skipping off-screen blocks lays the document out
+/// identically", which is what keeps this honest — it asserts that virtualized and full layouts
+/// agree on **every top-level block's height and the resulting virtual size**, at several scroll
+/// positions, on both sample documents. Not on pixels: dvui's testing backend has no render
+/// targets, so `capturePng` is unavailable. Layout equality is the property that matters anyway —
+/// a remembered height drifting from the measured one is exactly what would shift the document
+/// and make the scrollbar lie.
+///
+/// It can stay a plain global because that same test is what would catch a divergence if some
+/// future caller ever set it.
 pub var virtualize_blocks: bool = true;
+
+/// `FIZZY_MD_DIAG=1` logs the two things that make this preview jump: the column width being
+/// treated as "still resizing", and a block's height changing under the reader.
+///
+/// Env-gated because the useful version is noisy — it prints per block per frame — and because
+/// every real cause found in this file so far was found by measuring, not by reasoning. A profile
+/// says where time goes; this says what moved.
+pub var diag: bool = false;
+
+pub fn initDiagFromEnv() void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const raw = std.c.getenv("FIZZY_MD_DIAG") orelse return;
+    if (std.mem.eql(u8, std.mem.span(raw), "0")) return;
+    diag = true;
+    dvui.log.info("markdown: height diagnostics on (FIZZY_MD_DIAG)", .{});
+}
+
+/// A height change at least this large is worth reporting — bigger than any settling wobble.
+const diag_height_jump: f32 = 50;
 
 /// Off-screen blocks `renderTopLevel` may re-measure per frame after a width change. Bounds what
 /// a resize costs: without it, every frame of a window drag or a panel's open animation is a
@@ -125,7 +165,13 @@ pub var virtualize_blocks: bool = true;
 /// Each block needs two draws to settle (dvui sizes a widget from what its children reported the
 /// frame before), so a 180-block document is fully accurate again about 30 frames after the drag
 /// stops. Until then the only thing that is off is the scrollbar's idea of the total height.
-const resettle_budget: usize = 12;
+const resettle_below_budget: usize = 12;
+
+/// Off-screen blocks *above* the viewport top that may be re-measured per frame. Smaller than
+/// `resettle_below_budget`: re-measuring one of these shifts the content under the reader for a
+/// single frame before the anchor restores it. Non-zero because "never" leaves the scrollbar's
+/// total permanently wrong. See the two-budget note in `renderTopLevel`.
+const resettle_above_budget: usize = 4;
 
 /// Off-screen table text (in bytes of markdown) that may be measured per frame the first time a
 /// table is seen. Same idea as `resettle_budget`, one level down: a 45KB table
@@ -225,26 +271,40 @@ pub const RenderState = struct {
     /// memoized yet", which no real generation counter will collide with.
     wikilink_generation: u64 = std.math.maxInt(u64),
 
-    /// Laid-out height of each top-level block, by document order — what lets `renderTopLevel`
-    /// skip a block that isn't on screen and still hand the scroll container the right total
-    /// height. Grown as blocks are measured; a block past the end has never been measured, and
-    /// is always drawn.
-    block_heights: std.ArrayListUnmanaged(BlockHeight) = .empty,
-    /// How much *source* each top-level block came from, in document order — enough to guess its
-    /// laid-out height before it has ever been laid out. Without this, opening a document costs
-    /// one full-document layout (~13-20ms in ReleaseFast for a 60KB file, and it lands on the
-    /// frame a panel is animating open), because a block with no height cannot be placed and so
-    /// cannot be skipped.
-    block_source: std.ArrayListUnmanaged(SourceExtent) = .empty,
+    /// Where every top-level block sits, in document order: its source extent (enough to guess a
+    /// height before it has ever been laid out) and its measured height once it has. Without the
+    /// guess, opening a document costs one full-document layout (~13-20ms in ReleaseFast for a
+    /// 60KB file, landing on the frame a panel is animating open), because a block with no height
+    /// cannot be placed and so cannot be skipped.
+    blocks: bh.Table = .{},
     /// Content size each table cell measured at, keyed by @intFromPtr(cell node) — what a culled
     /// row hands the grid in place of its contents. It has to be the cell's *own* measurement and
     /// not the grid's row height / column width: the grid takes the max across a column, so
     /// feeding those back widens the column a little, which rewraps a visible cell and moves the
     /// whole table. (Measured the hard way: it showed up as one extra line of text in one row.)
     cell_sizes: std.AutoHashMapUnmanaged(usize, CellSize) = .empty,
-    /// Column width `block_heights` was measured at. A different width invalidates every entry
-    /// wholesale — wrapped prose reflows, so no cached height survives a resize.
-    block_layout_width: f32 = -1,
+    /// Rows in the block currently being laid out whose cells have never been measured, so they
+    /// stood in with a placeholder height this frame.
+    ///
+    /// This is what makes a table block's measurement *untrustworthy*: the grid reports a height
+    /// built from whatever mix of real and placeholder rows this frame happened to have, and that
+    /// mix is a function of where the reader is scrolled — so the same table measures differently
+    /// depending on how you arrived at it. Believing those numbers is what made the document jump
+    /// when scrolling past a table. Reset per top-level block by `renderTopLevel`.
+    block_rows_pending: usize = 0,
+    /// The block being laid out has spent its re-measure attempts (see
+    /// `block_heights.deferred_max_attempts`). Its table rows must then stop reporting themselves
+    /// as owed work: `Stats.pending_measure` asks for another frame, and a table whose cells never
+    /// settle would otherwise keep the whole app awake for ever.
+    block_measure_exhausted: bool = false,
+    /// Whether the text column changed width this frame — a sash drag, a window resize, a panel
+    /// animating open. Set by `renderTopLevel`, read by the table renderer, which spends its own
+    /// measuring budgets and needs the same answer for the same reason: work done at a width that
+    /// is about to change again is work thrown away.
+    width_in_flux: bool = false,
+    /// @intFromPtr(table_node.n) → the column widths that table is laid out at (gpa-owned), plus
+    /// what they were computed for. See `tableColumnWidths`.
+    table_layouts: std.AutoHashMapUnmanaged(usize, TableLayout) = .empty,
 
     pub fn deinit(self: *RenderState, gpa: std.mem.Allocator) void {
         self.clear(gpa);
@@ -259,9 +319,9 @@ pub const RenderState = struct {
         self.html_images.deinit(gpa);
         self.wikilinks.deinit(gpa);
         self.wikilink_resolved.deinit(gpa);
-        self.block_heights.deinit(gpa);
+        self.blocks.deinit(gpa);
         self.cell_sizes.deinit(gpa);
-        self.block_source.deinit(gpa);
+        self.table_layouts.deinit(gpa);
     }
 
     pub fn clear(self: *RenderState, gpa: std.mem.Allocator) void {
@@ -284,10 +344,18 @@ pub const RenderState = struct {
         var wi = self.wikilinks.valueIterator();
         while (wi.next()) |toks| gpa.free(toks.*);
         self.wikilinks.clearRetainingCapacity();
-        self.block_heights.clearRetainingCapacity();
+        // Deliberately `clearForReparse`, not `clear`: this runs on every content change, which
+        // during editing is every keystroke. It drops the positional arrays (the edit invalidated
+        // their indices) while keeping the heights keyed by block source, so blocks the edit did
+        // not touch keep their measured heights instead of collapsing back to estimates.
+        self.blocks.clearForReparse();
         self.cell_sizes.clearRetainingCapacity();
-        self.block_source.clearRetainingCapacity();
-        self.block_layout_width = -1;
+        var tl_it = self.table_layouts.valueIterator();
+        while (tl_it.next()) |tl| {
+            gpa.free(tl.natural);
+            gpa.free(tl.widths);
+        }
+        self.table_layouts.clearRetainingCapacity();
         self.clearResolvedWikilinks(gpa);
     }
 
@@ -357,6 +425,13 @@ pub const RenderContext = struct {
 /// they line up with the paragraph they label (see `CMARK_NODE_LIST`).
 const paragraph_margin_y: f32 = 4;
 
+/// Horizontal inset for the *framed* blocks — tables, code fences, blockquotes, raw HTML. Prose
+/// runs the full column width; anything that draws its own panel sits a step in from it, so the
+/// frame reads as a distinct object placed in the document rather than another line of text that
+/// happens to have a border. Nested framed blocks (a fence inside a quote) inset again, which is
+/// the intent: each level of containment is one step further in.
+const block_inset_x: f32 = 14;
+
 const max_image_bytes: usize = 16 * 1024 * 1024;
 const max_image_display_width: f32 = 720;
 const max_image_display_height: f32 = 540;
@@ -402,6 +477,37 @@ pub fn scanNode(node: md.Node, rs: *RenderState, gpa: std.mem.Allocator, source:
     return scanNodeInner(node, rs, gpa, scan_source);
 }
 
+/// What shape a top-level block is, for the height estimator. A `table` here is the GFM extension
+/// node, which cmark reports through `typeString` rather than as a `CMARK_NODE_*` constant, so it
+/// comes from the kind map the scan built — except that the scan has not run yet the first time
+/// through, which is why the node's own type is checked first and the map only consulted for the
+/// extension types it is the only source for.
+fn blockKind(n: md.Node, rs: *const RenderState) bh.BlockKind {
+    switch (n.nodeType()) {
+        md.c.CMARK_NODE_HEADING => return .heading,
+        md.c.CMARK_NODE_CODE_BLOCK => return .code,
+        md.c.CMARK_NODE_LIST => return .list,
+        md.c.CMARK_NODE_BLOCK_QUOTE => return .quote,
+        md.c.CMARK_NODE_THEMATIC_BREAK => return .rule,
+        md.c.CMARK_NODE_HTML_BLOCK => return .html,
+        md.c.CMARK_NODE_PARAGRAPH => {
+            // A paragraph that exists to hold a picture is nothing like a paragraph of prose: one
+            // line of source, and up to `max_image_display_height` on screen.
+            var c = n.firstChild();
+            while (c) |x| : (c = x.nextSibling()) {
+                if (x.nodeType() == md.c.CMARK_NODE_IMAGE) return .image;
+            }
+            return .paragraph;
+        },
+        else => {},
+    }
+    if (rs.ext_node_kinds.get(@intFromPtr(n.n))) |k| {
+        if (k == .table) return .table;
+    }
+    if (std.mem.eql(u8, n.typeString(), "table")) return .table;
+    return .paragraph;
+}
+
 /// Record each top-level block's source span, for `renderTopLevel`'s first-sight height guess.
 /// cmark reports 1-based line numbers for block nodes; a node whose lines don't fit the source
 /// (nothing observed doing this, but the API doesn't promise it) simply gets a zero extent, and a
@@ -409,11 +515,12 @@ pub fn scanNode(node: md.Node, rs: *RenderState, gpa: std.mem.Allocator, source:
 fn recordBlockExtents(doc_node: md.Node, rs: *RenderState, gpa: std.mem.Allocator, source: ScanSource) void {
     var child = doc_node.firstChild();
     while (child) |ch| : (child = ch.nextSibling()) {
-        var extent: SourceExtent = .{ .lines = 0, .bytes = 0 };
+        var extent: SourceExtent = .{ .kind = blockKind(ch, rs) };
         const start = ch.startLine();
         const end = ch.endLine();
         if (start >= 1 and end >= start) {
             extent.lines = @intCast(end - start + 1);
+            extent.start_line = @intCast(start - 1);
             if (source.index) |idx| {
                 const starts = idx.starts;
                 const first: usize = @intCast(start - 1);
@@ -421,11 +528,17 @@ fn recordBlockExtents(doc_node: md.Node, rs: *RenderState, gpa: std.mem.Allocato
                 if (first < starts.len) {
                     const from = starts[first];
                     const to = if (after < starts.len) starts[after] else @as(u32, @intCast(source.bytes.len));
-                    if (to > from) extent.bytes = to - from;
+                    if (to > from) {
+                        extent.bytes = to - from;
+                        // The block's identity across re-parses. Hashed from the source rather
+                        // than the AST because that is what an edit actually changes — a
+                        // paragraph nobody touched hashes the same however far its index moved.
+                        extent.hash = std.hash.XxHash3.hash(0, source.bytes[from..to]);
+                    }
                 }
             }
         }
-        rs.block_source.append(gpa, extent) catch {};
+        rs.blocks.appendExtent(gpa, extent);
     }
 }
 
@@ -1009,7 +1122,12 @@ fn renderImageUrl(raw_url: []const u8, alt: []const u8, want: RequestedSize, ctx
 
     // Hard ceiling so an unconstrained (or still-too-large) image can't take over the pane.
     // Percentage widths are *not* resolved against this — see below.
-    const avail_w = outer.data().contentRect().w;
+    // During a sash/resize frame the wrapper's content rect can briefly report 0 — fall back to
+    // the column width so the hero doesn't collapse to nothing for that frame.
+    const avail_w = blk: {
+        const w = outer.data().contentRect().w;
+        break :blk if (w > 1) w else ctx.column_width;
+    };
 
     const bytes: []const u8 = switch (resolved) {
         .bytes => |b| b,
@@ -1465,17 +1583,23 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: md.Node, span: dvui.Optio
 /// so `ids` restarts per block and a skipped neighbour can't shift anything.
 fn renderTopLevel(doc_node: md.Node, ids: *IdGen, ctx: RenderContext) void {
     const rs = ctx.rs;
-    if (rs.block_layout_width != ctx.column_width) {
-        // A width change reflows every wrapped paragraph, so no cached height is right any more.
-        // But *discarding* them would make every block "never measured" and force a full-document
-        // layout on that frame — and the widths that change are the ones that change every frame:
-        // the panel's open animation sliding out, and a window resize drag. So the heights are
-        // kept as estimates and merely stop being trusted: they still place each block (which is
-        // what keeps the on-screen set correct and gap-free — a skipped block really does occupy
-        // its estimate this frame), while `resettle_budget` re-measures a few per frame until
-        // they're all true again.
-        for (rs.block_heights.items) |*e| e.settled = false;
-        rs.block_layout_width = ctx.column_width;
+    const metrics = currentMetrics();
+
+    // Width in flux this frame (sash open animation, first layout of a new pane, window resize
+    // drag). Cached heights are for a different column, so they stop being trusted — but they are
+    // *kept*, not clamped toward the estimate. Clamping was how a narrow→wide resize used to
+    // collapse the document's height model: an image or a table occupies one line of source, so
+    // its estimate is a dozen pixels against a real several hundred, and every sash drag crushed
+    // it to that. The blank pane that clamping was meant to prevent is now prevented properly,
+    // by `visibleRange` being guaranteed non-empty.
+    const width_in_flux = rs.blocks.invalidateForWidth(ctx.column_width);
+    rs.width_in_flux = width_in_flux;
+    if (diag and width_in_flux) {
+        dvui.log.warn("md-diag: column width now {d:.2} — every cached height distrusted, tables unpinned", .{ctx.column_width});
+    }
+    if (width_in_flux) {
+        // Come back next frame — if the width has stopped moving, resettle can start.
+        dvui.refresh(null, @src(), null);
     }
 
     // Draw beyond the viewport by half a screen each way. dvui needs the widget to exist for a
@@ -1486,12 +1610,64 @@ fn renderTopLevel(doc_node: md.Node, ids: *IdGen, ctx: RenderContext) void {
     const slack = @max(200, ctx.viewport.h * 0.5);
     const vis_top = ctx.viewport.y - slack;
     const vis_bot = ctx.viewport.y + ctx.viewport.h + slack;
+    // The viewport top: the line between "re-measuring this is free" and "re-measuring this
+    // moves the reader, and costs a frame to put them back". See the budgets below.
+    const anchor_y = ctx.viewport.y;
 
-    // Off-screen blocks re-measured this frame, from the top down: the top of the document is
-    // what everything below is positioned against, so settling it first stops the visible content
-    // from wandering. The cost of one is roughly the cost of one visible block, which is what
-    // sets the size of this number.
-    var resettle_left: usize = resettle_budget;
+    // The blocks that must be laid out to cover the viewport, decided up front against the height
+    // table rather than block-by-block during the walk. Doing it here is what makes "the pane is
+    // never blank" a property of one function with tests behind it (`Table.visibleRange`) instead
+    // of an emergent hope about the per-block predicate below.
+    const must_draw: ?bh.Table.Range = if (!virtualize) null else rs.blocks.visibleRange(
+        ctx.viewport.y,
+        ctx.viewport.h,
+        slack,
+        metrics,
+        ctx.column_width,
+        ctx.content_origin_y,
+    );
+
+    // Two budgets, split by what a re-measure *costs the reader* rather than by distance.
+    //
+    // Below the viewport top is free: the anchor holds the reader's position against the block
+    // they are on, so a block further down changing height moves nothing they can see.
+    // Above the viewport top is not free: it shifts everything below it, and the anchor only puts
+    // the reader back on the *next* frame (positions are resolved before layout, and a height
+    // discovered during layout arrives too late for it). Correct, but briefly visible.
+    //
+    // Neither budget may be zero. A block that is never re-measured keeps its `estimate`,
+    // estimates are biased low on purpose, and a document whose height is mostly low guesses has
+    // a scrollbar that lies by thousands of pixels — which scrolling then "discovers" a screen at
+    // a time. That was the reported instability, and the earlier distance gate caused it by
+    // starving distant blocks outright (164 of 185 unmeasured after 600 frames on
+    // docs/PLUGIN_MANIFEST_PLAN.md). Both budgets being non-zero is what makes the sweep
+    // terminate: once every block has been measured twice, nothing wants a re-measure,
+    // `pending_measure` hits zero, and the refresh loop stops. A bounded warm-up, not a
+    // permanent wake.
+    var resettle_below_left: usize = if (width_in_flux) 0 else resettle_below_budget;
+    var resettle_above_left: usize = if (width_in_flux) 0 else resettle_above_budget;
+
+    // Skipped blocks used to each get their own empty `box` with `min_size_content = h`. On a
+    // multi-thousand-block document that meant thousands of widgets per frame even when only a
+    // handful were on screen — the open hitch and the steady ~20ms frames while a large preview
+    // sat idle. Contiguous skips collapse into one spacer instead.
+    var skip_run_h: f32 = 0;
+    var skip_run_id: usize = 0;
+
+    const flushSkip = struct {
+        fn f(run_h: *f32, run_id: usize) void {
+            if (run_h.* <= 0) return;
+            var spacer = box(@src(), .{ .dir = .vertical }, .{
+                .expand = .horizontal,
+                // Stable across frames for a given skip-run start so scroll anchoring stays
+                // coherent when a neighbouring run's height changes.
+                .id_extra = run_id +% 0x7000_0000,
+                .min_size_content = .{ .h = run_h.* },
+            });
+            spacer.deinit();
+            run_h.* = 0;
+        }
+    }.f;
 
     var y = ctx.content_origin_y;
     var index: usize = 0;
@@ -1500,22 +1676,33 @@ fn renderTopLevel(doc_node: md.Node, ids: *IdGen, ctx: RenderContext) void {
         child = ch.nextSibling();
         index += 1;
     }) {
-        // A block never laid out yet is placed by a guess from how much source it came from.
-        // The guess only has to be good enough to decide "near the viewport or not", and it is
-        // deliberately biased *low* (see `estimateBlockHeight`): guessing short draws a few extra
+        // A block never laid out yet is placed by a guess from how much source it came from. The
+        // guess only has to be good enough to decide "near the viewport or not", and it is
+        // deliberately biased *low* (see `Table.estimate`): guessing short draws a few extra
         // blocks, while guessing tall would skip one that is actually on screen and flash a gap.
-        const known: ?BlockHeight = if (index < rs.block_heights.items.len)
-            rs.block_heights.items[index]
-        else if (estimateBlockHeight(rs, index, ctx.column_width)) |est|
-            BlockHeight{ .h = est, .settled = false }
-        else
-            null;
-        const on_screen_est = known == null or (y < vis_bot and (y + known.?.h) > vis_top);
-        var draw = !virtualize or on_screen_est;
-        if (!draw and !known.?.settled) {
-            if (resettle_left > 0) {
+        rs.blocks.ensureSlot(ctx.gpa, index, metrics, ctx.column_width);
+        const known_h = rs.blocks.heightAt(index, metrics, ctx.column_width);
+        const state = rs.blocks.stateAt(index);
+
+        // `y` is always this block's start (skip runs advance it too; the spacer is just how
+        // that reserved height reaches the scroll container).
+        //
+        // Two independent reasons to draw, and the union of them is deliberate. `must_draw` is
+        // computed up front from the pre-frame height table, so it is the one that can *promise*
+        // a non-empty result; the running `y` is more accurate within the frame, because blocks
+        // above this one may have re-measured since that promise was made. Neither alone is both.
+        const on_screen_now = y < vis_bot and (y + known_h) > vis_top;
+        var draw = on_screen_now or
+            !rs.blocks.placeable(index) or
+            if (must_draw) |r| r.contains(index) else true;
+        if (!draw and (bh.Height{ .h = known_h, .state = state }).wantsMeasure()) {
+            // Entirely above the reader, or not? That is the only distinction that matters —
+            // see the budgets above.
+            const above = (y + known_h) <= anchor_y;
+            const budget = if (above) &resettle_above_left else &resettle_below_left;
+            if (budget.* > 0) {
                 draw = true;
-                resettle_left -= 1;
+                budget.* -= 1;
             } else {
                 // Owed a re-measure that this frame's budget couldn't pay for; see
                 // `Stats.pending_measure`.
@@ -1523,21 +1710,59 @@ fn renderTopLevel(doc_node: md.Node, ids: *IdGen, ctx: RenderContext) void {
             }
         }
 
+        if (!draw) {
+            if (skip_run_h == 0) skip_run_id = index;
+            skip_run_h += known_h;
+            y += known_h;
+            continue;
+        }
+
+        // Emit the spacer for everything we skipped above this block before laying it out.
+        flushSkip(&skip_run_h, skip_run_id);
+
+        // A block whose last measurement could not be trusted gets its height *pinned* to the one
+        // we do trust, rather than being allowed to report whatever this frame's layout produces.
+        //
+        // Refusing to record an untrustworthy measurement is not enough on its own: the widget is
+        // still emitted at whatever height it came out to, and the scroll container builds
+        // `virtual_size` from the widgets, not from this file's height table. A table under row
+        // culling is spectacularly unstable that way — the same block measured 46pt on one frame
+        // and 29,995pt on another (real height ~6,132) as the visible row set changed — and each
+        // swing moved the scrollbar and everything below it. Pinning both ends of the size makes
+        // the block occupy exactly what the table says it occupies, so layout and bookkeeping
+        // cannot disagree.
+        //
+        // The pin is released as soon as the block produces a measurement worth believing, which
+        // for a table means every one of its rows has been measured at least once.
+        // Scoped to blocks containing a table, and to states where the cached number is one we
+        // believe. Reacting to *this* frame's contamination would always be a frame late — the
+        // garbage measurement has already been emitted by then — so the pin goes on as soon as
+        // there is something worth holding, and comes off only when a width change demotes the
+        // entry back to `.measured` and the block genuinely has to be re-measured.
+        const block_state = rs.blocks.stateAt(index);
+        // ...and never while the column width is moving: that is precisely when the block has to
+        // be allowed to relearn its height, and a pin there would hold it at its pre-resize size.
+        const pin_h: ?f32 = if (known_h > 0 and !width_in_flux and
+            (block_state == .settled or block_state == .deferred) and
+            rs.subtree_has_table.contains(@intFromPtr(ch.n))) known_h else null;
         var wrapper = box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .id_extra = index,
-            // Only when skipping: a drawn block must be free to report a *smaller* height than
-            // last frame's, and a floor of the old value would keep it from ever shrinking.
-            .min_size_content = if (draw) null else dvui.Size{ .h = known.?.h },
+            .min_size_content = if (pin_h) |h| .{ .h = h } else null,
+            .max_size_content = if (pin_h) |h| .height(h) else null,
         });
         const wrapper_id = wrapper.data().id;
         const prof_t0 = if (block_profile == null) 0 else std.Io.Clock.boot.now(dvui.io).nanoseconds;
         const prof_tl = stats.text_layouts;
         const prof_bytes = stats.add_text_bytes;
-        if (draw) {
-            ids.n = 0;
-            renderBlock(ch, ids, ctx);
-        }
+        ids.n = 0;
+        rs.block_rows_pending = 0;
+        rs.block_measure_exhausted = !(bh.Height{
+            .h = known_h,
+            .state = block_state,
+            .attempts = rs.blocks.attemptsAt(index),
+        }).wantsMeasure();
+        renderBlock(ch, ids, ctx);
         wrapper.deinit();
         if (block_profile) |list| {
             list.append(block_profile_gpa.?, .{
@@ -1549,50 +1774,61 @@ fn renderTopLevel(doc_node: md.Node, ids: *IdGen, ctx: RenderContext) void {
             }) catch {};
         }
 
-        const entry: BlockHeight = if (draw) blk: {
-            const measured = (dvui.minSizeGet(wrapper_id) orelse dvui.Size{}).h;
-            // Now that the height is known, was the block *really* on screen? The estimate above
-            // decides what to draw; this decides what to believe. They differ exactly where it
-            // matters: on the first frame every block is drawn, but a table drawn off screen
-            // reports its header's height and nothing more.
-            const was_visible = y < vis_bot and (y + measured) > vis_top;
-            if (!was_visible and rs.subtree_has_table.contains(@intFromPtr(ch.n))) {
-                // Keep the height from the last time it was on screen. With no such height yet,
-                // the collapsed one is still a better placeholder than nothing — and either way
-                // this block is done being re-measured until it is scrolled to, so mark it
-                // settled rather than let it eat the budget every frame forever.
-                break :blk .{ .h = if (known) |k| k.h else measured, .settled = true };
-            }
-            break :blk .{ .h = measured, .settled = known != null and known.?.h == measured };
-        } else known.?;
-        if (index < rs.block_heights.items.len) {
-            rs.block_heights.items[index] = entry;
-        } else {
-            rs.block_heights.append(ctx.gpa, entry) catch {};
+        const measured = (dvui.minSizeGet(wrapper_id) orelse dvui.Size{}).h;
+        // The height is known — but is it *worth* knowing? A table whose rows have not all been
+        // measured reports a height built from a scroll-position-dependent mix of real rows and
+        // placeholders, so it measures differently depending on where the reader came from. That
+        // is a height that cannot be believed, and believing it is what made the document jump
+        // when scrolling past a table. `record` files it as `.deferred`: keep what we had, and
+        // stop short of calling it an answer.
+        //
+        // This used to key off "was the block off screen?" instead, on the theory that an
+        // off-screen table renders only its header. That stopped being true once culled cells
+        // started reporting a real placeholder height, and by then the test had inverted: it
+        // froze the *collapsed* first-frame measurement of a table the reader had never visited
+        // and never revisited it, leaving the document ~1300px short per table.
+        const partial = rs.block_rows_pending > 0;
+        rs.blocks.record(ctx.gpa, index, .{ .h = measured, .partial = partial }, metrics, ctx.column_width);
+        const after_h = rs.blocks.heightAt(index, metrics, ctx.column_width);
+        if (diag and known_h > 0 and @abs(after_h - known_h) > diag_height_jump) {
+            dvui.log.warn(
+                "md-diag: block {d} ({s}) height {d:.0} -> {d:.0} ({s}, rows_pending={d}) at viewport y={d:.0}",
+                .{ index, @tagName(rs.blocks.extents.items[index].kind), known_h, after_h, @tagName(rs.blocks.stateAt(index)), rs.block_rows_pending, ctx.viewport.y },
+            );
         }
-        y += entry.h;
+        // No scroll compensation here any more. A height change above the reader used to need a
+        // delta accumulated and applied to `viewport.y` after the fact; the anchor makes the
+        // reader's position a function of the current heights, so it simply re-derives.
+        y += after_h;
     }
+    flushSkip(&skip_run_h, skip_run_id);
 }
 
-/// Rough laid-out height for a block that has never been drawn, from the source it was parsed
-/// from. Null when there is nothing to go on, which means "draw it".
+/// Font metrics for `block_heights.zig`, which is deliberately dvui-free and so cannot read the
+/// theme itself.
 ///
-/// Biased low on purpose — an underestimate costs a few extra blocks of layout, an overestimate
-/// costs a visible gap where a block should have been.
-fn estimateBlockHeight(rs: *RenderState, index: usize, column_width: f32) ?f32 {
-    if (index >= rs.block_source.items.len) return null;
-    const extent = rs.block_source.items[index];
-    if (extent.lines == 0) return null;
+/// `sizeM` is the width of an "M"; ordinary prose averages a good deal narrower than that, and
+/// erring narrow means erring toward *more* estimated lines, which is the safe direction.
+pub fn currentMetricsForTest() bh.Metrics {
+    return currentMetrics();
+}
 
+fn currentMetrics() bh.Metrics {
     const font = dvui.Font.theme(.body);
-    const line_h = font.lineHeight();
-    // `sizeM` is the width of an "M"; ordinary prose averages a good deal narrower than that, and
-    // erring narrow means erring toward *more* estimated lines, which is the safe direction.
-    const avg_char_w = @max(1, font.sizeM(1, 1).w * 0.5);
-    const chars_per_line = @max(20, column_width / avg_char_w);
-    const wrapped: f32 = @ceil(@as(f32, @floatFromInt(extent.bytes)) / chars_per_line);
-    const lines = @max(@as(f32, @floatFromInt(extent.lines)), wrapped);
-    return lines * line_h * 0.8;
+    return .{ .line_h = font.lineHeight(), .em_w = font.sizeM(1, 1).w };
+}
+
+pub const Anchor = bh.Anchor;
+
+/// Where `a` points, as a scroll offset against the heights as they currently stand. Applied by
+/// the preview *before* the scroll area is built — see `markdown.drawPreview`.
+pub fn anchorResolve(rs: *const RenderState, a: Anchor, column_width: f32, origin_y: f32, max_scroll: f32) f32 {
+    return rs.blocks.resolveAnchor(a, currentMetrics(), column_width, origin_y, max_scroll);
+}
+
+/// Turn the settled scroll offset back into an anchor, after the scroll area has committed.
+pub fn anchorCapture(rs: *const RenderState, viewport_y: f32, column_width: f32, origin_y: f32, max_scroll: f32) ?Anchor {
+    return rs.blocks.captureAnchor(viewport_y, currentMetrics(), column_width, origin_y, max_scroll);
 }
 
 /// True when any cell in this table row still needs a real layout pass — never measured, measured
@@ -1610,6 +1846,163 @@ fn rowNeedsMeasure(ctx: RenderContext, g: *dvui.GridWidget, row: md.Node) bool {
     return false;
 }
 
+/// Column widths for one table: natural where the table fits, squeezed to `avail` where it
+/// doesn't. Cached per table node (see `RenderState.table_layouts`) — the walk below visits every
+/// cell in the table, which is exactly the work the render path goes to such lengths to avoid
+/// doing per frame.
+///
+/// Why compute widths here at all, rather than let the grid auto-size them? Because the grid's
+/// only inputs are the cells' *laid-out* min sizes, and a cell that wrapped reports the width it
+/// wrapped to. Feed those back and the columns ratchet: shrink-to-fit narrows a column, the cell
+/// inside re-wraps narrower, the next frame's measurement is narrower still, and a short cell
+/// ends up one character wide. Natural widths are measured from the text instead, so they are the
+/// same every frame no matter what the table currently looks like.
+fn tableColumnWidths(n: md.Node, num_cols: usize, avail: f32, cell_padding: dvui.Rect, ctx: RenderContext) []const f32 {
+    const font = dvui.Font.theme(.body);
+    const body_m = font.sizeM(1, 1).w;
+    const mono_m = dvui.Font.theme(.mono).sizeM(1, 1).w;
+    const key = @intFromPtr(n.n);
+    if (ctx.rs.table_layouts.getPtr(key)) |cached| {
+        if (cached.body_m == body_m and cached.mono_m == mono_m and cached.natural.len == num_cols) {
+            if (cached.avail == avail) return cached.widths;
+            // Only the space available changed — which is every frame of a sash drag. The natural
+            // widths are still valid, so re-fit them instead of re-measuring the whole table.
+            @memcpy(cached.widths, cached.natural);
+            fitColumns(cached.widths, avail, ctx.gpa);
+            cached.avail = avail;
+            return cached.widths;
+        }
+    }
+
+    const natural = ctx.gpa.alloc(f32, num_cols) catch return &.{};
+    @memset(natural, 0);
+    const widths = ctx.gpa.alloc(f32, num_cols) catch {
+        ctx.gpa.free(natural);
+        return &.{};
+    };
+
+    // What a cell adds around its text: the grid cell's own padding, plus the `textLayout` the
+    // content is drawn in (`TextLayoutWidget` has non-zero default padding, which is why the
+    // grid's own default minimum is padded the same way). Leaving this out measured every column
+    // a little too narrow, and a one-character column too narrow to show its character at all.
+    const pad_w = cell_padding.x + cell_padding.w +
+        dvui.TextLayoutWidget.defaults.paddingGet().x + dvui.TextLayoutWidget.defaults.paddingGet().w;
+
+    var row = n.firstChild();
+    while (row) |r| : (row = r.nextSibling()) {
+        const rk = extKind(ctx, r);
+        if (rk != .table_row and rk != .table_header) continue;
+        const cell_font = if (rk == .table_header) font.withWeight(.bold) else font;
+        var col: usize = 0;
+        var cl = r.firstChild();
+        while (cl) |cell| : (cl = cell.nextSibling()) {
+            if (extKind(ctx, cell) != .table_cell) continue;
+            defer col += 1;
+            if (col >= num_cols) continue;
+            // Rounded up: text measurement and layout disagree by fractions of a point, and a
+            // column a fraction under what its text needs wraps a whole character.
+            natural[col] = @max(natural[col], @ceil(inlineNaturalWidth(cell, cell_font) + pad_w) + 1);
+        }
+    }
+
+    @memcpy(widths, natural);
+    fitColumns(widths, avail, ctx.gpa);
+
+    const old = ctx.rs.table_layouts.fetchPut(ctx.gpa, key, .{
+        .natural = natural,
+        .widths = widths,
+        .avail = avail,
+        .body_m = body_m,
+        .mono_m = mono_m,
+    }) catch {
+        // Out of memory: hand back nothing and let the grid auto-size this table, rather than
+        // leak a width vector nothing owns.
+        ctx.gpa.free(natural);
+        ctx.gpa.free(widths);
+        return &.{};
+    };
+    if (old) |kv| {
+        ctx.gpa.free(kv.value.natural);
+        ctx.gpa.free(kv.value.widths);
+    }
+    return widths;
+}
+
+/// The width one table cell's contents want on a single unwrapped line. Walks the inlines rather
+/// than flattening to plain text so each run is measured in the font it will actually be drawn
+/// in: `` `--verbose` `` is monospace and wider than the same characters in the body font, and a
+/// column measured in the wrong font is a column that wraps when it shouldn't.
+fn inlineNaturalWidth(node: md.Node, font: dvui.Font) f32 {
+    var total: f32 = 0;
+    var c = node.firstChild();
+    while (c) |x| : (c = x.nextSibling()) {
+        switch (x.nodeType()) {
+            md.c.CMARK_NODE_TEXT, md.c.CMARK_NODE_HTML_INLINE => {
+                if (x.literal()) |t| total += font.textSize(t).w;
+            },
+            md.c.CMARK_NODE_CODE => {
+                if (x.literal()) |t| total += dvui.Font.theme(.mono).textSize(t).w;
+            },
+            md.c.CMARK_NODE_SOFTBREAK, md.c.CMARK_NODE_LINEBREAK => total += font.textSize(" ").w,
+            md.c.CMARK_NODE_STRONG => total += inlineNaturalWidth(x, font.withWeight(.bold)),
+            md.c.CMARK_NODE_EMPH => total += inlineNaturalWidth(x, font.withStyle(.italic)),
+            else => total += inlineNaturalWidth(x, font),
+        }
+    }
+    return total;
+}
+
+/// Squeeze `widths` (natural, in place) into `avail`, leaving them alone when they already fit.
+///
+/// Max-min fair: a column narrower than an equal share of the space keeps its natural width in
+/// full, and only the columns wider than their share give anything up — proportionally, and only
+/// as far as the space that's left over once the narrow ones are paid. Repeated until no more
+/// columns fall under the share, since paying the narrow ones raises it for everyone else.
+///
+/// The naive alternative — scale every column by the same factor — is what made `| flag |
+/// description |` wrap the *flag*: the long description alone can cover the whole overflow, but
+/// proportional scaling still takes its cut out of a column that had nothing to spare.
+fn fitColumns(widths: []f32, avail: f32, gpa: std.mem.Allocator) void {
+    if (widths.len == 0) return;
+    var total: f32 = 0;
+    for (widths) |w| total += w;
+    if (total <= avail) return;
+
+    const settled = gpa.alloc(bool, widths.len) catch return;
+    defer gpa.free(settled);
+    @memset(settled, false);
+
+    var avail_left = avail;
+    var cols_left: usize = widths.len;
+    while (cols_left > 0) {
+        const share = avail_left / @as(f32, @floatFromInt(cols_left));
+        var any = false;
+        for (widths, settled) |w, *s| {
+            if (s.* or w > share) continue;
+            s.* = true;
+            any = true;
+            avail_left -= w;
+            cols_left -= 1;
+        }
+        if (!any) break;
+    }
+
+    // Whatever is left over goes to the columns still over their share, in proportion to what
+    // they asked for. `cols_left == 0` means everything fit after all, which the total check
+    // above already ruled out — but the loop is the only thing that proves it, so don't divide
+    // by a zero it could produce.
+    if (cols_left == 0) return;
+    var over_total: f32 = 0;
+    for (widths, settled) |w, s| {
+        if (!s) over_total += w;
+    }
+    if (over_total <= 0) return;
+    const scale = @max(0, avail_left) / over_total;
+    for (widths, settled) |*w, s| {
+        if (!s) w.* *= scale;
+    }
+}
+
 fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
     statBlock();
     const t = n.nodeType();
@@ -1618,7 +2011,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
         md.c.CMARK_NODE_BLOCK_QUOTE => {
             var outer = box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .horizontal,
-                .margin = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
+                .margin = .{ .x = block_inset_x, .y = 4, .w = block_inset_x, .h = 4 },
                 .id_extra = ids.next(),
             });
             defer outer.deinit();
@@ -1716,7 +2109,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
             const code = n.literal() orelse "";
             var outer = box(@src(), .{ .dir = .vertical }, .{
                 .expand = .horizontal,
-                .margin = .{ .y = 6 },
+                .margin = .{ .x = block_inset_x, .y = 6, .w = block_inset_x, .h = 6 },
                 .background = true,
                 .color_fill = dvui.themeGet().color(.window, .fill).opacity(0.9),
                 .corners = dvui.CornerRect.all(6),
@@ -1773,7 +2166,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
             if (n.literal()) |h| {
                 var tl = textLayout(@src(), .{}, .{
                     .expand = .horizontal,
-                    .margin = .{ .y = 2 },
+                    .margin = .{ .x = block_inset_x, .y = 2, .w = block_inset_x, .h = 2 },
                     .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
                     .background = true,
                     .color_fill = dvui.themeGet().color(.err, .fill).opacity(0.08),
@@ -1877,16 +2270,48 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                 const num_cols = ctx.rs.table_col_counts.get(@intFromPtr(n.n)) orelse return;
                 if (num_cols == 0) return;
 
+                // Holds the table's inset from the prose column (see `block_inset_x`). Expands so
+                // the grid inside it is offered the full inset width — how much of that the table
+                // actually takes is the grid's business, below.
                 var table_wrap = box(@src(), .{ .dir = .vertical }, .{
-                    .expand = .none,
-                    .margin = .{ .y = 6 },
+                    .expand = .horizontal,
+                    .margin = .{ .x = block_inset_x, .y = 8, .w = block_inset_x, .h = 8 },
                     .id_extra = ids.next(),
                 });
                 defer table_wrap.deinit();
 
+                // `layout_only`: this is a content-sized preview table, not a spreadsheet. (The
+                // row-culling path below still supplies `min_size_content` for skipped cells;
+                // `layout_only` is what makes those heights stick every frame.)
+                //
+                // The width the table has to work with. Taken from the wrap rather than from
+                // `ctx.column_width` so a table nested in a quote or list gets its container's
+                // width, and — because the wrap expands — it is a *fixed* number rather than one
+                // derived from how wide the table currently is. That distinction is the whole
+                // trick: column widths computed against a number the columns themselves feed into
+                // ratchet down a little every frame.
+                const table_avail = blk: {
+                    const w = table_wrap.data().contentRect().w;
+                    // Headroom for the grid's own border, plus a point of slack. Without it, a
+                    // squeezed table's columns sum to exactly the wrap width, the grid finds its
+                    // viewport a hair narrower than that, and shaves the difference off every
+                    // column — enough (0.3pt was the measured case) to push a column that fit its
+                    // text perfectly into wrapping one character onto a second line.
+                    break :blk @max(60, (if (w > 0) w else ctx.column_width - 2 * block_inset_x) - 4);
+                };
+
+                // `.expand = .none`: the table is as wide as its columns and no wider. A
+                // two-column `| a | b |` stretched across the pane is harder to read than the same
+                // table at its natural size. Widths come from `tableColumnWidths` below, which is
+                // what makes "as wide as its columns" mean "up to the pane, then wrap".
+                //
+                // Scrolling stays off in both directions: the table scrolls with the document.
                 var g = dvui.grid(@src(), .{
+                    .layout_only = true,
                     .scroll_opts = .{
-                        .horizontal_bar = .auto,
+                        .horizontal = .none,
+                        .vertical = .none,
+                        .horizontal_bar = .hide,
                         .vertical_bar = .hide,
                     },
                 }, .{
@@ -1901,6 +2326,24 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                 defer g.deinit();
 
                 const cell_padding: dvui.Rect = .{ .x = 8, .y = 5, .w = 8, .h = 5 };
+
+                // Install our own column widths, and with them off the grid's plate, leave it to
+                // auto-size rows only. Row heights are safe to measure (a wrapped cell's height is
+                // what we want to learn), and uncapped: the grid's default max is ~5 lines, which
+                // clips a wrapped cell mid-sentence with nowhere else to read the rest.
+                //
+                // `col_widths` is empty on a table's first frame — the grid learns its column
+                // count from the cells it saw last frame — so that frame falls back to the grid's
+                // own auto-sizing and the frame after picks these up.
+                const col_ws = tableColumnWidths(n, num_cols, table_avail, cell_padding, ctx);
+                if (col_ws.len == num_cols and g.col_widths.len == num_cols) {
+                    @memcpy(g.col_widths, col_ws);
+                    g.autoSize(.{
+                        .auto = .rows,
+                        .min_height = 0,
+                        .max_height = dvui.max_float_safe,
+                    });
+                }
 
                 // dvui dropped `CellStyle.Banded` along with the grid rework, so the zebra
                 // striping is applied here: odd body rows get the alternate fill, everything
@@ -1924,9 +2367,19 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                 const row_clip_top = clip.y - row_slack;
                 const row_clip_bot = clip.y + clip.h + row_slack;
                 var row_anchor: ?struct { screen_y: f32, scale: f32, row_offset: f32 } = null;
-                var measure_bytes_left: u64 = table_measure_bytes;
+                // The *off-screen* budget goes to zero while the column is still moving, for the
+                // same reason `renderTopLevel` zeroes its block budget: a row measured at this
+                // frame's width is invalid at the next frame's, so a sash drag would pay for the
+                // whole table over and over and keep none of it (~5.4KB of text shaped per frame
+                // on docs/PLUGIN_MANIFEST_PLAN.md, discarded every time). Those rows stay owed —
+                // `pending_measure` keeps frames coming — and get measured once the width holds.
+                //
+                // `first_sight_left` is deliberately *not* zeroed. It gates rows that are on
+                // screen, and during a resize every row counts as never-measured (the column
+                // width they were measured at just changed), so zeroing it made every visible row
+                // cull itself and the table rendered blank for the whole drag.
+                var measure_bytes_left: u64 = if (ctx.rs.width_in_flux) 0 else table_measure_bytes;
                 var first_sight_left: u64 = table_first_sight_bytes;
-                var rows_unsettled = false;
 
                 var body_row: usize = 0;
                 var c = n.firstChild();
@@ -1965,7 +2418,6 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                         // heights, so one real cell rect plus `rowOffset`/`rowHeight` gives every
                         // other row's position exactly.
                         const measured_before = !rowNeedsMeasure(ctx, g, row);
-                        if (!measured_before) rows_unsettled = true;
                         var row_visible = if (!cull_rows or row_anchor == null) true else blk: {
                             const a = row_anchor.?;
                             const top = a.screen_y + (g.rowOffset(body_row) - a.row_offset) * a.scale;
@@ -1987,7 +2439,10 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                         // `renderDocument` asks for another frame while any remains. It stays
                         // owed on the frame it *is* measured on, because a measurement only
                         // counts once a second pass agrees with it.
-                        if (!measured_before and !row_visible) stats.pending_measure += 1;
+                        if (!measured_before and !row_visible and !ctx.rs.block_measure_exhausted) stats.pending_measure += 1;
+                        // Any row that has not been measured for real leaves this table's height
+                        // a guess, however it is drawn — see `RenderState.block_rows_pending`.
+                        if (!measured_before) ctx.rs.block_rows_pending += 1;
                         const row_text_before = stats.add_text_bytes;
 
                         var col: usize = 0;
@@ -2006,10 +2461,21 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                             // to be laid out in rather than the one it produces.
                             const cell_w = g.colWidth(col);
                             const draw_cell = row_visible or measure_row;
+                            // An unmeasured culled cell used to hand the grid a *zero* size, which
+                            // is the same low-bias mistake `Table.estimate` makes one level up and
+                            // it compounds: on a 45KB table most rows are unmeasured on first
+                            // sight, so the block came out a fraction of its real height and then
+                            // inflated by hundreds of points per frame as the budget caught up.
+                            // One line is the honest floor — most table cells are exactly that —
+                            // and the block's height is roughly right immediately instead.
+                            const cell_placeholder: dvui.Size = if (cached) |cs|
+                                cs.size
+                            else
+                                .{ .w = 0, .h = dvui.Font.theme(.body).lineHeight() };
                             const cell_box = g.cell(
                                 .{ .col = col, .row = body_row },
                                 banded.opts(body_row, cell_padding).override(
-                                    if (draw_cell) .{} else .{ .min_size_content = if (cached) |cs| cs.size else dvui.Size{} },
+                                    if (draw_cell) .{} else .{ .min_size_content = cell_placeholder },
                                 ),
                             );
                             if (row_anchor == null) {
@@ -2055,17 +2521,6 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                         body_row += 1;
                     }
                 }
-                // A grid only writes the row heights it measured into the ones it *keeps* during an
-                // auto-size pass, and it stops running those passes as soon as a frame changes
-                // nothing. A row measured after that point — which, with the measuring budget
-                // above, is most of a big table's rows — would have its height computed and then
-                // thrown away, leaving the row stuck at the grid's minimum. So the pass is re-armed
-                // for as long as any row is still settling.
-                //
-                // Only for as long, though: `autoSize` re-arms itself and refreshes each frame
-                // until the measurements agree, so calling it unconditionally would leave the
-                // preview repainting forever.
-                if (rows_unsettled) g.autoSize(.{ .auto = .both });
             } else {
                 var c = n.firstChild();
                 while (c) |ch| : (c = ch.nextSibling()) renderBlock(ch, ids, ctx);

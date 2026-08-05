@@ -277,6 +277,9 @@ fn revealPosition(_: *anyopaque, handle: DocHandle, line: u32, character: u32) v
     const doc = docFrom(handle) orelse return;
     doc.pending_sel = .collapsed(doc.byteOffsetForLineCharacter(line, character));
     doc.pending_scroll_line = line;
+    // Both panes show the same document, so a reveal means both. Set unconditionally — whether
+    // the extension has a preview, and whether it is on screen, is `TextEditor`'s to know.
+    doc.pending_preview_line = line;
 }
 fn bindDocumentToPane(_: *anyopaque, _: DocHandle, _: dvui.Id, _: *anyopaque, _: bool) void {
     // Text editing needs no pane/canvas binding; the text widget manages its own state.

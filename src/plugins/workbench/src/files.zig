@@ -18,9 +18,10 @@ pub var edit_id: ?usize = null;
 pub var selected_paths: std.AutoArrayHashMapUnmanaged(usize, []u8) = .empty;
 pub var selection_anchor: ?usize = null;
 
-/// Visible file/folder rows in depth-first tree order for the current frame (shift-range selection).
+/// One row in depth-first tree order, for resolving a shift-range. Built on demand — see
+/// `flushPendingFileShiftRange` — because the tree only builds widgets for rows near the
+/// viewport and a shift anchor is usually scrolled well off screen.
 const FileVisRow = struct { id: usize, path: []const u8 };
-var visible_file_rows_order: std.ArrayListUnmanaged(FileVisRow) = .empty;
 
 /// Shift-range uses row order built incrementally during draw; applying mid-traverse misses the anchor
 /// when it appears later in DFS than the clicked row. Flush after the tree pass completes.
@@ -141,6 +142,10 @@ fn drawWeb() !void {
 }
 
 pub fn drawFiles(path: []const u8, tree: *wdvui.TreeWidget) !void {
+    // Nothing is mid-walk at this point, so this is the one safe moment to free listings that
+    // last frame's draw invalidated while it was still reading them.
+    releaseRetiredListings();
+
     const unique_id = dvui.parentGet().extendId(@src(), 0);
     runtime.workbench().file_tree_data_id = unique_id;
 
@@ -375,6 +380,14 @@ pub fn invalidateFilterIndex() void {
     filter_cache_valid = false;
 }
 
+/// Both caches, for the disk-mutating helpers below. Deliberately *not* folded into
+/// `invalidateFilterIndex`: that one also fires every frame the filter box is empty, which would
+/// drop the listing cache continuously and undo the whole point of having it.
+fn invalidateAfterDiskChange() void {
+    invalidateFilterIndex();
+    invalidateDirCache();
+}
+
 fn freeFilterIndex() void {
     const gpa = runtime.allocator();
     for (filter_index.items) |p| gpa.free(p);
@@ -499,6 +512,200 @@ fn rankedFilterRows(root_directory: []const u8, filter_text: []const u8) []const
     return filter_cache_rows.items;
 }
 
+// ---- directory listing cache ---------------------------------------------------------------
+//
+// The unfiltered tree used to re-read every expanded directory straight from disk on *every
+// frame*: `openDir` + `iterate`, an arena dupe per name, a full sort, and an `isPathIgnored`
+// call per entry. On a normal project that is invisible. On a vault with a few hundred thousand
+// markdown files in one directory it is megabytes of arena churn and a sort of the whole listing
+// per frame, which is half of why such a folder drops the app to single-digit FPS. (The other
+// half is drawing a widget per row — see the virtualized file run in `search`.)
+//
+// So a listing is read once and kept. Freshness comes from `folderPathsChanged`, the watcher
+// fizzy already runs on the open root; when there is no watcher backend for the platform,
+// entries fall back to a short TTL so outside edits still show up.
+
+const CachedEntry = struct {
+    name: []u8,
+    /// Always `.file` or `.directory`. Anything else on disk (a symlink, a fifo) is resolved to
+    /// whichever it behaves as, so a sorted listing is always a directory run followed by a file
+    /// run — the split `search` needs to virtualize the file half. It also fixes a small
+    /// pre-existing bug: an entry of any other kind used to fall through the draw loop's `switch`
+    /// and leave a blank, unlabelled row in the tree.
+    kind: std.Io.File.Kind,
+};
+
+const CachedListing = struct {
+    /// Sorted by `cachedLessThan` and already screened against fizzy's ignore rules.
+    entries: []CachedEntry,
+    /// Count of leading `.directory` entries; `entries[dir_count..]` is the uniform-height run.
+    dir_count: usize,
+    read_at_ms: i64,
+};
+
+/// Keyed by absolute directory path (owned). Values are boxed because a listing is borrowed
+/// across a whole `search` call and the map rehashes as nested directories are read, which would
+/// otherwise move the value out from under the loop iterating it.
+var dir_cache: std.StringArrayHashMapUnmanaged(*CachedListing) = .empty;
+
+/// Listings unlinked from the cache but possibly still being read by the draw in progress.
+///
+/// Invalidation can fire *during* a draw — a context menu that deletes or renames a file runs
+/// inside the row it belongs to, several `search` frames deep, each of which is iterating a
+/// listing. Freeing eagerly there is a use-after-free in the enclosing loops, so an unlinked
+/// listing is parked here and released at the top of the next frame instead.
+var dir_cache_retired: std.ArrayListUnmanaged(*CachedListing) = .empty;
+
+/// Directories held at once. A tree with more than this expanded isn't a UI anyone is reading;
+/// dropping the whole cache beats maintaining an LRU for a case nobody reaches.
+const dir_cache_max_dirs: usize = 1024;
+
+/// Re-read interval used *only* when fizzy has no live folder watcher, so the tree still
+/// notices outside edits on a platform with no watcher backend.
+const dir_cache_unwatched_ttl_ms: i64 = 1000;
+
+/// Monotonic milliseconds. The boot clock rather than a wall clock: a TTL must not be
+/// perturbed by the system clock stepping.
+fn nowMs() i64 {
+    return @intCast(@divTrunc(std.Io.Clock.boot.now(dvui.io).nanoseconds, std.time.ns_per_ms));
+}
+
+fn cachedLessThan(_: void, lhs: CachedEntry, rhs: CachedEntry) bool {
+    if (lhs.kind == .directory and rhs.kind != .directory) return true;
+    if (lhs.kind != .directory and rhs.kind == .directory) return false;
+    return std.mem.order(u8, lhs.name, rhs.name) == .lt;
+}
+
+fn freeListing(listing: *CachedListing) void {
+    const gpa = runtime.allocator();
+    for (listing.entries) |e| gpa.free(e.name);
+    gpa.free(listing.entries);
+    gpa.destroy(listing);
+}
+
+/// Unlink one listing, parking it for release on the next frame (see `dir_cache_retired`).
+fn retireCachedListingAt(index: usize) void {
+    const gpa = runtime.allocator();
+    const listing = dir_cache.values()[index];
+    gpa.free(dir_cache.keys()[index]);
+    dir_cache.swapRemoveAt(index);
+    dir_cache_retired.append(gpa, listing) catch freeListing(listing);
+}
+
+/// Release listings unlinked during earlier frames. Called once at the top of the tree draw,
+/// which is the only point at which nothing can still be reading one.
+fn releaseRetiredListings() void {
+    for (dir_cache_retired.items) |listing| freeListing(listing);
+    dir_cache_retired.clearRetainingCapacity();
+}
+
+/// Drop every cached listing. The tree re-reads whatever it draws on the next frame.
+pub fn invalidateDirCache() void {
+    while (dir_cache.count() > 0) retireCachedListingAt(dir_cache.count() - 1);
+}
+
+/// Drop the listing for one directory. `folderPathsChanged` calls this with the parent of each
+/// changed path — a file appearing in `a/b/c.md` only invalidates `a/b`.
+pub fn invalidateDirCacheFor(directory: []const u8) void {
+    if (dir_cache.getIndex(directory)) |idx| retireCachedListingAt(idx);
+}
+
+/// Cached, sorted, ignore-screened listing for `directory`, reading it from disk on a miss.
+/// Null when the directory can't be opened.
+fn listDir(directory: []const u8) ?*const CachedListing {
+    const gpa = runtime.allocator();
+    const now = nowMs();
+
+    if (dir_cache.getIndex(directory)) |idx| {
+        const listing = dir_cache.values()[idx];
+        if (runtime.host().folderWatchActive() or now - listing.read_at_ms < dir_cache_unwatched_ttl_ms) {
+            return listing;
+        }
+        retireCachedListingAt(idx);
+    }
+
+    if (dir_cache.count() >= dir_cache_max_dirs) invalidateDirCache();
+
+    const io = dvui.io;
+    var dir = std.Io.Dir.cwd().openDir(io, directory, .{ .access_sub_paths = true, .iterate = true }) catch return null;
+    defer dir.close(io);
+
+    var entries: std.ArrayListUnmanaged(CachedEntry) = .empty;
+    const proj_root = runtime.host().folder();
+    // The ignore check wants an absolute path but doesn't keep it, so it's built into a stack
+    // buffer: joining through an allocator here would mean one allocation per entry on a listing
+    // that can be hundreds of thousands long.
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+
+    var iter = dir.iterate();
+    while (iter.next(io) catch null) |entry| {
+        const abs_path: ?[]const u8 = std.fmt.bufPrint(
+            &path_buf,
+            "{s}" ++ std.fs.path.sep_str ++ "{s}",
+            .{ directory, entry.name },
+        ) catch null;
+
+        if (proj_root) |root| {
+            const abs = abs_path orelse continue;
+            if (runtime.host().isPathIgnored(root, abs, entry.name, entry.kind)) continue;
+        }
+
+        const kind: std.Io.File.Kind = switch (entry.kind) {
+            .directory => .directory,
+            .file => .file,
+            else => if (abs_path) |abs|
+                (if (pathIsDirAbsolute(abs)) .directory else .file)
+            else
+                .file,
+        };
+
+        const name = gpa.dupe(u8, entry.name) catch continue;
+        entries.append(gpa, .{ .name = name, .kind = kind }) catch {
+            gpa.free(name);
+            continue;
+        };
+    }
+
+    const owned = entries.toOwnedSlice(gpa) catch {
+        for (entries.items) |e| gpa.free(e.name);
+        entries.deinit(gpa);
+        return null;
+    };
+    std.mem.sort(CachedEntry, owned, {}, cachedLessThan);
+
+    var dir_count: usize = 0;
+    while (dir_count < owned.len and owned[dir_count].kind == .directory) dir_count += 1;
+
+    const listing = gpa.create(CachedListing) catch {
+        for (owned) |e| gpa.free(e.name);
+        gpa.free(owned);
+        return null;
+    };
+    listing.* = .{ .entries = owned, .dir_count = dir_count, .read_at_ms = now };
+
+    const key = gpa.dupe(u8, directory) catch {
+        freeListing(listing);
+        return null;
+    };
+    dir_cache.put(gpa, key, listing) catch {
+        gpa.free(key);
+        freeListing(listing);
+        return null;
+    };
+    return listing;
+}
+
+/// Free everything this module holds across frames. Called from `Workbench.deinit`.
+pub fn deinitCaches() void {
+    deinitFilterIndex();
+    invalidateDirCache();
+    releaseRetiredListings();
+    dir_cache.deinit(runtime.allocator());
+    dir_cache_retired.deinit(runtime.allocator());
+    selectionFreeAll();
+    selected_paths.deinit(runtime.allocator());
+}
+
 /// One row to draw. `dir` is normally null — the row's parent directory is whichever directory
 /// the walk is currently in. Filtered rows come from all over the project at once (a flat ranked
 /// list, not a walk), so those carry their own parent explicitly.
@@ -508,12 +715,54 @@ const SimpleEntry = struct {
     dir: ?[]const u8 = null,
 };
 
-fn lessThan(_: void, lhs: SimpleEntry, rhs: SimpleEntry) bool {
-    if (lhs.kind == .directory and rhs.kind == .file) return true;
-    if (lhs.kind == .file and rhs.kind == .directory) return false;
+// ---- file-run virtualization ----------------------------------------------------------------
+//
+// Every row in the tree is a real widget stack — a branch, a caret slot, an icon slot, a label,
+// a context menu — so a directory's row count is a *per-frame* cost even for rows scrolled far
+// out of sight. A quarter-million-file directory is therefore unusable no matter how fast the
+// listing is read, which is why the cache above is only half the fix.
+//
+// Only the file run is virtualized. File rows are uniform height, so a leading and trailing
+// spacer can stand in for the rows outside the viewport and keep both the scrollbar and the
+// scroll offset exactly where they'd otherwise be. Directory rows are not: an expanded folder is
+// as tall as its whole subtree. They always draw, which is fine because directories are the
+// small half of every real tree.
 
-    return std.mem.order(u8, lhs.name, rhs.name) == .lt;
-}
+/// Below this many files in one directory, virtualizing costs more than it saves.
+const virtual_min_rows: usize = 64;
+
+/// Rows drawn beyond each edge of the viewport. Overscan is not just polish here: dvui drops a
+/// widget's min size the moment it goes undrawn (`min_sizes` is put-only tracked), so a row
+/// scrolled back into view reports zero height on its first frame again. Drawing it a few rows
+/// early means it has settled by the time it is actually on screen.
+const virtual_overscan: f32 = 16;
+
+/// Rows drawn on the very first frame purely to measure the row pitch, before which there is no
+/// way to know where the viewport falls in the run. One frame, then it self-corrects.
+const virtual_probe_rows: usize = 32;
+
+/// Natural-unit height budget for one file run.
+///
+/// dvui clamps *every* widget's reported min size to `dvui.max_float_safe` (2e6) so layout
+/// arithmetic stays inside f32's exact-integer range. At ~21.5 natural px per row that caps a
+/// run at roughly 93k rows — a 283k-file directory would silently lose two thirds of its scroll
+/// range, stopping partway down the list with no indication anything was cut.
+///
+/// Past that many rows the run therefore stops being drawn at one pixel per pixel: rows keep
+/// their true height, but the *mapping* from scroll offset to row index is compressed to fit the
+/// budget (see `virt_pitch`). The scrollbar then covers the whole directory, at the cost of one
+/// pixel of travel meaning more than one row. Sized under the limit to leave room for the
+/// directory rows and chrome sharing the same box.
+const virtual_run_budget: f32 = 1_800_000;
+
+/// Measured spacing between consecutive file rows, in physical pixels.
+///
+/// Module-level rather than per-directory dvui data on purpose: every file row in the tree is
+/// built identically, so one measurement serves all of them, and it survives the file tree not
+/// being drawn for a frame (switching sidebar tabs). Stored per widget, it would be reaped
+/// along with the widget, and the run would fall back to the probe path — which briefly reports
+/// a tiny content height and yanks the scroll position back to the top.
+var row_pitch_px: f32 = 0;
 
 /// `query`, when non-null, is the active filter — the bytes of `label` it matched are tinted so
 /// a row explains *why* it survived the filter (the same treatment the settings tree gives its
@@ -669,7 +918,6 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
     var color_i: usize = 0;
     var id_extra: usize = 0;
 
-    visible_file_rows_order.clearRetainingCapacity();
     errdefer pending_file_shift_range = null;
 
     const recursor = struct {
@@ -680,56 +928,166 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
         /// The filtered case used to run through the walk too, re-reading *every* directory in
         /// the project from disk on *every frame* and testing each basename with a substring
         /// match. That is what made typing in the filter box scale with project size.
-        fn search(directory: []const u8, tree: *wdvui.TreeWidget, inner_unique_id: dvui.Id, inner_id_extra: *usize, color_id: *usize, filter_text: []const u8, parent_branch: ?*wdvui.TreeWidget.Branch, rows: ?[]const SimpleEntry) !void {
-            const io = dvui.io;
-
+        fn search(directory: []const u8, tree: *wdvui.TreeWidget, inner_unique_id: dvui.Id, inner_id_extra: *usize, color_id: *usize, filter_text: []const u8, parent_branch: ?*wdvui.TreeWidget.Branch, rows: ?[]const SimpleEntry) anyerror!void {
             // Borrows `filter_text`, which outlives this call — see `fuzzy.Query`.
             const query = fuzzy.Query.init(filter_text);
             const active_query: ?*const fuzzy.Query = if (query.isEmpty()) null else &query;
 
-            var files = std.array_list.Managed(SimpleEntry).init(dvui.currentWindow().arena());
+            // Two sources of rows: a caller-supplied ranked list while a filter is active (flat,
+            // all files, already capped and screened), or this directory's cached listing.
+            // Neither is copied — a listing can be hundreds of thousands of entries and only the
+            // handful actually drawn below is touched.
+            const listing: ?*const CachedListing = if (rows == null) (listDir(directory) orelse return) else null;
+            const total: usize = if (rows) |r| r.len else listing.?.entries.len;
+            const file_run_start: usize = if (listing) |l| l.dir_count else 0;
 
-            if (rows) |ranked| {
-                // Already filtered, ranked, and carrying their own parent directories.
-                try files.appendSlice(ranked);
-            } else {
-                var dir = std.Io.Dir.cwd().openDir(io, directory, .{ .access_sub_paths = true, .iterate = true }) catch return;
-                defer dir.close(io);
-
-                var iter = dir.iterate();
-                while (try iter.next(io)) |entry| {
-                    try files.append(.{
-                        .name = dvui.currentWindow().arena().dupe(u8, entry.name) catch "Arena failed to allocate",
-                        .kind = entry.kind,
-                    });
+            const entryAt = struct {
+                fn get(r: ?[]const SimpleEntry, l: ?*const CachedListing, i: usize) SimpleEntry {
+                    if (r) |ranked| return ranked[i];
+                    const e = l.?.entries[i];
+                    return .{ .name = e.name, .kind = e.kind };
                 }
+            }.get;
 
-                std.mem.sort(
-                    SimpleEntry,
-                    files.items,
-                    {},
-                    lessThan,
-                );
+            // Directory rows: variable height, always drawn (see the virtualization notes above).
+            for (0..file_run_start) |i| {
+                _ = try drawRow(entryAt(rows, listing, i), directory, tree, inner_unique_id, inner_id_extra, color_id, filter_text, active_query, parent_branch);
             }
 
-            for (files.items) |entry| {
+            const file_count = total - file_run_start;
+            if (file_count == 0) return;
+
+            // Anchors the top of the file run in screen space. Placed after the directory rows
+            // precisely so their (variable, possibly animating) height doesn't have to be
+            // predicted — whatever it came out to, the run starts here.
+            const anchor = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 0, .h = 0 } });
+            const anchor_rs = anchor.rectScale();
+            const pitch: f32 = row_pitch_px;
+
+            const scale = if (anchor_rs.s > 0) anchor_rs.s else 1;
+            const count_f: f32 = @floatFromInt(file_count);
+
+            // Geometry pitch: the real row pitch normally, squeezed to fit `virtual_run_budget`
+            // once the run is too tall for dvui to express. Rows are still *drawn* at `pitch`;
+            // only the spacers and the offset-to-row mapping use this.
+            const virt_pitch = @min(pitch, virtual_run_budget * scale / count_f);
+
+            var lo: usize = 0;
+            var hi: usize = file_count;
+            const clip = dvui.clipGet();
+            if (file_count > virtual_min_rows) {
+                if (pitch > 0.5 and virt_pitch > 0.01 and clip.h > 0) {
+                    // Clamped as floats before the conversion: `@intFromFloat` is undefined for a
+                    // value outside the integer's range, and nothing here bounds the arithmetic.
+                    const limit: f32 = count_f;
+                    // Where the viewport starts is a question about the compressed mapping...
+                    const top = (clip.y - anchor_rs.r.y) / virt_pitch - virtual_overscan;
+                    lo = @intFromFloat(std.math.clamp(@floor(top), 0, limit));
+
+                    // ...but how many rows it takes to *fill* the viewport is a question about
+                    // real row height, which compression must not change.
+                    const span: usize = @intFromFloat(std.math.clamp(
+                        @ceil(clip.h / pitch + 2 * virtual_overscan),
+                        1,
+                        limit,
+                    ));
+
+                    // Once the block can no longer start that far down without overflowing the
+                    // end of the run, the lead spacer below pins it to the end — so it has to
+                    // show the rows that actually *live* at the end, not the ones the mapping
+                    // nominally points at.
+                    //
+                    // The test is in pixels, not row counts. Under compression the viewport
+                    // spans far more virtual rows than the block draws (~135 vs ~67 here), so
+                    // at max scroll `lo + span` still sits ~68 rows short of the last row and a
+                    // row-count test never fires — which is exactly how the final entries ended
+                    // up drawn but positioned past the scrollable area, and unreachable.
+                    const span_px = @as(f32, @floatFromInt(span)) * pitch;
+                    const max_lead_px = @max(0, count_f * virt_pitch - span_px);
+                    if (@as(f32, @floatFromInt(lo)) * virt_pitch > max_lead_px) {
+                        lo = file_count -| span;
+                    }
+                    hi = @min(file_count, lo + span);
+                } else {
+                    // No pitch yet (first frame for this run) — draw a bounded probe to measure it.
+                    hi = @min(file_count, virtual_probe_rows);
+                }
+            }
+
+            // Both spacers are drawn unconditionally, even at zero height: a widget that comes
+            // and goes as you scroll churns ids for no benefit.
+            //
+            // The lead is also held back so the drawn block cannot run past the end of the run.
+            // Under compression the block is taller than the virtual space it maps to, so near
+            // the bottom `lo * virt_pitch` would push it past `run_px`, the trailing spacer
+            // would bottom out at zero, and the run would grow — moving the scroll end, which
+            // moves `lo`. Pinning the last screenful to the end keeps the height invariant.
+            // Uncompressed this is never binding: `hi <= file_count` already guarantees it.
+            const run_px = count_f * virt_pitch;
+            const block_px = @as(f32, @floatFromInt(hi - lo)) * pitch;
+            const lead_px = @max(0, @min(@as(f32, @floatFromInt(lo)) * virt_pitch, run_px - block_px));
+            _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 0, .h = lead_px / scale } });
+
+            // Pitch is the *largest* gap between consecutive drawn rows, not their average.
+            //
+            // A row that just scrolled into view has no min size yet and lays out zero-height
+            // for one frame, so an average is biased low by however many rows are settling —
+            // and a pitch that shrinks shrinks the content height, which is exactly the
+            // feedback the trailing spacer above exists to prevent. The largest gap is the
+            // pitch of a settled pair, and there is essentially always one in the window.
+            var widest_gap: f32 = 0;
+            var prev_y: f32 = 0;
+            var drawn: usize = 0;
+            for (file_run_start + lo..file_run_start + hi) |i| {
+                const y = try drawRow(entryAt(rows, listing, i), directory, tree, inner_unique_id, inner_id_extra, color_id, filter_text, active_query, parent_branch);
+                if (drawn > 0) widest_gap = @max(widest_gap, y - prev_y);
+                prev_y = y;
+                drawn += 1;
+            }
+            if (widest_gap > 0.5) row_pitch_px = widest_gap;
+
+            // The trailing spacer is sized from what the rows *actually* occupied this frame,
+            // not from `(file_count - hi) * pitch`, so the run is always exactly
+            // `file_count * pitch` tall no matter what happened above.
+            //
+            // That invariant is the whole fix for a scroll area that fought the user: dvui drops
+            // a widget's min size as soon as it goes undrawn, so every row scrolled back into
+            // view is zero-height for one frame. With a fixed trailing spacer that made the
+            // content height collapse by a screenful whenever the visible window moved, which
+            // re-clamped the scroll offset, which moved the window again. Absorbing the
+            // difference here keeps the total constant and breaks the loop.
+            const marker = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 0, .h = 0 } });
+            const consumed_px = marker.rectScale().r.y - anchor_rs.r.y;
+            _ = dvui.spacer(@src(), .{ .min_size_content = .{
+                .w = 0,
+                .h = @max(0, run_px - consumed_px) / scale,
+            } });
+        }
+
+        /// Draw one file or folder row, returning its top edge in physical screen coordinates
+        /// (which is what `search` measures the run's row pitch from).
+        fn drawRow(
+            entry: SimpleEntry,
+            directory: []const u8,
+            tree: *wdvui.TreeWidget,
+            inner_unique_id: dvui.Id,
+            inner_id_extra: *usize,
+            color_id: *usize,
+            filter_text: []const u8,
+            active_query: ?*const fuzzy.Query,
+            parent_branch: ?*wdvui.TreeWidget.Branch,
+            // `anyerror` breaks the inferred-error-set cycle with `search`, which this calls back
+            // into for an expanded folder.
+        ) anyerror!f32 {
+            var row_y: f32 = 0;
+            {
                 const entry_dir = entry.dir orelse directory;
                 const abs_path = try std.fs.path.join(
                     dvui.currentWindow().arena(),
                     &.{ entry_dir, entry.name },
                 );
 
-                // Ranked rows were already screened when the index was built.
-                if (rows == null) {
-                    if (runtime.host().folder()) |proj_root| {
-                        if (runtime.host().isPathIgnored(proj_root, abs_path, entry.name, entry.kind)) {
-                            continue;
-                        }
-                    }
-                }
-
                 inner_id_extra.* = dvui.Id.update(tree.data().id, abs_path).asUsize();
-                try visible_file_rows_order.append(runtime.allocator(), .{ .id = inner_id_extra.*, .path = abs_path });
 
                 // Fixed Fizzy palette (theme-independent) so row accents stay stable across
                 // theme switches and line up with rainbow bracket colours in the editor.
@@ -780,6 +1138,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                     .padding = dvui.Rect.all(1),
                 });
                 defer branch.deinit();
+
+                row_y = branch.data().borderRectScale().r.y;
 
                 if (new_file_path) |path| {
                     if (std.mem.eql(u8, path, abs_path)) {
@@ -1143,18 +1503,18 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                     else => {},
                 }
             }
+            return row_y;
         }
-    }.search;
+    };
 
     if (outer_filter_text.len > 0) {
         const ranked = rankedFilterRows(root_directory, outer_filter_text);
-        try recursor(root_directory, outer_tree, unique_id, &id_extra, &color_i, outer_filter_text, null, ranked);
+        try recursor.search(root_directory, outer_tree, unique_id, &id_extra, &color_i, outer_filter_text, null, ranked);
+        flushPendingFileShiftRange(root_directory, outer_tree, ranked);
     } else {
-        try recursor(root_directory, outer_tree, unique_id, &id_extra, &color_i, outer_filter_text, null, null);
+        try recursor.search(root_directory, outer_tree, unique_id, &id_extra, &color_i, outer_filter_text, null, null);
+        flushPendingFileShiftRange(root_directory, outer_tree, null);
     }
-    flushPendingFileShiftRange();
-
-    return;
 }
 
 pub fn isFileSelected(id: usize) bool {
@@ -1221,14 +1581,55 @@ fn applyFileClick(id: usize, path: []const u8, mode: wdvui.TreeSelection.ClickMo
     }
 }
 
-fn flushPendingFileShiftRange() void {
-    const p = pending_file_shift_range orelse return;
-    pending_file_shift_range = null;
-    applyFileShiftRange(p.clicked_id, p.clicked_path, p.anchor_id);
+/// Depth-first order of every row the tree would show, matching draw order (a directory's
+/// children immediately follow it, directories before files within each listing).
+///
+/// This walks the cached listings rather than recording rows as they draw, because the tree
+/// only builds widgets for rows near the viewport — a shift anchor is usually scrolled far off
+/// screen, and recording only drawn rows would silently reduce every long-range shift-click to a
+/// single-row selection. Costs one pass on the frame a shift-click lands and nothing otherwise.
+fn appendRowOrder(
+    arena: std.mem.Allocator,
+    tree_id: dvui.Id,
+    directory: []const u8,
+    out: *std.ArrayListUnmanaged(FileVisRow),
+) void {
+    const listing = listDir(directory) orelse return;
+    for (listing.entries) |e| {
+        const abs = std.fs.path.join(arena, &.{ directory, e.name }) catch continue;
+        const branch_id = tree_id.update(abs);
+        out.append(arena, .{ .id = branch_id.asUsize(), .path = abs }) catch return;
+        if (e.kind == .directory and runtime.host().explorerBranchIsOpen(branch_id)) {
+            appendRowOrder(arena, tree_id, abs, out);
+        }
+    }
 }
 
-fn applyFileShiftRange(clicked_id: usize, clicked_path: []const u8, anchor_id: usize) void {
-    const rows = visible_file_rows_order.items;
+fn flushPendingFileShiftRange(
+    root_directory: []const u8,
+    tree: *wdvui.TreeWidget,
+    ranked: ?[]const SimpleEntry,
+) void {
+    const p = pending_file_shift_range orelse return;
+    pending_file_shift_range = null;
+
+    const arena = dvui.currentWindow().arena();
+    var rows: std.ArrayListUnmanaged(FileVisRow) = .empty;
+
+    if (ranked) |list| {
+        // A filter is active: row order is the ranked list, not the tree.
+        for (list) |e| {
+            const abs = std.fs.path.join(arena, &.{ e.dir orelse root_directory, e.name }) catch continue;
+            rows.append(arena, .{ .id = tree.data().id.update(abs).asUsize(), .path = abs }) catch break;
+        }
+    } else {
+        appendRowOrder(arena, tree.data().id, root_directory, &rows);
+    }
+
+    applyFileShiftRange(rows.items, p.clicked_id, p.clicked_path, p.anchor_id);
+}
+
+fn applyFileShiftRange(rows: []const FileVisRow, clicked_id: usize, clicked_path: []const u8, anchor_id: usize) void {
     var a_idx: ?usize = null;
     var c_idx: ?usize = null;
     for (rows, 0..) |row, i| {
@@ -1441,6 +1842,7 @@ pub fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.m
         dvui.log.err("Failed to move {s} to {s}", .{ source_path, new_path });
         return false;
     };
+    invalidateAfterDiskChange();
 
     if (runtime.host().docFromPath(source_path)) |doc| {
         doc.owner.setDocumentPath(doc, new_path) catch {
@@ -1460,7 +1862,7 @@ pub fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.m
 /// every open document beneath it; a file rename rewrites that document. Logs and
 /// continues on a filesystem failure (matches the explorer's inline behavior).
 pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File.Kind) !void {
-    invalidateFilterIndex();
+    invalidateAfterDiskChange();
     switch (kind) {
         .directory => {
             std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename folder: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
@@ -1495,7 +1897,7 @@ pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File
 /// Delete `path` from disk (a directory must be empty — mirrors the explorer's
 /// inline Delete). Logs and continues on failure.
 pub fn deletePath(path: []const u8) void {
-    invalidateFilterIndex();
+    invalidateAfterDiskChange();
     if (pathIsDirAbsolute(path)) {
         std.Io.Dir.deleteDirAbsolute(dvui.io, path) catch dvui.log.err("Failed to delete folder: {s}", .{path});
     } else {
@@ -1505,14 +1907,14 @@ pub fn deletePath(path: []const u8) void {
 
 /// Create an empty file at absolute `path`.
 pub fn createFilePath(path: []const u8) !void {
-    invalidateFilterIndex();
+    invalidateAfterDiskChange();
     var handle = try std.Io.Dir.createFileAbsolute(dvui.io, path, .{});
     handle.close(dvui.io);
 }
 
 /// Create a directory at absolute `path` (parents must already exist).
 pub fn createDirPath(path: []const u8) !void {
-    invalidateFilterIndex();
+    invalidateAfterDiskChange();
     try std.Io.Dir.createDirAbsolute(dvui.io, path, .default_dir);
 }
 

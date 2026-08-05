@@ -22,6 +22,8 @@ fn defaultTrackpadPinchRatio() f32 {
 // Shared infrastructure re-exports.
 pub const image = @import("gfx/image.zig");
 pub const perf = @import("gfx/perf.zig");
+/// TEMPORARY frame-hitch profiler (`FIZZY_HITCH_MS`).
+pub const hitch = @import("hitch.zig");
 pub const water_surface = @import("gfx/water_surface.zig");
 pub const math = @import("math/math.zig");
 pub const fs = @import("fs.zig");

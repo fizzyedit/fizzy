@@ -110,12 +110,29 @@ fn run(label: []const u8, sample: []const u8, case: Case) !void {
         .window_size = .{ .w = 1200, .h = 800 },
     });
     defer {
-        t.deinit();
+        // Preview first: it may own a running background parse worker holding the window
+        // pointer it wakes on completion, and `Preview.deinit` is what joins that worker.
+        // Destroying the window first left the worker refreshing freed memory.
         preview.deinit();
+        t.deinit();
     }
 
     // Warm up: the first frames parse the document, build the glyph atlas and settle every
     // widget's min size, none of which recur.
+    //
+    // Parsing happens on a worker thread, so "run N frames" no longer implies the document
+    // exists yet — and a fixed count silently stopped being enough the moment frames got fast.
+    // In ReleaseFast the whole 15-frame warm-up finished in ~150us, the parse had not landed,
+    // and every scenario below then measured the "Loading preview…" placeholder: 11us/frame,
+    // 0us in renderDocument, and the counters left over from the *previous* document. Wait for
+    // the document to actually be there.
+    {
+        var spins: usize = 0;
+        while (preview.rs.blocks.len() == 0 and spins < 10_000) : (spins += 1) {
+            _ = try dvui.testing.step(frame);
+        }
+        if (preview.rs.blocks.len() == 0) return error.MarkdownPreviewNeverParsed;
+    }
     for (0..15) |_| _ = try dvui.testing.step(frame);
 
     if (case.park_scroll_ticks != 0) {
@@ -239,8 +256,9 @@ fn runOpen(sample: []const u8) !void {
             open_samples.appendSlice(std.testing.allocator, samples.items) catch {};
         }
         render_ast.block_profile = null;
-        t.deinit();
+        // Preview before window — see the note in `run`.
         preview.deinit();
+        t.deinit();
     }
 
     if (profile_blocks) {

@@ -9,13 +9,6 @@
 //! The same step also runs `fizzy-sdk-tests` (rooted at `src/sdk/sdk.zig`)
 //! for SDK/dylib/settings coverage that needs dvui — see `build/app.zig`.
 //!
-//! Pixel-art-specific coverage (`Internal.File`, `Layer`, `Packer`,
-//! `Animation`, grid/pack/flood-fill regressions) moved out with the
-//! pixi plugin extraction — pixi now ships from its own repo
-//! (`fizzyedit/pixi`) and owns that coverage there. This target keeps
-//! the headless dvui harness alive for future fizzy-shell-level
-//! integration tests (workbench, text, image, menu/sidebar flows).
-//!
 //! See `tests/README.md` for the overall layering.
 
 const std = @import("std");
@@ -439,7 +432,6 @@ test "switching to different content re-reveals" {
     try std.testing.expectEqual(@as(f32, 1), reveal_alpha);
 }
 
-
 // -- center-provider cross-fade -----------------------------------------------------------------
 
 // Swapping center providers can't be a fade-in: each provider paints its own pane (square and
@@ -582,18 +574,39 @@ fn markdownFrame() !dvui.App.Result {
 /// `render_ast.table_measure_bytes`), and the first real width arrives on frame two, when the
 /// scroll viewport is known.
 ///
-/// `pending_measure` is part of the condition and not just a nicety: a table block is marked
-/// settled as soon as it has a height to stand on, long before its off-screen rows have been
+/// `pending_measure` is part of the condition and not just a nicety: a table block stops being
+/// re-measured as soon as it has a height to stand on, long before its off-screen rows have been
 /// measured, so waiting on block heights alone stops while the table is still hundreds of points
 /// short of its real size.
+///
+/// "Settled" here means every block has stopped wanting a re-measure — `.settled` proper, or
+/// `.deferred` (an off-screen table whose height can only be answered by scrolling to it). See
+/// `block_heights.Height.State`.
 fn markdownSettle() !void {
     for (0..600) |_| {
         _ = try dvui.testing.step(markdownFrame);
-        var all = md_preview.rs.block_heights.items.len > 0;
-        for (md_preview.rs.block_heights.items) |e| {
-            if (!e.settled) all = false;
+        var all = md_preview.rs.blocks.heights.items.len > 0;
+        for (md_preview.rs.blocks.heights.items) |e| {
+            if (e.wantsMeasure()) all = false;
         }
         if (all and md_render_ast.stats.pending_measure == 0) return;
+    }
+    // `MarkdownPreviewNeverSettled` on its own says nothing about *why*, and the answer is
+    // always the same shape: which blocks are still owed a measure, and in what state. Printing
+    // the tally is what turned "the layout never settles" into "164 of 185 blocks were never
+    // measured once, because the resettle budget was gated on being near the viewport".
+    var counts = [_]usize{0} ** 4;
+    for (md_preview.rs.blocks.heights.items) |e| counts[@intFromEnum(e.state)] += 1;
+    std.debug.print(
+        "\nnever settled: blocks={d} estimated={d} measured={d} settled={d} deferred={d} pending_measure={d}\n",
+        .{ md_preview.rs.blocks.heights.items.len, counts[0], counts[1], counts[2], counts[3], md_render_ast.stats.pending_measure },
+    );
+    var shown: usize = 0;
+    for (md_preview.rs.blocks.heights.items, 0..) |e, i| {
+        if (!e.wantsMeasure()) continue;
+        if (shown >= 10) break;
+        shown += 1;
+        std.debug.print("  block {d}: h={d:.2} state={s}\n", .{ i, e.h, @tagName(e.state) });
     }
     return error.MarkdownPreviewNeverSettled;
 }
@@ -610,11 +623,14 @@ const MarkdownLayout = struct {
 /// Lays the document out scrolled `wheel_ticks` from the top and reports the resulting geometry.
 fn markdownLayout(gpa: std.mem.Allocator, virtualize: bool, wheel_ticks: f32) !MarkdownLayout {
     md_render_ast.virtualize_blocks = virtualize;
-    md_preview = .{};
-    defer md_preview.deinit();
-
+    // Window first, so its `defer` runs *last*. `Preview.deinit` is what joins a background
+    // parse worker, and that worker holds the window pointer it wakes on completion — tearing
+    // the window down first left it refreshing freed memory.
     var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
     defer t.deinit();
+
+    md_preview = .{};
+    defer md_preview.deinit();
 
     try markdownSettle();
 
@@ -625,8 +641,8 @@ fn markdownLayout(gpa: std.mem.Allocator, virtualize: bool, wheel_ticks: f32) !M
         try markdownSettle();
     }
 
-    const heights = try gpa.alloc(f32, md_preview.rs.block_heights.items.len);
-    for (md_preview.rs.block_heights.items, heights) |entry, *out| out.* = entry.h;
+    const heights = try gpa.alloc(f32, md_preview.rs.blocks.heights.items.len);
+    for (md_preview.rs.blocks.heights.items, heights) |entry, *out| out.* = entry.h;
     return .{ .heights = heights, .virtual_h = md_preview.scroll.virtual_size.h };
 }
 
@@ -653,4 +669,541 @@ test "markdown preview: skipping off-screen blocks lays the document out identic
         for (virtualized.heights) |h| sum += h;
         try std.testing.expectApproxEqAbs(sum + 16, virtualized.virtual_h, 0.01);
     };
+}
+
+/// Steps until the document has been parsed and placed. The parse runs on a worker thread, so a
+/// fixed number of frames guarantees nothing about whether there is a document yet.
+fn markdownAwaitParse() !void {
+    for (0..600) |_| {
+        _ = try dvui.testing.step(markdownFrame);
+        if (md_preview.rs.blocks.len() > 0) return;
+    }
+    return error.MarkdownPreviewNeverParsed;
+}
+
+/// Scrolls by `ticks` and runs a fixed number of frames *without* waiting for settle — the point
+/// is what the reader experiences mid-scroll, not the steady state they eventually reach.
+fn markdownScroll(ticks: f32, frames: usize) !void {
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 400, .y = 300 } });
+    _ = try cw.addEventMouseWheel(ticks, .vertical, null);
+    for (0..frames) |_| _ = try dvui.testing.step(markdownFrame);
+}
+
+// The user-visible complaint these two encode: on docs/PLUGIN_MANIFEST_PLAN.md, scrolling about
+// three quarters of the way down went unstable — the document jumped under the reader and the
+// scrollbar jumped with it, and scrolling back up landed near the top of the document instead of
+// where they had been.
+//
+// Both symptoms are the same defect seen from two ends: the document's total height was mostly
+// low-biased *estimates* (blocks far from the viewport were never measured, so their guesses
+// stood in for real heights), and an absolute `viewport.y` measured against a total that grows as
+// you scroll into it cannot mean the same thing from one frame to the next.
+
+test "markdown preview: the document's height stops moving once settled" {
+    const gpa = std.testing.allocator;
+    md_doc = md_sample_tables;
+    // Window first, so its `defer` runs *last*. `Preview.deinit` is what joins a background
+    // parse worker, and that worker holds the window pointer it wakes on completion — tearing
+    // the window down first left it refreshing freed memory.
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+    defer t.deinit();
+
+    md_preview = .{};
+    defer md_preview.deinit();
+    try markdownSettle();
+
+    // Every block measured, so no block may still be standing on a guess. An `.estimated` block
+    // here is a block whose height the scrollbar is lying about.
+    for (md_preview.rs.blocks.heights.items, 0..) |e, i| {
+        if (e.state == .estimated) {
+            std.debug.print("block {d} never measured (h={d:.2})\n", .{ i, e.h });
+            return error.BlockLeftAtEstimate;
+        }
+    }
+
+    // Scrolling a settled document must not change how tall it is. When it does, every scroll
+    // position below the change means something different than it did the frame before — which
+    // is exactly what "the scrollbar jumps while I scroll" is.
+    const before = md_preview.scroll.virtual_size.h;
+    try markdownScroll(-4000, 30);
+    try std.testing.expectApproxEqAbs(before, md_preview.scroll.virtual_size.h, 1.0);
+    try markdownScroll(-4000, 30);
+    try std.testing.expectApproxEqAbs(before, md_preview.scroll.virtual_size.h, 1.0);
+}
+
+test "markdown preview: scrolling deep and back returns to the same place" {
+    const gpa = std.testing.allocator;
+    md_doc = md_sample_tables;
+    // Window first, so its `defer` runs *last*. `Preview.deinit` is what joins a background
+    // parse worker, and that worker holds the window pointer it wakes on completion — tearing
+    // the window down first left it refreshing freed memory.
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+    defer t.deinit();
+
+    md_preview = .{};
+    defer md_preview.deinit();
+    try markdownSettle();
+
+    // Three quarters of the way down — the region the instability was reported in, and on this
+    // document the one holding the 45KB table.
+    const max_scroll = md_preview.scroll.virtual_size.h - md_preview.scroll.viewport.h;
+    try std.testing.expect(max_scroll > 2000); // it really is a long document
+    md_preview.scroll.scrollToOffset(.vertical, max_scroll * 0.75);
+    for (0..30) |_| _ = try dvui.testing.step(markdownFrame);
+
+    const parked = md_preview.scroll.viewport.y;
+    // The scroll must actually have taken effect — see the note in the rapid-scrolling test.
+    try std.testing.expect(parked > max_scroll * 0.5);
+    // A settled document must not drift while merely being looked at.
+    for (0..30) |_| _ = try dvui.testing.step(markdownFrame);
+    try std.testing.expectApproxEqAbs(parked, md_preview.scroll.viewport.y, 1.0);
+
+    // Down a screen and back up the same amount: a round trip must be a no-op. It was not — the
+    // heights discovered on the way down changed what the offset meant on the way back.
+    try markdownScroll(-1500, 20);
+    try markdownScroll(1500, 20);
+    try std.testing.expectApproxEqAbs(parked, md_preview.scroll.viewport.y, 2.0);
+}
+
+// The case the anchor exists for. Every other test here holds the geometry still, which is
+// precisely the condition under which the old absolute-offset scheme also looked fine.
+//
+// Here the reader parks three quarters of the way down and *then* the column reflows under them.
+// Every height above them changes, so the pixel offset they were sitting at now points somewhere
+// else entirely. Holding position through that is the whole reason scroll state is a source line
+// rather than a number of pixels.
+test "markdown preview: the reader holds position when the column reflows" {
+    const gpa = std.testing.allocator;
+    md_doc = md_sample_tables;
+    // Window first, so its `defer` runs *last*. `Preview.deinit` is what joins a background
+    // parse worker, and that worker holds the window pointer it wakes on completion — tearing
+    // the window down first left it refreshing freed memory.
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+    defer t.deinit();
+
+    md_preview = .{};
+    defer md_preview.deinit();
+
+    try markdownSettle();
+
+    // Park deep in the document. Growth *below* the reader moves nothing, so a reader near the
+    // top would sit still even with no anchoring at all — the position has to be far enough down
+    // that a reflow changes a lot of height above them.
+    const max_before = md_preview.scroll.virtual_size.h - md_preview.scroll.viewport.h;
+    try std.testing.expect(max_before > 2000);
+    md_preview.scroll.scrollToOffset(.vertical, max_before * 0.75);
+    for (0..5) |_| _ = try dvui.testing.step(markdownFrame);
+    try std.testing.expect(md_preview.scroll.viewport.y > max_before * 0.5);
+
+    const anchor = md_preview.anchor orelse return error.NoAnchor;
+    try std.testing.expect(!anchor.at_end);
+    const height_before = md_preview.scroll.virtual_size.h;
+
+    // Narrow the window hard: every wrapped block reflows taller, including everything above the
+    // reader. This is a sash drag, and it is the cleanest way to move a lot of height at once.
+    // The testing backend reports its size from these fields, so writing them *is* a resize.
+    t.backend.size = .{ .w = 450, .h = 700 };
+    t.backend.size_pixels = .{ .w = 900, .h = 1400 };
+    // One explicit frame before settling. `dvui.testing.step` ends with `Window.begin`, which is
+    // what re-reads the backend size — so on the first step the frame still runs at the *old*
+    // width, and `markdownSettle` would see an already-settled layout and return immediately,
+    // before the resize had changed anything.
+    _ = try dvui.testing.step(markdownFrame);
+    try markdownSettle();
+
+    // The document really did change size underneath them — otherwise this proves nothing.
+    const height_after = md_preview.scroll.virtual_size.h;
+    try std.testing.expect(@abs(height_after - height_before) > 500);
+
+    // ...and they are still on the same source line, at the same offset into it. An absolute
+    // pixel offset could not survive this: the content that used to be at that offset is now
+    // hundreds of points further down.
+    const now = md_preview.anchor.?;
+    try std.testing.expectEqual(anchor.line, now.line);
+    try std.testing.expectApproxEqAbs(anchor.offset_px, now.offset_px, 2.0);
+}
+
+// The symptom that outlasted the anchor: scrolling past the end of the big table, and into the
+// next one, snapped and jumped.
+//
+// The anchor holds a reader against a *block*, so it cannot help when the block itself changes
+// size — and a table's measured height was a function of where the reader was scrolled. Its rows
+// are culled to what is on screen, and a row that had never been measured stood in with a
+// placeholder, so the grid reported a different total depending on which rows happened to be real
+// that frame. Every such change moved everything below it.
+//
+// The invariant that has to hold, and what this asserts: **a block's height is a function of the
+// document, not of the scroll position.**
+test "markdown preview: block heights do not depend on where the reader is" {
+    const gpa = std.testing.allocator;
+    md_doc = md_sample_tables;
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+    defer t.deinit();
+    md_preview = .{};
+    defer md_preview.deinit();
+
+    try markdownSettle();
+    const base = try gpa.alloc(f32, md_preview.rs.blocks.heights.items.len);
+    defer gpa.free(base);
+    for (md_preview.rs.blocks.heights.items, base) |e, *o| o.* = e.h;
+    const total_base = md_preview.scroll.virtual_size.h;
+    try std.testing.expect(total_base > 10_000); // the sample really is a long document
+
+    md_preview.scroll.scrollToOffset(.vertical, 0);
+    try markdownSettle();
+
+    // Wheel all the way down in steps, two frames each — no settling between them, which is what
+    // a real scroll looks like and what the earlier tests here never exercised.
+    var step_i: usize = 0;
+    while (step_i < 90) : (step_i += 1) {
+        try markdownScroll(-300, 2);
+        for (md_preview.rs.blocks.heights.items, base, 0..) |e, b, bi| {
+            if (@abs(e.h - b) > 1.0) {
+                std.debug.print(
+                    "\nblock {d} changed height while scrolling: {d:.1} -> {d:.1} (state {s}) at y={d:.1}\n",
+                    .{ bi, b, e.h, @tagName(e.state), md_preview.scroll.viewport.y },
+                );
+                return error.BlockHeightDependsOnScroll;
+            }
+        }
+    }
+
+    // ...and the document is the same size at the bottom as it was at the top.
+    try std.testing.expectApproxEqAbs(total_base, md_preview.scroll.virtual_size.h, 1.0);
+}
+
+// Rapidly scrolling up and down through the tables made the preview jump wildly, and it survived
+// both the anchor and the "block heights do not depend on scroll position" fix. Two distinct
+// causes, neither visible to a test that scrolls gently in one direction:
+//
+//  1. A table's *emitted* height was still unstable even when its recorded height was not. The
+//     scroll container builds `virtual_size` from widgets, not from the height table, so refusing
+//     to record a bad measurement did not stop it reaching the scrollbar. Block 5 emitted 46pt on
+//     one frame and 29,995pt on another against a real ~6,132.
+//  2. The anchor was re-derived every frame, so any single frame of bad geometry became the
+//     reader's stored position permanently.
+test "markdown preview: rapid scrolling up and down does not move the document" {
+    const gpa = std.testing.allocator;
+    md_doc = md_sample_tables;
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+    defer t.deinit();
+    md_preview = .{};
+    defer md_preview.deinit();
+
+    try markdownSettle();
+    const max = md_preview.scroll.virtual_size.h - md_preview.scroll.viewport.h;
+    try std.testing.expect(max > 5000);
+
+    // Park inside the big table.
+    md_preview.scroll.scrollToOffset(.vertical, max * 0.6);
+    try markdownSettle();
+    const parked = md_preview.scroll.viewport.y;
+    // Guard against the test silently running at the top: an anchor that overwrote the offset
+    // between frames used to discard `scrollToOffset` entirely, which made several tests here
+    // pass while asserting nothing.
+    try std.testing.expect(parked > max * 0.5);
+
+    const total = md_preview.scroll.virtual_size.h;
+
+    // Thrash: one frame per direction change, which is what outruns every budget in the renderer.
+    var round: usize = 0;
+    while (round < 12) : (round += 1) {
+        try markdownScroll(-2000, 1);
+        try markdownScroll(2000, 1);
+        try std.testing.expectApproxEqAbs(parked, md_preview.scroll.viewport.y, 1.0);
+        try std.testing.expectApproxEqAbs(total, md_preview.scroll.virtual_size.h, 1.0);
+    }
+}
+
+// Dragging the split-pane sash: every cached height is invalidated on every frame of the drag,
+// which is the harshest thing that happens to this renderer. Two things must hold at once, and
+// they pull against each other — the document has to actually reflow, and the reader must not
+// move while it does.
+//
+// Getting the second one by freezing everything is not a pass: an earlier version pinned table
+// blocks so hard they could never relearn their height (a pinned block measures exactly its pin,
+// so it agrees with itself forever), and the document silently stopped reflowing. Hence the
+// explicit assertion that the total really did change.
+test "markdown preview: the reader holds position while the sash is dragged" {
+    const gpa = std.testing.allocator;
+    md_doc = md_sample_tables;
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+    defer t.deinit();
+    md_preview = .{};
+    defer md_preview.deinit();
+
+    try markdownSettle();
+    const max = md_preview.scroll.virtual_size.h - md_preview.scroll.viewport.h;
+    md_preview.scroll.scrollToOffset(.vertical, max * 0.6);
+    try markdownSettle();
+
+    const start = md_preview.anchor orelse return error.NoAnchor;
+    try std.testing.expect(md_preview.scroll.viewport.y > max * 0.5); // really did park
+    const total_before = md_preview.scroll.virtual_size.h;
+
+    // 900 -> 500 in 10pt steps, one frame each: a drag, not a jump.
+    var w: f32 = 900;
+    var i: usize = 0;
+    while (i < 40) : (i += 1) {
+        w -= 10;
+        t.backend.size = .{ .w = w, .h = 700 };
+        t.backend.size_pixels = .{ .w = w * 2, .h = 1400 };
+        _ = try dvui.testing.step(markdownFrame);
+
+        // Checked every frame, not just at the end: the failure this guards against was the
+        // reader creeping a little on each frame of the drag.
+        const now = md_preview.anchor orelse return error.NoAnchor;
+        try std.testing.expectEqual(start.line, now.line);
+        try std.testing.expectApproxEqAbs(start.offset_px, now.offset_px, 2.0);
+
+        // The pane must still be *drawing* while it is dragged. Skipping work during a resize is
+        // the obvious way to make one fast, and an over-eager version of exactly that (zeroing
+        // the table's on-screen row budget along with its off-screen one) made every visible row
+        // cull itself, so the table rendered blank for the whole drag while the timings looked
+        // excellent. Cheap frames that draw nothing are not the goal.
+        try std.testing.expect(md_render_ast.stats.add_text_bytes > 500);
+    }
+
+    // The column really did narrow, and the document really did get taller for it.
+    try std.testing.expect(md_preview.rs.blocks.layout_width < 550);
+    try std.testing.expect(md_preview.scroll.virtual_size.h > total_before + 500);
+}
+
+// The workflow this preview actually exists for: typing in the editor with the preview beside it.
+// Every keystroke re-parses the document, and a re-parse used to throw the whole height table
+// away — all 50 blocks fell back to estimates, the total collapsed from 20,093 to 8,886, and the
+// reader was thrown hundreds of points for several frames. Once per character.
+//
+// Two things keep it still now, and both are needed: heights are keyed by block source so an edit
+// only invalidates the block it touched, and the anchor identifies its block by source hash so an
+// insertion above the reader does not renumber them out from under it.
+test "markdown preview: an edit does not move the reader or lose the layout" {
+    const gpa = std.testing.allocator;
+    // The same document with one line inserted near the top — what typing looks like from here.
+    const edited = try std.mem.concat(gpa, u8, &.{ md_sample_tables[0..200], "\nnew line\n", md_sample_tables[200..] });
+    defer gpa.free(edited);
+
+    md_doc = md_sample_tables;
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+    defer t.deinit();
+    md_preview = .{};
+    defer md_preview.deinit();
+
+    try markdownSettle();
+    const max = md_preview.scroll.virtual_size.h - md_preview.scroll.viewport.h;
+    md_preview.scroll.scrollToOffset(.vertical, max * 0.6);
+    try markdownSettle();
+
+    const y_before = md_preview.scroll.viewport.y;
+    const total_before = md_preview.scroll.virtual_size.h;
+    try std.testing.expect(y_before > max * 0.5); // really did park
+
+    md_doc = edited;
+    _ = try dvui.testing.step(markdownFrame);
+
+    // On the very first frame after the edit, most of the layout must survive. Blocks the edit did
+    // not touch keep their measured heights, so the document does not momentarily believe it is
+    // half its real size.
+    try std.testing.expect(md_preview.scroll.virtual_size.h > total_before * 0.8);
+    var kept: usize = 0;
+    for (md_preview.rs.blocks.heights.items) |e| {
+        if (e.state != .estimated) kept += 1;
+    }
+    try std.testing.expect(kept > md_preview.rs.blocks.heights.items.len / 2);
+
+    // And the reader ends up exactly where they were, despite every line below the insertion
+    // having been renumbered.
+    try markdownSettle();
+    try std.testing.expectApproxEqAbs(y_before, md_preview.scroll.viewport.y, 2.0);
+}
+
+// Before a block has ever been laid out, its height is a guess from its source — and until the
+// warm-up sweep finishes, the scrollbar is the sum of those guesses. The guess used to ignore what
+// kind of block it was: an image is one line of source and hundreds of points tall, a table row is
+// a line of source and a line *plus* cell padding, a heading is a line in a much larger font. All
+// the errors pointed the same way, and docs/PLUGIN_MANIFEST_PLAN.md estimated at 24% of its real
+// length — a scrollbar claiming the document was a quarter of its true size.
+//
+// A band, not a number: these are guesses and are meant to be. What matters is that they are the
+// right order of magnitude, and that a future change to the estimator cannot quietly undo that.
+test "markdown preview: the estimated document length is in the right ballpark" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ md_sample, md_sample_tables }) |sample| {
+        md_doc = sample;
+        var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+        defer t.deinit();
+        md_preview = .{};
+        defer md_preview.deinit();
+
+        try markdownAwaitParse();
+        const m = md_render_ast.currentMetricsForTest();
+        const w = md_preview.rs.blocks.layout_width;
+        var est: f32 = 0;
+        for (0..md_preview.rs.blocks.len()) |i| est += md_preview.rs.blocks.estimate(i, m, w) orelse 0;
+
+        try markdownSettle();
+        var real: f32 = 0;
+        for (md_preview.rs.blocks.heights.items) |e| real += e.h;
+
+        try std.testing.expect(real > 10_000); // these really are long documents
+        const ratio = est / real;
+        if (ratio < 0.7 or ratio > 1.4) {
+            std.debug.print("\nestimated length {d:.0} vs real {d:.0} ({d:.0}%)\n", .{ est, real, ratio * 100 });
+            return error.EstimateOutOfBand;
+        }
+    }
+}
+
+// Scrolling the whole document down and back up, checking every step that the reader went where
+// they asked and nowhere else. This is the shape of the bug reports that kept coming back — "it
+// jumps to the top", "it jumps to the bottom" — and none of the earlier tests could see it,
+// because they all parked somewhere and thrashed locally instead of traversing.
+//
+// The last one it caught: anchoring by block source hash, where the hash identifies *text* and
+// documents repeat themselves. docs/PLUGIN_MANIFEST_PLAN.md has seven top-level blocks sharing a
+// single hash, so an anchor on any of them resolved to whichever copy came first and the reader
+// was thrown to the top of the document.
+test "markdown preview: scrolling through the document never jumps past where it was asked" {
+    const gpa = std.testing.allocator;
+    // Both samples: PLUGINS.md is the longer one (185 blocks) and has its own tables. Running
+    // this only on the table-heavy sample missed it entirely.
+    for ([_][]const u8{ md_sample, md_sample_tables }) |sample| {
+    md_doc = sample;
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+    defer t.deinit();
+    md_preview = .{};
+    defer md_preview.deinit();
+
+    try markdownSettle();
+    md_preview.scroll.scrollToOffset(.vertical, 0);
+    try markdownSettle();
+
+    // Small steps on purpose. A coarse traversal steps straight over the short blocks — a rule, a
+    // one-line paragraph — and those are exactly the ones a document repeats, so a coarse sweep
+    // never anchors on one and never sees the bug that repetition causes.
+    const step_px: f32 = 100;
+    // Generous: one step of scrolling, plus room for the document's total to still be settling.
+    const tolerance: f32 = step_px + 250;
+
+    var down: usize = 0;
+    while (down < 220) : (down += 1) {
+        const before = md_preview.scroll.viewport.y;
+        try markdownScroll(-step_px, 2);
+        const after = md_preview.scroll.viewport.y;
+        if (after < before - 1 or after > before + tolerance) {
+            std.debug.print("\nscrolling down: y {d:.1} -> {d:.1} (asked for +{d:.0})\n", .{ before, after, step_px });
+            return error.ScrollJumped;
+        }
+    }
+    try std.testing.expect(md_preview.scroll.viewport.y > 5000); // it really did travel
+
+    var up: usize = 0;
+    while (up < 260) : (up += 1) {
+        const before = md_preview.scroll.viewport.y;
+        try markdownScroll(step_px, 2);
+        const after = md_preview.scroll.viewport.y;
+        if (after > before + 1 or after < before - tolerance) {
+            std.debug.print("\nscrolling up: y {d:.1} -> {d:.1} (asked for -{d:.0})\n", .{ before, after, step_px });
+            return error.ScrollJumped;
+        }
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 0), md_preview.scroll.viewport.y, 1.0);
+    }
+}
+
+
+// The preview must stop asking for frames. `dvui.Window.end` returns 0 while a refresh is pending
+// ("render again immediately") and null when there is nothing to do — so a preview that keeps
+// returning 0 is an app that never sleeps, burning battery behind an idle window.
+//
+// This is not hypothetical: the renderer asks for another frame whenever any block or table row is
+// still owed a measuring pass, and "keep asking until it converges" is not a termination argument.
+// A table whose cells never agree with the column width they are laid out in never converges, and
+// the preview then holds the whole app awake for as long as the document is open.
+fn markdownReachesIdle() !bool {
+    // Generous: the warm-up sweep legitimately wants a few hundred frames on a long document.
+    for (0..900) |_| {
+        const wait = try dvui.testing.step(markdownFrame);
+        if (wait == null or wait.? > 0) return true;
+    }
+    return false;
+}
+
+test "markdown preview: stops asking for frames so the app can sleep" {
+    const gpa = std.testing.allocator;
+    for ([_][]const u8{ md_sample, md_sample_tables }) |sample| {
+        md_doc = sample;
+        var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+        defer t.deinit();
+        md_preview = .{};
+        defer md_preview.deinit();
+
+        try markdownAwaitParse();
+        if (!try markdownReachesIdle()) {
+            var counts = [_]usize{0} ** 4;
+            for (md_preview.rs.blocks.heights.items) |e| counts[@intFromEnum(e.state)] += 1;
+            std.debug.print(
+                "\nnever idle: estimated={d} measured={d} settled={d} deferred={d} pending_measure={d}\n",
+                .{ counts[0], counts[1], counts[2], counts[3], md_render_ast.stats.pending_measure },
+            );
+            return error.PreviewNeverStopsRequestingFrames;
+        }
+
+        // ...and it must still be idle after scrolling into the tables and back, which is where
+        // the never-settling measurements live.
+        try markdownScroll(-8000, 4);
+        if (!try markdownReachesIdle()) return error.PreviewNeverStopsRequestingFramesAfterScroll;
+        try markdownScroll(8000, 4);
+        if (!try markdownReachesIdle()) return error.PreviewNeverStopsRequestingFramesAfterScrollBack;
+    }
+}
+
+
+// Typing, one character at a time, with the preview open beside the editor. This is the single
+// most common thing anyone does with this preview, and every keystroke re-parses the document.
+//
+// The per-edit test above inserts one line and checks the reader comes back. That is not the same
+// as *never leaving*: a jump that lasts one frame and corrects itself is still a jump the reader
+// sees, once per character.
+var md_edit_buf: std.ArrayListUnmanaged(u8) = .empty;
+
+test "markdown preview: typing does not move the preview" {
+    const gpa = std.testing.allocator;
+    md_edit_buf.clearRetainingCapacity();
+    defer md_edit_buf.deinit(gpa);
+    try md_edit_buf.appendSlice(gpa, md_sample);
+    md_doc = md_edit_buf.items;
+
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+    defer t.deinit();
+    md_preview = .{};
+    defer md_preview.deinit();
+
+    try markdownSettle();
+    const max = md_preview.scroll.virtual_size.h - md_preview.scroll.viewport.h;
+    // Deep, so that every table in the document is *above* the reader. A table's height changing
+    // below them moves nothing; the whole question is what happens to content above.
+    md_preview.scroll.scrollToOffset(.vertical, max * 0.9);
+    try markdownSettle();
+
+    const parked = md_preview.scroll.viewport.y;
+    try std.testing.expect(parked > max * 0.8);
+
+    // Type into a paragraph near the top — above the reader, so any height it gains moves
+    // everything they are looking at.
+    var typed: usize = 0;
+    while (typed < 12) : (typed += 1) {
+        try md_edit_buf.insert(gpa, 300, 'x');
+        md_doc = md_edit_buf.items;
+        // A couple of frames per keystroke, which is what a typist actually gives it.
+        for (0..2) |_| _ = try dvui.testing.step(markdownFrame);
+        if (@abs(md_preview.scroll.viewport.y - parked) > 3) {
+            std.debug.print(
+                "\nkeystroke {d}: preview moved {d:.1} -> {d:.1} (total {d:.0})\n",
+                .{ typed, parked, md_preview.scroll.viewport.y, md_preview.scroll.virtual_size.h },
+            );
+            return error.PreviewMovedWhileTyping;
+        }
+    }
 }

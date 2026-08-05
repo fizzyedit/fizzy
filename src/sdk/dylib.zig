@@ -132,6 +132,10 @@ const sdk_boundary_types = .{
     workbench_service.Api.VTable,
     markdown_service.Api,
     markdown_service.Api.VTable,
+    // Reached only through `VTable.defaultView`/`setDefaultView` parameter/return types — a
+    // *data* path `hashType` does walk via fn signatures, but list it explicitly so a tag
+    // rename can't be mistaken for "shape unchanged" when reading the boundary inventory.
+    markdown_service.Api.DefaultView,
     // Unlike `workbench`/`markdown`, this service's producer and consumer are *both* plugins
     // (an indexer registers it, the markdown renderer calls it) — fizzy only stores the
     // `*anyopaque`. So a mismatch here is dylib-to-dylib and the host would never notice:

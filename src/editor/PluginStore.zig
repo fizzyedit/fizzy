@@ -2195,19 +2195,26 @@ fn drawCardControls(entry: StoreEntry) void {
 
     const loaded = editor.host.pluginById(entry.id) != null;
     const disabled = editor.isPluginDisabled(entry.id);
+    const failed = entry.kind == .failed or editor.isFailedUserPlugin(entry.id);
+    // On disk, never loaded, and nothing in memory describes it — a build dropped into
+    // `plugins/<id>/` that fizzy has not classified yet (no `.plugins.<id>.enabled` on record, no
+    // load attempt, no failure). `Editor.reconcileDiscoveredPlugins` normally promotes these to
+    // `.disabled` (which carries the Enabled checkbox), but it runs off the watcher, so a card can
+    // still be drawn in this state — it must offer a way *in*, not just Uninstall.
+    const untracked = !loaded and !disabled and !failed and (entry.kind == .on_disk or isOnDisk(entry.id));
     // A build sitting in the plugins dir that isn't running: it failed to load (ABI/SDK mismatch,
     // etc.), or it is simply there with nothing in memory describing it. Either way it is on disk
     // like any installed plugin, so it must stay actionable (reinstall / uninstall) rather than
     // dead-ending at a bare "Failed" label — or, worse, at no card at all.
-    const broken = entry.kind == .failed or entry.kind == .on_disk or
-        editor.isFailedUserPlugin(entry.id) or (!loaded and !disabled and isOnDisk(entry.id));
+    const broken = failed or untracked;
 
     // Present on disk in some form: loaded, disabled-on-disk, sideloaded local, or a broken build.
     if (loaded or disabled or entry.kind == .local or entry.kind == .disabled or broken) {
-        // Enable/disable only makes sense for a plugin that can actually load — a mismatched
-        // (never-loaded) build has nothing to toggle, so skip the checkbox for the pure-broken case.
-        if (loaded or disabled) {
-            var enabled = !disabled;
+        // Enable/disable for anything that has a build to load: running, disabled, or an
+        // unclassified directory. A *failed* build is the one case with nothing to toggle — it
+        // already tried and lost — so it gets the Retry button below instead.
+        if (loaded or disabled or untracked) {
+            var enabled = loaded;
             if (dvui.checkbox(@src(), &enabled, "Enabled", .{ .gravity_y = 0.5 })) queueSetEnabled(entry.id, enabled);
         }
         // Replace with a host-compatible registry build, just before uninstall:
@@ -2225,13 +2232,22 @@ fn drawCardControls(entry: StoreEntry) void {
                     startDownload(entry.id, rel, true);
             }
         } else if (broken) {
+            // A locally built plugin that lost its load has no registry release to reinstall
+            // *from*, so Retry is the whole fix once the author rebuilds it in place: it re-runs
+            // the load against whatever is on disk now and clears the failure record on success.
+            if (failed) {
+                if (dvui.button(@src(), "Retry", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
+                    queueSetEnabled(entry.id, true);
+            }
             if (selectedRelease(entry)) |rel| {
                 if (dvui.button(@src(), "Reinstall", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
                     startDownload(entry.id, rel, false);
-            } else if (!have_snapshot) {
+            } else if (!have_snapshot or untracked) {
                 // No catalog yet (offline, or the first fetch is still running), so we genuinely
                 // don't know whether a build exists — say nothing rather than claim there is none.
                 // Uninstall below still works; the card gains a Reinstall once a snapshot lands.
+                // An untracked build stays quiet too: its Enabled checkbox is the action here, and
+                // "no store build" is irrelevant noise for something never installed from the store.
             } else {
                 // No build for this host in the fetched shard, so there is nothing to reinstall
                 // *from*. Say why (short form — this card also carries the wrapped failure text,

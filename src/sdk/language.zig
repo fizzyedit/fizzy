@@ -56,6 +56,16 @@ pub const LanguageSupport = struct {
         /// dylibs, and each `.dylib` gets its own private copy of every SDK global, so a
         /// write from the host's copy is invisible inside the plugin's.
         previewPane: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, id_extra: u64, gpa: std.mem.Allocator) anyerror!void = null,
+        /// Scroll the preview for `id_extra` so that 0-based source `line` is in view. Called
+        /// just before `previewPane` on the frame a reveal lands (`workbench.revealPosition`),
+        /// and not otherwise — a reveal is a one-shot event, so it is its own call rather than an
+        /// argument to the per-frame draw the provider would then have to de-duplicate.
+        ///
+        /// A provider that renders source into something with a shape of its own has to map the
+        /// line to its own layout; one that can't is free to leave this null, and the raw editor
+        /// still moves. Nothing guarantees the pane has ever been drawn for this `id_extra` yet,
+        /// so treat it as "remember this and apply it when you next draw".
+        previewReveal: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, line: u32, id_extra: u64) void = null,
         /// Non-blocking: called when the text editor opens (or reloads) a document. Intended
         /// for language-server warmup — spawn the server and send `textDocument/didOpen` so
         /// analysis can start before the first hover/completion, rather than paying cold-start

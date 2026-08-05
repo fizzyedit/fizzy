@@ -32,6 +32,32 @@ pub const PreviewMode = enum {
     }
 };
 
+/// Last `.split` sash position chosen this session. The mode itself persists as the markdown
+/// plugin setting `default_md_view` (via the `"markdown"` service); the ratio is session-only
+/// so a one-off drag doesn't rewrite settings.zon every frame of a sash move.
+pub var sticky_split_ratio: f32 = 0.5;
+
+/// Record the user's raw|split|preview choice: persists markdown's `default_md_view` and
+/// remembers the split sash ratio for documents opened later this session.
+pub fn rememberPreviewMode(mode: PreviewMode, user_ratio: f32) void {
+    sticky_split_ratio = user_ratio;
+    const md = sdk.host().getServiceTyped(sdk.services.markdown.Api) orelse return;
+    md.setDefaultView(switch (mode) {
+        .raw => .raw,
+        .split => .split,
+        .preview => .preview,
+    });
+}
+
+fn defaultPreviewMode() PreviewMode {
+    const md = sdk.host().getServiceTyped(sdk.services.markdown.Api) orelse return .split;
+    return switch (md.defaultView()) {
+        .raw => .raw,
+        .split => .split,
+        .preview => .preview,
+    };
+}
+
 /// Fizzy document id (monotonic, allocated from the host).
 id: u64,
 /// Absolute path on disk, heap-owned.
@@ -88,6 +114,12 @@ scroll_y: f32 = 0,
 /// (`break_lines = false`), so one source line is exactly one visual row and `line *
 /// line_height` is an exact, not approximate, scroll target.
 pending_scroll_line: ?u32 = null,
+/// The same reveal, for the preview pane — `LanguageSupport.previewReveal`, consumed by
+/// `TextEditor.drawPreviewPane`. Separate from `pending_scroll_line` because the two are
+/// consumed by different panes, and either may be the only one showing: `.raw` never draws a
+/// preview, `.preview` never draws the editor. Dropped unconsumed at the end of a frame that
+/// drew no preview, so turning one on later doesn't replay a jump from minutes ago.
+pending_preview_line: ?u32 = null,
 
 /// Owned completion candidates for the current completion list, if any — each `.label`/`.text`
 /// is a copy (`sdk.language.CompletionItem` fields from `sdk.host().completionFor(...)` are
@@ -151,10 +183,17 @@ pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
     try text.appendSlice(gpa, bytes);
     const path_copy = try gpa.dupe(u8, path);
     errdefer gpa.free(path_copy);
+    // Seed from the persisted `default_md_view` setting (and this session's sash ratio). Start
+    // the sash *at* the mode's resting position rather than animating there: the tray sliding
+    // open is feedback for a choice the user just made, not for every file they open.
+    const mode = defaultPreviewMode();
     var doc = Document{
         .id = sdk.host().allocDocId(),
         .path = path_copy,
         .text = text,
+        .preview_mode = mode,
+        .preview_split_ratio = mode.splitRatio(sticky_split_ratio),
+        .preview_split_ratio_user = sticky_split_ratio,
     };
     doc.refreshLineCount();
     return doc;
