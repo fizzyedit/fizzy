@@ -13,6 +13,9 @@ pub const core_module = @import("core_module.zig");
 /// dvui's *build* API (`AccesskitOptions` and friends), re-exported because this package owns the
 /// only dvui pin in the repo, so the app cannot `@import("dvui")` on its own.
 pub const dvui = @import("dvui");
+/// The SDK version triplet's single edit site. Built-in plugins' build glue reads it from here
+/// rather than by relative path for the one-module-per-file reason above.
+pub const sdk_version = @import("sdk_version.zig");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
