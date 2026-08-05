@@ -541,3 +541,116 @@ test "a center provider that disappears is not drawn for its own cross-fade" {
     try std.testing.expectEqual(@as(usize, 0), center_a_draws);
     try std.testing.expectEqual(@as(usize, 1), center_b_draws);
 }
+
+// -- markdown preview virtualization ------------------------------------------------------------
+
+// The markdown preview lays out only the blocks near the viewport (`render_ast.renderTopLevel`),
+// which is the difference between ~34ms and ~2.5ms per frame on docs/PLUGINS.md in Debug. The
+// whole optimization rests on one claim: skipping a block changes nothing the user can see,
+// because its wrapper still reports the height the block had when it was last drawn.
+//
+// So compare layout, not widget counts: every top-level block's height, and the scroll
+// container's resulting virtual size, must come out the same whether the blocks were all laid
+// out or only the on-screen ones were. If a remembered height ever drifted from the measured
+// one, the document below it would shift and the scrollbar would lie — and that is exactly what
+// these two numbers catch. (Comparing rendered pixels would be better still, but dvui's testing
+// backend has no render targets, so `dvui.testing.capturePng` is unavailable here.)
+const markdown = @import("markdown");
+const md_render_ast = markdown.render_ast;
+
+var md_preview: markdown.Preview = .{};
+var md_doc: []const u8 = "";
+const md_sample = @embedFile("markdown_sample");
+/// Table-heavy: one of its tables is 45KB on its own, which is what makes it the document that
+/// exercises row culling inside a table rather than only block skipping around it.
+const md_sample_tables = @embedFile("markdown_sample_tables");
+
+fn markdownFrame() !dvui.App.Result {
+    var b = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer b.deinit();
+    markdown.drawPreview(&md_preview, md_doc, std.testing.allocator, .{
+        .io = dvui.io,
+        .image_base_dir = ".",
+        .id_extra = 0,
+    });
+    return .ok;
+}
+
+/// Steps until the layout has stopped moving: every block height settled, and no off-screen table
+/// row still owed a measuring pass. Takes a while by design — the preview re-measures only a few
+/// off-screen blocks and a few KB of table text per frame (`render_ast.resettle_budget`,
+/// `render_ast.table_measure_bytes`), and the first real width arrives on frame two, when the
+/// scroll viewport is known.
+///
+/// `pending_measure` is part of the condition and not just a nicety: a table block is marked
+/// settled as soon as it has a height to stand on, long before its off-screen rows have been
+/// measured, so waiting on block heights alone stops while the table is still hundreds of points
+/// short of its real size.
+fn markdownSettle() !void {
+    for (0..600) |_| {
+        _ = try dvui.testing.step(markdownFrame);
+        var all = md_preview.rs.block_heights.items.len > 0;
+        for (md_preview.rs.block_heights.items) |e| {
+            if (!e.settled) all = false;
+        }
+        if (all and md_render_ast.stats.pending_measure == 0) return;
+    }
+    return error.MarkdownPreviewNeverSettled;
+}
+
+const MarkdownLayout = struct {
+    heights: []f32,
+    virtual_h: f32,
+
+    fn deinit(self: MarkdownLayout, gpa: std.mem.Allocator) void {
+        gpa.free(self.heights);
+    }
+};
+
+/// Lays the document out scrolled `wheel_ticks` from the top and reports the resulting geometry.
+fn markdownLayout(gpa: std.mem.Allocator, virtualize: bool, wheel_ticks: f32) !MarkdownLayout {
+    md_render_ast.virtualize_blocks = virtualize;
+    md_preview = .{};
+    defer md_preview.deinit();
+
+    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+    defer t.deinit();
+
+    try markdownSettle();
+
+    if (wheel_ticks != 0) {
+        const cw = dvui.currentWindow();
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 400, .y = 300 } });
+        _ = try cw.addEventMouseWheel(wheel_ticks, .vertical, null);
+        try markdownSettle();
+    }
+
+    const heights = try gpa.alloc(f32, md_preview.rs.block_heights.items.len);
+    for (md_preview.rs.block_heights.items, heights) |entry, *out| out.* = entry.h;
+    return .{ .heights = heights, .virtual_h = md_preview.scroll.virtual_size.h };
+}
+
+test "markdown preview: skipping off-screen blocks lays the document out identically" {
+    const gpa = std.testing.allocator;
+    defer md_render_ast.virtualize_blocks = true;
+
+    // Top, a screen or so down, and far enough that most of the document is behind the viewport.
+    for ([_][]const u8{ md_sample, md_sample_tables }) |sample| for ([_]f32{ 0, -1200, -6000 }) |ticks| {
+        md_doc = sample;
+        const full = try markdownLayout(gpa, false, ticks);
+        defer full.deinit(gpa);
+        const virtualized = try markdownLayout(gpa, true, ticks);
+        defer virtualized.deinit(gpa);
+
+        try std.testing.expect(full.heights.len > 30); // the samples really are long documents
+        try std.testing.expectEqualSlices(f32, full.heights, virtualized.heights);
+        // …and the scroll container's total is exactly those blocks plus the column's padding.
+        // Deliberately *not* compared against the full render's total: drawing every block lets
+        // each table's grid — a scroll container in its own right — ask the scroll area for more
+        // room than the block actually occupies, which is why that number comes out ~20% larger
+        // than the document really is.
+        var sum: f32 = 0;
+        for (virtualized.heights) |h| sum += h;
+        try std.testing.expectApproxEqAbs(sum + 16, virtualized.virtual_h, 0.01);
+    };
+}

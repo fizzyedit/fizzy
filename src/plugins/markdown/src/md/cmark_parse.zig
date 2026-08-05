@@ -48,6 +48,10 @@ pub const Node = struct {
         return c.cmark_node_get_start_line(n.n);
     }
 
+    pub fn endLine(n: Node) i32 {
+        return c.cmark_node_get_end_line(n.n);
+    }
+
     pub fn startColumn(n: Node) i32 {
         return c.cmark_node_get_start_column(n.n);
     }

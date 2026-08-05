@@ -54,6 +54,7 @@ const SettingsPluginsZon = @import("SettingsPluginsZon.zig");
 const SettingsWatcher = @import("SettingsWatcher.zig");
 const Constants = @import("Constants.zig");
 const DocumentWatcher = @import("DocumentWatcher.zig");
+const FolderWatcher = @import("FolderWatcher.zig");
 
 pub const Workspace = workbench_mod.Workspace;
 pub const Explorer = @import("explorer/Explorer.zig");
@@ -250,6 +251,10 @@ settings_watcher: ?SettingsWatcher = null,
 /// `Plugin.reloadDocument`; dirty docs set a conflict flag and `save` shows
 /// `FileChangedOnDisk`. Null on wasm / unsupported OS / start failure — best-effort.
 document_watcher: ?DocumentWatcher = null,
+/// Recursive watch on the open root folder, fanned out to plugins as `folderPathsChanged`.
+/// Same final-address constraint as the two above — started in `postInit`, retargeted whenever
+/// the root folder changes.
+folder_watcher: ?FolderWatcher = null,
 
 /// Timestamp of the most recent touch press anywhere in the app, or null if there
 /// hasn't been one. `Editor.draw` forces a per-frame refresh during the post-press
@@ -419,20 +424,25 @@ pub fn init(
         fizzy_dark.font_mono = .find(.{ .family = "CozetteVector", .size = editor.settings.font_mono_size });
 
         var strawberry: dvui.Theme = fizzy_dark;
+        strawberry.dark = true;
         strawberry.name = "Strawberry";
         strawberry.window = .{
             .fill = .{ .r = 84, .g = 12, .b = 26, .a = 255 },
             .border = .{ .r = 104, .g = 62, .b = 72, .a = 255 },
-            .text = .{ .r = 255, .g = 200, .b = 210, .a = 255 },
+            .text = .{ .r = 180, .g = 80, .b = 90, .a = 255 },
         };
 
         strawberry.control = .{
-            .fill = .{ .r = 206, .g = 54, .b = 76, .a = 255 },
-            .border = .{ .r = 104, .g = 62, .b = 72, .a = 255 },
-            .text = .{ .r = 220, .g = 45, .b = 57, .a = 255 },
+            .fill = .{ .r = 130, .g = 54, .b = 76, .a = 255 },
+            // Derived from an already-bright fill, the default hover/press tints wash out
+            // to near-white pink, so pin darker on-es.
+            .fill_hover = .{ .r = 178, .g = 44, .b = 66, .a = 255 },
+            .fill_press = .{ .r = 150, .g = 34, .b = 56, .a = 255 },
+            .border = .{ .r = 104, .g = 20, .b = 28, .a = 255 },
+            .text = .{ .r = 230, .g = 120, .b = 130, .a = 255 },
         };
         strawberry.highlight = .{
-            .fill = .{ .r = 236, .g = 64, .b = 89, .a = 255 },
+            .fill = .{ .r = 175, .g = 24, .b = 36, .a = 255 },
             .text = strawberry.window.fill.?,
         };
 
@@ -441,7 +451,7 @@ pub fn init(
         };
 
         strawberry.fill = .{ .r = 124, .g = 24, .b = 52, .a = 255 };
-        strawberry.text = strawberry.window.text.?.lighten(-10);
+        strawberry.text = strawberry.control.text.?.lighten(-20);
         strawberry.focus = strawberry.highlight.fill.?;
 
         var fizzy_light = fizzy_dark;
@@ -1597,6 +1607,17 @@ pub fn postInit(editor: *Editor) !void {
                 editor.document_watcher = null;
             };
         }
+
+        // Project-wide on-disk change broadcast for plugins (`folderPathsChanged`). Only the
+        // buffers are set up here; the watch itself is armed by `setProjectFolder`, which may
+        // already have run — hence the catch-up call below.
+        editor.folder_watcher = FolderWatcher.init(fizzy.app.allocator) catch |err| blk: {
+            dvui.log.warn("folder watcher: failed to init ({s}); plugins won't be told about on-disk changes", .{@errorName(err)});
+            break :blk null;
+        };
+        if (editor.folder_watcher) |*w| {
+            if (editor.folder) |f| w.setFolder(f);
+        }
     }
 }
 
@@ -1643,6 +1664,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .recentFolderAt = fizzyRecentFolderAt,
     .openInFileBrowser = fizzyOpenInFileBrowser,
     .isPathIgnored = fizzyIsPathIgnored,
+    .folderWatchActive = fizzyFolderWatchActive,
     .explorerBranchIsOpen = fizzyExplorerBranchIsOpen,
     .setExplorerBranchOpen = fizzySetExplorerBranchOpen,
     .drawWorkspaces = fizzyDrawWorkspaces,
@@ -1853,6 +1875,11 @@ fn fizzyRecentFolderAt(ctx: *anyopaque, index: usize) ?[]const u8 {
 fn fizzyOpenInFileBrowser(ctx: *anyopaque, path: []const u8) anyerror!void {
     return fizzyCtx(ctx).openInFileBrowser(path);
 }
+fn fizzyFolderWatchActive(ctx: *anyopaque) bool {
+    const editor = fizzyCtx(ctx);
+    return if (editor.folder_watcher) |*w| w.active() else false;
+}
+
 fn fizzyIsPathIgnored(
     ctx: *anyopaque,
     project_root: []const u8,
@@ -2743,6 +2770,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Reload clean open docs / flag dirty conflicts when files change on disk.
     if (editor.document_watcher) |*w| w.tick(editor);
 
+    // Fan out on-disk changes under the root folder to plugins. Cheap no-op unless the watcher
+    // thread buffered something.
+    if (editor.folder_watcher) |*w| w.tick(editor);
+
     var needs_save_status_anim_tick = false;
     for (editor.host.plugins.items) |plugin| {
         if (plugin.tickOpenDocuments()) needs_save_status_anim_tick = true;
@@ -3574,10 +3605,14 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
 
     for (editor.host.plugins.items) |plugin| plugin.onFolderOpen(fizzy.app.allocator);
     editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);
+    // After `ignore` — `FolderWatcher.tick` filters through it, and arming first would let a
+    // burst arrive while the rules still belong to the previous folder.
+    if (editor.folder_watcher) |*w| w.setFolder(editor.folder);
 }
 
 pub fn closeProjectFolder(editor: *Editor) void {
     if (editor.folder) |folder| {
+        if (editor.folder_watcher) |*w| w.setFolder(null);
         editor.ignore.deinit(fizzy.app.allocator);
         for (editor.host.plugins.items) |plugin| plugin.onFolderClose();
         fizzy.app.allocator.free(folder);
@@ -4444,6 +4479,12 @@ pub fn deinit(editor: *Editor) !void {
     if (editor.settings_watcher) |*w| {
         w.stop();
         editor.settings_watcher = null;
+    }
+    // Before the plugin `deinit` loop below: `tick` fans out into plugin vtables, and this
+    // joins the thread that feeds it.
+    if (editor.folder_watcher) |*w| {
+        w.deinit();
+        editor.folder_watcher = null;
     }
 
     // Tear workspaces down first: `Workspace.deinit` calls back into the owning plugin

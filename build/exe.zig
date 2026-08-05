@@ -1,9 +1,10 @@
 const std = @import("std");
-const dvui = @import("dvui");
+// dvui's build API via the SDK package, which owns the repo's only dvui pin.
+const dvui = @import("fizzy_sdk").dvui;
 // Vendored Velopack glue — see build/velopack.zig header (never `@import("velopack_zig")`).
 const velopack = @import("velopack.zig");
-const plugin = @import("../sdk/plugin_sdk.zig");
-const core_mod = @import("../sdk/core_module.zig");
+const plugin = @import("fizzy_sdk").plugin;
+const core_mod = @import("fizzy_sdk").core_module;
 const common = @import("common.zig");
 const plugins = @import("plugins.zig");
 const sdk = @import("sdk.zig");
@@ -79,7 +80,7 @@ pub fn addFizzyExecutableForTarget(
     velopack_enabled: bool,
 ) !FizzyExecutable {
     const dvui_dep = if (macos_sdl_paths) |p|
-        b.dependency("dvui", .{
+        sdk.dvuiDependency(b, .{
             .target = resolved_target,
             .optimize = optimize,
             .backend = .sdl3,
@@ -89,9 +90,9 @@ pub fn addFizzyExecutableForTarget(
             .library_path = p.lib,
         })
     else
-        b.dependency("dvui", .{ .target = resolved_target, .optimize = optimize, .backend = .sdl3, .accesskit = accesskit });
+        sdk.dvuiDependency(b, .{ .target = resolved_target, .optimize = optimize, .backend = .sdl3, .accesskit = accesskit });
 
-    const dvui_proxy_dep = b.dependency("dvui", .{
+    const dvui_proxy_dep = sdk.dvuiDependency(b, .{
         .target = resolved_target,
         .optimize = optimize,
         .backend = .proxy,
@@ -149,7 +150,15 @@ pub fn addFizzyExecutableForTarget(
     });
     _ = core_mod.addImports(b, core_proxy_module, dvui_proxy_mod, resolved_target, optimize);
 
-    if (b.lazyDependency("nightwatch", .{ .target = resolved_target, .optimize = optimize })) |dep| {
+    // `macos_fsevents` is load-bearing for `FolderWatcher`: it watches a whole project folder,
+    // and the kqueue fallback needs a file descriptor per directory *and* per file — exactly the
+    // shape that exhausts the fd limit on a real repo. FSEvents covers the subtree with one
+    // stream. The option only exists when nightwatch is built for macOS, hence the split.
+    const nightwatch_dep = if (resolved_target.result.os.tag == .macos)
+        b.lazyDependency("nightwatch", .{ .target = resolved_target, .optimize = optimize, .macos_fsevents = true })
+    else
+        b.lazyDependency("nightwatch", .{ .target = resolved_target, .optimize = optimize });
+    if (nightwatch_dep) |dep| {
         exe.root_module.addImport("nightwatch", dep.module("nightwatch"));
     }
 

@@ -481,6 +481,8 @@ plugin gets an Enabled-toggle-only row instead of its fields.
   domain work *inside* these generic phases (see the lifecycle table below for exactly when each
   fires).
 - **Folder lifecycle** — `onFolderClose` / `onFolderOpen`.
+- **Filesystem** — `folderPathsChanged` (files changed on disk under the open folder, from Fizzy's
+  own recursive watch; see below).
 - **Save protocol** — `saveNeedsConfirmation(doc)` + `requestSaveConfirmation(doc, mode, …)`.
 - **Contributions** — `contributeMenu`, `contributeKeybinds`.
 - **New document** — `requestNewDocumentDialog`.
@@ -532,6 +534,47 @@ through. `saveNeedsConfirmation` / `requestSaveConfirmation`
 fire `[active-doc]` from the save / close / quit-all paths; `loadDocument` runs on a **background
 load-worker thread** (touch only the host allocator + the given buffer, no dvui).
 
+#### `folderPathsChanged` — on-disk changes under the open folder
+
+`documentContentChanged` covers buffers *this editor* has open. `folderPathsChanged` covers the
+rest of the tree: a note an agent wrote, a `git checkout`, a file deleted in Finder. It fires
+`[broadcast]` from `FolderWatcher.tick` on the UI thread, with a coalesced batch:
+
+```zig
+fn folderPathsChanged(state: *anyopaque, changes: sdk.Plugin.PathChanges) void {
+    const st: *State = @ptrCast(@alignCast(state));
+    if (changes.truncated) return st.rescanEverything();
+    for (changes.events) |e| switch (e.kind) {
+        .created, .modified => st.reindex(e.path),
+        .deleted => st.forget(e.path),
+        .renamed => { st.forget(e.old_path); st.reindex(e.path); },
+    };
+}
+```
+
+Fizzy runs **one** watch over the folder and hands out the results, so a plugin that cares about
+files does not pin a watcher library or stand up a thread of its own. Four things about the
+contract are worth knowing before you rely on it:
+
+- **The slices live for the call only.** `changes`, every `event.path`, and every `old_path` are
+  borrowed. Copy anything you keep.
+- **Already filtered.** Events are run through Fizzy's `IgnoreRules` first, so `.git`, build
+  output and gitignored paths never arrive. You do not need to re-derive that with
+  `host.isPathIgnored`.
+- **`truncated` means "go look".** More changed than Fizzy could buffer, so `events` is an
+  incomplete picture — expect it during a build or a branch switch. A consumer that must not miss
+  anything should rescan rather than trust the list.
+- **A rename may arrive as delete + create.** `.renamed` with `old_path` set is a best case
+  (Linux, Windows); elsewhere the two halves are separate events, so handle that shape regardless.
+  Likewise `event.object` can be `.unknown` when the object was already gone by the time Fizzy
+  looked.
+
+`host.folderWatchActive()` says whether a watch is actually running — false with no folder open,
+on wasm, and when the platform watch could not start. A plugin that must stay correct either way
+should keep a slow periodic rescan and simply stretch its interval when this returns true, rather
+than dropping the fallback: "the watcher started" and "the watcher is still delivering" are
+different claims, and the backends differ per platform.
+
 ### 3.3 Reaching Fizzy: SDK-held injection, no storage file
 
 Plugin code can't import Fizzy, so Fizzy **injects pointers** into the plugin once at
@@ -540,7 +583,7 @@ catches them into the SDK itself, so your code just reads:
 
 - **`sdk.allocator()`** — the persistent host allocator.
 - **`sdk.host()`** — Fizzy's `*Host`: registries, services, and the `EditorAPI` read surface
-  (open folder, active doc, arena allocator, save dialogs).
+  (open folder, active doc, arena allocator, save dialogs, `folderWatchActive()`).
 - **`sdk.refresh()`** — wake the app event loop for another frame. **Safe from any thread**
   (LSP workers, load jobs, PTY readers). Call this when background work finishes and the UI
   may be idle with no mouse/keyboard events — otherwise a sleeping draw loop will not pick up
@@ -1068,6 +1111,7 @@ drop straight into the plugins directory, exactly like §2.6.
 | `src/sdk/settings.zig` | Comptime settings API (`sdk.settings.Schema(T)`) — see §3.1.1 |
 | `src/editor/SettingsPluginsZon.zig` | ZON-AST byte-span surgery for `settings.zon`'s merged `.plugins.<id>` fields — fizzy-only, not part of the SDK |
 | `src/editor/SettingsWatcher.zig` | Thin nightwatch adapter for live external `settings.zon` / dropped-in plugin reconciliation (see above) — fizzy-only, not part of the SDK |
+| `src/editor/FolderWatcher.zig`, `folder_events.zig` | Recursive watch on the open folder, fanned out to plugins as `folderPathsChanged` (§3.2). The only watcher adapter whose output leaves fizzy; nightwatch stays behind the hook so it can be swapped per platform. `folder_events.zig` is the std-only buffering/filtering half, split out so it can be unit-tested |
 | `sdk/plugin_sdk.zig` | `fizzy.plugin.create` / `.install` / `.addCModule` — the build-side API a plugin's `build.zig` calls |
 | `src/plugins/text/` | Canonical document-owning editor plugin — copy to start a new editor plugin |
 | `src/plugins/image/` | Read-only image viewer (PNG/JPG/JPEG) with zoom/pan |

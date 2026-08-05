@@ -29,10 +29,8 @@
             .hash = "icons-0.0.0-iJxA-VvGMwAgiKSXRe_Y0O7RpasdtEJhBfVx8IGGEBl_",
             .lazy = true,
         },
-        .dvui = .{
-            .url = "https://github.com/foxnne/dvui-dev/archive/ed2f1c67f0316184783c8dba7d79ed4c49d26f97.tar.gz",
-            .hash = "dvui-0.5.0-dev-AQFJmX1d_QA2wHjWCweU26ZxqIrA9LwWeysGFbfVMc7y",
-            //.path = "../dvui-dev",
+        .fizzy_sdk = .{
+            .path = "sdk/",
         },
         .assetpack = .{
             .url = "https://github.com/foxnne/assetpack/archive/ac7592f3f5988857840d0df4610e1e1fad690e2e.tar.gz",

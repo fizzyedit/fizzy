@@ -2,7 +2,11 @@ const std = @import("std");
 
 /// App-side re-export of the plugin build API (lives in `sdk/`). Plugins should depend on
 /// the `sdk/` package directly — see CLAUDE.md — not this root package.
-pub const plugin = @import("sdk/plugin_sdk.zig");
+///
+/// Reached through the dependency rather than by path (`sdk/plugin_sdk.zig`): the app consumes
+/// `sdk/` as a package so the two can share one dvui pin, and a file may belong to only one module,
+/// so claiming these for the root's build module would make that impossible.
+pub const plugin = @import("fizzy_sdk").plugin;
 
 pub fn build(b: *std.Build) !void {
     const windows_msvc_libc_opt = b.option([]const u8, "windows-msvc-libc", "zig libc manifest for *-windows-msvc when cross-compiling; forwarded by packageall for Windows children") orelse null;

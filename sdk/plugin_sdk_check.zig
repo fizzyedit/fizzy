@@ -55,7 +55,6 @@ pub fn main(main_init: std.process.Init) !void {
     const want_fingerprint = try std.fmt.allocPrint(arena, "0x{x}", .{sdk.dylib.abi_fingerprint});
 
     std.debug.print("pinned fizzy SDK: {s}  abi_fingerprint: {s}\n", .{ want_version, want_fingerprint });
-    std.debug.print("(plugin-build-action v3+ derives these from the built dylib — no need to copy them into release.yml)\n", .{});
 
     const file = std.Io.Dir.cwd().openFile(main_init.io, args[1], .{}) catch |err| switch (err) {
         error.FileNotFound => {

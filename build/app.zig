@@ -1,8 +1,12 @@
 const std = @import("std");
 
-const plugin = @import("../sdk/plugin_sdk.zig");
-const core_mod = @import("../sdk/core_module.zig");
-const dvui = @import("dvui");
+// Through the `sdk/` dependency, not by relative path — see `build/sdk.zig`'s `dvuiDependency` for
+// why the app consumes the SDK as a package, and `sdk/build.zig` for what it exposes. dvui's build
+// API arrives the same way because `sdk/` owns the repo's only dvui pin.
+const fizzy_sdk = @import("fizzy_sdk");
+const plugin = fizzy_sdk.plugin;
+const core_mod = fizzy_sdk.core_module;
+const dvui = fizzy_sdk.dvui;
 const velopack = @import("velopack.zig");
 
 pub const Options = struct {
@@ -390,6 +394,9 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         // Content-swap reveal phase machine. std-only by design (see reveal.zig) — the dvui
         // half is the thin wrapper in core/dvui.zig.
         .{ "fizzy-reveal-tests", "src/core/reveal.zig" },
+        // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
+        // be tested here; FolderWatcher.zig itself needs a live editor.
+        .{ "fizzy-folder-events-tests", "src/editor/folder_events.zig" },
     }) |entry| {
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = entry[0],
@@ -452,7 +459,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         return;
     }
 
-    const dvui_testing_dep = b.dependency("dvui", .{
+    const dvui_testing_dep = sdk.dvuiDependency(b, .{
         .target = target,
         .optimize = optimize,
         .backend = .testing,
@@ -485,7 +492,12 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const icons_test = core_mod.addImports(b, core_module_test, dvui_testing_dep.module("dvui_testing"), target, optimize);
     fizzy_test_module.addImport("core", core_module_test);
     if (icons_test) |icons| fizzy_test_module.addImport("icons", icons);
-    if (b.lazyDependency("nightwatch", .{ .target = target, .optimize = optimize })) |dep| {
+    // See `exe.zig` for why macOS needs the FSEvents backend.
+    const nightwatch_test_dep = if (target.result.os.tag == .macos)
+        b.lazyDependency("nightwatch", .{ .target = target, .optimize = optimize, .macos_fsevents = true })
+    else
+        b.lazyDependency("nightwatch", .{ .target = target, .optimize = optimize });
+    if (nightwatch_test_dep) |dep| {
         fizzy_test_module.addImport("nightwatch", dep.module("nightwatch"));
     }
 
@@ -503,7 +515,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .sdk = sdk_module_test,
         .icons = icons_test,
     }, fizzy_test_module);
-    _ = plugins.markdown.addStaticModule(b, target, optimize, .{
+    const markdown_module_test = plugins.markdown.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
         .sdk = sdk_module_test,
@@ -540,6 +552,13 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // built above rather than rooting a second one at the widget — a file may belong to only
     // one module per compilation, and the plugin's own module already owns it.
     integration_module.addImport("text", text_module_test);
+    // Same reasoning for the markdown preview: its block virtualization is a claim about what
+    // gets *drawn*, which only a real headless frame can check.
+    integration_module.addImport("markdown", markdown_module_test);
+    integration_module.addAnonymousImport("markdown_sample", .{ .root_source_file = b.path("docs/PLUGINS.md") });
+    // The document with the 45KB table — the case table-row culling exists for, and the one it
+    // could get wrong.
+    integration_module.addAnonymousImport("markdown_sample_tables", .{ .root_source_file = b.path("docs/PLUGIN_MANIFEST_PLAN.md") });
 
     const integration_tests = b.addTest(.{
         .name = "fizzy-integration-tests",
@@ -596,6 +615,37 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         const run_bench = b.addRunArtifact(bench_text);
         // Timings are the output — never serve a cached result, and don't let a parallel build
         // step's CPU contention skew them.
+        run_bench.has_side_effects = true;
+        bench_step.dependOn(&run_bench.step);
+    }
+
+    // `zig build bench-markdown` — markdown preview frame-cost benchmark. Same rules as
+    // `bench-text` above: its own step, prints timings instead of asserting, only comparable at
+    // equal `-Doptimize` (cmark and freetype build at the app's optimize level).
+    {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_markdown.zig"),
+        });
+        bench_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        bench_module.addImport("markdown", markdown_module_test);
+        // This repo's own docs, as anonymous imports rather than checked-in fixtures — the same
+        // reasoning as `bench-text`'s samples. `PLUGINS.md` is the document that prompted the
+        // benchmark.
+        bench_module.addAnonymousImport("sample_huge", .{ .root_source_file = b.path("docs/PLUGINS.md") });
+        bench_module.addAnonymousImport("sample_prose", .{ .root_source_file = b.path("docs/PLUGIN_MANIFEST_PLAN.md") });
+        bench_module.addAnonymousImport("sample_medium", .{ .root_source_file = b.path("CLAUDE.md") });
+        bench_module.addAnonymousImport("sample_small", .{ .root_source_file = b.path("docs/MODULARIZATION_RELEASE_NOTES.md") });
+
+        const bench_markdown = b.addTest(.{ .name = "fizzy-bench-markdown", .root_module = bench_module });
+        bench_markdown.root_module.link_libcpp = !target_is_windows_msvc;
+        if (target.result.os.tag == .windows) {
+            bench_markdown.root_module.linkSystemLibrary("comctl32", .{});
+        }
+
+        const bench_step = b.step("bench-markdown", "Benchmark the markdown preview's per-frame draw cost (prints timings)");
+        const run_bench = b.addRunArtifact(bench_markdown);
         run_bench.has_side_effects = true;
         bench_step.dependOn(&run_bench.step);
     }

@@ -58,7 +58,7 @@ pub fn draw(_: Infobar) !void {
             .gravity_y = 0.5,
             .margin = .all(0),
             .padding = .all(0),
-            .color_fill = .transparent,
+            .color_fill = fizzy.dvui.hoverRestFill(dvui.themeGet().color(.control, .fill_hover)),
             .color_fill_hover = dvui.themeGet().color(.control, .fill_hover),
             .color_fill_press = dvui.themeGet().color(.control, .fill_press),
         });

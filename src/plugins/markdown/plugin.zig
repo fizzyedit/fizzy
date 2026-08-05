@@ -15,6 +15,9 @@ pub const drawPreviewForDocument = md.drawPreviewForDocument;
 /// `src/editor/readme.zig` calls it directly; this plugin's `deinit` does the same for the
 /// dylib copy's separate globals.
 pub const deinitShared = md.deinitShared;
+/// Exposed for `zig build bench-markdown` only (`tests/bench/bench_markdown.zig`), which reads
+/// `render_ast.stats` after a frame. Nothing in the app reaches through here.
+pub const render_ast = @import("src/md/render_ast.zig");
 
 /// Injected at build time from `plugin.zig.zon` (see `static/integration.zig` /
 /// `src/plugins/shared/build/helpers.zig`'s `pluginOptions`) — one source of truth for

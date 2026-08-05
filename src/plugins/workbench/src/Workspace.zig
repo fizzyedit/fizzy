@@ -880,7 +880,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .gravity_x = 0.5,
                     .expand = .horizontal,
                     .padding = dvui.Rect.all(2),
-                    .color_fill = .transparent,
+                    .color_fill = wdvui.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
                     .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
                     .color_fill_press = dvui.themeGet().color(.window, .fill_press),
                 });
@@ -908,7 +908,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .gravity_x = 0.5,
                     .expand = .horizontal,
                     .padding = dvui.Rect.all(2),
-                    .color_fill = .transparent,
+                    .color_fill = wdvui.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
                     .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
                     .color_fill_press = dvui.themeGet().color(.window, .fill_press),
                 });
@@ -936,7 +936,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .gravity_x = 0.5,
                     .expand = .horizontal,
                     .padding = dvui.Rect.all(2),
-                    .color_fill = .transparent,
+                    .color_fill = wdvui.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
                     .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
                     .color_fill_press = dvui.themeGet().color(.window, .fill_press),
                 });
@@ -999,7 +999,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .id_extra = i,
                     .margin = dvui.Rect.all(1),
                     .padding = dvui.Rect.all(2),
-                    .color_fill = .transparent,
+                    .color_fill = wdvui.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
                     .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
                     .color_fill_press = dvui.themeGet().color(.window, .fill_press),
                     .color_text = dvui.themeGet().color(.control, .text).opacity(0.5),

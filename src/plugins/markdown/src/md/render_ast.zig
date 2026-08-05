@@ -31,6 +31,146 @@ fn wikilinkMemoKey(node: md.Node, token_index: usize) u64 {
 
 const is_windows = builtin.target.os.tag == .windows;
 
+/// What one `renderDocument` call emitted, for `zig build bench-markdown`. Wall time varies by
+/// machine and build mode; these counts don't, so they're the reproducible half of a before/after
+/// comparison — and they're what the wall time is a function of, since every widget here costs a
+/// layout pass and every `addText` costs text shaping.
+///
+/// Always on: incrementing a counter next to a widget construction is unmeasurable against the
+/// widget itself, and a build-mode gate would mean the numbers stop existing in exactly the
+/// release build worth checking.
+pub const Stats = struct {
+    /// `renderBlock` calls (every block node reached, visible or not).
+    blocks: u32 = 0,
+    /// `dvui.textLayout` widgets created.
+    text_layouts: u32 = 0,
+    /// `dvui.box` widgets created.
+    boxes: u32 = 0,
+    add_text_calls: u32 = 0,
+    add_text_bytes: u64 = 0,
+    /// Off-screen blocks and table rows whose height this frame is a cached guess that hasn't been
+    /// confirmed by two agreeing layout passes yet — the work the per-frame measuring budgets
+    /// (`resettle_budget`, `table_measure_bytes`) have deferred.
+    ///
+    /// `renderDocument` asks for another frame while this is non-zero, which is what makes the
+    /// budgets a way of *spreading* layout across frames rather than skipping it. Without that,
+    /// deferred work stalls whenever a frame happens to change no widget's size: dvui only
+    /// redraws when something asks it to, and a cached height asks for nothing by construction.
+    pending_measure: u32 = 0,
+    /// Nanoseconds spent parsing + pre-scanning the document, **accumulated** — one-time work
+    /// that lands entirely on the frame a document is opened on, which is the frame the user
+    /// feels as a hitch. Kept separate from `render_ns` so the two can be told apart.
+    parse_ns: u64 = 0,
+    /// Nanoseconds inside `renderDocument`, **accumulated** across frames — the benchmark zeroes
+    /// it and divides by its own iteration count. Everything else is per-document-draw.
+    render_ns: u64 = 0,
+};
+
+pub var stats: Stats = .{};
+
+/// Per-top-level-block timing for `zig build bench-markdown`. Off unless a profiler is installed,
+/// because it costs two clock reads per block.
+pub const BlockSample = struct {
+    index: usize,
+    kind: [:0]const u8,
+    ns: u64,
+    text_layouts: u32,
+    add_text_bytes: u64,
+};
+pub var block_profile: ?*std.ArrayListUnmanaged(BlockSample) = null;
+pub var block_profile_gpa: ?std.mem.Allocator = null;
+
+/// One top-level block's laid-out height, and whether re-measuring it could still change it.
+///
+/// dvui sizes a widget from what its children reported the frame *before*, so a block's first
+/// draw at a given width is still settling. A block that got skipped from then on would freeze at
+/// that half-settled value forever, pushing everything below it out of place — so `settled` only
+/// goes true once two consecutive draws agree, and until then the block is re-drawn (within
+/// `resettle_budget`) even off screen.
+pub const BlockHeight = struct {
+    h: f32,
+    settled: bool,
+};
+
+/// The span of markdown source one top-level block was parsed from.
+pub const SourceExtent = struct {
+    lines: u32,
+    bytes: u32,
+};
+
+/// One table cell's measured content size. `settled` follows the same two-agreeing-draws rule as
+/// `BlockHeight`, and for the same reason.
+pub const CellSize = struct {
+    size: dvui.Size,
+    /// The column width the size was measured at. A wrapped cell's height is a function of the
+    /// width it was laid out in, so a height on its own says nothing — and the widths a grid
+    /// hands out before any cell has reported what it needs are placeholders (`colWidth` returns
+    /// a flat 100 for a column it has never sized). Two draws at a placeholder width agree with
+    /// each other perfectly, so without recording the width, a cell measured on a table's first
+    /// frames settles at one line and stays there.
+    col_w: f32,
+    settled: bool,
+};
+
+/// Escape hatch for tests: with this off, `renderTopLevel` lays out every block, on screen or
+/// not. The integration test that asserts the two produce identical pixels is the only thing
+/// that turns it off — and the reason it can stay a plain global is that the same test is what
+/// would catch a divergence if some future caller ever set it.
+pub var virtualize_blocks: bool = true;
+
+/// Off-screen blocks `renderTopLevel` may re-measure per frame after a width change. Bounds what
+/// a resize costs: without it, every frame of a window drag or a panel's open animation is a
+/// full-document layout, which is the whole cost this virtualization exists to remove.
+///
+/// Each block needs two draws to settle (dvui sizes a widget from what its children reported the
+/// frame before), so a 180-block document is fully accurate again about 30 frames after the drag
+/// stops. Until then the only thing that is off is the scrollbar's idea of the total height.
+const resettle_budget: usize = 12;
+
+/// Off-screen table text (in bytes of markdown) that may be measured per frame the first time a
+/// table is seen. Same idea as `resettle_budget`, one level down: a 45KB table
+/// (docs/PLUGIN_MANIFEST_PLAN.md has one) costs several milliseconds to lay out in full, and
+/// doing that on the frame the document opens is the hitch this whole file is about. Spread over
+/// frames instead, the table's height is briefly short — by however many rows are still unmeasured
+/// — and settles within half a second.
+///
+/// Counted in bytes rather than rows because rows differ wildly: this document's big table runs
+/// ~2KB to a row, where an ordinary one runs ~50. A row budget that is gentle for the second is
+/// several milliseconds a frame for the first.
+const table_measure_bytes: u64 = 4000;
+
+/// Table text (in bytes) laid out on the frame a table is first seen, before any of its geometry
+/// exists — enough to fill a screen with something.
+///
+/// On that frame every row reports the grid's default height (a single line), so *every* row of a
+/// tall table looks like it fits on screen and the visibility test above lets all of them through
+/// — which is how one 45KB table came to cost 4.6ms on the frame its document opened. Capping the
+/// first sight to roughly a screenful, and letting `table_measure_bytes` bring in the rest over
+/// the next frames, is what keeps that frame cheap. From the second frame on the row heights are
+/// real and the cap no longer applies.
+const table_first_sight_bytes: u64 = 8000;
+
+inline fn statBlock() void {
+    stats.blocks += 1;
+}
+
+/// `dvui.textLayout` + the counter, so no call site can add one without the other.
+inline fn textLayout(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) *dvui.TextLayoutWidget {
+    stats.text_layouts += 1;
+    return dvui.textLayout(src, init_opts, opts);
+}
+
+inline fn box(src: std.builtin.SourceLocation, init_opts: dvui.BoxWidget.InitOptions, opts: dvui.Options) *dvui.BoxWidget {
+    stats.boxes += 1;
+    return dvui.box(src, init_opts, opts);
+}
+
+inline fn addText(tl: *dvui.TextLayoutWidget, txt: []const u8, opts: dvui.Options) void {
+    stats.add_text_calls += 1;
+    stats.add_text_bytes += txt.len;
+    tl.addText(txt, opts);
+}
+
 // Extension node kinds that cmark-gfm identifies by type string rather than
 // integer constant.  Precomputed once after parsing so rendering never calls
 // typeString() or any C FFI inside the per-frame draw loop.
@@ -53,6 +193,12 @@ pub const RenderState = struct {
     ext_node_kinds: std.AutoHashMapUnmanaged(usize, ExtNodeKind) = .empty,
     /// Set of @intFromPtr(node.n) for every node whose subtree contains an IMAGE.
     subtree_has_image: std.AutoHashMapUnmanaged(usize, void) = .empty,
+    /// Set of @intFromPtr(node.n) for every node whose subtree contains a TABLE. A table is
+    /// drawn with `dvui.grid`, which is a scroll container — and a scroll container lays out only
+    /// the rows inside its own viewport, so an off-screen table measures as its header alone.
+    /// That makes it the one block whose height `renderTopLevel` may not believe unless the block
+    /// was really on screen.
+    subtree_has_table: std.AutoHashMapUnmanaged(usize, void) = .empty,
     /// @intFromPtr(table_node.n) → column count (from header row).
     /// Avoids re-traversing the header row every render frame.
     table_col_counts: std.AutoHashMapUnmanaged(usize, usize) = .empty,
@@ -79,6 +225,27 @@ pub const RenderState = struct {
     /// memoized yet", which no real generation counter will collide with.
     wikilink_generation: u64 = std.math.maxInt(u64),
 
+    /// Laid-out height of each top-level block, by document order — what lets `renderTopLevel`
+    /// skip a block that isn't on screen and still hand the scroll container the right total
+    /// height. Grown as blocks are measured; a block past the end has never been measured, and
+    /// is always drawn.
+    block_heights: std.ArrayListUnmanaged(BlockHeight) = .empty,
+    /// How much *source* each top-level block came from, in document order — enough to guess its
+    /// laid-out height before it has ever been laid out. Without this, opening a document costs
+    /// one full-document layout (~13-20ms in ReleaseFast for a 60KB file, and it lands on the
+    /// frame a panel is animating open), because a block with no height cannot be placed and so
+    /// cannot be skipped.
+    block_source: std.ArrayListUnmanaged(SourceExtent) = .empty,
+    /// Content size each table cell measured at, keyed by @intFromPtr(cell node) — what a culled
+    /// row hands the grid in place of its contents. It has to be the cell's *own* measurement and
+    /// not the grid's row height / column width: the grid takes the max across a column, so
+    /// feeding those back widens the column a little, which rewraps a visible cell and moves the
+    /// whole table. (Measured the hard way: it showed up as one extra line of text in one row.)
+    cell_sizes: std.AutoHashMapUnmanaged(usize, CellSize) = .empty,
+    /// Column width `block_heights` was measured at. A different width invalidates every entry
+    /// wholesale — wrapped prose reflows, so no cached height survives a resize.
+    block_layout_width: f32 = -1,
+
     pub fn deinit(self: *RenderState, gpa: std.mem.Allocator) void {
         self.clear(gpa);
         self.image_cache.deinit(gpa);
@@ -86,11 +253,15 @@ pub const RenderState = struct {
         self.image_decode_failed.deinit(gpa);
         self.ext_node_kinds.deinit(gpa);
         self.subtree_has_image.deinit(gpa);
+        self.subtree_has_table.deinit(gpa);
         self.table_col_counts.deinit(gpa);
         self.task_items.deinit(gpa);
         self.html_images.deinit(gpa);
         self.wikilinks.deinit(gpa);
         self.wikilink_resolved.deinit(gpa);
+        self.block_heights.deinit(gpa);
+        self.cell_sizes.deinit(gpa);
+        self.block_source.deinit(gpa);
     }
 
     pub fn clear(self: *RenderState, gpa: std.mem.Allocator) void {
@@ -104,6 +275,7 @@ pub const RenderState = struct {
         self.image_decode_failed.clearRetainingCapacity();
         self.ext_node_kinds.clearRetainingCapacity();
         self.subtree_has_image.clearRetainingCapacity();
+        self.subtree_has_table.clearRetainingCapacity();
         self.table_col_counts.clearRetainingCapacity();
         self.task_items.clearRetainingCapacity();
         var hi = self.html_images.valueIterator();
@@ -112,6 +284,10 @@ pub const RenderState = struct {
         var wi = self.wikilinks.valueIterator();
         while (wi.next()) |toks| gpa.free(toks.*);
         self.wikilinks.clearRetainingCapacity();
+        self.block_heights.clearRetainingCapacity();
+        self.cell_sizes.clearRetainingCapacity();
+        self.block_source.clearRetainingCapacity();
+        self.block_layout_width = -1;
         self.clearResolvedWikilinks(gpa);
     }
 
@@ -161,6 +337,16 @@ pub const RenderContext = struct {
     /// Absolute path of the document being rendered, `""` when it has none. Wikilinks resolve
     /// relative to it, and are disabled entirely when it's empty — see `PreviewOptions`.
     document_path: []const u8 = "",
+    /// The scroll area's visible region, in its own virtual coordinates, and the virtual `y` the
+    /// first top-level block starts at. Together they say which blocks are on screen, which is
+    /// what lets everything else be skipped — see `renderTopLevel`. A zero-height viewport
+    /// disables the skipping and draws the whole document (what a caller with no scroll area of
+    /// its own would want).
+    viewport: dvui.Rect = .{},
+    content_origin_y: f32 = 0,
+    /// Width the blocks lay out at. Only used to notice it changed, which invalidates every
+    /// cached block height.
+    column_width: f32 = 0,
     /// The `"wikilink"` resolver, looked up once per document draw rather than per link.
     /// Null whenever wikilinks are off: no resolver plugin installed, or no `document_path`.
     /// When null, `[[Note]]` renders as the literal text it always was.
@@ -211,12 +397,43 @@ pub fn scanNode(node: md.Node, rs: *RenderState, gpa: std.mem.Allocator, source:
     // A failed line index only costs escape detection, so scanning continues without it.
     var index: ?wikilink_scan.LineIndex = wikilink_scan.LineIndex.build(gpa, source) catch null;
     defer if (index) |*i| i.deinit(gpa);
-    return scanNodeInner(node, rs, gpa, .{ .bytes = source, .index = index });
+    const scan_source: ScanSource = .{ .bytes = source, .index = index };
+    recordBlockExtents(node, rs, gpa, scan_source);
+    return scanNodeInner(node, rs, gpa, scan_source);
+}
+
+/// Record each top-level block's source span, for `renderTopLevel`'s first-sight height guess.
+/// cmark reports 1-based line numbers for block nodes; a node whose lines don't fit the source
+/// (nothing observed doing this, but the API doesn't promise it) simply gets a zero extent, and a
+/// zero extent means "no guess available" — that block is drawn rather than estimated.
+fn recordBlockExtents(doc_node: md.Node, rs: *RenderState, gpa: std.mem.Allocator, source: ScanSource) void {
+    var child = doc_node.firstChild();
+    while (child) |ch| : (child = ch.nextSibling()) {
+        var extent: SourceExtent = .{ .lines = 0, .bytes = 0 };
+        const start = ch.startLine();
+        const end = ch.endLine();
+        if (start >= 1 and end >= start) {
+            extent.lines = @intCast(end - start + 1);
+            if (source.index) |idx| {
+                const starts = idx.starts;
+                const first: usize = @intCast(start - 1);
+                const after: usize = @intCast(end);
+                if (first < starts.len) {
+                    const from = starts[first];
+                    const to = if (after < starts.len) starts[after] else @as(u32, @intCast(source.bytes.len));
+                    if (to > from) extent.bytes = to - from;
+                }
+            }
+        }
+        rs.block_source.append(gpa, extent) catch {};
+    }
 }
 
 fn scanNodeInner(node: md.Node, rs: *RenderState, gpa: std.mem.Allocator, source: ScanSource) bool {
+    var self_has_table = false;
     const ts = node.typeString();
     if (std.mem.eql(u8, ts, "table")) {
+        self_has_table = true;
         rs.ext_node_kinds.put(gpa, @intFromPtr(node.n), .table) catch {};
         // Count columns once from the header (or first body row) so the render
         // loop never needs to re-traverse the row for this.
@@ -279,9 +496,12 @@ fn scanNodeInner(node: md.Node, rs: *RenderState, gpa: std.mem.Allocator, source
     var child = node.firstChild();
     while (child) |ch| : (child = ch.nextSibling()) {
         if (scanNodeInner(ch, rs, gpa, source)) self_has_image = true;
+        if (rs.subtree_has_table.contains(@intFromPtr(ch.n))) self_has_table = true;
     }
     if (self_has_image)
         rs.subtree_has_image.put(gpa, @intFromPtr(node.n), {}) catch {};
+    if (self_has_table)
+        rs.subtree_has_table.put(gpa, @intFromPtr(node.n), {}) catch {};
 
     return self_has_image;
 }
@@ -705,7 +925,7 @@ fn renderUndecodableImage(alt: []const u8, url: []const u8, ctx: RenderContext, 
         renderMarkdownImagePlaceholder(text, ids);
         return;
     }
-    var tl = dvui.textLayout(@src(), .{}, .{
+    var tl = textLayout(@src(), .{}, .{
         .expand = .horizontal,
         .margin = .{ .y = 2, .h = 2 },
         .background = ctx.background,
@@ -729,7 +949,7 @@ fn renderMarkdownImage(img: md.Node, span: dvui.Options, ctx: RenderContext, ids
     _ = span;
     const arena = dvui.currentWindow().arena();
     const raw_url = img.linkUrl() orelse {
-        var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
+        var outer = box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .margin = .{ .y = 4, .h = 4 },
             .id_extra = ids.next(),
@@ -780,7 +1000,7 @@ fn renderImageUrl(raw_url: []const u8, alt: []const u8, want: RequestedSize, ctx
         else => {},
     }
 
-    var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
+    var outer = box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .margin = .{ .y = 4, .h = 4 },
         .id_extra = ids.next(),
@@ -801,7 +1021,7 @@ fn renderImageUrl(raw_url: []const u8, alt: []const u8, want: RequestedSize, ctx
             renderMarkdownImagePlaceholder(msg, ids);
             // A remote image that failed to load is still worth reaching: offer the link.
             if (net_image.isRemote(url_trim)) {
-                var tl = dvui.textLayout(@src(), .{}, .{
+                var tl = textLayout(@src(), .{}, .{
                     .expand = .horizontal,
                     .background = ctx.background,
                     .id_extra = ids.next(),
@@ -899,14 +1119,14 @@ fn alignGravityX(want: RequestedSize) f32 {
 
 fn renderImageCaption(alt: []const u8, ctx: RenderContext, ids: *IdGen) void {
     if (alt.len == 0) return;
-    var cap = dvui.textLayout(@src(), .{}, .{
+    var cap = textLayout(@src(), .{}, .{
         .expand = .horizontal,
         .margin = .{ .y = 2, .h = 0 },
         .background = ctx.background,
         .id_extra = ids.next(),
     });
     defer cap.deinit();
-    cap.addText(alt, .{
+    addText(cap, alt, .{
         .font = dvui.Font.theme(.body).larger(-1),
         .color_text = dvui.themeGet().color(.control, .text).opacity(0.65),
     });
@@ -949,7 +1169,7 @@ const MarkerMetrics = struct {
 fn renderTaskCheckbox(checked: bool, m: MarkerMetrics, ids: *IdGen) void {
     const theme = dvui.themeGet();
 
-    var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
+    var b = box(@src(), .{ .dir = .horizontal }, .{
         .min_size_content = .{ .w = m.side, .h = m.side },
         .max_size_content = .{ .w = m.side, .h = m.side },
         .gravity_y = 0,
@@ -1022,13 +1242,13 @@ fn renderInlineFlowContainer(container: md.Node, span: dvui.Options, ctx: Render
                     } else if (node.firstChild()) |_| {
                         renderInlineFlowContainer(node, span, ctx, ids);
                     } else if (node.literal()) |t| {
-                        var tl = dvui.textLayout(@src(), .{}, .{
+                        var tl = textLayout(@src(), .{}, .{
                             .expand = .horizontal,
                             .background = span.background,
                             .id_extra = ids.next(),
                         });
                         defer tl.deinit();
-                        tl.addText(t, .{ .font = span.font, .color_text = span.color_text });
+                        addText(tl, t, .{ .font = span.font, .color_text = span.color_text });
                     }
                 },
             }
@@ -1047,7 +1267,7 @@ fn renderInlineFlowContainer(container: md.Node, span: dvui.Options, ctx: Render
             scan = s.nextSibling();
         }
 
-        var tl = dvui.textLayout(@src(), .{}, .{
+        var tl = textLayout(@src(), .{}, .{
             .expand = .horizontal,
             .margin = .{ .y = 2, .h = 2 },
             .background = span.background,
@@ -1089,16 +1309,16 @@ fn renderTextWithWikilinks(
     ctx: RenderContext,
 ) void {
     const plain: dvui.Options = .{ .font = span.font, .color_text = span.color_text };
-    if (ctx.wikilink == null) return tl.addText(literal, plain);
-    const tokens = ctx.rs.wikilinks.get(@intFromPtr(node.n)) orelse return tl.addText(literal, plain);
+    if (ctx.wikilink == null) return addText(tl, literal, plain);
+    const tokens = ctx.rs.wikilinks.get(@intFromPtr(node.n)) orelse return addText(tl, literal, plain);
 
     var cursor: usize = 0;
     for (tokens, 0..) |tok, i| {
-        if (tok.start > cursor) tl.addText(literal[cursor..tok.start], plain);
+        if (tok.start > cursor) addText(tl, literal[cursor..tok.start], plain);
         renderWikilink(tl, node, i, tok, span, ctx);
         cursor = tok.end;
     }
-    if (cursor < literal.len) tl.addText(literal[cursor..], plain);
+    if (cursor < literal.len) addText(tl, literal[cursor..], plain);
 }
 
 fn renderWikilink(
@@ -1116,7 +1336,7 @@ fn renderWikilink(
     switch (res.status) {
         // Still scanning. Deliberately unstyled: painting every link red for the second after a
         // folder opens, then flipping them all blue, is worse than showing nothing at all.
-        .indexing => tl.addText(label, .{ .font = span.font, .color_text = span.color_text }),
+        .indexing => addText(tl, label, .{ .font = span.font, .color_text = span.color_text }),
 
         .resolved, .ambiguous => {
             const color = if (res.status == .ambiguous) theme.color(.err, .fill) else theme.focus;
@@ -1136,7 +1356,7 @@ fn renderWikilink(
         // hairline underline and dimmed text, rather than the error red a broken URL would get.
         // (dvui's `Underline` carries thickness only, no dash style, so weight is what's
         // available to say "provisional" with.) Inert until there's a create-note flow.
-        .unresolved => tl.addText(label, .{
+        .unresolved => addText(tl, label, .{
             .font = span.fontGet().withUnderline(.{ .thick = 0.04 }),
             .color_text = (span.color_text orelse theme.color(.content, .text)).opacity(0.6),
         }),
@@ -1149,14 +1369,14 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: md.Node, span: dvui.Optio
             if (x.literal()) |t| renderTextWithWikilinks(tl, x, t, span, ctx);
         },
         md.c.CMARK_NODE_SOFTBREAK => {
-            tl.addText(" ", .{});
+            addText(tl, " ", .{});
         },
         md.c.CMARK_NODE_LINEBREAK => {
-            tl.addText("\n", .{});
+            addText(tl, "\n", .{});
         },
         md.c.CMARK_NODE_CODE => {
             if (x.literal()) |t| {
-                tl.addText(t, .{
+                addText(tl, t, .{
                     // Match the editor's monospace size (also `Font.theme(.mono)`).
                     .font = dvui.Font.theme(.mono),
                     .color_text = dvui.themeGet().color(.control, .text).opacity(0.9),
@@ -1193,7 +1413,7 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: md.Node, span: dvui.Optio
         },
         md.c.CMARK_NODE_IMAGE => unreachable,
         md.c.CMARK_NODE_HTML_INLINE => {
-            if (x.literal()) |t| tl.addText(t, .{
+            if (x.literal()) |t| addText(tl, t, .{
                 .font = dvui.Font.theme(.mono),
                 .color_text = dvui.themeGet().color(.err, .text),
             });
@@ -1202,9 +1422,9 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: md.Node, span: dvui.Optio
             if (x.literal()) |t| {
                 const fn_font = dvui.Font.theme(.mono).larger(-1);
                 const fn_color = dvui.themeGet().focus.opacity(0.8);
-                tl.addText("[^", .{ .font = fn_font, .color_text = fn_color });
-                tl.addText(t, .{ .font = fn_font, .color_text = fn_color });
-                tl.addText("]", .{ .font = fn_font, .color_text = fn_color });
+                addText(tl, "[^", .{ .font = fn_font, .color_text = fn_color });
+                addText(tl, t, .{ .font = fn_font, .color_text = fn_color });
+                addText(tl, "]", .{ .font = fn_font, .color_text = fn_color });
             }
         },
         else => {
@@ -1215,21 +1435,188 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: md.Node, span: dvui.Optio
             } else if (x.firstChild()) |_| {
                 renderInlines(tl, x, span, ctx, ids);
             } else if (x.literal()) |t| {
-                tl.addText(t, .{ .font = span.font, .color_text = span.color_text });
+                addText(tl, t, .{ .font = span.font, .color_text = span.color_text });
             }
         },
     }
 }
 
+/// Draw the document's top-level blocks, laying out only the ones near the viewport.
+///
+/// Why this exists: every widget the renderer emits costs a full layout pass, and a
+/// `TextLayoutWidget` re-shapes all of its text every frame — there is no per-string shaping
+/// cache in dvui, and a paragraph is far too small for `cache_layout` (which skips *within* one
+/// widget) to help. So the old "walk the whole AST every frame" cost was linear in the document's
+/// **bytes**, not in what was on screen: docs/PLUGINS.md spent ~34ms/frame in Debug laying out
+/// 58KB of text to show maybe 3KB of it, and scrolling to the end cost exactly the same as
+/// sitting at the top. See `tests/bench/bench_markdown.zig`.
+///
+/// Each top-level block gets a wrapper box carrying its measured height. Off screen, the wrapper
+/// is emitted with that height and its contents are skipped entirely; the scroll container still
+/// sees the document's true total height, so the scrollbar and every scroll position stay exactly
+/// as they were. A block whose height isn't known at all is always drawn, so the cache fills in
+/// without ever showing a gap — which makes a document's first frame one full layout, and only
+/// one.
+///
+/// Widths change every frame while a panel animates open or a window is dragged, which is
+/// handled by `resettle_budget` rather than by throwing the cache away — see below.
+///
+/// The wrapper is also what makes the ids stable: widget ids inside a block are relative to it,
+/// so `ids` restarts per block and a skipped neighbour can't shift anything.
+fn renderTopLevel(doc_node: md.Node, ids: *IdGen, ctx: RenderContext) void {
+    const rs = ctx.rs;
+    if (rs.block_layout_width != ctx.column_width) {
+        // A width change reflows every wrapped paragraph, so no cached height is right any more.
+        // But *discarding* them would make every block "never measured" and force a full-document
+        // layout on that frame — and the widths that change are the ones that change every frame:
+        // the panel's open animation sliding out, and a window resize drag. So the heights are
+        // kept as estimates and merely stop being trusted: they still place each block (which is
+        // what keeps the on-screen set correct and gap-free — a skipped block really does occupy
+        // its estimate this frame), while `resettle_budget` re-measures a few per frame until
+        // they're all true again.
+        for (rs.block_heights.items) |*e| e.settled = false;
+        rs.block_layout_width = ctx.column_width;
+    }
+
+    // Draw beyond the viewport by half a screen each way. dvui needs the widget to exist for a
+    // frame before it can be scrolled onto properly, and a keyboard/scrollbar jump can move the
+    // viewport by more than a wheel tick does; the margin absorbs both without being large
+    // enough to matter for cost.
+    const virtualize = virtualize_blocks and ctx.viewport.h > 0;
+    const slack = @max(200, ctx.viewport.h * 0.5);
+    const vis_top = ctx.viewport.y - slack;
+    const vis_bot = ctx.viewport.y + ctx.viewport.h + slack;
+
+    // Off-screen blocks re-measured this frame, from the top down: the top of the document is
+    // what everything below is positioned against, so settling it first stops the visible content
+    // from wandering. The cost of one is roughly the cost of one visible block, which is what
+    // sets the size of this number.
+    var resettle_left: usize = resettle_budget;
+
+    var y = ctx.content_origin_y;
+    var index: usize = 0;
+    var child = doc_node.firstChild();
+    while (child) |ch| : ({
+        child = ch.nextSibling();
+        index += 1;
+    }) {
+        // A block never laid out yet is placed by a guess from how much source it came from.
+        // The guess only has to be good enough to decide "near the viewport or not", and it is
+        // deliberately biased *low* (see `estimateBlockHeight`): guessing short draws a few extra
+        // blocks, while guessing tall would skip one that is actually on screen and flash a gap.
+        const known: ?BlockHeight = if (index < rs.block_heights.items.len)
+            rs.block_heights.items[index]
+        else if (estimateBlockHeight(rs, index, ctx.column_width)) |est|
+            BlockHeight{ .h = est, .settled = false }
+        else
+            null;
+        const on_screen_est = known == null or (y < vis_bot and (y + known.?.h) > vis_top);
+        var draw = !virtualize or on_screen_est;
+        if (!draw and !known.?.settled) {
+            if (resettle_left > 0) {
+                draw = true;
+                resettle_left -= 1;
+            } else {
+                // Owed a re-measure that this frame's budget couldn't pay for; see
+                // `Stats.pending_measure`.
+                stats.pending_measure += 1;
+            }
+        }
+
+        var wrapper = box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .id_extra = index,
+            // Only when skipping: a drawn block must be free to report a *smaller* height than
+            // last frame's, and a floor of the old value would keep it from ever shrinking.
+            .min_size_content = if (draw) null else dvui.Size{ .h = known.?.h },
+        });
+        const wrapper_id = wrapper.data().id;
+        const prof_t0 = if (block_profile == null) 0 else std.Io.Clock.boot.now(dvui.io).nanoseconds;
+        const prof_tl = stats.text_layouts;
+        const prof_bytes = stats.add_text_bytes;
+        if (draw) {
+            ids.n = 0;
+            renderBlock(ch, ids, ctx);
+        }
+        wrapper.deinit();
+        if (block_profile) |list| {
+            list.append(block_profile_gpa.?, .{
+                .index = index,
+                .kind = ch.typeString(),
+                .ns = @intCast(std.Io.Clock.boot.now(dvui.io).nanoseconds - prof_t0),
+                .text_layouts = stats.text_layouts - prof_tl,
+                .add_text_bytes = stats.add_text_bytes - prof_bytes,
+            }) catch {};
+        }
+
+        const entry: BlockHeight = if (draw) blk: {
+            const measured = (dvui.minSizeGet(wrapper_id) orelse dvui.Size{}).h;
+            // Now that the height is known, was the block *really* on screen? The estimate above
+            // decides what to draw; this decides what to believe. They differ exactly where it
+            // matters: on the first frame every block is drawn, but a table drawn off screen
+            // reports its header's height and nothing more.
+            const was_visible = y < vis_bot and (y + measured) > vis_top;
+            if (!was_visible and rs.subtree_has_table.contains(@intFromPtr(ch.n))) {
+                // Keep the height from the last time it was on screen. With no such height yet,
+                // the collapsed one is still a better placeholder than nothing — and either way
+                // this block is done being re-measured until it is scrolled to, so mark it
+                // settled rather than let it eat the budget every frame forever.
+                break :blk .{ .h = if (known) |k| k.h else measured, .settled = true };
+            }
+            break :blk .{ .h = measured, .settled = known != null and known.?.h == measured };
+        } else known.?;
+        if (index < rs.block_heights.items.len) {
+            rs.block_heights.items[index] = entry;
+        } else {
+            rs.block_heights.append(ctx.gpa, entry) catch {};
+        }
+        y += entry.h;
+    }
+}
+
+/// Rough laid-out height for a block that has never been drawn, from the source it was parsed
+/// from. Null when there is nothing to go on, which means "draw it".
+///
+/// Biased low on purpose — an underestimate costs a few extra blocks of layout, an overestimate
+/// costs a visible gap where a block should have been.
+fn estimateBlockHeight(rs: *RenderState, index: usize, column_width: f32) ?f32 {
+    if (index >= rs.block_source.items.len) return null;
+    const extent = rs.block_source.items[index];
+    if (extent.lines == 0) return null;
+
+    const font = dvui.Font.theme(.body);
+    const line_h = font.lineHeight();
+    // `sizeM` is the width of an "M"; ordinary prose averages a good deal narrower than that, and
+    // erring narrow means erring toward *more* estimated lines, which is the safe direction.
+    const avg_char_w = @max(1, font.sizeM(1, 1).w * 0.5);
+    const chars_per_line = @max(20, column_width / avg_char_w);
+    const wrapped: f32 = @ceil(@as(f32, @floatFromInt(extent.bytes)) / chars_per_line);
+    const lines = @max(@as(f32, @floatFromInt(extent.lines)), wrapped);
+    return lines * line_h * 0.8;
+}
+
+/// True when any cell in this table row still needs a real layout pass — never measured, measured
+/// only once and so possibly still settling, or measured against a column width the grid has
+/// since changed its mind about.
+fn rowNeedsMeasure(ctx: RenderContext, g: *dvui.GridWidget, row: md.Node) bool {
+    var col: usize = 0;
+    var cl = row.firstChild();
+    while (cl) |cell| : (cl = cell.nextSibling()) {
+        if (extKind(ctx, cell) != .table_cell) continue;
+        defer col += 1;
+        const cached = ctx.rs.cell_sizes.get(@intFromPtr(cell.n)) orelse return true;
+        if (!cached.settled or cached.col_w != g.colWidth(col)) return true;
+    }
+    return false;
+}
+
 fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
+    statBlock();
     const t = n.nodeType();
     switch (t) {
-        md.c.CMARK_NODE_DOCUMENT => {
-            var c = n.firstChild();
-            while (c) |ch| : (c = ch.nextSibling()) renderBlock(ch, ids, ctx);
-        },
+        md.c.CMARK_NODE_DOCUMENT => renderTopLevel(n, ids, ctx),
         md.c.CMARK_NODE_BLOCK_QUOTE => {
-            var outer = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            var outer = box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .horizontal,
                 .margin = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
                 .id_extra = ids.next(),
@@ -1245,7 +1632,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                 .id_extra = ids.next(),
             });
 
-            var content = dvui.box(@src(), .{ .dir = .vertical }, .{
+            var content = box(@src(), .{ .dir = .vertical }, .{
                 .expand = .horizontal,
                 .padding = .{ .x = 10, .y = 4, .w = 0, .h = 4 },
                 .id_extra = ids.next(),
@@ -1268,7 +1655,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                     renderBlock(item_node, ids, ctx);
                     continue;
                 }
-                var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                var row = box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .horizontal,
                     .margin = .{ .y = 1 },
                     .id_extra = ids.next(),
@@ -1284,7 +1671,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                 if (list_kind == .ol) idx += 1;
 
                 {
-                    var pb = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                    var pb = box(@src(), .{ .dir = .horizontal }, .{
                         .min_size_content = .{ .w = col_w, .h = 0 },
                         .gravity_y = 0,
                         // The item's content is a paragraph, and `CMARK_NODE_PARAGRAPH` gives its
@@ -1308,7 +1695,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
 
                 _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 5, .h = 0 }, .id_extra = ids.next() });
 
-                var col = dvui.box(@src(), .{ .dir = .vertical }, .{
+                var col = box(@src(), .{ .dir = .vertical }, .{
                     .expand = .horizontal,
                     .id_extra = ids.next(),
                 });
@@ -1327,7 +1714,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
         md.c.CMARK_NODE_CODE_BLOCK => {
             const info = n.fenceInfo() orelse "";
             const code = n.literal() orelse "";
-            var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
+            var outer = box(@src(), .{ .dir = .vertical }, .{
                 .expand = .horizontal,
                 .margin = .{ .y = 6 },
                 .background = true,
@@ -1340,7 +1727,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
             defer outer.deinit();
 
             if (info.len > 0) {
-                var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                var hdr = box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .horizontal,
                     .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
                     .background = true,
@@ -1348,28 +1735,28 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                     .id_extra = ids.next(),
                 });
                 defer hdr.deinit();
-                var tl_i = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .background = false, .id_extra = ids.next() });
-                tl_i.addText(info, .{
+                var tl_i = textLayout(@src(), .{}, .{ .expand = .horizontal, .background = false, .id_extra = ids.next() });
+                addText(tl_i, info, .{
                     .font = dvui.Font.theme(.mono).withWeight(.bold),
                     .color_text = dvui.themeGet().color(.control, .text).opacity(0.55),
                 });
                 tl_i.deinit();
             }
 
-            var tl_c = dvui.textLayout(@src(), .{}, .{
+            var tl_c = textLayout(@src(), .{}, .{
                 .expand = .horizontal,
                 .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
                 .background = false,
                 .id_extra = ids.next(),
             });
             defer tl_c.deinit();
-            tl_c.addText(code, .{ .font = dvui.Font.theme(.mono) });
+            addText(tl_c, code, .{ .font = dvui.Font.theme(.mono) });
         },
         md.c.CMARK_NODE_HTML_BLOCK => {
             // `<p align="center"><img …></p>` is how most READMEs carry their hero image; render
             // the images and drop the wrapper markup rather than dumping the tags as raw text.
             if (ctx.rs.html_images.get(@intFromPtr(n.n))) |urls| {
-                var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
+                var outer = box(@src(), .{ .dir = .vertical }, .{
                     .expand = .horizontal,
                     .id_extra = ids.next(),
                 });
@@ -1384,7 +1771,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                 return;
             }
             if (n.literal()) |h| {
-                var tl = dvui.textLayout(@src(), .{}, .{
+                var tl = textLayout(@src(), .{}, .{
                     .expand = .horizontal,
                     .margin = .{ .y = 2 },
                     .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
@@ -1393,7 +1780,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                     .id_extra = ids.next(),
                 });
                 defer tl.deinit();
-                tl.addText(h, .{
+                addText(tl, h, .{
                     .font = dvui.Font.theme(.mono),
                     .color_text = dvui.themeGet().color(.err, .text).opacity(0.85),
                 });
@@ -1401,7 +1788,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
         },
         md.c.CMARK_NODE_PARAGRAPH => {
             if (!hasImageSubtree(ctx, n)) {
-                var tl = dvui.textLayout(@src(), .{}, .{
+                var tl = textLayout(@src(), .{}, .{
                     .expand = .horizontal,
                     .margin = .{ .y = paragraph_margin_y, .h = paragraph_margin_y },
                     .background = ctx.background,
@@ -1410,7 +1797,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                 defer tl.deinit();
                 renderInlines(tl, n, .{ .background = ctx.background }, ctx, ids);
             } else {
-                var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
+                var outer = box(@src(), .{ .dir = .vertical }, .{
                     .expand = .horizontal,
                     .margin = .{ .y = paragraph_margin_y, .h = paragraph_margin_y },
                     .id_extra = ids.next(),
@@ -1438,7 +1825,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
             const span: dvui.Options = .{ .font = heading_font, .background = ctx.background };
 
             if (!hasImageSubtree(ctx, n)) {
-                var tl = dvui.textLayout(@src(), .{}, .{
+                var tl = textLayout(@src(), .{}, .{
                     .expand = .horizontal,
                     .margin = .{ .y = top_margin, .h = 2 },
                     .font = heading_font,
@@ -1448,7 +1835,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                 defer tl.deinit();
                 renderInlines(tl, n, span, ctx, ids);
             } else {
-                var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
+                var outer = box(@src(), .{ .dir = .vertical }, .{
                     .expand = .horizontal,
                     .margin = .{ .y = top_margin, .h = 2 },
                     .id_extra = ids.next(),
@@ -1467,7 +1854,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
         },
         md.c.CMARK_NODE_FOOTNOTE_DEFINITION => {
             if (n.literal()) |name| {
-                var tl = dvui.textLayout(@src(), .{}, .{
+                var tl = textLayout(@src(), .{}, .{
                     .expand = .horizontal,
                     .margin = .{ .y = 4 },
                     .background = ctx.background,
@@ -1475,9 +1862,9 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                 });
                 const fn_font = dvui.Font.theme(.mono).larger(-1);
                 const fn_color = dvui.themeGet().focus.opacity(0.8);
-                tl.addText("[^", .{ .font = fn_font, .color_text = fn_color });
-                tl.addText(name, .{ .font = fn_font, .color_text = fn_color });
-                tl.addText("]: ", .{ .font = fn_font, .color_text = fn_color });
+                addText(tl, "[^", .{ .font = fn_font, .color_text = fn_color });
+                addText(tl, name, .{ .font = fn_font, .color_text = fn_color });
+                addText(tl, "]: ", .{ .font = fn_font, .color_text = fn_color });
                 tl.deinit();
             }
             var c = n.firstChild();
@@ -1490,7 +1877,7 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                 const num_cols = ctx.rs.table_col_counts.get(@intFromPtr(n.n)) orelse return;
                 if (num_cols == 0) return;
 
-                var table_wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
+                var table_wrap = box(@src(), .{ .dir = .vertical }, .{
                     .expand = .none,
                     .margin = .{ .y = 6 },
                     .id_extra = ids.next(),
@@ -1529,6 +1916,18 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                     }
                 };
 
+                // Screen-space band a row has to touch to be laid out, with the same half-screen
+                // of slack `renderTopLevel` gives blocks.
+                const cull_rows = virtualize_blocks and ctx.viewport.h > 0;
+                const clip = dvui.clipGet();
+                const row_slack = @max(200 * clip.h / @max(1, ctx.viewport.h), clip.h * 0.5);
+                const row_clip_top = clip.y - row_slack;
+                const row_clip_bot = clip.y + clip.h + row_slack;
+                var row_anchor: ?struct { screen_y: f32, scale: f32, row_offset: f32 } = null;
+                var measure_bytes_left: u64 = table_measure_bytes;
+                var first_sight_left: u64 = table_first_sight_bytes;
+                var rows_unsettled = false;
+
                 var body_row: usize = 0;
                 var c = n.firstChild();
                 while (c) |row| : (c = row.nextSibling()) {
@@ -1553,18 +1952,120 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
                             col += 1;
                         }
                     } else {
+                        // Is this row anywhere near the screen? A markdown table is drawn as a
+                        // *content-sized* grid — it scrolls with the page rather than inside
+                        // itself — so dvui's own row virtualization (`GridWidget.rowsVisible`)
+                        // can't help: as far as the grid is concerned its whole body is in view.
+                        // Without this, one 45KB table (docs/PLUGIN_MANIFEST_PLAN.md has one) is
+                        // laid out in full on every frame it appears on, which costs more than
+                        // the rest of that document put together.
+                        //
+                        // The anchor comes from the first body cell rather than from the grid's
+                        // internals: every cell's rect is placed from the grid's own cached row
+                        // heights, so one real cell rect plus `rowOffset`/`rowHeight` gives every
+                        // other row's position exactly.
+                        const measured_before = !rowNeedsMeasure(ctx, g, row);
+                        if (!measured_before) rows_unsettled = true;
+                        var row_visible = if (!cull_rows or row_anchor == null) true else blk: {
+                            const a = row_anchor.?;
+                            const top = a.screen_y + (g.rowOffset(body_row) - a.row_offset) * a.scale;
+                            const h = g.rowHeight(body_row) * a.scale;
+                            break :blk top < row_clip_bot and (top + h) > row_clip_top;
+                        };
+                        // A row with no measurements behind it has no trustworthy position either
+                        // — see `table_first_sight_rows`.
+                        if (row_visible and !measured_before and cull_rows and first_sight_left == 0)
+                            row_visible = false;
+
+                        // An off-screen row whose cells have never been measured (or whose
+                        // measurement hasn't been confirmed by a second draw) is worth one
+                        // measuring pass so the table's height is right — but only a few such
+                        // rows per frame, so a big table costs a little on each of several frames
+                        // instead of all of it on the frame the document opens.
+                        const measure_row = !row_visible and !measured_before and measure_bytes_left > 0;
+                        // An off-screen row that isn't settled yet is work owed, not work dropped:
+                        // `renderDocument` asks for another frame while any remains. It stays
+                        // owed on the frame it *is* measured on, because a measurement only
+                        // counts once a second pass agrees with it.
+                        if (!measured_before and !row_visible) stats.pending_measure += 1;
+                        const row_text_before = stats.add_text_bytes;
+
                         var col: usize = 0;
                         var cl = row.firstChild();
                         while (cl) |cell| : (cl = cell.nextSibling()) {
                             if (extKind(ctx, cell) != .table_cell) continue;
-                            const cell_box = g.cell(.{ .col = col, .row = body_row }, banded.opts(body_row, cell_padding));
-                            defer cell_box.deinit();
-                            renderInlineFlowContainer(cell, .{ .background = false }, ctx, ids);
+                            // A skipped cell still has to hand the grid the size its contents
+                            // would have, or the row collapses and the column shrinks to whatever
+                            // happens to be on screen. A cell with no measurement yet — or one
+                            // whose measurement hasn't been confirmed by a second draw — is drawn
+                            // regardless of where it is, which is what makes the table's total
+                            // height right from the first frame it appears on.
+                            const cell_key = @intFromPtr(cell.n);
+                            const cached = ctx.rs.cell_sizes.get(cell_key);
+                            // Read before the cell exists, so it is the width this cell is about
+                            // to be laid out in rather than the one it produces.
+                            const cell_w = g.colWidth(col);
+                            const draw_cell = row_visible or measure_row;
+                            const cell_box = g.cell(
+                                .{ .col = col, .row = body_row },
+                                banded.opts(body_row, cell_padding).override(
+                                    if (draw_cell) .{} else .{ .min_size_content = if (cached) |cs| cs.size else dvui.Size{} },
+                                ),
+                            );
+                            if (row_anchor == null) {
+                                const rs = cell_box.data().rectScale();
+                                row_anchor = .{
+                                    .screen_y = rs.r.y,
+                                    .scale = rs.s,
+                                    .row_offset = g.rowOffset(body_row),
+                                };
+                            }
+                            if (draw_cell) {
+                                // Ids inside a cell hang off the cell widget, so restarting them
+                                // per cell keeps a skipped neighbour from shifting anything.
+                                ids.n = 0;
+                                renderInlineFlowContainer(cell, .{ .background = false }, ctx, ids);
+                                // Read before `deinit`, and with the padding taken back off:
+                                // `min_size_content` has the padding added to it again, so
+                                // storing the padded size would grow the cell every frame.
+                                const measured: dvui.Size = .{
+                                    .w = @max(0, cell_box.data().min_size.w - cell_padding.x - cell_padding.w),
+                                    .h = @max(0, cell_box.data().min_size.h - cell_padding.y - cell_padding.h),
+                                };
+                                const agrees = cached != null and cached.?.col_w == cell_w and
+                                    cached.?.size.w == measured.w and cached.?.size.h == measured.h;
+                                ctx.rs.cell_sizes.put(ctx.gpa, cell_key, .{
+                                    .size = measured,
+                                    .col_w = cell_w,
+                                    .settled = agrees,
+                                }) catch {};
+                            }
+                            cell_box.deinit();
                             col += 1;
+                        }
+                        // Charge whichever budget paid for this row. Measured after the fact: a
+                        // row's size is only known once it has been laid out, so a budget can be
+                        // overshot by at most the one row that exhausts it.
+                        const row_text = stats.add_text_bytes - row_text_before;
+                        if (row_visible and !measured_before) {
+                            first_sight_left -|= row_text;
+                        } else if (measure_row) {
+                            measure_bytes_left -|= row_text;
                         }
                         body_row += 1;
                     }
                 }
+                // A grid only writes the row heights it measured into the ones it *keeps* during an
+                // auto-size pass, and it stops running those passes as soon as a frame changes
+                // nothing. A row measured after that point — which, with the measuring budget
+                // above, is most of a big table's rows — would have its height computed and then
+                // thrown away, leaving the row stuck at the grid's minimum. So the pass is re-armed
+                // for as long as any row is still settling.
+                //
+                // Only for as long, though: `autoSize` re-arms itself and refreshes each frame
+                // until the measurements agree, so calling it unconditionally would leave the
+                // preview repainting forever.
+                if (rows_unsettled) g.autoSize(.{ .auto = .both });
             } else {
                 var c = n.firstChild();
                 while (c) |ch| : (c = ch.nextSibling()) renderBlock(ch, ids, ctx);
@@ -1574,11 +2075,26 @@ fn renderBlock(n: md.Node, ids: *IdGen, ctx: RenderContext) void {
 }
 
 pub fn renderDocument(root: md.Node, ctx: RenderContext) void {
+    // Per-draw counters reset here; `render_ns` deliberately accumulates (see `Stats`).
+    const carried_ns = stats.render_ns;
+    const carried_parse_ns = stats.parse_ns;
+    stats = .{ .render_ns = carried_ns, .parse_ns = carried_parse_ns };
+    // wasm has no monotonic clock wired into `dvui.io` (`std.Io.failing` returns zero for every
+    // timestamp), so the counters above are the whole story there; timing is native-only.
+    const t0: i128 = if (comptime builtin.target.cpu.arch == .wasm32) 0 else std.Io.Clock.boot.now(dvui.io).nanoseconds;
+
     var resolved_ctx = ctx;
     resolved_ctx.wikilink = wikilinkResolver(ctx);
 
     var ids: IdGen = .{ .n = ctx.id_base };
     renderBlock(root, &ids, resolved_ctx);
+
+    // Keep frames coming until the measuring budgets have caught up — see `Stats.pending_measure`.
+    if (stats.pending_measure > 0) dvui.refresh(null, @src(), null);
+
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        stats.render_ns +%= @intCast(std.Io.Clock.boot.now(dvui.io).nanoseconds - t0);
+    }
 }
 
 /// The wikilink resolver to use for this document draw, or null when wikilinks are off.

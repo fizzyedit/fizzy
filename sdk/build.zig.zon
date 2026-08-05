@@ -22,9 +22,16 @@
             .hash = "icons-0.0.0-iJxA-VvGMwAgiKSXRe_Y0O7RpasdtEJhBfVx8IGGEBl_",
             .lazy = true,
         },
+        // Must resolve to the *same* dvui as the repo-root zon. Boundary-reachable dvui types feed
+        // the SDK shape fingerprint, and `recorded_sdk_shape_fingerprint` is one literal compiled by
+        // both this package and the app — so if these two pins disagree, each build demands a
+        // different value and satisfying one breaks the other. Local path during development, for
+        // the same reason the root zon uses one; swap both back to the URL+hash pin together before
+        // tagging, since CI requires a content-addressed pin.
         .dvui = .{
-            .url = "https://github.com/foxnne/dvui-dev/archive/ed2f1c67f0316184783c8dba7d79ed4c49d26f97.tar.gz",
-            .hash = "dvui-0.5.0-dev-AQFJmX1d_QA2wHjWCweU26ZxqIrA9LwWeysGFbfVMc7y",
+            //.url = "https://github.com/foxnne/dvui-dev/archive/ed2f1c67f0316184783c8dba7d79ed4c49d26f97.tar.gz",
+            //.hash = "dvui-0.5.0-dev-AQFJmX1d_QA2wHjWCweU26ZxqIrA9LwWeysGFbfVMc7y",
+            .path = "../../dvui-dev",
         },
         .zf = .{
             .url = "git+https://github.com/natecraddock/zf#c35c421f84895193246db06c40683c1a30e616ef",

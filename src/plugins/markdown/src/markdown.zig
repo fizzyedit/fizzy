@@ -44,10 +44,12 @@ pub const Preview = struct {
         self.ast_root = null;
         self.rs.clear(gpa);
         self.content_hash = h;
+        const t0 = std.Io.Clock.boot.now(dvui.io).nanoseconds;
         if (md_parse.parseMarkdown(content)) |ast| {
             self.ast_root = @ptrCast(ast.root.n);
             _ = render_ast.scanNode(ast.root, &self.rs, gpa, content);
         }
+        render_ast.stats.parse_ns +%= @intCast(std.Io.Clock.boot.now(dvui.io).nanoseconds - t0);
     }
 };
 
@@ -159,6 +161,21 @@ pub fn drawPreview(
             .id_base = @intCast(opts.id_extra << 16),
             .background = opts.background,
             .document_path = opts.document_path,
+            // What lets the renderer lay out only the blocks on screen. `viewport` is in the
+            // scroll area's virtual coordinates, where the column box starts at 0 — so the first
+            // block sits at its top padding.
+            //
+            // On a document's very first frame the `ScrollInfo` has not been laid out yet and its
+            // viewport is all zeros, which would read as "no viewport, draw everything" — and that
+            // frame is exactly the one that must not lay out a whole 60KB document, because it is
+            // the frame the preview pane opens on. The scroll area's own rect is already known by
+            // then, so it stands in.
+            .viewport = if (state.scroll.viewport.h > 0)
+                state.scroll.viewport
+            else
+                .{ .h = scroll.data().contentRect().h },
+            .content_origin_y = pad.y,
+            .column_width = column_w,
         });
     } else {
         dvui.labelNoFmt(

@@ -421,6 +421,16 @@ pub fn hovered(wd: *dvui.WidgetData) bool {
     return false;
 }
 
+/// Rest fill for a control that should be invisible until hovered.
+///
+/// `Color.transparent` is transparent *black*, and dvui's hover fade lerps straight (non
+/// premultiplied) RGBA, so a `.transparent` -> `hover` fade dips through a dark wash before it
+/// reaches the hover tint. That is invisible on near-black themes and jarring on saturated ones
+/// (Strawberry). Reusing the hover colour's RGB at zero alpha makes the fade ramp alpha only.
+pub fn hoverRestFill(hover: dvui.Color) dvui.Color {
+    return hover.opacity(0);
+}
+
 pub fn reorder(src: std.builtin.SourceLocation, init_opts: ReorderWidget.InitOptions, opts: dvui.Options) *ReorderWidget {
     var ret = dvui.widgetAlloc(ReorderWidget);
     ret.init(src, init_opts, opts);

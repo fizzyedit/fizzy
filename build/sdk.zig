@@ -1,5 +1,29 @@
 const std = @import("std");
 
+/// The repo's one dvui, borrowed from the `sdk/` package instead of pinned by the app.
+///
+/// dvui is not a dependency of the root package at all: `sdk/build.zig.zon` declares the only pin
+/// and this reaches through to it, so there is a single place to bump a version or point at a local
+/// checkout. `args` is forwarded to dvui's own build untouched (backend, target, optimize, …), so
+/// callers keep full control of *how* it is built; only *which* dvui is shared.
+///
+/// Worth the indirection because the two are not free to disagree. dvui types reachable from the
+/// plugin boundary feed `dylib.sdk_shape_fingerprint`, which both the app build and the plugin-SDK
+/// build check against the single `recorded_sdk_shape_fingerprint` literal in `src/sdk/version.zig`.
+/// When each build compiled a different dvui, they computed different fingerprints from that one
+/// literal and no value satisfied both — every fix broke the other side, and the error blamed
+/// `sdk_version`, which a bump cannot repair. One pin makes that state unreachable rather than
+/// merely discouraged.
+///
+/// The direction is forced: `sdk/` ships standalone as `fizzy-sdk-v*.tar.gz` for third-party
+/// plugins, so it must carry its own pin and can never read anything above its own root. The app
+/// can always reach down into it.
+pub fn dvuiDependency(b: *std.Build, args: anytype) *std.Build.Dependency {
+    // Only the SDK package's resolved dependency table is wanted here, not its artifacts, so its
+    // own target/optimize are left at default; `args` carries the target dvui is really built for.
+    return b.dependency("fizzy_sdk", .{}).builder.dependency("dvui", args);
+}
+
 pub fn addProxyBridgeModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
