@@ -19,7 +19,7 @@ const fizzy = @import("fizzy.zig");
 // symbols whose files import `@import("backend")` (SDL3) at file scope. Zig's
 // lazy analysis means a dead/unused file-scope `const` never triggers its
 // `@import`. We only pay the wasm-incompatibility cost when a reachable function
-// actually calls into native APIs. See WEB_PORT_PLAN.md.
+// actually calls into native APIs.
 comptime {
     // Pure constants / re-exports
     _ = fizzy.version;

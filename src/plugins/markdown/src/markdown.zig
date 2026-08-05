@@ -37,14 +37,19 @@ pub const Preview = struct {
         hasher.update(content);
         const h = hasher.final();
         if (self.content_hash == h and self.ast_root != null) return;
+        // `scanNode` needs the original source, not just the AST: cmark's text nodes have had
+        // backslash escapes applied and adjacent runs merged, so `\[\[A]]` is indistinguishable
+        // from `[[A]]` by then. See `md/wikilink_scan.zig`.
         md_parse.freeCachedRoot(self.ast_root);
         self.ast_root = null;
         self.rs.clear(gpa);
         self.content_hash = h;
+        const t0 = std.Io.Clock.boot.now(dvui.io).nanoseconds;
         if (md_parse.parseMarkdown(content)) |ast| {
             self.ast_root = @ptrCast(ast.root.n);
-            _ = render_ast.scanNode(ast.root, &self.rs, gpa);
+            _ = render_ast.scanNode(ast.root, &self.rs, gpa, content);
         }
+        render_ast.stats.parse_ns +%= @intCast(std.Io.Clock.boot.now(dvui.io).nanoseconds - t0);
     }
 };
 
@@ -60,6 +65,14 @@ pub const PreviewOptions = struct {
     image_base_dir: []const u8 = ".",
     /// Seed for widget ids so multiple previews don't collide.
     id_extra: u64 = 0,
+    /// Absolute path of the document being previewed, or `""` when it has none — an unsaved
+    /// buffer, or markdown fetched from the network (the store's README pane).
+    ///
+    /// Distinct from `image_base_dir`, which is a *directory* and may be a URL. This is the file
+    /// itself, and it's what `[[wikilink]]` resolution is relative to. Leaving it empty disables
+    /// wikilinks entirely: a fetched README must not resolve `[[Note]]` against the user's own
+    /// local files, and a link to nowhere is worse than the literal text it was written as.
+    document_path: []const u8 = "",
     /// Whether the preview paints fills behind its text at all — both the scroll area's own and
     /// each text widget's. `false` for a caller (the store's plugin detail page) that already
     /// draws its own background behind this and wants the preview to read as part of that pane
@@ -147,6 +160,22 @@ pub fn drawPreview(
             .rs = &state.rs,
             .id_base = @intCast(opts.id_extra << 16),
             .background = opts.background,
+            .document_path = opts.document_path,
+            // What lets the renderer lay out only the blocks on screen. `viewport` is in the
+            // scroll area's virtual coordinates, where the column box starts at 0 — so the first
+            // block sits at its top padding.
+            //
+            // On a document's very first frame the `ScrollInfo` has not been laid out yet and its
+            // viewport is all zeros, which would read as "no viewport, draw everything" — and that
+            // frame is exactly the one that must not lay out a whole 60KB document, because it is
+            // the frame the preview pane opens on. The scroll area's own rect is already known by
+            // then, so it stands in.
+            .viewport = if (state.scroll.viewport.h > 0)
+                state.scroll.viewport
+            else
+                .{ .h = scroll.data().contentRect().h },
+            .content_origin_y = pad.y,
+            .column_width = column_w,
         });
     } else {
         dvui.labelNoFmt(
@@ -184,5 +213,6 @@ pub fn drawPreviewForDocument(
         "."
     else
         std.fs.path.dirname(document_path) orelse ".";
+    merged.document_path = document_path;
     drawPreview(state, bytes, gpa, merged);
 }

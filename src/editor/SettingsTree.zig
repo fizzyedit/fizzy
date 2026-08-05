@@ -368,7 +368,7 @@ fn drawBranch(
         .expand = .horizontal,
         .color_fill_hover = theme.color(.control, .fill).opacity(0.5),
         .color_fill_press = theme.color(.control, .fill_press),
-        .color_fill = .transparent,
+        .color_fill = core.dvui.hoverRestFill(theme.color(.control, .fill)),
         .padding = dvui.Rect.all(1),
     });
     defer b.deinit();

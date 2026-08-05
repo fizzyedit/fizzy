@@ -355,6 +355,14 @@ pub fn isPathIgnored(
     return if (self.fizzy_api) |a| a.isPathIgnored(project_root, abs_path, name, kind) else false;
 }
 
+/// True when fizzy has a live filesystem watcher on the open root folder — i.e. when
+/// `Plugin.VTable.folderPathsChanged` will actually fire. A plugin that must stay correct
+/// (an index, a file tree) should keep a slow rescan for when this is false, and can skip it
+/// entirely when it is true.
+pub fn folderWatchActive(self: *Host) bool {
+    return if (self.fizzy_api) |a| a.folderWatchActive() else false;
+}
+
 pub fn explorerBranchIsOpen(self: *Host, branch_id: dvui.Id) bool {
     return if (self.fizzy_api) |a| a.explorerBranchIsOpen(branch_id) else false;
 }
@@ -652,6 +660,28 @@ pub fn pluginById(self: *Host, id: []const u8) ?*Plugin {
         if (std.mem.eql(u8, plugin.id, id)) return plugin;
     }
     return null;
+}
+
+/// Broadcast an open document's in-memory content change to every registered plugin.
+///
+/// Called by the document's **owner** when its buffer settles after an edit — see
+/// `Plugin.VTable.documentContentChanged` for the debouncing contract. This is how a plugin
+/// that owns nothing (a link indexer, a word counter) sees unsaved text at all: nothing else
+/// in the SDK exposes another plugin's live buffer.
+///
+/// The owner is included in the fan-out. That's deliberate — filtering it out would mean
+/// owners behave differently from everyone else for no reason, and an owner that doesn't want
+/// its own notification simply doesn't implement the hook.
+pub fn notifyDocumentContentChanged(self: *Host, path: []const u8, bytes: []const u8) void {
+    for (self.plugins.items) |plugin| plugin.documentContentChanged(path, bytes);
+}
+
+/// Broadcast a coalesced batch of on-disk changes under the open root folder to every plugin.
+///
+/// Called by `FolderWatcher.tick` on the UI thread, never from the watcher's own thread — see
+/// `Plugin.VTable.folderPathsChanged` for the contract this upholds.
+pub fn notifyFolderPathsChanged(self: *Host, changes: Plugin.PathChanges) void {
+    for (self.plugins.items) |plugin| plugin.folderPathsChanged(changes);
 }
 
 /// First registered plugin that implements `createDocument` (for fizzy New File flows).

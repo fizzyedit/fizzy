@@ -37,7 +37,9 @@ pub const current_sdk_version: []const u8 = std.fmt.comptimePrint("{d}.{d}.{d}",
     version_number.sdk_version.minor,
     version_number.sdk_version.patch,
 });
-const version_number = @import("../../../../sdk/sdk_version.zig");
+// Through the `sdk/` dependency rather than by relative path into it: the app consumes that
+// directory as a package so the two share one dvui pin, and a file may belong to only one module.
+const version_number = @import("fizzy_sdk").sdk_version;
 
 /// Identity read from a built-in's `plugin.zig.zon` at configure time, plus its raw source.
 /// Same type as `plugin_sdk.IdentityManifest` (both `@import` `manifest_identity.zig` directly)

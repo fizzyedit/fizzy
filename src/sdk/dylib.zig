@@ -26,6 +26,7 @@ const regions = @import("regions.zig");
 const language_mod = @import("language.zig");
 const workbench_service = @import("services/workbench.zig");
 const markdown_service = @import("services/markdown.zig");
+const wikilink_service = @import("services/wikilink.zig");
 
 /// C ABI — host loader injects host-owned pointers into the plugin image before `register`.
 ///
@@ -131,6 +132,20 @@ const sdk_boundary_types = .{
     workbench_service.Api.VTable,
     markdown_service.Api,
     markdown_service.Api.VTable,
+    // Unlike `workbench`/`markdown`, this service's producer and consumer are *both* plugins
+    // (an indexer registers it, the markdown renderer calls it) — fizzy only stores the
+    // `*anyopaque`. So a mismatch here is dylib-to-dylib and the host would never notice:
+    // a provider built with a 4-slot vtable and a consumer built against a 5-slot one both
+    // pass every other check, and the consumer calls a fn pointer past the end. Listing both
+    // turns that into a clean `err_abi_mismatch` at load.
+    wikilink_service.Api,
+    wikilink_service.Api.VTable,
+    // `Resolution`/`Candidate` are only reached through a slice or by value across the
+    // boundary — same lesson as `CompletionItem` above; give them explicit entries so a field
+    // added later can't change the real layout without moving the fingerprint.
+    wikilink_service.Api.Resolution,
+    wikilink_service.Api.Candidate,
+    wikilink_service.Token,
     VersionTriplet,
 };
 
@@ -177,7 +192,12 @@ const dvui_shared_state_types = .{
 /// zero-size it. A host and plugin in different classes have genuinely incompatible offsets even
 /// with an identical boundary shape, so this is folded into `abi_fingerprint` — the one
 /// real-layout axis the shape hash deliberately ignores.
-const optimize_safety_class: []const u8 = switch (builtin.mode) {
+///
+/// Public because it is the *only* fingerprint input a host can explain to the user in isolation:
+/// the plugin store publishes `"fast"` builds exclusively, so a `"safe"` host knows up front that
+/// no store shard can ever match it, whatever the SDK version says (see `PluginStore`'s
+/// `host_optimize_matches_store`).
+pub const optimize_safety_class: []const u8 = switch (builtin.mode) {
     .Debug, .ReleaseSafe => "safe",
     .ReleaseFast, .ReleaseSmall => "fast",
 };

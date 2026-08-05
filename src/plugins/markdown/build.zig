@@ -9,6 +9,24 @@ pub fn build(b: *std.Build) void {
     linkCmark(b, target, optimize, plugin.module);
 
     fizzy.plugin.install(b, plugin.lib, .{});
+
+    // `zig build test` — the escape/source-position logic in `src/md/wikilink_scan.zig`, run
+    // against the **real vendored cmark**. It can't live in fizzy's own pure-logic test list
+    // (`build/app.zig`) like `html_images`/`url_join` do: those are std-only by design, and this
+    // one is a claim about what cmark itself does to backslash escapes, which only cmark can
+    // confirm. So it tests from here, where cmark is already linked.
+    const test_step = b.step("test", "Run the markdown plugin's unit tests");
+    const scan_tests = b.addTest(.{
+        .name = "markdown-wikilink-scan-tests",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/md/wikilink_scan.zig"),
+        }),
+    });
+    scan_tests.root_module.addImport("fizzy_sdk", plugin.module.import_table.get("fizzy_sdk").?);
+    linkCmark(b, target, optimize, scan_tests.root_module);
+    test_step.dependOn(&b.addRunArtifact(scan_tests).step);
 }
 
 /// Duplicated from `static/integration.zig`'s `linkCmark` — deliberately, not `@import`ed:

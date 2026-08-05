@@ -19,6 +19,35 @@ pub const Plugin = @This();
 /// claim so `Host.pluginForExtension` only picks it as a fallback.
 pub const file_type_fallback_priority: u8 = 100;
 
+/// One filesystem change under the open root folder, delivered via
+/// `VTable.folderPathsChanged`.
+pub const PathEvent = struct {
+    /// Absolute path of the affected object. Valid only for the duration of the call.
+    path: []const u8,
+    kind: Kind,
+    object: ObjectType,
+    /// The pre-rename path, for `.renamed` only — and only on platforms whose watcher can pair
+    /// the two halves (Linux, Windows). Elsewhere a rename arrives as `.deleted` + `.created`,
+    /// which is why a consumer must handle that shape regardless.
+    old_path: []const u8 = "",
+
+    pub const Kind = enum { created, modified, deleted, renamed };
+    /// `.unknown` happens when the object is already gone by the time fizzy looks (a delete on
+    /// Windows, mostly) — treat it as "could be either".
+    pub const ObjectType = enum { file, dir, unknown };
+};
+
+/// A coalesced batch of filesystem changes.
+pub const PathChanges = struct {
+    /// Valid only for the duration of the call — copy anything you keep. Already filtered
+    /// against fizzy's ignore rules, so `.git`, build caches and gitignored paths never appear.
+    events: []const PathEvent,
+    /// More changes arrived than fizzy could buffer, so `events` is an incomplete picture of
+    /// what happened. A consumer that must not miss anything should rescan the folder rather
+    /// than trusting the list. Expect this during a build, a branch switch, or an npm install.
+    truncated: bool,
+};
+
 /// Opaque, plugin-owned state passed back to every vtable call.
 state: *anyopaque,
 vtable: *const VTable,
@@ -183,6 +212,45 @@ pub const VTable = struct {
     /// plugin can load state it keyed to that folder.
     onFolderOpen: ?*const fn (state: *anyopaque, allocator: std.mem.Allocator) void = null,
 
+    // ---- document content ----
+    /// [broadcast] An open document's in-memory contents changed. Fired for *every* registered
+    /// plugin, not just the owner — the point is to let a plugin that doesn't own the document
+    /// observe it anyway (a link indexer watching markdown it will never render, say). The
+    /// owner is the one that reports the change, via `Host.notifyDocumentContentChanged`.
+    ///
+    /// Owners are expected to **debounce**: report after a short lull in typing (a few hundred
+    /// ms) and immediately on save, never per keystroke. `path` is the document's path, empty
+    /// for an unsaved buffer. `bytes` is the live buffer and is only valid for the duration of
+    /// the call — copy anything you keep.
+    ///
+    /// This is a hint about *unsaved* state; the file on disk still says something else. A
+    /// consumer that also watches the filesystem should treat this as an overlay it can drop
+    /// once the on-disk version catches up, not as a reason to write anything through.
+    documentContentChanged: ?*const fn (state: *anyopaque, path: []const u8, bytes: []const u8) void = null,
+
+    // ---- filesystem ----
+    /// [broadcast] Files under the open root folder changed **on disk**. Fired for every
+    /// registered plugin — a file tree keeping itself current, a link indexer, a language
+    /// server syncing `didChangeWatchedFiles`.
+    ///
+    /// The counterpart to `documentContentChanged`, and the two are not interchangeable: that
+    /// one reports *unsaved buffers* fizzy already knows about, this one reports *the disk*,
+    /// including files nothing has open and changes fizzy had no part in — an agent editing
+    /// the tree, a `git checkout`, another editor. Neither implies the other, and a plugin
+    /// wanting a complete picture wants both.
+    ///
+    /// Contract:
+    /// - Delivered on the **UI thread**, from fizzy's frame tick — never the watcher's thread.
+    ///   A dylib must not take a callback on a thread it did not create.
+    /// - **Coalesced** (~200ms) so one logical save doesn't arrive as five events, and
+    ///   **pre-filtered** against fizzy's ignore rules, so `.git`, build output and gitignored
+    ///   paths are already gone.
+    /// - Best-effort. Not every platform has a working watcher, and one that does can still
+    ///   drop events under load (see `PathChanges.truncated`). Treat this as a prompt to go
+    ///   look, not as a ledger. `host.folderWatchActive()` says whether it is running at all;
+    ///   a plugin that must stay correct should keep a slow rescan for when it isn't.
+    folderPathsChanged: ?*const fn (state: *anyopaque, changes: PathChanges) void = null,
+
     // ---- save protocol ----
     /// [active-doc] True when the owner wants a confirmation before `saveDocument` (e.g. a save
     /// that would flatten lossy data, change encoding, or overwrite an on-disk change). When
@@ -283,6 +351,14 @@ pub fn onFolderClose(self: Plugin) void {
 
 pub fn onFolderOpen(self: Plugin, allocator: std.mem.Allocator) void {
     if (self.vtable.onFolderOpen) |f| f(self.state, allocator);
+}
+
+pub fn documentContentChanged(self: Plugin, path: []const u8, bytes: []const u8) void {
+    if (self.vtable.documentContentChanged) |f| f(self.state, path, bytes);
+}
+
+pub fn folderPathsChanged(self: Plugin, changes: PathChanges) void {
+    if (self.vtable.folderPathsChanged) |f| f(self.state, changes);
 }
 
 pub fn bindDocumentToPane(self: Plugin, doc: DocHandle, canvas_id: dvui.Id, workspace_handle: *anyopaque, center: bool) void {

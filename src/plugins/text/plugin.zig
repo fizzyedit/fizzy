@@ -59,6 +59,7 @@ const vtable: sdk.Plugin.VTable = .{
     .documentHasNativeExtension = documentHasNativeExtension,
     .documentHasRecognizedSaveExtension = documentHasRecognizedSaveExtension,
     // rendering + lifecycle
+    .tickOpenDocuments = tickOpenDocuments,
     .drawDocument = drawDocument,
     .closeDocument = closeDocument,
     .reloadDocument = reloadDocument,
@@ -305,6 +306,18 @@ fn reloadDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
 }
 fn isDirty(_: *anyopaque, handle: DocHandle) bool {
     return (docFrom(handle) orelse return false).isDirty();
+}
+
+/// Drive each open document's content-change debounce. Returns true while any of them still
+/// owes a notification, so fizzy keeps drawing until the burst settles instead of idling with
+/// one pending.
+fn tickOpenDocuments(state: *anyopaque) bool {
+    const st: *State = @ptrCast(@alignCast(state));
+    var pending = false;
+    for (st.docs.values()) |doc| {
+        if (doc.tickContentChanged()) pending = true;
+    }
+    return pending;
 }
 fn saveDocument(state: *anyopaque, handle: DocHandle) anyerror!void {
     const doc = docFrom(handle) orelse return;

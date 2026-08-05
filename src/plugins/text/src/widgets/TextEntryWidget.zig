@@ -938,53 +938,58 @@ pub fn draw(self: *TextEntryWidget) void {
             defer dvui.c.ts_query_cursor_delete(qc);
             dvui.c.ts_query_cursor_set_match_limit(qc, tree_sitter_match_limit);
 
-            dvui.c.ts_query_cursor_exec(qc, ts_parser.query, root);
-
-            var iter = ts_parser.queryCursorCaptureIterator(qc.?, self.text);
-            iter.debug = ts.log_captures;
-
             // Restrict the capture walk to what's actually on screen — this is the dominant
-            // per-frame cost of a highlighted document (see `highlightByteRange` for why it
-            // can't just reuse dvui's layout range). Text outside the queried range still
-            // renders via the gap/leftover chunks below; it's just uncolored until scrolled
-            // into range.
-            if (self.highlightByteRange()) |r| {
-                iter.setByteRange(r.start, r.end);
+            // per-frame cost of a highlighted document, and it comes as several ranges rather
+            // than one (see `highlightRanges`). Text outside them still renders via the
+            // gap/leftover chunks below; it's just uncolored until scrolled into range.
+            var range_buf: [max_highlight_ranges]ByteRange = undefined;
+            var ranges = self.highlightRanges(&range_buf);
+            if (ranges.len == 0) {
+                range_buf[0] = .{ .start = 0, .end = self.len };
+                ranges = range_buf[0..1];
             }
-            while (true) {
-                //const capture_start = perfBegin();
-                const maybe_match = iter.next();
-                //perfAccumCapture(capture_start);
-                const match = maybe_match orelse break;
 
-                const nstart = dvui.c.ts_node_start_byte(match.node);
-                const nend = dvui.c.ts_node_end_byte(match.node);
-                if (start < nstart) {
-                    // render non highlighted text up to this node
-                    //const shape_start = perfBegin();
-                    self.emitChunk(start, self.text[start..nstart], .{}, false, true);
-                    //perfAccumShape(shape_start);
-                } else if (nstart < start) {
-                    // this match is inside (or overlapping) the previous match
-                    // maybe we could be smarter here, but for now drop it
-                    continue;
-                }
+            for (ranges) |r| {
+                dvui.c.ts_query_cursor_exec(qc, ts_parser.query, root);
+                var iter = ts_parser.queryCursorCaptureIterator(qc.?, self.text);
+                iter.debug = ts.log_captures;
+                iter.setByteRange(r.start, r.end);
 
-                var opts: dvui.Options = .{};
-                const capture_name = match.captureName();
-                for (0..ts.highlights.len) |i| {
-                    const sh = ts.highlights[ts.highlights.len - i - 1];
-                    if (std.mem.startsWith(u8, capture_name, sh.name)) {
-                        opts = sh.opts;
-                        break;
+                while (true) {
+                    //const capture_start = perfBegin();
+                    const maybe_match = iter.next();
+                    //perfAccumCapture(capture_start);
+                    const match = maybe_match orelse break;
+
+                    const nstart = dvui.c.ts_node_start_byte(match.node);
+                    const nend = dvui.c.ts_node_end_byte(match.node);
+                    if (start < nstart) {
+                        // render non highlighted text up to this node
+                        //const shape_start = perfBegin();
+                        self.emitChunk(start, self.text[start..nstart], .{}, false, true);
+                        //perfAccumShape(shape_start);
+                    } else if (nstart < start) {
+                        // this match is inside (or overlapping) the previous match
+                        // maybe we could be smarter here, but for now drop it
+                        continue;
                     }
+
+                    var opts: dvui.Options = .{};
+                    const capture_name = match.captureName();
+                    for (0..ts.highlights.len) |i| {
+                        const sh = ts.highlights[ts.highlights.len - i - 1];
+                        if (std.mem.startsWith(u8, capture_name, sh.name)) {
+                            opts = sh.opts;
+                            break;
+                        }
+                    }
+
+                    //const shape_start = perfBegin();
+                    self.emitChunk(nstart, self.text[nstart..nend], opts, true, captureAllowsRainbow(capture_name));
+                    //perfAccumShape(shape_start);
+
+                    start = nend;
                 }
-
-                //const shape_start = perfBegin();
-                self.emitChunk(nstart, self.text[nstart..nend], opts, true, captureAllowsRainbow(capture_name));
-                //perfAccumShape(shape_start);
-
-                start = nend;
             }
 
             if (start < self.len) {
@@ -1061,6 +1066,50 @@ pub fn highlightByteRange(self: *TextEntryWidget) ?ByteRange {
         .start = @max(start, clb.start),
         .end = @min(@min(end, clb.end), self.len),
     };
+}
+
+/// The most byte ranges `highlightRanges` will query in one frame. Every range costs another
+/// `ts_query_cursor_exec` and tree descent, and dvui reports at most
+/// `TextLayoutWidget.VisibleRanges.max` runs anyway.
+const max_highlight_ranges = dvui.TextLayoutWidget.VisibleRanges.max;
+
+/// `highlightByteRange` split into the runs actually worth querying, in increasing byte order.
+///
+/// The single interval isn't enough on its own: a line wider than the viewport is on screen at
+/// its left edge and again — as a different line — below it, so an interval covering both also
+/// covers the line's off-screen middle. That middle is where a pathological line keeps all of its
+/// syntax nodes, so querying it costs the whole frame (36ms for one 200k-character line) to color
+/// pixels that don't exist. dvui reports which bytes its layout actually put on screen last
+/// frame, gaps included; each run gets its own query pass, and the gaps between them come out as
+/// uncolored text nobody can see.
+///
+/// Each run is padded, and the result clipped back to `highlightByteRange`, for the same reason
+/// that range is padded: dvui's runs are a frame stale, so a scroll or edit has to be able to
+/// land inside them and still be colored.
+fn highlightRanges(self: *TextEntryWidget, buf: *[max_highlight_ranges]ByteRange) []const ByteRange {
+    const range = self.highlightByteRange() orelse return &.{};
+    const visible = self.textLayout.visibleBytesLastFrame();
+    if (visible.len == 0) {
+        buf[0] = range;
+        return buf[0..1];
+    }
+
+    var n: usize = 0;
+    for (visible) |vis| {
+        const headroom = @max(2 * (vis.end -| vis.start), 4096);
+        const start = @max(range.start, vis.start -| headroom);
+        const end = @min(range.end, vis.end +| headroom);
+        if (end <= start) continue;
+        // Padding can make neighbouring runs meet; two passes over one span would emit the same
+        // captures twice, which the emit loop reads as overlapping matches and drops.
+        if (n > 0 and start <= buf[n - 1].end) {
+            buf[n - 1].end = @max(buf[n - 1].end, end);
+        } else {
+            buf[n] = .{ .start = start, .end = end };
+            n += 1;
+        }
+    }
+    return buf[0..n];
 }
 
 /// One ghost-text splice resolved for this frame: `text` shown dimmed at byte offset `anchor`.

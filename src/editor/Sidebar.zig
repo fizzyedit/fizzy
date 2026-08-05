@@ -121,11 +121,14 @@ fn drawOption(view: *const SidebarView, index: usize, size: f32) !Action {
 
     const color: dvui.Color = if (selected) theme.color(.highlight, .fill) else if (bw.hovered()) theme.color(.window, .text) else theme.color(.window, .fill);
 
+    // Apply both fill and stroke: Entypo glyphs are fill-based, Lucide (and most
+    // plugin icons) are stroke-based. Setting only one leaves the other at DVUI's
+    // default white — which is how a stroke icon looks "full white" in the rail.
     dvui.icon(
         @src(),
         view.id,
         view.icon,
-        .{ .fill_color = color },
+        .{ .fill_color = color, .stroke_color = color },
         .{
             .id_extra = index,
             .min_size_content = .{ .h = size },

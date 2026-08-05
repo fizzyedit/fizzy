@@ -2,6 +2,7 @@ const std = @import("std");
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
+const assets = @import("assets");
 const update_notify = @import("../backend/update_notify.zig");
 const Dialogs = fizzy.Editor.Dialogs;
 const Constants = @import("Constants.zig");
@@ -57,7 +58,7 @@ pub fn draw(_: Infobar) !void {
             .gravity_y = 0.5,
             .margin = .all(0),
             .padding = .all(0),
-            .color_fill = .transparent,
+            .color_fill = fizzy.dvui.hoverRestFill(dvui.themeGet().color(.control, .fill_hover)),
             .color_fill_hover = dvui.themeGet().color(.control, .fill_hover),
             .color_fill_press = dvui.themeGet().color(.control, .fill_press),
         });
@@ -68,15 +69,38 @@ pub fn draw(_: Infobar) !void {
         var box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .all(0), .padding = .all(0) });
         defer box.deinit();
 
-        dvui.icon(
-            @src(),
-            "info_icon",
-            icons.tvg.entypo.@"info-circled",
-            .{ .fill_color = dvui.themeGet().color(.window, .text) },
-            .{ .gravity_y = 0.5, .padding = .{
-                .x = 4,
-            } },
-        );
+        // The pixel-art F (`icon.png`, not `fox.png`), same logo the settings tree and file
+        // explorer use. `.imageFile` so dvui caches the texture — `fromImageFileBytes`
+        // re-decodes every frame. Sized off the bar height so it never grows the infobar.
+        const logo_side = bar_h - 8;
+        const logo: dvui.ImageSource = .{ .imageFile = .{
+            .bytes = assets.files.@"icon.png",
+            .name = "icon.png",
+            .interpolation = .nearest,
+        } };
+        {
+            // Fixed slot (min == max) so the artwork fits the bar instead of dictating its
+            // height, same shape as `treeRowGlyph` but sized off `infobar_height`.
+            var logo_slot = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .gravity_y = 0.5,
+                .expand = .none,
+                .background = false,
+                .min_size_content = .{ .w = logo_side, .h = logo_side },
+                .max_size_content = .size(.{ .w = logo_side, .h = logo_side }),
+                .padding = .all(0),
+                .margin = .{ .x = 4, .w = 2 },
+            });
+            defer logo_slot.deinit();
+
+            _ = dvui.image(@src(), .{ .source = logo, .shrink = .ratio }, .{
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
+                .expand = .ratio,
+                .padding = .all(0),
+                .margin = .all(0),
+                .background = false,
+            });
+        }
         dvui.label(@src(), "fizzy", .{}, .{ .font = font, .gravity_y = 0.5, .margin = .all(0) });
 
         if (button.clicked()) {

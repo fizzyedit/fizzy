@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const plugin = @import("../sdk/plugin_sdk.zig");
+const plugin = @import("fizzy_sdk").plugin;
 const update = @import("../update.zig");
 const GitDependency = update.GitDependency;
 

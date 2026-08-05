@@ -773,7 +773,10 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                     //.color_fill_hover = .fill,
                     .color_fill_hover = dvui.themeGet().color(.control, .fill).opacity(0.5),
                     .color_fill_press = dvui.themeGet().color(.control, .fill_press),
-                    .color_fill = if (selected and tree.drag_point == null) dvui.themeGet().color(.control, .fill).opacity(0.5) else .transparent,
+                    .color_fill = if (selected and tree.drag_point == null)
+                        dvui.themeGet().color(.control, .fill).opacity(0.5)
+                    else
+                        wdvui.hoverRestFill(dvui.themeGet().color(.control, .fill)),
                     .padding = dvui.Rect.all(1),
                 });
                 defer branch.deinit();
@@ -791,25 +794,25 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                 }
 
                 const current_point = dvui.currentWindow().mouse_pt;
-
-                const max_distance = if (!expanded) branch.data().borderRectScale().r.h * 3.0 else branch.data().borderRectScale().r.w / 8.0;
+                const rect = branch.data().borderRectScale().r;
+                const max_distance = if (!expanded) rect.h * 3.0 else rect.w / 8.0;
 
                 var dx: f32 = std.math.floatMax(f32);
 
-                if (current_point.x < branch.data().borderRectScale().r.x + if (expanded) (expanded_indent * dvui.currentWindow().natural_scale) else 0.0) {
+                if (current_point.x < rect.x + if (expanded) (expanded_indent * dvui.currentWindow().natural_scale) else 0.0) {
                     dx = std.math.floatMax(f32);
-                } else if (current_point.x > branch.data().borderRectScale().r.bottomRight().x) {
-                    dx = @abs(current_point.x - branch.data().borderRectScale().r.bottomRight().x);
+                } else if (current_point.x > rect.bottomRight().x) {
+                    dx = @abs(current_point.x - rect.bottomRight().x);
                 } else {
                     dx = 0.0;
                 }
 
                 var dy: f32 = std.math.floatMax(f32);
 
-                if (current_point.y < branch.data().borderRectScale().r.y) {
-                    dy = @abs(current_point.y - branch.data().borderRectScale().r.y);
-                } else if (current_point.y > branch.data().borderRectScale().r.bottomRight().y) {
-                    dy = @abs(current_point.y - branch.data().borderRectScale().r.bottomRight().y);
+                if (current_point.y < rect.y) {
+                    dy = @abs(current_point.y - rect.y);
+                } else if (current_point.y > rect.bottomRight().y) {
+                    dy = @abs(current_point.y - rect.bottomRight().y);
                 } else {
                     dy = 0.0;
                 }
@@ -1010,10 +1013,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                             }
                         }
 
+                        const doc = runtime.host().docFromPath(abs_path);
+                        const file_label = if (filter_text.len > 0) std.fs.path.relativePosix(dvui.currentWindow().arena(), ".", runtime.host().folder().?, abs_path) catch entry.name else entry.name;
+
                         editableLabel(
                             inner_id_extra.*,
-                            if (filter_text.len > 0) std.fs.path.relativePosix(dvui.currentWindow().arena(), ".", runtime.host().folder().?, abs_path) catch entry.name else entry.name,
-                            if (runtime.host().docFromPath(abs_path) != null) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
+                            file_label,
+                            if (doc != null) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
                             entry.kind,
                             abs_path,
                             active_query,
@@ -1021,8 +1027,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                             dvui.log.err("Failed to draw editable label", .{});
                         };
 
-                        if (runtime.host().docFromPath(abs_path)) |doc| {
-                            if (doc.owner.showsSaveStatusIndicator(doc)) {
+                        if (doc) |d| {
+                            if (d.owner.showsSaveStatusIndicator(d)) {
                                 wdvui.bubbleSpinner(@src(), .{
                                     .id_extra = inner_id_extra.* +% 4001,
                                     .expand = .none,
@@ -1031,7 +1037,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                                     .gravity_y = 0.5,
                                     .color_text = dvui.themeGet().color(.window, .text),
                                 }, .{
-                                    .complete_elapsed_ns = doc.owner.timeSinceSaveCompleteNs(doc),
+                                    .complete_elapsed_ns = d.owner.timeSinceSaveCompleteNs(d),
                                 });
                             }
                         }

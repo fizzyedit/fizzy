@@ -22,9 +22,18 @@
             .hash = "icons-0.0.0-iJxA-VvGMwAgiKSXRe_Y0O7RpasdtEJhBfVx8IGGEBl_",
             .lazy = true,
         },
+        // The repo's ONLY dvui pin — bump or repoint it here and nowhere else. dvui is deliberately
+        // absent from the root zon: the app consumes this package and borrows this entry through
+        // `build/sdk.zig`'s `dvuiDependency`, and build scripts take dvui's build API from
+        // `sdk/build.zig`'s re-export. Do not add `.dvui` back to the root zon to "fix" that.
+        //
+        // It lives here rather than there because this directory ships standalone as
+        // `fizzy-sdk-v*.tar.gz` and cannot reach anything above its own root, while the app can
+        // always reach down into it.
         .dvui = .{
-            .url = "https://github.com/foxnne/dvui-dev/archive/ed2f1c67f0316184783c8dba7d79ed4c49d26f97.tar.gz",
-            .hash = "dvui-0.5.0-dev-AQFJmX1d_QA2wHjWCweU26ZxqIrA9LwWeysGFbfVMc7y",
+            .url = "https://github.com/foxnne/dvui-dev/archive/2e8cbb81cc421c363f70079e9be6ba044200c941.tar.gz",
+            .hash = "dvui-0.5.0-dev-AQFJmVulAAEDws4e9-I85OM0EmRJK-IEn8gj3aVJuVJ0",
+            //.path = "../../dvui-dev",
         },
         .zf = .{
             .url = "git+https://github.com/natecraddock/zf#c35c421f84895193246db06c40683c1a30e616ef",
@@ -32,3 +41,4 @@
         },
     },
 }
+

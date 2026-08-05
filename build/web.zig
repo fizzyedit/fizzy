@@ -1,5 +1,5 @@
 const std = @import("std");
-const core_mod = @import("../sdk/core_module.zig");
+const core_mod = @import("fizzy_sdk").core_module;
 const plugins = @import("plugins.zig");
 const sdk = @import("sdk.zig");
 
@@ -24,7 +24,7 @@ pub fn addSteps(
         }),
     });
 
-    const dvui_web_dep = b.dependency("dvui", .{
+    const dvui_web_dep = sdk.dvuiDependency(b, .{
         .target = web_target,
         .optimize = optimize,
         .backend = .web,

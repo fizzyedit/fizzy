@@ -158,6 +158,53 @@ fn run(label: []const u8, sample: []const u8, cursor: usize) !void {
     std.debug.print("  {s:<34} {d:>6} us/frame\n", .{ label, per_frame_us });
 }
 
+/// A document whose only unusual feature is one pathologically long line — minified JS/CSS, a
+/// one-line JSON blob, a generated data table. The short lines around it are there so the
+/// viewport contains ordinary text too, the way it does in the editor.
+///
+/// Built at runtime rather than embedded: the repo has no such file, and a checked-in fixture
+/// of this size would be dead weight (`long_len` is the knob worth sweeping anyway).
+fn buildLongLine(gpa: std.mem.Allocator, long_len: usize, trailing_lines: usize) ![]u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(gpa);
+    for (0..5) |i| try buf.print(gpa, "const short_{d} = {d};\n", .{ i, i });
+    const unit = "const x = foo(bar, 1234); ";
+    while (buf.items.len < long_len) try buf.appendSlice(gpa, unit);
+    try buf.append(gpa, '\n');
+    for (0..trailing_lines) |i| try buf.print(gpa, "const after_{d} = {d};\n", .{ i, i });
+    return buf.toOwnedSlice(gpa);
+}
+
+test "bench: long single line" {
+    const gpa = std.testing.allocator;
+    std.debug.print("\n== long single line — {s} ==\n", .{@tagName(@import("builtin").mode)});
+
+    for ([_]usize{ 2_000, 20_000, 200_000 }) |long_len| {
+        const sample = try buildLongLine(gpa, long_len, 200);
+        defer gpa.free(sample);
+        std.debug.print(" one line of {d} chars, {d} bytes total\n", .{ long_len, sample.len });
+
+        tree_sitter = true;
+        cache_layout = true;
+        typing = false;
+        scroll_lines_per_frame = 0;
+        park_scroll_ticks = 0;
+        try run("idle, long line on screen", sample, 0);
+        try run("idle, caret mid-long-line", sample, 100 + long_len / 2);
+        tree_sitter = false;
+        try run("idle, no highlighting", sample, 0);
+        tree_sitter = true;
+
+        // Same long line with nothing after it — the minified-file shape. Worth its own case
+        // because it needs only one visible byte range to describe the frame, where a long line
+        // with text below it needs two with the line's off-screen middle between them, so this
+        // is the case that stays fast even if that gap handling regresses.
+        const trailing = try buildLongLine(gpa, long_len, 0);
+        defer gpa.free(trailing);
+        try run("idle, long line last in file", trailing, 0);
+    }
+}
+
 test "bench: text editor frame cost" {
     std.debug.print("\n== text editor frame cost — {s} ==\n", .{@tagName(@import("builtin").mode)});
 

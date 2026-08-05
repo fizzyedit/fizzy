@@ -15,6 +15,11 @@ pub const Node = struct {
         return .{ .n = ptr };
     }
 
+    pub fn parent(n: Node) ?Node {
+        const ptr = c.cmark_node_parent(n.n) orelse return null;
+        return .{ .n = ptr };
+    }
+
     pub fn nextSibling(n: Node) ?Node {
         const ptr = c.cmark_node_next(n.n) orelse return null;
         return .{ .n = ptr };
@@ -32,6 +37,27 @@ pub const Node = struct {
     pub fn literal(n: Node) ?[:0]const u8 {
         const ptr = c.cmark_node_get_literal(n.n) orelse return null;
         return std.mem.span(ptr);
+    }
+
+    /// Source position, 1-based. Populated for inline nodes unconditionally (`make_literal` in
+    /// cmark's `inlines.c`) — `CMARK_OPT_SOURCEPOS` only governs whether positions are *emitted*
+    /// in HTML output, not whether they're tracked. `cmark_consolidate_text_nodes` keeps the
+    /// first fragment's start and extends `end_column`, so a merged TEXT node still describes
+    /// the whole run it came from. See `wikilink_scan.zig` for what that's used for.
+    pub fn startLine(n: Node) i32 {
+        return c.cmark_node_get_start_line(n.n);
+    }
+
+    pub fn endLine(n: Node) i32 {
+        return c.cmark_node_get_end_line(n.n);
+    }
+
+    pub fn startColumn(n: Node) i32 {
+        return c.cmark_node_get_start_column(n.n);
+    }
+
+    pub fn endColumn(n: Node) i32 {
+        return c.cmark_node_get_end_column(n.n);
     }
 
     pub fn linkUrl(n: Node) ?[:0]const u8 {
