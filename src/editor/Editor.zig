@@ -113,6 +113,7 @@ pub const Panel = @import("panel/Panel.zig");
 pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
+const shell = @import("shell/shell.zig");
 pub const FileLoadJob = workbench_mod.FileLoadJob;
 
 pub const sdk = fizzy.sdk;
@@ -125,6 +126,12 @@ pub const Workbench = workbench_mod.Workbench;
 /// This arena is for small per-frame editor allocations, such as path joins, null terminations and labels.
 /// Do not free these allocations, instead, this allocator will be .reset(.retain_capacity) each frame
 arena: std.heap.ArenaAllocator,
+
+/// Shell (new-layout) selection state: keyword-group hash -> selected surface id.
+/// Surface ids are registry-owned string literals, so this stores no allocations of its own.
+/// Keyed by group rather than by region so two regions written with the same keywords share a
+/// selection with no wiring between them (see `shell/Frame.zig`).
+shell_selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 
 config_folder: []const u8,
 palette_folder: []const u8,
@@ -4155,220 +4162,228 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             }
         }
 
-        var base_box = dvui.box(
-            @src(),
-            .{ .dir = .horizontal },
-            .{
-                .expand = .both,
-            },
-        );
-        defer base_box.deinit();
+        if (build_opts.new_shell) {
+            // Experimental region-based shell (plan Phase 1). Both shells are compiled in;
+            // `-Dnew-shell` picks this one so the two can be diffed live.
+            var frame: shell.Frame = .init(editor);
+            const shell_result = try shell.ide.layout(editor, &frame);
+            if (shell_result != .ok) return shell_result;
+        } else {
+            var base_box = dvui.box(
+                @src(),
+                .{ .dir = .horizontal },
+                .{
+                    .expand = .both,
+                },
+            );
+            defer base_box.deinit();
 
-        for (editor.host.plugins.items) |plugin| {
-            plugin.tickActiveDocument(base_box.data().id);
-        }
+            for (editor.host.plugins.items) |plugin| {
+                plugin.tickActiveDocument(base_box.data().id);
+            }
 
-        // Always reset the peek layer index back, but we need to do this outside of the file widget so
-        // other editor windows can use it
-        defer for (editor.host.plugins.items) |plugin| plugin.endFrame();
+            // Always reset the peek layer index back, but we need to do this outside of the file widget so
+            // other editor windows can use it
+            defer for (editor.host.plugins.items) |plugin| plugin.endFrame();
 
-        // Sidebar area
-        // Since sidebar is drawn before the explorer, and we want to allow expanding the explorer
-        // from clicking a sidebar option, we need to check if the sidebar was pressed. The
-        // sidebar can't safely touch `editor.explorer.paned` itself — it runs before this
-        // frame's paned widget is allocated below — so it reports an `Action` and we dispatch
-        // after the paned is in place.
-        const sidebar_action = editor.sidebar.draw() catch {
-            dvui.log.err("Failed to draw sidebar", .{});
-            return false;
-        };
-
-        var explorer_paned_box = dvui.box(
-            @src(),
-            .{ .dir = .vertical },
-            .{
-                .expand = .both,
-                .background = false,
-            },
-        );
-        defer explorer_paned_box.deinit();
-
-        // Draw the infobar, but draw it at the bottom of the paned box (gravity_y = 1.0)
-        {
-            editor.infobar.draw() catch {
-                dvui.log.err("Failed to draw infobar", .{});
+            // Sidebar area
+            // Since sidebar is drawn before the explorer, and we want to allow expanding the explorer
+            // from clicking a sidebar option, we need to check if the sidebar was pressed. The
+            // sidebar can't safely touch `editor.explorer.paned` itself — it runs before this
+            // frame's paned widget is allocated below — so it reports an `Action` and we dispatch
+            // after the paned is in place.
+            const sidebar_action = editor.sidebar.draw() catch {
+                dvui.log.err("Failed to draw sidebar", .{});
+                return false;
             };
-        }
 
-        // Draw the explorer paned widget, which will recursively draw the workspaces in the second pane
-        editor.explorer.paned = fizzy.dvui.paned(@src(), .{
-            .direction = .horizontal,
-            .collapsed_size = Constants.min_window_size[0] + 1,
-            .handle_size = handle_size,
-            .handle_dynamic = .{
-                .handle_size_max = handle_size,
-                .distance_max = handle_dist,
-            },
-            .uncollapse_ratio = fizzy.editor.explorer_ratio,
-        }, .{
-            .expand = .both,
-            .background = false,
-        });
-        defer editor.explorer.paned.deinit();
-
-        editor.flushQueuedNativeMenuActions();
-        editor.flushQueuedNativeMenuItems();
-        editor.processPendingSaveAs();
-
-        if (dvui.firstFrame(editor.explorer.paned.wd.id)) {
-            editor.explorer.paned.split_ratio.* = 0.0;
-
-            // When the window is below the paned widget's collapse threshold (mobile / narrow
-            // web viewport), start closed instead of animating open to the saved desktop ratio —
-            // the user can sidebar-tap to peek the explorer in.
-            const avail_w = editor.explorer.paned.wd.contentRect().w;
-            const start_collapsed = avail_w < Constants.min_window_size[0];
-
-            if (start_collapsed or fizzy.editor.explorer_ratio < 0.01) {
-                editor.explorer.closed = true;
-            } else {
-                editor.explorer.paned.animateSplit(fizzy.editor.explorer_ratio, dvui.easing.outBack);
-            }
-        } else if (editor.explorer.paned.dragging) {
-            editor.explorer_ratio = editor.explorer.paned.split_ratio.*;
-            editor.markWindowRatiosDirty();
-        }
-
-        // `revealCenter`'s panel auto-hide is a collapsed-layout affordance only: once the window
-        // is wide enough to show both panes at once, give the bottom panel back at whatever ratio
-        // the user left it at.
-        if (!editor.explorer.paned.collapsed()) editor.panel_hidden_for_center = false;
-
-        switch (sidebar_action) {
-            .open => editor.explorer.open(),
-            .close => editor.explorer.peekClose(),
-            .none => {},
-        }
-
-        // Force continuous frames for a short grace window after every touch press.
-        // `dvui.ContextWidget`'s hold-to-open check only re-runs while frames render,
-        // and the engine otherwise settles after the press frame on idle touch
-        // hardware — so without this, the hold timer freezes and the color-picker
-        // context never opens. We do it at the editor level (rather than only inside
-        // canvas) so it works even when no file is open or no canvas is interactive.
-        {
-            for (dvui.events()) |*e| {
-                if (e.evt != .mouse) continue;
-                const me = e.evt.mouse;
-                switch (me.action) {
-                    .press => if (me.button.touch()) {
-                        editor.last_touch_press_ns = dvui.currentWindow().frame_time_ns;
-                    },
-                    .release => if (me.button.touch()) {
-                        editor.last_touch_press_ns = null;
-                    },
-                    else => {},
-                }
-            }
-            if (editor.last_touch_press_ns) |press_ns| {
-                const now = dvui.currentWindow().frame_time_ns;
-                const grace_ns: i128 = dvui.currentWindow().hold_menu_duration_ns + std.time.ns_per_ms * 100;
-                if (now - press_ns < grace_ns) {
-                    dvui.refresh(null, @src(), null);
-                }
-            }
-        }
-
-        if (editor.explorer.paned.showFirst()) {
-
-            // Explorer area
-            {
-                const result = try editor.explorer.draw();
-                if (result != .ok) {
-                    return result;
-                }
-            }
-        }
-
-        if (editor.explorer.paned.showSecond()) {
-            const bg_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
-            defer bg_box.deinit();
-
-            // On macOS, the menu is handled natively, so we don't need to draw it here — except
-            // when the TEMPORARY `Menu.debug_force_on_macos` toggle (View > "Show DVUI Menu
-            // (macOS)") is on, for comparing the two menu bars side by side.
-            if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
-                const result = try Menu.draw();
-                if (result != .ok) {
-                    return result;
-                }
-            }
-
-            const workspace_vbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false, .padding = .{ .w = handle_size } });
-            defer workspace_vbox.deinit();
-
-            if (editor.host.bottom_views.items.len > 0) {
-                editor.panel.paned = fizzy.dvui.paned(@src(), .{
-                    .direction = .vertical,
-                    .collapsed_size = Constants.min_window_size[1] + 1,
-                    .handle_size = handle_size,
-                    .handle_dynamic = .{ .handle_size_max = handle_size, .distance_max = handle_dist },
-                    .uncollapse_ratio = 1.0,
-                }, .{
+            var explorer_paned_box = dvui.box(
+                @src(),
+                .{ .dir = .vertical },
+                .{
                     .expand = .both,
                     .background = false,
-                });
-                defer editor.panel.paned.deinit();
+                },
+            );
+            defer explorer_paned_box.deinit();
 
-                if (!editor.panel.paned.dragging) {
-                    const show_panel = (editor.activeDoc() != null or editor.host.hasPersistentBottomView()) and !editor.panel_hidden_for_center;
-                    if (show_panel) {
-                        if ((editor.panel.paned.split_ratio.* == 1.0 and !editor.panel.paned.collapsed()) and fizzy.editor.panel_ratio > 0.0) {
-                            editor.panel.paned.animateSplit(1.0 - fizzy.editor.panel_ratio, dvui.easing.outQuint);
-                        }
-                    } else {
-                        if (!editor.panel.paned.animating and editor.panel.paned.split_ratio.* < 1.0) {
-                            editor.panel.paned.animateSplit(1.0, dvui.easing.outQuint);
-                        }
-                    }
+            // Draw the infobar, but draw it at the bottom of the paned box (gravity_y = 1.0)
+            {
+                editor.infobar.draw() catch {
+                    dvui.log.err("Failed to draw infobar", .{});
+                };
+            }
+
+            // Draw the explorer paned widget, which will recursively draw the workspaces in the second pane
+            editor.explorer.paned = fizzy.dvui.paned(@src(), .{
+                .direction = .horizontal,
+                .collapsed_size = Constants.min_window_size[0] + 1,
+                .handle_size = handle_size,
+                .handle_dynamic = .{
+                    .handle_size_max = handle_size,
+                    .distance_max = handle_dist,
+                },
+                .uncollapse_ratio = fizzy.editor.explorer_ratio,
+            }, .{
+                .expand = .both,
+                .background = false,
+            });
+            defer editor.explorer.paned.deinit();
+
+            editor.flushQueuedNativeMenuActions();
+            editor.flushQueuedNativeMenuItems();
+            editor.processPendingSaveAs();
+
+            if (dvui.firstFrame(editor.explorer.paned.wd.id)) {
+                editor.explorer.paned.split_ratio.* = 0.0;
+
+                // When the window is below the paned widget's collapse threshold (mobile / narrow
+                // web viewport), start closed instead of animating open to the saved desktop ratio —
+                // the user can sidebar-tap to peek the explorer in.
+                const avail_w = editor.explorer.paned.wd.contentRect().w;
+                const start_collapsed = avail_w < Constants.min_window_size[0];
+
+                if (start_collapsed or fizzy.editor.explorer_ratio < 0.01) {
+                    editor.explorer.closed = true;
                 } else {
-                    // Dragging the handle back up is the user overriding the collapsed-layout
-                    // auto-hide, so drop it rather than fighting them for the next frame.
-                    editor.panel_hidden_for_center = false;
-                    fizzy.editor.panel_ratio = 1.0 - editor.panel.paned.split_ratio.*;
-                    fizzy.editor.markWindowRatiosDirty();
+                    editor.explorer.paned.animateSplit(fizzy.editor.explorer_ratio, dvui.easing.outBack);
                 }
+            } else if (editor.explorer.paned.dragging) {
+                editor.explorer_ratio = editor.explorer.paned.split_ratio.*;
+                editor.markWindowRatiosDirty();
+            }
 
-                if (editor.panel.paned.showSecond()) {
-                    const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
-                        .expand = .both,
-                        .background = false,
-                        .gravity_y = 0.0,
-                    });
-                    defer vbox.deinit();
+            // `revealCenter`'s panel auto-hide is a collapsed-layout affordance only: once the window
+            // is wide enough to show both panes at once, give the bottom panel back at whatever ratio
+            // the user left it at.
+            if (!editor.explorer.paned.collapsed()) editor.panel_hidden_for_center = false;
 
-                    const result = try editor.panel.draw();
+            switch (sidebar_action) {
+                .open => editor.explorer.open(),
+                .close => editor.explorer.peekClose(),
+                .none => {},
+            }
+
+            // Force continuous frames for a short grace window after every touch press.
+            // `dvui.ContextWidget`'s hold-to-open check only re-runs while frames render,
+            // and the engine otherwise settles after the press frame on idle touch
+            // hardware — so without this, the hold timer freezes and the color-picker
+            // context never opens. We do it at the editor level (rather than only inside
+            // canvas) so it works even when no file is open or no canvas is interactive.
+            {
+                for (dvui.events()) |*e| {
+                    if (e.evt != .mouse) continue;
+                    const me = e.evt.mouse;
+                    switch (me.action) {
+                        .press => if (me.button.touch()) {
+                            editor.last_touch_press_ns = dvui.currentWindow().frame_time_ns;
+                        },
+                        .release => if (me.button.touch()) {
+                            editor.last_touch_press_ns = null;
+                        },
+                        else => {},
+                    }
+                }
+                if (editor.last_touch_press_ns) |press_ns| {
+                    const now = dvui.currentWindow().frame_time_ns;
+                    const grace_ns: i128 = dvui.currentWindow().hold_menu_duration_ns + std.time.ns_per_ms * 100;
+                    if (now - press_ns < grace_ns) {
+                        dvui.refresh(null, @src(), null);
+                    }
+                }
+            }
+
+            if (editor.explorer.paned.showFirst()) {
+
+                // Explorer area
+                {
+                    const result = try editor.explorer.draw();
+                    if (result != .ok) {
+                        return result;
+                    }
+                }
+            }
+
+            if (editor.explorer.paned.showSecond()) {
+                const bg_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+                defer bg_box.deinit();
+
+                // On macOS, the menu is handled natively, so we don't need to draw it here — except
+                // when the TEMPORARY `Menu.debug_force_on_macos` toggle (View > "Show DVUI Menu
+                // (macOS)") is on, for comparing the two menu bars side by side.
+                if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
+                    const result = try Menu.draw();
                     if (result != .ok) {
                         return result;
                     }
                 }
 
-                if (editor.panel.paned.showFirst()) {
+                const workspace_vbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false, .padding = .{ .w = handle_size } });
+                defer workspace_vbox.deinit();
+
+                if (editor.host.bottom_views.items.len > 0) {
+                    editor.panel.paned = fizzy.dvui.paned(@src(), .{
+                        .direction = .vertical,
+                        .collapsed_size = Constants.min_window_size[1] + 1,
+                        .handle_size = handle_size,
+                        .handle_dynamic = .{ .handle_size_max = handle_size, .distance_max = handle_dist },
+                        .uncollapse_ratio = 1.0,
+                    }, .{
+                        .expand = .both,
+                        .background = false,
+                    });
+                    defer editor.panel.paned.deinit();
+
+                    if (!editor.panel.paned.dragging) {
+                        const show_panel = (editor.activeDoc() != null or editor.host.hasPersistentBottomView()) and !editor.panel_hidden_for_center;
+                        if (show_panel) {
+                            if ((editor.panel.paned.split_ratio.* == 1.0 and !editor.panel.paned.collapsed()) and fizzy.editor.panel_ratio > 0.0) {
+                                editor.panel.paned.animateSplit(1.0 - fizzy.editor.panel_ratio, dvui.easing.outQuint);
+                            }
+                        } else {
+                            if (!editor.panel.paned.animating and editor.panel.paned.split_ratio.* < 1.0) {
+                                editor.panel.paned.animateSplit(1.0, dvui.easing.outQuint);
+                            }
+                        }
+                    } else {
+                        // Dragging the handle back up is the user overriding the collapsed-layout
+                        // auto-hide, so drop it rather than fighting them for the next frame.
+                        editor.panel_hidden_for_center = false;
+                        fizzy.editor.panel_ratio = 1.0 - editor.panel.paned.split_ratio.*;
+                        fizzy.editor.markWindowRatiosDirty();
+                    }
+
+                    if (editor.panel.paned.showSecond()) {
+                        const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
+                            .expand = .both,
+                            .background = false,
+                            .gravity_y = 0.0,
+                        });
+                        defer vbox.deinit();
+
+                        const result = try editor.panel.draw();
+                        if (result != .ok) {
+                            return result;
+                        }
+                    }
+
+                    if (editor.panel.paned.showFirst()) {
+                        const result = try drawActiveCenter(editor);
+                        if (result != .ok) {
+                            return result;
+                        }
+                    }
+                } else {
                     const result = try drawActiveCenter(editor);
                     if (result != .ok) {
                         return result;
                     }
                 }
             } else {
-                const result = try drawActiveCenter(editor);
-                if (result != .ok) {
-                    return result;
-                }
+                // Explorer peek/collapse hides the workspace subtree, so `drawWorkspaces` does not
+                // run and `workspace.center` would otherwise stay latched from a prior panel animation.
+                editor.clearAllWorkspaceCenter();
             }
-        } else {
-            // Explorer peek/collapse hides the workspace subtree, so `drawWorkspaces` does not
-            // run and `workspace.center` would otherwise stay latched from a prior panel animation.
-            editor.clearAllWorkspaceCenter();
         }
 
         { // Plugin keybinds + per-frame overlays (e.g. pixel-art's radial menu)
@@ -4452,7 +4467,7 @@ fn queueNativeMenuAction(editor: *Editor, action: usize) void {
     editor.pending_native_menu_actions_len += 1;
 }
 
-fn flushQueuedNativeMenuActions(editor: *Editor) void {
+pub fn flushQueuedNativeMenuActions(editor: *Editor) void {
     if (editor.pending_native_menu_actions_len == 0) return;
     const len: usize = editor.pending_native_menu_actions_len;
     editor.pending_native_menu_actions_len = 0;
@@ -4477,7 +4492,7 @@ fn queueNativeMenuItem(editor: *Editor, idx: usize) void {
 /// Runs plugin-registered `NativeMenuItem`s chosen from the real macOS menu bar. `idx` is
 /// resolved against the *current* `host.native_menu_items` — safe because a menu click and
 /// this flush both happen on the main thread with no plugin load/unload in between.
-fn flushQueuedNativeMenuItems(editor: *Editor) void {
+pub fn flushQueuedNativeMenuItems(editor: *Editor) void {
     if (editor.pending_native_menu_item_indices_len == 0) return;
     const len: usize = editor.pending_native_menu_item_indices_len;
     editor.pending_native_menu_item_indices_len = 0;
@@ -5434,7 +5449,7 @@ pub fn saveAsDialogCallback(paths: ?[][:0]const u8) void {
     };
 }
 
-fn processPendingSaveAs(editor: *Editor) void {
+pub fn processPendingSaveAs(editor: *Editor) void {
     const path = blk: {
         if (editor.pending_save_as_path) |p| break :blk p;
         if (comptime builtin.target.cpu.arch == .wasm32) {

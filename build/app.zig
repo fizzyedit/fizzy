@@ -142,6 +142,11 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     build_opts.addOption([]const u8, "app_repo_url", app_repo_url);
     build_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
+
+    // Experimental fizzy-as-a-library shell (plan Phase 1). Off by default: both shells are
+    // compiled in so the old and new layouts can be run side by side and diffed live.
+    const new_shell = b.option(bool, "new-shell", "Use the experimental region-based shell (src/editor/shell/)") orelse false;
+    build_opts.addOption(bool, "new_shell", new_shell);
     const static_workbench = b.option(
         bool,
         "static-workbench",
