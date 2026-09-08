@@ -24,6 +24,11 @@ pub const HighlightStyle = language.HighlightStyle;
 
 /// Fizzy region contribution types (sidebar / bottom / center / menu / settings).
 pub const regions = @import("regions.zig");
+/// Surfaces — the successor to the SidebarView/BottomView/CenterProvider trio. Those remain as
+/// compat sugar over `Host.registerSurface`.
+pub const Surface = @import("Surface.zig");
+/// Conventional region keywords fizzy's own shell accepts.
+pub const keywords = @import("keywords.zig");
 pub const SidebarView = regions.SidebarView;
 pub const BottomView = regions.BottomView;
 pub const CenterProvider = regions.CenterProvider;

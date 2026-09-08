@@ -24,6 +24,8 @@ pub const TreeSitterHighlight = language.TreeSitterHighlight;
 pub const HighlightStyle = language.HighlightStyle;
 
 pub const SidebarView = regions.SidebarView;
+pub const Surface = @import("Surface.zig");
+pub const keywords = @import("keywords.zig");
 pub const BottomView = regions.BottomView;
 pub const CenterProvider = regions.CenterProvider;
 pub const MenuContribution = regions.MenuContribution;
@@ -173,6 +175,12 @@ commands: std.ArrayListUnmanaged(Command) = .empty,
 /// Pluggable language/format support (syntax highlighting, preview panes).
 language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
 
+/// Surfaces — the shape-agnostic successor to sidebar/bottom/center views. Every
+/// `registerSidebarView` / `registerBottomView` / `registerCenterProvider` call also lands here
+/// with the conventional keywords for its old region, so an app's layout can match by keyword
+/// while existing plugins stay source-compatible.
+surfaces: std.ArrayListUnmanaged(Surface) = .empty,
+
 /// Active selection by contribution id (null = use the first registered).
 active_sidebar_view: ?[]const u8 = null,
 active_bottom_view: ?[]const u8 = null,
@@ -188,6 +196,7 @@ pub fn deinit(self: *Host) void {
     self.sidebar_views.deinit(self.allocator);
     self.bottom_views.deinit(self.allocator);
     self.center_providers.deinit(self.allocator);
+    self.surfaces.deinit(self.allocator);
     self.menus.deinit(self.allocator);
     self.menu_sections.deinit(self.allocator);
     self.native_menu_items.deinit(self.allocator);
@@ -574,6 +583,7 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(SidebarView, &self.sidebar_views, plugin);
     removeOwned(BottomView, &self.bottom_views, plugin);
     removeOwned(CenterProvider, &self.center_providers, plugin);
+    removeOwned(Surface, &self.surfaces, plugin);
     removeOwned(MenuContribution, &self.menus, plugin);
     removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
@@ -808,14 +818,78 @@ pub fn getServiceTyped(self: *Host, comptime Service: type) ?*Service {
 
 // ---- region registration (called from a plugin's register / postInit) -------
 
+/// Register a surface: a named drawable plus the keywords describing what kind of place its
+/// content belongs. The app's layout decides where that lands; see `src/sdk/surface.zig`.
+pub fn registerSurface(self: *Host, s: Surface) !void {
+    try self.surfaces.append(self.allocator, s);
+}
+
+/// Runtime visibility, not registration data — the plugin store toggles a built-in without
+/// unloading it.
+pub fn setSurfaceHidden(self: *Host, id: []const u8, hidden: bool) void {
+    for (self.surfaces.items) |*s| {
+        if (std.mem.eql(u8, s.id, id)) {
+            s.hidden = hidden;
+            return;
+        }
+    }
+}
+
+pub fn surfaceById(self: *Host, id: []const u8) ?*Surface {
+    for (self.surfaces.items) |*s| if (std.mem.eql(u8, s.id, id)) return s;
+    return null;
+}
+
+fn sidebarSurfaceDraw(ctx: ?*anyopaque) anyerror!dvui.App.Result {
+    const view: *SidebarView = @ptrCast(@alignCast(ctx.?));
+    try view.draw(view.ctx);
+    return .ok;
+}
+
+fn bottomSurfaceDraw(ctx: ?*anyopaque) anyerror!dvui.App.Result {
+    const view: *BottomView = @ptrCast(@alignCast(ctx.?));
+    try view.draw(view.ctx);
+    return .ok;
+}
+
+fn centerSurfaceDraw(ctx: ?*anyopaque) anyerror!dvui.App.Result {
+    const p: *CenterProvider = @ptrCast(@alignCast(ctx.?));
+    return p.draw(p.ctx);
+}
+
 pub fn registerSidebarView(self: *Host, view: SidebarView) !void {
     try self.sidebar_views.append(self.allocator, view);
     if (self.active_sidebar_view == null) self.active_sidebar_view = view.id;
+    // Compat sugar: also expose it as a surface with the conventional sidebar keywords, so a
+    // keyword-matching layout sees it without the plugin changing a line. The surface's ctx is
+    // the stored view, which is why this appends first.
+    const stored = &self.sidebar_views.items[self.sidebar_views.items.len - 1];
+    try self.registerSurface(.{
+        .id = view.id,
+        .owner = view.owner,
+        .title = view.title,
+        .icon = .{ .tvg = view.icon },
+        .keywords = keywords.sidebar,
+        .ctx = stored,
+        .draw = sidebarSurfaceDraw,
+        .draw_workspace = view.draw_workspace,
+        .hidden = view.hidden,
+    });
 }
 
 pub fn registerBottomView(self: *Host, view: BottomView) !void {
     try self.bottom_views.append(self.allocator, view);
     if (self.active_bottom_view == null) self.active_bottom_view = view.id;
+    const stored = &self.bottom_views.items[self.bottom_views.items.len - 1];
+    try self.registerSurface(.{
+        .id = view.id,
+        .owner = view.owner,
+        .title = view.title,
+        .keywords = keywords.bottom,
+        .ctx = stored,
+        .draw = bottomSurfaceDraw,
+        .persistent = view.persistent,
+    });
 }
 
 /// Move a bottom-panel tab from `from_index` to `to_index`.
@@ -897,6 +971,15 @@ pub fn registerCenter(
 pub fn registerCenterProvider(self: *Host, provider: CenterProvider) !void {
     try self.center_providers.append(self.allocator, provider);
     if (self.active_center == null) self.active_center = provider.id;
+    const stored = &self.center_providers.items[self.center_providers.items.len - 1];
+    try self.registerSurface(.{
+        .id = provider.id,
+        .owner = provider.owner,
+        .title = provider.id,
+        .keywords = keywords.main,
+        .ctx = stored,
+        .draw = centerSurfaceDraw,
+    });
 }
 
 pub fn registerMenu(self: *Host, menu: MenuContribution) !void {

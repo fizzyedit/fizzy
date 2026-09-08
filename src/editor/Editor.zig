@@ -138,6 +138,11 @@ arena: std.heap.ArenaAllocator,
 /// selection with no wiring between them (see `shell/Frame.zig`).
 shell_selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 
+/// Per-surface keyword overrides from `settings.zon` (`.plugins.<id>.surfaces.<sid>.keywords`).
+/// The user's answer wins over the plugin's declared defaults, which is what makes a wrong
+/// default cost two clicks rather than a plugin release. Keys and values are gpa-owned.
+surface_keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .empty,
+
 config_folder: []const u8,
 palette_folder: []const u8,
 

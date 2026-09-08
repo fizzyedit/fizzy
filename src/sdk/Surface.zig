@@ -1,0 +1,76 @@
+//! A **surface**: a named thing a plugin can draw.
+//!
+//! This replaces the `SidebarView` / `BottomView` / `CenterProvider` trio, which differed only
+//! in *where the host chose to call them*. Those names were fizzy's furniture leaking into the
+//! plugin contract; an app built on fizzy as a library has its own furniture, or none.
+//!
+//! A surface says what it *is*, never where it goes:
+//!
+//!   * `id` is identity — unique, stable, plugin-namespaced.
+//!   * `keywords` say what *kind of place* the content belongs, e.g. `.{"sidebar","explorer"}`.
+//!     An app's regions declare which keywords they accept, and a surface draws in a region when
+//!     the two intersect. Keywords are free-form strings, so a plugin inventing a new kind of
+//!     panel never touches this ABI — and they are only defaults: the user overrides them
+//!     per-plugin in `settings.zon`, so a wrong guess costs two clicks rather than a release.
+//!
+//! Contrast with a *document*, the other half of plugin drawing, unchanged by this:
+//! `Plugin.VTable.drawDocument` renders one open file, routed by `DocHandle.owner`. Workbench is
+//! itself a surface whose draw subdivides its area into tabs and splits and then invokes the
+//! document half per pane.
+const std = @import("std");
+const dvui = @import("dvui");
+const Plugin = @import("Plugin.zig");
+const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
+
+const Surface = @This();
+
+/// Stable, unique, plugin-namespaced: "workbench.panes", "pixi.sprites".
+id: []const u8,
+owner: ?*Plugin = null,
+/// User-facing, shown wherever the app chooses to name this surface.
+title: []const u8,
+icon: ?Icon = null,
+/// The kinds of place this content belongs. Defaults; the user's `settings.zon` overrides win.
+/// An empty list means the surface is never matched by keyword and must be placed by id — which
+/// is what an app does for a plugin it ships with and therefore knows by name.
+keywords: []const []const u8 = &.{},
+ctx: ?*anyopaque = null,
+/// Draw the content into the parent the host has established. Immediate mode: expand into the
+/// space you are given.
+draw: *const fn (ctx: ?*anyopaque) anyerror!dvui.App.Result,
+/// Optional: while this surface is the one a region shows, it takes over the app's main region
+/// too. Preserves `SidebarView.draw_workspace`.
+draw_workspace: ?*const fn (ctx: ?*anyopaque, pane: *WorkbenchPaneView) anyerror!void = null,
+/// Runtime state, not registration data: the plugin store toggles a built-in off without
+/// unloading it. Set through `Host.setSurfaceHidden`.
+hidden: bool = false,
+/// Keep drawing this surface's region even with no active document. Was
+/// `BottomView.persistent`.
+persistent: bool = false,
+
+/// How a surface asks to be depicted where an app chooses to list it (an icon rail, a tab
+/// strip). Format-tagged so fizzy's tvg is not imposed on an app that wants something else, and
+/// entirely ignorable — an app may resolve its own icon by surface id, or draw no icons at all.
+pub const Icon = union(enum) {
+    tvg: []const u8,
+    png: []const u8,
+    none,
+};
+
+/// Case-insensitive keyword intersection — the whole matching rule.
+pub fn matches(self: *const Surface, region_keywords: []const []const u8) bool {
+    for (self.keywords) |k| for (region_keywords) |r| {
+        if (std.ascii.eqlIgnoreCase(k, r)) return true;
+    };
+    return false;
+}
+
+/// How strongly this surface matches, for the ambiguity rule: when a surface matches several
+/// regions, the strongest intersection wins.
+pub fn matchStrength(self: *const Surface, region_keywords: []const []const u8) usize {
+    var n: usize = 0;
+    for (self.keywords) |k| for (region_keywords) |r| {
+        if (std.ascii.eqlIgnoreCase(k, r)) n += 1;
+    };
+    return n;
+}

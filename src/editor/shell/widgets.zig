@@ -25,12 +25,20 @@ const fizzy = @import("../../fizzy.zig");
 const Frame = @import("Frame.zig");
 const Sidebar = @import("../Sidebar.zig");
 
-/// The icon rail. Carries behavior the spike must not regress: pinned store/settings entries,
-/// a bounded scroll area with edge shadows, Windows titlebar hit-rect registration, and the
-/// undecided-plugin badge. Phase 4 rewrites its body as a true `f.matching` loop.
+/// The icon rail. Still delegates: it carries pinned store/settings entries, a bounded scroll
+/// area with edge shadows, Windows titlebar hit-rect registration, and the undecided-plugin
+/// badge. Rewriting it as a bare `f.matching` loop means moving all of that into the app layer
+/// first, which is the same job as splitting Explorer chrome from its region (see above).
 pub fn iconRail(f: *Frame, keywords: []const []const u8) !Sidebar.Action {
     _ = keywords;
     return f.editor.sidebar.draw(f.editor);
+}
+
+/// Surfaces this app declared no region for. An app should show these somewhere (fizzy lists
+/// them in settings) so a plugin never silently vanishes — the failure mode keyword matching is
+/// only safe because of.
+pub fn unplacedSurfaces(f: *Frame) []const *Frame.Surface {
+    return f.unplaced(&.{ Frame.sidebar_keywords, Frame.bottom_keywords, Frame.center_keywords });
 }
 
 /// Explorer chrome + the sidebar region it wraps.

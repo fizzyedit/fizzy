@@ -9,29 +9,17 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
+const sdk = fizzy.sdk;
 
 const Frame = @This();
 
-/// Default keywords by originating registry. Phase 4 replaces this with keywords a plugin
-/// declares on `Surface` directly; until then these are what `registerSidebarView` and friends
-/// will desugar to.
-pub const sidebar_keywords: []const []const u8 = &.{ "sidebar", "explorer" };
-pub const bottom_keywords: []const []const u8 = &.{ "bottom", "panel", "output" };
-pub const center_keywords: []const []const u8 = &.{ "main", "center", "workspace" };
+/// The conventional keyword sets fizzy's own regions accept. A plugin targeting "the fizzy
+/// shape" uses these; an app may accept any keywords it likes.
+pub const sidebar_keywords = sdk.keywords.sidebar;
+pub const bottom_keywords = sdk.keywords.bottom;
+pub const center_keywords = sdk.keywords.main;
 
-pub const Origin = enum { sidebar, bottom, center };
-
-/// A named thing that can draw. One identifier, plus the keywords describing what kind of
-/// place it belongs in — never where it goes.
-pub const Surface = struct {
-    id: []const u8,
-    title: []const u8,
-    icon: ?[]const u8 = null,
-    keywords: []const []const u8,
-    origin: Origin,
-    /// Index into the originating registry, valid for this frame only.
-    index: usize,
-};
+pub const Surface = sdk.Surface;
 
 editor: *fizzy.Editor,
 
@@ -50,52 +38,50 @@ fn intersects(a: []const []const u8, b: []const []const u8) bool {
     return false;
 }
 
-/// Every surface currently matching `keywords`, in registration order. Arena-allocated;
-/// valid for this frame only. Returns an empty slice rather than erroring so a layout can
-/// always iterate.
-pub fn matching(self: *Frame, keywords: []const []const u8) []const Surface {
-    var out: std.ArrayListUnmanaged(Surface) = .empty;
-    const a = self.arena();
-    const host = &self.editor.host;
+/// The keywords in force for a surface: the user's per-plugin override from `settings.zon` if
+/// present, otherwise the plugin's declared defaults. This is what makes a wrong default cost
+/// two clicks rather than a release.
+fn effectiveKeywords(self: *Frame, s: *const Surface) []const []const u8 {
+    if (self.editor.surface_keyword_overrides.get(s.id)) |kw| return kw;
+    return s.keywords;
+}
 
-    if (intersects(keywords, sidebar_keywords)) {
-        for (host.sidebar_views.items, 0..) |*v, i| {
-            if (v.hidden) continue;
-            out.append(a, .{
-                .id = v.id,
-                .title = v.title,
-                .icon = v.icon,
-                .keywords = sidebar_keywords,
-                .origin = .sidebar,
-                .index = i,
-            }) catch return out.items;
-        }
-    }
-    if (intersects(keywords, bottom_keywords)) {
-        for (host.bottom_views.items, 0..) |*v, i| {
-            out.append(a, .{
-                .id = v.id,
-                .title = v.title,
-                .keywords = bottom_keywords,
-                .origin = .bottom,
-                .index = i,
-            }) catch return out.items;
-        }
-    }
-    if (intersects(keywords, center_keywords)) {
-        for (host.center_providers.items, 0..) |*p, i| {
-            out.append(a, .{
-                .id = p.id,
-                .title = p.id,
-                .keywords = center_keywords,
-                .origin = .center,
-                .index = i,
-            }) catch return out.items;
-        }
+/// Every surface currently matching `keywords`, in registration order. Arena-allocated and
+/// valid for this frame only; returns an empty slice rather than erroring so a layout can
+/// always iterate.
+pub fn matching(self: *Frame, keywords: []const []const u8) []const *Surface {
+    var out: std.ArrayListUnmanaged(*Surface) = .empty;
+    const a = self.arena();
+    for (self.editor.host.surfaces.items) |*s| {
+        if (s.hidden) continue;
+        if (!intersects(self.effectiveKeywords(s), keywords)) continue;
+        out.append(a, s) catch return out.items;
     }
     return out.items;
 }
 
+/// A surface by id, regardless of keywords — how an app places a plugin it ships with and
+/// therefore knows by name (fizzy does this for `workbench.panes`).
+pub fn surface(self: *Frame, id: []const u8) ?*Surface {
+    return self.editor.host.surfaceById(id);
+}
+
+/// Surfaces that match no region this app declared. Never silently lost: the settings UI lists
+/// these so a user (or the plugin author) can see the gap and fix it.
+pub fn unplaced(self: *Frame, declared: []const []const []const u8) []const *Surface {
+    var out: std.ArrayListUnmanaged(*Surface) = .empty;
+    const a = self.arena();
+    outer: for (self.editor.host.surfaces.items) |*s| {
+        if (s.hidden) continue;
+        const kw = self.effectiveKeywords(s);
+        if (kw.len == 0) continue; // placed by id, not by keyword
+        for (declared) |region_kw| if (intersects(kw, region_kw)) continue :outer;
+        out.append(a, s) catch return out.items;
+    }
+    return out.items;
+}
+
+/// The selection group key for a keyword set.
 /// The selection group key for a keyword set. Groups are keyed by the keywords themselves, so
 /// two regions written with the same keywords share a selection with no wiring between them.
 fn groupKey(keywords: []const []const u8) u64 {
@@ -110,14 +96,15 @@ fn groupKey(keywords: []const []const u8) u64 {
     return h.final();
 }
 
-/// Which registry (if any) owns the selection for this keyword group.
+/// Which legacy registry (if any) owns the selection for this keyword group.
 ///
-/// SPIKE NOTE: the host already owns all three selections — `active_sidebar_view`,
-/// `active_bottom_view`, `active_center` — so `Frame` is a *view over existing state*, not a
-/// parallel store. That is what keeps the new shell behaviourally identical to the old one
-/// (Phase 1's acceptance bar) and stops two selection systems from fighting. `shell_selection`
-/// is the fallback for keyword groups no legacy registry owns.
-fn legacyOrigin(keywords: []const []const u8) ?Origin {
+/// The host already owns three selections — `active_sidebar_view`, `active_bottom_view`,
+/// `active_center` — so for the conventional keyword sets `Frame` is a *view over existing
+/// state* rather than a parallel store. That is what keeps the new shell and the legacy one
+/// from disagreeing. `Editor.shell_selection` is the fallback for any other keyword group.
+const LegacyOwner = enum { sidebar, bottom, center };
+
+fn legacyOwner(keywords: []const []const u8) ?LegacyOwner {
     if (intersects(keywords, sidebar_keywords)) return .sidebar;
     if (intersects(keywords, bottom_keywords)) return .bottom;
     if (intersects(keywords, center_keywords)) return .center;
@@ -126,7 +113,7 @@ fn legacyOrigin(keywords: []const []const u8) ?Origin {
 
 fn currentId(self: *Frame, keywords: []const []const u8) ?[]const u8 {
     const host = &self.editor.host;
-    if (legacyOrigin(keywords)) |o| return switch (o) {
+    if (legacyOwner(keywords)) |o| return switch (o) {
         .sidebar => host.active_sidebar_view,
         .bottom => host.active_bottom_view,
         .center => host.active_center,
@@ -134,10 +121,10 @@ fn currentId(self: *Frame, keywords: []const []const u8) ?[]const u8 {
     return self.editor.shell_selection.get(groupKey(keywords));
 }
 
-/// Which surface is current for this keyword group, or null when nothing matches.
-/// Degrades: if the remembered id is gone (plugin unloaded, keywords changed), falls back to
-/// the first match rather than drawing nothing.
-pub fn selected(self: *Frame, keywords: []const []const u8) ?Surface {
+/// Which surface is current for this keyword group, or null when nothing matches. Degrades: if
+/// the remembered id is gone (plugin unloaded, keywords overridden elsewhere), falls back to the
+/// first match rather than drawing nothing.
+pub fn selected(self: *Frame, keywords: []const []const u8) ?*Surface {
     const items = self.matching(keywords);
     if (items.len == 0) return null;
     if (self.currentId(keywords)) |id| {
@@ -146,14 +133,14 @@ pub fn selected(self: *Frame, keywords: []const []const u8) ?Surface {
     return items[0];
 }
 
-pub fn isSelected(self: *Frame, keywords: []const []const u8, s: Surface) bool {
+pub fn isSelected(self: *Frame, keywords: []const []const u8, s: *const Surface) bool {
     const cur = self.selected(keywords) orelse return false;
     return std.mem.eql(u8, cur.id, s.id);
 }
 
-pub fn select(self: *Frame, keywords: []const []const u8, s: Surface) void {
+pub fn select(self: *Frame, keywords: []const []const u8, s: *const Surface) void {
     const host = &self.editor.host;
-    if (legacyOrigin(keywords)) |o| {
+    if (legacyOwner(keywords)) |o| {
         switch (o) {
             .sidebar => host.setActiveSidebarView(s.id),
             .bottom => host.setActiveBottomView(s.id),
@@ -161,47 +148,32 @@ pub fn select(self: *Frame, keywords: []const []const u8, s: Surface) void {
         }
         return;
     }
-    self.editor.shell_selection.put(fizzy.app().allocator, groupKey(keywords), s.id) catch {};
+    self.editor.shell_selection.put(self.editor.gpa, groupKey(keywords), s.id) catch {};
 }
 
-/// Draw one surface into the current parent, wrapped in the swap cross-fade so every region
-/// gets it for free (plan §D). Keyed by surface id, never by the parent's id — a box id moves
-/// with the surrounding layout and would restart the fade on changes that are not content
-/// swaps (see the warning at workbench Workspace.zig:768).
-pub fn draw(self: *Frame, s: Surface) !dvui.App.Result {
-    const host = &self.editor.host;
+/// Draw one surface into the current parent, wrapped in the swap cross-fade so every region gets
+/// it for free. Keyed by **surface id**, never the parent box id — a box id moves with the
+/// surrounding layout and would restart the fade on changes that are not content swaps (see the
+/// warning at workbench `src/Workspace.zig:768`).
+pub fn draw(self: *Frame, s: *Surface) !dvui.App.Result {
+    _ = self;
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(s.id);
     const rv = fizzy.dvui.reveal(
-        dvui.Id.extendId(null, @src(), @truncate(groupKey(s.keywords))),
+        dvui.Id.extendId(null, @src(), @truncate(hasher.final())),
         hasher.final(),
         .{},
     );
     defer rv.deinit();
-
-    switch (s.origin) {
-        .sidebar => {
-            if (s.index >= host.sidebar_views.items.len) return .ok;
-            try host.sidebar_views.items[s.index].draw(host.sidebar_views.items[s.index].ctx);
-        },
-        .bottom => {
-            if (s.index >= host.bottom_views.items.len) return .ok;
-            try host.bottom_views.items[s.index].draw(host.bottom_views.items[s.index].ctx);
-        },
-        .center => {
-            if (s.index >= host.center_providers.items.len) return .ok;
-            return try host.center_providers.items[s.index].draw(host.center_providers.items[s.index].ctx);
-        },
-    }
-    return .ok;
+    return s.draw(s.ctx);
 }
 
 pub const RegionOptions = struct {
     keywords: []const []const u8,
 };
 
-/// Sugar for the common case: draw whichever surface is selected for these keywords.
-/// Everything it does is reachable via `matching` / `selected` / `draw`.
+/// Sugar for the common case: draw whichever surface is selected for these keywords. Everything
+/// it does is reachable through `matching` / `selected` / `draw`.
 pub fn region(self: *Frame, opts: RegionOptions) !dvui.App.Result {
     const s = self.selected(opts.keywords) orelse return .ok;
     return self.draw(s);

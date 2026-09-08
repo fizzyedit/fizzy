@@ -57,6 +57,29 @@ Don't trust older narrative docs that call this forward-looking/not-yet-built.
   pixi extraction and the `code`→`text` rename). Superseded by `docs/PLUGINS.md` for anything
   plugin-related; useful only for the older "how did we get here" narrative.
 
+## File naming: a file is a struct
+
+Zig files *are* structs, so the repo follows that literally and you should too:
+
+- **`CapitalName.zig` IS the struct.** Fields are declared at the top level of the file, with
+  `const Self = @This();`, and consumers write `const Surface = @import("Surface.zig");` — not a
+  file containing `pub const Surface = struct { ... }`, which nests the type one level deeper for
+  no reason. Existing examples: `Host.zig`, `Plugin.zig`, `DocHandle.zig`, `Surface.zig`,
+  `WorkbenchPane.zig`.
+- **`lowercase.zig` is a namespace** of related declarations with no single type at its centre:
+  `keywords.zig`, `paths.zig`, `regions.zig`, `fingerprint.zig`.
+
+### Case-renaming an existing file is a CI trap
+
+macOS and Windows filesystems are case-insensitive; Linux CI is not. Renaming a *tracked* file
+from `surface.zig` to `Surface.zig` looks like a no-op to git locally, so the rename is never
+staged — and then CI fails to resolve `@import("Surface.zig")` on a case-sensitive filesystem.
+Use `git mv -f old.zig tmp && git mv -f tmp New.zig` (two steps) when changing only case, and
+check `git status --porcelain` actually shows the rename before committing.
+
+The same case-insensitivity will silently destroy work: `rm src/sdk/surface.zig` deletes
+`src/sdk/Surface.zig`. Watch for it when converting a file to the capitalized form.
+
 ## Build
 
 ```sh
