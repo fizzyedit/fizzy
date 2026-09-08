@@ -89,6 +89,19 @@ jobs:
         shell: bash
         run: zig build check-web
 
+      # Fizzy consumed as a library by an outside package. This is the only check that can
+      # catch a path resolving against the consumer's cwd instead of fizzy's build root — the
+      # exact bug that broke this (`.cwd_relative = "src/App.zig"`) is invisible when fizzy
+      # builds itself, because then the two directories are the same.
+      - name: Build external consumer apps (fizzy as a library)
+        if: matrix.name != 'Windows'
+        run: |
+          for app in examples/minimal-app examples/studio-app; do
+            echo "::group::$app"
+            (cd "$app" && zig build --summary all)
+            echo "::endgroup::"
+          done
+
       - name: Verify SDK version / ABI fingerprint lock
         shell: bash
         run: zig build test-sdk-version --summary all

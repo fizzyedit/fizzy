@@ -1,0 +1,12 @@
+.{
+    .name = .fizzy_studio_app,
+    .version = "0.1.0",
+    .fingerprint = 0xe2d14f2642e75f1f,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        // Fizzy consumed as a library. A real downstream app would use the release tarball URL;
+        // a relative path keeps this example building against the working tree.
+        .fizzy = .{ .path = "../.." },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}

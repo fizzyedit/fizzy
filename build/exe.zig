@@ -110,7 +110,11 @@ pub fn addFizzyExecutableForTarget(
         .root_module = b.addModule("App", .{
             .target = resolved_target,
             .optimize = optimize,
-            .root_source_file = .{ .cwd_relative = "src/App.zig" },
+            // `b.path`, not `.cwd_relative`: this resolves against *fizzy's* build root, which
+            // is what makes the package consumable. A cwd-relative path silently works while
+            // fizzy builds itself (cwd is fizzy's root) and fails with FileNotFound the moment
+            // an outside package depends on fizzy — see examples/minimal-app.
+            .root_source_file = b.path("src/App.zig"),
         }),
     });
     exe.root_module.strip = false;
