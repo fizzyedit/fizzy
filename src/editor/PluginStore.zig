@@ -41,7 +41,7 @@ pub const view_id = "fizzy.store";
 /// `tick` swaps the active center to this provider; deselecting (or leaving the tab) restores
 /// the previous center.
 pub const readme_center_id = "fizzy.store.readme";
-const default_registry_url = "https://plugins.fizzyed.it/catalog";
+const default_registry_url = @import("../AppInfo.zig").current.registry_url;
 
 /// True while we have hijacked the active center to show a README, plus the center id to restore
 /// when the selection is cleared or the store tab is no longer active.

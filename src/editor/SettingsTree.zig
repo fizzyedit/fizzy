@@ -36,7 +36,7 @@ const settings = fizzy.sdk.settings;
 
 /// Fizzy's own branch. Named for the app so it reads as a peer of the plugin branches
 /// rather than as a special case.
-const fizzy_branch_title = "Fizzy";
+const fizzy_branch_title = @import("../AppInfo.zig").current.display_name;
 
 /// Expand/collapse state, keyed by a hash of the branch's path through the tree
 /// ("Fizzy/Appearance", a plugin id, …) rather than by its widget id.

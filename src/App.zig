@@ -15,6 +15,7 @@ const update_notify = @import("backend/update_notify.zig");
 const singleton = @import("backend/singleton.zig");
 const paths = fizzy.paths;
 const Constants = @import("editor/Constants.zig");
+const AppInfo = @import("AppInfo.zig");
 
 const App = @This();
 const Editor = fizzy.Editor;
@@ -49,7 +50,7 @@ var pref_path_len: usize = 0;
 const start_options_base: dvui.App.StartOptions = .{
     .size = .{ .w = Constants.initial_window_size[0], .h = Constants.initial_window_size[1] },
     .min_size = .{ .w = Constants.min_window_size[0], .h = Constants.min_window_size[1] },
-    .title = "fizzy",
+    .title = AppInfo.display_name_z,
     .icon = icon,
     .transparent = if (builtin.os.tag == .macos or builtin.os.tag == .windows) true else false,
     // macOS: Cancel-leading dialog/footer order; other platforms: OK-leading (matches dialog header close vs icon).
@@ -88,7 +89,7 @@ fn startOptions() dvui.App.StartOptions {
         if (comptime builtin.os.tag == .macos) {
             if (runningFromAppBundle(main_init.io)) opts.icon = null;
         }
-        if (paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.processEnviron(), ".")) |pref_path| {
+        if (paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.processEnviron(), ".", AppInfo.current.config_dir)) |pref_path| {
             pref_path_len = pref_path.len;
             opts.pref_path = pref_path_buf[0..pref_path_len :0];
         }
@@ -116,7 +117,7 @@ pub const dvui_app: dvui.App = .{
 };
 
 pub fn main(main_init: std.process.Init) !u8 {
-    std.log.info("Fizzy version {s} ({s})", .{ build_opts.app_version, @tagName(@import("builtin").mode) });
+    std.log.info("{s} version {s} ({s})", .{ AppInfo.current.display_name, AppInfo.current.version, @tagName(@import("builtin").mode) });
 
     if (comptime auto_update.impl) {
         // appRunHook handles Velopack's install/uninstall/firstrun CLI flags and
@@ -253,7 +254,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     // listings show the real product name + version. `build_opts.app_version`
     // is a non-sentinel slice, so allocate a null-terminated copy for SDL.
     const version_z = std.fmt.allocPrintSentinel(allocator, "{s}", .{build_opts.app_version}, 0) catch "0.0.0";
-    fizzy.backend.setSdlAppMetadata("fizzy", version_z, "com.foxnne.fizzy");
+    fizzy.backend.setSdlAppMetadata(AppInfo.display_name_z, version_z, AppInfo.bundle_id_z);
 
     fizzy.backend.setupMacOSMenuBar();
 

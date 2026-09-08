@@ -78,6 +78,9 @@ pub fn addFizzyExecutableForTarget(
     assets_module: *std.Build.Module,
     macos_sdl_paths: ?MacosSdlPaths,
     velopack_enabled: bool,
+    /// The application's short name (see src/AppInfo.zig) — the executable's name. Passed in
+    /// rather than hardcoded so an app built on fizzy as a library names its own binary.
+    app_name: []const u8,
 ) !FizzyExecutable {
     const dvui_dep = if (macos_sdl_paths) |p|
         sdk.dvuiDependency(b, .{
@@ -103,7 +106,7 @@ pub fn addFizzyExecutableForTarget(
     const proxy_bridge_plugin_mod = dvui_proxy_dep.module("proxy_bridge");
 
     const exe = b.addExecutable(.{
-        .name = "fizzy",
+        .name = app_name,
         .root_module = b.addModule("App", .{
             .target = resolved_target,
             .optimize = optimize,

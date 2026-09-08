@@ -1,5 +1,6 @@
 const std = @import("std");
 const fizzy = @import("../fizzy.zig");
+const AppInfo = @import("../AppInfo.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const assets = @import("assets");
@@ -96,7 +97,7 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
                 .background = false,
             });
         }
-        dvui.label(@src(), "fizzy", .{}, .{ .font = font, .gravity_y = 0.5, .margin = .all(0) });
+        dvui.label(@src(), AppInfo.current.name, .{}, .{ .font = font, .gravity_y = 0.5, .margin = .all(0) });
 
         if (button.clicked()) {
             Dialogs.AboutFizzy.request();

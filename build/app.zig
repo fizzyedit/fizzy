@@ -139,6 +139,19 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     const build_opts = b.addOptions();
     build_opts.addOption([]const u8, "app_version", app_version);
+
+    // Application identity (see src/AppInfo.zig). Options rather than literals so an app built
+    // on fizzy as a library can set them; fizzy passes its own values.
+    const app_name = b.option([]const u8, "app-name", "Short lowercase app identifier (exe name, packId, config dir)") orelse "fizzy";
+    const app_display_name = b.option([]const u8, "app-display-name", "Human-facing application name") orelse "Fizzy";
+    const app_bundle_id = b.option([]const u8, "app-bundle-id", "Reverse-DNS application identifier") orelse "com.foxnne.fizzy";
+    const app_config_dir = b.option([]const u8, "app-config-dir", "Config directory name (defaults to app-name)") orelse app_name;
+    const app_registry_url = b.option([]const u8, "app-registry-url", "Plugin registry catalog URL; empty disables the store") orelse "https://plugins.fizzyed.it/catalog";
+    build_opts.addOption([]const u8, "app_name", app_name);
+    build_opts.addOption([]const u8, "app_display_name", app_display_name);
+    build_opts.addOption([]const u8, "app_bundle_id", app_bundle_id);
+    build_opts.addOption([]const u8, "app_config_dir", app_config_dir);
+    build_opts.addOption([]const u8, "app_registry_url", app_registry_url);
     build_opts.addOption([]const u8, "app_repo_url", app_repo_url);
     build_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
@@ -192,7 +205,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     web.addSteps(b, optimize, build_opts, workbench_opts, assets_module);
 
-    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled);
+    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name);
     const exe = main_fizzy.exe;
 
     const package_fizzy: FizzyExecutable = package_blk: {
@@ -206,7 +219,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         pack_opts.addOption(bool, "static_workbench", static_workbench);
         pack_opts.addOption(bool, "static_text", static_text);
         pack_opts.addOption(bool, "static_image", static_image);
-        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true);
+        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name);
     };
     const exe_for_package = package_fizzy.exe;
 

@@ -118,15 +118,19 @@ pub fn configRoot(
     return root;
 }
 
+/// `<platform config root>/<dir_name>`. `dir_name` is the application's, not fizzy's — see
+/// `AppInfo.config_dir`. `core` cannot import `AppInfo` (it is shared with plugins and must
+/// stay app-agnostic), so callers pass it in.
 pub fn configFolder(
     allocator: std.mem.Allocator,
     io: std.Io,
     arena: std.mem.Allocator,
     environ: std.process.Environ,
     fallback: []const u8,
+    dir_name: []const u8,
 ) ![]const u8 {
     const config_root = try configRoot(io, arena, environ, fallback);
-    return std.fs.path.join(allocator, &.{ config_root, "fizzy" }) catch fallback;
+    return std.fs.path.join(allocator, &.{ config_root, dir_name }) catch fallback;
 }
 
 pub fn configFolderZ(
@@ -134,10 +138,11 @@ pub fn configFolderZ(
     io: std.Io,
     environ: std.process.Environ,
     fallback: []const u8,
+    dir_name: []const u8,
 ) ?[:0]const u8 {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    const folder = configFolder(arena.allocator(), io, arena.allocator(), environ, fallback) catch return null;
+    const folder = configFolder(arena.allocator(), io, arena.allocator(), environ, fallback, dir_name) catch return null;
     if (folder.len + 1 > buf.len) return null;
     @memcpy(buf[0..folder.len], folder);
     buf[folder.len] = 0;

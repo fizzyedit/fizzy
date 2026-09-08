@@ -114,6 +114,7 @@ pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
 const shell = @import("shell/shell.zig");
+const AppInfo = @import("../AppInfo.zig");
 pub const FileLoadJob = workbench_mod.FileLoadJob;
 
 pub const sdk = fizzy.sdk;
@@ -494,7 +495,7 @@ pub fn init(
     const config_folder: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
         app.root_path
     else config_folder_blk: {
-        break :config_folder_blk try fizzy.paths.configFolder(app.allocator, dvui.io, arena, fizzy.processEnviron(), app.root_path);
+        break :config_folder_blk try fizzy.paths.configFolder(app.allocator, dvui.io, arena, fizzy.processEnviron(), app.root_path, AppInfo.current.config_dir);
     };
 
     // One-time migration: pre-rename builds used `Fizzy/` (capitalized).
@@ -503,7 +504,8 @@ pub fn init(
     // failure is ignored. On case-sensitive filesystems (most Linux) the legacy
     // dir is otherwise orphaned, so we move it across to preserve user settings.
     // Wasm: no filesystem, no migration; `Io.Dir.renameAbsolute` pulls in posix.AT.
-    if (comptime builtin.target.cpu.arch != .wasm32) {
+    // Fizzy's own one-time migration, not something an app built on fizzy inherits.
+    if (comptime builtin.target.cpu.arch != .wasm32 and std.mem.eql(u8, AppInfo.current.name, "fizzy")) {
         const legacy = std.fs.path.join(arena, &.{ config_root, "Fizzy" }) catch null;
         if (legacy) |legacy_path| {
             // Only rename if the new path doesn't already have content.
