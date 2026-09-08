@@ -153,6 +153,13 @@ surface_keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .emp
 /// states the fact instead of the plugin inferring it.
 shell_bottom_split: ?*fizzy.dvui.PanedWidget = null,
 
+/// Positions to reveal once their not-yet-open path finishes loading. Set by `revealPosition`
+/// when the target is not open yet and drained once per frame. Previously lived on the workbench
+/// plugin, which is what forced goto-definition to depend on workbench; the queue was incidental
+/// to that service rather than meaningful to it. Rare and short-lived (usually at most one, from
+/// a single goto-definition), so a linear per-frame scan is fine.
+pending_reveals: std.ArrayListUnmanaged(PendingReveal) = .empty,
+
 config_folder: []const u8,
 palette_folder: []const u8,
 
@@ -1427,6 +1434,46 @@ fn loadSurfaceKeywordOverrides(editor: *Editor) void {
     }
 }
 
+/// Warns about keyword overrides that point a surface at fizzy's bottom panel, which cannot
+/// draw arbitrary surfaces yet.
+///
+/// `Panel`/`panel_layout`/`PanelWorkspace` still resolve their contents from
+/// `host.bottom_views` — the legacy registry — because their grouping, split and drag-reorder
+/// machinery is built around it (see src/sdk/PHASE4.md). The sidebar was converted in Phase 4c;
+/// the panel was not.
+///
+/// Without this warning the failure is silent and is exactly the one the keyword design
+/// promises never to have: an overridden surface leaves the rail (which *does* honour keywords)
+/// and is never drawn by the panel, so it simply vanishes. Better to say so.
+fn warnUndrawableOverrides(editor: *Editor) void {
+    if (editor.surface_keyword_overrides.count() == 0) return;
+    var it = editor.surface_keyword_overrides.iterator();
+    while (it.next()) |entry| {
+        const id = entry.key_ptr.*;
+        const kws = entry.value_ptr.*;
+
+        var targets_bottom = false;
+        for (kws) |k| for (shell.Frame.bottom_keywords) |b| {
+            if (std.ascii.eqlIgnoreCase(k, b)) targets_bottom = true;
+        };
+        if (!targets_bottom) continue;
+
+        // Already a real bottom view? Then the panel can draw it and there is nothing to warn.
+        var is_bottom_view = false;
+        for (editor.host.bottom_views.items) |v| {
+            if (std.mem.eql(u8, v.id, id)) is_bottom_view = true;
+        }
+        if (is_bottom_view) continue;
+
+        std.log.warn(
+            "surface '{s}' is overridden into the bottom panel, but fizzy's panel cannot draw " ++
+                "surfaces that did not register as bottom views yet — it will not be shown. " ++
+                "Remove the override, or point it at sidebar/explorer.",
+            .{id},
+        );
+    }
+}
+
 fn seedPluginFlags(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.gpa;
@@ -2620,6 +2667,8 @@ pub fn postInit(editor: *Editor) !void {
             if (editor.folder) |f| w.setFolder(f);
         }
     }
+
+    warnUndrawableOverrides(editor);
 }
 
 /// The Settings sidebar view: a single searchable tree (`SettingsTree`) whose "Fizzy" branch
@@ -2659,6 +2708,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .docFromPath = fizzyDocFromPath,
     .openFilePath = fizzyOpenFilePath,
     .openOrFocusFileAtGrouping = fizzyOpenOrFocusFileAtGrouping,
+    .revealPosition = fizzyRevealPosition,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
     .closeProjectFolder = fizzyCloseProjectFolder,
@@ -4255,6 +4305,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // Every frame starts with no bottom split; whichever layout runs states whether it
         // established one. See `shell_bottom_split`.
         editor.shell_bottom_split = null;
+        editor.pollPendingReveals();
 
         if (build_opts.new_shell) {
             // Experimental region-based shell (plan Phase 1). Both shells are compiled in;
@@ -4638,6 +4689,77 @@ pub fn setWindowStyle(_: *Editor) void {
 
 pub fn rebuildWorkspaces(editor: *Editor) !void {
     try editor.workbench.rebuildWorkspaces();
+}
+
+pub const PendingReveal = struct {
+    path: []const u8,
+    line: u32,
+    character: u32,
+};
+
+/// Ensure `path` is open and move the caret to `line`/`character`. See `EditorAPI.revealPosition`.
+pub fn revealPosition(editor: *Editor, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
+    if (editor.docFromPath(path)) |doc| {
+        doc.owner.revealPosition(doc, line, character);
+        // `revealPosition` alone only sets `pending_cursor` on a possibly-background document —
+        // nothing else made this path the *visible* one. Without this, jumping to a definition
+        // in a non-active tab silently sets the caret and stops: the tab never gets focus, so
+        // the document is never drawn to consume `pending_cursor`, and the jump looks like a
+        // no-op. `open_side` is ignored here — an already-open target is focused where it
+        // lives, the same way the file tree's "Open to the side" does not move an open file.
+        if (editor.open_files.getIndex(doc.id)) |idx| editor.setActiveFile(idx);
+        return true;
+    }
+
+    // Nothing claims this extension, so `openFilePath` would reject it — fail fast rather than
+    // queueing a reveal that could never resolve.
+    if (editor.host.pluginForExtension(std.fs.path.extension(path)) == null) return false;
+
+    // Same canonical spelling `openFilePath` stores on the document, so `pollPendingReveals`'
+    // exact `docFromPath` cannot miss a `.`-laden URI-derived path.
+    const owned_path = try std.fs.path.resolve(editor.gpa, &.{path});
+    errdefer editor.gpa.free(owned_path);
+    try editor.pending_reveals.append(editor.gpa, .{ .path = owned_path, .line = line, .character = character });
+
+    // `open_side`: mint a fresh grouping so the load lands in a new split rather than the current
+    // one — mirrors the file tree's "Open to the side" exactly.
+    const target_grouping: u64 = if (open_side) editor.workbench.newGroupingID() else editor.workbench.currentGroupingID();
+
+    // Pass `owned_path`, not `path`: the canonical spelling is the one `openFilePath` stores on
+    // the document, and `pollPendingReveals` matches on it exactly.
+    _ = editor.openFilePath(owned_path, target_grouping) catch |err| {
+        editor.pending_reveals.items.len -= 1;
+        editor.gpa.free(owned_path);
+        return err;
+    };
+    // Deliberately `true`, not `openFilePath`'s result. A `false` there (as opposed to an error)
+    // only ever means "a load for this exact path is already in flight" — "already open" was
+    // ruled out by `docFromPath` above and "no owner plugin" by the extension check. The file
+    // WILL finish loading and `pollPendingReveals` will apply the reveal, so returning `false`
+    // here would drop a goto-definition target whenever a load happened to be in progress:
+    // "opened the file, caret never moved".
+    return true;
+}
+
+/// Applies and clears any pending reveal whose target has finished loading. Called once per
+/// frame from `tick`.
+pub fn pollPendingReveals(editor: *Editor) void {
+    if (editor.pending_reveals.items.len == 0) return;
+    var i: usize = 0;
+    while (i < editor.pending_reveals.items.len) {
+        const pr = editor.pending_reveals.items[i];
+        if (editor.docFromPath(pr.path)) |doc| {
+            doc.owner.revealPosition(doc, pr.line, pr.character);
+            editor.gpa.free(pr.path);
+            _ = editor.pending_reveals.swapRemove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn fizzyRevealPosition(ctx: *anyopaque, path: []const u8, line: u32, character: u32, open_side: bool) anyerror!bool {
+    return revealPosition(fizzyCtx(ctx), path, line, character, open_side);
 }
 
 pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {

@@ -60,15 +60,43 @@ Phase 5 example apps:
    with no plugin change and no fizzy release. That is the escape hatch the whole
    keyword-matching design rests on, now actually working.
 
-   **Still to do on this thread:** `Panel.draw` (the bottom tab strip) resolves through
-   `host.active_bottom_view` the same way the explorer used to, so a surface that *arrives* in
-   the bottom region by override is listed by `f.matching` but not yet drawn by the panel's own
-   strip. Same fix, one file over.
+   **Still to do on this thread: the panel.** `Panel` / `panel_layout` / `PanelWorkspace`
+   (~600 lines, 38 references) still resolve contents from `host.bottom_views`, because their
+   grouping, split and drag-reorder machinery is built around that registry and around
+   `*BottomView` rather than `*Surface`. That is a conversion of its own, and it is exactly the
+   kind of behavior that needs *visual* verification — so it is deliberately not attempted
+   blind.
 
-1. **The three-way service split (§E).** `workbench-api` is still one service doing three jobs:
-   document lifecycle (which `EditorAPI` already duplicates), file-tree mutation, and
-   tabs/splits presentation. Splitting it is what frees a document plugin from depending on
-   workbench at all.
+   Meanwhile the half-state would be the design's worst failure mode: a surface overridden into
+   `bottom` leaves the rail (which now honours keywords) and is never drawn by the panel, so it
+   vanishes silently. `Editor.warnUndrawableOverrides` turns that into a startup warning naming
+   the surface and what to do about it. Loud beats silent until the panel is converted.
+
+1. ~~**The three-way service split (§E).**~~ **Largely done (Phase 4d).**
+
+   The split turned out far cheaper than the plan assumed, because surveying the actual callers
+   showed **every in-tree consumer of `workbench-api` used exactly one method: `revealPosition`.**
+   Nothing used `open`/`close`/`save`/`createFile`/`rename`/grouping at all.
+
+   And `svcRevealPosition` was already written almost entirely against the *host* —
+   `docFromPath`, `doc.owner.revealPosition`, `setActiveDocIndex`, `pluginForExtension`,
+   `openFilePath` — with only a small pending-reveal queue that belonged to workbench by accident
+   rather than by meaning.
+
+   So it moved to `EditorAPI.revealPosition` / `Editor.revealPosition`, with the queue now on
+   `Editor` and drained from `tick`. `workbench-api.revealPosition` remains as a one-line
+   forwarder so plugins compiled against it keep working.
+
+   **Result: `text`, `markdown` and `image` now depend on no workbench service at all.** A
+   `grep` for `services.workbench` outside `src/plugins/workbench/` returns nothing. Those
+   plugins load in a fizzy-based app that ships no workbench — which is the portability goal in
+   §D4, and it is now true rather than aspirational.
+
+   **Still notionally open:** the file-tree mutation half (`createFile`/`createDir`/`rename`/
+   `delete`/`move`) is still on `workbench-api` rather than its own `files` service. No in-tree
+   plugin uses it, so splitting it now would be speculative — do it when a second consumer
+   appears, which is also when the right shape will be obvious.
+
 2. **Doc/view split for multiple views of one document.** Needs a stable `view_id` on
    `bindDocumentToPane` and per-view state separated from per-document state in `text` and
    `image`. New capability, not a rename — and the plan flags text's cursor/buffer entanglement

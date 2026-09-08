@@ -106,6 +106,22 @@ pub const VTable = struct {
     openFilePath: *const fn (ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!bool,
     /// Focus an open doc or queue load; returns index when already open, null when loading.
     openOrFocusFileAtGrouping: *const fn (ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!?usize,
+    /// Ensure `path` is open and move the caret to `line`/`character` (0-based; `character` a
+    /// byte count within the line), opening it asynchronously if needed — so this may land a
+    /// frame or more later.
+    ///
+    /// **This is host state, not workbench state.** It used to live only on the `workbench-api`
+    /// service, which meant a plugin doing goto-definition (text, markdown) depended on
+    /// workbench being installed. But the implementation was already written almost entirely
+    /// against the host — `docFromPath`, `doc.owner.revealPosition`, `setActiveDocIndex`,
+    /// `pluginForExtension` — with only a small pending-reveal queue that was workbench's by
+    /// accident rather than by meaning. Moving it here is what lets those plugins load in any
+    /// fizzy-based app, per the portability goal.
+    ///
+    /// `open_side` opens into a new grouping when the path is not already open; it is ignored
+    /// when the target is open anywhere, which just focuses it where it lives (mirroring the
+    /// file tree's "Open to the side"). Returns false when no plugin can open `path` at all.
+    revealPosition: *const fn (ctx: *anyopaque, path: []const u8, line: u32, character: u32, open_side: bool) anyerror!bool,
     /// Close document `id` (may prompt when dirty).
     closeDocById: *const fn (ctx: *anyopaque, id: u64) anyerror!void,
     /// Open/switch the project root folder.
@@ -328,6 +344,10 @@ pub fn openFilePath(self: EditorAPI, path: []const u8, grouping: u64) !bool {
 
 pub fn openOrFocusFileAtGrouping(self: EditorAPI, path: []const u8, grouping: u64) !?usize {
     return self.vtable.openOrFocusFileAtGrouping(self.ctx, path, grouping);
+}
+
+pub fn revealPosition(self: EditorAPI, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
+    return self.vtable.revealPosition(self.ctx, path, line, character, open_side);
 }
 
 pub fn closeDocById(self: EditorAPI, id: u64) !void {

@@ -969,8 +969,7 @@ fn tryRevealFileUri(url: []const u8, open_side: bool) bool {
 /// round trip isn't merely wasteful: it has to percent-encode, and a path containing a space or
 /// a `#` is exactly where a hand-rolled encoder goes wrong.
 fn revealPath(path: []const u8, line: u32, character: u32, open_side: bool) bool {
-    const wb = sdk.host().getServiceTyped(sdk.services.workbench.Api) orelse return false;
-    return wb.revealPosition(path, line, character, open_side) catch |err| {
+    return sdk.host().revealPosition(path, line, character, open_side) catch |err| {
         dvui.log.err("markdown: revealPosition failed for {s}: {any}", .{ path, err });
         return false;
     };

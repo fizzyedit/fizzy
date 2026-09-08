@@ -327,6 +327,12 @@ pub fn docFromPath(self: *Host, path: []const u8) ?DocHandle {
     return if (self.fizzy_api) |a| a.docFromPath(path) else null;
 }
 
+/// Open `path` if needed and put the caret at `line`/`character`. Host state — a plugin doing
+/// goto-definition needs no workbench service for this. Returns false when nothing can open it.
+pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
+    return if (self.fizzy_api) |a| a.revealPosition(path, line, character, open_side) else false;
+}
+
 pub fn openFilePath(self: *Host, path: []const u8, grouping: u64) !bool {
     return if (self.fizzy_api) |a| try a.openFilePath(path, grouping) else false;
 }

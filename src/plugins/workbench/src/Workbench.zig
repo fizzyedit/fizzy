@@ -37,13 +37,6 @@ file_tree_data_id: ?dvui.Id = null,
 /// not during `init` where `&editor.*` would point at a stack temporary.
 api: Api = undefined,
 
-/// Positions to reveal once their (not-yet-open) path finishes loading, set by
-/// `revealPosition` when the target isn't open yet. Polled once per frame in
-/// `drawWorkspaces` against `host.docFromPath` and cleared once applied. Rare/short-lived
-/// (usually at most one pending reveal at a time from a single goto-definition click), so a
-/// linear per-frame scan is fine — not worth threading through `Editor.zig`'s load-completion
-/// callback for this.
-pending_reveals: std.ArrayListUnmanaged(PendingReveal) = .empty,
 
 /// A path that has just appeared on disk and should be revealed: parents expanded, row selected,
 /// inline rename opened, and the rect handed to any dialog still closing over the top of it.
@@ -52,8 +45,7 @@ pending_reveals: std.ArrayListUnmanaged(PendingReveal) = .empty,
 /// compiled twice — once into fizzy, once into the workbench dylib — so its module-level `var`s
 /// are two separate objects, and a write from fizzy lands in the copy nobody draws. Instance
 /// state does cross that boundary: fizzy passes `&editor.workbench` into the dylib as `arg_c`
-/// (`Editor.loadWorkbenchDylib`), so both copies see this exact field. `pending_reveals` above
-/// already relies on the same property.
+/// (`Editor.loadWorkbenchDylib`), so both copies see this exact field.
 pending_new_file_path: ?[]u8 = null,
 
 /// Bumped whenever something changes the contents of a watched directory. `files.zig` keeps a
@@ -62,11 +54,6 @@ pending_new_file_path: ?[]u8 = null,
 /// made by the copy that doesn't. Wrapping is harmless — only inequality is ever tested.
 disk_generation: u32 = 0,
 
-const PendingReveal = struct {
-    path: []u8,
-    line: u32,
-    character: u32,
-};
 
 /// Queue `path` to be revealed by the file tree on an upcoming frame, replacing any path already
 /// queued. Safe from either copy of the module; the tree consumes it when the row exists.
@@ -96,27 +83,9 @@ pub fn init(allocator: std.mem.Allocator) Workbench {
 pub fn deinit(self: *Workbench) void {
     files.deinitCaches();
     self.decorators.deinit(self.allocator);
-    for (self.pending_reveals.items) |pr| self.allocator.free(pr.path);
-    self.pending_reveals.deinit(self.allocator);
     self.clearPendingNewFilePath();
 }
 
-/// Called once per frame from `drawWorkspaces`. Applies and clears any pending reveal whose
-/// target document has finished loading.
-pub fn pollPendingReveals(self: *Workbench) void {
-    if (self.pending_reveals.items.len == 0) return;
-    var i: usize = 0;
-    while (i < self.pending_reveals.items.len) {
-        const pr = self.pending_reveals.items[i];
-        if (runtime.host().docFromPath(pr.path)) |doc| {
-            doc.owner.revealPosition(doc, pr.line, pr.character);
-            self.allocator.free(pr.path);
-            _ = self.pending_reveals.swapRemove(i);
-        } else {
-            i += 1;
-        }
-    }
-}
 
 pub fn initDefaultWorkspace(self: *Workbench) !void {
     self.workspaces = .empty;
@@ -179,7 +148,6 @@ pub fn rebuildWorkspaces(self: *Workbench) !void {
 }
 
 pub fn drawWorkspaces(self: *Workbench, panel: workbench_layout.PanelPanedState, index: usize) !dvui.App.Result {
-    self.pollPendingReveals();
     return workbench_layout.drawWorkspaces(self, panel, index);
 }
 
@@ -310,45 +278,10 @@ fn svcRegisterBranchDecorator(_: *anyopaque, decorator: BranchDecorator) anyerro
     return runtime.workbench().registerBranchDecorator(decorator);
 }
 fn svcRevealPosition(ctx: *anyopaque, path: []const u8, line: u32, character: u32, open_side: bool) anyerror!bool {
-    const host = hostOf(ctx);
-    if (host.docFromPath(path)) |doc| {
-        doc.owner.revealPosition(doc, line, character);
-        // `revealPosition` alone only sets `pending_cursor` on the (possibly background-tab)
-        // document — nothing else about this path made it the *visible* one. Without this,
-        // jumping to a definition already open in a non-active tab/pane silently sets the
-        // caret there and stops: the tab never gets focus, so the document is never drawn to
-        // consume `pending_cursor`, and the jump looks like a no-op. `open_side` is ignored
-        // here — an already-open target just gets focused wherever it already lives, the same
-        // way the file tree's "Open to the side" doesn't move an already-open file either.
-        if (host.docIndex(doc.id)) |idx| host.setActiveDocIndex(idx);
-        return true;
-    }
-
-    // No plugin claims this extension at all — `openFilePath` would just reject it below, so
-    // fail fast instead of queuing a pending reveal that could never resolve.
-    if (host.pluginForExtension(std.fs.path.extension(path)) == null) return false;
-
-    const wb = runtime.workbench();
-    // Same canonical spelling `openFilePath` will store on the document (`std.fs.path.resolve`
-    // ≡ `fizzy.paths.normalize`) — otherwise `pollPendingReveals`'s exact `docFromPath` could
-    // miss a `.`-laden URI-derived path on the fast path.
-    const owned_path = try std.fs.path.resolve(wb.allocator, &.{path});
-    errdefer wb.allocator.free(owned_path);
-    try wb.pending_reveals.append(wb.allocator, .{ .path = owned_path, .line = line, .character = character });
-    // `openFilePath` returning `false` here (as opposed to an actual error) only ever means
-    // "a load for this exact path is already in flight" — the "already open" case was ruled
-    // out by `docFromPath` above, and "no owner plugin" by the check above. Either way the
-    // file WILL finish loading and `pollPendingReveals` will pick it up once it does, so the
-    // just-queued reveal must stay queued rather than being dropped on a plain `false` (which
-    // previously discarded the goto-definition target whenever a load for it happened to
-    // already be in progress, silently landing on "opened the file, caret never moved").
-    // `open_side`: mint a fresh grouping so the load lands in a new split instead of the
-    // current one — mirrors the file tree's "Open to the side" menu action exactly.
-    const target_grouping = if (open_side) wb.newGroupingID() else wb.currentGroupingID();
-    _ = host.openFilePath(owned_path, target_grouping) catch |err| {
-        wb.pending_reveals.items.len -= 1;
-        wb.allocator.free(owned_path);
-        return err;
-    };
-    return true;
+    // Forwards to the host. This used to be the *only* way to reach goto-definition, which made
+    // text and markdown depend on workbench being installed — even though the implementation was
+    // already written almost entirely against the host. It now lives on `EditorAPI`
+    // (`Editor.revealPosition`); this remains so plugins compiled against `workbench-api` keep
+    // working.
+    return hostOf(ctx).revealPosition(path, line, character, open_side);
 }

@@ -1119,8 +1119,9 @@ fn drawHoverLoadingFailed(id_extra: u64) void {
 /// comment for why an already-open target ignores it and just gets focused.
 fn performGotoDefinition(doc: *Document, ext: []const u8, byte_offset: usize, open_side: bool) void {
     const loc = sdk.host().gotoDefinitionFor(ext, doc.path, doc.text.items, byte_offset) orelse return;
-    const wb = sdk.host().getServiceTyped(sdk.services.workbench.Api) orelse return;
-    _ = wb.revealPosition(loc.path, loc.line, loc.character, open_side) catch |err| {
+    // Host state, not a workbench service: this plugin now needs no workbench to jump to a
+    // definition, so it loads in a fizzy-based app that ships no workbench at all.
+    _ = sdk.host().revealPosition(loc.path, loc.line, loc.character, open_side) catch |err| {
         dvui.log.err("gotoDefinition: revealPosition failed: {any}", .{err});
     };
 }
@@ -1516,16 +1517,15 @@ fn compactBlankLines(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
     return std.mem.trim(u8, out.items, " \t\n\r");
 }
 
-/// Opens a hover/footer `file://` link (with optional `#L` / `#L…C…` fragment) via workbench.
+/// Opens a hover/footer `file://` link (with optional `#L` / `#L…C…` fragment) through the host.
 /// Same routing the markdown renderer uses for in-body links — kept here so the footer doesn't
 /// depend on going through a full markdown re-render just to host a one-line link row.
 fn revealHoverFileUri(url: []const u8, open_side: bool) void {
-    const wb = sdk.host().getServiceTyped(sdk.services.workbench.Api) orelse return;
     const arena = dvui.currentWindow().arena();
     const parsed = parseHoverFileUri(arena, url) orelse return;
     const line: u32 = if (parsed.line_1based > 0) parsed.line_1based - 1 else 0;
     const character: u32 = if (parsed.character_1based > 0) parsed.character_1based - 1 else 0;
-    _ = wb.revealPosition(parsed.path, line, character, open_side) catch |err| {
+    _ = sdk.host().revealPosition(parsed.path, line, character, open_side) catch |err| {
         dvui.log.err("hover: revealPosition failed for {s}: {any}", .{ parsed.path, err });
     };
 }
