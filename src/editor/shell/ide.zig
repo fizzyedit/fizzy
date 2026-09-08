@@ -4,6 +4,13 @@
 //! starts from, and the proof that the API is expressive enough — if fizzy's real layout
 //! cannot be written here, the design is wrong (plan, Phase 1).
 //!
+//! **Use it, or copy it.** Following dvui's methodology for widgets: fizzy ships a handful of
+//! shapes, and an app either uses one directly — `-Dshell=ide` gives you the general IDE shape
+//! with no layout code of your own — or copies this function into its own source and edits it to
+//! add, remove or rearrange regions. There is nothing privileged in here: it is ordinary code
+//! over the public `Frame` API, which is exactly what makes copying it a reasonable thing to do
+//! rather than a fork.
+//!
 //! Read it top to bottom: a fixed rail on the left, a resizable sidebar, the menu bar, a
 //! resizable bottom panel, and everything left over is the main area.
 //!
@@ -100,7 +107,13 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         return .ok;
     }
 
-    var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    // The legacy shell pads the workspace column by the sash width so content never sits flush
+    // against the window edge; preserved here (`Editor.zig`'s workspace_vbox).
+    var content = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .background = false,
+        .padding = .{ .w = layout_split.handle_size },
+    });
     defer content.deinit();
 
     // macOS draws the menu natively; the in-app bar is the fallback everywhere else.
@@ -118,6 +131,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         });
         defer dock.deinit();
         editor.panel.paned = dock.paned;
+        editor.shell_bottom_split = dock.paned;
 
         // Panel auto-show/hide, ported verbatim from the legacy shell: the panel collapses
         // when there is no document and no persistent view, and a user drag overrides it.

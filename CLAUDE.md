@@ -57,6 +57,24 @@ Don't trust older narrative docs that call this forward-looking/not-yet-built.
   pixi extraction and the `code`→`text` rename). Superseded by `docs/PLUGINS.md` for anything
   plugin-related; useful only for the older "how did we get here" narrative.
 
+## Shipped shapes, meant to be copied (dvui's methodology)
+
+Fizzy follows dvui's approach to widgets, one level up: it ships a handful of **layout shapes**
+(`src/editor/shell/{ide,minimal,studio}.zig`) rather than a configurable layout engine. An app
+either picks one as-is and writes no layout code at all, or **copies** the closest one into its
+own source and edits it.
+
+That constrains how these are written, and the constraint is the point:
+
+- A shape is ordinary code over the public `Frame` API — a couple of dozen lines. Nothing in it
+  may be privileged or reach into fizzy internals a copier could not reach, or copying becomes
+  forking.
+- Prefer adding a *new shape* over adding an option to an existing one. A mode flag is declared
+  policy; a second file the user can read end to end is not.
+- Anything a shape needs that only fizzy can provide is a bug in `Frame`, not a reason for a
+  special case. `Editor.shell_bottom_split` exists because a plugin was reaching for a widget the
+  shape happened to create — the fix was to make the shape *state* it, not to bless the shape.
+
 ## File naming: a file is a struct
 
 Zig files *are* structs, so the repo follows that literally and you should too:

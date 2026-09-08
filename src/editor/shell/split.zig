@@ -90,8 +90,12 @@ fn ratioSlot(id: dvui.Id, default: f32) *f32 {
     return gop.value_ptr;
 }
 
-const handle_size: f32 = 1.0;
-const handle_dist: f32 = 8.0;
+/// Match fizzy's tuned sash feel exactly (`Editor.zig`'s `handle_size` / `handle_dist`): a 10pt
+/// handle that grows within 60pt of the pointer. These were 1.0/8.0 in the first spike, which
+/// made the drag target ~10x thinner than the shell it was replacing — the kind of regression
+/// that only shows up by looking at it.
+pub const handle_size: f32 = 10;
+pub const handle_dist: f32 = 60;
 
 pub fn split(src: std.builtin.SourceLocation, opts: Options) Split {
     const dir = opts.side.direction();

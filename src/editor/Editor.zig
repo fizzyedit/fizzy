@@ -143,6 +143,16 @@ shell_selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 /// default cost two clicks rather than a plugin release. Keys and values are gpa-owned.
 surface_keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .empty,
 
+/// The bottom split the app's layout established **this frame**, or null if it drew none.
+///
+/// `drawWorkspaces` — the host API the workbench plugin calls — needs the shell's panel
+/// animation state so a workspace can coordinate with it. It used to read `editor.panel.paned`
+/// behind an `if (bottom_views.len > 0)` guard, which was really a proxy for "the shell drew a
+/// panel paned". That proxy is false in any app that hosts bottom surfaces but lays them out
+/// differently (or not at all) — `shell/minimal.zig` segfaulted on exactly this. The shell now
+/// states the fact instead of the plugin inferring it.
+shell_bottom_split: ?*fizzy.dvui.PanedWidget = null,
+
 config_folder: []const u8,
 palette_folder: []const u8,
 
@@ -4176,11 +4186,15 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             }
         }
 
+        // Every frame starts with no bottom split; whichever layout runs states whether it
+        // established one. See `shell_bottom_split`.
+        editor.shell_bottom_split = null;
+
         if (build_opts.new_shell) {
             // Experimental region-based shell (plan Phase 1). Both shells are compiled in;
             // `-Dnew-shell` picks this one so the two can be diffed live.
             var frame: shell.Frame = .init(editor);
-            const shell_result = try shell.ide.layout(editor, &frame);
+            const shell_result = try shell.layout(editor, &frame);
             if (shell_result != .ok) return shell_result;
         } else {
             var base_box = dvui.box(
@@ -4347,6 +4361,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                         .background = false,
                     });
                     defer editor.panel.paned.deinit();
+                    editor.shell_bottom_split = editor.panel.paned;
 
                     if (!editor.panel.paned.dragging) {
                         const show_panel = (editor.activeDoc() != null or editor.host.hasPersistentBottomView()) and !editor.panel_hidden_for_center;
@@ -4562,8 +4577,7 @@ pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
     var animating = false;
     var split_ratio: *f32 = &full_split;
 
-    if (editor.host.bottom_views.items.len > 0) {
-        const panel = editor.panel.paned;
+    if (editor.shell_bottom_split) |panel| {
         dragging = panel.dragging;
         animating = panel.animating;
         split_ratio = panel.split_ratio;
