@@ -30,8 +30,7 @@ const Sidebar = @import("../Sidebar.zig");
 /// badge. Rewriting it as a bare `f.matching` loop means moving all of that into the app layer
 /// first, which is the same job as splitting Explorer chrome from its region (see above).
 pub fn iconRail(f: *Frame, keywords: []const []const u8) !Sidebar.Action {
-    _ = keywords;
-    return f.editor.sidebar.draw(f.editor);
+    return f.editor.sidebar.draw(f.editor, f, keywords);
 }
 
 /// Surfaces this app declared no region for. An app should show these somewhere (fizzy lists
@@ -43,8 +42,7 @@ pub fn unplacedSurfaces(f: *Frame) []const *Frame.Surface {
 
 /// Explorer chrome + the sidebar region it wraps.
 pub fn explorerPane(f: *Frame, keywords: []const []const u8) !dvui.App.Result {
-    _ = keywords;
-    return f.editor.explorer.draw(f.editor);
+    return f.editor.explorer.draw(f.editor, f, keywords);
 }
 
 /// Bottom-panel chrome (tab strip) + the bottom region it wraps.

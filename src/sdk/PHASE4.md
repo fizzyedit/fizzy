@@ -38,25 +38,32 @@ refused to build until both moved together, which is the mechanism working.
 Each of these is a substantial change in its own right, and none is a prerequisite for the
 Phase 5 example apps:
 
-0. **The Explorer/Panel chrome split — now the blocker for everything user-facing.**
-   Keyword overrides load and change what `Frame.matching` returns, verified end to end: writing
+0. ~~**The Explorer/Panel chrome split.**~~ **Done for the sidebar path (Phase 4c).**
+   `Sidebar.draw` now lists `f.matching(keywords)` instead of `host.sidebar_views`, and
+   `Explorer.draw` / `drawHeader` resolve their body through `f.selected(keywords)` instead of
+   `host.activeSidebarView()`. Selection goes through `f.select`, so it still lands in the same
+   host state and the two shells cannot disagree.
 
-   ```zon
-   .plugins = .{ .workbench = .{
-       .surface_keywords = .{ .@"workbench.files" = .{ "bottom" } },
-   } }
+   Verified end to end. With `.surface_keywords = .{ .@"workbench.files" = .{ "bottom" } }` in
+   `settings.zon`:
+
+   ```
+   without override            with override
+   RAIL LISTS workbench.files  RAIL LISTS fizzy.store          <- file tree gone from the rail
+   RAIL LISTS fizzy.store      RAIL LISTS fizzy.settings
+   RAIL LISTS fizzy.settings   EXPLORER DRAWS fizzy.store      <- degraded to first match
+   EXPLORER DRAWS workbench... BOTTOM LISTS workbench.files    <- moved to the bottom panel
+   BOTTOM LISTS fizzy.output   BOTTOM LISTS fizzy.output
    ```
 
-   loads as `workbench.files -> ["bottom"]`, so the file tree leaves the sidebar match set and
-   joins the bottom one. **But nothing moves on screen.** `ide.zig` routes its sidebar through
-   `widgets.explorerPane` → `Explorer.draw`, which resolves the view through
-   `host.activeSidebarView()` — the *legacy registry* — bypassing keyword matching entirely.
-   Same for `Panel.draw`.
+   A user moved a plugin's surface from the sidebar to the bottom panel by editing a text file,
+   with no plugin change and no fizzy release. That is the escape hatch the whole
+   keyword-matching design rests on, now actually working.
 
-   So the persistence half of the rebinding story works and the visible half does not, and the
-   chrome split is what connects them. It is also the prerequisite for the rebinding UI: a
-   settings pane that edits a table nothing reads would be worse than none. This moved from
-   "nice cleanup" to "the next thing to do".
+   **Still to do on this thread:** `Panel.draw` (the bottom tab strip) resolves through
+   `host.active_bottom_view` the same way the explorer used to, so a surface that *arrives* in
+   the bottom region by override is listed by `f.matching` but not yet drawn by the panel's own
+   strip. Same fix, one file over.
 
 1. **The three-way service split (§E).** `workbench-api` is still one service doing three jobs:
    document lifecycle (which `EditorAPI` already duplicates), file-tree mutation, and

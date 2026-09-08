@@ -4286,7 +4286,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // sidebar can't safely touch `editor.explorer.paned` itself — it runs before this
             // frame's paned widget is allocated below — so it reports an `Action` and we dispatch
             // after the paned is in place.
-            const sidebar_action = editor.sidebar.draw(editor) catch {
+            // The legacy shell builds a frame too, so both shells resolve rail contents the
+            // same way (by keyword) rather than one reading the registry directly.
+            var legacy_frame: shell.Frame = .init(editor);
+            const sidebar_action = editor.sidebar.draw(editor, &legacy_frame, shell.Frame.sidebar_keywords) catch {
                 dvui.log.err("Failed to draw sidebar", .{});
                 return false;
             };
@@ -4391,7 +4394,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
                 // Explorer area
                 {
-                    const result = try editor.explorer.draw(editor);
+                    const result = try editor.explorer.draw(editor, &legacy_frame, shell.Frame.sidebar_keywords);
                     if (result != .ok) {
                         return result;
                     }

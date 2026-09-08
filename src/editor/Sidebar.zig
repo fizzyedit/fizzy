@@ -8,6 +8,7 @@ const Editor = fizzy.Editor;
 
 const SidebarView = fizzy.sdk.SidebarView;
 const PluginStore = @import("PluginStore.zig");
+const Frame = @import("shell/Frame.zig");
 
 pub const Sidebar = @This();
 
@@ -36,7 +37,10 @@ pub fn deinit() void {
 /// "reached unreachable code".
 pub const Action = enum { none, open, close };
 
-pub fn draw(_: Sidebar, editor: *Editor) !Action {
+/// `f` is the layout frame: the rail lists whatever currently *matches* the keywords its
+/// region accepts, rather than whatever happens to be in `host.sidebar_views`. That is what
+/// makes a user's keyword override actually move an icon out of (or into) this rail.
+pub fn draw(_: Sidebar, editor: *Editor, f: *Frame, keywords: []const []const u8) !Action {
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .vertical,
         .background = false,
@@ -63,9 +67,9 @@ pub fn draw(_: Sidebar, editor: *Editor) !Action {
             .background = false,
         });
 
-        for (editor.host.sidebar_views.items, 0..) |*view, i| {
-            if (view.hidden or isPinned(view.id)) continue;
-            const a = try drawOption(editor, view, i, 20);
+        for (f.matching(keywords), 0..) |surface, i| {
+            if (isPinned(surface.id)) continue;
+            const a = try drawOption(editor, f, keywords, surface, i, 20);
             if (a != .none) ret = a;
         }
 
@@ -85,9 +89,9 @@ pub fn draw(_: Sidebar, editor: *Editor) !Action {
         });
         defer bottom.deinit();
 
-        for (editor.host.sidebar_views.items, 0..) |*view, i| {
-            if (view.hidden or !isPinned(view.id)) continue;
-            const a = try drawOption(editor, view, i, 20);
+        for (f.matching(keywords), 0..) |surface, i| {
+            if (!isPinned(surface.id)) continue;
+            const a = try drawOption(editor, f, keywords, surface, i, 20);
             if (a != .none) ret = a;
         }
     }
@@ -95,8 +99,15 @@ pub fn draw(_: Sidebar, editor: *Editor) !Action {
     return ret;
 }
 
-fn drawOption(editor: *Editor, view: *const SidebarView, index: usize, size: f32) !Action {
-    const selected = editor.host.isActiveSidebarView(view.id);
+fn drawOption(
+    editor: *Editor,
+    f: *Frame,
+    keywords: []const []const u8,
+    view: *Frame.Surface,
+    index: usize,
+    size: f32,
+) !Action {
+    const selected = f.isSelected(keywords, view);
     var ret: Action = .none;
 
     const theme = dvui.themeGet();
@@ -133,7 +144,12 @@ fn drawOption(editor: *Editor, view: *const SidebarView, index: usize, size: f32
     dvui.icon(
         @src(),
         view.id,
-        view.icon,
+        // A surface's icon is format-tagged and optional; the rail draws tvg. A surface with a
+        // png or no icon simply gets no glyph here rather than the rail refusing to list it.
+        switch (view.icon orelse .none) {
+            .tvg => |bytes| bytes,
+            else => dvui.entypo.dot_single,
+        },
         .{ .fill_color = color, .stroke_color = color },
         .{
             .id_extra = index,
@@ -173,7 +189,7 @@ fn drawOption(editor: *Editor, view: *const SidebarView, index: usize, size: f32
         if (selected and explorer_visible) {
             ret = .close;
         } else {
-            editor.host.setActiveSidebarView(view.id);
+            f.select(keywords, view);
             ret = .open;
         }
         dvui.refresh(null, @src(), null);

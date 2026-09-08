@@ -11,6 +11,7 @@ const Editor = fizzy.Editor;
 
 const nfd = @import("nfd");
 const PluginStore = @import("../PluginStore.zig");
+const Frame = @import("../shell/Frame.zig");
 
 pub const Explorer = @This();
 
@@ -85,7 +86,18 @@ pub fn peekClose(explorer: *Explorer) void {
     explorer.collapse_btn_anim_started = false;
 }
 
-pub fn draw(explorer: *Explorer, editor: *fizzy.Editor) !dvui.App.Result {
+/// Draws the explorer *chrome* — header, scroll policy, collapse button — around whichever
+/// surface currently matches `keywords`. The chrome is the app's; the body is the plugin's.
+///
+/// Before Phase 4c this resolved the body through `host.activeSidebarView()`, i.e. the legacy
+/// registry, which meant a user's keyword override changed what `Frame.matching` returned but
+/// nothing moved on screen.
+pub fn draw(
+    explorer: *Explorer,
+    editor: *fizzy.Editor,
+    f: *Frame,
+    keywords: []const []const u8,
+) !dvui.App.Result {
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
@@ -95,7 +107,7 @@ pub fn draw(explorer: *Explorer, editor: *fizzy.Editor) !dvui.App.Result {
     explorer.rect = vbox.data().rect;
     explorer.rect_screen = vbox.data().rectScale().r;
 
-    try drawHeader(explorer, editor);
+    try drawHeader(explorer, f, keywords);
 
     _ = dvui.spacer(@src(), .{});
 
@@ -110,7 +122,7 @@ pub fn draw(explorer: *Explorer, editor: *fizzy.Editor) !dvui.App.Result {
     // a second explorer-level vertical bar on top of the pane scrollbars. Pin vertical
     // scroll to `.given` for that tab so we fill the viewport and let the panes scroll.
     const self_vert_scroll = blk: {
-        if (editor.host.activeSidebarView()) |view| {
+        if (f.selected(keywords)) |view| {
             break :blk std.mem.eql(u8, view.id, PluginStore.view_id);
         }
         break :blk false;
@@ -246,8 +258,8 @@ pub fn hovered(explorer: *Explorer) bool {
     return fizzy.dvui.hovered(explorer.paned.data());
 }
 
-pub fn drawHeader(_: *Explorer, editor: *fizzy.Editor) !void {
-    const view = editor.host.activeSidebarView() orelse return;
+pub fn drawHeader(_: *Explorer, f: *Frame, keywords: []const []const u8) !void {
+    const view = f.selected(keywords) orelse return;
     const header_title = std.ascii.allocUpperString(dvui.currentWindow().arena(), view.title) catch view.title;
 
     dvui.labelNoFmt(@src(), header_title, .{}, .{ .font = dvui.Font.theme(.heading) });
