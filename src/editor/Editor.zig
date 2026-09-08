@@ -1364,6 +1364,69 @@ fn isValidPluginId(id: []const u8) bool {
 /// false all mean disabled — R12), and `auto_update_off_ids` from every `.plugins.<id>.auto_update`
 /// that is explicitly `false`. One directory walk and one settings read for both.
 /// Call once after settings load, before `loadUserPlugins`.
+/// Reads every `.plugins.<id>.surface_keywords` block from `settings.zon` into
+/// `surface_keyword_overrides`.
+///
+/// This is what makes a plugin's declared keywords a *default* rather than a decree: if a
+/// surface lands somewhere unhelpful, the user changes where it goes without waiting on a plugin
+/// release. Deliberately tolerant — a malformed override yields fewer entries, never a startup
+/// failure, because this file is one the user is invited to hand-edit.
+fn loadSurfaceKeywordOverrides(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const gpa = editor.gpa;
+
+    const settings_path = std.fs.path.join(gpa, &.{ editor.config_folder, "settings.zon" }) catch return;
+    defer gpa.free(settings_path);
+    const data = fizzy.fs.readZ(gpa, dvui.io, settings_path) catch return;
+    defer gpa.free(data);
+
+    const blocks = SettingsPluginsZon.listPluginBlocks(gpa, data) catch return;
+    defer SettingsPluginsZon.freeEntries(gpa, blocks);
+
+    for (blocks) |block| {
+        const text = block.text orelse continue;
+        const text_z = gpa.dupeZ(u8, text) catch continue;
+        defer gpa.free(text_z);
+        const kw_text = SettingsPluginsZon.extractField(gpa, text_z, "surface_keywords") orelse continue;
+        defer gpa.free(kw_text);
+
+        const parsed = SettingsPluginsZon.parseSurfaceKeywords(gpa, kw_text) catch continue;
+        defer SettingsPluginsZon.freeSurfaceKeywords(gpa, parsed);
+
+        for (parsed) |entry| {
+            // The map owns its keys and values; `parsed` is freed above.
+            const id_owned = gpa.dupe(u8, entry.surface_id) catch continue;
+            var kws = gpa.alloc([]const u8, entry.keywords.len) catch {
+                gpa.free(id_owned);
+                continue;
+            };
+            var n: usize = 0;
+            for (entry.keywords) |k| {
+                kws[n] = gpa.dupe(u8, k) catch break;
+                n += 1;
+            }
+            kws = kws[0..n];
+            if (n == 0) {
+                gpa.free(id_owned);
+                gpa.free(kws);
+                continue;
+            }
+            const gop = editor.surface_keyword_overrides.getOrPut(gpa, id_owned) catch {
+                gpa.free(id_owned);
+                for (kws) |k| gpa.free(k);
+                gpa.free(kws);
+                continue;
+            };
+            if (gop.found_existing) {
+                gpa.free(id_owned);
+                for (gop.value_ptr.*) |k| gpa.free(k);
+                gpa.free(gop.value_ptr.*);
+            }
+            gop.value_ptr.* = kws;
+        }
+    }
+}
+
 fn seedPluginFlags(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.gpa;
@@ -2442,6 +2505,9 @@ pub fn postInit(editor: *Editor) !void {
     // disabled plugins are skipped at startup and the store's auto-update pass already knows
     // which plugins opted out.
     editor.seedPluginFlags();
+    // Per-surface keyword overrides: the user's answer to "where should this go", which wins
+    // over whatever the plugin declared. Read before plugins draw anything.
+    loadSurfaceKeywordOverrides(editor);
 
     // User-installed plugins from `<config>/plugins/{id}.{dylib,so,dll}`.
     editor.loadUserPlugins(editor.config_folder);

@@ -38,6 +38,26 @@ refused to build until both moved together, which is the mechanism working.
 Each of these is a substantial change in its own right, and none is a prerequisite for the
 Phase 5 example apps:
 
+0. **The Explorer/Panel chrome split — now the blocker for everything user-facing.**
+   Keyword overrides load and change what `Frame.matching` returns, verified end to end: writing
+
+   ```zon
+   .plugins = .{ .workbench = .{
+       .surface_keywords = .{ .@"workbench.files" = .{ "bottom" } },
+   } }
+   ```
+
+   loads as `workbench.files -> ["bottom"]`, so the file tree leaves the sidebar match set and
+   joins the bottom one. **But nothing moves on screen.** `ide.zig` routes its sidebar through
+   `widgets.explorerPane` → `Explorer.draw`, which resolves the view through
+   `host.activeSidebarView()` — the *legacy registry* — bypassing keyword matching entirely.
+   Same for `Panel.draw`.
+
+   So the persistence half of the rebinding story works and the visible half does not, and the
+   chrome split is what connects them. It is also the prerequisite for the rebinding UI: a
+   settings pane that edits a table nothing reads would be worse than none. This moved from
+   "nice cleanup" to "the next thing to do".
+
 1. **The three-way service split (§E).** `workbench-api` is still one service doing three jobs:
    document lifecycle (which `EditorAPI` already duplicates), file-tree mutation, and
    tabs/splits presentation. Splitting it is what frees a document plugin from depending on
