@@ -268,7 +268,7 @@ fn displayUpdateToast(id: dvui.Id) !void {
 /// Safe to call from any GUI-thread event handler (toast click, dialog button).
 pub fn kickInstall() void {
     if (comptime !auto_update.impl) return;
-    _ = update_install.startOrGet(fizzy.app.allocator, dvui.io) catch |err| {
+    _ = update_install.startOrGet(fizzy.app().allocator, dvui.io) catch |err| {
         dvui.log.err("update install kick failed: {any}", .{err});
         dvui.toast(@src(), .{ .message = "Update failed to start — see logs." });
         return;

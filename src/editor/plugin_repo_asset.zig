@@ -7,7 +7,7 @@ pub const max_readme_bytes = 512 * 1024;
 pub const max_icon_bytes = 256 * 1024;
 
 pub fn gpa() std.mem.Allocator {
-    return fizzy.app.allocator;
+    return fizzy.app().allocator;
 }
 
 /// GET `url`; return the body bytes (app-allocator owned) on HTTP 200, else null.
@@ -51,9 +51,9 @@ pub fn readLocalAsset(io: std.Io, subpath: []const u8, filename: []const u8, lim
     if (trimmed.len == 0) return null;
 
     var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
-    var dir_len = std.mem.sliceTo(fizzy.app.root_path, 0).len;
+    var dir_len = std.mem.sliceTo(fizzy.app().root_path, 0).len;
     if (dir_len == 0 or dir_len >= dir_buf.len) return null;
-    @memcpy(dir_buf[0..dir_len], fizzy.app.root_path[0..dir_len]);
+    @memcpy(dir_buf[0..dir_len], fizzy.app().root_path[0..dir_len]);
 
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     var depth: u8 = 0;

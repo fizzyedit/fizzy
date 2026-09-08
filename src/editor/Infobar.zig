@@ -25,7 +25,7 @@ pub fn deinit() void {
     // TODO: Free memory
 }
 
-pub fn draw(_: Infobar) !void {
+pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
     const font = infobar.font();
     const bar_h = infobar.height();
 
@@ -119,7 +119,7 @@ pub fn draw(_: Infobar) !void {
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = infobar.item_spacing } });
 
-    if (fizzy.editor.folder) |folder| {
+    if (editor.folder) |folder| {
         dvui.icon(
             @src(),
             "project_icon",
@@ -176,12 +176,12 @@ fn drawPluginEntries(bar_h: f32) void {
 }
 
 fn collectedEntries() []const infobar.Entry {
-    const arena = fizzy.editor.host.arena();
+    const arena = fizzy.editor().host.arena();
     var list: std.ArrayList(infobar.Entry) = .empty;
-    const active = fizzy.editor.activeDoc();
+    const active = fizzy.editor().activeDoc();
     const owner: ?*fizzy.sdk.Plugin = if (active) |doc| doc.owner else null;
     if (owner) |o| appendFrom(&list, arena, o, active);
-    for (fizzy.editor.host.plugins.items) |p| {
+    for (fizzy.editor().host.plugins.items) |p| {
         if (p == owner) continue;
         appendFrom(&list, arena, p, active);
     }

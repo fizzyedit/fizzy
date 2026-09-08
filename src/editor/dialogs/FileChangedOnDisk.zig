@@ -23,8 +23,8 @@ pub fn request(file_id: u64) void {
 }
 
 fn fileBasename(file_id: u64) []const u8 {
-    const doc = fizzy.editor.docById(file_id) orelse return "?";
-    return std.fs.path.basename(fizzy.editor.docPath(doc));
+    const doc = fizzy.editor().docById(file_id) orelse return "?";
+    return std.fs.path.basename(fizzy.editor().docPath(doc));
 }
 
 fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
@@ -90,27 +90,27 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
 }
 
 fn onOverwrite(file_id: u64) !void {
-    const doc = fizzy.editor.docById(file_id) orelse {
+    const doc = fizzy.editor().docById(file_id) orelse {
         fizzy.dvui.closeFloatingDialogAnchored();
         return;
     };
     fizzy.dvui.closeFloatingDialogAnchored();
     // Clear conflict and write; `noteSaved` refreshes the baseline after success.
-    if (fizzy.editor.document_watcher) |*w| w.markPendingBaseline(file_id);
+    if (fizzy.editor().document_watcher) |*w| w.markPendingBaseline(file_id);
     doc.owner.saveDocument(doc) catch |err| {
         // Save failed — keep treating disk as conflicting so the next save re-prompts.
-        if (fizzy.editor.document_watcher) |*w| w.restoreDiskConflict(file_id);
+        if (fizzy.editor().document_watcher) |*w| w.restoreDiskConflict(file_id);
         return err;
     };
-    if (fizzy.editor.document_watcher) |*w| w.noteSaved(file_id);
+    if (fizzy.editor().document_watcher) |*w| w.noteSaved(file_id);
 }
 
 fn onDiscard(file_id: u64) void {
-    const doc = fizzy.editor.docById(file_id) orelse {
+    const doc = fizzy.editor().docById(file_id) orelse {
         fizzy.dvui.closeFloatingDialogAnchored();
         return;
     };
-    if (fizzy.editor.document_watcher) |*w| w.discardToDisk(doc);
+    if (fizzy.editor().document_watcher) |*w| w.discardToDisk(doc);
     fizzy.dvui.closeFloatingDialogAnchored();
 }
 

@@ -163,7 +163,7 @@ const Impl = if (have_impl) struct {
 
 fn wake() void {
     // Safe from any thread — see `Editor.zig`'s `fizzyRefresh` doc comment.
-    fizzy.app.window.backend.refresh();
+    fizzy.app().window.backend.refresh();
 }
 
 /// Allocates the ring buffers. Does not start nightwatch — `setFolder` does, once a folder is

@@ -125,6 +125,10 @@ pub const Workbench = workbench_mod.Workbench;
 
 /// This arena is for small per-frame editor allocations, such as path joins, null terminations and labels.
 /// Do not free these allocations, instead, this allocator will be .reset(.retain_capacity) each frame
+/// The app-wide general-purpose allocator. Held on the Editor so editor code does not
+/// reach through the `fizzy.app()` global for it — a precondition for using fizzy as a
+/// library, where there is no single ambient App.
+gpa: std.mem.Allocator,
 arena: std.heap.ArenaAllocator,
 
 /// Shell (new-layout) selection state: keyword-group hash -> selected surface id.
@@ -490,7 +494,7 @@ pub fn init(
     const config_folder: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
         app.root_path
     else config_folder_blk: {
-        break :config_folder_blk try fizzy.paths.configFolder(fizzy.app.allocator, dvui.io, arena, fizzy.processEnviron(), app.root_path);
+        break :config_folder_blk try fizzy.paths.configFolder(app.allocator, dvui.io, arena, fizzy.processEnviron(), app.root_path);
     };
 
     // One-time migration: pre-rename builds used `Fizzy/` (capitalized).
@@ -518,7 +522,7 @@ pub fn init(
             }
         }
     }
-    const palette_folder = std.fs.path.join(fizzy.app.allocator, &.{ config_folder, "palettes" }) catch config_folder;
+    const palette_folder = std.fs.path.join(app.allocator, &.{ config_folder, "palettes" }) catch config_folder;
 
     var editor: Editor = .{
         .config_folder = config_folder,
@@ -528,6 +532,7 @@ pub fn init(
         .sidebar = try .init(),
         .infobar = try .init(),
         .arena = .init(std.heap.page_allocator),
+        .gpa = app.allocator,
         .last_titlebar_color = dvui.themeGet().color(.control, .fill),
         .themes = .empty,
         .host = .init(app.allocator),
@@ -737,7 +742,7 @@ pub fn init(
 
     // Capture dvui's defaults before fizzy's own binds land, so `rebuildKeybinds` can
     // restore them after clearing the map.
-    editor.dvui_default_keybinds = try dvui.currentWindow().keybinds.clone(fizzy.app.allocator);
+    editor.dvui_default_keybinds = try dvui.currentWindow().keybinds.clone(app.allocator);
 
     try Keybinds.register();
 
@@ -746,14 +751,14 @@ pub fn init(
     // overlay), otherwise the very first autosave after startup would spuriously rewrite the
     // file just because this seed only accounted for fizzy's own fields, not `.plugins`.
     if (comptime builtin.target.cpu.arch == .wasm32) {
-        const serialized = try Settings.serialize(&editor.settings, fizzy.app.allocator);
-        defer fizzy.app.allocator.free(serialized);
+        const serialized = try Settings.serialize(&editor.settings, app.allocator);
+        defer app.allocator.free(serialized);
         editor.settings_last_saved_hash = std.hash.Wyhash.hash(0, serialized);
     } else {
-        const settings_path = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.zon" });
-        defer fizzy.app.allocator.free(settings_path);
-        const composed = try editor.composeSettingsText(fizzy.app.allocator, settings_path, &.{});
-        defer fizzy.app.allocator.free(composed);
+        const settings_path = try std.fs.path.join(app.allocator, &.{ editor.config_folder, "settings.zon" });
+        defer app.allocator.free(settings_path);
+        const composed = try editor.composeSettingsText(app.allocator, settings_path, &.{});
+        defer app.allocator.free(composed);
         editor.settings_last_saved_hash = std.hash.Wyhash.hash(0, composed);
     }
 
@@ -769,40 +774,40 @@ pub fn init(
 /// Stable fizzy-builtin contribution id.
 pub const view_settings = "fizzy.settings";
 
-fn loadWorkbenchFromDylibEnabled() bool {
+fn loadWorkbenchFromDylibEnabled(gpa: std.mem.Allocator) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
     if (comptime build_opts.static_workbench) return false;
-    if (std.process.Environ.getAlloc(fizzy.processEnviron(), fizzy.app.allocator, "FIZZY_STATIC_WORKBENCH")) |v| {
-        defer fizzy.app.allocator.free(v);
+    if (std.process.Environ.getAlloc(fizzy.processEnviron(), gpa, "FIZZY_STATIC_WORKBENCH")) |v| {
+        defer gpa.free(v);
         return v.len == 0 or v[0] == '0';
     } else |_| {}
     return true;
 }
 
-fn loadTextFromDylibEnabled() bool {
+fn loadTextFromDylibEnabled(gpa: std.mem.Allocator) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
     if (comptime build_opts.static_text) return false;
-    if (std.process.Environ.getAlloc(fizzy.processEnviron(), fizzy.app.allocator, "FIZZY_STATIC_TEXT")) |v| {
-        defer fizzy.app.allocator.free(v);
+    if (std.process.Environ.getAlloc(fizzy.processEnviron(), gpa, "FIZZY_STATIC_TEXT")) |v| {
+        defer gpa.free(v);
         return v.len == 0 or v[0] == '0';
     } else |_| {}
     return true;
 }
 
-fn loadMarkdownFromDylibEnabled() bool {
+fn loadMarkdownFromDylibEnabled(gpa: std.mem.Allocator) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    if (std.process.Environ.getAlloc(fizzy.processEnviron(), fizzy.app.allocator, "FIZZY_STATIC_MARKDOWN")) |v| {
-        defer fizzy.app.allocator.free(v);
+    if (std.process.Environ.getAlloc(fizzy.processEnviron(), gpa, "FIZZY_STATIC_MARKDOWN")) |v| {
+        defer gpa.free(v);
         return v.len == 0 or v[0] == '0';
     } else |_| {}
     return true;
 }
 
-fn loadImageFromDylibEnabled() bool {
+fn loadImageFromDylibEnabled(gpa: std.mem.Allocator) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
     if (comptime build_opts.static_image) return false;
-    if (std.process.Environ.getAlloc(fizzy.processEnviron(), fizzy.app.allocator, "FIZZY_STATIC_IMAGE")) |v| {
-        defer fizzy.app.allocator.free(v);
+    if (std.process.Environ.getAlloc(fizzy.processEnviron(), gpa, "FIZZY_STATIC_IMAGE")) |v| {
+        defer gpa.free(v);
         return v.len == 0 or v[0] == '0';
     } else |_| {}
     return true;
@@ -841,7 +846,7 @@ fn syncLoadedPluginGlobals(editor: *Editor, plugin_id: []const u8, arg_b: *anyop
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     for (editor.loaded_plugin_libs.items) |loaded| {
         if (!std.mem.eql(u8, loaded.plugin_id, plugin_id)) continue;
-        loaded.set_globals(@ptrCast(&fizzy.app.allocator), arg_b, arg_c);
+        loaded.set_globals(@ptrCast(&editor.gpa), arg_b, arg_c);
     }
 }
 
@@ -851,19 +856,19 @@ pub fn syncLoadedWorkbenchGlobals(editor: *Editor) void {
 }
 
 fn appendLoadedPluginLib(editor: *Editor, loaded: PluginLoader.LoadedLib) !void {
-    const id_owned = try fizzy.app.allocator.dupe(u8, loaded.plugin_id);
+    const id_owned = try editor.gpa.dupe(u8, loaded.plugin_id);
     var stored = loaded;
     stored.plugin_id = id_owned;
-    try editor.loaded_plugin_libs.append(fizzy.app.allocator, stored);
+    try editor.loaded_plugin_libs.append(editor.gpa, stored);
 }
 
 /// Load `{exe_dir}/plugins/workbench.{ext}` and register via dylib entry.
 pub fn loadWorkbenchDylib(editor: *Editor, exe_dir: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const path = try PluginLoader.builtinPluginPath(fizzy.app.allocator, exe_dir, "workbench");
-    errdefer fizzy.app.allocator.free(path);
-    const loaded = try PluginLoader.loadAndRegister(&editor.host, fizzy.app.allocator, path, "workbench", .{
-        .gpa = &fizzy.app.allocator,
+    const path = try PluginLoader.builtinPluginPath(editor.gpa, exe_dir, "workbench");
+    errdefer editor.gpa.free(path);
+    const loaded = try PluginLoader.loadAndRegister(&editor.host, editor.gpa, path, "workbench", .{
+        .gpa = &editor.gpa,
         .arg_b = @ptrCast(&editor.host), // workbench convention: arg_b = *Host
         .arg_c = @ptrCast(&editor.workbench), // arg_c = *Workbench
     });
@@ -875,10 +880,10 @@ pub fn loadWorkbenchDylib(editor: *Editor, exe_dir: []const u8) !void {
 /// Load `{exe_dir}/plugins/text.{ext}` and register via dylib entry.
 pub fn loadTextDylib(editor: *Editor, exe_dir: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const path = try PluginLoader.builtinPluginPath(fizzy.app.allocator, exe_dir, "text");
-    errdefer fizzy.app.allocator.free(path);
-    const loaded = try PluginLoader.loadAndRegister(&editor.host, fizzy.app.allocator, path, "text", .{
-        .gpa = &fizzy.app.allocator,
+    const path = try PluginLoader.builtinPluginPath(editor.gpa, exe_dir, "text");
+    errdefer editor.gpa.free(path);
+    const loaded = try PluginLoader.loadAndRegister(&editor.host, editor.gpa, path, "text", .{
+        .gpa = &editor.gpa,
         .arg_b = @ptrCast(&editor.host),
         .arg_c = null,
     });
@@ -890,10 +895,10 @@ pub fn loadTextDylib(editor: *Editor, exe_dir: []const u8) !void {
 /// Load `{exe_dir}/plugins/markdown.{ext}` and register via dylib entry.
 pub fn loadMarkdownDylib(editor: *Editor, exe_dir: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const path = try PluginLoader.builtinPluginPath(fizzy.app.allocator, exe_dir, "markdown");
-    errdefer fizzy.app.allocator.free(path);
-    const loaded = try PluginLoader.loadAndRegister(&editor.host, fizzy.app.allocator, path, "markdown", .{
-        .gpa = &fizzy.app.allocator,
+    const path = try PluginLoader.builtinPluginPath(editor.gpa, exe_dir, "markdown");
+    errdefer editor.gpa.free(path);
+    const loaded = try PluginLoader.loadAndRegister(&editor.host, editor.gpa, path, "markdown", .{
+        .gpa = &editor.gpa,
         .arg_b = @ptrCast(&editor.host),
         .arg_c = null,
     });
@@ -905,10 +910,10 @@ pub fn loadMarkdownDylib(editor: *Editor, exe_dir: []const u8) !void {
 /// Load `{exe_dir}/plugins/image.{ext}` and register via dylib entry.
 pub fn loadImageDylib(editor: *Editor, exe_dir: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const path = try PluginLoader.builtinPluginPath(fizzy.app.allocator, exe_dir, "image");
-    errdefer fizzy.app.allocator.free(path);
-    const loaded = try PluginLoader.loadAndRegister(&editor.host, fizzy.app.allocator, path, "image", .{
-        .gpa = &fizzy.app.allocator,
+    const path = try PluginLoader.builtinPluginPath(editor.gpa, exe_dir, "image");
+    errdefer editor.gpa.free(path);
+    const loaded = try PluginLoader.loadAndRegister(&editor.host, editor.gpa, path, "image", .{
+        .gpa = &editor.gpa,
         .arg_b = @ptrCast(&editor.host),
         .arg_c = null,
     });
@@ -975,18 +980,18 @@ fn recordPluginFailure(
     plugin_version: ?std.SemanticVersion,
     stamp: FileStamp,
 ) void {
-    const id_owned = fizzy.app.allocator.dupe(u8, id) catch return;
-    const reason_owned = fizzy.app.allocator.dupe(u8, reason) catch {
-        fizzy.app.allocator.free(id_owned);
+    const id_owned = editor.gpa.dupe(u8, id) catch return;
+    const reason_owned = editor.gpa.dupe(u8, reason) catch {
+        editor.gpa.free(id_owned);
         return;
     };
-    const detail_owned: ?[]const u8 = if (detail) |d| fizzy.app.allocator.dupe(u8, d) catch null else null;
+    const detail_owned: ?[]const u8 = if (detail) |d| editor.gpa.dupe(u8, d) catch null else null;
     if (detail_owned == null and detail != null) {
-        fizzy.app.allocator.free(id_owned);
-        fizzy.app.allocator.free(reason_owned);
+        editor.gpa.free(id_owned);
+        editor.gpa.free(reason_owned);
         return;
     }
-    editor.failed_user_plugins.append(fizzy.app.allocator, .{
+    editor.failed_user_plugins.append(editor.gpa, .{
         .id = id_owned,
         .reason = reason_owned,
         .detail = detail_owned,
@@ -994,9 +999,9 @@ fn recordPluginFailure(
         .source_mtime_ns = stamp.mtime_ns,
         .source_size = stamp.size,
     }) catch {
-        fizzy.app.allocator.free(id_owned);
-        fizzy.app.allocator.free(reason_owned);
-        if (detail_owned) |d| fizzy.app.allocator.free(d);
+        editor.gpa.free(id_owned);
+        editor.gpa.free(reason_owned);
+        if (detail_owned) |d| editor.gpa.free(d);
     };
 }
 
@@ -1016,9 +1021,9 @@ fn clearFailedUserPlugin(editor: *Editor, id: []const u8) void {
     while (i < editor.failed_user_plugins.items.len) {
         if (std.mem.eql(u8, editor.failed_user_plugins.items[i].id, id)) {
             const f = editor.failed_user_plugins.orderedRemove(i);
-            fizzy.app.allocator.free(f.id);
-            fizzy.app.allocator.free(f.reason);
-            if (f.detail) |d| fizzy.app.allocator.free(d);
+            editor.gpa.free(f.id);
+            editor.gpa.free(f.reason);
+            if (f.detail) |d| editor.gpa.free(d);
         } else i += 1;
     }
 }
@@ -1065,10 +1070,10 @@ fn recordLoadFailure(editor: *Editor, id: []const u8, path: []const u8, err: Plu
     const reason = pluginLoadFailureReason(err);
     const probe = PluginLoader.probeVersionInfo(path);
     const detail: ?[]const u8 = if (probe) |info|
-        formatPluginProbeDetail(fizzy.app.allocator, info) catch null
+        formatPluginProbeDetail(editor.gpa, info) catch null
     else
         null;
-    defer if (detail) |d| fizzy.app.allocator.free(d);
+    defer if (detail) |d| editor.gpa.free(d);
     // `recordPluginFailure` appends unconditionally; drop any prior record so repeated attempts
     // (enable → fail → enable → fail) leave one row, not a growing pile of duplicate cards.
     editor.clearFailedUserPlugin(id);
@@ -1122,8 +1127,8 @@ fn migrateFlatPluginLayout(allocator: std.mem.Allocator, plugins_dir: []const u8
 pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
 
-    const plugins_dir = std.fs.path.join(fizzy.app.allocator, &.{ config_folder, "plugins" }) catch return;
-    defer fizzy.app.allocator.free(plugins_dir);
+    const plugins_dir = std.fs.path.join(editor.gpa, &.{ config_folder, "plugins" }) catch return;
+    defer editor.gpa.free(plugins_dir);
 
     const ext_suffix: []const u8 = switch (builtin.os.tag) {
         .windows => ".dll",
@@ -1131,11 +1136,11 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         else => ".so",
     };
 
-    migrateFlatPluginLayout(fizzy.app.allocator, plugins_dir, ext_suffix);
+    migrateFlatPluginLayout(editor.gpa, plugins_dir, ext_suffix);
 
     // Leftover fresh-load temp copies from a previous run (see `PluginLoader.copyToFreshLoadPath`)
     // — safe to clear unconditionally here since nothing is loaded from this directory yet.
-    PluginLoader.sweepLoadTempDir(fizzy.app.allocator, plugins_dir);
+    PluginLoader.sweepLoadTempDir(editor.gpa, plugins_dir);
 
     var dir = std.Io.Dir.cwd().openDir(dvui.io, plugins_dir, .{ .iterate = true }) catch return;
     defer dir.close(dvui.io);
@@ -1159,9 +1164,9 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
             continue;
         }
 
-        const file_name = PluginLoader.pluginFilename(plugin_id, fizzy.app.allocator) catch continue;
-        defer fizzy.app.allocator.free(file_name);
-        const path = std.fs.path.join(fizzy.app.allocator, &.{ plugins_dir, plugin_id, file_name }) catch continue;
+        const file_name = PluginLoader.pluginFilename(plugin_id, editor.gpa) catch continue;
+        defer editor.gpa.free(file_name);
+        const path = std.fs.path.join(editor.gpa, &.{ plugins_dir, plugin_id, file_name }) catch continue;
 
         if (editor.host.pluginById(plugin_id) != null) {
             // A fizzy built-in (`text`/`workbench`/`image`/`markdown`) is loaded via its own
@@ -1181,19 +1186,19 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
                 const probe = PluginLoader.probeVersionInfo(path);
                 editor.recordPluginFailure(plugin_id, "id already registered by a built-in plugin", null, if (probe) |info| info.plugin_version else null, .of(path));
             }
-            fizzy.app.allocator.free(path);
+            editor.gpa.free(path);
             continue;
         }
 
         const load_start = std.Io.Clock.boot.now(dvui.io).nanoseconds;
-        const loaded = PluginLoader.loadAndRegister(&editor.host, fizzy.app.allocator, path, plugin_id, .{
-            .gpa = &fizzy.app.allocator,
+        const loaded = PluginLoader.loadAndRegister(&editor.host, editor.gpa, path, plugin_id, .{
+            .gpa = &editor.gpa,
             .arg_b = @ptrCast(&editor.host),
             .arg_c = null,
         }) catch |err| {
             dvui.log.err("user plugin '{s}' ({s}): load failed: {s} — {s}", .{ plugin_id, path, @errorName(err), pluginLoadFailureReason(err) });
             editor.recordLoadFailure(plugin_id, path, err);
-            fizzy.app.allocator.free(path);
+            editor.gpa.free(path);
             continue;
         };
 
@@ -1236,44 +1241,44 @@ fn unloadPluginLibs(editor: *Editor) void {
         // document) still had a live data-store entry. `PluginLoader.zig`'s `DynLib` doc
         // comment already says the handle "must stay open for the app's lifetime"; the process
         // exiting reclaims it for free, same tradeoff as the leaked `FileLoadJob`s below.
-        fizzy.app.allocator.free(entry.plugin_id);
-        fizzy.app.allocator.free(entry.path);
+        editor.gpa.free(entry.plugin_id);
+        editor.gpa.free(entry.path);
     }
-    editor.loaded_plugin_libs.deinit(fizzy.app.allocator);
+    editor.loaded_plugin_libs.deinit(editor.gpa);
 
     for (editor.failed_user_plugins.items) |f| {
-        fizzy.app.allocator.free(f.id);
-        fizzy.app.allocator.free(f.reason);
-        if (f.detail) |d| fizzy.app.allocator.free(d);
+        editor.gpa.free(f.id);
+        editor.gpa.free(f.reason);
+        if (f.detail) |d| editor.gpa.free(d);
     }
-    editor.failed_user_plugins.deinit(fizzy.app.allocator);
+    editor.failed_user_plugins.deinit(editor.gpa);
 
-    for (editor.disabled_plugin_ids.items) |id| fizzy.app.allocator.free(id);
-    editor.disabled_plugin_ids.deinit(fizzy.app.allocator);
+    for (editor.disabled_plugin_ids.items) |id| editor.gpa.free(id);
+    editor.disabled_plugin_ids.deinit(editor.gpa);
 
-    for (editor.undecided_plugin_ids.items) |id| fizzy.app.allocator.free(id);
-    editor.undecided_plugin_ids.deinit(fizzy.app.allocator);
+    for (editor.undecided_plugin_ids.items) |id| editor.gpa.free(id);
+    editor.undecided_plugin_ids.deinit(editor.gpa);
 
-    for (editor.auto_update_off_ids.items) |id| fizzy.app.allocator.free(id);
-    editor.auto_update_off_ids.deinit(fizzy.app.allocator);
+    for (editor.auto_update_off_ids.items) |id| editor.gpa.free(id);
+    editor.auto_update_off_ids.deinit(editor.gpa);
 
     {
         var it = editor.plugin_flags_pending.iterator();
-        while (it.next()) |e| fizzy.app.allocator.free(e.key_ptr.*);
-        editor.plugin_flags_pending.deinit(fizzy.app.allocator);
+        while (it.next()) |e| editor.gpa.free(e.key_ptr.*);
+        editor.plugin_flags_pending.deinit(editor.gpa);
     }
 
     {
         var it = editor.plugin_extensions_pending.iterator();
         while (it.next()) |e| {
-            fizzy.app.allocator.free(e.key_ptr.*);
-            SettingsPluginsZon.freeExtensions(fizzy.app.allocator, e.value_ptr.*);
+            editor.gpa.free(e.key_ptr.*);
+            SettingsPluginsZon.freeExtensions(editor.gpa, e.value_ptr.*);
         }
-        editor.plugin_extensions_pending.deinit(fizzy.app.allocator);
+        editor.plugin_extensions_pending.deinit(editor.gpa);
     }
     editor.clearExtensionOwnerCache();
 
-    editor.dvui_default_keybinds.deinit(fizzy.app.allocator);
+    editor.dvui_default_keybinds.deinit(editor.gpa);
 }
 
 // ---- runtime plugin lifecycle (store: install / enable / disable / update) ---------
@@ -1344,7 +1349,7 @@ fn isValidPluginId(id: []const u8) bool {
 /// Call once after settings load, before `loadUserPlugins`.
 fn seedPluginFlags(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     const plugins_dir = std.fs.path.join(gpa, &.{ editor.config_folder, "plugins" }) catch return;
     defer gpa.free(plugins_dir);
 
@@ -1381,7 +1386,7 @@ fn trackAutoUpdate(editor: *Editor, id: []const u8, on: bool) !void {
     if (on) {
         for (editor.auto_update_off_ids.items, 0..) |d, i| {
             if (std.mem.eql(u8, d, id)) {
-                fizzy.app.allocator.free(editor.auto_update_off_ids.orderedRemove(i));
+                editor.gpa.free(editor.auto_update_off_ids.orderedRemove(i));
                 return;
             }
         }
@@ -1389,9 +1394,9 @@ fn trackAutoUpdate(editor: *Editor, id: []const u8, on: bool) !void {
     }
     if (!editor.isPluginAutoUpdate(id)) return; // already opted out
     if (!isValidPluginId(id)) return error.InvalidPluginId;
-    const dup = try fizzy.app.allocator.dupe(u8, id);
-    errdefer fizzy.app.allocator.free(dup);
-    try editor.auto_update_off_ids.append(fizzy.app.allocator, dup);
+    const dup = try editor.gpa.dupe(u8, id);
+    errdefer editor.gpa.free(dup);
+    try editor.auto_update_off_ids.append(editor.gpa, dup);
 }
 
 /// True when `id` takes store updates — the default for every plugin, so this answers "not on the
@@ -1421,9 +1426,9 @@ pub fn setPluginAutoUpdate(editor: *Editor, id: []const u8, on: bool) !void {
 fn trackDisabledPlugin(editor: *Editor, id: []const u8) !void {
     if (editor.isPluginDisabled(id)) return;
     if (!isValidPluginId(id)) return error.InvalidPluginId;
-    const dup = try fizzy.app.allocator.dupe(u8, id);
-    errdefer fizzy.app.allocator.free(dup);
-    try editor.disabled_plugin_ids.append(fizzy.app.allocator, dup);
+    const dup = try editor.gpa.dupe(u8, id);
+    errdefer editor.gpa.free(dup);
+    try editor.disabled_plugin_ids.append(editor.gpa, dup);
 }
 
 /// True when `id` is on disk but fizzy has never been told whether to run it (no
@@ -1447,7 +1452,7 @@ pub fn undecidedPluginCount(editor: *const Editor) usize {
 /// decision the user can no longer make. Called from `reconcileDiscoveredPlugins`, which the
 /// watcher already runs for any change under `<config>/` (a deleted directory very much included).
 fn pruneMissingUndecidedPlugins(editor: *Editor, plugins_dir: []const u8) void {
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     var i: usize = editor.undecided_plugin_ids.items.len;
     while (i > 0) {
         i -= 1;
@@ -1467,9 +1472,9 @@ fn pruneMissingUndecidedPlugins(editor: *Editor, plugins_dir: []const u8) void {
 fn trackUndecidedPlugin(editor: *Editor, id: []const u8) !void {
     if (editor.isPluginUndecided(id)) return;
     if (!isValidPluginId(id)) return error.InvalidPluginId;
-    const dup = try fizzy.app.allocator.dupe(u8, id);
-    errdefer fizzy.app.allocator.free(dup);
-    try editor.undecided_plugin_ids.append(fizzy.app.allocator, dup);
+    const dup = try editor.gpa.dupe(u8, id);
+    errdefer editor.gpa.free(dup);
+    try editor.undecided_plugin_ids.append(editor.gpa, dup);
 }
 
 /// Drop `id`'s undecided status — called from every path that records an explicit decision
@@ -1478,7 +1483,7 @@ fn trackUndecidedPlugin(editor: *Editor, id: []const u8) !void {
 fn untrackUndecidedPlugin(editor: *Editor, id: []const u8) void {
     for (editor.undecided_plugin_ids.items, 0..) |d, i| {
         if (std.mem.eql(u8, d, id)) {
-            fizzy.app.allocator.free(editor.undecided_plugin_ids.orderedRemove(i));
+            editor.gpa.free(editor.undecided_plugin_ids.orderedRemove(i));
             return;
         }
     }
@@ -1488,7 +1493,7 @@ fn untrackDisabledPlugin(editor: *Editor, id: []const u8) void {
     for (editor.disabled_plugin_ids.items, 0..) |d, i| {
         if (std.mem.eql(u8, d, id)) {
             const owned = editor.disabled_plugin_ids.orderedRemove(i);
-            fizzy.app.allocator.free(owned);
+            editor.gpa.free(owned);
             return;
         }
     }
@@ -1565,7 +1570,7 @@ fn setPluginFlagsPersisted(editor: *Editor, id: []const u8, flags: PendingPlugin
         // path it validated itself; every other write to a bogus id is refused.
         if (flags.enabled != true or flags.auto_update != null) return error.InvalidPluginId;
     }
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     if (editor.plugin_flags_pending.getPtr(id)) |slot| {
         if (flags.erase) {
             slot.* = .{ .erase = true };
@@ -1628,7 +1633,7 @@ fn readPluginExtensions(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id
 }
 
 fn clearExtensionOwnerCache(editor: *Editor) void {
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     {
         var it = editor.extension_owner.iterator();
         while (it.next()) |e| {
@@ -1665,7 +1670,7 @@ fn clearExtensionOwnerCache(editor: *Editor) void {
 /// plugin's block deliberately survives in `settings.zon`, and its claim simply doesn't appear
 /// while it's gone — then comes back intact if it is reinstalled.
 pub fn rebuildExtensionOwnerCache(editor: *Editor) void {
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     editor.clearExtensionOwnerCache();
     if (comptime builtin.target.cpu.arch == .wasm32) return;
 
@@ -1720,7 +1725,7 @@ fn recordExtensionConflict(
     loser: []const u8,
     kind: ExtensionConflict.Kind,
 ) void {
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     const ext_owned = gpa.dupe(u8, ext) catch return;
     errdefer gpa.free(ext_owned);
     const loser_owned = gpa.dupe(u8, loser) catch {
@@ -1763,7 +1768,7 @@ pub fn extensionOwner(editor: *Editor, ext: []const u8) ?[]const u8 {
 /// `chosen_id` may be the fallback editor's own id ("keep Plain Text for `.foo`"): `ownsExtension`
 /// treats the fallback editor as owning anything, so that is a legal, meaningful entry.
 pub fn resolveExtensionConflict(editor: *Editor, ext: []const u8, chosen_id: []const u8) !void {
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     if (ext.len == 0) return error.InvalidExtension;
 
     const settings_path = try std.fs.path.join(gpa, &.{ editor.config_folder, "settings.zon" });
@@ -1833,7 +1838,7 @@ pub fn resolveExtensionConflict(editor: *Editor, ext: []const u8, chosen_id: []c
 /// it. Buffered rather than written per call so one Confirm covering several extensions produces
 /// a single `settings.zon` write; `resolveExtensionConflict` flushes at the end.
 fn setPluginExtensionsPersisted(editor: *Editor, id: []const u8, exts: []const []const u8) !void {
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     errdefer SettingsPluginsZon.freeExtensions(gpa, exts);
     if (editor.plugin_extensions_pending.getPtr(id)) |slot| {
         SettingsPluginsZon.freeExtensions(gpa, slot.*);
@@ -1879,7 +1884,7 @@ fn flushPluginExtensionWrites(editor: *Editor) !void {
 /// identically; there is no special-casing of builtins.
 pub fn maybeShowFileTypeDialog(editor: *Editor, id: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     const plugin = editor.host.pluginById(id) orelse return;
 
     var rows: std.ArrayListUnmanaged(Dialogs.FileTypeDefaults.Row) = .empty;
@@ -1946,7 +1951,7 @@ fn appendFileTypeDialogRow(
     ext: []const u8,
     prior: *sdk.Plugin,
 ) !void {
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     const Choice = Dialogs.FileTypeDefaults.Choice;
 
     var choices: std.ArrayListUnmanaged(Choice) = .empty;
@@ -2070,7 +2075,7 @@ pub fn staleOpenDocsForExtension(editor: *Editor, gpa: std.mem.Allocator, ext: [
 /// file-type preference must never be able to discard unsaved work; the caller tells the user
 /// how many were left alone. Returns `.{ reopened, skipped_dirty }`.
 pub fn reopenDocsUnderCurrentOwner(editor: *Editor, doc_ids: []const u64) struct { usize, usize } {
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     var reopened: usize = 0;
     var skipped: usize = 0;
     for (doc_ids) |doc_id| {
@@ -2135,11 +2140,11 @@ pub const UnloadError = error{ NotUnloadable, DirtyDocuments };
 /// registered. On success the lib is appended to `loaded_plugin_libs`.
 pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return error.NotUnloadable;
-    const path = try userPluginPath(fizzy.app.allocator, editor, id);
-    errdefer fizzy.app.allocator.free(path);
+    const path = try userPluginPath(editor.gpa, editor, id);
+    errdefer editor.gpa.free(path);
 
-    const loaded = PluginLoader.loadAndRegister(&editor.host, fizzy.app.allocator, path, id, .{
-        .gpa = &fizzy.app.allocator,
+    const loaded = PluginLoader.loadAndRegister(&editor.host, editor.gpa, path, id, .{
+        .gpa = &editor.gpa,
         .arg_b = @ptrCast(&editor.host),
         .arg_c = null,
     }) catch |err| {
@@ -2210,11 +2215,11 @@ fn cancelPluginLoadingJobs(editor: *Editor, plugin: *sdk.Plugin) void {
     // Collect this plugin's jobs up front — cleanup mutates `loading_jobs`, so we can't hold
     // the map iterator across removal.
     var owned: std.ArrayListUnmanaged(*FileLoadJob) = .empty;
-    defer owned.deinit(fizzy.app.allocator);
+    defer owned.deinit(editor.gpa);
     {
         var it = editor.loading_jobs.valueIterator();
         while (it.next()) |job_ptr| {
-            if (job_ptr.*.owner == plugin) owned.append(fizzy.app.allocator, job_ptr.*) catch {};
+            if (job_ptr.*.owner == plugin) owned.append(editor.gpa, job_ptr.*) catch {};
         }
     }
 
@@ -2263,9 +2268,9 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, force: bool) UnloadError!vo
     // Close every document this plugin owns. Collect ids first — closing mutates
     // `open_files` underneath us.
     var owned: std.ArrayListUnmanaged(u64) = .empty;
-    defer owned.deinit(fizzy.app.allocator);
+    defer owned.deinit(editor.gpa);
     for (editor.open_files.values()) |doc| {
-        if (doc.owner == plugin) owned.append(fizzy.app.allocator, doc.id) catch {};
+        if (doc.owner == plugin) owned.append(editor.gpa, doc.id) catch {};
     }
     for (owned.items) |doc_id| editor.rawCloseFileID(doc_id) catch |err|
         dvui.log.err("unloadPlugin '{s}': closing doc {d} failed: {s}", .{ id, doc_id, @errorName(err) });
@@ -2289,8 +2294,8 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, force: bool) UnloadError!vo
     // Unmap the image and free our bookkeeping for it.
     var loaded = editor.loaded_plugin_libs.orderedRemove(lib_index);
     loaded.lib.close();
-    fizzy.app.allocator.free(loaded.plugin_id);
-    fizzy.app.allocator.free(loaded.path);
+    editor.gpa.free(loaded.plugin_id);
+    editor.gpa.free(loaded.path);
 }
 
 /// Enable or disable a plugin, persisting the choice and applying it live: disabling
@@ -2357,8 +2362,8 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
     // Uninstall is the one lifecycle event that resets "we have already asked about this plugin".
     editor.clearPluginOwnershipRecord(id);
 
-    const plugin_dir = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "plugins", id });
-    defer fizzy.app.allocator.free(plugin_dir);
+    const plugin_dir = try std.fs.path.join(editor.gpa, &.{ editor.config_folder, "plugins", id });
+    defer editor.gpa.free(plugin_dir);
     std.Io.Dir.cwd().deleteTree(dvui.io, plugin_dir) catch |err|
         dvui.log.warn("uninstallPlugin '{s}': could not delete {s}: {s}", .{ id, plugin_dir, @errorName(err) });
     // A broken (failed-to-load) build can be uninstalled too; clear its failure record so the
@@ -2368,7 +2373,7 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
 }
 
 pub fn postInit(editor: *Editor) !void {
-    sdk.installRuntime(&fizzy.app.allocator, &editor.host, null);
+    sdk.installRuntime(&editor.gpa, &editor.host, null);
 
     // Fizzy commands must be registered against the Editor's *final* address — `init` returns
     // an Editor by value, so a pointer taken there would dangle the moment it's moved.
@@ -2387,29 +2392,29 @@ pub fn postInit(editor: *Editor) !void {
     // are actually shipped as dylibs right now (they keep the third-party shape purely as
     // a template/example) — so the dylib load "fails" and falls back to static on every
     // run. Not worth logging until that changes.
-    if (loadWorkbenchFromDylibEnabled()) {
-        editor.loadWorkbenchDylib(fizzy.app.root_path) catch {
+    if (loadWorkbenchFromDylibEnabled(editor.gpa)) {
+        editor.loadWorkbenchDylib(fizzy.app().root_path) catch {
             try workbench_mod.register(&editor.host);
         };
     } else {
         try workbench_mod.register(&editor.host);
     }
-    if (loadTextFromDylibEnabled()) {
-        editor.loadTextDylib(fizzy.app.root_path) catch {
+    if (loadTextFromDylibEnabled(editor.gpa)) {
+        editor.loadTextDylib(fizzy.app().root_path) catch {
             try text_mod.register(&editor.host);
         };
     } else {
         try text_mod.register(&editor.host);
     }
-    if (loadImageFromDylibEnabled()) {
-        editor.loadImageDylib(fizzy.app.root_path) catch {
+    if (loadImageFromDylibEnabled(editor.gpa)) {
+        editor.loadImageDylib(fizzy.app().root_path) catch {
             try image_mod.register(&editor.host);
         };
     } else {
         try image_mod.register(&editor.host);
     }
-    if (loadMarkdownFromDylibEnabled()) {
-        editor.loadMarkdownDylib(fizzy.app.root_path) catch {
+    if (loadMarkdownFromDylibEnabled(editor.gpa)) {
+        editor.loadMarkdownDylib(fizzy.app().root_path) catch {
             try markdown_mod.register(&editor.host);
         };
     } else {
@@ -2499,7 +2504,7 @@ pub fn postInit(editor: *Editor) !void {
     // its final heap address (see `SettingsWatcher.start`'s doc comment). Best-effort
     // throughout: fizzy must never fail to launch just because the watcher couldn't start.
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        editor.settings_watcher = SettingsWatcher.init(fizzy.app.allocator, editor.config_folder) catch |err| blk: {
+        editor.settings_watcher = SettingsWatcher.init(editor.gpa, editor.config_folder) catch |err| blk: {
             dvui.log.warn("settings watcher: failed to init ({s}); external hand-edits / dropped-in plugins won't be picked up live", .{@errorName(err)});
             break :blk null;
         };
@@ -2512,7 +2517,7 @@ pub fn postInit(editor: *Editor) !void {
         }
 
         // Open-document external-change watching (reload clean tabs; conflict dialog on save).
-        editor.document_watcher = DocumentWatcher.init(fizzy.app.allocator);
+        editor.document_watcher = DocumentWatcher.init(editor.gpa);
         if (editor.document_watcher) |*w| {
             w.start() catch |err| {
                 dvui.log.warn("document watcher: failed to start ({s}); open files won't pick up external edits live", .{@errorName(err)});
@@ -2524,7 +2529,7 @@ pub fn postInit(editor: *Editor) !void {
         // Project-wide on-disk change broadcast for plugins (`folderPathsChanged`). Only the
         // buffers are set up here; the watch itself is armed by `setProjectFolder`, which may
         // already have run — hence the catch-up call below.
-        editor.folder_watcher = FolderWatcher.init(fizzy.app.allocator) catch |err| blk: {
+        editor.folder_watcher = FolderWatcher.init(editor.gpa) catch |err| blk: {
             dvui.log.warn("folder watcher: failed to init ({s}); plugins won't be told about on-disk changes", .{@errorName(err)});
             break :blk null;
         };
@@ -2670,8 +2675,8 @@ fn fizzyLoadPluginSettingsFile(ctx: *anyopaque, id: []const u8) ?[]u8 {
     // through to here, but this vtable entry is still type-checked for every target regardless.
     if (comptime builtin.target.cpu.arch == .wasm32) return null;
     const editor = fizzyCtx(ctx);
-    const path = std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.zon" }) catch return null;
-    defer fizzy.app.allocator.free(path);
+    const path = std.fs.path.join(editor.gpa, &.{ editor.config_folder, "settings.zon" }) catch return null;
+    defer editor.gpa.free(path);
     const data = fizzy.fs.readZ(editor.host.allocator, dvui.io, path) catch return null;
     defer editor.host.allocator.free(data);
     return readPluginSettingsText(editor.host.allocator, data, id);
@@ -2848,7 +2853,7 @@ fn fizzyRefresh(ctx: *anyopaque) void {
     // Safe from any thread (see `SDLBackend.refresh`'s doc comment) — a single call reliably
     // wakes the blocked event loop and produces exactly one composited frame; see
     // `render_bridge.refresh`'s doc comment for how that was verified.
-    fizzy.app.window.backend.refresh();
+    fizzy.app().window.backend.refresh();
 }
 fn fizzyAllocUntitledPath(ctx: *anyopaque) anyerror![]u8 {
     return fizzyCtx(ctx).allocNextUntitledPath();
@@ -2888,10 +2893,12 @@ fn fizzySetPendingCloseDocId(ctx: *anyopaque, id: u64) void {
     fizzyCtx(ctx).pending_close_file_id = id;
 }
 fn fizzyQueueCloseAfterSave(ctx: *anyopaque, id: u64) anyerror!void {
-    try fizzyCtx(ctx).pending_close_after_save.put(fizzy.app.allocator, id, {});
+    const editor = fizzyCtx(ctx);
+    try fizzyCtx(ctx).pending_close_after_save.put(editor.gpa, id, {});
 }
 fn fizzyTrackQuitSaveInFlight(ctx: *anyopaque, id: u64) anyerror!void {
-    try fizzyCtx(ctx).quit_saves_in_flight.put(fizzy.app.allocator, id, {});
+    const editor = fizzyCtx(ctx);
+    try fizzyCtx(ctx).quit_saves_in_flight.put(editor.gpa, id, {});
 }
 fn fizzyResumeSaveAllQuit(ctx: *anyopaque) void {
     fizzyCtx(ctx).pending_quit_continue = true;
@@ -2903,7 +2910,7 @@ fn fizzyAbortSaveAllQuit(ctx: *anyopaque) void {
 /// Store a loaded/created document in the plugin registry and register its handle.
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
     const ptr = try owner.registerOpenDocument(doc_buf);
-    try editor.open_files.put(fizzy.app.allocator, id, .{
+    try editor.open_files.put(editor.gpa, id, .{
         .ptr = ptr,
         .owner = owner,
         .id = id,
@@ -3064,8 +3071,8 @@ pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
     const key: []const u8 = if (path_canonical)
         path
     else
-        fizzy.paths.normalize(fizzy.app.allocator, path) catch return null;
-    defer if (!path_canonical) fizzy.app.allocator.free(@constCast(key));
+        fizzy.paths.normalize(editor.gpa, path) catch return null;
+    defer if (!path_canonical) editor.gpa.free(@constCast(key));
 
     for (editor.open_files.values()) |doc| {
         const stored = editor.docPath(doc);
@@ -3077,8 +3084,8 @@ pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
         // A canonical `stored` normalizes to itself, and both comparisons above already ruled it
         // out — no need to allocate a copy just to re-compare it.
         if (fizzy.paths.isNormalizedAbsolute(stored)) continue;
-        const stored_canon = fizzy.paths.normalize(fizzy.app.allocator, stored) catch continue;
-        defer fizzy.app.allocator.free(stored_canon);
+        const stored_canon = fizzy.paths.normalize(editor.gpa, stored) catch continue;
+        defer editor.gpa.free(stored_canon);
         if (std.mem.eql(u8, stored_canon, key)) return doc;
     }
     return null;
@@ -3183,7 +3190,7 @@ fn resolveSettingsTheme(editor: *Editor) *dvui.Theme {
 pub fn applySettingsTheme(editor: *Editor) !void {
     const t = resolveSettingsTheme(editor);
     if (!std.mem.eql(u8, editor.settings.theme, t.name)) {
-        try Settings.setThemeName(&editor.settings, fizzy.app.allocator, t.name);
+        try Settings.setThemeName(&editor.settings, editor.gpa, t.name);
     }
     dvui.themeSet(t.*);
     editor.applyFontSizesFromSettings();
@@ -3191,7 +3198,7 @@ pub fn applySettingsTheme(editor: *Editor) !void {
 
 pub fn applyHoldMenuDuration(editor: *Editor) void {
     const ms = @max(@as(u32, 100), editor.settings.hold_menu_duration_ms);
-    fizzy.app.window.hold_menu_duration_ns = @as(i128, ms) * 1_000_000;
+    fizzy.app().window.hold_menu_duration_ns = @as(i128, ms) * 1_000_000;
 }
 
 pub fn currentGroupingID(editor: *Editor) u64 {
@@ -3275,7 +3282,7 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
     // Wasm: no on-disk config; `composeSettingsText` reads via `Io.Dir.cwd()` (posix.AT), which
     // doesn't exist for this target.
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
 
     var pending_settings = editor.host.takePendingPluginSettings();
     defer {
@@ -3409,7 +3416,7 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
 /// content, only detects "something changed" — this is the half that actually reads and applies.
 pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
 
     const settings_path = std.fs.path.join(gpa, &.{ editor.config_folder, "settings.zon" }) catch return;
     defer gpa.free(settings_path);
@@ -3479,7 +3486,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
 /// gets the exact same dirty-document safety guard the Plugins-tab toggle already has.
 fn reconcilePluginEnabled(editor: *Editor, settings_data: [:0]const u8) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     const plugins_dir = std.fs.path.join(gpa, &.{ editor.config_folder, "plugins" }) catch return;
     defer gpa.free(plugins_dir);
 
@@ -3534,7 +3541,7 @@ fn reconcilePluginEnabled(editor: *Editor, settings_data: [:0]const u8) void {
 /// decides whether to pick the new build up now instead of at next launch.
 pub fn reconcileChangedPluginBinaries(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
 
     // Collect first: `updatePlugin` unloads, which mutates `loaded_plugin_libs` (and frees the
     // entry's `plugin_id`, so the id has to be our own copy — the same reason
@@ -3598,7 +3605,7 @@ fn restampLoadedPlugin(editor: *Editor, id: []const u8) void {
 /// disabled is left alone: "off" is a decision, not a failure to recover from.
 pub fn reconcileFailedPluginBinaries(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
 
     // Collect first: a retry mutates `failed_user_plugins` (both on success, via
     // `clearFailedUserPlugin`, and on failure, which re-records), so the ids have to be our own
@@ -3659,7 +3666,7 @@ fn userPluginPath(gpa: std.mem.Allocator, editor: *Editor, id: []const u8) ![]u8
 /// `.on_disk` card with no way to load it.
 pub fn reconcileDiscoveredPlugins(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     const plugins_dir = std.fs.path.join(gpa, &.{ editor.config_folder, "plugins" }) catch return;
     defer gpa.free(plugins_dir);
 
@@ -3746,8 +3753,8 @@ fn saveSettingsGuarded(editor: *Editor) !void {
     if (editor.activelyDrawing())
         return;
 
-    const settings_path = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.zon" });
-    defer fizzy.app.allocator.free(settings_path);
+    const settings_path = try std.fs.path.join(editor.gpa, &.{ editor.config_folder, "settings.zon" });
+    defer editor.gpa.free(settings_path);
 
     try editor.writeMergedSettings(settings_path);
     editor.settings_dirty = false;
@@ -3772,8 +3779,8 @@ fn scheduleSaveWakeup(remaining_ns: i128, id_extra: usize) void {
 
 /// Flush to disk regardless of idle/drawing deferral — used during shutdown only.
 fn saveSettingsRaw(editor: *Editor) !void {
-    const settings_path = try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "settings.zon" });
-    defer fizzy.app.allocator.free(settings_path);
+    const settings_path = try std.fs.path.join(editor.gpa, &.{ editor.config_folder, "settings.zon" });
+    defer editor.gpa.free(settings_path);
 
     try editor.writeMergedSettings(settings_path);
     editor.settings_dirty = false;
@@ -3921,8 +3928,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     while (fizzy.backend.pollPendingDialogResult()) |result| {
         result.callback(result.files);
         if (result.files) |files| {
-            for (files) |f| fizzy.app.allocator.free(f);
-            fizzy.app.allocator.free(files);
+            for (files) |f| editor.gpa.free(f);
+            editor.gpa.free(files);
         }
     }
 
@@ -4192,7 +4199,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // sidebar can't safely touch `editor.explorer.paned` itself — it runs before this
             // frame's paned widget is allocated below — so it reports an `Action` and we dispatch
             // after the paned is in place.
-            const sidebar_action = editor.sidebar.draw() catch {
+            const sidebar_action = editor.sidebar.draw(editor) catch {
                 dvui.log.err("Failed to draw sidebar", .{});
                 return false;
             };
@@ -4209,7 +4216,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
             // Draw the infobar, but draw it at the bottom of the paned box (gravity_y = 1.0)
             {
-                editor.infobar.draw() catch {
+                editor.infobar.draw(editor) catch {
                     dvui.log.err("Failed to draw infobar", .{});
                 };
             }
@@ -4223,7 +4230,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     .handle_size_max = handle_size,
                     .distance_max = handle_dist,
                 },
-                .uncollapse_ratio = fizzy.editor.explorer_ratio,
+                .uncollapse_ratio = editor.explorer_ratio,
             }, .{
                 .expand = .both,
                 .background = false,
@@ -4243,10 +4250,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 const avail_w = editor.explorer.paned.wd.contentRect().w;
                 const start_collapsed = avail_w < Constants.min_window_size[0];
 
-                if (start_collapsed or fizzy.editor.explorer_ratio < 0.01) {
+                if (start_collapsed or editor.explorer_ratio < 0.01) {
                     editor.explorer.closed = true;
                 } else {
-                    editor.explorer.paned.animateSplit(fizzy.editor.explorer_ratio, dvui.easing.outBack);
+                    editor.explorer.paned.animateSplit(editor.explorer_ratio, dvui.easing.outBack);
                 }
             } else if (editor.explorer.paned.dragging) {
                 editor.explorer_ratio = editor.explorer.paned.split_ratio.*;
@@ -4259,7 +4266,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             if (!editor.explorer.paned.collapsed()) editor.panel_hidden_for_center = false;
 
             switch (sidebar_action) {
-                .open => editor.explorer.open(),
+                .open => editor.explorer.open(editor),
                 .close => editor.explorer.peekClose(),
                 .none => {},
             }
@@ -4297,7 +4304,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
                 // Explorer area
                 {
-                    const result = try editor.explorer.draw();
+                    const result = try editor.explorer.draw(editor);
                     if (result != .ok) {
                         return result;
                     }
@@ -4312,7 +4319,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 // when the TEMPORARY `Menu.debug_force_on_macos` toggle (View > "Show DVUI Menu
                 // (macOS)") is on, for comparing the two menu bars side by side.
                 if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
-                    const result = try Menu.draw();
+                    const result = try Menu.draw(editor);
                     if (result != .ok) {
                         return result;
                     }
@@ -4337,8 +4344,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     if (!editor.panel.paned.dragging) {
                         const show_panel = (editor.activeDoc() != null or editor.host.hasPersistentBottomView()) and !editor.panel_hidden_for_center;
                         if (show_panel) {
-                            if ((editor.panel.paned.split_ratio.* == 1.0 and !editor.panel.paned.collapsed()) and fizzy.editor.panel_ratio > 0.0) {
-                                editor.panel.paned.animateSplit(1.0 - fizzy.editor.panel_ratio, dvui.easing.outQuint);
+                            if ((editor.panel.paned.split_ratio.* == 1.0 and !editor.panel.paned.collapsed()) and editor.panel_ratio > 0.0) {
+                                editor.panel.paned.animateSplit(1.0 - editor.panel_ratio, dvui.easing.outQuint);
                             }
                         } else {
                             if (!editor.panel.paned.animating and editor.panel.paned.split_ratio.* < 1.0) {
@@ -4349,8 +4356,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                         // Dragging the handle back up is the user overriding the collapsed-layout
                         // auto-hide, so drop it rather than fighting them for the next frame.
                         editor.panel_hidden_for_center = false;
-                        fizzy.editor.panel_ratio = 1.0 - editor.panel.paned.split_ratio.*;
-                        fizzy.editor.markWindowRatiosDirty();
+                        editor.panel_ratio = 1.0 - editor.panel.paned.split_ratio.*;
+                        editor.markWindowRatiosDirty();
                     }
 
                     if (editor.panel.paned.showSecond()) {
@@ -4361,7 +4368,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                         });
                         defer vbox.deinit();
 
-                        const result = try editor.panel.draw();
+                        const result = try editor.panel.draw(editor);
                         if (result != .ok) {
                             return result;
                         }
@@ -4563,7 +4570,7 @@ pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
 }
 
 pub fn abortSaveAllQuit(editor: *Editor) void {
-    editor.quit_save_all_ids.clearAndFree(fizzy.app.allocator);
+    editor.quit_save_all_ids.clearAndFree(editor.gpa);
     editor.quit_saves_in_flight.clearRetainingCapacity();
     editor.quit_in_progress = false;
     editor.pending_close_file_id = null;
@@ -4655,7 +4662,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
             editor.abortSaveAllQuit();
             return;
         };
-        editor.quit_saves_in_flight.put(fizzy.app.allocator, id, {}) catch |err| {
+        editor.quit_saves_in_flight.put(editor.gpa, id, {}) catch |err| {
             dvui.log.err("Save all quit track: {s}", .{@errorName(err)});
             editor.abortSaveAllQuit();
             return;
@@ -4716,30 +4723,30 @@ pub fn close(app: *App, editor: *Editor) void {
 /// anything deriving a key from `editor.folder` (a language server's `rootUri`, notably) then
 /// can't disagree about how the same directory is spelled. See `fizzy.paths.normalize`.
 pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
-    const path = try fizzy.paths.normalize(fizzy.app.allocator, path_in);
-    defer fizzy.app.allocator.free(path);
+    const path = try fizzy.paths.normalize(editor.gpa, path_in);
+    defer editor.gpa.free(path);
 
     // Opening a folder makes a close queued during this frame's draw moot.
     editor.pending_folder_close = false;
 
     if (editor.folder != null) {
-        editor.ignore.deinit(fizzy.app.allocator);
+        editor.ignore.deinit(editor.gpa);
         for (editor.host.plugins.items) |plugin| plugin.onFolderClose();
         // Not freed here: this runs from menus and plugin draws, and the outgoing string may
         // still be borrowed by whoever is mid-frame. See `folder_retired`.
         editor.retireFolder();
     }
-    editor.folder = try fizzy.app.allocator.dupe(u8, path);
+    editor.folder = try editor.gpa.dupe(u8, path);
     editor.command_palette.invalidate();
-    try editor.recents.appendFolder(try fizzy.app.allocator.dupe(u8, path));
+    try editor.recents.appendFolder(try editor.gpa.dupe(u8, path));
     // The dvui menu re-reads recents every frame; the macOS submenu is retained state.
     fizzy.backend.rebuildNativeRecentFolders();
     if (editor.host.firstVisibleSidebarView()) |view| {
         editor.host.setActiveSidebarView(view.id);
     }
 
-    for (editor.host.plugins.items) |plugin| plugin.onFolderOpen(fizzy.app.allocator);
-    editor.ignore = try IgnoreRules.load(fizzy.app.allocator, path);
+    for (editor.host.plugins.items) |plugin| plugin.onFolderOpen(editor.gpa);
+    editor.ignore = try IgnoreRules.load(editor.gpa, path);
     // After `ignore` — `FolderWatcher.tick` filters through it, and arming first would let a
     // burst arrive while the rules still belong to the previous folder.
     if (editor.folder_watcher) |*w| w.setFolder(editor.folder);
@@ -4762,13 +4769,13 @@ pub fn closeProjectFolder(editor: *Editor) void {
 fn retireFolder(editor: *Editor) void {
     const folder = editor.folder orelse return;
     editor.folder = null;
-    editor.folder_retired.append(fizzy.app.allocator, folder) catch fizzy.app.allocator.free(folder);
+    editor.folder_retired.append(editor.gpa, folder) catch editor.gpa.free(folder);
 }
 
 /// Release folder strings retired by earlier frames. Called at the top of `tick`, before
 /// anything draws, which is the one point at which nothing can still be holding one.
 fn releaseRetiredFolders(editor: *Editor) void {
-    for (editor.folder_retired.items) |folder| fizzy.app.allocator.free(folder);
+    for (editor.folder_retired.items) |folder| editor.gpa.free(folder);
     editor.folder_retired.clearRetainingCapacity();
 }
 
@@ -4778,7 +4785,7 @@ fn applyPendingFolderClose(editor: *Editor) void {
     editor.pending_folder_close = false;
     if (editor.folder == null) return;
     if (editor.folder_watcher) |*w| w.setFolder(null);
-    editor.ignore.deinit(fizzy.app.allocator);
+    editor.ignore.deinit(editor.gpa);
     for (editor.host.plugins.items) |plugin| plugin.onFolderClose();
     editor.retireFolder();
 }
@@ -4825,8 +4832,8 @@ pub fn clearFileTreeTabDragDropState(editor: *Editor) void {
 /// path, and later `docFromPath` lookups all agree — otherwise `foo/./bar.zig` and `foo/bar.zig`
 /// would open as two documents. See `fizzy.paths.normalize`.
 pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
-    const path = try fizzy.paths.normalize(fizzy.app.allocator, path_in);
-    defer fizzy.app.allocator.free(path);
+    const path = try fizzy.paths.normalize(editor.gpa, path_in);
+    defer editor.gpa.free(path);
 
     // Already open? Just focus it. (`docFromPath` also collapses lexical variants, so a doc
     // opened under a pre-normalization spelling is still found.)
@@ -4855,10 +4862,10 @@ pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
 
     // Spawn a worker. The job owns the (already canonical) path string we'll key the map by.
     const io = dvui.io;
-    const job = try FileLoadJob.create(fizzy.app.allocator, path, owner, grouping);
+    const job = try FileLoadJob.create(editor.gpa, path, owner, grouping);
     errdefer job.destroy(io);
 
-    try editor.loading_jobs.put(fizzy.app.allocator, job.path, job);
+    try editor.loading_jobs.put(editor.gpa, job.path, job);
     editor.last_load_request_path = job.path;
 
     if (comptime builtin.target.cpu.arch == .wasm32) {
@@ -4888,15 +4895,15 @@ pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
 /// the document under its canonical spelling (same contract as `openFilePath`). Returns its id.
 pub fn openFileFromBytes(editor: *Editor, path_in: []u8, bytes: []const u8, grouping: u64) !u64 {
     const path = blk: {
-        defer fizzy.app.allocator.free(path_in);
-        break :blk try fizzy.paths.normalize(fizzy.app.allocator, path_in);
+        defer editor.gpa.free(path_in);
+        break :blk try fizzy.paths.normalize(editor.gpa, path_in);
     };
 
     // Freed on every exit path below except the success transfer into the plugin document
     // (loaders dupe `path`). Cleared to null after that free so a later `errdefer` can't
     // double-free if `insertOpenDoc` fails.
     var path_owned: ?[]u8 = path;
-    errdefer if (path_owned) |p| fizzy.app.allocator.free(p);
+    errdefer if (path_owned) |p| editor.gpa.free(p);
 
     if (editor.docFromPath(path)) |existing| {
         if (editor.open_files.getIndex(existing.id)) |idx| {
@@ -4909,13 +4916,13 @@ pub fn openFileFromBytes(editor: *Editor, path_in: []u8, bytes: []const u8, grou
         return error.InvalidExtension;
     };
 
-    const staging = try owner.allocDocumentBuffer(fizzy.app.allocator);
-    defer fizzy.app.allocator.free(staging.backing);
+    const staging = try owner.allocDocumentBuffer(editor.gpa);
+    defer editor.gpa.free(staging.backing);
 
     const handled = try owner.loadDocumentFromBytes(path, bytes, staging.buf.ptr);
     if (!handled) return error.InvalidFile;
 
-    fizzy.app.allocator.free(path);
+    editor.gpa.free(path);
     path_owned = null;
 
     owner.setDocumentGroupingOnBuffer(staging.buf.ptr, grouping);
@@ -4932,13 +4939,13 @@ pub fn processLoadingJobs(editor: *Editor) void {
 
     // Snapshot the job pointers because we'll be mutating the map during iteration.
     var to_remove: std.ArrayListUnmanaged(*FileLoadJob) = .empty;
-    defer to_remove.deinit(fizzy.app.allocator);
+    defer to_remove.deinit(editor.gpa);
 
     var it = editor.loading_jobs.valueIterator();
     while (it.next()) |job_ptr| {
         const job = job_ptr.*;
         if (!job.done.load(.acquire)) continue;
-        to_remove.append(fizzy.app.allocator, job) catch continue;
+        to_remove.append(editor.gpa, job) catch continue;
     }
 
     for (to_remove.items) |job| {
@@ -5186,8 +5193,8 @@ pub fn newFile(editor: *Editor, path: []const u8, grid: sdk.EditorAPI.NewDocGrid
     const pending_owner = editor.host.pending_new_document_owner;
     editor.host.pending_new_document_owner = null;
     const owner = pending_owner orelse editor.host.pluginWithCreateDocument() orelse return error.NoEditorPlugin;
-    const staging = try owner.allocDocumentBuffer(fizzy.app.allocator);
-    defer fizzy.app.allocator.free(staging.backing);
+    const staging = try owner.allocDocumentBuffer(editor.gpa);
+    defer editor.gpa.free(staging.backing);
 
     owner.createDocument(path, grid, staging.buf.ptr) catch {
         owner.deinitDocumentBuffer(staging.buf.ptr);
@@ -5216,7 +5223,7 @@ pub fn allocNextUntitledPath(editor: *Editor) ![]u8 {
             max_n = @max(max_n, 1);
         }
     }
-    return std.fmt.allocPrint(fizzy.app.allocator, "untitled-{d}", .{max_n + 1});
+    return std.fmt.allocPrint(editor.gpa, "untitled-{d}", .{max_n + 1});
 }
 
 /// Opens the New File dialog via the plugin that provides one (dispatched by `Host`); on confirm
@@ -5388,27 +5395,27 @@ const save_as_dialog_filters: [4]fizzy.backend.DialogFileFilter = .{
 
 /// Opens a Save As dialog: any filename/extension the user types ("All Files"), `.fiz` (all
 /// layers; `.pixi` also accepted for legacy), or flat `.png` / `.jpg` / `.jpeg` (visible layers composited).
-pub fn requestSaveAs(_: *Editor) void {
-    const doc = fizzy.editor.activeDoc() orelse return;
-    const def = doc.owner.documentDefaultSaveAsFilename(doc, fizzy.app.allocator) catch {
+pub fn requestSaveAs(editor: *Editor) void {
+    const doc = editor.activeDoc() orelse return;
+    const def = doc.owner.documentDefaultSaveAsFilename(doc, editor.gpa) catch {
         std.log.err("Failed to build default save-as name", .{});
         return;
     };
-    defer fizzy.app.allocator.free(def);
-    const current_file_dir: ?[]const u8 = std.fs.path.dirname(fizzy.editor.docPath(doc));
+    defer editor.gpa.free(def);
+    const current_file_dir: ?[]const u8 = std.fs.path.dirname(editor.docPath(doc));
     fizzy.backend.showSaveFileDialog(saveAsDialogCallback, &save_as_dialog_filters, def, current_file_dir);
 }
 
 /// Clears pending save-as / save-and-close state when the user dismisses a save dialog.
 pub fn cancelPendingSaveDialog(editor: *Editor) void {
     if (editor.pending_save_as_path) |p| {
-        fizzy.app.allocator.free(p);
+        editor.gpa.free(p);
         editor.pending_save_as_path = null;
     }
     if (comptime builtin.target.cpu.arch == .wasm32) {
         const WebFileIo = @import("WebFileIo.zig");
         if (WebFileIo.pending_save_filename) |p| {
-            fizzy.app.allocator.free(p);
+            editor.gpa.free(p);
             WebFileIo.pending_save_filename = null;
         }
     }
@@ -5433,17 +5440,17 @@ pub fn cancelPendingSaveDialog(editor: *Editor) void {
 /// Save dialog may invoke this from AppKit outside `Window.begin` / `end`; do not use `currentWindow` here.
 pub fn saveAsDialogCallback(paths: ?[][:0]const u8) void {
     if (paths == null) {
-        fizzy.editor.cancelPendingSaveDialog();
+        fizzy.editor().cancelPendingSaveDialog();
         return;
     }
     const p = paths.?;
     if (p.len == 0) return;
     const path0 = p[0];
     if (path0.len == 0) return;
-    if (fizzy.editor.pending_save_as_path) |old| {
-        fizzy.app.allocator.free(old);
+    if (fizzy.editor().pending_save_as_path) |old| {
+        fizzy.app().allocator.free(old);
     }
-    fizzy.editor.pending_save_as_path = fizzy.app.allocator.dupe(u8, path0[0..path0.len]) catch {
+    fizzy.editor().pending_save_as_path = fizzy.app().allocator.dupe(u8, path0[0..path0.len]) catch {
         dvui.log.err("Save As: out of memory queuing path", .{});
         return;
     };
@@ -5466,7 +5473,7 @@ pub fn processPendingSaveAs(editor: *Editor) void {
             WebFileIo.pending_save_filename = null;
         }
     }
-    defer fizzy.app.allocator.free(path);
+    defer editor.gpa.free(path);
 
     const doc = editor.activeDoc() orelse {
         editor.pending_close_file_id = null;
@@ -5513,14 +5520,14 @@ pub fn redo(editor: *Editor) !void {
     try doc.owner.redo(doc);
 }
 
-pub fn openInFileBrowser(_: *Editor, path: []const u8) !void {
+pub fn openInFileBrowser(editor: *Editor, path: []const u8) !void {
     // Darwin goes through `darwin_spawn` rather than `std.process.run`: the latter walks the
     // `environ` array captured at startup, which any `unsetenv` elsewhere in the process (SDL,
     // a plugin, a system framework) shrinks *in place* — leaving a NULL before the captured
     // length and segfaulting the whole app on the next spawn. See `darwin_spawn.zig`.
     if (builtin.os.tag == .macos) {
         // `posix_spawn` (unlike `posix_spawnp`) does not search `$PATH`, so name `open` in full.
-        const child = fizzy.core.darwin_spawn.spawn(fizzy.app.allocator, .{
+        const child = fizzy.core.darwin_spawn.spawn(editor.gpa, .{
             .argv = &.{ "/usr/bin/open", path },
             .stdin = .discard,
             .stdout = .discard,
@@ -5544,15 +5551,15 @@ pub fn openInFileBrowser(_: *Editor, path: []const u8) !void {
     // `start` is a cmd.exe builtin, not a standalone executable, so spawning it directly
     // (bypassing the shell) always fails on Windows — reveal via explorer.exe instead.
     if (builtin.os.tag == .windows) {
-        const arg = try std.fmt.allocPrint(fizzy.app.allocator, "/select,{s}", .{path});
-        defer fizzy.app.allocator.free(arg);
-        _ = std.process.run(fizzy.app.allocator, dvui.io, .{ .argv = &.{ "explorer.exe", arg } }) catch {
+        const arg = try std.fmt.allocPrint(editor.gpa, "/select,{s}", .{path});
+        defer editor.gpa.free(arg);
+        _ = std.process.run(editor.gpa, dvui.io, .{ .argv = &.{ "explorer.exe", arg } }) catch {
             dvui.log.err("Failed to open file browser", .{});
             return;
         };
         return;
     }
-    _ = std.process.run(fizzy.app.allocator, dvui.io, .{ .argv = &.{ "xdg-open", path } }) catch {
+    _ = std.process.run(editor.gpa, dvui.io, .{ .argv = &.{ "xdg-open", path } }) catch {
         dvui.log.err("Failed to open file browser", .{});
         return;
     };
@@ -5688,35 +5695,35 @@ pub fn deinit(editor: *Editor) !void {
             // — better than a use-after-free if the worker hasn't yet observed cancellation.
             _ = job_ptr;
         }
-        editor.loading_jobs.deinit(fizzy.app.allocator);
+        editor.loading_jobs.deinit(editor.gpa);
     }
 
     editor.workbench.clearFileTreeTabDragDropState();
 
     if (editor.pending_save_as_path) |p| {
-        fizzy.app.allocator.free(p);
+        editor.gpa.free(p);
         editor.pending_save_as_path = null;
     }
 
-    editor.quit_save_all_ids.deinit(fizzy.app.allocator);
-    editor.quit_saves_in_flight.deinit(fizzy.app.allocator);
-    editor.pending_close_after_save.deinit(fizzy.app.allocator);
+    editor.quit_save_all_ids.deinit(editor.gpa);
+    editor.quit_saves_in_flight.deinit(editor.gpa);
+    editor.pending_close_after_save.deinit(editor.gpa);
 
     // Recents persist via Io.Dir.cwd writes — no FS on wasm; skip persist.
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        editor.recents.save(fizzy.app.allocator, try std.fs.path.join(fizzy.app.allocator, &.{ editor.config_folder, "recents.zon" })) catch {
+        editor.recents.save(editor.gpa, try std.fs.path.join(editor.gpa, &.{ editor.config_folder, "recents.zon" })) catch {
             dvui.log.err("Failed to save recents", .{});
         };
     }
-    editor.recents.deinit(fizzy.app.allocator);
+    editor.recents.deinit(editor.gpa);
 
     if (comptime builtin.target.cpu.arch != .wasm32) try saveSettingsRaw(editor);
     saveWindowRatiosRaw(editor);
-    editor.settings.deinit(fizzy.app.allocator);
+    editor.settings.deinit(editor.gpa);
 
     editor.explorer.deinit();
-    editor.panel.deinit(fizzy.app.allocator);
-    fizzy.app.allocator.destroy(editor.panel);
+    editor.panel.deinit(editor.gpa);
+    editor.gpa.destroy(editor.panel);
 
     PluginStore.deinit();
     editor.unloadPluginLibs();
@@ -5726,21 +5733,21 @@ pub fn deinit(editor: *Editor) !void {
     // Pixel-art state is owned by the pixi plugin now: its `pluginDeinit` (run in the plugin
     // loop above) persists the project and frees its own state + packer.
 
-    editor.ignore.deinit(fizzy.app.allocator);
+    editor.ignore.deinit(editor.gpa);
 
     if (editor.keybind_conflicts) |c| {
-        fizzy.app.allocator.free(c);
+        editor.gpa.free(c);
         editor.keybind_conflicts = null;
     }
     if (editor.keybinds_overrides) |*f| {
-        f.deinit(fizzy.app.allocator);
+        f.deinit(editor.gpa);
         editor.keybinds_overrides = null;
     }
-    KeybindSettings.deinit(fizzy.app.allocator);
-    editor.keymap.deinit(fizzy.app.allocator);
+    KeybindSettings.deinit(editor.gpa);
+    editor.keymap.deinit(editor.gpa);
 
-    if (editor.folder) |folder| fizzy.app.allocator.free(folder);
+    if (editor.folder) |folder| editor.gpa.free(folder);
     editor.releaseRetiredFolders();
-    editor.folder_retired.deinit(fizzy.app.allocator);
+    editor.folder_retired.deinit(editor.gpa);
     editor.arena.deinit();
 }

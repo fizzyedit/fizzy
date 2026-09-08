@@ -36,7 +36,7 @@ pub fn deinit() void {
 /// "reached unreachable code".
 pub const Action = enum { none, open, close };
 
-pub fn draw(_: Sidebar) !Action {
+pub fn draw(_: Sidebar, editor: *Editor) !Action {
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .vertical,
         .background = false,
@@ -63,9 +63,9 @@ pub fn draw(_: Sidebar) !Action {
             .background = false,
         });
 
-        for (fizzy.editor.host.sidebar_views.items, 0..) |*view, i| {
+        for (editor.host.sidebar_views.items, 0..) |*view, i| {
             if (view.hidden or isPinned(view.id)) continue;
-            const a = try drawOption(view, i, 20);
+            const a = try drawOption(editor, view, i, 20);
             if (a != .none) ret = a;
         }
 
@@ -85,9 +85,9 @@ pub fn draw(_: Sidebar) !Action {
         });
         defer bottom.deinit();
 
-        for (fizzy.editor.host.sidebar_views.items, 0..) |*view, i| {
+        for (editor.host.sidebar_views.items, 0..) |*view, i| {
             if (view.hidden or !isPinned(view.id)) continue;
-            const a = try drawOption(view, i, 20);
+            const a = try drawOption(editor, view, i, 20);
             if (a != .none) ret = a;
         }
     }
@@ -95,8 +95,8 @@ pub fn draw(_: Sidebar) !Action {
     return ret;
 }
 
-fn drawOption(view: *const SidebarView, index: usize, size: f32) !Action {
-    const selected = fizzy.editor.host.isActiveSidebarView(view.id);
+fn drawOption(editor: *Editor, view: *const SidebarView, index: usize, size: f32) !Action {
+    const selected = editor.host.isActiveSidebarView(view.id);
     var ret: Action = .none;
 
     const theme = dvui.themeGet();
@@ -121,7 +121,7 @@ fn drawOption(view: *const SidebarView, index: usize, size: f32) !Action {
 
     // Only the store view can carry one; nothing else in the rail has a pending-decision notion.
     const undecided_count: usize = if (std.mem.eql(u8, view.id, PluginStore.view_id))
-        fizzy.editor.undecidedPluginCount()
+        editor.undecidedPluginCount()
     else
         0;
 
@@ -169,11 +169,11 @@ fn drawOption(view: *const SidebarView, index: usize, size: f32) !Action {
         // here; Editor.zig invokes `peekClose` / `open` after `editor.explorer.paned` has
         // been recreated for this frame. Doing the call directly here would dereference
         // last frame's freed paned widget and crash on wasm.
-        const explorer_visible = fizzy.editor.explorer.peek_open or !fizzy.editor.explorer.closed;
+        const explorer_visible = editor.explorer.peek_open or !editor.explorer.closed;
         if (selected and explorer_visible) {
             ret = .close;
         } else {
-            fizzy.editor.host.setActiveSidebarView(view.id);
+            editor.host.setActiveSidebarView(view.id);
             ret = .open;
         }
         dvui.refresh(null, @src(), null);

@@ -192,7 +192,7 @@ fn ensureIndex(self: *CommandPalette, editor: *Editor) void {
     const root = editor.folder orelse return;
     if (self.index_built and std.mem.eql(u8, self.index_root, root)) return;
 
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     self.freeIndex(gpa);
     if (!std.mem.eql(u8, self.index_root, root)) {
         if (self.index_root.len > 0) gpa.free(self.index_root);
@@ -210,7 +210,7 @@ fn indexDir(self: *CommandPalette, editor: *Editor, directory: []const u8, depth
     if (depth > max_index_depth or self.index.items.len >= max_index_files) return;
 
     const io = dvui.io;
-    const gpa = fizzy.app.allocator;
+    const gpa = editor.gpa;
     var dir = std.Io.Dir.cwd().openDir(io, directory, .{
         .access_sub_paths = true,
         .iterate = true,
@@ -242,7 +242,7 @@ fn indexDir(self: *CommandPalette, editor: *Editor, directory: []const u8, depth
 
 /// Invalidate the index — call when the project folder changes or the tree is known stale.
 pub fn invalidate(self: *CommandPalette) void {
-    self.freeIndex(fizzy.app.allocator);
+    self.freeIndex(fizzy.app().allocator);
     self.index_built = false;
 }
 

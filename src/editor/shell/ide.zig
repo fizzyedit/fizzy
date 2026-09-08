@@ -43,7 +43,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
 
     // Infobar is drawn early but gravity-anchored to the bottom of this column, so it spans
     // the sidebar+content width. Preserved from the legacy shell verbatim.
-    editor.infobar.draw() catch dvui.log.err("Failed to draw infobar", .{});
+    editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
 
     var side = layout_split.split(@src(), .{
         .side = .left,
@@ -82,7 +82,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     if (!side.paned.collapsed()) editor.panel_hidden_for_center = false;
 
     switch (rail_action) {
-        .open => editor.explorer.open(),
+        .open => editor.explorer.open(editor),
         .close => editor.explorer.peekClose(),
         .none => {},
     }
@@ -105,7 +105,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
 
     // macOS draws the menu natively; the in-app bar is the fallback everywhere else.
     if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
-        const r = try Menu.draw();
+        const r = try Menu.draw(editor);
         if (r != .ok) return r;
     }
 

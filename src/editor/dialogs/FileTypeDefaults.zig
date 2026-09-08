@@ -93,7 +93,7 @@ pub fn request(id: []const u8, display_name: []const u8, new_rows: []Row) void {
     if (new_rows.len == 0) return;
     if (active(dvui.currentWindow())) return;
 
-    const gpa = fizzy.app.allocator;
+    const gpa = fizzy.app().allocator;
     reset();
     plugin_id = gpa.dupe(u8, id) catch return;
     plugin_name = gpa.dupe(u8, display_name) catch {
@@ -121,7 +121,7 @@ pub fn request(id: []const u8, display_name: []const u8, new_rows: []Row) void {
 
 /// Free everything this module owns. Safe to call twice.
 fn reset() void {
-    const gpa = fizzy.app.allocator;
+    const gpa = fizzy.app().allocator;
     for (rows) |r| {
         gpa.free(r.ext);
         for (r.choices) |c| {
@@ -283,7 +283,7 @@ fn confirm() void {
     for (rows) |row| {
         if (row.selected >= row.choices.len) continue;
         const chosen = row.choices[row.selected].id;
-        fizzy.editor.resolveExtensionConflict(row.ext, chosen) catch |err|
+        fizzy.editor().resolveExtensionConflict(row.ext, chosen) catch |err|
             dvui.log.err("file types: could not assign '{s}' to '{s}': {s}", .{ row.ext, chosen, @errorName(err) });
     }
 }

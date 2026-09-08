@@ -22,10 +22,10 @@ pub const Kind = enum {
 pub fn request(default_filename: []const u8, kind: Kind) void {
     if (active(dvui.currentWindow())) return;
     if (default_name_storage) |old| {
-        fizzy.app.allocator.free(old);
+        fizzy.app().allocator.free(old);
         default_name_storage = null;
     }
-    default_name_storage = fizzy.app.allocator.dupe(u8, default_filename) catch {
+    default_name_storage = fizzy.app().allocator.dupe(u8, default_filename) catch {
         dvui.log.err("Web Save As: out of memory", .{});
         return;
     };
@@ -78,22 +78,22 @@ pub fn callAfter(id: dvui.Id, response: dvui.enums.DialogResponse) anyerror!void
     const name = dvui.dataGetSlice(null, id, "_save_as_name", []const u8) orelse "";
     defer {
         if (default_name_storage) |old| {
-            fizzy.app.allocator.free(old);
+            fizzy.app().allocator.free(old);
             default_name_storage = null;
         }
     }
 
     if (response != .ok or name.len == 0) {
         if (response == .cancel) {
-            fizzy.editor.cancelPendingSaveDialog();
+            fizzy.editor().cancelPendingSaveDialog();
         }
         return;
     }
 
-    const owned = fizzy.app.allocator.dupe(u8, name) catch {
+    const owned = fizzy.app().allocator.dupe(u8, name) catch {
         dvui.log.err("Web Save As: out of memory", .{});
         return;
     };
-    if (WebFileIo.pending_save_filename) |old| fizzy.app.allocator.free(old);
+    if (WebFileIo.pending_save_filename) |old| fizzy.app().allocator.free(old);
     WebFileIo.pending_save_filename = owned;
 }

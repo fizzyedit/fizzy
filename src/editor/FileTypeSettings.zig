@@ -72,7 +72,7 @@ fn collectRows(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayLis
     var rows: std.ArrayListUnmanaged(Row) = .empty;
     if (comptime builtin.target.cpu.arch == .wasm32) return rows;
 
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     const table_hit = fuzzy.scoreBest(&table_keywords, query, .{ .plain = true });
 
     var exts: std.StringArrayHashMapUnmanaged(void) = .empty;
@@ -182,7 +182,7 @@ pub fn draw(query: *const fuzzy.Query) void {
 }
 
 fn drawConflicts(theme: dvui.Theme) void {
-    const conflicts = fizzy.editor.extension_conflicts.items;
+    const conflicts = fizzy.editor().extension_conflicts.items;
     if (conflicts.len == 0) return;
 
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -405,7 +405,7 @@ fn drawRow(
 /// the entry to the chosen plugin *and* strips it from every other block, so picking anything
 /// here also repairs a flagged row.
 fn drawOwnerDropdown(row: Row, ri: usize) void {
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
 
     var dropdown: dvui.DropdownWidget = undefined;
     dropdown.init(@src(), .{}, .{
@@ -466,7 +466,7 @@ fn assign(editor: *fizzy.Editor, ext: []const u8, id: []const u8) void {
 /// documents behind, this offers to reopen them, and says so per row instead of hoping the user
 /// notices that the setting only applies to the next file they open.
 fn drawReopenAction(row: Row, ri: usize) void {
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     const arena = dvui.currentWindow().arena();
     const stale = editor.staleOpenDocsForExtension(arena, row.ext) catch &.{};
 

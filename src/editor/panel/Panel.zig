@@ -29,14 +29,14 @@ pub fn deinit(self: *Panel, allocator: std.mem.Allocator) void {
     self.view_groupings.deinit(allocator);
 }
 
-pub fn draw(panel: *Panel) !dvui.App.Result {
+pub fn draw(panel: *Panel, editor: *fizzy.Editor) !dvui.App.Result {
     var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
     });
     defer vbox.deinit();
 
-    const host = &fizzy.editor.host;
+    const host = &editor.host;
     if (host.bottom_views.items.len == 0) {
         PanelWorkspace.drawBackground(0);
         return .ok;
@@ -46,7 +46,7 @@ pub fn draw(panel: *Panel) !dvui.App.Result {
     try panel_layout.rebuildWorkspaces(panel, host);
 
     if (panel.workspaces.count() == 0) {
-        try panel.workspaces.put(fizzy.app.allocator, 0, PanelWorkspace.init(0));
+        try panel.workspaces.put(fizzy.app().allocator, 0, PanelWorkspace.init(0));
     }
 
     return try panel_layout.drawWorkspaces(panel, host, 0);
@@ -55,7 +55,7 @@ pub fn draw(panel: *Panel) !dvui.App.Result {
 pub fn ensureViewGroupings(self: *Panel, host: *fizzy.Editor.Host) void {
     for (host.bottom_views.items) |view| {
         if (self.view_groupings.get(view.id) == null) {
-            self.view_groupings.put(fizzy.app.allocator, view.id, 0) catch {};
+            self.view_groupings.put(fizzy.app().allocator, view.id, 0) catch {};
         }
     }
 }
@@ -68,7 +68,7 @@ pub fn setViewGrouping(self: *Panel, view_id: []const u8, grouping: u64) void {
     if (self.view_groupings.getPtr(view_id)) |g| {
         g.* = grouping;
     } else {
-        self.view_groupings.put(fizzy.app.allocator, view_id, grouping) catch {};
+        self.view_groupings.put(fizzy.app().allocator, view_id, grouping) catch {};
     }
 }
 

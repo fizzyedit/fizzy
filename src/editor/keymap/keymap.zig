@@ -3,7 +3,7 @@
 //! **Invariant: nothing under `keymap/` may import dvui.** dvui's keybind map is a
 //! `name → Keybind` lookup where `Keybind` is a single key plus modifier flags — it cannot hold
 //! a chord, and it is matched by *bind name* rather than by command, which is why today's
-//! `Keybinds.tick()` is a hardcoded if-chain wired straight to `fizzy.editor.*` calls with
+//! `Keybinds.tick()` is a hardcoded if-chain wired straight to `fizzy.editor().*` calls with
 //! nothing addressable by a config file. This module owns the real table; the dvui-facing
 //! adapter converts events in and projects single-stroke bindings back out so menus and dvui's
 //! own widgets keep working.

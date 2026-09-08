@@ -70,7 +70,7 @@ fn panelContentColor() dvui.Color {
     switch (builtin.os.tag) {
         .macos, .windows => {
             content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow()))
-                content_color.opacity(fizzy.editor.settings.content_opacity)
+                content_color.opacity(fizzy.editor().settings.content_opacity)
             else
                 content_color;
         },
@@ -330,7 +330,7 @@ fn processTabDrag(self: *PanelWorkspace, data: *dvui.WidgetData, panel: *Panel, 
                 panel.setViewGrouping(dragged_view.id, new_g);
                 var new_ws = PanelWorkspace.init(new_g);
                 new_ws.active_view_id = dragged_view.id;
-                panel.workspaces.put(fizzy.app.allocator, new_g, new_ws) catch {};
+                panel.workspaces.put(fizzy.app().allocator, new_g, new_ws) catch {};
                 panel.open_workspace_grouping = new_g;
                 host.setActiveBottomView(dragged_view.id);
             }

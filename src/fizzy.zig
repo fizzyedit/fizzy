@@ -26,9 +26,35 @@ pub const Fling = core.Fling;
 pub const Sidebar = @import("editor/Sidebar.zig");
 pub const OutputLog = @import("editor/OutputLog.zig");
 
-// Global pointers
-pub var app: *App = undefined;
-pub var editor: *Editor = undefined;
+// The process-wide App/Editor instance.
+//
+// Phase 2 of the fizzy-as-a-library work replaced the public mutable globals with accessors.
+// Editor-scoped logic now takes an explicit `*Editor` (and reaches the allocator through
+// `editor.gpa`); what remains behind these accessors is code that genuinely has no place to
+// receive one:
+//
+//   * OS / dvui callbacks invoked with no context pointer — native file-dialog callbacks
+//     (`backend_native.zig`), `Editor.saveAsDialogCallback`, `singleton_native.dispatchPath`,
+//     the update-notify install hook.
+//   * `App.zig` itself, which owns the instance.
+//
+// Threading a context through those is a separate change (each needs a userdata slot on the
+// callback), tracked as the residual of Phase 2. Everything else should take `*Editor`.
+var app_instance: *App = undefined;
+var editor_instance: *Editor = undefined;
+
+pub fn app() *App {
+    return app_instance;
+}
+
+pub fn editor() *Editor {
+    return editor_instance;
+}
+
+pub fn setInstances(a: *App, e: *Editor) void {
+    app_instance = a;
+    editor_instance = e;
+}
 
 /// Runtime platform detection (`isMacOS()` etc.) that's accurate on wasm web
 /// builds, where `builtin.os.tag` is always `.freestanding`.

@@ -77,7 +77,7 @@ var ratios: std.AutoHashMapUnmanaged(u64, f32) = .empty;
 
 fn ratioSlot(id: dvui.Id, default: f32) *f32 {
     const key: u64 = @intFromEnum(id);
-    const gop = ratios.getOrPut(fizzy.app.allocator, key) catch {
+    const gop = ratios.getOrPut(fizzy.app().allocator, key) catch {
         // Out of memory for a UI ratio is not worth failing a frame over; fall back to a
         // per-frame temporary so layout still runs.
         const tmp = struct {

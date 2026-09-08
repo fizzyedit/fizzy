@@ -1,6 +1,6 @@
 //! Fizzy keybindings: the default bind table, fizzy's own commands, and key dispatch.
 //!
-//! Keys used to be wired straight to `fizzy.editor.*` calls by a hardcoded if-chain, which meant
+//! Keys used to be wired straight to `fizzy.editor().*` calls by a hardcoded if-chain, which meant
 //! nothing was addressable by id and so nothing could be rebound. Now every fizzy action is a
 //! registered `Command`, and `tick()` resolves a key event to a command id through
 //! `keymap.Keymap` and runs it via the Host registry — the same registry plugin commands live
@@ -300,7 +300,7 @@ fn cmdCommandPalette(state: *anyopaque) anyerror!void {
 fn cmdToggleExplorer(state: *anyopaque) anyerror!void {
     const editor = editorFromState(state);
     // `.closed`, not `paned.split_ratio` — the latter is only valid during draw.
-    if (editor.explorer.closed) editor.explorer.open() else editor.explorer.close();
+    if (editor.explorer.closed) editor.explorer.open(editor) else editor.explorer.close();
     // A native menu click doesn't arrive as an SDL event, so without this nothing requests the
     // frame the paned needs to animate.
     dvui.refresh(null, @src(), dvui.currentWindow().data().id);
@@ -853,7 +853,7 @@ fn activeOwnerId(editor: *Editor) ?[]const u8 {
 // These keybinds are available regardless of the currently focused widget.
 // Any binds that need to be consumed by a specific widget do not need to trigger here.
 pub fn tick() !void {
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     // While the palette is open it owns the keyboard entirely — otherwise Escape would also run
     // `fizzy.cancel`, and a typed character could trip a single-key binding.
     if (editor.command_palette.open) return;

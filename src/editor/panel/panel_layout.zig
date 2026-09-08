@@ -19,7 +19,7 @@ pub fn rebuildWorkspaces(panel: *Panel, host: *fizzy.Editor.Host) !void {
         if (!panel.workspaces.contains(grouping)) {
             var workspace = PanelWorkspace.init(grouping);
             workspace.active_view_id = view.id;
-            try panel.workspaces.put(fizzy.app.allocator, grouping, workspace);
+            try panel.workspaces.put(fizzy.app().allocator, grouping, workspace);
         }
     }
 

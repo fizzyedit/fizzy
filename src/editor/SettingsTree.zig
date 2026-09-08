@@ -65,7 +65,7 @@ fn isOpen(key: u64) bool {
 
 fn setOpen(key: u64, open: bool) void {
     if (open) {
-        open_branches.put(fizzy.app.allocator, key, {}) catch return;
+        open_branches.put(fizzy.app().allocator, key, {}) catch return;
     } else {
         _ = open_branches.remove(key);
     }
@@ -153,7 +153,7 @@ fn lowerLeaf(_: void, a: Leaf, b: Leaf) bool {
 /// scratch every frame, which is cheap (tens of leaves) and keeps zero state to invalidate.
 fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnmanaged(Branch) {
     var roots: std.ArrayListUnmanaged(Branch) = .empty;
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
 
     // --- fizzy's own settings, one child branch per category
     var fizzy_branch: Branch = .{
@@ -271,7 +271,7 @@ pub fn draw() !void {
     // that width, never wrapped. Clamping the pane's own reported min size (`max_size_content`
     // is what `minSizeSetAndRefresh` clamps against) stops descriptions from driving the width,
     // which in turn gives them a bounded width to wrap inside.
-    const viewport_w = fizzy.editor.explorer.scroll_info.viewport.w;
+    const viewport_w = fizzy.editor().explorer.scroll_info.viewport.w;
     const right_gap: f32 = 20; // clear of the pane's right edge (scrollbar / clip)
 
     var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -564,7 +564,7 @@ fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) v
     // Plugin branch. `drawPluginIcon` is the same hook the plugin store's cards use, so a plugin
     // that ships an icon is recognisable in both places.
     const plugin_id = if (branch.schema) |s| s.owner.id else if (branch.failed) |f| f.id else "";
-    if (plugin_id.len > 0 and fizzy.editor.host.drawPluginIcon(plugin_id)) return;
+    if (plugin_id.len > 0 and fizzy.editor().host.drawPluginIcon(plugin_id)) return;
 
     // No icon of its own: fall back to the plugin's initial in the theme's *text* color, the same
     // stand-in `Host`'s plugin button uses. A generic package glyph tinted with a row *fill*

@@ -15,7 +15,7 @@ pub var mouse_distance: f32 = std.math.floatMax(f32);
 /// native/dvui menu comparison this exists for is done.
 pub var debug_force_on_macos: bool = false;
 
-pub fn draw() !dvui.App.Result {
+pub fn draw(editor: *Editor) !dvui.App.Result {
     const bg_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = false, .color_fill = dvui.themeGet().color(.control, .fill) });
     defer bg_box.deinit();
 
@@ -33,7 +33,7 @@ pub fn draw() !dvui.App.Result {
 
     // Fizzy owns only the menu bar container + theme; the top-level menus are
     // plugin (and fizzy built-in) contributions, drawn in registration order.
-    for (fizzy.editor.host.menus.items) |*menu| {
+    for (editor.host.menus.items) |*menu| {
         if (menu.hidden) continue;
         menu.draw(menu.ctx) catch |err| {
             dvui.log.err("Menu contribution failed: {any}", .{err});
@@ -50,7 +50,7 @@ pub fn draw() !dvui.App.Result {
 /// action was written out here *and* in the macOS menu path *and* as the command body in
 /// `Keybinds` — three copies that had already drifted apart.
 fn run(id: []const u8) void {
-    fizzy.editor.host.runCommand(id) catch |err| {
+    fizzy.editor().host.runCommand(id) catch |err| {
         dvui.log.err("menu command '{s}' failed: {s}", .{ id, @errorName(err) });
     };
 }
@@ -60,7 +60,7 @@ fn run(id: []const u8) void {
 /// with the macOS builder walking the same tree.
 pub fn drawModelMenu(ctx: ?*anyopaque) anyerror!void {
     const sub: *const model.Submenu = @ptrCast(@alignCast(ctx orelse return));
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
 
     // Every top-level menu (File/Edit/View/Help) is drawn through this same function at this
     // same `@src()`s, so without a differentiator dvui sees sibling widgets — the button, the
@@ -315,7 +315,7 @@ pub fn menuItemWithChevron(src: std.builtin.SourceLocation, label_str: []const u
 pub fn drawMenuSections(parent_menu_id: []const u8) !void {
     const sub = model.submenuFor(parent_menu_id) orelse return;
     var drew_separator = false;
-    for (fizzy.editor.host.menu_sections.items) |*section| {
+    for (fizzy.editor().host.menu_sections.items) |*section| {
         if (section.hidden) continue;
         if (!model.menuMatches(sub, section.parent_menu_id)) continue;
         if (!drew_separator) {

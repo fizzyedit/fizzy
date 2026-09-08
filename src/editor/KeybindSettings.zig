@@ -108,7 +108,7 @@ fn isOwnerOpen(key: u64) bool {
 
 fn setOwnerOpen(key: u64, open: bool) void {
     if (open) {
-        open_owners.put(fizzy.app.allocator, key, {}) catch {};
+        open_owners.put(fizzy.app().allocator, key, {}) catch {};
     } else {
         _ = open_owners.remove(key);
     }
@@ -120,7 +120,7 @@ fn ownerPrefix(id: []const u8) []const u8 {
 
 fn ownerLabel(owner: []const u8) []const u8 {
     if (std.mem.eql(u8, owner, "fizzy")) return "Fizzy";
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     if (editor.host.pluginById(owner)) |p| return p.display_name;
     return owner;
 }
@@ -132,7 +132,7 @@ fn collectGroups(
     query: *const fuzzy.Query,
     platform: keymap.Platform,
 ) std.ArrayListUnmanaged(Group) {
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     var groups: std.ArrayListUnmanaged(Group) = .empty;
 
     // A hit on the table's own name shows the whole list — but only as a *fallback*, applied
@@ -236,7 +236,7 @@ pub fn draw(query: *const fuzzy.Query) void {
         return;
     }
 
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     const theme = dvui.themeGet();
     const platform: keymap.Platform = if (fizzy.platform.isMacOS()) .mac else .other;
     const arena = dvui.currentWindow().arena();

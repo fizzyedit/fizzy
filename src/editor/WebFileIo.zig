@@ -31,8 +31,8 @@ pub fn downloadBytes(filename: []const u8, data: []const u8) !void {
 }
 
 pub fn downloadBytesWithExtension(filename: []const u8, ext: []const u8, data: []const u8) !void {
-    const name = try downloadNameWithExtension(fizzy.app.allocator, filename, ext);
-    defer fizzy.app.allocator.free(name);
+    const name = try downloadNameWithExtension(fizzy.app().allocator, filename, ext);
+    defer fizzy.app().allocator.free(name);
     try downloadBytes(name, data);
 }
 
@@ -44,7 +44,7 @@ pub fn showOpenFileDialog(
 ) void {
     if (comptime builtin.target.cpu.arch != .wasm32) return;
     open_callback = cb;
-    open_grouping = fizzy.editor.currentGroupingID();
+    open_grouping = fizzy.editor().currentGroupingID();
     open_picker_id = dvui.Id.extendId(null, @src(), 0);
     // No accept filter — text is the fallback owner for any extension, and other plugins
     // offer their own types via `fileTypes`.
@@ -72,13 +72,13 @@ pub fn pollOpenPicker(editor: *fizzy.Editor) void {
     open_picker_id = null;
 
     for (uploaded) |wasm_file| {
-        const bytes = wasm_file.readData(fizzy.app.allocator) catch |err| {
+        const bytes = wasm_file.readData(editor.gpa) catch |err| {
             dvui.log.err("Failed to read uploaded file {s}: {any}", .{ wasm_file.name, err });
             continue;
         };
-        defer fizzy.app.allocator.free(bytes);
+        defer editor.gpa.free(bytes);
 
-        const path_owned = fizzy.app.allocator.dupe(u8, wasm_file.name) catch continue;
+        const path_owned = editor.gpa.dupe(u8, wasm_file.name) catch continue;
         if (editor.openFileFromBytes(path_owned, bytes, open_grouping)) |doc_id| {
             if (editor.open_files.getIndex(doc_id)) |idx| {
                 editor.setActiveFile(idx);

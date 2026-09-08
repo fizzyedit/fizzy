@@ -26,7 +26,7 @@ const PendingOpen = struct { path: []u8 };
 const State = struct {
     instance: ?singleton_app.SingletonApp = null,
     /// Captured at `earlyStartup` time; used by the listener thread to
-    /// allocate queued path copies before `fizzy.app` may exist.
+    /// allocate queued path copies before `fizzy.app()` may exist.
     allocator: std.mem.Allocator = undefined,
     /// Set before dvui/SDL init so secondary instances can exit without
     /// creating a window. Same as `dvui.io` once the backend starts.
@@ -174,7 +174,7 @@ fn dispatchPath(path: []const u8) !void {
     if (std.Io.Dir.openDirAbsolute(io, path, .{})) |dir| {
         var d = dir;
         d.close(io);
-        try fizzy.editor.setProjectFolder(path);
+        try fizzy.editor().setProjectFolder(path);
         return;
     } else |_| {}
 
@@ -183,10 +183,10 @@ fn dispatchPath(path: []const u8) !void {
     // backwards-compat with pixi) marker and open that as the project
     // folder first. That way double-clicking any file inside a project
     // automatically loads the project context.
-    if (fizzy.editor.folder == null) {
+    if (fizzy.editor().folder == null) {
         if (findProjectRoot(state.allocator, path)) |root| {
             defer state.allocator.free(root);
-            fizzy.editor.setProjectFolder(root) catch |err| {
+            fizzy.editor().setProjectFolder(root) catch |err| {
                 log.warn("found project root '{s}' but failed to set: {t}", .{ root, err });
             };
         }
@@ -197,7 +197,7 @@ fn dispatchPath(path: []const u8) !void {
         return err;
     };
     file.close(io);
-    _ = try fizzy.editor.openFilePath(path, fizzy.editor.currentGroupingID());
+    _ = try fizzy.editor().openFilePath(path, fizzy.editor().currentGroupingID());
 }
 
 /// Walk upward from `file_path`'s parent directory, returning the first

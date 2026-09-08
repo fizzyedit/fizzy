@@ -29,21 +29,18 @@ const Sidebar = @import("../Sidebar.zig");
 /// a bounded scroll area with edge shadows, Windows titlebar hit-rect registration, and the
 /// undecided-plugin badge. Phase 4 rewrites its body as a true `f.matching` loop.
 pub fn iconRail(f: *Frame, keywords: []const []const u8) !Sidebar.Action {
-    _ = f;
     _ = keywords;
-    return fizzy.editor.sidebar.draw();
+    return f.editor.sidebar.draw(f.editor);
 }
 
 /// Explorer chrome + the sidebar region it wraps.
 pub fn explorerPane(f: *Frame, keywords: []const []const u8) !dvui.App.Result {
-    _ = f;
     _ = keywords;
-    return fizzy.editor.explorer.draw();
+    return f.editor.explorer.draw(f.editor);
 }
 
 /// Bottom-panel chrome (tab strip) + the bottom region it wraps.
 pub fn bottomPane(f: *Frame, keywords: []const []const u8) !dvui.App.Result {
-    _ = f;
     _ = keywords;
-    return fizzy.editor.panel.draw();
+    return f.editor.panel.draw(f.editor);
 }

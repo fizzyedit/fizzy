@@ -184,13 +184,13 @@ pub fn markDiskScanDirty() void {
 }
 
 fn freeDiskIds() void {
-    for (disk_ids.items) |id| fizzy.app.allocator.free(id);
+    for (disk_ids.items) |id| fizzy.app().allocator.free(id);
     disk_ids.clearRetainingCapacity();
 }
 
 fn clearManifestCache() void {
-    for (manifest_cache.keys()) |k| fizzy.app.allocator.free(k);
-    for (manifest_cache.values()) |v| PluginLoader.freeProbedManifest(fizzy.app.allocator, v);
+    for (manifest_cache.keys()) |k| fizzy.app().allocator.free(k);
+    for (manifest_cache.values()) |v| PluginLoader.freeProbedManifest(fizzy.app().allocator, v);
     manifest_cache.clearRetainingCapacity();
 }
 
@@ -202,8 +202,8 @@ fn refreshDiskScan() void {
     clearManifestCache();
     if (comptime builtin.target.cpu.arch == .wasm32) return;
 
-    const a = fizzy.app.allocator;
-    const plugins_dir = std.fs.path.join(a, &.{ fizzy.editor.config_folder, "plugins" }) catch return;
+    const a = fizzy.app().allocator;
+    const plugins_dir = std.fs.path.join(a, &.{ fizzy.editor().config_folder, "plugins" }) catch return;
     defer a.free(plugins_dir);
 
     var dir = std.Io.Dir.cwd().openDir(dvui.io, plugins_dir, .{ .iterate = true }) catch return;
@@ -231,7 +231,7 @@ fn isOnDisk(id: []const u8) bool {
 /// Cache `id`'s version. Overwrites an existing entry so a reload/update always reflects the
 /// latest known value.
 fn rememberVersion(id: []const u8, v: std.SemanticVersion) void {
-    const a = fizzy.app.allocator;
+    const a = fizzy.app().allocator;
     const gop = version_cache.getOrPut(a, id) catch return;
     if (gop.found_existing) {
         gop.value_ptr.* = v;
@@ -249,7 +249,7 @@ fn rememberVersion(id: []const u8, v: std.SemanticVersion) void {
 /// when the name changes (e.g. a version that renamed itself).
 fn rememberName(id: []const u8, name: []const u8) void {
     if (name.len == 0 or std.mem.eql(u8, name, id)) return;
-    const a = fizzy.app.allocator;
+    const a = fizzy.app().allocator;
     const gop = name_cache.getOrPut(a, id) catch return;
     if (gop.found_existing) {
         if (std.mem.eql(u8, gop.value_ptr.*, name)) return;
@@ -283,7 +283,7 @@ fn resolveTitle(id: []const u8, fallback: []const u8) []const u8 {
 /// session), falling back to the bare id. Used by `PluginSettingsPane` to label a disabled
 /// plugin's Enabled-toggle-only row without duplicating this cache's lookup logic.
 pub fn displayName(id: []const u8) []const u8 {
-    if (fizzy.editor.host.pluginById(id)) |p| return p.display_name;
+    if (fizzy.editor().host.pluginById(id)) |p| return p.display_name;
     return resolveTitle(id, id);
 }
 
@@ -295,8 +295,8 @@ pub fn displayName(id: []const u8) []const u8 {
 /// real name and version on its card. Cheap and bounded: only runs on first draw / Refresh, and
 /// only probes ids whose name or version we don't already know.
 fn probeOnDiskInfo() void {
-    const editor = fizzy.editor;
-    const a = fizzy.app.allocator;
+    const editor = fizzy.editor();
+    const a = fizzy.app().allocator;
     const plugins_dir = std.fs.path.join(a, &.{ editor.config_folder, "plugins" }) catch return;
     defer a.free(plugins_dir);
 
@@ -333,9 +333,9 @@ fn refreshLocalInfo() void {
 
 pub fn register(host: *sdk.Host) !void {
     const url = resolveRegistryUrl();
-    const fp_hex = try std.fmt.allocPrint(fizzy.app.allocator, "0x{x}", .{dylib.abi_fingerprint});
-    defer fizzy.app.allocator.free(fp_hex);
-    catalog = try store.Catalog.init(fizzy.app.allocator, dvui.io, url, fp_hex);
+    const fp_hex = try std.fmt.allocPrint(fizzy.app().allocator, "0x{x}", .{dylib.abi_fingerprint});
+    defer fizzy.app().allocator.free(fp_hex);
+    catalog = try store.Catalog.init(fizzy.app().allocator, dvui.io, url, fp_hex);
     try host.registerSidebarView(.{
         .id = view_id,
         .icon = dvui.entypo.shop,
@@ -357,7 +357,7 @@ pub fn register(host: *sdk.Host) !void {
 /// the workbench homepage — just stacked vertically (header/tabs/content) instead of that
 /// helper's horizontal direction, so it isn't reused directly.
 fn drawReadmeCenter(_: ?*anyopaque) anyerror!dvui.App.Result {
-    const host = &fizzy.editor.host;
+    const host = &fizzy.editor().host;
     var content_color = dvui.themeGet().color(.window, .fill);
     switch (builtin.os.tag) {
         .macos, .windows => {
@@ -486,7 +486,7 @@ fn drawDetailHeader(entry: StoreEntry) void {
         if (repoSource(entry)) |src| StoreIcon.request(entry.id, src.repo, src.subpath);
         // 60 rather than the full 64 of `logo`'s box — just enough breathing room that the
         // image doesn't touch the header's own edges, per the "less empty space" ask.
-        const drew = StoreIcon.draw(entry.id, 60) or fizzy.editor.host.drawPluginIcon(entry.id);
+        const drew = StoreIcon.draw(entry.id, 60) or fizzy.editor().host.drawPluginIcon(entry.id);
         if (!drew) {
             dvui.icon(
                 @src(),
@@ -723,12 +723,12 @@ fn drawChangelogPlaceholder() void {
 /// to whatever this returns. Owned for the process lifetime (freed in `deinit`).
 fn resolveRegistryUrl() []const u8 {
     if (comptime builtin.target.cpu.arch == .wasm32) return default_registry_url;
-    if (std.process.Environ.getAlloc(fizzy.processEnviron(), fizzy.app.allocator, "FIZZY_PLUGIN_REGISTRY_URL")) |override| {
+    if (std.process.Environ.getAlloc(fizzy.processEnviron(), fizzy.app().allocator, "FIZZY_PLUGIN_REGISTRY_URL")) |override| {
         if (override.len > 0) {
             registry_url_owned = override;
             return override;
         }
-        fizzy.app.allocator.free(override);
+        fizzy.app().allocator.free(override);
     } else |_| {}
     return default_registry_url;
 }
@@ -745,31 +745,31 @@ pub fn deinit() void {
     // `freeJob` cancels and awaits each job's download worker before freeing it, so quitting
     // mid-install can't leave a worker writing into a freed `Job` (see `Job.tasks`).
     for (jobs.values()) |job| freeJob(job);
-    jobs.deinit(fizzy.app.allocator);
+    jobs.deinit(fizzy.app().allocator);
     for (pending_actions.items) |action| switch (action) {
-        .set_enabled => |a| fizzy.app.allocator.free(a.id),
-        .set_auto_update => |a| fizzy.app.allocator.free(a.id),
-        .uninstall => |a| fizzy.app.allocator.free(a.id),
+        .set_enabled => |a| fizzy.app().allocator.free(a.id),
+        .set_auto_update => |a| fizzy.app().allocator.free(a.id),
+        .uninstall => |a| fizzy.app().allocator.free(a.id),
     };
-    pending_actions.deinit(fizzy.app.allocator);
-    for (name_cache.keys()) |k| fizzy.app.allocator.free(k);
-    for (name_cache.values()) |v| fizzy.app.allocator.free(v);
-    name_cache.deinit(fizzy.app.allocator);
-    for (version_cache.keys()) |k| fizzy.app.allocator.free(k);
-    version_cache.deinit(fizzy.app.allocator);
+    pending_actions.deinit(fizzy.app().allocator);
+    for (name_cache.keys()) |k| fizzy.app().allocator.free(k);
+    for (name_cache.values()) |v| fizzy.app().allocator.free(v);
+    name_cache.deinit(fizzy.app().allocator);
+    for (version_cache.keys()) |k| fizzy.app().allocator.free(k);
+    version_cache.deinit(fizzy.app().allocator);
 
     clearPendingUpdates();
-    pending_updates.deinit(fizzy.app.allocator);
+    pending_updates.deinit(fizzy.app().allocator);
     clearManifestCache();
-    manifest_cache.deinit(fizzy.app.allocator);
+    manifest_cache.deinit(fizzy.app().allocator);
     freeDiskIds();
-    disk_ids.deinit(fizzy.app.allocator);
+    disk_ids.deinit(fizzy.app().allocator);
     Readme.deinit();
     StoreIcon.deinit();
     if (catalog) |*c| c.deinit();
     catalog = null;
     if (registry_url_owned) |u| {
-        fizzy.app.allocator.free(u);
+        fizzy.app().allocator.free(u);
         registry_url_owned = null;
     }
 }
@@ -779,11 +779,11 @@ pub fn deinit() void {
 /// worker never started or has already finished.
 fn freeJob(job: *Job) void {
     job.tasks.cancel(dvui.io);
-    fizzy.app.allocator.free(job.id);
-    fizzy.app.allocator.free(job.url);
-    fizzy.app.allocator.free(job.sha256);
-    fizzy.app.allocator.free(job.dest);
-    fizzy.app.allocator.destroy(job);
+    fizzy.app().allocator.free(job.id);
+    fizzy.app().allocator.free(job.url);
+    fizzy.app().allocator.free(job.sha256);
+    fizzy.app().allocator.free(job.dest);
+    fizzy.app().allocator.destroy(job);
 }
 
 // ---- automatic updates -----------------------------------------------------
@@ -838,7 +838,7 @@ pub fn pendingUpdates() []PendingUpdate {
 }
 
 fn clearPendingUpdates() void {
-    const a = fizzy.app.allocator;
+    const a = fizzy.app().allocator;
     for (pending_updates.items) |u| {
         a.free(u.id);
         a.free(u.title);
@@ -859,7 +859,7 @@ pub fn dismissPendingUpdates() void {
 /// The window shows exactly the plugins that are still out of date, and closes itself once the
 /// last row goes (see `PluginUpdates.dialog`).
 fn dropPendingUpdate(id: []const u8) void {
-    const a = fizzy.app.allocator;
+    const a = fizzy.app().allocator;
     for (pending_updates.items, 0..) |u, i| {
         if (!std.mem.eql(u8, u.id, id)) continue;
         // Ordered, so the rows the user is still looking at don't reshuffle underneath them as
@@ -890,7 +890,7 @@ pub fn applyPendingUpdate(id: []const u8) void {
     // now, not by what the row said when it was built — the plugin may have been enabled or
     // disabled while the window sat open.
     startDownloadUrl(row.id, row.url, row.sha256, .{
-        .is_update = fizzy.editor.host.pluginById(id) != null,
+        .is_update = fizzy.editor().host.pluginById(id) != null,
         .quiet = true,
     });
     row.started = true;
@@ -1005,7 +1005,7 @@ fn autoUpdateTick() void {
                 const fake_dl: store.registry.Download = .{ .url = "https://127.0.0.1:9/simulated", .sha256 = "" };
                 appendPendingUpdate("pixi", "Pixi", "0.4.1", fake_dl, .{ .major = 0, .minor = 3, .patch = 9 }, false);
                 appendPendingUpdate("ghostty", "Terminal", "1.2.0", fake_dl, .{ .major = 1, .minor = 2, .patch = 0 }, true);
-                dvui.log.info("plugin updates: simulated {d} rows, mode {s}", .{ pending_updates.items.len, @tagName(fizzy.editor.settings.plugin_update_mode) });
+                dvui.log.info("plugin updates: simulated {d} rows, mode {s}", .{ pending_updates.items.len, @tagName(fizzy.editor().settings.plugin_update_mode) });
                 offerPendingUpdates();
                 auto_phase = .done;
                 return;
@@ -1058,7 +1058,7 @@ fn autoUpdateTick() void {
 /// True if any plugin on disk is a candidate for the update check at all — installed, not
 /// bundled, not disabled, and not opted out.
 fn anyUpdatableInstalled() bool {
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     for (disk_ids.items) |id| {
         if (isBundled(id)) continue;
         if (editor.isPluginDisabled(id)) continue;
@@ -1071,7 +1071,7 @@ fn anyUpdatableInstalled() bool {
 /// Build `pending_updates` from the fetched catalog: every enabled, opted-in plugin the store has
 /// a better build of for *this* host.
 fn collectPendingUpdates() void {
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     clearPendingUpdates();
     if (disk_scan_dirty) refreshDiskScan();
 
@@ -1127,7 +1127,7 @@ fn appendPendingUpdate(
     from: ?std.SemanticVersion,
     repair: bool,
 ) void {
-    const a = fizzy.app.allocator;
+    const a = fizzy.app().allocator;
     var owned: [4][]u8 = undefined;
     var taken: usize = 0;
     // One unwind path for all four strings: a partial row must free exactly what it took.
@@ -1167,7 +1167,7 @@ fn appendPendingUpdate(
 /// version upgrades of *working* plugins are worth asking about.
 fn offerPendingUpdates() void {
     if (pending_updates.items.len == 0) return;
-    switch (fizzy.editor.settings.plugin_update_mode) {
+    switch (fizzy.editor().settings.plugin_update_mode) {
         .silent => {
             for (pending_updates.items) |u| {
                 dvui.log.info("plugin updates: installing {s} {s}", .{ u.title, u.to });
@@ -1220,16 +1220,16 @@ pub fn tick() void {
     for (pending_actions.items) |action| switch (action) {
         .set_enabled => |a| {
             applySetEnabled(a.id, a.enabled);
-            fizzy.app.allocator.free(a.id);
+            fizzy.app().allocator.free(a.id);
         },
         .set_auto_update => |a| {
-            fizzy.editor.setPluginAutoUpdate(a.id, a.on) catch |err|
+            fizzy.editor().setPluginAutoUpdate(a.id, a.on) catch |err|
                 reportError("could not change auto-update for '{s}': {s}", .{ a.id, @errorName(err) });
-            fizzy.app.allocator.free(a.id);
+            fizzy.app().allocator.free(a.id);
         },
         .uninstall => |a| {
             applyUninstall(a.id);
-            fizzy.app.allocator.free(a.id);
+            fizzy.app().allocator.free(a.id);
         },
     };
     pending_actions.clearRetainingCapacity();
@@ -1261,9 +1261,9 @@ pub fn tick() void {
                 // (which threads `job.is_update` through, see `drawCardControls`) can
                 // reapply the update once the user has saved/closed.
                 const loaded = if (job.is_update)
-                    fizzy.editor.updatePlugin(job.id, false)
+                    fizzy.editor().updatePlugin(job.id, false)
                 else
-                    fizzy.editor.installAndLoadPlugin(job.id);
+                    fizzy.editor().installAndLoadPlugin(job.id);
                 loaded catch |err| {
                     // An automatic update the user never asked for reports nothing and leaves no
                     // Retry card: the new build is already sitting at `job.dest`, so a plugin held
@@ -1305,7 +1305,7 @@ pub fn tick() void {
 /// is selected, show its README in the center; otherwise restore whatever center was active when
 /// we took over. Idempotent — safe to call every frame.
 fn syncReadmeCenter() void {
-    const host = &fizzy.editor.host;
+    const host = &fizzy.editor().host;
     const want = host.isActiveSidebarView(view_id) and Readme.selectedId() != null;
     if (want and !readme_center_active) {
         saved_center = host.active_center;
@@ -1334,7 +1334,7 @@ fn toggleSelect(entry: StoreEntry) void {
     // On a collapsed (phone / narrow web) layout the detail page we just selected renders in the
     // center, hidden behind the peeked-open explorer — so get out of its way: close the peek and
     // swing the bottom panel shut. No-op on a desktop-width window (see `Editor.revealCenter`).
-    fizzy.editor.revealCenter();
+    fizzy.editor().revealCenter();
 }
 
 /// Reconstruct the `StoreEntry` for whichever plugin is currently selected in the detail center
@@ -1351,7 +1351,7 @@ fn selectedEntry(snapshot: ?store.Catalog.Snapshot) ?StoreEntry {
 /// the caller's already-acquired catalog snapshot (or null when the catalog has never loaded);
 /// this makes no locking decisions of its own.
 fn entryFor(id: []const u8, snapshot: ?store.Catalog.Snapshot) ?StoreEntry {
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     const registry = if (snapshot) |snap| snap.summary.pluginById(id) else null;
     const release = if (snapshot) |snap| snap.shard.releaseFor(id) else null;
 
@@ -1383,8 +1383,8 @@ fn probedManifestFor(id: []const u8) PluginLoader.ProbedManifest {
     if (comptime builtin.target.cpu.arch == .wasm32) return .{};
     if (manifest_cache.get(id)) |cached| return cached;
 
-    const a = fizzy.app.allocator;
-    const editor = fizzy.editor;
+    const a = fizzy.app().allocator;
+    const editor = fizzy.editor();
     const empty: PluginLoader.ProbedManifest = .{};
 
     const plugins_dir = std.fs.path.join(a, &.{ editor.config_folder, "plugins" }) catch return empty;
@@ -1412,7 +1412,7 @@ fn descriptionFor(entry: StoreEntry) ?[]const u8 {
     if (entry.registry) |r| {
         if (r.description.len > 0) return r.description;
     }
-    if (fizzy.editor.builtinManifest(entry.id)) |m| {
+    if (fizzy.editor().builtinManifest(entry.id)) |m| {
         return if (m.description.len > 0) m.description else null;
     }
     const probed = probedManifestFor(entry.id);
@@ -1425,7 +1425,7 @@ fn tagsFor(entry: StoreEntry) []const []const u8 {
     if (entry.registry) |r| {
         if (r.tags.len > 0) return r.tags;
     }
-    if (fizzy.editor.builtinManifest(entry.id)) |m| return m.tags;
+    if (fizzy.editor().builtinManifest(entry.id)) |m| return m.tags;
     return probedManifestFor(entry.id).tags;
 }
 
@@ -1436,7 +1436,7 @@ fn authorFor(entry: StoreEntry) ?[]const u8 {
     if (entry.registry) |r| {
         if (r.author.len > 0) return r.author;
     }
-    if (fizzy.editor.builtinManifest(entry.id)) |m| {
+    if (fizzy.editor().builtinManifest(entry.id)) |m| {
         return if (m.author.len > 0) m.author else null;
     }
     const probed = probedManifestFor(entry.id);
@@ -1451,7 +1451,7 @@ fn authorUrlFor(entry: StoreEntry) ?[]const u8 {
     if (entry.registry) |r| {
         if (r.author_url.len > 0) return r.author_url;
     }
-    if (fizzy.editor.builtinManifest(entry.id)) |m| {
+    if (fizzy.editor().builtinManifest(entry.id)) |m| {
         return if (m.author_url.len > 0) m.author_url else null;
     }
     const probed = probedManifestFor(entry.id);
@@ -1483,7 +1483,7 @@ fn worker(job: *Job, io: std.Io) void {
     // Whatever happens below, the result is only ever *applied* by `tick` on the UI thread, so
     // every exit path has to wake a sleeping app — see `Job.win`.
     defer dvui.refresh(job.win, @src(), null);
-    store.download.download(fizzy.app.allocator, io, job.url, job.sha256, job.dest) catch |err| {
+    store.download.download(fizzy.app().allocator, io, job.url, job.sha256, job.dest) catch |err| {
         const n = @min(@errorName(err).len, job.err_buf.len);
         @memcpy(job.err_buf[0..n], @errorName(err)[0..n]);
         job.err_len = n;
@@ -1514,7 +1514,7 @@ fn startDownloadUrl(id: []const u8, url: []const u8, sha256: []const u8, opts: D
         reportError("could not prepare download for '{s}'", .{id});
         return;
     };
-    jobs.put(fizzy.app.allocator, job.id, job) catch {
+    jobs.put(fizzy.app().allocator, job.id, job) catch {
         freeJob(job);
         return;
     };
@@ -1537,9 +1537,9 @@ pub const DownloadOptions = struct {
 };
 
 fn buildJob(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadOptions) !*Job {
-    const a = fizzy.app.allocator;
+    const a = fizzy.app().allocator;
 
-    const plugins_dir = try std.fs.path.join(a, &.{ fizzy.editor.config_folder, "plugins" });
+    const plugins_dir = try std.fs.path.join(a, &.{ fizzy.editor().config_folder, "plugins" });
     defer a.free(plugins_dir);
     const plugin_dir = try std.fs.path.join(a, &.{ plugins_dir, id });
     defer a.free(plugin_dir);
@@ -1575,7 +1575,7 @@ fn buildJob(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadO
 // ---- drawing ---------------------------------------------------------------
 
 fn installedVersion(id: []const u8) ?std.SemanticVersion {
-    for (fizzy.editor.loaded_plugin_libs.items) |loaded| {
+    for (fizzy.editor().loaded_plugin_libs.items) |loaded| {
         if (std.mem.eql(u8, loaded.plugin_id, id)) return loaded.version_info.plugin_version;
     }
     return null;
@@ -1585,7 +1585,7 @@ fn installedVersion(id: []const u8) ?std.SemanticVersion {
 /// rather than `StoreEntry`, so it surfaces even when a registry row (which takes merge precedence
 /// over the local `.failed` row, see `draw`) shadows the same id.
 fn failedInfo(id: []const u8) ?fizzy.Editor.FailedPlugin {
-    for (fizzy.editor.failed_user_plugins.items) |f| {
+    for (fizzy.editor().failed_user_plugins.items) |f| {
         if (std.mem.eql(u8, f.id, id)) return f;
     }
     return null;
@@ -1792,7 +1792,7 @@ fn draw(_: ?*anyopaque) anyerror!void {
     have_snapshot = maybe_snapshot != null;
 
     const arena = dvui.currentWindow().arena();
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
 
     // Store entries (STORE tab): one row per registry plugin, independent of local install
     // state — a pure "what does the store publish" list. See `drawStoreCard`.
@@ -2214,7 +2214,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
     const theme = dvui.themeGet();
     const selected = if (Readme.selectedId()) |sid| std.mem.eql(u8, sid, entry.id) else false;
     // Disabled plugins read as a faded card: half the surface fill opacity and half the shadow.
-    //const disabled = fizzy.editor.isPluginDisabled(entry.id);
+    //const disabled = fizzy.editor().isPluginDisabled(entry.id);
 
     // The card stays lit while the pointer is inside its own flyout. The panel overhangs the
     // card's right edge, so `ButtonWidget`'s hover goes false the instant the mouse crosses into
@@ -2260,7 +2260,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
             });
             defer logo.deinit();
             if (repoSource(entry)) |src| StoreIcon.request(entry.id, src.repo, src.subpath);
-            const drew = StoreIcon.draw(entry.id, 32) or fizzy.editor.host.drawPluginIcon(entry.id);
+            const drew = StoreIcon.draw(entry.id, 32) or fizzy.editor().host.drawPluginIcon(entry.id);
             if (!drew) {
                 dvui.icon(
                     @src(),
@@ -2571,7 +2571,7 @@ fn drawHoverToggles(entry: StoreEntry, card_r: dvui.Rect.Physical, card_hovered:
 const ToggleSize = enum { normal, compact };
 
 fn drawToggleControls(entry: StoreEntry, size: ToggleSize) void {
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     if (isBundled(entry.id)) return;
     const body = dvui.Font.theme(.body);
     const opts: dvui.Options = .{
@@ -2631,7 +2631,7 @@ fn drawDetailControls(entry: StoreEntry) void {
 /// entry behind) never shows an "installed vX" it has no business showing.
 fn isInstalled(entry: StoreEntry) bool {
     if (isBundled(entry.id)) return true;
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     if (editor.host.pluginById(entry.id) != null) return true;
     if (editor.isPluginDisabled(entry.id)) return true;
     if (entry.kind == .local or entry.kind == .disabled) return true;
@@ -2684,8 +2684,8 @@ fn infoLine(buf: []u8, entry: StoreEntry) []const u8 {
     // A build that is present but has never been run reads as installed-and-working otherwise;
     // say so, so the Load button beside it has a reason. Only for the never-decided case — a
     // plugin the user switched off deliberately doesn't need telling.
-    if (!isBundled(entry.id) and fizzy.editor.host.pluginById(entry.id) == null and
-        fizzy.editor.isPluginUndecided(entry.id))
+    if (!isBundled(entry.id) and fizzy.editor().host.pluginById(entry.id) == null and
+        fizzy.editor().isPluginUndecided(entry.id))
     {
         parts[n] = "not loaded";
         n += 1;
@@ -2891,7 +2891,7 @@ fn updateRelease(entry: StoreEntry) ?store.ShardRelease {
 ///   * protected bundled fallback (workbench/text/markdown) → no controls;
 ///   * bundled built-in → not store-manageable (no uninstall).
 fn drawCardControls(entry: StoreEntry) void {
-    const editor = fizzy.editor;
+    const editor = fizzy.editor();
     const theme = dvui.themeGet();
     const muted = theme.color(.window, .text).opacity(0.7);
 
@@ -3114,7 +3114,7 @@ fn drawHeader() !void {
         // file watcher makes, so Refresh is a manual stand-in for it on a platform (or a mount)
         // where the watcher never fired. It deliberately only *offers* a discovered build (it
         // becomes an undecided "Load" card); Refresh never loads or executes a plugin.
-        if (comptime builtin.target.cpu.arch != .wasm32) fizzy.editor.reconcileDiscoveredPlugins();
+        if (comptime builtin.target.cpu.arch != .wasm32) fizzy.editor().reconcileDiscoveredPlugins();
         refreshLocalInfo();
     }
 }
@@ -3132,8 +3132,8 @@ fn removePendingForId(id: []const u8) void {
         };
         if (matches) {
             switch (action) {
-                .set_enabled => |a| fizzy.app.allocator.free(a.id),
-                .uninstall => |a| fizzy.app.allocator.free(a.id),
+                .set_enabled => |a| fizzy.app().allocator.free(a.id),
+                .uninstall => |a| fizzy.app().allocator.free(a.id),
                 .set_auto_update => unreachable,
             }
             _ = pending_actions.orderedRemove(i);
@@ -3150,12 +3150,12 @@ fn removePendingForId(id: []const u8) void {
 /// settings-pane draw pass may itself be iterating Host registries.
 pub fn queueSetEnabled(id: []const u8, enabled: bool) void {
     removePendingForId(id);
-    const dup = fizzy.app.allocator.dupe(u8, id) catch {
+    const dup = fizzy.app().allocator.dupe(u8, id) catch {
         reportError("'{s}' could not be queued", .{id});
         return;
     };
-    pending_actions.append(fizzy.app.allocator, .{ .set_enabled = .{ .id = dup, .enabled = enabled } }) catch {
-        fizzy.app.allocator.free(dup);
+    pending_actions.append(fizzy.app().allocator, .{ .set_enabled = .{ .id = dup, .enabled = enabled } }) catch {
+        fizzy.app().allocator.free(dup);
         reportError("'{s}' could not be queued", .{id});
     };
 }
@@ -3163,37 +3163,37 @@ pub fn queueSetEnabled(id: []const u8, enabled: bool) void {
 /// Queue an auto-update opt in/out for `id`. Deliberately does **not** clear other queued actions
 /// for the same id (see `removePendingForId`) — it changes nothing about the plugin's load state.
 fn queueSetAutoUpdate(id: []const u8, on: bool) void {
-    const dup = fizzy.app.allocator.dupe(u8, id) catch {
+    const dup = fizzy.app().allocator.dupe(u8, id) catch {
         reportError("'{s}' could not be queued", .{id});
         return;
     };
-    pending_actions.append(fizzy.app.allocator, .{ .set_auto_update = .{ .id = dup, .on = on } }) catch {
-        fizzy.app.allocator.free(dup);
+    pending_actions.append(fizzy.app().allocator, .{ .set_auto_update = .{ .id = dup, .on = on } }) catch {
+        fizzy.app().allocator.free(dup);
         reportError("'{s}' could not be queued", .{id});
     };
 }
 
 fn queueUninstall(id: []const u8) void {
     removePendingForId(id);
-    const dup = fizzy.app.allocator.dupe(u8, id) catch {
+    const dup = fizzy.app().allocator.dupe(u8, id) catch {
         reportError("'{s}' could not be queued", .{id});
         return;
     };
-    pending_actions.append(fizzy.app.allocator, .{ .uninstall = .{ .id = dup } }) catch {
-        fizzy.app.allocator.free(dup);
+    pending_actions.append(fizzy.app().allocator, .{ .uninstall = .{ .id = dup } }) catch {
+        fizzy.app().allocator.free(dup);
         reportError("'{s}' could not be queued", .{id});
     };
 }
 
 fn applySetEnabled(id: []const u8, enabled: bool) void {
-    fizzy.editor.setPluginEnabled(id, enabled, false) catch |err| switch (err) {
+    fizzy.editor().setPluginEnabled(id, enabled, false) catch |err| switch (err) {
         error.DirtyDocuments => reportError("'{s}' has unsaved changes — save or close them first", .{id}),
         else => reportError("'{s}' could not be {s}: {s}", .{ id, if (enabled) "enabled" else "disabled", @errorName(err) }),
     };
 }
 
 fn applyUninstall(id: []const u8) void {
-    fizzy.editor.uninstallPlugin(id, false) catch |err| switch (err) {
+    fizzy.editor().uninstallPlugin(id, false) catch |err| switch (err) {
         error.DirtyDocuments => reportError("'{s}' has unsaved changes — save or close them first", .{id}),
         else => reportError("'{s}' could not be uninstalled: {s}", .{ id, @errorName(err) }),
     };

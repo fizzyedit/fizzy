@@ -161,7 +161,7 @@ pub fn select(self: *Frame, keywords: []const []const u8, s: Surface) void {
         }
         return;
     }
-    self.editor.shell_selection.put(fizzy.app.allocator, groupKey(keywords), s.id) catch {};
+    self.editor.shell_selection.put(fizzy.app().allocator, groupKey(keywords), s.id) catch {};
 }
 
 /// Draw one surface into the current parent, wrapped in the swap cross-fade so every region

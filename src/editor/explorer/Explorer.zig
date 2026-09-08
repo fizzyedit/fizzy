@@ -40,7 +40,7 @@ collapse_btn_anim_started: bool = false,
 
 pub fn init() Explorer {
     return .{
-        .open_branches = .init(fizzy.app.allocator),
+        .open_branches = .init(fizzy.app().allocator),
     };
 }
 
@@ -54,7 +54,7 @@ pub fn close(explorer: *Explorer) void {
     explorer.closed = true;
 }
 
-pub fn open(explorer: *Explorer) void {
+pub fn open(explorer: *Explorer, editor: *fizzy.Editor) void {
     if (explorer.paned.collapsed()) {
         // Already peeking: do nothing. The peek stays open until the floating collapse
         // button is clicked — sidebar taps don't toggle it back closed (and we no longer
@@ -63,8 +63,8 @@ pub fn open(explorer: *Explorer) void {
         return;
     }
 
-    if (fizzy.editor.explorer_ratio > 0.0) {
-        explorer.paned.animateSplit(fizzy.editor.explorer_ratio, dvui.easing.outBack);
+    if (editor.explorer_ratio > 0.0) {
+        explorer.paned.animateSplit(editor.explorer_ratio, dvui.easing.outBack);
     } else {
         explorer.paned.animateSplit(0.2, dvui.easing.outBack);
     }
@@ -85,7 +85,7 @@ pub fn peekClose(explorer: *Explorer) void {
     explorer.collapse_btn_anim_started = false;
 }
 
-pub fn draw(explorer: *Explorer) !dvui.App.Result {
+pub fn draw(explorer: *Explorer, editor: *fizzy.Editor) !dvui.App.Result {
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
@@ -95,7 +95,7 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
     explorer.rect = vbox.data().rect;
     explorer.rect_screen = vbox.data().rectScale().r;
 
-    try drawHeader(explorer);
+    try drawHeader(explorer, editor);
 
     _ = dvui.spacer(@src(), .{});
 
@@ -110,7 +110,7 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
     // a second explorer-level vertical bar on top of the pane scrollbars. Pin vertical
     // scroll to `.given` for that tab so we fill the viewport and let the panes scroll.
     const self_vert_scroll = blk: {
-        if (fizzy.editor.host.activeSidebarView()) |view| {
+        if (editor.host.activeSidebarView()) |view| {
             break :blk std.mem.eql(u8, view.id, PluginStore.view_id);
         }
         break :blk false;
@@ -130,12 +130,12 @@ pub fn draw(explorer: *Explorer) !dvui.App.Result {
     });
 
     if (comptime workbench.has_file_tree) {
-        if (!fizzy.editor.host.isActiveSidebarView(fizzy.Editor.workbench_files_view)) {
-            fizzy.editor.resetFileTreeWhenFilesHidden();
+        if (!editor.host.isActiveSidebarView(fizzy.Editor.workbench_files_view)) {
+            editor.resetFileTreeWhenFilesHidden();
         }
     }
 
-    if (fizzy.editor.host.activeSidebarView()) |view| {
+    if (editor.host.activeSidebarView()) |view| {
         try view.draw(view.ctx);
     }
 
@@ -246,8 +246,8 @@ pub fn hovered(explorer: *Explorer) bool {
     return fizzy.dvui.hovered(explorer.paned.data());
 }
 
-pub fn drawHeader(_: *Explorer) !void {
-    const view = fizzy.editor.host.activeSidebarView() orelse return;
+pub fn drawHeader(_: *Explorer, editor: *fizzy.Editor) !void {
+    const view = editor.host.activeSidebarView() orelse return;
     const header_title = std.ascii.allocUpperString(dvui.currentWindow().arena(), view.title) catch view.title;
 
     dvui.labelNoFmt(@src(), header_title, .{}, .{ .font = dvui.Font.theme(.heading) });

@@ -71,7 +71,7 @@ fn startOptions() dvui.App.StartOptions {
     var opts = start_options_base;
 
     // Create the dvui window with the *same* allocator the host hands to plugins
-    // (`fizzy.app.allocator`). Without this, dvui defaults the window to the runtime's
+    // (`fizzy.app().allocator`). Without this, dvui defaults the window to the runtime's
     // `main_init.gpa`, a different allocator instance — so `dvui.currentWindow().gpa`
     // and `host.allocator` would be distinct, and a plugin that allocated with one and
     // freed with the other would corrupt the heap. Unifying them makes every allocator a
@@ -220,23 +220,24 @@ pub fn AppInit(win: *dvui.Window) !void {
         break :path_blk dir;
     };
 
-    fizzy.app = try allocator.create(App);
-    fizzy.app.* = .{
+    const app_ptr = try allocator.create(App);
+    app_ptr.* = .{
         .allocator = allocator,
         .window = win,
         .root_path = allocator.dupeZ(u8, path) catch ".",
     };
 
-    fizzy.editor = try allocator.create(Editor);
-    fizzy.editor.* = Editor.init(fizzy.app) catch unreachable;
+    const editor_ptr = try allocator.create(Editor);
+    fizzy.setInstances(app_ptr, editor_ptr);
+    editor_ptr.* = Editor.init(app_ptr) catch unreachable;
 
     // Workbench fizzy-owned state: wire before plugin `register`.
-    workbench.runtime.setWorkbench(&fizzy.editor.workbench);
+    workbench.runtime.setWorkbench(&fizzy.editor().workbench);
 
     // Second-stage init that needs the editor at its final heap address (e.g. registering the
     // workbench-api service whose `ctx` is this pointer). This loads the built-in plugins,
     // including pixi as a generic dylib that owns its own state + atlas packer.
-    fizzy.editor.postInit() catch unreachable;
+    fizzy.editor().postInit() catch unreachable;
 
     // Hand the window to the listener thread and queue our own argv so the
     // first frame opens any files / project folder supplied on the command line.
@@ -282,10 +283,10 @@ pub fn AppInit(win: *dvui.Window) !void {
 // Run as app is shutting down before dvui.Window.deinit()
 pub fn AppDeinit(_: *dvui.Window) void {
     // Persist the current windowed frame while the window still exists. No-op off macOS.
-    fizzy.backend.saveWindowGeometry(fizzy.app.window);
+    fizzy.backend.saveWindowGeometry(fizzy.app().window);
     // `editor.deinit` runs each plugin's `deinit` first (pixi's persists its `.fizproject` and
     // frees its own state + packer while `editor.host`/folder are still live).
-    fizzy.editor.deinit() catch unreachable;
+    fizzy.editor().deinit() catch unreachable;
     // Tear down the singleton listener after the editor so any callback
     // currently in flight finishes before we free state it touches.
     singleton.deinit();
@@ -296,5 +297,5 @@ pub fn AppFrame() !dvui.App.Result {
     fizzy.hitch.frameBegin();
     defer fizzy.hitch.frameEnd();
     singleton.drainPending();
-    return try fizzy.editor.tick();
+    return try fizzy.editor().tick();
 }
