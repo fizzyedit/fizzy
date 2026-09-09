@@ -75,24 +75,39 @@ pub const ServiceEntry = struct {
 /// it. Draw with `expand = .ratio` so your artwork fits that slot at its own aspect ratio; a
 /// hard-coded size or scale makes tree rows taller than every other row, and drawing without a
 /// reserved slot (e.g. bare in a tab row) lets ratio+gravity center the icon in the whole parent.
-pub const FileIcon = struct {
-    owner: ?*Plugin = null,
-    ctx: ?*anyopaque = null,
-    draw: *const fn (ctx: ?*anyopaque, ext: []const u8, path: []const u8, color: dvui.Color) bool,
-};
-
-/// A plugin logo drawer, used by the Plugins store card and by the Settings tree's branch for
-/// this plugin. Drawers are matched by `owner.id`; when none match (plugin not loaded, or no
-/// registration), the caller falls back to a placeholder — the store's generic glyph, or the
-/// plugin's initial letter in the settings tree.
+/// A plugin-provided **painter**: fizzy reserves a rect, the painter fills it.
 ///
-/// Same sizing contract as `FileIcon`: the caller reserves the rect (32px on a store card, one
-/// row glyph in the settings tree) and your drawer fills it with `expand = .ratio`. Drawing at a
-/// fixed size means looking right in one of those two places and wrong in the other.
-pub const PluginIcon = struct {
+/// One type rather than the `FileIcon` / `PluginIcon` pair it replaces. Those differed only in
+/// what fizzy told the drawer — a file's extension, path and colour, or nothing at all — and
+/// `core.dvui.treeRowGlyph` already documented a single contract for both: "fizzy reserves the
+/// rect; the plugin draws into it with `expand = .ratio`". Two registries, two registrars and
+/// two dispatchers for one idea is the kind of accidental specialisation that makes the surface
+/// look bigger than it is.
+///
+/// The parameters are a tagged union rather than a type parameter because this crosses a dylib
+/// boundary: a generic would have to monomorphise, and the function pointer must be one
+/// concrete type on both sides.
+///
+/// Return false to decline, so the caller can fall back — the file tree to a generic glyph, the
+/// store to its placeholder, the settings tree to the plugin's initial letter.
+pub const Painter = struct {
     owner: ?*Plugin = null,
     ctx: ?*anyopaque = null,
-    draw: *const fn (ctx: ?*anyopaque) void,
+    draw: *const fn (ctx: ?*anyopaque, subject: Subject) bool,
+
+    /// What is being painted. Sizing contract is the same for every case: the caller reserves
+    /// the slot (a tree row glyph, a 32px store card, a tab row) and the painter fills it with
+    /// `expand = .ratio`. Drawing at a fixed size looks right in one place and wrong in the rest.
+    pub const Subject = union(enum) {
+        /// A file, in the tree or on a tab.
+        file: struct {
+            ext: []const u8,
+            path: []const u8,
+            color: dvui.Color,
+        },
+        /// The owning plugin's own logo, for the store card and the settings tree branch.
+        plugin_logo,
+    };
 };
 
 allocator: std.mem.Allocator,
@@ -142,10 +157,8 @@ plugins_dir: ?[]const u8 = null,
 file_row_fill_colors: std.ArrayListUnmanaged(FileRowFillColor) = .empty,
 
 /// File-tree row icon drawers (workbench asks the Host; plugins register for their file types).
-file_icons: std.ArrayListUnmanaged(FileIcon) = .empty,
+painters: std.ArrayListUnmanaged(Painter) = .empty,
 
-/// Plugin-store card logo drawers (Plugins tab asks the Host; each plugin registers one for itself).
-plugin_icons: std.ArrayListUnmanaged(PluginIcon) = .empty,
 
 /// Loaded plugins' settings schemas (`sdk.settings.Schema(...)`), drawn by fizzy's settings
 /// pane while each owner stays registered — see `settings.zig`'s "loaded-only" module doc note.
@@ -203,8 +216,8 @@ pub fn deinit(self: *Host) void {
     self.commands.deinit(self.allocator);
     self.language_support.deinit(self.allocator);
     self.file_row_fill_colors.deinit(self.allocator);
-    self.file_icons.deinit(self.allocator);
-    self.plugin_icons.deinit(self.allocator);
+    self.painters.deinit(self.allocator);
+
     self.settings_schemas.deinit(self.allocator);
     {
         var it = self.plugin_settings_pending.iterator();
@@ -602,8 +615,7 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(Command, &self.commands, plugin);
     removeOwned(LanguageSupport, &self.language_support, plugin);
     removeOwned(FileRowFillColor, &self.file_row_fill_colors, plugin);
-    removeOwned(FileIcon, &self.file_icons, plugin);
-    removeOwned(PluginIcon, &self.plugin_icons, plugin);
+    removeOwned(Painter, &self.painters, plugin);
     removeOwnedSettingsSchemas(&self.settings_schemas, plugin);
     if (self.fallback_editor == plugin) self.fallback_editor = null;
 
@@ -738,20 +750,20 @@ pub fn fileRowFillColor(self: *Host, color_index: usize) ?dvui.Color {
 ///
 /// A second caller is a plugin-author bug, not a user-facing conflict: the last registration
 /// silently wins. Deliberately an opt-in call rather than a `Plugin` field, since the concept
-/// is meaningless to every other plugin author (same shape as `registerFileIcon` below).
+/// is meaningless to every other plugin author (same shape as `registerPainter` below).
 pub fn registerFallbackEditor(self: *Host, plugin: *Plugin) void {
     self.fallback_editor = plugin;
 }
 
-pub fn registerFileIcon(self: *Host, drawer: FileIcon) !void {
-    try self.file_icons.append(self.allocator, drawer);
+pub fn registerPainter(self: *Host, drawer: Painter) !void {
+    try self.painters.append(self.allocator, drawer);
 }
 
 /// Draw the file-tree row icon for `ext`/`path`.
 ///
 /// Order (first success wins):
 /// 1. Language plugin that claims the extension (tree-sitter or preview) → that plugin's logo
-/// 2. Explicit `registerFileIcon` drawers (pixi sprites, image glyph, text code glyph, …)
+/// 2. Explicit `registerPainter` drawers (pixi sprites, image glyph, text code glyph, …)
 /// 3. Specialized document owner (offers `ext` via `fileTypes`, i.e. not the fallback editor)
 ///    → that plugin's logo
 ///
@@ -775,11 +787,11 @@ pub fn drawFileIcon(self: *Host, ext: []const u8, path: []const u8, color: dvui.
         if (self.drawPluginIcon(owner.id)) return true;
     }
 
-    for (self.file_icons.items) |drawer| {
-        if (drawer.draw(drawer.ctx, ext, path, color)) return true;
+    for (self.painters.items) |drawer| {
+        if (drawer.draw(drawer.ctx, .{ .file = .{ .ext = ext, .path = path, .color = color } })) return true;
     }
 
-    // Specialized document plugins (pixi, image, …) that didn't register a FileIcon drawer
+    // Specialized document plugins (pixi, image, …) that didn't register a Painter
     // still get their logo when they uniquely claim the extension.
     if (self.pluginForExtension(ext)) |p| {
         if (p != self.fallback_editor) {
@@ -789,9 +801,7 @@ pub fn drawFileIcon(self: *Host, ext: []const u8, path: []const u8, color: dvui.
     return false;
 }
 
-pub fn registerPluginIcon(self: *Host, drawer: PluginIcon) !void {
-    try self.plugin_icons.append(self.allocator, drawer);
-}
+
 
 /// Register `plugin`'s settings schema (see `settings.zig`'s `make(T).register`). Typically
 /// called once from a plugin's `register(host)`, after loading its persisted values.
@@ -803,11 +813,10 @@ pub fn registerSettingsSchema(self: *Host, schema: SettingsSchema) !void {
 /// plugin. Returns true if a loaded plugin drew its logo; false means the caller should draw
 /// a generic default.
 pub fn drawPluginIcon(self: *Host, plugin_id: []const u8) bool {
-    for (self.plugin_icons.items) |drawer| {
+    for (self.painters.items) |drawer| {
         const owner = drawer.owner orelse continue;
         if (!std.mem.eql(u8, owner.id, plugin_id)) continue;
-        drawer.draw(drawer.ctx);
-        return true;
+        if (drawer.draw(drawer.ctx, .plugin_logo)) return true;
     }
     return false;
 }
@@ -1646,13 +1655,10 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
             return null;
         }
     }.f;
-    const noIcon = struct {
-        fn f(_: ?*anyopaque, _: []const u8, _: []const u8, _: dvui.Color) bool {
+    const noPaint = struct {
+        fn f(_: ?*anyopaque, _: Painter.Subject) bool {
             return false;
         }
-    }.f;
-    const noPluginIcon = struct {
-        fn f(_: ?*anyopaque) void {}
     }.f;
 
     var host = Host.init(testing.allocator);
@@ -1676,8 +1682,7 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try host.registerNativeMenuItem(.{ .id = "victim.native", .parent_menu_id = "fizzy.menu.view", .owner = &plugin, .title = "V", .run = noopDraw });
     try host.registerCommand(.{ .id = "victim.cmd", .owner = &plugin, .title = "V", .run = noopRun });
     try host.registerFileRowFillColor(.{ .owner = &plugin, .color = noColor });
-    try host.registerFileIcon(.{ .owner = &plugin, .draw = noIcon });
-    try host.registerPluginIcon(.{ .owner = &plugin, .draw = noPluginIcon });
+    try host.registerPainter(.{ .owner = &plugin, .draw = noPaint });
     const empty_access: settings.Access = .{
         .getBool = struct {
             fn f(_: *anyopaque, _: usize) bool {
@@ -1767,8 +1772,7 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try testing.expectEqual(@as(usize, 0), host.native_menu_items.items.len);
     try testing.expectEqual(@as(usize, 0), host.commands.items.len);
     try testing.expectEqual(@as(usize, 0), host.file_row_fill_colors.items.len);
-    try testing.expectEqual(@as(usize, 0), host.file_icons.items.len);
-    try testing.expectEqual(@as(usize, 0), host.plugin_icons.items.len);
+    try testing.expectEqual(@as(usize, 0), host.painters.items.len);
     try testing.expectEqual(@as(usize, 0), host.settings_schemas.items.len);
     try testing.expect(host.getService("victim.svc") == null);
 

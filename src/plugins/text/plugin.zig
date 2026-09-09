@@ -99,7 +99,7 @@ pub fn register(host: *sdk.Host) !void {
     // claim set is unbounded, so it can never appear as a specialized claimant in the File
     // Types table, only as the implicit "Text (fallback)" option.
     host.registerFallbackEditor(&plugin);
-    try host.registerFileIcon(.{ .owner = &plugin, .draw = drawFileIcon });
+    try host.registerPainter(.{ .owner = &plugin, .draw = paint });
     try host.registerCommand(.{
         .id = sdk.Plugin.commandId("text", "copy"),
         .owner = &plugin,
@@ -177,7 +177,13 @@ fn isTextIconExt(ext: []const u8) bool {
     return false;
 }
 
-fn drawFileIcon(_: ?*anyopaque, ext: []const u8, _: []const u8, color: dvui.Color) bool {
+fn paint(_: ?*anyopaque, subject: sdk.Host.Painter.Subject) bool {
+    const file = switch (subject) {
+        .file => |f| f,
+        .plugin_logo => return false,
+    };
+    const ext = file.ext;
+    const color = file.color;
     if (!isTextIconExt(ext)) return false;
     // `expand = .ratio` fits the glyph to the fixed slot the file tree reserved for it — see
     // `Host.FileIcon`. Sizing it here instead would make text rows a different height to every

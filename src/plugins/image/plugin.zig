@@ -66,7 +66,7 @@ pub fn register(host: *sdk.Host) !void {
     plugin.state = @ptrCast(st);
 
     try host.registerPlugin(&plugin);
-    try host.registerFileIcon(.{ .owner = &plugin, .draw = drawFileIcon });
+    try host.registerPainter(.{ .owner = &plugin, .draw = paint });
 }
 
 pub fn pluginPtr() *sdk.Plugin {
@@ -95,7 +95,13 @@ fn fileTypes(_: *anyopaque) []const []const u8 {
     return &flat_image_extensions;
 }
 
-fn drawFileIcon(_: ?*anyopaque, ext: []const u8, _: []const u8, color: dvui.Color) bool {
+fn paint(_: ?*anyopaque, subject: sdk.Host.Painter.Subject) bool {
+    const file = switch (subject) {
+        .file => |f| f,
+        .plugin_logo => return false,
+    };
+    const ext = file.ext;
+    const color = file.color;
     if (!isFlatImageExtension(ext)) return false;
     // `expand = .ratio` fits the glyph to the fixed slot the file tree reserved for it — see
     // `Host.FileIcon`.
