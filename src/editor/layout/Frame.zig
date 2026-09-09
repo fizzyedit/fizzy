@@ -190,7 +190,7 @@ pub fn drawSelected(self: *Frame, keywords: []const []const u8) !dvui.App.Result
 //
 // The test this has to pass is that a shape never writes mechanism. Before it existed,
 // `ide.zig` reached `dock.paned.dragging`, called `animateSplit`, read `split_ratio.*`, kept
-// `editor.panel_ratio` in sync by hand and published `editor.panel.paned` so other code could
+// `editor.panel_ratio` in sync by hand and published `editor.panes.paned` so other code could
 // find it — none of which an app author should know about, and all of which only worked because
 // fizzy's own shape happens to have a panel.
 

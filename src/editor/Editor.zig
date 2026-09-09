@@ -109,7 +109,7 @@ const FolderWatcher = @import("FolderWatcher.zig");
 pub const Workspace = workbench_mod.Workspace;
 pub const Explorer = @import("explorer/Explorer.zig");
 pub const IgnoreRules = @import("explorer/IgnoreRules.zig");
-pub const Panel = @import("panel/Panel.zig");
+pub const PaneGroup = @import("layout/panes/PaneGroup.zig");
 pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
@@ -146,7 +146,7 @@ surface_keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .emp
 /// The bottom split the app's layout established **this frame**, or null if it drew none.
 ///
 /// `drawWorkspaces` — the host API the workbench plugin calls — needs the shell's panel
-/// animation state so a workspace can coordinate with it. It used to read `editor.panel.paned`
+/// animation state so a workspace can coordinate with it. It used to read `editor.panes.paned`
 /// behind an `if (bottom_views.len > 0)` guard, which was really a proxy for "the shell drew a
 /// panel paned". That proxy is false in any app that hosts bottom surfaces but lays them out
 /// differently (or not at all) — `layout/minimal.zig` segfaulted on exactly this. The layout now
@@ -269,7 +269,7 @@ settings: Settings = undefined,
 recents: Recents = undefined,
 
 explorer: *Explorer,
-panel: *Panel,
+panes: *PaneGroup,
 
 last_titlebar_color: dvui.Color,
 
@@ -569,7 +569,7 @@ pub fn init(
         .config_folder = config_folder,
         .palette_folder = palette_folder,
         .explorer = try app.allocator.create(Explorer),
-        .panel = try app.allocator.create(Panel),
+        .panes = try app.allocator.create(PaneGroup),
         .sidebar = try .init(),
         .infobar = try .init(),
         .arena = .init(std.heap.page_allocator),
@@ -777,7 +777,7 @@ pub fn init(
     fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) editor.settings.window_opacity_dark else editor.settings.window_opacity_light));
 
     editor.explorer.* = .init();
-    editor.panel.* = .init();
+    editor.panes.* = .init();
     editor.open_files = .empty;
     try editor.workbench.initDefaultWorkspace();
 
@@ -2388,7 +2388,7 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, force: bool) UnloadError!vo
     editor.host.unregisterPlugin(plugin);
     // The bottom panel borrows `BottomView.id` slices (grouping keys, per-split active tab)
     // that live in the image we're about to unmap — drop them while they're still readable.
-    editor.panel.forgetUnregisteredViews(&editor.host);
+    editor.panes.forgetUnregisteredSurfaces(&editor.host);
     fizzy.backend.rebuildDynamicNativeMenus();
     plugin.deinit();
 
@@ -4460,7 +4460,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 defer workspace_vbox.deinit();
 
                 if (editor.host.bottom_views.items.len > 0) {
-                    editor.panel.paned = fizzy.dvui.paned(@src(), .{
+                    editor.panes.paned = fizzy.dvui.paned(@src(), .{
                         .direction = .vertical,
                         .collapsed_size = Constants.min_window_size[1] + 1,
                         .handle_size = handle_size,
@@ -4470,36 +4470,36 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                         .expand = .both,
                         .background = false,
                     });
-                    defer editor.panel.paned.deinit();
+                    defer editor.panes.paned.deinit();
                     // The legacy shell registers its raw paned the same way a shape's `split`
                     // does, so `splitFor` works identically under both shells.
                     editor.registerSplit(.{
-                        .paned = editor.panel.paned,
+                        .paned = editor.panes.paned,
                         .side = .bottom,
                         .ratio_store = &editor.panel_ratio,
                         .keywords = sdk.keywords.ide.panel,
                     });
 
-                    if (!editor.panel.paned.dragging) {
+                    if (!editor.panes.paned.dragging) {
                         const show_panel = (editor.activeDoc() != null or editor.host.hasPersistentBottomView()) and !editor.panel_hidden_for_center;
                         if (show_panel) {
-                            if ((editor.panel.paned.split_ratio.* == 1.0 and !editor.panel.paned.collapsed()) and editor.panel_ratio > 0.0) {
-                                editor.panel.paned.animateSplit(1.0 - editor.panel_ratio, dvui.easing.outQuint);
+                            if ((editor.panes.paned.split_ratio.* == 1.0 and !editor.panes.paned.collapsed()) and editor.panel_ratio > 0.0) {
+                                editor.panes.paned.animateSplit(1.0 - editor.panel_ratio, dvui.easing.outQuint);
                             }
                         } else {
-                            if (!editor.panel.paned.animating and editor.panel.paned.split_ratio.* < 1.0) {
-                                editor.panel.paned.animateSplit(1.0, dvui.easing.outQuint);
+                            if (!editor.panes.paned.animating and editor.panes.paned.split_ratio.* < 1.0) {
+                                editor.panes.paned.animateSplit(1.0, dvui.easing.outQuint);
                             }
                         }
                     } else {
                         // Dragging the handle back up is the user overriding the collapsed-layout
                         // auto-hide, so drop it rather than fighting them for the next frame.
                         editor.panel_hidden_for_center = false;
-                        editor.panel_ratio = 1.0 - editor.panel.paned.split_ratio.*;
+                        editor.panel_ratio = 1.0 - editor.panes.paned.split_ratio.*;
                         editor.markWindowRatiosDirty();
                     }
 
-                    if (editor.panel.paned.showSecond()) {
+                    if (editor.panes.paned.showSecond()) {
                         const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
                             .expand = .both,
                             .background = false,
@@ -4507,13 +4507,13 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                         });
                         defer vbox.deinit();
 
-                        const result = try editor.panel.draw(editor, &legacy_frame, sdk.keywords.ide.panel);
+                        const result = try editor.panes.draw(editor, &legacy_frame, sdk.keywords.ide.panel);
                         if (result != .ok) {
                             return result;
                         }
                     }
 
-                    if (editor.panel.paned.showFirst()) {
+                    if (editor.panes.paned.showFirst()) {
                         const result = try drawActiveCenter(editor);
                         if (result != .ok) {
                             return result;
@@ -5977,8 +5977,8 @@ pub fn deinit(editor: *Editor) !void {
     editor.settings.deinit(editor.gpa);
 
     editor.explorer.deinit();
-    editor.panel.deinit(editor.gpa);
-    editor.gpa.destroy(editor.panel);
+    editor.panes.deinit(editor.gpa);
+    editor.gpa.destroy(editor.panes);
 
     PluginStore.deinit();
     editor.unloadPluginLibs();

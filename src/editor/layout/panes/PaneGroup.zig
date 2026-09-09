@@ -1,13 +1,13 @@
 const std = @import("std");
 
 const dvui = @import("dvui");
-const fizzy = @import("../../fizzy.zig");
+const fizzy = @import("../../../fizzy.zig");
 
-const panel_layout = @import("panel_layout.zig");
-const PanelWorkspace = @import("PanelWorkspace.zig");
+const pane_layout = @import("pane_layout.zig");
+const Pane = @import("Pane.zig");
 
-pub const Panel = @This();
-const Frame = @import("../layout/Frame.zig");
+pub const PaneGroup = @This();
+const Frame = @import("../Frame.zig");
 
 paned: *fizzy.dvui.PanedWidget = undefined,
 scroll_info: dvui.ScrollInfo = .{
@@ -15,17 +15,17 @@ scroll_info: dvui.ScrollInfo = .{
 },
 
 /// Bottom-panel splits keyed by tab-grouping id (mirrors workbench workspaces).
-workspaces: std.AutoArrayHashMapUnmanaged(u64, PanelWorkspace) = .empty,
-open_workspace_grouping: u64 = 0,
+workspaces: std.AutoArrayHashMapUnmanaged(u64, Pane) = .empty,
+open_pane: u64 = 0,
 grouping_id_counter: u64 = 0,
 /// Which split each registered bottom view belongs to (`view.id` -> grouping).
 view_groupings: std.StringArrayHashMapUnmanaged(u64) = .empty,
 
-pub fn init() Panel {
+pub fn init() PaneGroup {
     return .{};
 }
 
-pub fn deinit(self: *Panel, allocator: std.mem.Allocator) void {
+pub fn deinit(self: *PaneGroup, allocator: std.mem.Allocator) void {
     self.workspaces.deinit(allocator);
     self.view_groupings.deinit(allocator);
 }
@@ -40,7 +40,7 @@ pub fn surfaces(f: *Frame, keywords: []const []const u8) []const *Frame.Surface 
     return f.matching(keywords);
 }
 
-pub fn draw(panel: *Panel, editor: *fizzy.Editor, f: *Frame, keywords: []const []const u8) !dvui.App.Result {
+pub fn draw(panel: *PaneGroup, editor: *fizzy.Editor, f: *Frame, keywords: []const []const u8) !dvui.App.Result {
     var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
@@ -49,21 +49,21 @@ pub fn draw(panel: *Panel, editor: *fizzy.Editor, f: *Frame, keywords: []const [
 
     const host = &editor.host;
     if (surfaces(f, keywords).len == 0) {
-        PanelWorkspace.drawBackground(0);
+        Pane.drawBackground(0);
         return .ok;
     }
 
-    panel.ensureViewGroupings(f, keywords);
-    try panel_layout.rebuildWorkspaces(panel, f, keywords);
+    panel.ensurePanes(f, keywords);
+    try pane_layout.rebuildWorkspaces(panel, f, keywords);
 
     if (panel.workspaces.count() == 0) {
-        try panel.workspaces.put(fizzy.app().allocator, 0, PanelWorkspace.init(0));
+        try panel.workspaces.put(fizzy.app().allocator, 0, Pane.init(0));
     }
 
-    return try panel_layout.drawWorkspaces(panel, host, f, keywords, 0);
+    return try pane_layout.drawWorkspaces(panel, host, f, keywords, 0);
 }
 
-pub fn ensureViewGroupings(self: *Panel, f: *Frame, keywords: []const []const u8) void {
+pub fn ensurePanes(self: *PaneGroup, f: *Frame, keywords: []const []const u8) void {
     for (surfaces(f, keywords)) |view| {
         if (self.view_groupings.get(view.id) == null) {
             self.view_groupings.put(fizzy.app().allocator, view.id, 0) catch {};
@@ -71,11 +71,11 @@ pub fn ensureViewGroupings(self: *Panel, f: *Frame, keywords: []const []const u8
     }
 }
 
-pub fn viewGrouping(self: *Panel, view_id: []const u8) u64 {
+pub fn paneOf(self: *PaneGroup, view_id: []const u8) u64 {
     return self.view_groupings.get(view_id) orelse 0;
 }
 
-pub fn setViewGrouping(self: *Panel, view_id: []const u8, grouping: u64) void {
+pub fn setViewGrouping(self: *PaneGroup, view_id: []const u8, grouping: u64) void {
     if (self.view_groupings.getPtr(view_id)) |g| {
         g.* = grouping;
     } else {
@@ -83,12 +83,12 @@ pub fn setViewGrouping(self: *Panel, view_id: []const u8, grouping: u64) void {
     }
 }
 
-pub fn newGroupingID(self: *Panel) u64 {
+pub fn newPaneId(self: *PaneGroup) u64 {
     self.grouping_id_counter += 1;
     return self.grouping_id_counter;
 }
 
-pub fn viewIndex(self: *Panel, f: *Frame, keywords: []const []const u8, view_id: []const u8) ?usize {
+pub fn viewIndex(self: *PaneGroup, f: *Frame, keywords: []const []const u8, view_id: []const u8) ?usize {
     _ = self;
     for (surfaces(f, keywords), 0..) |view, i| {
         if (std.mem.eql(u8, view.id, view_id)) return i;
@@ -107,7 +107,7 @@ pub fn viewIndex(self: *Panel, f: *Frame, keywords: []const []const u8, view_id:
 /// Call *after* `Host.unregisterPlugin` (so the doomed views are already out of
 /// `bottom_views`) and *before* `dlclose` (so these slices are still readable) — the same
 /// ordering contract `unregisterPlugin` documents for the active-selection ids.
-pub fn forgetUnregisteredViews(self: *Panel, host: *fizzy.Editor.Host) void {
+pub fn forgetUnregisteredSurfaces(self: *PaneGroup, host: *fizzy.Editor.Host) void {
     // Checks the registry, not a Frame: this runs after `unregisterPlugin` and outside a frame,
     // so there is no live match set to consult. `surfaceById` is the frame-free equivalent —
     // an unregistered plugin's surfaces are removed by `removeOwned` at the same moment its
@@ -127,17 +127,17 @@ pub fn forgetUnregisteredViews(self: *Panel, host: *fizzy.Editor.Host) void {
     }
 }
 
-pub fn activeViewInGrouping(self: *Panel, f: *Frame, keywords: []const []const u8, grouping: u64) ?*Frame.Surface {
+pub fn activeSurfaceIn(self: *PaneGroup, f: *Frame, keywords: []const []const u8, grouping: u64) ?*Frame.Surface {
     const workspace = self.workspaces.get(grouping) orelse return null;
     if (workspace.active_view_id) |active_id| {
         for (surfaces(f, keywords)) |view| {
-            if (std.mem.eql(u8, view.id, active_id) and self.viewGrouping(view.id) == grouping) {
+            if (std.mem.eql(u8, view.id, active_id) and self.paneOf(view.id) == grouping) {
                 return view;
             }
         }
     }
     for (surfaces(f, keywords)) |view| {
-        if (self.viewGrouping(view.id) == grouping) return view;
+        if (self.paneOf(view.id) == grouping) return view;
     }
     return null;
 }
@@ -147,7 +147,7 @@ pub fn activeViewInGrouping(self: *Panel, f: *Frame, keywords: []const []const u
 /// Tab order is the match order, and a match set is filtered — so the indices a drag produces
 /// are positions within *this region's* matches, not positions in `host.surfaces`. Translating
 /// through ids is what keeps a reorder correct when some surfaces match a different region.
-pub fn swapBottomViews(_: *Panel, host: *fizzy.Editor.Host, f: *Frame, keywords: []const []const u8, a: usize, b: usize) void {
+pub fn swapSurfaces(_: *PaneGroup, host: *fizzy.Editor.Host, f: *Frame, keywords: []const []const u8, a: usize, b: usize) void {
     const list = surfaces(f, keywords);
     if (a >= list.len or b >= list.len or a == b) return;
     host.swapSurfaces(list[a].id, list[b].id);

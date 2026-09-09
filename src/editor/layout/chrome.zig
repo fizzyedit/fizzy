@@ -112,5 +112,5 @@ pub fn explorerPane(f: *Frame, keywords: []const []const u8) !dvui.App.Result {
 
 /// Bottom-panel chrome (tab strip) + the bottom region it wraps.
 pub fn bottomPane(f: *Frame, keywords: []const []const u8) !dvui.App.Result {
-    return f.editor.panel.draw(f.editor, f, keywords);
+    return f.editor.panes.draw(f.editor, f, keywords);
 }

@@ -1,22 +1,22 @@
 //! Bottom-panel workspace map maintenance + recursive split drawing.
 const std = @import("std");
 const dvui = @import("dvui");
-const fizzy = @import("../../fizzy.zig");
+const fizzy = @import("../../../fizzy.zig");
 
-const Panel = @import("Panel.zig");
-const Frame = @import("../layout/Frame.zig");
-const PanelWorkspace = @import("PanelWorkspace.zig");
+const PaneGroup = @import("PaneGroup.zig");
+const Frame = @import("../Frame.zig");
+const Pane = @import("Pane.zig");
 
 const handle_size = 10;
 const handle_dist = 60;
 
-pub fn rebuildWorkspaces(panel: *Panel, f: *Frame, keywords: []const []const u8) !void {
-    panel.ensureViewGroupings(f, keywords);
+pub fn rebuildWorkspaces(panel: *PaneGroup, f: *Frame, keywords: []const []const u8) !void {
+    panel.ensurePanes(f, keywords);
 
-    for (Panel.surfaces(f, keywords)) |view| {
-        const grouping = panel.viewGrouping(view.id);
+    for (PaneGroup.surfaces(f, keywords)) |view| {
+        const grouping = panel.paneOf(view.id);
         if (!panel.workspaces.contains(grouping)) {
-            var workspace = PanelWorkspace.init(grouping);
+            var workspace = Pane.init(grouping);
             workspace.active_view_id = view.id;
             try panel.workspaces.put(fizzy.app().allocator, grouping, workspace);
         }
@@ -26,18 +26,18 @@ pub fn rebuildWorkspaces(panel: *Panel, f: *Frame, keywords: []const []const u8)
         if (panel.workspaces.count() == 1) break;
 
         var contains = false;
-        for (Panel.surfaces(f, keywords)) |v| {
-            if (panel.viewGrouping(v.id) == workspace.grouping) {
+        for (PaneGroup.surfaces(f, keywords)) |v| {
+            if (panel.paneOf(v.id) == workspace.grouping) {
                 contains = true;
                 break;
             }
         }
 
         if (!contains) {
-            if (panel.open_workspace_grouping == workspace.grouping) {
+            if (panel.open_pane == workspace.grouping) {
                 for (panel.workspaces.values()) |*w| {
                     if (w.grouping != workspace.grouping) {
-                        panel.open_workspace_grouping = w.grouping;
+                        panel.open_pane = w.grouping;
                         break;
                     }
                 }
@@ -48,11 +48,11 @@ pub fn rebuildWorkspaces(panel: *Panel, f: *Frame, keywords: []const []const u8)
     }
 
     for (panel.workspaces.values()) |*workspace| {
-        if (panel.activeViewInGrouping(f, keywords, workspace.grouping)) |active| {
-            if (panel.viewGrouping(active.id) == workspace.grouping) continue;
+        if (panel.activeSurfaceIn(f, keywords, workspace.grouping)) |active| {
+            if (panel.paneOf(active.id) == workspace.grouping) continue;
         }
-        for (Panel.surfaces(f, keywords)) |v| {
-            if (panel.viewGrouping(v.id) == workspace.grouping) {
+        for (PaneGroup.surfaces(f, keywords)) |v| {
+            if (panel.paneOf(v.id) == workspace.grouping) {
                 workspace.active_view_id = v.id;
                 break;
             }
@@ -61,7 +61,7 @@ pub fn rebuildWorkspaces(panel: *Panel, f: *Frame, keywords: []const []const u8)
 }
 
 pub fn drawWorkspaces(
-    panel: *Panel,
+    panel: *PaneGroup,
     host: *fizzy.Editor.Host,
     f: *Frame,
     keywords: []const []const u8,
