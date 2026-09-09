@@ -329,6 +329,12 @@ pub fn docFromPath(self: *Host, path: []const u8) ?DocHandle {
 
 /// Open `path` if needed and put the caret at `line`/`character`. Host state — a plugin doing
 /// goto-definition needs no workbench service for this. Returns false when nothing can open it.
+/// The split governing the region matching `kw` — ratio, collapsed, mid-drag — or null when
+/// this app's layout declared no such split.
+pub fn splitState(self: *Host, kw: []const []const u8) ?EditorAPI.SplitState {
+    return if (self.fizzy_api) |a| a.splitState(kw) else null;
+}
+
 pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
     return if (self.fizzy_api) |a| a.revealPosition(path, line, character, open_side) else false;
 }

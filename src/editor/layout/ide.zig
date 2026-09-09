@@ -5,7 +5,7 @@
 //! cannot be written here, the design is wrong (plan, Phase 1).
 //!
 //! **Use it, or copy it.** Following dvui's methodology for widgets: fizzy ships a handful of
-//! shapes, and an app either uses one directly — `-Dshell=ide` gives you the general IDE shape
+//! shapes, and an app either uses one directly — `-Dlayout=ide` gives you the general IDE shape
 //! with no layout code of your own — or copies this function into its own source and edits it to
 //! add, remove or rearrange regions. There is nothing privileged in here: it is ordinary code
 //! over the public `Frame` API, which is exactly what makes copying it a reasonable thing to do
@@ -15,8 +15,8 @@
 //! resizable bottom panel, and everything left over is the main area.
 //!
 //! The main area goes through `f.region` — the real test of the generalized cross-fade. The
-//! sidebar and bottom go through `widgets.*`, because fizzy wraps those regions in app chrome
-//! that Phase 4 splits apart; see the finding recorded in `widgets.zig`.
+//! sidebar and bottom go through `chrome.*`, because fizzy wraps those regions in app chrome
+//! that Phase 4 splits apart; see the finding recorded in `chrome.zig`.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -25,7 +25,7 @@ const sdk = fizzy.sdk;
 
 const Frame = @import("Frame.zig");
 const layout_split = @import("split.zig");
-const widgets = @import("widgets.zig");
+const chrome = @import("chrome.zig");
 const Menu = @import("../Menu.zig");
 const Constants = @import("../Constants.zig");
 
@@ -50,7 +50,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     // The icon rail: a chooser for the sidebar region, drawn in its own fixed strip because it
     // sits *beside* the region it chooses for rather than above it. That is why choosers are
     // widgets an app places, not a property of a region.
-    const rail_action = try widgets.iconRail(f, sidebar);
+    const rail_action = try chrome.iconRail(f, sidebar);
 
     var explorer_col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
     defer explorer_col.deinit();

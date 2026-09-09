@@ -113,7 +113,7 @@ pub const Panel = @import("panel/Panel.zig");
 pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
-const shell = @import("shell/shell.zig");
+const layout = @import("layout/layout.zig");
 const AppInfo = @import("../AppInfo.zig");
 pub const FileLoadJob = workbench_mod.FileLoadJob;
 
@@ -135,8 +135,8 @@ arena: std.heap.ArenaAllocator,
 /// Shell (new-layout) selection state: keyword-group hash -> selected surface id.
 /// Surface ids are registry-owned string literals, so this stores no allocations of its own.
 /// Keyed by group rather than by region so two regions written with the same keywords share a
-/// selection with no wiring between them (see `shell/Frame.zig`).
-shell_selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
+/// selection with no wiring between them (see `layout/Frame.zig`).
+layout_selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 
 /// Per-surface keyword overrides from `settings.zon` (`.plugins.<id>.surfaces.<sid>.keywords`).
 /// The user's answer wins over the plugin's declared defaults, which is what makes a wrong
@@ -149,7 +149,7 @@ surface_keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .emp
 /// animation state so a workspace can coordinate with it. It used to read `editor.panel.paned`
 /// behind an `if (bottom_views.len > 0)` guard, which was really a proxy for "the shell drew a
 /// panel paned". That proxy is false in any app that hosts bottom surfaces but lays them out
-/// differently (or not at all) — `shell/minimal.zig` segfaulted on exactly this. The shell now
+/// differently (or not at all) — `layout/minimal.zig` segfaulted on exactly this. The layout now
 /// states the fact instead of the plugin inferring it.
 /// The splits the app's layout established **this frame**, addressable by the keywords their
 /// docked half shows.
@@ -160,7 +160,7 @@ surface_keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .emp
 /// region animating") asks by keyword instead, so it keeps working in a shape that has neither.
 ///
 /// Frame-scoped: cleared at the top of every frame and repopulated by whichever layout runs.
-shell_splits: std.ArrayListUnmanaged(ShellSplit) = .empty,
+layout_splits: std.ArrayListUnmanaged(RegisteredSplit) = .empty,
 
 /// Persisted size for each named region, as a fraction of its parent.
 ///
@@ -1470,7 +1470,7 @@ fn warnUndrawableOverrides(editor: *Editor) void {
         const kws = entry.value_ptr.*;
 
         var targets_bottom = false;
-        for (kws) |k| for (shell.Frame.bottom_keywords) |b| {
+        for (kws) |k| for (layout.Frame.bottom_keywords) |b| {
             if (std.ascii.eqlIgnoreCase(k, b)) targets_bottom = true;
         };
         if (!targets_bottom) continue;
@@ -2726,6 +2726,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .openFilePath = fizzyOpenFilePath,
     .openOrFocusFileAtGrouping = fizzyOpenOrFocusFileAtGrouping,
     .revealPosition = fizzyRevealPosition,
+    .splitState = fizzySplitState,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
     .closeProjectFolder = fizzyCloseProjectFolder,
@@ -4320,28 +4321,28 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
 
         // Every frame starts with no bottom split; whichever layout runs states whether it
-        // established one. See `shell_bottom_split`.
-        editor.shell_splits.clearRetainingCapacity();
+        // established one. See `layout_splits`.
+        editor.layout_splits.clearRetainingCapacity();
         editor.pollPendingReveals();
 
-        if (build_opts.new_shell) {
-            // Experimental region-based shell (plan Phase 1). Both shells are compiled in;
-            // `-Dnew-shell` picks this one so the two can be diffed live.
+        if (build_opts.region_layout) {
+            // Experimental region-based layout. Both are compiled in; `-Dregion-layout`
+            // picks this one so the two can be diffed live.
             // Frame lifecycle and housekeeping belong to the framework, not to a shape: every
             // layout needed these five calls verbatim, and getting one wrong is a bug an app
             // author has no way to diagnose. A shape declares regions; it does not run the
             // frame.
-            var shell_root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
-            for (editor.host.plugins.items) |plugin| plugin.tickActiveDocument(shell_root.data().id);
+            var layout_root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
+            for (editor.host.plugins.items) |plugin| plugin.tickActiveDocument(layout_root.data().id);
             editor.flushQueuedNativeMenuActions();
             editor.flushQueuedNativeMenuItems();
             editor.processPendingSaveAs();
 
-            var frame: shell.Frame = .init(editor);
-            const shell_result = shell.layout(editor, &frame);
+            var frame: layout.Frame = .init(editor);
+            const shell_result = layout.run(editor, &frame);
 
             for (editor.host.plugins.items) |plugin| plugin.endFrame();
-            shell_root.deinit();
+            layout_root.deinit();
 
             if (try shell_result != .ok) return try shell_result;
         } else {
@@ -4370,8 +4371,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // after the paned is in place.
             // The legacy shell builds a frame too, so both shells resolve rail contents the
             // same way (by keyword) rather than one reading the registry directly.
-            var legacy_frame: shell.Frame = .init(editor);
-            const sidebar_action = editor.sidebar.draw(editor, &legacy_frame, shell.Frame.sidebar_keywords) catch {
+            var legacy_frame: layout.Frame = .init(editor);
+            const sidebar_action = editor.sidebar.draw(editor, &legacy_frame, layout.Frame.sidebar_keywords) catch {
                 dvui.log.err("Failed to draw sidebar", .{});
                 return false;
             };
@@ -4476,7 +4477,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
                 // Explorer area
                 {
-                    const result = try editor.explorer.draw(editor, &legacy_frame, shell.Frame.sidebar_keywords);
+                    const result = try editor.explorer.draw(editor, &legacy_frame, layout.Frame.sidebar_keywords);
                     if (result != .ok) {
                         return result;
                     }
@@ -4514,7 +4515,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     defer editor.panel.paned.deinit();
                     // The legacy shell registers its raw paned the same way a shape's `split`
                     // does, so `splitFor` works identically under both shells.
-                    editor.registerShellSplit(.{
+                    editor.registerSplit(.{
                         .paned = editor.panel.paned,
                         .side = .bottom,
                         .ratio_store = &editor.panel_ratio,
@@ -4752,17 +4753,17 @@ pub fn regionRatio(editor: *Editor, name: []const u8, default: f32) *f32 {
 }
 
 /// One entry is just the `Split` itself — there is no separate registry record. `Split` and a
-/// parallel `ShellSplit` were two names for one thing, which made it ambiguous which you were
+/// parallel `RegisteredSplit` were two names for one thing, which made it ambiguous which you were
 /// holding. A `Split` is safe to store by value here: the registry is frame-scoped and the
 /// widget it points at is dvui-allocated, not stack-held.
-pub const ShellSplit = shell.layout_split.Split;
+pub const RegisteredSplit = layout.Split;
 
 /// The split whose docked half shows `keywords`, or null when this app's layout drew none —
 /// which is a normal state, not an error: `minimal.zig` has no bottom region at all.
 /// The split whose docked half shows `keywords`, or null when this app's layout drew none —
 /// a normal state, not an error: `minimal.zig` has no bottom region at all.
-pub fn splitFor(editor: *Editor, keywords: []const []const u8) ?ShellSplit {
-    for (editor.shell_splits.items) |entry| {
+pub fn splitFor(editor: *Editor, keywords: []const []const u8) ?RegisteredSplit {
+    for (editor.layout_splits.items) |entry| {
         for (entry.keywords) |a| for (keywords) |b| {
             if (std.ascii.eqlIgnoreCase(a, b)) return entry;
         };
@@ -4770,9 +4771,9 @@ pub fn splitFor(editor: *Editor, keywords: []const []const u8) ?ShellSplit {
     return null;
 }
 
-pub fn registerShellSplit(editor: *Editor, entry: ShellSplit) void {
+pub fn registerSplit(editor: *Editor, entry: RegisteredSplit) void {
     if (entry.keywords.len == 0) return;
-    editor.shell_splits.append(editor.gpa, entry) catch {};
+    editor.layout_splits.append(editor.gpa, entry) catch {};
 }
 
 pub const PendingReveal = struct {
@@ -4842,27 +4843,27 @@ pub fn pollPendingReveals(editor: *Editor) void {
     }
 }
 
+fn fizzySplitState(ctx: *anyopaque, keywords: []const []const u8) ?sdk.EditorAPI.SplitState {
+    const editor = fizzyCtx(ctx);
+    var s = editor.splitFor(keywords) orelse return null;
+    return .{
+        .ratio = s.ratio(),
+        .collapsed = s.paned.collapsed(),
+        .dragging = s.paned.dragging,
+        .animating = s.paned.animating,
+    };
+}
+
 fn fizzyRevealPosition(ctx: *anyopaque, path: []const u8, line: u32, character: u32, open_side: bool) anyerror!bool {
     return revealPosition(fizzyCtx(ctx), path, line, character, open_side);
 }
 
 pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
-    var full_split: f32 = 1.0;
-    var dragging = false;
-    var animating = false;
-    var split_ratio: *f32 = &full_split;
-
-    if (editor.splitFor(sdk.keywords.ide.panel)) |bottom| {
-        dragging = bottom.paned.dragging;
-        animating = bottom.paned.animating;
-        split_ratio = bottom.paned.split_ratio;
-    }
-
-    return editor.workbench.drawWorkspaces(.{
-        .dragging = dragging,
-        .animating = animating,
-        .split_ratio = split_ratio,
-    }, index);
+    // The panel split's state used to be gathered here and handed to the workbench as three
+    // out-parameters. It now asks for it itself through `Host.splitState`, which works in an app
+    // whose bottom region is shaped differently or absent — this could only ever answer for
+    // fizzy's own shape.
+    return editor.workbench.drawWorkspaces(index);
 }
 
 pub fn abortSaveAllQuit(editor: *Editor) void {

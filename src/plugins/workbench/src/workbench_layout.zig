@@ -2,6 +2,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
+const sdk = @import("fizzy_sdk");
 const runtime = @import("runtime.zig");
 const Workbench = @import("Workbench.zig");
 const Workspace = @import("Workspace.zig");
@@ -74,14 +75,15 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
     }
 }
 
-pub const PanelPanedState = struct {
-    dragging: bool,
-    animating: bool,
-    split_ratio: *f32,
-};
-
-pub fn drawWorkspaces(wb: *Workbench, panel: PanelPanedState, index: usize) !dvui.App.Result {
+pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
     if (index >= wb.workspaces.count()) return .ok;
+
+    // The bottom split's state, asked for directly rather than handed in as three
+    // out-parameters on the call. Those parameters only worked because fizzy's own shape has a
+    // panel; an app whose bottom region is laid out differently — or absent — had no way to
+    // supply them. Absent is a normal answer here, and means "no bottom split to coordinate
+    // with", which is exactly right for `minimal.zig`.
+    const panel = runtime.host().splitState(sdk.keywords.ide.panel);
 
     var s = core.dvui.paned(@src(), .{
         .direction = .horizontal,
@@ -94,11 +96,12 @@ pub fn drawWorkspaces(wb: *Workbench, panel: PanelPanedState, index: usize) !dvu
     });
     defer s.deinit();
 
-    const dragging = panel.dragging or s.dragging;
+    const panel_dragging = if (panel) |p| p.dragging else false;
+    const dragging = panel_dragging or s.dragging;
 
     if (!dragging) {
-        const should_center = (s.animating and s.split_ratio.* < 1.0) or
-            (panel.animating and panel.split_ratio.* < 1.0);
+        const panel_animating_open = if (panel) |p| (p.animating and p.ratio < 1.0) else false;
+        const should_center = (s.animating and s.split_ratio.* < 1.0) or panel_animating_open;
         if (index + 1 < wb.workspaces.count()) {
             wb.workspaces.values()[index + 1].center = should_center;
         } else if (wb.workspaces.count() == 1) {
@@ -129,7 +132,7 @@ pub fn drawWorkspaces(wb: *Workbench, panel: PanelPanedState, index: usize) !dvu
     }
 
     if (s.showSecond()) {
-        const result = try drawWorkspaces(wb, panel, index + 1);
+        const result = try drawWorkspaces(wb, index + 1);
         if (result != .ok) return result;
     }
 

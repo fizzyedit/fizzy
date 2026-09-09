@@ -16,7 +16,7 @@
 //! A new shape defines its own preset here (or in its own file — nothing here is privileged);
 //! adding one never touches the ABI, because these are just string slices.
 
-/// The general IDE shape (`src/editor/shell/ide.zig`): icon rail, left explorer, bottom panel,
+/// The general IDE shape (`src/editor/layout/ide.zig`): icon rail, left explorer, bottom panel,
 /// main area. What most fizzy-based apps start from, and what a plugin written "for fizzy"
 /// should target unless it has reason not to.
 pub const ide = struct {
@@ -28,7 +28,7 @@ pub const ide = struct {
     pub const main: []const []const u8 = &.{ "main", "center", "workspace" };
 };
 
-/// The studio shape (`src/editor/shell/studio.zig`): no file explorer, a large canvas, a
+/// The studio shape (`src/editor/layout/studio.zig`): no file explorer, a large canvas, a
 /// right-hand stack, a short bottom strip. Deliberately inverts the IDE arrangement.
 ///
 /// It reuses the IDE's keyword sets rather than inventing synonyms — that is the point of

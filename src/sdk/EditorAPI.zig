@@ -45,6 +45,22 @@ pub const PanZoomScheme = enum { mouse, trackpad };
 ctx: *anyopaque,
 vtable: *const VTable,
 
+/// The state of the split governing a region.
+///
+/// Named for the split rather than the region because every field here belongs to the split:
+/// a region has no ratio or drag state of its own. Size is deliberately absent — a plugin
+/// drawing into a region already knows its own rect from dvui and does not need fizzy to
+/// report it.
+pub const SplitState = struct {
+    /// Fraction of its parent the docked side occupies.
+    ratio: f32,
+    collapsed: bool,
+    /// True while the user is dragging this split. Worth checking before starting an animation
+    /// of your own, so the two do not fight.
+    dragging: bool,
+    animating: bool,
+};
+
 pub const VTable = struct {
     /// Fizzy's per-frame arena allocator (reset every frame; do not free).
     arena: *const fn (ctx: *anyopaque) std.mem.Allocator,
@@ -122,6 +138,14 @@ pub const VTable = struct {
     /// when the target is open anywhere, which just focuses it where it lives (mirroring the
     /// file tree's "Open to the side"). Returns false when no plugin can open `path` at all.
     revealPosition: *const fn (ctx: *anyopaque, path: []const u8, line: u32, character: u32, open_side: bool) anyerror!bool,
+    /// The split governing the region matching these keywords, or null when the app's layout
+    /// declared no such split — a normal answer, not an error.
+    ///
+    /// A plugin drawing into a region legitimately needs this: workbench coordinates its own
+    /// pane animation with the bottom split. Before, it was smuggled in as three out-parameters
+    /// on `drawWorkspaces`, which only worked because fizzy's own shape has a panel — an app
+    /// with a differently-shaped bottom had no way to answer.
+    splitState: *const fn (ctx: *anyopaque, keywords: []const []const u8) ?SplitState,
     /// Close document `id` (may prompt when dirty).
     closeDocById: *const fn (ctx: *anyopaque, id: u64) anyerror!void,
     /// Open/switch the project root folder.
@@ -348,6 +372,10 @@ pub fn openOrFocusFileAtGrouping(self: EditorAPI, path: []const u8, grouping: u6
 
 pub fn revealPosition(self: EditorAPI, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
     return self.vtable.revealPosition(self.ctx, path, line, character, open_side);
+}
+
+pub fn splitState(self: EditorAPI, keywords: []const []const u8) ?SplitState {
+    return self.vtable.splitState(self.ctx, keywords);
 }
 
 pub fn closeDocById(self: EditorAPI, id: u64) !void {

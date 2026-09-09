@@ -7,7 +7,7 @@
 //! (plan, Phase 5).
 //!
 //! **Use it, or copy it.** Following dvui's methodology for widgets: fizzy ships a handful of
-//! shapes, and an app either uses one directly — `-Dshell=ide` gives you the general IDE shape
+//! shapes, and an app either uses one directly — `-Dlayout=ide` gives you the general IDE shape
 //! with no layout code of your own — or copies this function into its own source and edits it to
 //! add, remove or rearrange regions. There is nothing privileged in here: it is ordinary code
 //! over the public `Frame` API, which is exactly what makes copying it a reasonable thing to do

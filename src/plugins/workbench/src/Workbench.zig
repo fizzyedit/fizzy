@@ -147,8 +147,8 @@ pub fn rebuildWorkspaces(self: *Workbench) !void {
     return workbench_layout.rebuildWorkspaces(self);
 }
 
-pub fn drawWorkspaces(self: *Workbench, panel: workbench_layout.PanelPanedState, index: usize) !dvui.App.Result {
-    return workbench_layout.drawWorkspaces(self, panel, index);
+pub fn drawWorkspaces(self: *Workbench, index: usize) !dvui.App.Result {
+    return workbench_layout.drawWorkspaces(self, index);
 }
 
 pub fn activeDoc(self: *Workbench) ?sdk.DocHandle {

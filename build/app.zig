@@ -158,15 +158,15 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     // Experimental fizzy-as-a-library shell (plan Phase 1). Off by default: both shells are
     // compiled in so the old and new layouts can be run side by side and diffed live.
-    const new_shell = b.option(bool, "new-shell", "Use the experimental region-based shell (src/editor/shell/)") orelse false;
-    build_opts.addOption(bool, "new_shell", new_shell);
+    const new_layout = b.option(bool, "region-layout", "Use the experimental region-based layout (src/editor/layout/)") orelse false;
+    build_opts.addOption(bool, "region_layout", new_layout);
 
-    // Which layout function the region-based shell uses. `ide` is fizzy's own shape; `minimal`
+    // Which shipped layout shape the region-based layout uses. `ide` is fizzy's own shape; `minimal`
     // and `studio` are deliberately different shapes that load the SAME plugins unchanged —
     // the acceptance test for the layout API (plan, Phase 5).
-    const Shell = enum { ide, minimal, studio };
-    const shell_kind = b.option(Shell, "shell", "Layout for the region-based shell: ide (default), minimal, studio") orelse .ide;
-    build_opts.addOption(Shell, "shell", shell_kind);
+    const Shape = enum { ide, minimal, studio };
+    const layout_kind = b.option(Shape, "layout", "Which shipped layout shape to use: ide (default), minimal, studio") orelse .ide;
+    build_opts.addOption(Shape, "layout", layout_kind);
     const static_workbench = b.option(
         bool,
         "static-workbench",

@@ -8,7 +8,7 @@ const Editor = fizzy.Editor;
 
 const SidebarView = fizzy.sdk.SidebarView;
 const PluginStore = @import("PluginStore.zig");
-const Frame = @import("shell/Frame.zig");
+const Frame = @import("layout/Frame.zig");
 
 pub const Sidebar = @This();
 

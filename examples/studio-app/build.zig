@@ -17,9 +17,9 @@ pub fn build(b: *std.Build) !void {
         .@"app-name" = @as([]const u8, "studioapp"),
         .@"app-display-name" = @as([]const u8, "Studio App"),
         .@"app-bundle-id" = @as([]const u8, "dev.fizzy.studioapp"),
-        // Layout (Phase 5): one of fizzy's shipped shapes, used as-is.
-        .@"new-shell" = true,
-        .shell = @as([]const u8, "studio"),
+        // Layout: one of fizzy's shipped shapes, used as-is.
+        .@"region-layout" = true,
+        .layout = @as([]const u8, "studio"),
     });
 
     b.installArtifact(fizzy.artifact("studioapp"));

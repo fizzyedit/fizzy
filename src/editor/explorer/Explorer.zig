@@ -11,7 +11,7 @@ const Editor = fizzy.Editor;
 
 const nfd = @import("nfd");
 const PluginStore = @import("../PluginStore.zig");
-const Frame = @import("../shell/Frame.zig");
+const Frame = @import("../layout/Frame.zig");
 
 pub const Explorer = @This();
 
@@ -53,7 +53,7 @@ pub fn deinit(self: *Explorer) void {
 /// The split whose docked half shows sidebar content, or null when this app's shape declared
 /// none. Replaces the `explorer.paned` pointer a shape used to have to publish — see
 /// `Editor.splitFor`.
-fn split(editor: *fizzy.Editor) ?fizzy.Editor.ShellSplit {
+fn split(editor: *fizzy.Editor) ?fizzy.Editor.RegisteredSplit {
     return editor.splitFor(fizzy.sdk.keywords.ide.sidebar);
 }
 

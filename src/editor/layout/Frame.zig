@@ -12,7 +12,7 @@ const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
 const layout_split = @import("split.zig");
 const Constants = @import("../Constants.zig");
-const widgets_ref = @import("widgets.zig");
+const chrome_ref = @import("chrome.zig");
 
 const Frame = @This();
 
@@ -107,7 +107,7 @@ fn groupKey(keywords: []const []const u8) u64 {
 /// The host already owns three selections — `active_sidebar_view`, `active_bottom_view`,
 /// `active_center` — so for the conventional keyword sets `Frame` is a *view over existing
 /// state* rather than a parallel store. That is what keeps the new shell and the legacy one
-/// from disagreeing. `Editor.shell_selection` is the fallback for any other keyword group.
+/// from disagreeing. `Editor.layout_selection` is the fallback for any other keyword group.
 const LegacyOwner = enum { sidebar, bottom, center };
 
 fn legacyOwner(keywords: []const []const u8) ?LegacyOwner {
@@ -124,7 +124,7 @@ fn currentId(self: *Frame, keywords: []const []const u8) ?[]const u8 {
         .bottom => host.active_bottom_view,
         .center => host.active_center,
     };
-    return self.editor.shell_selection.get(groupKey(keywords));
+    return self.editor.layout_selection.get(groupKey(keywords));
 }
 
 /// Which surface is current for this keyword group, or null when nothing matches. Degrades: if
@@ -154,7 +154,7 @@ pub fn select(self: *Frame, keywords: []const []const u8, s: *const Surface) voi
         }
         return;
     }
-    self.editor.shell_selection.put(self.editor.gpa, groupKey(keywords), s.id) catch {};
+    self.editor.layout_selection.put(self.editor.gpa, groupKey(keywords), s.id) catch {};
 }
 
 /// Draw one surface into the current parent, wrapped in the swap cross-fade so every region gets
@@ -319,14 +319,14 @@ fn drawRegionContents(self: *Frame, opts: RegionOptions, matches: []const *Surfa
     _ = matches;
     switch (opts.chooser) {
         .none => {},
-        .tabs => widgets_ref.tabs(self, opts.keywords),
-        .icons => _ = widgets_ref.iconRail(self, opts.keywords) catch {},
+        .tabs => chrome_ref.tabs(self, opts.keywords),
+        .icons => _ = chrome_ref.iconRail(self, opts.keywords) catch {},
         // These two draw chrome *and* content, so they return directly. They are fizzy's own
         // richer variants (a titled scroll pane; a splittable tabbed panel) and exist as
         // chooser values rather than as app code because an app copying the IDE shape wants
         // them wholesale — see CLAUDE.md on shipped shapes.
-        .explorer_chrome => return widgets_ref.explorerPane(self, opts.keywords),
-        .panel_chrome => return widgets_ref.bottomPane(self, opts.keywords),
+        .explorer_chrome => return chrome_ref.explorerPane(self, opts.keywords),
+        .panel_chrome => return chrome_ref.bottomPane(self, opts.keywords),
     }
     return self.drawSelected(opts.keywords);
 }

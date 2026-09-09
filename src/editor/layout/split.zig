@@ -163,6 +163,6 @@ pub fn split(editor: *fizzy.Editor, src: std.builtin.SourceLocation, opts: Optio
     });
 
     const s: Split = .{ .paned = p, .side = opts.side, .ratio_store = slot, .keywords = opts.keywords };
-    editor.registerShellSplit(s);
+    editor.registerSplit(s);
     return s;
 }

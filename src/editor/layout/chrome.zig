@@ -23,6 +23,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
 const Frame = @import("Frame.zig");
+const chrome = @import("chrome.zig");
 const Sidebar = @import("../Sidebar.zig");
 
 /// The icon rail. Still delegates: it carries pinned store/settings entries, a bounded scroll
@@ -43,7 +44,7 @@ pub fn iconRail(f: *Frame, keywords: []const []const u8) !Sidebar.Action {
 /// try f.drawSelected(bottom);
 ///
 /// // "this region is TABBED, and the tabs correspond to x"
-/// widgets.tabs(f, bottom);            // the tabs
+/// chrome.tabs(f, bottom);            // the tabs
 /// try f.drawSelected(bottom);  // ...and the active one
 /// ```
 ///
