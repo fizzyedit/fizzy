@@ -11,6 +11,8 @@ pub const PanedWidget = @import("widgets/PanedWidget.zig");
 pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
 pub const TreeWidget = @import("widgets/TreeWidget.zig");
 pub const TreeSelection = @import("widgets/TreeSelection.zig");
+/// Reorderable tab strip shared by fizzy's bottom panel and the workbench's document tabs.
+pub const Tabs = @import("widgets/Tabs.zig");
 
 /// Core-owned dialog chrome state, set by the dialog framework and read by
 /// fizzy so core stays decoupled from the editor. When a modal is open fizzy

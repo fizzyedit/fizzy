@@ -78,7 +78,11 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         editor.shell_bottom_split = strip.paned;
 
         if (strip.showDock()) {
-            const r = try widgets.bottomPane(f, bottom);
+            // "This region IS x": a single bottom surface fills it, with no chooser at all —
+            // the shape an app takes when it wants, say, just a terminal down here. Contrast
+            // `ide.zig`, which draws a tab strip above the same call and so gets the tabbed
+            // form. The difference is one line of app code, not a framework mode.
+            const r = try f.region(.{ .keywords = bottom });
             if (r != .ok) return r;
         }
         if (strip.showRest()) {

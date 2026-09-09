@@ -152,7 +152,14 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         }
 
         if (dock.showDock()) {
-            // Panel chrome (tab strip) wrapping the bottom region — see widgets.zig.
+            // "This region is TABBED, and the tabs correspond to bottom surfaces."
+            //
+            // Fizzy uses the *rich* tabbed form: `Panel` draws its own strip and additionally
+            // supports splitting the bottom into several panes with tabs moving between them.
+            // The plain tabbed form is `widgets.tabs(f, bottom)` followed by
+            // `f.region(.{ .keywords = bottom })` — same chooser, no splitting — and the single
+            // form is that with the `tabs` line deleted (`studio.zig`). All three are the same
+            // building blocks; none is a mode on the others.
             const r = try widgets.bottomPane(f, bottom);
             if (r != .ok) return r;
         }

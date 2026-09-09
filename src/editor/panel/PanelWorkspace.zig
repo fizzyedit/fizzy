@@ -16,9 +16,9 @@ pub const PanelWorkspace = @This();
 grouping: u64,
 active_view_id: ?[]const u8 = null,
 
-tabs_drag_index: ?usize = null,
-tabs_removed_index: ?usize = null,
-tabs_insert_before_index: ?usize = null,
+/// Shared with the workbench's document tabs — see `core.dvui.Tabs.State`. This trio used
+/// to be declared identically in both places.
+tab_state: fizzy.dvui.Tabs.State = .{},
 
 pub fn init(grouping: u64) PanelWorkspace {
     return .{ .grouping = grouping };
@@ -82,42 +82,15 @@ fn panelContentColor() dvui.Color {
 fn drawTabs(self: *PanelWorkspace, panel: *Panel, host: *fizzy.Editor.Host) void {
     defer self.processTabsDrag(panel, host);
 
-    var tabs_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .none,
-        .margin = dvui.Rect.all(0),
-        .padding = dvui.Rect.all(0),
+    // The strip scaffolding — reorder, scroll, per-tab boxes, press/drag handling — is shared
+    // with the workbench's document tabs (`core.dvui.Tabs`). What stays here is the part
+    // that is actually about *this* strip: which views belong to this grouping, what a tab
+    // looks like, and what selecting one means.
+    var strip: fizzy.dvui.Tabs = .begin(@src(), &self.tab_state, .{
+        .drag_name = drag_name,
         .id_extra = @intCast(self.grouping),
     });
-    defer tabs_box.deinit();
-
-    var scroll_area = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .hide, .vertical_bar = .hide }, .{
-        .expand = .none,
-        .background = false,
-        .style = .content,
-        .margin = dvui.Rect.all(0),
-        .padding = dvui.Rect.all(0),
-        .border = dvui.Rect.all(0),
-        .corners = dvui.CornerRect.all(0),
-        .ninepatch_fill = &dvui.Ninepatch.none,
-        .ninepatch_hover = &dvui.Ninepatch.none,
-        .ninepatch_press = &dvui.Ninepatch.none,
-        .id_extra = @intCast(self.grouping),
-    });
-    defer scroll_area.deinit();
-
-    var tabs = dvui.reorder(@src(), .{ .drag_name = drag_name }, .{
-        .expand = .none,
-        .background = false,
-    });
-    defer tabs.deinit();
-
-    var tabs_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .none,
-        .margin = dvui.Rect.all(0),
-        .padding = dvui.Rect.all(0),
-        .id_extra = @intCast(self.grouping),
-    });
-    defer tabs_hbox.deinit();
+    defer strip.end();
 
     const active_in_this_group = blk: {
         if (panel.open_workspace_grouping != self.grouping) break :blk false;
@@ -134,47 +107,9 @@ fn drawTabs(self: *PanelWorkspace, panel: *Panel, host: *fizzy.Editor.Host) void
     for (host.bottom_views.items, 0..) |view, i| {
         if (panel.viewGrouping(view.id) != self.grouping) continue;
 
-        var reorderable = tabs.reorderable(@src(), .{}, .{
-            .expand = .vertical,
-            .id_extra = i,
-            .padding = dvui.Rect.all(0),
-            .margin = dvui.Rect.all(0),
-            .border = .all(0),
-        });
-        defer reorderable.deinit();
-
         const selected = active_in_this_group and active_index == i;
-
-        // Tabs carry no background in their resting state — selection is shown purely via the
-        // label color (see `color_text` below). A fill is drawn only while a tab is being
-        // dragged, as reorder feedback.
-        const show_tab_fill = reorderable.floating();
-
-        var hbox: dvui.BoxWidget = undefined;
-        hbox.init(@src(), .{ .dir = .horizontal }, .{
-            .expand = .none,
-            .border = dvui.Rect.all(0),
-            .background = show_tab_fill,
-            .color_fill = if (show_tab_fill) dvui.themeGet().color(.control, .fill) else .transparent,
-            .id_extra = i,
-            .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
-            .margin = dvui.Rect.all(0),
-            .ninepatch_fill = &dvui.Ninepatch.none,
-            .ninepatch_hover = &dvui.Ninepatch.none,
-            .ninepatch_press = &dvui.Ninepatch.none,
-        });
-        defer hbox.deinit();
-
-        if (reorderable.floating()) {
-            self.tabs_drag_index = i;
-        }
-        if (show_tab_fill) hbox.drawBackground();
-
-        if (reorderable.removed()) {
-            self.tabs_removed_index = i;
-        } else if (reorderable.insertBefore()) {
-            self.tabs_insert_before_index = i;
-        }
+        var t = strip.tab(@src(), i, selected);
+        defer t.end();
 
         var title_buf: [64]u8 = undefined;
         const title_upper = if (view.title.len <= title_buf.len)
@@ -189,41 +124,14 @@ fn drawTabs(self: *PanelWorkspace, panel: *Panel, host: *fizzy.Editor.Host) void
             .gravity_y = 0.5,
         });
 
-        loop: for (dvui.events()) |*e| {
-            if (!hbox.matchEvent(e)) continue;
-
-            switch (e.evt) {
-                .mouse => |me| {
-                    if (me.action == .press and me.button.pointer()) {
-                        self.active_view_id = view.id;
-                        panel.open_workspace_grouping = self.grouping;
-                        host.setActiveBottomView(view.id);
-                        dvui.refresh(null, @src(), hbox.data().id);
-
-                        e.handle(@src(), hbox.data());
-                        dvui.captureMouse(hbox.data(), e.num);
-                        dvui.dragPreStart(me.button, me.p, .{ .size = reorderable.data().rectScale().r.size(), .offset = reorderable.data().rectScale().r.topLeft().diff(me.p) });
-                    } else if (me.action == .release and me.button.pointer()) {
-                        dvui.captureMouse(null, e.num);
-                        dvui.dragEnd();
-                    } else if (me.action == .motion) {
-                        if (dvui.captured(hbox.data().id)) {
-                            e.handle(@src(), hbox.data());
-                            if (dvui.dragging(me.p, null)) |_| {
-                                reorderable.reorder.dragStart(reorderable.data().id.asUsize(), me.p, 0);
-                                break :loop;
-                            }
-                        }
-                    }
-                },
-                else => {},
-            }
+        if (t.clicked()) {
+            self.active_view_id = view.id;
+            panel.open_workspace_grouping = self.grouping;
+            host.setActiveBottomView(view.id);
         }
     }
 
-    if (tabs.finalSlot()) {
-        self.tabs_insert_before_index = host.bottom_views.items.len;
-    }
+    strip.finalSlot(host.bottom_views.items.len);
 }
 
 fn drawContent(self: *PanelWorkspace, panel: *Panel, host: *fizzy.Editor.Host) !void {
@@ -242,8 +150,8 @@ fn drawContent(self: *PanelWorkspace, panel: *Panel, host: *fizzy.Editor.Host) !
 }
 
 fn processTabsDrag(self: *PanelWorkspace, panel: *Panel, host: *fizzy.Editor.Host) void {
-    if (self.tabs_insert_before_index) |insert_before| {
-        if (self.tabs_removed_index) |removed| {
+    if (self.tab_state.insert_before_index) |insert_before| {
+        if (self.tab_state.removed_index) |removed| {
             if (removed >= host.bottom_views.items.len) return;
             if (removed > insert_before) {
                 panel.swapBottomViews(host, removed, insert_before);
@@ -255,11 +163,11 @@ fn processTabsDrag(self: *PanelWorkspace, panel: *Panel, host: *fizzy.Editor.Hos
                 panel.swapBottomViews(host, removed, insert_before);
                 self.active_view_id = host.bottom_views.items[insert_before].id;
             }
-            self.tabs_removed_index = null;
-            self.tabs_insert_before_index = null;
+            self.tab_state.removed_index = null;
+            self.tab_state.insert_before_index = null;
         } else {
             for (panel.workspaces.values()) |*workspace| {
-                if (workspace.tabs_removed_index) |removed| {
+                if (workspace.tab_state.removed_index) |removed| {
                     if (removed >= host.bottom_views.items.len) return;
                     const view = host.bottom_views.items[removed];
                     if (removed > insert_before) {
@@ -276,10 +184,10 @@ fn processTabsDrag(self: *PanelWorkspace, panel: *Panel, host: *fizzy.Editor.Hos
                         self.active_view_id = view.id;
                     }
 
-                    self.tabs_removed_index = null;
-                    self.tabs_insert_before_index = null;
-                    workspace.tabs_removed_index = null;
-                    workspace.tabs_insert_before_index = null;
+                    self.tab_state.removed_index = null;
+                    self.tab_state.insert_before_index = null;
+                    workspace.tab_state.removed_index = null;
+                    workspace.tab_state.insert_before_index = null;
                     panel.open_workspace_grouping = self.grouping;
                     host.setActiveBottomView(view.id);
                     break;
@@ -294,7 +202,7 @@ fn processTabDrag(self: *PanelWorkspace, data: *dvui.WidgetData, panel: *Panel, 
 
     const drag_src = blk: {
         for (panel.workspaces.values()) |*w| {
-            if (w.tabs_drag_index) |i| break :blk .{ .ws = w, .index = i };
+            if (w.tab_state.drag_index) |i| break :blk .{ .ws = w, .index = i };
         }
         break :blk null;
     };
@@ -321,7 +229,7 @@ fn processTabDrag(self: *PanelWorkspace, data: *dvui.WidgetData, panel: *Panel, 
             }
 
             if (e.evt.mouse.action == .release and e.evt.mouse.button.pointer()) {
-                defer workspace.tabs_drag_index = null;
+                defer workspace.tab_state.drag_index = null;
                 e.handle(@src(), data);
                 dvui.dragEnd();
                 dvui.refresh(null, @src(), data.id);
@@ -342,7 +250,7 @@ fn processTabDrag(self: *PanelWorkspace, data: *dvui.WidgetData, panel: *Panel, 
             }
 
             if (e.evt.mouse.action == .release and e.evt.mouse.button.pointer()) {
-                defer workspace.tabs_drag_index = null;
+                defer workspace.tab_state.drag_index = null;
                 e.handle(@src(), data);
                 dvui.dragEnd();
                 dvui.refresh(null, @src(), data.id);
