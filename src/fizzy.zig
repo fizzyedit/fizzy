@@ -60,6 +60,10 @@ pub fn setInstances(a: *App, e: *Editor) void {
 /// builds, where `builtin.os.tag` is always `.freestanding`.
 pub const platform = core.platform;
 
+/// Application layout: regions, splits, tabs and the keyword vocabulary. See
+/// src/editor/layout/layout.zig.
+pub const layout = @import("editor/layout/layout.zig");
+
 /// Plugin SDK surface
 pub const sdk = @import("fizzy_sdk");
 

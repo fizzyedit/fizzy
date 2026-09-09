@@ -389,6 +389,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ "fizzy-window-layout-tests", "src/backend/window_layout.zig" },
         .{ "fizzy-plugin-store-tests", "src/backend/plugin_store/store.zig" },
         .{ "fizzy-paths-tests", "src/core/paths.zig" },
+        .{ "fizzy-split-layout-tests", "src/core/split_layout.zig" },
         .{ "fizzy-lsp-protocol-tests", "src/core/lsp/Protocol.zig" },
         .{ "fizzy-lsp-uri-tests", "src/core/lsp/UriUtil.zig" },
         .{ "fizzy-settings-plugins-zon-tests", "src/editor/SettingsPluginsZon.zig" },

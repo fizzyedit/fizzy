@@ -29,6 +29,8 @@ pub const math = @import("math/math.zig");
 pub const fs = @import("fs.zig");
 pub const platform = @import("platform.zig");
 pub const paths = @import("paths.zig");
+/// Pure layout maths for the linear splitter (see core/widgets/SplitBox.zig).
+pub const split_layout = @import("split_layout.zig");
 
 /// Resolves the user's real login-shell `PATH` — see `shell_env.zig`.
 pub const shell_env = @import("shell_env.zig");
