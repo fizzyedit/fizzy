@@ -99,7 +99,7 @@ pub fn register(host: *sdk.Host) !void {
     // claim set is unbounded, so it can never appear as a specialized claimant in the File
     // Types table, only as the implicit "Text (fallback)" option.
     host.registerFallbackEditor(&plugin);
-    try host.registerPainter(.{ .owner = &plugin, .draw = paint });
+    try host.registerFileKind(.{ .owner = &plugin, .kindFor = fileKind });
     try host.registerCommand(.{
         .id = sdk.Plugin.commandId("text", "copy"),
         .owner = &plugin,
@@ -177,26 +177,9 @@ fn isTextIconExt(ext: []const u8) bool {
     return false;
 }
 
-fn paint(_: ?*anyopaque, subject: sdk.Host.Painter.Subject) bool {
-    const file = switch (subject) {
-        .file => |f| f,
-        .plugin_logo => return false,
-    };
-    const ext = file.ext;
-    const color = file.color;
-    if (!isTextIconExt(ext)) return false;
-    // `expand = .ratio` fits the glyph to the fixed slot the file tree reserved for it — see
-    // `Host.FileIcon`. Sizing it here instead would make text rows a different height to every
-    // other row in the tree.
-    dvui.icon(@src(), "CodeFileIcon", dvui.entypo.code, .{ .stroke_color = color, .fill_color = color }, .{
-        .expand = .ratio,
-        .gravity_x = 0.5,
-        .gravity_y = 0.5,
-        .padding = dvui.Rect.all(0),
-        .margin = dvui.Rect.all(0),
-        .background = false,
-    });
-    return true;
+/// What kind of file this is — not what it looks like. See `image/plugin.zig`'s note.
+fn fileKind(_: ?*anyopaque, ext: []const u8) ?[]const u8 {
+    return if (isTextIconExt(ext)) "source" else null;
 }
 
 // ---- document staging buffer -------------------------------------------------

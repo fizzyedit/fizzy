@@ -101,6 +101,7 @@ const PluginSettingsPane = @import("PluginSettingsPane.zig");
 const SettingsTree = @import("SettingsTree.zig");
 const OutputPanel = @import("OutputPanel.zig");
 const SettingsPluginsZon = @import("SettingsPluginsZon.zig");
+const file_glyphs = @import("file_glyphs.zig");
 const SettingsWatcher = @import("SettingsWatcher.zig");
 const Constants = @import("Constants.zig");
 const DocumentWatcher = @import("DocumentWatcher.zig");
@@ -182,6 +183,12 @@ palette_folder: []const u8,
 
 /// Plugin registry + service locator exposed to plugins
 host: Host,
+
+/// The project's file set, shared with every plugin through `host.files`. The app owns it
+/// because more than one plugin reads it — see `core.FileTable`. Its `env` is wired in
+/// `postInit`, since the ignore rules and the watcher it asks about live on this same `Editor`
+/// and so need its final address.
+file_table: core.FileTable,
 
 /// File-management workbench (per-branch explorer decorations, …)
 workbench: Workbench,
@@ -578,6 +585,7 @@ pub fn init(
         .themes = .empty,
         .host = .init(app.allocator),
         .workbench = .init(app.allocator),
+        .file_table = .init(app.allocator, dvui.io),
     };
 
     try editor.workbench.registerBuiltins();
@@ -2488,6 +2496,18 @@ pub fn postInit(editor: *Editor) !void {
     // the Host instead of importing the concrete Editor.
     editor.host.installFizzyApi(.{ .ctx = editor, .vtable = &fizzy_api_vtable });
 
+    // Publish the shared file set. Same reason as the commands above: `env.ctx` is this
+    // editor's final address. The table answers three questions it can't itself — where the
+    // project is, whether the watcher is live, which paths are ignored — and in exchange holds
+    // the caches every plugin that draws files then shares.
+    editor.file_table.env = .{
+        .ctx = editor,
+        .root = fileTableRoot,
+        .watching = fileTableWatching,
+        .ignored = fileTableIgnored,
+    };
+    editor.host.files = &editor.file_table;
+
     // Register plugin contributions (sidebar/bottom/center/menus). These are the
     // near-empty fizzy's content: it iterates the Host registries rather than
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
@@ -2685,6 +2705,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .openOrFocusFileAtGrouping = fizzyOpenOrFocusFileAtGrouping,
     .revealPosition = fizzyRevealPosition,
     .splitState = fizzySplitState,
+    .drawFileKindGlyph = fizzyDrawFileKindGlyph,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
     .closeProjectFolder = fizzyCloseProjectFolder,
@@ -2913,6 +2934,25 @@ fn fizzyFolderWatchActive(ctx: *anyopaque) bool {
     return if (editor.folder_watcher) |*w| w.active() else false;
 }
 
+// `core.FileTable.Env` — the three things the shared file set has to ask this editor. Separate
+// from the `fizzy_api_vtable` thunks above because the table is `core`, not `sdk`: it takes an
+// `?*anyopaque` and knows nothing about `EditorAPI`.
+fn fileTableRoot(ctx: ?*anyopaque) ?[]const u8 {
+    return fizzyCtx(ctx.?).folder;
+}
+fn fileTableWatching(ctx: ?*anyopaque) bool {
+    return fizzyFolderWatchActive(ctx.?);
+}
+fn fileTableIgnored(
+    ctx: ?*anyopaque,
+    project_root: []const u8,
+    abs_path: []const u8,
+    name: []const u8,
+    kind: std.Io.File.Kind,
+) bool {
+    return fizzyCtx(ctx.?).ignore.isIgnored(project_root, abs_path, name, kind);
+}
+
 fn fizzyIsPathIgnored(
     ctx: *anyopaque,
     project_root: []const u8,
@@ -2971,19 +3011,15 @@ fn fizzyCreateDocument(ctx: *anyopaque, path: []const u8, grid: sdk.EditorAPI.Ne
     return fizzyCtx(ctx).newFile(path, grid);
 }
 fn fizzySetExplorerNewFilePath(ctx: *anyopaque, path: []const u8) anyerror!void {
-    const wb = &fizzyCtx(ctx).workbench;
-    try wb.setPendingNewFilePath(path);
+    const editor = fizzyCtx(ctx);
+    try editor.workbench.setPendingNewFilePath(path);
     // A plugin reaching this has just written `path` with its own save routine, not through
-    // `files.createFilePath`, so nothing has dropped the tree's directory listing cache and that
-    // cache still predates the file. Left stale, the row never appears on the next frame: the
-    // match in `files.zig` never runs, no inline rename opens, and the dialog still closing over
-    // the top of it has no row to fly into. This is the only thing standing between "the file
-    // exists" and "the user can see and rename it".
-    //
-    // Both calls go to the shared `Workbench` instance rather than to `fizzy.Explorer.files`.
-    // That module is linked into fizzy *and* into the workbench dylib, so its globals are two
-    // separate objects and everything written here used to land in the copy that never draws.
-    wb.noteDiskChanged();
+    // `files.createFilePath`, so nothing has dropped the shared listing cache and that cache
+    // still predates the file. Left stale, the row never appears on the next frame: the match in
+    // `files.zig` never runs, no inline rename opens, and the dialog still closing over the top
+    // of it has no row to fly into. This is the only thing standing between "the file exists"
+    // and "the user can see and rename it".
+    editor.file_table.invalidateAll();
 }
 fn fizzyRequestSaveAs(ctx: *anyopaque) void {
     fizzyCtx(ctx).requestSaveAs();
@@ -4801,6 +4837,21 @@ pub fn pollPendingReveals(editor: *Editor) void {
     }
 }
 
+fn fizzyDrawFileKindGlyph(_: *anyopaque, kind: []const u8, color: dvui.Color) bool {
+    const glyph = file_glyphs.glyphFor(kind) orelse return false;
+    // Same sizing contract every file glyph uses: the caller reserved the slot, so fit to it
+    // with `expand = .ratio` rather than picking a size here.
+    dvui.icon(@src(), "FileKindGlyph", glyph, .{ .stroke_color = color, .fill_color = color }, .{
+        .expand = .ratio,
+        .gravity_x = 0.5,
+        .gravity_y = 0.5,
+        .padding = dvui.Rect.all(0),
+        .margin = dvui.Rect.all(0),
+        .background = false,
+    });
+    return true;
+}
+
 fn fizzySplitState(ctx: *anyopaque, keywords: []const []const u8) ?sdk.EditorAPI.SplitState {
     const editor = fizzyCtx(ctx);
     var s = editor.splitFor(keywords) orelse return null;
@@ -5984,6 +6035,10 @@ pub fn deinit(editor: *Editor) !void {
     editor.unloadPluginLibs();
     editor.host.deinit();
     editor.workbench.deinit();
+    // After the plugin `deinit` loop above and after `host.deinit`: plugin teardown can still
+    // reach `host.files`, and this frees what it would read.
+    editor.host.files = null;
+    editor.file_table.deinit();
 
     // Pixel-art state is owned by the pixi plugin now: its `pluginDeinit` (run in the plugin
     // loop above) persists the project and frees its own state + packer.

@@ -66,7 +66,7 @@ pub fn register(host: *sdk.Host) !void {
     plugin.state = @ptrCast(st);
 
     try host.registerPlugin(&plugin);
-    try host.registerPainter(.{ .owner = &plugin, .draw = paint });
+    try host.registerFileKind(.{ .owner = &plugin, .kindFor = fileKind });
 }
 
 pub fn pluginPtr() *sdk.Plugin {
@@ -95,25 +95,12 @@ fn fileTypes(_: *anyopaque) []const []const u8 {
     return &flat_image_extensions;
 }
 
-fn paint(_: ?*anyopaque, subject: sdk.Host.Painter.Subject) bool {
-    const file = switch (subject) {
-        .file => |f| f,
-        .plugin_logo => return false,
-    };
-    const ext = file.ext;
-    const color = file.color;
-    if (!isFlatImageExtension(ext)) return false;
-    // `expand = .ratio` fits the glyph to the fixed slot the file tree reserved for it — see
-    // `Host.FileIcon`.
-    dvui.icon(@src(), "ImageFileIcon", dvui.entypo.image, .{ .stroke_color = color, .fill_color = color }, .{
-        .expand = .ratio,
-        .gravity_x = 0.5,
-        .gravity_y = 0.5,
-        .padding = dvui.Rect.all(0),
-        .margin = dvui.Rect.all(0),
-        .background = false,
-    });
-    return true;
+/// What kind of file this is — not what it looks like. Fizzy maps kinds to glyphs in
+/// `editor/file_glyphs.zig`; another app maps them differently, and this plugin neither knows
+/// nor cares. Previously this drew `entypo.image` directly, which made a plugin responsible for
+/// an app's visual language.
+fn fileKind(_: ?*anyopaque, ext: []const u8) ?[]const u8 {
+    return if (isFlatImageExtension(ext)) "image" else null;
 }
 
 fn documentStackSize(_: *anyopaque) usize {

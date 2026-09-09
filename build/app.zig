@@ -459,6 +459,24 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         }));
     }
 
+    // `core.FileTable` — the shared project file set. Reaches `fuzzy.zig` by relative import so
+    // it needs zf too, and nothing else: it takes its `std.Io` from the host rather than reading
+    // `dvui.io`, precisely so the listing cache and the ranking are testable against a real
+    // directory here instead of only under a running app.
+    {
+        const file_table_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/core/FileTable.zig"),
+        });
+        file_table_module.addImport("zf", core_mod.zfModule(b, target, optimize));
+        try unit_test_artifacts.append(b.allocator, b.addTest(.{
+            .name = "fizzy-file-table-tests",
+            .root_module = file_table_module,
+            .filters = test_filters,
+        }));
+    }
+
     for (unit_test_artifacts.items) |unit_test| {
         test_step.dependOn(&b.addRunArtifact(unit_test).step);
         check_step.dependOn(&unit_test.step);

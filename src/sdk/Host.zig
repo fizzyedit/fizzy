@@ -63,18 +63,28 @@ pub const ServiceEntry = struct {
     owner: ?*Plugin = null,
 };
 
-/// A file-type icon drawer. The workbench calls registered drawers in order from each reserved
-/// icon slot (file-tree rows and open-file tabs); the first that returns `true` wins, otherwise
-/// the workbench draws a generic filesystem default. This lets the plugin that owns a file type
-/// draw its own icon (a glyph, a thumbnail, anything) instead of fizzy hardcoding
-/// per-extension icons. `ext` is the extension including the dot, as on disk (compare
-/// case-insensitively); `path` is absolute; `color` is the themed icon color.
+/// What *kind* of thing a file is — "image", "source", "sprite" — as opposed to how it looks.
 ///
-/// **Size is the host's to decide, not yours.** Every call site reserves a fixed square slot
-/// (`core.dvui.treeRowGlyph`, sized from the user's font settings) and your drawer runs inside
-/// it. Draw with `expand = .ratio` so your artwork fits that slot at its own aspect ratio; a
-/// hard-coded size or scale makes tree rows taller than every other row, and drawing without a
-/// reserved slot (e.g. bare in a tab row) lets ratio+gravity center the icon in the whole parent.
+/// This is the same split as `Surface.keywords`: the plugin says what something *is*, the app
+/// decides how to present it. A plugin knows `.png` is an image; it does not know whether this
+/// app draws images with an entypo glyph, a custom SVG, or a thumbnail, and it should not have
+/// to. Before this, `registerFileIcon` made every plugin pick a glyph — and both in-tree
+/// painters did exactly that, drawing `entypo.image` / `entypo.code` off nothing but the
+/// extension.
+///
+/// It also fixes agreement for free. The file tree and the tab bar are drawn by entirely
+/// separate code, and had to agree on a file's icon; they now both resolve kind -> glyph through
+/// one app-side table rather than both happening to call the same plugin.
+///
+/// Kinds are free-form strings for the same reason keywords are: a plugin inventing "shader"
+/// must not need an SDK change, and an app that has never heard of "shader" simply falls back.
+pub const FileKind = struct {
+    owner: ?*Plugin = null,
+    ctx: ?*anyopaque = null,
+    /// The kind this extension is, or null to decline.
+    kindFor: *const fn (ctx: ?*anyopaque, ext: []const u8) ?[]const u8,
+};
+
 /// A plugin-provided **painter**: fizzy reserves a rect, the painter fills it.
 ///
 /// One type rather than the `FileIcon` / `PluginIcon` pair it replaces. Those differed only in
@@ -83,6 +93,12 @@ pub const ServiceEntry = struct {
 /// rect; the plugin draws into it with `expand = .ratio`". Two registries, two registrars and
 /// two dispatchers for one idea is the kind of accidental specialisation that makes the surface
 /// look bigger than it is.
+///
+/// **Size is the host's to decide, not yours.** Every call site reserves a fixed square slot
+/// (`core.dvui.treeRowGlyph`, sized from the user's font settings) and your painter runs inside
+/// it. Draw with `expand = .ratio` so your artwork fits that slot at its own aspect ratio; a
+/// hard-coded size or scale makes tree rows taller than every other row, and drawing without a
+/// reserved slot (e.g. bare in a tab row) lets ratio+gravity center the icon in the whole parent.
 ///
 /// The parameters are a tagged union rather than a type parameter because this crosses a dylib
 /// boundary: a generic would have to monomorphise, and the function pointer must be one
@@ -129,6 +145,22 @@ pending_new_document_owner: ?*Plugin = null,
 /// draw per-branch explorer decorations without a compile-time dependency on it.
 services: std.StringHashMapUnmanaged(ServiceEntry) = .empty,
 
+/// The project's file set — one cached, searchable view of what is on disk, owned by the app and
+/// shared by every plugin that draws files. Null in a headless host.
+///
+/// **This is the shape inter-plugin sharing takes when the thing being shared is data rather
+/// than behaviour, and it needs no vtable.** A service (above) is a `{ctx, vtable}` pair because
+/// its implementation lives in a *plugin* the host cannot name; a `core.FileTable` is a plain
+/// struct declared in the framework, so both images know its layout and plugin code calls its
+/// methods directly. Function pointers are only for calls that go *into* a plugin.
+///
+/// It replaces a real defect rather than adding a capability: the file tree kept these caches as
+/// module-level `var`s, and its module is compiled into both fizzy and the workbench dylib — so
+/// there were two of every cache, reconciled by a `disk_generation` counter each copy polled to
+/// know when to discard its own work. A tab strip wanting the same listings would have been a
+/// third. One table, no counter.
+files: ?*core.FileTable = null,
+
 /// Fizzy's read/utility surface (arena, folder, shared settings, dirty mark),
 /// installed by fizzy during startup. Null until installed (headless/test).
 fizzy_api: ?EditorAPI = null,
@@ -158,6 +190,8 @@ file_row_fill_colors: std.ArrayListUnmanaged(FileRowFillColor) = .empty,
 
 /// File-tree row icon drawers (workbench asks the Host; plugins register for their file types).
 painters: std.ArrayListUnmanaged(Painter) = .empty,
+/// Extension -> kind declarations; see `FileKind`.
+file_kinds: std.ArrayListUnmanaged(FileKind) = .empty,
 
 
 /// Loaded plugins' settings schemas (`sdk.settings.Schema(...)`), drawn by fizzy's settings
@@ -217,6 +251,7 @@ pub fn deinit(self: *Host) void {
     self.language_support.deinit(self.allocator);
     self.file_row_fill_colors.deinit(self.allocator);
     self.painters.deinit(self.allocator);
+    self.file_kinds.deinit(self.allocator);
 
     self.settings_schemas.deinit(self.allocator);
     {
@@ -616,6 +651,7 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(LanguageSupport, &self.language_support, plugin);
     removeOwned(FileRowFillColor, &self.file_row_fill_colors, plugin);
     removeOwned(Painter, &self.painters, plugin);
+    removeOwned(FileKind, &self.file_kinds, plugin);
     removeOwnedSettingsSchemas(&self.settings_schemas, plugin);
     if (self.fallback_editor == plugin) self.fallback_editor = null;
 
@@ -716,12 +752,55 @@ pub fn notifyDocumentContentChanged(self: *Host, path: []const u8, bytes: []cons
     for (self.plugins.items) |plugin| plugin.documentContentChanged(path, bytes);
 }
 
-/// Broadcast a coalesced batch of on-disk changes under the open root folder to every plugin.
+/// Broadcast a coalesced batch of on-disk changes under the open root folder to every plugin,
+/// after applying it to the shared file set.
 ///
 /// Called by `FolderWatcher.tick` on the UI thread, never from the watcher's own thread — see
 /// `Plugin.VTable.folderPathsChanged` for the contract this upholds.
+///
+/// The file set is reconciled here rather than by whichever plugin happens to draw a tree: the
+/// host owns both the watcher and the table, so no plugin should have to subscribe to disk
+/// events just to keep shared state honest. A plugin's own hook is for what it *additionally*
+/// wants to do with a change.
 pub fn notifyFolderPathsChanged(self: *Host, changes: Plugin.PathChanges) void {
+    if (self.files) |files| applyPathChanges(files, changes);
     for (self.plugins.items) |plugin| plugin.folderPathsChanged(changes);
+}
+
+/// Drop exactly the listings a batch of disk events invalidates.
+///
+/// Only the *parent* of each changed path is dropped: a file appearing in `a/b/c.md` says
+/// nothing about `a`. A truncated batch means the event list is an incomplete picture, so the
+/// whole cache goes instead.
+fn applyPathChanges(files: *core.FileTable, changes: Plugin.PathChanges) void {
+    if (changes.truncated) {
+        files.invalidateListings();
+        return;
+    }
+
+    for (changes.events) |event| {
+        // A file's *contents* changing leaves every listing exactly as it was, and this is by
+        // far the most common event there is — every save of every open document. Re-reading a
+        // directory for it would put the full cost of a quarter-million-entry listing back on
+        // the frame after each keystroke-triggered autosave. It can't be dropped outright
+        // though: macOS reports a newly created file as `.modified` as well (see
+        // `core.FileTable.noteFileModified`), so the listing is re-read when the name is one it
+        // has never seen.
+        if (event.kind == .modified and event.object == .file) {
+            files.noteFileModified(event.path);
+            continue;
+        }
+
+        if (std.fs.path.dirname(event.path)) |parent| files.invalidateListing(parent);
+        // A rename's two halves can sit in different directories.
+        if (event.old_path.len > 0) {
+            if (std.fs.path.dirname(event.old_path)) |parent| files.invalidateListing(parent);
+        }
+        // A directory that itself appeared or vanished changes its own listing too. `.unknown`
+        // is included deliberately: the object is already gone by the time fizzy looks, so it
+        // could be either.
+        if (event.object != .file) files.invalidateListing(event.path);
+    }
 }
 
 /// First registered plugin that implements `createDocument` (for fizzy New File flows).
@@ -755,6 +834,22 @@ pub fn registerFallbackEditor(self: *Host, plugin: *Plugin) void {
     self.fallback_editor = plugin;
 }
 
+/// Declare what kinds of file this plugin recognises. Prefer this over `registerPainter`: it
+/// leaves the look to the app, and makes the tree and the tab bar agree by construction.
+pub fn registerFileKind(self: *Host, k: FileKind) !void {
+    try self.file_kinds.append(self.allocator, k);
+}
+
+/// The kind declared for `ext`, or null when nothing claims it.
+pub fn fileKind(self: *Host, ext: []const u8) ?[]const u8 {
+    for (self.file_kinds.items) |k| {
+        if (k.kindFor(k.ctx, ext)) |kind| return kind;
+    }
+    return null;
+}
+
+/// Draw a plugin-provided visual. The escape hatch for content-derived artwork — a sprite
+/// thumbnail, an image preview — where the plugin genuinely must draw rather than name a kind.
 pub fn registerPainter(self: *Host, drawer: Painter) !void {
     try self.painters.append(self.allocator, drawer);
 }
@@ -787,8 +882,18 @@ pub fn drawFileIcon(self: *Host, ext: []const u8, path: []const u8, color: dvui.
         if (self.drawPluginIcon(owner.id)) return true;
     }
 
+    // Painters first: they are the escape hatch for content-derived artwork (a sprite
+    // thumbnail, an image preview), which should win over a generic per-kind glyph.
     for (self.painters.items) |drawer| {
         if (drawer.draw(drawer.ctx, .{ .file = .{ .ext = ext, .path = path, .color = color } })) return true;
+    }
+
+    // Then the declared kind, drawn by the *app*. This is the common path: a plugin says
+    // `.png` is an "image", fizzy decides what an image looks like.
+    if (self.fileKind(ext)) |kind| {
+        if (self.fizzy_api) |a| {
+            if (a.drawFileKindGlyph(kind, color)) return true;
+        }
     }
 
     // Specialized document plugins (pixi, image, …) that didn't register a Painter

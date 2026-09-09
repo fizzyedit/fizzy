@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const wdvui = @import("core").dvui;
 const fuzzy = @import("core").fuzzy;
+const FileTable = @import("core").FileTable;
 const palette = @import("core").palette;
 const runtime = @import("runtime.zig");
 const icons = @import("icons");
@@ -46,21 +47,6 @@ fn clearNewFilePath() void {
     runtime.workbench().clearPendingNewFilePath();
 }
 
-/// This copy's last-seen `Workbench.disk_generation`. When it falls behind, something (possibly
-/// the *other* copy of this module, or a plugin saving through its own routine) changed the
-/// contents of a directory we have cached, and the caches below are stale.
-var seen_disk_generation: u32 = 0;
-
-/// Drop this copy's caches if any copy has announced a disk change since the last check. Called
-/// once at the top of the tree draw, before anything consults `dir_cache`.
-fn syncDiskGeneration() void {
-    const current = runtime.workbench().disk_generation;
-    if (current == seen_disk_generation) return;
-    seen_disk_generation = current;
-    invalidateFilterIndex();
-    invalidateDirCache();
-}
-
 const open_message = if (builtin.os.tag == .macos) "Reveal in Finder" else "Reveal in File Browser";
 
 pub const Extension = enum {
@@ -88,10 +74,6 @@ pub fn draw() !void {
         try drawWeb();
         return;
     }
-
-    // Before anything reads `dir_cache`: adopt any disk change announced by the other copy of
-    // this module (or by a plugin that saved through its own routine).
-    syncDiskGeneration();
 
     // `tab_drag` matches workspace tab strips so file rows can drop on the canvas like tabs (DVUI reorder_tree cross-widget pattern).
     var tree = wdvui.TreeWidget.tree(@src(), .{ .enable_reordering = true, .drag_name = "tab_drag" }, .{ .background = false, .expand = .both });
@@ -173,9 +155,10 @@ fn drawWeb() !void {
 }
 
 pub fn drawFiles(path: []const u8, tree: *wdvui.TreeWidget) !void {
+    const files = table() orelse return;
     // Nothing is mid-walk at this point, so this is the one safe moment to free listings that
     // last frame's draw invalidated while it was still reading them.
-    releaseRetiredListings();
+    files.releaseRetired();
 
     const unique_id = dvui.parentGet().extendId(@src(), 0);
     runtime.workbench().file_tree_data_id = unique_id;
@@ -199,7 +182,7 @@ pub fn drawFiles(path: []const u8, tree: *wdvui.TreeWidget) !void {
 
     // Closing the filter ends the session the path index was built for: the next one re-walks, so
     // files created or removed while the box was closed can't linger in the results.
-    if (filter_text.len == 0) invalidateFilterIndex();
+    if (filter_text.len == 0) files.invalidateIndex();
 
     // Resolve before taking the basename. Launching as `fizzy .` (or any relative path) makes
     // `basename` return the literal "." and the project row's title becomes a single unreadable
@@ -367,447 +350,24 @@ fn pointerReleaseInRectWithoutSelectionModifier(r: dvui.Rect.Physical) bool {
     return false;
 }
 
-// ---- filtered-mode path index --------------------------------------------------------------
+// ---- the shared file set --------------------------------------------------------------------
 //
-// While the filter box is empty the tree is drawn straight from the filesystem, one directory per
-// expanded folder — cheap, and always current. A filter changes that completely: every file in
-// the project is a candidate, so the old code re-walked the *entire* project on every frame just
-// to test basenames. Instead the project is walked **once per filter session** into this index,
-// and each keystroke only re-ranks strings already in memory.
-
-/// Absolute paths of every non-ignored file in the project, owned by `runtime.allocator()`.
-var filter_index: std.ArrayListUnmanaged([]u8) = .empty;
-/// Project root the index was built for; empty when there is no index. Owned.
-var filter_index_root: []u8 = &.{};
-/// Set when the filter box goes empty, so the next filter session rebuilds from disk rather than
-/// ranking a snapshot that may be minutes old. Also set by the mutation helpers below.
-var filter_index_stale: bool = true;
-
-/// Refuse to index a pathological tree rather than stall a frame. A project past this many files
-/// still filters — just over the first `filter_index_max_files` discovered.
-const filter_index_max_files: usize = 200_000;
-const filter_index_max_depth: usize = 32;
-
-/// Hard cap on drawn filtered rows. Every row is a real tree widget — an id, an icon, a
-/// run-split highlighted label — so the list length is a per-frame cost, not just a scroll
-/// length. Uncapped, a one-letter query over a large project matched nearly the whole index
-/// and drew tens of thousands of rows per frame, which froze the app. Past a few hundred hits
-/// the ranking is noise anyway; the answer is to type another character.
-const filter_max_rows: usize = 300;
-
-/// Last ranking, reused while neither the query nor the index has changed. Without this the
-/// whole index is re-scored on every frame the explorer draws, not just on each keystroke.
-var filter_cache_query: []u8 = &.{};
-var filter_cache_rows: std.ArrayListUnmanaged(SimpleEntry) = .empty;
-var filter_cache_valid: bool = false;
-
-/// Drop the cached path index. Called when the filter closes and whenever this module creates,
-/// deletes, renames, or moves something — those are the only mutations that happen while the
-/// explorer is open, and re-walking on the next keystroke is cheap enough to not need finer
-/// invalidation.
-pub fn invalidateFilterIndex() void {
-    filter_index_stale = true;
-    filter_cache_valid = false;
-}
-
-/// Both caches, for the disk-mutating helpers below — and for fizzy, when a plugin wrote to
-/// disk through its own save routine rather than through one of them. Deliberately *not* folded
-/// into `invalidateFilterIndex`: that one also fires every frame the filter box is empty, which
-/// would drop the listing cache continuously and undo the whole point of having it.
-pub fn invalidateAfterDiskChange() void {
-    invalidateFilterIndex();
-    invalidateDirCache();
-    // Tell the *other* copy of this module too — its `dir_cache` is a different object and just
-    // went stale. Recording the new value here as already-seen keeps `syncDiskGeneration` from
-    // immediately re-invalidating what this call has just cleared.
-    const wb = runtime.workbench();
-    wb.noteDiskChanged();
-    seen_disk_generation = wb.disk_generation;
-}
-
-fn freeFilterIndex() void {
-    const gpa = runtime.allocator();
-    for (filter_index.items) |p| gpa.free(p);
-    filter_index.clearRetainingCapacity();
-    // Cached rows borrow the index strings.
-    filter_cache_valid = false;
-    filter_cache_rows.clearRetainingCapacity();
-}
-
-pub fn deinitFilterIndex() void {
-    const gpa = runtime.allocator();
-    freeFilterIndex();
-    filter_index.deinit(gpa);
-    if (filter_index_root.len > 0) gpa.free(filter_index_root);
-    filter_index_root = &.{};
-    filter_index_stale = true;
-    filter_cache_rows.deinit(gpa);
-    if (filter_cache_query.len > 0) gpa.free(filter_cache_query);
-    filter_cache_query = &.{};
-}
-
-/// Rebuild the index for `root` if it's missing, stale, or was built for a different project.
-fn ensureFilterIndex(root: []const u8) void {
-    if (!filter_index_stale and std.mem.eql(u8, filter_index_root, root)) return;
-
-    const gpa = runtime.allocator();
-    freeFilterIndex();
-    if (!std.mem.eql(u8, filter_index_root, root)) {
-        if (filter_index_root.len > 0) gpa.free(filter_index_root);
-        filter_index_root = gpa.dupe(u8, root) catch &.{};
-    }
-    indexDir(root, 0);
-    filter_index_stale = false;
-}
-
-/// Depth-first walk honouring the same ignore rules the tree itself uses, so a filter never
-/// surfaces something the unfiltered tree deliberately hides (`.git`, `node_modules`, …). Written
-/// by hand rather than with `Dir.walk` precisely because it has to *prune* ignored directories —
-/// a walker that descends into `node_modules` first and filters after is the slow thing we're
-/// removing.
-fn indexDir(directory: []const u8, depth: usize) void {
-    if (depth > filter_index_max_depth) return;
-    if (filter_index.items.len >= filter_index_max_files) return;
-
-    const io = dvui.io;
-    const gpa = runtime.allocator();
-    var dir = std.Io.Dir.cwd().openDir(io, directory, .{ .access_sub_paths = true, .iterate = true }) catch return;
-    defer dir.close(io);
-
-    var iter = dir.iterate();
-    while (iter.next(io) catch null) |entry| {
-        if (filter_index.items.len >= filter_index_max_files) return;
-
-        const abs_path = std.fs.path.join(gpa, &.{ directory, entry.name }) catch continue;
-        var keep = false;
-        defer if (!keep) gpa.free(abs_path);
-
-        if (runtime.host().folder()) |proj_root| {
-            if (runtime.host().isPathIgnored(proj_root, abs_path, entry.name, entry.kind)) continue;
-        }
-
-        switch (entry.kind) {
-            .file => {
-                filter_index.append(gpa, abs_path) catch continue;
-                keep = true;
-            },
-            .directory => indexDir(abs_path, depth + 1),
-            else => {},
-        }
-    }
-}
-
-/// Rank the indexed paths against `filter_text` and return the rows to draw, best match first.
-///
-/// Matching runs against the **project-relative path**, not just the basename, with zf's filepath
-/// mode: `src/files.zig` beats `s/r/c/f/i/l/e/s.zig` for the query `srcfiles`, and a query with a
-/// `/` in it is treated as a path constraint. The old substring test on the basename alone could
-/// not express either.
-fn rankedFilterRows(root_directory: []const u8, filter_text: []const u8) []const SimpleEntry {
-    ensureFilterIndex(root_directory);
-
-    var query = fuzzy.Query.init(filter_text);
-    if (query.isEmpty()) return &.{};
-
-    // Ranking depends only on the query and the index, and both change far less often than
-    // frames do — the explorer redraws on hover, scroll, animation, every peer widget.
-    if (filter_cache_valid and std.mem.eql(u8, filter_cache_query, filter_text)) {
-        return filter_cache_rows.items;
-    }
-
-    const gpa = runtime.allocator();
-    const arena = dvui.currentWindow().arena();
-    const Hit = fuzzy.Ranked(usize);
-    var hits: std.ArrayListUnmanaged(Hit) = .empty;
-
-    for (filter_index.items, 0..) |abs_path, i| {
-        const rel = std.fs.path.relativePosix(arena, ".", root_directory, abs_path) catch continue;
-        const score = fuzzy.score(rel, &query, .{ .plain = false }) orelse continue;
-        // Shorter paths win ties — the same tie-break zf's own frontend uses.
-        hits.append(arena, .{ .item = i, .score = score, .tie = rel.len }) catch break;
-    }
-    fuzzy.sort(usize, hits.items);
-
-    // Rows borrow the index strings, so the cache lives exactly as long as the index does —
-    // `freeFilterIndex` drops it.
-    filter_cache_rows.clearRetainingCapacity();
-    for (hits.items) |hit| {
-        if (filter_cache_rows.items.len >= filter_max_rows) break;
-        const abs_path = filter_index.items[hit.item];
-        filter_cache_rows.append(gpa, .{
-            .name = std.fs.path.basename(abs_path),
-            .kind = .file,
-            .dir = std.fs.path.dirname(abs_path) orelse root_directory,
-        }) catch break;
-    }
-
-    if (filter_cache_query.len > 0) gpa.free(filter_cache_query);
-    filter_cache_query = gpa.dupe(u8, filter_text) catch &.{};
-    // A failed dupe just means the next frame re-ranks; never claim a cache we can't key.
-    filter_cache_valid = filter_cache_query.len == filter_text.len;
-
-    return filter_cache_rows.items;
-}
-
-// ---- directory listing cache ---------------------------------------------------------------
+// Listing directories, caching those listings, and ranking every path in the project used to
+// live here, as module-level `var`s. They now live in `core.FileTable`, one instance owned by
+// the app and reached through the Host — because the tab strip needs the same answers this tree
+// does, and neither should pay to find them out twice. See that file for why the caches exist
+// at all; the tree just reads them.
 //
-// The unfiltered tree used to re-read every expanded directory straight from disk on *every
-// frame*: `openDir` + `iterate`, an arena dupe per name, a full sort, and an `isPathIgnored`
-// call per entry. On a normal project that is invisible. On a vault with a few hundred thousand
-// markdown files in one directory it is megabytes of arena churn and a sort of the whole listing
-// per frame, which is half of why such a folder drops the app to single-digit FPS. (The other
-// half is drawing a widget per row — see the virtualized file run in `search`.)
-//
-// So a listing is read once and kept. Freshness comes from `folderPathsChanged`, the watcher
-// fizzy already runs on the open root; when there is no watcher backend for the platform,
-// entries fall back to a short TTL so outside edits still show up.
+// It also fixed a real defect. This module is compiled into fizzy *and* into the workbench
+// dylib, so every one of those `var`s was two objects, kept roughly in step by a
+// `disk_generation` counter each copy polled to decide when to throw its own work away.
 
-const CachedEntry = struct {
-    name: []u8,
-    /// Always `.file` or `.directory`. Anything else on disk (a symlink, a fifo) is resolved to
-    /// whichever it behaves as, so a sorted listing is always a directory run followed by a file
-    /// run — the split `search` needs to virtualize the file half. It also fixes a small
-    /// pre-existing bug: an entry of any other kind used to fall through the draw loop's `switch`
-    /// and leave a blank, unlabelled row in the tree.
-    kind: std.Io.File.Kind,
-};
-
-const CachedListing = struct {
-    /// Sorted by `cachedLessThan` and already screened against fizzy's ignore rules.
-    entries: []CachedEntry,
-    /// Count of leading `.directory` entries; `entries[dir_count..]` is the uniform-height run.
-    dir_count: usize,
-    read_at_ms: i64,
-};
-
-/// Keyed by absolute directory path (owned). Values are boxed because a listing is borrowed
-/// across a whole `search` call and the map rehashes as nested directories are read, which would
-/// otherwise move the value out from under the loop iterating it.
-var dir_cache: std.StringArrayHashMapUnmanaged(*CachedListing) = .empty;
-
-/// Listings unlinked from the cache but possibly still being read by the draw in progress.
-///
-/// Invalidation can fire *during* a draw — a context menu that deletes or renames a file runs
-/// inside the row it belongs to, several `search` frames deep, each of which is iterating a
-/// listing. Freeing eagerly there is a use-after-free in the enclosing loops, so an unlinked
-/// listing is parked here and released at the top of the next frame instead.
-var dir_cache_retired: std.ArrayListUnmanaged(*CachedListing) = .empty;
-
-/// Directories held at once. A tree with more than this expanded isn't a UI anyone is reading;
-/// dropping the whole cache beats maintaining an LRU for a case nobody reaches.
-const dir_cache_max_dirs: usize = 1024;
-
-/// Re-read interval used *only* when fizzy has no live folder watcher, so the tree still
-/// notices outside edits on a platform with no watcher backend.
-const dir_cache_unwatched_ttl_ms: i64 = 1000;
-
-/// Monotonic milliseconds. The boot clock rather than a wall clock: a TTL must not be
-/// perturbed by the system clock stepping.
-fn nowMs() i64 {
-    return @intCast(@divTrunc(std.Io.Clock.boot.now(dvui.io).nanoseconds, std.time.ns_per_ms));
+/// The shared file set, or null in a headless host. Every file-drawing path below starts here
+/// and returns early without it, which is the same degradation a missing service gets.
+fn table() ?*FileTable {
+    return runtime.host().files;
 }
 
-/// Display order for two names: case-insensitive, so `README.md`, `docs/` and `zig-out/` sort
-/// where a reader expects rather than splitting into an uppercase run followed by a lowercase one
-/// (`std.mem.order` compares raw bytes, and every uppercase ASCII letter sorts below every
-/// lowercase one).
-///
-/// Falls back to an exact byte comparison when two names differ only in case. That keeps the
-/// order *total* — without it `README` and `readme`, which can coexist on a case-sensitive
-/// filesystem, would compare equal and their relative position would depend on the sort's
-/// internals. `listingHasFile` binary-searches with this same function, so the tiebreak is load
-/// bearing, not cosmetic.
-fn nameOrder(a: []const u8, b: []const u8) std.math.Order {
-    const n = @min(a.len, b.len);
-    for (a[0..n], b[0..n]) |ca, cb| {
-        const la = std.ascii.toLower(ca);
-        const lb = std.ascii.toLower(cb);
-        if (la != lb) return if (la < lb) .lt else .gt;
-    }
-    if (a.len != b.len) return if (a.len < b.len) .lt else .gt;
-    return std.mem.order(u8, a, b);
-}
-
-fn cachedLessThan(_: void, lhs: CachedEntry, rhs: CachedEntry) bool {
-    if (lhs.kind == .directory and rhs.kind != .directory) return true;
-    if (lhs.kind != .directory and rhs.kind == .directory) return false;
-    return nameOrder(lhs.name, rhs.name) == .lt;
-}
-
-fn freeListing(listing: *CachedListing) void {
-    const gpa = runtime.allocator();
-    for (listing.entries) |e| gpa.free(e.name);
-    gpa.free(listing.entries);
-    gpa.destroy(listing);
-}
-
-/// Unlink one listing, parking it for release on the next frame (see `dir_cache_retired`).
-fn retireCachedListingAt(index: usize) void {
-    const gpa = runtime.allocator();
-    const listing = dir_cache.values()[index];
-    gpa.free(dir_cache.keys()[index]);
-    dir_cache.swapRemoveAt(index);
-    dir_cache_retired.append(gpa, listing) catch freeListing(listing);
-}
-
-/// Release listings unlinked during earlier frames. Called once at the top of the tree draw,
-/// which is the only point at which nothing can still be reading one.
-fn releaseRetiredListings() void {
-    for (dir_cache_retired.items) |listing| freeListing(listing);
-    dir_cache_retired.clearRetainingCapacity();
-}
-
-/// Drop every cached listing. The tree re-reads whatever it draws on the next frame.
-pub fn invalidateDirCache() void {
-    while (dir_cache.count() > 0) retireCachedListingAt(dir_cache.count() - 1);
-}
-
-/// Drop the listing for one directory. `folderPathsChanged` calls this with the parent of each
-/// changed path — a file appearing in `a/b/c.md` only invalidates `a/b`.
-pub fn invalidateDirCacheFor(directory: []const u8) void {
-    if (dir_cache.getIndex(directory)) |idx| retireCachedListingAt(idx);
-}
-
-/// A `.modified` event for a file that may or may not be new.
-///
-/// A file's *contents* changing leaves its parent's listing exactly as it was, and that is by
-/// far the most common event there is (every save of every open document), so the tree wants to
-/// ignore it. But on macOS a brand-new file arrives as `.modified` too: FSEvents coalesces
-/// ItemCreated and ItemModified onto one event, and nightwatch resolves that pair to `.modified`
-/// because a rewrite of an existing file through `O_CREAT` sets ItemCreated as well. Ignoring
-/// every `.modified` therefore meant a file created outside fizzy never appeared in the tree.
-///
-/// So: re-read the parent only when its cached listing has never seen this name. A save of an
-/// already-listed file still costs one binary search and no disk access.
-pub fn noteFileModified(path: []const u8) void {
-    const parent = std.fs.path.dirname(path) orelse return;
-    const idx = dir_cache.getIndex(parent) orelse return; // not cached: nothing to re-read
-    if (listingHasFile(dir_cache.values()[idx], std.fs.path.basename(path))) return;
-    retireCachedListingAt(idx);
-}
-
-/// Binary search of the file half of a listing (`entries[dir_count..]`, sorted by `nameOrder` —
-/// see `cachedLessThan`; this must use the *same* comparator or the search silently misses). A per-save lookup must not walk a listing that can be hundreds of
-/// thousands of entries long.
-fn listingHasFile(listing: *const CachedListing, name: []const u8) bool {
-    const files_only = listing.entries[listing.dir_count..];
-    var lo: usize = 0;
-    var hi: usize = files_only.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        switch (nameOrder(files_only[mid].name, name)) {
-            .lt => lo = mid + 1,
-            .gt => hi = mid,
-            .eq => return true,
-        }
-    }
-    return false;
-}
-
-/// Cached, sorted, ignore-screened listing for `directory`, reading it from disk on a miss.
-/// Null when the directory can't be opened.
-fn listDir(directory: []const u8) ?*const CachedListing {
-    const gpa = runtime.allocator();
-    const now = nowMs();
-
-    if (dir_cache.getIndex(directory)) |idx| {
-        const listing = dir_cache.values()[idx];
-        if (runtime.host().folderWatchActive() or now - listing.read_at_ms < dir_cache_unwatched_ttl_ms) {
-            return listing;
-        }
-        retireCachedListingAt(idx);
-    }
-
-    if (dir_cache.count() >= dir_cache_max_dirs) invalidateDirCache();
-
-    const io = dvui.io;
-    var dir = std.Io.Dir.cwd().openDir(io, directory, .{ .access_sub_paths = true, .iterate = true }) catch return null;
-    defer dir.close(io);
-
-    var entries: std.ArrayListUnmanaged(CachedEntry) = .empty;
-    const proj_root = runtime.host().folder();
-    // The ignore check wants an absolute path but doesn't keep it, so it's built into a stack
-    // buffer: joining through an allocator here would mean one allocation per entry on a listing
-    // that can be hundreds of thousands long.
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-
-    var iter = dir.iterate();
-    while (iter.next(io) catch null) |entry| {
-        const abs_path: ?[]const u8 = std.fmt.bufPrint(
-            &path_buf,
-            "{s}" ++ std.fs.path.sep_str ++ "{s}",
-            .{ directory, entry.name },
-        ) catch null;
-
-        if (proj_root) |root| {
-            const abs = abs_path orelse continue;
-            if (runtime.host().isPathIgnored(root, abs, entry.name, entry.kind)) continue;
-        }
-
-        const kind: std.Io.File.Kind = switch (entry.kind) {
-            .directory => .directory,
-            .file => .file,
-            else => if (abs_path) |abs|
-                (if (pathIsDirAbsolute(abs)) .directory else .file)
-            else
-                .file,
-        };
-
-        const name = gpa.dupe(u8, entry.name) catch continue;
-        entries.append(gpa, .{ .name = name, .kind = kind }) catch {
-            gpa.free(name);
-            continue;
-        };
-    }
-
-    const owned = entries.toOwnedSlice(gpa) catch {
-        for (entries.items) |e| gpa.free(e.name);
-        entries.deinit(gpa);
-        return null;
-    };
-    std.mem.sort(CachedEntry, owned, {}, cachedLessThan);
-
-    var dir_count: usize = 0;
-    while (dir_count < owned.len and owned[dir_count].kind == .directory) dir_count += 1;
-
-    const listing = gpa.create(CachedListing) catch {
-        for (owned) |e| gpa.free(e.name);
-        gpa.free(owned);
-        return null;
-    };
-    listing.* = .{ .entries = owned, .dir_count = dir_count, .read_at_ms = now };
-
-    const key = gpa.dupe(u8, directory) catch {
-        freeListing(listing);
-        return null;
-    };
-    dir_cache.put(gpa, key, listing) catch {
-        gpa.free(key);
-        freeListing(listing);
-        return null;
-    };
-    return listing;
-}
-
-/// Free everything this module holds across frames. Called from `Workbench.deinit`.
-pub fn deinitCaches() void {
-    deinitFilterIndex();
-    invalidateDirCache();
-    releaseRetiredListings();
-    dir_cache.deinit(runtime.allocator());
-    dir_cache_retired.deinit(runtime.allocator());
-    selectionFreeAll();
-    selected_paths.deinit(runtime.allocator());
-}
-
-/// One row to draw. `dir` is normally null — the row's parent directory is whichever directory
-/// the walk is currently in. Filtered rows come from all over the project at once (a flat ranked
-/// list, not a walk), so those carry their own parent explicitly.
-const SimpleEntry = struct {
-    name: []const u8,
-    kind: std.Io.File.Kind,
-    dir: ?[]const u8 = null,
-};
 
 // ---- file-run virtualization ----------------------------------------------------------------
 //
@@ -980,7 +540,7 @@ fn filterLabel(
     };
 
     var buf: [fuzzy.highlight_buf_len]usize = undefined;
-    // `.plain = false` matches how `rankedFilterRows` scored these rows: the label is a
+    // `.plain = false` matches how `FileTable.search` scored these rows: the label is a
     // project-relative path, so zf weights its basename here too.
     const hits = fuzzy.highlight(label, q, &buf, .{ .plain = false });
     if (hits.len == 0) {
@@ -1017,29 +577,31 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
     const recursor = struct {
         /// Draw a set of rows: either the contents of `directory` (the normal tree walk, `rows`
         /// null), or a caller-supplied flat list of already-ranked rows (`rows` non-null, used
-        /// while a filter is active — see `rankedFilterRows`).
+        /// while a filter is active — see `FileTable.search`).
         ///
         /// The filtered case used to run through the walk too, re-reading *every* directory in
         /// the project from disk on *every frame* and testing each basename with a substring
         /// match. That is what made typing in the filter box scale with project size.
-        fn search(directory: []const u8, tree: *wdvui.TreeWidget, inner_unique_id: dvui.Id, inner_id_extra: *usize, color_id: *usize, filter_text: []const u8, parent_branch: ?*wdvui.TreeWidget.Branch, rows: ?[]const SimpleEntry) anyerror!void {
+        fn search(directory: []const u8, tree: *wdvui.TreeWidget, inner_unique_id: dvui.Id, inner_id_extra: *usize, color_id: *usize, filter_text: []const u8, parent_branch: ?*wdvui.TreeWidget.Branch, rows: ?[]const FileTable.Entry) anyerror!void {
             // Borrows `filter_text`, which outlives this call — see `fuzzy.Query`.
             const query = fuzzy.Query.init(filter_text);
             const active_query: ?*const fuzzy.Query = if (query.isEmpty()) null else &query;
 
             // Two sources of rows: a caller-supplied ranked list while a filter is active (flat,
-            // all files, already capped and screened), or this directory's cached listing.
-            // Neither is copied — a listing can be hundreds of thousands of entries and only the
-            // handful actually drawn below is touched.
-            const listing: ?*const CachedListing = if (rows == null) (listDir(directory) orelse return) else null;
+            // all files, already capped and screened), or this directory's cached listing. One
+            // `FileTable.Entry` type serves both, which is what lets the run below draw either
+            // without a second code path. Neither is copied — a listing can be hundreds of
+            // thousands of entries and only the handful actually drawn is touched.
+            const listing: ?*const FileTable.Listing = if (rows == null)
+                ((table() orelse return).listDir(directory) orelse return)
+            else
+                null;
             const total: usize = if (rows) |r| r.len else listing.?.entries.len;
             const file_run_start: usize = if (listing) |l| l.dir_count else 0;
 
             const entryAt = struct {
-                fn get(r: ?[]const SimpleEntry, l: ?*const CachedListing, i: usize) SimpleEntry {
-                    if (r) |ranked| return ranked[i];
-                    const e = l.?.entries[i];
-                    return .{ .name = e.name, .kind = e.kind };
+                fn get(r: ?[]const FileTable.Entry, l: ?*const FileTable.Listing, i: usize) FileTable.Entry {
+                    return if (r) |ranked| ranked[i] else l.?.entries[i];
                 }
             }.get;
 
@@ -1161,7 +723,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
         /// Draw one file or folder row, returning its top edge in physical screen coordinates
         /// (which is what `search` measures the run's row pitch from).
         fn drawRow(
-            entry: SimpleEntry,
+            entry: FileTable.Entry,
             directory: []const u8,
             tree: *wdvui.TreeWidget,
             inner_unique_id: dvui.Id,
@@ -1601,7 +1163,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
     };
 
     if (outer_filter_text.len > 0) {
-        const ranked = rankedFilterRows(root_directory, outer_filter_text);
+        const files = table() orelse return;
+        const ranked = files.search(root_directory, outer_filter_text, dvui.currentWindow().arena());
         try recursor.search(root_directory, outer_tree, unique_id, &id_extra, &color_i, outer_filter_text, null, ranked);
         flushPendingFileShiftRange(root_directory, outer_tree, ranked);
     } else {
@@ -1613,6 +1176,14 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
 pub fn isFileSelected(id: usize) bool {
     if (selected_id) |p| if (p == id) return true;
     return selected_paths.contains(id);
+}
+
+/// Free everything this module holds across frames. Called from `Workbench.deinit`. Only the
+/// selection is left: the listing and path caches this used to tear down belong to the app now
+/// (see `table`), which is also why nothing here is per-copy any more.
+pub fn deinitCaches() void {
+    selectionFreeAll();
+    selected_paths.deinit(runtime.allocator());
 }
 
 fn selectionFreeAll() void {
@@ -1687,7 +1258,7 @@ fn appendRowOrder(
     directory: []const u8,
     out: *std.ArrayListUnmanaged(FileVisRow),
 ) void {
-    const listing = listDir(directory) orelse return;
+    const listing = (table() orelse return).listDir(directory) orelse return;
     for (listing.entries) |e| {
         const abs = std.fs.path.join(arena, &.{ directory, e.name }) catch continue;
         const branch_id = tree_id.update(abs);
@@ -1701,7 +1272,7 @@ fn appendRowOrder(
 fn flushPendingFileShiftRange(
     root_directory: []const u8,
     tree: *wdvui.TreeWidget,
-    ranked: ?[]const SimpleEntry,
+    ranked: ?[]const FileTable.Entry,
 ) void {
     const p = pending_file_shift_range orelse return;
     pending_file_shift_range = null;
@@ -1935,7 +1506,7 @@ pub fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.m
         dvui.log.err("Failed to move {s} to {s}", .{ source_path, new_path });
         return false;
     };
-    invalidateAfterDiskChange();
+    if (table()) |t| t.invalidateAll();
 
     if (runtime.host().docFromPath(source_path)) |doc| {
         doc.owner.setDocumentPath(doc, new_path) catch {
@@ -1955,7 +1526,7 @@ pub fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.m
 /// every open document beneath it; a file rename rewrites that document. Logs and
 /// continues on a filesystem failure (matches the explorer's inline behavior).
 pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File.Kind) !void {
-    invalidateAfterDiskChange();
+    if (table()) |t| t.invalidateAll();
     switch (kind) {
         .directory => {
             std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename folder: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
@@ -1990,7 +1561,7 @@ pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File
 /// Delete `path` from disk (a directory must be empty — mirrors the explorer's
 /// inline Delete). Logs and continues on failure.
 pub fn deletePath(path: []const u8) void {
-    invalidateAfterDiskChange();
+    if (table()) |t| t.invalidateAll();
     const is_dir = pathIsDirAbsolute(path);
     if (is_dir) {
         std.Io.Dir.deleteDirAbsolute(dvui.io, path) catch {
@@ -2043,14 +1614,14 @@ fn closeDocumentsForDeletedPath(path: []const u8, is_dir: bool) void {
 
 /// Create an empty file at absolute `path`.
 pub fn createFilePath(path: []const u8) !void {
-    invalidateAfterDiskChange();
+    if (table()) |t| t.invalidateAll();
     var handle = try std.Io.Dir.createFileAbsolute(dvui.io, path, .{});
     handle.close(dvui.io);
 }
 
 /// Create a directory at absolute `path` (parents must already exist).
 pub fn createDirPath(path: []const u8) !void {
-    invalidateAfterDiskChange();
+    if (table()) |t| t.invalidateAll();
     try std.Io.Dir.createDirAbsolute(dvui.io, path, .default_dir);
 }
 

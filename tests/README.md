@@ -110,8 +110,8 @@ Each covered file is its own test artifact root in `build/app.zig`
    imports `dvui` and `fizzy_sdk`.
 
 3. **`fizzy-integration-tests`** — `tests/integration.zig` exercises
-   real fizzy code that needs a live `dvui.Window` and `fizzy.app` /
-   `fizzy.editor` globals. dvui's `testing` backend creates a window with
+   real fizzy code that needs a live `dvui.Window` and the `fizzy.app()` /
+   `fizzy.editor()` instances. dvui's `testing` backend creates a window with
    no GPU and no SDL; `tests/fizzy_shim.zig` heap-allocates just enough
    of those globals. The shim is deliberately minimal — when a new test
    needs a field the shim doesn't set, set just that field at the top of
@@ -120,7 +120,7 @@ Each covered file is its own test artifact root in `build/app.zig`
 Currently covered in the integration artifact:
 
 - A single smoke test that the shim brings up a working headless
-  `dvui.Window` with `fizzy.app` / `fizzy.editor` globals set.
+  `dvui.Window` with the `fizzy.app()` / `fizzy.editor()` instances set.
 
 Pixel-art-specific coverage that used to live here (`Internal.File`,
 `Layer`, `Packer`, `Animation`, grid/pack/flood-fill regressions, the
@@ -180,7 +180,7 @@ What's intentionally **not** here yet:
    defer ctx.deinit(std.testing.allocator);
    ```
 3. Drive the function under test and assert on the resulting state.
-4. If the code under test reads a `fizzy.editor` field the shim hasn't
+4. If the code under test reads a `fizzy.editor()` field the shim hasn't
    set, set it at the top of your test instead of broadening the shim.
 5. Run `zig build test-integration`.
 

@@ -146,6 +146,14 @@ pub const VTable = struct {
     /// on `drawWorkspaces`, which only worked because fizzy's own shape has a panel — an app
     /// with a differently-shaped bottom had no way to answer.
     splitState: *const fn (ctx: *anyopaque, keywords: []const []const u8) ?SplitState,
+    /// Draw the app's glyph for a declared file kind ("image", "source", …), or return false if
+    /// this app has no glyph for it.
+    ///
+    /// The kind comes from a plugin (`Host.FileKind`); the *look* is the app's, which is why
+    /// this crosses back over rather than living in the SDK. Fizzy's table is one file,
+    /// `editor/file_glyphs.zig`, so the file tree and the tab bar cannot disagree; an app that
+    /// ships no table simply falls through to the caller's generic icon.
+    drawFileKindGlyph: *const fn (ctx: *anyopaque, kind: []const u8, color: dvui.Color) bool,
     /// Close document `id` (may prompt when dirty).
     closeDocById: *const fn (ctx: *anyopaque, id: u64) anyerror!void,
     /// Open/switch the project root folder.
@@ -376,6 +384,10 @@ pub fn revealPosition(self: EditorAPI, path: []const u8, line: u32, character: u
 
 pub fn splitState(self: EditorAPI, keywords: []const []const u8) ?SplitState {
     return self.vtable.splitState(self.ctx, keywords);
+}
+
+pub fn drawFileKindGlyph(self: EditorAPI, kind: []const u8, color: dvui.Color) bool {
+    return self.vtable.drawFileKindGlyph(self.ctx, kind, color);
 }
 
 pub fn closeDocById(self: EditorAPI, id: u64) !void {

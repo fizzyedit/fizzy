@@ -2,7 +2,7 @@
 //!
 //! These tests run real fizzy drawing functions against a *headless*
 //! `dvui.Window` provided by dvui's testing backend. The shim in
-//! `fizzy_shim.zig` brings up just enough of `fizzy.app` / `fizzy.editor`
+//! `fizzy_shim.zig` brings up just enough of `fizzy.app()` / `fizzy.editor()`
 //! for the code paths exercised here to read the globals they need
 //! without booting the full editor (no assets, no themes, no SDL).
 //!
@@ -26,8 +26,8 @@ test "shim brings up a dvui.testing window with usable fizzy globals" {
     const buf = try arena.alloc(u8, 16);
     @memset(buf, 0);
 
-    try std.testing.expect(fizzy.app == ctx.app);
-    try std.testing.expect(fizzy.editor == ctx.editor);
+    try std.testing.expect(fizzy.app() == ctx.app);
+    try std.testing.expect(fizzy.editor() == ctx.editor);
 }
 
 // -- menu accelerators -------------------------------------------------------------------------
@@ -477,10 +477,9 @@ test "a provider swap degrades cleanly when the backend has no render targets" {
 
     const editor = ctx.editor;
     center_frame_ctx = editor;
-    defer {
-        editor.center_transition.discard();
-        editor.host.center_providers.deinit(std.testing.allocator);
-    }
+    // Only the transition: every host registry a `registerCenter` touches comes down with
+    // `ctx.deinit`'s `host.deinit`.
+    defer editor.center_transition.discard();
 
     try editor.host.registerCenter(.{ .id = "test.center.a", .draw = centerADraw });
     try editor.host.registerCenter(.{ .id = "test.center.b", .draw = centerBDraw });
@@ -513,10 +512,9 @@ test "a center provider that disappears is not drawn for its own cross-fade" {
 
     const editor = ctx.editor;
     center_frame_ctx = editor;
-    defer {
-        editor.center_transition.discard();
-        editor.host.center_providers.deinit(std.testing.allocator);
-    }
+    // Only the transition: every host registry a `registerCenter` touches comes down with
+    // `ctx.deinit`'s `host.deinit`.
+    defer editor.center_transition.discard();
 
     try editor.host.registerCenter(.{ .id = "test.center.a", .draw = centerADraw });
     try editor.host.registerCenter(.{ .id = "test.center.b", .draw = centerBDraw });

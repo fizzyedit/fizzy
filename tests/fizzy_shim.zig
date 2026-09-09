@@ -6,11 +6,11 @@
 //! tests that just want to call e.g. `Internal.File.fillPoint` against
 //! an in-memory file.
 //!
-//! Strategy: heap-allocate `fizzy.app` and `fizzy.editor`, zero-initialize
-//! the editor, then set only the fields tests actually read. Convention:
-//! if a new test fails because some `fizzy.editor.foo` is zero/empty/null,
-//! set just that field at the top of that test rather than expanding
-//! the shim.
+//! Strategy: heap-allocate the app and editor, zero-initialize the editor,
+//! publish both with `fizzy.setInstances`, then set only the fields tests
+//! actually read. Convention: if a new test fails because some
+//! `fizzy.editor().foo` is zero/empty/null, set just that field at the top of
+//! that test rather than expanding the shim.
 
 const std = @import("std");
 const dvui = @import("dvui");
@@ -22,6 +22,10 @@ pub const Ctx = struct {
     editor: *fizzy.Editor,
 
     pub fn deinit(self: *Ctx, gpa: std.mem.Allocator) void {
+        // A test that registers a surface (`registerCenterProvider` and friends) puts it in a
+        // host-owned list, so the host has to come down with the rest. Safe on the zeroed host
+        // below: every registry in it is an empty `ArrayListUnmanaged`/`HashMapUnmanaged`.
+        self.editor.host.deinit();
         self.editor.arena.deinit();
         gpa.destroy(self.editor);
         gpa.destroy(self.app);
@@ -39,7 +43,6 @@ pub fn init(gpa: std.mem.Allocator) !Ctx {
         .window = t.window,
         .root_path = "",
     };
-    fizzy.app = app_ptr;
 
     // fizzy.Editor contains many non-nullable pointer / non-zeroable
     // fields, so `std.mem.zeroes(fizzy.Editor)` rejects at comptime.
@@ -47,13 +50,14 @@ pub fn init(gpa: std.mem.Allocator) !Ctx {
     // and `@memset` the bytes to zero — every byte of the struct is
     // now 0, which is safe as long as tests only read fields they
     // explicitly set below. If a new test fails because some
-    // `fizzy.editor.foo` is zero/null/empty, set just that field at the
+    // `fizzy.editor().foo` is zero/null/empty, set just that field at the
     // top of that test rather than expanding the shim.
     const editor_ptr = try gpa.create(fizzy.Editor);
     @memset(@as([*]u8, @ptrCast(editor_ptr))[0..@sizeOf(fizzy.Editor)], 0);
     editor_ptr.arena = std.heap.ArenaAllocator.init(gpa);
     editor_ptr.host.allocator = gpa;
-    fizzy.editor = editor_ptr;
+
+    fizzy.setInstances(app_ptr, editor_ptr);
 
     return .{ .t = t, .app = app_ptr, .editor = editor_ptr };
 }

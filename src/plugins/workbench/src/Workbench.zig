@@ -48,12 +48,6 @@ api: Api = undefined,
 /// (`Editor.loadWorkbenchDylib`), so both copies see this exact field.
 pending_new_file_path: ?[]u8 = null,
 
-/// Bumped whenever something changes the contents of a watched directory. `files.zig` keeps a
-/// per-copy directory listing cache; comparing this counter against its own last-seen value is
-/// how the copy that actually draws learns to drop that cache, including when the change was
-/// made by the copy that doesn't. Wrapping is harmless — only inequality is ever tested.
-disk_generation: u32 = 0,
-
 
 /// Queue `path` to be revealed by the file tree on an upcoming frame, replacing any path already
 /// queued. Safe from either copy of the module; the tree consumes it when the row exists.
@@ -67,13 +61,6 @@ pub fn setPendingNewFilePath(self: *Workbench, path: []const u8) !void {
 pub fn clearPendingNewFilePath(self: *Workbench) void {
     if (self.pending_new_file_path) |old| self.allocator.free(old);
     self.pending_new_file_path = null;
-}
-
-/// Announce that something on disk changed under an open folder, so every copy of `files.zig`
-/// drops its listing cache on its next draw. Cheap and idempotent — call it on any create,
-/// delete, rename or move, including ones performed by a plugin's own save routine.
-pub fn noteDiskChanged(self: *Workbench) void {
-    self.disk_generation +%= 1;
 }
 
 pub fn init(allocator: std.mem.Allocator) Workbench {

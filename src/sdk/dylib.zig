@@ -12,6 +12,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const proxy_bridge = @import("proxy_bridge");
+const core = @import("core");
 const fingerprint = @import("fingerprint.zig");
 const dvui_context = @import("dvui_context.zig");
 const runtime = @import("runtime.zig");
@@ -156,6 +157,16 @@ const sdk_boundary_types = .{
     wikilink_service.Api.Resolution,
     wikilink_service.Api.Candidate,
     wikilink_service.Token,
+    // The shared project file set. Unlike everything above it, this crosses the boundary purely
+    // as *shape*: `Host.files` is a pointer to a host-owned struct whose methods plugin code
+    // calls directly, with no vtable in between — so a field added or moved here silently
+    // changes where plugin code reads, and the pointer means `hashType` won't walk it from
+    // `Host`. `Entry` and `Listing` are reached only through slices, the same lesson
+    // `CompletionItem` taught, so they need their own entries too.
+    core.FileTable,
+    core.FileTable.Entry,
+    core.FileTable.Listing,
+    core.FileTable.Env,
     VersionTriplet,
 };
 

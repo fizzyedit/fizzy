@@ -43,7 +43,6 @@ var plugin: sdk.Plugin = .{
 
 const vtable: sdk.Plugin.VTable = .{
     .contributeKeybinds = contributeKeybinds,
-    .folderPathsChanged = folderPathsChanged,
 };
 
 /// When false at compile time (`-Dworkbench-file-tree=false`), the Files sidebar is not registered.
@@ -74,46 +73,6 @@ fn drawFiles(_: ?*anyopaque) anyerror!void {
 
 fn drawCenter(_: ?*anyopaque) anyerror!dvui.App.Result {
     return runtime.host().drawWorkspaces(0);
-}
-
-/// Keeps the file tree's cached directory listings honest. The tree no longer re-reads every
-/// expanded directory each frame (that is what made a folder with a few hundred thousand files
-/// unusable), so this is how a change made outside fizzy — or by another tool — reaches it.
-///
-/// Only the *parent* of each changed path is dropped: a file appearing in `a/b/c.md` says
-/// nothing about `a`. A truncated batch means the event list is an incomplete picture, so the
-/// whole cache goes instead.
-fn folderPathsChanged(_: *anyopaque, changes: sdk.Plugin.PathChanges) void {
-    if (!has_file_tree) return;
-
-    if (changes.truncated) {
-        files.invalidateDirCache();
-        return;
-    }
-
-    for (changes.events) |event| {
-        // A file's *contents* changing leaves every listing exactly as it was, and this is by
-        // far the most common event there is — every save of every open document. Re-reading a
-        // directory for it would put the full cost of a quarter-million-entry listing back on
-        // the frame after each keystroke-triggered autosave. It can't be dropped outright
-        // though: macOS reports a newly created file as `.modified` as well (see
-        // `files.noteFileModified`), so the listing is re-read when the name is one it has
-        // never seen.
-        if (event.kind == .modified and event.object == .file) {
-            files.noteFileModified(event.path);
-            continue;
-        }
-
-        if (std.fs.path.dirname(event.path)) |parent| files.invalidateDirCacheFor(parent);
-        // A rename's two halves can sit in different directories.
-        if (event.old_path.len > 0) {
-            if (std.fs.path.dirname(event.old_path)) |parent| files.invalidateDirCacheFor(parent);
-        }
-        // A directory that itself appeared or vanished changes its own listing too. `.unknown`
-        // is included deliberately: the object is already gone by the time fizzy looks, so it
-        // could be either.
-        if (event.object != .file) files.invalidateDirCacheFor(event.path);
-    }
 }
 
 /// File-management keybinds (open / save). Fizzy registers its own
