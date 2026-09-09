@@ -66,7 +66,7 @@ pub fn register(host: *sdk.Host) !void {
     plugin.state = @ptrCast(st);
 
     try host.registerPlugin(&plugin);
-    try host.registerFileKind(.{ .owner = &plugin, .kindFor = fileKind });
+    try host.registerFileKind(.{ .owner = &plugin, .kind = fileKind });
 }
 
 pub fn pluginPtr() *sdk.Plugin {

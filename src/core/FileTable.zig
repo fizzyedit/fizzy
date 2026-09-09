@@ -422,6 +422,52 @@ fn freeIndex(self: *FileTable) void {
     self.results.clearRetainingCapacity();
 }
 
+// ---- mutation --------------------------------------------------------------------------------
+//
+// The table that knows what is on disk is also what changes it, so a caller cannot forget to
+// invalidate — which is the bug these replace. They were five near-identical helpers in the file
+// tree, each opening with a manual `invalidateAfterDiskChange()` that any new call site had to
+// remember, and each also exposed as a `workbench-api` service method so a plugin wanting to
+// create a file had to depend on the plugin that draws tabs.
+//
+// Nothing here knows that documents exist. Keeping an open document's path in step with a rename
+// is the host's job, because only the host can see the document set — see `Host.renamePath`.
+
+/// Create an empty file at absolute `path`.
+pub fn createFile(self: *FileTable, path: []const u8) !void {
+    self.invalidateAll();
+    var handle = try std.Io.Dir.createFileAbsolute(self.io, path, .{});
+    handle.close(self.io);
+}
+
+/// Create a directory at absolute `path`. Parents must already exist.
+pub fn createDir(self: *FileTable, path: []const u8) !void {
+    self.invalidateAll();
+    try std.Io.Dir.createDirAbsolute(self.io, path, .default_dir);
+}
+
+/// Delete absolute `path`, which must be a file or an empty directory.
+pub fn remove(self: *FileTable, path: []const u8) !void {
+    self.invalidateAll();
+    if (self.isDir(path)) {
+        try std.Io.Dir.deleteDirAbsolute(self.io, path);
+    } else {
+        try std.Io.Dir.deleteFileAbsolute(self.io, path);
+    }
+}
+
+/// Rename absolute `old_path` to absolute `new_path`. Works for a file or a directory.
+pub fn rename(self: *FileTable, old_path: []const u8, new_path: []const u8) !void {
+    self.invalidateAll();
+    try std.Io.Dir.renameAbsolute(old_path, new_path, self.io);
+}
+
+/// Whether `abs` names a directory. False for anything that can't be stat'd, so a caller
+/// treating a vanished path as a file is the safe default.
+pub fn isDir(self: *const FileTable, abs: []const u8) bool {
+    return isDirAbsolute(self.io, abs);
+}
+
 // ---- internals -------------------------------------------------------------------------------
 
 /// Unlink one listing, parking it for release on the next frame (see `retired`).

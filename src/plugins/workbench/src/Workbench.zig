@@ -200,75 +200,17 @@ fn drawUnsavedDot(_: ?*anyopaque, path: []const u8, id_extra: usize) void {
 // ============================================================================
 
 const service_vtable: Api.VTable = .{
-    .open = svcOpen,
     .currentGrouping = svcCurrentGrouping,
     .newGrouping = svcNewGrouping,
-    .close = svcClose,
-    .save = svcSave,
-    .isOpen = svcIsOpen,
-    .openCount = svcOpenCount,
-    .openPathAt = svcOpenPathAt,
-    .createFile = svcCreateFile,
-    .createDir = svcCreateDir,
-    .rename = svcRename,
-    .delete = svcDelete,
-    .move = svcMove,
     .registerBranchDecorator = svcRegisterBranchDecorator,
-    .revealPosition = svcRevealPosition,
 };
 
-inline fn hostOf(ctx: *anyopaque) *sdk.Host {
-    return @ptrCast(@alignCast(ctx));
-}
-
-fn svcOpen(ctx: *anyopaque, path: []const u8, grouping: u64) anyerror!bool {
-    return hostOf(ctx).openFilePath(path, grouping);
-}
 fn svcCurrentGrouping(_: *anyopaque) u64 {
     return runtime.workbench().currentGroupingID();
 }
 fn svcNewGrouping(_: *anyopaque) u64 {
     return runtime.workbench().newGroupingID();
 }
-fn svcClose(ctx: *anyopaque, id: u64) anyerror!void {
-    return hostOf(ctx).closeDocById(id);
-}
-fn svcSave(ctx: *anyopaque) anyerror!void {
-    return hostOf(ctx).save();
-}
-fn svcIsOpen(ctx: *anyopaque, path: []const u8) bool {
-    return hostOf(ctx).docFromPath(path) != null;
-}
-fn svcOpenCount(ctx: *anyopaque) usize {
-    return hostOf(ctx).openDocCount();
-}
-fn svcOpenPathAt(ctx: *anyopaque, index: usize) ?[]const u8 {
-    const doc = hostOf(ctx).docByIndex(index) orelse return null;
-    return doc.owner.documentPath(doc);
-}
-fn svcCreateFile(_: *anyopaque, path: []const u8) anyerror!void {
-    return files.createFilePath(path);
-}
-fn svcCreateDir(_: *anyopaque, path: []const u8) anyerror!void {
-    return files.createDirPath(path);
-}
-fn svcRename(_: *anyopaque, path: []const u8, new_path: []const u8, kind: std.Io.File.Kind) anyerror!void {
-    return files.renamePath(path, new_path, kind);
-}
-fn svcDelete(_: *anyopaque, path: []const u8) void {
-    files.deletePath(path);
-}
-fn svcMove(_: *anyopaque, path: []const u8, target_dir: []const u8) anyerror!bool {
-    return files.moveOnePath(path, target_dir, dvui.currentWindow().arena());
-}
 fn svcRegisterBranchDecorator(_: *anyopaque, decorator: BranchDecorator) anyerror!void {
     return runtime.workbench().registerBranchDecorator(decorator);
-}
-fn svcRevealPosition(ctx: *anyopaque, path: []const u8, line: u32, character: u32, open_side: bool) anyerror!bool {
-    // Forwards to the host. This used to be the *only* way to reach goto-definition, which made
-    // text and markdown depend on workbench being installed — even though the implementation was
-    // already written almost entirely against the host. It now lives on `EditorAPI`
-    // (`Editor.revealPosition`); this remains so plugins compiled against `workbench-api` keep
-    // working.
-    return hostOf(ctx).revealPosition(path, line, character, open_side);
 }

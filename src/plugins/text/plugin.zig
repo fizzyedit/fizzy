@@ -99,7 +99,7 @@ pub fn register(host: *sdk.Host) !void {
     // claim set is unbounded, so it can never appear as a specialized claimant in the File
     // Types table, only as the implicit "Text (fallback)" option.
     host.registerFallbackEditor(&plugin);
-    try host.registerFileKind(.{ .owner = &plugin, .kindFor = fileKind });
+    try host.registerFileKind(.{ .owner = &plugin, .kind = fileKind });
     try host.registerCommand(.{
         .id = sdk.Plugin.commandId("text", "copy"),
         .owner = &plugin,

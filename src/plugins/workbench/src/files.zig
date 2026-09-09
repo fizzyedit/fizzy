@@ -492,7 +492,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             }
 
             if (!std.mem.eql(u8, label, te.getText()) and te.getText().len > 0 and valid_path) {
-                try renamePath(full_path, new_path, kind);
+                try runtime.host().renamePath(full_path, new_path, kind);
             }
         }
     } else if (kind == .file) {
@@ -984,7 +984,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                                     dvui.log.err("Failed to collect selection paths: {any}", .{err});
                                     break :blk &[_][]const u8{};
                                 };
-                                for (top) |del_path| deletePath(del_path);
+                                for (top) |del_path| runtime.host().deletePath(del_path);
                             }
                         }
                     }
@@ -1368,10 +1368,8 @@ fn selectionPathsSorted(arena: std.mem.Allocator) ![]const []const u8 {
 }
 
 fn pathIsDirAbsolute(abs: []const u8) bool {
-    const io = dvui.io;
-    var d = std.Io.Dir.openDirAbsolute(io, abs, .{}) catch return false;
-    d.close(io);
-    return true;
+    const files = table() orelse return false;
+    return files.isDir(abs);
 }
 
 /// True when some registered plugin claims this file extension (not directories).
@@ -1475,7 +1473,7 @@ fn applyFileMove(unique_id: dvui.Id, tree: *wdvui.TreeWidget, target_dir: []cons
         }.lt);
 
         for (paths.items) |p| {
-            _ = try moveOnePath(p, target_dir, arena);
+            _ = try runtime.host().movePath(p, target_dir);
         }
 
         // Rebuild the selection map from the new paths on disk.
@@ -1491,139 +1489,12 @@ fn applyFileMove(unique_id: dvui.Id, tree: *wdvui.TreeWidget, target_dir: []cons
         }
         selection_anchor = selected_id;
     } else if (primary_path_opt) |removed_path| {
-        _ = try moveOnePath(removed_path, target_dir, arena);
+        _ = try runtime.host().movePath(removed_path, target_dir);
     }
 
     dvui.dataRemove(null, unique_id, "removed_path");
 }
 
-pub fn moveOnePath(source_path: []const u8, target_dir: []const u8, arena: std.mem.Allocator) !bool {
-    const base = std.fs.path.basename(source_path);
-    const new_path = try std.fs.path.join(arena, &.{ target_dir, base });
-    if (std.mem.eql(u8, source_path, new_path)) return false;
-
-    std.Io.Dir.renameAbsolute(source_path, new_path, dvui.io) catch {
-        dvui.log.err("Failed to move {s} to {s}", .{ source_path, new_path });
-        return false;
-    };
-    if (table()) |t| t.invalidateAll();
-
-    if (runtime.host().docFromPath(source_path)) |doc| {
-        doc.owner.setDocumentPath(doc, new_path) catch {
-            dvui.log.err("Failed to duplicate path: {s}", .{new_path});
-            return error.FailedToDuplicatePath;
-        };
-    }
-    return true;
-}
-
-// ---- workbench-api file-tree operations -------------------------------------
-// The functions below are the disk-mutating primitives behind both the explorer's
-// inline actions (rename/delete above) and the `workbench-api` Host service. They
-// keep any matching open document's `path` field in sync so tabs don't dangle.
-
-/// Rename `full_path` to `new_path`. A directory rename rewrites the `path` of
-/// every open document beneath it; a file rename rewrites that document. Logs and
-/// continues on a filesystem failure (matches the explorer's inline behavior).
-pub fn renamePath(full_path: []const u8, new_path: []const u8, kind: std.Io.File.Kind) !void {
-    if (table()) |t| t.invalidateAll();
-    switch (kind) {
-        .directory => {
-            std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename folder: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
-
-            var di: usize = 0;
-            while (di < runtime.host().openDocCount()) : (di += 1) {
-                const doc = runtime.host().docByIndex(di) orelse continue;
-                const path = doc.owner.documentPath(doc);
-                if (std.mem.containsAtLeast(u8, path, 1, full_path)) {
-                    const file_name = dvui.currentWindow().arena().dupe(u8, std.fs.path.basename(path)) catch "Failed to duplicate path";
-                    const new_full = try std.fs.path.join(runtime.allocator(), &.{ new_path, file_name });
-                    doc.owner.setDocumentPath(doc, new_full) catch {
-                        dvui.log.err("Failed to update open document path", .{});
-                    };
-                }
-            }
-        },
-        .file => {
-            std.Io.Dir.renameAbsolute(full_path, new_path, dvui.io) catch dvui.log.err("Failed to rename file: {s} to {s}", .{ std.fs.path.basename(full_path), std.fs.path.basename(new_path) });
-
-            if (runtime.host().docFromPath(full_path)) |doc| {
-                doc.owner.setDocumentPath(doc, new_path) catch {
-                    dvui.log.err("Failed to duplicate path: {s}", .{new_path});
-                    return error.FailedToDuplicatePath;
-                };
-            }
-        },
-        else => {},
-    }
-}
-
-/// Delete `path` from disk (a directory must be empty — mirrors the explorer's
-/// inline Delete). Logs and continues on failure.
-pub fn deletePath(path: []const u8) void {
-    if (table()) |t| t.invalidateAll();
-    const is_dir = pathIsDirAbsolute(path);
-    if (is_dir) {
-        std.Io.Dir.deleteDirAbsolute(dvui.io, path) catch {
-            dvui.log.err("Failed to delete folder: {s}", .{path});
-            return;
-        };
-    } else {
-        std.Io.Dir.deleteFileAbsolute(dvui.io, path) catch {
-            dvui.log.err("Failed to delete file: {s}", .{path});
-            return;
-        };
-    }
-    closeDocumentsForDeletedPath(path, is_dir);
-}
-
-/// Close whatever the delete just removed from under the editor: the document for `path`, or —
-/// when `path` was a directory — every open document beneath it. The other half of what
-/// `renamePath` does for open documents; without it a deleted file keeps its tab, its editor and
-/// (for markdown) its preview, all bound to a path that no longer exists.
-///
-/// Routed through `closeDocById`, so an unsaved document still raises the normal unsaved-close
-/// dialog rather than having its edits discarded silently — the file being gone from disk is
-/// exactly when those edits are the only copy left.
-fn closeDocumentsForDeletedPath(path: []const u8, is_dir: bool) void {
-    if (!is_dir) {
-        // `docFromPath` collapses lexical spellings of the same file, which a manual compare
-        // against `documentPath` would not.
-        const doc = runtime.host().docFromPath(path) orelse return;
-        runtime.host().closeDocById(doc.id) catch |err| {
-            dvui.log.err("Failed to close deleted document: {any} ({s})", .{ err, path });
-        };
-        return;
-    }
-
-    // Ids first: closing mutates the open-document list this walks.
-    const arena = dvui.currentWindow().arena();
-    var ids: std.ArrayListUnmanaged(u64) = .empty;
-    var i: usize = 0;
-    while (i < runtime.host().openDocCount()) : (i += 1) {
-        const doc = runtime.host().docByIndex(i) orelse continue;
-        if (!isStrictPathDescendant(doc.owner.documentPath(doc), path)) continue;
-        ids.append(arena, doc.id) catch break;
-    }
-    for (ids.items) |id| {
-        runtime.host().closeDocById(id) catch |err| {
-            dvui.log.err("Failed to close deleted document: {any}", .{err});
-        };
-    }
-}
-
-/// Create an empty file at absolute `path`.
-pub fn createFilePath(path: []const u8) !void {
-    if (table()) |t| t.invalidateAll();
-    var handle = try std.Io.Dir.createFileAbsolute(dvui.io, path, .{});
-    handle.close(dvui.io);
-}
-
-/// Create a directory at absolute `path` (parents must already exist).
-pub fn createDirPath(path: []const u8) !void {
-    if (table()) |t| t.invalidateAll();
-    try std.Io.Dir.createDirAbsolute(dvui.io, path, .default_dir);
-}
 
 /// "New Folder..." from either context menu (the project row and a folder row run the same
 /// code): create the folder, then hand the tree its path so the row that appears next frame
@@ -1646,7 +1517,7 @@ pub fn createFolderInteractive(parent: []const u8) void {
         std.Io.Dir.accessAbsolute(dvui.io, candidate, .{}) catch break candidate;
     } else return;
 
-    createDirPath(path) catch {
+    runtime.host().createDir(path) catch {
         dvui.log.err("Failed to create folder: {s}", .{path});
         return;
     };
