@@ -21,6 +21,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
+const sdk = fizzy.sdk;
 
 const Frame = @import("Frame.zig");
 const layout_split = @import("split.zig");
@@ -28,11 +29,19 @@ const widgets = @import("widgets.zig");
 const Menu = @import("../Menu.zig");
 const Constants = @import("../Constants.zig");
 
-/// Keyword sets this shell's regions accept. An app declares what *kinds* of thing each
-/// region takes; it never names a plugin's surfaces.
-const sidebar = Frame.sidebar_keywords;
-const bottom = Frame.bottom_keywords;
-const main_area = Frame.center_keywords;
+// ── The IDE preset ──────────────────────────────────────────────────────────────────────────
+//
+// A preset is a **layout plus the keywords it accepts**, kept in one file: copying this shape
+// gets you both, and a plugin can name this shape's vocabulary directly
+// (`sdk.keywords.ide.sidebar`). The strings live in the SDK because plugins are dylibs and
+// cannot import app code; these re-export them so the preset reads as one thing.
+
+/// The left explorer: file trees, outlines, plugin browsers — things you pick *from*.
+pub const sidebar = sdk.keywords.ide.sidebar;
+/// The bottom panel: logs, diagnostics, terminals — things a task *produces*.
+pub const bottom = sdk.keywords.ide.panel;
+/// The main area: documents and canvases — the thing being worked on.
+pub const main_area = sdk.keywords.ide.main;
 
 pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
@@ -52,21 +61,19 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     // the sidebar+content width. Preserved from the legacy shell verbatim.
     editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
 
-    var side = layout_split.split(@src(), .{
+    // `dock`, not `split`: it registers the split under the keywords its docked half shows, so
+    // anything outside the layout that needs to command or query this region — `Explorer.open`,
+    // `revealCenter`, the workbench's `drawWorkspaces` — finds it by keyword. A shape used to
+    // have to publish `editor.explorer.paned = …` by hand, which was mechanism leaking into app
+    // code and only worked because fizzy's own shape happens to have an explorer.
+    var side = layout_split.dock(editor, @src(), .{
         .side = .left,
+        .keywords = sidebar,
         .size = editor.explorer_ratio,
         .resize = .drag,
         .collapse = .peek,
     });
     defer side.deinit();
-
-    // SPIKE FINDING: a split's PanedWidget is NOT private layout state. `Explorer.open` /
-    // `peekClose` / `collapsed`, `Editor.revealCenter` (:3237) and — critically —
-    // `Editor.drawWorkspaces` (:4552, the host API the *workbench plugin* calls) all reach
-    // into `editor.explorer.paned` / `editor.panel.paned` to coordinate their own animation
-    // with the shell's. Publishing them here keeps behavior identical; see the write-up in
-    // shell/FINDINGS.md for why Phase 4 should invert this instead.
-    editor.explorer.paned = side.paned;
 
     editor.flushQueuedNativeMenuActions();
     editor.flushQueuedNativeMenuItems();
@@ -123,15 +130,14 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     }
 
     if (f.matching(bottom).len > 0) {
-        var dock = layout_split.split(@src(), .{
+        var dock = layout_split.dock(editor, @src(), .{
             .side = .bottom,
+            .keywords = bottom,
             .size = editor.panel_ratio,
             .resize = .drag,
             .collapse = .peek,
         });
         defer dock.deinit();
-        editor.panel.paned = dock.paned;
-        editor.shell_bottom_split = dock.paned;
 
         // Panel auto-show/hide, ported verbatim from the legacy shell: the panel collapses
         // when there is no document and no persistent view, and a user drag overrides it.

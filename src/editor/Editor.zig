@@ -151,7 +151,16 @@ surface_keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .emp
 /// panel paned". That proxy is false in any app that hosts bottom surfaces but lays them out
 /// differently (or not at all) — `shell/minimal.zig` segfaulted on exactly this. The shell now
 /// states the fact instead of the plugin inferring it.
-shell_bottom_split: ?*fizzy.dvui.PanedWidget = null,
+/// The splits the app's layout established **this frame**, addressable by the keywords their
+/// docked half shows.
+///
+/// This replaces reaching for `Editor.explorer.paned` / `Editor.panel.paned` — named singletons
+/// that only existed because fizzy's own shape has an explorer and a panel. Anything that needs
+/// to command or query a region ("open the region showing sidebar things", "is the bottom
+/// region animating") asks by keyword instead, so it keeps working in a shape that has neither.
+///
+/// Frame-scoped: cleared at the top of every frame and repopulated by whichever layout runs.
+shell_splits: std.ArrayListUnmanaged(ShellSplit) = .empty,
 
 /// Positions to reveal once their not-yet-open path finishes loading. Set by `revealPosition`
 /// when the target is not open yet and drained once per frame. Previously lived on the workbench
@@ -4304,7 +4313,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
         // Every frame starts with no bottom split; whichever layout runs states whether it
         // established one. See `shell_bottom_split`.
-        editor.shell_bottom_split = null;
+        editor.shell_splits.clearRetainingCapacity();
         editor.pollPendingReveals();
 
         if (build_opts.new_shell) {
@@ -4481,7 +4490,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                         .background = false,
                     });
                     defer editor.panel.paned.deinit();
-                    editor.shell_bottom_split = editor.panel.paned;
+                    editor.registerShellSplit(.{
+                        .keywords = sdk.keywords.ide.panel,
+                        .paned = editor.panel.paned,
+                        .near = false,
+                    });
 
                     if (!editor.panel.paned.dragging) {
                         const show_panel = (editor.activeDoc() != null or editor.host.hasPersistentBottomView()) and !editor.panel_hidden_for_center;
@@ -4691,6 +4704,29 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
     try editor.workbench.rebuildWorkspaces();
 }
 
+pub const ShellSplit = struct {
+    keywords: []const []const u8,
+    paned: *fizzy.dvui.PanedWidget,
+    /// Which half is the docked one, so `open`/`close` know which end to animate toward.
+    near: bool,
+};
+
+/// The split whose docked half shows `keywords`, or null when this app's layout drew none —
+/// which is a normal state, not an error: `minimal.zig` has no bottom region at all.
+pub fn splitFor(editor: *Editor, keywords: []const []const u8) ?ShellSplit {
+    for (editor.shell_splits.items) |entry| {
+        for (entry.keywords) |a| for (keywords) |b| {
+            if (std.ascii.eqlIgnoreCase(a, b)) return entry;
+        };
+    }
+    return null;
+}
+
+pub fn registerShellSplit(editor: *Editor, entry: ShellSplit) void {
+    if (entry.keywords.len == 0) return;
+    editor.shell_splits.append(editor.gpa, entry) catch {};
+}
+
 pub const PendingReveal = struct {
     path: []const u8,
     line: u32,
@@ -4768,10 +4804,10 @@ pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
     var animating = false;
     var split_ratio: *f32 = &full_split;
 
-    if (editor.shell_bottom_split) |panel| {
-        dragging = panel.dragging;
-        animating = panel.animating;
-        split_ratio = panel.split_ratio;
+    if (editor.splitFor(sdk.keywords.ide.panel)) |bottom| {
+        dragging = bottom.paned.dragging;
+        animating = bottom.paned.animating;
+        split_ratio = bottom.paned.split_ratio;
     }
 
     return editor.workbench.drawWorkspaces(.{

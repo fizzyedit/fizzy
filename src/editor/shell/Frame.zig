@@ -15,9 +15,12 @@ const Frame = @This();
 
 /// The conventional keyword sets fizzy's own regions accept. A plugin targeting "the fizzy
 /// shape" uses these; an app may accept any keywords it likes.
-pub const sidebar_keywords = sdk.keywords.sidebar;
-pub const bottom_keywords = sdk.keywords.bottom;
-pub const center_keywords = sdk.keywords.main;
+/// Back-compat aliases for the IDE preset. Prefer `sdk.keywords.ide.*` at call sites: it says
+/// *which shape's* convention is being used, where a bare `sidebar_keywords` on the generic
+/// Frame implies every app has a sidebar.
+pub const sidebar_keywords = sdk.keywords.ide.sidebar;
+pub const bottom_keywords = sdk.keywords.ide.panel;
+pub const center_keywords = sdk.keywords.ide.main;
 
 pub const Surface = sdk.Surface;
 

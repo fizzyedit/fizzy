@@ -19,14 +19,25 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
+const sdk = fizzy.sdk;
 
 const Frame = @import("Frame.zig");
 const layout_split = @import("split.zig");
 const widgets = @import("widgets.zig");
 
-const side = Frame.sidebar_keywords;
-const bottom = Frame.bottom_keywords;
-const main_area = Frame.center_keywords;
+// ── The studio preset ───────────────────────────────────────────────────────────────────────
+//
+// Layout plus vocabulary, as with `ide.zig`. Note it reuses the IDE's keyword sets rather than
+// inventing synonyms: that is the point of matching on *kind of place* rather than position. A
+// surface saying "I belong somewhere like a sidebar" lands in this shape's right-hand stack
+// without knowing it moved.
+
+/// The right-hand stack — same kind of content as the IDE's left sidebar, opposite side.
+pub const side = sdk.keywords.studio.stack;
+/// The short bottom strip.
+pub const bottom = sdk.keywords.studio.strip;
+/// The large canvas.
+pub const main_area = sdk.keywords.studio.canvas;
 
 pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
@@ -49,13 +60,13 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
 
     // Right-hand stack, not left. Same keywords as fizzy's sidebar.
-    var right = layout_split.split(@src(), .{
+    var right = layout_split.dock(editor, @src(), .{
         .side = .right,
+        .keywords = side,
         .size = 0.25,
         .resize = .drag,
     });
     defer right.deinit();
-    editor.explorer.paned = right.paned;
 
     if (right.showDock()) {
         const r = try widgets.explorerPane(f, side);
@@ -68,14 +79,13 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
 
     // Big canvas with a short strip underneath — the studio arrangement.
     if (f.matching(bottom).len > 0) {
-        var strip = layout_split.split(@src(), .{
+        var strip = layout_split.dock(editor, @src(), .{
             .side = .bottom,
+            .keywords = bottom,
             .size = 0.18,
             .resize = .drag,
         });
         defer strip.deinit();
-        editor.panel.paned = strip.paned;
-        editor.shell_bottom_split = strip.paned;
 
         if (strip.showDock()) {
             // "This region IS x": a single bottom surface fills it, with no chooser at all —

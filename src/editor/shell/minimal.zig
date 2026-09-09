@@ -19,10 +19,14 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
+const sdk = fizzy.sdk;
 
 const Frame = @import("Frame.zig");
 
-const main_area = Frame.center_keywords;
+// ── The minimal preset ──────────────────────────────────────────────────────────────────────
+/// One region, and it is the main area. No sidebar or panel vocabulary at all — surfaces asking
+/// for those simply have nowhere to go here, which `Frame.unplaced` reports.
+pub const main_area = sdk.keywords.ide.main;
 
 pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });

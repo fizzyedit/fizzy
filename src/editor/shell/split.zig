@@ -35,6 +35,11 @@ pub const Side = enum {
 
 pub const Options = struct {
     side: Side,
+    /// The kinds of surface this split's docked half shows. Registering the split under its
+    /// keywords is what lets anything *outside* the layout command or query it — "open the
+    /// region that shows sidebar things" — without a named `Editor.explorer` / `Editor.panel`
+    /// singleton and without the shape publishing widget pointers.
+    keywords: []const []const u8 = &.{},
     /// Fraction of the parent the docked side takes. Null uses the remembered value.
     size: ?f32 = null,
     resize: ?enum { drag } = null,
@@ -48,6 +53,32 @@ pub const Split = struct {
     paned: *fizzy.dvui.PanedWidget,
     side: Side,
     ratio_store: *f32,
+    keywords: []const []const u8 = &.{},
+
+    /// Animate the docked half open to `ratio` (of the parent), or to a sensible default.
+    pub fn open(self: *Split, to: f32) void {
+        const target = if (to > 0.0) to else 0.2;
+        self.paned.animateSplit(
+            if (self.side.isNear()) target else 1.0 - target,
+            dvui.easing.outBack,
+        );
+    }
+
+    pub fn close(self: *Split) void {
+        self.paned.animateSplit(if (self.side.isNear()) 0.0 else 1.0, dvui.easing.outQuint);
+    }
+
+    pub fn ratio(self: *Split) f32 {
+        return if (self.side.isNear()) self.paned.split_ratio.* else 1.0 - self.paned.split_ratio.*;
+    }
+
+    pub fn dragging(self: *Split) bool {
+        return self.paned.dragging;
+    }
+
+    pub fn animating(self: *Split) bool {
+        return self.paned.animating;
+    }
 
     /// True while the docked side should draw.
     pub fn showDock(self: *Split) bool {
@@ -127,5 +158,18 @@ pub fn split(src: std.builtin.SourceLocation, opts: Options) Split {
         .background = false,
     });
 
-    return .{ .paned = p, .side = opts.side, .ratio_store = slot };
+    return .{ .paned = p, .side = opts.side, .ratio_store = slot, .keywords = opts.keywords };
+}
+
+/// `split`, additionally registered on the editor so anything outside the layout can find it by
+/// keyword. This is what shapes should call: it removes the `editor.explorer.paned = …` /
+/// `editor.panel.paned = …` publishing lines that were mechanism leaking into app code.
+pub fn dock(editor: *fizzy.Editor, src: std.builtin.SourceLocation, opts: Options) Split {
+    const s = split(src, opts);
+    editor.registerShellSplit(.{
+        .keywords = opts.keywords,
+        .paned = s.paned,
+        .near = opts.side.isNear(),
+    });
+    return s;
 }
