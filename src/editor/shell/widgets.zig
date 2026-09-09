@@ -40,11 +40,11 @@ pub fn iconRail(f: *Frame, keywords: []const []const u8) !Sidebar.Action {
 /// ```zig
 /// // "this region IS x" — one surface fills it, no chooser at all. An app that just wants a
 /// // terminal at the bottom writes only this.
-/// try f.region(.{ .keywords = bottom });
+/// try f.drawSelected(bottom);
 ///
 /// // "this region is TABBED, and the tabs correspond to x"
 /// widgets.tabs(f, bottom);            // the tabs
-/// try f.region(.{ .keywords = bottom });  // ...and the active one
+/// try f.drawSelected(bottom);  // ...and the active one
 /// ```
 ///
 /// Nothing here is privileged: it lists `f.matching`, reads `f.isSelected` and writes

@@ -841,6 +841,42 @@ pub fn setSurfaceHidden(self: *Host, id: []const u8, hidden: bool) void {
     }
 }
 
+/// Re-point the compat surfaces' `ctx` at their backing view after any registry append.
+///
+/// `registerSidebarView` and friends store `&self.sidebar_views.items[n]` as the surface's
+/// `ctx`. That address is only valid until the next append reallocates the list — so every
+/// surface registered before the last one was left pointing at freed memory. It survived the
+/// IDE shape by luck (its sidebar path draws through the legacy registry, not through
+/// `Surface.draw`) and crashed the moment a shape drew a compat surface via `Frame.draw`.
+///
+/// Re-resolving by id after each append is correct regardless of reallocation, and cheap: this
+/// runs a handful of times during startup registration, never per frame.
+fn repointCompatSurfaces(self: *Host) void {
+    // `registerSidebarView` and friends store `&self.sidebar_views.items[n]` as the compat
+    // surface's `ctx`. That address is valid only until the next append reallocates the list, so
+    // every surface registered before the last one ends up pointing at freed memory. It survived
+    // the IDE shape by luck — its sidebar path draws through the legacy registry rather than
+    // through `Surface.draw` — and crashed the moment `studio.zig` drew a compat surface via
+    // `Frame.draw`.
+    //
+    // Matched by **id**, not by comparing `draw` against the compat thunks: that comparison
+    // silently stopped matching after a few registrations, and ids are unique anyway. A surface
+    // a plugin registered directly has no id in these legacy lists, so its ctx is left alone.
+    //
+    // Runs a handful of times during startup registration, never per frame.
+    for (self.surfaces.items) |*s| {
+        for (self.sidebar_views.items) |*v| {
+            if (std.mem.eql(u8, s.id, v.id)) s.ctx = v;
+        }
+        for (self.bottom_views.items) |*v| {
+            if (std.mem.eql(u8, s.id, v.id)) s.ctx = v;
+        }
+        for (self.center_providers.items) |*p| {
+            if (std.mem.eql(u8, s.id, p.id)) s.ctx = p;
+        }
+    }
+}
+
 pub fn surfaceById(self: *Host, id: []const u8) ?*Surface {
     for (self.surfaces.items) |*s| if (std.mem.eql(u8, s.id, id)) return s;
     return null;
@@ -881,6 +917,7 @@ pub fn registerSidebarView(self: *Host, view: SidebarView) !void {
         .draw_workspace = view.draw_workspace,
         .hidden = view.hidden,
     });
+    self.repointCompatSurfaces();
 }
 
 pub fn registerBottomView(self: *Host, view: BottomView) !void {
@@ -896,6 +933,7 @@ pub fn registerBottomView(self: *Host, view: BottomView) !void {
         .draw = bottomSurfaceDraw,
         .persistent = view.persistent,
     });
+    self.repointCompatSurfaces();
 }
 
 /// Move a bottom-panel tab from `from_index` to `to_index`.
@@ -986,6 +1024,7 @@ pub fn registerCenterProvider(self: *Host, provider: CenterProvider) !void {
         .ctx = stored,
         .draw = centerSurfaceDraw,
     });
+    self.repointCompatSurfaces();
 }
 
 pub fn registerMenu(self: *Host, menu: MenuContribution) !void {

@@ -128,7 +128,11 @@ fn ratioSlot(id: dvui.Id, default: f32) *f32 {
 pub const handle_size: f32 = 10;
 pub const handle_dist: f32 = 60;
 
-pub fn split(src: std.builtin.SourceLocation, opts: Options) Split {
+/// Create a split. One function: a split always registers itself under the keywords its docked
+/// half shows, because that is what lets anything outside the layout find it ("open the region
+/// showing sidebar things") without a named `Editor.explorer` singleton. There is no separate
+/// `register` step for a caller to know about or forget.
+pub fn split(editor: *fizzy.Editor, src: std.builtin.SourceLocation, opts: Options) Split {
     const dir = opts.side.direction();
     const default_ratio = opts.size orelse 0.25;
     // The paned's ratio is always measured from the *first* child, so a far-side dock stores
@@ -158,18 +162,7 @@ pub fn split(src: std.builtin.SourceLocation, opts: Options) Split {
         .background = false,
     });
 
-    return .{ .paned = p, .side = opts.side, .ratio_store = slot, .keywords = opts.keywords };
-}
-
-/// `split`, additionally registered on the editor so anything outside the layout can find it by
-/// keyword. This is what shapes should call: it removes the `editor.explorer.paned = …` /
-/// `editor.panel.paned = …` publishing lines that were mechanism leaking into app code.
-pub fn dock(editor: *fizzy.Editor, src: std.builtin.SourceLocation, opts: Options) Split {
-    const s = split(src, opts);
-    editor.registerShellSplit(.{
-        .keywords = opts.keywords,
-        .paned = s.paned,
-        .near = opts.side.isNear(),
-    });
+    const s: Split = .{ .paned = p, .side = opts.side, .ratio_store = slot, .keywords = opts.keywords };
+    editor.registerShellSplit(s);
     return s;
 }

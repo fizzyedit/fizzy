@@ -10,6 +10,9 @@ const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
+const layout_split = @import("split.zig");
+const Constants = @import("../Constants.zig");
+const widgets_ref = @import("widgets.zig");
 
 const Frame = @This();
 
@@ -171,13 +174,159 @@ pub fn draw(self: *Frame, s: *Surface) !dvui.App.Result {
     return s.draw(s.ctx);
 }
 
-pub const RegionOptions = struct {
-    keywords: []const []const u8,
+/// Draw whichever surface is selected for these keywords, into the current parent. Everything
+/// it does is reachable through `matching` / `selected` / `draw`; `region` uses it to fill a
+/// declared region's space.
+pub fn drawSelected(self: *Frame, keywords: []const []const u8) !dvui.App.Result {
+    const s = self.selected(keywords) orelse return .ok;
+    return self.draw(s);
+}
+
+// ── The base layer: regions and keywords ────────────────────────────────────────────────────
+//
+// Everything above is the vocabulary — which surfaces exist, which match, which is selected.
+// This is the layer a *layout* is written against: a shape declares regions, and the framework
+// owns the mechanism (paned trees, split ratios, persistence, collapse animation, auto-hide).
+//
+// The test this has to pass is that a shape never writes mechanism. Before it existed,
+// `ide.zig` reached `dock.paned.dragging`, called `animateSplit`, read `split_ratio.*`, kept
+// `editor.panel_ratio` in sync by hand and published `editor.panel.paned` so other code could
+// find it — none of which an app author should know about, and all of which only worked because
+// fizzy's own shape happens to have a panel.
+
+/// Which edge a region takes. Re-exported from the split widget rather than declared again —
+/// `Frame.Edge` and `split.Side` were two identical enums for one concept.
+pub const Edge = layout_split.Side;
+
+/// How a region presents itself when several surfaces match it.
+///
+/// This is a mode, and modes have been removed from this design twice already — so the reason
+/// it survives here: it is the *region* stating how it shows its own contents, not a plugin
+/// stating where it goes, and every value is reachable by hand from `matching`/`selected`/
+/// `draw` if a shape wants something else. `.none` is the "this region IS x" form; `.tabs` is
+/// the "this region is tabbed" form.
+pub const Chooser = enum {
+    none,
+    tabs,
+    icons,
+    /// Fizzy's explorer chrome: a header naming the active surface plus a per-view scroll
+    /// policy, wrapped around the region's content.
+    explorer_chrome,
+    /// Fizzy's panel chrome: a grouping-aware, drag-reorderable tab strip that additionally
+    /// supports splitting the region into several panes.
+    panel_chrome,
 };
 
-/// Sugar for the common case: draw whichever surface is selected for these keywords. Everything
-/// it does is reachable through `matching` / `selected` / `draw`.
-pub fn region(self: *Frame, opts: RegionOptions) !dvui.App.Result {
-    const s = self.selected(opts.keywords) orelse return .ok;
-    return self.draw(s);
+pub const RegionOptions = struct {
+    /// Human-facing region name. Shown wherever a user picks a region — the settings table that
+    /// lets someone place a surface directly, ignoring keywords entirely.
+    name: []const u8,
+    /// What kinds of surface this region accepts.
+    keywords: []const []const u8,
+    /// Which edge it takes. Null means "the remainder".
+    edge: ?Edge = null,
+    /// Fraction of the parent, when docked to an edge. Null uses the persisted size.
+    size: ?f32 = null,
+    resize: bool = false,
+    collapsible: bool = false,
+    chooser: Chooser = .none,
+    /// Collapse the region while nothing matches it. Framework behaviour, not app policy: a
+    /// region with nothing in it should not hold space open.
+    hide_when_empty: bool = false,
+};
+
+/// A declared region: an area that accepts keywords and draws the surfaces matching them.
+///
+/// Note this is **not** docking in the draggable-panel sense — a region's place is fixed by the
+/// shape that declares it. Real docking (dvui has dockable panels now) would be a layer *above*
+/// this that lets the user move regions at runtime, and is the natural basis for a
+/// Premiere-style shape. Named seam, not built.
+///
+/// `region` draws the region's own contents — the chooser, if it asked for one, and the active
+/// matching surface — and leaves the caller positioned in the *remaining* space, so whatever the
+/// layout writes next lands there. That is what removes the `showFirst`/`showSecond` pairs from
+/// shapes.
+pub const Region = struct {
+    split: ?layout_split.Split,
+    rest_visible: bool,
+
+    /// True when the space beyond this region should draw. False while the region is expanded
+    /// over everything (a collapsed-layout peek), so a shape can return early.
+    pub fn rest(self: *Region) bool {
+        return self.rest_visible;
+    }
+
+    pub fn end(self: *Region) void {
+        if (self.split) |*s| s.deinit();
+    }
+};
+
+/// Declare a region. See `RegionOptions`.
+pub fn region(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions) !Region {
+    const editor = self.editor;
+    const matches = self.matching(opts.keywords);
+
+    // A region with nothing in it should not hold space open. Framework behaviour: an app that
+    // wants an empty region to keep its space simply leaves `hide_when_empty` off.
+    if (opts.hide_when_empty and matches.len == 0) {
+        return .{ .split = null, .rest_visible = true };
+    }
+
+    const edge = opts.edge orelse {
+        // The remainder. No split at all — draw straight into whatever space is left.
+        _ = try self.drawRegionContents(opts, matches);
+        return .{ .split = null, .rest_visible = true };
+    };
+
+    // Size persistence, first-frame collapse and drag-write are framework behaviour, keyed by
+    // the region's name — a shape declaring a "Stack" gets its size remembered without fizzy
+    // knowing what a Stack is. These were fifteen hand-written lines in `ide.zig`.
+    const ratio_slot = editor.regionRatio(opts.name, opts.size orelse 0.25);
+
+    var s = layout_split.split(editor, src, .{
+        .side = edge,
+        .keywords = opts.keywords,
+        .size = ratio_slot.*,
+        .resize = if (opts.resize) .drag else null,
+        .collapse = if (opts.collapsible) .peek else null,
+    });
+
+    if (dvui.firstFrame(s.paned.wd.id)) {
+        // Start collapsed when the window is too narrow to show both halves — the mobile / narrow
+        // case — rather than animating open to a desktop size that will not fit.
+        const avail = switch (edge) {
+            .left, .right => s.paned.wd.contentRect().w,
+            .top, .bottom => s.paned.wd.contentRect().h,
+        };
+        const too_narrow = avail < Constants.min_window_size[0];
+        if (too_narrow or ratio_slot.* < 0.01) s.close() else s.open(ratio_slot.*);
+    } else if (s.paned.dragging) {
+        ratio_slot.* = s.ratio();
+        editor.markWindowRatiosDirty();
+    }
+
+    if (s.showDock()) {
+        _ = try self.drawRegionContents(opts, matches);
+    }
+
+    return .{ .split = s, .rest_visible = s.showRest() };
+}
+
+/// The chooser (if any) plus the active surface. Everything here is reachable by hand from
+/// `matching` / `selected` / `draw` — a shape wanting a different chooser writes its own loop
+/// and never calls `dock`.
+fn drawRegionContents(self: *Frame, opts: RegionOptions, matches: []const *Surface) !dvui.App.Result {
+    _ = matches;
+    switch (opts.chooser) {
+        .none => {},
+        .tabs => widgets_ref.tabs(self, opts.keywords),
+        .icons => _ = widgets_ref.iconRail(self, opts.keywords) catch {},
+        // These two draw chrome *and* content, so they return directly. They are fizzy's own
+        // richer variants (a titled scroll pane; a splittable tabbed panel) and exist as
+        // chooser values rather than as app code because an app copying the IDE shape wants
+        // them wholesale — see CLAUDE.md on shipped shapes.
+        .explorer_chrome => return widgets_ref.explorerPane(self, opts.keywords),
+        .panel_chrome => return widgets_ref.bottomPane(self, opts.keywords),
+    }
+    return self.drawSelected(opts.keywords);
 }

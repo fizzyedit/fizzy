@@ -162,6 +162,14 @@ surface_keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .emp
 /// Frame-scoped: cleared at the top of every frame and repopulated by whichever layout runs.
 shell_splits: std.ArrayListUnmanaged(ShellSplit) = .empty,
 
+/// Persisted size for each named region, as a fraction of its parent.
+///
+/// Replaces the named `explorer_ratio` / `panel_ratio` fields for the region layer: a shape
+/// declares regions by name and the framework remembers each one's size, so an app with a
+/// "Stack" and a "Strip" persists those without fizzy knowing they exist. Seeded from the two
+/// legacy fields so existing settings.zon files keep their sizes.
+region_ratios: std.StringHashMapUnmanaged(f32) = .empty,
+
 /// Positions to reveal once their not-yet-open path finishes loading. Set by `revealPosition`
 /// when the target is not open yet and drained once per frame. Previously lived on the workbench
 /// plugin, which is what forced goto-definition to depend on workbench; the queue was incidental
@@ -3384,7 +3392,7 @@ pub fn markWindowRatiosDirty(editor: *Editor) void {
 /// exists — see the `Sidebar` note about deferring paned pokes to `tick`.
 pub fn revealCenter(editor: *Editor) void {
     if (!editor.explorer.paned.collapsed() or !editor.explorer.peek_open) return;
-    editor.explorer.peekClose();
+    editor.explorer.peekClose(editor);
     editor.panel_hidden_for_center = true;
 }
 
@@ -4319,9 +4327,23 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         if (build_opts.new_shell) {
             // Experimental region-based shell (plan Phase 1). Both shells are compiled in;
             // `-Dnew-shell` picks this one so the two can be diffed live.
+            // Frame lifecycle and housekeeping belong to the framework, not to a shape: every
+            // layout needed these five calls verbatim, and getting one wrong is a bug an app
+            // author has no way to diagnose. A shape declares regions; it does not run the
+            // frame.
+            var shell_root = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
+            for (editor.host.plugins.items) |plugin| plugin.tickActiveDocument(shell_root.data().id);
+            editor.flushQueuedNativeMenuActions();
+            editor.flushQueuedNativeMenuItems();
+            editor.processPendingSaveAs();
+
             var frame: shell.Frame = .init(editor);
-            const shell_result = try shell.layout(editor, &frame);
-            if (shell_result != .ok) return shell_result;
+            const shell_result = shell.layout(editor, &frame);
+
+            for (editor.host.plugins.items) |plugin| plugin.endFrame();
+            shell_root.deinit();
+
+            if (try shell_result != .ok) return try shell_result;
         } else {
             var base_box = dvui.box(
                 @src(),
@@ -4417,7 +4439,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
             switch (sidebar_action) {
                 .open => editor.explorer.open(editor),
-                .close => editor.explorer.peekClose(),
+                .close => editor.explorer.peekClose(editor),
                 .none => {},
             }
 
@@ -4490,10 +4512,13 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                         .background = false,
                     });
                     defer editor.panel.paned.deinit();
+                    // The legacy shell registers its raw paned the same way a shape's `split`
+                    // does, so `splitFor` works identically under both shells.
                     editor.registerShellSplit(.{
-                        .keywords = sdk.keywords.ide.panel,
                         .paned = editor.panel.paned,
-                        .near = false,
+                        .side = .bottom,
+                        .ratio_store = &editor.panel_ratio,
+                        .keywords = sdk.keywords.ide.panel,
                     });
 
                     if (!editor.panel.paned.dragging) {
@@ -4704,15 +4729,38 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
     try editor.workbench.rebuildWorkspaces();
 }
 
-pub const ShellSplit = struct {
-    keywords: []const []const u8,
-    paned: *fizzy.dvui.PanedWidget,
-    /// Which half is the docked one, so `open`/`close` know which end to animate toward.
-    near: bool,
-};
+/// The persisted size slot for a named region, created on first use.
+pub fn regionRatio(editor: *Editor, name: []const u8, default: f32) *f32 {
+    // Fizzy's own two regions keep using the fields that `settings.zon` already round-trips, so
+    // there is one persistence path rather than a generic map shadowing two named floats. Any
+    // other region name gets a slot in the map. When the legacy shell is retired these two
+    // become ordinary entries and this special case goes with it.
+    if (std.mem.eql(u8, name, "Sidebar")) return &editor.explorer_ratio;
+    if (std.mem.eql(u8, name, "Panel")) return &editor.panel_ratio;
+
+    const gop = editor.region_ratios.getOrPut(editor.gpa, name) catch {
+        // Out of memory for a UI ratio is not worth failing a frame over; hand back a scratch
+        // slot so layout still runs.
+        const scratch = struct {
+            var v: f32 = 0.25;
+        };
+        scratch.v = default;
+        return &scratch.v;
+    };
+    if (!gop.found_existing) gop.value_ptr.* = default;
+    return gop.value_ptr;
+}
+
+/// One entry is just the `Split` itself — there is no separate registry record. `Split` and a
+/// parallel `ShellSplit` were two names for one thing, which made it ambiguous which you were
+/// holding. A `Split` is safe to store by value here: the registry is frame-scoped and the
+/// widget it points at is dvui-allocated, not stack-held.
+pub const ShellSplit = shell.layout_split.Split;
 
 /// The split whose docked half shows `keywords`, or null when this app's layout drew none —
 /// which is a normal state, not an error: `minimal.zig` has no bottom region at all.
+/// The split whose docked half shows `keywords`, or null when this app's layout drew none —
+/// a normal state, not an error: `minimal.zig` has no bottom region at all.
 pub fn splitFor(editor: *Editor, keywords: []const []const u8) ?ShellSplit {
     for (editor.shell_splits.items) |entry| {
         for (entry.keywords) |a| for (keywords) |b| {

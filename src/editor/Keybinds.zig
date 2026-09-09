@@ -300,7 +300,7 @@ fn cmdCommandPalette(state: *anyopaque) anyerror!void {
 fn cmdToggleExplorer(state: *anyopaque) anyerror!void {
     const editor = editorFromState(state);
     // `.closed`, not `paned.split_ratio` — the latter is only valid during draw.
-    if (editor.explorer.closed) editor.explorer.open(editor) else editor.explorer.close();
+    if (editor.explorer.closed) editor.explorer.open(editor) else editor.explorer.close(editor);
     // A native menu click doesn't arrive as an SDL event, so without this nothing requests the
     // frame the paned needs to animate.
     dvui.refresh(null, @src(), dvui.currentWindow().data().id);

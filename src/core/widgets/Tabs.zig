@@ -117,7 +117,11 @@ pub fn begin(src: std.builtin.SourceLocation, state: *State, opts: Options) Tabs
 /// One tab. Draw its contents between this and `Tab.end()`.
 pub const Tab = struct {
     reorderable: *dvui.ReorderWidget.Reorderable,
-    box: dvui.BoxWidget,
+    /// A **pointer**, not a value. A `BoxWidget` registers itself as dvui's current parent using
+    /// its own address, so a box held by value inside a struct returned from `tab()` leaves dvui
+    /// pointing at the dead stack temporary — every widget drawn inside the tab then crashes
+    /// dereferencing its parent. dvui's own `dvui.box` uses `widgetAlloc` for this reason.
+    box: *dvui.BoxWidget,
     /// True while this tab is the one being dragged — the only state at which a resting tab
     /// draws a fill, as reorder feedback.
     floating: bool,
@@ -194,7 +198,7 @@ pub fn tab(self: *Tabs, src: std.builtin.SourceLocation, index: usize, selected:
         self.state.insert_before_index = index;
     }
 
-    var box: dvui.BoxWidget = undefined;
+    const box = dvui.widgetAlloc(dvui.BoxWidget);
     box.init(@src(), .{ .dir = .horizontal }, .{
         .expand = .none,
         .border = dvui.Rect.all(0),

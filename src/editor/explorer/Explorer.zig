@@ -50,38 +50,49 @@ pub fn deinit(self: *Explorer) void {
     self.open_branches.deinit();
 }
 
-pub fn close(explorer: *Explorer) void {
-    explorer.paned.animateSplit(0.0, dvui.easing.outQuint);
+/// The split whose docked half shows sidebar content, or null when this app's shape declared
+/// none. Replaces the `explorer.paned` pointer a shape used to have to publish — see
+/// `Editor.splitFor`.
+fn split(editor: *fizzy.Editor) ?fizzy.Editor.ShellSplit {
+    return editor.splitFor(fizzy.sdk.keywords.ide.sidebar);
+}
+
+pub fn close(explorer: *Explorer, editor: *fizzy.Editor) void {
+    const s = split(editor) orelse return;
+    s.paned.animateSplit(0.0, dvui.easing.outQuint);
     explorer.closed = true;
 }
 
 pub fn open(explorer: *Explorer, editor: *fizzy.Editor) void {
-    if (explorer.paned.collapsed()) {
+    const s = split(editor) orelse return;
+    if (s.paned.collapsed()) {
         // Already peeking: do nothing. The peek stays open until the floating collapse
         // button is clicked — sidebar taps don't toggle it back closed (and we no longer
         // need to refresh any timer).
-        if (!explorer.peek_open) explorer.peekOpen();
+        if (!explorer.peek_open) explorer.peekOpen(editor);
         return;
     }
 
     if (editor.explorer_ratio > 0.0) {
-        explorer.paned.animateSplit(editor.explorer_ratio, dvui.easing.outBack);
+        s.paned.animateSplit(editor.explorer_ratio, dvui.easing.outBack);
     } else {
-        explorer.paned.animateSplit(0.2, dvui.easing.outBack);
+        s.paned.animateSplit(0.2, dvui.easing.outBack);
     }
 
     explorer.closed = false;
 }
 
-pub fn peekOpen(explorer: *Explorer) void {
-    explorer.paned.animateSplit(1.0, dvui.easing.outBack);
+pub fn peekOpen(explorer: *Explorer, editor: *fizzy.Editor) void {
+    const s = split(editor) orelse return;
+    s.paned.animateSplit(1.0, dvui.easing.outBack);
     explorer.peek_open = true;
     explorer.closed = false;
 }
 
-pub fn peekClose(explorer: *Explorer) void {
+pub fn peekClose(explorer: *Explorer, editor: *fizzy.Editor) void {
+    const s = split(editor) orelse return;
     explorer.peek_open = false;
-    explorer.paned.animateSplit(0.0, dvui.easing.outQuint);
+    s.paned.animateSplit(0.0, dvui.easing.outQuint);
     explorer.closed = true;
     explorer.collapse_btn_anim_started = false;
 }
@@ -167,14 +178,14 @@ pub fn draw(
 
     // Peek-only floating collapse button. Drawn last so it overlays everything else in the
     // explorer pane. Only appears while we're full-screen peeking on a collapsed paned.
-    if (explorer.peek_open and explorer.paned.collapsed()) {
-        drawCollapseButton(explorer);
+    if (split(editor)) |sp| {
+        if (explorer.peek_open and sp.paned.collapsed()) drawCollapseButton(explorer, editor);
     }
 
     return .ok;
 }
 
-fn drawCollapseButton(explorer: *Explorer) void {
+fn drawCollapseButton(explorer: *Explorer, editor: *fizzy.Editor) void {
     // Styled to match the floating Edit pill (see `Workspace.drawEditPill`): circular
     // background, same content.fill / content.text color pair, same drop shadow.
     const button_size: f32 = 48;
@@ -182,7 +193,8 @@ fn drawCollapseButton(explorer: *Explorer) void {
     const margin: f32 = 8;
     const wr = dvui.windowRect();
 
-    const anim_id = dvui.Id.update(explorer.paned.data().id, "collapse_btn");
+    const sp = split(editor) orelse return;
+    const anim_id = dvui.Id.update(sp.paned.data().id, "collapse_btn");
     if (!explorer.collapse_btn_anim_started) {
         explorer.collapse_btn_anim_started = true;
         dvui.animation(anim_id, "_appear", .{
@@ -250,12 +262,13 @@ fn drawCollapseButton(explorer: *Explorer) void {
     );
 
     if (bw.clicked()) {
-        explorer.peekClose();
+        explorer.peekClose(editor);
     }
 }
 
-pub fn hovered(explorer: *Explorer) bool {
-    return fizzy.dvui.hovered(explorer.paned.data());
+pub fn hovered(_: *Explorer, editor: *fizzy.Editor) bool {
+    const s = split(editor) orelse return false;
+    return fizzy.dvui.hovered(s.paned.data());
 }
 
 pub fn drawHeader(_: *Explorer, f: *Frame, keywords: []const []const u8) !void {

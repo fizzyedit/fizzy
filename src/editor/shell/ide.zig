@@ -47,75 +47,43 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer body.deinit();
 
-    for (editor.host.plugins.items) |plugin| plugin.tickActiveDocument(body.data().id);
-    defer for (editor.host.plugins.items) |plugin| plugin.endFrame();
-
-    // The icon rail: the app's own loop over matching surfaces. Nothing here is a framework
-    // "chooser" — swapping this for PNG icons or a radial menu is editing these six lines.
+    // The icon rail: a chooser for the sidebar region, drawn in its own fixed strip because it
+    // sits *beside* the region it chooses for rather than above it. That is why choosers are
+    // widgets an app places, not a property of a region.
     const rail_action = try widgets.iconRail(f, sidebar);
 
     var explorer_col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
     defer explorer_col.deinit();
 
-    // Infobar is drawn early but gravity-anchored to the bottom of this column, so it spans
-    // the sidebar+content width. Preserved from the legacy shell verbatim.
+    // Drawn early but gravity-anchored to the bottom, so it spans the full width beneath both
+    // the sidebar and the content.
     editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
 
-    // `dock`, not `split`: it registers the split under the keywords its docked half shows, so
-    // anything outside the layout that needs to command or query this region — `Explorer.open`,
-    // `revealCenter`, the workbench's `drawWorkspaces` — finds it by keyword. A shape used to
-    // have to publish `editor.explorer.paned = …` by hand, which was mechanism leaking into app
-    // code and only worked because fizzy's own shape happens to have an explorer.
-    var side = layout_split.dock(editor, @src(), .{
-        .side = .left,
+    // ── The shape, as region declarations ───────────────────────────────────────────────────
+    var side = try f.region(@src(), .{
+        .name = "Sidebar",
         .keywords = sidebar,
-        .size = editor.explorer_ratio,
-        .resize = .drag,
-        .collapse = .peek,
+        .edge = .left,
+        .size = 0.2,
+        .resize = true,
+        .collapsible = true,
+        .chooser = .explorer_chrome,
     });
-    defer side.deinit();
-
-    editor.flushQueuedNativeMenuActions();
-    editor.flushQueuedNativeMenuItems();
-    editor.processPendingSaveAs();
-
-    if (dvui.firstFrame(side.paned.wd.id)) {
-        side.paned.split_ratio.* = 0.0;
-        const avail_w = side.paned.wd.contentRect().w;
-        const start_collapsed = avail_w < Constants.min_window_size[0];
-        if (start_collapsed or editor.explorer_ratio < 0.01) {
-            editor.explorer.closed = true;
-        } else {
-            side.paned.animateSplit(editor.explorer_ratio, dvui.easing.outBack);
-        }
-    } else if (side.paned.dragging) {
-        editor.explorer_ratio = side.paned.split_ratio.*;
-        editor.markWindowRatiosDirty();
-    }
-
-    if (!side.paned.collapsed()) editor.panel_hidden_for_center = false;
+    defer side.end();
 
     switch (rail_action) {
         .open => editor.explorer.open(editor),
-        .close => editor.explorer.peekClose(),
+        .close => editor.explorer.peekClose(editor),
         .none => {},
     }
 
-    if (side.showDock()) {
-        // Explorer chrome (header + scroll) wrapping the sidebar region — see widgets.zig.
-        const r = try widgets.explorerPane(f, sidebar);
-        if (r != .ok) return r;
-    }
-
-    if (!side.showRest()) {
-        // Explorer peek/collapse hides the workspace subtree, so `drawWorkspaces` does not run
-        // and `workspace.center` would otherwise stay latched from a prior panel animation.
+    if (!side.rest()) {
+        // Explorer peek/collapse hides the content subtree, so `drawWorkspaces` does not run and
+        // a workspace's center would otherwise stay latched from a prior panel animation.
         editor.clearAllWorkspaceCenter();
         return .ok;
     }
 
-    // The legacy shell pads the workspace column by the sash width so content never sits flush
-    // against the window edge; preserved here (`Editor.zig`'s workspace_vbox).
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
@@ -129,52 +97,21 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         if (r != .ok) return r;
     }
 
-    if (f.matching(bottom).len > 0) {
-        var dock = layout_split.dock(editor, @src(), .{
-            .side = .bottom,
-            .keywords = bottom,
-            .size = editor.panel_ratio,
-            .resize = .drag,
-            .collapse = .peek,
-        });
-        defer dock.deinit();
+    var panel = try f.region(@src(), .{
+        .name = "Panel",
+        .keywords = bottom,
+        .edge = .bottom,
+        .size = 0.25,
+        .resize = true,
+        .collapsible = true,
+        .hide_when_empty = true,
+        .chooser = .panel_chrome,
+    });
+    defer panel.end();
+    if (!panel.rest()) return .ok;
 
-        // Panel auto-show/hide, ported verbatim from the legacy shell: the panel collapses
-        // when there is no document and no persistent view, and a user drag overrides it.
-        if (!dock.paned.dragging) {
-            const show_panel = (editor.activeDoc() != null or editor.host.hasPersistentBottomView()) and
-                !editor.panel_hidden_for_center;
-            if (show_panel) {
-                if ((dock.paned.split_ratio.* == 1.0 and !dock.paned.collapsed()) and editor.panel_ratio > 0.0) {
-                    dock.paned.animateSplit(1.0 - editor.panel_ratio, dvui.easing.outQuint);
-                }
-            } else if (!dock.paned.animating and dock.paned.split_ratio.* < 1.0) {
-                dock.paned.animateSplit(1.0, dvui.easing.outQuint);
-            }
-        } else {
-            editor.panel_hidden_for_center = false;
-            editor.panel_ratio = 1.0 - dock.paned.split_ratio.*;
-            editor.markWindowRatiosDirty();
-        }
+    var main = try f.region(@src(), .{ .name = "Main", .keywords = main_area });
+    defer main.end();
 
-        if (dock.showDock()) {
-            // "This region is TABBED, and the tabs correspond to bottom surfaces."
-            //
-            // Fizzy uses the *rich* tabbed form: `Panel` draws its own strip and additionally
-            // supports splitting the bottom into several panes with tabs moving between them.
-            // The plain tabbed form is `widgets.tabs(f, bottom)` followed by
-            // `f.region(.{ .keywords = bottom })` — same chooser, no splitting — and the single
-            // form is that with the `tabs` line deleted (`studio.zig`). All three are the same
-            // building blocks; none is a mode on the others.
-            const r = try widgets.bottomPane(f, bottom);
-            if (r != .ok) return r;
-        }
-        if (dock.showRest()) {
-            const r = try f.region(.{ .keywords = main_area });
-            if (r != .ok) return r;
-        }
-        return .ok;
-    }
-
-    return try f.region(.{ .keywords = main_area });
+    return .ok;
 }

@@ -43,13 +43,6 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer body.deinit();
 
-    for (editor.host.plugins.items) |plugin| plugin.tickActiveDocument(body.data().id);
-    defer for (editor.host.plugins.items) |plugin| plugin.endFrame();
-
-    editor.flushQueuedNativeMenuActions();
-    editor.flushQueuedNativeMenuItems();
-    editor.processPendingSaveAs();
-
     var col = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
@@ -59,48 +52,39 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
 
     editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
 
-    // Right-hand stack, not left. Same keywords as fizzy's sidebar.
-    var right = layout_split.dock(editor, @src(), .{
-        .side = .right,
+    // The whole shape, as region declarations. No paned, no split ratios, no showFirst /
+    // showSecond, no widget pointers published for other code to find — the framework owns all
+    // of that. What is left is what this shape actually *is*.
+
+    // A stack on the right, not the left. Same keywords as the IDE's sidebar, so a surface that
+    // belongs "somewhere like a sidebar" lands here without knowing it moved.
+    var stack = try f.region(@src(), .{
+        .name = "Stack",
         .keywords = side,
+        .edge = .right,
         .size = 0.25,
-        .resize = .drag,
+        .resize = true,
     });
-    defer right.deinit();
+    defer stack.end();
+    if (!stack.rest()) return .ok;
 
-    if (right.showDock()) {
-        const r = try widgets.explorerPane(f, side);
-        if (r != .ok) return r;
-    }
-    if (!right.showRest()) {
-        editor.clearAllWorkspaceCenter();
-        return .ok;
-    }
+    // A short strip along the bottom with NO chooser: "this region IS x". The shape an app takes
+    // when it wants, say, just a terminal down there. `ide.zig` asks for `.chooser = .tabs` on
+    // the same declaration and gets the tabbed form; the difference is one field.
+    var strip = try f.region(@src(), .{
+        .name = "Strip",
+        .keywords = bottom,
+        .edge = .bottom,
+        .size = 0.18,
+        .resize = true,
+        .hide_when_empty = true,
+    });
+    defer strip.end();
+    if (!strip.rest()) return .ok;
 
-    // Big canvas with a short strip underneath — the studio arrangement.
-    if (f.matching(bottom).len > 0) {
-        var strip = layout_split.dock(editor, @src(), .{
-            .side = .bottom,
-            .keywords = bottom,
-            .size = 0.18,
-            .resize = .drag,
-        });
-        defer strip.deinit();
+    // The remainder: the large canvas.
+    var canvas = try f.region(@src(), .{ .name = "Canvas", .keywords = main_area });
+    defer canvas.end();
 
-        if (strip.showDock()) {
-            // "This region IS x": a single bottom surface fills it, with no chooser at all —
-            // the shape an app takes when it wants, say, just a terminal down here. Contrast
-            // `ide.zig`, which draws a tab strip above the same call and so gets the tabbed
-            // form. The difference is one line of app code, not a framework mode.
-            const r = try f.region(.{ .keywords = bottom });
-            if (r != .ok) return r;
-        }
-        if (strip.showRest()) {
-            const r = try f.region(.{ .keywords = main_area });
-            if (r != .ok) return r;
-        }
-        return .ok;
-    }
-
-    return try f.region(.{ .keywords = main_area });
+    return .ok;
 }
