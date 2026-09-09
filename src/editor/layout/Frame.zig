@@ -198,24 +198,25 @@ pub fn drawSelected(self: *Frame, keywords: []const []const u8) !dvui.App.Result
 /// `Frame.Edge` and `split.Side` were two identical enums for one concept.
 pub const Edge = layout_split.Side;
 
-/// How a region presents itself when several surfaces match it.
+/// How a region draws its own contents.
 ///
-/// This is a mode, and modes have been removed from this design twice already — so the reason
-/// it survives here: it is the *region* stating how it shows its own contents, not a plugin
-/// stating where it goes, and every value is reachable by hand from `matching`/`selected`/
-/// `draw` if a shape wants something else. `.none` is the "this region IS x" form; `.tabs` is
-/// the "this region is tabbed" form.
-pub const Chooser = enum {
-    none,
-    tabs,
-    icons,
-    /// Fizzy's explorer chrome: a header naming the active surface plus a per-view scroll
-    /// policy, wrapped around the region's content.
-    explorer_chrome,
-    /// Fizzy's panel chrome: a grouping-aware, drag-reorderable tab strip that additionally
-    /// supports splitting the region into several panes.
-    panel_chrome,
-};
+/// Null means "draw the selected matching surface" — the "this region IS x" form. A function
+/// means the region has chrome of its own: a tab strip above its content, a titled scroll pane,
+/// a splittable panel. It is handed the region's keywords and returns when the region is full.
+///
+/// This replaced a five-value `Chooser` enum, two of whose values (`explorer_chrome`,
+/// `panel_chrome`) named *fizzy's own* furniture from inside the generic layer. That is the
+/// case CLAUDE.md calls a bug in `Frame` rather than a special case: a shape is supposed to be
+/// ordinary code over this API, and an app copying `ide.zig` could not have written those two
+/// values itself. As a function pointer they are just `chrome.explorerPane` and
+/// `chrome.bottomPane` — app code, passed in, replaceable by the app's own loop over
+/// `matching` / `selected` / `draw`, which is the governing test for everything here.
+///
+/// It also retired the two values nothing used (`.tabs`, `.icons`); `chrome.tabbed` is the
+/// first of those as a plain function, and the icon rail was never this shape to begin with —
+/// it sits *beside* the region it chooses for, so `ide.zig` calls it directly and reads the
+/// action it returns.
+pub const Content = *const fn (f: *Frame, keywords: []const []const u8) anyerror!dvui.App.Result;
 
 pub const RegionOptions = struct {
     /// Human-facing region name. Shown wherever a user picks a region — the settings table that
@@ -229,7 +230,8 @@ pub const RegionOptions = struct {
     size: ?f32 = null,
     resize: bool = false,
     collapsible: bool = false,
-    chooser: Chooser = .none,
+    /// Chrome this region draws around/instead of its selected surface. See `Content`.
+    content: ?Content = null,
     /// Collapse the region while nothing matches it. Framework behaviour, not app policy: a
     /// region with nothing in it should not hold space open.
     hide_when_empty: bool = false,
@@ -242,7 +244,7 @@ pub const RegionOptions = struct {
 /// this that lets the user move regions at runtime, and is the natural basis for a
 /// Premiere-style shape. Named seam, not built.
 ///
-/// `region` draws the region's own contents — the chooser, if it asked for one, and the active
+/// `region` draws the region's own contents — its chrome, if it declared any, and the active
 /// matching surface — and leaves the caller positioned in the *remaining* space, so whatever the
 /// layout writes next lands there. That is what removes the `showFirst`/`showSecond` pairs from
 /// shapes.
@@ -312,21 +314,12 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions
     return .{ .split = s, .rest_visible = s.showRest() };
 }
 
-/// The chooser (if any) plus the active surface. Everything here is reachable by hand from
-/// `matching` / `selected` / `draw` — a shape wanting a different chooser writes its own loop
-/// and never calls `dock`.
+/// The region's contents: its own chrome if it declared any, otherwise the active surface.
+///
+/// Everything reachable here is reachable by hand from `matching` / `selected` / `draw`, so a
+/// shape wanting something else writes its own function and passes it as `content`.
 fn drawRegionContents(self: *Frame, opts: RegionOptions, matches: []const *Surface) !dvui.App.Result {
     _ = matches;
-    switch (opts.chooser) {
-        .none => {},
-        .tabs => chrome_ref.tabs(self, opts.keywords),
-        .icons => _ = chrome_ref.iconRail(self, opts.keywords) catch {},
-        // These two draw chrome *and* content, so they return directly. They are fizzy's own
-        // richer variants (a titled scroll pane; a splittable tabbed panel) and exist as
-        // chooser values rather than as app code because an app copying the IDE shape wants
-        // them wholesale — see CLAUDE.md on shipped shapes.
-        .explorer_chrome => return chrome_ref.explorerPane(self, opts.keywords),
-        .panel_chrome => return chrome_ref.bottomPane(self, opts.keywords),
-    }
-    return self.drawSelected(opts.keywords);
+    const content = opts.content orelse return self.drawSelected(opts.keywords);
+    return content(self, opts.keywords);
 }

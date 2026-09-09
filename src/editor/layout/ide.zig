@@ -67,7 +67,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         .size = 0.2,
         .resize = true,
         .collapsible = true,
-        .chooser = .explorer_chrome,
+        .content = chrome.explorerPane,
     });
     defer side.end();
 
@@ -105,7 +105,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         .resize = true,
         .collapsible = true,
         .hide_when_empty = true,
-        .chooser = .panel_chrome,
+        .content = chrome.bottomPane,
     });
     defer panel.end();
     if (!panel.rest()) return .ok;

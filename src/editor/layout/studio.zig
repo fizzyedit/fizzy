@@ -68,9 +68,10 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     defer stack.end();
     if (!stack.rest()) return .ok;
 
-    // A short strip along the bottom with NO chooser: "this region IS x". The shape an app takes
-    // when it wants, say, just a terminal down there. `ide.zig` asks for `.chooser = .tabs` on
-    // the same declaration and gets the tabbed form; the difference is one field.
+    // A short strip along the bottom with no chrome of its own: "this region IS x". The shape
+    // an app takes when it wants, say, just a terminal down there. Adding `.content =
+    // chrome.tabbed` to the same declaration gets the tabbed form instead, and `ide.zig` passes
+    // `chrome.bottomPane` for the richer splittable one; the difference is one field.
     var strip = try f.region(@src(), .{
         .name = "Strip",
         .keywords = bottom,

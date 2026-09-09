@@ -93,6 +93,18 @@ pub fn tabs(f: *Frame, keywords: []const []const u8) void {
     strip.finalSlot(surfaces.len);
 }
 
+/// The plain tabbed region: a strip of tabs, then the selected surface beneath it. The
+/// `content` function form of the two-line recipe `tabs` documents above — pass it as
+/// `.content = chrome.tabbed` and the region is tabbed.
+///
+/// `iconRail` deliberately has no counterpart here. It is a chooser that sits *beside* the
+/// region it chooses for rather than above it (see `ide.zig`), so it is not a region's content
+/// and wrapping it as one would only lose the action it returns.
+pub fn tabbed(f: *Frame, keywords: []const []const u8) !dvui.App.Result {
+    tabs(f, keywords);
+    return f.drawSelected(keywords);
+}
+
 /// Drag state for `tabStrip`. One strip per app in practice; a layout wanting two independent
 /// strips copies this recipe (see CLAUDE.md's shipped-shapes note) rather than fizzy growing a
 /// handle type for a case nothing has yet.
