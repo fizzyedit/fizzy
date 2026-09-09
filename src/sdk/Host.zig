@@ -883,6 +883,23 @@ fn repointCompatSurfaces(self: *Host) void {
     }
 }
 
+/// Swap two surfaces' positions in the registry, by id. Registration order is the order they
+/// appear in a chooser, so this is how a tab drag persists a reorder.
+pub fn swapSurfaces(self: *Host, a_id: []const u8, b_id: []const u8) void {
+    var ai: ?usize = null;
+    var bi: ?usize = null;
+    for (self.surfaces.items, 0..) |*s, i| {
+        if (std.mem.eql(u8, s.id, a_id)) ai = i;
+        if (std.mem.eql(u8, s.id, b_id)) bi = i;
+    }
+    const a = ai orelse return;
+    const b = bi orelse return;
+    if (a == b) return;
+    const tmp = self.surfaces.items[a];
+    self.surfaces.items[a] = self.surfaces.items[b];
+    self.surfaces.items[b] = tmp;
+}
+
 pub fn surfaceById(self: *Host, id: []const u8) ?*Surface {
     for (self.surfaces.items) |*s| if (std.mem.eql(u8, s.id, id)) return s;
     return null;

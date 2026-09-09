@@ -4,17 +4,16 @@ const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
 
 const Panel = @import("Panel.zig");
+const Frame = @import("../layout/Frame.zig");
 const PanelWorkspace = @import("PanelWorkspace.zig");
 
 const handle_size = 10;
 const handle_dist = 60;
 
-pub fn rebuildWorkspaces(panel: *Panel, host: *fizzy.Editor.Host) !void {
-    panel.ensureViewGroupings(host);
+pub fn rebuildWorkspaces(panel: *Panel, f: *Frame, keywords: []const []const u8) !void {
+    panel.ensureViewGroupings(f, keywords);
 
-    var i: usize = 0;
-    while (i < host.bottom_views.items.len) : (i += 1) {
-        const view = host.bottom_views.items[i];
+    for (Panel.surfaces(f, keywords)) |view| {
         const grouping = panel.viewGrouping(view.id);
         if (!panel.workspaces.contains(grouping)) {
             var workspace = PanelWorkspace.init(grouping);
@@ -27,7 +26,7 @@ pub fn rebuildWorkspaces(panel: *Panel, host: *fizzy.Editor.Host) !void {
         if (panel.workspaces.count() == 1) break;
 
         var contains = false;
-        for (host.bottom_views.items) |v| {
+        for (Panel.surfaces(f, keywords)) |v| {
             if (panel.viewGrouping(v.id) == workspace.grouping) {
                 contains = true;
                 break;
@@ -49,10 +48,10 @@ pub fn rebuildWorkspaces(panel: *Panel, host: *fizzy.Editor.Host) !void {
     }
 
     for (panel.workspaces.values()) |*workspace| {
-        if (panel.activeViewInGrouping(host, workspace.grouping)) |active| {
+        if (panel.activeViewInGrouping(f, keywords, workspace.grouping)) |active| {
             if (panel.viewGrouping(active.id) == workspace.grouping) continue;
         }
-        for (host.bottom_views.items) |v| {
+        for (Panel.surfaces(f, keywords)) |v| {
             if (panel.viewGrouping(v.id) == workspace.grouping) {
                 workspace.active_view_id = v.id;
                 break;
@@ -64,6 +63,8 @@ pub fn rebuildWorkspaces(panel: *Panel, host: *fizzy.Editor.Host) !void {
 pub fn drawWorkspaces(
     panel: *Panel,
     host: *fizzy.Editor.Host,
+    f: *Frame,
+    keywords: []const []const u8,
     index: usize,
 ) !dvui.App.Result {
     if (index >= panel.workspaces.count()) return .ok;
@@ -96,12 +97,12 @@ pub fn drawWorkspaces(
     }
 
     if (s.showFirst()) {
-        const result = try panel.workspaces.values()[index].draw(panel, host);
+        const result = try panel.workspaces.values()[index].draw(panel, host, f, keywords);
         if (result != .ok) return result;
     }
 
     if (s.showSecond()) {
-        const result = try drawWorkspaces(panel, host, index + 1);
+        const result = try drawWorkspaces(panel, host, f, keywords, index + 1);
         if (result != .ok) return result;
     }
 

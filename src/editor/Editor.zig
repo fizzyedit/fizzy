@@ -1451,46 +1451,6 @@ fn loadSurfaceKeywordOverrides(editor: *Editor) void {
     }
 }
 
-/// Warns about keyword overrides that point a surface at fizzy's bottom panel, which cannot
-/// draw arbitrary surfaces yet.
-///
-/// `Panel`/`panel_layout`/`PanelWorkspace` still resolve their contents from
-/// `host.bottom_views` — the legacy registry — because their grouping, split and drag-reorder
-/// machinery is built around it (see src/sdk/PHASE4.md). The sidebar was converted in Phase 4c;
-/// the panel was not.
-///
-/// Without this warning the failure is silent and is exactly the one the keyword design
-/// promises never to have: an overridden surface leaves the rail (which *does* honour keywords)
-/// and is never drawn by the panel, so it simply vanishes. Better to say so.
-fn warnUndrawableOverrides(editor: *Editor) void {
-    if (editor.surface_keyword_overrides.count() == 0) return;
-    var it = editor.surface_keyword_overrides.iterator();
-    while (it.next()) |entry| {
-        const id = entry.key_ptr.*;
-        const kws = entry.value_ptr.*;
-
-        var targets_bottom = false;
-        for (kws) |k| for (layout.Frame.bottom_keywords) |b| {
-            if (std.ascii.eqlIgnoreCase(k, b)) targets_bottom = true;
-        };
-        if (!targets_bottom) continue;
-
-        // Already a real bottom view? Then the panel can draw it and there is nothing to warn.
-        var is_bottom_view = false;
-        for (editor.host.bottom_views.items) |v| {
-            if (std.mem.eql(u8, v.id, id)) is_bottom_view = true;
-        }
-        if (is_bottom_view) continue;
-
-        std.log.warn(
-            "surface '{s}' is overridden into the bottom panel, but fizzy's panel cannot draw " ++
-                "surfaces that did not register as bottom views yet — it will not be shown. " ++
-                "Remove the override, or point it at sidebar/explorer.",
-            .{id},
-        );
-    }
-}
-
 fn seedPluginFlags(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.gpa;
@@ -2684,8 +2644,6 @@ pub fn postInit(editor: *Editor) !void {
             if (editor.folder) |f| w.setFolder(f);
         }
     }
-
-    warnUndrawableOverrides(editor);
 }
 
 /// The Settings sidebar view: a single searchable tree (`SettingsTree`) whose "Fizzy" branch
@@ -4549,7 +4507,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                         });
                         defer vbox.deinit();
 
-                        const result = try editor.panel.draw(editor);
+                        const result = try editor.panel.draw(editor, &legacy_frame, sdk.keywords.ide.panel);
                         if (result != .ok) {
                             return result;
                         }
