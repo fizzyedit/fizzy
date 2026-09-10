@@ -37,14 +37,6 @@ pub fn deinit(self: *Panel, allocator: std.mem.Allocator) void {
     self.view_groupings.deinit(allocator);
 }
 
-/// The surfaces this panel shows: whatever currently matches the keywords its region accepts.
-///
-/// Asking the layout rather than the registry is what makes a user's keyword override take
-/// effect here — the panel draws the same set `Layout.matching` resolved for its region.
-pub fn surfaces(f: *Layout, keywords: []const []const u8) []const *Layout.Surface {
-    return f.matching(keywords);
-}
-
 pub fn draw(panel: *Panel, editor: *fizzy.Editor, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
     var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
@@ -53,7 +45,7 @@ pub fn draw(panel: *Panel, editor: *fizzy.Editor, f: *Layout, keywords: []const 
     defer vbox.deinit();
 
     const host = &editor.host;
-    if (surfaces(f, keywords).len == 0) {
+    if (f.matching(keywords).len == 0) {
         Pane.drawBackground(0);
         return .ok;
     }
@@ -69,7 +61,7 @@ pub fn draw(panel: *Panel, editor: *fizzy.Editor, f: *Layout, keywords: []const 
 }
 
 pub fn ensurePanes(self: *Panel, f: *Layout, keywords: []const []const u8) void {
-    for (surfaces(f, keywords)) |view| {
+    for (f.matching(keywords)) |view| {
         if (self.view_groupings.get(view.id) == null) {
             self.view_groupings.put(fizzy.entry().allocator, view.id, 0) catch {};
         }
@@ -95,7 +87,7 @@ pub fn newPaneId(self: *Panel) u64 {
 
 pub fn viewIndex(self: *Panel, f: *Layout, keywords: []const []const u8, view_id: []const u8) ?usize {
     _ = self;
-    for (surfaces(f, keywords), 0..) |view, i| {
+    for (f.matching(keywords), 0..) |view, i| {
         if (std.mem.eql(u8, view.id, view_id)) return i;
     }
     return null;
@@ -135,13 +127,13 @@ pub fn forgetUnregisteredSurfaces(self: *Panel, host: *fizzy.Editor.Host) void {
 pub fn activeSurfaceIn(self: *Panel, f: *Layout, keywords: []const []const u8, grouping: u64) ?*Layout.Surface {
     const workspace = self.workspaces.get(grouping) orelse return null;
     if (workspace.active_view_id) |active_id| {
-        for (surfaces(f, keywords)) |view| {
+        for (f.matching(keywords)) |view| {
             if (std.mem.eql(u8, view.id, active_id) and self.paneOf(view.id) == grouping) {
                 return view;
             }
         }
     }
-    for (surfaces(f, keywords)) |view| {
+    for (f.matching(keywords)) |view| {
         if (self.paneOf(view.id) == grouping) return view;
     }
     return null;
@@ -153,7 +145,7 @@ pub fn activeSurfaceIn(self: *Panel, f: *Layout, keywords: []const []const u8, g
 /// are positions within *this region's* matches, not positions in `host.surfaces`. Translating
 /// through ids is what keeps a reorder correct when some surfaces match a different region.
 pub fn swapSurfaces(_: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8, a: usize, b: usize) void {
-    const list = surfaces(f, keywords);
+    const list = f.matching(keywords);
     if (a >= list.len or b >= list.len or a == b) return;
     host.swapSurfaces(list[a].id, list[b].id);
 }

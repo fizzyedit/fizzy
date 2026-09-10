@@ -15,7 +15,7 @@ const handle_dist = 60;
 pub fn rebuildWorkspaces(panel: *Panel, f: *Layout, keywords: []const []const u8) !void {
     panel.ensurePanes(f, keywords);
 
-    for (Panel.surfaces(f, keywords)) |view| {
+    for (f.matching(keywords)) |view| {
         const grouping = panel.paneOf(view.id);
         if (!panel.workspaces.contains(grouping)) {
             var workspace = Pane.init(grouping);
@@ -28,7 +28,7 @@ pub fn rebuildWorkspaces(panel: *Panel, f: *Layout, keywords: []const []const u8
         if (panel.workspaces.count() == 1) break;
 
         var contains = false;
-        for (Panel.surfaces(f, keywords)) |v| {
+        for (f.matching(keywords)) |v| {
             if (panel.paneOf(v.id) == workspace.grouping) {
                 contains = true;
                 break;
@@ -53,7 +53,7 @@ pub fn rebuildWorkspaces(panel: *Panel, f: *Layout, keywords: []const []const u8
         if (panel.activeSurfaceIn(f, keywords, workspace.grouping)) |active| {
             if (panel.paneOf(active.id) == workspace.grouping) continue;
         }
-        for (Panel.surfaces(f, keywords)) |v| {
+        for (f.matching(keywords)) |v| {
             if (panel.paneOf(v.id) == workspace.grouping) {
                 workspace.active_view_id = v.id;
                 break;

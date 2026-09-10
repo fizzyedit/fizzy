@@ -61,7 +61,7 @@ pub fn draw(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, ke
         }
     }
 
-    if (Panel.surfaces(f, keywords).len >= 1) self.drawTabs(panel, host, f, keywords);
+    if (f.matching(keywords).len >= 1) self.drawTabs(panel, host, f, keywords);
     try self.drawContent(panel, host, f, keywords);
 
     return .ok;
@@ -106,7 +106,7 @@ fn drawTabs(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, ke
     else
         null;
 
-    for (Panel.surfaces(f, keywords), 0..) |view, i| {
+    for (f.matching(keywords), 0..) |view, i| {
         if (panel.paneOf(view.id) != self.grouping) continue;
 
         const selected = active_in_this_group and active_index == i;
@@ -133,7 +133,7 @@ fn drawTabs(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, ke
         }
     }
 
-    strip.finalSlot(Panel.surfaces(f, keywords).len);
+    strip.finalSlot(f.matching(keywords).len);
 }
 
 fn drawContent(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) !void {
@@ -155,10 +155,10 @@ fn drawContent(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout,
 fn processTabsDrag(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
     if (self.tab_info.insert_before_index) |insert_before| {
         if (self.tab_info.removed_index) |removed| {
-            if (removed >= Panel.surfaces(f, keywords).len) return;
+            if (removed >= f.matching(keywords).len) return;
             // The dragged surface ends up under the cursor whichever way the swap goes, so
             // read it before reordering rather than re-indexing the match set afterwards.
-            const view = Panel.surfaces(f, keywords)[removed];
+            const view = f.matching(keywords)[removed];
             if (removed > insert_before) {
                 panel.swapSurfaces(host, f, keywords, removed, insert_before);
             } else if (insert_before > 0) {
@@ -172,8 +172,8 @@ fn processTabsDrag(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Lay
         } else {
             for (panel.workspaces.values()) |*workspace| {
                 if (workspace.tab_info.removed_index) |removed| {
-                    if (removed >= Panel.surfaces(f, keywords).len) return;
-                    const view = Panel.surfaces(f, keywords)[removed];
+                    if (removed >= f.matching(keywords).len) return;
+                    const view = f.matching(keywords)[removed];
                     if (removed > insert_before) {
                         panel.swapSurfaces(host, f, keywords, removed, insert_before);
                         panel.setViewGrouping(view.id, self.grouping);
@@ -213,8 +213,8 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *Panel, host: *fiz
     if (drag_src == null) return;
     const workspace = drag_src.?.ws;
     const drag_index = drag_src.?.index;
-    if (drag_index >= Panel.surfaces(f, keywords).len) return;
-    const dragged_view = Panel.surfaces(f, keywords)[drag_index];
+    if (drag_index >= f.matching(keywords).len) return;
+    const dragged_view = f.matching(keywords)[drag_index];
 
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = data.id, .r = data.rectScale().r, .drag_name = drag_name })) continue;
