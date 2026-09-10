@@ -39,6 +39,15 @@ depth: usize = 0,
 
 pub const Container = struct {
     dir: dvui.enums.Direction,
+    /// The base region's declared minimum along the axis — `min_size_content` on the region in
+    /// this container that is not resizable. The app declares it; the framework only reads it.
+    base_min: f32 = 0,
+    /// Every resizable region in this container. A sash needs them all, because honouring one
+    /// drag can mean pushing the others back.
+    resizables: [max_trays]dvui.Id = undefined,
+    resizable_count: usize = 0,
+    /// Total length the sashes in this container take.
+    handles: f32 = 0,
     /// The container's own box, for measuring how near the pointer is to a split inside it.
     box: ?*dvui.BoxWidget = null,
     /// A split that found no resizable region before it, waiting to be bound to the one after.
@@ -52,6 +61,9 @@ pub const Container = struct {
 /// Layouts nest a few levels; anything deeper is a mistake worth reporting rather than
 /// supporting. Keeps the stack a fixed array with no allocation on the layout path.
 pub const max_nesting = 8;
+
+/// Trays per container. More than a handful on one axis is a layout problem, not a use case.
+pub const max_trays = 6;
 
 pub fn init(editor: *fizzy.Editor) Frame {
     return .{ .editor = editor };
@@ -442,8 +454,24 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
                 p.pending_split = null;
             }
             p.last_resizable = id;
+            if (p.resizable_count < max_trays) {
+                p.resizables[p.resizable_count] = id;
+                p.resizable_count += 1;
+            }
         }
         shut_now = size <= 0;
+    }
+
+    if (!kind.resize) {
+        // The base of this container: what it insists on keeping is what the trays must leave it.
+        if (parent) |p| {
+            const m = opts.min_size_content orelse dvui.Size{};
+            const along = switch (axis) {
+                .horizontal => m.w,
+                .vertical => m.h,
+            };
+            if (along > p.base_min) p.base_min = along;
+        }
     }
 
     const box = dvui.box(src, .{ .dir = kind.dir }, box_opts);
@@ -508,10 +536,20 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
     };
 
     const container = c.box orelse return;
+    c.handles += sash.handle_size;
+    const room = switch (axis) {
+        .horizontal => container.data().contentRect().w,
+        .vertical => container.data().contentRect().h,
+    };
     sash.interact(container, sep, axis, target, sign, .{
         .resize = opts.resize,
         .min = opts.min,
         .max = opts.max,
+    }, .{
+        .length = room,
+        .base_min = c.base_min,
+        .handles = c.handles,
+        .others = c.resizables[0..c.resizable_count],
     });
 }
 

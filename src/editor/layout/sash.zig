@@ -13,6 +13,77 @@ const icons = @import("icons");
 pub const handle_size: f32 = 10;
 pub const handle_dist: f32 = 60;
 
+/// What the container knows that a single sash does not: how much room there is, how much of it
+/// the base region insists on keeping, and which other regions can give way.
+///
+/// This is why a sash *requests* an extent rather than setting one. With a left and a right tray
+/// over one centre, dragging the left one past the point where the centre is at its minimum has
+/// to push the right one out of the way — an answer no region owns on its own. The container
+/// arbitrates; the regions stop owning their sizes independently.
+pub const Constraint = struct {
+    /// The container's length along the axis.
+    length: f32 = 0,
+    /// The base region's declared minimum — `min_size_content` on the region that is not
+    /// resizable. Declared by the app, never inferred from a plugin's content, or the plugin
+    /// would be setting the app's proportions.
+    base_min: f32 = 0,
+    /// Total length the sashes themselves take.
+    handles: f32 = 0,
+    /// The other resizable regions in this container, which yield once the base is at its
+    /// minimum and the drag still wants more.
+    others: []const dvui.Id = &.{},
+};
+
+/// Resolve a requested extent for `target` against the container's constraint, pushing the other
+/// trays back if that is the only way to honour it.
+///
+/// Returns the extent `target` should take. Anything the others had to give up has already been
+/// written to them.
+pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
+    // `std.math.clamp` asserts `lower <= upper`, so an explicit `max` below `min` would panic
+    // inside the clamp rather than reaching any guard after it.
+    const limit = @max(opts.min, opts.max orelse (c.length - handle_size));
+    var size = std.math.clamp(want, opts.min, limit);
+    if (c.length <= 0) return size;
+
+    // What the trays may occupy between them once the base has kept its minimum. Never negative:
+    // a container too small for the base alone leaves the trays nothing rather than a negative
+    // budget that would read as unlimited room.
+    const room = @max(0, c.length - c.base_min - c.handles);
+
+    var others: f32 = 0;
+    for (c.others) |o| {
+        if (o == target) continue;
+        others += dvui.dataGet(null, o, "_size", f32) orelse 0;
+    }
+
+    if (size + others <= room) return size;
+
+    // Over budget. Constraints are resolved in a fixed order so a conflict has one answer rather
+    // than depending on which sash the user happens to be dragging:
+    //
+    //   1. The other trays give way, nearest the budget first — "push the far sidebar out of the
+    //      way", the behaviour the whole mechanism exists for.
+    //   2. If they are all shut and it still does not fit, the dragged tray stops.
+    //   3. If even that is not enough — every tray at a declared minimum, and the container
+    //      still too small — the **base** is squeezed below `base_min`. It yields last because
+    //      it is the region with somewhere to go: it can scroll or clip, and a tray pinned to a
+    //      minimum by the app cannot.
+    //
+    // Nothing here can produce a negative extent, which is the failure that would otherwise turn
+    // a conflict into a layout that inverts.
+    var excess = size + others - room;
+    for (c.others) |o| {
+        if (o == target or excess <= 0) continue;
+        const had = dvui.dataGet(null, o, "_size", f32) orelse 0;
+        const give = @min(had, excess);
+        if (give > 0) dvui.dataSet(null, o, "_size", had - give);
+        excess -= give;
+    }
+    if (excess > 0) size = @max(opts.min, size - excess);
+    return @max(0, size);
+}
+
 pub const Options = struct {
     /// False draws the gap but does not let the user move it.
     resize: bool = true,
@@ -75,6 +146,7 @@ pub fn interact(
     target: dvui.Id,
     sign: f32,
     opts: Options,
+    c: Constraint,
 ) void {
     const wd = sep.data();
     const srs = wd.borderRectScale();
@@ -177,16 +249,7 @@ pub fn interact(
         else
             current + sign * (p - centre) / srs.s;
 
-        // The far end is the container's own length less the sash, so the region can be dragged
-        // fully open rather than stopping wherever the neighbour's content happens to want to
-        // be. Without a cap the stored size just keeps growing past the window, and the sash
-        // stops tracking the pointer because the layout cannot honour it.
-        const room = switch (axis) {
-            .horizontal => container.data().contentRect().w,
-            .vertical => container.data().contentRect().h,
-        };
-        const limit = opts.max orelse @max(opts.min, room - handle_size);
-        dvui.dataSet(null, target, "_size", std.math.clamp(want, opts.min, limit));
+        dvui.dataSet(null, target, "_size", resolve(target, want, c, opts));
         dvui.refresh(null, @src(), wd.id);
     }
 
@@ -307,7 +370,7 @@ fn twoPaneFrame() !dvui.App.Result {
         t_room = row.data().contentRect().w;
         t_room_px = row.data().borderRectScale().r.w;
         t_org_px = row.data().borderRectScale().r.x;
-        interact(row, sep, .horizontal, t_target, 1, .{ .min = t_min });
+        interact(row, sep, .horizontal, t_target, 1, .{ .min = t_min }, .{ .length = row.data().contentRect().w });
         t_captured = dvui.captured(sep.data().id);
     }
     sep.deinit();
@@ -522,4 +585,113 @@ test "a far-away press is not a grab" {
 
 test {
     testing.refAllDecls(@This());
+}
+
+// ── Constraint resolution ───────────────────────────────────────────────────────────────────
+//
+// `resolve` is pure arithmetic over dvui's data store, so it tests directly without a drag.
+
+fn setSize(id: dvui.Id, v: f32) void {
+    dvui.dataSet(null, id, "_size", v);
+}
+fn getSize(id: dvui.Id) f32 {
+    return dvui.dataGet(null, id, "_size", f32) orelse 0;
+}
+
+test "a tray takes what it asks for while there is room" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    const left: dvui.Id = @enumFromInt(0xA1);
+    const right: dvui.Id = @enumFromInt(0xA2);
+    setSize(left, 100);
+    setSize(right, 100);
+
+    const c: Constraint = .{ .length = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
+    try testing.expectApproxEqAbs(@as(f32, 300), resolve(left, 300, c, .{}), 0.001);
+    // The other tray is untouched: there was room for both.
+    try testing.expectApproxEqAbs(@as(f32, 100), getSize(right), 0.001);
+}
+
+test "the far tray is pushed back once the base is at its minimum" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    const left: dvui.Id = @enumFromInt(0xB1);
+    const right: dvui.Id = @enumFromInt(0xB2);
+    setSize(left, 200);
+    setSize(right, 200);
+
+    // 1000 long, base keeps 400, sashes take 20 -> 580 for the trays. Asking for 500 on the left
+    // leaves 80 for the right, so it has to give up 120.
+    const c: Constraint = .{ .length = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
+    try testing.expectApproxEqAbs(@as(f32, 500), resolve(left, 500, c, .{}), 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 80), getSize(right), 0.001);
+}
+
+test "a tray that pushes everything shut then stops" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    const left: dvui.Id = @enumFromInt(0xC1);
+    const right: dvui.Id = @enumFromInt(0xC2);
+    setSize(left, 200);
+    setSize(right, 200);
+
+    const c: Constraint = .{ .length = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
+    // Far more than the whole budget: the right shuts, and the left stops at what is left.
+    const got = resolve(left, 5000, c, .{});
+    try testing.expectApproxEqAbs(@as(f32, 0), getSize(right), 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 580), got, 0.001);
+}
+
+test "conflicting minimums squeeze the base rather than inverting the layout" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    const left: dvui.Id = @enumFromInt(0xD1);
+    const right: dvui.Id = @enumFromInt(0xD2);
+    setSize(left, 100);
+    setSize(right, 100);
+
+    // No room for the base's minimum and both trays' declared minimums at once.
+    const c: Constraint = .{ .length = 300, .base_min = 280, .handles = 20, .others = &.{ left, right } };
+    const got = resolve(left, 200, c, .{ .min = 60 });
+    // The tray keeps its declared minimum, the base is the one that yields, and nothing is
+    // negative — a conflict must not produce an inverted layout.
+    try testing.expectApproxEqAbs(@as(f32, 60), got, 0.001);
+    try testing.expect(got >= 0);
+    try testing.expect(getSize(right) >= 0);
+}
+
+test "a container smaller than the base leaves the trays nothing" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    const only: dvui.Id = @enumFromInt(0xE1);
+    setSize(only, 100);
+
+    // base_min alone exceeds the container: room is zero, not negative.
+    const c: Constraint = .{ .length = 200, .base_min = 400, .handles = 10, .others = &.{only} };
+    try testing.expectApproxEqAbs(@as(f32, 0), resolve(only, 150, c, .{}), 0.001);
+}
+
+test "a max below the min does not panic in the clamp" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    const only: dvui.Id = @enumFromInt(0xF1);
+    setSize(only, 50);
+
+    // `std.math.clamp` asserts lower <= upper, so a contradictory pair has to be reconciled
+    // before it reaches the clamp rather than after.
+    const c: Constraint = .{ .length = 1000, .base_min = 100, .handles = 10, .others = &.{only} };
+    const got = resolve(only, 500, c, .{ .min = 200, .max = 50 });
+    try testing.expectApproxEqAbs(@as(f32, 200), got, 0.001);
 }
