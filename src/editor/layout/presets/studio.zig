@@ -61,7 +61,10 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
         defer left.deinit();
 
         // The large canvas.
-        _ = try f.region(@src(), .{ .name = "Canvas", .keywords = main_area }, .{ .expand = .both });
+        {
+            var canvas = try f.region(@src(), .{ .name = "Canvas", .keywords = main_area }, .{ .expand = .both });
+            defer canvas.deinit();
+        }
 
         f.split(@src(), .{});
 
@@ -69,25 +72,31 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
         // shape an app takes when it wants, say, just a terminal down there. Adding `.content =
         // chrome.tabbed` gets the tabbed form; `ide.zig` passes `chrome.bottomPane` for the
         // richer splittable one. The difference is one field.
-        _ = try f.region(@src(), .{
-            .name = "Strip",
-            .keywords = bottom,
-            .resize = true,
-            .collapsible = true,
-            .hide_when_empty = true,
-        }, .{ .min_size_content = .{ .h = 150 }, .expand = .horizontal });
+        {
+            var strip = try f.region(@src(), .{
+                .name = "Strip",
+                .keywords = bottom,
+                .resize = true,
+                .collapsible = true,
+                .hide_when_empty = true,
+            }, .{ .min_size_content = .{ .h = 150 }, .expand = .horizontal });
+            defer strip.deinit();
+        }
     }
 
     f.split(@src(), .{});
 
     // A stack on the right, not the left. Same keywords as the IDE's sidebar, so a surface that
     // belongs "somewhere like a sidebar" lands here without knowing it moved.
-    _ = try f.region(@src(), .{
-        .name = "Stack",
-        .keywords = side,
-        .resize = true,
-        .collapsible = true,
-    }, .{ .min_size_content = .{ .w = 300 }, .expand = .vertical });
+    {
+        var stack = try f.region(@src(), .{
+            .name = "Stack",
+            .keywords = side,
+            .resize = true,
+            .collapsible = true,
+        }, .{ .min_size_content = .{ .w = 300 }, .expand = .vertical });
+        defer stack.deinit();
+    }
 
     return .ok;
 }

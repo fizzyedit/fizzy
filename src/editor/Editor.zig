@@ -4293,6 +4293,15 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             var layout: Layout = .init(editor);
             const shell_result = presets.run(editor, &layout);
 
+            // A region is a box, so a shape that declares one and never scopes it leaves the box
+            // open and dvui reports the mismatch two widgets later ("not at the top of the widget
+            // stack"), naming a box the shape author never wrote. Say it here instead, while the
+            // count still means "regions this shape forgot to deinit".
+            if (layout.depth != 0) dvui.log.err(
+                "layout left {d} region(s) open — a region is a box: scope it and `defer r.deinit()`",
+                .{layout.depth},
+            );
+
             for (editor.host.plugins.items) |plugin| plugin.endFrame();
             layout_root.deinit();
 

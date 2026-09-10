@@ -75,13 +75,16 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
     var work = try f.region(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer work.deinit();
 
-    _ = try f.region(@src(), .{
-        .name = "Sidebar",
-        .keywords = sidebar,
-        .content = chrome.explorerPane,
-        .resize = true,
-        .collapsible = true,
-    }, .{ .min_size_content = .{ .w = 260 }, .expand = .vertical });
+    {
+        var side = try f.region(@src(), .{
+            .name = "Sidebar",
+            .keywords = sidebar,
+            .content = chrome.explorerPane,
+            .resize = true,
+            .collapsible = true,
+        }, .{ .min_size_content = .{ .w = 260 }, .expand = .vertical });
+        defer side.deinit();
+    }
 
     // The rail drives the sidebar by *size*, not by reaching for the widget behind it.
     switch (rail_action) {
@@ -95,18 +98,24 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
     var content = try f.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer content.deinit();
 
-    _ = try f.region(@src(), .{ .name = "Main", .keywords = main_area }, .{ .expand = .both });
+    {
+        var main = try f.region(@src(), .{ .name = "Main", .keywords = main_area }, .{ .expand = .both });
+        defer main.deinit();
+    }
 
     f.split(@src(), .{});
 
-    _ = try f.region(@src(), .{
-        .name = "Panel",
-        .keywords = bottom,
-        .content = chrome.bottomPane,
-        .resize = true,
-        .collapsible = true,
-        .hide_when_empty = true,
-    }, .{ .min_size_content = .{ .h = 220 }, .expand = .horizontal });
+    {
+        var panel = try f.region(@src(), .{
+            .name = "Panel",
+            .keywords = bottom,
+            .content = chrome.bottomPane,
+            .resize = true,
+            .collapsible = true,
+            .hide_when_empty = true,
+        }, .{ .min_size_content = .{ .h = 220 }, .expand = .horizontal });
+        defer panel.deinit();
+    }
 
     return .ok;
 }
