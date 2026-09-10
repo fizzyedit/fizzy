@@ -77,6 +77,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
                 .name = "Sidebar",
                 .content = chrome.explorerPane,
                 .resize = true,
+                .collapsible = true,
             }, .{ .min_size_content = .{ .w = 260 }, .expand = .vertical });
             defer side.deinit();
         }
@@ -100,6 +101,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
                     .name = "Panel",
                     .content = chrome.bottomPane,
                     .resize = true,
+                    .collapsible = true,
                     .hide_when_empty = true,
                 }, .{ .min_size_content = .{ .h = 220 }, .expand = .horizontal });
                 defer panel.deinit();

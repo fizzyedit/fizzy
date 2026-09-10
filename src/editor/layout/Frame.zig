@@ -301,6 +301,8 @@ pub const RegionOptions = struct {
 /// layout writes next lands there. That is what removes the `showFirst`/`showSecond` pairs from
 /// shapes.
 pub const Region = struct {
+    /// Clip set while the region is open, restored on `deinit`.
+    prev_clip: ?dvui.Rect.Physical = null,
     /// The box this region is. A region **is** a `dvui.box`: same layout mechanics, same
     /// options, same lifetime rules — so an app author who has written any dvui already knows
     /// how this behaves, and a split is a separator between two of them.
@@ -318,6 +320,7 @@ pub const Region = struct {
     }
 
     pub fn deinit(self: *Region) void {
+        if (self.prev_clip) |c| dvui.clipSet(c);
         if (self.box) |b| {
             if (self.frame) |f| {
                 std.debug.assert(f.depth > 0);
@@ -352,6 +355,17 @@ pub const RegionInit = struct {
     resize: bool = false,
     /// Collapse while nothing matches, rather than holding empty space open.
     hide_when_empty: bool = false,
+    /// Let the region shut completely. Dragged below `collapse_at` it snaps to zero and stops
+    /// drawing its contents, and it starts shut when the window is too small to show it beside
+    /// everything else.
+    ///
+    /// Without this a region cannot actually close: its contents report a minimum, and while
+    /// `max_size_content` clamps what the region *claims*, the contents still draw at their
+    /// natural size — so the region bottoms out at whatever the plugin inside wants to be. Not
+    /// drawing them is the only thing that really shuts it.
+    collapsible: bool = false,
+    /// The width below which a collapsible region snaps shut.
+    collapse_at: f32 = 40,
 };
 
 /// Declare a region: an area that hosts matching surfaces, holds other regions, or both.
@@ -393,7 +407,17 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
             .horizontal => given.w,
             .vertical => given.h,
         };
-        const size = storedSize(id, default);
+        var size = storedSize(id, default);
+
+        // Snap shut. A region dragged down to a sliver should close rather than bottom out on
+        // whatever its contents want to be, and one that cannot be shown at all when the window
+        // is small should start closed — the behaviour the paned shell had and the region form
+        // was missing.
+        if (kind.collapsible) {
+            const room = if (parent) |p| roomOf(p, axis) else 0;
+            const no_room = room > 0 and room < Constants.min_window_size[0];
+            if (size < kind.collapse_at or no_room) size = 0;
+        }
 
         // Persist it immediately, so a drag has a correct baseline on its very first press.
         // Without this the sash fell back to the region's *natural* min size when no size had
@@ -431,11 +455,31 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
     self.containers[self.depth] = .{ .dir = kind.dir, .box = box };
     self.depth += 1;
 
-    // Opening a region draws what it hosts, the way opening a box draws its background. Anything
-    // the shape writes inside the braces draws after it.
-    if (kind.keywords.len > 0) _ = try self.drawRegionContents(kind, matches);
+    // A region clips what it holds. Contents draw at their own natural size, so without this a
+    // region squeezed narrower than its contents simply spills them over its neighbour instead
+    // of getting smaller — which is what a half-closed sidebar looked like.
+    const clip_to = box.data().contentRectScale().r;
+    const prev_clip = dvui.clip(clip_to);
 
-    return .{ .box = box, .frame = self };
+    // Nothing to draw once it is shut, which is the whole point: the contents are what was
+    // holding it open.
+    const shut = kind.collapsible and collapsedSize(id);
+    if (!shut and kind.keywords.len > 0) _ = try self.drawRegionContents(kind, matches);
+
+    return .{ .box = box, .frame = self, .prev_clip = prev_clip };
+}
+
+fn roomOf(p: *Container, axis: dvui.enums.Direction) f32 {
+    const b = p.box orelse return 0;
+    const r = b.data().contentRect();
+    return switch (axis) {
+        .horizontal => r.w,
+        .vertical => r.h,
+    };
+}
+
+fn collapsedSize(id: dvui.Id) bool {
+    return (dvui.dataGet(null, id, "_size", f32) orelse 1) <= 0;
 }
 
 /// A draggable divider between the region before it and the region after it — `dvui.separator`
