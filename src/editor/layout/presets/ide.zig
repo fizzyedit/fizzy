@@ -15,8 +15,8 @@
 //! resizable bottom panel, and everything left over is the main area.
 //!
 //! The main area goes through `f.region` — the real test of the generalized cross-fade. The
-//! sidebar and bottom go through `chrome.*`, because fizzy wraps those regions in app chrome
-//! that Phase 4 splits apart; see the finding recorded in `chrome.zig`.
+//! sidebar and bottom pass a `content` function, because fizzy wraps those two regions in chrome
+//! of its own (see `explorerPane` / `bottomPane` at the bottom of this file).
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -25,7 +25,6 @@ const sdk = fizzy.sdk;
 
 const Layout = @import("../Layout.zig");
 const Sash = @import("core").dvui.Sash;
-const chrome = @import("../chrome.zig");
 const Menu = @import("../../Menu.zig");
 const Constants = @import("../../Constants.zig");
 
@@ -50,7 +49,12 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
     // The icon rail: a chooser for the sidebar region, drawn in its own fixed strip because it
     // sits *beside* the region it chooses for rather than above it. That is why choosers are
     // widgets an app places, not a property of a region.
-    const rail_action = try chrome.iconRail(f, sidebar);
+    //
+    // It is still fizzy's own `Sidebar`: the rail carries pinned store/settings entries, a
+    // bounded scroll area with edge shadows, Windows titlebar hit-rect registration and the
+    // undecided-plugin badge. An app wanting a plain rail writes the four-line `f.matching` loop
+    // instead — nothing here is reachable only from a shape.
+    const rail_action = try editor.sidebar.draw(editor, f, sidebar);
 
     var stack = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
@@ -79,7 +83,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
         var side = try f.region(@src(), .{
             .name = "Sidebar",
             .keywords = sidebar,
-            .content = chrome.explorerPane,
+            .content = explorerPane,
             .resize = true,
             .collapsible = true,
         }, .{ .min_size_content = .{ .w = 260 }, .expand = .vertical });
@@ -109,7 +113,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
         var panel = try f.region(@src(), .{
             .name = "Panel",
             .keywords = bottom,
-            .content = chrome.bottomPane,
+            .content = bottomPane,
             .resize = true,
             .collapsible = true,
             .hide_when_empty = true,
@@ -118,4 +122,32 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
     }
 
     return .ok;
+}
+
+// ── Fizzy's own chrome ──────────────────────────────────────────────────────────────────────
+//
+// `Explorer` and `Panel` are neither surfaces nor regions: they are **app chrome that wraps a
+// region**.
+//
+//   Explorer.draw = a header showing the active view's title
+//                 + a scroll area (with per-view scroll policy)
+//                 + the active sidebar surface's own draw        <- this part is the region
+//
+//   Panel.draw    = a grouping-aware, drag-reorderable tab strip
+//                 + the active bottom surface's own draw         <- this part is the region
+//
+// That is the design working — the app owns the furniture and the plugin owns only its content
+// — and it is why they live here, in the shape that wants them, rather than in the framework. A
+// copy of this file that wants a plain sidebar drops the `.content` field; one that wants tabs
+// without splits passes `Layout.tabbed`.
+//
+// They are functions only because a `Region.Content` is a function pointer: there is nowhere to
+// write `editor.explorer.draw(...)` as an expression in a struct literal.
+
+fn explorerPane(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
+    return f.editor.explorer.draw(f.editor, f, keywords);
+}
+
+fn bottomPane(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
+    return f.editor.panes.draw(f.editor, f, keywords);
 }

@@ -20,8 +20,8 @@
 //!
 //! **The app draws them** when the tabs represent surfaces — several plugins each contributing
 //! a pane to one region. The app owns the strip because no single plugin can: they must share
-//! it. Fizzy's bottom panel is this. A shape writes `chrome.tabs(f, kw)` then draws the
-//! selected surface, or passes `.content = chrome.tabbed` to the region.
+//! it. Fizzy's bottom panel is this. A shape writes `f.tabs(kw)` then draws the selected
+//! surface, or passes `.content = Layout.tabbed` to the region.
 //!
 //! **The plugin draws them** when the tabs represent something only the plugin knows about —
 //! its own documents, timelines, layers. Then the plugin registers *one* surface and draws the
@@ -150,7 +150,6 @@ pub const Region = @import("layout/Region.zig");
 
 pub const Tabs = core.dvui.Tabs;
 pub const keywords = @import("fizzy_sdk").keywords;
-pub const chrome = @import("layout/chrome.zig");
 
 /// The shipped layout presets and their dispatcher. See `layout/presets.zig`.
 pub const presets = @import("layout/presets.zig");

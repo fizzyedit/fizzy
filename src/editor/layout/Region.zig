@@ -72,11 +72,11 @@ pub fn open(self: Region) void {
 /// `panel_chrome`) named *fizzy's own* furniture from inside the generic layer. That is the
 /// case CLAUDE.md calls a bug in `Layout` rather than a special case: a shape is supposed to be
 /// ordinary code over this API, and an app copying `ide.zig` could not have written those two
-/// values itself. As a function pointer they are just `chrome.explorerPane` and
-/// `chrome.bottomPane` — app code, passed in, replaceable by the app's own loop over
-/// `matching` / `selected` / `draw`, which is the governing test for everything here.
+/// values itself. As a function pointer they are just `explorerPane` and `bottomPane` in
+/// `presets/ide.zig` — app code, passed in, replaceable by the app's own loop over `matching` /
+/// `selected` / `draw`, which is the governing test for everything here.
 ///
-/// It also retired the two values nothing used (`.tabs`, `.icons`); `chrome.tabbed` is the
+/// It also retired the two values nothing used (`.tabs`, `.icons`); `Layout.tabbed` is the
 /// first of those as a plain function, and the icon rail was never this shape to begin with —
 /// it sits *beside* the region it chooses for, so `ide.zig` calls it directly and reads the
 /// action it returns.

@@ -13,7 +13,6 @@ const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
 const Sash = core.dvui.Sash;
 const Constants = @import("../Constants.zig");
-const chrome_ref = @import("chrome.zig");
 
 const Layout = @This();
 
@@ -470,3 +469,79 @@ fn drawRegionContents(self: *Layout, opts: anytype, matches: []const *Surface) !
     const content = opts.content orelse return self.drawSelected(opts.keywords);
     return content(self, opts.keywords);
 }
+
+/// A **tab strip**: the chooser half of a tabbed region.
+///
+/// This is the piece that makes the two forms of region explicit in a layout:
+///
+/// ```zig
+/// // "this region IS x" — one surface fills it, no chooser at all. An app that just wants a
+/// // terminal at the bottom writes only this.
+/// try f.drawSelected(bottom);
+///
+/// // "this region is TABBED, and the tabs correspond to x"
+/// f.tabs(bottom);            // the tabs
+/// try f.drawSelected(bottom);  // ...and the active one
+/// ```
+///
+/// Nothing here is privileged: it lists `f.matching`, reads `f.isSelected` and writes
+/// `f.select`, so an app that wants a different-looking chooser — a dropdown, a segmented
+/// control, a radial menu — writes its own loop and calls the same three functions. The rail
+/// (the icon rail) is the same idea drawn as icons, and it sits in a *different place* from its
+/// body, which is exactly why these are two widgets rather than one region mode.
+///
+/// **No in-tree caller yet, deliberately.** Fizzy's own bottom panel uses the richer `Panel`
+/// path (which draws its own strip *and* supports splitting the bottom into several panes), and
+/// `studio.zig` demonstrates the single-surface form. This is the plain tabbed form in between,
+/// and it exists as consumer API rather than as fizzy's own code — the first shape that wants
+/// tabs without splits uses it as-is instead of copying `Panel`.
+pub fn tabs(f: *Layout, keywords: []const []const u8) void {
+    const surfaces = f.matching(keywords);
+    if (surfaces.len == 0) return;
+
+    var strip: fizzy.dvui.Tabs = .begin(@src(), &tabs_state, .{ .drag_name = "fizzy_tab_strip" });
+    defer strip.end();
+
+    for (surfaces, 0..) |s, i| {
+        const is_selected = f.isSelected(keywords, s);
+        var t = strip.tab(@src(), i, is_selected);
+        defer t.end();
+
+        var title_buf: [64]u8 = undefined;
+        const title_upper = if (s.title.len <= title_buf.len)
+            std.ascii.upperString(&title_buf, s.title)
+        else
+            s.title;
+
+        dvui.label(@src(), "{s}", .{title_upper}, .{
+            .color_text = if (is_selected)
+                dvui.themeGet().color(.highlight, .fill)
+            else
+                dvui.themeGet().color(.control, .text),
+            .font = dvui.Font.theme(.heading),
+            .padding = dvui.Rect.all(4),
+            .gravity_y = 0.5,
+        });
+
+        if (t.clicked()) f.select(keywords, s);
+    }
+
+    strip.finalSlot(surfaces.len);
+}
+
+/// The plain tabbed region: a strip of tabs, then the selected surface beneath it. The
+/// `content` function form of the two-line recipe `tabs` documents above — pass it as
+/// `.content = Layout.tabbed` and the region is tabbed.
+///
+/// the icon rail deliberately has no counterpart here. It is a chooser that sits *beside* the
+/// region it chooses for rather than above it (see `ide.zig`), so it is not a region's content
+/// and wrapping it as one would only lose the action it returns.
+pub fn tabbed(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
+    f.tabs(keywords);
+    return f.drawSelected(keywords);
+}
+
+/// Drag state for `tabStrip`. One strip per app in practice; a layout wanting two independent
+/// strips copies this recipe (see CLAUDE.md's shipped-shapes note) rather than fizzy growing a
+/// handle type for a case nothing has yet.
+var tabs_state: fizzy.dvui.Tabs.State = .{};
