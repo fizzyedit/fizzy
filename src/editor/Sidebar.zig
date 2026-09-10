@@ -38,7 +38,7 @@ pub fn deinit() void {
 pub const Action = enum { none, open, close };
 
 /// `f` is the layout frame: the rail lists whatever currently *matches* the keywords its
-/// region accepts, rather than whatever happens to be in `host.sidebar_views`. That is what
+/// region accepts, rather than every surface in `host.surfaces`. That is what
 /// makes a user's keyword override actually move an icon out of (or into) this rail.
 pub fn draw(_: Sidebar, editor: *Editor, f: *Layout, keywords: []const []const u8) !Action {
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{

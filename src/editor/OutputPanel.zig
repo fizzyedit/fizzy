@@ -28,7 +28,7 @@ fn selectScope(name: []const u8) void {
     selected_scope_len = n;
 }
 
-pub fn draw(_: ?*anyopaque) anyerror!void {
+pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer hbox.deinit();
 
@@ -118,6 +118,7 @@ pub fn draw(_: ?*anyopaque) anyerror!void {
     // scrolled back down themselves, or nothing ever pushed it away). Any other position
     // means the user scrolled up, so leave it be until they return to the bottom.
     follow = scroll_info.offsetFromMax(.vertical) < 1.0;
+    return .ok;
 }
 
 /// Narrow vertical strip of tab buttons: "All" first, then one per distinct scope in

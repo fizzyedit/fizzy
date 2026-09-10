@@ -22,7 +22,7 @@ pub const Ctx = struct {
     editor: *fizzy.Editor,
 
     pub fn deinit(self: *Ctx, gpa: std.mem.Allocator) void {
-        // A test that registers a surface (`registerCenterProvider` and friends) puts it in a
+        // A test that registers a surface (`registerSurface`) puts it in a
         // host-owned list, so the host has to come down with the rest. Safe on the zeroed host
         // below: every registry in it is an empty `ArrayListUnmanaged`/`HashMapUnmanaged`.
         self.editor.host.deinit();

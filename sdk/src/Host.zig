@@ -23,11 +23,8 @@ pub const LanguageSupport = language.LanguageSupport;
 pub const TreeSitterHighlight = language.TreeSitterHighlight;
 pub const HighlightStyle = language.HighlightStyle;
 
-pub const SidebarView = regions.SidebarView;
 pub const Surface = @import("Surface.zig");
 pub const keywords = @import("keywords.zig");
-pub const BottomView = regions.BottomView;
-pub const CenterProvider = regions.CenterProvider;
 pub const MenuContribution = regions.MenuContribution;
 pub const MenuSectionContribution = regions.MenuSectionContribution;
 pub const NativeMenuItem = regions.NativeMenuItem;
@@ -205,11 +202,8 @@ settings_schemas: std.ArrayListUnmanaged(SettingsSchema) = .empty,
 // registration order, which is the order they appear in the UI.
 
 /// Left-region (explorer) views, one per sidebar icon.
-sidebar_views: std.ArrayListUnmanaged(SidebarView) = .empty,
 /// Bottom-panel views (shown as a tab strip).
-bottom_views: std.ArrayListUnmanaged(BottomView) = .empty,
 /// Center ("main window") providers; the active one draws the whole center.
-center_providers: std.ArrayListUnmanaged(CenterProvider) = .empty,
 /// Menubar contributions (non-macOS in-app menu bar).
 menus: std.ArrayListUnmanaged(MenuContribution) = .empty,
 /// Nested items contributed into an open parent menu (e.g. View > Example).
@@ -222,10 +216,9 @@ commands: std.ArrayListUnmanaged(Command) = .empty,
 /// Pluggable language/format support (syntax highlighting, preview panes).
 language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
 
-/// Surfaces — the shape-agnostic successor to sidebar/bottom/center views. Every
-/// `registerSidebarView` / `registerBottomView` / `registerCenterProvider` call also lands here
-/// with the conventional keywords for its old region, so an app's layout can match by keyword
-/// while existing plugins stay source-compatible.
+/// Every UI a plugin contributes, of every kind. A `Surface` carries keywords rather than a
+/// region name, so the app's layout decides where it lands and the SDK never has to grow a new
+/// registry for a new kind of place.
 surfaces: std.ArrayListUnmanaged(Surface) = .empty,
 
 /// Active selection by contribution id (null = use the first registered).
@@ -246,9 +239,6 @@ pub fn deinit(self: *Host) void {
     self.plugins.deinit(self.allocator);
     self.services.deinit(self.allocator);
     self.selections.deinit(self.allocator);
-    self.sidebar_views.deinit(self.allocator);
-    self.bottom_views.deinit(self.allocator);
-    self.center_providers.deinit(self.allocator);
     self.surfaces.deinit(self.allocator);
     self.menus.deinit(self.allocator);
     self.menu_sections.deinit(self.allocator);
@@ -772,9 +762,6 @@ pub fn registerPlugin(self: *Host, plugin: *Plugin) !void {
 /// this *before* `dlclose`, so that the active-selection ids (which may point into that
 /// image) are compared and reset while the memory is still mapped.
 pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
-    removeOwned(SidebarView, &self.sidebar_views, plugin);
-    removeOwned(BottomView, &self.bottom_views, plugin);
-    removeOwned(CenterProvider, &self.center_providers, plugin);
     removeOwned(Surface, &self.surfaces, plugin);
     removeOwned(MenuContribution, &self.menus, plugin);
     removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
@@ -812,7 +799,6 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     var it = self.selections.iterator();
     while (it.next()) |e| {
         const id = e.value_ptr.*;
-        if (self.hasSidebarView(id) or self.hasBottomView(id) or self.hasCenterProvider(id)) continue;
         if (self.surfaceById(id) != null) continue;
         _ = self.selections.remove(e.key_ptr.*);
         it = self.selections.iterator();
@@ -845,21 +831,6 @@ fn removeOwnedSettingsSchemas(list: *std.ArrayListUnmanaged(SettingsSchema), plu
         }
     }
     list.items.len = w;
-}
-
-fn hasSidebarView(self: *Host, id: []const u8) bool {
-    for (self.sidebar_views.items) |*v| if (std.mem.eql(u8, v.id, id)) return true;
-    return false;
-}
-
-fn hasBottomView(self: *Host, id: []const u8) bool {
-    for (self.bottom_views.items) |*v| if (std.mem.eql(u8, v.id, id)) return true;
-    return false;
-}
-
-fn hasCenterProvider(self: *Host, id: []const u8) bool {
-    for (self.center_providers.items) |*p| if (std.mem.eql(u8, p.id, id)) return true;
-    return false;
 }
 
 /// Lookup a registered plugin by stable id (`"pixi"`, `"workbench"`, …).
@@ -1093,42 +1064,6 @@ pub fn setSurfaceHidden(self: *Host, id: []const u8, hidden: bool) void {
     }
 }
 
-/// Re-point the compat surfaces' `ctx` at their backing view after any registry append.
-///
-/// `registerSidebarView` and friends store `&self.sidebar_views.items[n]` as the surface's
-/// `ctx`. That address is only valid until the next append reallocates the list — so every
-/// surface registered before the last one was left pointing at freed memory. It survived the
-/// IDE shape by luck (its sidebar path draws through the legacy registry, not through
-/// `Surface.draw`) and crashed the moment a shape drew a compat surface via `Frame.draw`.
-///
-/// Re-resolving by id after each append is correct regardless of reallocation, and cheap: this
-/// runs a handful of times during startup registration, never per frame.
-fn repointCompatSurfaces(self: *Host) void {
-    // `registerSidebarView` and friends store `&self.sidebar_views.items[n]` as the compat
-    // surface's `ctx`. That address is valid only until the next append reallocates the list, so
-    // every surface registered before the last one ends up pointing at freed memory. It survived
-    // the IDE shape by luck — its sidebar path draws through the legacy registry rather than
-    // through `Surface.draw` — and crashed the moment `studio.zig` drew a compat surface via
-    // `Frame.draw`.
-    //
-    // Matched by **id**, not by comparing `draw` against the compat thunks: that comparison
-    // silently stopped matching after a few registrations, and ids are unique anyway. A surface
-    // a plugin registered directly has no id in these legacy lists, so its ctx is left alone.
-    //
-    // Runs a handful of times during startup registration, never per frame.
-    for (self.surfaces.items) |*s| {
-        for (self.sidebar_views.items) |*v| {
-            if (std.mem.eql(u8, s.id, v.id)) s.ctx = v;
-        }
-        for (self.bottom_views.items) |*v| {
-            if (std.mem.eql(u8, s.id, v.id)) s.ctx = v;
-        }
-        for (self.center_providers.items) |*p| {
-            if (std.mem.eql(u8, s.id, p.id)) s.ctx = p;
-        }
-    }
-}
-
 /// Swap two surfaces' positions in the registry, by id. Registration order is the order they
 /// appear in a chooser, so this is how a tab drag persists a reorder.
 pub fn swapSurfaces(self: *Host, a_id: []const u8, b_id: []const u8) void {
@@ -1151,149 +1086,29 @@ pub fn surfaceById(self: *Host, id: []const u8) ?*Surface {
     return null;
 }
 
-fn sidebarSurfaceDraw(ctx: ?*anyopaque) anyerror!dvui.App.Result {
-    const view: *SidebarView = @ptrCast(@alignCast(ctx.?));
-    try view.draw(view.ctx);
-    return .ok;
-}
-
-fn bottomSurfaceDraw(ctx: ?*anyopaque) anyerror!dvui.App.Result {
-    const view: *BottomView = @ptrCast(@alignCast(ctx.?));
-    try view.draw(view.ctx);
-    return .ok;
-}
-
-fn centerSurfaceDraw(ctx: ?*anyopaque) anyerror!dvui.App.Result {
-    const p: *CenterProvider = @ptrCast(@alignCast(ctx.?));
-    return p.draw(p.ctx);
-}
-
-pub fn registerSidebarView(self: *Host, view: SidebarView) !void {
-    try self.sidebar_views.append(self.allocator, view);
-    if (self.selectionFor(keywords.ide.sidebar) == null) self.setSelectionFor(keywords.ide.sidebar, view.id);
-    // Compat sugar: also expose it as a surface with the conventional sidebar keywords, so a
-    // keyword-matching layout sees it without the plugin changing a line. The surface's ctx is
-    // the stored view, which is why this appends first.
-    const stored = &self.sidebar_views.items[self.sidebar_views.items.len - 1];
-    try self.registerSurface(.{
-        .id = view.id,
-        .owner = view.owner,
-        .title = view.title,
-        .icon = .{ .tvg = view.icon },
-        .keywords = keywords.ide.sidebar,
-        .ctx = stored,
-        .draw = sidebarSurfaceDraw,
-        .draw_workspace = view.draw_workspace,
-        .hidden = view.hidden,
-    });
-    self.repointCompatSurfaces();
-}
-
-pub fn registerBottomView(self: *Host, view: BottomView) !void {
-    try self.bottom_views.append(self.allocator, view);
-    if (self.selectionFor(keywords.ide.panel) == null) self.setSelectionFor(keywords.ide.panel, view.id);
-    const stored = &self.bottom_views.items[self.bottom_views.items.len - 1];
-    try self.registerSurface(.{
-        .id = view.id,
-        .owner = view.owner,
-        .title = view.title,
-        .keywords = keywords.ide.panel,
-        .ctx = stored,
-        .draw = bottomSurfaceDraw,
-        .persistent = view.persistent,
-    });
-    self.repointCompatSurfaces();
-}
-
-/// Move a bottom-panel tab from `from_index` to `to_index`.
-pub fn reorderBottomView(self: *Host, from_index: usize, to_index: usize) void {
-    if (from_index >= self.bottom_views.items.len or to_index >= self.bottom_views.items.len) return;
-    if (from_index == to_index) return;
-    const item = self.bottom_views.items[from_index];
-    _ = self.bottom_views.orderedRemove(from_index);
-    self.bottom_views.insert(self.allocator, to_index, item) catch return;
-}
-
-pub fn setSidebarViewHidden(self: *Host, id: []const u8, hidden: bool) void {
-    for (self.sidebar_views.items) |*view| {
-        if (std.mem.eql(u8, view.id, id)) {
-            view.hidden = hidden;
-            return;
-        }
+/// The surface a keyword group currently shows: the user's selection if it still exists,
+/// otherwise the first visible match — so a region never goes blank because the plugin that
+/// owned the selected surface unloaded.
+///
+/// One function for every kind of region, rather than one per region the app happens to have.
+pub fn selectedSurface(self: *Host, kw: []const []const u8) ?*Surface {
+    if (self.selectionFor(kw)) |id| {
+        if (self.surfaceById(id)) |s| if (!s.hidden) return s;
     }
+    for (self.surfaces.items) |*s| {
+        if (s.hidden) continue;
+        if (keywords.intersects(s.keywords, kw)) return s;
+    }
+    return null;
 }
 
-/// Fluent sugar — same fields as `SidebarView`, without a new ABI type.
-pub fn registerSidebar(
-    self: *Host,
-    spec: struct {
-        id: []const u8,
-        title: []const u8,
-        icon: []const u8,
-        draw: *const fn (ctx: ?*anyopaque) anyerror!void,
-        owner: ?*Plugin = null,
-        hidden: bool = false,
-        draw_workspace: ?*const fn (ctx: ?*anyopaque, pane: *WorkbenchPaneView) anyerror!void = null,
-    },
-) !void {
-    try self.registerSidebarView(.{
-        .id = spec.id,
-        .title = spec.title,
-        .icon = spec.icon,
-        .draw = spec.draw,
-        .owner = spec.owner,
-        .hidden = spec.hidden,
-        .draw_workspace = spec.draw_workspace,
-    });
-}
-
-pub fn registerBottom(
-    self: *Host,
-    spec: struct {
-        id: []const u8,
-        title: []const u8,
-        draw: *const fn (ctx: ?*anyopaque) anyerror!void,
-        owner: ?*Plugin = null,
-        persistent: bool = false,
-    },
-) !void {
-    try self.registerBottomView(.{
-        .id = spec.id,
-        .title = spec.title,
-        .draw = spec.draw,
-        .owner = spec.owner,
-        .persistent = spec.persistent,
-    });
-}
-
-pub fn registerCenter(
-    self: *Host,
-    spec: struct {
-        id: []const u8,
-        draw: *const fn (ctx: ?*anyopaque) anyerror!dvui.App.Result,
-        owner: ?*Plugin = null,
-    },
-) !void {
-    try self.registerCenterProvider(.{
-        .id = spec.id,
-        .draw = spec.draw,
-        .owner = spec.owner,
-    });
-}
-
-pub fn registerCenterProvider(self: *Host, provider: CenterProvider) !void {
-    try self.center_providers.append(self.allocator, provider);
-    if (self.selectionFor(keywords.ide.main) == null) self.setSelectionFor(keywords.ide.main, provider.id);
-    const stored = &self.center_providers.items[self.center_providers.items.len - 1];
-    try self.registerSurface(.{
-        .id = provider.id,
-        .owner = provider.owner,
-        .title = provider.id,
-        .keywords = keywords.ide.main,
-        .ctx = stored,
-        .draw = centerSurfaceDraw,
-    });
-    self.repointCompatSurfaces();
+/// True when some surface matching `kw` asks to stay visible with no document open — the bottom
+/// panel's `persistent`, generalized.
+pub fn hasPersistentSurface(self: *Host, kw: []const []const u8) bool {
+    for (self.surfaces.items) |*s| {
+        if (s.persistent and keywords.intersects(s.keywords, kw)) return true;
+    }
+    return false;
 }
 
 pub fn registerMenu(self: *Host, menu: MenuContribution) !void {
@@ -1479,72 +1294,6 @@ pub fn selectionFor(self: *Host, kw: []const []const u8) ?[]const u8 {
 /// is how a chooser and the region it chooses for stay in step with nothing wired between them.
 pub fn setSelectionFor(self: *Host, kw: []const []const u8, id: []const u8) void {
     self.selections.put(self.allocator, keywords.groupKey(kw), id) catch {};
-}
-
-pub fn setActiveSidebarView(self: *Host, id: []const u8) void {
-    self.setSelectionFor(keywords.ide.sidebar, id);
-}
-
-pub fn isActiveSidebarView(self: *Host, id: []const u8) bool {
-    const active = self.selectionFor(keywords.ide.sidebar) orelse return false;
-    return std.mem.eql(u8, active, id);
-}
-
-/// The currently active sidebar view, or the first visible registered view as fallback.
-pub fn activeSidebarView(self: *Host) ?*SidebarView {
-    if (self.selectionFor(keywords.ide.sidebar)) |id| {
-        for (self.sidebar_views.items) |*v| {
-            if (std.mem.eql(u8, v.id, id)) return v;
-        }
-    }
-    return self.firstVisibleSidebarView();
-}
-
-pub fn firstVisibleSidebarView(self: *Host) ?*SidebarView {
-    for (self.sidebar_views.items) |*v| {
-        if (!v.hidden) return v;
-    }
-    return null;
-}
-
-pub fn hasPersistentBottomView(self: *Host) bool {
-    for (self.bottom_views.items) |*v| {
-        if (v.persistent) return true;
-    }
-    return false;
-}
-
-pub fn setActiveBottomView(self: *Host, id: []const u8) void {
-    self.setSelectionFor(keywords.ide.panel, id);
-}
-
-pub fn isActiveBottomView(self: *Host, id: []const u8) bool {
-    const active = self.selectionFor(keywords.ide.panel) orelse return false;
-    return std.mem.eql(u8, active, id);
-}
-
-pub fn activeBottomView(self: *Host) ?*BottomView {
-    if (self.selectionFor(keywords.ide.panel)) |id| {
-        for (self.bottom_views.items) |*v| {
-            if (std.mem.eql(u8, v.id, id)) return v;
-        }
-    }
-    if (self.bottom_views.items.len > 0) return &self.bottom_views.items[0];
-    return null;
-}
-
-pub fn setActiveCenter(self: *Host, id: []const u8) void {
-    self.setSelectionFor(keywords.ide.main, id);
-}
-
-pub fn activeCenter(self: *Host) ?*CenterProvider {
-    if (self.selectionFor(keywords.ide.main)) |id| {
-        for (self.center_providers.items) |*p| {
-            if (std.mem.eql(u8, p.id, id)) return p;
-        }
-    }
-    if (self.center_providers.items.len > 0) return &self.center_providers.items[0];
-    return null;
 }
 
 /// Whether `plugin` may legitimately own `ext`: it either offers `ext` via `fileTypes`, or it
@@ -1921,10 +1670,10 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
 
     try host.registerPlugin(&keeper);
     try host.registerPlugin(&plugin);
-    try host.registerSidebarView(.{ .id = "keeper.view", .owner = &keeper, .icon = "", .title = "K", .draw = noopDraw });
-    try host.registerSidebarView(.{ .id = "victim.view", .owner = &plugin, .icon = "", .title = "V", .draw = noopDraw });
-    try host.registerBottomView(.{ .id = "victim.bottom", .owner = &plugin, .title = "V", .draw = noopDraw });
-    try host.registerCenterProvider(.{ .id = "victim.center", .owner = &plugin, .draw = noopCenter });
+    try host.registerSurface(.{ .id = "keeper.view", .owner = &keeper, .title = "K", .keywords = keywords.ide.sidebar, .draw = noopCenter });
+    try host.registerSurface(.{ .id = "victim.view", .owner = &plugin, .title = "V", .keywords = keywords.ide.sidebar, .draw = noopCenter });
+    try host.registerSurface(.{ .id = "victim.bottom", .owner = &plugin, .title = "V", .keywords = keywords.ide.panel, .draw = noopCenter });
+    try host.registerSurface(.{ .id = "victim.center", .owner = &plugin, .title = "V", .keywords = keywords.ide.main, .draw = noopCenter });
     try host.registerMenu(.{ .id = "victim.menu", .owner = &plugin, .draw = noopDraw });
     try host.registerMenuSection(.{ .id = "victim.section", .parent_menu_id = "fizzy.menu.view", .owner = &plugin, .draw = noopDraw });
     try host.registerNativeMenuItem(.{ .id = "victim.native", .parent_menu_id = "fizzy.menu.view", .owner = &plugin, .title = "V", .run = noopDraw });
@@ -1999,10 +1748,10 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     });
     try host.registerService("victim.svc", &service_obj, &plugin);
 
-    // Active sidebar view points at the victim (keeper registered first, but force it).
-    host.setActiveSidebarView("victim.view");
-    host.setActiveBottomView("victim.bottom");
-    host.setActiveCenter("victim.center");
+    // Each region's selection points at the victim (keeper registered first, but force it).
+    host.setSelectionFor(keywords.ide.sidebar, "victim.view");
+    host.setSelectionFor(keywords.ide.panel, "victim.bottom");
+    host.setSelectionFor(keywords.ide.main, "victim.center");
 
     host.unregisterPlugin(&plugin);
 
@@ -2010,11 +1759,9 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try testing.expect(host.pluginById("victim") == null);
     try testing.expect(host.pluginById("keeper") != null);
 
-    // Every victim contribution is gone; keeper's sidebar view remains.
-    try testing.expectEqual(@as(usize, 1), host.sidebar_views.items.len);
-    try testing.expectEqualStrings("keeper.view", host.sidebar_views.items[0].id);
-    try testing.expectEqual(@as(usize, 0), host.bottom_views.items.len);
-    try testing.expectEqual(@as(usize, 0), host.center_providers.items.len);
+    // Every victim contribution is gone; the keeper's surface remains.
+    try testing.expectEqual(@as(usize, 1), host.surfaces.items.len);
+    try testing.expectEqualStrings("keeper.view", host.surfaces.items[0].id);
     try testing.expectEqual(@as(usize, 0), host.menus.items.len);
     try testing.expectEqual(@as(usize, 0), host.menu_sections.items.len);
     try testing.expectEqual(@as(usize, 0), host.native_menu_items.items.len);
@@ -2024,8 +1771,8 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try testing.expectEqual(@as(usize, 0), host.settings_schemas.items.len);
     try testing.expect(host.getService("victim.svc") == null);
 
-    // Active selections that named removed contributions reset to null; the next frame
-    // falls back to a still-registered view.
+    // Selections that named removed surfaces reset to null; the next frame falls back to a
+    // still-registered one.
     try testing.expect(host.selectionFor(keywords.ide.sidebar) == null);
     try testing.expect(host.selectionFor(keywords.ide.panel) == null);
     try testing.expect(host.selectionFor(keywords.ide.main) == null);

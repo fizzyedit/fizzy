@@ -2526,18 +2526,20 @@ pub fn postInit(editor: *Editor) !void {
     try PluginStore.register(&editor.host);
 
     // Fizzy built-in: Settings (owner = null; not a plugin).
-    try editor.host.registerSidebarView(.{
+    try editor.host.registerSurface(.{
         .id = view_settings,
-        .icon = dvui.entypo.cog,
+        .icon = .{ .tvg = dvui.entypo.cog },
         .title = "Settings",
+        .keywords = sdk.keywords.ide.sidebar,
         .draw = drawSettingsPane,
     });
 
     // Fizzy built-in: Output (owner = null; not a plugin). `persistent` keeps it visible
     // even with no document open, since it's a diagnostic view, not a per-file one.
-    try editor.host.registerBottomView(.{
+    try editor.host.registerSurface(.{
         .id = "fizzy.output",
         .title = "Output",
+        .keywords = sdk.keywords.ide.panel,
         .persistent = true,
         .draw = OutputPanel.draw,
     });
@@ -2629,8 +2631,9 @@ pub fn postInit(editor: *Editor) !void {
 /// carries fizzy's own categories (`Explorer.settings.groups`) and whose remaining branches
 /// are one per plugin — loaded plugins' schema fields drawn by `PluginSettingsPane.drawField`,
 /// failed plugins' failure reason.
-fn drawSettingsPane(_: ?*anyopaque) anyerror!void {
+fn drawSettingsPane(_: ?*anyopaque) anyerror!dvui.App.Result {
     try SettingsTree.draw();
+    return .ok;
 }
 
 // ---- EditorAPI: fizzy-provided read/utility surface for plugins ----------
@@ -3061,7 +3064,7 @@ pub fn clearAllWorkspaceCenter(editor: *Editor) void {
 /// Instead the outgoing provider gets one more draw, recorded into a texture rather than shown,
 /// and that snapshot fades out over the incoming provider. See `core.anim.transition`.
 fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
-    const center = editor.host.activeCenter() orelse {
+    const center = editor.host.selectedSurface(sdk.keywords.ide.main) orelse {
         editor.layout.center_transition.discard();
         editor.layout.center_prev_id = null;
         return .ok;
@@ -3093,7 +3096,7 @@ fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
             // Look up by id rather than caching the pointer: a plugin can be unloaded between
             // frames, and its `draw` pointer would be dangling. Errors are ignored — a provider
             // failing here must not take down the swap, it just means no fade.
-            if (self.editor.centerProviderById(self.prev_id)) |outgoing| {
+            if (self.editor.host.surfaceById(self.prev_id)) |outgoing| {
                 _ = outgoing.draw(outgoing.ctx) catch {};
             }
         }
@@ -3134,14 +3137,6 @@ fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
 /// frame loop around it needs far more of the editor than the shim brings up.
 pub fn drawActiveCenterForTest(editor: *Editor) !dvui.App.Result {
     return drawActiveCenter(editor);
-}
-
-/// Registered center provider with this id, or null if it is gone (plugin unloaded).
-fn centerProviderById(editor: *Editor, id: []const u8) ?*sdk.regions.CenterProvider {
-    for (editor.host.center_providers.items) |*p| {
-        if (std.mem.eql(u8, p.id, id)) return p;
-    }
-    return null;
 }
 
 /// Workbench routing helpers (type-agnostic; dispatch through `doc.owner`).
@@ -4790,8 +4785,8 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     try editor.recents.appendFolder(try editor.gpa.dupe(u8, path));
     // The dvui menu re-reads recents every frame; the macOS submenu is retained state.
     fizzy.backend.rebuildNativeRecentFolders();
-    if (editor.host.firstVisibleSidebarView()) |view| {
-        editor.host.setActiveSidebarView(view.id);
+    if (editor.host.selectedSurface(sdk.keywords.ide.sidebar)) |s| {
+        editor.host.setSelectionFor(sdk.keywords.ide.sidebar, s.id);
     }
 
     for (editor.host.plugins.items) |plugin| plugin.onFolderOpen(editor.gpa);

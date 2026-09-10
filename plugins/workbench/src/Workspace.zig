@@ -85,10 +85,11 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
         }
     }
 
-    // A sidebar view may optionally take over this workspace pane's content region (e.g. pixel
-    // art's "Project" view renders the packed atlas here instead of document tabs+canvas). The
-    // workbench owns only the pane frame; it hands the active view the opaque workspace handle.
-    const active = runtime.host().activeSidebarView();
+    // The surface a sidebar-ish region currently shows may optionally take over this workspace
+    // pane's content region (e.g. pixel art's "Project" view renders the packed atlas here
+    // instead of document tabs+canvas). The workbench owns only the pane frame; it hands that
+    // surface the opaque workspace handle.
+    const active = runtime.host().selectedSurface(sdk.keywords.ide.sidebar);
     if (active != null and active.?.draw_workspace != null) {
         var pane_view: sdk.WorkbenchPaneView = .{
             .grouping = self.grouping,

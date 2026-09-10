@@ -52,23 +52,27 @@ pub fn register(host: *sdk.Host) !void {
     plugin.state = @ptrCast(runtime.workbench());
     try host.registerPlugin(&plugin);
     if (comptime has_file_tree) {
-        try host.registerSidebarView(.{
+        try host.registerSurface(.{
             .id = view_files,
             .owner = &plugin,
-            .icon = dvui.entypo.folder,
+            .icon = .{ .tvg = dvui.entypo.folder },
             .title = "Files",
+            .keywords = sdk.keywords.ide.sidebar,
             .draw = drawFiles,
         });
     }
-    try host.registerCenterProvider(.{
+    try host.registerSurface(.{
         .id = center_workspaces,
         .owner = &plugin,
+        .title = "Workspace",
+        .keywords = sdk.keywords.ide.main,
         .draw = drawCenter,
     });
 }
 
-fn drawFiles(_: ?*anyopaque) anyerror!void {
+fn drawFiles(_: ?*anyopaque) anyerror!dvui.App.Result {
     try files.draw();
+    return .ok;
 }
 
 fn drawCenter(_: ?*anyopaque) anyerror!dvui.App.Result {

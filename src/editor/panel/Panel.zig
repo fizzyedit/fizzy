@@ -39,10 +39,8 @@ pub fn deinit(self: *Panel, allocator: std.mem.Allocator) void {
 
 /// The surfaces this panel shows: whatever currently matches the keywords its region accepts.
 ///
-/// Was `host.bottom_views.items` — the legacy registry — which meant a user's keyword override
-/// changed what `Layout.matching` returned but the panel kept drawing the old set. The sidebar
-/// was converted in Phase 4c; this is the same change one file over, and it is what lets
-/// `Editor.warnUndrawableOverrides` go away.
+/// Asking the layout rather than the registry is what makes a user's keyword override take
+/// effect here — the panel draws the same set `Layout.matching` resolved for its region.
 pub fn surfaces(f: *Layout, keywords: []const []const u8) []const *Layout.Surface {
     return f.matching(keywords);
 }
@@ -103,17 +101,17 @@ pub fn viewIndex(self: *Panel, f: *Layout, keywords: []const []const u8, view_id
     return null;
 }
 
-/// Drop panel bookkeeping that still names a bottom view which is no longer registered.
+/// Drop panel bookkeeping that still names a surface which is no longer registered.
 ///
 /// Both the keys of `view_groupings` and each workspace's `active_view_id` are *borrowed*
-/// `BottomView.id` slices, and for a runtime-loaded plugin those live in the plugin image's
+/// `Surface.id` slices, and for a runtime-loaded plugin those live in the plugin image's
 /// static memory. Unregistering the plugin's contributions doesn't touch them, so without this
 /// the panel goes on hashing and comparing strings that point into an unmapped library on every
 /// frame it draws.
 ///
-/// Call *after* `Host.unregisterPlugin` (so the doomed views are already out of
-/// `bottom_views`) and *before* `dlclose` (so these slices are still readable) — the same
-/// ordering contract `unregisterPlugin` documents for the active-selection ids.
+/// Call *after* `Host.unregisterPlugin` (so the doomed surfaces are already out of the
+/// registry) and *before* `dlclose` (so these slices are still readable) — the same ordering
+/// contract `unregisterPlugin` documents for the active-selection ids.
 pub fn forgetUnregisteredSurfaces(self: *Panel, host: *fizzy.Editor.Host) void {
     // Checks the registry, not a Layout: this runs after `unregisterPlugin` and outside a frame,
     // so there is no live match set to consult. `surfaceById` is the frame-free equivalent —

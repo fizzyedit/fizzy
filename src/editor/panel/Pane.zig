@@ -129,7 +129,7 @@ fn drawTabs(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, ke
         if (t.clicked()) {
             self.active_view_id = view.id;
             panel.open_pane = self.grouping;
-            host.setActiveBottomView(view.id);
+            host.setSelectionFor(keywords, view.id);
         }
     }
 
@@ -156,23 +156,24 @@ fn processTabsDrag(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Lay
     if (self.tab_info.insert_before_index) |insert_before| {
         if (self.tab_info.removed_index) |removed| {
             if (removed >= Panel.surfaces(f, keywords).len) return;
+            // The dragged surface ends up under the cursor whichever way the swap goes, so
+            // read it before reordering rather than re-indexing the match set afterwards.
+            const view = Panel.surfaces(f, keywords)[removed];
             if (removed > insert_before) {
                 panel.swapSurfaces(host, f, keywords, removed, insert_before);
-                self.active_view_id = host.bottom_views.items[insert_before].id;
             } else if (insert_before > 0) {
                 panel.swapSurfaces(host, f, keywords, removed, insert_before - 1);
-                self.active_view_id = host.bottom_views.items[insert_before - 1].id;
             } else {
                 panel.swapSurfaces(host, f, keywords, removed, insert_before);
-                self.active_view_id = host.bottom_views.items[insert_before].id;
             }
+            self.active_view_id = view.id;
             self.tab_info.removed_index = null;
             self.tab_info.insert_before_index = null;
         } else {
             for (panel.workspaces.values()) |*workspace| {
                 if (workspace.tab_info.removed_index) |removed| {
                     if (removed >= Panel.surfaces(f, keywords).len) return;
-                    const view = host.bottom_views.items[removed];
+                    const view = Panel.surfaces(f, keywords)[removed];
                     if (removed > insert_before) {
                         panel.swapSurfaces(host, f, keywords, removed, insert_before);
                         panel.setViewGrouping(view.id, self.grouping);
@@ -192,7 +193,7 @@ fn processTabsDrag(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Lay
                     workspace.tab_info.removed_index = null;
                     workspace.tab_info.insert_before_index = null;
                     panel.open_pane = self.grouping;
-                    host.setActiveBottomView(view.id);
+                    host.setSelectionFor(keywords, view.id);
                     break;
                 }
             }
@@ -213,7 +214,7 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *Panel, host: *fiz
     const workspace = drag_src.?.ws;
     const drag_index = drag_src.?.index;
     if (drag_index >= Panel.surfaces(f, keywords).len) return;
-    const dragged_view = host.bottom_views.items[drag_index];
+    const dragged_view = Panel.surfaces(f, keywords)[drag_index];
 
     for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = data.id, .r = data.rectScale().r, .drag_name = drag_name })) continue;
@@ -243,7 +244,7 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *Panel, host: *fiz
                 new_ws.active_view_id = dragged_view.id;
                 panel.workspaces.put(fizzy.entry().allocator, new_g, new_ws) catch {};
                 panel.open_pane = new_g;
-                host.setActiveBottomView(dragged_view.id);
+                host.setSelectionFor(keywords, dragged_view.id);
             }
         } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
             if (e.evt.mouse.action == .position) {
@@ -261,7 +262,7 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *Panel, host: *fiz
                 panel.setViewGrouping(dragged_view.id, self.grouping);
                 self.active_view_id = dragged_view.id;
                 panel.open_pane = self.grouping;
-                host.setActiveBottomView(dragged_view.id);
+                host.setSelectionFor(keywords, dragged_view.id);
             }
         }
     }

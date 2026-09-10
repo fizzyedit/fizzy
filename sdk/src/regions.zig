@@ -12,47 +12,6 @@ const dvui = @import("dvui");
 const Plugin = @import("Plugin.zig");
 const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
 
-/// A left-region (explorer) view, selected by its sidebar icon. Exactly one
-/// sidebar view is active at a time; its `draw` fills the left pane.
-pub const SidebarView = struct {
-    id: []const u8,
-    owner: ?*Plugin = null,
-    /// Icon byte slice (tvg/entypo) shown in the sidebar rail.
-    icon: []const u8,
-    /// User-facing title (sidebar tooltip + pane header).
-    title: []const u8,
-    /// When true the view is registered but omitted from the sidebar icon rail.
-    hidden: bool = false,
-    ctx: ?*anyopaque = null,
-    draw: *const fn (ctx: ?*anyopaque) anyerror!void,
-    /// Optional: while this view is the active sidebar view, it takes over the workspace
-    /// content region instead of the normal document tabs+canvas. The workbench calls this
-    /// per workspace pane with a `WorkbenchPaneView` (grouping + toast rect slot).
-    draw_workspace: ?*const fn (ctx: ?*anyopaque, pane: *WorkbenchPaneView) anyerror!void = null,
-};
-
-/// A bottom-panel view. The panel shows a tab strip across all registered views;
-/// the active one's `draw` fills the panel body.
-pub const BottomView = struct {
-    id: []const u8,
-    owner: ?*Plugin = null,
-    title: []const u8,
-    /// When true the bottom panel stays visible even with no active document.
-    persistent: bool = false,
-    ctx: ?*anyopaque = null,
-    draw: *const fn (ctx: ?*anyopaque) anyerror!void,
-};
-
-/// A center ("main window") provider. The active provider draws the ENTIRE center
-/// region and may render a single view or its own recursive tabs/splits. The
-/// workbench registers one (its tabs/splits + canvas); others may take over.
-pub const CenterProvider = struct {
-    id: []const u8,
-    owner: ?*Plugin = null,
-    ctx: ?*anyopaque = null,
-    draw: *const fn (ctx: ?*anyopaque) anyerror!dvui.App.Result,
-};
-
 /// A menubar contribution. Its `draw` adds top-level menu(s) to the in-app menu
 /// bar (non-macOS). A plugin may register several.
 pub const MenuContribution = struct {

@@ -18,7 +18,7 @@ pub const Explorer = @This();
 pub const files = workbench.files;
 // pub const animations = @import("animations.zig");
 // pub const keyframe_animations = @import("keyframe_animations.zig");
-// The pixel-art project view is contributed by the plugin via `Host.registerSidebarView`,
+// The pixel-art project view is contributed by the plugin via `Host.registerSurface`,
 // not re-exported here.
 pub const settings = @import("settings.zig");
 
@@ -70,9 +70,8 @@ pub fn peekClose(explorer: *Explorer, editor: *fizzy.Editor) void {
 /// Draws the explorer *chrome* — header, scroll policy, collapse button — around whichever
 /// surface currently matches `keywords`. The chrome is the app's; the body is the plugin's.
 ///
-/// Before Phase 4c this resolved the body through `host.activeSidebarView()`, i.e. the legacy
-/// registry, which meant a user's keyword override changed what `Layout.matching` returned but
-/// nothing moved on screen.
+/// The body is resolved through the layout's match set rather than the registry, so a user's
+/// keyword override moves the body on screen instead of only changing `Layout.matching`.
 pub fn draw(
     explorer: *Explorer,
     editor: *fizzy.Editor,
@@ -123,13 +122,14 @@ pub fn draw(
     });
 
     if (comptime workbench.has_file_tree) {
-        if (!editor.host.isActiveSidebarView(fizzy.Editor.workbench_files_view)) {
+        const active = editor.host.selectionFor(fizzy.sdk.keywords.ide.sidebar);
+        if (active == null or !std.mem.eql(u8, active.?, fizzy.Editor.workbench_files_view)) {
             editor.resetFileTreeWhenFilesHidden();
         }
     }
 
-    if (editor.host.activeSidebarView()) |view| {
-        try view.draw(view.ctx);
+    if (editor.host.selectedSurface(fizzy.sdk.keywords.ide.sidebar)) |surface| {
+        _ = try surface.draw(surface.ctx);
     }
 
     scroll.deinit();

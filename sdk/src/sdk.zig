@@ -50,9 +50,6 @@ pub const regions = @import("regions.zig");
 pub const Surface = @import("Surface.zig");
 /// Conventional region keywords fizzy's own shell accepts.
 pub const keywords = @import("keywords.zig");
-pub const SidebarView = regions.SidebarView;
-pub const BottomView = regions.BottomView;
-pub const CenterProvider = regions.CenterProvider;
 pub const MenuContribution = regions.MenuContribution;
 pub const MenuSectionContribution = regions.MenuSectionContribution;
 pub const Command = regions.Command;

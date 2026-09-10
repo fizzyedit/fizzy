@@ -161,9 +161,9 @@ pub const VTable = struct {
 
     // ---- render hooks (the plugin draws its own dvui UI into the host window) ----
     // Sidebar/explorer panes and bottom-panel tabs are NOT vtable hooks — plugins
-    // contribute them as named, owned views via `Host.registerSidebarView` /
-    // `Host.registerBottomView`, which fizzy renders as tab strips when more than
-    // one is registered. Only per-document rendering routes through the vtable below.
+    // contribute them as named, owned `Surface`s via `Host.registerSurface`, and the app's
+    // layout matches them to a region by keyword, rendering a tab strip when more than one
+    // lands in the same place. Only per-document rendering routes through the vtable below.
     /// Draw an open document (center/workspace region), dispatched via `DocHandle.owner`.
     drawDocument: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
     /// Infobar chips for this frame. Fizzy draws each as icon + text after its own items

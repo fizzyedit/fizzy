@@ -336,16 +336,19 @@ pub fn register(host: *sdk.Host) !void {
     const fp_hex = try std.fmt.allocPrint(fizzy.entry().allocator, "0x{x}", .{dylib.abi_fingerprint});
     defer fizzy.entry().allocator.free(fp_hex);
     catalog = try store.Catalog.init(fizzy.entry().allocator, dvui.io, url, fp_hex);
-    try host.registerSidebarView(.{
+    try host.registerSurface(.{
         .id = view_id,
-        .icon = dvui.entypo.shop,
+        .icon = .{ .tvg = dvui.entypo.shop },
         .title = "Plugins",
+        .keywords = fizzy.sdk.keywords.ide.sidebar,
         .draw = draw,
     });
     // README center provider. Registered after the workbench center (see `postInit` order) so it
     // never becomes the default active center; `tick` activates it on demand.
-    try host.registerCenter(.{
+    try host.registerSurface(.{
         .id = readme_center_id,
+        .title = "Plugin README",
+        .keywords = fizzy.sdk.keywords.ide.main,
         .draw = drawReadmeCenter,
     });
 }
@@ -1306,13 +1309,14 @@ pub fn tick() void {
 /// we took over. Idempotent — safe to call every frame.
 fn syncReadmeCenter() void {
     const host = &fizzy.editor().host;
-    const want = host.isActiveSidebarView(view_id) and Readme.selectedId() != null;
+    const active_sidebar = host.selectionFor(fizzy.sdk.keywords.ide.sidebar);
+    const want = active_sidebar != null and std.mem.eql(u8, active_sidebar.?, view_id) and Readme.selectedId() != null;
     if (want and !readme_center_active) {
         saved_center = host.selectionFor(fizzy.sdk.keywords.ide.main);
-        host.setActiveCenter(readme_center_id);
+        host.setSelectionFor(fizzy.sdk.keywords.ide.main, readme_center_id);
         readme_center_active = true;
     } else if (!want and readme_center_active) {
-        if (saved_center) |id| host.setActiveCenter(id);
+        if (saved_center) |id| host.setSelectionFor(fizzy.sdk.keywords.ide.main, id);
         saved_center = null;
         readme_center_active = false;
     }
@@ -1743,7 +1747,7 @@ fn rankEntries(entries: *std.ArrayListUnmanaged(StoreEntry), query: *const fuzzy
     std.sort.block(StoreEntry, entries.items, {}, entryScoreLess);
 }
 
-fn draw(_: ?*anyopaque) anyerror!void {
+fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // Unlike the old flat list, the tab now fills the full explorer viewport height
     // (`expand = .both`, not just `.horizontal`) so the section below the tab strip gets a
     // genuinely bounded height — it then scrolls its own overflow (see
@@ -1780,7 +1784,7 @@ fn draw(_: ?*anyopaque) anyerror!void {
     filter_hbox.deinit();
     var query = fuzzy.Query.init(filter_text);
 
-    const cat = if (catalog) |*c| c else return;
+    const cat = if (catalog) |*c| c else return .ok;
     const maybe_snapshot = cat.acquire();
     defer cat.release();
 
@@ -1878,6 +1882,7 @@ fn draw(_: ?*anyopaque) anyerror!void {
         .store => _ = drawStoreSection(store_entries.items, filter_text, cat.status()),
         .installed => _ = drawInstalledSection(installed_entries.items, filter_text),
     }
+    return .ok;
 }
 
 /// Store / Installed strip below the filter row. Same look as the detail page's

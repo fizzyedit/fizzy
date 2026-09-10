@@ -94,9 +94,6 @@ const sdk_boundary_types = .{
     DocHandle,
     EditorAPI,
     EditorAPI.VTable,
-    regions.SidebarView,
-    regions.BottomView,
-    regions.CenterProvider,
     regions.MenuContribution,
     regions.MenuSectionContribution,
     // Reached only through `Host.native_menu_items`' backing slice — a *data* pointer

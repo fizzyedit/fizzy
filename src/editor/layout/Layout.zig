@@ -1,11 +1,8 @@
 //! What an app's shape declares its regions with.
 //!
-//! SPIKE NOTE (Phase 1): `Surface` here is *synthesized* from fizzy's existing
-//! `host.sidebar_views` / `bottom_views` / `center_providers` registries rather than being a
-//! real SDK type. That is deliberate — it lets the new shell run against every existing plugin
-//! with zero plugin changes and no ABI bump, which is the whole point of doing the spike before
-//! Phase 4. The default keywords assigned per registry are exactly the compat sugar Phase 4
-//! will implement for real (see plan §F).
+//! A region says which keywords it accepts; a plugin's `sdk.Surface` says which it carries.
+//! The intersection is the match set the region draws, so neither side names the other and an
+//! app can invent a region shape the SDK has never heard of.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
@@ -104,13 +101,6 @@ fn arena(self: *Layout) std.mem.Allocator {
     return self.editor.arena.allocator();
 }
 
-fn intersects(a: []const []const u8, b: []const []const u8) bool {
-    for (a) |x| for (b) |y| {
-        if (std.ascii.eqlIgnoreCase(x, y)) return true;
-    };
-    return false;
-}
-
 /// The keywords in force for a surface: the user's per-plugin override from `settings.zon` if
 /// present, otherwise the plugin's declared defaults. This is what makes a wrong default cost
 /// two clicks rather than a release.
@@ -127,7 +117,7 @@ pub fn matching(self: *Layout, keywords: []const []const u8) []const *Surface {
     const a = self.arena();
     for (self.editor.host.surfaces.items) |*s| {
         if (s.hidden) continue;
-        if (!intersects(self.effectiveKeywords(s), keywords)) continue;
+        if (!sdk.keywords.intersects(self.effectiveKeywords(s), keywords)) continue;
         out.append(a, s) catch return out.items;
     }
     return out.items;
@@ -148,7 +138,7 @@ pub fn unplaced(self: *Layout, declared: []const []const []const u8) []const *Su
         if (s.hidden) continue;
         const kw = self.effectiveKeywords(s);
         if (kw.len == 0) continue; // placed by id, not by keyword
-        for (declared) |region_kw| if (intersects(kw, region_kw)) continue :outer;
+        for (declared) |region_kw| if (sdk.keywords.intersects(kw, region_kw)) continue :outer;
         out.append(a, s) catch return out.items;
     }
     return out.items;

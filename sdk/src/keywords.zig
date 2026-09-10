@@ -61,3 +61,16 @@ pub fn groupKey(keywords: []const []const u8) u64 {
     }
     return h.final();
 }
+
+/// Do two keyword sets share a word? A surface draws in a region exactly when they do.
+///
+/// Beside `groupKey` for the same reason: `Host.selectedSurface` and `Layout.matching` must
+/// agree about what matches, and two implementations of this would disagree silently.
+/// Case-insensitive; exact per word, never fuzzy — fuzziness is for suggesting a fix to a
+/// keyword that matched nothing, never for the binding itself.
+pub fn intersects(a: []const []const u8, b: []const []const u8) bool {
+    for (a) |x| for (b) |y| {
+        if (std.ascii.eqlIgnoreCase(x, y)) return true;
+    };
+    return false;
+}

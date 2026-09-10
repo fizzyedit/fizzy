@@ -477,14 +477,14 @@ test "a provider swap degrades cleanly when the backend has no render targets" {
 
     const editor = ctx.editor;
     center_frame_ctx = editor;
-    // Only the transition: every host registry a `registerCenter` touches comes down with
+    // Only the transition: every host registry a `registerSurface` touches comes down with
     // `ctx.deinit`'s `host.deinit`.
     defer editor.layout.center_transition.discard();
 
-    try editor.host.registerCenter(.{ .id = "test.center.a", .draw = centerADraw });
-    try editor.host.registerCenter(.{ .id = "test.center.b", .draw = centerBDraw });
+    try editor.host.registerSurface(.{ .id = "test.center.a", .title = "A", .keywords = fizzy.sdk.keywords.ide.main, .draw = centerADraw });
+    try editor.host.registerSurface(.{ .id = "test.center.b", .title = "B", .keywords = fizzy.sdk.keywords.ide.main, .draw = centerBDraw });
 
-    editor.host.setActiveCenter("test.center.a");
+    editor.host.setSelectionFor(fizzy.sdk.keywords.ide.main, "test.center.a");
     center_a_draws = 0;
     center_b_draws = 0;
 
@@ -493,7 +493,7 @@ test "a provider swap degrades cleanly when the backend has no render targets" {
     try std.testing.expectEqual(@as(usize, 2), center_a_draws);
     try std.testing.expectEqual(@as(usize, 0), center_b_draws);
 
-    editor.host.setActiveCenter("test.center.b");
+    editor.host.setSelectionFor(fizzy.sdk.keywords.ide.main, "test.center.b");
     _ = try dvui.testing.step(centerFrame);
     _ = try dvui.testing.step(centerFrame);
 
@@ -512,21 +512,21 @@ test "a center provider that disappears is not drawn for its own cross-fade" {
 
     const editor = ctx.editor;
     center_frame_ctx = editor;
-    // Only the transition: every host registry a `registerCenter` touches comes down with
+    // Only the transition: every host registry a `registerSurface` touches comes down with
     // `ctx.deinit`'s `host.deinit`.
     defer editor.layout.center_transition.discard();
 
-    try editor.host.registerCenter(.{ .id = "test.center.a", .draw = centerADraw });
-    try editor.host.registerCenter(.{ .id = "test.center.b", .draw = centerBDraw });
-    editor.host.setActiveCenter("test.center.a");
+    try editor.host.registerSurface(.{ .id = "test.center.a", .title = "A", .keywords = fizzy.sdk.keywords.ide.main, .draw = centerADraw });
+    try editor.host.registerSurface(.{ .id = "test.center.b", .title = "B", .keywords = fizzy.sdk.keywords.ide.main, .draw = centerBDraw });
+    editor.host.setSelectionFor(fizzy.sdk.keywords.ide.main, "test.center.a");
     _ = try dvui.testing.step(centerFrame);
 
     center_a_draws = 0;
     center_b_draws = 0;
 
     // A goes away and B takes over in the same breath.
-    _ = editor.host.center_providers.orderedRemove(0);
-    editor.host.setActiveCenter("test.center.b");
+    _ = editor.host.surfaces.orderedRemove(0);
+    editor.host.setSelectionFor(fizzy.sdk.keywords.ide.main, "test.center.b");
     _ = try dvui.testing.step(centerFrame);
 
     try std.testing.expectEqual(@as(usize, 0), center_a_draws);
