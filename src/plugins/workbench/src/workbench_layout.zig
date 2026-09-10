@@ -1,4 +1,4 @@
-//! Workspace map maintenance + recursive split drawing.
+//! Workspace map maintenance, and drawing the document panes side by side.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
@@ -75,66 +75,88 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
     }
 }
 
+/// Draw every workspace side by side, separated by the same sash the app's own regions use.
+///
+/// This was a **recursion**: each level opened a two-child `PanedWidget` with workspace `index`
+/// in the first half and all the remaining workspaces nested in the second. That is the tree
+/// shape a two-child pane forces, and it is why splitting documents behaved differently from
+/// splitting anything else in the app — it was a second implementation of the same idea, with
+/// its own ratios, its own handle and its own feel.
+///
+/// Now it is a flat loop: N panes on an axis with `core.dvui.Sash` between them, sized in points
+/// like every other region. The `index` parameter stays because it is on the host vtable, and is
+/// the first pane to draw.
 pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
-    if (index >= wb.workspaces.count()) return .ok;
+    const count = wb.workspaces.count();
+    if (index >= count) return .ok;
 
-    // The bottom split's state, asked for directly rather than handed in as three
-    // out-parameters on the call. Those parameters only worked because fizzy's own shape has a
-    // panel; an app whose bottom region is laid out differently — or absent — had no way to
-    // supply them. Absent is a normal answer here, and means "no bottom split to coordinate
-    // with", which is exactly right for `minimal.zig`.
+    // The bottom split's state, asked for directly rather than handed in as three out-parameters
+    // on the call. Those parameters only worked because fizzy's own shape has a panel; an app
+    // whose bottom region is laid out differently — or absent — had no way to supply them.
+    // Absent is a normal answer, and means "no bottom split to coordinate with".
     const panel = runtime.host().splitState(sdk.keywords.ide.panel);
-
-    var s = core.dvui.paned(@src(), .{
-        .direction = .horizontal,
-        .collapsed_size = if (index == wb.workspaces.count() - 1) std.math.floatMax(f32) else 0,
-        .handle_size = handle_size,
-        .handle_dynamic = .{ .handle_size_max = handle_size, .distance_max = handle_dist },
-    }, .{
-        .expand = .both,
-        .background = false,
-    });
-    defer s.deinit();
-
     const panel_dragging = if (panel) |p| p.dragging else false;
-    const dragging = panel_dragging or s.dragging;
+    const panel_animating_open = if (panel) |p| (p.animating and p.ratio < 1.0) else false;
 
-    if (!dragging) {
-        const panel_animating_open = if (panel) |p| (p.animating and p.ratio < 1.0) else false;
-        const should_center = (s.animating and s.split_ratio.* < 1.0) or panel_animating_open;
-        if (index + 1 < wb.workspaces.count()) {
-            wb.workspaces.values()[index + 1].center = should_center;
-        } else if (wb.workspaces.count() == 1) {
-            wb.workspaces.values()[index].center = should_center;
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both, .background = false });
+    defer row.deinit();
+
+    var dragging = panel_dragging;
+    var i: usize = index;
+    while (i < count) : (i += 1) {
+        if (i > index) {
+            // The divider between this pane and the one before it. Every pane but the last is
+            // sized, so the sash drags the one on its left.
+            var sep = core.dvui.Sash.begin(@src(), .horizontal, i);
+            defer sep.end();
+            sep.drag(row, paneId(row, i - 1), 1, .{}, .{
+                .length = row.data().contentRect().w,
+                .handles = handle_size * @as(f32, @floatFromInt(count - 1)),
+            });
+            if (dvui.captured(sep.box.data().id)) dragging = true;
         }
-    }
 
-    if (s.collapsing and s.split_ratio.* < 0.5) {
-        s.animateSplit(1.0, dvui.easing.outBack);
-    }
+        // The last pane takes what is left; the others keep the width they were dragged to.
+        const last = i == count - 1;
+        const id = paneId(row, i);
+        const width = core.dvui.Sash.sizeOf(id);
+        var pane = dvui.box(@src(), .{ .dir = .vertical }, if (last) .{
+            .id_extra = i,
+            .expand = .both,
+            .background = false,
+        } else .{
+            .id_extra = i,
+            .expand = .vertical,
+            .background = false,
+            .min_size_content = .{ .w = width },
+            .max_size_content = .width(width),
+        });
+        if (!last) core.dvui.Sash.recordEdges(id, pane.data(), .horizontal);
 
-    if (!s.dragging and !s.animating and !s.collapsing and !s.collapsed_state) {
-        if (index == wb.workspaces.count() - 1) {
-            if (s.split_ratio.* != 1.0) {
-                s.animateSplit(1.0, dvui.easing.outBack);
-            }
-        } else {
-            if (dvui.firstFrame(s.wd.id)) {
-                s.split_ratio.* = 1.0;
-                s.animateSplit(0.5, dvui.easing.outBack);
-            }
+        // A pane that has never been sized starts at an even share, which is what the old
+        // first-frame `1.0 -> 0.5` animation was expressing.
+        if (!last and width <= 0) {
+            const even = row.data().contentRect().w / @as(f32, @floatFromInt(count));
+            dvui.dataSet(null, id, "_size", @max(80, even));
+            dvui.refresh(null, @src(), id);
         }
-    }
 
-    if (s.showFirst()) {
-        const result = try wb.workspaces.values()[index].draw();
+        const result = try wb.workspaces.values()[i].draw();
+        pane.deinit();
         if (result != .ok) return result;
     }
 
-    if (s.showSecond()) {
-        const result = try drawWorkspaces(wb, index + 1);
-        if (result != .ok) return result;
+    // Centring is coordinated with the panel exactly as before: while nothing is being dragged,
+    // a workspace centres its content if the panel is animating open.
+    if (!dragging and count > 0) {
+        wb.workspaces.values()[count - 1].center = panel_animating_open;
     }
 
     return .ok;
+}
+
+/// A stable id per pane, derived from the row so it survives the panes around it coming and
+/// going. Sizes hang off this.
+fn paneId(row: *dvui.BoxWidget, i: usize) dvui.Id {
+    return row.data().id.extendId(@src(), i);
 }

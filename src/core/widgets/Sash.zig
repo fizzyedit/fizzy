@@ -111,8 +111,9 @@ pub const Options = struct {
 
 /// Open a sash: it takes `handle_size` along the container's axis and stretches across it, so
 /// `dvui.box` reserves the gap the way it reserves any other child.
-pub fn begin(src: std.builtin.SourceLocation, axis: dvui.enums.Direction) Sash {
+pub fn begin(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_extra: usize) Sash {
     return .{ .axis = axis, .box = dvui.box(src, .{ .dir = axis }, .{
+        .id_extra = id_extra,
         .min_size_content = switch (axis) {
             .horizontal => .{ .w = handle_size },
             .vertical => .{ .h = handle_size },
@@ -449,7 +450,7 @@ fn twoPaneFrame() !dvui.App.Result {
         recordEdges(t_target, left.data(), .horizontal);
     }
 
-    var sep = begin(@src(), .horizontal);
+    var sep = begin(@src(), .horizontal, 0);
     {
         const srs = sep.box.data().borderRectScale();
         t_sep_x = srs.r.x + srs.r.w / 2;
