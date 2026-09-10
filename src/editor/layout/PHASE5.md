@@ -47,7 +47,7 @@ only ran fizzy's own shape.
 
 ## Two visual regressions also caught by looking
 
-- The sash drag target was `handle_size = 1.0 / dist = 8.0` against fizzy's `10 / 60` — a ~10x
+- The split drag target was `handle_size = 1.0 / dist = 8.0` against fizzy's `10 / 60` — a ~10x
   thinner grab area. Restored.
 - The workspace column lost its `padding = .{ .w = handle_size }`, so content sat flush against
   the window edge. Restored in `ide.zig`, and `studio.zig` pads its own mirrored edge.

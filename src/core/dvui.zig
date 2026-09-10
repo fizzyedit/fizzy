@@ -12,12 +12,12 @@ pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
 pub const TreeWidget = @import("widgets/TreeWidget.zig");
 pub const TreeSelection = @import("widgets/TreeSelection.zig");
 /// Reorderable tab strip shared by fizzy's bottom panel and the workbench's document tabs.
-/// The draggable sash between two regions. Lives here rather than beside the layout because the
+/// The draggable split between two regions. Lives here rather than beside the layout because the
 /// workbench draws document splits from inside a dylib and must reach the same one — the same
-/// reason `Tabs` is here. A sash implemented twice is a sash that behaves two ways.
-pub const Sash = @import("widgets/Sash.zig");
-/// Open a sash. See `Sash`.
-pub const sash = Sash.sash;
+/// reason `Tabs` is here. A split implemented twice is a split that behaves two ways.
+pub const Split = @import("widgets/Split.zig");
+/// Open a split. See `Split`.
+pub const split = Split.split;
 pub const Tabs = @import("widgets/Tabs.zig");
 
 /// Core-owned dialog chrome state, set by the dialog framework and read by

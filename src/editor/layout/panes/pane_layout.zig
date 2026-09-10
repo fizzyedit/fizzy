@@ -4,7 +4,7 @@ const dvui = @import("dvui");
 const fizzy = @import("../../../fizzy.zig");
 
 const PaneGroup = @import("PaneGroup.zig");
-const Sash = @import("core").dvui.Sash;
+const Split = @import("core").dvui.Split;
 const Layout = @import("../Layout.zig");
 const Pane = @import("Pane.zig");
 
@@ -61,12 +61,12 @@ pub fn rebuildWorkspaces(panel: *PaneGroup, f: *Layout, keywords: []const []cons
     }
 }
 
-/// Draw the pane group's panes side by side, separated by the same sash the app's regions and
+/// Draw the pane group's panes side by side, separated by the same split the app's regions and
 /// the workbench's document panes use.
 ///
 /// This recursed the same way `workbench_layout` did — a two-child paned per level with the rest
 /// nested in the second half — which made it the third implementation of splitting in the tree.
-/// It is now a flat loop over `core.dvui.Sash`, so a divider here drags, looks and feels exactly
+/// It is now a flat loop over `core.dvui.Split`, so a divider here drags, looks and feels exactly
 /// like a divider anywhere else.
 pub fn drawWorkspaces(
     panel: *PaneGroup,
@@ -84,11 +84,11 @@ pub fn drawWorkspaces(
     var i: usize = index;
     while (i < count) : (i += 1) {
         if (i > index) {
-            var sep = Sash.sash(@src(), .horizontal, i);
-            defer sep.end();
-            sep.drag(row, paneId(row, i - 1), 1, .{}, .{
+            var divider = Split.split(@src(), .horizontal, i);
+            defer divider.end();
+            divider.drag(row, paneId(row, i - 1), 1, .{}, .{
                 .length = row.data().contentRect().w,
-                .handles = Sash.handle_size * @as(f32, @floatFromInt(count - 1)),
+                .handles = Split.handle_size * @as(f32, @floatFromInt(count - 1)),
             });
         }
 
@@ -116,7 +116,7 @@ pub fn drawWorkspaces(
             .min_size_content = .{ .w = width },
             .max_size_content = .width(width),
         });
-        if (!last) Sash.recordEdges(id, pane.data(), .horizontal);
+        if (!last) Split.recordEdges(id, pane.data(), .horizontal);
 
         const result = try panel.workspaces.values()[i].draw(panel, host, f, keywords);
         pane.deinit();

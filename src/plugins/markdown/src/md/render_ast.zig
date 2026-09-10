@@ -113,7 +113,7 @@ pub const TableLayout = struct {
     /// Held separately from `widths` because it depends only on the table's *content* and the
     /// fonts — never on how much room the table has. Measuring it means walking every cell in the
     /// table and shaping its text, which on a 45KB table is milliseconds; recomputing that on
-    /// every frame of a sash drag (where only `avail` is moving) was most of what made dragging
+    /// every frame of a split drag (where only `avail` is moving) was most of what made dragging
     /// the splitter crawl.
     natural: []f32,
     /// `natural` squeezed into `avail` (gpa-owned). Recomputed whenever `avail` moves, which is
@@ -313,7 +313,7 @@ pub const RenderState = struct {
     /// started at. Lets the placement probe say whether the cursor or the spacer moved.
     diag_last_spacer: f32 = 0,
     diag_last_skip_from: usize = 0,
-    /// Whether the text column changed width this frame — a sash drag, a window resize, a panel
+    /// Whether the text column changed width this frame — a split drag, a window resize, a panel
     /// animating open. Set by `renderTopLevel`, read by the table renderer, which spends its own
     /// measuring budgets and needs the same answer for the same reason: work done at a width that
     /// is about to change again is work thrown away.
@@ -1183,11 +1183,11 @@ fn renderImageUrl(raw_url: []const u8, alt: []const u8, want: RequestedSize, ctx
 
     // Hard ceiling so an unconstrained (or still-too-large) image can't take over the pane.
     // Percentage widths are *not* resolved against this — see below.
-    // During a sash/resize frame the wrapper's content rect can briefly report 0 — fall back to
+    // During a split/resize frame the wrapper's content rect can briefly report 0 — fall back to
     // the column width so the hero doesn't collapse to nothing for that frame.
     const avail_w = blk: {
         const rect_w = outer.data().contentRect().w;
-        // During a sash/resize frame the wrapper's content rect can briefly report 0 — fall back
+        // During a split/resize frame the wrapper's content rect can briefly report 0 — fall back
         // to the column width so the hero doesn't collapse to nothing for that frame.
         if (!(rect_w > 1)) break :blk ctx.column_width;
         // ...and take the smaller of the two the rest of the time.
@@ -1712,11 +1712,11 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
     const rs = ctx.rs;
     const metrics = currentMetrics();
 
-    // Width in flux this frame (sash open animation, first layout of a new pane, window resize
+    // Width in flux this frame (split open animation, first layout of a new pane, window resize
     // drag). Cached heights are for a different column, so they stop being trusted — but they are
     // *kept*, not clamped toward the estimate. Clamping was how a narrow→wide resize used to
     // collapse the document's height model: an image or a table occupies one line of source, so
-    // its estimate is a dozen pixels against a real several hundred, and every sash drag crushed
+    // its estimate is a dozen pixels against a real several hundred, and every split drag crushed
     // it to that. The blank pane that clamping was meant to prevent is now prevented properly,
     // by `visibleRange` being guaranteed non-empty.
     const width_in_flux = rs.blocks.invalidateForWidth(ctx.column_width);
@@ -2245,7 +2245,7 @@ fn tableColumnWidths(n: ast.Node, num_cols: usize, avail: f32, cell_padding: dvu
     if (ctx.rs.table_layouts.getPtr(key)) |cached| {
         if (cached.body_m == body_m and cached.mono_m == mono_m and cached.natural.len == num_cols) {
             if (cached.avail == avail) return cached.widths;
-            // Only the space available changed — which is every frame of a sash drag. The natural
+            // Only the space available changed — which is every frame of a split drag. The natural
             // widths are still valid, so re-fit them instead of re-measuring the whole table.
             @memcpy(cached.widths, cached.natural);
             fitColumns(cached.widths, avail, ctx.gpa);
@@ -2760,7 +2760,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 var row_anchor: ?struct { screen_y: f32, scale: f32, row_offset: f32 } = null;
                 // The *off-screen* budget goes to zero while the column is still moving, for the
                 // same reason `renderTopLevel` zeroes its block budget: a row measured at this
-                // frame's width is invalid at the next frame's, so a sash drag would pay for the
+                // frame's width is invalid at the next frame's, so a split drag would pay for the
                 // whole table over and over and keep none of it (~5.4KB of text shaped per frame
                 // on docs/PLUGIN_MANIFEST_PLAN.md, discarded every time). Those rows stay owed —
                 // `pending_measure` keeps frames coming — and get measured once the width holds.

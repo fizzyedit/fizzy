@@ -208,7 +208,7 @@ pub const Preview = struct {
 
         // First open always hops to a worker — including the repo's own mid-size docs
         // (PLUGINS.md / PLUGIN_MANIFEST_PLAN.md). Those used to parse+scan on the same frames
-        // as the preview sash / first layout, which is exactly when a hitch is most visible.
+        // as the preview split / first layout, which is exactly when a hitch is most visible.
         // Edits (ast already present) stay synchronous so we don't thrash workers per keystroke.
         if (self.ast_root == null and self.parse_job == null) {
             if (render_ast.diag) {
@@ -488,7 +488,7 @@ pub fn drawPreview(
         //
         // The renderer treats a width change as "the pane is being resized": it stops trusting
         // cached heights, stops spending its measuring budgets, unpins table heights, and asks for
-        // another frame. All correct for a sash drag — and catastrophic if the width never quite
+        // another frame. All correct for a split drag — and catastrophic if the width never quite
         // holds still, because then that state never ends. The pane's width comes from a split
         // whose ratio is eased toward its target every frame, so "never quite holds still" is not
         // hypothetical.

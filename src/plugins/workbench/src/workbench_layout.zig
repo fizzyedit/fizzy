@@ -4,7 +4,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const runtime = @import("runtime.zig");
-const Sash = core.dvui.Sash;
+const Split = core.dvui.Split;
 const Workbench = @import("Workbench.zig");
 const Workspace = @import("Workspace.zig");
 
@@ -76,7 +76,7 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
     }
 }
 
-/// Draw every workspace side by side, separated by the same sash the app's own regions use.
+/// Draw every workspace side by side, separated by the same split the app's own regions use.
 ///
 /// This was a **recursion**: each level opened a two-child `PanedWidget` with workspace `index`
 /// in the first half and all the remaining workspaces nested in the second. That is the tree
@@ -84,7 +84,7 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
 /// splitting anything else in the app — it was a second implementation of the same idea, with
 /// its own ratios, its own handle and its own feel.
 ///
-/// Now it is a flat loop: N panes on an axis with `core.dvui.Sash` between them, sized in points
+/// Now it is a flat loop: N panes on an axis with `core.dvui.Split` between them, sized in points
 /// like every other region. The `index` parameter stays because it is on the host vtable, and is
 /// the first pane to draw.
 pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
@@ -116,13 +116,13 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
 
         if (!first) {
             // The divider before this pane drags *this* pane, anchored to its far edge.
-            var sep = core.dvui.sash(@src(), .horizontal, i);
-            defer sep.end();
-            sep.drag(row, id, -1, .{}, .{
+            var divider = core.dvui.split(@src(), .horizontal, i);
+            defer divider.end();
+            divider.drag(row, id, -1, .{}, .{
                 .length = row.data().contentRect().w,
-                .handles = Sash.handle_size * @as(f32, @floatFromInt(count - 1)),
+                .handles = Split.handle_size * @as(f32, @floatFromInt(count - 1)),
             });
-            if (dvui.captured(sep.box.data().id)) dragging = true;
+            if (dvui.captured(divider.box.data().id)) dragging = true;
         }
 
         // Absence means never sized; zero means the user dragged it shut. Reading zero as "needs
@@ -136,14 +136,14 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
                 var taken: f32 = 0;
                 var k: usize = index + 1;
                 while (k < i) : (k += 1) taken += dvui.dataGet(null, paneId(wb, k), "_size", f32) orelse 0;
-                const handles = Sash.handle_size * @as(f32, @floatFromInt(count - 1));
+                const handles = Split.handle_size * @as(f32, @floatFromInt(count - 1));
                 const half = @max(80, (row.data().contentRect().w - taken - handles) / 2);
                 dvui.dataSet(null, id, "_size", half);
                 dvui.dataSet(null, id, "_shown", @as(f32, 0));
                 dvui.refresh(null, @src(), id);
                 break :blk half;
             };
-            width = Sash.eased(id, target, 220);
+            width = Split.eased(id, target, 220);
         }
 
         var pane = dvui.box(@src(), .{ .dir = .vertical }, if (first) .{
@@ -157,7 +157,7 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
             .min_size_content = .{ .w = width },
             .max_size_content = .width(width),
         });
-        if (!first) Sash.recordEdges(id, pane.data(), .horizontal);
+        if (!first) Split.recordEdges(id, pane.data(), .horizontal);
 
         const result = try wb.workspaces.values()[i].draw();
         pane.deinit();

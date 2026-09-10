@@ -12,7 +12,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
-const Sash = core.dvui.Sash;
+const Split = core.dvui.Split;
 const Layout = @import("Layout.zig");
 
 const Region = @This();
@@ -51,15 +51,15 @@ pub fn deinit(self: *Region) void {
 // call `animateSplit` on it, which only worked while a region *was* a paned.
 
 pub fn isClosed(self: Region) bool {
-    return Sash.isClosed(self.id);
+    return Split.isClosed(self.id);
 }
 
 pub fn close(self: Region) void {
-    Sash.close(self.id);
+    Split.close(self.id);
 }
 
 pub fn open(self: Region) void {
-    Sash.open(self.id, self.default_extent);
+    Split.open(self.id, self.default_extent);
 }
 
 /// How a region draws its own contents.
@@ -103,7 +103,7 @@ pub const Init = struct {
     ///
     /// Closing itself needs no flag: a region slides continuously from its full size to nothing,
     /// because a pinned box is exactly the size it is pinned to and a region clips what it holds.
-    /// There is no threshold and nothing snaps — a sash that jumps the last stretch is a sash
+    /// There is no threshold and nothing snaps — a split that jumps the last stretch is a split
     /// that fights you.
     collapsible: bool = false,
 };

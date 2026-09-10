@@ -115,7 +115,7 @@ fn previewPane(state: *anyopaque, ext: []const u8, path: []const u8, bytes: []co
         // panel sitting beside the editor rather than the other half of one document.
         .background = false,
         // This preview owns the full pane, so nothing else insets it: without a margin of its
-        // own the prose runs straight into the sash on one side and the pane edge on the other.
+        // own the prose runs straight into the split on one side and the pane edge on the other.
         // Extra at the top clears the raw|split|preview pill, which floats over the content.
         .content_padding = .{ .x = 20, .y = 16, .w = 20, .h = 16 },
     });

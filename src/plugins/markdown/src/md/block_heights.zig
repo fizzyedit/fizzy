@@ -478,7 +478,7 @@ pub const Table = struct {
     /// still far closer to the truth than an estimate, so heights are kept and merely demoted to
     /// re-measurable. They must not be clamped toward the estimate: an image or a table occupies
     /// one line of source, so its estimate is a dozen pixels against a real several hundred, and
-    /// clamping collapsed the whole document's height model on every sash drag.
+    /// clamping collapsed the whole document's height model on every split drag.
     ///
     /// Returns true when the width actually moved.
     pub fn invalidateForWidth(self: *Table, column_width: f32) bool {
@@ -625,7 +625,7 @@ pub const Table = struct {
     ///
     /// Guaranteed non-empty for a non-empty document, and that guarantee is the point. The old code
     /// had no such invariant: it decided per block whether to draw, so a height table that had
-    /// drifted (say, every height still sized for a narrower column mid-sash-drag) could conclude
+    /// drifted (say, every height still sized for a narrower column mid-split-drag) could conclude
     /// that *nothing* overlapped the viewport and render a blank pane. Stating the guarantee once,
     /// here, is what makes that unrepresentable — rather than approximating it by biasing every
     /// height downward and hoping the error lands the safe way.
@@ -911,7 +911,7 @@ test "width change keeps measurements instead of clamping them to estimates" {
     try testing.expect(t.invalidateForWidth(900));
 
     // The regression this guards: the height used to be clamped to `@min(h, estimate)`, which
-    // collapsed 540 to ~13 on every sash drag and took the document's height model with it.
+    // collapsed 540 to ~13 on every split drag and took the document's height model with it.
     try testing.expectEqual(@as(f32, 540), t.heights.items[0].h);
     try testing.expectEqual(Height.State.measured, t.stateAt(0));
     try testing.expect(t.heights.items[0].wantsMeasure());

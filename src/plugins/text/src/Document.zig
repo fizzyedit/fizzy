@@ -23,13 +23,13 @@ pub const PreviewMode = enum {
     preview,
 };
 
-/// Last `.split` sash position chosen this session. The mode itself persists as the markdown
+/// Last `.split` split position chosen this session. The mode itself persists as the markdown
 /// plugin setting `default_md_view` (via the `"markdown"` service); the ratio is session-only
-/// so a one-off drag doesn't rewrite settings.zon every frame of a sash move.
+/// so a one-off drag doesn't rewrite settings.zon every frame of a split move.
 pub var sticky_split_ratio: f32 = 0.5;
 
 /// Record the user's raw|split|preview choice: persists markdown's `default_md_view` and
-/// remembers the split sash ratio for documents opened later this session.
+/// remembers the split split ratio for documents opened later this session.
 pub fn rememberPreviewMode(mode: PreviewMode, user_ratio: f32) void {
     sticky_split_ratio = user_ratio;
     const md = sdk.host().getServiceTyped(sdk.services.markdown.Api) orelse return;
@@ -131,11 +131,11 @@ completion_anchor: ?usize = null,
 /// Raw|split|preview state when a language plugin registers a preview pane.
 ///
 /// `preview_split_ratio_user` is the position `.split` returns to: the fraction of the pane the
-/// *raw* side gets, last chosen by dragging the sash. A ratio rather than points because it is
-/// what `settings.zon` has always stored and what a new document inherits — the sash itself works
+/// *raw* side gets, last chosen by dragging the split. A ratio rather than points because it is
+/// what `settings.zon` has always stored and what a new document inherits — the split itself works
 /// in points, and `previewExtent` converts at the draw.
 ///
-/// The live position is not here: it belongs to the sash, under its own widget id, the same way
+/// The live position is not here: it belongs to the split, under its own widget id, the same way
 /// every other divider in the app remembers where it sits.
 preview_mode: PreviewMode = .split,
 preview_split_ratio_user: f32 = 0.5,
@@ -176,8 +176,8 @@ pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
     try text.appendSlice(gpa, bytes);
     const path_copy = try gpa.dupe(u8, path);
     errdefer gpa.free(path_copy);
-    // Seed from the persisted `default_md_view` setting (and this session's sash ratio). Start
-    // the sash *at* the mode's resting position rather than animating there: the tray sliding
+    // Seed from the persisted `default_md_view` setting (and this session's split ratio). Start
+    // the split *at* the mode's resting position rather than animating there: the tray sliding
     // open is feedback for a choice the user just made, not for every file they open.
     const mode = defaultPreviewMode();
     var doc = Document{

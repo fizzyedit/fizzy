@@ -19,7 +19,7 @@ can write theirs.
 
 Why `core` is a package and not just "shared code": a plugin is a dylib and an app is an exe, and
 both need the same widgets, the same fuzzy matcher, the same paths. Anything both sides draw with
-lives there — `Tabs` and `Sash` already do, and that was not a coincidence.
+lives there — `Tabs` and `Split` already do, and that was not a coincidence.
 
 ## Why the split is exactly here
 
@@ -39,7 +39,7 @@ framework.
 
 ### core — shared floor (mostly already right)
 
-Stays as `src/core/`: `dvui.zig` and `widgets/` (Tabs, Sash, TreeWidget, CanvasWidget, Paned,
+Stays as `src/core/`: `dvui.zig` and `widgets/` (Tabs, Split, TreeWidget, CanvasWidget, Paned,
 Reorder, FloatingWindow), `math/`, `fs`, `paths`, `fuzzy`, `lsp/`, `Fling`, `FileTable`.
 
 ### sdk — the plugin contract (already a package)
@@ -84,7 +84,7 @@ the chrome that is genuinely fizzy's rather than any app's: `explorer/`, `Sideba
 - **`Editor`'s new name.** `App` is right and taken by `src/App.zig`, which is the dvui entry.
   Splitting those two is the fix: the entry point is not the application.
 - **Does a plugin get regions?** Today it cannot — `Frame` needs the app state, so the workbench
-  builds its document splits out of raw boxes and a sash. That is why "pane" exists as a word. If
+  builds its document splits out of raw boxes and a split. That is why "pane" exists as a word. If
   the region API moved to `core`, panes would just be regions and the term would disappear.
 
 ## Order

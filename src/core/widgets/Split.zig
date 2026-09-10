@@ -1,6 +1,6 @@
-//! The **sash**: the draggable divider between two regions.
+//! The **split**: the draggable divider between two regions.
 //!
-//! Lives apart from `Frame` so it can be tested against dvui's testing backend without an
+//! Lives apart from `Layout` so it can be tested against dvui's testing backend without an
 //! `Editor` — this path has been wrong twice in ways no amount of reading caught (a drag that
 //! took capture and then froze; a handle that filled its whole strip), and both were dvui
 //! event-routing rules rather than layout logic. It depends on nothing but dvui.
@@ -8,26 +8,26 @@ const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
 
-const Sash = @This();
+const Split = @This();
 
-/// The separator's own box. A sash is a widget you get back and `end`, like `Tabs` — it has a
+/// The separator's own box. A split is a widget you get back and `end`, like `Tabs` — it has a
 /// rect, a lifetime and drag state, so it is a type rather than a bag of functions over one.
 box: *dvui.BoxWidget,
 axis: dvui.enums.Direction,
 
-/// Set `FIZZY_SASH_DEBUG=1` to log what each drag computes. Temporary: a sash that stops short
+/// Set `FIZZY_SPLIT_DEBUG=1` to log what each drag computes. Temporary: a split that stops short
 /// has now survived three rounds of reasoning about it, so the next step is numbers.
 pub var debug: bool = false;
 
-/// Thickness of a sash, and how near the pointer must be before it shows itself. Fizzy's tuned
+/// Thickness of a split, and how near the pointer must be before it shows itself. Fizzy's tuned
 /// values: a thinner target is measurably harder to grab.
 pub const handle_size: f32 = 10;
 pub const handle_dist: f32 = 60;
 
-/// What the container knows that a single sash does not: how much room there is, how much of it
+/// What the container knows that a single split does not: how much room there is, how much of it
 /// the base region insists on keeping, and which other regions can give way.
 ///
-/// This is why a sash *requests* an extent rather than setting one. With a left and a right tray
+/// This is why a split *requests* an extent rather than setting one. With a left and a right tray
 /// over one centre, dragging the left one past the point where the centre is at its minimum has
 /// to push the right one out of the way — an answer no region owns on its own. The container
 /// arbitrates; the regions stop owning their sizes independently.
@@ -38,7 +38,7 @@ pub const Constraint = struct {
     /// resizable. Declared by the app, never inferred from a plugin's content, or the plugin
     /// would be setting the app's proportions.
     base_min: f32 = 0,
-    /// Total length the sashes themselves take.
+    /// Total length the splits themselves take.
     handles: f32 = 0,
     /// The other resizable regions in this container, which yield once the base is at its
     /// minimum and the drag still wants more.
@@ -71,7 +71,7 @@ pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
     if (size + others <= room) return size;
 
     // Over budget. Constraints are resolved in a fixed order so a conflict has one answer rather
-    // than depending on which sash the user happens to be dragging:
+    // than depending on which split the user happens to be dragging:
     //
     //   1. The other trays give way, nearest the budget first — "push the far sidebar out of the
     //      way", the behaviour the whole mechanism exists for.
@@ -101,21 +101,21 @@ pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
 pub const Options = struct {
     /// False draws the gap but does not let the user move it.
     resize: bool = true,
-    /// Smallest extent the dragged neighbour may be squeezed to. Zero by default, so a sash can
+    /// Smallest extent the dragged neighbour may be squeezed to. Zero by default, so a split can
     /// be dragged fully closed — a region you cannot shut is a region the user has to fight.
     min: f32 = 0,
-    /// Largest, or null to allow the full length of the container minus the sash itself, so a
+    /// Largest, or null to allow the full length of the container minus the split itself, so a
     /// region can be dragged fully open. A number here is a deliberate cap, not a default.
     max: ?f32 = null,
 };
 
-/// Open a sash: it takes `handle_size` along the container's axis and stretches across it, so
+/// Open a split: it takes `handle_size` along the container's axis and stretches across it, so
 /// `dvui.box` reserves the gap the way it reserves any other child.
 ///
 /// Named for what it returns, the way `dvui.box` returns a `BoxWidget` and `core.dvui.paned` a
-/// `PanedWidget` — you call `sash()` and get a `Sash`. Also re-exported as `core.dvui.sash` so a
+/// `PanedWidget` — you call `split()` and get a `Split`. Also re-exported as `core.dvui.split` so a
 /// caller that never names the type still reads the same.
-pub fn sash(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_extra: usize) Sash {
+pub fn split(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_extra: usize) Split {
     return .{ .axis = axis, .box = dvui.box(src, .{ .dir = axis }, .{
         .id_extra = id_extra,
         .min_size_content = switch (axis) {
@@ -130,7 +130,7 @@ pub fn sash(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_extr
     }) };
 }
 
-pub fn end(self: *Sash) void {
+pub fn end(self: *Split) void {
     self.box.deinit();
 }
 
@@ -191,11 +191,11 @@ pub fn eased(id: dvui.Id, target: f32, ms: i32) f32 {
     return target;
 }
 
-/// Record where a resizable region's edges are, so a sash can size it from a fixed anchor
+/// Record where a resizable region's edges are, so a split can size it from a fixed anchor
 /// instead of correcting itself frame to frame.
 ///
 /// The anchor is the edge the region does **not** grow from: the far edge of a region before the
-/// sash, or the near edge of one after it. Neither moves while dragging, which is what makes the
+/// split, or the near edge of one after it. Neither moves while dragging, which is what makes the
 /// arithmetic absolute.
 pub fn recordEdges(id: dvui.Id, wd: *dvui.WidgetData, axis: dvui.enums.Direction) void {
     const r = wd.borderRectScale().r;
@@ -211,11 +211,11 @@ pub fn recordEdges(id: dvui.Id, wd: *dvui.WidgetData, axis: dvui.enums.Direction
     }
 }
 
-/// Drag `target`'s stored extent, and draw the sash. `sign` is +1 when the target is the region
-/// *before* the sash and -1 when it is the one after, so dragging always moves the edge the way
+/// Drag `target`'s stored extent, and draw the split. `sign` is +1 when the target is the region
+/// *before* the split and -1 when it is the one after, so dragging always moves the edge the way
 /// the pointer goes.
 pub fn drag(
-    self: *Sash,
+    self: *Split,
     container: *dvui.BoxWidget,
     target: dvui.Id,
     sign: f32,
@@ -236,9 +236,9 @@ pub fn drag(
         .vertical => srs.r.y + srs.r.h / 2,
     };
 
-    // Events are matched against the **container**, not this thin strip, so the sash can grow as
+    // Events are matched against the **container**, not this thin strip, so the split can grow as
     // the pointer approaches rather than only reacting once it is already on top of a 10pt
-    // target. `PanedWidget` does the same, and it is the difference between a sash that feels
+    // target. `PanedWidget` does the same, and it is the difference between a split that feels
     // findable and one that does not. Nothing is handled unless the pointer is actually close.
     //
     // **Except while we hold capture.** dvui's `eventMatch` refuses every widget that is not the
@@ -247,9 +247,9 @@ pub fn drag(
     // freezes on the first pixel, capture is never given back, and the resize cursor sticks. So
     // once captured we match on ourselves, which the capture branch admits regardless of rect.
     var dist: f32 = std.math.floatMax(f32);
-    // Where the pointer wants the sash, taken from the last motion of the frame and applied once
+    // Where the pointer wants the split, taken from the last motion of the frame and applied once
     // after the loop. Applying inside it would over-shoot: every motion event would be measured
-    // against the same stale sash position.
+    // against the same stale split position.
     var drag_to: ?f32 = null;
     for (dvui.events()) |*e| {
         if (e.evt != .mouse) continue;
@@ -297,24 +297,24 @@ pub fn drag(
         }
     }
 
-    // Drive the size from where the pointer is relative to the sash, not from an accumulated
+    // Drive the size from where the pointer is relative to the split, not from an accumulated
     // delta.
     //
     // `dvui.dragging` returns the difference since the **previous call**, not since the press
     // (see `Dragging.get`), so adding it to a baseline captured at press time applies exactly one
-    // frame of movement and then stops — the sash pops once and sits there. Summing it instead
+    // frame of movement and then stops — the split pops once and sits there. Summing it instead
     // would work but drifts, and drops any motion a frame misses.
     //
-    // The sash is drawn wherever the stored size puts it, so moving the size by the pointer's
-    // offset from the sash lands the sash under the pointer, and stays exact from then on with
+    // The split is drawn wherever the stored size puts it, so moving the size by the pointer's
+    // offset from the split lands the split under the pointer, and stays exact from then on with
     // nothing accumulated. `PanedWidget` drives its ratio from the absolute pointer position for
     // the same reason.
     if (drag_to) |p| {
         // Size from the region's fixed edge, not from a correction applied to the current size.
         //
         // A relative correction winds up: once the size clamps at a limit the pointer keeps
-        // travelling past the sash, and dragging back has to walk off that overshoot before
-        // anything moves — the sash sticks at the end of its range and then lags. Measuring from
+        // travelling past the split, and dragging back has to walk off that overshoot before
+        // anything moves — the split sticks at the end of its range and then lags. Measuring from
         // an edge that does not move during the drag makes the size a pure function of where the
         // pointer is, so it leaves a limit the instant the pointer does.
         const current = dvui.dataGet(null, target, "_size", f32) orelse currentExtent(target, axis);
@@ -326,35 +326,35 @@ pub fn drag(
 
         const resolved = resolve(target, want, c, opts);
         if (debug) dvui.log.err(
-            "[sash] axis={s} sign={d} p={d} centre={d} anchor={?d} scale={d} | want={d} resolved={d} | min={d} max={?d} len={d} base_min={d} handles={d} others={d}",
+            "[split] axis={s} sign={d} p={d} centre={d} anchor={?d} scale={d} | want={d} resolved={d} | min={d} max={?d} len={d} base_min={d} handles={d} others={d}",
             .{ @tagName(axis), sign, p, centre, anchor, srs.s, want, resolved, opts.min, opts.max, c.length, c.base_min, c.handles, c.others.len },
         );
         dvui.dataSet(null, target, "_size", resolved);
         // Keep the shown extent in step with the target during a drag, so the region does not
-        // read this as a change to ease into. A sash belongs under the pointer, not on a curve.
+        // read this as a change to ease into. A split belongs under the pointer, not on a curve.
         dvui.dataSet(null, target, "_shown", resolved);
         dvui.refresh(null, @src(), wd.id);
     }
 
     if (dvui.captured(wd.id)) dist = 0;
 
-    // A sash whose region is shut has nothing beside it to imply that it is there, so it keeps a
+    // A split whose region is shut has nothing beside it to imply that it is there, so it keeps a
     // resting line at the edge and grows the grip out of that on approach. Without it a closed
     // region is indistinguishable from no region, and the way back is invisible.
     //
     // Several shut regions in a row — a few markdown previews opened to the side — do not pile up
-    // on one another: a sash still takes its own `handle_size` in the layout even when what it
+    // on one another: a split still takes its own `handle_size` in the layout even when what it
     // resizes is zero, so they sit side by side and read as the several separate handles they
     // are.
     const at_rest = (dvui.dataGet(null, target, "_shown", f32) orelse 1) <= 0;
-    drawSash(wd, srs, axis, dist, at_rest);
+    drawSplit(wd, srs, axis, dist, at_rest);
 }
 
-/// The sash itself: a short rounded bar across the middle of the gap with a grip on it, fading
+/// The split itself: a short rounded bar across the middle of the gap with a grip on it, fading
 /// in as the pointer approaches. Deliberately **not** a fill of the whole separator — the strip
 /// spans the entire edge, and painting all of it reads as a solid divider rather than something
 /// you can grab.
-fn drawSash(
+fn drawSplit(
     wd: *dvui.WidgetData,
     srs: dvui.RectScale,
     axis: dvui.enums.Direction,
@@ -363,7 +363,7 @@ fn drawSash(
 ) void {
     _ = at_rest;
 
-    // A sash is **always** visible, as a short faint pill, and grows into the full grip as the
+    // A split is **always** visible, as a short faint pill, and grows into the full grip as the
     // pointer approaches.
     //
     // It used to draw nothing until the pointer was near, which left a shut or nearly-shut region
@@ -403,7 +403,7 @@ fn drawSash(
     // `.round`, not `.all`. `CornerRect.all(r)` means "the theme's corner *kind*, at radius r",
     // and fizzy's theme squares its corners — so the radius was being honoured and the shape
     // ignored, and the pill came out a rectangle. `PanedWidget` has the same line and the same
-    // square handle. A sash is a grip, not a panel: it should read as a pill whatever the theme
+    // square handle. A split is a grip, not a panel: it should read as a pill whatever the theme
     // does to boxes.
     r.fill(.round(thick / 2), .{ .color = wd.options.color(.text).opacity(alpha), .fade = 1.0 });
 
@@ -461,7 +461,7 @@ var t_min: f32 = 0;
 var t_room_px: f32 = 0;
 var t_org_px: f32 = 0;
 
-/// A horizontal container: a fixed-width region, a sash, and a stretchy one. The same shape as
+/// A horizontal container: a fixed-width region, a split, and a stretchy one. The same shape as
 /// a sidebar beside a main area.
 fn twoPaneFrame() !dvui.App.Result {
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
@@ -481,7 +481,7 @@ fn twoPaneFrame() !dvui.App.Result {
         recordEdges(t_target, left.data(), .horizontal);
     }
 
-    var sep = sash(@src(), .horizontal, 0);
+    var sep = split(@src(), .horizontal, 0);
     {
         const srs = sep.box.data().borderRectScale();
         t_sep_x = srs.r.x + srs.r.w / 2;
@@ -497,7 +497,7 @@ fn twoPaneFrame() !dvui.App.Result {
     {
         // A real minimum on the far side, which is what makes the open limit *unreachable*: the
         // stored size can be clamped to a value the layout cannot actually give, and then the
-        // sash sits short of it. That gap is where windup lives, so a test frame without it
+        // split sits short of it. That gap is where windup lives, so a test frame without it
         // cannot show the bug.
         var right = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
@@ -510,7 +510,7 @@ fn twoPaneFrame() !dvui.App.Result {
     return .ok;
 }
 
-test "dragging the sash resizes the region before it" {
+test "dragging the split resizes the region before it" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
     defer t.deinit();
 
@@ -536,11 +536,11 @@ test "dragging the sash resizes the region before it" {
     // ...and it must move *by the drag distance*, not merely increase. A baseline taken from
     // anything other than the region's current extent — its natural content minimum, say — makes
     // the first press jump the region to that width before applying the delta, which reads as
-    // the sash popping to a different size the moment you grab it.
+    // the split popping to a different size the moment you grab it.
     try testing.expectApproxEqAbs(before + 80 / t_scale, t_size, 1.0);
 }
 
-test "the sash follows the pointer across a multi-step drag" {
+test "the split follows the pointer across a multi-step drag" {
     // The regression this exists for: `dvui.dragging` reports the delta since the *previous
     // call*, so a single-motion test cannot tell a cumulative baseline from an incremental one —
     // they agree on the first event and only diverge from the second. A real drag is many motion
@@ -569,7 +569,7 @@ test "the sash follows the pointer across a multi-step drag" {
     _ = try dvui.testing.step(twoPaneFrame);
 
     try testing.expectApproxEqAbs(before + moved / t_scale, t_size, 2.0);
-    // And the sash itself ends up under the pointer, which is what "follows the mouse" means.
+    // And the split itself ends up under the pointer, which is what "follows the mouse" means.
     try testing.expectApproxEqAbs(grab + moved, t_sep_x, 4.0);
 }
 
@@ -593,7 +593,7 @@ test "releasing gives capture back, so the cursor does not stick" {
     try testing.expect(!t_captured);
 }
 
-test "a sash can be dragged fully closed and fully open" {
+test "a split can be dragged fully closed and fully open" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
     defer t.deinit();
 
@@ -611,7 +611,7 @@ test "a sash can be dragged fully closed and fully open" {
     }
     try testing.expectApproxEqAbs(@as(f32, 0), t_size, 0.001);
 
-    // ...and all the way to the far edge, which is the container's length less the sash.
+    // ...and all the way to the far edge, which is the container's length less the split.
     for (0..8) |_| {
         _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 4000, .y = 100 } });
         _ = try dvui.testing.step(twoPaneFrame);
@@ -625,8 +625,8 @@ test "a sash can be dragged fully closed and fully open" {
 
 test "leaving a limit tracks the pointer immediately" {
     // The windup this exists for: with the size corrected frame to frame, overshooting a limit
-    // banks up the distance the pointer travelled past the sash, and dragging back has to spend
-    // it all again before anything moves. The sash appears stuck at the end of its range.
+    // banks up the distance the pointer travelled past the split, and dragging back has to spend
+    // it all again before anything moves. The split appears stuck at the end of its range.
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
     defer t.deinit();
 
@@ -645,7 +645,7 @@ test "leaving a limit tracks the pointer immediately" {
     }
     const at_limit = t_size;
 
-    // Now come back to a position well inside the range. One frame should put the sash there.
+    // Now come back to a position well inside the range. One frame should put the split there.
     const target_x = t_org_px + t_room_px * 0.4;
     _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = target_x, .y = 100 } });
     _ = try dvui.testing.step(twoPaneFrame);
@@ -653,7 +653,7 @@ test "leaving a limit tracks the pointer immediately" {
     // The size responds on this frame...
     try testing.expect(t_size < at_limit - 20);
 
-    // ...and the sash is drawn there two frames later. That is dvui's normal settle, not the
+    // ...and the split is drawn there two frames later. That is dvui's normal settle, not the
     // windup this test is about: a box places its children from the min size they reported *last*
     // frame, so a size written during one frame reaches the layout on the next. During a real
     // drag the pointer is moving continuously, so this is a frame of trail, not a stall.
@@ -690,7 +690,7 @@ test "a far-away press is not a grab" {
     const before = t_size;
     const cw = dvui.currentWindow();
 
-    // Well clear of the sash: pressing here belongs to whatever is under it, not to the split.
+    // Well clear of the split: pressing here belongs to whatever is under it, not to the split.
     _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = t_sep_x + 200, .y = 100 } });
     _ = try dvui.testing.step(twoPaneFrame);
     _ = try cw.addEventMouseButton(.left, .press);
@@ -743,7 +743,7 @@ test "the far tray is pushed back once the base is at its minimum" {
     setSize(left, 200);
     setSize(right, 200);
 
-    // 1000 long, base keeps 400, sashes take 20 -> 580 for the trays. Asking for 500 on the left
+    // 1000 long, base keeps 400, splits take 20 -> 580 for the trays. Asking for 500 on the left
     // leaves 80 for the right, so it has to give up 120.
     const c: Constraint = .{ .length = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
     try testing.expectApproxEqAbs(@as(f32, 500), resolve(left, 500, c, .{}), 0.001);

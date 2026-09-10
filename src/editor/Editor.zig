@@ -2438,10 +2438,10 @@ pub fn postInit(editor: *Editor) !void {
     dvui.log.info("layout: shape '{s}'", .{@tagName(build_opts.layout)});
 
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        if (std.process.Environ.getAlloc(fizzy.processEnviron(), editor.gpa, "FIZZY_SASH_DEBUG")) |v| {
+        if (std.process.Environ.getAlloc(fizzy.processEnviron(), editor.gpa, "FIZZY_SPLIT_DEBUG")) |v| {
             editor.gpa.free(v);
-            core.dvui.Sash.debug = true;
-            dvui.log.info("layout: sash debug logging on", .{});
+            core.dvui.Split.debug = true;
+            dvui.log.info("layout: split debug logging on", .{});
         } else |_| {}
     }
     sdk.installRuntime(&editor.gpa, &editor.host, null);

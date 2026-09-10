@@ -22,7 +22,7 @@ const fizzy = @import("../../../fizzy.zig");
 const sdk = fizzy.sdk;
 
 const Layout = @import("../Layout.zig");
-const Sash = @import("core").dvui.Sash;
+const Split = @import("core").dvui.Split;
 
 // ── The studio preset ───────────────────────────────────────────────────────────────────────
 //
@@ -42,7 +42,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
-        .padding = .{ .x = Sash.handle_size },
+        .padding = .{ .x = Split.handle_size },
     });
     defer body.deinit();
 

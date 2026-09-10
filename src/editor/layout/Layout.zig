@@ -11,7 +11,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
-const Sash = core.dvui.Sash;
+const Split = core.dvui.Split;
 const Constants = @import("../Constants.zig");
 
 const Layout = @This();
@@ -40,11 +40,11 @@ pub const Container = struct {
     /// The base region's declared minimum along the axis — `min_size_content` on the region in
     /// this container that is not resizable. The app declares it; the framework only reads it.
     base_min: f32 = 0,
-    /// Every resizable region in this container. A sash needs them all, because honouring one
+    /// Every resizable region in this container. A split needs them all, because honouring one
     /// drag can mean pushing the others back.
     resizables: [max_trays]dvui.Id = undefined,
     resizable_count: usize = 0,
-    /// Total length the sashes in this container take.
+    /// Total length the splits in this container take.
     handles: f32 = 0,
     /// The container's own box, for measuring how near the pointer is to a split inside it.
     box: ?*dvui.BoxWidget = null,
@@ -75,9 +75,9 @@ fn innermost(self: *Layout) ?*Container {
 }
 
 /// Thickness of a split, and how near the pointer must be before it shows itself. Fizzy's tuned
-/// sash values (`layout.split`), kept because a thinner target is measurably harder to grab.
-pub const handle_size = Sash.handle_size;
-pub const handle_dist = Sash.handle_dist;
+/// split values (`layout.split`), kept because a thinner target is measurably harder to grab.
+pub const handle_size = Split.handle_size;
+pub const handle_dist = Split.handle_dist;
 
 // A region's extent along its parent's axis is stored under `"_size"`, in points.
 //
@@ -279,9 +279,9 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: Region.Init,
         // Ease toward the target when it moved for a reason other than a drag — the collapse
         // when the window runs out of room, and the restore when it comes back.
         //
-        // A drag is exempt, and stays exempt without a flag: the sash writes `_shown` alongside
+        // A drag is exempt, and stays exempt without a flag: the split writes `_shown` alongside
         // `_size`, so the two agree and nothing kicks off. Easing a drag would be wrong anyway —
-        // a sash should sit under the pointer, not lag behind it on a curve.
+        // a split should sit under the pointer, not lag behind it on a curve.
         if (dvui.animationGet(id, "_ease")) |a| {
             extent = a.value();
         } else {
@@ -303,7 +303,7 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: Region.Init,
         if (kind.name.len > 0) self.editor.setRegionExtent(kind.name, chosen);
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
-        // wider than the size the user dragged it to simply stays wider, and the sash appears to
+        // wider than the size the user dragged it to simply stays wider, and the split appears to
         // stop responding once it reaches that content's natural width. Pinning the maximum too
         // makes the stored size exact and stops a plugin's content dictating the app's
         // proportions — the hazard `layout.zig` names in its sizing notes.
@@ -345,7 +345,7 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: Region.Init,
         // dvui clamps a widget's reported min size with `max_size_content`, so capping it along
         // the parent's axis stops the plugin inside from reserving space the app never granted.
         // Without this the bottom panel cannot be dragged open past whatever the editor above it
-        // wants to be — the neighbour's content, not the layout, decides how far a sash travels.
+        // wants to be — the neighbour's content, not the layout, decides how far a split travels.
         // The region clips anyway, so nothing escapes; it just stops pushing back.
         //
         // An explicit `max_size_content` from the shape wins: that is the app deciding, which is
@@ -370,7 +370,7 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: Region.Init,
     }
 
     const box = dvui.box(src, .{ .dir = kind.dir }, box_opts);
-    if (kind.resize) Sash.recordEdges(id, box.data(), axis);
+    if (kind.resize) Split.recordEdges(id, box.data(), axis);
     self.containers[self.depth] = .{ .dir = kind.dir, .box = box };
     self.depth += 1;
 
@@ -413,52 +413,47 @@ fn roomOf(p: *Container, axis: dvui.enums.Direction) f32 {
 /// declared once, on the container. Dragging it changes the stored extent of the nearest
 /// preceding `resize` region, which is the entire resize model — one number per resizable
 /// region, no ratios, no boundary table, and `dvui.box` doing the layout.
-pub fn split(self: *Layout, src: std.builtin.SourceLocation, opts: SplitOptions) void {
+/// The options are `Split.Options` itself, never a copy: this once had a second struct with the
+/// same three fields, whose defaults drifted — `min` went to zero in one place so a region could
+/// be dragged shut and stayed 40 here, which silently won and pinned every split 40pt from its
+/// end. Two structs describing one thing will always end up disagreeing about it.
+pub fn split(self: *Layout, src: std.builtin.SourceLocation, opts: Split.Options) void {
     const c = self.innermost() orelse {
         dvui.log.err("split() outside a region does nothing", .{});
         return;
     };
     const axis = c.dir;
 
-    var sep = Sash.sash(src, axis, 0);
-    defer sep.end();
+    var divider = Split.split(src, axis, 0);
+    defer divider.end();
     if (!opts.resize) return;
 
-    // Which neighbour this sash resizes. Preferring the one *before* it makes the sidebar case
+    // Which neighbour this split resizes. Preferring the one *before* it makes the sidebar case
     // work immediately; falling back to the one after is what the bottom panel needs, since a
-    // panel is declared after its own split and cannot be known when the sash is drawn. That one
+    // panel is declared after its own split and cannot be known when the split is drawn. That one
     // is bound by `region` and read back a frame later.
     var sign: f32 = 1;
     const target = c.last_resizable orelse blk: {
         sign = -1;
-        break :blk dvui.dataGet(null, sep.box.data().id, "_after", dvui.Id) orelse {
-            c.pending_split = sep.box.data().id;
+        break :blk dvui.dataGet(null, divider.box.data().id, "_after", dvui.Id) orelse {
+            c.pending_split = divider.box.data().id;
             return;
         };
     };
 
     const container = c.box orelse return;
-    c.handles += Sash.handle_size;
+    c.handles += Split.handle_size;
     const room = switch (axis) {
         .horizontal => container.data().contentRect().w,
         .vertical => container.data().contentRect().h,
     };
-    sep.drag(container, target, sign, opts, .{
+    divider.drag(container, target, sign, opts, .{
         .length = room,
         .base_min = c.base_min,
         .handles = c.handles,
         .others = c.resizables[0..c.resizable_count],
     });
 }
-
-/// What a `split` accepts. **The sash's own options, not a copy of them.**
-///
-/// This used to be a second struct with the same three fields, copied across field by field in
-/// `split`. Its defaults then drifted from the sash's: `min` was lowered to zero in one place so
-/// a region could be dragged shut, and stayed at 40 here — which silently won, and pinned every
-/// sash 40pt from its end. Two structs describing one thing will always end up disagreeing about
-/// it, so there is one.
-pub const SplitOptions = Sash.Options;
 
 /// The region's contents: its own chrome if it declared any, otherwise the active surface.
 ///

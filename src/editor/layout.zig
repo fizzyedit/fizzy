@@ -126,7 +126,7 @@
 //!
 //! ## Where this stands
 //!
-//! Built. A region **is** a `dvui.box` and a `split` is a `core.dvui.Sash` between two of them,
+//! Built. A region **is** a `dvui.box` and a `split` is a `core.dvui.Split` between two of them,
 //! so the sizing is dvui's own and there is no second model to learn. Every shipped shape uses
 //! it; the edge-docking form and its `rest()` branching are gone.
 //!

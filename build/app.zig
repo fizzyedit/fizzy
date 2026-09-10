@@ -727,20 +727,20 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         plugin_loader_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         plugin_loader_module.addImport("fizzy_sdk", sdk_module_test);
 
-        // The layout sash: drag, capture handoff and hit distance. Rooted at the file itself,
+        // The layout split: drag, capture handoff and hit distance. Rooted at the file itself,
         // which imports nothing but dvui precisely so it can be — every bug it has had was a
         // dvui event-routing rule, and those need a real Window to reproduce.
-        const sash_tests_module = b.createModule(.{
+        const split_tests_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/core/widgets/Sash.zig"),
+            .root_source_file = b.path("src/core/widgets/Split.zig"),
         });
-        sash_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
-        if (icons_test) |icons| sash_tests_module.addImport("icons", icons);
+        split_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        if (icons_test) |icons| split_tests_module.addImport("icons", icons);
 
         inline for (.{
             .{ "fizzy-sdk-tests", sdk_tests_module },
-            .{ "fizzy-sash-tests", sash_tests_module },
+            .{ "fizzy-split-tests", split_tests_module },
             .{ "fizzy-plugin-loader-tests", plugin_loader_module },
         }) |entry| {
             const t = b.addTest(.{

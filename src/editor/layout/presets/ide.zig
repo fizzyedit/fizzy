@@ -24,7 +24,7 @@ const fizzy = @import("../../../fizzy.zig");
 const sdk = fizzy.sdk;
 
 const Layout = @import("../Layout.zig");
-const Sash = @import("core").dvui.Sash;
+const Split = @import("core").dvui.Split;
 const Menu = @import("../../Menu.zig");
 const Constants = @import("../../Constants.zig");
 
@@ -59,7 +59,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
     var stack = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
-        .padding = .{ .w = Sash.handle_size },
+        .padding = .{ .w = Split.handle_size },
     });
     defer stack.deinit();
 
