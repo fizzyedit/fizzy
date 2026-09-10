@@ -230,9 +230,11 @@ export fn fizzy_macos_window_request_clear_frames(frames: c_int) void {
 /// Replaced the hardcoded `explorer_ratio` / `panel_ratio` pair, which named the two regions fizzy
 /// happens to have — so an app with a "Stack" and a "Strip" could persist nothing, and fizzy's own
 /// furniture was baked into a framework's on-disk format.
-pub const RegionSize = struct {
+pub const RegionExtent = struct {
     name: []const u8,
-    size: f32,
+    /// Points along the region's own axis: width under a horizontal parent, height under a
+    /// vertical one. One number, because a region only ever divides its parent one way.
+    extent: f32,
 };
 
 const SavedFrame = struct {
@@ -240,7 +242,7 @@ const SavedFrame = struct {
     y: f64 = 0,
     w: f64 = 0,
     h: f64 = 0,
-    regions: []const RegionSize = &.{},
+    regions: []const RegionExtent = &.{},
 };
 const layout_file = "layout.zon";
 /// What `layout.zon` used to be called, read once as a fallback so an existing install keeps its
@@ -327,26 +329,26 @@ fn writeSavedFrame(dir: []const u8, x: f64, y: f64, w: f64, h: f64) void {
 /// explorer/panel split ratios. Cross-platform (called from `Editor`'s debounced autosave on
 /// every OS, not just macOS).
 /// Read-modify-write: keeps whatever frame geometry is on disk, replaces the region list.
-pub fn saveRegionSizes(dir: []const u8, sizes: []const RegionSize) void {
+pub fn saveRegionExtents(dir: []const u8, extents: []const RegionExtent) void {
     const gpa = std.heap.page_allocator;
     var f = loadWindowFile(gpa, dir);
     defer std.zon.parse.free(gpa, f);
     const keep = f.regions;
-    f.regions = sizes;
+    f.regions = extents;
     writeWindowFile(dir, f);
     f.regions = keep;
 }
 
 /// Every region's remembered extent, in `gpa`-owned memory. Call once at startup; free the
 /// names with `gpa` when done.
-pub fn loadRegionSizes(gpa: std.mem.Allocator, dir: []const u8) []RegionSize {
+pub fn loadRegionExtents(gpa: std.mem.Allocator, dir: []const u8) []RegionExtent {
     const f = loadWindowFile(gpa, dir);
-    const out = gpa.alloc(RegionSize, f.regions.len) catch {
+    const out = gpa.alloc(RegionExtent, f.regions.len) catch {
         std.zon.parse.free(gpa, f);
         return &.{};
     };
     for (f.regions, 0..) |r, i| {
-        out[i] = .{ .name = gpa.dupe(u8, r.name) catch "", .size = r.size };
+        out[i] = .{ .name = gpa.dupe(u8, r.name) catch "", .extent = r.extent };
     }
     std.zon.parse.free(gpa, f);
     return out;

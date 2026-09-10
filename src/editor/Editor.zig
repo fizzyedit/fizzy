@@ -117,6 +117,7 @@ pub const Menu = @import("Menu.zig");
 /// The shipped layout presets and the dispatcher that runs the selected one.
 const presets = @import("layout/presets.zig");
 const Layout = @import("layout/Layout.zig");
+const Region = @import("layout/Region.zig");
 const AppInfo = @import("../AppInfo.zig");
 pub const FileLoadJob = workbench_mod.FileLoadJob;
 
@@ -134,7 +135,7 @@ pub const Workbench = workbench_mod.Workbench;
 /// library, where there is no single ambient App.
 gpa: std.mem.Allocator,
 
-layout: LayoutState = .{},
+layout: Layout.State = .{},
 
 arena: std.heap.ArenaAllocator,
 
@@ -553,10 +554,10 @@ pub fn init(
     }
 
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        const sizes = fizzy.backend.loadRegionSizes(app.allocator, editor.config_folder);
-        defer app.allocator.free(sizes);
-        for (sizes) |r| {
-            editor.layout.sizes.put(app.allocator, r.name, r.size) catch continue;
+        const extents = fizzy.backend.loadRegionExtents(app.allocator, editor.config_folder);
+        defer app.allocator.free(extents);
+        for (extents) |r| {
+            editor.layout.extents.put(app.allocator, r.name, r.extent) catch continue;
         }
     }
 
@@ -3905,14 +3906,14 @@ fn saveWindowRatiosGuarded(editor: *Editor) void {
     if (editor.activelyDrawing())
         return;
 
-    editor.saveRegionSizes();
+    editor.saveRegionExtents();
     editor.layout.dirty = false;
 }
 
 /// Flush to disk regardless of idle/drawing deferral — used during shutdown only.
 fn saveWindowRatiosRaw(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    editor.saveRegionSizes();
+    editor.saveRegionExtents();
     editor.layout.dirty = false;
 }
 
@@ -4455,60 +4456,37 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
 }
 
 /// Write every region's extent to `layout.zon`, by name.
-fn saveRegionSizes(editor: *Editor) void {
+fn saveRegionExtents(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    var list: std.ArrayListUnmanaged(fizzy.backend.RegionSize) = .empty;
+    var list: std.ArrayListUnmanaged(fizzy.backend.RegionExtent) = .empty;
     defer list.deinit(editor.gpa);
-    var it = editor.layout.sizes.iterator();
+    var it = editor.layout.extents.iterator();
     while (it.next()) |e| {
-        list.append(editor.gpa, .{ .name = e.key_ptr.*, .size = e.value_ptr.* }) catch return;
+        list.append(editor.gpa, .{ .name = e.key_ptr.*, .extent = e.value_ptr.* }) catch return;
     }
-    fizzy.backend.saveRegionSizes(editor.config_folder, list.items);
+    fizzy.backend.saveRegionExtents(editor.config_folder, list.items);
 }
 
 /// The extent a region should start at: what the user last left it, or the shape's default.
-pub fn regionSize(editor: *Editor, name: []const u8, default: f32) f32 {
-    return editor.layout.sizes.get(name) orelse default;
+pub fn regionExtent(editor: *Editor, name: []const u8, default: f32) f32 {
+    return editor.layout.extents.get(name) orelse default;
 }
 
 /// Remember a region's extent. Debounced to disk by the same timer the window ratios use.
-pub fn setRegionSize(editor: *Editor, name: []const u8, size: f32) void {
-    const gop = editor.layout.sizes.getOrPut(editor.gpa, name) catch return;
-    if (gop.found_existing and gop.value_ptr.* == size) return;
+pub fn setRegionExtent(editor: *Editor, name: []const u8, extent: f32) void {
+    const gop = editor.layout.extents.getOrPut(editor.gpa, name) catch return;
+    if (gop.found_existing and gop.value_ptr.* == extent) return;
     if (!gop.found_existing) gop.key_ptr.* = editor.gpa.dupe(u8, name) catch {
-        _ = editor.layout.sizes.remove(name);
+        _ = editor.layout.extents.remove(name);
         return;
     };
-    gop.value_ptr.* = size;
+    gop.value_ptr.* = extent;
     editor.markWindowRatiosDirty();
 }
 
-/// A region declared by this frame's shape, found by the keywords it accepts.
-///
-/// This is how anything outside the layout drives a region — the rail button, a command, a
-/// keybind — without knowing what widget the shape used. It carries an id and a size, not a
-/// widget pointer: `Explorer` used to reach for the `PanedWidget` behind the sidebar and call
-/// `animateSplit` on it, which only worked while a region *was* a paned.
-pub const RegisteredRegion = struct {
-    keywords: []const []const u8,
-    id: dvui.Id,
-    /// What to open to when it has never been open. The size the shape asked for.
-    default_size: f32,
-
-    pub fn isClosed(self: RegisteredRegion) bool {
-        return core.dvui.Sash.isClosed(self.id);
-    }
-    pub fn close(self: RegisteredRegion) void {
-        core.dvui.Sash.close(self.id);
-    }
-    pub fn open(self: RegisteredRegion) void {
-        core.dvui.Sash.open(self.id, self.default_size);
-    }
-};
-
 /// The region accepting `keywords`, or null when this app's shape declared none — a normal
 /// state, not an error.
-pub fn regionFor(editor: *Editor, keywords: []const []const u8) ?RegisteredRegion {
+pub fn regionFor(editor: *Editor, keywords: []const []const u8) ?Region {
     for (editor.layout.regions.items) |entry| {
         for (entry.keywords) |a| for (keywords) |b| {
             if (std.ascii.eqlIgnoreCase(a, b)) return entry;
@@ -4517,7 +4495,7 @@ pub fn regionFor(editor: *Editor, keywords: []const []const u8) ?RegisteredRegio
     return null;
 }
 
-pub fn registerRegion(editor: *Editor, entry: RegisteredRegion) void {
+pub fn registerRegion(editor: *Editor, entry: Region) void {
     editor.layout.regions.append(editor.gpa, entry) catch {};
 }
 
@@ -5818,54 +5796,3 @@ pub fn deinit(editor: *Editor) !void {
     editor.arena.deinit();
 }
 
-/// The application's layout *state*: which surface each region shows, the regions this frame
-/// declared, and every region's remembered extent.
-///
-/// Named `LayoutState` because `Layout` is the thing a shape declares regions *with*. The field
-/// is `layout`, which is what call sites read.
-///
-/// Grouped rather than spread across the application state because the boundary matters: this
-/// is framework, and the chrome beside it (explorer, sidebar, panes) is fizzy's own. Seventy-five
-/// flat fields made that invisible.
-pub const LayoutState = struct {
-    /// Shell (new-layout) selection state: keyword-group hash -> selected surface id.
-    /// Surface ids are registry-owned string literals, so this stores no allocations of its own.
-    /// Keyed by group rather than by region so two regions written with the same keywords share a
-    /// selection with no wiring between them (see `layout/Layout.zig`).
-    selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
-    /// Per-surface keyword overrides from `settings.zon` (`.plugins.<id>.surfaces.<sid>.keywords`).
-    /// The user's answer wins over the plugin's declared defaults, which is what makes a wrong
-    /// default cost two clicks rather than a plugin release. Keys and values are gpa-owned.
-    keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .empty,
-    /// Regions declared by this frame's shape. Cleared and rebuilt every frame.
-    regions: std.ArrayListUnmanaged(RegisteredRegion) = .empty,
-    /// Every region's remembered extent in **points**, by the name its shape declared, loaded from
-    /// `layout.zon` at startup and written back debounced.
-    ///
-    /// Replaces `explorer_ratio` / `panel_ratio`, which named the two regions fizzy happens to have —
-    /// so an app with a "Stack" and a "Strip" could persist nothing, and fizzy's own furniture was
-    /// baked into a framework's on-disk format. Those two survive only for the legacy shell.
-    sizes: std.StringHashMapUnmanaged(f32) = .empty,
-    /// Explorer/panel split ratios — "window shape" state persisted in `window.zon`, not
-    /// `settings.zon` (dragging a splitter fires every frame; keeping it out of the settings file
-    /// means normal window use never dirties a git-tracked settings.zon). Loaded once at startup
-    /// (see `init`); defaults match the pre-move `Settings` field defaults.
-    /// Debounced-save bookkeeping for the ratios above, separate from `settings_dirty`/
-    /// `settings_save_deadline_ns` — sidebar/panel dragging must not force a settings.zon write
-    /// attempt on every drag frame.
-    dirty: bool = false,
-    save_deadline_ns: i128 = 0,
-    /// Collapsed-layout (phone / narrow web viewport) center focus: while true the bottom panel
-    /// stays swung shut so the center region owns the whole viewport. Set by `revealCenter`, which
-    /// callers use when a tap has just put something worth reading in the center (e.g. picking a
-    /// plugin in the store). Deliberately *not* a `panel_ratio` write: the user's panel height
-    /// survives, so dragging the handle back up — or widening the window out of the collapsed
-    /// layout — restores the panel where they left it.
-    panel_hidden_for_center: bool = false,
-    /// Id of the center provider drawn last frame, so a swap can look the outgoing one up again by
-    /// id (never cache the pointer: a plugin can unload between frames). Borrowed from the host's
-    /// registry entry, which outlives a frame.
-    center_prev_id: ?[]const u8 = null,
-    /// Host-owned cross-fade between center providers. See `drawActiveCenter`.
-    center_transition: core.dvui.Transition = .{},
-};

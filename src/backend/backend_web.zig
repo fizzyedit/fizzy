@@ -54,13 +54,13 @@ pub fn showWindow(_: *dvui.Window) void {}
 pub fn saveWindowGeometry(_: *dvui.Window) void {}
 
 /// Symmetric with the native API: no `window.zon` to persist on web.
-pub const RegionSize = struct { name: []const u8, size: f32 };
+pub const RegionExtent = struct { name: []const u8, extent: f32 };
 
-pub fn saveRegionSizes(_: []const u8, _: []const RegionSize) void {}
+pub fn saveRegionExtents(_: []const u8, _: []const RegionExtent) void {}
 
 /// Symmetric with the native API: no `window.zon` to read on web — same defaults
 /// `SavedFrame` itself declares natively.
-pub fn loadRegionSizes(_: std.mem.Allocator, _: []const u8) []RegionSize {
+pub fn loadRegionExtents(_: std.mem.Allocator, _: []const u8) []RegionExtent {
     return &.{};
 }
 

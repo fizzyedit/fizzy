@@ -11,10 +11,20 @@
 //! shapes.
 const std = @import("std");
 const dvui = @import("dvui");
+const core = @import("core");
+const Sash = core.dvui.Sash;
 const Layout = @import("Layout.zig");
 
 const Region = @This();
 
+/// What kinds of surface this region accepts, as its shape declared them.
+keywords: []const []const u8 = &.{},
+/// This region's widget id, stable across frames from the shape's `@src()`.
+id: dvui.Id = .zero,
+/// How far this region reaches along its parent's axis when it has never been dragged — the
+/// width under a horizontal parent, the height under a vertical one, in points. One number,
+/// because a region only ever divides its parent one way; the other axis is the parent's.
+default_extent: f32 = 0,
 /// Clip set while the region is open, restored on `deinit`.
 prev_clip: ?dvui.Rect.Physical = null,
 /// The box this region is. A region **is** a `dvui.box`: same layout mechanics, same
@@ -32,6 +42,24 @@ pub fn deinit(self: *Region) void {
         }
         b.deinit();
     }
+}
+
+// Opening and shutting from outside the layout — a rail button, a command, a keybind. These
+// work on the copy `Editor.regionFor` hands back as well as on a live one, which is why they
+// touch only `id` and `default_extent`: everything they need is a persisted extent under an id,
+// never a widget pointer. `Explorer` used to reach for the `PanedWidget` behind the sidebar and
+// call `animateSplit` on it, which only worked while a region *was* a paned.
+
+pub fn isClosed(self: Region) bool {
+    return Sash.isClosed(self.id);
+}
+
+pub fn close(self: Region) void {
+    Sash.close(self.id);
+}
+
+pub fn open(self: Region) void {
+    Sash.open(self.id, self.default_extent);
 }
 
 /// How a region draws its own contents.

@@ -210,6 +210,9 @@ pub fn drawSelected(self: *Layout, keywords: []const []const u8) !dvui.App.Resul
 
 pub const Region = @import("Region.zig");
 
+/// What persists behind a `Layout` between frames — selections, declared regions, sizes.
+pub const State = @import("State.zig");
+
 /// Declare a region: an area that hosts matching surfaces, holds other regions, or both.
 ///
 /// It is a `dvui.box`. The second argument says what the region *is*; the third is dvui's own
@@ -244,17 +247,22 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: Region.Init,
     // to, defaulting to the `min_size_content` the shape wrote.
     var box_opts = opts;
     var shut_now = false;
-    var size: f32 = 0;
+    // The region's reach along its parent's axis, in points: `extent` is what it shows this
+    // frame (mid-animation it is between the two), `default_extent` what it opens to when the
+    // user has never dragged it.
+    var extent: f32 = 0;
+    var default_extent: f32 = 0;
     if (kind.resize) {
         const given = opts.min_size_content orelse dvui.Size{};
         const default: f32 = switch (axis) {
             .horizontal => given.w,
             .vertical => given.h,
         };
+        default_extent = default;
         // Seeded from what the user last left this region at, by name — so a layout persists
         // across restarts without the framework knowing which regions an app has.
         if (dvui.dataGet(null, id, "_size", f32) == null) {
-            dvui.dataSet(null, id, "_size", self.editor.regionSize(kind.name, default));
+            dvui.dataSet(null, id, "_size", self.editor.regionExtent(kind.name, default));
         }
 
         // The size the user chose. Auto-collapse must never overwrite it, or folding the window
@@ -276,7 +284,7 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: Region.Init,
         // `_size`, so the two agree and nothing kicks off. Easing a drag would be wrong anyway —
         // a sash should sit under the pointer, not lag behind it on a curve.
         if (dvui.animationGet(id, "_ease")) |a| {
-            size = a.value();
+            extent = a.value();
         } else {
             const shown = dvui.dataGet(null, id, "_shown", f32) orelse target;
             if (shown != target) {
@@ -286,14 +294,14 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: Region.Init,
                     .end_time = collapse_ms * std.time.us_per_ms,
                     .easing = dvui.easing.outQuint,
                 });
-                size = shown;
+                extent = shown;
             } else {
-                size = target;
+                extent = target;
             }
         }
-        dvui.dataSet(null, id, "_shown", size);
+        dvui.dataSet(null, id, "_shown", extent);
         dvui.dataSet(null, id, "_size", chosen);
-        if (kind.name.len > 0) self.editor.setRegionSize(kind.name, chosen);
+        if (kind.name.len > 0) self.editor.setRegionExtent(kind.name, chosen);
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
         // wider than the size the user dragged it to simply stays wider, and the sash appears to
@@ -301,12 +309,12 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: Region.Init,
         // makes the stored size exact and stops a plugin's content dictating the app's
         // proportions — the hazard `layout.zig` names in its sizing notes.
         box_opts.min_size_content = switch (axis) {
-            .horizontal => .{ .w = size, .h = given.h },
-            .vertical => .{ .w = given.w, .h = size },
+            .horizontal => .{ .w = extent, .h = given.h },
+            .vertical => .{ .w = given.w, .h = extent },
         };
         box_opts.max_size_content = switch (axis) {
-            .horizontal => .width(size),
-            .vertical => .height(size),
+            .horizontal => .width(extent),
+            .vertical => .height(extent),
         };
         if (parent) |p| {
             // A split declared *before* this region was waiting for a neighbour to resize — the
@@ -322,14 +330,14 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: Region.Init,
             if (kind.keywords.len > 0) self.editor.registerRegion(.{
                 .keywords = kind.keywords,
                 .id = id,
-                .default_size = default,
+                .default_extent = default,
             });
             if (p.resizable_count < max_trays) {
                 p.resizables[p.resizable_count] = id;
                 p.resizable_count += 1;
             }
         }
-        shut_now = size <= 0;
+        shut_now = extent <= 0;
     }
 
     if (!kind.resize) {
@@ -379,7 +387,14 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: Region.Init,
     // drawn, at every size the tray takes.
     if (!shut_now and kind.keywords.len > 0) _ = try self.drawRegionContents(kind, matches);
 
-    return .{ .box = box, .layout = self, .prev_clip = prev_clip };
+    return .{
+        .keywords = kind.keywords,
+        .id = id,
+        .default_extent = default_extent,
+        .box = box,
+        .layout = self,
+        .prev_clip = prev_clip,
+    };
 }
 
 fn roomOf(p: *Container, axis: dvui.enums.Direction) f32 {
