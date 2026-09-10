@@ -2485,6 +2485,25 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
 }
 
 pub fn postInit(editor: *Editor) !void {
+    // Which shell is running, said out loud at startup.
+    //
+    // Both are compiled in and `-Dregion-layout` defaults to off, but they install to the *same*
+    // binary path — so a plain `zig build` silently replaces a region-layout build with the
+    // legacy one, and the only symptom is that everything behaves like the old shell. That cost
+    // several rounds of debugging a sash that was never running.
+    if (comptime build_opts.region_layout) {
+        dvui.log.info("layout: region-based, shape '{s}'", .{@tagName(build_opts.layout)});
+    } else {
+        dvui.log.info("layout: legacy paned shell (build with -Dregion-layout for the region layout)", .{});
+    }
+
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (std.process.Environ.getAlloc(fizzy.processEnviron(), editor.gpa, "FIZZY_SASH_DEBUG")) |v| {
+            editor.gpa.free(v);
+            @import("layout/sash.zig").debug = true;
+            dvui.log.info("layout: sash debug logging on", .{});
+        } else |_| {}
+    }
     sdk.installRuntime(&editor.gpa, &editor.host, null);
 
     // Fizzy commands must be registered against the Editor's *final* address — `init` returns

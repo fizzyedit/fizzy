@@ -65,6 +65,9 @@ pub const max_nesting = 8;
 /// Trays per container. More than a handful on one axis is a layout problem, not a use case.
 pub const max_trays = 6;
 
+/// How long a region takes to fold away or come back. Matches the paned shell's feel.
+pub const collapse_ms: i32 = 220;
+
 pub fn init(editor: *fizzy.Editor) Frame {
     return .{ .editor = editor };
 }
@@ -426,11 +429,35 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
             if (room > 0 and room < Constants.min_window_size[0]) size = 0;
         }
 
+        // Ease toward the target when it moved for a reason other than a drag — the collapse when
+        // the window runs out of room, and the restore when it comes back. Fizzy's paned shell
+        // animated those and the region form was snapping.
+        //
+        // A drag is exempt, and stays exempt without a flag: the sash writes `_shown` alongside
+        // `_size`, so the two agree and nothing kicks off. Easing a drag would be wrong anyway —
+        // a sash should sit under the pointer, not lag behind it on a curve.
+        const target = size;
+        if (dvui.animationGet(id, "_ease")) |a| {
+            size = a.value();
+        } else {
+            const shown = dvui.dataGet(null, id, "_shown", f32) orelse target;
+            if (shown != target) {
+                dvui.animation(id, "_ease", .{
+                    .start_val = shown,
+                    .end_val = target,
+                    .end_time = collapse_ms * std.time.us_per_ms,
+                    .easing = dvui.easing.outQuint,
+                });
+                size = shown;
+            }
+        }
+        dvui.dataSet(null, id, "_shown", size);
+
         // Persist it immediately, so a drag has a correct baseline on its very first press.
         // Without this the sash fell back to the region's *natural* min size when no size had
         // been stored yet, so the first drag jumped the region to that width before applying
         // the delta — the "pops to a slimmer width" report.
-        dvui.dataSet(null, id, "_size", size);
+        dvui.dataSet(null, id, "_size", target);
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
         // wider than the size the user dragged it to simply stays wider, and the sash appears to
@@ -459,7 +486,7 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
                 p.resizable_count += 1;
             }
         }
-        shut_now = size <= 0;
+        shut_now = size <= 0 and target <= 0;
     }
 
     if (!kind.resize) {

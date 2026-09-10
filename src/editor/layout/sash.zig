@@ -8,6 +8,10 @@ const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
 
+/// Set `FIZZY_SASH_DEBUG=1` to log what each drag computes. Temporary: a sash that stops short
+/// has now survived three rounds of reasoning about it, so the next step is numbers.
+pub var debug: bool = false;
+
 /// Thickness of a sash, and how near the pointer must be before it shows itself. Fizzy's tuned
 /// values: a thinner target is measurably harder to grab.
 pub const handle_size: f32 = 10;
@@ -77,7 +81,10 @@ pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
         if (o == target or excess <= 0) continue;
         const had = dvui.dataGet(null, o, "_size", f32) orelse 0;
         const give = @min(had, excess);
-        if (give > 0) dvui.dataSet(null, o, "_size", had - give);
+        if (give > 0) {
+            dvui.dataSet(null, o, "_size", had - give);
+            dvui.dataSet(null, o, "_shown", had - give);
+        }
         excess -= give;
     }
     if (excess > 0) size = @max(opts.min, size - excess);
@@ -249,7 +256,12 @@ pub fn interact(
         else
             current + sign * (p - centre) / srs.s;
 
-        dvui.dataSet(null, target, "_size", resolve(target, want, c, opts));
+        const resolved = resolve(target, want, c, opts);
+        if (debug) dvui.log.err("[sash] p={d} anchor={?d} scale={d} want={d} resolved={d} min={d} max={?d} len={d} base_min={d} handles={d}", .{ p, anchor, srs.s, want, resolved, opts.min, opts.max, c.length, c.base_min, c.handles });
+        dvui.dataSet(null, target, "_size", resolved);
+        // Keep the shown extent in step with the target during a drag, so the region does not
+        // read this as a change to ease into. A sash belongs under the pointer, not on a curve.
+        dvui.dataSet(null, target, "_shown", resolved);
         dvui.refresh(null, @src(), wd.id);
     }
 
