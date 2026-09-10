@@ -25,6 +25,7 @@ const sdk = fizzy.sdk;
 
 const Frame = @import("Frame.zig");
 const chrome = @import("chrome.zig");
+const layout_split = @import("split.zig");
 const Menu = @import("../Menu.zig");
 
 pub const sidebar = sdk.keywords.ide.sidebar;
@@ -39,41 +40,60 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     // for, and it has a fixed width, so it is not one of the split shares.
     _ = chrome.iconRail(f, sidebar) catch {};
 
-    var cols = core.dvui.splitBox(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
-    defer cols.deinit();
+    // Everything right of the rail, stacked: the splitter, then the infobar under it.
+    //
+    // The infobar has to be a **sibling of the splitter, not a child of it**. Drawn inside the
+    // splitter it is a child with no `slot`, so it inherits the previous child's rect — which
+    // put it at the bottom of the *content column*, overlaying the bottom panel and spanning
+    // only that column's width instead of the window. `SplitBox` now logs a stray child rather
+    // than placing it somewhere plausible-looking.
+    //
+    // The right padding is fizzy's own margin, matching `ide.zig`: without it the panel and the
+    // main area butt against the window edge.
+    var stack = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .background = false,
+        .padding = .{ .w = layout_split.handle_size },
+    });
+    defer stack.deinit();
 
-    {   // ── the sidebar ─────────────────────────────────────────────────────────────────────
-        var c = cols.slot(@src());
-        defer c.deinit();
-        _ = chrome.explorerPane(f, sidebar) catch {};
-    }
+    {
+        var cols = core.dvui.splitBox(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+        defer cols.deinit();
 
-    cols.handle();
-
-    {   // ── the content column: main over panel, split the other way ────────────────────────
-        var c = cols.slot(@src());
-        defer c.deinit();
-
-        if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
-            const r = try Menu.draw(editor);
-            if (r != .ok) return r;
+        {   // ── the sidebar ─────────────────────────────────────────────────────────────────
+            var c = cols.slot(@src());
+            defer c.deinit();
+            _ = chrome.explorerPane(f, sidebar) catch {};
         }
 
-        var rows = core.dvui.splitBox(@src(), .{ .dir = .vertical }, .{ .expand = .both });
-        defer rows.deinit();
+        cols.handle();
 
-        {
-            var m = rows.slot(@src());
-            defer m.deinit();
-            _ = try f.drawSelected(main_area);
-        }
+        {   // ── the content column: main over panel, split the other way ────────────────────
+            var c = cols.slot(@src());
+            defer c.deinit();
 
-        rows.handle();
+            if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
+                const r = try Menu.draw(editor);
+                if (r != .ok) return r;
+            }
 
-        {
-            var p = rows.slot(@src());
-            defer p.deinit();
-            _ = chrome.bottomPane(f, bottom) catch {};
+            var rows = core.dvui.splitBox(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            defer rows.deinit();
+
+            {
+                var m = rows.slot(@src());
+                defer m.deinit();
+                _ = try f.drawSelected(main_area);
+            }
+
+            rows.handle();
+
+            {
+                var p = rows.slot(@src());
+                defer p.deinit();
+                _ = chrome.bottomPane(f, bottom) catch {};
+            }
         }
     }
 

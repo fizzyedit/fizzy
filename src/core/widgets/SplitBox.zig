@@ -79,6 +79,9 @@ near: ?usize = null,
 near_dist: f32 = std.math.floatMax(f32),
 /// The boundary being dragged, if any. Persisted so a drag survives across frames.
 drag_index: ?usize = null,
+/// Set by `slot`, cleared by the child it introduces. A child arriving while this is false was
+/// added without a `slot` — see `rectFor`.
+expect_child: bool = false,
 
 /// A layout with more regions on one axis than this is a design problem, not a use case. The
 /// cap keeps `draggable` a fixed-size bitset rather than another allocation.
@@ -177,6 +180,7 @@ fn fractionAt(self: *const SplitBox, index: usize, axis_pos: f32) f32 {
 pub fn slot(self: *SplitBox, src: std.builtin.SourceLocation) *dvui.BoxWidget {
     const index = self.placed;
     self.placed += 1;
+    self.expect_child = true;
     // `id_extra` by index, so a child keeps its identity when siblings come and go — without it
     // every region's state would shift by one the moment a panel is hidden.
     const b = dvui.widgetAlloc(dvui.BoxWidget);
@@ -346,7 +350,20 @@ pub fn data(self: *SplitBox) *dvui.WidgetData {
 pub fn rectFor(self: *SplitBox, id: dvui.Id, min_size: dvui.Size, e: dvui.Options.Expand, g: dvui.Options.Gravity) dvui.Rect {
     // Children arrive in `slot` order, and `slot` has already advanced `placed` — so the child
     // now asking for its rect is the one at `placed - 1`.
-    _ = id;
+    if (!self.expect_child) {
+        // A widget was created while this box was the parent, but without a `slot` — usually a
+        // `defer box.deinit()` that outlives the layout body, so the next thing drawn lands
+        // inside the splitter by accident. Without this it silently inherits the previous
+        // child's rect and looks *almost* right: fizzy's infobar ended up at the bottom of the
+        // content column, overlaying the panel and spanning only that column. Say so, and give
+        // it the whole content rect so it is obvious rather than plausible.
+        dvui.log.err("{s}:{d}: SplitBox {x} child {x} was added without a slot()", .{
+            self.wd.src.file, self.wd.src.line, self.wd.id, id,
+        });
+        dvui.debug.widget_id = id;
+        return dvui.placeIn(self.wd.contentRect().justSize(), min_size, e, g);
+    }
+    self.expect_child = false;
     const index = if (self.placed == 0) 0 else self.placed - 1;
     return dvui.placeIn(self.childRect(index), min_size, e, g);
 }
