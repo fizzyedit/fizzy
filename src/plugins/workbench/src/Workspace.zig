@@ -3,7 +3,6 @@ const builtin = @import("builtin");
 
 const core = @import("core");
 const dvui = @import("dvui");
-const wdvui = core.dvui;
 const sdk = @import("fizzy_sdk");
 const runtime = @import("runtime.zig");
 const icons = @import("icons");
@@ -226,7 +225,7 @@ fn drawTabs(self: *Workspace) void {
 
                 defer hbox.deinit();
 
-                const tab_hovered = wdvui.hovered(hbox.data());
+                const tab_hovered = core.widgets.hovered(hbox.data());
 
                 if (reorderable.floating()) {
                     self.tabs_drag_index = i;
@@ -239,14 +238,14 @@ fn drawTabs(self: *Workspace) void {
                     if (prev_same_group_index) |prev_index| {
                         if (i == prev_index) {
                             // This tab is directly to the left of the active tab.
-                            wdvui.drawEdgeShadow(hbox.data().rectScale(), .right, .{});
+                            core.draw.drawEdgeShadow(hbox.data().rectScale(), .right, .{});
                         }
                     }
 
                     if (next_same_group_index) |next_index| {
                         if (i == next_index) {
                             // This tab is directly to the right of the active tab.
-                            wdvui.drawEdgeShadow(hbox.data().rectScale(), .left, .{});
+                            core.draw.drawEdgeShadow(hbox.data().rectScale(), .left, .{});
                         }
                     }
                 }
@@ -263,12 +262,12 @@ fn drawTabs(self: *Workspace) void {
                 const tab_doc_path = doc.owner.documentPath(doc);
                 const tab_icon_color = dvui.themeGet().color(.control, .text);
                 {
-                    var icon_slot = wdvui.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .x = 4, .w = 2 } });
+                    var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .x = 4, .w = 2 } });
                     defer icon_slot.deinit();
                     if (!runtime.host().drawFileIcon(std.fs.path.extension(tab_doc_path), tab_doc_path, tab_icon_color)) {
                         dvui.icon(@src(), "file_icon", icons.tvg.lucide.file, .{
                             .stroke_color = tab_icon_color,
-                        }, wdvui.treeRowIconOptions(.{}));
+                        }, core.widgets.treeRowIconOptions(.{}));
                     }
                 }
 
@@ -278,13 +277,13 @@ fn drawTabs(self: *Workspace) void {
                     .gravity_y = 0.5,
                 });
 
-                const close_inner = wdvui.windowHeaderCloseInnerSide();
+                const close_inner = core.dialogs.windowHeaderCloseInnerSide();
 
                 const status_close_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .none,
                     .gravity_y = 0.5,
                     .margin = dvui.Rect.all(0),
-                    .padding = wdvui.tab_status_inset,
+                    .padding = core.widgets.tab_status_inset,
                     .min_size_content = .{ .w = close_inner, .h = close_inner },
                 });
                 defer status_close_box.deinit();
@@ -296,14 +295,14 @@ fn drawTabs(self: *Workspace) void {
                 // atomic load — the write side uses an atomic store in matching `save*` paths.
                 const save_flash_elapsed = doc.owner.timeSinceSaveCompleteNs(doc);
                 const save_in_check_phase = if (save_flash_elapsed) |elapsed|
-                    wdvui.bubbleSpinnerSaveInCheckPhase(elapsed)
+                    core.dialogs.bubbleSpinnerSaveInCheckPhase(elapsed)
                 else
                     false;
                 const save_blocks_tab_close = doc.owner.isDocumentSaving(doc) or
                     (doc.owner.showsSaveStatusIndicator(doc) and !save_in_check_phase);
 
                 if (save_blocks_tab_close) {
-                    wdvui.bubbleSpinner(@src(), .{
+                    core.dialogs.bubbleSpinner(@src(), .{
                         .id_extra = i *% 16 + 5,
                         .expand = .none,
                         .min_size_content = .{ .w = close_inner, .h = close_inner },
@@ -314,7 +313,7 @@ fn drawTabs(self: *Workspace) void {
                         .complete_elapsed_ns = save_flash_elapsed,
                     });
                 } else if (save_in_check_phase and !tab_hovered) {
-                    wdvui.bubbleSpinner(@src(), .{
+                    core.dialogs.bubbleSpinner(@src(), .{
                         .id_extra = i *% 16 + 5,
                         .expand = .none,
                         .min_size_content = .{ .w = close_inner, .h = close_inner },
@@ -326,7 +325,7 @@ fn drawTabs(self: *Workspace) void {
                     });
                 } else {
                     var tab_close_button: dvui.ButtonWidget = undefined;
-                    tab_close_button.init(@src(), .{ .draw_focus = false }, wdvui.tabCloseButtonOptions(.{
+                    tab_close_button.init(@src(), .{ .draw_focus = false }, core.widgets.tabCloseButtonOptions(.{
                         .expand = .none,
                         .min_size_content = .{ .w = close_inner, .h = close_inner },
                         .gravity_x = 0.5,
@@ -393,7 +392,7 @@ fn drawTabs(self: *Workspace) void {
                 }
 
                 if (selected and !reorderable.floating()) {
-                    wdvui.drawTabActiveIndicator(
+                    core.draw.drawTabActiveIndicator(
                         reorderable.data().borderRectScale(),
                         dvui.themeGet().color(.window, .text),
                     );
@@ -768,7 +767,7 @@ pub fn drawCanvas(self: *Workspace) !void {
             // The reveal's own id is source-derived and keyed by pane, deliberately not
             // `canvas_vbox`'s: that box's id moves with the surrounding layout (panel toggles,
             // splits), which would restart the fade on changes that aren't content swaps.
-            const rv = core.dvui.reveal(
+            const rv = core.anim.reveal(
                 dvui.Id.extendId(null, @src(), @truncate(self.grouping)),
                 doc.id,
                 .{},
@@ -880,7 +879,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .gravity_x = 0.5,
                     .expand = .horizontal,
                     .padding = dvui.Rect.all(2),
-                    .color_fill = wdvui.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
+                    .color_fill = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
                     .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
                     .color_fill_press = dvui.themeGet().color(.window, .fill_press),
                 });
@@ -889,7 +888,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                 button.processEvents();
                 button.drawBackground();
 
-                wdvui.labelWithKeybind(
+                core.draw.labelWithKeybind(
                     "New File",
                     dvui.currentWindow().keybinds.get("new_file") orelse .{},
                     true,
@@ -908,7 +907,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .gravity_x = 0.5,
                     .expand = .horizontal,
                     .padding = dvui.Rect.all(2),
-                    .color_fill = wdvui.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
+                    .color_fill = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
                     .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
                     .color_fill_press = dvui.themeGet().color(.window, .fill_press),
                 });
@@ -917,7 +916,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                 button.processEvents();
                 button.drawBackground();
 
-                wdvui.labelWithKeybind(
+                core.draw.labelWithKeybind(
                     "Open Folder",
                     dvui.currentWindow().keybinds.get("open_folder") orelse .{},
                     true,
@@ -936,7 +935,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .gravity_x = 0.5,
                     .expand = .horizontal,
                     .padding = dvui.Rect.all(2),
-                    .color_fill = wdvui.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
+                    .color_fill = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
                     .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
                     .color_fill_press = dvui.themeGet().color(.window, .fill_press),
                 });
@@ -945,7 +944,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                 button.processEvents();
                 button.drawBackground();
 
-                wdvui.labelWithKeybind(
+                core.draw.labelWithKeybind(
                     "Open Files",
                     dvui.currentWindow().keybinds.get("open_files") orelse .{},
                     true,
@@ -999,7 +998,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .id_extra = i,
                     .margin = dvui.Rect.all(1),
                     .padding = dvui.Rect.all(2),
-                    .color_fill = wdvui.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
+                    .color_fill = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
                     .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
                     .color_fill_press = dvui.themeGet().color(.window, .fill_press),
                     .color_text = dvui.themeGet().color(.control, .text).opacity(0.5),
@@ -1012,7 +1011,7 @@ pub fn drawHomePage(_: *Workspace) !void {
             scroll_area.deinit();
             // Faint on purpose here (the list sits on the empty-workspace backdrop, not in a
             // panel), unlike the default weight every other viewport uses.
-            wdvui.drawScrollEdgeShadows(scroll_rs, null, &si, .{ .opacity = 0.15 });
+            core.draw.drawScrollEdgeShadows(scroll_rs, null, &si, .{ .opacity = 0.15 });
         }
     }
 }

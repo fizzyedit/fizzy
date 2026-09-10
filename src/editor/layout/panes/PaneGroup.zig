@@ -9,7 +9,7 @@ const Pane = @import("Pane.zig");
 pub const PaneGroup = @This();
 const Layout = @import("../Layout.zig");
 
-paned: *fizzy.dvui.PanedWidget = undefined,
+paned: *fizzy.widgets.PanedWidget = undefined,
 scroll_info: dvui.ScrollInfo = .{
     .horizontal = .auto,
 },

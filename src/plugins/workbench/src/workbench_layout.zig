@@ -4,7 +4,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const runtime = @import("runtime.zig");
-const Split = core.dvui.Split;
+const Split = core.widgets.Split;
 const Workbench = @import("Workbench.zig");
 const Workspace = @import("Workspace.zig");
 
@@ -84,7 +84,7 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
 /// splitting anything else in the app — it was a second implementation of the same idea, with
 /// its own ratios, its own handle and its own feel.
 ///
-/// Now it is a flat loop: N panes on an axis with `core.dvui.Split` between them, sized in points
+/// Now it is a flat loop: N panes on an axis with `core.widgets.Split` between them, sized in points
 /// like every other region. The `index` parameter stays because it is on the host vtable, and is
 /// the first pane to draw.
 pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
@@ -116,7 +116,7 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
 
         if (!first) {
             // The divider before this pane drags *this* pane, anchored to its far edge.
-            var divider = core.dvui.split(@src(), .horizontal, i);
+            var divider = core.widgets.split(@src(), .horizontal, i);
             defer divider.deinit();
             divider.drag(row, id, -1, .{}, .{
                 .extent = row.data().contentRect().w,

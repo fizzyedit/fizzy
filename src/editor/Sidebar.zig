@@ -76,7 +76,7 @@ pub fn draw(_: Sidebar, editor: *Editor, f: *Layout, keywords: []const []const u
         const si = scroll.si.*;
         scroll.deinit();
 
-        fizzy.dvui.drawScrollEdgeShadows(pane.data().contentRectScale(), null, &si, .{});
+        fizzy.draw.drawScrollEdgeShadows(pane.data().contentRectScale(), null, &si, .{});
 
         pane.deinit();
     }

@@ -16,7 +16,7 @@
 //!
 //! Usage:
 //! ```zig
-//! var strip: Tabs = .init(@src(), &self.tab_state, .{ .drag_name = drag_name });
+//! var strip: Tabs = .init(@src(), &self.tab_info, .{ .drag_name = drag_name });
 //! defer strip.deinit();
 //! for (items, 0..) |item, i| {
 //!     var t = strip.tab(@src(), i, i == active_index);
@@ -29,21 +29,22 @@ const dvui = @import("dvui");
 
 const Tabs = @This();
 
-/// Per-strip drag state. The caller owns it so it survives across frames — this is the trio
-/// that was duplicated verbatim on both sides.
-pub const State = struct {
+/// A strip's live drag state, owned by the caller so it survives across frames — the same
+/// arrangement as `dvui.ScrollInfo`, and named for it: you keep one and pass it in, and reading
+/// it afterwards is how you learn a tab moved.
+pub const TabInfo = struct {
     drag_index: ?usize = null,
     removed_index: ?usize = null,
     insert_before_index: ?usize = null,
 
     /// True when a drag finished this frame and the caller should apply a move.
-    pub fn pendingMove(self: State) ?struct { from: usize, to: usize } {
+    pub fn pendingMove(self: TabInfo) ?struct { from: usize, to: usize } {
         const from = self.removed_index orelse return null;
         const to = self.insert_before_index orelse return null;
         return .{ .from = from, .to = if (to > from) to - 1 else to };
     }
 
-    pub fn clearMove(self: *State) void {
+    pub fn clearMove(self: *TabInfo) void {
         self.removed_index = null;
         self.insert_before_index = null;
     }
@@ -59,14 +60,14 @@ pub const Options = struct {
     scroll: bool = true,
 };
 
-state: *State,
+info: *TabInfo,
 opts: Options,
 outer: *dvui.BoxWidget,
 scroll_area: ?*dvui.ScrollAreaWidget,
 reorder: *dvui.ReorderWidget,
 inner: *dvui.BoxWidget,
 
-pub fn init(src: std.builtin.SourceLocation, state: *State, opts: Options) Tabs {
+pub fn init(src: std.builtin.SourceLocation, info: *TabInfo, opts: Options) Tabs {
     const outer = dvui.box(src, .{ .dir = .horizontal }, .{
         .expand = .none,
         .margin = dvui.Rect.all(0),
@@ -105,7 +106,7 @@ pub fn init(src: std.builtin.SourceLocation, state: *State, opts: Options) Tabs 
     });
 
     return .{
-        .state = state,
+        .info = info,
         .opts = opts,
         .outer = outer,
         .scroll_area = scroll_area,
@@ -191,11 +192,11 @@ pub fn tab(self: *Tabs, src: std.builtin.SourceLocation, index: usize, selected:
     });
 
     const floating = reorderable.floating();
-    if (floating) self.state.drag_index = index;
+    if (floating) self.info.drag_index = index;
     if (reorderable.removed()) {
-        self.state.removed_index = index;
+        self.info.removed_index = index;
     } else if (reorderable.insertBefore()) {
-        self.state.insert_before_index = index;
+        self.info.insert_before_index = index;
     }
 
     const box = dvui.widgetAlloc(dvui.BoxWidget);
@@ -220,7 +221,7 @@ pub fn tab(self: *Tabs, src: std.builtin.SourceLocation, index: usize, selected:
 /// tabs drawn, which is the index a drop past the end inserts at.
 pub fn finalSlot(self: *Tabs, count: usize) void {
     if (self.reorder.finalSlot()) {
-        self.state.insert_before_index = count;
+        self.info.insert_before_index = count;
     }
 }
 

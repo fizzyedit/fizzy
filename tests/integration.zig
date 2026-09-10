@@ -367,7 +367,7 @@ test "the highlight query range covers every byte the viewport shows" {
 
 // -- content-swap reveal ------------------------------------------------------------------------
 
-// `core.dvui.reveal` hides the one frame dvui needs to size newly-swapped content, then fades it
+// `core.anim.reveal` hides the one frame dvui needs to size newly-swapped content, then fades it
 // in (see `src/core/reveal.zig`). The phase machine is unit-tested on its own; what needs a real
 // window is the wiring — that the phases actually reach `dvui`'s alpha, that the animation is
 // registered and completes, and that a settled pane ends fully opaque instead of stuck dim.
@@ -379,7 +379,7 @@ fn revealFrame() !dvui.App.Result {
     var b = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer b.deinit();
 
-    const rv = fizzy.core.dvui.reveal(b.data().id, reveal_key, .{});
+    const rv = fizzy.core.anim.reveal(b.data().id, reveal_key, .{});
     defer rv.deinit();
 
     // Sampled inside the reveal's scope — this is what any content drawn here would be scaled by.
@@ -439,7 +439,7 @@ test "switching to different content re-reveals" {
 // full-bleed for a document canvas, a rounded card for the homepage / pack window / store page),
 // so fading the incoming one up exposes the window behind it and changes the corner shape
 // mid-swap. Instead the *outgoing* provider draws one more time into a texture, and that snapshot
-// fades out over the incoming one — see `core.dvui.transition` and `Editor.drawActiveCenter`.
+// fades out over the incoming one — see `core.anim.transition` and `Editor.drawActiveCenter`.
 //
 // What matters here is the draw bookkeeping: the outgoing provider gets exactly one extra draw,
 // on the swap frame, and never again. On the testing backend (no render targets) that extra draw

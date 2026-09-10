@@ -5,7 +5,7 @@ const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const Document = @import("Document.zig");
 
-const CanvasWidget = core.dvui.CanvasWidget;
+const CanvasWidget = core.widgets.CanvasWidget;
 
 const checker_even: [4]u8 = .{ 255, 255, 255, 255 };
 const checker_odd: [4]u8 = .{ 175, 175, 175, 255 };

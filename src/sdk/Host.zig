@@ -89,13 +89,13 @@ pub const FileKind = struct {
 ///
 /// One type rather than the `FileIcon` / `PluginIcon` pair it replaces. Those differed only in
 /// what fizzy told the drawer — a file's extension, path and colour, or nothing at all — and
-/// `core.dvui.treeRowGlyph` already documented a single contract for both: "fizzy reserves the
+/// `core.widgets.treeRowGlyph` already documented a single contract for both: "fizzy reserves the
 /// rect; the plugin draws into it with `expand = .ratio`". Two registries, two registrars and
 /// two dispatchers for one idea is the kind of accidental specialisation that makes the surface
 /// look bigger than it is.
 ///
 /// **Size is the host's to decide, not yours.** Every call site reserves a fixed square slot
-/// (`core.dvui.treeRowGlyph`, sized from the user's font settings) and your painter runs inside
+/// (`core.widgets.treeRowGlyph`, sized from the user's font settings) and your painter runs inside
 /// it. Draw with `expand = .ratio` so your artwork fits that slot at its own aspect ratio; a
 /// hard-coded size or scale makes tree rows taller than every other row, and drawing without a
 /// reserved slot (e.g. bare in a tab row) lets ratio+gravity center the icon in the whole parent.
@@ -995,7 +995,7 @@ pub fn registerPainter(self: *Host, drawer: Painter) !void {
 ///    → that plugin's logo
 ///
 /// Returns false when nothing claimed it — caller draws a generic filesystem default.
-/// **Caller must reserve a `core.dvui.treeRowGlyph` slot**; drawers use `expand = .ratio`.
+/// **Caller must reserve a `core.widgets.treeRowGlyph` slot**; drawers use `expand = .ratio`.
 pub fn drawFileIcon(self: *Host, ext: []const u8, path: []const u8, color: dvui.Color) bool {
     // Language plugins (zig, json, markdown, …) own the identity of their formats even when
     // `text` owns the document — prefer their logo over the generic code glyph.
@@ -1656,7 +1656,7 @@ fn dispatchNewDocumentToPlugin(self: *Host, owner: *Plugin, parent_path: ?[]cons
 fn newDocumentChooserActive(win: *dvui.Window) bool {
     var it = win.dialogs.iterator(null);
     while (it.next()) |d| {
-        const df = dvui.dataGet(null, d.id, "_displayFn", core.dvui.DisplayFn) orelse continue;
+        const df = dvui.dataGet(null, d.id, "_displayFn", core.dialogs.DisplayFn) orelse continue;
         if (df == newDocumentChooserDisplay) return true;
     }
     return false;
@@ -1664,11 +1664,11 @@ fn newDocumentChooserActive(win: *dvui.Window) bool {
 
 /// Modal picker shown when more than one plugin can create a new document: a rounded-square,
 /// drop-shadowed button per candidate (its registered plugin-store icon, falling back to its
-/// name) via `core.dvui.dialog` — the same chrome every other fizzy dialog uses. Picking one
+/// name) via `core.dialogs.dialog` — the same chrome every other fizzy dialog uses. Picking one
 /// dispatches exactly as `requestNewDocument` would with a single candidate.
 fn showNewDocumentChooser(parent_path: ?[]const u8, id_extra: usize) void {
     if (newDocumentChooserActive(dvui.currentWindow())) return;
-    var mutex = core.dvui.dialog(@src(), .{
+    var mutex = core.dialogs.dialog(@src(), .{
         .displayFn = newDocumentChooserDisplay,
         .title = "New File",
         .ok_label = "",
@@ -1708,7 +1708,7 @@ fn newDocumentChooserDisplay(id: dvui.Id) anyerror!bool {
 
         if (newDocumentChooserButton(host, plugin, index)) {
             host.dispatchNewDocumentToPlugin(plugin, parent_path, id_extra);
-            core.dvui.closeFloatingDialogAnchored();
+            core.dialogs.closeFloatingDialogAnchored();
         }
 
         _ = dvui.spacer(@src(), .{ .id_extra = index, .min_size_content = .{ .w = 1, .h = 6 } });

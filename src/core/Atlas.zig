@@ -1,7 +1,8 @@
 //! A loaded spritesheet: GPU `source` texture + indexed sprite metadata.
 //!
-//! The fizzy's `editor.atlas` uses this minimal type for UI icons. The pixel-art
-//! plugin's packed output uses the richer `Internal.Atlas` instead.
+//! **Only pixi uses this.** Fizzy's own icons are tvg now; pixi loads its packed UI atlas
+//! through this from inside its dylib, and its build-time packer has a richer `Atlas.zig` of
+//! its own. It should move into pixi — see the note in `core.zig`.
 const std = @import("std");
 const dvui = @import("dvui");
 

@@ -220,8 +220,8 @@ pub fn menuItemWithHotkey(src: std.builtin.SourceLocation, label_str: []const u8
     // here would fire at function exit, *after* the explicit `mi.deinit()` call, closing the
     // parent before its child and panicking ("widget is not closed within its parent").
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .id_extra = opts.id_extra orelse 0 });
-    fizzy.dvui.menuRowIcon(icon, opts.color_text orelse dvui.themeGet().color(.window, .text), enabled, opts.id_extra orelse 0);
-    fizzy.dvui.labelWithKeybind(label_str, hotkey, enabled, opts, opts);
+    fizzy.draw.menuRowIcon(icon, opts.color_text orelse dvui.themeGet().color(.window, .text), enabled, opts.id_extra orelse 0);
+    fizzy.draw.labelWithKeybind(label_str, hotkey, enabled, opts, opts);
     row.deinit();
 
     mi.deinit();
@@ -241,7 +241,7 @@ pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opt
     label_opts.margin = dvui.Rect.all(0);
     label_opts.padding = dvui.Rect.all(0);
 
-    if (fizzy.dvui.hovered(mi.data())) {
+    if (fizzy.widgets.hovered(mi.data())) {
         label_opts.color_text = dvui.themeGet().color(.window, .text);
     }
 
@@ -273,7 +273,7 @@ pub fn menuItemWithChevron(src: std.builtin.SourceLocation, label_str: []const u
     label_opts.margin = dvui.Rect.all(0);
     label_opts.padding = dvui.Rect.all(0);
 
-    if (fizzy.dvui.hovered(mi.data())) {
+    if (fizzy.widgets.hovered(mi.data())) {
         label_opts.color_text = dvui.themeGet().color(.window, .text);
     }
 

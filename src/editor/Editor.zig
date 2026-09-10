@@ -2440,7 +2440,7 @@ pub fn postInit(editor: *Editor) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (std.process.Environ.getAlloc(fizzy.processEnviron(), editor.gpa, "FIZZY_SPLIT_DEBUG")) |v| {
             editor.gpa.free(v);
-            core.dvui.Split.debug = true;
+            core.widgets.Split.debug = true;
             dvui.log.info("layout: split debug logging on", .{});
         } else |_| {}
     }
@@ -2748,8 +2748,8 @@ fn fizzyDrawMenuItem(ctx: *anyopaque, title: []const u8, command_id: ?[]const u8
     const id_extra: usize = @truncate(std.hash.Wyhash.hash(0, title));
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .id_extra = id_extra });
     defer row.deinit();
-    fizzy.dvui.menuRowIcon(icon, dvui.themeGet().color(.window, .text), enabled, id_extra);
-    fizzy.dvui.labelWithKeybind(title, kb, enabled, .{ .expand = .horizontal }, .{ .expand = .horizontal });
+    fizzy.draw.menuRowIcon(icon, dvui.themeGet().color(.window, .text), enabled, id_extra);
+    fizzy.draw.labelWithKeybind(title, kb, enabled, .{ .expand = .horizontal }, .{ .expand = .horizontal });
     return clicked;
 }
 
@@ -3059,7 +3059,7 @@ pub fn clearAllWorkspaceCenter(editor: *Editor) void {
 /// needs a frame to size the incoming subtree from a cold min-size cache.
 ///
 /// Instead the outgoing provider gets one more draw, recorded into a texture rather than shown,
-/// and that snapshot fades out over the incoming provider. See `core.dvui.transition`.
+/// and that snapshot fades out over the incoming provider. See `core.anim.transition`.
 fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
     const center = editor.host.activeCenter() orelse {
         editor.layout.center_transition.discard();
@@ -3117,7 +3117,7 @@ fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
         .slot = slot,
     };
 
-    var frame = core.dvui.transition(&editor.layout.center_transition, .{
+    var frame = core.anim.transition(&editor.layout.center_transition, .{
         .key = std.hash.Wyhash.hash(0, center.id),
         .rect = rs.r,
         .draw_previous = if (prev_id != null) CaptureCtx.draw else null,
@@ -4038,7 +4038,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
     }
 
-    defer fizzy.dvui.modal_dim_titlebar = false;
+    defer fizzy.dialogs.modal_dim_titlebar = false;
     editor.setTitlebarColor();
     editor.setWindowStyle();
 
@@ -4448,7 +4448,7 @@ pub fn handleNativeMenuAction(editor: *Editor, tag: usize) !void {
 }
 
 pub fn setTitlebarColor(editor: *Editor) void {
-    const color = if (fizzy.dvui.modal_dim_titlebar) dvui.themeGet().color(.control, .fill).lerp(.black, if (dvui.themeGet().dark) 60.0 / 255.0 else 80.0 / 255.0) else dvui.themeGet().color(.control, .fill);
+    const color = if (fizzy.dialogs.modal_dim_titlebar) dvui.themeGet().color(.control, .fill).lerp(.black, if (dvui.themeGet().dark) 60.0 / 255.0 else 80.0 / 255.0) else dvui.themeGet().color(.control, .fill);
 
     if (!std.mem.eql(u8, &editor.last_titlebar_color.toRGBA(), &color.toRGBA())) {
         editor.last_titlebar_color = color;
@@ -5053,13 +5053,13 @@ pub fn cancelAllLoadingJobs(editor: *Editor) void {
     }
 }
 
-/// Iterates the save-complete toast subwindow (`fizzy.dvui.save_toast_subwindow_id`) and
+/// Iterates the save-complete toast subwindow (`fizzy.dialogs.save_toast_subwindow_id`) and
 /// renders each toast inside a self-sized floating column anchored to the bottom-center of
 /// the viewport, so back-to-back saves stack vertically rather than overlapping. Each toast's
 /// display function (`saveCompleteToastDisplay`) builds its own card body + fade-out animator
 /// + self-remove on timer expiry.
 pub fn drawSaveToasts(editor: *Editor) void {
-    if (dvui.toastsFor(fizzy.dvui.save_toast_subwindow_id) == null) return;
+    if (dvui.toastsFor(fizzy.dialogs.save_toast_subwindow_id) == null) return;
 
     // Anchor at the center of the active workspace's canvas rect (in physical pixels). Using
     // `from` + `from_gravity = 0.5,0.5` lets the FloatingWidget self-size to the toast column
@@ -5088,7 +5088,7 @@ pub fn drawSaveToasts(editor: *Editor) void {
     var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .none });
     defer col.deinit();
 
-    var it = dvui.toastsFor(fizzy.dvui.save_toast_subwindow_id) orelse return;
+    var it = dvui.toastsFor(fizzy.dialogs.save_toast_subwindow_id) orelse return;
     while (it.next()) |t| {
         t.display(t.id) catch |err| {
             dvui.log.err("save toast display: {any}", .{err});
@@ -5208,7 +5208,7 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
         // Single-line layout: small bubble spinner + "<basename> — <phase>…" on one baseline.
         // Keeps multi-file load lists compact (each row ~26 nat-px tall) while still showing
         // both the file identity and what's currently happening to it.
-        fizzy.dvui.bubbleSpinner(@src(), .{
+        fizzy.dialogs.bubbleSpinner(@src(), .{
             .min_size_content = .{ .w = 18, .h = 18 },
             .gravity_y = 0.5,
             .color_text = dvui.themeGet().color(.content, .text),

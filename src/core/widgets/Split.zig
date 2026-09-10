@@ -115,7 +115,7 @@ pub const Options = struct {
 /// `dvui.box` reserves the gap the way it reserves any other child.
 ///
 /// `init` + `deinit`, the pairing every dvui widget uses, because that is what this is. The
-/// verb form lives in the namespace above the type — `core.dvui.split(...)` for a plugin,
+/// verb form lives in the namespace above the type — `core.widgets.split(...)` for a plugin,
 /// `Layout.split(...)` for a shape — exactly as `dvui.box()` sits above `BoxWidget.init`.
 pub fn init(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_extra: usize) Split {
     return .{ .axis = axis, .box = dvui.box(src, .{ .dir = axis }, .{

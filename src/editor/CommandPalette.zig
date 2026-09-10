@@ -12,12 +12,12 @@
 //! straight back to file search, as it does in VSCode.
 
 const std = @import("std");
+const core = @import("core");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const fizzy = @import("../fizzy.zig");
 const fuzzy = @import("core").fuzzy;
-const wdvui = @import("core").dvui;
 const keymap = @import("keymap/keymap.zig");
 const Keybinds = @import("Keybinds.zig");
 
@@ -154,7 +154,7 @@ pub fn close(self: *CommandPalette) void {
 
 /// Whether the panel's height is still moving — either auto-sizing to a new content height or
 /// collapsing on close.
-fn animatingGeometry(self: *const CommandPalette, win: *fizzy.dvui.FloatingWindowWidget) bool {
+fn animatingGeometry(self: *const CommandPalette, win: *fizzy.widgets.FloatingWindowWidget) bool {
     if (self.closing) return true;
     return dvui.animationGet(win.data().id, "_auto_height") != null;
 }
@@ -434,14 +434,14 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
 
     // Same fizzy as Grid Layout / other dialogs: modal floating window focuses its subwindow
     // (so the text entry can receive keys) and paints a black scrim via `color_text = .black`.
-    fizzy.dvui.modal_dim_titlebar = true;
+    fizzy.dialogs.modal_dim_titlebar = true;
     // Scrim tracks the reveal, so the dim arrives and leaves with the panel instead of snapping
     // to full black on frame one and popping off at the end of the outro. Same base values dvui
     // picks per theme (60 dark / 80 light), scaled.
     const dim_base: f32 = if (theme.dark) 60 else 80;
     const dim_alpha: u8 = @intFromFloat(@round(dim_base * std.math.clamp(self.anim, 0, 1)));
 
-    var win = fizzy.dvui.floatingWindow(@src(), .{
+    var win = fizzy.widgets.floatingWindow(@src(), .{
         .modal = true,
         .modal_alpha = dim_alpha,
         .open_flag = &self.fw_open,
@@ -677,17 +677,17 @@ fn drawRow(
             // Same fixed glyph slot as the file tree / tabs — `drawFileIcon` drawers use
             // `expand = .ratio` and must not size against the whole palette row.
             {
-                var icon_slot = wdvui.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .w = 4 } });
+                var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .w = 4 } });
                 defer icon_slot.deinit();
                 if (!editor.host.drawFileIcon(ext, abs, text_color)) {
                     dvui.icon(@src(), "file", icons.tvg.lucide.file, .{
                         .stroke_color = text_color,
-                    }, wdvui.treeRowIconOptions(.{}));
+                    }, core.widgets.treeRowIconOptions(.{}));
                 }
             }
             // Basename is what users type most often; `.plain = false` still weights it like a
             // path segment when the query hits directory letters that also appear in the name.
-            wdvui.labelHighlighted(@src(), std.fs.path.basename(abs), query, false, .{
+            core.draw.labelHighlighted(@src(), std.fs.path.basename(abs), query, false, .{
                 .gravity_y = 0.5,
                 .padding = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
                 .color_text = text_color,
@@ -700,7 +700,7 @@ fn drawRow(
                 const dir = std.fs.path.dirname(abs) orelse root;
                 const rel = std.fs.path.relativePosix(arena, ".", root, dir) catch "";
                 if (rel.len > 0) {
-                    wdvui.labelHighlighted(@src(), rel, query, false, .{
+                    core.draw.labelHighlighted(@src(), rel, query, false, .{
                         .gravity_y = 0.5,
                         .gravity_x = 0.0,
                         .color_text = text_color.opacity(0.5),
@@ -714,7 +714,7 @@ fn drawRow(
             // Same fixed glyph slot the menu bar uses for this command's icon (`Menu.zig`'s
             // `menuRowIcon`) — reserved even when `c.icon` is null, so rows with and without an
             // icon still line up in the same column.
-            wdvui.menuRowIcon(c.icon, text_color, c.enabled, i);
+            core.draw.menuRowIcon(c.icon, text_color, c.enabled, i);
             // Title over source, stacked — the same shape a settings row uses for its name and
             // the key beneath it (`SettingRow.header`). Sitting side by side, a source of varying
             // width pushed every title's neighbour out of line; stacked, the titles all start on
@@ -728,7 +728,7 @@ fn drawRow(
                 });
                 defer stack.deinit();
 
-                wdvui.labelHighlighted(@src(), c.title, query, true, .{
+                core.draw.labelHighlighted(@src(), c.title, query, true, .{
                     .margin = dvui.Rect.all(0),
                     .padding = dvui.Rect.all(0),
                     .color_text = color,
@@ -737,7 +737,7 @@ fn drawRow(
                 // Dimmed provenance in the mono face — highlighted too, so querying "pixi"
                 // lights up the source rather than looking like a miss on the title.
                 if (c.source) |src| {
-                    wdvui.labelHighlighted(@src(), src, query, true, .{
+                    core.draw.labelHighlighted(@src(), src, query, true, .{
                         .margin = dvui.Rect.all(0),
                         .padding = dvui.Rect.all(0),
                         .font = dvui.Font.theme(.mono).larger(-1),

@@ -29,7 +29,7 @@ pub fn request(default_filename: []const u8, kind: Kind) void {
         dvui.log.err("Web Save As: out of memory", .{});
         return;
     };
-    var mutex = fizzy.dvui.dialog(@src(), .{
+    var mutex = fizzy.dialogs.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
         .title = kind.dialogTitle(),
@@ -45,7 +45,7 @@ pub fn request(default_filename: []const u8, kind: Kind) void {
 pub fn active(win: *dvui.Window) bool {
     var it = win.dialogs.iterator(null);
     while (it.next()) |d| {
-        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dvui.DisplayFn) orelse continue;
+        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dialogs.DisplayFn) orelse continue;
         if (df == dialog) return true;
     }
     return false;

@@ -4,7 +4,7 @@ const dvui = @import("dvui");
 const fizzy = @import("../../../fizzy.zig");
 
 const PaneGroup = @import("PaneGroup.zig");
-const Split = @import("core").dvui.Split;
+const Split = @import("core").widgets.Split;
 const Layout = @import("../Layout.zig");
 const Pane = @import("Pane.zig");
 
@@ -66,7 +66,7 @@ pub fn rebuildWorkspaces(panel: *PaneGroup, f: *Layout, keywords: []const []cons
 ///
 /// This recursed the same way `workbench_layout` did — a two-child paned per level with the rest
 /// nested in the second half — which made it the third implementation of splitting in the tree.
-/// It is now a flat loop over `core.dvui.Split`, so a divider here drags, looks and feels exactly
+/// It is now a flat loop over `core.widgets.Split`, so a divider here drags, looks and feels exactly
 /// like a divider anywhere else.
 pub fn drawWorkspaces(
     panel: *PaneGroup,

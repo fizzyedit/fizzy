@@ -33,7 +33,7 @@ fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: 
 pub fn active(win: *dvui.Window) bool {
     var it = win.dialogs.iterator(null);
     while (it.next()) |d| {
-        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dvui.DisplayFn) orelse continue;
+        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dialogs.DisplayFn) orelse continue;
         if (df == dialog) return true;
     }
     return false;
@@ -43,7 +43,7 @@ pub fn request() void {
     if (active(dvui.currentWindow())) return;
     status_line = " ";
     update_ready_after_check = false;
-    var mutex = fizzy.dvui.dialog(@src(), .{
+    var mutex = fizzy.dialogs.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
         .title = "About Fizzy",
@@ -310,7 +310,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
         defer spinner_slot.deinit();
 
         if (checking or finish_elapsed != null) {
-            fizzy.dvui.bubbleSpinner(@src(), .{
+            fizzy.dialogs.bubbleSpinner(@src(), .{
                 .expand = .none,
                 .min_size_content = .{ .w = 24, .h = 24 },
                 .gravity_x = 0.5,
@@ -356,7 +356,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
                 update_ready_after_check = false;
                 setStatus(" ");
                 update_notify.kickInstall();
-                fizzy.dvui.closeFloatingDialogAnchored();
+                fizzy.dialogs.closeFloatingDialogAnchored();
             }
         }
     }
@@ -364,7 +364,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
 
     if (dialogButton(@src(), "Close", .control, 10, 2)) {
-        fizzy.dvui.closeFloatingDialogAnchored();
+        fizzy.dialogs.closeFloatingDialogAnchored();
     }
 
     return true;

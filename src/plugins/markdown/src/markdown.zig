@@ -1,7 +1,7 @@
 //! Markdown preview (CommonMark+GFM via md4c / md4zig). Native and web.
 const std = @import("std");
+const core = @import("core");
 const dvui = @import("dvui");
-const core_dvui = @import("core").dvui;
 
 const md_ast = @import("md/ast.zig");
 
@@ -583,7 +583,7 @@ pub fn drawPreview(
     // `state.scroll` is the caller-owned `ScrollInfo` the area was driven by, so it stays valid
     // after `deinit` and holds this frame's final viewport/virtual size/offset. Horizontal
     // overflow only happens below the min column width.
-    core_dvui.drawScrollEdgeShadows(scroll_rs, scroll_rs, &state.scroll, .{});
+    core.draw.drawScrollEdgeShadows(scroll_rs, scroll_rs, &state.scroll, .{});
 }
 
 /// Like `drawPreview`, but resolves `![alt](path)` relative to `document_path`.

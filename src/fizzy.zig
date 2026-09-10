@@ -68,7 +68,10 @@ pub const layout = @import("editor/layout.zig");
 pub const sdk = @import("fizzy_sdk");
 
 /// Custom dvui stuff
-pub const dvui = core.dvui;
+pub const widgets = core.widgets;
+pub const anim = core.anim;
+pub const dialogs = core.dialogs;
+pub const draw = core.draw;
 
 /// Custom backend stuff. Split per-arch: native uses SDL3 + objc + win32; web (and
 /// headless integration tests, which wire dvui's `testing` backend onto a native

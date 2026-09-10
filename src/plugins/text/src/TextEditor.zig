@@ -11,7 +11,7 @@ const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
 const tc = @import("textcore/textcore.zig");
 const TooltipWidget = @import("widgets/TooltipWidget.zig");
 const fuzzy = core.fuzzy;
-const Split = core.dvui.Split;
+const Split = core.widgets.Split;
 
 const editor_pad_y: f32 = 8;
 const editor_pad_right: f32 = 8;
@@ -59,7 +59,7 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
     // stop, so the preview slides in and out from the right like a document opening to the side
     // rather than the pane's contents being swapped underneath the user.
     //
-    // It is `core.dvui.Split` — the same divider the app's own regions, the document panes and the
+    // It is `core.widgets.Split` — the same divider the app's own regions, the document panes and the
     // bottom panel use, sized in points. A `PanedWidget` here was a second implementation of the
     // same idea, with its own ratio, its own handle and its own feel.
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -93,7 +93,7 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
     // Ended before the preview pane opens, not deferred: a split is a box, and anything drawn
     // while it is still open becomes its child — which stretches the split across the pane it is
     // supposed to sit beside, and draws the grip in the middle of the preview.
-    var divider = core.dvui.split(@src(), .horizontal, @truncate(id_extra + 0x1100));
+    var divider = core.widgets.split(@src(), .horizontal, @truncate(id_extra + 0x1100));
     divider.drag(row, split, -1, .{}, .{ .extent = total, .handles = Split.handle_size });
     const dragging = dvui.captured(divider.box.data().id);
     divider.deinit();
@@ -365,12 +365,12 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
     // Horizontal scroll hints are dropped while the preview shares the pane: the right-edge one
     // lands in exactly the same pixels as the constant split edge below, and two shadows stacked
     // there read as a heavier, darker band than either edge anywhere else in the app.
-    core.dvui.drawScrollEdgeShadows(editor_rs, if (split_edge) null else scroll_rs, te.scroll.si, .{});
+    core.draw.drawScrollEdgeShadows(editor_rs, if (split_edge) null else scroll_rs, te.scroll.si, .{});
 
     // Unconditional right edge while the preview shares the pane, unlike the scroll hints above:
     // this one isn't saying "there is more text this way", it's the boundary between the raw
     // editor and the preview, which otherwise run into each other as one flat surface.
-    if (split_edge) core.dvui.drawEdgeShadow(editor_rs, .right, .{});
+    if (split_edge) core.draw.drawEdgeShadow(editor_rs, .right, .{});
 
     if (te.text_changed) doc.refreshLineCount();
 

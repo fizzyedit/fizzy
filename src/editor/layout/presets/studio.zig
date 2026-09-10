@@ -22,7 +22,7 @@ const fizzy = @import("../../../fizzy.zig");
 const sdk = fizzy.sdk;
 
 const Layout = @import("../Layout.zig");
-const Split = @import("core").dvui.Split;
+const Split = @import("core").widgets.Split;
 
 // ── The studio preset ───────────────────────────────────────────────────────────────────────
 //

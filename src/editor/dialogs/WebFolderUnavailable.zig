@@ -6,7 +6,7 @@ const fizzy = @import("../../fizzy.zig");
 
 pub fn request() void {
     if (active(dvui.currentWindow())) return;
-    var mutex = fizzy.dvui.dialog(@src(), .{
+    var mutex = fizzy.dialogs.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
         .title = "Open Folder",
@@ -23,7 +23,7 @@ pub fn request() void {
 pub fn active(win: *dvui.Window) bool {
     var it = win.dialogs.iterator(null);
     while (it.next()) |d| {
-        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dvui.DisplayFn) orelse continue;
+        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dialogs.DisplayFn) orelse continue;
         if (df == dialog) return true;
     }
     return false;
@@ -65,7 +65,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     defer row.deinit();
 
     if (dialogButton(@src(), "Cancel")) {
-        fizzy.dvui.closeFloatingDialogAnchored();
+        fizzy.dialogs.closeFloatingDialogAnchored();
     }
 
     return true;

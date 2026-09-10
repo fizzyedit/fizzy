@@ -6,7 +6,7 @@ const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 
 pub fn request(file_id: u64) void {
-    var mutex = fizzy.dvui.dialog(@src(), .{
+    var mutex = fizzy.dialogs.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
         .title = "File changed on disk",
@@ -91,10 +91,10 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
 
 fn onOverwrite(file_id: u64) !void {
     const doc = fizzy.editor().docById(file_id) orelse {
-        fizzy.dvui.closeFloatingDialogAnchored();
+        fizzy.dialogs.closeFloatingDialogAnchored();
         return;
     };
-    fizzy.dvui.closeFloatingDialogAnchored();
+    fizzy.dialogs.closeFloatingDialogAnchored();
     // Clear conflict and write; `noteSaved` refreshes the baseline after success.
     if (fizzy.editor().document_watcher) |*w| w.markPendingBaseline(file_id);
     doc.owner.saveDocument(doc) catch |err| {
@@ -107,15 +107,15 @@ fn onOverwrite(file_id: u64) !void {
 
 fn onDiscard(file_id: u64) void {
     const doc = fizzy.editor().docById(file_id) orelse {
-        fizzy.dvui.closeFloatingDialogAnchored();
+        fizzy.dialogs.closeFloatingDialogAnchored();
         return;
     };
     if (fizzy.editor().document_watcher) |*w| w.discardToDisk(doc);
-    fizzy.dvui.closeFloatingDialogAnchored();
+    fizzy.dialogs.closeFloatingDialogAnchored();
 }
 
 fn onCancel() void {
-    fizzy.dvui.closeFloatingDialogAnchored();
+    fizzy.dialogs.closeFloatingDialogAnchored();
 }
 
 pub fn callAfter(_: dvui.Id, _: dvui.enums.DialogResponse) !void {}

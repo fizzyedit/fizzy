@@ -10,7 +10,7 @@
 //! is that policy, extracted so every content swap can share it.
 //!
 //! The phase machine is the whole decision, and it is pure — dvui's data store and animation
-//! system only supply the inputs (`core.dvui.reveal` does that part).
+//! system only supply the inputs (`core.anim.reveal` does that part).
 const std = @import("std");
 
 pub const Phase = enum {

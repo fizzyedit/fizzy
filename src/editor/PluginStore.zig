@@ -382,7 +382,7 @@ fn drawReadmeCenter(_: ?*anyopaque) anyerror!dvui.App.Result {
     // Switching pages swaps the whole subtree (header, tabs, README), so hide the settle frame
     // and cross-fade rather than letting it flash. Keyed on the selection, so re-rendering the
     // same page every frame costs nothing.
-    const rv = core.dvui.reveal(pane.data().id, revealKey(), .{});
+    const rv = core.anim.reveal(pane.data().id, revealKey(), .{});
     defer rv.deinit();
 
     const entry = selectedEntry(snapshot) orelse {
@@ -1896,7 +1896,7 @@ fn drawPaneTabs(status: store.Status) void {
     // A refresh over existing cards is a footnote, not a takeover: the cards stay put and this
     // spinner is the only sign a fetch is outstanding.
     if (status == .fetching and have_snapshot) {
-        fizzy.dvui.bubbleSpinner(@src(), .{
+        fizzy.dialogs.bubbleSpinner(@src(), .{
             .min_size_content = .{ .w = 14, .h = 14 },
             .gravity_x = 1.0,
             .gravity_y = 0.5,
@@ -1933,7 +1933,7 @@ fn drawFetchingPlaceholder() void {
     });
     defer row.deinit();
 
-    fizzy.dvui.bubbleSpinner(@src(), .{
+    fizzy.dialogs.bubbleSpinner(@src(), .{
         .min_size_content = .{ .w = 20, .h = 20 },
         .gravity_y = 0.5,
         .color_text = dvui.themeGet().color(.window, .text),
@@ -2056,7 +2056,7 @@ fn drawStoreSection(entries: []const StoreEntry, filter_text: []const u8, status
     scroll.deinit();
 
     const rs = pane_box.data().contentRectScale();
-    fizzy.dvui.drawScrollEdgeShadows(rs, rs, &store_scroll_info, .{});
+    fizzy.draw.drawScrollEdgeShadows(rs, rs, &store_scroll_info, .{});
 
     return shown;
 }
@@ -2111,7 +2111,7 @@ fn drawInstalledSection(entries: []const StoreEntry, filter_text: []const u8) us
     scroll.deinit();
 
     const rs = pane_box.data().contentRectScale();
-    fizzy.dvui.drawScrollEdgeShadows(rs, rs, &installed_scroll_info, .{});
+    fizzy.draw.drawScrollEdgeShadows(rs, rs, &installed_scroll_info, .{});
 
     return shown;
 }

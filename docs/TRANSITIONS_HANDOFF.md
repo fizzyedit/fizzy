@@ -20,7 +20,7 @@ swap therefore has one frame of visibly wrong layout.
 
 Two shapes of fix exist in the tree, and they are *not* interchangeable:
 
-| | `core.dvui.reveal` | `core.dvui.transition` / `CrossFade` |
+| | `core.anim.reveal` | `core.anim.transition` / `CrossFade` |
 |---|---|---|
 | what it does | hides the incoming subtree one frame, then fades it up | records the outgoing screen to a texture and fades that out over the incoming one |
 | needs | nothing | backend render-target support |
@@ -40,14 +40,14 @@ is fading between has rounded corners.
 **`src/core/reveal.zig`** — pure phase machine (`hidden → fading → shown`, restart on key change).
 4 unit tests, wired into `zig build test` as `fizzy-reveal-tests`.
 
-**`core.dvui.reveal(id, key, opts) Reveal`** (`src/core/dvui.zig`) — maps those phases onto
+**`core.anim.reveal(id, key, opts) Reveal`** (`src/core/anim.zig`) — maps those phases onto
 `dvui.alpha` + a dvui animation. State lives in dvui's data store under `id`, which must be a
 *stable* widget id (source-derived, not parent-derived — see §5).
 
-**`core.dvui.transition(state, opts) TransitionFrame`** — the host-owned entry point:
+**`core.anim.transition(state, opts) TransitionFrame`** — the host-owned entry point:
 
 ```zig
-var frame = core.dvui.transition(&region.transition, .{
+var frame = core.anim.transition(&region.transition, .{
     .key = current_key,
     .rect = rs.r,
     .draw_previous = drawOutgoing,   // called only on the swap frame
@@ -60,7 +60,7 @@ drawIncoming();
 Swap detection, capture, ID isolation, and blit teardown all live inside. `CrossFade` remains the
 low-level primitive `transition` drives.
 
-**`core.dvui.CrossFade`** — offscreen capture via `dvui.Picture`. `endCapture` keeps the texture
+**`core.anim.CrossFade`** — offscreen capture via `dvui.Picture`. `endCapture` keeps the texture
 (not `Picture.deinit`, which would draw-and-destroy). Blit rect is `pic.r` (pixel-enlarged), and
 the target is cleared explicitly after create. Capture runs under an isolate parent so its widget
 ids cannot collide with the incoming tree.

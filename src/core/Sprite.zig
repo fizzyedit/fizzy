@@ -1,7 +1,7 @@
 //! A sub-rect within an atlas texture: pixel `source` rect + optional `origin`.
 //!
-//! Used by fizzy for UI icons and by the pixel-art renderer as the sprite-rect
-//! type. Distinct from the plugin's build-time `Atlas.zig` (JSON loader with animations).
+//! **Only pixi uses this** — as its runtime sprite-rect type. Fizzy draws no sprites. Distinct
+//! from pixi's own build-time `Atlas.zig` (JSON loader with animations); see `core.zig`.
 const std = @import("std");
 const dvui = @import("dvui");
 

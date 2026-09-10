@@ -7,7 +7,7 @@ const sdk = @import("fizzy_sdk");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
 
-const CanvasWidget = core.dvui.CanvasWidget;
+const CanvasWidget = core.widgets.CanvasWidget;
 
 const Document = @This();
 

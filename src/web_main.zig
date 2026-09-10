@@ -34,7 +34,7 @@ comptime {
 
     // Custom dvui wrapper + widgets — types compile even though the widget files
     // contain dead `@import("backend")` SDL3 imports at file scope.
-    _ = fizzy.dvui.CanvasWidget;
+    _ = fizzy.widgets.CanvasWidget;
 
     // The big ones: Editor + App. Type-level reference only — passes because Zig
     // doesn't fully analyze function bodies until they're actually wired into a

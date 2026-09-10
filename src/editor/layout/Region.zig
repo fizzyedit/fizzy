@@ -7,7 +7,7 @@
 //!
 //! `init` + `deinit`, like any dvui widget, with the verb form on the namespace above it:
 //! `f.region(@src(), .{ … }, .{ … })` in a shape, which is `Layout.region` re-exporting this
-//! file's `init`. Same arrangement as `dvui.box` over `BoxWidget.init`, and `core.dvui.split`
+//! file's `init`. Same arrangement as `dvui.box` over `BoxWidget.init`, and `core.widgets.split`
 //! over `Split.init`.
 //!
 //! `region` draws the region's own contents — its chrome, if it declared any, and the active
@@ -17,7 +17,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
-const Split = core.dvui.Split;
+const Split = core.widgets.Split;
 const Constants = @import("../Constants.zig");
 const Layout = @import("Layout.zig");
 

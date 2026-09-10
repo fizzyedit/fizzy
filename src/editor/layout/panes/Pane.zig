@@ -17,9 +17,9 @@ pub const Pane = @This();
 grouping: u64,
 active_view_id: ?[]const u8 = null,
 
-/// Shared with the workbench's document tabs — see `core.dvui.Tabs.State`. This trio used
+/// Shared with the workbench's document tabs — see `core.widgets.Tabs.TabInfo`. This trio used
 /// to be declared identically in both places.
-tab_state: fizzy.dvui.Tabs.State = .{},
+tab_info: fizzy.widgets.Tabs.TabInfo = .{},
 
 pub fn init(grouping: u64) Pane {
     return .{ .grouping = grouping };
@@ -84,10 +84,10 @@ fn drawTabs(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout
     defer self.processTabsDrag(panel, host, f, keywords);
 
     // The strip scaffolding — reorder, scroll, per-tab boxes, press/drag handling — is shared
-    // with the workbench's document tabs (`core.dvui.Tabs`). What stays here is the part
+    // with the workbench's document tabs (`core.widgets.Tabs`). What stays here is the part
     // that is actually about *this* strip: which views belong to this grouping, what a tab
     // looks like, and what selecting one means.
-    var strip: fizzy.dvui.Tabs = .init(@src(), &self.tab_state, .{
+    var strip: fizzy.widgets.Tabs = .init(@src(), &self.tab_info, .{
         .drag_name = drag_name,
         .id_extra = @intCast(self.grouping),
     });
@@ -152,8 +152,8 @@ fn drawContent(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Lay
 }
 
 fn processTabsDrag(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
-    if (self.tab_state.insert_before_index) |insert_before| {
-        if (self.tab_state.removed_index) |removed| {
+    if (self.tab_info.insert_before_index) |insert_before| {
+        if (self.tab_info.removed_index) |removed| {
             if (removed >= PaneGroup.surfaces(f, keywords).len) return;
             if (removed > insert_before) {
                 panel.swapSurfaces(host, f, keywords, removed, insert_before);
@@ -165,11 +165,11 @@ fn processTabsDrag(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: 
                 panel.swapSurfaces(host, f, keywords, removed, insert_before);
                 self.active_view_id = host.bottom_views.items[insert_before].id;
             }
-            self.tab_state.removed_index = null;
-            self.tab_state.insert_before_index = null;
+            self.tab_info.removed_index = null;
+            self.tab_info.insert_before_index = null;
         } else {
             for (panel.workspaces.values()) |*workspace| {
-                if (workspace.tab_state.removed_index) |removed| {
+                if (workspace.tab_info.removed_index) |removed| {
                     if (removed >= PaneGroup.surfaces(f, keywords).len) return;
                     const view = host.bottom_views.items[removed];
                     if (removed > insert_before) {
@@ -186,10 +186,10 @@ fn processTabsDrag(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: 
                         self.active_view_id = view.id;
                     }
 
-                    self.tab_state.removed_index = null;
-                    self.tab_state.insert_before_index = null;
-                    workspace.tab_state.removed_index = null;
-                    workspace.tab_state.insert_before_index = null;
+                    self.tab_info.removed_index = null;
+                    self.tab_info.insert_before_index = null;
+                    workspace.tab_info.removed_index = null;
+                    workspace.tab_info.insert_before_index = null;
                     panel.open_pane = self.grouping;
                     host.setActiveBottomView(view.id);
                     break;
@@ -204,7 +204,7 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *PaneGroup, host: 
 
     const drag_src = blk: {
         for (panel.workspaces.values()) |*w| {
-            if (w.tab_state.drag_index) |i| break :blk .{ .ws = w, .index = i };
+            if (w.tab_info.drag_index) |i| break :blk .{ .ws = w, .index = i };
         }
         break :blk null;
     };
@@ -231,7 +231,7 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *PaneGroup, host: 
             }
 
             if (e.evt.mouse.action == .release and e.evt.mouse.button.pointer()) {
-                defer workspace.tab_state.drag_index = null;
+                defer workspace.tab_info.drag_index = null;
                 e.handle(@src(), data);
                 dvui.dragEnd();
                 dvui.refresh(null, @src(), data.id);
@@ -252,7 +252,7 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *PaneGroup, host: 
             }
 
             if (e.evt.mouse.action == .release and e.evt.mouse.button.pointer()) {
-                defer workspace.tab_state.drag_index = null;
+                defer workspace.tab_info.drag_index = null;
                 e.handle(@src(), data);
                 dvui.dragEnd();
                 dvui.refresh(null, @src(), data.id);

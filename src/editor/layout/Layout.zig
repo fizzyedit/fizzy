@@ -11,7 +11,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
-const Split = core.dvui.Split;
+const Split = core.widgets.Split;
 const Constants = @import("../Constants.zig");
 
 const Layout = @This();
@@ -188,7 +188,7 @@ pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
     _ = self;
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(s.id);
-    const rv = fizzy.dvui.reveal(
+    const rv = fizzy.anim.reveal(
         dvui.Id.extendId(null, @src(), @truncate(hasher.final())),
         hasher.final(),
         .{},
@@ -304,7 +304,7 @@ pub fn tabs(f: *Layout, keywords: []const []const u8) void {
     const surfaces = f.matching(keywords);
     if (surfaces.len == 0) return;
 
-    var strip: fizzy.dvui.Tabs = .init(@src(), &tabs_state, .{ .drag_name = "fizzy_tab_strip" });
+    var strip: fizzy.widgets.Tabs = .init(@src(), &tab_info, .{ .drag_name = "fizzy_tab_strip" });
     defer strip.deinit();
 
     for (surfaces, 0..) |s, i| {
@@ -349,4 +349,4 @@ pub fn tabbed(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
 /// Drag state for `tabStrip`. One strip per app in practice; a layout wanting two independent
 /// strips copies this recipe (see CLAUDE.md's shipped-shapes note) rather than fizzy growing a
 /// handle type for a case nothing has yet.
-var tabs_state: fizzy.dvui.Tabs.State = .{};
+var tab_info: fizzy.widgets.Tabs.TabInfo = .{};

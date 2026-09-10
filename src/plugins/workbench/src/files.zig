@@ -1,7 +1,7 @@
 const std = @import("std");
+const core = @import("core");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const wdvui = @import("core").dvui;
 const fuzzy = @import("core").fuzzy;
 const FileTable = @import("core").FileTable;
 const palette = @import("core").palette;
@@ -76,7 +76,7 @@ pub fn draw() !void {
     }
 
     // `tab_drag` matches workspace tab strips so file rows can drop on the canvas like tabs (DVUI reorder_tree cross-widget pattern).
-    var tree = wdvui.TreeWidget.tree(@src(), .{ .enable_reordering = true, .drag_name = "tab_drag" }, .{ .background = false, .expand = .both });
+    var tree = core.widgets.TreeWidget.tree(@src(), .{ .enable_reordering = true, .drag_name = "tab_drag" }, .{ .background = false, .expand = .both });
     defer tree.deinit();
 
     // Same as tools pane header: first frame after open (or after Files wasn't drawn last frame)
@@ -113,7 +113,7 @@ pub fn draw() !void {
 }
 
 fn drawWeb() !void {
-    var tree = wdvui.TreeWidget.tree(@src(), .{}, .{ .background = false, .expand = .both });
+    var tree = core.widgets.TreeWidget.tree(@src(), .{}, .{ .background = false, .expand = .both });
     defer tree.deinit();
 
     const viewport_w = runtime.host().explorerViewportWidth();
@@ -154,7 +154,7 @@ fn drawWeb() !void {
     }
 }
 
-pub fn drawFiles(path: []const u8, tree: *wdvui.TreeWidget) !void {
+pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
     const files = table() orelse return;
     // Nothing is mid-walk at this point, so this is the one safe moment to free listings that
     // last frame's draw invalidated while it was still reading them.
@@ -229,7 +229,7 @@ pub fn drawFiles(path: []const u8, tree: *wdvui.TreeWidget) !void {
     const caret_color = dvui.themeGet().color(.control, .fill);
 
     {
-        var caret_slot = wdvui.treeRowGlyph(@src(), .{});
+        var caret_slot = core.widgets.treeRowGlyph(@src(), .{});
         defer caret_slot.deinit();
         _ = dvui.icon(
             @src(),
@@ -238,7 +238,7 @@ pub fn drawFiles(path: []const u8, tree: *wdvui.TreeWidget) !void {
             // Same tint the folder rows below use, so the project row's caret doesn't read as a
             // different kind of control from every other caret in the tree.
             .{ .fill_color = caret_color, .stroke_color = caret_color },
-            wdvui.treeRowIconOptions(.{}),
+            core.widgets.treeRowIconOptions(.{}),
         );
     }
 
@@ -293,7 +293,7 @@ pub fn drawFiles(path: []const u8, tree: *wdvui.TreeWidget) !void {
 }
 
 /// Context menu for the project root directory: close project, reveal on disk, new file / folder.
-fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u8, tree: *wdvui.TreeWidget) !void {
+fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u8, tree: *core.widgets.TreeWidget) !void {
     var fw2 = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(point) }, .{ .box_shadow = .{
         .color = .black,
         .offset = .{ .x = 0, .y = 0 },
@@ -568,7 +568,7 @@ fn filterLabel(
     }
 }
 
-pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, unique_id: dvui.Id, outer_filter_text: []const u8) !void {
+pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWidget, unique_id: dvui.Id, outer_filter_text: []const u8) !void {
     var color_i: usize = 0;
     var id_extra: usize = 0;
 
@@ -582,7 +582,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
         /// The filtered case used to run through the walk too, re-reading *every* directory in
         /// the project from disk on *every frame* and testing each basename with a substring
         /// match. That is what made typing in the filter box scale with project size.
-        fn search(directory: []const u8, tree: *wdvui.TreeWidget, inner_unique_id: dvui.Id, inner_id_extra: *usize, color_id: *usize, filter_text: []const u8, parent_branch: ?*wdvui.TreeWidget.Branch, rows: ?[]const FileTable.Entry) anyerror!void {
+        fn search(directory: []const u8, tree: *core.widgets.TreeWidget, inner_unique_id: dvui.Id, inner_id_extra: *usize, color_id: *usize, filter_text: []const u8, parent_branch: ?*core.widgets.TreeWidget.Branch, rows: ?[]const FileTable.Entry) anyerror!void {
             // Borrows `filter_text`, which outlives this call — see `fuzzy.Query`.
             const query = fuzzy.Query.init(filter_text);
             const active_query: ?*const fuzzy.Query = if (query.isEmpty()) null else &query;
@@ -725,13 +725,13 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
         fn drawRow(
             entry: FileTable.Entry,
             directory: []const u8,
-            tree: *wdvui.TreeWidget,
+            tree: *core.widgets.TreeWidget,
             inner_unique_id: dvui.Id,
             inner_id_extra: *usize,
             color_id: *usize,
             filter_text: []const u8,
             active_query: ?*const fuzzy.Query,
-            parent_branch: ?*wdvui.TreeWidget.Branch,
+            parent_branch: ?*core.widgets.TreeWidget.Branch,
             // `anyerror` breaks the inferred-error-set cycle with `search`, which this calls back
             // into for an expanded folder.
         ) anyerror!f32 {
@@ -790,7 +790,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                     .color_fill = if (selected and tree.drag_point == null)
                         dvui.themeGet().color(.control, .fill).opacity(0.5)
                     else
-                        wdvui.hoverRestFill(dvui.themeGet().color(.control, .fill)),
+                        core.widgets.hoverRestFill(dvui.themeGet().color(.control, .fill)),
                     .padding = dvui.Rect.all(1),
                 });
                 defer branch.deinit();
@@ -807,7 +807,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                                 // own centre; now that the row it produced has a rect, re-aim the
                                 // close at it so the user's eye is carried from the dialog to the
                                 // name they are about to type over.
-                                wdvui.setDialogCloseRectOverride(branch.data().borderRectScale().r);
+                                core.dialogs.setDialogCloseRectOverride(branch.data().borderRectScale().r);
                                 clearNewFilePath();
                             }
                         }
@@ -999,7 +999,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                         // Files have no expander, so they open with an empty caret-sized slot —
                         // that's what lines their icons up with the folder icons above them.
                         {
-                            var caret_slot = wdvui.treeRowGlyph(@src(), .{});
+                            var caret_slot = core.widgets.treeRowGlyph(@src(), .{});
                             caret_slot.deinit();
                         }
 
@@ -1009,7 +1009,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                         // art at an arbitrary aspect ratio, so it is boxed to the shared row-glyph
                         // size like every other glyph rather than being trusted to behave.
                         {
-                            var icon_slot = wdvui.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
+                            var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
                             defer icon_slot.deinit();
 
                             if (!runtime.host().drawFileIcon(std.fs.path.extension(entry.name), abs_path, icon_color)) {
@@ -1023,7 +1023,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                                     "FileIcon",
                                     icon,
                                     .{ .stroke_color = icon_color, .fill_color = icon_color },
-                                    wdvui.treeRowIconOptions(.{}),
+                                    core.widgets.treeRowIconOptions(.{}),
                                 );
                             }
                         }
@@ -1044,7 +1044,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
 
                         if (doc) |d| {
                             if (d.owner.showsSaveStatusIndicator(d)) {
-                                wdvui.bubbleSpinner(@src(), .{
+                                core.dialogs.bubbleSpinner(@src(), .{
                                     .id_extra = inner_id_extra.* +% 4001,
                                     .expand = .none,
                                     .min_size_content = .{ .w = 14, .h = 14 },
@@ -1073,7 +1073,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
 
                         if (dvui.parentGet().data().rectScale().r.h > 10) {
                             {
-                                var caret_slot = wdvui.treeRowGlyph(@src(), .{});
+                                var caret_slot = core.widgets.treeRowGlyph(@src(), .{});
                                 defer caret_slot.deinit();
                                 _ = dvui.icon(
                                     @src(),
@@ -1083,12 +1083,12 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                                         .fill_color = icon_color,
                                         .stroke_color = icon_color,
                                     },
-                                    wdvui.treeRowIconOptions(.{}),
+                                    core.widgets.treeRowIconOptions(.{}),
                                 );
                             }
 
                             {
-                                var icon_slot = wdvui.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
+                                var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
                                 defer icon_slot.deinit();
                                 _ = dvui.icon(
                                     @src(),
@@ -1098,7 +1098,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *wdvui.TreeWidget, u
                                         .fill_color = icon_color,
                                         .stroke_color = icon_color,
                                     },
-                                    wdvui.treeRowIconOptions(.{}),
+                                    core.widgets.treeRowIconOptions(.{}),
                                 );
                             }
                         }
@@ -1214,7 +1214,7 @@ fn selectionRemove(id: usize) bool {
 }
 
 /// Apply a modifier-aware click to the file-tree selection. Indexed by id_extra (path hash).
-fn applyFileClick(id: usize, path: []const u8, mode: wdvui.TreeSelection.ClickMode) void {
+fn applyFileClick(id: usize, path: []const u8, mode: core.widgets.TreeSelection.ClickMode) void {
     switch (mode) {
         .replace => {
             selectionFreeAll();
@@ -1271,7 +1271,7 @@ fn appendRowOrder(
 
 fn flushPendingFileShiftRange(
     root_directory: []const u8,
-    tree: *wdvui.TreeWidget,
+    tree: *core.widgets.TreeWidget,
     ranked: ?[]const FileTable.Entry,
 ) void {
     const p = pending_file_shift_range orelse return;
@@ -1319,14 +1319,14 @@ fn applyFileShiftRange(rows: []const FileVisRow, clicked_id: usize, clicked_path
 /// Derive the click mode from the most recent pointer release event that falls within `rect`.
 /// Used after `branch.button.clicked()` so we can honor ctrl/cmd/shift without intercepting the
 /// button's own event handling.
-fn detectClickMode(rect: dvui.Rect.Physical) wdvui.TreeSelection.ClickMode {
-    var mode: wdvui.TreeSelection.ClickMode = .replace;
+fn detectClickMode(rect: dvui.Rect.Physical) core.widgets.TreeSelection.ClickMode {
+    var mode: core.widgets.TreeSelection.ClickMode = .replace;
     for (dvui.events()) |*e| {
         if (e.evt != .mouse) continue;
         const me = e.evt.mouse;
         if (me.action != .release or !me.button.pointer()) continue;
         if (!rect.contains(me.p)) continue;
-        mode = wdvui.TreeSelection.clickModeFromMod(me.mod);
+        mode = core.widgets.TreeSelection.clickModeFromMod(me.mod);
     }
     return mode;
 }
@@ -1445,7 +1445,7 @@ fn selectionBranchIdsForMultiDrag(arena: std.mem.Allocator) ![]const usize {
 /// Move the drag source (and, for a multi-drag, every other selected path) into `target_dir`.
 /// Renames files/folders on disk and rewrites open-file paths in-place. Clears the drag's
 /// stashed `removed_path` when complete.
-fn applyFileMove(unique_id: dvui.Id, tree: *wdvui.TreeWidget, target_dir: []const u8) !void {
+fn applyFileMove(unique_id: dvui.Id, tree: *core.widgets.TreeWidget, target_dir: []const u8) !void {
     const arena = dvui.currentWindow().arena();
 
     // The primary (floating) row's path is stashed here by the branch that reports `floating()`.

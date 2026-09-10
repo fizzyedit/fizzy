@@ -31,7 +31,6 @@ const PluginStore = @import("PluginStore.zig");
 const fizzy_settings = @import("explorer/settings.zig");
 
 const fuzzy = core.fuzzy;
-const wdvui = core.dvui;
 const settings = fizzy.sdk.settings;
 
 /// Fizzy's own branch. Named for the app so it reads as a peer of the plugin branches
@@ -301,7 +300,7 @@ pub fn draw() !void {
     // Two trees, one per mode. A search force-expands branches, and `TreeWidget` stores expansion
     // per widget id — sharing one id space would bleed "expanded because searching" into the
     // browsing tree's animation state. Separate `id_extra` keeps them cleanly apart.
-    var tree = wdvui.TreeWidget.tree(@src(), .{}, .{
+    var tree = core.widgets.TreeWidget.tree(@src(), .{}, .{
         .id_extra = @intFromBool(searching),
         .expand = .horizontal,
         .background = false,
@@ -344,7 +343,7 @@ fn drawSearchRow() []const u8 {
 }
 
 fn drawBranch(
-    tree: *wdvui.TreeWidget,
+    tree: *core.widgets.TreeWidget,
     branch: *const Branch,
     query: *const fuzzy.Query,
     searching: bool,
@@ -368,7 +367,7 @@ fn drawBranch(
         .expand = .horizontal,
         .color_fill_hover = theme.color(.control, .fill).opacity(0.5),
         .color_fill_press = theme.color(.control, .fill_press),
-        .color_fill = core.dvui.hoverRestFill(theme.color(.control, .fill)),
+        .color_fill = core.widgets.hoverRestFill(theme.color(.control, .fill)),
         .padding = dvui.Rect.all(1),
     });
     defer b.deinit();
@@ -492,26 +491,26 @@ fn drawFailure(f: fizzy.Editor.FailedPlugin) void {
 
 /// A branch's own row: the same caret + identity icon + label the file tree draws, with the
 /// characters the query matched tinted so it's obvious *why* a row survived the filter.
-fn drawRow(b: *wdvui.TreeWidget.Branch, branch: *const Branch, query: *const fuzzy.Query, style: RowStyle) void {
+fn drawRow(b: *core.widgets.TreeWidget.Branch, branch: *const Branch, query: *const fuzzy.Query, style: RowStyle) void {
     // Same tint the file tree uses for every caret (project root *and* folder) — `control.fill`.
     // `fill_hover` reads as a washed-out caret on top-level settings branches.
     const icon_color = dvui.themeGet().color(.control, .fill);
 
     {
-        var slot = wdvui.treeRowGlyph(@src(), .{});
+        var slot = core.widgets.treeRowGlyph(@src(), .{});
         defer slot.deinit();
         _ = dvui.icon(
             @src(),
             "BranchCaret",
             if (b.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
             .{ .fill_color = icon_color, .stroke_color = icon_color },
-            wdvui.treeRowIconOptions(.{}),
+            core.widgets.treeRowIconOptions(.{}),
         );
     }
 
     {
         // Same trailing gap as the file tree's folder/file icon slot (`files.zig`).
-        var slot = wdvui.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
+        var slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
         defer slot.deinit();
         drawIdentityIcon(branch, style, icon_color);
     }
@@ -544,7 +543,7 @@ fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) v
             "CategoryIcon",
             glyph,
             .{ .fill_color = color, .stroke_color = color },
-            wdvui.treeRowIconOptions(.{}),
+            core.widgets.treeRowIconOptions(.{}),
         );
         return;
     }
@@ -557,7 +556,7 @@ fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) v
             .name = "icon.png",
             .interpolation = .nearest,
         } };
-        _ = dvui.image(@src(), .{ .source = logo, .shrink = .ratio }, wdvui.treeRowIconOptions(.{}));
+        _ = dvui.image(@src(), .{ .source = logo, .shrink = .ratio }, core.widgets.treeRowIconOptions(.{}));
         return;
     }
 

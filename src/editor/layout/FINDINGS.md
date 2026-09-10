@@ -57,7 +57,7 @@ groups no legacy registry owns.
 
 ## 4. The generalized cross-fade works
 
-`f.draw` wrapping its child in a `core.dvui.reveal` keyed by **surface id** (never the parent
+`f.draw` wrapping its child in a `core.anim.reveal` keyed by **surface id** (never the parent
 box id — see the warning at `workbench/src/Workspace.zig:768`) drives the main-area swap with no
 visible regression. The bespoke `CaptureCtx` / `center_transition` path in `Editor.zig:2968` is
 therefore replaceable, as planned.

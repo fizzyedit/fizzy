@@ -51,4 +51,4 @@ panel_hidden_for_center: bool = false,
 /// registry entry, which outlives a frame.
 center_prev_id: ?[]const u8 = null,
 /// Host-owned cross-fade between center providers. See `drawActiveCenter`.
-center_transition: core.dvui.Transition = .{},
+center_transition: core.anim.Transition = .{},

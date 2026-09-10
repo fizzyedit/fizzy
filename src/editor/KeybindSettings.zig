@@ -33,7 +33,6 @@ const keymap = @import("keymap/keymap.zig");
 const adapter = @import("keymap/dvui_adapter.zig");
 const Keybinds = @import("Keybinds.zig");
 
-const wdvui = core.dvui;
 const fuzzy = core.fuzzy;
 
 /// Command id currently waiting for a key press, or null when idle. Points into
@@ -258,7 +257,7 @@ pub fn draw(query: *const fuzzy.Query) void {
     // Two trees, one per mode: a search force-expands branches and `TreeWidget` keeps expansion
     // per widget id, so sharing one id space would bleed "expanded because searching" into the
     // browsing tree's animation state (same split `SettingsTree` uses).
-    var tree = wdvui.TreeWidget.tree(@src(), .{}, .{
+    var tree = core.widgets.TreeWidget.tree(@src(), .{}, .{
         .id_extra = @intFromBool(searching),
         .expand = .horizontal,
         .background = false,
@@ -271,7 +270,7 @@ pub fn draw(query: *const fuzzy.Query) void {
 }
 
 fn drawOwnerBranch(
-    tree: *wdvui.TreeWidget,
+    tree: *core.widgets.TreeWidget,
     editor: *fizzy.Editor,
     group: *const Group,
     query: *const fuzzy.Query,
@@ -293,7 +292,7 @@ fn drawOwnerBranch(
         .expand = .horizontal,
         .color_fill_hover = theme.color(.control, .fill).opacity(0.5),
         .color_fill_press = theme.color(.control, .fill_press),
-        .color_fill = core.dvui.hoverRestFill(theme.color(.control, .fill)),
+        .color_fill = core.widgets.hoverRestFill(theme.color(.control, .fill)),
         .padding = dvui.Rect.all(1),
     });
     defer b.deinit();
@@ -301,29 +300,29 @@ fn drawOwnerBranch(
     {
         const icon_color = theme.color(.control, .fill);
         {
-            var slot = wdvui.treeRowGlyph(@src(), .{});
+            var slot = core.widgets.treeRowGlyph(@src(), .{});
             defer slot.deinit();
             _ = dvui.icon(
                 @src(),
                 "KeybindOwnerCaret",
                 if (b.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
                 .{ .fill_color = icon_color, .stroke_color = icon_color },
-                wdvui.treeRowIconOptions(.{}),
+                core.widgets.treeRowIconOptions(.{}),
             );
         }
         {
-            var slot = wdvui.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
+            var slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
             defer slot.deinit();
             _ = dvui.icon(
                 @src(),
                 "KeybindOwnerIcon",
                 icons.tvg.entypo.folder,
                 .{ .fill_color = icon_color, .stroke_color = icon_color },
-                wdvui.treeRowIconOptions(.{}),
+                core.widgets.treeRowIconOptions(.{}),
             );
         }
         // Same text colour and match-tinting as every other row in the pane.
-        wdvui.labelHighlighted(@src(), group.title, query, true, .{
+        core.draw.labelHighlighted(@src(), group.title, query, true, .{
             .gravity_y = 0.5,
             .expand = .horizontal,
             .font = dvui.Font.theme(.body),
@@ -520,7 +519,7 @@ fn drawOwnerGrid(
     // The same "there is more content this way" hint every other viewport in the app draws, so a
     // table wider than the pane reads as scrollable rather than as one that is simply cut off.
     // Vertical is null: these grids never scroll on that axis, they grow and the explorer scrolls.
-    wdvui.drawScrollEdgeShadows(null, grid_rs, &si, .{});
+    core.draw.drawScrollEdgeShadows(null, grid_rs, &si, .{});
 }
 
 /// Zebra striping for the body rows. dvui dropped `GridWidget.CellStyle.Banded` when the grid
@@ -578,7 +577,7 @@ fn drawCommandRow(
             .padding = .all(0),
         });
         defer left.deinit();
-        wdvui.labelHighlighted(@src(), c.title, query, true, .{
+        core.draw.labelHighlighted(@src(), c.title, query, true, .{
             .expand = .horizontal,
             .margin = .all(0),
             .padding = .all(0),
@@ -586,7 +585,7 @@ fn drawCommandRow(
         // The command id is an identifier the user can type (into `keybinds.zon`, the palette),
         // so it takes the smaller mono face — the same treatment the command palette gives the
         // provenance line under its titles.
-        wdvui.labelHighlighted(@src(), c.id, query, true, .{
+        core.draw.labelHighlighted(@src(), c.id, query, true, .{
             .expand = .horizontal,
             .margin = .all(0),
             .padding = .all(0),

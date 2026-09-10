@@ -24,7 +24,7 @@ const fizzy = @import("../../../fizzy.zig");
 const sdk = fizzy.sdk;
 
 const Layout = @import("../Layout.zig");
-const Split = @import("core").dvui.Split;
+const Split = @import("core").widgets.Split;
 const Menu = @import("../../Menu.zig");
 const Constants = @import("../../Constants.zig");
 

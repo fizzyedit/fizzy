@@ -22,7 +22,6 @@ const dvui = @import("dvui");
 const core = @import("core");
 
 const fuzzy = core.fuzzy;
-const wdvui = core.dvui;
 
 /// Horizontal inset shared by every line in a row, so name/key/description/control all start on
 /// the same left edge.
@@ -38,7 +37,7 @@ pub fn header(name: []const u8, key: []const u8, query: *const fuzzy.Query) void
             .padding = .{ .x = inset, .w = inset, .h = 1 },
             .font = dvui.Font.theme(.body).withWeight(.bold),
         });
-        wdvui.addHighlightedText(tl, name, query, true, dvui.themeGet().color(.control, .text));
+        core.draw.addHighlightedText(tl, name, query, true, dvui.themeGet().color(.control, .text));
         tl.deinit();
     }
 
@@ -51,7 +50,7 @@ pub fn header(name: []const u8, key: []const u8, query: *const fuzzy.Query) void
         .padding = .{ .x = inset, .w = inset, .h = 2 },
         .font = dvui.Font.theme(.mono),
     });
-    wdvui.addHighlightedText(tl, key, query, true, mutedText(0.55));
+    core.draw.addHighlightedText(tl, key, query, true, mutedText(0.55));
     tl.deinit();
 }
 

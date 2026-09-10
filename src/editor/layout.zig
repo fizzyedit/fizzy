@@ -11,7 +11,7 @@
 //!   `Layout`   the live view — which surfaces exist, which match a region, which is selected
 //!   `Region`  a named area accepting keywords, drawing whatever matches (`Layout.region`)
 //!   `Split`   a resizable, collapsible division, addressable by the keywords it shows
-//!   `Tabs`    a reorderable strip of tabs (`core.dvui.Tabs`)
+//!   `Tabs`    a reorderable strip of tabs (`core.widgets.Tabs`)
 //!   `keywords` the conventional keyword sets fizzy's shipped shapes use
 //!
 //! ## Who draws the tabs
@@ -31,7 +31,7 @@
 //! are.
 //!
 //! Nothing distinguishes the two at registration — a surface is a surface, and drawing a tab
-//! strip inside your own area needs no permission. That is why `core.dvui.Tabs` lives in `core`
+//! strip inside your own area needs no permission. That is why `core.widgets.Tabs` lives in `core`
 //! rather than here: a plugin dylib reaches for the same widget the app does.
 //! Note the core pieces come through the named `core` module, never by relative path: a file
 //! may belong to only one module, and `@import("../../core/...")` here would claim it for the
@@ -116,7 +116,7 @@
 //!
 //! **Plugin authors** work a level down: raw dvui for their own content, plus fizzy's mid-level
 //! constructs where one exists — `Viewport` for zoom/pan surfaces, `Tabs`, the dialog chrome in
-//! `core.dvui.dialog`, scroll areas with edge shadows, context menus. Those are content blocks,
+//! `core.dialogs.dialog`, scroll areas with edge shadows, context menus. Those are content blocks,
 //! not layout, and they live in `core` precisely so a dylib can reach them.
 //!
 //! It also leaves room for the thing this is ultimately for: once regions are the only unit, a
@@ -126,7 +126,7 @@
 //!
 //! ## Where this stands
 //!
-//! Built. A region **is** a `dvui.box` and a `split` is a `core.dvui.Split` between two of them,
+//! Built. A region **is** a `dvui.box` and a `split` is a `core.widgets.Split` between two of them,
 //! so the sizing is dvui's own and there is no second model to learn. Every shipped shape uses
 //! it; the edge-docking form and its `rest()` branching are gone.
 //!
@@ -148,7 +148,7 @@ const fizzy = @import("../fizzy.zig");
 pub const Layout = @import("layout/Layout.zig");
 pub const Region = @import("layout/Region.zig");
 
-pub const Tabs = core.dvui.Tabs;
+pub const Tabs = core.widgets.Tabs;
 pub const keywords = @import("fizzy_sdk").keywords;
 
 /// The shipped layout presets and their dispatcher. See `layout/presets.zig`.
@@ -163,7 +163,7 @@ pub const presets = @import("layout/presets.zig");
 /// A zoom/pan viewport with inertial panning — the block behind any artboard-style view (the
 /// image plugin's canvas today; an atlas view, a pixel-art artboard or a node graph equally).
 /// Already consumes `Fling` internally for the coast-after-flick.
-pub const Viewport = core.dvui.CanvasWidget;
+pub const Viewport = core.widgets.CanvasWidget;
 
 /// Inertial coasting after a flick, one per axis. Used by `Viewport`; available directly for a
 /// scroll area that wants the same feel.

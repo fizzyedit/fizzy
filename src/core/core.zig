@@ -36,16 +36,28 @@ pub const shell_env = @import("shell_env.zig");
 /// Darwin-only raw `posix_spawn` wrapper — see `darwin_spawn.zig` for why.
 pub const darwin_spawn = @import("darwin_spawn.zig");
 
-/// Generic dvui hub: dialog framework, helpers, and the generic widgets.
-pub const dvui = @import("dvui.zig");
+/// The widgets both an app and a plugin dylib draw with: splits, tabs, trees, the canvas.
+pub const widgets = @import("widgets.zig");
+/// Reveals, cross-fades and transitions — the animation any region or pane swap runs through.
+pub const anim = @import("anim.zig");
+/// The dialog framework, its window chrome, and the toasts and spinners that share it.
+pub const dialogs = @import("dialogs.zig");
+/// Drawing helpers with no widget of their own: highlighted labels, menu rows, edge shadows.
+pub const draw = @import("draw.zig");
 
 /// Generic momentum/fling helper (pan, scrub, cover-flow).
 pub const Fling = @import("Fling.zig");
 
 /// Generic sprite sub-rect within an atlas texture.
+///
+/// Nothing in fizzy draws a sprite any more — the editor's own icons went to tvg. These two
+/// survive because **pixi** loads its packed UI atlas through them from inside its dylib
+/// (`pixi/src/State.zig`, `runtime.zig`), and core is the only floor a plugin can reach. They
+/// belong in pixi, and should move there the next time that repo is opened; core keeps them
+/// until then so an out-of-tree plugin does not break mid-experiment.
 pub const Sprite = @import("Sprite.zig");
 
-/// Generic loaded spritesheet (`source` texture + sprite table).
+/// Generic loaded spritesheet (`source` texture + sprite table). See `Sprite` above.
 pub const Atlas = @import("Atlas.zig");
 
 /// Server-agnostic LSP client (JSON-RPC framing, caching, threading) shared by every

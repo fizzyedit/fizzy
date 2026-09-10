@@ -39,7 +39,7 @@ pub const NewDocGrid = struct {
 pub const WebSaveKind = enum { save, save_as };
 
 /// Resolved canvas zoom/pan control style (mouse: scroll zooms, middle-button pans;
-/// trackpad: scroll pans, ctrl/cmd+scroll zooms). Matches `core.dvui.CanvasWidget.PanZoomScheme`.
+/// trackpad: scroll pans, ctrl/cmd+scroll zooms). Matches `core.widgets.CanvasWidget.PanZoomScheme`.
 pub const PanZoomScheme = enum { mouse, trackpad };
 
 ctx: *anyopaque,

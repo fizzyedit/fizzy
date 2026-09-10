@@ -26,7 +26,6 @@ const dvui = @import("dvui");
 const core = @import("core");
 const fizzy = @import("../fizzy.zig");
 
-const wdvui = core.dvui;
 const fuzzy = core.fuzzy;
 
 /// Shown in place of a plugin name for the fallback editor, which owns everything nothing else
@@ -322,7 +321,7 @@ fn drawGrid(rows: []Row, query: *const fuzzy.Query, theme: dvui.Theme) void {
     const grid_rs = grid.data().borderRectScale();
     const si = grid.msi.*;
     grid.deinit();
-    wdvui.drawScrollEdgeShadows(null, grid_rs, &si, .{});
+    core.draw.drawScrollEdgeShadows(null, grid_rs, &si, .{});
 }
 
 /// Last-column heading. Not sortable — there is nothing to order by — so it stays a plain label
@@ -378,7 +377,7 @@ fn drawRow(
             }, .{ .gravity_y = 0.5, .min_size_content = .{ .w = 12, .h = 12 } });
             _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 4, .h = 1 } });
         }
-        wdvui.labelHighlighted(@src(), row.ext, query, true, .{
+        core.draw.labelHighlighted(@src(), row.ext, query, true, .{
             .expand = .horizontal,
             .font = dvui.Font.theme(.mono),
             .gravity_y = 0.5,
