@@ -146,7 +146,7 @@ const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
 
 pub const Layout = @import("layout/Layout.zig");
-pub const Region = Layout.Region;
+pub const Region = @import("layout/Region.zig");
 
 pub const Tabs = core.dvui.Tabs;
 pub const keywords = @import("fizzy_sdk").keywords;
