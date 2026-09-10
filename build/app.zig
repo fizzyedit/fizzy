@@ -755,6 +755,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
             .root_source_file = b.path("src/editor/layout/sash.zig"),
         });
         sash_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        if (icons_test) |icons| sash_tests_module.addImport("icons", icons);
 
         inline for (.{
             .{ "fizzy-sdk-tests", sdk_tests_module },

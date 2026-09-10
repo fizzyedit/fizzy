@@ -394,9 +394,25 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
             .vertical => given.h,
         };
         const size = storedSize(id, default);
+
+        // Persist it immediately, so a drag has a correct baseline on its very first press.
+        // Without this the sash fell back to the region's *natural* min size when no size had
+        // been stored yet, so the first drag jumped the region to that width before applying
+        // the delta — the "pops to a slimmer width" report.
+        dvui.dataSet(null, id, "_size", size);
+
+        // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
+        // wider than the size the user dragged it to simply stays wider, and the sash appears to
+        // stop responding once it reaches that content's natural width. Pinning the maximum too
+        // makes the stored size exact and stops a plugin's content dictating the app's
+        // proportions — the hazard `layout.zig` names in its sizing notes.
         box_opts.min_size_content = switch (axis) {
             .horizontal => .{ .w = size, .h = given.h },
             .vertical => .{ .w = given.w, .h = size },
+        };
+        box_opts.max_size_content = switch (axis) {
+            .horizontal => .width(size),
+            .vertical => .height(size),
         };
         if (parent) |p| {
             // A split declared *before* this region was waiting for a neighbour to resize — the
@@ -435,7 +451,7 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
     };
     const axis = c.dir;
 
-    var sep = sash.strip(src, axis);
+    var sep = sash.handle(src, axis);
     defer sep.deinit();
     if (!opts.resize) return;
 

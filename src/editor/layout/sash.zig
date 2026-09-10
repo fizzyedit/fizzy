@@ -6,6 +6,7 @@
 //! event-routing rules rather than layout logic. It depends on nothing but dvui.
 const std = @import("std");
 const dvui = @import("dvui");
+const icons = @import("icons");
 
 /// Thickness of a sash, and how near the pointer must be before it shows itself. Fizzy's tuned
 /// values: a thinner target is measurably harder to grab.
@@ -21,9 +22,9 @@ pub const Options = struct {
     max: ?f32 = null,
 };
 
-/// The separator itself: takes `handle_size` along the container's axis and stretches across it,
-/// so `dvui.box` reserves the gap the way it reserves any other child.
-pub fn strip(src: std.builtin.SourceLocation, axis: dvui.enums.Direction) *dvui.BoxWidget {
+/// The handle itself: takes `handle_size` along the container's axis and stretches across it, so
+/// `dvui.box` reserves the gap the way it reserves any other child.
+pub fn handle(src: std.builtin.SourceLocation, axis: dvui.enums.Direction) *dvui.BoxWidget {
     return dvui.box(src, .{ .dir = axis }, .{
         .min_size_content = switch (axis) {
             .horizontal => .{ .w = handle_size },
@@ -162,6 +163,29 @@ fn drawSash(wd: *dvui.WidgetData, srs: dvui.RectScale, axis: dvui.enums.Directio
         },
     }
     r.fill(.all(thick), .{ .color = wd.options.color(.text).opacity(0.5), .fade = 1.0 });
+
+    // The grip, so the sash reads as something you grab rather than a bar that happens to be
+    // there. Same icon and placement as `PanedWidget`, because these are the same affordance and
+    // fizzy's sashes should not differ depending on which one drew them.
+    const grip = switch (axis) {
+        .horizontal => icons.tvg.lucide.@"grip-vertical",
+        .vertical => icons.tvg.lucide.@"grip-horizontal",
+    };
+    var g = r;
+    switch (axis) {
+        .horizontal => {
+            g.h = dvui.iconWidth("grip", grip, g.w) catch g.w;
+            g.y = (srs.r.y + srs.r.h / 2) - g.h / 2;
+        },
+        .vertical => {
+            g.w = dvui.iconWidth("grip", grip, g.h) catch g.h;
+            g.x = (srs.r.x + srs.r.w / 2) - g.w / 2;
+        },
+    }
+    g = g.outset(dvui.Rect.Physical.all(2 * srs.s));
+    dvui.icon(@src(), "grip", grip, .{
+        .stroke_color = dvui.themeGet().color(.content, .fill),
+    }, .{ .rect = srs.rectFromPhysical(g) });
 }
 
 /// A resizable region's current extent, used as the starting point for the first drag before any
@@ -186,6 +210,7 @@ var t_target: dvui.Id = undefined;
 var t_size: f32 = 0;
 var t_captured: bool = false;
 var t_sep_x: f32 = 0;
+var t_scale: f32 = 1;
 
 /// A horizontal container: a fixed-width region, a sash, and a stretchy one. The same shape as
 /// a sidebar beside a main area.
@@ -194,18 +219,22 @@ fn twoPaneFrame() !dvui.App.Result {
     defer row.deinit();
 
     {
+        const w = storedSize(t_target, 100);
         var left = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .min_size_content = .{ .w = storedSize(t_target, 100) },
+            .min_size_content = .{ .w = w },
+            .max_size_content = .width(w),
             .expand = .vertical,
         });
         defer left.deinit();
         t_target = left.data().id;
+        dvui.dataSet(null, t_target, "_size", w);
     }
 
-    var sep = strip(@src(), .horizontal);
+    var sep = handle(@src(), .horizontal);
     {
         const srs = sep.data().borderRectScale();
         t_sep_x = srs.r.x + srs.r.w / 2;
+        t_scale = srs.s;
         interact(row, sep, .horizontal, t_target, 1, .{ .min = 20 });
         t_captured = dvui.captured(sep.data().id);
     }
@@ -242,6 +271,12 @@ test "dragging the sash resizes the region before it" {
     // The regression: with capture held, matching events on the container makes dvui reject
     // every one of them ("someone else has capture"), so the drag freezes on the first pixel.
     try testing.expect(t_size > before);
+
+    // ...and it must move *by the drag distance*, not merely increase. A baseline taken from
+    // anything other than the region's current extent — its natural content minimum, say — makes
+    // the first press jump the region to that width before applying the delta, which reads as
+    // the sash popping to a different size the moment you grab it.
+    try testing.expectApproxEqAbs(before + 80 / t_scale, t_size, 1.0);
 }
 
 test "releasing gives capture back, so the cursor does not stick" {
