@@ -308,7 +308,7 @@ fn drawSash(
     const full_len = edge / 5;
     const len = rest_len + (@max(full_len, rest_len) - rest_len) * approach;
 
-    const rest_thick = 3 * srs.s;
+    const rest_thick = 4 * srs.s;
     const thick = rest_thick + (handle_size * srs.s - rest_thick) * approach;
     const alpha = 0.18 + 0.32 * approach;
 
@@ -327,7 +327,12 @@ fn drawSash(
             r.w = len;
         },
     }
-    r.fill(.all(thick / 2), .{ .color = wd.options.color(.text).opacity(alpha), .fade = 1.0 });
+    // `.round`, not `.all`. `CornerRect.all(r)` means "the theme's corner *kind*, at radius r",
+    // and fizzy's theme squares its corners — so the radius was being honoured and the shape
+    // ignored, and the pill came out a rectangle. `PanedWidget` has the same line and the same
+    // square handle. A sash is a grip, not a panel: it should read as a pill whatever the theme
+    // does to boxes.
+    r.fill(.round(thick / 2), .{ .color = wd.options.color(.text).opacity(alpha), .fade = 1.0 });
 
     // The grip only once the pointer is close enough for the pill to have room for it — drawing
     // it into the resting pill would just be noise at the edge of every region.
@@ -736,3 +741,4 @@ test "a max below the min does not panic in the clamp" {
     const got = resolve(only, 500, c, .{ .min = 200, .max = 50 });
     try testing.expectApproxEqAbs(@as(f32, 200), got, 0.001);
 }
+
