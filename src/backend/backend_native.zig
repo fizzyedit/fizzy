@@ -225,39 +225,67 @@ export fn fizzy_macos_window_request_clear_frames(frames: c_int) void {
 // the cross-platform ratio save (debounced, on every platform) — so both read-modify-write
 // (`loadWindowFile` then override only their own fields) rather than overwriting the whole file,
 // so neither ever clobbers what the other most recently wrote.
+/// One region's remembered extent, in points, by the name its shape declared.
+///
+/// Replaces the hardcoded `explorer_ratio` / `panel_ratio` pair. Those named two regions fizzy
+/// happens to have, which meant an app with a "Stack" and a "Strip" could not persist anything —
+/// and fizzy's own names leaked into the on-disk format of a framework.
+pub const RegionSize = struct {
+    name: []const u8,
+    size: f32,
+};
+
 const SavedFrame = struct {
     x: f64 = 0,
     y: f64 = 0,
     w: f64 = 0,
     h: f64 = 0,
+    regions: []const RegionSize = &.{},
+
+    // Legacy-shell only: the two hardcoded region ratios, kept so the default (non-region) build
+    // does not lose its sizes before that shell is deleted. The region path persists everything
+    // through `regions`, by the name a shape declared.
     explorer_ratio: f32 = 0.35,
     panel_ratio: f32 = 0.25,
 };
-const window_file = "window.zon";
+const layout_file = "layout.zon";
+/// What `layout.zon` used to be called, read once as a fallback so an existing install keeps its
+/// window position. It only ever held geometry plus two hardcoded region ratios; the name stopped
+/// fitting when regions became something a shape names for itself.
+const legacy_window_file = "window.zon";
 
-fn windowFilePath(buf: []u8, dir: []const u8) ?[:0]const u8 {
+fn windowFilePath(buf: []u8, dir: []const u8, name: []const u8) ?[:0]const u8 {
     const sep = std.fs.path.sep_str;
     if (std.mem.endsWith(u8, dir, sep)) {
-        return std.fmt.bufPrintZ(buf, "{s}{s}", .{ dir, window_file }) catch null;
+        return std.fmt.bufPrintZ(buf, "{s}{s}", .{ dir, name }) catch null;
     }
-    return std.fmt.bufPrintZ(buf, "{s}{s}{s}", .{ dir, sep, window_file }) catch null;
+    return std.fmt.bufPrintZ(buf, "{s}{s}{s}", .{ dir, sep, name }) catch null;
 }
 
 /// Reads every field of `window.zon`, falling back to `SavedFrame`'s own defaults for whatever
 /// is missing or unparseable (never null — simplifies every caller, which only cares about the
 /// subset of fields it owns).
-fn loadWindowFile(dir: []const u8) SavedFrame {
+/// Reads `window.zon` into `gpa`-owned memory. Free with `std.zon.parse.free(gpa, frame)` — the
+/// region list holds allocated names now, so the old return-by-value-and-forget will not do.
+fn loadWindowFile(gpa: std.mem.Allocator, dir: []const u8) SavedFrame {
     var path_buf: [1024]u8 = undefined;
-    const path = windowFilePath(&path_buf, dir) orelse return .{};
-    const data = std.Io.Dir.cwd().readFileAlloc(dvui.io, path, std.heap.page_allocator, .limited(1024)) catch return .{};
-    defer std.heap.page_allocator.free(data);
-    var nul_buf: [1025]u8 = undefined;
+    const path = windowFilePath(&path_buf, dir, layout_file) orelse return .{};
+    const data = std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(4096)) catch blk: {
+        // Fall back to the old name once, so an existing install keeps its window position.
+        var legacy_buf: [1024]u8 = undefined;
+        const legacy = windowFilePath(&legacy_buf, dir, legacy_window_file) orelse return .{};
+        break :blk std.Io.Dir.cwd().readFileAlloc(dvui.io, legacy, gpa, .limited(4096)) catch return .{};
+    };
+    defer gpa.free(data);
+    var nul_buf: [4097]u8 = undefined;
     if (data.len >= nul_buf.len) return .{};
     @memcpy(nul_buf[0..data.len], data);
     nul_buf[data.len] = 0;
-    return std.zon.parse.fromSlice(
+    // `fromSliceAlloc`, not `fromSlice`: the region list holds allocated names, and `fromSlice`
+    // asserts at comptime that the result contains no pointers.
+    return std.zon.parse.fromSliceAlloc(
         SavedFrame,
-        std.heap.page_allocator,
+        gpa,
         nul_buf[0..data.len :0],
         null,
         .{ .ignore_unknown_fields = true },
@@ -266,28 +294,34 @@ fn loadWindowFile(dir: []const u8) SavedFrame {
 
 fn writeWindowFile(dir: []const u8, f: SavedFrame) void {
     var path_buf: [1024]u8 = undefined;
-    const path = windowFilePath(&path_buf, dir) orelse return;
+    const path = windowFilePath(&path_buf, dir, layout_file) orelse return;
     var aw = std.Io.Writer.Allocating.init(std.heap.page_allocator);
     defer aw.deinit();
     std.zon.stringify.serialize(f, .{}, &aw.writer) catch return;
     std.Io.Dir.createDirAbsolute(dvui.io, dir, .default_dir) catch {};
     std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = aw.written() }) catch {
-        std.log.err("failed to write window.zon", .{});
+        std.log.err("failed to write layout.zon", .{});
     };
 }
 
 /// The saved NSWindow frame, or null if there's none yet / it's degenerate (w/h < 1) — same
 /// contract `loadSavedFrame` had before the rename. macOS-only caller (`restoreWindowState`).
 fn loadSavedFrame(dir: []const u8) ?SavedFrame {
-    const f = loadWindowFile(dir);
-    if (f.w < 1 or f.h < 1) return null;
+    const gpa = std.heap.page_allocator;
+    const f = loadWindowFile(gpa, dir);
+    if (f.w < 1 or f.h < 1) {
+        std.zon.parse.free(gpa, f);
+        return null;
+    }
     return f;
 }
 
 /// Read-modify-write: preserves whatever ratios are already on disk, overrides only the frame
 /// geometry. macOS-only caller (`saveWindowGeometry`).
 fn writeSavedFrame(dir: []const u8, x: f64, y: f64, w: f64, h: f64) void {
-    var f = loadWindowFile(dir);
+    const gpa = std.heap.page_allocator;
+    var f = loadWindowFile(gpa, dir);
+    defer std.zon.parse.free(gpa, f);
     f.x = x;
     f.y = y;
     f.w = w;
@@ -298,18 +332,48 @@ fn writeSavedFrame(dir: []const u8, x: f64, y: f64, w: f64, h: f64) void {
 /// Read-modify-write: preserves whatever frame geometry is already on disk, overrides only the
 /// explorer/panel split ratios. Cross-platform (called from `Editor`'s debounced autosave on
 /// every OS, not just macOS).
+/// Legacy-shell only. See `SavedFrame`.
 pub fn saveWindowRatios(dir: []const u8, explorer_ratio: f32, panel_ratio: f32) void {
-    var f = loadWindowFile(dir);
+    const gpa = std.heap.page_allocator;
+    var f = loadWindowFile(gpa, dir);
+    defer std.zon.parse.free(gpa, f);
     f.explorer_ratio = explorer_ratio;
     f.panel_ratio = panel_ratio;
     writeWindowFile(dir, f);
 }
 
-/// Explorer/panel split ratios from `window.zon`, or `SavedFrame`'s own defaults if the file
-/// doesn't exist yet (fresh install). Cross-platform; call once at startup.
+/// Legacy-shell only. See `SavedFrame`.
 pub fn loadWindowRatios(dir: []const u8) struct { explorer_ratio: f32, panel_ratio: f32 } {
-    const f = loadWindowFile(dir);
+    const gpa = std.heap.page_allocator;
+    const f = loadWindowFile(gpa, dir);
+    defer std.zon.parse.free(gpa, f);
     return .{ .explorer_ratio = f.explorer_ratio, .panel_ratio = f.panel_ratio };
+}
+
+/// Read-modify-write: keeps whatever frame geometry is on disk, replaces the region list.
+pub fn saveRegionSizes(dir: []const u8, sizes: []const RegionSize) void {
+    const gpa = std.heap.page_allocator;
+    var f = loadWindowFile(gpa, dir);
+    defer std.zon.parse.free(gpa, f);
+    const keep = f.regions;
+    f.regions = sizes;
+    writeWindowFile(dir, f);
+    f.regions = keep;
+}
+
+/// Every region's remembered extent, in `gpa`-owned memory. Call once at startup; free the
+/// names with `gpa` when done.
+pub fn loadRegionSizes(gpa: std.mem.Allocator, dir: []const u8) []RegionSize {
+    const f = loadWindowFile(gpa, dir);
+    const out = gpa.alloc(RegionSize, f.regions.len) catch {
+        std.zon.parse.free(gpa, f);
+        return &.{};
+    };
+    for (f.regions, 0..) |r, i| {
+        out[i] = .{ .name = gpa.dupe(u8, r.name) catch "", .size = r.size };
+    }
+    std.zon.parse.free(gpa, f);
+    return out;
 }
 
 /// True if the saved frame's title strip lands on a connected display (guards

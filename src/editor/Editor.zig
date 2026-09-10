@@ -172,6 +172,13 @@ layout_regions: std.ArrayListUnmanaged(RegisteredRegion) = .empty,
 /// "Stack" and a "Strip" persists those without fizzy knowing they exist. Seeded from the two
 /// legacy fields so existing settings.zon files keep their sizes.
 region_ratios: std.StringHashMapUnmanaged(f32) = .empty,
+/// Every region's remembered extent in **points**, by the name its shape declared, loaded from
+/// `layout.zon` at startup and written back debounced.
+///
+/// Replaces `explorer_ratio` / `panel_ratio`, which named the two regions fizzy happens to have —
+/// so an app with a "Stack" and a "Strip" could persist nothing, and fizzy's own furniture was
+/// baked into a framework's on-disk format. Those two survive only for the legacy shell.
+region_sizes: std.StringHashMapUnmanaged(f32) = .empty,
 
 /// Positions to reveal once their not-yet-open path finishes loading. Set by `revealPosition`
 /// when the target is not open yet and drained once per frame. Previously lived on the workbench
@@ -611,6 +618,12 @@ pub fn init(
         const ratios = fizzy.backend.loadWindowRatios(editor.config_folder);
         editor.explorer_ratio = ratios.explorer_ratio;
         editor.panel_ratio = ratios.panel_ratio;
+
+        const sizes = fizzy.backend.loadRegionSizes(app.allocator, editor.config_folder);
+        defer app.allocator.free(sizes);
+        for (sizes) |r| {
+            editor.region_sizes.put(app.allocator, r.name, r.size) catch continue;
+        }
     }
 
     // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
@@ -3968,6 +3981,7 @@ fn saveWindowRatiosGuarded(editor: *Editor) void {
         return;
 
     fizzy.backend.saveWindowRatios(editor.config_folder, editor.explorer_ratio, editor.panel_ratio);
+    editor.saveRegionSizes();
     editor.window_ratios_dirty = false;
 }
 
@@ -3975,6 +3989,7 @@ fn saveWindowRatiosGuarded(editor: *Editor) void {
 fn saveWindowRatiosRaw(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     fizzy.backend.saveWindowRatios(editor.config_folder, editor.explorer_ratio, editor.panel_ratio);
+    editor.saveRegionSizes();
     editor.window_ratios_dirty = false;
 }
 
@@ -4744,6 +4759,35 @@ pub fn setWindowStyle(_: *Editor) void {
 
 pub fn rebuildWorkspaces(editor: *Editor) !void {
     try editor.workbench.rebuildWorkspaces();
+}
+
+/// Write every region's extent to `layout.zon`, by name.
+fn saveRegionSizes(editor: *Editor) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    var list: std.ArrayListUnmanaged(fizzy.backend.RegionSize) = .empty;
+    defer list.deinit(editor.gpa);
+    var it = editor.region_sizes.iterator();
+    while (it.next()) |e| {
+        list.append(editor.gpa, .{ .name = e.key_ptr.*, .size = e.value_ptr.* }) catch return;
+    }
+    fizzy.backend.saveRegionSizes(editor.config_folder, list.items);
+}
+
+/// The extent a region should start at: what the user last left it, or the shape's default.
+pub fn regionSize(editor: *Editor, name: []const u8, default: f32) f32 {
+    return editor.region_sizes.get(name) orelse default;
+}
+
+/// Remember a region's extent. Debounced to disk by the same timer the window ratios use.
+pub fn setRegionSize(editor: *Editor, name: []const u8, size: f32) void {
+    const gop = editor.region_sizes.getOrPut(editor.gpa, name) catch return;
+    if (gop.found_existing and gop.value_ptr.* == size) return;
+    if (!gop.found_existing) gop.key_ptr.* = editor.gpa.dupe(u8, name) catch {
+        _ = editor.region_sizes.remove(name);
+        return;
+    };
+    gop.value_ptr.* = size;
+    editor.markWindowRatiosDirty();
 }
 
 /// The persisted size slot for a named region, created on first use.

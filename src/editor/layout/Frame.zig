@@ -370,6 +370,12 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
             .horizontal => given.w,
             .vertical => given.h,
         };
+        // Seeded from what the user last left this region at, by name — so a layout persists
+        // across restarts without the framework knowing which regions an app has.
+        if (dvui.dataGet(null, id, "_size", f32) == null) {
+            dvui.dataSet(null, id, "_size", self.editor.regionSize(kind.name, default));
+        }
+
         // The size the user chose. Auto-collapse must never overwrite it, or folding the window
         // small destroys the extent it is supposed to restore — which is what "it does not
         // reopen to its last place" was. The paned shell kept an `uncollapse_ratio` for the same
@@ -406,6 +412,7 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
         }
         dvui.dataSet(null, id, "_shown", size);
         dvui.dataSet(null, id, "_size", chosen);
+        if (kind.name.len > 0) self.editor.setRegionSize(kind.name, chosen);
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
         // wider than the size the user dragged it to simply stays wider, and the sash appears to
