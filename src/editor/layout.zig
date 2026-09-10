@@ -1,11 +1,15 @@
 //! `fizzy.layout` — everything an application uses to lay itself out.
 //!
+//! This sits beside the `layout/` directory rather than inside it: macOS and Windows filesystems
+//! are case-insensitive, so `layout/layout.zig` and `layout/Layout.zig` are the same path, and
+//! moving one silently destroys the other.
+//!
 //! Grouped rather than scattered so it is obvious what this material is *for*: these are the
 //! pieces you build an app's base layout from, and nothing here knows what a document, an
 //! explorer or a panel is.
 //!
-//!   `Frame`   the live view — which surfaces exist, which match a region, which is selected
-//!   `Region`  a named area accepting keywords, drawing whatever matches (`Frame.region`)
+//!   `Layout`   the live view — which surfaces exist, which match a region, which is selected
+//!   `Region`  a named area accepting keywords, drawing whatever matches (`Layout.region`)
 //!   `Split`   a resizable, collapsible division, addressable by the keywords it shows
 //!   `Tabs`    a reorderable strip of tabs (`core.dvui.Tabs`)
 //!   `keywords` the conventional keyword sets fizzy's shipped shapes use
@@ -139,33 +143,17 @@ const std = @import("std");
 const core = @import("core");
 const build_opts = @import("build_opts");
 const dvui = @import("dvui");
-const fizzy = @import("../../fizzy.zig");
+const fizzy = @import("../fizzy.zig");
 
-pub const Frame = @import("Frame.zig");
-pub const Region = Frame.Region;
-pub const RegionOptions = Frame.RegionOptions;
+pub const Layout = @import("layout/Layout.zig");
+pub const Region = Layout.Region;
+
 pub const Tabs = core.dvui.Tabs;
 pub const keywords = @import("fizzy_sdk").keywords;
-pub const chrome = @import("chrome.zig");
+pub const chrome = @import("layout/chrome.zig");
 
-// ── The shipped shapes, and the dispatcher ──────────────────────────────────────────────────
-//
-// Shapes are **meant to be copied**, on dvui's model for widgets: an app picks one as-is and
-// writes no layout code at all, or copies the closest one into its own source and edits it.
-// Each is ordinary code over the public API above, so copying is editing rather than forking.
-
-pub const ide = @import("ide.zig");
-pub const minimal = @import("minimal.zig");
-pub const studio = @import("studio.zig");
-
-/// Run the shape `-Dlayout=` selected. All of them load the same plugins; only the layout differs.
-pub fn run(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
-    return switch (build_opts.layout) {
-        .ide => ide.layout(editor, f),
-        .minimal => minimal.layout(editor, f),
-        .studio => studio.layout(editor, f),
-    };
-}
+/// The shipped layout presets and their dispatcher. See `layout/presets.zig`.
+pub const presets = @import("layout/presets.zig");
 
 // ── Content-side reusable blocks ────────────────────────────────────────────────────────────
 //

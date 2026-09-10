@@ -11,7 +11,7 @@ const Editor = fizzy.Editor;
 
 const nfd = @import("nfd");
 const PluginStore = @import("../PluginStore.zig");
-const Frame = @import("../layout/Frame.zig");
+const Layout = @import("../layout/Layout.zig");
 
 pub const Explorer = @This();
 
@@ -71,12 +71,12 @@ pub fn peekClose(explorer: *Explorer, editor: *fizzy.Editor) void {
 /// surface currently matches `keywords`. The chrome is the app's; the body is the plugin's.
 ///
 /// Before Phase 4c this resolved the body through `host.activeSidebarView()`, i.e. the legacy
-/// registry, which meant a user's keyword override changed what `Frame.matching` returned but
+/// registry, which meant a user's keyword override changed what `Layout.matching` returned but
 /// nothing moved on screen.
 pub fn draw(
     explorer: *Explorer,
     editor: *fizzy.Editor,
-    f: *Frame,
+    f: *Layout,
     keywords: []const []const u8,
 ) !dvui.App.Result {
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -243,7 +243,7 @@ pub fn hovered(_: *Explorer, editor: *fizzy.Editor) bool {
     return false;
 }
 
-pub fn drawHeader(_: *Explorer, f: *Frame, keywords: []const []const u8) !void {
+pub fn drawHeader(_: *Explorer, f: *Layout, keywords: []const []const u8) !void {
     const view = f.selected(keywords) orelse return;
     const header_title = std.ascii.allocUpperString(dvui.currentWindow().arena(), view.title) catch view.title;
 

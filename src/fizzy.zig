@@ -62,7 +62,7 @@ pub const platform = core.platform;
 
 /// Application layout: regions, splits, tabs and the keyword vocabulary. See
 /// src/editor/layout/layout.zig.
-pub const layout = @import("editor/layout/layout.zig");
+pub const layout = @import("editor/layout.zig");
 
 /// Plugin SDK surface
 pub const sdk = @import("fizzy_sdk");

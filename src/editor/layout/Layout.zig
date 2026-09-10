@@ -1,4 +1,4 @@
-//! The layout-side API an app's `layout()` function talks to.
+//! What an app's shape declares its regions with.
 //!
 //! SPIKE NOTE (Phase 1): `Surface` here is *synthesized* from fizzy's existing
 //! `host.sidebar_views` / `bottom_views` / `center_providers` registries rather than being a
@@ -15,13 +15,13 @@ const Sash = core.dvui.Sash;
 const Constants = @import("../Constants.zig");
 const chrome_ref = @import("chrome.zig");
 
-const Frame = @This();
+const Layout = @This();
 
 /// The conventional keyword sets fizzy's own regions accept. A plugin targeting "the fizzy
 /// shape" uses these; an app may accept any keywords it likes.
 /// Back-compat aliases for the IDE preset. Prefer `sdk.keywords.ide.*` at call sites: it says
 /// *which shape's* convention is being used, where a bare `sidebar_keywords` on the generic
-/// Frame implies every app has a sidebar.
+/// Layout implies every app has a sidebar.
 pub const sidebar_keywords = sdk.keywords.ide.sidebar;
 pub const bottom_keywords = sdk.keywords.ide.panel;
 pub const center_keywords = sdk.keywords.ide.main;
@@ -67,11 +67,11 @@ pub const max_trays = 6;
 /// How long a region takes to fold away or come back. Matches the paned shell's feel.
 pub const collapse_ms: i32 = 220;
 
-pub fn init(editor: *fizzy.Editor) Frame {
+pub fn init(editor: *fizzy.Editor) Layout {
     return .{ .editor = editor };
 }
 
-fn innermost(self: *Frame) ?*Container {
+fn innermost(self: *Layout) ?*Container {
     return if (self.depth == 0) null else &self.containers[self.depth - 1];
 }
 
@@ -89,7 +89,7 @@ pub const handle_dist = Sash.handle_dist;
 // the same mechanism with different numbers, and a window resize grows the stretchy half rather
 // than rescaling the sidebar.
 
-fn arena(self: *Frame) std.mem.Allocator {
+fn arena(self: *Layout) std.mem.Allocator {
     return self.editor.arena.allocator();
 }
 
@@ -103,7 +103,7 @@ fn intersects(a: []const []const u8, b: []const []const u8) bool {
 /// The keywords in force for a surface: the user's per-plugin override from `settings.zon` if
 /// present, otherwise the plugin's declared defaults. This is what makes a wrong default cost
 /// two clicks rather than a release.
-fn effectiveKeywords(self: *Frame, s: *const Surface) []const []const u8 {
+fn effectiveKeywords(self: *Layout, s: *const Surface) []const []const u8 {
     if (self.editor.layout.keyword_overrides.get(s.id)) |kw| return kw;
     return s.keywords;
 }
@@ -111,7 +111,7 @@ fn effectiveKeywords(self: *Frame, s: *const Surface) []const []const u8 {
 /// Every surface currently matching `keywords`, in registration order. Arena-allocated and
 /// valid for this frame only; returns an empty slice rather than erroring so a layout can
 /// always iterate.
-pub fn matching(self: *Frame, keywords: []const []const u8) []const *Surface {
+pub fn matching(self: *Layout, keywords: []const []const u8) []const *Surface {
     var out: std.ArrayListUnmanaged(*Surface) = .empty;
     const a = self.arena();
     for (self.editor.host.surfaces.items) |*s| {
@@ -124,13 +124,13 @@ pub fn matching(self: *Frame, keywords: []const []const u8) []const *Surface {
 
 /// A surface by id, regardless of keywords — how an app places a plugin it ships with and
 /// therefore knows by name (fizzy does this for `workbench.panes`).
-pub fn surface(self: *Frame, id: []const u8) ?*Surface {
+pub fn surface(self: *Layout, id: []const u8) ?*Surface {
     return self.editor.host.surfaceById(id);
 }
 
 /// Surfaces that match no region this app declared. Never silently lost: the settings UI lists
 /// these so a user (or the plugin author) can see the gap and fix it.
-pub fn unplaced(self: *Frame, declared: []const []const []const u8) []const *Surface {
+pub fn unplaced(self: *Layout, declared: []const []const []const u8) []const *Surface {
     var out: std.ArrayListUnmanaged(*Surface) = .empty;
     const a = self.arena();
     outer: for (self.editor.host.surfaces.items) |*s| {
@@ -161,7 +161,7 @@ fn groupKey(keywords: []const []const u8) u64 {
 /// Which legacy registry (if any) owns the selection for this keyword group.
 ///
 /// The host already owns three selections — `active_sidebar_view`, `active_bottom_view`,
-/// `active_center` — so for the conventional keyword sets `Frame` is a *view over existing
+/// `active_center` — so for the conventional keyword sets `Layout` is a *view over existing
 /// state* rather than a parallel store. That is what keeps the new shell and the legacy one
 /// from disagreeing. `Editor.layout.selection` is the fallback for any other keyword group.
 const LegacyOwner = enum { sidebar, bottom, center };
@@ -173,7 +173,7 @@ fn legacyOwner(keywords: []const []const u8) ?LegacyOwner {
     return null;
 }
 
-fn currentId(self: *Frame, keywords: []const []const u8) ?[]const u8 {
+fn currentId(self: *Layout, keywords: []const []const u8) ?[]const u8 {
     const host = &self.editor.host;
     if (legacyOwner(keywords)) |o| return switch (o) {
         .sidebar => host.active_sidebar_view,
@@ -186,7 +186,7 @@ fn currentId(self: *Frame, keywords: []const []const u8) ?[]const u8 {
 /// Which surface is current for this keyword group, or null when nothing matches. Degrades: if
 /// the remembered id is gone (plugin unloaded, keywords overridden elsewhere), falls back to the
 /// first match rather than drawing nothing.
-pub fn selected(self: *Frame, keywords: []const []const u8) ?*Surface {
+pub fn selected(self: *Layout, keywords: []const []const u8) ?*Surface {
     const items = self.matching(keywords);
     if (items.len == 0) return null;
     if (self.currentId(keywords)) |id| {
@@ -195,12 +195,12 @@ pub fn selected(self: *Frame, keywords: []const []const u8) ?*Surface {
     return items[0];
 }
 
-pub fn isSelected(self: *Frame, keywords: []const []const u8, s: *const Surface) bool {
+pub fn isSelected(self: *Layout, keywords: []const []const u8, s: *const Surface) bool {
     const cur = self.selected(keywords) orelse return false;
     return std.mem.eql(u8, cur.id, s.id);
 }
 
-pub fn select(self: *Frame, keywords: []const []const u8, s: *const Surface) void {
+pub fn select(self: *Layout, keywords: []const []const u8, s: *const Surface) void {
     const host = &self.editor.host;
     if (legacyOwner(keywords)) |o| {
         switch (o) {
@@ -217,7 +217,7 @@ pub fn select(self: *Frame, keywords: []const []const u8, s: *const Surface) voi
 /// it for free. Keyed by **surface id**, never the parent box id — a box id moves with the
 /// surrounding layout and would restart the fade on changes that are not content swaps (see the
 /// warning at workbench `src/Workspace.zig:768`).
-pub fn draw(self: *Frame, s: *Surface) !dvui.App.Result {
+pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
     _ = self;
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(s.id);
@@ -233,7 +233,7 @@ pub fn draw(self: *Frame, s: *Surface) !dvui.App.Result {
 /// Draw whichever surface is selected for these keywords, into the current parent. Everything
 /// it does is reachable through `matching` / `selected` / `draw`; `region` uses it to fill a
 /// declared region's space.
-pub fn drawSelected(self: *Frame, keywords: []const []const u8) !dvui.App.Result {
+pub fn drawSelected(self: *Layout, keywords: []const []const u8) !dvui.App.Result {
     const s = self.selected(keywords) orelse return .ok;
     return self.draw(s);
 }
@@ -259,7 +259,7 @@ pub fn drawSelected(self: *Frame, keywords: []const []const u8) !dvui.App.Result
 ///
 /// This replaced a five-value `Chooser` enum, two of whose values (`explorer_chrome`,
 /// `panel_chrome`) named *fizzy's own* furniture from inside the generic layer. That is the
-/// case CLAUDE.md calls a bug in `Frame` rather than a special case: a shape is supposed to be
+/// case CLAUDE.md calls a bug in `Layout` rather than a special case: a shape is supposed to be
 /// ordinary code over this API, and an app copying `ide.zig` could not have written those two
 /// values itself. As a function pointer they are just `chrome.explorerPane` and
 /// `chrome.bottomPane` — app code, passed in, replaceable by the app's own loop over
@@ -269,7 +269,7 @@ pub fn drawSelected(self: *Frame, keywords: []const []const u8) !dvui.App.Result
 /// first of those as a plain function, and the icon rail was never this shape to begin with —
 /// it sits *beside* the region it chooses for, so `ide.zig` calls it directly and reads the
 /// action it returns.
-pub const Content = *const fn (f: *Frame, keywords: []const []const u8) anyerror!dvui.App.Result;
+pub const Content = *const fn (f: *Layout, keywords: []const []const u8) anyerror!dvui.App.Result;
 
 /// A declared region: an area that accepts keywords and draws the surfaces matching them.
 ///
@@ -289,7 +289,7 @@ pub const Region = struct {
     /// options, same lifetime rules — so an app author who has written any dvui already knows
     /// how this behaves, and a split is a separator between two of them.
     box: ?*dvui.BoxWidget = null,
-    frame: ?*Frame = null,
+    frame: ?*Layout = null,
 
     pub fn deinit(self: *Region) void {
         if (self.prev_clip) |c| dvui.clipSet(c);
@@ -346,7 +346,7 @@ pub const RegionInit = struct {
 /// }
 /// f.split(@src(), .{});
 /// ```
-pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, opts: dvui.Options) !Region {
+pub fn region(self: *Layout, src: std.builtin.SourceLocation, kind: RegionInit, opts: dvui.Options) !Region {
     if (self.depth >= max_nesting) {
         dvui.log.err("layout nests deeper than {d} regions; \"{s}\" ignored", .{ max_nesting, kind.name });
         return .{};
@@ -518,7 +518,7 @@ fn roomOf(p: *Container, axis: dvui.enums.Direction) f32 {
 /// declared once, on the container. Dragging it changes the stored extent of the nearest
 /// preceding `resize` region, which is the entire resize model — one number per resizable
 /// region, no ratios, no boundary table, and `dvui.box` doing the layout.
-pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) void {
+pub fn split(self: *Layout, src: std.builtin.SourceLocation, opts: SplitOptions) void {
     const c = self.innermost() orelse {
         dvui.log.err("split() outside a region does nothing", .{});
         return;
@@ -569,7 +569,7 @@ pub const SplitOptions = Sash.Options;
 ///
 /// Everything reachable here is reachable by hand from `matching` / `selected` / `draw`, so a
 /// shape wanting something else writes its own function and passes it as `content`.
-fn drawRegionContents(self: *Frame, opts: anytype, matches: []const *Surface) !dvui.App.Result {
+fn drawRegionContents(self: *Layout, opts: anytype, matches: []const *Surface) !dvui.App.Result {
     _ = matches;
     const content = opts.content orelse return self.drawSelected(opts.keywords);
     return content(self, opts.keywords);

@@ -8,7 +8,7 @@
 //! shapes, and an app either uses one directly — `-Dlayout=ide` gives you the general IDE shape
 //! with no layout code of your own — or copies this function into its own source and edits it to
 //! add, remove or rearrange regions. There is nothing privileged in here: it is ordinary code
-//! over the public `Frame` API, which is exactly what makes copying it a reasonable thing to do
+//! over the public `Layout` API, which is exactly what makes copying it a reasonable thing to do
 //! rather than a fork.
 //!
 //! Read it top to bottom: a fixed rail on the left, a resizable sidebar, the menu bar, a
@@ -20,14 +20,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const fizzy = @import("../../fizzy.zig");
+const fizzy = @import("../../../fizzy.zig");
 const sdk = fizzy.sdk;
 
-const Frame = @import("Frame.zig");
+const Layout = @import("../Layout.zig");
 const Sash = @import("core").dvui.Sash;
-const chrome = @import("chrome.zig");
-const Menu = @import("../Menu.zig");
-const Constants = @import("../Constants.zig");
+const chrome = @import("../chrome.zig");
+const Menu = @import("../../Menu.zig");
+const Constants = @import("../../Constants.zig");
 
 // ── The IDE preset ──────────────────────────────────────────────────────────────────────────
 //
@@ -43,7 +43,7 @@ pub const bottom = sdk.keywords.ide.panel;
 /// The main area: documents and canvases — the thing being worked on.
 pub const main_area = sdk.keywords.ide.main;
 
-pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
+pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer body.deinit();
 

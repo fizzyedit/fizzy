@@ -8,7 +8,7 @@ const Editor = fizzy.Editor;
 
 const SidebarView = fizzy.sdk.SidebarView;
 const PluginStore = @import("PluginStore.zig");
-const Frame = @import("layout/Frame.zig");
+const Layout = @import("layout/Layout.zig");
 
 pub const Sidebar = @This();
 
@@ -40,7 +40,7 @@ pub const Action = enum { none, open, close };
 /// `f` is the layout frame: the rail lists whatever currently *matches* the keywords its
 /// region accepts, rather than whatever happens to be in `host.sidebar_views`. That is what
 /// makes a user's keyword override actually move an icon out of (or into) this rail.
-pub fn draw(_: Sidebar, editor: *Editor, f: *Frame, keywords: []const []const u8) !Action {
+pub fn draw(_: Sidebar, editor: *Editor, f: *Layout, keywords: []const []const u8) !Action {
     const vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .vertical,
         .background = false,
@@ -101,9 +101,9 @@ pub fn draw(_: Sidebar, editor: *Editor, f: *Frame, keywords: []const []const u8
 
 fn drawOption(
     editor: *Editor,
-    f: *Frame,
+    f: *Layout,
     keywords: []const []const u8,
-    view: *Frame.Surface,
+    view: *Layout.Surface,
     index: usize,
     size: f32,
 ) !Action {

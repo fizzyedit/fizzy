@@ -9,7 +9,7 @@
 //! shapes, and an app either uses one directly — `-Dlayout=ide` gives you the general IDE shape
 //! with no layout code of your own — or copies this function into its own source and edits it to
 //! add, remove or rearrange regions. There is nothing privileged in here: it is ordinary code
-//! over the public `Frame` API, which is exactly what makes copying it a reasonable thing to do
+//! over the public `Layout` API, which is exactly what makes copying it a reasonable thing to do
 //! rather than a fork.
 //!
 //! The interesting part is the right-hand region: it accepts the *same* `sidebar`/`explorer`
@@ -18,12 +18,12 @@
 //! the job place-names could not.
 const std = @import("std");
 const dvui = @import("dvui");
-const fizzy = @import("../../fizzy.zig");
+const fizzy = @import("../../../fizzy.zig");
 const sdk = fizzy.sdk;
 
-const Frame = @import("Frame.zig");
+const Layout = @import("../Layout.zig");
 const Sash = @import("core").dvui.Sash;
-const chrome = @import("chrome.zig");
+const chrome = @import("../chrome.zig");
 
 // ── The studio preset ───────────────────────────────────────────────────────────────────────
 //
@@ -39,7 +39,7 @@ pub const bottom = sdk.keywords.studio.strip;
 /// The large canvas.
 pub const main_area = sdk.keywords.studio.canvas;
 
-pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
+pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,

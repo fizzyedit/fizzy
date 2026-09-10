@@ -114,11 +114,9 @@ pub const PaneGroup = @import("layout/panes/PaneGroup.zig");
 pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
-/// The shipped layout shapes and the dispatcher that runs the selected one. Imported as `shapes`
-/// rather than `layout` so the application can carry a `layout` *field* — a file-scope import is
-/// a struct member too, and the two would collide.
-const shapes = @import("layout/layout.zig");
-const Frame = @import("layout/Frame.zig");
+/// The shipped layout presets and the dispatcher that runs the selected one.
+const presets = @import("layout/presets.zig");
+const Layout = @import("layout/Layout.zig");
 const AppInfo = @import("../AppInfo.zig");
 pub const FileLoadJob = workbench_mod.FileLoadJob;
 
@@ -136,7 +134,7 @@ pub const Workbench = workbench_mod.Workbench;
 /// library, where there is no single ambient App.
 gpa: std.mem.Allocator,
 
-layout: Layout = .{},
+layout: LayoutState = .{},
 
 arena: std.heap.ArenaAllocator,
 
@@ -4281,7 +4279,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         editor.pollPendingReveals();
 
         {
-            // Frame lifecycle and housekeeping belong to the framework, not to a shape: every
+            // Layout lifecycle and housekeeping belong to the framework, not to a shape: every
             // layout needed these five calls verbatim, and getting one wrong is a bug an app
             // author has no way to diagnose. A shape declares regions; it does not run the
             // frame.
@@ -4291,8 +4289,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.flushQueuedNativeMenuItems();
             editor.processPendingSaveAs();
 
-            var frame: Frame = .init(editor);
-            const shell_result = shapes.run(editor, &frame);
+            var layout: Layout = .init(editor);
+            const shell_result = presets.run(editor, &layout);
 
             for (editor.host.plugins.items) |plugin| plugin.endFrame();
             layout_root.deinit();
@@ -5820,17 +5818,20 @@ pub fn deinit(editor: *Editor) !void {
     editor.arena.deinit();
 }
 
-/// Everything about how this app is laid out: which surface each region shows, the regions and
-/// splits this frame declared, and every region's remembered extent.
+/// The application's layout *state*: which surface each region shows, the regions this frame
+/// declared, and every region's remembered extent.
+///
+/// Named `LayoutState` because `Layout` is the thing a shape declares regions *with*. The field
+/// is `layout`, which is what call sites read.
 ///
 /// Grouped rather than spread across the application state because the boundary matters: this
 /// is framework, and the chrome beside it (explorer, sidebar, panes) is fizzy's own. Seventy-five
 /// flat fields made that invisible.
-pub const Layout = struct {
+pub const LayoutState = struct {
     /// Shell (new-layout) selection state: keyword-group hash -> selected surface id.
     /// Surface ids are registry-owned string literals, so this stores no allocations of its own.
     /// Keyed by group rather than by region so two regions written with the same keywords share a
-    /// selection with no wiring between them (see `layout/Frame.zig`).
+    /// selection with no wiring between them (see `layout/Layout.zig`).
     selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
     /// Per-surface keyword overrides from `settings.zon` (`.plugins.<id>.surfaces.<sid>.keywords`).
     /// The user's answer wins over the plugin's declared defaults, which is what makes a wrong

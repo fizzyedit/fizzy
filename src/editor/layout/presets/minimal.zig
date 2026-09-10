@@ -10,7 +10,7 @@
 //! shapes, and an app either uses one directly — `-Dlayout=ide` gives you the general IDE shape
 //! with no layout code of your own — or copies this function into its own source and edits it to
 //! add, remove or rearrange regions. There is nothing privileged in here: it is ordinary code
-//! over the public `Frame` API, which is exactly what makes copying it a reasonable thing to do
+//! over the public `Layout` API, which is exactly what makes copying it a reasonable thing to do
 //! rather than a fork.
 //!
 //! Note what is absent: no rail, so nothing selects between browser surfaces; no sidebar region,
@@ -18,17 +18,17 @@
 //! That is the designed behavior, not a bug.
 const std = @import("std");
 const dvui = @import("dvui");
-const fizzy = @import("../../fizzy.zig");
+const fizzy = @import("../../../fizzy.zig");
 const sdk = fizzy.sdk;
 
-const Frame = @import("Frame.zig");
+const Layout = @import("../Layout.zig");
 
 // ── The minimal preset ──────────────────────────────────────────────────────────────────────
 /// One region, and it is the main area. No sidebar or panel vocabulary at all — surfaces asking
-/// for those simply have nowhere to go here, which `Frame.unplaced` reports.
+/// for those simply have nowhere to go here, which `Layout.unplaced` reports.
 pub const main_area = sdk.keywords.ide.main;
 
-pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
+pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer body.deinit();
 

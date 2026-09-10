@@ -1,5 +1,5 @@
 //! `fizzy.widgets` — app-side chrome drawn *around* and *inside* regions, as opposed to
-//! `Frame`'s layout verbs.
+//! `Layout`'s layout verbs.
 //!
 //! SPIKE FINDING (Phase 1). Fizzy's `Explorer` and `Panel` are not surfaces and are not
 //! regions: they are **app chrome that wraps a region**.
@@ -17,12 +17,12 @@
 //! together with the surface/ABI change so it happens once.
 //!
 //! Until then these delegate to the existing implementations, which resolve the active view
-//! through the same host state `Frame` reads (`host.active_sidebar_view` /
+//! through the same host state `Layout` reads (`host.active_sidebar_view` /
 //! `active_bottom_view`), so the new shell and the old one cannot disagree.
 const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
-const Frame = @import("Frame.zig");
+const Layout = @import("Layout.zig");
 const chrome = @import("chrome.zig");
 const Sidebar = @import("../Sidebar.zig");
 
@@ -30,7 +30,7 @@ const Sidebar = @import("../Sidebar.zig");
 /// area with edge shadows, Windows titlebar hit-rect registration, and the undecided-plugin
 /// badge. Rewriting it as a bare `f.matching` loop means moving all of that into the app layer
 /// first, which is the same job as splitting Explorer chrome from its region (see above).
-pub fn iconRail(f: *Frame, keywords: []const []const u8) !Sidebar.Action {
+pub fn iconRail(f: *Layout, keywords: []const []const u8) !Sidebar.Action {
     return f.editor.sidebar.draw(f.editor, f, keywords);
 }
 
@@ -59,7 +59,7 @@ pub fn iconRail(f: *Frame, keywords: []const []const u8) !Sidebar.Action {
 /// `studio.zig` demonstrates the single-surface form. This is the plain tabbed form in between,
 /// and it exists as consumer API rather than as fizzy's own code — the first shape that wants
 /// tabs without splits uses it as-is instead of copying `Panel`.
-pub fn tabs(f: *Frame, keywords: []const []const u8) void {
+pub fn tabs(f: *Layout, keywords: []const []const u8) void {
     const surfaces = f.matching(keywords);
     if (surfaces.len == 0) return;
 
@@ -100,7 +100,7 @@ pub fn tabs(f: *Frame, keywords: []const []const u8) void {
 /// `iconRail` deliberately has no counterpart here. It is a chooser that sits *beside* the
 /// region it chooses for rather than above it (see `ide.zig`), so it is not a region's content
 /// and wrapping it as one would only lose the action it returns.
-pub fn tabbed(f: *Frame, keywords: []const []const u8) !dvui.App.Result {
+pub fn tabbed(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
     tabs(f, keywords);
     return f.drawSelected(keywords);
 }
@@ -113,16 +113,16 @@ var tabs_state: fizzy.dvui.Tabs.State = .{};
 /// Surfaces this app declared no region for. An app should show these somewhere (fizzy lists
 /// them in settings) so a plugin never silently vanishes — the failure mode keyword matching is
 /// only safe because of.
-pub fn unplacedSurfaces(f: *Frame) []const *Frame.Surface {
-    return f.unplaced(&.{ Frame.sidebar_keywords, Frame.bottom_keywords, Frame.center_keywords });
+pub fn unplacedSurfaces(f: *Layout) []const *Layout.Surface {
+    return f.unplaced(&.{ Layout.sidebar_keywords, Layout.bottom_keywords, Layout.center_keywords });
 }
 
 /// Explorer chrome + the sidebar region it wraps.
-pub fn explorerPane(f: *Frame, keywords: []const []const u8) !dvui.App.Result {
+pub fn explorerPane(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
     return f.editor.explorer.draw(f.editor, f, keywords);
 }
 
 /// Bottom-panel chrome (tab strip) + the bottom region it wraps.
-pub fn bottomPane(f: *Frame, keywords: []const []const u8) !dvui.App.Result {
+pub fn bottomPane(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
     return f.editor.panes.draw(f.editor, f, keywords);
 }

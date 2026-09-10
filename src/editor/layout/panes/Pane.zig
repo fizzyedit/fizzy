@@ -6,7 +6,7 @@ const dvui = @import("dvui");
 const fizzy = @import("../../../fizzy.zig");
 
 const PaneGroup = @import("PaneGroup.zig");
-const Frame = @import("../Frame.zig");
+const Layout = @import("../Layout.zig");
 
 const panel_corner_radius: f32 = 12;
 
@@ -39,7 +39,7 @@ pub fn drawBackground(grouping: u64) void {
     defer card.deinit();
 }
 
-pub fn draw(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Frame, keywords: []const []const u8) !dvui.App.Result {
+pub fn draw(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = true,
@@ -80,7 +80,7 @@ fn panelContentColor() dvui.Color {
     return content_color;
 }
 
-fn drawTabs(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Frame, keywords: []const []const u8) void {
+fn drawTabs(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
     defer self.processTabsDrag(panel, host, f, keywords);
 
     // The strip scaffolding — reorder, scroll, per-tab boxes, press/drag handling — is shared
@@ -135,7 +135,7 @@ fn drawTabs(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Frame,
     strip.finalSlot(PaneGroup.surfaces(f, keywords).len);
 }
 
-fn drawContent(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Frame, keywords: []const []const u8) !void {
+fn drawContent(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) !void {
     var content_vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
@@ -151,7 +151,7 @@ fn drawContent(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Fra
     _ = try f.draw(view);
 }
 
-fn processTabsDrag(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Frame, keywords: []const []const u8) void {
+fn processTabsDrag(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
     if (self.tab_state.insert_before_index) |insert_before| {
         if (self.tab_state.removed_index) |removed| {
             if (removed >= PaneGroup.surfaces(f, keywords).len) return;
@@ -199,7 +199,7 @@ fn processTabsDrag(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: 
     }
 }
 
-fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Frame, keywords: []const []const u8) void {
+fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
     if (!dvui.dragName(drag_name)) return;
 
     const drag_src = blk: {

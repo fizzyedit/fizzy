@@ -5,13 +5,13 @@ const fizzy = @import("../../../fizzy.zig");
 
 const PaneGroup = @import("PaneGroup.zig");
 const Sash = @import("core").dvui.Sash;
-const Frame = @import("../Frame.zig");
+const Layout = @import("../Layout.zig");
 const Pane = @import("Pane.zig");
 
 const handle_size = 10;
 const handle_dist = 60;
 
-pub fn rebuildWorkspaces(panel: *PaneGroup, f: *Frame, keywords: []const []const u8) !void {
+pub fn rebuildWorkspaces(panel: *PaneGroup, f: *Layout, keywords: []const []const u8) !void {
     panel.ensurePanes(f, keywords);
 
     for (PaneGroup.surfaces(f, keywords)) |view| {
@@ -71,7 +71,7 @@ pub fn rebuildWorkspaces(panel: *PaneGroup, f: *Frame, keywords: []const []const
 pub fn drawWorkspaces(
     panel: *PaneGroup,
     host: *fizzy.Editor.Host,
-    f: *Frame,
+    f: *Layout,
     keywords: []const []const u8,
     index: usize,
 ) !dvui.App.Result {

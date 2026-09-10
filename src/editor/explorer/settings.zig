@@ -201,7 +201,7 @@ pub const groups = [_]Group{
         .icon = icons.tvg.lucide.bug,
         .items = &.{
             .{
-                .label = "Frame rate",
+                .label = "Layout rate",
                 .key = "fps",
                 .description = "Frames per second this window is currently drawing. Read-only.",
                 .keywords = "fps performance diagnostics",
