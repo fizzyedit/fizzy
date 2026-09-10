@@ -12,6 +12,7 @@ const core = @import("core");
 const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
 const layout_split = @import("split.zig");
+const sash = @import("sash.zig");
 const Constants = @import("../Constants.zig");
 const chrome_ref = @import("chrome.zig");
 
@@ -62,8 +63,8 @@ fn innermost(self: *Frame) ?*Container {
 
 /// Thickness of a split, and how near the pointer must be before it shows itself. Fizzy's tuned
 /// sash values (`layout.split`), kept because a thinner target is measurably harder to grab.
-pub const handle_size: f32 = 10;
-pub const handle_dist: f32 = 60;
+pub const handle_size = sash.handle_size;
+pub const handle_dist = sash.handle_dist;
 
 /// A region's persisted extent along its parent's axis, in points.
 ///
@@ -73,9 +74,7 @@ pub const handle_dist: f32 = 60;
 /// there is no second sizing model — a fixed icon rail, a dragged sidebar and a stretching main
 /// area are the same mechanism with different numbers, and a window resize grows the stretchy
 /// half rather than rescaling the sidebar.
-fn storedSize(id: dvui.Id, default: f32) f32 {
-    return dvui.dataGet(null, id, "_size", f32) orelse default;
-}
+const storedSize = sash.storedSize;
 
 fn arena(self: *Frame) std.mem.Allocator {
     return self.editor.arena.allocator();
@@ -436,24 +435,14 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
     };
     const axis = c.dir;
 
-    var sep = dvui.box(src, .{ .dir = axis }, .{
-        .min_size_content = switch (axis) {
-            .horizontal => .{ .w = handle_size },
-            .vertical => .{ .h = handle_size },
-        },
-        .expand = switch (axis) {
-            .horizontal => .vertical,
-            .vertical => .horizontal,
-        },
-        .background = false,
-    });
+    var sep = sash.strip(src, axis);
     defer sep.deinit();
     if (!opts.resize) return;
 
-    // Which neighbour this split resizes. Preferring the one *before* it makes the sidebar case
+    // Which neighbour this sash resizes. Preferring the one *before* it makes the sidebar case
     // work immediately; falling back to the one after is what the bottom panel needs, since a
-    // panel is declared after its own split and cannot be known when the split is drawn. That
-    // one is bound by `region` and read back a frame later.
+    // panel is declared after its own split and cannot be known when the sash is drawn. That one
+    // is bound by `region` and read back a frame later.
     var sign: f32 = 1;
     const target = c.last_resizable orelse blk: {
         sign = -1;
@@ -463,7 +452,12 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
         };
     };
 
-    self.dragSplit(c, sep, axis, target, sign, opts);
+    const container = c.box orelse return;
+    sash.interact(container, sep, axis, target, sign, .{
+        .resize = opts.resize,
+        .min = opts.min,
+        .max = opts.max,
+    });
 }
 
 pub const SplitOptions = struct {
@@ -474,128 +468,6 @@ pub const SplitOptions = struct {
     /// Largest, or null for no limit. Stops a panel from swallowing the window.
     max: ?f32 = null,
 };
-
-fn dragSplit(
-    self: *Frame,
-    c: *Container,
-    sep: *dvui.BoxWidget,
-    axis: dvui.enums.Direction,
-    target: dvui.Id,
-    sign: f32,
-    opts: SplitOptions,
-) void {
-    _ = self;
-    const wd = sep.data();
-    const srs = wd.borderRectScale();
-    const cursor: dvui.enums.Cursor = switch (axis) {
-        .horizontal => .arrow_w_e,
-        .vertical => .arrow_n_s,
-    };
-
-    // The centre line of the split, and how far the pointer is from it.
-    const centre = switch (axis) {
-        .horizontal => srs.r.x + srs.r.w / 2,
-        .vertical => srs.r.y + srs.r.h / 2,
-    };
-
-    // Events are matched against the **container**, not this thin strip, so the sash can grow as
-    // the pointer approaches rather than only reacting once it is already on top of a 10pt
-    // target. `PanedWidget` does the same, and it is the difference between a sash that feels
-    // findable and one that does not. Nothing is handled unless the pointer is actually close.
-    var dist: f32 = std.math.floatMax(f32);
-    if (c.box) |cbox| {
-        for (dvui.events()) |*e| {
-            if (e.evt != .mouse) continue;
-            if (!dvui.eventMatchSimple(e, cbox.data())) continue;
-
-            const p = switch (axis) {
-                .horizontal => e.evt.mouse.p.x,
-                .vertical => e.evt.mouse.p.y,
-            };
-            dist = @abs(p - centre) / srs.s;
-
-            const captured = dvui.captured(wd.id);
-            if (!captured and dist > handle_size) continue;
-
-            switch (e.evt.mouse.action) {
-                .press => if (e.evt.mouse.button.pointer()) {
-                    e.handle(@src(), wd);
-                    dvui.captureMouse(wd, e.num);
-                    dvui.dragPreStart(e.evt.mouse.button, e.evt.mouse.p, .{ .cursor = cursor });
-                    // The extent at grab time, so the drag is measured from where it started
-                    // instead of accumulating rounding every frame.
-                    dvui.dataSet(null, wd.id, "_start", dvui.dataGet(null, target, "_size", f32) orelse currentExtent(target, axis));
-                },
-                .release => if (e.evt.mouse.button.pointer() and captured) {
-                    e.handle(@src(), wd);
-                    dvui.captureMouse(null, e.num);
-                    dvui.dragEnd();
-                },
-                .motion => if (captured) {
-                    e.handle(@src(), wd);
-                    if (dvui.dragging(e.evt.mouse.p, null)) |delta| {
-                        const start = dvui.dataGet(null, wd.id, "_start", f32) orelse 0;
-                        const moved = sign * switch (axis) {
-                            .horizontal => delta.x,
-                            .vertical => delta.y,
-                        } / srs.s;
-                        const want = start + moved;
-                        const capped = if (opts.max) |m| @min(want, m) else want;
-                        dvui.dataSet(null, target, "_size", @max(opts.min, capped));
-                        dvui.refresh(null, @src(), wd.id);
-                    }
-                },
-                .position => dvui.cursorSet(cursor),
-                else => {},
-            }
-        }
-    }
-
-    if (dvui.captured(wd.id)) dist = 0;
-    drawSash(wd, srs, axis, dist);
-}
-
-/// The sash itself: a short rounded bar across the middle of the gap with a grip on it, fading
-/// in as the pointer approaches. Deliberately **not** a fill of the whole separator — the strip
-/// spans the entire edge, and painting all of it reads as a solid divider rather than something
-/// you can grab.
-fn drawSash(wd: *dvui.WidgetData, srs: dvui.RectScale, axis: dvui.enums.Direction, dist: f32) void {
-    if (dist > handle_size + handle_dist) return;
-
-    var len_ratio: f32 = 1.0 / 5.0;
-    len_ratio *= 1.0 - std.math.clamp((dist - handle_size) / handle_dist, 0.0, 1.0);
-    if (len_ratio <= 0.001) return;
-
-    const thick = handle_size * srs.s;
-    var r = srs.r;
-    switch (axis) {
-        .horizontal => {
-            r.x = srs.r.x + srs.r.w / 2 - thick / 2;
-            r.w = thick;
-            const h = srs.r.h * len_ratio;
-            r.y = srs.r.y + srs.r.h / 2 - h / 2;
-            r.h = h;
-        },
-        .vertical => {
-            r.y = srs.r.y + srs.r.h / 2 - thick / 2;
-            r.h = thick;
-            const w = srs.r.w * len_ratio;
-            r.x = srs.r.x + srs.r.w / 2 - w / 2;
-            r.w = w;
-        },
-    }
-    r.fill(.all(thick), .{ .color = wd.options.color(.text).opacity(0.5), .fade = 1.0 });
-}
-
-/// A resizable region's current extent, used as the starting point for the first drag before any
-/// size has been stored.
-fn currentExtent(target: dvui.Id, axis: dvui.enums.Direction) f32 {
-    const r = dvui.minSizeGet(target) orelse return 0;
-    return switch (axis) {
-        .horizontal => r.w,
-        .vertical => r.h,
-    };
-}
 
 /// The original edge-docking region. See `region`./// The original edge-docking region. See `region`./// The original edge-docking region. See `region`.
 pub fn dock(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions) !Region {

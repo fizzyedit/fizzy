@@ -746,8 +746,19 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         splitbox_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         if (icons_test) |icons| splitbox_tests_module.addImport("icons", icons);
 
+        // The layout sash: drag, capture handoff and hit distance. Rooted at the file itself,
+        // which imports nothing but dvui precisely so it can be — every bug it has had was a
+        // dvui event-routing rule, and those need a real Window to reproduce.
+        const sash_tests_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/editor/layout/sash.zig"),
+        });
+        sash_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+
         inline for (.{
             .{ "fizzy-sdk-tests", sdk_tests_module },
+            .{ "fizzy-sash-tests", sash_tests_module },
             .{ "fizzy-plugin-loader-tests", plugin_loader_module },
             .{ "fizzy-splitbox-tests", splitbox_tests_module },
         }) |entry| {
