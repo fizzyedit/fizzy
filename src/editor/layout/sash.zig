@@ -118,11 +118,6 @@ pub fn handle(src: std.builtin.SourceLocation, axis: dvui.enums.Direction) *dvui
     });
 }
 
-/// A region's persisted extent along its parent's axis, in points.
-pub fn storedSize(id: dvui.Id, default: f32) f32 {
-    return dvui.dataGet(null, id, "_size", f32) orelse default;
-}
-
 /// Record where a resizable region's edges are, so a sash can size it from a fixed anchor
 /// instead of correcting itself frame to frame.
 ///
@@ -217,6 +212,7 @@ pub fn interact(
             },
             .motion => if (captured) {
                 e.handle(@src(), wd);
+                if (debug) dvui.log.err("[sash] motion raw=({d},{d}) dragging={?}", .{ e.evt.mouse.p.x, e.evt.mouse.p.y, dvui.dragging(e.evt.mouse.p, null) });
                 if (dvui.dragging(e.evt.mouse.p, null) != null) {
                     drag_to = switch (axis) {
                         .horizontal => e.evt.mouse.p.x,
@@ -257,7 +253,10 @@ pub fn interact(
             current + sign * (p - centre) / srs.s;
 
         const resolved = resolve(target, want, c, opts);
-        if (debug) dvui.log.err("[sash] p={d} anchor={?d} scale={d} want={d} resolved={d} min={d} max={?d} len={d} base_min={d} handles={d}", .{ p, anchor, srs.s, want, resolved, opts.min, opts.max, c.length, c.base_min, c.handles });
+        if (debug) dvui.log.err(
+            "[sash] axis={s} sign={d} p={d} centre={d} anchor={?d} scale={d} | want={d} resolved={d} | min={d} max={?d} len={d} base_min={d} handles={d} others={d}",
+            .{ @tagName(axis), sign, p, centre, anchor, srs.s, want, resolved, opts.min, opts.max, c.length, c.base_min, c.handles, c.others.len },
+        );
         dvui.dataSet(null, target, "_size", resolved);
         // Keep the shown extent in step with the target during a drag, so the region does not
         // read this as a change to ease into. A sash belongs under the pointer, not on a curve.
@@ -266,14 +265,49 @@ pub fn interact(
     }
 
     if (dvui.captured(wd.id)) dist = 0;
-    drawSash(wd, srs, axis, dist);
+
+    // A sash whose region is shut has nothing beside it to imply that it is there, so it keeps a
+    // resting line at the edge and grows the grip out of that on approach. Without it a closed
+    // region is indistinguishable from no region, and the way back is invisible.
+    //
+    // Several shut regions in a row — a few markdown previews opened to the side — do not pile up
+    // on one another: a sash still takes its own `handle_size` in the layout even when what it
+    // resizes is zero, so they sit side by side and read as the several separate handles they
+    // are.
+    const at_rest = (dvui.dataGet(null, target, "_shown", f32) orelse 1) <= 0;
+    drawSash(wd, srs, axis, dist, at_rest);
 }
 
 /// The sash itself: a short rounded bar across the middle of the gap with a grip on it, fading
 /// in as the pointer approaches. Deliberately **not** a fill of the whole separator — the strip
 /// spans the entire edge, and painting all of it reads as a solid divider rather than something
 /// you can grab.
-fn drawSash(wd: *dvui.WidgetData, srs: dvui.RectScale, axis: dvui.enums.Direction, dist: f32) void {
+fn drawSash(
+    wd: *dvui.WidgetData,
+    srs: dvui.RectScale,
+    axis: dvui.enums.Direction,
+    dist: f32,
+    at_rest: bool,
+) void {
+    // The resting line: the full length of the edge, hairline thin, faint. Drawn whatever the
+    // pointer is doing, because its job is to say "there is a handle here" to someone who is not
+    // yet looking for one.
+    if (at_rest) {
+        const hair = @max(1, srs.s);
+        var line = srs.r;
+        switch (axis) {
+            .horizontal => {
+                line.x = srs.r.x + srs.r.w / 2 - hair / 2;
+                line.w = hair;
+            },
+            .vertical => {
+                line.y = srs.r.y + srs.r.h / 2 - hair / 2;
+                line.h = hair;
+            },
+        }
+        line.fill(.all(0), .{ .color = wd.options.color(.text).opacity(0.20), .fade = 0 });
+    }
+
     if (dist > handle_size + handle_dist) return;
 
     var len_ratio: f32 = 1.0 / 5.0;
@@ -361,7 +395,7 @@ fn twoPaneFrame() !dvui.App.Result {
     defer row.deinit();
 
     {
-        const w = storedSize(t_target, 100);
+        const w = (dvui.dataGet(null, t_target, "_size", f32) orelse 100);
 
         var left = dvui.box(@src(), .{ .dir = .vertical }, .{
             .min_size_content = .{ .w = w },
@@ -399,7 +433,7 @@ fn twoPaneFrame() !dvui.App.Result {
         defer right.deinit();
     }
 
-    t_size = storedSize(t_target, 100);
+    t_size = (dvui.dataGet(null, t_target, "_size", f32) orelse 100);
     return .ok;
 }
 

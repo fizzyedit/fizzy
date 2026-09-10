@@ -81,15 +81,14 @@ fn innermost(self: *Frame) ?*Container {
 pub const handle_size = sash.handle_size;
 pub const handle_dist = sash.handle_dist;
 
-/// A region's persisted extent along its parent's axis, in points.
-///
-/// Points rather than a fraction of the parent, and stored per region rather than as a table of
-/// boundaries, because that is what `dvui.box` already understands: a child that does not expand
-/// along the axis takes its minimum, and the ones that do share the remainder. Reusing that means
-/// there is no second sizing model — a fixed icon rail, a dragged sidebar and a stretching main
-/// area are the same mechanism with different numbers, and a window resize grows the stretchy
-/// half rather than rescaling the sidebar.
-const storedSize = sash.storedSize;
+// A region's extent along its parent's axis is stored under `"_size"`, in points.
+//
+// Points rather than a fraction of the parent, and per region rather than a table of boundaries,
+// because that is what `dvui.box` already understands: a child that does not expand along the
+// axis takes its minimum, and the ones that do share the remainder. Reusing that means there is
+// no second sizing model — a fixed icon rail, a dragged sidebar and a stretching main area are
+// the same mechanism with different numbers, and a window resize grows the stretchy half rather
+// than rescaling the sidebar.
 
 fn arena(self: *Frame) std.mem.Allocator {
     return self.editor.arena.allocator();
@@ -413,30 +412,31 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
     // to, defaulting to the `min_size_content` the shape wrote.
     var box_opts = opts;
     var shut_now = false;
+    var size: f32 = 0;
     if (kind.resize) {
         const given = opts.min_size_content orelse dvui.Size{};
         const default: f32 = switch (axis) {
             .horizontal => given.w,
             .vertical => given.h,
         };
-        var size = storedSize(id, default);
+        // The size the user chose. Auto-collapse must never overwrite it, or folding the window
+        // small destroys the extent it is supposed to restore — which is what "it does not
+        // reopen to its last place" was. The paned shell kept an `uncollapse_ratio` for the same
+        // reason; here the stored size simply stays put and only what is *shown* goes to zero.
+        const chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
 
-        // Start shut when there is no room for this region at all. The paned shell did this and
-        // the region form was missing it. Note it only forces *closed*: everything between closed
-        // and open is the user's drag, unsnapped.
+        var target = chosen;
         if (kind.collapsible) {
             const room = if (parent) |p| roomOf(p, axis) else 0;
-            if (room > 0 and room < Constants.min_window_size[0]) size = 0;
+            if (room > 0 and room < Constants.min_window_size[0]) target = 0;
         }
 
-        // Ease toward the target when it moved for a reason other than a drag — the collapse when
-        // the window runs out of room, and the restore when it comes back. Fizzy's paned shell
-        // animated those and the region form was snapping.
+        // Ease toward the target when it moved for a reason other than a drag — the collapse
+        // when the window runs out of room, and the restore when it comes back.
         //
         // A drag is exempt, and stays exempt without a flag: the sash writes `_shown` alongside
         // `_size`, so the two agree and nothing kicks off. Easing a drag would be wrong anyway —
         // a sash should sit under the pointer, not lag behind it on a curve.
-        const target = size;
         if (dvui.animationGet(id, "_ease")) |a| {
             size = a.value();
         } else {
@@ -449,15 +449,12 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
                     .easing = dvui.easing.outQuint,
                 });
                 size = shown;
+            } else {
+                size = target;
             }
         }
         dvui.dataSet(null, id, "_shown", size);
-
-        // Persist it immediately, so a drag has a correct baseline on its very first press.
-        // Without this the sash fell back to the region's *natural* min size when no size had
-        // been stored yet, so the first drag jumped the region to that width before applying
-        // the delta — the "pops to a slimmer width" report.
-        dvui.dataSet(null, id, "_size", target);
+        dvui.dataSet(null, id, "_size", chosen);
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
         // wider than the size the user dragged it to simply stays wider, and the sash appears to
@@ -486,7 +483,7 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
                 p.resizable_count += 1;
             }
         }
-        shut_now = size <= 0 and target <= 0;
+        shut_now = size <= 0;
     }
 
     if (!kind.resize) {
