@@ -16,6 +16,8 @@
 //! A new shape defines its own preset here (or in its own file — nothing here is privileged);
 //! adding one never touches the ABI, because these are just string slices.
 
+const std = @import("std");
+
 /// The general IDE shape (`src/editor/layout/ide.zig`): icon rail, left explorer, bottom panel,
 /// main area. What most fizzy-based apps start from, and what a plugin written "for fizzy"
 /// should target unless it has reason not to.
@@ -39,3 +41,23 @@ pub const studio = struct {
     pub const strip = ide.panel;
     pub const canvas = ide.main;
 };
+
+/// The key a set of keywords selects under.
+///
+/// Two regions written with the same keywords share a selection, with nothing wired between
+/// them — that is what lets an icon rail and the pane it chooses for agree without either
+/// naming the other. Case-insensitive, so `"Sidebar"` and `"sidebar"` are one group.
+///
+/// Lives here rather than in the layout because `Host` stores the selections and the layout
+/// reads them: two implementations of this hash would disagree silently and each look right.
+pub fn groupKey(keywords: []const []const u8) u64 {
+    var h = std.hash.Wyhash.init(0);
+    for (keywords) |k| {
+        var buf: [64]u8 = undefined;
+        const n = @min(k.len, buf.len);
+        for (k[0..n], 0..) |c, i| buf[i] = std.ascii.toLower(c);
+        h.update(buf[0..n]);
+        h.update("\x00");
+    }
+    return h.final();
+}

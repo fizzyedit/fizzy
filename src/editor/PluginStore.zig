@@ -1308,11 +1308,11 @@ fn syncReadmeCenter() void {
     const host = &fizzy.editor().host;
     const want = host.isActiveSidebarView(view_id) and Readme.selectedId() != null;
     if (want and !readme_center_active) {
-        saved_center = host.active_center;
+        saved_center = host.selectionFor(fizzy.sdk.keywords.ide.main);
         host.setActiveCenter(readme_center_id);
         readme_center_active = true;
     } else if (!want and readme_center_active) {
-        host.active_center = saved_center;
+        if (saved_center) |id| host.setActiveCenter(id);
         saved_center = null;
         readme_center_active = false;
     }

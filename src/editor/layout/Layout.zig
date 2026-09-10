@@ -143,44 +143,10 @@ pub fn unplaced(self: *Layout, declared: []const []const []const u8) []const *Su
     return out.items;
 }
 
-/// The selection group key for a keyword set.
-/// The selection group key for a keyword set. Groups are keyed by the keywords themselves, so
-/// two regions written with the same keywords share a selection with no wiring between them.
-fn groupKey(keywords: []const []const u8) u64 {
-    var h = std.hash.Wyhash.init(0);
-    for (keywords) |k| {
-        var buf: [64]u8 = undefined;
-        const n = @min(k.len, buf.len);
-        for (k[0..n], 0..) |c, i| buf[i] = std.ascii.toLower(c);
-        h.update(buf[0..n]);
-        h.update("\x00");
-    }
-    return h.final();
-}
 
-/// Which legacy registry (if any) owns the selection for this keyword group.
-///
-/// The host already owns three selections — `active_sidebar_view`, `active_bottom_view`,
-/// `active_center` — so for the conventional keyword sets `Layout` is a *view over existing
-/// state* rather than a parallel store. That is what keeps the new shell and the legacy one
-/// from disagreeing. `Editor.layout.selection` is the fallback for any other keyword group.
-const LegacyOwner = enum { sidebar, bottom, center };
-
-fn legacyOwner(keywords: []const []const u8) ?LegacyOwner {
-    if (intersects(keywords, sidebar_keywords)) return .sidebar;
-    if (intersects(keywords, bottom_keywords)) return .bottom;
-    if (intersects(keywords, center_keywords)) return .center;
-    return null;
-}
 
 fn currentId(self: *Layout, keywords: []const []const u8) ?[]const u8 {
-    const host = &self.editor.host;
-    if (legacyOwner(keywords)) |o| return switch (o) {
-        .sidebar => host.active_sidebar_view,
-        .bottom => host.active_bottom_view,
-        .center => host.active_center,
-    };
-    return self.editor.layout.selection.get(groupKey(keywords));
+    return self.editor.host.selectionFor(keywords);
 }
 
 /// Which surface is current for this keyword group, or null when nothing matches. Degrades: if
@@ -201,17 +167,9 @@ pub fn isSelected(self: *Layout, keywords: []const []const u8, s: *const Surface
 }
 
 pub fn select(self: *Layout, keywords: []const []const u8, s: *const Surface) void {
-    const host = &self.editor.host;
-    if (legacyOwner(keywords)) |o| {
-        switch (o) {
-            .sidebar => host.setActiveSidebarView(s.id),
-            .bottom => host.setActiveBottomView(s.id),
-            .center => host.setActiveCenter(s.id),
-        }
-        return;
-    }
-    self.editor.layout.selection.put(self.editor.gpa, groupKey(keywords), s.id) catch {};
+    self.editor.host.setSelectionFor(keywords, s.id);
 }
+
 
 /// Draw one surface into the current parent, wrapped in the swap cross-fade so every region gets
 /// it for free. Keyed by **surface id**, never the parent box id — a box id moves with the

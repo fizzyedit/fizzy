@@ -229,9 +229,14 @@ language_support: std.ArrayListUnmanaged(LanguageSupport) = .empty,
 surfaces: std.ArrayListUnmanaged(Surface) = .empty,
 
 /// Active selection by contribution id (null = use the first registered).
-active_sidebar_view: ?[]const u8 = null,
-active_bottom_view: ?[]const u8 = null,
-active_center: ?[]const u8 = null,
+/// Which surface is selected, per keyword group.
+///
+/// One store rather than the three named fields it replaces (`active_sidebar_view`,
+/// `active_bottom_view`, `active_center`). Those named the three regions fizzy happens to have,
+/// so the layout had to special-case them to avoid keeping a second, disagreeing copy — and a
+/// fourth kind of region could not have a selection at all. The named accessors below are now
+/// views onto this.
+selections: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 
 pub fn init(allocator: std.mem.Allocator) Host {
     return .{ .allocator = allocator };
@@ -240,6 +245,7 @@ pub fn init(allocator: std.mem.Allocator) Host {
 pub fn deinit(self: *Host) void {
     self.plugins.deinit(self.allocator);
     self.services.deinit(self.allocator);
+    self.selections.deinit(self.allocator);
     self.sidebar_views.deinit(self.allocator);
     self.bottom_views.deinit(self.allocator);
     self.center_providers.deinit(self.allocator);
@@ -800,16 +806,16 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
         }
     }
 
-    // Active-selection ids may name a now-removed view; reset so the next frame falls
-    // back to a still-registered contribution (or none).
-    if (self.active_sidebar_view) |id| {
-        if (!self.hasSidebarView(id)) self.active_sidebar_view = null;
-    }
-    if (self.active_bottom_view) |id| {
-        if (!self.hasBottomView(id)) self.active_bottom_view = null;
-    }
-    if (self.active_center) |id| {
-        if (!self.hasCenterProvider(id)) self.active_center = null;
+    // A selection may name a now-removed surface; drop it so the next frame falls back to a
+    // still-registered one. Generic over every keyword group rather than the three that used to
+    // have named fields — a fourth kind of region gets the same treatment for free.
+    var it = self.selections.iterator();
+    while (it.next()) |e| {
+        const id = e.value_ptr.*;
+        if (self.hasSidebarView(id) or self.hasBottomView(id) or self.hasCenterProvider(id)) continue;
+        if (self.surfaceById(id) != null) continue;
+        _ = self.selections.remove(e.key_ptr.*);
+        it = self.selections.iterator();
     }
 }
 
@@ -1164,7 +1170,7 @@ fn centerSurfaceDraw(ctx: ?*anyopaque) anyerror!dvui.App.Result {
 
 pub fn registerSidebarView(self: *Host, view: SidebarView) !void {
     try self.sidebar_views.append(self.allocator, view);
-    if (self.active_sidebar_view == null) self.active_sidebar_view = view.id;
+    if (self.selectionFor(keywords.ide.sidebar) == null) self.setSelectionFor(keywords.ide.sidebar, view.id);
     // Compat sugar: also expose it as a surface with the conventional sidebar keywords, so a
     // keyword-matching layout sees it without the plugin changing a line. The surface's ctx is
     // the stored view, which is why this appends first.
@@ -1185,7 +1191,7 @@ pub fn registerSidebarView(self: *Host, view: SidebarView) !void {
 
 pub fn registerBottomView(self: *Host, view: BottomView) !void {
     try self.bottom_views.append(self.allocator, view);
-    if (self.active_bottom_view == null) self.active_bottom_view = view.id;
+    if (self.selectionFor(keywords.ide.panel) == null) self.setSelectionFor(keywords.ide.panel, view.id);
     const stored = &self.bottom_views.items[self.bottom_views.items.len - 1];
     try self.registerSurface(.{
         .id = view.id,
@@ -1277,7 +1283,7 @@ pub fn registerCenter(
 
 pub fn registerCenterProvider(self: *Host, provider: CenterProvider) !void {
     try self.center_providers.append(self.allocator, provider);
-    if (self.active_center == null) self.active_center = provider.id;
+    if (self.selectionFor(keywords.ide.main) == null) self.setSelectionFor(keywords.ide.main, provider.id);
     const stored = &self.center_providers.items[self.center_providers.items.len - 1];
     try self.registerSurface(.{
         .id = provider.id,
@@ -1464,18 +1470,29 @@ pub fn formatFor(self: *Host, ext: []const u8, path: []const u8, bytes: []const 
 
 // ---- active selection ------------------------------------------------------
 
+/// The surface id selected for `keywords`, or null if nothing has been chosen yet.
+pub fn selectionFor(self: *Host, kw: []const []const u8) ?[]const u8 {
+    return self.selections.get(keywords.groupKey(kw));
+}
+
+/// Choose the surface for `keywords`. Regions written with the same keywords share this, which
+/// is how a chooser and the region it chooses for stay in step with nothing wired between them.
+pub fn setSelectionFor(self: *Host, kw: []const []const u8, id: []const u8) void {
+    self.selections.put(self.allocator, keywords.groupKey(kw), id) catch {};
+}
+
 pub fn setActiveSidebarView(self: *Host, id: []const u8) void {
-    self.active_sidebar_view = id;
+    self.setSelectionFor(keywords.ide.sidebar, id);
 }
 
 pub fn isActiveSidebarView(self: *Host, id: []const u8) bool {
-    const active = self.active_sidebar_view orelse return false;
+    const active = self.selectionFor(keywords.ide.sidebar) orelse return false;
     return std.mem.eql(u8, active, id);
 }
 
 /// The currently active sidebar view, or the first visible registered view as fallback.
 pub fn activeSidebarView(self: *Host) ?*SidebarView {
-    if (self.active_sidebar_view) |id| {
+    if (self.selectionFor(keywords.ide.sidebar)) |id| {
         for (self.sidebar_views.items) |*v| {
             if (std.mem.eql(u8, v.id, id)) return v;
         }
@@ -1498,16 +1515,16 @@ pub fn hasPersistentBottomView(self: *Host) bool {
 }
 
 pub fn setActiveBottomView(self: *Host, id: []const u8) void {
-    self.active_bottom_view = id;
+    self.setSelectionFor(keywords.ide.panel, id);
 }
 
 pub fn isActiveBottomView(self: *Host, id: []const u8) bool {
-    const active = self.active_bottom_view orelse return false;
+    const active = self.selectionFor(keywords.ide.panel) orelse return false;
     return std.mem.eql(u8, active, id);
 }
 
 pub fn activeBottomView(self: *Host) ?*BottomView {
-    if (self.active_bottom_view) |id| {
+    if (self.selectionFor(keywords.ide.panel)) |id| {
         for (self.bottom_views.items) |*v| {
             if (std.mem.eql(u8, v.id, id)) return v;
         }
@@ -1517,11 +1534,11 @@ pub fn activeBottomView(self: *Host) ?*BottomView {
 }
 
 pub fn setActiveCenter(self: *Host, id: []const u8) void {
-    self.active_center = id;
+    self.setSelectionFor(keywords.ide.main, id);
 }
 
 pub fn activeCenter(self: *Host) ?*CenterProvider {
-    if (self.active_center) |id| {
+    if (self.selectionFor(keywords.ide.main)) |id| {
         for (self.center_providers.items) |*p| {
             if (std.mem.eql(u8, p.id, id)) return p;
         }
@@ -2009,7 +2026,7 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
 
     // Active selections that named removed contributions reset to null; the next frame
     // falls back to a still-registered view.
-    try testing.expect(host.active_sidebar_view == null);
-    try testing.expect(host.active_bottom_view == null);
-    try testing.expect(host.active_center == null);
+    try testing.expect(host.selectionFor(keywords.ide.sidebar) == null);
+    try testing.expect(host.selectionFor(keywords.ide.panel) == null);
+    try testing.expect(host.selectionFor(keywords.ide.main) == null);
 }
