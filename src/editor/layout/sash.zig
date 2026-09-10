@@ -16,9 +16,11 @@ pub const handle_dist: f32 = 60;
 pub const Options = struct {
     /// False draws the gap but does not let the user move it.
     resize: bool = true,
-    /// Smallest extent the dragged neighbour may be squeezed to.
-    min: f32 = 40,
-    /// Largest, or null for no limit. Stops a panel from swallowing the window.
+    /// Smallest extent the dragged neighbour may be squeezed to. Zero by default, so a sash can
+    /// be dragged fully closed — a region you cannot shut is a region the user has to fight.
+    min: f32 = 0,
+    /// Largest, or null to allow the full length of the container minus the sash itself, so a
+    /// region can be dragged fully open. A number here is a deliberate cap, not a default.
     max: ?f32 = null,
 };
 
@@ -41,6 +43,26 @@ pub fn handle(src: std.builtin.SourceLocation, axis: dvui.enums.Direction) *dvui
 /// A region's persisted extent along its parent's axis, in points.
 pub fn storedSize(id: dvui.Id, default: f32) f32 {
     return dvui.dataGet(null, id, "_size", f32) orelse default;
+}
+
+/// Record where a resizable region's edges are, so a sash can size it from a fixed anchor
+/// instead of correcting itself frame to frame.
+///
+/// The anchor is the edge the region does **not** grow from: the far edge of a region before the
+/// sash, or the near edge of one after it. Neither moves while dragging, which is what makes the
+/// arithmetic absolute.
+pub fn recordEdges(id: dvui.Id, wd: *dvui.WidgetData, axis: dvui.enums.Direction) void {
+    const r = wd.borderRectScale().r;
+    switch (axis) {
+        .horizontal => {
+            dvui.dataSet(null, id, "_org", r.x);
+            dvui.dataSet(null, id, "_end", r.x + r.w);
+        },
+        .vertical => {
+            dvui.dataSet(null, id, "_org", r.y);
+            dvui.dataSet(null, id, "_end", r.y + r.h);
+        },
+    }
 }
 
 /// Drag `target`'s stored extent, and draw the sash. `sign` is +1 when the target is the region
@@ -141,10 +163,30 @@ pub fn interact(
     // nothing accumulated. `PanedWidget` drives its ratio from the absolute pointer position for
     // the same reason.
     if (drag_to) |p| {
+        // Size from the region's fixed edge, not from a correction applied to the current size.
+        //
+        // A relative correction winds up: once the size clamps at a limit the pointer keeps
+        // travelling past the sash, and dragging back has to walk off that overshoot before
+        // anything moves — the sash sticks at the end of its range and then lags. Measuring from
+        // an edge that does not move during the drag makes the size a pure function of where the
+        // pointer is, so it leaves a limit the instant the pointer does.
         const current = dvui.dataGet(null, target, "_size", f32) orelse currentExtent(target, axis);
-        const want = current + sign * (p - centre) / srs.s;
-        const capped = if (opts.max) |m| @min(want, m) else want;
-        dvui.dataSet(null, target, "_size", @max(opts.min, capped));
+        const anchor = dvui.dataGet(null, target, if (sign > 0) "_org" else "_end", f32);
+        const want = if (anchor) |a|
+            (if (sign > 0) (p - a) else (a - p)) / srs.s - handle_size / 2
+        else
+            current + sign * (p - centre) / srs.s;
+
+        // The far end is the container's own length less the sash, so the region can be dragged
+        // fully open rather than stopping wherever the neighbour's content happens to want to
+        // be. Without a cap the stored size just keeps growing past the window, and the sash
+        // stops tracking the pointer because the layout cannot honour it.
+        const room = switch (axis) {
+            .horizontal => container.data().contentRect().w,
+            .vertical => container.data().contentRect().h,
+        };
+        const limit = opts.max orelse @max(opts.min, room - handle_size);
+        dvui.dataSet(null, target, "_size", std.math.clamp(want, opts.min, limit));
         dvui.refresh(null, @src(), wd.id);
     }
 
@@ -230,6 +272,12 @@ var t_size: f32 = 0;
 var t_captured: bool = false;
 var t_sep_x: f32 = 0;
 var t_scale: f32 = 1;
+var t_room: f32 = 0;
+var t_min: f32 = 0;
+/// The container in **physical** pixels — mouse events are posted in those, `contentRect` is in
+/// points, and mixing them is a test that fails for a reason unrelated to the widget.
+var t_room_px: f32 = 0;
+var t_org_px: f32 = 0;
 
 /// A horizontal container: a fixed-width region, a sash, and a stretchy one. The same shape as
 /// a sidebar beside a main area.
@@ -239,6 +287,7 @@ fn twoPaneFrame() !dvui.App.Result {
 
     {
         const w = storedSize(t_target, 100);
+
         var left = dvui.box(@src(), .{ .dir = .vertical }, .{
             .min_size_content = .{ .w = w },
             .max_size_content = .width(w),
@@ -247,6 +296,7 @@ fn twoPaneFrame() !dvui.App.Result {
         defer left.deinit();
         t_target = left.data().id;
         dvui.dataSet(null, t_target, "_size", w);
+        recordEdges(t_target, left.data(), .horizontal);
     }
 
     var sep = handle(@src(), .horizontal);
@@ -254,13 +304,23 @@ fn twoPaneFrame() !dvui.App.Result {
         const srs = sep.data().borderRectScale();
         t_sep_x = srs.r.x + srs.r.w / 2;
         t_scale = srs.s;
-        interact(row, sep, .horizontal, t_target, 1, .{ .min = 20 });
+        t_room = row.data().contentRect().w;
+        t_room_px = row.data().borderRectScale().r.w;
+        t_org_px = row.data().borderRectScale().r.x;
+        interact(row, sep, .horizontal, t_target, 1, .{ .min = t_min });
         t_captured = dvui.captured(sep.data().id);
     }
     sep.deinit();
 
     {
-        var right = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+        // A real minimum on the far side, which is what makes the open limit *unreachable*: the
+        // stored size can be clamped to a value the layout cannot actually give, and then the
+        // sash sits short of it. That gap is where windup lives, so a test frame without it
+        // cannot show the bug.
+        var right = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .both,
+            .min_size_content = .{ .w = 120 },
+        });
         defer right.deinit();
     }
 
@@ -351,7 +411,78 @@ test "releasing gives capture back, so the cursor does not stick" {
     try testing.expect(!t_captured);
 }
 
+test "a sash can be dragged fully closed and fully open" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+
+    try dvui.testing.settle(twoPaneFrame);
+    const cw = dvui.currentWindow();
+
+    // All the way to the near edge: shut, not stopped short by a floor nobody asked for.
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = t_sep_x, .y = 100 } });
+    _ = try dvui.testing.step(twoPaneFrame);
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(twoPaneFrame);
+    for (0..8) |_| {
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = -400, .y = 100 } });
+        _ = try dvui.testing.step(twoPaneFrame);
+    }
+    try testing.expectApproxEqAbs(@as(f32, 0), t_size, 0.001);
+
+    // ...and all the way to the far edge, which is the container's length less the sash.
+    for (0..8) |_| {
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 4000, .y = 100 } });
+        _ = try dvui.testing.step(twoPaneFrame);
+    }
+    _ = try cw.addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    try testing.expect(t_size > 150);
+    try testing.expectApproxEqAbs(t_room - handle_size, t_size, 2.0);
+}
+
+test "leaving a limit tracks the pointer immediately" {
+    // The windup this exists for: with the size corrected frame to frame, overshooting a limit
+    // banks up the distance the pointer travelled past the sash, and dragging back has to spend
+    // it all again before anything moves. The sash appears stuck at the end of its range.
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+
+    try dvui.testing.settle(twoPaneFrame);
+    const cw = dvui.currentWindow();
+
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = t_sep_x, .y = 100 } });
+    _ = try dvui.testing.step(twoPaneFrame);
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    // Far past the open limit, by a long way.
+    for (0..6) |_| {
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 4000, .y = 100 } });
+        _ = try dvui.testing.step(twoPaneFrame);
+    }
+    const at_limit = t_size;
+
+    // Now come back to a position well inside the range. One frame should put the sash there.
+    const target_x = t_org_px + t_room_px * 0.4;
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = target_x, .y = 100 } });
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    // The size responds on this frame...
+    try testing.expect(t_size < at_limit - 20);
+
+    // ...and the sash is drawn there two frames later. That is dvui's normal settle, not the
+    // windup this test is about: a box places its children from the min size they reported *last*
+    // frame, so a size written during one frame reaches the layout on the next. During a real
+    // drag the pointer is moving continuously, so this is a frame of trail, not a stall.
+    _ = try dvui.testing.step(twoPaneFrame);
+    _ = try dvui.testing.step(twoPaneFrame);
+    try testing.expectApproxEqAbs(target_x, t_sep_x, 4.0);
+}
+
 test "a drag cannot squeeze the region below its minimum" {
+    t_min = 20;
+    defer t_min = 0;
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
     defer t.deinit();
 

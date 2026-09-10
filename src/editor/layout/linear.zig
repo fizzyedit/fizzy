@@ -81,7 +81,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
             defer side.deinit();
         }
 
-        f.split(@src(), .{ .min = 140 });
+        f.split(@src(), .{});
 
         {
             var content = try f.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
@@ -92,7 +92,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
                 defer main.deinit();
             }
 
-            f.split(@src(), .{ .min = 80 });
+            f.split(@src(), .{});
 
             {
                 var panel = try f.region(@src(), .{

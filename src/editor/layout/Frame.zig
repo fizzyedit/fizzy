@@ -427,6 +427,7 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
     }
 
     const box = dvui.box(src, .{ .dir = kind.dir }, box_opts);
+    if (kind.resize) sash.recordEdges(id, box.data(), axis);
     self.containers[self.depth] = .{ .dir = kind.dir, .box = box };
     self.depth += 1;
 
