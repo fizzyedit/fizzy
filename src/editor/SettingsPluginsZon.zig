@@ -498,7 +498,7 @@ const testing = std.testing;
 
 const sample_source: [:0]const u8 =
     \\.{
-    \\    .explorer_ratio = 0.35,
+    \\    .theme = 0.35,
     \\    .plugins = .{
     \\        .pixi = .{ .enabled = true, .settings = .{ .grid_size = 16 } },
     \\        .text = .{ .enabled = true, .settings = .{ .tab_size = 4 } },
@@ -519,7 +519,7 @@ test "extractPluginBlob returns the verbatim value text for an existing id" {
 }
 
 test "extractPluginBlob returns null when .plugins is absent" {
-    const source: [:0]const u8 = ".{ .explorer_ratio = 0.35 }";
+    const source: [:0]const u8 = ".{ .theme = 0.35 }";
     try testing.expect(extractPluginBlob(testing.allocator, source, "pixi") == null);
 }
 
@@ -543,7 +543,7 @@ test "nested extractField reaches .plugins.<id>.settings" {
 
 test "composeMergedText round-trips: overlay replaces one id, others survive untouched" {
     const overlay = [_]Entry{.{ .id = "pixi", .text = ".{ .enabled = true, .settings = .{ .grid_size = 32 } }" }};
-    const fizzy_text = ".{ .explorer_ratio = 0.35 }";
+    const fizzy_text = ".{ .theme = 0.35 }";
 
     const composed = try composeMergedText(testing.allocator, fizzy_text, sample_source, &overlay);
     defer testing.allocator.free(composed);
@@ -562,7 +562,7 @@ test "composeMergedText round-trips: overlay replaces one id, others survive unt
 
 test "composeMergedText removes an id when overlay text is null" {
     const overlay = [_]Entry{.{ .id = "pixi", .text = null }};
-    const fizzy_text = ".{ .explorer_ratio = 0.35 }";
+    const fizzy_text = ".{ .theme = 0.35 }";
 
     const composed = try composeMergedText(testing.allocator, fizzy_text, sample_source, &overlay);
     defer testing.allocator.free(composed);
@@ -579,7 +579,7 @@ test "composeMergedText removes an id when overlay text is null" {
 
 test "composeMergedText adds a brand-new id when there is no existing .plugins block" {
     const overlay = [_]Entry{.{ .id = "pixi", .text = ".{ .enabled = true, .settings = .{ .grid_size = 8 } }" }};
-    const fizzy_text = ".{ .explorer_ratio = 0.35 }";
+    const fizzy_text = ".{ .theme = 0.35 }";
 
     const composed = try composeMergedText(testing.allocator, fizzy_text, null, &overlay);
     defer testing.allocator.free(composed);
@@ -638,7 +638,7 @@ test "upsertOne never clobbers an id that's already present" {
 }
 
 test "upsertOne adds a .plugins block when none exists yet" {
-    const source: [:0]const u8 = ".{ .explorer_ratio = 0.35 }";
+    const source: [:0]const u8 = ".{ .theme = 0.35 }";
     const composed = try upsertOne(testing.allocator, source, .{ .id = "pixi", .text = ".{ .enabled = true }" });
     defer testing.allocator.free(composed);
     const composed_z = try testing.allocator.dupeZ(u8, composed);
@@ -826,10 +826,10 @@ test "composeMergedText re-indents a multi-line id block under .plugins" {
         \\}
     ;
     const overlay = [_]Entry{.{ .id = "text", .text = id_block }};
-    const composed = try composeMergedText(testing.allocator, ".{ .explorer_ratio = 0.35 }", null, &overlay);
+    const composed = try composeMergedText(testing.allocator, ".{ .theme = 0.35 }", null, &overlay);
     defer testing.allocator.free(composed);
     try testing.expectEqualStrings(
-        \\.{ .explorer_ratio = 0.35,
+        \\.{ .theme = 0.35,
         \\    .plugins = .{
         \\        .text = .{
         \\            .enabled = true,
@@ -848,7 +848,7 @@ test "composeMergedText dedents an already-nested block (no indent compounding)"
     // extracted block; rewriting without dedent pushed `.enabled` further right each save.
     const existing: [:0]const u8 =
         \\.{
-        \\    .explorer_ratio = 0.35,
+        \\    .theme = 0.35,
         \\    .plugins = .{
         \\        .zig = .{
         \\                    .enabled = true,
@@ -856,10 +856,10 @@ test "composeMergedText dedents an already-nested block (no indent compounding)"
         \\    },
         \\}
     ;
-    const composed = try composeMergedText(testing.allocator, ".{ .explorer_ratio = 0.35 }", existing, &.{});
+    const composed = try composeMergedText(testing.allocator, ".{ .theme = 0.35 }", existing, &.{});
     defer testing.allocator.free(composed);
     try testing.expectEqualStrings(
-        \\.{ .explorer_ratio = 0.35,
+        \\.{ .theme = 0.35,
         \\    .plugins = .{
         \\        .zig = .{
         \\            .enabled = true,

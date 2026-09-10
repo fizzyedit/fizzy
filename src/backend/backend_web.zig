@@ -56,12 +56,6 @@ pub fn saveWindowGeometry(_: *dvui.Window) void {}
 /// Symmetric with the native API: no `window.zon` to persist on web.
 pub const RegionSize = struct { name: []const u8, size: f32 };
 
-pub fn saveWindowRatios(_: []const u8, _: f32, _: f32) void {}
-
-pub fn loadWindowRatios(_: []const u8) struct { explorer_ratio: f32, panel_ratio: f32 } {
-    return .{ .explorer_ratio = 0.35, .panel_ratio = 0.25 };
-}
-
 pub fn saveRegionSizes(_: []const u8, _: []const RegionSize) void {}
 
 /// Symmetric with the native API: no `window.zon` to read on web — same defaults

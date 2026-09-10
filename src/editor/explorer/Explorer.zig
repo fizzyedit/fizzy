@@ -22,7 +22,6 @@ pub const files = workbench.files;
 // not re-exported here.
 pub const settings = @import("settings.zig");
 
-paned: *fizzy.dvui.PanedWidget = undefined,
 scroll_info: dvui.ScrollInfo = .{
     .horizontal = .auto,
 },
@@ -31,11 +30,6 @@ rect_screen: dvui.Rect.Physical = .{},
 open_branches: std.AutoHashMap(dvui.Id, void) = undefined,
 animations_ratio: f32 = 0.5,
 closed: bool = false,
-
-/// Peek state: when the explorer is collapsed (small window), a sidebar tap slides the
-/// explorer fully in and it stays open until the user clicks the floating collapse button
-/// at the bottom-right. No auto-close timer — that path caused a per-frame refresh that
-/// kept the app from settling after the open animation finished.
 peek_open: bool = false,
 collapse_btn_anim_started: bool = false,
 
@@ -50,67 +44,27 @@ pub fn deinit(self: *Explorer) void {
     self.open_branches.deinit();
 }
 
-/// The split whose docked half shows sidebar content, or null when this app's shape declared
-/// none. Replaces the `explorer.paned` pointer a shape used to have to publish — see
-/// `Editor.splitFor`.
-fn split(editor: *fizzy.Editor) ?fizzy.Editor.RegisteredSplit {
-    return editor.splitFor(fizzy.sdk.keywords.ide.sidebar);
-}
-
-/// The sidebar as a **region**, when the running shape declared one. Preferred over `split`:
-/// it carries an id and a size rather than a widget, so opening the explorer is setting a
-/// number and letting the region ease toward it — no reaching for the `PanedWidget` behind it.
-fn region(editor: *fizzy.Editor) ?fizzy.Editor.RegisteredRegion {
-    return editor.regionFor(fizzy.sdk.keywords.ide.sidebar);
-}
-
 pub fn close(explorer: *Explorer, editor: *fizzy.Editor) void {
     explorer.closed = true;
-    if (region(editor)) |r| return r.close();
-    const s = split(editor) orelse return;
-    s.paned.animateSplit(0.0, dvui.easing.outQuint);
+    if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.close();
 }
 
 pub fn open(explorer: *Explorer, editor: *fizzy.Editor) void {
-    if (region(editor)) |r| {
-        r.open();
-        explorer.closed = false;
-        return;
-    }
-
-    const s = split(editor) orelse return;
-    if (s.paned.collapsed()) {
-        // Already peeking: do nothing. The peek stays open until the floating collapse
-        // button is clicked — sidebar taps don't toggle it back closed (and we no longer
-        // need to refresh any timer).
-        if (!explorer.peek_open) explorer.peekOpen(editor);
-        return;
-    }
-
-    if (editor.explorer_ratio > 0.0) {
-        s.paned.animateSplit(editor.explorer_ratio, dvui.easing.outBack);
-    } else {
-        s.paned.animateSplit(0.2, dvui.easing.outBack);
-    }
-
     explorer.closed = false;
+    if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.open();
 }
 
 pub fn peekOpen(explorer: *Explorer, editor: *fizzy.Editor) void {
     explorer.peek_open = true;
     explorer.closed = false;
-    if (region(editor)) |r| return r.open();
-    const s = split(editor) orelse return;
-    s.paned.animateSplit(1.0, dvui.easing.outBack);
+    if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.open();
 }
 
 pub fn peekClose(explorer: *Explorer, editor: *fizzy.Editor) void {
     explorer.peek_open = false;
     explorer.closed = true;
     explorer.collapse_btn_anim_started = false;
-    if (region(editor)) |r| return r.close();
-    const s = split(editor) orelse return;
-    s.paned.animateSplit(0.0, dvui.easing.outQuint);
+    if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.close();
 }
 
 /// Draws the explorer *chrome* — header, scroll policy, collapse button — around whichever
@@ -194,8 +148,8 @@ pub fn draw(
 
     // Peek-only floating collapse button. Drawn last so it overlays everything else in the
     // explorer pane. Only appears while we're full-screen peeking on a collapsed paned.
-    if (split(editor)) |sp| {
-        if (explorer.peek_open and sp.paned.collapsed()) drawCollapseButton(explorer, editor);
+    if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| {
+        if (explorer.peek_open and r.isClosed()) drawCollapseButton(explorer, editor);
     }
 
     return .ok;
@@ -209,8 +163,8 @@ fn drawCollapseButton(explorer: *Explorer, editor: *fizzy.Editor) void {
     const margin: f32 = 8;
     const wr = dvui.windowRect();
 
-    const sp = split(editor) orelse return;
-    const anim_id = dvui.Id.update(sp.paned.data().id, "collapse_btn");
+    const r = editor.regionFor(fizzy.sdk.keywords.ide.sidebar) orelse return;
+    const anim_id = dvui.Id.update(r.id, "collapse_btn");
     if (!explorer.collapse_btn_anim_started) {
         explorer.collapse_btn_anim_started = true;
         dvui.animation(anim_id, "_appear", .{
@@ -283,8 +237,10 @@ fn drawCollapseButton(explorer: *Explorer, editor: *fizzy.Editor) void {
 }
 
 pub fn hovered(_: *Explorer, editor: *fizzy.Editor) bool {
-    const s = split(editor) orelse return false;
-    return fizzy.dvui.hovered(s.paned.data());
+    _ = editor;
+    // The sidebar is a region now, and a region is a plain box — there is no widget handle to ask
+    // about hover. Nothing reads this today; it returns false rather than pretending.
+    return false;
 }
 
 pub fn drawHeader(_: *Explorer, f: *Frame, keywords: []const []const u8) !void {

@@ -479,7 +479,7 @@ test "a provider swap degrades cleanly when the backend has no render targets" {
     center_frame_ctx = editor;
     // Only the transition: every host registry a `registerCenter` touches comes down with
     // `ctx.deinit`'s `host.deinit`.
-    defer editor.center_transition.discard();
+    defer editor.layout.center_transition.discard();
 
     try editor.host.registerCenter(.{ .id = "test.center.a", .draw = centerADraw });
     try editor.host.registerCenter(.{ .id = "test.center.b", .draw = centerBDraw });
@@ -500,7 +500,7 @@ test "a provider swap degrades cleanly when the backend has no render targets" {
     // B took over immediately; A stopped dead; nothing is being held on to.
     try std.testing.expectEqual(@as(usize, 2), center_a_draws);
     try std.testing.expectEqual(@as(usize, 2), center_b_draws);
-    try std.testing.expect(editor.center_transition.cross_fade.texture == null);
+    try std.testing.expect(editor.layout.center_transition.cross_fade.texture == null);
 }
 
 test "a center provider that disappears is not drawn for its own cross-fade" {
@@ -514,7 +514,7 @@ test "a center provider that disappears is not drawn for its own cross-fade" {
     center_frame_ctx = editor;
     // Only the transition: every host registry a `registerCenter` touches comes down with
     // `ctx.deinit`'s `host.deinit`.
-    defer editor.center_transition.discard();
+    defer editor.layout.center_transition.discard();
 
     try editor.host.registerCenter(.{ .id = "test.center.a", .draw = centerADraw });
     try editor.host.registerCenter(.{ .id = "test.center.b", .draw = centerBDraw });

@@ -156,16 +156,11 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     build_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
 
-    // Experimental fizzy-as-a-library shell (plan Phase 1). Off by default: both shells are
-    // compiled in so the old and new layouts can be run side by side and diffed live.
-    const new_layout = b.option(bool, "region-layout", "Use the experimental region-based layout (src/editor/layout/)") orelse false;
-    build_opts.addOption(bool, "region_layout", new_layout);
-
     // Which shipped layout shape the region-based layout uses. `ide` is fizzy's own shape; `minimal`
     // and `studio` are deliberately different shapes that load the SAME plugins unchanged —
     // the acceptance test for the layout API (plan, Phase 5).
-    const Shape = enum { ide, minimal, studio, linear };
-    const layout_kind = b.option(Shape, "layout", "Which shipped layout shape to use: ide (default), minimal, studio, linear") orelse .ide;
+    const Shape = enum { ide, minimal, studio };
+    const layout_kind = b.option(Shape, "layout", "Which shipped layout shape to use: ide (default), minimal, studio") orelse .ide;
     build_opts.addOption(Shape, "layout", layout_kind);
     const static_workbench = b.option(
         bool,

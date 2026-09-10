@@ -122,10 +122,9 @@
 //!
 //! ## Where this stands
 //!
-//! Built, in `linear.zig`. A region **is** a `dvui.box` and a `split` is a `core.dvui.Sash`
-//! between two of them, so the sizing is dvui's own and there is no second model to learn.
-//! `ide`, `minimal` and `studio` still use the edge-docking `Frame.dock` until collapse and peek
-//! exist on the region path.
+//! Built. A region **is** a `dvui.box` and a `split` is a `core.dvui.Sash` between two of them,
+//! so the sizing is dvui's own and there is no second model to learn. Every shipped shape uses
+//! it; the edge-docking form and its `rest()` branching are gone.
 //!
 //! ## Layered regions and blur
 //!
@@ -145,9 +144,6 @@ const fizzy = @import("../../fizzy.zig");
 pub const Frame = @import("Frame.zig");
 pub const Region = Frame.Region;
 pub const RegionOptions = Frame.RegionOptions;
-pub const Side = @import("split.zig").Side;
-pub const Split = @import("split.zig").Split;
-pub const split = @import("split.zig").split;
 pub const Tabs = core.dvui.Tabs;
 pub const keywords = @import("fizzy_sdk").keywords;
 pub const chrome = @import("chrome.zig");
@@ -161,8 +157,6 @@ pub const chrome = @import("chrome.zig");
 pub const ide = @import("ide.zig");
 pub const minimal = @import("minimal.zig");
 pub const studio = @import("studio.zig");
-/// The region/sash shape — see `linear.zig`.
-pub const linear = @import("linear.zig");
 
 /// Run the shape `-Dlayout=` selected. All of them load the same plugins; only the layout differs.
 pub fn run(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
@@ -170,7 +164,6 @@ pub fn run(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         .ide => ide.layout(editor, f),
         .minimal => minimal.layout(editor, f),
         .studio => studio.layout(editor, f),
-        .linear => linear.layout(editor, f),
     };
 }
 

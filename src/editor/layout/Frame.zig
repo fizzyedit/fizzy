@@ -104,7 +104,7 @@ fn intersects(a: []const []const u8, b: []const []const u8) bool {
 /// present, otherwise the plugin's declared defaults. This is what makes a wrong default cost
 /// two clicks rather than a release.
 fn effectiveKeywords(self: *Frame, s: *const Surface) []const []const u8 {
-    if (self.editor.surface_keyword_overrides.get(s.id)) |kw| return kw;
+    if (self.editor.layout.keyword_overrides.get(s.id)) |kw| return kw;
     return s.keywords;
 }
 
@@ -163,7 +163,7 @@ fn groupKey(keywords: []const []const u8) u64 {
 /// The host already owns three selections — `active_sidebar_view`, `active_bottom_view`,
 /// `active_center` — so for the conventional keyword sets `Frame` is a *view over existing
 /// state* rather than a parallel store. That is what keeps the new shell and the legacy one
-/// from disagreeing. `Editor.layout_selection` is the fallback for any other keyword group.
+/// from disagreeing. `Editor.layout.selection` is the fallback for any other keyword group.
 const LegacyOwner = enum { sidebar, bottom, center };
 
 fn legacyOwner(keywords: []const []const u8) ?LegacyOwner {
@@ -180,7 +180,7 @@ fn currentId(self: *Frame, keywords: []const []const u8) ?[]const u8 {
         .bottom => host.active_bottom_view,
         .center => host.active_center,
     };
-    return self.editor.layout_selection.get(groupKey(keywords));
+    return self.editor.layout.selection.get(groupKey(keywords));
 }
 
 /// Which surface is current for this keyword group, or null when nothing matches. Degrades: if
@@ -210,7 +210,7 @@ pub fn select(self: *Frame, keywords: []const []const u8, s: *const Surface) voi
         }
         return;
     }
-    self.editor.layout_selection.put(self.editor.gpa, groupKey(keywords), s.id) catch {};
+    self.editor.layout.selection.put(self.editor.gpa, groupKey(keywords), s.id) catch {};
 }
 
 /// Draw one surface into the current parent, wrapped in the swap cross-fade so every region gets
@@ -246,7 +246,7 @@ pub fn drawSelected(self: *Frame, keywords: []const []const u8) !dvui.App.Result
 //
 // The test this has to pass is that a shape never writes mechanism. Before it existed,
 // `ide.zig` reached `dock.paned.dragging`, called `animateSplit`, read `split_ratio.*`, kept
-// `editor.panel_ratio` in sync by hand and published `editor.panes.paned` so other code could
+// `editor.layout.panel_ratio` in sync by hand and published `editor.panes.paned` so other code could
 // find it — none of which an app author should know about, and all of which only worked because
 // fizzy's own shape happens to have a panel.
 

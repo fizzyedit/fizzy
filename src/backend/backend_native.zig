@@ -227,9 +227,9 @@ export fn fizzy_macos_window_request_clear_frames(frames: c_int) void {
 // so neither ever clobbers what the other most recently wrote.
 /// One region's remembered extent, in points, by the name its shape declared.
 ///
-/// Replaces the hardcoded `explorer_ratio` / `panel_ratio` pair. Those named two regions fizzy
-/// happens to have, which meant an app with a "Stack" and a "Strip" could not persist anything —
-/// and fizzy's own names leaked into the on-disk format of a framework.
+/// Replaced the hardcoded `explorer_ratio` / `panel_ratio` pair, which named the two regions fizzy
+/// happens to have — so an app with a "Stack" and a "Strip" could persist nothing, and fizzy's own
+/// furniture was baked into a framework's on-disk format.
 pub const RegionSize = struct {
     name: []const u8,
     size: f32,
@@ -241,12 +241,6 @@ const SavedFrame = struct {
     w: f64 = 0,
     h: f64 = 0,
     regions: []const RegionSize = &.{},
-
-    // Legacy-shell only: the two hardcoded region ratios, kept so the default (non-region) build
-    // does not lose its sizes before that shell is deleted. The region path persists everything
-    // through `regions`, by the name a shape declared.
-    explorer_ratio: f32 = 0.35,
-    panel_ratio: f32 = 0.25,
 };
 const layout_file = "layout.zon";
 /// What `layout.zon` used to be called, read once as a fallback so an existing install keeps its
@@ -332,24 +326,6 @@ fn writeSavedFrame(dir: []const u8, x: f64, y: f64, w: f64, h: f64) void {
 /// Read-modify-write: preserves whatever frame geometry is already on disk, overrides only the
 /// explorer/panel split ratios. Cross-platform (called from `Editor`'s debounced autosave on
 /// every OS, not just macOS).
-/// Legacy-shell only. See `SavedFrame`.
-pub fn saveWindowRatios(dir: []const u8, explorer_ratio: f32, panel_ratio: f32) void {
-    const gpa = std.heap.page_allocator;
-    var f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
-    f.explorer_ratio = explorer_ratio;
-    f.panel_ratio = panel_ratio;
-    writeWindowFile(dir, f);
-}
-
-/// Legacy-shell only. See `SavedFrame`.
-pub fn loadWindowRatios(dir: []const u8) struct { explorer_ratio: f32, panel_ratio: f32 } {
-    const gpa = std.heap.page_allocator;
-    const f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
-    return .{ .explorer_ratio = f.explorer_ratio, .panel_ratio = f.panel_ratio };
-}
-
 /// Read-modify-write: keeps whatever frame geometry is on disk, replaces the region list.
 pub fn saveRegionSizes(dir: []const u8, sizes: []const RegionSize) void {
     const gpa = std.heap.page_allocator;
