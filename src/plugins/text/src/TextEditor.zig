@@ -11,6 +11,7 @@ const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
 const tc = @import("textcore/textcore.zig");
 const TooltipWidget = @import("widgets/TooltipWidget.zig");
 const fuzzy = core.fuzzy;
+const Sash = core.dvui.Sash;
 
 const editor_pad_y: f32 = 8;
 const editor_pad_right: f32 = 8;
@@ -25,10 +26,6 @@ fn pillFont() dvui.Font {
     return dvui.Font.theme(.body).larger(-1);
 }
 
-/// Raw|split|preview sash geometry. Same values every other split in the app uses (see
-/// `workbench_layout.zig` / `panel_layout.zig`) so the handle looks and reacts identically.
-const handle_size = 10;
-const handle_dist = 60;
 
 const chromeless = dvui.Options{
     .background = false,
@@ -58,51 +55,76 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
 
     drawPreviewTogglePill(doc, id_extra);
 
-    // One paned for all three modes: `.raw` and `.preview` are this same widget animated to an
-    // end stop, so the preview slides in and out from the right like a document opening to the
-    // side rather than the pane's contents being swapped underneath the user.
-    var paned = core.dvui.paned(@src(), .{
-        .direction = .horizontal,
-        .collapsed_size = 0,
-        .split_ratio = &doc.preview_split_ratio,
-        // Min == max thickness, matching every other sash in the app (workbench splits, the
-        // explorer, the bottom panel): only the handle's *visibility* animates with mouse
-        // proximity. A smaller `handle_size` than `handle_size_max` makes `handleGap` grow as the
-        // pointer approaches, which shoves both panes' contents sideways under the cursor.
-        .handle_size = handle_size,
-        .handle_dynamic = .{ .handle_size_max = handle_size, .distance_max = handle_dist },
-    }, .{ .expand = .both, .background = false, .id_extra = @intCast(id_extra + 0x1000) });
-    defer paned.deinit();
+    // One sash for all three modes: `.raw` and `.preview` are this same divider run to an end
+    // stop, so the preview slides in and out from the right like a document opening to the side
+    // rather than the pane's contents being swapped underneath the user.
+    //
+    // It is `core.dvui.Sash` — the same divider the app's own regions, the document panes and the
+    // bottom panel use, sized in points. A `PanedWidget` here was a second implementation of the
+    // same idea, with its own ratio, its own handle and its own feel.
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .both,
+        .background = false,
+        .id_extra = @intCast(id_extra + 0x1000),
+    });
+    defer row.deinit();
 
-    // A drag is the user choosing a new `.split` position — remember it (and treat dragging the
-    // sash to either end as picking that mode), then leave the ratio alone this frame.
-    if (paned.dragging) {
-        if (paned.split_ratio.* >= 1.0) {
+    const split = row.data().id;
+    const total = row.data().contentRect().w;
+
+    // Last frame's drawn width, for the raw pane's right edge only — the sash below has not run
+    // yet this frame, and an edge shadow one frame behind the pointer is invisible.
+    const shown_prev = dvui.dataGet(null, split, "_shown", f32) orelse 0;
+
+    // The raw side takes whatever the preview leaves, and must not report a floor of its own:
+    // dvui clamps a widget's reported min size with `max_size_content`, so capping the width at
+    // 1 stops a long line of code deciding how much room the preview gets. It still expands to
+    // fill, and the editor scrolls horizontally as it always did. Same trick `Layout.region`
+    // uses on a stretchy region, for the same reason.
+    var raw = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .background = false,
+        .max_size_content = .{ .w = 1, .h = dvui.max_float_safe },
+        .id_extra = @intCast(id_extra + 0x1300),
+    });
+    const changed = try drawEditor(doc, ext, id_extra, gpa, shown_prev > 0);
+    raw.deinit();
+
+    // Ended before the preview pane opens, not deferred: a sash is a box, and anything drawn
+    // while it is still open becomes its child — which stretches the sash across the pane it is
+    // supposed to sit beside, and draws the grip in the middle of the preview.
+    var sep = core.dvui.sash(@src(), .horizontal, @truncate(id_extra + 0x1100));
+    sep.drag(row, split, -1, .{}, .{ .length = total, .handles = Sash.handle_size });
+    const dragging = dvui.captured(sep.box.data().id);
+    sep.end();
+
+    // A drag is the user choosing a new `.split` position — and dragging the sash to either end
+    // is how you pick that mode, so the modes and the sash never disagree about where it sits.
+    const width = if (dragging) blk: {
+        const dragged = Sash.sizeOf(split);
+        if (dragged <= 0) {
             doc.preview_mode = .raw;
-        } else if (paned.split_ratio.* <= 0.0) {
+        } else if (dragged >= total - Sash.handle_size) {
             doc.preview_mode = .preview;
         } else {
             doc.preview_mode = .split;
-            doc.preview_split_ratio_user = paned.split_ratio.*;
+            doc.preview_split_ratio_user = if (total > 0) 1 - dragged / total else 0.5;
         }
         Document.rememberPreviewMode(doc.preview_mode, doc.preview_split_ratio_user);
-    } else {
-        // `animateSplit` is a no-op once the ratio is already there, so this is safe every frame.
-        // Opening eases with `outBack` and closing with `outQuint`, matching the explorer and
-        // bottom panel (`Explorer.zig`, `panel_layout.zig`).
-        const target = doc.preview_mode.splitRatio(doc.preview_split_ratio_user);
-        const closing = doc.preview_mode == .raw;
-        paned.animateSplit(target, if (closing) dvui.easing.outQuint else dvui.easing.outBack);
-    }
+        break :blk dragged;
+    } else Sash.eased(split, previewExtent(doc.preview_mode, doc.preview_split_ratio_user, total), 220);
 
-    var changed = false;
-    if (paned.showFirst()) {
-        // Any ratio below 1 means the preview has some of the pane — including mid-animation,
-        // where the edge matters most — so the raw side keeps a right edge against it.
-        changed = try drawEditor(doc, ext, id_extra, gpa, paned.split_ratio.* < 1.0);
-    }
-    if (paned.showSecond()) {
+    if (width > 0) {
+        var pane = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .vertical,
+            .background = false,
+            .min_size_content = .{ .w = width },
+            .max_size_content = .width(width),
+            .id_extra = @intCast(id_extra + 0x1200),
+        });
+        Sash.recordEdges(split, pane.data(), .horizontal);
         try drawPreviewPane(doc, preview.?, ext, id_extra + 0x2000, gpa);
+        pane.deinit();
     } else {
         // No preview on screen to consume it. Drop it rather than let it sit until the user
         // opens the preview and gets yanked to a heading they clicked on ages ago.
@@ -110,6 +132,19 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
     }
 
     return changed;
+}
+
+/// How wide the preview side is when the mode settles there, in points.
+///
+/// `.preview` stops one sash short of the full width rather than at it, so the handle stays on
+/// screen and the user can always drag the raw side back out — a divider you can push off the
+/// edge is one you cannot get back.
+fn previewExtent(mode: Document.PreviewMode, user_ratio: f32, total: f32) f32 {
+    return switch (mode) {
+        .raw => 0,
+        .split => @max(0, (1 - user_ratio) * total),
+        .preview => @max(0, total - Sash.handle_size),
+    };
 }
 
 fn drawPreviewPane(

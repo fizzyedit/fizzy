@@ -14,22 +14,13 @@ const is_wasm = builtin.target.cpu.arch == .wasm32;
 const Document = @This();
 
 /// What the document tab shows when its language has a preview pane: the editor alone, both
-/// side by side, or the preview alone. `.split` is one paned widget with both sides drawn —
-/// `.raw` and `.preview` are that same widget run to either end, so switching slides the
-/// preview in and out as a tray rather than swapping the pane's contents.
+/// side by side, or the preview alone. `.split` is both sides drawn with a divider between them —
+/// `.raw` and `.preview` are that same divider run to either end, so switching slides the preview
+/// in and out as a tray rather than swapping the pane's contents.
 pub const PreviewMode = enum {
     raw,
     split,
     preview,
-
-    /// Sash position this mode settles at. `.split` uses the user's remembered ratio.
-    pub fn splitRatio(self: PreviewMode, user_ratio: f32) f32 {
-        return switch (self) {
-            .raw => 1.0,
-            .split => user_ratio,
-            .preview => 0.0,
-        };
-    }
 };
 
 /// Last `.split` sash position chosen this session. The mode itself persists as the markdown
@@ -139,12 +130,14 @@ completion_anchor: ?usize = null,
 
 /// Raw|split|preview state when a language plugin registers a preview pane.
 ///
-/// `preview_split_ratio` is the *live* sash position — the paned widget drives it, and so does
-/// the open/close animation, which runs it to 1 (preview tray fully closed) or 0 (editor fully
-/// closed). `preview_split_ratio_user` is the position `.split` returns to: the last one the
-/// user actually dragged the sash to, which the animation would otherwise overwrite.
+/// `preview_split_ratio_user` is the position `.split` returns to: the fraction of the pane the
+/// *raw* side gets, last chosen by dragging the sash. A ratio rather than points because it is
+/// what `settings.zon` has always stored and what a new document inherits — the sash itself works
+/// in points, and `previewExtent` converts at the draw.
+///
+/// The live position is not here: it belongs to the sash, under its own widget id, the same way
+/// every other divider in the app remembers where it sits.
 preview_mode: PreviewMode = .split,
-preview_split_ratio: f32 = 0.5,
 preview_split_ratio_user: f32 = 0.5,
 
 /// Undo/redo history — see `textcore.History` for the capture + grouping strategy.
@@ -192,7 +185,6 @@ pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
         .path = path_copy,
         .text = text,
         .preview_mode = mode,
-        .preview_split_ratio = mode.splitRatio(sticky_split_ratio),
         .preview_split_ratio_user = sticky_split_ratio,
     };
     doc.refreshLineCount();
