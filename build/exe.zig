@@ -189,13 +189,18 @@ pub fn addFizzyExecutableForTarget(
         .core = core_module,
         .sdk = sdk_module,
     }, exe.root_module);
-    if (resolved_target.result.cpu.arch != .wasm32) {
-        _ = markdown_plugin.addStaticModule(b, resolved_target, optimize, .{
+    const markdown_module: ?*std.Build.Module = if (resolved_target.result.cpu.arch != .wasm32)
+        markdown_plugin.addStaticModule(b, resolved_target, optimize, .{
             .dvui = dvui_dep.module("dvui_sdl3"),
             .core = core_module,
             .sdk = sdk_module,
-        }, exe.root_module);
-    }
+        }, exe.root_module)
+    else
+        null;
+
+    // The `app` framework module: the plugin store and what it needs. Fizzy is its first
+    // consumer, not its owner — see `app/app.zig`.
+    _ = sdk.wireAppModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), core_module, sdk_module, icons_module, markdown_module, exe.root_module);
 
     const workbench_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
         break :blk workbench_plugin.addDylib(b, resolved_target, optimize, .{

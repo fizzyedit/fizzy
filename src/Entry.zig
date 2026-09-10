@@ -89,7 +89,7 @@ fn startOptions() dvui.App.StartOptions {
         if (comptime builtin.os.tag == .macos) {
             if (runningFromAppBundle(main_init.io)) opts.icon = null;
         }
-        if (paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.processEnviron(), ".", AppInfo.current.config_dir)) |pref_path| {
+        if (paths.configFolderZ(&pref_path_buf, main_init.io, fizzy.core.platform.processEnviron(), ".", AppInfo.current.config_dir)) |pref_path| {
             pref_path_len = pref_path.len;
             opts.pref_path = pref_path_buf[0..pref_path_len :0];
         }

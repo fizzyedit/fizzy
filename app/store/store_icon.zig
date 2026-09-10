@@ -7,11 +7,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const core = @import("core");
-const fizzy = @import("../fizzy.zig");
 const repo_asset = @import("plugin_repo_asset.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
-const web_fetch = if (is_wasm) @import("../backend/web_fetch.zig") else struct {};
+const web_fetch = if (is_wasm) @import("web_fetch.zig") else struct {};
 
 const icon_filename = "ICON.png";
 

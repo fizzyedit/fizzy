@@ -71,3 +71,33 @@ pub fn wireSdkModule(
     if (consumer) |c| c.addImport("fizzy_sdk", sdk_module);
     return sdk_module;
 }
+
+/// Create the `app` module — the framework an application switches on (the plugin store today).
+///
+/// Separate from `core` because of the dylib boundary: this may depend on the network, the
+/// filesystem and `dlopen`, none of which belongs inside a plugin. Wired the same way for the
+/// exe, the web build and the tests so the three cannot drift.
+pub fn wireAppModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    dvui_module: *std.Build.Module,
+    core_module: *std.Build.Module,
+    sdk_module: *std.Build.Module,
+    icons_module: ?*std.Build.Module,
+    markdown_module: ?*std.Build.Module,
+    consumer: ?*std.Build.Module,
+) *std.Build.Module {
+    const app_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("app/app.zig"),
+    });
+    app_module.addImport("dvui", dvui_module);
+    app_module.addImport("core", core_module);
+    app_module.addImport("fizzy_sdk", sdk_module);
+    if (icons_module) |icons| app_module.addImport("icons", icons);
+    if (markdown_module) |md| app_module.addImport("markdown", md);
+    if (consumer) |c| c.addImport("app", app_module);
+    return app_module;
+}

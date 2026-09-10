@@ -92,11 +92,9 @@ const image_mod = @import("image");
 /// line here, alongside its import/registration, not a separately-maintained string list.
 const bundled_modules = .{ workbench_mod, text_mod, image_mod, markdown_mod };
 
-const PluginLoader = if (builtin.target.cpu.arch == .wasm32)
-    @import("PluginLoader_stub.zig")
-else
-    @import("PluginLoader.zig");
-const PluginStore = @import("PluginStore.zig");
+const PluginLoader = @import("app").store.Loader;
+const PluginStore = @import("app").store.Store;
+const PluginManager = @import("app").store.Manager;
 const PluginSettingsPane = @import("PluginSettingsPane.zig");
 const SettingsTree = @import("SettingsTree.zig");
 const OutputPanel = @import("OutputPanel.zig");
@@ -484,12 +482,12 @@ pub fn init(
     const config_root: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
         app.root_path
     else config_root_blk: {
-        break :config_root_blk try fizzy.core.paths.configRoot(dvui.io, arena, fizzy.processEnviron(), app.root_path);
+        break :config_root_blk try fizzy.core.paths.configRoot(dvui.io, arena, fizzy.core.platform.processEnviron(), app.root_path);
     };
     const config_folder: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
         app.root_path
     else config_folder_blk: {
-        break :config_folder_blk try fizzy.core.paths.configFolder(app.allocator, dvui.io, arena, fizzy.processEnviron(), app.root_path, AppInfo.current.config_dir);
+        break :config_folder_blk try fizzy.core.paths.configFolder(app.allocator, dvui.io, arena, fizzy.core.platform.processEnviron(), app.root_path, AppInfo.current.config_dir);
     };
 
     // One-time migration: pre-rename builds used `Fizzy/` (capitalized).
@@ -776,7 +774,7 @@ pub const view_settings = "fizzy.settings";
 fn loadWorkbenchFromDylibEnabled(gpa: std.mem.Allocator) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
     if (comptime build_opts.static_workbench) return false;
-    if (std.process.Environ.getAlloc(fizzy.processEnviron(), gpa, "FIZZY_STATIC_WORKBENCH")) |v| {
+    if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), gpa, "FIZZY_STATIC_WORKBENCH")) |v| {
         defer gpa.free(v);
         return v.len == 0 or v[0] == '0';
     } else |_| {}
@@ -786,7 +784,7 @@ fn loadWorkbenchFromDylibEnabled(gpa: std.mem.Allocator) bool {
 fn loadTextFromDylibEnabled(gpa: std.mem.Allocator) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
     if (comptime build_opts.static_text) return false;
-    if (std.process.Environ.getAlloc(fizzy.processEnviron(), gpa, "FIZZY_STATIC_TEXT")) |v| {
+    if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), gpa, "FIZZY_STATIC_TEXT")) |v| {
         defer gpa.free(v);
         return v.len == 0 or v[0] == '0';
     } else |_| {}
@@ -795,7 +793,7 @@ fn loadTextFromDylibEnabled(gpa: std.mem.Allocator) bool {
 
 fn loadMarkdownFromDylibEnabled(gpa: std.mem.Allocator) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    if (std.process.Environ.getAlloc(fizzy.processEnviron(), gpa, "FIZZY_STATIC_MARKDOWN")) |v| {
+    if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), gpa, "FIZZY_STATIC_MARKDOWN")) |v| {
         defer gpa.free(v);
         return v.len == 0 or v[0] == '0';
     } else |_| {}
@@ -805,7 +803,7 @@ fn loadMarkdownFromDylibEnabled(gpa: std.mem.Allocator) bool {
 fn loadImageFromDylibEnabled(gpa: std.mem.Allocator) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
     if (comptime build_opts.static_image) return false;
-    if (std.process.Environ.getAlloc(fizzy.processEnviron(), gpa, "FIZZY_STATIC_IMAGE")) |v| {
+    if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), gpa, "FIZZY_STATIC_IMAGE")) |v| {
         defer gpa.free(v);
         return v.len == 0 or v[0] == '0';
     } else |_| {}
@@ -2438,7 +2436,7 @@ pub fn postInit(editor: *Editor) !void {
     dvui.log.info("layout: shape '{s}'", .{@tagName(build_opts.layout)});
 
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        if (std.process.Environ.getAlloc(fizzy.processEnviron(), editor.gpa, "FIZZY_SPLIT_DEBUG")) |v| {
+        if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.gpa, "FIZZY_SPLIT_DEBUG")) |v| {
             editor.gpa.free(v);
             core.widgets.Split.debug = true;
             dvui.log.info("layout: split debug logging on", .{});
@@ -2523,7 +2521,7 @@ pub fn postInit(editor: *Editor) !void {
 
     // Fizzy built-in: Plugin store (owner = null; not a plugin). Registered just before
     // Settings so its icon sits directly above the cog in the sidebar rail.
-    try PluginStore.register(&editor.host);
+    try PluginStore.register(editor.pluginManager());
 
     // Fizzy built-in: Settings (owner = null; not a plugin).
     try editor.host.registerSurface(.{
@@ -5800,3 +5798,134 @@ pub fn deinit(editor: *Editor) !void {
     editor.arena.deinit();
 }
 
+
+// ---- PluginManager: what the store needs from this application --------------------------
+//
+// Fizzy filling in the seam the store now talks to (`PluginManager.zig`). Every member is
+// forwarding to state fizzy already owned; the point is that the store no longer reaches for
+// `fizzy.editor()` to find it, so a different app supplies its own and gets the same store.
+
+fn pmSelf(ctx: *anyopaque) *Editor {
+    return @ptrCast(@alignCast(ctx));
+}
+
+const plugin_manager_vtable: PluginManager.VTable = .{
+    .isDisabled = struct {
+        fn f(ctx: *anyopaque, id: []const u8) bool {
+            return pmSelf(ctx).isPluginDisabled(id);
+        }
+    }.f,
+    .isUndecided = struct {
+        fn f(ctx: *anyopaque, id: []const u8) bool {
+            return pmSelf(ctx).isPluginUndecided(id);
+        }
+    }.f,
+    .isAutoUpdate = struct {
+        fn f(ctx: *anyopaque, id: []const u8) bool {
+            return pmSelf(ctx).isPluginAutoUpdate(id);
+        }
+    }.f,
+    .setAutoUpdate = struct {
+        fn f(ctx: *anyopaque, id: []const u8, on: bool) anyerror!void {
+            return pmSelf(ctx).setPluginAutoUpdate(id, on);
+        }
+    }.f,
+    .updateMode = struct {
+        fn f(ctx: *anyopaque) PluginManager.UpdateMode {
+            return switch (pmSelf(ctx).settings.plugin_update_mode) {
+                .prompt => .prompt,
+                .silent => .silent,
+            };
+        }
+    }.f,
+    .disabledIds = struct {
+        fn f(ctx: *anyopaque) []const []const u8 {
+            return pmSelf(ctx).disabled_plugin_ids.items;
+        }
+    }.f,
+    .loadedLibs = struct {
+        fn f(ctx: *anyopaque) []const PluginLoader.LoadedLib {
+            return pmSelf(ctx).loaded_plugin_libs.items;
+        }
+    }.f,
+    .failures = struct {
+        fn f(ctx: *anyopaque) []const PluginManager.Failure {
+            const editor = pmSelf(ctx);
+            // Rebuilt in the frame arena rather than stored twice: `FailedPlugin` carries
+            // reconciliation bookkeeping (the rejected build's mtime + size) that is fizzy's
+            // business and none of the store's.
+            const a = editor.arena.allocator();
+            var out = a.alloc(PluginManager.Failure, editor.failed_user_plugins.items.len) catch return &.{};
+            for (editor.failed_user_plugins.items, 0..) |failed, i| {
+                out[i] = .{
+                    .id = failed.id,
+                    .reason = failed.reason,
+                    .detail = failed.detail,
+                    .plugin_version = failed.plugin_version,
+                };
+            }
+            return out;
+        }
+    }.f,
+    .builtinManifest = struct {
+        fn f(ctx: *anyopaque, id: []const u8) ?sdk.manifest.Manifest {
+            return pmSelf(ctx).builtinManifest(id);
+        }
+    }.f,
+    .install = struct {
+        fn f(ctx: *anyopaque, id: []const u8) anyerror!void {
+            return pmSelf(ctx).installAndLoadPlugin(id);
+        }
+    }.f,
+    .update = struct {
+        fn f(ctx: *anyopaque, id: []const u8, force: bool) anyerror!void {
+            return pmSelf(ctx).updatePlugin(id, force);
+        }
+    }.f,
+    .uninstall = struct {
+        fn f(ctx: *anyopaque, id: []const u8, force: bool) anyerror!void {
+            return pmSelf(ctx).uninstallPlugin(id, force);
+        }
+    }.f,
+    .setEnabled = struct {
+        fn f(ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) anyerror!void {
+            return pmSelf(ctx).setPluginEnabled(id, enabled, force);
+        }
+    }.f,
+    .reconcileDiscovered = struct {
+        fn f(ctx: *anyopaque) void {
+            pmSelf(ctx).reconcileDiscoveredPlugins();
+        }
+    }.f,
+    .appUpdate = struct {
+        fn f(_: *anyopaque) PluginManager.AppUpdate {
+            return switch (update_notify.appUpdateState()) {
+                .checking => .checking,
+                .available, .installing => .pending,
+                .none => .none,
+            };
+        }
+    }.f,
+    .offerUpdates = struct {
+        fn f(_: *anyopaque) void {
+            Dialogs.PluginUpdates.request();
+        }
+    }.f,
+    .revealMain = struct {
+        fn f(ctx: *anyopaque) void {
+            pmSelf(ctx).revealCenter();
+        }
+    }.f,
+};
+
+pub fn pluginManager(editor: *Editor) PluginManager {
+    return .{
+        .ctx = editor,
+        .host = &editor.host,
+        .gpa = editor.gpa,
+        .config_folder = editor.config_folder,
+        .root_path = std.mem.sliceTo(fizzy.entry().root_path, 0),
+        .registry_url = AppInfo.current.registry_url,
+        .vtable = &plugin_manager_vtable,
+    };
+}

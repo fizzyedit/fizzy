@@ -27,7 +27,3 @@ pub const perf_logging: bool = false;
 /// flip and rebuild to test the update-available UI.
 pub const debug_simulate_update_available: bool = false;
 
-/// Pretend two installed plugins have store updates waiting, so the "Plugin updates" window (or,
-/// with `plugin_update_mode = .silent`, the silent path's logging) can be exercised without an
-/// actually out-of-date plugin. Same build-time-flag shape as `debug_simulate_update_available`.
-pub const debug_simulate_plugin_updates: bool = false;

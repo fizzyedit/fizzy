@@ -222,17 +222,21 @@ pub const Catalog = struct {
         shard: registry.ReleaseShard,
     };
 
-    /// Lock the catalog and return the latest snapshot (or null if the summary has never loaded
-    /// successfully). The slices stay valid until the matching `release` — hold the lock across
+    /// Lock the catalog and return the latest snapshot, or null if the summary has never loaded
+    /// successfully. The slices stay valid until the matching `release` — hold the lock across
     /// any read of them. Pair with `release`.
+    ///
+    /// **The lock is held either way**, including when this returns null. It used to unlock on
+    /// the null path, which made the pairing conditional while every caller writes an
+    /// unconditional `defer release()` — so drawing the store before the first summary arrived
+    /// (offline, or the first launch of a fresh install) unlocked an unlocked mutex and panicked
+    /// in `std.Io`. A lock whose release depends on the return value is a lock nobody can use
+    /// correctly.
     pub fn acquire(self: *Catalog) ?Snapshot {
         // Single-threaded on wasm: the browser callback and the UI share a thread, so the
         // lock would only fight `std.Io.failing`'s mutex.
         if (comptime !is_wasm) self.mutex.lockUncancelable(self.io);
-        const summary = self.summary orelse {
-            if (comptime !is_wasm) self.mutex.unlock(self.io);
-            return null;
-        };
+        const summary = self.summary orelse return null;
         return .{
             .summary = summary.value,
             .shard = if (self.shard) |s| s.value else registry.ReleaseShard.empty,

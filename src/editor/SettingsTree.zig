@@ -27,7 +27,7 @@ const core = @import("core");
 const fizzy = @import("../fizzy.zig");
 const PluginSettingsPane = @import("PluginSettingsPane.zig");
 const SettingRow = @import("SettingRow.zig");
-const PluginStore = @import("PluginStore.zig");
+const PluginStore = @import("app").store.Store;
 const fizzy_settings = @import("explorer/settings.zig");
 
 const fuzzy = core.fuzzy;

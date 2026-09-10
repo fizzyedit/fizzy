@@ -373,7 +373,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // `addAnonymousImport`) is a separate module whose tests are never run. That is
     // how `fizzy-unit-tests` silently ran zero tests behind a green build. So: one
     // `addTest` per pure-logic root, each rooted directly at the file under test.
-    // Files reached from such a root by relative `@import` (plugin_store's
+    // Files reached from such a root by relative `@import` (the registry client's
     // registry/compat/download, say) are part of the same module and *are* collected.
     var unit_test_artifacts: std.ArrayListUnmanaged(*std.Build.Step.Compile) = .empty;
 
@@ -382,7 +382,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ "fizzy-easing-tests", "core/math/easing.zig" },
         .{ "fizzy-layout-anchor-tests", "core/math/layout_anchor.zig" },
         .{ "fizzy-window-layout-tests", "src/backend/window_layout.zig" },
-        .{ "fizzy-plugin-store-tests", "src/backend/plugin_store/store.zig" },
+        .{ "fizzy-plugin-store-tests", "app/store/registry/store.zig" },
         .{ "fizzy-paths-tests", "core/paths.zig" },
         .{ "fizzy-lsp-protocol-tests", "core/lsp/Protocol.zig" },
         .{ "fizzy-lsp-uri-tests", "core/lsp/UriUtil.zig" },
@@ -566,6 +566,9 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .core = core_module_test,
         .sdk = sdk_module_test,
     }, fizzy_test_module);
+    // The `app` framework module (the plugin store), wired the same way the exe and the web
+    // build wire it — see `build/sdk.zig`.
+    _ = sdk.wireAppModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), core_module_test, sdk_module_test, icons_test, markdown_module_test, fizzy_test_module);
     _ = image_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
@@ -722,7 +725,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         const plugin_loader_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/editor/PluginLoader.zig"),
+            .root_source_file = b.path("app/store/PluginLoader.zig"),
         });
         plugin_loader_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         plugin_loader_module.addImport("fizzy_sdk", sdk_module_test);

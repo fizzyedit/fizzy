@@ -9,7 +9,7 @@
 const std = @import("std");
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
-const PluginStore = @import("../PluginStore.zig");
+const PluginStore = @import("app").store.Store;
 
 /// The list stops growing here and scrolls instead, so a user with a dozen outdated plugins gets
 /// a scrollbar rather than a window clipped by the dialog's own `max_size`.
