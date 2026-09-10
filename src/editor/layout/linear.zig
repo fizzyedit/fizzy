@@ -36,20 +36,12 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer body.deinit();
 
-    // The rail still sits outside the splitter: it is a chooser beside the region it chooses
-    // for, and it has a fixed width, so it is not one of the split shares.
+    // The rail sits outside the layout: it is a chooser drawn *beside* the region it chooses
+    // for, with a fixed width, so it is not one of the split shares.
     _ = chrome.iconRail(f, sidebar) catch {};
 
-    // Everything right of the rail, stacked: the splitter, then the infobar under it.
-    //
-    // The infobar has to be a **sibling of the splitter, not a child of it**. Drawn inside the
-    // splitter it is a child with no `slot`, so it inherits the previous child's rect — which
-    // put it at the bottom of the *content column*, overlaying the bottom panel and spanning
-    // only that column's width instead of the window. `SplitBox` now logs a stray child rather
-    // than placing it somewhere plausible-looking.
-    //
-    // The right padding is fizzy's own margin, matching `ide.zig`: without it the panel and the
-    // main area butt against the window edge.
+    // Everything right of the rail, stacked: the regions, then the infobar under them. The
+    // right padding is fizzy's own margin, matching `ide.zig`.
     var stack = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
@@ -57,44 +49,33 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     });
     defer stack.deinit();
 
+    // macOS draws the menu natively; the in-app bar is the fallback everywhere else.
+    if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
+        const r = try Menu.draw(editor);
+        if (r != .ok) return r;
+    }
+
     {
-        var cols = core.dvui.splitBox(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
-        defer cols.deinit();
+        // ── the shape, in two verbs ─────────────────────────────────────────────────────────
+        //
+        // No `dvui.box`, no widget handles, no `rest()` branching and no early returns: a
+        // container subdivides, a leaf hosts surfaces, and `split` puts a draggable boundary
+        // between the two either side of it. Read it as the picture it makes.
+        var cols = try f.region(@src(), .{ .dir = .horizontal });
+        defer cols.end();
 
-        {   // ── the sidebar ─────────────────────────────────────────────────────────────────
-            var c = cols.slot(@src());
-            defer c.deinit();
-            _ = chrome.explorerPane(f, sidebar) catch {};
-        }
+        _ = try f.region(@src(), .{ .name = "Sidebar", .keywords = sidebar, .content = chrome.explorerPane });
 
-        cols.handle();
+        f.split(.{});
 
-        {   // ── the content column: main over panel, split the other way ────────────────────
-            var c = cols.slot(@src());
-            defer c.deinit();
+        var right = try f.region(@src(), .{ .dir = .vertical });
+        defer right.end();
 
-            if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
-                const r = try Menu.draw(editor);
-                if (r != .ok) return r;
-            }
+        _ = try f.region(@src(), .{ .name = "Main", .keywords = main_area });
 
-            var rows = core.dvui.splitBox(@src(), .{ .dir = .vertical }, .{ .expand = .both });
-            defer rows.deinit();
+        f.split(.{});
 
-            {
-                var m = rows.slot(@src());
-                defer m.deinit();
-                _ = try f.drawSelected(main_area);
-            }
-
-            rows.handle();
-
-            {
-                var p = rows.slot(@src());
-                defer p.deinit();
-                _ = chrome.bottomPane(f, bottom) catch {};
-            }
-        }
+        _ = try f.region(@src(), .{ .name = "Panel", .keywords = bottom, .content = chrome.bottomPane });
     }
 
     editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});

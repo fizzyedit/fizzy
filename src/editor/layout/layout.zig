@@ -122,11 +122,22 @@
 //!
 //! ## Where this stands
 //!
-//! Not yet implemented. `Frame.region` currently establishes a paned split per region and the
-//! shapes still open `dvui.box` for their containers; the maths for the linear form is in
-//! `core/split_layout.zig` with tests, and the dvui shell over it is the missing piece. That
-//! shell is drag behaviour, which needs interactive checking rather than a compile — so it is
-//! written down here rather than half-built.
+//! Partly implemented. `Frame.region` still establishes a paned split per region and the shapes
+//! still open `dvui.box` for their containers. The maths for the linear form is in
+//! `core/split_layout.zig` with tests; `core.dvui.SplitBox` is now the dvui shell over it, with
+//! its drag behaviour covered headlessly by `fizzy-splitbox-tests`, and `linear.zig` is the
+//! shape trialling it. What remains is folding it into `region` / `split` so a shape stops
+//! opening `dvui.box` at all.
+//!
+//! ## Layered regions and blur
+//!
+//! A tray that blurs what is behind it (the bottom panel over the editor; a scroll edge over its
+//! own overflowing content) is designed but not built — see `LAYERS.md` in this directory. The
+//! short version, because it is the decision most likely to be re-derived wrongly: blur is a
+//! **property of a region** (`.blur_behind`), never a layout verb that reverses render order. An
+//! app author must not have to reason about paint order to place a panel, and reversing paint
+//! order does not reverse dvui's event routing — declaration order and hit-test order would stop
+//! agreeing.
 const std = @import("std");
 const core = @import("core");
 const build_opts = @import("build_opts");

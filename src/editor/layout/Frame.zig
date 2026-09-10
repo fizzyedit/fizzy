@@ -8,6 +8,7 @@
 //! will implement for real (see plan §F).
 const std = @import("std");
 const dvui = @import("dvui");
+const core = @import("core");
 const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
 const layout_split = @import("split.zig");
@@ -29,8 +30,22 @@ pub const Surface = sdk.Surface;
 
 editor: *fizzy.Editor,
 
+/// Open linear containers, innermost last. A container region pushes; its `end` pops. This is
+/// what lets a leaf `region` know which splitter it is a slot of, and `split` know which
+/// boundary it is marking, without either being passed a handle by the shape.
+containers: [max_nesting]*core.dvui.SplitBox = undefined,
+depth: usize = 0,
+
+/// Layouts nest a few levels; anything deeper is a mistake worth reporting rather than
+/// supporting. Keeps the stack a fixed array with no allocation on the layout path.
+pub const max_nesting = 8;
+
 pub fn init(editor: *fizzy.Editor) Frame {
     return .{ .editor = editor };
+}
+
+fn innermost(self: *Frame) ?*core.dvui.SplitBox {
+    return if (self.depth == 0) null else self.containers[self.depth - 1];
 }
 
 fn arena(self: *Frame) std.mem.Allocator {
@@ -220,10 +235,19 @@ pub const Content = *const fn (f: *Frame, keywords: []const []const u8) anyerror
 
 pub const RegionOptions = struct {
     /// Human-facing region name. Shown wherever a user picks a region — the settings table that
-    /// lets someone place a surface directly, ignoring keywords entirely.
-    name: []const u8,
-    /// What kinds of surface this region accepts.
-    keywords: []const []const u8,
+    /// lets someone place a surface directly, ignoring keywords entirely. A container region
+    /// needs none: nothing is placed in it directly.
+    name: []const u8 = "",
+    /// What kinds of surface this region accepts. Empty on a container region.
+    keywords: []const []const u8 = &.{},
+    /// Set to make this a **container**: a region that holds other regions along `dir`, with
+    /// `split` marking draggable boundaries between them. Null makes it a leaf — a place
+    /// surfaces draw.
+    ///
+    /// One verb doing both is deliberate rather than an overload. A container with keywords
+    /// would be a region that is both a place and a place-holder, and there is no third
+    /// concept: you subdivide, or you host content.
+    dir: ?dvui.enums.Direction = null,
     /// Which edge it takes. Null means "the remainder".
     edge: ?Edge = null,
     /// Fraction of the parent, when docked to an edge. Null uses the persisted size.
@@ -249,22 +273,107 @@ pub const RegionOptions = struct {
 /// layout writes next lands there. That is what removes the `showFirst`/`showSecond` pairs from
 /// shapes.
 pub const Region = struct {
-    split: ?layout_split.Split,
-    rest_visible: bool,
+    split: ?layout_split.Split = null,
+    rest_visible: bool = true,
+    /// Set when this region is a **container**: the splitter it opened, which `end` pops.
+    container: ?*core.dvui.SplitBox = null,
+    /// For a nested container, the parent's slot it was opened inside. Leaves close their own
+    /// slot before returning and leave this null.
+    slot: ?*dvui.BoxWidget = null,
+    frame: ?*Frame = null,
 
     /// True when the space beyond this region should draw. False while the region is expanded
     /// over everything (a collapsed-layout peek), so a shape can return early.
+    ///
+    /// Always true for a linear region: there is no "rest" to gate. N regions on an axis each
+    /// have their own share, which is the branching the linear form exists to remove — a shape
+    /// written against containers never calls this.
     pub fn rest(self: *Region) bool {
         return self.rest_visible;
     }
 
     pub fn end(self: *Region) void {
-        if (self.split) |*s| s.deinit();
+        // Innermost first: the splitter, then the parent slot it lives in.
+        if (self.container) |box| {
+            if (self.frame) |f| {
+                std.debug.assert(f.depth > 0);
+                f.depth -= 1;
+            }
+            box.deinit();
+        }
+        if (self.slot) |b| b.deinit();
+        if (self.split) |*sp| sp.deinit();
     }
 };
 
 /// Declare a region. See `RegionOptions`.
+///
+/// Three forms, chosen by the options and by where the call sits:
+///
+///   * `dir` set — a **container**. Opens a linear splitter; regions declared inside it are its
+///     children and `split` puts draggable boundaries between them.
+///   * inside a container — a **leaf**. Takes the next slot and draws its contents there.
+///   * outside any container — the **edge-docked** form, which docks to `edge` and leaves the
+///     caller in the remaining space (`rest`). This is what `ide.zig` still uses; it predates
+///     the linear form and is kept until collapse/peek exists on the linear path.
 pub fn region(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions) !Region {
+    if (opts.dir) |dir| {
+        if (self.depth >= max_nesting) {
+            dvui.log.err("layout nests deeper than {d} containers; region \"{s}\" ignored", .{ max_nesting, opts.name });
+            return .{};
+        }
+        // A container inside a container is one of its parent's shares, so it takes a slot
+        // first and opens inside it. Without this it would be a child of the parent splitter
+        // with no slot of its own, which `SplitBox` now reports rather than misplacing.
+        const parent_slot = if (self.innermost()) |parent| parent.slot(src) else null;
+        const box = core.dvui.splitBox(src, .{ .dir = dir }, .{ .expand = .both });
+        self.containers[self.depth] = box;
+        self.depth += 1;
+        return .{ .container = box, .slot = parent_slot, .frame = self };
+    }
+
+    const box = self.innermost() orelse return self.edgeRegion(src, opts);
+
+    const matches = self.matching(opts.keywords);
+    // A region with nothing in it should not hold a share of the axis open.
+    //
+    // Note this changes the child count, so the splitter redistributes its boundaries — the
+    // sizes either side are not preserved across the region appearing and disappearing.
+    // `split_layout.insertSplit` / `removeSplit` exist to do that properly and are the intended
+    // fix; wiring them needs a stable per-region identity, not just an index.
+    if (opts.hide_when_empty and matches.len == 0) return .{};
+
+    // A leaf **opens and closes within this call**, so it is a complete statement and needs no
+    // `end`. It has to be: deferring a leaf's close to the end of the layout scope would leave
+    // its box as the current dvui parent, and every later sibling would be created *inside* it
+    // rather than beside it. Only containers, which really do enclose what follows, return
+    // something to end.
+    const slot = box.slot(src);
+    defer slot.deinit();
+    _ = try self.drawRegionContents(opts, matches);
+    return .{};
+}
+
+/// A draggable boundary between the previous region and the next, inside a container.
+///
+/// It takes no direction: a split inherits the axis of the container it is in, so direction is
+/// declared once, on the container, rather than restated at every boundary.
+pub fn split(self: *Frame, opts: SplitOptions) void {
+    const box = self.innermost() orelse {
+        dvui.log.err("split() outside a container region does nothing", .{});
+        return;
+    };
+    if (opts.resize) box.handle();
+}
+
+pub const SplitOptions = struct {
+    /// False makes the boundary static: the regions either side still divide the axis, but the
+    /// user cannot move the edge between them.
+    resize: bool = true,
+};
+
+/// The original edge-docking region. See `region`.
+fn edgeRegion(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions) !Region {
     const editor = self.editor;
     const matches = self.matching(opts.keywords);
 
