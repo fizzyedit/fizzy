@@ -100,8 +100,13 @@ pub const document = @import("document.zig");
 pub const manifest = @import("manifest.zig");
 pub const Manifest = manifest.Manifest;
 
-/// Inter-plugin services (`"workbench"`, `"markdown"`, `"wikilink"`).
+/// Services: capability offered by name and version rather than by the ABI.
+///
+/// `"files"` is the application's; the rest are plugins'. Every one of them is optional — a
+/// caller handles null and offers what it can, which is what lets one plugin build run in
+/// applications that have wildly different amounts of machinery.
 pub const services = struct {
+    pub const files = @import("services/files.zig");
     pub const workbench = @import("services/workbench.zig");
     pub const markdown = @import("services/markdown.zig");
     pub const wikilink = @import("services/wikilink.zig");

@@ -95,6 +95,9 @@ const bundled_modules = .{ workbench_mod, text_mod, image_mod, markdown_mod };
 const PluginLoader = @import("app").store.Loader;
 const PluginStore = @import("app").store.Store;
 const PluginManager = @import("app").store.Manager;
+/// Fizzy's implementation of the `files` service. Public so a test — or an app copying fizzy —
+/// can register it explicitly rather than only through `postInit`.
+pub const FilesService = @import("FilesService.zig");
 const PluginSettingsPane = @import("PluginSettingsPane.zig");
 const SettingsTree = @import("SettingsTree.zig");
 const OutputPanel = @import("OutputPanel.zig");
@@ -153,6 +156,9 @@ palette_folder: []const u8,
 
 /// Plugin registry + service locator exposed to plugins
 host: Host,
+/// Fizzy's implementation of the `files` service, registered in `postInit`. A field rather than
+/// a temporary because the host stores the pointer.
+files_service: sdk.services.files.Api = undefined,
 
 /// The project's file set, shared with every plugin through `host.files`. The app owns it
 /// because more than one plugin reads it — see `core.FileTable`. Its `env` is wired in
@@ -2582,6 +2588,18 @@ pub fn postInit(editor: *Editor) !void {
             &editor.workbench.api,
             editor.host.pluginById("workbench"),
         );
+    }
+
+    // Fizzy's own `files` service: create/rename/delete/move with open documents kept in step.
+    // Registered by the app, not built into the contract — see `FilesService.zig`.
+    //
+    // Not on the web, which has no filesystem to manage: the file tree there is read-only, and a
+    // plugin asking for this service simply does not get one — which is the degradation every
+    // caller already handles. The comptime guard also keeps the implementation out of the wasm
+    // build entirely, since taking a function's address forces its analysis.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        editor.files_service = FilesService.api(&editor.host);
+        try editor.host.registerService(sdk.services.files.Api, &editor.files_service, null);
     }
 
     // Live external-edit reconciliation for settings.zon + dropped-in plugin discovery (see

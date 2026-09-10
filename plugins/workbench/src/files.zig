@@ -492,7 +492,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             }
 
             if (!std.mem.eql(u8, label, te.getText()) and te.getText().len > 0 and valid_path) {
-                try runtime.host().renamePath(full_path, new_path, kind);
+                if (runtime.files()) |fs| try fs.rename(full_path, new_path, kind);
             }
         }
     } else if (kind == .file) {
@@ -984,7 +984,9 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
                                     dvui.log.err("Failed to collect selection paths: {any}", .{err});
                                     break :blk &[_][]const u8{};
                                 };
-                                for (top) |del_path| runtime.host().deletePath(del_path);
+                                if (runtime.files()) |fs| {
+                                    for (top) |del_path| fs.delete(del_path);
+                                }
                             }
                         }
                     }
@@ -1473,7 +1475,7 @@ fn applyFileMove(unique_id: dvui.Id, tree: *core.widgets.TreeWidget, target_dir:
         }.lt);
 
         for (paths.items) |p| {
-            _ = try runtime.host().movePath(p, target_dir);
+            if (runtime.files()) |fs| _ = try fs.move(p, target_dir);
         }
 
         // Rebuild the selection map from the new paths on disk.
@@ -1489,7 +1491,7 @@ fn applyFileMove(unique_id: dvui.Id, tree: *core.widgets.TreeWidget, target_dir:
         }
         selection_anchor = selected_id;
     } else if (primary_path_opt) |removed_path| {
-        _ = try runtime.host().movePath(removed_path, target_dir);
+        if (runtime.files()) |fs| _ = try fs.move(removed_path, target_dir);
     }
 
     dvui.dataRemove(null, unique_id, "removed_path");
@@ -1517,7 +1519,8 @@ pub fn createFolderInteractive(parent: []const u8) void {
         std.Io.Dir.accessAbsolute(dvui.io, candidate, .{}) catch break candidate;
     } else return;
 
-    runtime.host().createDir(path) catch {
+    const fs = runtime.files() orelse return;
+    fs.createDir(path) catch {
         dvui.log.err("Failed to create folder: {s}", .{path});
         return;
     };

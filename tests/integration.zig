@@ -1604,3 +1604,34 @@ test "markdown preview: typing does not move the preview" {
         }
     }
 }
+
+// -- the files service -------------------------------------------------------------------------
+
+// Creating, renaming, deleting and moving used to be `Host` methods, which made fizzy's
+// implementation the only one an app could have. They are a service now, and this is the whole
+// contract: an app registers an implementation, a plugin asks for it by type and version, and a
+// plugin that does not find one carries on without it.
+test "the files service is the app's to provide, and a plugin asking for it gets what was registered" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    const files_api = fizzy.sdk.services.files.Api;
+
+    // Nothing registered yet: the caller's answer is null, not a crash and not an error type it
+    // has to know about. This is the degradation every call site is written against.
+    try std.testing.expect(editor.host.getServiceTyped(files_api) == null);
+
+    var service = fizzy.Editor.FilesService.api(&editor.host);
+    try editor.host.registerService(files_api, &service, null);
+
+    const found = editor.host.getServiceTyped(files_api) orelse return error.TestUnexpectedResult;
+
+    // Same implementation the app registered — a service is a pointer to the app's own value,
+    // not a copy the host owns.
+    try std.testing.expect(found == &service);
+
+    // And it really is fizzy's: with no file table behind it (this shim has none) the app's
+    // implementation says so rather than pretending to have written anything.
+    try std.testing.expectError(error.NoFileTable, found.createFile("/tmp/fizzy-files-service-test"));
+}
