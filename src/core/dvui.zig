@@ -12,7 +12,10 @@ pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
 pub const TreeWidget = @import("widgets/TreeWidget.zig");
 pub const TreeSelection = @import("widgets/TreeSelection.zig");
 /// Reorderable tab strip shared by fizzy's bottom panel and the workbench's document tabs.
-pub const SplitBox = @import("widgets/SplitBox.zig");
+/// The draggable sash between two regions. Lives here rather than beside the layout because the
+/// workbench draws document splits from inside a dylib and must reach the same one — the same
+/// reason `Tabs` is here. A sash implemented twice is a sash that behaves two ways.
+pub const sash = @import("widgets/sash.zig");
 pub const Tabs = @import("widgets/Tabs.zig");
 
 /// Core-owned dialog chrome state, set by the dialog framework and read by
@@ -424,13 +427,6 @@ pub fn treeRowGlyph(src: std.builtin.SourceLocation, opts: dvui.Options) *dvui.B
 }
 
 /// Currently this is specialized for the layers paned widget, just includes icon and dragging flag so we know when the pane is dragging
-/// A linear splitter: N children separated by draggable handles. See `SplitBox`.
-pub fn splitBox(src: std.builtin.SourceLocation, init_opts: SplitBox.InitOptions, opts: dvui.Options) *SplitBox {
-    const ret = dvui.widgetAlloc(SplitBox);
-    ret.install(src, init_opts, opts);
-    return ret;
-}
-
 pub fn paned(src: std.builtin.SourceLocation, init_opts: PanedWidget.InitOptions, opts: dvui.Options) *PanedWidget {
     var ret = dvui.widgetAlloc(PanedWidget);
     ret.init(src, init_opts, opts);

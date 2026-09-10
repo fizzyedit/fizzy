@@ -122,12 +122,10 @@
 //!
 //! ## Where this stands
 //!
-//! Partly implemented. `Frame.region` still establishes a paned split per region and the shapes
-//! still open `dvui.box` for their containers. The maths for the linear form is in
-//! `core/split_layout.zig` with tests; `core.dvui.SplitBox` is now the dvui shell over it, with
-//! its drag behaviour covered headlessly by `fizzy-splitbox-tests`, and `linear.zig` is the
-//! shape trialling it. What remains is folding it into `region` / `split` so a shape stops
-//! opening `dvui.box` at all.
+//! Built, in `linear.zig`. A region **is** a `dvui.box` and a `split` is a `core.dvui.sash`
+//! between two of them, so the sizing is dvui's own and there is no second model to learn.
+//! `ide`, `minimal` and `studio` still use the edge-docking `Frame.dock` until collapse and peek
+//! exist on the region path.
 //!
 //! ## Layered regions and blur
 //!
@@ -151,7 +149,6 @@ pub const Side = @import("split.zig").Side;
 pub const Split = @import("split.zig").Split;
 pub const split = @import("split.zig").split;
 pub const Tabs = core.dvui.Tabs;
-pub const boundaries = core.split_layout;
 pub const keywords = @import("fizzy_sdk").keywords;
 pub const chrome = @import("chrome.zig");
 
@@ -164,7 +161,7 @@ pub const chrome = @import("chrome.zig");
 pub const ide = @import("ide.zig");
 pub const minimal = @import("minimal.zig");
 pub const studio = @import("studio.zig");
-/// The trial shape for the linear `SplitBox` — see `linear.zig`.
+/// The region/sash shape — see `linear.zig`.
 pub const linear = @import("linear.zig");
 
 /// Run the shape `-Dlayout=` selected. All of them load the same plugins; only the layout differs.

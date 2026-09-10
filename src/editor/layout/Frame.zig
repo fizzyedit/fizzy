@@ -12,7 +12,7 @@ const core = @import("core");
 const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
 const layout_split = @import("split.zig");
-const sash = @import("sash.zig");
+const sash = core.dvui.sash;
 const Constants = @import("../Constants.zig");
 const chrome_ref = @import("chrome.zig");
 

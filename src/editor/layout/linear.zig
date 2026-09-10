@@ -1,6 +1,6 @@
 //! The linear form of fizzy's IDE shape: three regions on an axis, no nesting of two-child panes.
 //!
-//! **This is the trial shape for `core.dvui.SplitBox`.** `ide.zig` expresses the same layout as
+//! **This is the shape the region/sash API is built for.** `ide.zig` expresses the same layout as
 //! a tree of edge-docked regions, each of which is a two-child `PanedWidget` — which is why it
 //! needs `rest()` branching and early returns, and why its regions read as nested rather than as
 //! a list. Here the sidebar, the content column and the panel are three `slot` calls, and the

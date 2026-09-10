@@ -2500,7 +2500,7 @@ pub fn postInit(editor: *Editor) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (std.process.Environ.getAlloc(fizzy.processEnviron(), editor.gpa, "FIZZY_SASH_DEBUG")) |v| {
             editor.gpa.free(v);
-            @import("layout/sash.zig").debug = true;
+            core.dvui.sash.debug = true;
             dvui.log.info("layout: sash debug logging on", .{});
         } else |_| {}
     }
