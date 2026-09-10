@@ -212,7 +212,6 @@ pub fn interact(
             },
             .motion => if (captured) {
                 e.handle(@src(), wd);
-                if (debug) dvui.log.err("[sash] motion raw=({d},{d}) dragging={?}", .{ e.evt.mouse.p.x, e.evt.mouse.p.y, dvui.dragging(e.evt.mouse.p, null) });
                 if (dvui.dragging(e.evt.mouse.p, null) != null) {
                     drag_to = switch (axis) {
                         .horizontal => e.evt.mouse.p.x,
@@ -289,54 +288,50 @@ fn drawSash(
     dist: f32,
     at_rest: bool,
 ) void {
-    // The resting line: the full length of the edge, hairline thin, faint. Drawn whatever the
-    // pointer is doing, because its job is to say "there is a handle here" to someone who is not
-    // yet looking for one.
-    if (at_rest) {
-        const hair = @max(1, srs.s);
-        var line = srs.r;
-        switch (axis) {
-            .horizontal => {
-                line.x = srs.r.x + srs.r.w / 2 - hair / 2;
-                line.w = hair;
-            },
-            .vertical => {
-                line.y = srs.r.y + srs.r.h / 2 - hair / 2;
-                line.h = hair;
-            },
-        }
-        line.fill(.all(0), .{ .color = wd.options.color(.text).opacity(0.20), .fade = 0 });
-    }
+    _ = at_rest;
 
-    if (dist > handle_size + handle_dist) return;
+    // A sash is **always** visible, as a short faint pill, and grows into the full grip as the
+    // pointer approaches.
+    //
+    // It used to draw nothing until the pointer was near, which left a shut or nearly-shut region
+    // indistinguishable from no region at all — and the way back to it unfindable. A resting mark
+    // shown only at exactly zero does not fix that either: a region squeezed to a sliver is just
+    // as unreadable and just as much in need of a "there is something here".
+    const approach = 1.0 - std.math.clamp((dist - handle_size) / handle_dist, 0.0, 1.0);
 
-    var len_ratio: f32 = 1.0 / 5.0;
-    len_ratio *= 1.0 - std.math.clamp((dist - handle_size) / handle_dist, 0.0, 1.0);
-    if (len_ratio <= 0.001) return;
+    const edge = switch (axis) {
+        .horizontal => srs.r.h,
+        .vertical => srs.r.w,
+    };
+    // At rest a short pill; under the pointer a fifth of the edge, matching `PanedWidget`.
+    const rest_len = @min(edge, 28 * srs.s);
+    const full_len = edge / 5;
+    const len = rest_len + (@max(full_len, rest_len) - rest_len) * approach;
 
-    const thick = handle_size * srs.s;
+    const rest_thick = 3 * srs.s;
+    const thick = rest_thick + (handle_size * srs.s - rest_thick) * approach;
+    const alpha = 0.18 + 0.32 * approach;
+
     var r = srs.r;
     switch (axis) {
         .horizontal => {
             r.x = srs.r.x + srs.r.w / 2 - thick / 2;
             r.w = thick;
-            const h = srs.r.h * len_ratio;
-            r.y = srs.r.y + srs.r.h / 2 - h / 2;
-            r.h = h;
+            r.y = srs.r.y + srs.r.h / 2 - len / 2;
+            r.h = len;
         },
         .vertical => {
             r.y = srs.r.y + srs.r.h / 2 - thick / 2;
             r.h = thick;
-            const w = srs.r.w * len_ratio;
-            r.x = srs.r.x + srs.r.w / 2 - w / 2;
-            r.w = w;
+            r.x = srs.r.x + srs.r.w / 2 - len / 2;
+            r.w = len;
         },
     }
-    r.fill(.all(thick), .{ .color = wd.options.color(.text).opacity(0.5), .fade = 1.0 });
+    r.fill(.all(thick / 2), .{ .color = wd.options.color(.text).opacity(alpha), .fade = 1.0 });
 
-    // The grip, so the sash reads as something you grab rather than a bar that happens to be
-    // there. Same icon and placement as `PanedWidget`, because these are the same affordance and
-    // fizzy's sashes should not differ depending on which one drew them.
+    // The grip only once the pointer is close enough for the pill to have room for it — drawing
+    // it into the resting pill would just be noise at the edge of every region.
+    if (approach < 0.6) return;
     const grip = switch (axis) {
         .horizontal => icons.tvg.lucide.@"grip-vertical",
         .vertical => icons.tvg.lucide.@"grip-horizontal",
@@ -354,7 +349,7 @@ fn drawSash(
     }
     g = g.outset(dvui.Rect.Physical.all(2 * srs.s));
     dvui.icon(@src(), "grip", grip, .{
-        .stroke_color = dvui.themeGet().color(.content, .fill),
+        .stroke_color = dvui.themeGet().color(.content, .fill).opacity(approach),
     }, .{ .rect = srs.rectFromPhysical(g) });
 }
 

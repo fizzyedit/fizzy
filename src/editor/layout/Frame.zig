@@ -565,11 +565,7 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
         .horizontal => container.data().contentRect().w,
         .vertical => container.data().contentRect().h,
     };
-    sash.interact(container, sep, axis, target, sign, .{
-        .resize = opts.resize,
-        .min = opts.min,
-        .max = opts.max,
-    }, .{
+    sash.interact(container, sep, axis, target, sign, opts, .{
         .length = room,
         .base_min = c.base_min,
         .handles = c.handles,
@@ -577,16 +573,16 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
     });
 }
 
-pub const SplitOptions = struct {
-    /// False draws the gap but does not let the user move it.
-    resize: bool = true,
-    /// Smallest extent the dragged neighbour may be squeezed to.
-    min: f32 = 40,
-    /// Largest, or null for no limit. Stops a panel from swallowing the window.
-    max: ?f32 = null,
-};
+/// What a `split` accepts. **The sash's own options, not a copy of them.**
+///
+/// This used to be a second struct with the same three fields, copied across field by field in
+/// `split`. Its defaults then drifted from the sash's: `min` was lowered to zero in one place so
+/// a region could be dragged shut, and stayed at 40 here — which silently won, and pinned every
+/// sash 40pt from its end. Two structs describing one thing will always end up disagreeing about
+/// it, so there is one.
+pub const SplitOptions = sash.Options;
 
-/// The original edge-docking region. See `region`./// The original edge-docking region. See `region`./// The original edge-docking region. See `region`.
+/// The original edge-docking region. See `region`.
 pub fn dock(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions) !Region {
     const editor = self.editor;
     const matches = self.matching(opts.keywords);
