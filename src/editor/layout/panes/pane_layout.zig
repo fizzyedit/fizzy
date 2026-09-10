@@ -84,10 +84,10 @@ pub fn drawWorkspaces(
     var i: usize = index;
     while (i < count) : (i += 1) {
         if (i > index) {
-            var divider = Split.split(@src(), .horizontal, i);
-            defer divider.end();
+            var divider = Split.init(@src(), .horizontal, i);
+            defer divider.deinit();
             divider.drag(row, paneId(row, i - 1), 1, .{}, .{
-                .length = row.data().contentRect().w,
+                .extent = row.data().contentRect().w,
                 .handles = Split.handle_size * @as(f32, @floatFromInt(count - 1)),
             });
         }

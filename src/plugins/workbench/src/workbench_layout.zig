@@ -117,9 +117,9 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
         if (!first) {
             // The divider before this pane drags *this* pane, anchored to its far edge.
             var divider = core.dvui.split(@src(), .horizontal, i);
-            defer divider.end();
+            defer divider.deinit();
             divider.drag(row, id, -1, .{}, .{
-                .length = row.data().contentRect().w,
+                .extent = row.data().contentRect().w,
                 .handles = Split.handle_size * @as(f32, @floatFromInt(count - 1)),
             });
             if (dvui.captured(divider.box.data().id)) dragging = true;

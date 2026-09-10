@@ -94,9 +94,9 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
     // while it is still open becomes its child — which stretches the split across the pane it is
     // supposed to sit beside, and draws the grip in the middle of the preview.
     var divider = core.dvui.split(@src(), .horizontal, @truncate(id_extra + 0x1100));
-    divider.drag(row, split, -1, .{}, .{ .length = total, .handles = Split.handle_size });
+    divider.drag(row, split, -1, .{}, .{ .extent = total, .handles = Split.handle_size });
     const dragging = dvui.captured(divider.box.data().id);
-    divider.end();
+    divider.deinit();
 
     // A drag is the user choosing a new `.split` position — and dragging the split to either end
     // is how you pick that mode, so the modes and the split never disagree about where it sits.

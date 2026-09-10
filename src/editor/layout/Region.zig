@@ -5,9 +5,10 @@
 //! this that lets the user move regions at runtime, and is the natural basis for a
 //! Premiere-style shape. Named seam, not built.
 //!
-//! Made with `Layout.region` — `f.region(@src(), .{ … }, .{ … })`, which is re-exported there so
-//! it sits beside `f.split(...)` in a shape. The constructor lives in this file, next to the type
-//! it returns, the same way `core.dvui.split` lives in `Split.zig`.
+//! `init` + `deinit`, like any dvui widget, with the verb form on the namespace above it:
+//! `f.region(@src(), .{ … }, .{ … })` in a shape, which is `Layout.region` re-exporting this
+//! file's `init`. Same arrangement as `dvui.box` over `BoxWidget.init`, and `core.dvui.split`
+//! over `Split.init`.
 //!
 //! `region` draws the region's own contents — its chrome, if it declared any, and the active
 //! matching surface — and leaves the caller positioned in the *remaining* space, so whatever the
@@ -130,7 +131,7 @@ pub const InitOptions = struct {
 /// }
 /// f.split(@src(), .{});
 /// ```
-pub fn region(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: dvui.Options) !Region {
+pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: dvui.Options) !Region {
     if (self.depth >= Layout.max_nesting) {
         dvui.log.err("layout nests deeper than {d} regions; \"{s}\" ignored", .{ Layout.max_nesting, init_opts.name });
         return .{};
@@ -175,8 +176,8 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOpt
 
         var target = chosen;
         if (init_opts.collapsible) {
-            const room = if (parent) |p| roomOf(p, axis) else 0;
-            if (room > 0 and room < Constants.min_window_size[0]) target = 0;
+            const available = if (parent) |p| p.extent(axis) else 0;
+            if (available > 0 and available < Constants.min_window_size[0]) target = 0;
         }
 
         // Ease toward the target when it moved for a reason other than a drag — the collapse
@@ -299,14 +300,6 @@ pub fn region(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOpt
     };
 }
 
-fn roomOf(p: *Layout.Container, axis: dvui.enums.Direction) f32 {
-    const b = p.box orelse return 0;
-    const r = b.data().contentRect();
-    return switch (axis) {
-        .horizontal => r.w,
-        .vertical => r.h,
-    };
-}
 
 /// The region's contents: its own chrome if it declared any, otherwise the active surface.
 ///

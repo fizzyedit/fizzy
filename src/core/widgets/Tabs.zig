@@ -16,11 +16,11 @@
 //!
 //! Usage:
 //! ```zig
-//! var strip: Tabs = .begin(@src(), &self.tab_state, .{ .drag_name = drag_name });
-//! defer strip.end();
+//! var strip: Tabs = .init(@src(), &self.tab_state, .{ .drag_name = drag_name });
+//! defer strip.deinit();
 //! for (items, 0..) |item, i| {
 //!     var t = strip.tab(@src(), i, i == active_index);
-//!     defer t.end();
+//!     defer t.deinit();
 //!     // draw whatever a tab looks like here
 //! }
 //! ```
@@ -66,7 +66,7 @@ scroll_area: ?*dvui.ScrollAreaWidget,
 reorder: *dvui.ReorderWidget,
 inner: *dvui.BoxWidget,
 
-pub fn begin(src: std.builtin.SourceLocation, state: *State, opts: Options) Tabs {
+pub fn init(src: std.builtin.SourceLocation, state: *State, opts: Options) Tabs {
     const outer = dvui.box(src, .{ .dir = .horizontal }, .{
         .expand = .none,
         .margin = dvui.Rect.all(0),
@@ -114,7 +114,7 @@ pub fn begin(src: std.builtin.SourceLocation, state: *State, opts: Options) Tabs
     };
 }
 
-/// One tab. Draw its contents between this and `Tab.end()`.
+/// One tab. Draw its contents between this and `Tab.deinit()`.
 pub const Tab = struct {
     reorderable: *dvui.ReorderWidget.Reorderable,
     /// A **pointer**, not a value. A `BoxWidget` registers itself as dvui's current parent using
@@ -174,7 +174,7 @@ pub const Tab = struct {
         return self.was_clicked;
     }
 
-    pub fn end(self: *Tab) void {
+    pub fn deinit(self: *Tab) void {
         _ = self.clicked();
         self.box.deinit();
         self.reorderable.deinit();
@@ -224,7 +224,7 @@ pub fn finalSlot(self: *Tabs, count: usize) void {
     }
 }
 
-pub fn end(self: *Tabs) void {
+pub fn deinit(self: *Tabs) void {
     self.inner.deinit();
     self.reorder.deinit();
     if (self.scroll_area) |sa| sa.deinit();

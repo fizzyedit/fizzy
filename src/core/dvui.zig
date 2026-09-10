@@ -16,8 +16,9 @@ pub const TreeSelection = @import("widgets/TreeSelection.zig");
 /// workbench draws document splits from inside a dylib and must reach the same one — the same
 /// reason `Tabs` is here. A split implemented twice is a split that behaves two ways.
 pub const Split = @import("widgets/Split.zig");
-/// Open a split. See `Split`.
-pub const split = Split.split;
+/// Open a split — the verb form of `Split.init`, so a caller that never names the type reads
+/// the same as it does for `dvui.box`.
+pub const split = Split.init;
 pub const Tabs = @import("widgets/Tabs.zig");
 
 /// Core-owned dialog chrome state, set by the dialog framework and read by

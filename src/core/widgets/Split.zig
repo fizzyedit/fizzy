@@ -10,7 +10,8 @@ const icons = @import("icons");
 
 const Split = @This();
 
-/// The separator's own box. A split is a widget you get back and `end`, like `Tabs` — it has a
+/// The separator's own box. A split is a widget you get back and `deinit`, like any dvui
+/// widget — it has a
 /// rect, a lifetime and drag state, so it is a type rather than a bag of functions over one.
 box: *dvui.BoxWidget,
 axis: dvui.enums.Direction,
@@ -32,8 +33,9 @@ pub const handle_dist: f32 = 60;
 /// to push the right one out of the way — an answer no region owns on its own. The container
 /// arbitrates; the regions stop owning their sizes independently.
 pub const Constraint = struct {
-    /// The container's length along the axis.
-    length: f32 = 0,
+    /// The container's own extent along the axis — one number, the same word every other
+    /// distance along a layout axis uses (`Region.default_extent`, `Layout.Container.extent`).
+    extent: f32 = 0,
     /// The base region's declared minimum — `min_size_content` on the region that is not
     /// resizable. Declared by the app, never inferred from a plugin's content, or the plugin
     /// would be setting the app's proportions.
@@ -53,14 +55,14 @@ pub const Constraint = struct {
 pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
     // `std.math.clamp` asserts `lower <= upper`, so an explicit `max` below `min` would panic
     // inside the clamp rather than reaching any guard after it.
-    const limit = @max(opts.min, opts.max orelse (c.length - handle_size));
+    const limit = @max(opts.min, opts.max orelse (c.extent - handle_size));
     var size = std.math.clamp(want, opts.min, limit);
-    if (c.length <= 0) return size;
+    if (c.extent <= 0) return size;
 
     // What the trays may occupy between them once the base has kept its minimum. Never negative:
     // a container too small for the base alone leaves the trays nothing rather than a negative
     // budget that would read as unlimited room.
-    const room = @max(0, c.length - c.base_min - c.handles);
+    const budget = @max(0, c.extent - c.base_min - c.handles);
 
     var others: f32 = 0;
     for (c.others) |o| {
@@ -68,7 +70,7 @@ pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
         others += dvui.dataGet(null, o, "_size", f32) orelse 0;
     }
 
-    if (size + others <= room) return size;
+    if (size + others <= budget) return size;
 
     // Over budget. Constraints are resolved in a fixed order so a conflict has one answer rather
     // than depending on which split the user happens to be dragging:
@@ -83,7 +85,7 @@ pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
     //
     // Nothing here can produce a negative extent, which is the failure that would otherwise turn
     // a conflict into a layout that inverts.
-    var excess = size + others - room;
+    var excess = size + others - budget;
     for (c.others) |o| {
         if (o == target or excess <= 0) continue;
         const had = dvui.dataGet(null, o, "_size", f32) orelse 0;
@@ -112,10 +114,10 @@ pub const Options = struct {
 /// Open a split: it takes `handle_size` along the container's axis and stretches across it, so
 /// `dvui.box` reserves the gap the way it reserves any other child.
 ///
-/// Named for what it returns, the way `dvui.box` returns a `BoxWidget` and `core.dvui.paned` a
-/// `PanedWidget` — you call `split()` and get a `Split`. Also re-exported as `core.dvui.split` so a
-/// caller that never names the type still reads the same.
-pub fn split(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_extra: usize) Split {
+/// `init` + `deinit`, the pairing every dvui widget uses, because that is what this is. The
+/// verb form lives in the namespace above the type — `core.dvui.split(...)` for a plugin,
+/// `Layout.split(...)` for a shape — exactly as `dvui.box()` sits above `BoxWidget.init`.
+pub fn init(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_extra: usize) Split {
     return .{ .axis = axis, .box = dvui.box(src, .{ .dir = axis }, .{
         .id_extra = id_extra,
         .min_size_content = switch (axis) {
@@ -130,7 +132,7 @@ pub fn split(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_ext
     }) };
 }
 
-pub fn end(self: *Split) void {
+pub fn deinit(self: *Split) void {
     self.box.deinit();
 }
 
@@ -326,8 +328,8 @@ pub fn drag(
 
         const resolved = resolve(target, want, c, opts);
         if (debug) dvui.log.err(
-            "[split] axis={s} sign={d} p={d} centre={d} anchor={?d} scale={d} | want={d} resolved={d} | min={d} max={?d} len={d} base_min={d} handles={d} others={d}",
-            .{ @tagName(axis), sign, p, centre, anchor, srs.s, want, resolved, opts.min, opts.max, c.length, c.base_min, c.handles, c.others.len },
+            "[split] axis={s} sign={d} p={d} centre={d} anchor={?d} scale={d} | want={d} resolved={d} | min={d} max={?d} extent={d} base_min={d} handles={d} others={d}",
+            .{ @tagName(axis), sign, p, centre, anchor, srs.s, want, resolved, opts.min, opts.max, c.extent, c.base_min, c.handles, c.others.len },
         );
         dvui.dataSet(null, target, "_size", resolved);
         // Keep the shown extent in step with the target during a drag, so the region does not
@@ -481,18 +483,18 @@ fn twoPaneFrame() !dvui.App.Result {
         recordEdges(t_target, left.data(), .horizontal);
     }
 
-    var sep = split(@src(), .horizontal, 0);
+    var divider = init(@src(), .horizontal, 0);
     {
-        const srs = sep.box.data().borderRectScale();
+        const srs = divider.box.data().borderRectScale();
         t_sep_x = srs.r.x + srs.r.w / 2;
         t_scale = srs.s;
         t_room = row.data().contentRect().w;
         t_room_px = row.data().borderRectScale().r.w;
         t_org_px = row.data().borderRectScale().r.x;
-        sep.drag(row, t_target, 1, .{ .min = t_min }, .{ .length = row.data().contentRect().w });
-        t_captured = dvui.captured(sep.box.data().id);
+        divider.drag(row, t_target, 1, .{ .min = t_min }, .{ .extent = row.data().contentRect().w });
+        t_captured = dvui.captured(divider.box.data().id);
     }
-    sep.end();
+    divider.deinit();
 
     {
         // A real minimum on the far side, which is what makes the open limit *unreachable*: the
@@ -727,7 +729,7 @@ test "a tray takes what it asks for while there is room" {
     setSize(left, 100);
     setSize(right, 100);
 
-    const c: Constraint = .{ .length = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
+    const c: Constraint = .{ .extent = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
     try testing.expectApproxEqAbs(@as(f32, 300), resolve(left, 300, c, .{}), 0.001);
     // The other tray is untouched: there was room for both.
     try testing.expectApproxEqAbs(@as(f32, 100), getSize(right), 0.001);
@@ -745,7 +747,7 @@ test "the far tray is pushed back once the base is at its minimum" {
 
     // 1000 long, base keeps 400, splits take 20 -> 580 for the trays. Asking for 500 on the left
     // leaves 80 for the right, so it has to give up 120.
-    const c: Constraint = .{ .length = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
+    const c: Constraint = .{ .extent = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
     try testing.expectApproxEqAbs(@as(f32, 500), resolve(left, 500, c, .{}), 0.001);
     try testing.expectApproxEqAbs(@as(f32, 80), getSize(right), 0.001);
 }
@@ -760,7 +762,7 @@ test "a tray that pushes everything shut then stops" {
     setSize(left, 200);
     setSize(right, 200);
 
-    const c: Constraint = .{ .length = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
+    const c: Constraint = .{ .extent = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
     // Far more than the whole budget: the right shuts, and the left stops at what is left.
     const got = resolve(left, 5000, c, .{});
     try testing.expectApproxEqAbs(@as(f32, 0), getSize(right), 0.001);
@@ -778,7 +780,7 @@ test "conflicting minimums squeeze the base rather than inverting the layout" {
     setSize(right, 100);
 
     // No room for the base's minimum and both trays' declared minimums at once.
-    const c: Constraint = .{ .length = 300, .base_min = 280, .handles = 20, .others = &.{ left, right } };
+    const c: Constraint = .{ .extent = 300, .base_min = 280, .handles = 20, .others = &.{ left, right } };
     const got = resolve(left, 200, c, .{ .min = 60 });
     // The tray keeps its declared minimum, the base is the one that yields, and nothing is
     // negative — a conflict must not produce an inverted layout.
@@ -796,7 +798,7 @@ test "a container smaller than the base leaves the trays nothing" {
     setSize(only, 100);
 
     // base_min alone exceeds the container: room is zero, not negative.
-    const c: Constraint = .{ .length = 200, .base_min = 400, .handles = 10, .others = &.{only} };
+    const c: Constraint = .{ .extent = 200, .base_min = 400, .handles = 10, .others = &.{only} };
     try testing.expectApproxEqAbs(@as(f32, 0), resolve(only, 150, c, .{}), 0.001);
 }
 
@@ -810,7 +812,7 @@ test "a max below the min does not panic in the clamp" {
 
     // `std.math.clamp` asserts lower <= upper, so a contradictory pair has to be reconciled
     // before it reaches the clamp rather than after.
-    const c: Constraint = .{ .length = 1000, .base_min = 100, .handles = 10, .others = &.{only} };
+    const c: Constraint = .{ .extent = 1000, .base_min = 100, .handles = 10, .others = &.{only} };
     const got = resolve(only, 500, c, .{ .min = 200, .max = 50 });
     try testing.expectApproxEqAbs(@as(f32, 200), got, 0.001);
 }

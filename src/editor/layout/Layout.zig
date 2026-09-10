@@ -44,16 +44,28 @@ pub const Container = struct {
     /// drag can mean pushing the others back.
     resizables: [max_trays]dvui.Id = undefined,
     resizable_count: usize = 0,
-    /// Total length the splits in this container take.
+    /// Total extent the splits in this container take between them.
     handles: f32 = 0,
     /// The container's own box, for measuring how near the pointer is to a split inside it.
     box: ?*dvui.BoxWidget = null,
     /// A split that found no resizable region before it, waiting to be bound to the one after.
     pending_split: ?dvui.Id = null,
-    /// The most recent resizable child. A `split` drags *this* region's stored size — the
+    /// The most recent resizable child. A `split` drags *this* region's stored extent — the
     /// neighbour before it — which is the whole of the resize mechanism: there are no ratios and
     /// no boundary table, just one number per resizable region.
     last_resizable: ?dvui.Id = null,
+
+    /// How far this container reaches along `axis`, in points — its width when horizontal, its
+    /// height when vertical. The same single number a region calls its extent, measured for the
+    /// thing regions sit inside.
+    pub fn extent(self: *Container, axis: dvui.enums.Direction) f32 {
+        const b = self.box orelse return 0;
+        const r = b.data().contentRect();
+        return switch (axis) {
+            .horizontal => r.w,
+            .vertical => r.h,
+        };
+    }
 };
 
 /// Layouts nest a few levels; anything deeper is a mistake worth reporting rather than
@@ -206,9 +218,9 @@ pub fn drawSelected(self: *Layout, keywords: []const []const u8) !dvui.App.Resul
 // fizzy's own shape happens to have a panel.
 
 pub const Region = @import("Region.zig");
-/// Declare a region. Lives on `Region` — the type it returns — and is re-exported here so a
-/// shape writes `f.region(...)` beside `f.split(...)`. Same arrangement as `core.dvui.split`.
-pub const region = Region.region;
+/// Declare a region — the verb form of `Region.init`, so a shape writes `f.region(...)` beside
+/// `f.split(...)` and never names the type. Same arrangement as `dvui.box` over `BoxWidget.init`.
+pub const region = Region.init;
 
 /// What persists behind a `Layout` between frames — selections, declared regions, sizes.
 pub const State = @import("State.zig");
@@ -236,8 +248,8 @@ pub fn split(self: *Layout, src: std.builtin.SourceLocation, opts: Split.Options
     };
     const axis = c.dir;
 
-    var divider = Split.split(src, axis, 0);
-    defer divider.end();
+    var divider = Split.init(src, axis, 0);
+    defer divider.deinit();
     if (!opts.resize) return;
 
     // Which neighbour this split resizes. Preferring the one *before* it makes the sidebar case
@@ -255,12 +267,8 @@ pub fn split(self: *Layout, src: std.builtin.SourceLocation, opts: Split.Options
 
     const container = c.box orelse return;
     c.handles += Split.handle_size;
-    const room = switch (axis) {
-        .horizontal => container.data().contentRect().w,
-        .vertical => container.data().contentRect().h,
-    };
     divider.drag(container, target, sign, opts, .{
-        .length = room,
+        .extent = c.extent(axis),
         .base_min = c.base_min,
         .handles = c.handles,
         .others = c.resizables[0..c.resizable_count],
@@ -296,13 +304,13 @@ pub fn tabs(f: *Layout, keywords: []const []const u8) void {
     const surfaces = f.matching(keywords);
     if (surfaces.len == 0) return;
 
-    var strip: fizzy.dvui.Tabs = .begin(@src(), &tabs_state, .{ .drag_name = "fizzy_tab_strip" });
-    defer strip.end();
+    var strip: fizzy.dvui.Tabs = .init(@src(), &tabs_state, .{ .drag_name = "fizzy_tab_strip" });
+    defer strip.deinit();
 
     for (surfaces, 0..) |s, i| {
         const is_selected = f.isSelected(keywords, s);
         var t = strip.tab(@src(), i, is_selected);
-        defer t.end();
+        defer t.deinit();
 
         var title_buf: [64]u8 = undefined;
         const title_upper = if (s.title.len <= title_buf.len)

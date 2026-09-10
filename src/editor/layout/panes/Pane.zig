@@ -87,11 +87,11 @@ fn drawTabs(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout
     // with the workbench's document tabs (`core.dvui.Tabs`). What stays here is the part
     // that is actually about *this* strip: which views belong to this grouping, what a tab
     // looks like, and what selecting one means.
-    var strip: fizzy.dvui.Tabs = .begin(@src(), &self.tab_state, .{
+    var strip: fizzy.dvui.Tabs = .init(@src(), &self.tab_state, .{
         .drag_name = drag_name,
         .id_extra = @intCast(self.grouping),
     });
-    defer strip.end();
+    defer strip.deinit();
 
     const active_in_this_group = blk: {
         if (panel.open_pane != self.grouping) break :blk false;
@@ -110,7 +110,7 @@ fn drawTabs(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout
 
         const selected = active_in_this_group and active_index == i;
         var t = strip.tab(@src(), i, selected);
-        defer t.end();
+        defer t.deinit();
 
         var title_buf: [64]u8 = undefined;
         const title_upper = if (view.title.len <= title_buf.len)
