@@ -1,8 +1,122 @@
-//! What an app's shape declares its regions with.
+//! What an app's shape declares its regions with — the whole of how an app lays itself out.
 //!
-//! A region says which keywords it accepts; a plugin's `sdk.Surface` says which it carries.
-//! The intersection is the match set the region draws, so neither side names the other and an
-//! app can invent a region shape the SDK has never heard of.
+//! A region says which keywords it accepts; a plugin's `sdk.Surface` says which it carries. The
+//! intersection is the match set the region draws, so neither side names the other and an app
+//! can invent a region shape the SDK has never heard of.
+//!
+//! The three pieces, all in this directory: `Layout` is the live view (which surfaces exist,
+//! which match a region, which is selected), `Region.zig` is a named area accepting keywords,
+//! and `presets.zig` dispatches to the shipped shapes in `presets/`. The resizable division
+//! between two regions is `core.widgets.Split`, and a tab strip is `core.widgets.Tabs` — both in
+//! `core` rather than here because a plugin dylib draws the same ones the app does.
+//!
+//! ## Who draws the tabs
+//!
+//! There are two forms, both supported, and the difference is *what the tabs represent*:
+//!
+//! **The app draws them** when the tabs represent surfaces — several plugins each contributing
+//! a pane to one region. The app owns the strip because no single plugin can: they must share
+//! it. Fizzy's bottom panel is this. A shape writes `f.tabs(kw)` then draws the selected
+//! surface, or passes `.content = Layout.tabbed` to the region.
+//!
+//! **The plugin draws them** when the tabs represent something only the plugin knows about —
+//! its own documents, timelines, layers. Then the plugin registers *one* surface and draws the
+//! entire region: its own tab strip, its own splits, its own content. Fizzy's main area is
+//! already exactly this: `workbench` registers one surface and draws document tabs and splits
+//! inside it (`Workspace.drawTabs`), and neither fizzy nor any shape knows how many tabs there
+//! are.
+//!
+//! Nothing distinguishes the two at registration — a surface is a surface, and drawing a tab
+//! strip inside your own area needs no permission.
+//!
+//! ## The shape of a layout
+//!
+//! ```zig
+//! var body = f.region(@src(), .{ .dir = .horizontal });
+//! defer body.deinit();
+//!
+//!     f.region(@src(), .{ .name = "Sidebar", .keywords = kw.ide.sidebar });
+//!     f.split(@src(), .{ .resize = true, .collapsible = true });
+//!
+//!     var right = f.region(@src(), .{ .dir = .vertical });
+//!     defer right.deinit();
+//!         f.region(@src(), .{ .name = "Main",  .keywords = kw.ide.main });
+//!         f.split(@src(), .{ .resize = true });
+//!         f.region(@src(), .{ .name = "Panel", .keywords = kw.ide.panel });
+//! ```
+//!
+//! One object with two verbs: declare a region, or put a draggable split between the last one
+//! and the next. Reads top to bottom, no `showFirst` / `showSecond` / `rest()` branching, and N
+//! regions on an axis rather than a forced tree of two-child panes. Nesting is how you cross
+//! axes — a region's content can be another layout.
+//!
+//! The intended end state is that a layout function contains *nothing else*: no `dvui.box`, no
+//! `dvui.label`, no fizzy widgets intermixed. `region` therefore does double duty, and that is
+//! deliberate rather than an overload: a region **with** keywords is a place surfaces draw; a
+//! region **without** is a plain container you nest more regions in — so it takes box-like
+//! options (`dir`, `expand`) as well as placement ones. There is no third concept, and no reason
+//! for an app author to reach past this API into dvui.
+//!
+//! `dir` is what a container region orients — **its child regions and splits**, not content. A
+//! horizontal region lays its children left to right, and a `split` inside it is therefore a
+//! vertical bar you drag left and right. The split inherits the containing region's axis rather
+//! than restating it, so direction is declared in exactly one place; an explicit `dir` on a
+//! split is available for the rare case that has to differ.
+//!
+//! ## How a region gets its size
+//!
+//! From `expand`, which is dvui's existing meaning rather than a new concept — so there is no
+//! separate sizing vocabulary to learn, and the three cases fall out of one field:
+//!
+//! **Fit to content.** A region that does not expand along its parent's axis takes its size from
+//! its content's minimum. In a horizontal container, `.expand = .vertical` means "as wide as
+//! what is in me". This is the answer to "a region only large enough to contain its content":
+//! you do not size it, and there is no split position to store, because the content decides.
+//!
+//! **Stretch, with a draggable boundary.** `.expand = .both` on both neighbours means neither
+//! has an opinion, so the `split` between them owns the boundary and persists it. A split
+//! position is only meaningful when both sides stretch — which is why size belongs on the split
+//! rather than on the region.
+//!
+//! **Fixed.** Fit-to-content plus a minimum: the icon rail is `.expand = .vertical` with a 40pt
+//! minimum width, and needs no split at all.
+//!
+//! The hazard in fit-to-content is that it hands size control to whatever plugin draws there —
+//! a surface with a wide minimum makes the region wide. So a fitting region should carry a
+//! `max_size` guard, again dvui's existing `max_size_content`. An app that does not want a
+//! plugin dictating its proportions uses the stretch form instead.
+//!
+//! ## Two audiences, two levels
+//!
+//! **App authors** use only this: `region` and `split`, with keywords assigned per region. They
+//! never touch dvui. That is the whole point of the level existing, and it is why the surface
+//! is two verbs rather than a widget toolkit — a small enough vocabulary to hold in your head
+//! and, prospectively, to check at comptime (a layout that declares a region twice, or splits
+//! outside a container, is a compile error rather than a confusing frame).
+//!
+//! **Plugin authors** work a level down: raw dvui for their own content, plus fizzy's mid-level
+//! constructs where one exists — `core.widgets.CanvasWidget` for zoom/pan surfaces, `Tabs`, the
+//! dialog chrome in `core.dialogs.dialog`, scroll areas with edge shadows, context menus. Those
+//! are content blocks, not layout, and they live in `core` precisely so a dylib can reach them.
+//!
+//! It also leaves room for the thing this is ultimately for: once regions are the only unit, a
+//! region can be dragged to move or re-split it at runtime, which is how a Premiere- or
+//! Blender-style app would work. Fizzy itself stays rigid — its shape is fixed by
+//! `presets/ide.zig` — but nothing in the model prevents an app from letting the user rearrange.
+//!
+//! ## Layered regions and blur
+//!
+//! A tray that blurs what is behind it (the bottom panel over the editor; a scroll edge over its
+//! own overflowing content) is designed but not built — see `LAYERS.md` in this directory. The
+//! short version, because it is the decision most likely to be re-derived wrongly: blur is a
+//! **property of a region** (`.blur_behind`), never a layout verb that reverses render order. An
+//! app author must not have to reason about paint order to place a panel, and reversing paint
+//! order does not reverse dvui's event routing — declaration order and hit-test order would stop
+//! agreeing.
+//!
+//! Note the core pieces come through the named `core` module, never by relative path: a file may
+//! belong to only one module, and `@import("../../core/...")` here would claim it for the root
+//! build module and break `core` as a dependency outright (CLAUDE.md).
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");

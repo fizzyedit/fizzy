@@ -48,10 +48,6 @@ pub fn setInstances(a: *Entry, e: *Editor) void {
     editor_instance = e;
 }
 
-/// Application layout: regions, splits, tabs and the keyword vocabulary. See
-/// src/editor/layout.zig.
-pub const layout = @import("editor/layout.zig");
-
 /// Plugin SDK surface
 pub const sdk = @import("fizzy_sdk");
 

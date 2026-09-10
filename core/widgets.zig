@@ -7,10 +7,10 @@
 //!
 //! The divide this file sits on:
 //!
-//!   `fizzy.layout`  the app's own shape — `Layout`, `Region`, the shipped presets. App only:
-//!                   a plugin never declares a region, it fills one.
-//!   `core.widgets`  what both sides draw with. No layout vocabulary, no plugin vocabulary.
-//!   `fizzy.sdk`     the plugin contract — `Host`, `Surface`, `Plugin`. Draws nothing itself.
+//!   `editor/layout/`  the app's own shape — `Layout`, `Region`, the shipped presets. App
+//!                     only: a plugin never declares a region, it fills one.
+//!   `core.widgets`    what both sides draw with. No layout vocabulary, no plugin vocabulary.
+//!   `fizzy.sdk`       the plugin contract — `Host`, `Surface`, `Plugin`. Draws nothing itself.
 //!
 //! Widgets are `init` + `deinit`, like dvui's own; the verb form (`split`, `paned`, `reorder`,
 //! `floatingWindow`) sits here in the namespace, the way `dvui.box` sits over `BoxWidget.init`.
