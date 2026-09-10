@@ -733,9 +733,23 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         plugin_loader_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         plugin_loader_module.addImport("fizzy_sdk", sdk_module_test);
 
+        // The linear splitter's drag behaviour. Needs a real dvui Window and synthetic mouse
+        // events, so it cannot join the pure-logic unit layer even though the boundary maths
+        // it drives (`core/split_layout.zig`) is tested there. This is the layer that catches
+        // the immediate-mode ordering bugs the maths cannot see — events are processed before
+        // the layout body has run, so anything the body declares is a frame late.
+        const splitbox_tests_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("src/core/widgets_tests.zig"),
+        });
+        splitbox_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        if (icons_test) |icons| splitbox_tests_module.addImport("icons", icons);
+
         inline for (.{
             .{ "fizzy-sdk-tests", sdk_tests_module },
             .{ "fizzy-plugin-loader-tests", plugin_loader_module },
+            .{ "fizzy-splitbox-tests", splitbox_tests_module },
         }) |entry| {
             const t = b.addTest(.{
                 .name = entry[0],

@@ -63,9 +63,16 @@ boundaries: []f32 = &no_boundaries,
 expected: usize = 0,
 /// How many `slot` calls this frame has seen so far; also the index of the next child.
 placed: usize = 0,
-/// Which boundaries the layout marked draggable this frame. A boundary with no `handle()` call
-/// is a static edge: still a boundary, just not one the user can move.
+/// Which boundaries were draggable **last** frame — what events are matched against.
+///
+/// It has to be last frame's for the same reason the child count does: events are processed in
+/// `install`, before the layout body has run, so `handle()` has not been called yet and this
+/// frame's marks do not exist. Consuming `marked` here instead is the bug that made every
+/// boundary look static — the bitset was all zeros at event time, so nothing ever matched.
 draggable: std.StaticBitSet(max_children) = std.StaticBitSet(max_children).initEmpty(),
+/// Which boundaries `handle()` marked this frame. Accurate by `deinit`, so drawing uses it, and
+/// it becomes next frame's `draggable`.
+marked: std.StaticBitSet(max_children) = std.StaticBitSet(max_children).initEmpty(),
 
 /// Which boundary the pointer is nearest, and how far away, for the grow-on-approach handle.
 near: ?usize = null,
@@ -90,6 +97,7 @@ pub fn install(self: *SplitBox, src: std.builtin.SourceLocation, init_opts: Init
     const id = self.wd.id;
 
     self.expected = dvui.dataGet(null, id, "_count", usize) orelse 0;
+    self.draggable.mask = dvui.dataGet(null, id, "_draggable", u32) orelse 0;
     self.drag_index = dvui.dataGet(null, id, "_drag", usize);
 
     if (self.expected > 1) {
@@ -185,7 +193,7 @@ pub fn slot(self: *SplitBox, src: std.builtin.SourceLocation) *dvui.BoxWidget {
 /// `slot`s; a boundary with no `handle()` stays a static edge.
 pub fn handle(self: *SplitBox) void {
     if (self.placed == 0 or self.placed > max_children) return;
-    self.draggable.set(self.placed - 1);
+    self.marked.set(self.placed - 1);
 }
 
 // ── Events and drawing ──────────────────────────────────────────────────────────────────────
@@ -268,7 +276,7 @@ fn drawHandles(self: *SplitBox) void {
 
     var i: usize = 0;
     while (i < self.boundaries.len) : (i += 1) {
-        if (!self.draggable.isSet(i)) continue;
+        if (!self.marked.isSet(i)) continue;
 
         // Grow on approach: invisible until the pointer is within `handle_dist`, full length
         // under it. The same feel as fizzy's sash, which is what makes a thin divider findable.
@@ -376,10 +384,143 @@ pub fn deinit(self: *SplitBox) void {
         dvui.dataSetSlice(null, id, "_bounds", self.boundaries);
     }
     if (self.drag_index) |d| dvui.dataSet(null, id, "_drag", d) else dvui.dataRemove(null, id, "_drag");
+    // Next frame's event pass matches against these.
+    if (self.marked.mask != self.draggable.mask) dvui.refresh(null, @src(), id);
+    dvui.dataSet(null, id, "_draggable", self.marked.mask);
 
     self.wd.minSizeSetAndRefresh();
     self.wd.minSizeReportToParent();
     dvui.parentReset(id, self.wd.parent);
+}
+
+// ── Tests ───────────────────────────────────────────────────────────────────────────────────
+//
+// Headless, against dvui's testing backend, because the bugs this widget can have are *ordering*
+// bugs that no amount of boundary maths catches: events are processed in `install`, before the
+// layout body has declared anything, so every fact the body supplies — how many children there
+// are, which boundaries carry a handle — is a frame late by construction. The first version of
+// this widget read `handle()`'s marks in the same frame they were set, so the bitset was empty at
+// event time and nothing was ever draggable. It compiled, ran, drew, and did nothing.
+
+const testing = std.testing;
+
+/// A window-filling horizontal split with two children and a draggable boundary. Declared at file
+/// scope because dvui's test driver takes a plain frame function.
+fn twoChildFrame() !dvui.App.Result {
+    var box = dvui.widgetAlloc(SplitBox);
+    box.install(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+    defer box.deinit();
+
+    {
+        var c = box.slot(@src());
+        defer c.deinit();
+    }
+    box.handle();
+    {
+        var c = box.slot(@src());
+        defer c.deinit();
+    }
+    recordProbe(box);
+    test_draggable = box.draggable.mask;
+    return .ok;
+}
+
+var test_boundary: ?f32 = null;
+var test_marked: u32 = 0;
+var test_draggable: u32 = 0;
+/// Where handle 0 actually is, in the physical coordinates dvui's test driver posts mouse
+/// events in. Computed from the widget rather than by hand: the test window's physical pixels
+/// are not its logical points, and hard-coding the point in the wrong space is a test that
+/// fails for a reason that has nothing to do with the widget (it is how this test first failed).
+/// Reading it from the same `handleOffset` the drawing uses also asserts the thing that actually
+/// matters — that the handle you can grab is the handle you can see.
+var test_handle_px: f32 = 0;
+
+fn recordProbe(box: *SplitBox) void {
+    test_boundary = if (box.boundaries.len > 0) box.boundaries[0] else null;
+    test_marked = box.marked.mask;
+    if (box.boundaries.len > 0) {
+        const rs = box.wd.contentRectScale();
+        test_handle_px = rs.r.x + (box.handleOffset(0) + box.init_opts.handle_size / 2) * rs.s;
+    }
+}
+
+test "the handle is draggable from the frame after it is declared" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+
+    try dvui.testing.settle(twoChildFrame);
+
+    // The count and the handle mark have both made it into persistent state, so the *next*
+    // frame's event pass can see them. This is the assertion that would have failed before:
+    // `marked` was set every frame, but `draggable` — what events match against — stayed 0.
+    try testing.expectEqual(@as(u32, 1), test_marked);
+    try testing.expectEqual(@as(u32, 1), test_draggable);
+    try testing.expect(test_boundary != null);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), test_boundary.?, 0.0001);
+}
+
+test "dragging the handle moves the boundary" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+
+    try dvui.testing.settle(twoChildFrame);
+    const before = test_boundary.?;
+
+    const start = test_handle_px;
+    const cw = dvui.currentWindow();
+
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = start, .y = 40 } });
+    _ = try dvui.testing.step(twoChildFrame);
+
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(twoChildFrame);
+
+    // Well past dvui's drag threshold, towards the right.
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = start + 60, .y = 40 } });
+    _ = try dvui.testing.step(twoChildFrame);
+
+    _ = try cw.addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(twoChildFrame);
+
+    const after = test_boundary.?;
+    try testing.expect(after > before);
+    // The handle followed the pointer: it should now sit under where the drag ended, which is
+    // the "does the boundary track without drift" question a screenshot cannot answer.
+    try testing.expectApproxEqAbs(start + 60, test_handle_px, 2.0);
+}
+
+test "a boundary with no handle() call is not draggable" {
+    const Static = struct {
+        fn frame() !dvui.App.Result {
+            var box = dvui.widgetAlloc(SplitBox);
+            box.install(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+            defer box.deinit();
+            { var c = box.slot(@src()); defer c.deinit(); }
+            // no box.handle() here
+            { var c = box.slot(@src()); defer c.deinit(); }
+            recordProbe(box);
+            return .ok;
+        }
+    };
+
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+
+    try dvui.testing.settle(Static.frame);
+    const before = test_boundary.?;
+    try testing.expectEqual(@as(u32, 0), test_marked);
+
+    const start = test_handle_px;
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = start, .y = 40 } });
+    _ = try dvui.testing.step(Static.frame);
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(Static.frame);
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = start + 60, .y = 40 } });
+    _ = try dvui.testing.step(Static.frame);
+
+    try testing.expectApproxEqAbs(before, test_boundary.?, 0.0001);
 }
 
 test {
