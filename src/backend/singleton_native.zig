@@ -16,10 +16,14 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const singleton_app = @import("singleton_app");
 const fizzy = @import("../fizzy.zig");
+const AppInfo = @import("../AppInfo.zig");
 
 const log = std.log.scoped(.singleton);
 
-pub const app_id = "dev.foxnne.fizzy";
+/// The lock every instance of *this* app contends for. It must be the app's own identifier and
+/// not fizzy's: two apps built on fizzy would otherwise share one lock, and launching the second
+/// would forward its argv to the first and exit.
+pub const app_id = AppInfo.bundle_id_z;
 
 const PendingOpen = struct { path: []u8 };
 
@@ -245,7 +249,7 @@ pub fn collectAndResolveArgv(
     }
 
     const main_init = main_init_opt orelse {
-        const exe = try gpa.dupe(u8, "fizzy");
+        const exe = try gpa.dupe(u8, AppInfo.current.name);
         try out.append(gpa, exe);
         return out.toOwnedSlice(gpa);
     };

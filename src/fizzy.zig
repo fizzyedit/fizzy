@@ -5,6 +5,9 @@ const std = @import("std");
 /// consume it, so a name that appears here as well would read as fizzy's when it is not.
 pub const core = @import("core");
 
+/// Plugin SDK surface
+pub const sdk = @import("fizzy_sdk");
+
 pub const version: std.SemanticVersion = .{
     .major = 0,
     .minor = 2,
@@ -47,9 +50,6 @@ pub fn setInstances(a: *Entry, e: *Editor) void {
     entry_instance = a;
     editor_instance = e;
 }
-
-/// Plugin SDK surface
-pub const sdk = @import("fizzy_sdk");
 
 /// Custom backend stuff. Split per-arch: native uses SDL3 + objc + win32; web (and
 /// headless integration tests, which wire dvui's `testing` backend onto a native

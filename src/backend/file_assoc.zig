@@ -30,6 +30,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const AppInfo = @import("../AppInfo.zig");
 
 pub const default_progid_extensions = [_]ExtAssoc{
     .{ .ext = ".fiz", .progid = "Fizzy.fiz", .friendly = "Fizzy Document" },
@@ -105,12 +106,16 @@ const WindowsImpl = struct {
     const library_loader = win32.system.library_loader;
     const HKEY = win32.system.registry.HKEY;
 
-    const app_name = "fizzy";
+    // Registry identity is the *app's*, not fizzy's: two apps built on fizzy would otherwise
+    // write the same keys, and installing the second would silently take over the first's
+    // associations. The document progids above are a separate question — they name a file
+    // format rather than an application, and still say Fizzy.
+    const app_name = AppInfo.current.display_name;
     // All sub-keys passed through `setStringValueRaw` are relative to
     // `HKCU\Software\Classes\…`; the prefix is added once inside that helper.
-    const application_key = "Applications\\fizzy.exe";
-    const open_with_progid = "Fizzy.Document";
-    const open_with_friendly = "Fizzy Document";
+    const application_key = "Applications\\" ++ AppInfo.current.name ++ ".exe";
+    const open_with_progid = AppInfo.current.display_name ++ ".Document";
+    const open_with_friendly = AppInfo.current.display_name ++ " Document";
 
     // `std.process.executablePath` now requires an `Io`, which the Velopack C
     // callbacks that drive registration don't have. This path is Windows-only,

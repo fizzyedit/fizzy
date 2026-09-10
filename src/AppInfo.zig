@@ -54,5 +54,10 @@ pub const current: AppInfo = .{
 
 /// Null-terminated forms, for the C APIs that need them (SDL metadata, window title).
 pub const display_name_z: [:0]const u8 = build_opts.app_display_name ++ "";
+
+/// The macOS app menu's first item. AppKit creates that item itself rather than from fizzy's
+/// menu model, so the title is written straight into the `NSMenuItem` and has to be built here
+/// where the terminator survives concatenation.
+pub const about_title_z: [:0]const u8 = "About " ++ build_opts.app_display_name ++ "";
 pub const bundle_id_z: [:0]const u8 = build_opts.app_bundle_id ++ "";
 pub const version_z: [:0]const u8 = build_opts.app_version ++ "";

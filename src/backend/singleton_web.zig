@@ -5,8 +5,10 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
+const AppInfo = @import("../AppInfo.zig");
 
-pub const app_id = "dev.foxnne.fizzy";
+/// Unused here (one tab is one instance), but declared so this file mirrors the native API.
+pub const app_id = AppInfo.bundle_id_z;
 
 pub fn earlyStartup(_: std.mem.Allocator, _: std.process.Init) !void {}
 
@@ -34,7 +36,7 @@ pub fn collectAndResolveArgv(
 ) ![]const []const u8 {
     const out = try gpa.alloc([]const u8, 1);
     errdefer gpa.free(out);
-    out[0] = try gpa.dupe(u8, "fizzy");
+    out[0] = try gpa.dupe(u8, AppInfo.current.name);
     return out;
 }
 

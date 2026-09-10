@@ -11,6 +11,7 @@ const window_layout = @import("window_layout.zig");
 const Constants = @import("../editor/Constants.zig");
 const KeybindSettings = @import("../editor/KeybindSettings.zig");
 const menu_model = @import("../editor/menu_model.zig");
+const AppInfo = @import("../AppInfo.zig");
 
 // AppKit geometry types for NSView frame/bounds (same layout as Foundation).
 const NSPoint = extern struct { x: f64, y: f64 };
@@ -618,7 +619,7 @@ export fn FizzyNativeMenuItemTitle(tag: c_int) callconv(.c) ?[*:0]const u8 {
     };
 }
 
-/// The app menu's "About fizzy", which AppKit creates rather than the model.
+/// The app menu's "About <app>", which AppKit creates rather than the model.
 export fn FizzyNativeMenuAboutAction() callconv(.c) void {
     pending_native_menu_about.store(true, .release);
 }
@@ -1628,18 +1629,20 @@ pub fn setupMacOSMenuBar() void {
         if (fizzy_get_selector("about:")) |about_sel| {
             const about_item = app_submenu.msgSend(objc.Object, "itemAtIndex:", .{@as(c_ulong, 0)});
             if (about_item.value != 0) {
-                const about_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"About fizzy".ptr});
+                const about_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{AppInfo.about_title_z.ptr});
                 about_item.msgSend(void, "setTitle:", .{about_title.value});
                 about_item.msgSend(void, "setAction:", .{about_sel});
                 about_item.msgSend(void, "setTarget:", .{target.value});
             }
         }
 
-        // Patch every remaining "DVUI App Example" → "fizzy" in app-menu item titles.
+        // Patch every remaining "DVUI App Example" → this app's display name in app-menu item
+        // titles (Hide, Quit, Services). The name is the *app's*, not fizzy's — an app built on
+        // fizzy must not offer to quit fizzy.
         // `stringByReplacingOccurrencesOfString:withString:` is a no-op when the substring
         // isn't present, so it's safe to apply unconditionally over the whole menu.
         const search_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"DVUI App Example".ptr});
-        const replacement_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"fizzy".ptr});
+        const replacement_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{AppInfo.display_name_z.ptr});
         const item_count = app_submenu.msgSend(c_long, "numberOfItems", .{});
         var idx: c_long = 0;
         while (idx < item_count) : (idx += 1) {

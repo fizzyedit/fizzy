@@ -18,7 +18,6 @@ pub fn build(b: *std.Build) !void {
         .@"app-display-name" = @as([]const u8, "Minimal App"),
         .@"app-bundle-id" = @as([]const u8, "dev.fizzy.minimalapp"),
         // Layout: one of fizzy's shipped shapes, used as-is.
-        .@"region-layout" = true,
         .layout = @as([]const u8, "minimal"),
     });
 
