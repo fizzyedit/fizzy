@@ -4,11 +4,32 @@
 //! settings through these types instead of reaching into editor globals. File
 //! management, the workspace/tabs system, and the editors (pixel art, …) all live
 //! behind this boundary, which also supports loading plugins as runtime dylibs.
+//!
+//! **This is everything a plugin needs.** A plugin declares one dependency — the `sdk/`
+//! package — and that package hands its build the modules it draws with. The widgets and
+//! helpers of the shared floor are re-exported here as `sdk.core` (`sdk.core.widgets.Split`,
+//! `sdk.core.fuzzy`, …), so a plugin author never has to know that `core` is a separate tree
+//! compiled per dvui flavour; `@import("core")` directly is the same thing, and both work.
+//!
+//! The three trees exist for the dylib boundary, not for the reader:
+//!
+//!   `core/`  compiled into the app *and* into every plugin, once per dvui flavour — so it may
+//!            never depend on the app, and an app-only dependency (Velopack) in here would be
+//!            linked into every `.dylib` fizzy ships.
+//!   `sdk/`   the shape that crosses `dlopen`, locked by `recorded_sdk_shape_fingerprint`.
+//!   app      what only an application needs — layout presets, the plugin store, installers.
+//!            Never enters a dylib.
 
 // Eagerly evaluate the ABI fingerprint lock (see `version.zig`).
 comptime {
     _ = @import("version.zig");
 }
+
+/// The shared floor, re-exported so `sdk` really is the one name a plugin needs: widgets
+/// (`core.widgets.Split`, `Tabs`, `TreeWidget`), `core.anim`, `core.dialogs`, `core.draw`,
+/// `core.fuzzy`, `core.paths`, `core.lsp`. The `sdk/` package exports it to a plugin's build as
+/// its own module too, so `@import("core")` resolves to this same code.
+pub const core = @import("core");
 
 pub const Host = @import("Host.zig");
 pub const Plugin = @import("Plugin.zig");
