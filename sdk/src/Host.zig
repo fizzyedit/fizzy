@@ -57,7 +57,16 @@ pub const FileRowFillColor = struct {
 /// unload can remove the owner's services. `owner` is null for fizzy-registered
 /// services with no single plugin owner.
 pub const ServiceEntry = struct {
+    /// The service's name. Borrowed: a plugin's `service_name` is a string literal in its own
+    /// image, which `unregisterPlugin` drops before `dlclose`.
+    name: []const u8,
     ptr: *anyopaque,
+    /// The provider's declared `service_version`. Checked on every typed lookup: a downstream
+    /// app's own service cannot be covered by `recorded_sdk_shape_fingerprint` — that hash is
+    /// over *this* SDK's shape and knows nothing about a CAD app's geometry API — so without a
+    /// version a changed struct is a silent vtable-shape mismatch across `dlopen`, which is the
+    /// worst failure this codebase can produce. Bump it whenever the type's layout changes.
+    version: u32,
     owner: ?*Plugin = null,
 };
 
@@ -141,7 +150,14 @@ pending_new_document_owner: ?*Plugin = null,
 /// Service locator for inter-plugin APIs: name -> opaque service vtable. E.g. the
 /// workbench plugin registers "workbench" so editor plugins can place tabs and
 /// draw per-branch explorer decorations without a compile-time dependency on it.
-services: std.StringHashMapUnmanaged(ServiceEntry) = .empty,
+/// Registered services, in registration order.
+///
+/// A list rather than a map keyed by name, because **several providers may share a name**: that
+/// is what a hook is. An app defines `"cad.hooks"`, every plugin that wants to observe it
+/// registers an implementation, and the app calls each in turn (`servicesNamed`). A map silently
+/// dropped all but the last, which is a fine answer for "who provides X" and a wrong one for
+/// "who is listening to X".
+services: std.ArrayListUnmanaged(ServiceEntry) = .empty,
 
 /// The project's file set — one cached, searchable view of what is on disk, owned by the app and
 /// shared by every plugin that draws files. Null in a headless host.
@@ -775,16 +791,9 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwnedSettingsSchemas(&self.settings_schemas, plugin);
     if (self.fallback_editor == plugin) self.fallback_editor = null;
 
-    // Services: free the owned key strings and drop the entries.
-    {
-        var it = self.services.iterator();
-        var doomed: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer doomed.deinit(self.allocator);
-        while (it.next()) |e| {
-            if (e.value_ptr.owner == plugin) doomed.append(self.allocator, e.key_ptr.*) catch {};
-        }
-        for (doomed.items) |name| _ = self.services.remove(name);
-    }
+    // Services: drop this plugin's entries before its image goes away — both the vtable pointer
+    // and the name string live in it.
+    removeOwned(ServiceEntry, &self.services, plugin);
 
     // Drop the plugin from the registry (pointer identity; no `owner` field here).
     for (self.plugins.items, 0..) |p, i| {
@@ -1030,20 +1039,97 @@ pub fn drawPluginIcon(self: *Host, plugin_id: []const u8) bool {
     return false;
 }
 
-/// Register an inter-plugin service. `owner` is the contributing plugin (null for a
-/// fizzy-registered service); it lets `unregisterPlugin` drop the service on unload.
-pub fn registerService(self: *Host, name: []const u8, service: *anyopaque, owner: ?*Plugin) !void {
-    try self.services.put(self.allocator, name, .{ .ptr = service, .owner = owner });
+/// Register a service under `T`'s declared name and version.
+///
+/// A service is how capability crosses the plugin boundary in *both* directions: an app offers
+/// one for plugins to call (fizzy's `"workbench"`), and a plugin registers one for the app to
+/// call back into (a hook the app defined). Nothing about it rides the SDK fingerprint, which is
+/// the point — a downstream app can invent services its plugins use without fizzy knowing the
+/// type exists, and adding one costs nobody a rebuild.
+///
+/// `owner` is the contributing plugin, so `unregisterPlugin` can drop the entry before the image
+/// it points into is closed. Null for one the application itself provides.
+pub fn registerService(self: *Host, comptime T: type, impl: *T, owner: ?*Plugin) !void {
+    try self.services.append(self.allocator, .{
+        .name = T.service_name,
+        .ptr = impl,
+        .version = serviceVersion(T),
+        .owner = owner,
+    });
 }
 
+/// Set false to silence the version-mismatch warning. Exists for the test that asserts the
+/// refusal itself: the run fails on any log output, and the warning is the *symptom* being
+/// tested, not the assertion.
+pub var warn_on_service_mismatch: bool = true;
+
+/// The version `T` declares, or 0 for a service that declares none.
+///
+/// Zero is not a free pass: it means "unversioned", it only matches other unversioned providers,
+/// and every service in this SDK declares one. It exists so a service written before versioning
+/// still resolves against itself rather than failing in a way its author cannot read.
+fn serviceVersion(comptime T: type) u32 {
+    return if (@hasDecl(T, "service_version")) T.service_version else 0;
+}
+
+/// The first provider of `name`, untyped. Prefer `getServiceTyped`, which checks the version.
 pub fn getService(self: *Host, name: []const u8) ?*anyopaque {
-    return if (self.services.get(name)) |entry| entry.ptr else null;
+    for (self.services.items) |e| {
+        if (std.mem.eql(u8, e.name, name)) return e.ptr;
+    }
+    return null;
 }
 
-/// Typed service lookup. `Service` must declare `service_name` and match the registered layout.
-pub fn getServiceTyped(self: *Host, comptime Service: type) ?*Service {
-    const ptr = self.getService(Service.service_name) orelse return null;
-    return @ptrCast(@alignCast(ptr));
+/// Typed service lookup. `T` must declare `service_name`; it should declare `service_version`.
+///
+/// Returns null when nothing provides the service **or** when the provider's version differs
+/// from `T`'s — a mismatch is logged and refused rather than cast, because the two sides are
+/// separate compilations and the wrong layout reinterpreted through a vtable is undebuggable.
+/// A caller must handle null anyway: a service is optional by construction, and a plugin that
+/// cannot find one should offer what it can rather than fail to load.
+pub fn getServiceTyped(self: *Host, comptime T: type) ?*T {
+    const want = serviceVersion(T);
+    for (self.services.items) |e| {
+        if (!std.mem.eql(u8, e.name, T.service_name)) continue;
+        if (e.version != want) {
+            // `warn`, not `err`: the caller has to handle null anyway — a service is optional by
+            // construction — so this is a capability the plugin does without, not a fault the
+            // app cannot continue past. It is still worth saying out loud, because the symptom
+            // on the other side is a feature quietly missing.
+            if (warn_on_service_mismatch) dvui.log.warn(
+                "service '{s}': provider is version {d}, caller wants {d} — refusing",
+                .{ T.service_name, e.version, want },
+            );
+            continue;
+        }
+        return @ptrCast(@alignCast(e.ptr));
+    }
+    return null;
+}
+
+/// Every provider of `T`, in registration order — the hook form. An app that defines a hook
+/// calls this and invokes each implementation; a service with exactly one provider is just the
+/// common case of the same thing.
+///
+/// The slice is the host's own storage: valid until the next registration or plugin unload, so
+/// call it, walk it, and do not keep it.
+pub fn servicesNamed(self: *Host, comptime T: type, buf: []*T) []*T {
+    const want = serviceVersion(T);
+    var n: usize = 0;
+    for (self.services.items) |e| {
+        if (n == buf.len) break;
+        if (!std.mem.eql(u8, e.name, T.service_name)) continue;
+        if (e.version != want) {
+            if (warn_on_service_mismatch) dvui.log.warn(
+                "service '{s}': provider is version {d}, caller wants {d} — skipping",
+                .{ T.service_name, e.version, want },
+            );
+            continue;
+        }
+        buf[n] = @ptrCast(@alignCast(e.ptr));
+        n += 1;
+    }
+    return buf[0..n];
 }
 
 // ---- region registration (called from a plugin's register / postInit) -------
@@ -1664,7 +1750,6 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
 
     const vtable = Plugin.VTable{};
     var plugin = Plugin{ .state = undefined, .vtable = &vtable, .id = "victim", .display_name = "Victim" };
-    var service_obj: u32 = 0;
 
     // A second, surviving plugin so we can prove only the victim's entries are removed.
     var keeper = Plugin{ .state = undefined, .vtable = &vtable, .id = "keeper", .display_name = "Keeper" };
@@ -1747,7 +1832,13 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
         .value = &dummy_value,
         .access = &empty_access,
     });
-    try host.registerService("victim.svc", &service_obj, &plugin);
+    const VictimSvc = struct {
+        pub const service_name = "victim.svc";
+        pub const service_version: u32 = 1;
+        value: u32,
+    };
+    var victim_svc: VictimSvc = .{ .value = 0 };
+    try host.registerService(VictimSvc, &victim_svc, &plugin);
 
     // Each region's selection points at the victim (keeper registered first, but force it).
     host.setSelectionFor(keywords.ide.sidebar, "victim.view");
@@ -1777,4 +1868,63 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try testing.expect(host.selectionFor(keywords.ide.sidebar) == null);
     try testing.expect(host.selectionFor(keywords.ide.panel) == null);
     try testing.expect(host.selectionFor(keywords.ide.main) == null);
+}
+
+test "a service whose provider is a different version is refused, not cast" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+
+    // Same name, different declared version — the exact shape of a downstream app whose service
+    // struct changed under a plugin built against the older one.
+    const V1 = struct {
+        pub const service_name = "geometry";
+        pub const service_version: u32 = 1;
+        value: u32,
+    };
+    const V2 = struct {
+        pub const service_name = "geometry";
+        pub const service_version: u32 = 2;
+        value: u32,
+        added: u32,
+    };
+
+    var v1: V1 = .{ .value = 7 };
+    try host.registerService(V1, &v1, null);
+
+    // The matching version resolves.
+    const same = host.getServiceTyped(V1) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u32, 7), same.value);
+
+    // The mismatched one does not — this is the cast that would otherwise read `added` off the
+    // end of a `V1`. The refusal warns in production; here the assertion is the refusal.
+    warn_on_service_mismatch = false;
+    defer warn_on_service_mismatch = true;
+    try testing.expect(host.getServiceTyped(V2) == null);
+}
+
+test "several providers can share one name, which is what a hook is" {
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+
+    const Hook = struct {
+        pub const service_name = "cad.hooks";
+        pub const service_version: u32 = 1;
+        id: u32,
+    };
+    var a: Hook = .{ .id = 1 };
+    var b: Hook = .{ .id = 2 };
+    try host.registerService(Hook, &a, null);
+    try host.registerService(Hook, &b, null);
+
+    var buf: [4]*Hook = undefined;
+    const found = host.servicesNamed(Hook, &buf);
+    try testing.expectEqual(@as(usize, 2), found.len);
+    // Registration order, so an app calling hooks in turn gets a stable, explicable order.
+    try testing.expectEqual(@as(u32, 1), found[0].id);
+    try testing.expectEqual(@as(u32, 2), found[1].id);
+
+    // The single-provider lookup still answers with the first, which is what every existing
+    // caller of a one-provider service expects.
+    const first = host.getServiceTyped(Hook) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u32, 1), first.id);
 }

@@ -8,6 +8,9 @@
 const std = @import("std");
 
 pub const Api = struct {
+    /// Bump whenever this struct's layout changes: `getServiceTyped` refuses a provider whose
+    /// version differs rather than reinterpreting one shape as another across `dlopen`.
+    pub const service_version: u32 = 1;
     pub const service_name = "markdown";
 
     ctx: *anyopaque,

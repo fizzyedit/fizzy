@@ -78,7 +78,7 @@ pub fn register(host: *sdk.Host) !void {
     try host.registerPlugin(&plugin);
     try plugin_state.registerSettings(host, &plugin);
     try host.registerLanguageSupport(language_support);
-    try host.registerService("markdown", &markdown_api, &plugin);
+    try host.registerService(sdk.services.markdown.Api, &markdown_api, &plugin);
 }
 
 fn deinit(state: *anyopaque) void {

@@ -2578,7 +2578,7 @@ pub fn postInit(editor: *Editor) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) {
         editor.workbench.initService(&editor.host);
         try editor.host.registerService(
-            Workbench.Api.service_name,
+            Workbench.Api,
             &editor.workbench.api,
             editor.host.pluginById("workbench"),
         );

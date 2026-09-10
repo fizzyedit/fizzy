@@ -20,6 +20,19 @@
 //!   app      what only an application needs — layout presets, the plugin store, installers.
 //!            Never enters a dylib.
 
+/// In effect only when this file is a compilation **root**, which it is for exactly one thing:
+/// the SDK's own test binary (`fizzy-sdk-tests`). An app or plugin has its own root and this is
+/// inert there.
+///
+/// It exists because the test runner fails a run that logs anything above `err`, and one of
+/// these tests asserts a behaviour whose whole point is that it *warns*: a service provider
+/// whose version does not match the caller's is refused rather than cast. Silencing the warning
+/// in the test binary keeps that test honest — it still calls the real lookup and still asserts
+/// the refusal — without turning a deliberate log into a failed build.
+const std = @import("std");
+
+pub const std_options: std.Options = .{ .log_level = .err };
+
 // Eagerly evaluate the ABI fingerprint lock (see `version.zig`).
 comptime {
     _ = @import("version.zig");
