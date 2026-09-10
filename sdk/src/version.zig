@@ -62,7 +62,7 @@ pub const VersionTriplet = dylib.VersionTriplet;
 /// third-party plugins depend on directly.
 ///
 /// Reached as a *named* module, not a relative path: Zig confines a module's relative imports to
-/// its own root (`src/sdk/`), so a file one directory up is unreachable by path from here no
+/// its own root (`sdk/src/`), so a file one directory up is unreachable by path from here no
 /// matter which package the build calls this. The `sdk_version` module is wired at both sites
 /// that build `fizzy_sdk` — `build/sdk.zig` (app) and `sdk/plugin_sdk.zig` (third-party).
 pub const sdk_version = @import("sdk_version").sdk_version;
@@ -77,7 +77,7 @@ comptime {
     if (dylib.sdk_shape_fingerprint != recorded_sdk_shape_fingerprint) {
         @compileError(std.fmt.comptimePrint(
             "SDK boundary shape fingerprint is 0x{x} — bump sdk_version and update " ++
-                "recorded_sdk_shape_fingerprint in src/sdk/version.zig",
+                "recorded_sdk_shape_fingerprint in sdk/src/version.zig",
             .{dylib.sdk_shape_fingerprint},
         ));
     }

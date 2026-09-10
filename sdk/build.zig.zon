@@ -15,6 +15,7 @@
         "sdk_version.zig",
         "manifest_identity.zig",
         "paths.zig",
+        "src",
     },
     .dependencies = .{
         .icons = .{

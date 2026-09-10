@@ -387,14 +387,14 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ "fizzy-lsp-protocol-tests", "core/lsp/Protocol.zig" },
         .{ "fizzy-lsp-uri-tests", "core/lsp/UriUtil.zig" },
         .{ "fizzy-settings-plugins-zon-tests", "src/editor/SettingsPluginsZon.zig" },
-        // std-only despite living under src/sdk/ — and the SDK-rooted test artifact
+        // std-only despite living under sdk/src/ — and the SDK-rooted test artifact
         // below never reaches it (nothing in the graph forces `sdk.manifest`), so it
         // needs its own root either way.
-        .{ "fizzy-sdk-manifest-tests", "src/sdk/manifest.zig" },
+        .{ "fizzy-sdk-manifest-tests", "sdk/src/manifest.zig" },
         // The `[[wikilink]]` tokenizer. std-only on purpose: it's shared verbatim by the
         // markdown renderer and by out-of-tree indexers, so it must not depend on dvui or
         // anything else the SDK-rooted artifact drags in.
-        .{ "fizzy-sdk-wikilink-tests", "src/sdk/services/wikilink.zig" },
+        .{ "fizzy-sdk-wikilink-tests", "sdk/src/services/wikilink.zig" },
         // The text plugin's headless editing model. Lives under plugins/ but is
         // deliberately dvui-free (see textcore.zig), so it tests as pure logic from the
         // app build. One root covers every file below it — they're relative imports.
@@ -711,7 +711,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     // Pure-logic tests that nevertheless sit in a file importing `dvui` (or the SDK)
     // can't join the unit layer, so they get their own roots here. Rooting at
-    // `src/sdk/sdk.zig` collects every SDK file reachable from it by relative
+    // `sdk/src/sdk.zig` collects every SDK file reachable from it by relative
     // import *and actually referenced* — dylib.zig, fingerprint.zig, settings.zig,
     // version.zig, Host.zig. A file only reached through an unreferenced `pub const
     // x = @import(…)` in sdk.zig is analyzed lazily and its tests never run (that is

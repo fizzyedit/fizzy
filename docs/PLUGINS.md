@@ -141,7 +141,7 @@ sidecar next to the installed dylib — the plugins directory holds only the bui
 Fizzy isn't a package you install separately — a plugin depends on **the fizzy repo itself** as a
 Zig package, pinned by a **`sdk-v<sdk_version>` tag** (e.g. `sdk-v0.1.35`), not an arbitrary
 commit SHA. That tag is pushed automatically at the exact commit where the matching `sdk_version`
-was recorded in `src/sdk/version.zig` (see §5) — pin against it and the ref you're reading in
+was recorded in `sdk/src/version.zig` (see §5) — pin against it and the ref you're reading in
 `build.zig.zon` tells you, at a glance, which SDK contract you're building against. Use
 `zig fetch` to fill in the hash — pin the **SDK release asset**, not the git archive of the tag:
 
@@ -180,7 +180,7 @@ users won't have a sibling checkout.
 Depend on fizzy's **`sdk/` package** (not the repo root). The root zon owns the editor and lists
 app-only deps (Velopack, …) that must never enter a plugin's `zig-pkg`. Zig cannot depend on a
 subdirectory of a URL archive, so the release asset *is* the `sdk/` package with `core` +
-`src/sdk` vendored in. Do **not** pin
+`sdk/src` vendored in. Do **not** pin
 `https://github.com/fizzyedit/fizzy/archive/refs/tags/sdk-v….tar.gz` — that is the full monorepo.
 
 Locally: `.path = "../fizzy/sdk"` (or equivalent) while developing against an unreleased SDK.
@@ -324,7 +324,7 @@ pub fn register(host: *sdk.Host) !void {
 }
 ```
 
-Each contribution struct (defined in [`src/sdk/regions.zig`](../src/sdk/regions.zig)) takes a
+Each contribution struct (defined in [`sdk/src/regions.zig`](../sdk/src/regions.zig)) takes a
 stable, namespaced `id`, the owning `*Plugin`, and a `draw`/resolver fn. Fizzy renders the
 set — and shows a tab strip automatically when more than one plugin contributes to the same
 region. Everything registered here is torn down automatically on unload (disable/uninstall via
@@ -751,7 +751,7 @@ The text editor calls `host.treeSitterHighlightFor(ext)`, `host.previewProviderF
 `completion`/`signatureHelp`/`format` hooks follow the same first-registered-provider-wins
 lookup, keyed off `ext`.
 
-See `src/sdk/language.zig` for every hook's full doc comment (three-state hover convention,
+See `sdk/src/language.zig` for every hook's full doc comment (three-state hover convention,
 why `gotoDefinition` returns an LSP `Position` instead of a resolved byte offset, the
 completion ghost-text/dropdown split, …) — those types are the single source of truth, not
 duplicated here.
@@ -834,7 +834,7 @@ fingerprint and every service type used across dylibs is listed in `dylib.zig`'s
 `sdk_boundary_types`.
 
 The SDK ships definitions for the services plugins in this ecosystem publish, in
-[`src/sdk/services/`](../src/sdk/services/):
+[`sdk/src/services/`](../sdk/src/services/):
 
 | Service | Provider | What it's for |
 |---|---|---|
@@ -986,7 +986,7 @@ Fizzy uses three independent versions:
 | Version | Owner | Purpose |
 |---------|-------|---------|
 | **App version** | Fizzy release (`build.zig.zon`) | User-facing editor release; does **not** gate plugin loading |
-| **SDK version** | `src/sdk/version.zig` (`sdk_version`) | ABI contract; bumps when the plugin boundary changes. Every bump gets an `sdk-v<version>` git tag **and** a `fizzy-sdk-v*` release asset (auto-pushed by CI — see §2.3) as the pin point for plugin `build.zig.zon`s |
+| **SDK version** | `sdk/src/version.zig` (`sdk_version`) | ABI contract; bumps when the plugin boundary changes. Every bump gets an `sdk-v<version>` git tag **and** a `fizzy-sdk-v*` release asset (auto-pushed by CI — see §2.3) as the pin point for plugin `build.zig.zon`s |
 | **Plugin version** | Author `plugin.zig.zon` `.version` | Plugin's own release semver — the single source of truth, forwarded into the build (`fizzy_plugin_options`) and embedded in the dylib's `fizzy_plugin_manifest_zon`/`fizzy_plugin_version` exports |
 
 At load time the host checks, in order:
@@ -1016,7 +1016,7 @@ rare and deliberate, not something that breaks on every release:
 
 CI enforces the pairing on the fizzy side: `zig build test-sdk-version` fails at compile time if
 the live shape fingerprint (`dylib.sdk_shape_fingerprint`) drifts from the recorded literal
-(`recorded_sdk_shape_fingerprint` in `src/sdk/version.zig`) without an accompanying `sdk_version`
+(`recorded_sdk_shape_fingerprint` in `sdk/src/version.zig`) without an accompanying `sdk_version`
 bump.
 
 On the plugin side, `fizzy.plugin.install` wires a `check` build step that prints what your
@@ -1194,18 +1194,18 @@ drop straight into the plugins directory, exactly like §2.6.
 
 | Path | Role |
 |------|------|
-| `src/sdk/sdk.zig` | SDK entry — re-exports everything below |
-| `src/sdk/Host.zig` | Registries + service locator + `register*` methods |
-| `src/sdk/Plugin.zig` | Plugin identity + the vtable of hooks |
-| `src/sdk/DocHandle.zig` | Opaque document handle (`owner`-routed) |
-| `src/sdk/EditorAPI.zig` | Fizzy's read/utility surface plugins reach back through |
-| `src/sdk/regions.zig` | Sidebar/bottom/center/menu/settings/command contribution structs |
-| `src/sdk/language.zig` | `LanguageSupport` registry — documentOpened/hover/goto-definition/completion/signature-help/format/highlighting/preview hooks looked up by file extension |
+| `sdk/src/sdk.zig` | SDK entry — re-exports everything below |
+| `sdk/src/Host.zig` | Registries + service locator + `register*` methods |
+| `sdk/src/Plugin.zig` | Plugin identity + the vtable of hooks |
+| `sdk/src/DocHandle.zig` | Opaque document handle (`owner`-routed) |
+| `sdk/src/EditorAPI.zig` | Fizzy's read/utility surface plugins reach back through |
+| `sdk/src/regions.zig` | Sidebar/bottom/center/menu/settings/command contribution structs |
+| `sdk/src/language.zig` | `LanguageSupport` registry — documentOpened/hover/goto-definition/completion/signature-help/format/highlighting/preview hooks looked up by file extension |
 | `core/lsp/Client.zig` | Server-agnostic LSP client (JSON-RPC framing, caching, threading) shared by every language plugin — see §3.9 |
-| `src/sdk/dylib.zig`, `dvui_context.zig` | Runtime-library C entry contract + dvui injection |
-| `src/sdk/version.zig` | SDK version + ABI fingerprint CI lock |
-| `src/sdk/manifest.zig` | `Manifest` — the `plugin.zig.zon` shape (`id`/`name`/`version`/`min_sdk_version`/`description`/`tags`) + `parse`/`free`, read back out of a loaded dylib at runtime. The typed shape actually baked into a dylib's C-ABI exports is `dylib.Identity` (build-injected, never runtime-parsed) |
-| `src/sdk/settings.zig` | Comptime settings API (`sdk.settings.Schema(T)`) — see §3.1.1 |
+| `sdk/src/dylib.zig`, `dvui_context.zig` | Runtime-library C entry contract + dvui injection |
+| `sdk/src/version.zig` | SDK version + ABI fingerprint CI lock |
+| `sdk/src/manifest.zig` | `Manifest` — the `plugin.zig.zon` shape (`id`/`name`/`version`/`min_sdk_version`/`description`/`tags`) + `parse`/`free`, read back out of a loaded dylib at runtime. The typed shape actually baked into a dylib's C-ABI exports is `dylib.Identity` (build-injected, never runtime-parsed) |
+| `sdk/src/settings.zig` | Comptime settings API (`sdk.settings.Schema(T)`) — see §3.1.1 |
 | `src/editor/SettingsPluginsZon.zig` | ZON-AST byte-span surgery for `settings.zon`'s merged `.plugins.<id>` fields — fizzy-only, not part of the SDK |
 | `src/editor/SettingsWatcher.zig` | Thin nightwatch adapter for live external `settings.zon` / dropped-in plugin reconciliation (see above) — fizzy-only, not part of the SDK |
 | `src/editor/FolderWatcher.zig`, `folder_events.zig` | Recursive watch on the open folder, fanned out to plugins as `folderPathsChanged` (§3.2). The only watcher adapter whose output leaves fizzy; nightwatch stays behind the hook so it can be swapped per platform. `folder_events.zig` is the std-only buffering/filtering half, split out so it can be unit-tested |

@@ -12,9 +12,9 @@ Fizzy the app is itself a near-empty host (window, frame loop, menu/sidebar/pane
 Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(host) + vtable)
 ```
 
-- **`src/sdk/`** — the entire contract. `Host` (registries + service locator), `Plugin` (identity + vtable of hooks Fizzy calls), `DocHandle` (opaque `{ptr, id, owner}` — Fizzy routes every doc op to `owner`, never inspects `ptr`), `EditorAPI` (Fizzy's own read/util surface plugins reach back through), `regions.zig` (sidebar/bottom/center/menu/settings/command contribution structs), `dylib.zig`/`dvui_context.zig` (runtime-library C-ABI + dvui injection).
+- **`sdk/src/`** — the entire contract. `Host` (registries + service locator), `Plugin` (identity + vtable of hooks Fizzy calls), `DocHandle` (opaque `{ptr, id, owner}` — Fizzy routes every doc op to `owner`, never inspects `ptr`), `EditorAPI` (Fizzy's own read/util surface plugins reach back through), `regions.zig` (sidebar/bottom/center/menu/settings/command contribution structs), `dylib.zig`/`dvui_context.zig` (runtime-library C-ABI + dvui injection).
 - **`src/editor/`** — Fizzy itself: `Editor.zig` (frame loop, plugin registration/loading), `PluginLoader.zig` (dlopen), `Menu.zig`, `Sidebar.zig`, `Settings.zig`, etc.
-- **`core/`** — shared infra (Atlas/Sprite, math, gfx, fs, paths, platform detection) used by Fizzy *and* plugins. Not plugin-owned; don't move it. `core.fuzzy` is the one matcher behind every filter box in the app (settings tree, file tree, plugin store, LSP completions) — wrap zf through it rather than matching by hand, and remember **lower scores are better**.
+- **`core/`** — the shared floor used by Fizzy *and* plugins: `widgets` (Split, Tabs, Tree, Canvas), `anim`, `dialogs`, `draw`, math, gfx, fs, paths, platform detection. Not plugin-owned; don't move it. (`Atlas`/`Sprite` are there only because pixi still loads its packed UI atlas through them — see the note in `core/core.zig`.) `core.fuzzy` is the one matcher behind every filter box in the app (settings tree, file tree, plugin store, LSP completions) — wrap zf through it rather than matching by hand, and remember **lower scores are better**.
 - **`plugins/`** — bundled built-in plugins. Each is file-for-file the **same shape a third-party plugin would use**: root `plugin.zig` + identity-only `plugin.zig.zon` + `build.zig` + `build.zig.zon` (optional `src/**`), plus fizzy-internal glue in `static/`. No author `root.zig` or `<name>.zig` hub — the build helper generates the dylib entry; files use named imports (`fizzy_sdk`/`dvui`/…). Builds standalone with `cd plugins/<name> && zig build`.
 
 **Two link modes, one source:** built-in plugins compile **static** (linked directly, all targets incl. web) or **dynamic** (`.dylib`/`.so`/`.dll`, desktop-only, `dlopen`'d — this is how third-party plugins ship too). `FIZZY_STATIC_<NAME>=1` env var forces static for a given built-in (useful when debugging dylib loading).
@@ -75,6 +75,22 @@ That constrains how these are written, and the constraint is the point:
   special case. `Editor.shell_bottom_split` exists because a plugin was reaching for a widget the
   shape happened to create — the fix was to make the shape *state* it, not to bless the shape.
 
+## Where things live
+
+```
+core/      the shared floor both an app and a plugin dylib draw with — widgets (Split, Tabs,
+           Tree, Canvas), anim, dialogs, draw, fs, paths, math, fuzzy, lsp
+sdk/       the plugin contract: `sdk/src/**` is the SDK itself, the files beside it are its
+           build surface (this directory ships standalone as `fizzy-sdk-v*.tar.gz`)
+plugins/   the bundled plugins, in the exact shape a third-party plugin has
+examples/  apps built on fizzy
+src/       fizzy the application — `Entry`, `editor/`, `backend/`
+build/     the app build API
+```
+
+A consumer reaches for `core/` and `sdk/`; `src/` is fizzy's own source and nothing outside
+fizzy should need to look in it.
+
 ## File naming: a file is a struct
 
 Zig files *are* structs, so the repo follows that literally and you should too:
@@ -95,8 +111,8 @@ staged — and then CI fails to resolve `@import("Surface.zig")` on a case-sensi
 Use `git mv -f old.zig tmp && git mv -f tmp New.zig` (two steps) when changing only case, and
 check `git status --porcelain` actually shows the rename before committing.
 
-The same case-insensitivity will silently destroy work: `rm src/sdk/surface.zig` deletes
-`src/sdk/Surface.zig`. Watch for it when converting a file to the capitalized form.
+The same case-insensitivity will silently destroy work: `rm sdk/src/surface.zig` deletes
+`sdk/src/Surface.zig`. Watch for it when converting a file to the capitalized form.
 
 ## Build
 
@@ -107,7 +123,7 @@ zig build test         # unit/integration tests
 zig build test-sdk-version  # CI lock: ABI fingerprint bump must bump sdk_version too
 ```
 
-Run all of these after touching the SDK boundary (`src/sdk/**`) or a plugin's vtable usage.
+Run all of these after touching the SDK boundary (`sdk/src/**`) or a plugin's vtable usage.
 
 ### Keep the plugin build free of app-only dependencies
 

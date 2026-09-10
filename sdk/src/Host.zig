@@ -1077,7 +1077,7 @@ pub fn getServiceTyped(self: *Host, comptime Service: type) ?*Service {
 // ---- region registration (called from a plugin's register / postInit) -------
 
 /// Register a surface: a named drawable plus the keywords describing what kind of place its
-/// content belongs. The app's layout decides where that lands; see `src/sdk/surface.zig`.
+/// content belongs. The app's layout decides where that lands; see `sdk/src/surface.zig`.
 pub fn registerSurface(self: *Host, s: Surface) !void {
     try self.surfaces.append(self.allocator, s);
 }

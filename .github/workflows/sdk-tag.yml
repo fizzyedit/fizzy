@@ -3,7 +3,7 @@ name: SDK tag
 # Auto-pins the plugin ABI contract: on every push to main, if sdk/sdk_version.zig's
 # `sdk_version` doesn't already have a matching `sdk-v<major>.<minor>.<patch>` tag, create and
 # push one at this commit. Then pack the plugin-facing `sdk/` package (plus vendored
-# `core` + `src/sdk`) into `fizzy-sdk-v*.tar.gz` and publish it as a GitHub release asset
+# `core` + `sdk/src`) into `fizzy-sdk-v*.tar.gz` and publish it as a GitHub release asset
 # on that tag — the URL third-party plugins pin (docs/PLUGINS.md §2.3). The git archive of the
 # monorepo is *not* a valid plugin pin: its root zon owns Velopack.
 #
@@ -15,7 +15,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "src/sdk/version.zig"
+      - "sdk/src/version.zig"
       - "sdk/**"
       - "scripts/pack-sdk.sh"
       - ".github/workflows/sdk-tag.yml"
@@ -101,7 +101,7 @@ jobs:
             echo "Changelog range: $range"
             printf '## Changes since `%s`\n\n' "$prev" >"$out"
 
-            sdk_log=$(git log "$range" --no-merges --format='- %s (%h)' -- sdk src/sdk scripts/pack-sdk.sh)
+            sdk_log=$(git log "$range" --no-merges --format='- %s (%h)' -- sdk sdk/src scripts/pack-sdk.sh)
             if [[ -n "$sdk_log" ]]; then
               printf '### SDK\n\n%s\n\n' "$sdk_log" >>"$out"
             fi
@@ -154,7 +154,7 @@ jobs:
           \`\`\`
 
           Do **not** pin the git archive of this tag — that is the full monorepo (app zon / Velopack).
-          This asset is the \`sdk/\` package with \`core\` + \`src/sdk\` vendored in.
+          This asset is the \`sdk/\` package with \`core\` + \`sdk/src\` vendored in.
           Locally, \`.path = "../fizzy/sdk"\` is fine while developing against an unreleased SDK.
 
           See [docs/PLUGINS.md](https://github.com/fizzyedit/fizzy/blob/main/docs/PLUGINS.md) §2.3.

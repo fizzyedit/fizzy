@@ -45,10 +45,10 @@ const version_number = @import("fizzy_sdk").sdk_version;
 /// Same type as `plugin_sdk.IdentityManifest` (both `@import` `manifest_identity.zig` directly)
 /// — only `readManifestAt` below stays duplicated, since sharing *that* would pull one build
 /// graph into the other (see this file's top doc comment).
-/// Deliberately `src/sdk/…` and not the mirror in the `sdk/` package: that copy belongs to the
+/// Deliberately `sdk/src/…`, the runtime SDK source, and not `sdk/manifest_identity.zig`: that copy belongs to the
 /// sdk package's own build module, and a file may belong to only one module — importing it from
 /// here puts it in fizzy's `@build` module too and the build fails outright.
-pub const IdentityManifest = @import("../../../src/sdk/manifest_identity.zig").IdentityManifest;
+pub const IdentityManifest = @import("../../../sdk/src/manifest_identity.zig").IdentityManifest;
 
 /// Read and validate a built-in plugin's `plugin.zig.zon`. `zon_rel_path` is fizzy-build-root
 /// relative (e.g. `"plugins/image/plugin.zig.zon"`). Read (not comptime `@import`) on

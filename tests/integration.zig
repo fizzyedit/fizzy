@@ -6,7 +6,7 @@
 //! for the code paths exercised here to read the globals they need
 //! without booting the full editor (no assets, no themes, no SDL).
 //!
-//! The same step also runs `fizzy-sdk-tests` (rooted at `src/sdk/sdk.zig`)
+//! The same step also runs `fizzy-sdk-tests` (rooted at `sdk/src/sdk.zig`)
 //! for SDK/dylib/settings coverage that needs dvui — see `build/app.zig`.
 //!
 //! See `tests/README.md` for the overall layering.

@@ -1,4 +1,4 @@
-//! Mirror of `src/sdk/manifest_identity.zig` for the plugin-facing package's build scripts.
+//! Mirror of `sdk/src/manifest_identity.zig` for the plugin-facing package's build scripts.
 //! Keep the struct identical.
 pub const IdentityManifest = struct {
     id: []const u8,

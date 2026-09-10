@@ -44,7 +44,7 @@ Reorder, FloatingWindow), `math/`, `fs`, `paths`, `fuzzy`, `lsp/`, `Fling`, `Fil
 
 ### sdk — the plugin contract (already a package)
 
-Stays: `src/sdk/**` behind `sdk/build.zig`. `Surface`, `Plugin`, `Host`, `DocHandle`, `EditorAPI`,
+Stays: `sdk/src/**` behind `sdk/build.zig`. `Surface`, `Plugin`, `Host`, `DocHandle`, `EditorAPI`,
 `keywords`, `settings.Schema`, `services/`, `dylib.zig`.
 
 ### app — the framework (new)

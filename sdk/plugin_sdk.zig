@@ -24,12 +24,13 @@ const core_paths = @import("paths.zig");
 /// the five `core` compiles and miss this one (see its doc comment).
 const core_module = @import("core_module.zig");
 
-/// LazyPath to a repo-relative source file (`core/…`, `src/sdk/…`).
+/// LazyPath to a source tree this package needs (`src/…` for the SDK itself, `core/…` for the
+/// shared floor).
 ///
-/// Two layouts share this package:
-/// - **In-repo** (`fizzy/sdk/`): sources live at `../src/…` beside this package.
-/// - **Release tarball** (`fizzy-sdk-v*.tar.gz`): `src/` is vendored next to `build.zig`
-///   so the archive root *is* this package (see `scripts/pack-sdk.sh`).
+/// The SDK's own source lives inside this package (`sdk/src/`) and resolves directly. `core/`
+/// is the one tree that does not: in-repo it sits beside this package (`../core/…`), and in the
+/// release tarball (`fizzy-sdk-v*.tar.gz`) it is vendored at the archive root, which *is* this
+/// package — so the access check below picks whichever layout is present.
 fn repoPath(b: *std.Build, sub_path: []const u8) std.Build.LazyPath {
     b.build_root.handle.access(b.graph.io, sub_path, .{}) catch {
         const root = b.build_root.path orelse @panic("fizzy sdk: missing build_root");
@@ -77,7 +78,7 @@ pub const ModuleOptions = struct {
 /// struct.
 pub const IdentityManifest = @import("manifest_identity.zig").IdentityManifest;
 
-/// Derived from `sdk_version.zig` (`std`-only, unlike `src/sdk/version.zig` itself,
+/// Derived from `sdk_version.zig` (`std`-only, unlike `src/version.zig` itself,
 /// which transitively reaches "dvui"/"proxy_bridge" — named imports this compilation unit
 /// doesn't carry; see `dylib_exports` above for the same "avoid a deep import" reasoning) rather
 /// than duplicated as a literal: a hand-copied version string here silently drifted out of sync
@@ -565,7 +566,7 @@ pub fn exportModules(
     const sdk_mod = b.addModule("fizzy_sdk", .{
         .target = target,
         .optimize = optimize,
-        .root_source_file = repoPath(b, "src/sdk/sdk.zig"),
+        .root_source_file = repoPath(b, "src/sdk.zig"),
     });
     sdk_mod.addImport("dvui", dvui_proxy_mod);
     sdk_mod.addImport("proxy_bridge", proxy_bridge_mod);

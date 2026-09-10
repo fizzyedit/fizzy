@@ -58,7 +58,7 @@ cheapest first. Wiring lives in `build/app.zig`.
 | Step                   | Artifacts                                                                 | Needs a window? | Notes |
 | ---------------------- | ------------------------------------------------------------------------- | --------------- | ----- |
 | `zig build test`       | One `b.addTest` per pure-logic file (`fizzy-direction-tests`, …, `fizzy-fuzzy-tests`) | No | CI entry; no dvui/SDL/Velopack |
-| `zig build test-integration` | `fizzy-sdk-tests` (`src/sdk/sdk.zig`) + `fizzy-plugin-loader-tests` (`src/editor/PluginLoader.zig`) + `fizzy-integration-tests` (`tests/integration.zig`) | Headless (dvui testing backend) | Not run by CI today |
+| `zig build test-integration` | `fizzy-sdk-tests` (`sdk/src/sdk.zig`) + `fizzy-plugin-loader-tests` (`src/editor/PluginLoader.zig`) + `fizzy-integration-tests` (`tests/integration.zig`) | Headless (dvui testing backend) | Not run by CI today |
 
 
 ### Unit tests (pure logic)
@@ -84,9 +84,9 @@ Each covered file is its own test artifact root in `build/app.zig`
   `fizzy-lsp-uri-tests` — `file://` URI ↔ path conversion.
 - [`src/editor/SettingsPluginsZon.zig`](../src/editor/SettingsPluginsZon.zig) —
   `fizzy-settings-plugins-zon-tests` — ZON-AST byte-span surgery on `settings.zon`.
-- [`src/sdk/manifest.zig`](../src/sdk/manifest.zig) —
+- [`sdk/src/manifest.zig`](../sdk/src/manifest.zig) —
   `fizzy-sdk-manifest-tests` — `plugin.zig.zon` parsing (std-only, so it lives
-  in the unit layer even though it sits under `src/sdk/`).
+  in the unit layer even though it sits under `sdk/src/`).
 - [`core/fuzzy.zig`](../core/fuzzy.zig) —
   `fizzy-fuzzy-tests` — fuzzy matcher wrapper over `zf` (needs a `zf` import).
 
@@ -94,9 +94,9 @@ Each covered file is its own test artifact root in `build/app.zig`
 
 `zig build test-integration` runs three artifacts:
 
-1. **`fizzy-sdk-tests`** — root module `src/sdk/sdk.zig`, with
+1. **`fizzy-sdk-tests`** — root module `sdk/src/sdk.zig`, with
    dvui-testing + `proxy_bridge` + `core` wired the same way as the app.
-   Collects same-module `test` blocks under `src/sdk/` (`dylib.zig` ABI
+   Collects same-module `test` blocks under `sdk/src/` (`dylib.zig` ABI
    fingerprint, `fingerprint.zig`, `settings.zig`, `Host.zig`,
    `version.zig`). These cannot live under `zig build test` because the
    SDK imports dvui. Caveat: a file reached only through an *unreferenced*
@@ -164,7 +164,7 @@ What's intentionally **not** here yet:
 
 ### SDK (needs dvui / `proxy_bridge` / `core`)
 
-1. Add a `test "..."` block in the relevant `src/sdk/*.zig` file.
+1. Add a `test "..."` block in the relevant `sdk/src/*.zig` file.
 2. Usually no build wiring: `fizzy-sdk-tests` is already rooted at
    `sdk.zig`, so same-module file imports pick the new block up.
 3. Run `zig build test-integration --summary all` and verify the

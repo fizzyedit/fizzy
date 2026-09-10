@@ -2,10 +2,10 @@
 
 ## Landed
 
-**`src/sdk/Surface.zig`** is the shape-agnostic successor to the
+**`sdk/src/Surface.zig`** is the shape-agnostic successor to the
 `SidebarView` / `BottomView` / `CenterProvider` trio, which differed only in *where the host
 chose to call them*. A surface carries one identifier plus `keywords` describing what kind of
-place its content belongs — never where it goes. **`src/sdk/keywords.zig`** documents the
+place its content belongs — never where it goes. **`sdk/src/keywords.zig`** documents the
 conventional sets fizzy's own regions accept (`sidebar`/`explorer`, `bottom`/`panel`/`output`,
 `main`/`center`/`workspace`); they are conventions, not an enum, so a plugin inventing a new
 kind of panel never bumps the ABI.

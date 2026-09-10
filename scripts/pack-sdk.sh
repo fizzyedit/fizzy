@@ -3,8 +3,8 @@
 #
 # Zig has no "depend on a subdirectory of this archive" — plugins must fetch a
 # package whose root build.zig.zon has no Velopack. This script stages `sdk/` as
-# the package root and vendors `core/` + `src/sdk` beside it so
-# `plugin_sdk.repoPath` resolves via in-package `src/` (see that function).
+# the package root. The SDK's own source already lives inside it (`sdk/src/`), so only
+# `core/` is vendored in beside it — `plugin_sdk.repoPath` resolves both (see that function).
 #
 # Usage:
 #   ./scripts/pack-sdk.sh                 # writes zig-out/sdk/fizzy-sdk-vX.Y.Z.tar.gz
@@ -34,29 +34,27 @@ staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 
 pkg="$staging/$pkg_name"
-mkdir -p "$pkg/src"
+mkdir -p "$pkg"
 
-# Package root = today's sdk/ build surface (no app-only deps).
+# Package root = the sdk/ build surface plus its own src/ (no app-only deps).
 cp -R sdk/. "$pkg/"
-# Runtime / module sources that exportModules points at.
+# The one module source that lives outside the package in-repo.
 cp -R core "$pkg/core"
-cp -R src/sdk "$pkg/src/sdk"
 
 # Drop build/editor-only noise if any leaked into the copy (none expected).
-rm -rf "$pkg/core/.zig-cache" "$pkg/src/sdk/.zig-cache" 2>/dev/null || true
+rm -rf "$pkg/core/.zig-cache" "$pkg/src/.zig-cache" 2>/dev/null || true
 rm -rf "$pkg/.zig-cache" "$pkg/zig-pkg" "$pkg/zig-out" 2>/dev/null || true
 
-# Tarball package must hash the vendored trees (`core/` and `src/sdk/`); the in-repo
-# sdk/build.zig.zon does not list them, because there they live beside the package
-# rather than inside it.
+# Tarball package must also hash the vendored `core/`; the in-repo sdk/build.zig.zon
+# cannot list it, because there it lives beside the package rather than inside it.
 python3 - <<'PY' "$pkg/build.zig.zon" "$version"
 import sys, re
 path, version = sys.argv[1], sys.argv[2]
 text = open(path).read()
-if '"src"' not in text.split(".paths")[1].split("}")[0]:
+if '"core"' not in text.split(".paths")[1].split("}")[0]:
     text = text.replace(
-        '        "paths.zig",\n    },',
-        '        "paths.zig",\n        "core",\n        "src",\n    },',
+        '        "src",\n    },',
+        '        "src",\n        "core",\n    },',
         1,
     )
 text = re.sub(r'\.version = "[^"]*"', f'.version = "{version}"', text, count=1)

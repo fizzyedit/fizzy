@@ -9,7 +9,7 @@ const std = @import("std");
 ///
 /// Worth the indirection because the two are not free to disagree. dvui types reachable from the
 /// plugin boundary feed `dylib.sdk_shape_fingerprint`, which both the app build and the plugin-SDK
-/// build check against the single `recorded_sdk_shape_fingerprint` literal in `src/sdk/version.zig`.
+/// build check against the single `recorded_sdk_shape_fingerprint` literal in `sdk/src/version.zig`.
 /// When each build compiled a different dvui, they computed different fingerprints from that one
 /// literal and no value satisfied both — every fix broke the other side, and the error blamed
 /// `sdk_version`, which a bump cannot repair. One pin makes that state unreachable rather than
@@ -52,14 +52,14 @@ pub fn wireSdkModule(
     const sdk_module = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/sdk/sdk.zig"),
+        .root_source_file = b.path("sdk/src/sdk.zig"),
     });
     sdk_module.addImport("dvui", dvui_module);
     sdk_module.addImport("proxy_bridge", proxy_bridge_module);
     sdk_module.addImport("core", core_module);
     // `sdk_version` as a *named* module rather than a relative `@import`: `sdk/sdk_version.zig`
     // is the single edit site for the triplet, but it sits outside this module's root
-    // (`src/sdk/`), and Zig confines a module's relative imports to its own root — a named
+    // (`sdk/src/`), and Zig confines a module's relative imports to its own root — a named
     // module is the only way in. Wired identically on the third-party path in
     // `sdk/plugin_sdk.zig`'s `exportModules`; both must stay in step or `version.zig` fails to
     // compile (loudly, at the first build).
