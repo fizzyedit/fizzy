@@ -494,6 +494,24 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
     }
 
     if (!kind.resize) {
+        // A stretchy region must not let its *contents* set a floor under it.
+        //
+        // dvui clamps a widget's reported min size with `max_size_content`, so capping it along
+        // the parent's axis stops the plugin inside from reserving space the app never granted.
+        // Without this the bottom panel cannot be dragged open past whatever the editor above it
+        // wants to be — the neighbour's content, not the layout, decides how far a sash travels.
+        // The region clips anyway, so nothing escapes; it just stops pushing back.
+        //
+        // An explicit `max_size_content` from the shape wins: that is the app deciding, which is
+        // the whole point.
+        if (parent != null and opts.max_size_content == null) {
+            const given = opts.min_size_content orelse dvui.Size{};
+            box_opts.max_size_content = switch (axis) {
+                .horizontal => .{ .w = @max(1, given.w), .h = dvui.max_float_safe },
+                .vertical => .{ .w = dvui.max_float_safe, .h = @max(1, given.h) },
+            };
+        }
+
         // The base of this container: what it insists on keeping is what the trays must leave it.
         if (parent) |p| {
             const m = opts.min_size_content orelse dvui.Size{};

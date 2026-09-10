@@ -119,7 +119,17 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
         // The last pane takes what is left; the others keep the width they were dragged to.
         const last = i == count - 1;
         const id = paneId(row, i);
-        const width = core.dvui.Sash.sizeOf(id);
+
+        // **Never sized** and **dragged shut** are different states, and reading a width of zero
+        // as "needs a starting size" is what stopped a pane from closing: it sprang back to an
+        // even share on the very next frame. Absence means never sized; zero means closed.
+        const stored = dvui.dataGet(null, id, "_size", f32);
+        const width = stored orelse blk: {
+            const even = @max(80, row.data().contentRect().w / @as(f32, @floatFromInt(count)));
+            dvui.dataSet(null, id, "_size", even);
+            dvui.refresh(null, @src(), id);
+            break :blk even;
+        };
         var pane = dvui.box(@src(), .{ .dir = .vertical }, if (last) .{
             .id_extra = i,
             .expand = .both,
@@ -132,14 +142,6 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
             .max_size_content = .width(width),
         });
         if (!last) core.dvui.Sash.recordEdges(id, pane.data(), .horizontal);
-
-        // A pane that has never been sized starts at an even share, which is what the old
-        // first-frame `1.0 -> 0.5` animation was expressing.
-        if (!last and width <= 0) {
-            const even = row.data().contentRect().w / @as(f32, @floatFromInt(count));
-            dvui.dataSet(null, id, "_size", @max(80, even));
-            dvui.refresh(null, @src(), id);
-        }
 
         const result = try wb.workspaces.values()[i].draw();
         pane.deinit();
