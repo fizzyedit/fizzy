@@ -1,6 +1,7 @@
 .{
     .paths = .{
         "src",
+        "plugins",
         "build",
         "build.zig",
         "build.zig.zon",

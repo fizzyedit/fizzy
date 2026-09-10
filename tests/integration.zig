@@ -98,7 +98,7 @@ test "a shell command shadowed by a user binding gives up its native chord" {
 // what they cover is the half of the behavior that has no pure-logic seam: applying a decision
 // from `textcore.pairs` to the buffer and the selection. The decisions themselves (when to
 // close, step over, surround, or stay out of the way) are unit-tested in
-// `src/plugins/text/src/textcore/pairs.zig`.
+// `plugins/text/src/textcore/pairs.zig`.
 
 /// Backing buffer for `textEntryFrame` — file-scope because `dvui.App.frameFunction` takes no
 /// arguments, and the widget struct is rebuilt from this buffer every frame anyway.

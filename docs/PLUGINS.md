@@ -294,10 +294,10 @@ there's nothing to see — that's expected. Section 3 adds a visible pane.
 packaging / the release CI in §6 grabs. Your plugin's own directory (`Host.pluginInstallDir(id)`)
 is also where it can store its own assets/data at runtime, if it needs to.
 
-> **Fastest way to start a real plugin:** copy [`src/plugins/text/`](../src/plugins/text/)
+> **Fastest way to start a real plugin:** copy [`plugins/text/`](../plugins/text/)
 > instead of typing all of the above by hand. It's an always-compiling document-owning editor
 > plugin with every file already in the right place. For a minimal utility plugin (menus/views
-> only), see [`src/plugins/markdown/`](../src/plugins/markdown/).
+> only), see [`plugins/markdown/`](../plugins/markdown/).
 
 ---
 
@@ -333,7 +333,7 @@ the plugin store) and re-added on load.
 **Store card icons (`ICON.png`).** The Plugins tab fetches `ICON.png` from your plugin
 repository (same `homepage` URL and subdirectory convention as `README.md`) so icons appear in
 the store *before* installation. Commit `ICON.png` at your repo root (or under
-`src/plugins/<id>/` for built-ins in the fizzy monorepo). No copy goes into the central
+`plugins/<id>/` for built-ins in the fizzy monorepo). No copy goes into the central
 [`fizzyedit/plugins`](https://github.com/fizzyedit/plugins) registry — only `README.md` and
 `ICON.png` are pulled from your repo at browse time. `registerPluginIcon` remains an optional
 fallback when a loaded plugin has no fetchable `ICON.png` (e.g. a sideloaded dylib with no known
@@ -1210,9 +1210,9 @@ drop straight into the plugins directory, exactly like §2.6.
 | `src/editor/SettingsWatcher.zig` | Thin nightwatch adapter for live external `settings.zon` / dropped-in plugin reconciliation (see above) — fizzy-only, not part of the SDK |
 | `src/editor/FolderWatcher.zig`, `folder_events.zig` | Recursive watch on the open folder, fanned out to plugins as `folderPathsChanged` (§3.2). The only watcher adapter whose output leaves fizzy; nightwatch stays behind the hook so it can be swapped per platform. `folder_events.zig` is the std-only buffering/filtering half, split out so it can be unit-tested |
 | `sdk/plugin_sdk.zig` | `fizzy.plugin.create` / `.install` / `.addCModule` — the build-side API a plugin's `build.zig` calls |
-| `src/plugins/text/` | Canonical document-owning editor plugin — copy to start a new editor plugin |
-| `src/plugins/image/` | Read-only image viewer (PNG/JPG/JPEG) with zoom/pan |
-| `src/plugins/workbench/` | Reference file-management (workbench-shape) plugin |
+| `plugins/text/` | Canonical document-owning editor plugin — copy to start a new editor plugin |
+| `plugins/image/` | Read-only image viewer (PNG/JPG/JPEG) with zoom/pan |
+| `plugins/workbench/` | Reference file-management (workbench-shape) plugin |
 | [`fizzyedit/pixi`](https://github.com/fizzyedit/pixi) | Reference third-party editor plugin, incl. vendored C deps + packed assets |
 | [`fizzyedit/zig`](https://github.com/fizzyedit/zig) | Reference LSP-backed language plugin (zls) — see §3.9 |
 | [`fizzyedit/plugins`](https://github.com/fizzyedit/plugins) | The store registry/aggregator |
@@ -1248,11 +1248,11 @@ its own assets/data) — no on-disk `.zon` sidecar next to the dylib. The plugin
 Built-ins ship inside the signed app and compile **two ways** — statically into the
 native/web/test binaries *and* (desktop) as a bundled dylib. Their folder matches the
 canonical §2 shape (`plugin.zig` + `plugin.zig.zon` + `build.zig` + `build.zig.zon`), and each
-builds standalone with `cd src/plugins/<name> && zig build`. The only extra is fizzy-internal
+builds standalone with `cd plugins/<name> && zig build`. The only extra is fizzy-internal
 glue kept out of the plugin contract:
 
 ```
-src/plugins/<name>/
+plugins/<name>/
   plugin.zig         # register + vtable (+ fizzy-internal re-exports for static @import("<name>"))
   plugin.zig.zon     # identity only
   build.zig          # fizzy.plugin.create + install

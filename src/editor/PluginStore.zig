@@ -3058,7 +3058,7 @@ const RepoSource = struct {
 };
 
 /// The fizzy monorepo — source of truth for the bundled built-ins (workbench, text, markdown), whose
-/// `README.md` / `ICON.png` live at `src/plugins/<id>/` rather than at a repo root.
+/// `README.md` / `ICON.png` live at `plugins/<id>/` rather than at a repo root.
 const fizzy_repo_url = "https://github.com/fizzyedit/fizzy";
 
 /// Where to fetch `entry`'s README and store icon from, regardless of whether it's a store plugin or a
@@ -3079,12 +3079,12 @@ fn readmeSource(entry: StoreEntry) ?RepoSource {
     return repoSource(entry);
 }
 
-/// `src/plugins/<id>` — only ever called for `isBundled` ids.
+/// `plugins/<id>` — only ever called for `isBundled` ids.
 fn builtinSubpath(id: []const u8) []const u8 {
-    if (std.mem.eql(u8, id, "workbench")) return "src/plugins/workbench";
-    if (std.mem.eql(u8, id, "text")) return "src/plugins/text";
-    if (std.mem.eql(u8, id, "markdown")) return "src/plugins/markdown";
-    if (std.mem.eql(u8, id, "image")) return "src/plugins/image";
+    if (std.mem.eql(u8, id, "workbench")) return "plugins/workbench";
+    if (std.mem.eql(u8, id, "text")) return "plugins/text";
+    if (std.mem.eql(u8, id, "markdown")) return "plugins/markdown";
+    if (std.mem.eql(u8, id, "image")) return "plugins/image";
     unreachable;
 }
 

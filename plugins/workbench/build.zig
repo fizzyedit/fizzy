@@ -1,5 +1,5 @@
 //! Standalone build for the workbench plugin — the canonical third-party shape.
-//! `cd src/plugins/workbench && zig build` produces `workbench.<dylib|dll|so>`. The
+//! `cd plugins/workbench && zig build` produces `workbench.<dylib|dll|so>`. The
 //! `-Dworkbench-file-tree` option feeds a `workbench_opts` module the plugin imports;
 //! attaching a build-options module to a `fizzy.plugin.create` lib is exactly how any
 //! third-party plugin would expose compile-time flags. See docs/PLUGINS.md.

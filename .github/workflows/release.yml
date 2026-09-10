@@ -103,7 +103,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
-          key: zig-p-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon', 'sdk/build.zig.zon', 'libs/*/build.zig.zon', 'src/plugins/*/build.zig.zon') }}
+          key: zig-p-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon', 'sdk/build.zig.zon', 'libs/*/build.zig.zon', 'plugins/*/build.zig.zon') }}
           restore-keys: |
             zig-p-${{ runner.os }}-${{ env.ZIG_VERSION }}-
 
@@ -248,7 +248,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
-          key: zig-p-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon', 'sdk/build.zig.zon', 'libs/*/build.zig.zon', 'src/plugins/*/build.zig.zon') }}
+          key: zig-p-${{ runner.os }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig.zon', 'sdk/build.zig.zon', 'libs/*/build.zig.zon', 'plugins/*/build.zig.zon') }}
           restore-keys: |
             zig-p-${{ runner.os }}-${{ env.ZIG_VERSION }}-
 

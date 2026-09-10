@@ -21,7 +21,7 @@ pub const beginWebOverlayFrame = md.beginWebOverlayFrame;
 pub const render_ast = @import("src/md/render_ast.zig");
 
 /// Injected at build time from `plugin.zig.zon` (see `static/integration.zig` /
-/// `src/plugins/shared/build/helpers.zig`'s `pluginOptions`) — one source of truth for
+/// `plugins/shared/build/helpers.zig`'s `pluginOptions`) — one source of truth for
 /// identity, not duplicated as string literals here.
 pub const plugin_options = @import("fizzy_plugin_options");
 

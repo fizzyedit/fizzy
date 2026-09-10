@@ -1,6 +1,6 @@
 //! `zig build bench-markdown` — frame-cost benchmark for the markdown preview's draw path.
 //!
-//! Drives the real preview renderer (`src/plugins/markdown`, the same entry point the editor's
+//! Drives the real preview renderer (`plugins/markdown`, the same entry point the editor's
 //! preview pane and the plugin store's README pane call) over real markdown documents in dvui's
 //! headless testing backend, and reports microseconds per frame. Deliberately *not* part of
 //! `zig build test`: it prints timings rather than asserting, and timings are machine-dependent.

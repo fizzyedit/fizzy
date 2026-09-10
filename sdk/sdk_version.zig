@@ -3,7 +3,7 @@
 //!
 //! It lives in the `sdk/` package (rather than beside `src/sdk/version.zig`, where the rest of
 //! the runtime surface lives) because its two build-script readers cannot reach anywhere else:
-//! `sdk/plugin_sdk.zig` and `src/plugins/shared/build/helpers.zig` need the value at
+//! `sdk/plugin_sdk.zig` and `plugins/shared/build/helpers.zig` need the value at
 //! build-script comptime, and a build script can only `@import` paths inside its own package
 //! root — `sdk/` is a standalone package third-party plugins depend on directly, so `../src/…`
 //! is off-limits to it. The runtime side reaches *in* instead: `src/sdk/version.zig` re-exports

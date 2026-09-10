@@ -88,7 +88,7 @@ Phase 5 example apps:
    forwarder so plugins compiled against it keep working.
 
    **Result: `text`, `markdown` and `image` now depend on no workbench service at all.** A
-   `grep` for `services.workbench` outside `src/plugins/workbench/` returns nothing. Those
+   `grep` for `services.workbench` outside `plugins/workbench/` returns nothing. Those
    plugins load in a fizzy-based app that ships no workbench — which is the portability goal in
    §D4, and it is now true rather than aspirational.
 

@@ -1,12 +1,13 @@
-//! Markdown plugin — fizzy-internal static-embed + bundled-dylib module graph.
+//! Image plugin — fizzy-internal static-embed + bundled-dylib module graph.
+//! Runs only from the fizzy build root, so paths are single fizzy-relative literals.
 const std = @import("std");
 const helpers = @import("../../shared/build/helpers.zig");
 
-pub const id = "markdown";
+pub const id = "image";
 pub const installDylib = helpers.installDylib;
 
-const module_path = "src/plugins/markdown/plugin.zig";
-const zon_path = "src/plugins/markdown/plugin.zig.zon";
+const module_path = "plugins/image/plugin.zig";
+const zon_path = "plugins/image/plugin.zig.zon";
 
 pub const ModuleImports = struct {
     dvui: *std.Build.Module,
@@ -22,21 +23,7 @@ fn applyImports(module: *std.Build.Module, imports: ModuleImports) void {
     if (imports.proxy_bridge) |proxy_bridge| module.addImport("proxy_bridge", proxy_bridge);
 }
 
-/// md4c, via our wrapper. The module carries md4c's C sources and include paths,
-/// so importing it is all a consumer has to do — including for wasm, where the
-/// wrapper supplies the libc subset md4c needs.
-pub fn addMd4zig(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    module: *std.Build.Module,
-) void {
-    module.addImport("md4zig", b.dependency("md4zig", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("md4zig"));
-}
-
+/// Static `@import("image")` module for exe / web / tests.
 pub fn addStaticModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -54,10 +41,10 @@ pub fn addStaticModule(
     // link modes must attach the *same* options step (see its doc comment for why).
     mod.addOptions(helpers.plugin_options_import, helpers.pluginOptionsFor(b, zon_path));
     applyImports(mod, imports);
-    addMd4zig(b, target, optimize, mod);
     return mod;
 }
 
+/// Native dynamic library bundled beside the app (`image.dylib` / `.dll` / `.so`).
 pub fn addDylib(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -72,6 +59,5 @@ pub fn addDylib(
         .optimize = optimize,
     });
     applyImports(created.module, imports);
-    addMd4zig(b, target, optimize, created.module);
     return created.lib;
 }

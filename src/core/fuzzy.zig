@@ -67,7 +67,7 @@ pub const Query = struct {
 
 pub const Options = struct {
     /// Leave `false` only for real filesystem paths, where zf's basename weighting is what makes
-    /// `filz` rank `src/files.zig` above `src/plugins/f/i/l/z.txt`. Labels, ids, and identifiers
+    /// `filz` rank `src/files.zig` above `plugins/f/i/l/z.txt`. Labels, ids, and identifiers
     /// are `plain = true`: they have no meaningful `/`-structure to weight.
     plain: bool = true,
 };
@@ -217,7 +217,7 @@ test "every token must match" {
 
 test "path mode prefers a basename match over a directory-only one" {
     var q = Query.init("files");
-    const basename_hit = score("src/plugins/workbench/src/files.zig", &q, .{ .plain = false }).?;
+    const basename_hit = score("plugins/workbench/src/files.zig", &q, .{ .plain = false }).?;
     const dir_hit = score("src/files/plugins/workbench/other.zig", &q, .{ .plain = false }).?;
     try testing.expect(basename_hit < dir_hit);
 }

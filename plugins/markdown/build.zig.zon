@@ -13,7 +13,7 @@
     .fingerprint = 0x96be88e3e93bcfea,
     .dependencies = .{
         .fizzy = .{
-            .path = "../../../sdk",
+            .path = "../../sdk",
         },
         .md4zig = .{
             .url = "git+https://github.com/fizzyedit/md4zig#2d0a687d28be9849b9abe3453bfb7c9f22ffcda1",

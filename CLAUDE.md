@@ -15,11 +15,11 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 - **`src/sdk/`** — the entire contract. `Host` (registries + service locator), `Plugin` (identity + vtable of hooks Fizzy calls), `DocHandle` (opaque `{ptr, id, owner}` — Fizzy routes every doc op to `owner`, never inspects `ptr`), `EditorAPI` (Fizzy's own read/util surface plugins reach back through), `regions.zig` (sidebar/bottom/center/menu/settings/command contribution structs), `dylib.zig`/`dvui_context.zig` (runtime-library C-ABI + dvui injection).
 - **`src/editor/`** — Fizzy itself: `Editor.zig` (frame loop, plugin registration/loading), `PluginLoader.zig` (dlopen), `Menu.zig`, `Sidebar.zig`, `Settings.zig`, etc.
 - **`src/core/`** — shared infra (Atlas/Sprite, math, gfx, fs, paths, platform detection) used by Fizzy *and* plugins. Not plugin-owned; don't move it. `core.fuzzy` is the one matcher behind every filter box in the app (settings tree, file tree, plugin store, LSP completions) — wrap zf through it rather than matching by hand, and remember **lower scores are better**.
-- **`src/plugins/`** — bundled built-in plugins. Each is file-for-file the **same shape a third-party plugin would use**: root `plugin.zig` + identity-only `plugin.zig.zon` + `build.zig` + `build.zig.zon` (optional `src/**`), plus fizzy-internal glue in `static/`. No author `root.zig` or `<name>.zig` hub — the build helper generates the dylib entry; files use named imports (`fizzy_sdk`/`dvui`/…). Builds standalone with `cd src/plugins/<name> && zig build`.
+- **`plugins/`** — bundled built-in plugins. Each is file-for-file the **same shape a third-party plugin would use**: root `plugin.zig` + identity-only `plugin.zig.zon` + `build.zig` + `build.zig.zon` (optional `src/**`), plus fizzy-internal glue in `static/`. No author `root.zig` or `<name>.zig` hub — the build helper generates the dylib entry; files use named imports (`fizzy_sdk`/`dvui`/…). Builds standalone with `cd plugins/<name> && zig build`.
 
 **Two link modes, one source:** built-in plugins compile **static** (linked directly, all targets incl. web) or **dynamic** (`.dylib`/`.so`/`.dll`, desktop-only, `dlopen`'d — this is how third-party plugins ship too). `FIZZY_STATIC_<NAME>=1` env var forces static for a given built-in (useful when debugging dylib loading).
 
-## Currently bundled plugins (check `ls src/plugins/` — this list moves)
+## Currently bundled plugins (check `ls plugins/` — this list moves)
 
 - **`workbench`** — file tree, tabs/splits, center provider; owns no documents. Exposes a `workbench-api` service other plugins use to open/close/manage files without importing workbench.
 - **`text`** — generic text/code editor; fallback owner for any file extension nothing else claims. (Recently renamed from `code`.)
@@ -27,11 +27,11 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 - **`markdown`** — `.md` preview utility plugin.
 - `shared` — build helpers used across plugins' `static/integration.zig` (not a plugin itself).
 
-**Pixi (pixel-art editor) has been extracted out of this repo** into an external, third-party-style plugin ([`fizzyedit/pixi`](https://github.com/fizzyedit/pixi), `~/dev/fizzyedit/pixi`) — it ships and updates purely through the plugin store (`docs/PLUGINS.md` §6), with no special treatment in Fizzy itself. Older docs/handoffs (`HANDOFF.md`) still describe pixi as in-tree — that's historical, not current. **Trust `ls src/plugins/` and `git log` over any doc's plugin list.**
+**Pixi (pixel-art editor) has been extracted out of this repo** into an external, third-party-style plugin ([`fizzyedit/pixi`](https://github.com/fizzyedit/pixi), `~/dev/fizzyedit/pixi`) — it ships and updates purely through the plugin store (`docs/PLUGINS.md` §6), with no special treatment in Fizzy itself. Older docs/handoffs (`HANDOFF.md`) still describe pixi as in-tree — that's historical, not current. **Trust `ls plugins/` and `git log` over any doc's plugin list.**
 
 ## Writing a plugin
 
-1. Copy `src/plugins/text/` as your template (or `src/plugins/image/` for a document-owning viewer).
+1. Copy `plugins/text/` as your template (or `plugins/image/` for a document-owning viewer).
 2. Add identity-only `plugin.zig.zon` (`id`/`name`/`version`/`min_sdk_version`). Implement root `plugin.zig`: `Plugin` + `register(host)` + vtable; call `host.register{SidebarView,BottomView,CenterProvider,Menu,Command,Service,…}` as needed.
 3. Plugin prefs: `sdk.settings.Schema(struct { … })` then `.register(host, &plugin, …)` — Fizzy draws them only while the plugin is loaded (no SettingsSection). User config on disk is ZON (`settings.zon` / `recents.zon`).
 4. Editor plugins implement the document vtable cluster; workbench-style plugins register a center provider + sidebar views instead.
@@ -123,7 +123,7 @@ Pattern:
 Acceptance test after any build-graph change:
 
 ```sh
-cd src/plugins/image && rm -rf .zig-cache zig-out zig-pkg && zig build -Doptimize=ReleaseFast
+cd plugins/image && rm -rf .zig-cache zig-out zig-pkg && zig build -Doptimize=ReleaseFast
 ls zig-pkg | grep -i velo   # must be empty
 ```
 

@@ -4,7 +4,7 @@
 //!
 //! `std`-free (see `sdk_version.zig`'s doc comment for why this matters): both `sdk/plugin_sdk.zig`
 //! (third-party build path — uses the mirror at `sdk/manifest_identity.zig`) and
-//! `src/plugins/shared/build/helpers.zig` (built-in path) `@import` this shape for the type,
+//! `plugins/shared/build/helpers.zig` (built-in path) `@import` this shape for the type,
 //! while keeping their own `readManifestAt`/`pluginOptions` implementations separate — those
 //! genuinely can't share code without pulling one build graph into the other (see `helpers.zig`'s
 //! doc comment).

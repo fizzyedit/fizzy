@@ -45,10 +45,13 @@ const version_number = @import("fizzy_sdk").sdk_version;
 /// Same type as `plugin_sdk.IdentityManifest` (both `@import` `manifest_identity.zig` directly)
 /// — only `readManifestAt` below stays duplicated, since sharing *that* would pull one build
 /// graph into the other (see this file's top doc comment).
-pub const IdentityManifest = @import("../../../sdk/manifest_identity.zig").IdentityManifest;
+/// Deliberately `src/sdk/…` and not the mirror in the `sdk/` package: that copy belongs to the
+/// sdk package's own build module, and a file may belong to only one module — importing it from
+/// here puts it in fizzy's `@build` module too and the build fails outright.
+pub const IdentityManifest = @import("../../../src/sdk/manifest_identity.zig").IdentityManifest;
 
 /// Read and validate a built-in plugin's `plugin.zig.zon`. `zon_rel_path` is fizzy-build-root
-/// relative (e.g. `"src/plugins/image/plugin.zig.zon"`). Read (not comptime `@import`) on
+/// relative (e.g. `"plugins/image/plugin.zig.zon"`). Read (not comptime `@import`) on
 /// purpose: `@import`ing the manifest here would attach it to fizzy's build-module graph and
 /// collide with the same file when the plugin is built standalone (its own `build.zig` already
 /// `@import`s it via `plugin_sdk.readManifest`). Panics clearly on a missing/invalid manifest.
@@ -159,7 +162,7 @@ pub const DylibOptions = struct {
     /// The plugin's root `plugin.zig` — becomes `plugin_impl` in the generated dylib root.
     root_source_file: std.Build.LazyPath,
     /// Fizzy-build-root-relative path to the plugin's `plugin.zig.zon` (e.g.
-    /// `"src/plugins/image/plugin.zig.zon"`).
+    /// `"plugins/image/plugin.zig.zon"`).
     manifest_zon_path: []const u8,
     /// The `sdk` module the generated root's `@import("fizzy_sdk")` resolves to — must be the same
     /// module instance the caller also imports onto `plugin_impl` (see `Created.module`).
@@ -226,7 +229,7 @@ fn generatedDylibRoot(
 
 /// Native dynamic library bundled beside the app (`{name}.dylib` / `.dll` / `.so`) — a built-in
 /// compiled the same way a third-party plugin's dylib would be (`plugin_sdk.create`), just
-/// sourced from `src/plugins/<name>/` instead of a separate package. `name`/identity come from
+/// sourced from `plugins/<name>/` instead of a separate package. `name`/identity come from
 /// `manifest_zon_path`, not a caller-supplied string, so there is one source of truth.
 pub fn addDylib(b: *std.Build, opts: DylibOptions) Created {
     const m = readManifestAt(b, opts.manifest_zon_path);

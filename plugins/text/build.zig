@@ -1,5 +1,5 @@
 //! Standalone build for the text plugin — the canonical third-party shape.
-//! `cd src/plugins/text && zig build` produces `text.<dylib|dll|so>`. Identical in form to
+//! `cd plugins/text && zig build` produces `text.<dylib|dll|so>`. Identical in form to
 //! any external plugin: declare `fizzy`, call `fizzy.plugin.create` + `.install`. The
 //! fizzy-internal static-embed build lives separately in `static/` and is driven by the
 //! root build. See docs/PLUGINS.md.

@@ -45,7 +45,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // Built-in plugins are embedded by importing their `static/integration.zig` directly
     // (via build/plugins.zig); the root build owns the module graph, so there is no plugin
     // package dependency to resolve here. Their canonical `build.zig` is only for the
-    // standalone (`cd src/plugins/<name> && zig build`) third-party-shape build.
+    // standalone (`cd plugins/<name> && zig build`) third-party-shape build.
 
     const macos_sdl_paths = try common.macosSdlPathsForExplicitTarget(b, target);
     const zig_out_subdir = common.zigOutSubdirForTarget(b, target);
@@ -395,30 +395,30 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         // markdown renderer and by out-of-tree indexers, so it must not depend on dvui or
         // anything else the SDK-rooted artifact drags in.
         .{ "fizzy-sdk-wikilink-tests", "src/sdk/services/wikilink.zig" },
-        // The text plugin's headless editing model. Lives under src/plugins/ but is
+        // The text plugin's headless editing model. Lives under plugins/ but is
         // deliberately dvui-free (see textcore.zig), so it tests as pure logic from the
         // app build. One root covers every file below it — they're relative imports.
-        .{ "fizzy-textcore-tests", "src/plugins/text/src/textcore/textcore.zig" },
+        .{ "fizzy-textcore-tests", "plugins/text/src/textcore/textcore.zig" },
         // Keybinding parse/resolve core. Deliberately dvui-free (see keymap.zig) — dvui's
         // keybind map can't express chords and is keyed by bind name, not command.
         .{ "fizzy-keymap-tests", "src/editor/keymap/keymap.zig" },
-        // `<img>` scanning for the markdown preview's raw-HTML blocks. Under src/plugins/
+        // `<img>` scanning for the markdown preview's raw-HTML blocks. Under plugins/
         // but std-only by design (see html_images.zig), so it tests from the app build.
-        .{ "fizzy-md-html-images-tests", "src/plugins/markdown/src/md/html_images.zig" },
+        .{ "fizzy-md-html-images-tests", "plugins/markdown/src/md/html_images.zig" },
         // Resolving a fetched README's relative image paths against its source URL. std-only,
         // same reasoning as html_images above.
-        .{ "fizzy-md-url-join-tests", "src/plugins/markdown/src/md/url_join.zig" },
+        .{ "fizzy-md-url-join-tests", "plugins/markdown/src/md/url_join.zig" },
         // Sniffing image bytes stb can't decode (SVG badges), so the preview never re-enters
         // stbi for them every frame. std-only, same reasoning as the two above.
-        .{ "fizzy-md-image-format-tests", "src/plugins/markdown/src/md/image_format.zig" },
+        .{ "fizzy-md-image-format-tests", "plugins/markdown/src/md/image_format.zig" },
         // The markdown preview's block height table — placement, height trust, and the
         // never-blank visible-range guarantee. std-only by design (see block_heights.zig) so
         // the rules the preview's scroll stability rests on are testable without a Window.
-        .{ "fizzy-md-block-heights-tests", "src/plugins/markdown/src/md/block_heights.zig" },
+        .{ "fizzy-md-block-heights-tests", "plugins/markdown/src/md/block_heights.zig" },
         // Fence language tag → file extension, which is the whole of what the markdown plugin
         // knows about languages: the grammar itself comes from whichever plugin claims that
         // extension. std-only, so the table is testable without a Window.
-        .{ "fizzy-md-code-language-tests", "src/plugins/markdown/src/md/code_language.zig" },
+        .{ "fizzy-md-code-language-tests", "plugins/markdown/src/md/code_language.zig" },
         // Content-swap reveal phase machine. std-only by design (see reveal.zig) — the dvui
         // half is the thin wrapper in core/dvui.zig.
         .{ "fizzy-reveal-tests", "src/core/reveal.zig" },

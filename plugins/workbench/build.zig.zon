@@ -1,5 +1,5 @@
 .{
-    .name = .text,
+    .name = .workbench,
     .version = "0.1.1",
     .minimum_zig_version = "0.16.0",
     .paths = .{
@@ -8,13 +8,12 @@
         "plugin.zig",
         "plugin.zig.zon",
         "src",
-        "queries",
         "static",
     },
-    .fingerprint = 0x3b8ba7c7af3f1a7e,
+    .fingerprint = 0xc23e2206858de248,
     .dependencies = .{
         .fizzy = .{
-            .path = "../../../sdk",
+            .path = "../../sdk",
         },
         .icons = .{
             .url = "https://github.com/foxnne/zig-lib-icons/archive/db034786a1286ab28dc35aba534c098aa4f1a3aa.tar.gz",

@@ -21,7 +21,7 @@ const Status = enum(u8) { idle, fetching, ready, not_found, failed };
 const Readme = struct {
     id: []u8,
     repo: []u8,
-    /// Path within the repo to look under for `README.md` (e.g. `"src/plugins/workbench"` for a
+    /// Path within the repo to look under for `README.md` (e.g. `"plugins/workbench"` for a
     /// built-in whose source lives in a subdirectory of the fizzy monorepo). Empty means repo root.
     subpath: []u8,
     io: std.Io,

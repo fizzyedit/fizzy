@@ -73,7 +73,7 @@ pub const ModuleOptions = struct {
 
 /// Plugin identity read from `plugin.zig.zon` at configure time — see `readManifest` and
 /// `manifest_identity.zig`'s doc comment for why this is a plain relative `@import` (shared
-/// with `src/plugins/shared/build/helpers.zig`'s twin `readManifestAt`) rather than a duplicate
+/// with `plugins/shared/build/helpers.zig`'s twin `readManifestAt`) rather than a duplicate
 /// struct.
 pub const IdentityManifest = @import("manifest_identity.zig").IdentityManifest;
 
@@ -82,7 +82,7 @@ pub const IdentityManifest = @import("manifest_identity.zig").IdentityManifest;
 /// doesn't carry; see `dylib_exports` above for the same "avoid a deep import" reasoning) rather
 /// than duplicated as a literal: a hand-copied version string here silently drifted out of sync
 /// with every `sdk_version` bump for a long stretch before this, since nothing forced anyone to
-/// notice. `src/plugins/shared/build/helpers.zig`'s `current_sdk_version` mirrors this the same way.
+/// notice. `plugins/shared/build/helpers.zig`'s `current_sdk_version` mirrors this the same way.
 pub const current_sdk_version: []const u8 = std.fmt.comptimePrint("{d}.{d}.{d}", .{
     version_number.sdk_version.major,
     version_number.sdk_version.minor,
@@ -472,7 +472,7 @@ pub const PluginArtifact = struct {
 /// alongside the one already on `plugin_impl`, makes Zig's build graph treat the file as the root
 /// of two modules at once and refuse it ("file exists in modules 'fizzy_plugin_options' and
 /// 'fizzy_plugin_options0'") the moment `plugin.zig` itself references the import — which fizzy's
-/// own built-ins now do (see `src/plugins/shared/build/helpers.zig`'s twin `generatedDylibRoot`).
+/// own built-ins now do (see `plugins/shared/build/helpers.zig`'s twin `generatedDylibRoot`).
 fn generatedDylibRoot(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
