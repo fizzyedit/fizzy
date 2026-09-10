@@ -11,7 +11,6 @@ const dvui = @import("dvui");
 const core = @import("core");
 const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
-const layout_split = @import("split.zig");
 const Sash = core.dvui.Sash;
 const Constants = @import("../Constants.zig");
 const chrome_ref = @import("chrome.zig");
@@ -251,9 +250,6 @@ pub fn drawSelected(self: *Frame, keywords: []const []const u8) !dvui.App.Result
 // find it — none of which an app author should know about, and all of which only worked because
 // fizzy's own shape happens to have a panel.
 
-/// Which edge a region takes. Re-exported from the split widget rather than declared again —
-/// `Frame.Edge` and `split.Side` were two identical enums for one concept.
-pub const Edge = layout_split.Side;
 
 /// How a region draws its own contents.
 ///
@@ -275,34 +271,6 @@ pub const Edge = layout_split.Side;
 /// action it returns.
 pub const Content = *const fn (f: *Frame, keywords: []const []const u8) anyerror!dvui.App.Result;
 
-pub const RegionOptions = struct {
-    /// Human-facing region name. Shown wherever a user picks a region — the settings table that
-    /// lets someone place a surface directly, ignoring keywords entirely. A container region
-    /// needs none: nothing is placed in it directly.
-    name: []const u8 = "",
-    /// What kinds of surface this region accepts. Empty on a container region.
-    keywords: []const []const u8 = &.{},
-    /// Set to make this a **container**: a region that holds other regions along `dir`, with
-    /// `split` marking draggable boundaries between them. Null makes it a leaf — a place
-    /// surfaces draw.
-    ///
-    /// One verb doing both is deliberate rather than an overload. A container with keywords
-    /// would be a region that is both a place and a place-holder, and there is no third
-    /// concept: you subdivide, or you host content.
-    dir: ?dvui.enums.Direction = null,
-    /// Which edge it takes. Null means "the remainder".
-    edge: ?Edge = null,
-    /// Fraction of the parent, when docked to an edge. Null uses the persisted size.
-    size: ?f32 = null,
-    resize: bool = false,
-    collapsible: bool = false,
-    /// Chrome this region draws around/instead of its selected surface. See `Content`.
-    content: ?Content = null,
-    /// Collapse the region while nothing matches it. Framework behaviour, not app policy: a
-    /// region with nothing in it should not hold space open.
-    hide_when_empty: bool = false,
-};
-
 /// A declared region: an area that accepts keywords and draws the surfaces matching them.
 ///
 /// Note this is **not** docking in the draggable-panel sense — a region's place is fixed by the
@@ -323,16 +291,6 @@ pub const Region = struct {
     box: ?*dvui.BoxWidget = null,
     frame: ?*Frame = null,
 
-    /// Edge-docking only (`Frame.dock`).
-    split: ?layout_split.Split = null,
-    rest_visible: bool = true,
-
-    /// True when the space beyond a *docked* region should draw. Meaningless for a plain region:
-    /// N regions in a box each have their own share, which is the branching this form removes.
-    pub fn rest(self: *Region) bool {
-        return self.rest_visible;
-    }
-
     pub fn deinit(self: *Region) void {
         if (self.prev_clip) |c| dvui.clipSet(c);
         if (self.box) |b| {
@@ -342,13 +300,6 @@ pub const Region = struct {
             }
             b.deinit();
         }
-        if (self.split) |*sp| sp.deinit();
-    }
-
-    /// Retained so the edge-docked shapes still read the same. Regions are boxes now, and a box
-    /// is `deinit`ed.
-    pub fn end(self: *Region) void {
-        self.deinit();
     }
 };
 
@@ -606,57 +557,6 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
 /// sash 40pt from its end. Two structs describing one thing will always end up disagreeing about
 /// it, so there is one.
 pub const SplitOptions = Sash.Options;
-
-/// The original edge-docking region. See `region`.
-pub fn dock(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions) !Region {
-    const editor = self.editor;
-    const matches = self.matching(opts.keywords);
-
-    // A region with nothing in it should not hold space open. Framework behaviour: an app that
-    // wants an empty region to keep its space simply leaves `hide_when_empty` off.
-    if (opts.hide_when_empty and matches.len == 0) {
-        return .{ .split = null, .rest_visible = true };
-    }
-
-    const edge = opts.edge orelse {
-        // The remainder. No split at all — draw straight into whatever space is left.
-        _ = try self.drawRegionContents(opts, matches);
-        return .{ .split = null, .rest_visible = true };
-    };
-
-    // Size persistence, first-frame collapse and drag-write are framework behaviour, keyed by
-    // the region's name — a shape declaring a "Stack" gets its size remembered without fizzy
-    // knowing what a Stack is. These were fifteen hand-written lines in `ide.zig`.
-    const ratio_slot = editor.regionRatio(opts.name, opts.size orelse 0.25);
-
-    var s = layout_split.split(editor, src, .{
-        .side = edge,
-        .keywords = opts.keywords,
-        .size = ratio_slot.*,
-        .resize = if (opts.resize) .drag else null,
-        .collapse = if (opts.collapsible) .peek else null,
-    });
-
-    if (dvui.firstFrame(s.paned.wd.id)) {
-        // Start collapsed when the window is too narrow to show both halves — the mobile / narrow
-        // case — rather than animating open to a desktop size that will not fit.
-        const avail = switch (edge) {
-            .left, .right => s.paned.wd.contentRect().w,
-            .top, .bottom => s.paned.wd.contentRect().h,
-        };
-        const too_narrow = avail < Constants.min_window_size[0];
-        if (too_narrow or ratio_slot.* < 0.01) s.close() else s.open(ratio_slot.*);
-    } else if (s.paned.dragging) {
-        ratio_slot.* = s.ratio();
-        editor.markWindowRatiosDirty();
-    }
-
-    if (s.showDock()) {
-        _ = try self.drawRegionContents(opts, matches);
-    }
-
-    return .{ .split = s, .rest_visible = s.showRest() };
-}
 
 /// The region's contents: its own chrome if it declared any, otherwise the active surface.
 ///

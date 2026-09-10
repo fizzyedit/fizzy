@@ -24,7 +24,7 @@ const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
 
 const Frame = @import("Frame.zig");
-const layout_split = @import("split.zig");
+const Sash = @import("core").dvui.Sash;
 const chrome = @import("chrome.zig");
 const Menu = @import("../Menu.zig");
 const Constants = @import("../Constants.zig");
@@ -52,44 +52,15 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     // widgets an app places, not a property of a region.
     const rail_action = try chrome.iconRail(f, sidebar);
 
-    var explorer_col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = false });
-    defer explorer_col.deinit();
-
-    // Drawn early but gravity-anchored to the bottom, so it spans the full width beneath both
-    // the sidebar and the content.
-    editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
-
-    // ── The shape, as region declarations ───────────────────────────────────────────────────
-    var side = try f.dock(@src(), .{
-        .name = "Sidebar",
-        .keywords = sidebar,
-        .edge = .left,
-        .size = 0.2,
-        .resize = true,
-        .collapsible = true,
-        .content = chrome.explorerPane,
-    });
-    defer side.end();
-
-    switch (rail_action) {
-        .open => editor.explorer.open(editor),
-        .close => editor.explorer.peekClose(editor),
-        .none => {},
-    }
-
-    if (!side.rest()) {
-        // Explorer peek/collapse hides the content subtree, so `drawWorkspaces` does not run and
-        // a workspace's center would otherwise stay latched from a prior panel animation.
-        editor.clearAllWorkspaceCenter();
-        return .ok;
-    }
-
-    var content = dvui.box(@src(), .{ .dir = .vertical }, .{
+    var stack = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
-        .padding = .{ .w = layout_split.handle_size },
+        .padding = .{ .w = Sash.handle_size },
     });
-    defer content.deinit();
+    defer stack.deinit();
+
+    // Drawn first so it reserves its height: a region that expands takes every remaining point.
+    editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
 
     // macOS draws the menu natively; the in-app bar is the fallback everywhere else.
     if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
@@ -97,21 +68,45 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         if (r != .ok) return r;
     }
 
-    var panel = try f.dock(@src(), .{
+    // ── The shape ───────────────────────────────────────────────────────────────────────────
+    //
+    // Regions and splits, with no edges and no `rest()`. Where a region sits is where it is
+    // declared; which way a split divides comes from the container it is in.
+    var work = try f.region(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+    defer work.deinit();
+
+    _ = try f.region(@src(), .{
+        .name = "Sidebar",
+        .keywords = sidebar,
+        .content = chrome.explorerPane,
+        .resize = true,
+        .collapsible = true,
+    }, .{ .min_size_content = .{ .w = 260 }, .expand = .vertical });
+
+    // The rail drives the sidebar by *size*, not by reaching for the widget behind it.
+    switch (rail_action) {
+        .open => editor.explorer.open(editor),
+        .close => editor.explorer.peekClose(editor),
+        .none => {},
+    }
+
+    f.split(@src(), .{});
+
+    var content = try f.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer content.deinit();
+
+    _ = try f.region(@src(), .{ .name = "Main", .keywords = main_area }, .{ .expand = .both });
+
+    f.split(@src(), .{});
+
+    _ = try f.region(@src(), .{
         .name = "Panel",
         .keywords = bottom,
-        .edge = .bottom,
-        .size = 0.25,
+        .content = chrome.bottomPane,
         .resize = true,
         .collapsible = true,
         .hide_when_empty = true,
-        .content = chrome.bottomPane,
-    });
-    defer panel.end();
-    if (!panel.rest()) return .ok;
-
-    var main = try f.dock(@src(), .{ .name = "Main", .keywords = main_area });
-    defer main.end();
+    }, .{ .min_size_content = .{ .h = 220 }, .expand = .horizontal });
 
     return .ok;
 }

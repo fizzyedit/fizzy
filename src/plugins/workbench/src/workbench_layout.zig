@@ -103,45 +103,50 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
     defer row.deinit();
 
     var dragging = panel_dragging;
+    // The **first** pane absorbs the remainder; every pane after it carries a size.
+    //
+    // It used to be the last, which meant a pane opened to the side was the unsized one and
+    // simply appeared at whatever was left — instantly, with nothing to animate. Sizing the new
+    // pane instead lets it start at zero and slide in, which is what opening to the side looked
+    // like when it was a paned animating its ratio.
     var i: usize = index;
     while (i < count) : (i += 1) {
-        if (i > index) {
-            // The divider between this pane and the one before it. Every pane but the last is
-            // sized, so the sash drags the one on its left.
+        const first = i == index;
+        const id = paneId(wb, i);
+
+        if (!first) {
+            // The divider before this pane drags *this* pane, anchored to its far edge.
             var sep = core.dvui.sash(@src(), .horizontal, i);
             defer sep.end();
-            sep.drag(row, paneId(wb, i - 1), 1, .{}, .{
+            sep.drag(row, id, -1, .{}, .{
                 .length = row.data().contentRect().w,
-                .handles = handle_size * @as(f32, @floatFromInt(count - 1)),
+                .handles = Sash.handle_size * @as(f32, @floatFromInt(count - 1)),
             });
             if (dvui.captured(sep.box.data().id)) dragging = true;
         }
 
-        // The last pane takes what is left; the others keep the width they were dragged to.
-        const last = i == count - 1;
-        const id = paneId(wb, i);
+        // Absence means never sized; zero means the user dragged it shut. Reading zero as "needs
+        // a starting size" springs a closed pane back open on the next frame.
+        var width: f32 = 0;
+        if (!first) {
+            const stored = dvui.dataGet(null, id, "_size", f32);
+            const target = stored orelse blk: {
+                // A new pane halves what is left, which is what "open to the side" means: the
+                // group being split gives up half of itself. Shown starts at zero so it slides in.
+                var taken: f32 = 0;
+                var k: usize = index + 1;
+                while (k < i) : (k += 1) taken += dvui.dataGet(null, paneId(wb, k), "_size", f32) orelse 0;
+                const handles = Sash.handle_size * @as(f32, @floatFromInt(count - 1));
+                const half = @max(80, (row.data().contentRect().w - taken - handles) / 2);
+                dvui.dataSet(null, id, "_size", half);
+                dvui.dataSet(null, id, "_shown", @as(f32, 0));
+                dvui.refresh(null, @src(), id);
+                break :blk half;
+            };
+            width = Sash.eased(id, target, 220);
+        }
 
-        // **Never sized** and **dragged shut** are different states, and reading a width of zero
-        // as "needs a starting size" is what stopped a pane from closing: it sprang back to an
-        // even share on the very next frame. Absence means never sized; zero means closed.
-        const stored = dvui.dataGet(null, id, "_size", f32);
-        const target = stored orelse blk: {
-            // A pane that has never been sized halves what is left, which is what "open to the
-            // side" means: the group being split gives up half of itself and the new one takes
-            // the rest. Seeded at zero so the first frame animates it open.
-            var taken: f32 = 0;
-            var k: usize = index;
-            while (k < i) : (k += 1) taken += dvui.dataGet(null, paneId(wb, k), "_size", f32) orelse 0;
-            const handles = Sash.handle_size * @as(f32, @floatFromInt(count - 1));
-            const half = @max(80, (row.data().contentRect().w - taken - handles) / 2);
-            dvui.dataSet(null, id, "_size", half);
-            dvui.dataSet(null, id, "_shown", @as(f32, 0));
-            dvui.refresh(null, @src(), id);
-            break :blk half;
-        };
-        // Eased, so a new split slides in the way the paned's ratio animation used to.
-        const width = Sash.eased(id, target, 220);
-        var pane = dvui.box(@src(), .{ .dir = .vertical }, if (last) .{
+        var pane = dvui.box(@src(), .{ .dir = .vertical }, if (first) .{
             .id_extra = i,
             .expand = .both,
             .background = false,
@@ -152,7 +157,7 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
             .min_size_content = .{ .w = width },
             .max_size_content = .width(width),
         });
-        if (!last) core.dvui.Sash.recordEdges(id, pane.data(), .horizontal);
+        if (!first) Sash.recordEdges(id, pane.data(), .horizontal);
 
         const result = try wb.workspaces.values()[i].draw();
         pane.deinit();
