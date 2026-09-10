@@ -57,13 +57,27 @@ fn split(editor: *fizzy.Editor) ?fizzy.Editor.RegisteredSplit {
     return editor.splitFor(fizzy.sdk.keywords.ide.sidebar);
 }
 
+/// The sidebar as a **region**, when the running shape declared one. Preferred over `split`:
+/// it carries an id and a size rather than a widget, so opening the explorer is setting a
+/// number and letting the region ease toward it — no reaching for the `PanedWidget` behind it.
+fn region(editor: *fizzy.Editor) ?fizzy.Editor.RegisteredRegion {
+    return editor.regionFor(fizzy.sdk.keywords.ide.sidebar);
+}
+
 pub fn close(explorer: *Explorer, editor: *fizzy.Editor) void {
+    explorer.closed = true;
+    if (region(editor)) |r| return r.close();
     const s = split(editor) orelse return;
     s.paned.animateSplit(0.0, dvui.easing.outQuint);
-    explorer.closed = true;
 }
 
 pub fn open(explorer: *Explorer, editor: *fizzy.Editor) void {
+    if (region(editor)) |r| {
+        r.open();
+        explorer.closed = false;
+        return;
+    }
+
     const s = split(editor) orelse return;
     if (s.paned.collapsed()) {
         // Already peeking: do nothing. The peek stays open until the floating collapse
@@ -83,18 +97,20 @@ pub fn open(explorer: *Explorer, editor: *fizzy.Editor) void {
 }
 
 pub fn peekOpen(explorer: *Explorer, editor: *fizzy.Editor) void {
-    const s = split(editor) orelse return;
-    s.paned.animateSplit(1.0, dvui.easing.outBack);
     explorer.peek_open = true;
     explorer.closed = false;
+    if (region(editor)) |r| return r.open();
+    const s = split(editor) orelse return;
+    s.paned.animateSplit(1.0, dvui.easing.outBack);
 }
 
 pub fn peekClose(explorer: *Explorer, editor: *fizzy.Editor) void {
-    const s = split(editor) orelse return;
     explorer.peek_open = false;
-    s.paned.animateSplit(0.0, dvui.easing.outQuint);
     explorer.closed = true;
     explorer.collapse_btn_anim_started = false;
+    if (region(editor)) |r| return r.close();
+    const s = split(editor) orelse return;
+    s.paned.animateSplit(0.0, dvui.easing.outQuint);
 }
 
 /// Draws the explorer *chrome* — header, scroll policy, collapse button — around whichever

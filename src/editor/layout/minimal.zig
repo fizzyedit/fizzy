@@ -32,12 +32,14 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     var body = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer body.deinit();
 
+    // Drawn first so it reserves its height: a region that expands takes every remaining point,
+    // and anything declared after one gets none.
+    editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
+
     // One region, filling everything. Workbench's tabs and splits land here because its surface
     // carries the `main` keywords — this shape never names it.
-    var main = try f.dock(@src(), .{ .name = "Main", .keywords = main_area });
-    defer main.end();
-
-    editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
+    var main = try f.region(@src(), .{ .name = "Main", .keywords = main_area }, .{ .expand = .both });
+    defer main.deinit();
 
     return .ok;
 }

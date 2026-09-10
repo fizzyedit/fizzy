@@ -162,6 +162,8 @@ surface_keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .emp
 ///
 /// Frame-scoped: cleared at the top of every frame and repopulated by whichever layout runs.
 layout_splits: std.ArrayListUnmanaged(RegisteredSplit) = .empty,
+/// Regions declared by this frame's shape. Frame-scoped, like `layout_splits`.
+layout_regions: std.ArrayListUnmanaged(RegisteredRegion) = .empty,
 
 /// Persisted size for each named region, as a fraction of its parent.
 ///
@@ -2500,7 +2502,7 @@ pub fn postInit(editor: *Editor) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (std.process.Environ.getAlloc(fizzy.processEnviron(), editor.gpa, "FIZZY_SASH_DEBUG")) |v| {
             editor.gpa.free(v);
-            core.dvui.sash.debug = true;
+            core.dvui.Sash.debug = true;
             dvui.log.info("layout: sash debug logging on", .{});
         } else |_| {}
     }
@@ -4336,6 +4338,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // Every frame starts with no bottom split; whichever layout runs states whether it
         // established one. See `layout_splits`.
         editor.layout_splits.clearRetainingCapacity();
+        editor.layout_regions.clearRetainingCapacity();
         editor.pollPendingReveals();
 
         if (build_opts.region_layout) {
@@ -4770,6 +4773,44 @@ pub fn regionRatio(editor: *Editor, name: []const u8, default: f32) *f32 {
 /// holding. A `Split` is safe to store by value here: the registry is frame-scoped and the
 /// widget it points at is dvui-allocated, not stack-held.
 pub const RegisteredSplit = layout.Split;
+
+/// A region declared by this frame's shape, found by the keywords it accepts.
+///
+/// This is how anything outside the layout drives a region — the rail button, a command, a
+/// keybind — without knowing what widget the shape used. It carries an id and a size, not a
+/// widget pointer: `Explorer` used to reach for the `PanedWidget` behind the sidebar and call
+/// `animateSplit` on it, which only worked while a region *was* a paned.
+pub const RegisteredRegion = struct {
+    keywords: []const []const u8,
+    id: dvui.Id,
+    /// What to open to when it has never been open. The size the shape asked for.
+    default_size: f32,
+
+    pub fn isClosed(self: RegisteredRegion) bool {
+        return core.dvui.Sash.isClosed(self.id);
+    }
+    pub fn close(self: RegisteredRegion) void {
+        core.dvui.Sash.close(self.id);
+    }
+    pub fn open(self: RegisteredRegion) void {
+        core.dvui.Sash.open(self.id, self.default_size);
+    }
+};
+
+/// The region accepting `keywords`, or null when this app's shape declared none — a normal
+/// state, not an error.
+pub fn regionFor(editor: *Editor, keywords: []const []const u8) ?RegisteredRegion {
+    for (editor.layout_regions.items) |entry| {
+        for (entry.keywords) |a| for (keywords) |b| {
+            if (std.ascii.eqlIgnoreCase(a, b)) return entry;
+        };
+    }
+    return null;
+}
+
+pub fn registerRegion(editor: *Editor, entry: RegisteredRegion) void {
+    editor.layout_regions.append(editor.gpa, entry) catch {};
+}
 
 /// The split whose docked half shows `keywords`, or null when this app's layout drew none —
 /// which is a normal state, not an error: `minimal.zig` has no bottom region at all.

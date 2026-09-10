@@ -738,7 +738,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         const sash_tests_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/core/widgets/sash.zig"),
+            .root_source_file = b.path("src/core/widgets/Sash.zig"),
         });
         sash_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         if (icons_test) |icons| sash_tests_module.addImport("icons", icons);

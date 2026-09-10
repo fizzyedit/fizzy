@@ -15,7 +15,7 @@ pub const TreeSelection = @import("widgets/TreeSelection.zig");
 /// The draggable sash between two regions. Lives here rather than beside the layout because the
 /// workbench draws document splits from inside a dylib and must reach the same one — the same
 /// reason `Tabs` is here. A sash implemented twice is a sash that behaves two ways.
-pub const sash = @import("widgets/sash.zig");
+pub const Sash = @import("widgets/Sash.zig");
 pub const Tabs = @import("widgets/Tabs.zig");
 
 /// Core-owned dialog chrome state, set by the dialog framework and read by

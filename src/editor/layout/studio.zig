@@ -22,7 +22,7 @@ const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
 
 const Frame = @import("Frame.zig");
-const layout_split = @import("split.zig");
+const Sash = @import("core").dvui.Sash;
 const chrome = @import("chrome.zig");
 
 // ── The studio preset ───────────────────────────────────────────────────────────────────────
@@ -40,52 +40,54 @@ pub const bottom = sdk.keywords.studio.strip;
 pub const main_area = sdk.keywords.studio.canvas;
 
 pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
-    var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
-    defer body.deinit();
-
-    var col = dvui.box(@src(), .{ .dir = .vertical }, .{
+    var body = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
-        .padding = .{ .x = layout_split.handle_size },
+        .padding = .{ .x = Sash.handle_size },
     });
-    defer col.deinit();
+    defer body.deinit();
 
     editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
 
-    // The whole shape, as region declarations. No paned, no split ratios, no showFirst /
-    // showSecond, no widget pointers published for other code to find — the framework owns all
-    // of that. What is left is what this shape actually *is*.
+    // The whole shape, as regions and splits. No paned, no ratios, no `rest()` branching, and
+    // nothing about an edge: where a region sits is where it is declared, and which way a split
+    // divides comes from the container it is in.
+    var work = try f.region(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+    defer work.deinit();
+
+    {
+        // Canvas over strip, on the left.
+        var left = try f.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+        defer left.deinit();
+
+        // The large canvas.
+        _ = try f.region(@src(), .{ .name = "Canvas", .keywords = main_area }, .{ .expand = .both });
+
+        f.split(@src(), .{});
+
+        // A short strip along the bottom with no chrome of its own: "this region IS x". The
+        // shape an app takes when it wants, say, just a terminal down there. Adding `.content =
+        // chrome.tabbed` gets the tabbed form; `ide.zig` passes `chrome.bottomPane` for the
+        // richer splittable one. The difference is one field.
+        _ = try f.region(@src(), .{
+            .name = "Strip",
+            .keywords = bottom,
+            .resize = true,
+            .collapsible = true,
+            .hide_when_empty = true,
+        }, .{ .min_size_content = .{ .h = 150 }, .expand = .horizontal });
+    }
+
+    f.split(@src(), .{});
 
     // A stack on the right, not the left. Same keywords as the IDE's sidebar, so a surface that
     // belongs "somewhere like a sidebar" lands here without knowing it moved.
-    var stack = try f.dock(@src(), .{
+    _ = try f.region(@src(), .{
         .name = "Stack",
         .keywords = side,
-        .edge = .right,
-        .size = 0.25,
         .resize = true,
-    });
-    defer stack.end();
-    if (!stack.rest()) return .ok;
-
-    // A short strip along the bottom with no chrome of its own: "this region IS x". The shape
-    // an app takes when it wants, say, just a terminal down there. Adding `.content =
-    // chrome.tabbed` to the same declaration gets the tabbed form instead, and `ide.zig` passes
-    // `chrome.bottomPane` for the richer splittable one; the difference is one field.
-    var strip = try f.dock(@src(), .{
-        .name = "Strip",
-        .keywords = bottom,
-        .edge = .bottom,
-        .size = 0.18,
-        .resize = true,
-        .hide_when_empty = true,
-    });
-    defer strip.end();
-    if (!strip.rest()) return .ok;
-
-    // The remainder: the large canvas.
-    var canvas = try f.dock(@src(), .{ .name = "Canvas", .keywords = main_area });
-    defer canvas.end();
+        .collapsible = true,
+    }, .{ .min_size_content = .{ .w = 300 }, .expand = .vertical });
 
     return .ok;
 }

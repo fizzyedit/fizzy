@@ -1,4 +1,4 @@
-//! The **sash**: the interactive half of a `split`.
+//! The **sash**: the draggable divider between two regions.
 //!
 //! Lives apart from `Frame` so it can be tested against dvui's testing backend without an
 //! `Editor` — this path has been wrong twice in ways no amount of reading caught (a drag that
@@ -7,6 +7,13 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
+
+const Sash = @This();
+
+/// The separator's own box. A sash is a widget you get back and `end`, like `Tabs` — it has a
+/// rect, a lifetime and drag state, so it is a type rather than a bag of functions over one.
+box: *dvui.BoxWidget,
+axis: dvui.enums.Direction,
 
 /// Set `FIZZY_SASH_DEBUG=1` to log what each drag computes. Temporary: a sash that stops short
 /// has now survived three rounds of reasoning about it, so the next step is numbers.
@@ -102,10 +109,10 @@ pub const Options = struct {
     max: ?f32 = null,
 };
 
-/// The handle itself: takes `handle_size` along the container's axis and stretches across it, so
+/// Open a sash: it takes `handle_size` along the container's axis and stretches across it, so
 /// `dvui.box` reserves the gap the way it reserves any other child.
-pub fn handle(src: std.builtin.SourceLocation, axis: dvui.enums.Direction) *dvui.BoxWidget {
-    return dvui.box(src, .{ .dir = axis }, .{
+pub fn begin(src: std.builtin.SourceLocation, axis: dvui.enums.Direction) Sash {
+    return .{ .axis = axis, .box = dvui.box(src, .{ .dir = axis }, .{
         .min_size_content = switch (axis) {
             .horizontal => .{ .w = handle_size },
             .vertical => .{ .h = handle_size },
@@ -115,7 +122,41 @@ pub fn handle(src: std.builtin.SourceLocation, axis: dvui.enums.Direction) *dvui
             .vertical => .horizontal,
         },
         .background = false,
-    });
+    }) };
+}
+
+pub fn end(self: *Sash) void {
+    self.box.deinit();
+}
+
+/// A region's extent, and opening or shutting it from outside the layout.
+///
+/// These are the whole protocol for driving a region programmatically — the rail button, a
+/// command, a keybind. They move the *stored* size; `Frame.region` eases the drawn size toward
+/// it, so a caller gets the animation without knowing there is one.
+///
+/// Before this, opening the explorer meant reaching for the `PanedWidget` behind it and calling
+/// `animateSplit`. That only worked while a region *was* a paned, which is exactly the kind of
+/// reach-through that made the old shell impossible to reshape.
+pub fn sizeOf(id: dvui.Id) f32 {
+    return dvui.dataGet(null, id, "_size", f32) orelse 0;
+}
+
+pub fn isClosed(id: dvui.Id) bool {
+    return sizeOf(id) <= 0;
+}
+
+/// Shut it, remembering how big it was so `open` can put it back.
+pub fn close(id: dvui.Id) void {
+    const cur = sizeOf(id);
+    if (cur > 0) dvui.dataSet(null, id, "_open", cur);
+    dvui.dataSet(null, id, "_size", @as(f32, 0));
+}
+
+/// Reopen to the remembered extent, or `fallback` if it has never been open.
+pub fn open(id: dvui.Id, fallback: f32) void {
+    const was = dvui.dataGet(null, id, "_open", f32) orelse fallback;
+    dvui.dataSet(null, id, "_size", @max(1, was));
 }
 
 /// Record where a resizable region's edges are, so a sash can size it from a fixed anchor
@@ -141,16 +182,16 @@ pub fn recordEdges(id: dvui.Id, wd: *dvui.WidgetData, axis: dvui.enums.Direction
 /// Drag `target`'s stored extent, and draw the sash. `sign` is +1 when the target is the region
 /// *before* the sash and -1 when it is the one after, so dragging always moves the edge the way
 /// the pointer goes.
-pub fn interact(
+pub fn drag(
+    self: *Sash,
     container: *dvui.BoxWidget,
-    sep: *dvui.BoxWidget,
-    axis: dvui.enums.Direction,
     target: dvui.Id,
     sign: f32,
     opts: Options,
     c: Constraint,
 ) void {
-    const wd = sep.data();
+    const axis = self.axis;
+    const wd = self.box.data();
     const srs = wd.borderRectScale();
     const cursor: dvui.enums.Cursor = switch (axis) {
         .horizontal => .arrow_w_e,
@@ -408,18 +449,18 @@ fn twoPaneFrame() !dvui.App.Result {
         recordEdges(t_target, left.data(), .horizontal);
     }
 
-    var sep = handle(@src(), .horizontal);
+    var sep = begin(@src(), .horizontal);
     {
-        const srs = sep.data().borderRectScale();
+        const srs = sep.box.data().borderRectScale();
         t_sep_x = srs.r.x + srs.r.w / 2;
         t_scale = srs.s;
         t_room = row.data().contentRect().w;
         t_room_px = row.data().borderRectScale().r.w;
         t_org_px = row.data().borderRectScale().r.x;
-        interact(row, sep, .horizontal, t_target, 1, .{ .min = t_min }, .{ .length = row.data().contentRect().w });
-        t_captured = dvui.captured(sep.data().id);
+        sep.drag(row, t_target, 1, .{ .min = t_min }, .{ .length = row.data().contentRect().w });
+        t_captured = dvui.captured(sep.box.data().id);
     }
-    sep.deinit();
+    sep.end();
 
     {
         // A real minimum on the far side, which is what makes the open limit *unreachable*: the

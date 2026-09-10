@@ -122,7 +122,7 @@
 //!
 //! ## Where this stands
 //!
-//! Built, in `linear.zig`. A region **is** a `dvui.box` and a `split` is a `core.dvui.sash`
+//! Built, in `linear.zig`. A region **is** a `dvui.box` and a `split` is a `core.dvui.Sash`
 //! between two of them, so the sizing is dvui's own and there is no second model to learn.
 //! `ide`, `minimal` and `studio` still use the edge-docking `Frame.dock` until collapse and peek
 //! exist on the region path.

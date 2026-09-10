@@ -12,7 +12,7 @@ const core = @import("core");
 const fizzy = @import("../../fizzy.zig");
 const sdk = fizzy.sdk;
 const layout_split = @import("split.zig");
-const sash = core.dvui.sash;
+const Sash = core.dvui.Sash;
 const Constants = @import("../Constants.zig");
 const chrome_ref = @import("chrome.zig");
 
@@ -78,8 +78,8 @@ fn innermost(self: *Frame) ?*Container {
 
 /// Thickness of a split, and how near the pointer must be before it shows itself. Fizzy's tuned
 /// sash values (`layout.split`), kept because a thinner target is measurably harder to grab.
-pub const handle_size = sash.handle_size;
-pub const handle_dist = sash.handle_dist;
+pub const handle_size = Sash.handle_size;
+pub const handle_dist = Sash.handle_dist;
 
 // A region's extent along its parent's axis is stored under `"_size"`, in points.
 //
@@ -478,6 +478,13 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
                 p.pending_split = null;
             }
             p.last_resizable = id;
+            // Findable from outside the layout by the keywords it accepts, so a rail button or
+            // a command can open and shut it without knowing what the shape built.
+            if (kind.keywords.len > 0) self.editor.registerRegion(.{
+                .keywords = kind.keywords,
+                .id = id,
+                .default_size = default,
+            });
             if (p.resizable_count < max_trays) {
                 p.resizables[p.resizable_count] = id;
                 p.resizable_count += 1;
@@ -499,7 +506,7 @@ pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, o
     }
 
     const box = dvui.box(src, .{ .dir = kind.dir }, box_opts);
-    if (kind.resize) sash.recordEdges(id, box.data(), axis);
+    if (kind.resize) Sash.recordEdges(id, box.data(), axis);
     self.containers[self.depth] = .{ .dir = kind.dir, .box = box };
     self.depth += 1;
 
@@ -542,8 +549,8 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
     };
     const axis = c.dir;
 
-    var sep = sash.handle(src, axis);
-    defer sep.deinit();
+    var sep = Sash.begin(src, axis);
+    defer sep.end();
     if (!opts.resize) return;
 
     // Which neighbour this sash resizes. Preferring the one *before* it makes the sidebar case
@@ -553,19 +560,19 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
     var sign: f32 = 1;
     const target = c.last_resizable orelse blk: {
         sign = -1;
-        break :blk dvui.dataGet(null, sep.data().id, "_after", dvui.Id) orelse {
-            c.pending_split = sep.data().id;
+        break :blk dvui.dataGet(null, sep.box.data().id, "_after", dvui.Id) orelse {
+            c.pending_split = sep.box.data().id;
             return;
         };
     };
 
     const container = c.box orelse return;
-    c.handles += sash.handle_size;
+    c.handles += Sash.handle_size;
     const room = switch (axis) {
         .horizontal => container.data().contentRect().w,
         .vertical => container.data().contentRect().h,
     };
-    sash.interact(container, sep, axis, target, sign, opts, .{
+    sep.drag(container, target, sign, opts, .{
         .length = room,
         .base_min = c.base_min,
         .handles = c.handles,
@@ -580,7 +587,7 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
 /// a region could be dragged shut, and stayed at 40 here — which silently won, and pinned every
 /// sash 40pt from its end. Two structs describing one thing will always end up disagreeing about
 /// it, so there is one.
-pub const SplitOptions = sash.Options;
+pub const SplitOptions = Sash.Options;
 
 /// The original edge-docking region. See `region`.
 pub fn dock(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions) !Region {
