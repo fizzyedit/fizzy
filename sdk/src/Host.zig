@@ -8,7 +8,6 @@ const dvui = @import("dvui");
 const core = @import("core");
 const runtime = @import("runtime.zig");
 const Plugin = @import("Plugin.zig");
-const regions = @import("regions.zig");
 const EditorAPI = @import("EditorAPI.zig");
 const DocHandle = @import("DocHandle.zig");
 const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
@@ -25,10 +24,12 @@ pub const HighlightStyle = language.HighlightStyle;
 
 pub const Surface = @import("Surface.zig");
 pub const keywords = @import("keywords.zig");
-pub const MenuContribution = regions.MenuContribution;
-pub const MenuSectionContribution = regions.MenuSectionContribution;
-pub const NativeMenuItem = regions.NativeMenuItem;
-pub const Command = regions.Command;
+// Not `const menus = @import("menus.zig")`: `Host` already has a `menus` *field* (the
+// registry), and a file-scope import is a struct member too.
+pub const MenuContribution = @import("menus.zig").MenuContribution;
+pub const MenuSectionContribution = @import("menus.zig").MenuSectionContribution;
+pub const NativeMenuItem = @import("menus.zig").NativeMenuItem;
+pub const Command = @import("Command.zig");
 
 /// Per-plugin opaque settings blobs pending a write: plugin id -> serialized zon text, or `null`
 /// meaning "remove this id's `.settings` section entirely" (R12's non-default-only persistence —
@@ -209,7 +210,7 @@ menus: std.ArrayListUnmanaged(MenuContribution) = .empty,
 /// Nested items contributed into an open parent menu (e.g. View > Example).
 menu_sections: std.ArrayListUnmanaged(MenuSectionContribution) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
-/// `regions.NativeMenuItem`.
+/// `NativeMenuItem`.
 native_menu_items: std.ArrayListUnmanaged(NativeMenuItem) = .empty,
 /// Plugin-contributed commands, invoked by id (menus, keybinds, palette) — see `Command`.
 commands: std.ArrayListUnmanaged(Command) = .empty,
@@ -1119,7 +1120,7 @@ pub fn registerMenuSection(self: *Host, section: MenuSectionContribution) !void 
     try self.menu_sections.append(self.allocator, section);
 }
 
-/// Register a native-menu leaf item; see `regions.NativeMenuItem`. No-op on platforms with
+/// Register a native-menu leaf item; see `NativeMenuItem`. No-op on platforms with
 /// no native menu builder (the registry entry just sits unread).
 pub fn registerNativeMenuItem(self: *Host, item: NativeMenuItem) !void {
     try self.native_menu_items.append(self.allocator, item);

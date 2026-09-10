@@ -1,19 +1,22 @@
-//! Fizzy region contributions. A plugin's `register(host)` imperatively adds as
-//! many of these as it wants (multiple sidebar icons, bottom-panel views, center
-//! providers, menubar entries). The near-empty fizzy owns no features of its own —
-//! it just iterates these registries (see `Host`) and draws whatever plugins
-//! contributed. Built-in fizzy items (e.g. Settings) register with `owner = null`.
+//! Menu contributions: what a plugin adds to the menu bar, in-app and native.
 //!
-//! `ctx` is contribution-owned opaque state passed back to its `draw` fn (null for
-//! contributions that reach through the `fizzy.*` globals directly). `id`s are
-//! stable and plugin-namespaced (e.g. "pixelart.sprites") so selection state and
-//! cross-plugin references survive without a compile-time dependency.
-const dvui = @import("dvui");
+//! A plugin's `register(host)` imperatively adds as many of these as it wants. The near-empty
+//! fizzy owns no menus of its own — it iterates these registries (see `Host`) and draws whatever
+//! plugins contributed. Built-in fizzy items (e.g. Settings) register with `owner = null`.
+//!
+//! `ctx` is contribution-owned opaque state passed back to its `draw` fn (null for contributions
+//! that reach through the `fizzy.*` globals directly). `id`s are stable and plugin-namespaced
+//! (e.g. `"pixelart.sprites"`) so selection state and cross-plugin references survive without a
+//! compile-time dependency.
+//!
+//! The immediate-mode `draw` contributions and the pure-data `NativeMenuItem` are two
+//! representations of the same menu, not alternatives: macOS draws a real `NSMenu` and never
+//! sees a dvui bar, every other platform draws the dvui bar and never sees an `NSMenu`. A plugin
+//! that wants an item everywhere registers both.
 const Plugin = @import("Plugin.zig");
-const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
 
-/// A menubar contribution. Its `draw` adds top-level menu(s) to the in-app menu
-/// bar (non-macOS). A plugin may register several.
+/// A menubar contribution. Its `draw` adds top-level menu(s) to the in-app menu bar
+/// (non-macOS). A plugin may register several.
 pub const MenuContribution = struct {
     id: []const u8,
     owner: ?*Plugin = null,
@@ -77,27 +80,3 @@ pub const NativeMenuItem = struct {
     ctx: ?*anyopaque = null,
     run: *const fn (ctx: ?*anyopaque) anyerror!void,
 };
-
-/// A named, invocable action a plugin registers with the Host. Fizzy, menus, and
-/// keybindings trigger it by `id` via `Host.runCommand(id)` **without knowing what it
-/// does** — this is how a plugin contributes its own features (atlas pack, raster
-/// transform, a grid-layout dialog, …) without the SDK or fizzy naming them. Ids are
-/// plugin-namespaced (`"pixelart.packProject"`). The owner resolves any context it needs
-/// (active doc, selection, …) inside `run`; fizzy passes only the owner's opaque state.
-pub const Command = struct {
-    id: []const u8,
-    owner: ?*Plugin = null,
-    /// User-facing label (menus / future command palette).
-    title: []const u8,
-    /// Invoke the command. `state` is the owning plugin's opaque state (`owner.state`).
-    run: *const fn (state: *anyopaque) anyerror!void,
-    /// Optional enabled-state query — e.g. grey out while busy or with no active document.
-    /// Absent = always enabled.
-    isEnabled: ?*const fn (state: *anyopaque) bool = null,
-    /// Optional TVG icon bytes (e.g. `icons.tvg.lucide.save`) shown ahead of this command's
-    /// label wherever fizzy draws a row for it: the in-app dvui menu (a fizzy-owned
-    /// `CommandItem`'s row, or a plugin's `MenuSectionContribution` row via `Host.drawMenuItem`)
-    /// and the command palette. Absent draws no icon, not a placeholder glyph.
-    icon: ?[]const u8 = null,
-};
-

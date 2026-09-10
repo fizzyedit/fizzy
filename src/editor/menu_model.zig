@@ -71,7 +71,7 @@ pub const Submenu = struct {
     /// the one plugin that targeted it, was updated to `fizzy.menu.edit`).
     id: []const u8,
     /// Ids this menu used to have, still accepted alongside the current one. Plugins target a
-    /// menu by `parent_menu_id`, and that is a published contract — `sdk/regions.zig` documents
+    /// menu by `parent_menu_id`, and that is a published contract — `sdk/src/menus.zig` documents
     /// the old spellings and shipped plugins use them — so renaming without accepting the old
     /// names would silently drop a third-party plugin's menu section with no error anywhere.
     /// (File's `workbench.menu.file` is the one alias still live, from when File really was a

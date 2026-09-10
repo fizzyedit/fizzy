@@ -82,7 +82,7 @@ pub fn register() !void {
 /// `Host.runCommand` passes `owner.state` to `run`, so fizzy needs *a* `Plugin` to hang its
 /// commands off. This is that pseudo-plugin: never added to `host.plugins`, so no lifecycle hook
 /// ever fires on it and `removeOwned` never touches its commands. The alternative — adding a
-/// `state` field to `sdk.regions.Command` — would move the ABI fingerprint and force every
+/// `state` field to `sdk.Command` — would move the ABI fingerprint and force every
 /// third-party plugin to be rebuilt, which isn't worth it for a pointer we can supply this way.
 var fizzy_plugin: sdk.Plugin = .{
     .state = undefined, // set to the Editor in `registerCommands`

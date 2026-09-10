@@ -43,16 +43,17 @@ pub const LanguageSupport = language.LanguageSupport;
 pub const TreeSitterHighlight = language.TreeSitterHighlight;
 pub const HighlightStyle = language.HighlightStyle;
 
-/// Fizzy region contribution types (sidebar / bottom / center / menu / settings).
-pub const regions = @import("regions.zig");
-/// Surfaces — the successor to the SidebarView/BottomView/CenterProvider trio. Those remain as
-/// compat sugar over `Host.registerSurface`.
+/// A named thing a plugin draws. The app's layout decides where it lands, by keyword.
 pub const Surface = @import("Surface.zig");
 /// Conventional region keywords fizzy's own shell accepts.
 pub const keywords = @import("keywords.zig");
-pub const MenuContribution = regions.MenuContribution;
-pub const MenuSectionContribution = regions.MenuSectionContribution;
-pub const Command = regions.Command;
+/// What a plugin adds to the menu bar, in-app and native.
+pub const menus = @import("menus.zig");
+pub const MenuContribution = menus.MenuContribution;
+pub const MenuSectionContribution = menus.MenuSectionContribution;
+pub const NativeMenuItem = menus.NativeMenuItem;
+/// A named action fizzy invokes by id, without knowing what it does.
+pub const Command = @import("Command.zig");
 pub const menu = @import("menu.zig");
 
 /// Fizzy-provided read/utility surface plugins reach through the `Host`

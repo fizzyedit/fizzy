@@ -23,7 +23,8 @@ const Host = @import("Host.zig");
 const Plugin = @import("Plugin.zig");
 const DocHandle = @import("DocHandle.zig");
 const EditorAPI = @import("EditorAPI.zig");
-const regions = @import("regions.zig");
+const menus = @import("menus.zig");
+const Command = @import("Command.zig");
 const language_mod = @import("language.zig");
 const infobar_mod = @import("infobar.zig");
 const workbench_service = @import("services/workbench.zig");
@@ -94,15 +95,15 @@ const sdk_boundary_types = .{
     DocHandle,
     EditorAPI,
     EditorAPI.VTable,
-    regions.MenuContribution,
-    regions.MenuSectionContribution,
+    menus.MenuContribution,
+    menus.MenuSectionContribution,
     // Reached only through `Host.native_menu_items`' backing slice — a *data* pointer
     // `hashType` deliberately never follows (see the `HoverResult` note below) — so without
     // this entry a field added here would change the real cross-plugin layout of that list
     // without moving the fingerprint, and fizzy would read a plugin's differently-shaped
     // struct. Same lesson as `CompletionItem` / `Setting`.
-    regions.NativeMenuItem,
-    regions.Command,
+    menus.NativeMenuItem,
+    Command,
     language_mod.LanguageSupport,
     language_mod.LanguageSupport.VTable,
     language_mod.TreeSitterHighlight,
