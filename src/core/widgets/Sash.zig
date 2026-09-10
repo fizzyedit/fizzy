@@ -111,7 +111,11 @@ pub const Options = struct {
 
 /// Open a sash: it takes `handle_size` along the container's axis and stretches across it, so
 /// `dvui.box` reserves the gap the way it reserves any other child.
-pub fn begin(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_extra: usize) Sash {
+///
+/// Named for what it returns, the way `dvui.box` returns a `BoxWidget` and `core.dvui.paned` a
+/// `PanedWidget` — you call `sash()` and get a `Sash`. Also re-exported as `core.dvui.sash` so a
+/// caller that never names the type still reads the same.
+pub fn sash(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_extra: usize) Sash {
     return .{ .axis = axis, .box = dvui.box(src, .{ .dir = axis }, .{
         .id_extra = id_extra,
         .min_size_content = switch (axis) {
@@ -158,6 +162,33 @@ pub fn close(id: dvui.Id) void {
 pub fn open(id: dvui.Id, fallback: f32) void {
     const was = dvui.dataGet(null, id, "_open", f32) orelse fallback;
     dvui.dataSet(null, id, "_size", @max(1, was));
+}
+
+/// The drawn extent for `target`, easing toward it when it moved for a reason other than a drag
+/// — a pane appearing, a region collapsing, a mode changing.
+///
+/// Callers that size a pane every frame use this instead of the stored size directly, so a new
+/// split slides in rather than appearing at full width. A drag is exempt without a flag: the
+/// drag writes `_shown` alongside `_size`, so the two agree and nothing starts.
+pub fn eased(id: dvui.Id, target: f32, ms: i32) f32 {
+    if (dvui.animationGet(id, "_ease")) |a| {
+        const v = a.value();
+        dvui.dataSet(null, id, "_shown", v);
+        return v;
+    }
+    const shown = dvui.dataGet(null, id, "_shown", f32) orelse target;
+    if (shown != target) {
+        dvui.animation(id, "_ease", .{
+            .start_val = shown,
+            .end_val = target,
+            .end_time = ms * std.time.us_per_ms,
+            .easing = dvui.easing.outBack,
+        });
+        dvui.dataSet(null, id, "_shown", shown);
+        return shown;
+    }
+    dvui.dataSet(null, id, "_shown", target);
+    return target;
 }
 
 /// Record where a resizable region's edges are, so a sash can size it from a fixed anchor
@@ -450,7 +481,7 @@ fn twoPaneFrame() !dvui.App.Result {
         recordEdges(t_target, left.data(), .horizontal);
     }
 
-    var sep = begin(@src(), .horizontal, 0);
+    var sep = sash(@src(), .horizontal, 0);
     {
         const srs = sep.box.data().borderRectScale();
         t_sep_x = srs.r.x + srs.r.w / 2;

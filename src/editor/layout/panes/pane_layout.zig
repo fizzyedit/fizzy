@@ -84,7 +84,7 @@ pub fn drawWorkspaces(
     var i: usize = index;
     while (i < count) : (i += 1) {
         if (i > index) {
-            var sep = Sash.begin(@src(), .horizontal, i);
+            var sep = Sash.sash(@src(), .horizontal, i);
             defer sep.end();
             sep.drag(row, paneId(row, i - 1), 1, .{}, .{
                 .length = row.data().contentRect().w,

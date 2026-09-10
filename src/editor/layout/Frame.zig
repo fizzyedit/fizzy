@@ -567,7 +567,7 @@ pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) 
     };
     const axis = c.dir;
 
-    var sep = Sash.begin(src, axis, 0);
+    var sep = Sash.sash(src, axis, 0);
     defer sep.end();
     if (!opts.resize) return;
 

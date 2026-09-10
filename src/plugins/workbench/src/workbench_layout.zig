@@ -4,6 +4,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const runtime = @import("runtime.zig");
+const Sash = core.dvui.Sash;
 const Workbench = @import("Workbench.zig");
 const Workspace = @import("Workspace.zig");
 
@@ -107,9 +108,9 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
         if (i > index) {
             // The divider between this pane and the one before it. Every pane but the last is
             // sized, so the sash drags the one on its left.
-            var sep = core.dvui.Sash.begin(@src(), .horizontal, i);
+            var sep = core.dvui.sash(@src(), .horizontal, i);
             defer sep.end();
-            sep.drag(row, paneId(row, i - 1), 1, .{}, .{
+            sep.drag(row, paneId(wb, i - 1), 1, .{}, .{
                 .length = row.data().contentRect().w,
                 .handles = handle_size * @as(f32, @floatFromInt(count - 1)),
             });
@@ -118,18 +119,28 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
 
         // The last pane takes what is left; the others keep the width they were dragged to.
         const last = i == count - 1;
-        const id = paneId(row, i);
+        const id = paneId(wb, i);
 
         // **Never sized** and **dragged shut** are different states, and reading a width of zero
         // as "needs a starting size" is what stopped a pane from closing: it sprang back to an
         // even share on the very next frame. Absence means never sized; zero means closed.
         const stored = dvui.dataGet(null, id, "_size", f32);
-        const width = stored orelse blk: {
-            const even = @max(80, row.data().contentRect().w / @as(f32, @floatFromInt(count)));
-            dvui.dataSet(null, id, "_size", even);
+        const target = stored orelse blk: {
+            // A pane that has never been sized halves what is left, which is what "open to the
+            // side" means: the group being split gives up half of itself and the new one takes
+            // the rest. Seeded at zero so the first frame animates it open.
+            var taken: f32 = 0;
+            var k: usize = index;
+            while (k < i) : (k += 1) taken += dvui.dataGet(null, paneId(wb, k), "_size", f32) orelse 0;
+            const handles = Sash.handle_size * @as(f32, @floatFromInt(count - 1));
+            const half = @max(80, (row.data().contentRect().w - taken - handles) / 2);
+            dvui.dataSet(null, id, "_size", half);
+            dvui.dataSet(null, id, "_shown", @as(f32, 0));
             dvui.refresh(null, @src(), id);
-            break :blk even;
+            break :blk half;
         };
+        // Eased, so a new split slides in the way the paned's ratio animation used to.
+        const width = Sash.eased(id, target, 220);
         var pane = dvui.box(@src(), .{ .dir = .vertical }, if (last) .{
             .id_extra = i,
             .expand = .both,
@@ -157,8 +168,11 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
     return .ok;
 }
 
-/// A stable id per pane, derived from the row so it survives the panes around it coming and
-/// going. Sizes hang off this.
-fn paneId(row: *dvui.BoxWidget, i: usize) dvui.Id {
-    return row.data().id.extendId(@src(), i);
+/// A stable id per pane, keyed by the **workspace's grouping** rather than its position.
+///
+/// Keying by index attached a size to a *slot*: close a pane, open a document to the side, and
+/// the new group inherited whatever the old occupant of that slot had been dragged to —
+/// including zero, which opened it already shut.
+fn paneId(wb: *Workbench, i: usize) dvui.Id {
+    return dvui.Id.extendId(null, @src(), @truncate(wb.workspaces.keys()[i] +% 0x9E37));
 }
