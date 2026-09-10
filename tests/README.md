@@ -110,7 +110,7 @@ Each covered file is its own test artifact root in `build/app.zig`
    imports `dvui` and `fizzy_sdk`.
 
 3. **`fizzy-integration-tests`** — `tests/integration.zig` exercises
-   real fizzy code that needs a live `dvui.Window` and the `fizzy.app()` /
+   real fizzy code that needs a live `dvui.Window` and the `fizzy.entry()` /
    `fizzy.editor()` instances. dvui's `testing` backend creates a window with
    no GPU and no SDL; `tests/fizzy_shim.zig` heap-allocates just enough
    of those globals. The shim is deliberately minimal — when a new test
@@ -120,7 +120,7 @@ Each covered file is its own test artifact root in `build/app.zig`
 Currently covered in the integration artifact:
 
 - A single smoke test that the shim brings up a working headless
-  `dvui.Window` with the `fizzy.app()` / `fizzy.editor()` instances set.
+  `dvui.Window` with the `fizzy.entry()` / `fizzy.editor()` instances set.
 
 Pixel-art-specific coverage that used to live here (`Internal.File`,
 `Layer`, `Packer`, `Animation`, grid/pack/flood-fill regressions, the

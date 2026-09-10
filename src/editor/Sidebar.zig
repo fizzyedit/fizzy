@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const Constants = @import("Constants.zig");
-const App = fizzy.App;
+const Entry = fizzy.Entry;
 const Editor = fizzy.Editor;
 
 const SidebarView = fizzy.sdk.SidebarView;

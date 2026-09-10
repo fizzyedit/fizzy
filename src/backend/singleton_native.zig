@@ -26,7 +26,7 @@ const PendingOpen = struct { path: []u8 };
 const State = struct {
     instance: ?singleton_app.SingletonApp = null,
     /// Captured at `earlyStartup` time; used by the listener thread to
-    /// allocate queued path copies before `fizzy.app()` may exist.
+    /// allocate queued path copies before `fizzy.entry()` may exist.
     allocator: std.mem.Allocator = undefined,
     /// Set before dvui/SDL init so secondary instances can exit without
     /// creating a window. Same as `dvui.io` once the backend starts.

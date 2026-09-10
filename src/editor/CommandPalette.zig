@@ -242,7 +242,7 @@ fn indexDir(self: *CommandPalette, editor: *Editor, directory: []const u8, depth
 
 /// Invalidate the index — call when the project folder changes or the tree is known stale.
 pub fn invalidate(self: *CommandPalette) void {
-    self.freeIndex(fizzy.app().allocator);
+    self.freeIndex(fizzy.entry().allocator);
     self.index_built = false;
 }
 

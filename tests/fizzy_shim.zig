@@ -18,7 +18,7 @@ const fizzy = @import("fizzy");
 
 pub const Ctx = struct {
     t: dvui.testing,
-    app: *fizzy.App,
+    app: *fizzy.Entry,
     editor: *fizzy.Editor,
 
     pub fn deinit(self: *Ctx, gpa: std.mem.Allocator) void {
@@ -37,7 +37,7 @@ pub fn init(gpa: std.mem.Allocator) !Ctx {
     var t = try dvui.testing.init(.{ .allocator = gpa });
     errdefer t.deinit();
 
-    const app_ptr = try gpa.create(fizzy.App);
+    const app_ptr = try gpa.create(fizzy.Entry);
     app_ptr.* = .{
         .allocator = gpa,
         .window = t.window,

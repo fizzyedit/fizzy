@@ -184,13 +184,13 @@ pub fn markDiskScanDirty() void {
 }
 
 fn freeDiskIds() void {
-    for (disk_ids.items) |id| fizzy.app().allocator.free(id);
+    for (disk_ids.items) |id| fizzy.entry().allocator.free(id);
     disk_ids.clearRetainingCapacity();
 }
 
 fn clearManifestCache() void {
-    for (manifest_cache.keys()) |k| fizzy.app().allocator.free(k);
-    for (manifest_cache.values()) |v| PluginLoader.freeProbedManifest(fizzy.app().allocator, v);
+    for (manifest_cache.keys()) |k| fizzy.entry().allocator.free(k);
+    for (manifest_cache.values()) |v| PluginLoader.freeProbedManifest(fizzy.entry().allocator, v);
     manifest_cache.clearRetainingCapacity();
 }
 
@@ -202,7 +202,7 @@ fn refreshDiskScan() void {
     clearManifestCache();
     if (comptime builtin.target.cpu.arch == .wasm32) return;
 
-    const a = fizzy.app().allocator;
+    const a = fizzy.entry().allocator;
     const plugins_dir = std.fs.path.join(a, &.{ fizzy.editor().config_folder, "plugins" }) catch return;
     defer a.free(plugins_dir);
 
@@ -231,7 +231,7 @@ fn isOnDisk(id: []const u8) bool {
 /// Cache `id`'s version. Overwrites an existing entry so a reload/update always reflects the
 /// latest known value.
 fn rememberVersion(id: []const u8, v: std.SemanticVersion) void {
-    const a = fizzy.app().allocator;
+    const a = fizzy.entry().allocator;
     const gop = version_cache.getOrPut(a, id) catch return;
     if (gop.found_existing) {
         gop.value_ptr.* = v;
@@ -249,7 +249,7 @@ fn rememberVersion(id: []const u8, v: std.SemanticVersion) void {
 /// when the name changes (e.g. a version that renamed itself).
 fn rememberName(id: []const u8, name: []const u8) void {
     if (name.len == 0 or std.mem.eql(u8, name, id)) return;
-    const a = fizzy.app().allocator;
+    const a = fizzy.entry().allocator;
     const gop = name_cache.getOrPut(a, id) catch return;
     if (gop.found_existing) {
         if (std.mem.eql(u8, gop.value_ptr.*, name)) return;
@@ -296,7 +296,7 @@ pub fn displayName(id: []const u8) []const u8 {
 /// only probes ids whose name or version we don't already know.
 fn probeOnDiskInfo() void {
     const editor = fizzy.editor();
-    const a = fizzy.app().allocator;
+    const a = fizzy.entry().allocator;
     const plugins_dir = std.fs.path.join(a, &.{ editor.config_folder, "plugins" }) catch return;
     defer a.free(plugins_dir);
 
@@ -333,9 +333,9 @@ fn refreshLocalInfo() void {
 
 pub fn register(host: *sdk.Host) !void {
     const url = resolveRegistryUrl();
-    const fp_hex = try std.fmt.allocPrint(fizzy.app().allocator, "0x{x}", .{dylib.abi_fingerprint});
-    defer fizzy.app().allocator.free(fp_hex);
-    catalog = try store.Catalog.init(fizzy.app().allocator, dvui.io, url, fp_hex);
+    const fp_hex = try std.fmt.allocPrint(fizzy.entry().allocator, "0x{x}", .{dylib.abi_fingerprint});
+    defer fizzy.entry().allocator.free(fp_hex);
+    catalog = try store.Catalog.init(fizzy.entry().allocator, dvui.io, url, fp_hex);
     try host.registerSidebarView(.{
         .id = view_id,
         .icon = dvui.entypo.shop,
@@ -723,12 +723,12 @@ fn drawChangelogPlaceholder() void {
 /// to whatever this returns. Owned for the process lifetime (freed in `deinit`).
 fn resolveRegistryUrl() []const u8 {
     if (comptime builtin.target.cpu.arch == .wasm32) return default_registry_url;
-    if (std.process.Environ.getAlloc(fizzy.processEnviron(), fizzy.app().allocator, "FIZZY_PLUGIN_REGISTRY_URL")) |override| {
+    if (std.process.Environ.getAlloc(fizzy.processEnviron(), fizzy.entry().allocator, "FIZZY_PLUGIN_REGISTRY_URL")) |override| {
         if (override.len > 0) {
             registry_url_owned = override;
             return override;
         }
-        fizzy.app().allocator.free(override);
+        fizzy.entry().allocator.free(override);
     } else |_| {}
     return default_registry_url;
 }
@@ -745,31 +745,31 @@ pub fn deinit() void {
     // `freeJob` cancels and awaits each job's download worker before freeing it, so quitting
     // mid-install can't leave a worker writing into a freed `Job` (see `Job.tasks`).
     for (jobs.values()) |job| freeJob(job);
-    jobs.deinit(fizzy.app().allocator);
+    jobs.deinit(fizzy.entry().allocator);
     for (pending_actions.items) |action| switch (action) {
-        .set_enabled => |a| fizzy.app().allocator.free(a.id),
-        .set_auto_update => |a| fizzy.app().allocator.free(a.id),
-        .uninstall => |a| fizzy.app().allocator.free(a.id),
+        .set_enabled => |a| fizzy.entry().allocator.free(a.id),
+        .set_auto_update => |a| fizzy.entry().allocator.free(a.id),
+        .uninstall => |a| fizzy.entry().allocator.free(a.id),
     };
-    pending_actions.deinit(fizzy.app().allocator);
-    for (name_cache.keys()) |k| fizzy.app().allocator.free(k);
-    for (name_cache.values()) |v| fizzy.app().allocator.free(v);
-    name_cache.deinit(fizzy.app().allocator);
-    for (version_cache.keys()) |k| fizzy.app().allocator.free(k);
-    version_cache.deinit(fizzy.app().allocator);
+    pending_actions.deinit(fizzy.entry().allocator);
+    for (name_cache.keys()) |k| fizzy.entry().allocator.free(k);
+    for (name_cache.values()) |v| fizzy.entry().allocator.free(v);
+    name_cache.deinit(fizzy.entry().allocator);
+    for (version_cache.keys()) |k| fizzy.entry().allocator.free(k);
+    version_cache.deinit(fizzy.entry().allocator);
 
     clearPendingUpdates();
-    pending_updates.deinit(fizzy.app().allocator);
+    pending_updates.deinit(fizzy.entry().allocator);
     clearManifestCache();
-    manifest_cache.deinit(fizzy.app().allocator);
+    manifest_cache.deinit(fizzy.entry().allocator);
     freeDiskIds();
-    disk_ids.deinit(fizzy.app().allocator);
+    disk_ids.deinit(fizzy.entry().allocator);
     Readme.deinit();
     StoreIcon.deinit();
     if (catalog) |*c| c.deinit();
     catalog = null;
     if (registry_url_owned) |u| {
-        fizzy.app().allocator.free(u);
+        fizzy.entry().allocator.free(u);
         registry_url_owned = null;
     }
 }
@@ -779,11 +779,11 @@ pub fn deinit() void {
 /// worker never started or has already finished.
 fn freeJob(job: *Job) void {
     job.tasks.cancel(dvui.io);
-    fizzy.app().allocator.free(job.id);
-    fizzy.app().allocator.free(job.url);
-    fizzy.app().allocator.free(job.sha256);
-    fizzy.app().allocator.free(job.dest);
-    fizzy.app().allocator.destroy(job);
+    fizzy.entry().allocator.free(job.id);
+    fizzy.entry().allocator.free(job.url);
+    fizzy.entry().allocator.free(job.sha256);
+    fizzy.entry().allocator.free(job.dest);
+    fizzy.entry().allocator.destroy(job);
 }
 
 // ---- automatic updates -----------------------------------------------------
@@ -838,7 +838,7 @@ pub fn pendingUpdates() []PendingUpdate {
 }
 
 fn clearPendingUpdates() void {
-    const a = fizzy.app().allocator;
+    const a = fizzy.entry().allocator;
     for (pending_updates.items) |u| {
         a.free(u.id);
         a.free(u.title);
@@ -859,7 +859,7 @@ pub fn dismissPendingUpdates() void {
 /// The window shows exactly the plugins that are still out of date, and closes itself once the
 /// last row goes (see `PluginUpdates.dialog`).
 fn dropPendingUpdate(id: []const u8) void {
-    const a = fizzy.app().allocator;
+    const a = fizzy.entry().allocator;
     for (pending_updates.items, 0..) |u, i| {
         if (!std.mem.eql(u8, u.id, id)) continue;
         // Ordered, so the rows the user is still looking at don't reshuffle underneath them as
@@ -1127,7 +1127,7 @@ fn appendPendingUpdate(
     from: ?std.SemanticVersion,
     repair: bool,
 ) void {
-    const a = fizzy.app().allocator;
+    const a = fizzy.entry().allocator;
     var owned: [4][]u8 = undefined;
     var taken: usize = 0;
     // One unwind path for all four strings: a partial row must free exactly what it took.
@@ -1220,16 +1220,16 @@ pub fn tick() void {
     for (pending_actions.items) |action| switch (action) {
         .set_enabled => |a| {
             applySetEnabled(a.id, a.enabled);
-            fizzy.app().allocator.free(a.id);
+            fizzy.entry().allocator.free(a.id);
         },
         .set_auto_update => |a| {
             fizzy.editor().setPluginAutoUpdate(a.id, a.on) catch |err|
                 reportError("could not change auto-update for '{s}': {s}", .{ a.id, @errorName(err) });
-            fizzy.app().allocator.free(a.id);
+            fizzy.entry().allocator.free(a.id);
         },
         .uninstall => |a| {
             applyUninstall(a.id);
-            fizzy.app().allocator.free(a.id);
+            fizzy.entry().allocator.free(a.id);
         },
     };
     pending_actions.clearRetainingCapacity();
@@ -1383,7 +1383,7 @@ fn probedManifestFor(id: []const u8) PluginLoader.ProbedManifest {
     if (comptime builtin.target.cpu.arch == .wasm32) return .{};
     if (manifest_cache.get(id)) |cached| return cached;
 
-    const a = fizzy.app().allocator;
+    const a = fizzy.entry().allocator;
     const editor = fizzy.editor();
     const empty: PluginLoader.ProbedManifest = .{};
 
@@ -1483,7 +1483,7 @@ fn worker(job: *Job, io: std.Io) void {
     // Whatever happens below, the result is only ever *applied* by `tick` on the UI thread, so
     // every exit path has to wake a sleeping app — see `Job.win`.
     defer dvui.refresh(job.win, @src(), null);
-    store.download.download(fizzy.app().allocator, io, job.url, job.sha256, job.dest) catch |err| {
+    store.download.download(fizzy.entry().allocator, io, job.url, job.sha256, job.dest) catch |err| {
         const n = @min(@errorName(err).len, job.err_buf.len);
         @memcpy(job.err_buf[0..n], @errorName(err)[0..n]);
         job.err_len = n;
@@ -1514,7 +1514,7 @@ fn startDownloadUrl(id: []const u8, url: []const u8, sha256: []const u8, opts: D
         reportError("could not prepare download for '{s}'", .{id});
         return;
     };
-    jobs.put(fizzy.app().allocator, job.id, job) catch {
+    jobs.put(fizzy.entry().allocator, job.id, job) catch {
         freeJob(job);
         return;
     };
@@ -1537,7 +1537,7 @@ pub const DownloadOptions = struct {
 };
 
 fn buildJob(id: []const u8, url: []const u8, sha256: []const u8, opts: DownloadOptions) !*Job {
-    const a = fizzy.app().allocator;
+    const a = fizzy.entry().allocator;
 
     const plugins_dir = try std.fs.path.join(a, &.{ fizzy.editor().config_folder, "plugins" });
     defer a.free(plugins_dir);
@@ -3132,8 +3132,8 @@ fn removePendingForId(id: []const u8) void {
         };
         if (matches) {
             switch (action) {
-                .set_enabled => |a| fizzy.app().allocator.free(a.id),
-                .uninstall => |a| fizzy.app().allocator.free(a.id),
+                .set_enabled => |a| fizzy.entry().allocator.free(a.id),
+                .uninstall => |a| fizzy.entry().allocator.free(a.id),
                 .set_auto_update => unreachable,
             }
             _ = pending_actions.orderedRemove(i);
@@ -3150,12 +3150,12 @@ fn removePendingForId(id: []const u8) void {
 /// settings-pane draw pass may itself be iterating Host registries.
 pub fn queueSetEnabled(id: []const u8, enabled: bool) void {
     removePendingForId(id);
-    const dup = fizzy.app().allocator.dupe(u8, id) catch {
+    const dup = fizzy.entry().allocator.dupe(u8, id) catch {
         reportError("'{s}' could not be queued", .{id});
         return;
     };
-    pending_actions.append(fizzy.app().allocator, .{ .set_enabled = .{ .id = dup, .enabled = enabled } }) catch {
-        fizzy.app().allocator.free(dup);
+    pending_actions.append(fizzy.entry().allocator, .{ .set_enabled = .{ .id = dup, .enabled = enabled } }) catch {
+        fizzy.entry().allocator.free(dup);
         reportError("'{s}' could not be queued", .{id});
     };
 }
@@ -3163,24 +3163,24 @@ pub fn queueSetEnabled(id: []const u8, enabled: bool) void {
 /// Queue an auto-update opt in/out for `id`. Deliberately does **not** clear other queued actions
 /// for the same id (see `removePendingForId`) — it changes nothing about the plugin's load state.
 fn queueSetAutoUpdate(id: []const u8, on: bool) void {
-    const dup = fizzy.app().allocator.dupe(u8, id) catch {
+    const dup = fizzy.entry().allocator.dupe(u8, id) catch {
         reportError("'{s}' could not be queued", .{id});
         return;
     };
-    pending_actions.append(fizzy.app().allocator, .{ .set_auto_update = .{ .id = dup, .on = on } }) catch {
-        fizzy.app().allocator.free(dup);
+    pending_actions.append(fizzy.entry().allocator, .{ .set_auto_update = .{ .id = dup, .on = on } }) catch {
+        fizzy.entry().allocator.free(dup);
         reportError("'{s}' could not be queued", .{id});
     };
 }
 
 fn queueUninstall(id: []const u8) void {
     removePendingForId(id);
-    const dup = fizzy.app().allocator.dupe(u8, id) catch {
+    const dup = fizzy.entry().allocator.dupe(u8, id) catch {
         reportError("'{s}' could not be queued", .{id});
         return;
     };
-    pending_actions.append(fizzy.app().allocator, .{ .uninstall = .{ .id = dup } }) catch {
-        fizzy.app().allocator.free(dup);
+    pending_actions.append(fizzy.entry().allocator, .{ .uninstall = .{ .id = dup } }) catch {
+        fizzy.entry().allocator.free(dup);
         reportError("'{s}' could not be queued", .{id});
     };
 }

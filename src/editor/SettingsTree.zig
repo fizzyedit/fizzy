@@ -65,7 +65,7 @@ fn isOpen(key: u64) bool {
 
 fn setOpen(key: u64, open: bool) void {
     if (open) {
-        open_branches.put(fizzy.app().allocator, key, {}) catch return;
+        open_branches.put(fizzy.entry().allocator, key, {}) catch return;
     } else {
         _ = open_branches.remove(key);
     }

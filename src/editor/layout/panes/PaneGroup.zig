@@ -57,7 +57,7 @@ pub fn draw(panel: *PaneGroup, editor: *fizzy.Editor, f: *Frame, keywords: []con
     try pane_layout.rebuildWorkspaces(panel, f, keywords);
 
     if (panel.workspaces.count() == 0) {
-        try panel.workspaces.put(fizzy.app().allocator, 0, Pane.init(0));
+        try panel.workspaces.put(fizzy.entry().allocator, 0, Pane.init(0));
     }
 
     return try pane_layout.drawWorkspaces(panel, host, f, keywords, 0);
@@ -66,7 +66,7 @@ pub fn draw(panel: *PaneGroup, editor: *fizzy.Editor, f: *Frame, keywords: []con
 pub fn ensurePanes(self: *PaneGroup, f: *Frame, keywords: []const []const u8) void {
     for (surfaces(f, keywords)) |view| {
         if (self.view_groupings.get(view.id) == null) {
-            self.view_groupings.put(fizzy.app().allocator, view.id, 0) catch {};
+            self.view_groupings.put(fizzy.entry().allocator, view.id, 0) catch {};
         }
     }
 }
@@ -79,7 +79,7 @@ pub fn setViewGrouping(self: *PaneGroup, view_id: []const u8, grouping: u64) voi
     if (self.view_groupings.getPtr(view_id)) |g| {
         g.* = grouping;
     } else {
-        self.view_groupings.put(fizzy.app().allocator, view_id, grouping) catch {};
+        self.view_groupings.put(fizzy.entry().allocator, view_id, grouping) catch {};
     }
 }
 

@@ -104,7 +104,7 @@ fn beginSaveAndClose(doc: fizzy.sdk.DocHandle, file_id: u64) !void {
     }
     if (fizzy.editor().document_watcher) |*w| w.markPendingBaseline(file_id);
     try doc.owner.saveDocumentAsync(doc);
-    try fizzy.editor().pending_close_after_save.put(fizzy.app().allocator, file_id, {});
+    try fizzy.editor().pending_close_after_save.put(fizzy.entry().allocator, file_id, {});
 }
 
 fn onSaveAndClose(file_id: u64) !void {

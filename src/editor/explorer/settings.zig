@@ -234,7 +234,7 @@ fn drawTheme() void {
     if (dropdown.dropped()) {
         for (fizzy.editor().themes.items) |theme| {
             if (dropdown.addChoiceLabel(theme.name)) {
-                Editor.Settings.setThemeName(&fizzy.editor().settings, fizzy.app().allocator, theme.name) catch {
+                Editor.Settings.setThemeName(&fizzy.editor().settings, fizzy.entry().allocator, theme.name) catch {
                     dvui.log.err("Failed to store theme name", .{});
                     break;
                 };

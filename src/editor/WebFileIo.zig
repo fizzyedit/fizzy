@@ -31,8 +31,8 @@ pub fn downloadBytes(filename: []const u8, data: []const u8) !void {
 }
 
 pub fn downloadBytesWithExtension(filename: []const u8, ext: []const u8, data: []const u8) !void {
-    const name = try downloadNameWithExtension(fizzy.app().allocator, filename, ext);
-    defer fizzy.app().allocator.free(name);
+    const name = try downloadNameWithExtension(fizzy.entry().allocator, filename, ext);
+    defer fizzy.entry().allocator.free(name);
     try downloadBytes(name, data);
 }
 

@@ -240,7 +240,7 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *PaneGroup, host: 
                 panel.setViewGrouping(dragged_view.id, new_g);
                 var new_ws = Pane.init(new_g);
                 new_ws.active_view_id = dragged_view.id;
-                panel.workspaces.put(fizzy.app().allocator, new_g, new_ws) catch {};
+                panel.workspaces.put(fizzy.entry().allocator, new_g, new_ws) catch {};
                 panel.open_pane = new_g;
                 host.setActiveBottomView(dragged_view.id);
             }

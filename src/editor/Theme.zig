@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 const fizzy = @import("../fizzy.zig");
 
-const App = fizzy.App;
+const Entry = fizzy.Entry;
 const Color = fizzy.math.Color;
 
 const Theme = @This();

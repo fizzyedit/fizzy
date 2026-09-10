@@ -5,8 +5,8 @@
 //! (see `dvui-dev/src/backends/web.zig:890`). This matches graphl and DVUI's
 //! own `examples/app.zig` rather than the manual export style.
 //!
-//! Lifecycle is delegated to `fizzy.App` (`AppInit` / `AppFrame` / `AppDeinit`) via
-//! `fizzy.App.dvui_app`, so the web build runs the same editor tick loop as native.
+//! Lifecycle is delegated to `fizzy.Entry` (`AppInit` / `AppFrame` / `AppDeinit`) via
+//! `fizzy.Entry.dvui_app`, so the web build runs the same editor tick loop as native.
 
 const std = @import("std");
 const dvui = @import("dvui");
@@ -40,11 +40,11 @@ comptime {
     // doesn't fully analyze function bodies until they're actually wired into a
     // reachable call (e.g. assigned to a runtime fn-pointer field)\
     _ = fizzy.Editor;
-    _ = fizzy.App;
+    _ = fizzy.Entry;
 }
 
-pub const dvui_app: dvui.App = fizzy.App.dvui_app;
+pub const dvui_app: dvui.App = fizzy.Entry.dvui_app;
 
 pub const main = dvui.App.main;
 pub const panic = dvui.App.panic;
-pub const std_options: std.Options = fizzy.App.std_options;
+pub const std_options: std.Options = fizzy.Entry.std_options;

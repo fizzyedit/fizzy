@@ -98,7 +98,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
 fn onQuitWithoutSaving() !void {
     fizzy.dvui.closeFloatingDialogAnchored();
 
-    const alloc = fizzy.app().allocator;
+    const alloc = fizzy.entry().allocator;
     const keys = try alloc.alloc(u64, fizzy.editor().open_files.count());
     defer alloc.free(keys);
     for (fizzy.editor().open_files.keys(), 0..) |k, i| keys[i] = k;
@@ -113,7 +113,7 @@ fn onSaveAllAndQuit() !void {
 
     fizzy.editor().quit_save_all_ids.clearRetainingCapacity();
     for (fizzy.editor().open_files.values()) |doc| {
-        if (doc.owner.isDirty(doc)) try fizzy.editor().quit_save_all_ids.append(fizzy.app().allocator, doc.id);
+        if (doc.owner.isDirty(doc)) try fizzy.editor().quit_save_all_ids.append(fizzy.entry().allocator, doc.id);
     }
     if (fizzy.editor().quit_save_all_ids.items.len == 0) {
         fizzy.editor().pending_app_close = true;

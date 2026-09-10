@@ -6,7 +6,7 @@ const workbench = @import("workbench");
 const icons = @import("icons");
 
 const Core = @import("mach").Core;
-const App = fizzy.App;
+const Entry = fizzy.Entry;
 const Editor = fizzy.Editor;
 
 const nfd = @import("nfd");
@@ -41,7 +41,7 @@ collapse_btn_anim_started: bool = false,
 
 pub fn init() Explorer {
     return .{
-        .open_branches = .init(fizzy.app().allocator),
+        .open_branches = .init(fizzy.entry().allocator),
     };
 }
 

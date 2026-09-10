@@ -2,7 +2,7 @@
 //!
 //! These tests run real fizzy drawing functions against a *headless*
 //! `dvui.Window` provided by dvui's testing backend. The shim in
-//! `fizzy_shim.zig` brings up just enough of `fizzy.app()` / `fizzy.editor()`
+//! `fizzy_shim.zig` brings up just enough of `fizzy.entry()` / `fizzy.editor()`
 //! for the code paths exercised here to read the globals they need
 //! without booting the full editor (no assets, no themes, no SDL).
 //!
@@ -26,7 +26,7 @@ test "shim brings up a dvui.testing window with usable fizzy globals" {
     const buf = try arena.alloc(u8, 16);
     @memset(buf, 0);
 
-    try std.testing.expect(fizzy.app() == ctx.app);
+    try std.testing.expect(fizzy.entry() == ctx.app);
     try std.testing.expect(fizzy.editor() == ctx.editor);
 }
 

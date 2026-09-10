@@ -92,8 +92,8 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
 pub fn indexOfFolder(recents: *Recents, path: []const u8) ?usize {
     if (recents.folders.items.len == 0) return null;
 
-    const canon_key = canonicalize(fizzy.app().allocator, path) catch null;
-    defer if (canon_key) |k| fizzy.app().allocator.free(k);
+    const canon_key = canonicalize(fizzy.entry().allocator, path) catch null;
+    defer if (canon_key) |k| fizzy.entry().allocator.free(k);
     const key: []const u8 = canon_key orelse trimTrailingPathSeparators(path);
 
     for (recents.folders.items, 0..) |folder, i| {
@@ -106,12 +106,12 @@ pub fn indexOfFolder(recents: *Recents, path: []const u8) ?usize {
 /// Takes ownership of `path`.
 pub fn appendFolder(recents: *Recents, path: []const u8) !void {
     const canon_owned = dup: {
-        defer fizzy.app().allocator.free(path);
-        break :dup try canonicalize(fizzy.app().allocator, path);
+        defer fizzy.entry().allocator.free(path);
+        break :dup try canonicalize(fizzy.entry().allocator, path);
     };
 
     if (recents.indexOfFolder(canon_owned)) |index| {
-        fizzy.app().allocator.free(canon_owned);
+        fizzy.entry().allocator.free(canon_owned);
         const folder = recents.folders.orderedRemove(index);
         try recents.folders.append(folder);
         return;
@@ -119,7 +119,7 @@ pub fn appendFolder(recents: *Recents, path: []const u8) !void {
 
     if (recents.folders.items.len >= Constants.max_recents) {
         const oldest = recents.folders.orderedRemove(0);
-        fizzy.app().allocator.free(oldest);
+        fizzy.entry().allocator.free(oldest);
     }
 
     try recents.folders.append(canon_owned);

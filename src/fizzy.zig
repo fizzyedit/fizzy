@@ -18,7 +18,7 @@ pub const hitch = core.hitch;
 pub const water_surface = core.water_surface;
 pub const math = core.math;
 
-pub const App = @import("App.zig");
+pub const Entry = @import("Entry.zig");
 pub const Editor = @import("editor/Editor.zig");
 pub const Explorer = @import("editor/explorer/Explorer.zig");
 pub const Fling = core.Fling;
@@ -26,7 +26,7 @@ pub const Fling = core.Fling;
 pub const Sidebar = @import("editor/Sidebar.zig");
 pub const OutputLog = @import("editor/OutputLog.zig");
 
-// The process-wide App/Editor instance.
+// The process-wide entry / application-state instances.
 //
 // Phase 2 of the fizzy-as-a-library work replaced the public mutable globals with accessors.
 // Editor-scoped logic now takes an explicit `*Editor` (and reaches the allocator through
@@ -36,23 +36,23 @@ pub const OutputLog = @import("editor/OutputLog.zig");
 //   * OS / dvui callbacks invoked with no context pointer — native file-dialog callbacks
 //     (`backend_native.zig`), `Editor.saveAsDialogCallback`, `singleton_native.dispatchPath`,
 //     the update-notify install hook.
-//   * `App.zig` itself, which owns the instance.
+//   * `Entry.zig` itself, which owns the instance.
 //
 // Threading a context through those is a separate change (each needs a userdata slot on the
 // callback), tracked as the residual of Phase 2. Everything else should take `*Editor`.
-var app_instance: *App = undefined;
+var entry_instance: *Entry = undefined;
 var editor_instance: *Editor = undefined;
 
-pub fn app() *App {
-    return app_instance;
+pub fn entry() *Entry {
+    return entry_instance;
 }
 
 pub fn editor() *Editor {
     return editor_instance;
 }
 
-pub fn setInstances(a: *App, e: *Editor) void {
-    app_instance = a;
+pub fn setInstances(a: *Entry, e: *Editor) void {
+    entry_instance = a;
     editor_instance = e;
 }
 

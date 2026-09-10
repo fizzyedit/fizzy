@@ -520,7 +520,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     // Build a module rooted at `src/fizzy.zig` carrying all the same
     // imports the production exe carries. Because fizzy.zig's transitive
-    // imports (App.zig, Editor.zig, …) reference `dvui`, `assets`, etc. by
+    // imports (Entry.zig, Editor.zig, …) reference `dvui`, `assets`, etc. by
     // name, those names must be wired here.
     // We point dvui at the *testing* backend so calling drawing
     // functions doesn't try to open a real OS window.
@@ -667,7 +667,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         // The documents it benchmarks are this repo's own sources — `@embedFile` can't reach
         // outside its package, so they arrive the same way.
         bench_module.addAnonymousImport("sample_large", .{ .root_source_file = b.path("src/editor/Editor.zig") });
-        bench_module.addAnonymousImport("sample_small", .{ .root_source_file = b.path("src/App.zig") });
+        bench_module.addAnonymousImport("sample_small", .{ .root_source_file = b.path("src/Entry.zig") });
 
         const bench_text = b.addTest(.{ .name = "fizzy-bench-text", .root_module = bench_module });
         bench_text.root_module.link_libcpp = !target_is_windows_msvc;

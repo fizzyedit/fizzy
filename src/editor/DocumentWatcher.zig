@@ -121,7 +121,7 @@ pub fn start(self: *DocumentWatcher) !void {
 
 /// Safe from the nightwatch handler thread — wakes the blocked event loop for one frame.
 fn wake() void {
-    fizzy.app().window.backend.refresh();
+    fizzy.entry().window.backend.refresh();
 }
 
 /// Main-thread only. Call after mutating open-doc contents so the editor repaints without

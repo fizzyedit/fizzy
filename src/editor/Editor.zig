@@ -27,7 +27,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const update_notify = @import("../backend/update_notify.zig");
 
-const App = fizzy.App;
+const Entry = fizzy.Entry;
 const Editor = @This();
 
 pub const Recents = @import("Recents.zig");
@@ -128,7 +128,7 @@ pub const Workbench = workbench_mod.Workbench;
 /// This arena is for small per-frame editor allocations, such as path joins, null terminations and labels.
 /// Do not free these allocations, instead, this allocator will be .reset(.retain_capacity) each frame
 /// The app-wide general-purpose allocator. Held on the Editor so editor code does not
-/// reach through the `fizzy.app()` global for it — a precondition for using fizzy as a
+/// reach through the `fizzy.entry()` global for it — a precondition for using fizzy as a
 /// library, where there is no single ambient App.
 gpa: std.mem.Allocator,
 arena: std.heap.ArenaAllocator,
@@ -528,7 +528,7 @@ const embedded_fonts: []const dvui.Font.Source = &.{
 };
 
 pub fn init(
-    app: *App,
+    app: *Entry,
 ) !Editor {
     const arena = dvui.currentWindow().arena();
     // Wasm: skip the env-map / known-folders lookup. `std.process.Environ.put`
@@ -2538,28 +2538,28 @@ pub fn postInit(editor: *Editor) !void {
     // a template/example) — so the dylib load "fails" and falls back to static on every
     // run. Not worth logging until that changes.
     if (loadWorkbenchFromDylibEnabled(editor.gpa)) {
-        editor.loadWorkbenchDylib(fizzy.app().root_path) catch {
+        editor.loadWorkbenchDylib(fizzy.entry().root_path) catch {
             try workbench_mod.register(&editor.host);
         };
     } else {
         try workbench_mod.register(&editor.host);
     }
     if (loadTextFromDylibEnabled(editor.gpa)) {
-        editor.loadTextDylib(fizzy.app().root_path) catch {
+        editor.loadTextDylib(fizzy.entry().root_path) catch {
             try text_mod.register(&editor.host);
         };
     } else {
         try text_mod.register(&editor.host);
     }
     if (loadImageFromDylibEnabled(editor.gpa)) {
-        editor.loadImageDylib(fizzy.app().root_path) catch {
+        editor.loadImageDylib(fizzy.entry().root_path) catch {
             try image_mod.register(&editor.host);
         };
     } else {
         try image_mod.register(&editor.host);
     }
     if (loadMarkdownFromDylibEnabled(editor.gpa)) {
-        editor.loadMarkdownDylib(fizzy.app().root_path) catch {
+        editor.loadMarkdownDylib(fizzy.entry().root_path) catch {
             try markdown_mod.register(&editor.host);
         };
     } else {
@@ -3023,7 +3023,7 @@ fn fizzyRefresh(ctx: *anyopaque) void {
     // Safe from any thread (see `SDLBackend.refresh`'s doc comment) — a single call reliably
     // wakes the blocked event loop and produces exactly one composited frame; see
     // `render_bridge.refresh`'s doc comment for how that was verified.
-    fizzy.app().window.backend.refresh();
+    fizzy.entry().window.backend.refresh();
 }
 fn fizzyAllocUntitledPath(ctx: *anyopaque) anyerror![]u8 {
     return fizzyCtx(ctx).allocNextUntitledPath();
@@ -3364,7 +3364,7 @@ pub fn applySettingsTheme(editor: *Editor) !void {
 
 pub fn applyHoldMenuDuration(editor: *Editor) void {
     const ms = @max(@as(u32, 100), editor.settings.hold_menu_duration_ms);
-    fizzy.app().window.hold_menu_duration_ns = @as(i128, ms) * 1_000_000;
+    fizzy.entry().window.hold_menu_duration_ns = @as(i128, ms) * 1_000_000;
 }
 
 pub fn currentGroupingID(editor: *Editor) u64 {
@@ -5067,7 +5067,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
     // which one worker reaches before the GUI's wakeup yields.
 }
 
-pub fn close(app: *App, editor: *Editor) void {
+pub fn close(app: *Entry, editor: *Editor) void {
     _ = app;
     if (editor.open_files.count() == 0) {
         editor.pending_app_close = true;
@@ -5814,9 +5814,9 @@ pub fn saveAsDialogCallback(paths: ?[][:0]const u8) void {
     const path0 = p[0];
     if (path0.len == 0) return;
     if (fizzy.editor().pending_save_as_path) |old| {
-        fizzy.app().allocator.free(old);
+        fizzy.entry().allocator.free(old);
     }
-    fizzy.editor().pending_save_as_path = fizzy.app().allocator.dupe(u8, path0[0..path0.len]) catch {
+    fizzy.editor().pending_save_as_path = fizzy.entry().allocator.dupe(u8, path0[0..path0.len]) catch {
         dvui.log.err("Save As: out of memory queuing path", .{});
         return;
     };

@@ -17,10 +17,10 @@ const paths = fizzy.paths;
 const Constants = @import("editor/Constants.zig");
 const AppInfo = @import("AppInfo.zig");
 
-const App = @This();
+const Entry = @This();
 const Editor = fizzy.Editor;
 
-// App fields
+// Entry fields
 allocator: std.mem.Allocator = undefined,
 
 //delta_time: f32 = 0.0,
@@ -72,7 +72,7 @@ fn startOptions() dvui.App.StartOptions {
     var opts = start_options_base;
 
     // Create the dvui window with the *same* allocator the host hands to plugins
-    // (`fizzy.app().allocator`). Without this, dvui defaults the window to the runtime's
+    // (`fizzy.entry().allocator`). Without this, dvui defaults the window to the runtime's
     // `main_init.gpa`, a different allocator instance — so `dvui.currentWindow().gpa`
     // and `host.allocator` would be distinct, and a plugin that allocated with one and
     // freed with the other would corrupt the heap. Unifying them makes every allocator a
@@ -196,7 +196,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     const allocator = appAllocator();
 
     // Inject shared infrastructure context into `core` so it stays decoupled from
-    // the App hub (allocator for gfx, trackpad input for the canvas widget).
+    // the Entry hub (allocator for gfx, trackpad input for the canvas widget).
     fizzy.core.gpa = allocator;
     fizzy.core.takeTrackpadPinchRatio = fizzy.backend.takeTrackpadPinchRatio;
 
@@ -221,7 +221,7 @@ pub fn AppInit(win: *dvui.Window) !void {
         break :path_blk dir;
     };
 
-    const app_ptr = try allocator.create(App);
+    const app_ptr = try allocator.create(Entry);
     app_ptr.* = .{
         .allocator = allocator,
         .window = win,
@@ -249,7 +249,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     // before our AppInit runs).
     fizzy.backend.installFileOpenEventHandling(win);
 
-    // Override DVUI's default SDL metadata ("DVUI App Example") so the macOS
+    // Override DVUI's default SDL metadata ("DVUI Entry Example") so the macOS
     // app menu reads "About fizzy" / "Hide fizzy" / "Quit fizzy" and process
     // listings show the real product name + version. `build_opts.app_version`
     // is a non-sentinel slice, so allocate a null-terminated copy for SDL.
@@ -284,7 +284,7 @@ pub fn AppInit(win: *dvui.Window) !void {
 // Run as app is shutting down before dvui.Window.deinit()
 pub fn AppDeinit(_: *dvui.Window) void {
     // Persist the current windowed frame while the window still exists. No-op off macOS.
-    fizzy.backend.saveWindowGeometry(fizzy.app().window);
+    fizzy.backend.saveWindowGeometry(fizzy.entry().window);
     // `editor.deinit` runs each plugin's `deinit` first (pixi's persists its `.fizproject` and
     // frees its own state + packer while `editor.host`/folder are still live).
     fizzy.editor().deinit() catch unreachable;

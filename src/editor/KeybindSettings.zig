@@ -108,7 +108,7 @@ fn isOwnerOpen(key: u64) bool {
 
 fn setOwnerOpen(key: u64, open: bool) void {
     if (open) {
-        open_owners.put(fizzy.app().allocator, key, {}) catch {};
+        open_owners.put(fizzy.entry().allocator, key, {}) catch {};
     } else {
         _ = open_owners.remove(key);
     }
