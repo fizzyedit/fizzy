@@ -368,7 +368,7 @@ test "the highlight query range covers every byte the viewport shows" {
 // -- content-swap reveal ------------------------------------------------------------------------
 
 // `core.anim.reveal` hides the one frame dvui needs to size newly-swapped content, then fades it
-// in (see `src/core/reveal.zig`). The phase machine is unit-tested on its own; what needs a real
+// in (see `core/reveal.zig`). The phase machine is unit-tested on its own; what needs a real
 // window is the wiring — that the phases actually reach `dvui`'s alpha, that the animation is
 // registered and completes, and that a settled pane ends fully opaque instead of stuck dim.
 

@@ -1,4 +1,4 @@
-//! Build-time copy of `localConfigRoot` from `src/core/paths.zig`.
+//! Build-time copy of `localConfigRoot` from `core/paths.zig`.
 //! Keep in sync — install path and runtime load path must never drift.
 const std = @import("std");
 

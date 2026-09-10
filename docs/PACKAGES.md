@@ -39,7 +39,7 @@ framework.
 
 ### core — shared floor (mostly already right)
 
-Stays as `src/core/`: `dvui.zig` and `widgets/` (Tabs, Split, TreeWidget, CanvasWidget, Paned,
+Stays as `core/`: `dvui.zig` and `widgets/` (Tabs, Split, TreeWidget, CanvasWidget, Paned,
 Reorder, FloatingWindow), `math/`, `fs`, `paths`, `fuzzy`, `lsp/`, `Fling`, `FileTable`.
 
 ### sdk — the plugin contract (already a package)

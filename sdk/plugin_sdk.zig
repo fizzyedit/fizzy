@@ -17,14 +17,14 @@
 const std = @import("std");
 
 /// Shared with the runtime loader so install + load locations never drift (see its doc comment).
-/// Lives in this package; keep `localConfigRoot` in sync with `src/core/paths.zig`.
+/// Lives in this package; keep `localConfigRoot` in sync with `core/paths.zig`.
 const core_paths = @import("paths.zig");
 
 /// The `core` module's import set, shared with the app build so a dependency can't reach four of
 /// the five `core` compiles and miss this one (see its doc comment).
 const core_module = @import("core_module.zig");
 
-/// LazyPath to a repo-relative source file (`src/core/…`, `src/sdk/…`).
+/// LazyPath to a repo-relative source file (`core/…`, `src/sdk/…`).
 ///
 /// Two layouts share this package:
 /// - **In-repo** (`fizzy/sdk/`): sources live at `../src/…` beside this package.
@@ -339,7 +339,7 @@ fn pluginExt(os_tag: std.Target.Os.Tag) []const u8 {
 
 /// Resolve `{local_config}/fizzy/plugins` on the build host — exactly where the app scans for
 /// user plugins. Must mirror `known-folders` `.local_configuration` (what the runtime loader
-/// uses, see `src/core/paths.zig`) + `fizzy/plugins`:
+/// uses, see `core/paths.zig`) + `fizzy/plugins`:
 ///   macOS   `~/Library/Application Support/fizzy/plugins`
 ///   Linux   `$XDG_CONFIG_HOME/fizzy/plugins` (or `~/.config/fizzy/plugins`)
 ///   Windows `%LOCALAPPDATA%/fizzy/plugins`   (FOLDERID_LocalAppData — *not* Roaming/`%APPDATA%`)
@@ -557,7 +557,7 @@ pub fn exportModules(
     const core_mod = b.addModule("core", .{
         .target = target,
         .optimize = optimize,
-        .root_source_file = repoPath(b, "src/core/core.zig"),
+        .root_source_file = repoPath(b, "core/core.zig"),
         .link_libc = true,
     });
     _ = core_module.addImports(b, core_mod, dvui_proxy_mod, target, optimize);

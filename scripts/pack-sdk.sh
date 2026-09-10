@@ -3,7 +3,7 @@
 #
 # Zig has no "depend on a subdirectory of this archive" — plugins must fetch a
 # package whose root build.zig.zon has no Velopack. This script stages `sdk/` as
-# the package root and vendors `src/core` + `src/sdk` beside it so
+# the package root and vendors `core/` + `src/sdk` beside it so
 # `plugin_sdk.repoPath` resolves via in-package `src/` (see that function).
 #
 # Usage:
@@ -39,15 +39,16 @@ mkdir -p "$pkg/src"
 # Package root = today's sdk/ build surface (no app-only deps).
 cp -R sdk/. "$pkg/"
 # Runtime / module sources that exportModules points at.
-cp -R src/core "$pkg/src/core"
+cp -R core "$pkg/core"
 cp -R src/sdk "$pkg/src/sdk"
 
 # Drop build/editor-only noise if any leaked into the copy (none expected).
-rm -rf "$pkg/src/core/.zig-cache" "$pkg/src/sdk/.zig-cache" 2>/dev/null || true
+rm -rf "$pkg/core/.zig-cache" "$pkg/src/sdk/.zig-cache" 2>/dev/null || true
 rm -rf "$pkg/.zig-cache" "$pkg/zig-pkg" "$pkg/zig-out" 2>/dev/null || true
 
-# Tarball package must hash `src/` (in-repo sdk/build.zig.zon does not list it —
-# those trees live beside the package, not inside it).
+# Tarball package must hash the vendored trees (`core/` and `src/sdk/`); the in-repo
+# sdk/build.zig.zon does not list them, because there they live beside the package
+# rather than inside it.
 python3 - <<'PY' "$pkg/build.zig.zon" "$version"
 import sys, re
 path, version = sys.argv[1], sys.argv[2]
@@ -55,7 +56,7 @@ text = open(path).read()
 if '"src"' not in text.split(".paths")[1].split("}")[0]:
     text = text.replace(
         '        "paths.zig",\n    },',
-        '        "paths.zig",\n        "src",\n    },',
+        '        "paths.zig",\n        "core",\n        "src",\n    },',
         1,
     )
 text = re.sub(r'\.version = "[^"]*"', f'.version = "{version}"', text, count=1)

@@ -179,7 +179,7 @@ users won't have a sibling checkout.
 
 Depend on fizzy's **`sdk/` package** (not the repo root). The root zon owns the editor and lists
 app-only deps (Velopack, …) that must never enter a plugin's `zig-pkg`. Zig cannot depend on a
-subdirectory of a URL archive, so the release asset *is* the `sdk/` package with `src/core` +
+subdirectory of a URL archive, so the release asset *is* the `sdk/` package with `core` +
 `src/sdk` vendored in. Do **not** pin
 `https://github.com/fizzyedit/fizzy/archive/refs/tags/sdk-v….tar.gz` — that is the full monorepo.
 
@@ -766,7 +766,7 @@ complete, server-agnostic LSP client: process lifecycle, JSON-RPC framing, per-r
 caching/debouncing/negative-caching, capability negotiation (position encoding,
 `completionItem/resolve` support), and answering server-initiated requests
 (`workspace/configuration`, `client/registerCapability`, …). It backs the bundled `zig` plugin
-(zls) today; See `src/core/lsp/Client.zig`'s own doc comments for the full threading model.
+(zls) today; See `core/lsp/Client.zig`'s own doc comments for the full threading model.
 
 Your plugin supplies only what's specific to your server, via `Client.Config`:
 
@@ -1201,7 +1201,7 @@ drop straight into the plugins directory, exactly like §2.6.
 | `src/sdk/EditorAPI.zig` | Fizzy's read/utility surface plugins reach back through |
 | `src/sdk/regions.zig` | Sidebar/bottom/center/menu/settings/command contribution structs |
 | `src/sdk/language.zig` | `LanguageSupport` registry — documentOpened/hover/goto-definition/completion/signature-help/format/highlighting/preview hooks looked up by file extension |
-| `src/core/lsp/Client.zig` | Server-agnostic LSP client (JSON-RPC framing, caching, threading) shared by every language plugin — see §3.9 |
+| `core/lsp/Client.zig` | Server-agnostic LSP client (JSON-RPC framing, caching, threading) shared by every language plugin — see §3.9 |
 | `src/sdk/dylib.zig`, `dvui_context.zig` | Runtime-library C entry contract + dvui injection |
 | `src/sdk/version.zig` | SDK version + ABI fingerprint CI lock |
 | `src/sdk/manifest.zig` | `Manifest` — the `plugin.zig.zon` shape (`id`/`name`/`version`/`min_sdk_version`/`description`/`tags`) + `parse`/`free`, read back out of a loaded dylib at runtime. The typed shape actually baked into a dylib's C-ABI exports is `dylib.Identity` (build-injected, never runtime-parsed) |

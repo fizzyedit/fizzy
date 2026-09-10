@@ -86,7 +86,7 @@ pub fn addSteps(
     const core_module_web = b.createModule(.{
         .target = web_target,
         .optimize = optimize,
-        .root_source_file = b.path("src/core/core.zig"),
+        .root_source_file = b.path("core/core.zig"),
         .link_libc = false,
         .single_threaded = true,
     });

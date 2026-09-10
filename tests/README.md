@@ -66,28 +66,28 @@ cheapest first. Wiring lives in `build/app.zig`.
 Each covered file is its own test artifact root in `build/app.zig`
 (std-only, or std + a named dep like `zf` for fuzzy). Currently:
 
-- [`src/core/math/direction.zig`](../src/core/math/direction.zig) —
+- [`core/math/direction.zig`](../core/math/direction.zig) —
   `fizzy-direction-tests` — 8-way / 4-way direction encoding,
   `fromRadians`, rotation inverses.
-- [`src/core/math/easing.zig`](../src/core/math/easing.zig) —
+- [`core/math/easing.zig`](../core/math/easing.zig) —
   `fizzy-easing-tests` — `lerp`, `ease`, endpoint pinning, midpoint bias.
-- [`src/core/math/layout_anchor.zig`](../src/core/math/layout_anchor.zig) —
+- [`core/math/layout_anchor.zig`](../core/math/layout_anchor.zig) —
   `fizzy-layout-anchor-tests` — anchor math shared by grid/layout code.
 - [`src/backend/window_layout.zig`](../src/backend/window_layout.zig) —
   `fizzy-window-layout-tests` — macOS window/Space transition geometry helpers.
 - [`src/backend/plugin_store/store.zig`](../src/backend/plugin_store/store.zig) —
   `fizzy-plugin-store-tests` — catalog/registry/download parsing (sibling
   file imports keep those tests in the same module).
-- [`src/core/lsp/Protocol.zig`](../src/core/lsp/Protocol.zig) —
+- [`core/lsp/Protocol.zig`](../core/lsp/Protocol.zig) —
   `fizzy-lsp-protocol-tests` — LSP message framing/parsing.
-- [`src/core/lsp/UriUtil.zig`](../src/core/lsp/UriUtil.zig) —
+- [`core/lsp/UriUtil.zig`](../core/lsp/UriUtil.zig) —
   `fizzy-lsp-uri-tests` — `file://` URI ↔ path conversion.
 - [`src/editor/SettingsPluginsZon.zig`](../src/editor/SettingsPluginsZon.zig) —
   `fizzy-settings-plugins-zon-tests` — ZON-AST byte-span surgery on `settings.zon`.
 - [`src/sdk/manifest.zig`](../src/sdk/manifest.zig) —
   `fizzy-sdk-manifest-tests` — `plugin.zig.zon` parsing (std-only, so it lives
   in the unit layer even though it sits under `src/sdk/`).
-- [`src/core/fuzzy.zig`](../src/core/fuzzy.zig) —
+- [`core/fuzzy.zig`](../core/fuzzy.zig) —
   `fizzy-fuzzy-tests` — fuzzy matcher wrapper over `zf` (needs a `zf` import).
 
 ### Integration / SDK tests (headless)
@@ -144,7 +144,7 @@ What's intentionally **not** here yet:
 
 1. Find a source file that has no dvui / fizzy imports, or extract the
    pure piece you want to test into one (look at how
-   `src/core/math/easing.zig` was extracted from `math.zig` for a
+   `core/math/easing.zig` was extracted from `math.zig` for a
    minimal example).
 2. Add a `test "..."` block at the bottom of the file:
    ```zig

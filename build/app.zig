@@ -378,14 +378,14 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     var unit_test_artifacts: std.ArrayListUnmanaged(*std.Build.Step.Compile) = .empty;
 
     inline for (.{
-        .{ "fizzy-direction-tests", "src/core/math/direction.zig" },
-        .{ "fizzy-easing-tests", "src/core/math/easing.zig" },
-        .{ "fizzy-layout-anchor-tests", "src/core/math/layout_anchor.zig" },
+        .{ "fizzy-direction-tests", "core/math/direction.zig" },
+        .{ "fizzy-easing-tests", "core/math/easing.zig" },
+        .{ "fizzy-layout-anchor-tests", "core/math/layout_anchor.zig" },
         .{ "fizzy-window-layout-tests", "src/backend/window_layout.zig" },
         .{ "fizzy-plugin-store-tests", "src/backend/plugin_store/store.zig" },
-        .{ "fizzy-paths-tests", "src/core/paths.zig" },
-        .{ "fizzy-lsp-protocol-tests", "src/core/lsp/Protocol.zig" },
-        .{ "fizzy-lsp-uri-tests", "src/core/lsp/UriUtil.zig" },
+        .{ "fizzy-paths-tests", "core/paths.zig" },
+        .{ "fizzy-lsp-protocol-tests", "core/lsp/Protocol.zig" },
+        .{ "fizzy-lsp-uri-tests", "core/lsp/UriUtil.zig" },
         .{ "fizzy-settings-plugins-zon-tests", "src/editor/SettingsPluginsZon.zig" },
         // std-only despite living under src/sdk/ — and the SDK-rooted test artifact
         // below never reaches it (nothing in the graph forces `sdk.manifest`), so it
@@ -421,7 +421,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ "fizzy-md-code-language-tests", "plugins/markdown/src/md/code_language.zig" },
         // Content-swap reveal phase machine. std-only by design (see reveal.zig) — the dvui
         // half is the thin wrapper in core/dvui.zig.
-        .{ "fizzy-reveal-tests", "src/core/reveal.zig" },
+        .{ "fizzy-reveal-tests", "core/reveal.zig" },
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.
         .{ "fizzy-folder-events-tests", "src/editor/folder_events.zig" },
@@ -443,7 +443,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         const fuzzy_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/core/fuzzy.zig"),
+            .root_source_file = b.path("core/fuzzy.zig"),
         });
         fuzzy_module.addImport("zf", core_mod.zfModule(b, target, optimize));
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
@@ -461,7 +461,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         const file_table_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/core/FileTable.zig"),
+            .root_source_file = b.path("core/FileTable.zig"),
         });
         file_table_module.addImport("zf", core_mod.zfModule(b, target, optimize));
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
@@ -533,7 +533,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const core_module_test = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/core/core.zig"),
+        .root_source_file = b.path("core/core.zig"),
     });
     const icons_test = core_mod.addImports(b, core_module_test, dvui_testing_dep.module("dvui_testing"), target, optimize);
     fizzy_test_module.addImport("core", core_module_test);
@@ -733,7 +733,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         const split_tests_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("src/core/widgets/Split.zig"),
+            .root_source_file = b.path("core/widgets/Split.zig"),
         });
         split_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         if (icons_test) |icons| split_tests_module.addImport("icons", icons);

@@ -208,11 +208,11 @@ test "scattered characters match, missing ones do not" {
 }
 
 test "every token must match" {
-    var q = Query.init("src zig");
-    try testing.expect(matches("src/core/fuzzy.zig", &q, .{ .plain = false }));
+    var q = Query.init("core zig");
+    try testing.expect(matches("core/fuzzy.zig", &q, .{ .plain = false }));
 
-    var one_bad = Query.init("src nope");
-    try testing.expect(!matches("src/core/fuzzy.zig", &one_bad, .{ .plain = false }));
+    var one_bad = Query.init("core nope");
+    try testing.expect(!matches("core/fuzzy.zig", &one_bad, .{ .plain = false }));
 }
 
 test "path mode prefers a basename match over a directory-only one" {
@@ -263,7 +263,7 @@ test "ranking a small list end to end" {
     const candidates = [_][]const u8{
         "src/editor/Settings.zig",
         "src/editor/SettingsTree.zig",
-        "src/core/fuzzy.zig",
+        "core/fuzzy.zig",
         "docs/PLUGINS.md",
     };
     var q = Query.init("setting");

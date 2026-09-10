@@ -144,7 +144,7 @@ pub fn addFizzyExecutableForTarget(
     const core_module = b.createModule(.{
         .target = resolved_target,
         .optimize = optimize,
-        .root_source_file = b.path("src/core/core.zig"),
+        .root_source_file = b.path("core/core.zig"),
     });
     const icons_module = core_mod.addImports(b, core_module, dvui_dep.module("dvui_sdl3"), resolved_target, optimize);
     exe.root_module.addImport("core", core_module);
@@ -153,7 +153,7 @@ pub fn addFizzyExecutableForTarget(
     const core_proxy_module = b.createModule(.{
         .target = resolved_target,
         .optimize = optimize,
-        .root_source_file = b.path("src/core/core.zig"),
+        .root_source_file = b.path("core/core.zig"),
     });
     _ = core_mod.addImports(b, core_proxy_module, dvui_proxy_mod, resolved_target, optimize);
 

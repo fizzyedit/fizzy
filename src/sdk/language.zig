@@ -22,7 +22,7 @@ pub const TreeSitterHighlight = struct {
     log_captures: bool = false,
 };
 
-/// Result types below are owned by `core.lsp` (see `src/core/lsp/Client.zig`) — that's where
+/// Result types below are owned by `core.lsp` (see `core/lsp/Client.zig`) — that's where
 /// the LSP client producing them lives, shared by every language plugin. Aliased here so
 /// `LanguageSupport.VTable` hooks can keep referring to them as `sdk.language.*`, matching the
 /// rest of this SDK-facing surface; see each type's doc comment in `core.lsp` for the full

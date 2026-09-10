@@ -1,6 +1,6 @@
 //! Shared wiring for the `core` module's imports.
 //!
-//! `src/core/core.zig` is compiled five separate times against five different dvui flavors —
+//! `core/core.zig` is compiled five separate times against five different dvui flavors —
 //! native exe (`dvui_sdl3`), the dylib-facing proxy (`dvui_proxy`), web (`dvui_web`), unit tests
 //! (`dvui_testing`), and the plugin-SDK export path (`plugin_sdk.zig`'s `exportModules`). The
 //! *module options* legitimately differ per site (`link_libc`, `single_threaded`, …), but the

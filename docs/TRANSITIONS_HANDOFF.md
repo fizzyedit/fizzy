@@ -37,10 +37,10 @@ is fading between has rounded corners.
 
 ## 2. What exists now
 
-**`src/core/reveal.zig`** — pure phase machine (`hidden → fading → shown`, restart on key change).
+**`core/reveal.zig`** — pure phase machine (`hidden → fading → shown`, restart on key change).
 4 unit tests, wired into `zig build test` as `fizzy-reveal-tests`.
 
-**`core.anim.reveal(id, key, opts) Reveal`** (`src/core/anim.zig`) — maps those phases onto
+**`core.anim.reveal(id, key, opts) Reveal`** (`core/anim.zig`) — maps those phases onto
 `dvui.alpha` + a dvui animation. State lives in dvui's data store under `id`, which must be a
 *stable* widget id (source-derived, not parent-derived — see §5).
 
