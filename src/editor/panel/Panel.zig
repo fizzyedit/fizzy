@@ -17,7 +17,6 @@ const Pane = @import("Pane.zig");
 pub const Panel = @This();
 const Layout = @import("../layout/Layout.zig");
 
-paned: *fizzy.core.widgets.PanedWidget = undefined,
 scroll_info: dvui.ScrollInfo = .{
     .horizontal = .auto,
 },
