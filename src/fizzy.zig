@@ -49,7 +49,7 @@ pub fn setInstances(a: *Entry, e: *Editor) void {
 }
 
 /// Application layout: regions, splits, tabs and the keyword vocabulary. See
-/// src/editor/layout/layout.zig.
+/// src/editor/layout.zig.
 pub const layout = @import("editor/layout.zig");
 
 /// Plugin SDK surface
