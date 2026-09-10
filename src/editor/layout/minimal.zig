@@ -34,7 +34,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
 
     // One region, filling everything. Workbench's tabs and splits land here because its surface
     // carries the `main` keywords — this shape never names it.
-    var main = try f.region(@src(), .{ .name = "Main", .keywords = main_area });
+    var main = try f.dock(@src(), .{ .name = "Main", .keywords = main_area });
     defer main.end();
 
     editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});

@@ -60,7 +60,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
 
     // ── The shape, as region declarations ───────────────────────────────────────────────────
-    var side = try f.region(@src(), .{
+    var side = try f.dock(@src(), .{
         .name = "Sidebar",
         .keywords = sidebar,
         .edge = .left,
@@ -97,7 +97,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         if (r != .ok) return r;
     }
 
-    var panel = try f.region(@src(), .{
+    var panel = try f.dock(@src(), .{
         .name = "Panel",
         .keywords = bottom,
         .edge = .bottom,
@@ -110,7 +110,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     defer panel.end();
     if (!panel.rest()) return .ok;
 
-    var main = try f.region(@src(), .{ .name = "Main", .keywords = main_area });
+    var main = try f.dock(@src(), .{ .name = "Main", .keywords = main_area });
     defer main.end();
 
     return .ok;

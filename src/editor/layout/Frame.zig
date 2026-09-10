@@ -30,11 +30,23 @@ pub const Surface = sdk.Surface;
 
 editor: *fizzy.Editor,
 
-/// Open linear containers, innermost last. A container region pushes; its `end` pops. This is
-/// what lets a leaf `region` know which splitter it is a slot of, and `split` know which
-/// boundary it is marking, without either being passed a handle by the shape.
-containers: [max_nesting]*core.dvui.SplitBox = undefined,
+/// Open regions, innermost last. Every region pushes; its `deinit` pops. This is what lets
+/// `split` know which axis it divides and which neighbour it resizes, without a shape having to
+/// pass either in.
+containers: [max_nesting]Container = undefined,
 depth: usize = 0,
+
+pub const Container = struct {
+    dir: dvui.enums.Direction,
+    /// The container's own box, for measuring how near the pointer is to a split inside it.
+    box: ?*dvui.BoxWidget = null,
+    /// A split that found no resizable region before it, waiting to be bound to the one after.
+    pending_split: ?dvui.Id = null,
+    /// The most recent resizable child. A `split` drags *this* region's stored size — the
+    /// neighbour before it — which is the whole of the resize mechanism: there are no ratios and
+    /// no boundary table, just one number per resizable region.
+    last_resizable: ?dvui.Id = null,
+};
 
 /// Layouts nest a few levels; anything deeper is a mistake worth reporting rather than
 /// supporting. Keeps the stack a fixed array with no allocation on the layout path.
@@ -44,8 +56,25 @@ pub fn init(editor: *fizzy.Editor) Frame {
     return .{ .editor = editor };
 }
 
-fn innermost(self: *Frame) ?*core.dvui.SplitBox {
-    return if (self.depth == 0) null else self.containers[self.depth - 1];
+fn innermost(self: *Frame) ?*Container {
+    return if (self.depth == 0) null else &self.containers[self.depth - 1];
+}
+
+/// Thickness of a split, and how near the pointer must be before it shows itself. Fizzy's tuned
+/// sash values (`layout.split`), kept because a thinner target is measurably harder to grab.
+pub const handle_size: f32 = 10;
+pub const handle_dist: f32 = 60;
+
+/// A region's persisted extent along its parent's axis, in points.
+///
+/// Points rather than a fraction of the parent, and stored per region rather than as a table of
+/// boundaries, because that is what `dvui.box` already understands: a child that does not expand
+/// along the axis takes its minimum, and the ones that do share the remainder. Reusing that means
+/// there is no second sizing model — a fixed icon rail, a dragged sidebar and a stretching main
+/// area are the same mechanism with different numbers, and a window resize grows the stretchy
+/// half rather than rescaling the sidebar.
+fn storedSize(id: dvui.Id, default: f32) f32 {
+    return dvui.dataGet(null, id, "_size", f32) orelse default;
 }
 
 fn arena(self: *Frame) std.mem.Allocator {
@@ -273,107 +302,303 @@ pub const RegionOptions = struct {
 /// layout writes next lands there. That is what removes the `showFirst`/`showSecond` pairs from
 /// shapes.
 pub const Region = struct {
-    split: ?layout_split.Split = null,
-    rest_visible: bool = true,
-    /// Set when this region is a **container**: the splitter it opened, which `end` pops.
-    container: ?*core.dvui.SplitBox = null,
-    /// For a nested container, the parent's slot it was opened inside. Leaves close their own
-    /// slot before returning and leave this null.
-    slot: ?*dvui.BoxWidget = null,
+    /// The box this region is. A region **is** a `dvui.box`: same layout mechanics, same
+    /// options, same lifetime rules — so an app author who has written any dvui already knows
+    /// how this behaves, and a split is a separator between two of them.
+    box: ?*dvui.BoxWidget = null,
     frame: ?*Frame = null,
 
-    /// True when the space beyond this region should draw. False while the region is expanded
-    /// over everything (a collapsed-layout peek), so a shape can return early.
-    ///
-    /// Always true for a linear region: there is no "rest" to gate. N regions on an axis each
-    /// have their own share, which is the branching the linear form exists to remove — a shape
-    /// written against containers never calls this.
+    /// Edge-docking only (`Frame.dock`).
+    split: ?layout_split.Split = null,
+    rest_visible: bool = true,
+
+    /// True when the space beyond a *docked* region should draw. Meaningless for a plain region:
+    /// N regions in a box each have their own share, which is the branching this form removes.
     pub fn rest(self: *Region) bool {
         return self.rest_visible;
     }
 
-    pub fn end(self: *Region) void {
-        // Innermost first: the splitter, then the parent slot it lives in.
-        if (self.container) |box| {
+    pub fn deinit(self: *Region) void {
+        if (self.box) |b| {
             if (self.frame) |f| {
                 std.debug.assert(f.depth > 0);
                 f.depth -= 1;
             }
-            box.deinit();
+            b.deinit();
         }
-        if (self.slot) |b| b.deinit();
         if (self.split) |*sp| sp.deinit();
+    }
+
+    /// Retained so the edge-docked shapes still read the same. Regions are boxes now, and a box
+    /// is `deinit`ed.
+    pub fn end(self: *Region) void {
+        self.deinit();
     }
 };
 
-/// Declare a region. See `RegionOptions`.
+/// What a region *is*, as opposed to how it is laid out — which is `dvui.Options`, unchanged.
+pub const RegionInit = struct {
+    /// Human-facing name, shown wherever a user places a surface by hand.
+    name: []const u8 = "",
+    /// What kinds of surface this region accepts. Empty means it hosts nothing itself and is
+    /// purely a container for other regions.
+    keywords: []const []const u8 = &.{},
+    /// The axis this region lays its children along, exactly as `dvui.box`'s `dir`.
+    dir: dvui.enums.Direction = .vertical,
+    /// Chrome drawn instead of the plain selected surface. See `Content`.
+    content: ?Content = null,
+    /// Make this region's extent along its parent's axis draggable by the `split` after it. The
+    /// starting extent comes from `min_size_content` in the `dvui.Options`; the user's drag
+    /// replaces it and persists.
+    resize: bool = false,
+    /// Collapse while nothing matches, rather than holding empty space open.
+    hide_when_empty: bool = false,
+};
+
+/// Declare a region: an area that hosts matching surfaces, holds other regions, or both.
 ///
-/// Three forms, chosen by the options and by where the call sits:
+/// It is a `dvui.box`. The second argument says what the region *is*; the third is dvui's own
+/// `Options`, unchanged — `expand`, `min_size_content`, `padding`, `gravity`, all of it. So the
+/// sizing rules are the ones already in use everywhere else: a child that does not expand along
+/// the axis takes its minimum, and the children that do share what is left.
 ///
-///   * `dir` set — a **container**. Opens a linear splitter; regions declared inside it are its
-///     children and `split` puts draggable boundaries between them.
-///   * inside a container — a **leaf**. Takes the next slot and draws its contents there.
-///   * outside any container — the **edge-docked** form, which docks to `edge` and leaves the
-///     caller in the remaining space (`rest`). This is what `ide.zig` still uses; it predates
-///     the linear form and is kept until collapse/peek exists on the linear path.
-pub fn region(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions) !Region {
-    if (opts.dir) |dir| {
-        if (self.depth >= max_nesting) {
-            dvui.log.err("layout nests deeper than {d} containers; region \"{s}\" ignored", .{ max_nesting, opts.name });
-            return .{};
-        }
-        // A container inside a container is one of its parent's shares, so it takes a slot
-        // first and opens inside it. Without this it would be a child of the parent splitter
-        // with no slot of its own, which `SplitBox` now reports rather than misplacing.
-        const parent_slot = if (self.innermost()) |parent| parent.slot(src) else null;
-        const box = core.dvui.splitBox(src, .{ .dir = dir }, .{ .expand = .both });
-        self.containers[self.depth] = box;
-        self.depth += 1;
-        return .{ .container = box, .slot = parent_slot, .frame = self };
+/// Scope it and `deinit` it the way you would any box:
+///
+/// ```zig
+/// {
+///     var side = f.region(@src(), .{ .keywords = kw.ide.sidebar, .resize = true },
+///                                  .{ .min_size_content = .{ .w = 240 } });
+///     defer side.deinit();
+/// }
+/// f.split(@src(), .{});
+/// ```
+pub fn region(self: *Frame, src: std.builtin.SourceLocation, kind: RegionInit, opts: dvui.Options) !Region {
+    if (self.depth >= max_nesting) {
+        dvui.log.err("layout nests deeper than {d} regions; \"{s}\" ignored", .{ max_nesting, kind.name });
+        return .{};
     }
 
-    const box = self.innermost() orelse return self.edgeRegion(src, opts);
+    const matches = self.matching(kind.keywords);
+    if (kind.hide_when_empty and kind.keywords.len > 0 and matches.len == 0) return .{};
 
-    const matches = self.matching(opts.keywords);
-    // A region with nothing in it should not hold a share of the axis open.
-    //
-    // Note this changes the child count, so the splitter redistributes its boundaries — the
-    // sizes either side are not preserved across the region appearing and disappearing.
-    // `split_layout.insertSplit` / `removeSplit` exist to do that properly and are the intended
-    // fix; wiring them needs a stable per-region identity, not just an index.
-    if (opts.hide_when_empty and matches.len == 0) return .{};
+    const parent = self.innermost();
+    const axis: dvui.enums.Direction = if (parent) |p| p.dir else .horizontal;
+    const id = dvui.parentGet().extendId(src, opts.idExtra());
 
-    // A leaf **opens and closes within this call**, so it is a complete statement and needs no
-    // `end`. It has to be: deferring a leaf's close to the end of the layout scope would leave
-    // its box as the current dvui parent, and every later sibling would be created *inside* it
-    // rather than beside it. Only containers, which really do enclose what follows, return
-    // something to end.
-    const slot = box.slot(src);
-    defer slot.deinit();
-    _ = try self.drawRegionContents(opts, matches);
-    return .{};
+    // A resizable region's extent along its parent's axis is whatever the user last dragged it
+    // to, defaulting to the `min_size_content` the shape wrote.
+    var box_opts = opts;
+    if (kind.resize) {
+        const given = opts.min_size_content orelse dvui.Size{};
+        const default: f32 = switch (axis) {
+            .horizontal => given.w,
+            .vertical => given.h,
+        };
+        const size = storedSize(id, default);
+        box_opts.min_size_content = switch (axis) {
+            .horizontal => .{ .w = size, .h = given.h },
+            .vertical => .{ .w = given.w, .h = size },
+        };
+        if (parent) |p| {
+            // A split declared *before* this region was waiting for a neighbour to resize — the
+            // bottom-panel shape, where the panel comes after its own split. Bind it now; the
+            // split picks it up next frame, the same one-frame settle everything else here uses.
+            if (p.pending_split) |sp| {
+                dvui.dataSet(null, sp, "_after", id);
+                p.pending_split = null;
+            }
+            p.last_resizable = id;
+        }
+    }
+
+    const box = dvui.box(src, .{ .dir = kind.dir }, box_opts);
+    self.containers[self.depth] = .{ .dir = kind.dir, .box = box };
+    self.depth += 1;
+
+    // Opening a region draws what it hosts, the way opening a box draws its background. Anything
+    // the shape writes inside the braces draws after it.
+    if (kind.keywords.len > 0) _ = try self.drawRegionContents(kind, matches);
+
+    return .{ .box = box, .frame = self };
 }
 
-/// A draggable boundary between the previous region and the next, inside a container.
+/// A draggable divider between the region before it and the region after it — `dvui.separator`
+/// with a drag.
 ///
-/// It takes no direction: a split inherits the axis of the container it is in, so direction is
-/// declared once, on the container, rather than restated at every boundary.
-pub fn split(self: *Frame, opts: SplitOptions) void {
-    const box = self.innermost() orelse {
-        dvui.log.err("split() outside a container region does nothing", .{});
+/// It takes no direction: a split divides the axis of the region it sits in, so direction is
+/// declared once, on the container. Dragging it changes the stored extent of the nearest
+/// preceding `resize` region, which is the entire resize model — one number per resizable
+/// region, no ratios, no boundary table, and `dvui.box` doing the layout.
+pub fn split(self: *Frame, src: std.builtin.SourceLocation, opts: SplitOptions) void {
+    const c = self.innermost() orelse {
+        dvui.log.err("split() outside a region does nothing", .{});
         return;
     };
-    if (opts.resize) box.handle();
+    const axis = c.dir;
+
+    var sep = dvui.box(src, .{ .dir = axis }, .{
+        .min_size_content = switch (axis) {
+            .horizontal => .{ .w = handle_size },
+            .vertical => .{ .h = handle_size },
+        },
+        .expand = switch (axis) {
+            .horizontal => .vertical,
+            .vertical => .horizontal,
+        },
+        .background = false,
+    });
+    defer sep.deinit();
+    if (!opts.resize) return;
+
+    // Which neighbour this split resizes. Preferring the one *before* it makes the sidebar case
+    // work immediately; falling back to the one after is what the bottom panel needs, since a
+    // panel is declared after its own split and cannot be known when the split is drawn. That
+    // one is bound by `region` and read back a frame later.
+    var sign: f32 = 1;
+    const target = c.last_resizable orelse blk: {
+        sign = -1;
+        break :blk dvui.dataGet(null, sep.data().id, "_after", dvui.Id) orelse {
+            c.pending_split = sep.data().id;
+            return;
+        };
+    };
+
+    self.dragSplit(c, sep, axis, target, sign, opts);
 }
 
 pub const SplitOptions = struct {
-    /// False makes the boundary static: the regions either side still divide the axis, but the
-    /// user cannot move the edge between them.
+    /// False draws the gap but does not let the user move it.
     resize: bool = true,
+    /// Smallest extent the dragged neighbour may be squeezed to.
+    min: f32 = 40,
+    /// Largest, or null for no limit. Stops a panel from swallowing the window.
+    max: ?f32 = null,
 };
 
-/// The original edge-docking region. See `region`.
-fn edgeRegion(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions) !Region {
+fn dragSplit(
+    self: *Frame,
+    c: *Container,
+    sep: *dvui.BoxWidget,
+    axis: dvui.enums.Direction,
+    target: dvui.Id,
+    sign: f32,
+    opts: SplitOptions,
+) void {
+    _ = self;
+    const wd = sep.data();
+    const srs = wd.borderRectScale();
+    const cursor: dvui.enums.Cursor = switch (axis) {
+        .horizontal => .arrow_w_e,
+        .vertical => .arrow_n_s,
+    };
+
+    // The centre line of the split, and how far the pointer is from it.
+    const centre = switch (axis) {
+        .horizontal => srs.r.x + srs.r.w / 2,
+        .vertical => srs.r.y + srs.r.h / 2,
+    };
+
+    // Events are matched against the **container**, not this thin strip, so the sash can grow as
+    // the pointer approaches rather than only reacting once it is already on top of a 10pt
+    // target. `PanedWidget` does the same, and it is the difference between a sash that feels
+    // findable and one that does not. Nothing is handled unless the pointer is actually close.
+    var dist: f32 = std.math.floatMax(f32);
+    if (c.box) |cbox| {
+        for (dvui.events()) |*e| {
+            if (e.evt != .mouse) continue;
+            if (!dvui.eventMatchSimple(e, cbox.data())) continue;
+
+            const p = switch (axis) {
+                .horizontal => e.evt.mouse.p.x,
+                .vertical => e.evt.mouse.p.y,
+            };
+            dist = @abs(p - centre) / srs.s;
+
+            const captured = dvui.captured(wd.id);
+            if (!captured and dist > handle_size) continue;
+
+            switch (e.evt.mouse.action) {
+                .press => if (e.evt.mouse.button.pointer()) {
+                    e.handle(@src(), wd);
+                    dvui.captureMouse(wd, e.num);
+                    dvui.dragPreStart(e.evt.mouse.button, e.evt.mouse.p, .{ .cursor = cursor });
+                    // The extent at grab time, so the drag is measured from where it started
+                    // instead of accumulating rounding every frame.
+                    dvui.dataSet(null, wd.id, "_start", dvui.dataGet(null, target, "_size", f32) orelse currentExtent(target, axis));
+                },
+                .release => if (e.evt.mouse.button.pointer() and captured) {
+                    e.handle(@src(), wd);
+                    dvui.captureMouse(null, e.num);
+                    dvui.dragEnd();
+                },
+                .motion => if (captured) {
+                    e.handle(@src(), wd);
+                    if (dvui.dragging(e.evt.mouse.p, null)) |delta| {
+                        const start = dvui.dataGet(null, wd.id, "_start", f32) orelse 0;
+                        const moved = sign * switch (axis) {
+                            .horizontal => delta.x,
+                            .vertical => delta.y,
+                        } / srs.s;
+                        const want = start + moved;
+                        const capped = if (opts.max) |m| @min(want, m) else want;
+                        dvui.dataSet(null, target, "_size", @max(opts.min, capped));
+                        dvui.refresh(null, @src(), wd.id);
+                    }
+                },
+                .position => dvui.cursorSet(cursor),
+                else => {},
+            }
+        }
+    }
+
+    if (dvui.captured(wd.id)) dist = 0;
+    drawSash(wd, srs, axis, dist);
+}
+
+/// The sash itself: a short rounded bar across the middle of the gap with a grip on it, fading
+/// in as the pointer approaches. Deliberately **not** a fill of the whole separator — the strip
+/// spans the entire edge, and painting all of it reads as a solid divider rather than something
+/// you can grab.
+fn drawSash(wd: *dvui.WidgetData, srs: dvui.RectScale, axis: dvui.enums.Direction, dist: f32) void {
+    if (dist > handle_size + handle_dist) return;
+
+    var len_ratio: f32 = 1.0 / 5.0;
+    len_ratio *= 1.0 - std.math.clamp((dist - handle_size) / handle_dist, 0.0, 1.0);
+    if (len_ratio <= 0.001) return;
+
+    const thick = handle_size * srs.s;
+    var r = srs.r;
+    switch (axis) {
+        .horizontal => {
+            r.x = srs.r.x + srs.r.w / 2 - thick / 2;
+            r.w = thick;
+            const h = srs.r.h * len_ratio;
+            r.y = srs.r.y + srs.r.h / 2 - h / 2;
+            r.h = h;
+        },
+        .vertical => {
+            r.y = srs.r.y + srs.r.h / 2 - thick / 2;
+            r.h = thick;
+            const w = srs.r.w * len_ratio;
+            r.x = srs.r.x + srs.r.w / 2 - w / 2;
+            r.w = w;
+        },
+    }
+    r.fill(.all(thick), .{ .color = wd.options.color(.text).opacity(0.5), .fade = 1.0 });
+}
+
+/// A resizable region's current extent, used as the starting point for the first drag before any
+/// size has been stored.
+fn currentExtent(target: dvui.Id, axis: dvui.enums.Direction) f32 {
+    const r = dvui.minSizeGet(target) orelse return 0;
+    return switch (axis) {
+        .horizontal => r.w,
+        .vertical => r.h,
+    };
+}
+
+/// The original edge-docking region. See `region`./// The original edge-docking region. See `region`./// The original edge-docking region. See `region`.
+pub fn dock(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions) !Region {
     const editor = self.editor;
     const matches = self.matching(opts.keywords);
 
@@ -427,7 +652,7 @@ fn edgeRegion(self: *Frame, src: std.builtin.SourceLocation, opts: RegionOptions
 ///
 /// Everything reachable here is reachable by hand from `matching` / `selected` / `draw`, so a
 /// shape wanting something else writes its own function and passes it as `content`.
-fn drawRegionContents(self: *Frame, opts: RegionOptions, matches: []const *Surface) !dvui.App.Result {
+fn drawRegionContents(self: *Frame, opts: anytype, matches: []const *Surface) !dvui.App.Result {
     _ = matches;
     const content = opts.content orelse return self.drawSelected(opts.keywords);
     return content(self, opts.keywords);

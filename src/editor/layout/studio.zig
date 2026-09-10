@@ -58,7 +58,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
 
     // A stack on the right, not the left. Same keywords as the IDE's sidebar, so a surface that
     // belongs "somewhere like a sidebar" lands here without knowing it moved.
-    var stack = try f.region(@src(), .{
+    var stack = try f.dock(@src(), .{
         .name = "Stack",
         .keywords = side,
         .edge = .right,
@@ -72,7 +72,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     // an app takes when it wants, say, just a terminal down there. Adding `.content =
     // chrome.tabbed` to the same declaration gets the tabbed form instead, and `ide.zig` passes
     // `chrome.bottomPane` for the richer splittable one; the difference is one field.
-    var strip = try f.region(@src(), .{
+    var strip = try f.dock(@src(), .{
         .name = "Strip",
         .keywords = bottom,
         .edge = .bottom,
@@ -84,7 +84,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     if (!strip.rest()) return .ok;
 
     // The remainder: the large canvas.
-    var canvas = try f.region(@src(), .{ .name = "Canvas", .keywords = main_area });
+    var canvas = try f.dock(@src(), .{ .name = "Canvas", .keywords = main_area });
     defer canvas.end();
 
     return .ok;

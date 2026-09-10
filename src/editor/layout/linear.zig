@@ -49,6 +49,12 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     });
     defer stack.deinit();
 
+    // Drawn early but gravity-anchored to the bottom, exactly as `ide.zig` does. A region that
+    // expands takes every remaining point of the stack, so anything declared after it gets
+    // nothing — which is why the infobar has to reserve its height first rather than trail the
+    // layout.
+    editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
+
     // macOS draws the menu natively; the in-app bar is the fallback everywhere else.
     if (builtin.os.tag != .macos or Menu.debug_force_on_macos) {
         const r = try Menu.draw(editor);
@@ -56,28 +62,50 @@ pub fn layout(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
     }
 
     {
-        // ── the shape, in two verbs ─────────────────────────────────────────────────────────
+        // ── the shape ───────────────────────────────────────────────────────────────────────
         //
-        // No `dvui.box`, no widget handles, no `rest()` branching and no early returns: a
-        // container subdivides, a leaf hosts surfaces, and `split` puts a draggable boundary
-        // between the two either side of it. Read it as the picture it makes.
-        var cols = try f.region(@src(), .{ .dir = .horizontal });
-        defer cols.end();
+        // Regions are boxes and splits are separators, so this is ordinary dvui: scope a region,
+        // `deinit` it, put a split between two of them. Sizes are points that `dvui.box` lays out
+        // — the sidebar keeps the width you dragged it to when the window resizes, rather than
+        // rescaling with it.
+        var work = try f.region(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+        defer work.deinit();
 
-        _ = try f.region(@src(), .{ .name = "Sidebar", .keywords = sidebar, .content = chrome.explorerPane });
+        {
+            var side = try f.region(@src(), .{
+                .keywords = sidebar,
+                .name = "Sidebar",
+                .content = chrome.explorerPane,
+                .resize = true,
+            }, .{ .min_size_content = .{ .w = 260 }, .expand = .vertical });
+            defer side.deinit();
+        }
 
-        f.split(.{});
+        f.split(@src(), .{ .min = 140 });
 
-        var right = try f.region(@src(), .{ .dir = .vertical });
-        defer right.end();
+        {
+            var content = try f.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            defer content.deinit();
 
-        _ = try f.region(@src(), .{ .name = "Main", .keywords = main_area });
+            {
+                var main = try f.region(@src(), .{ .keywords = main_area, .name = "Main" }, .{ .expand = .both });
+                defer main.deinit();
+            }
 
-        f.split(.{});
+            f.split(@src(), .{ .min = 80 });
 
-        _ = try f.region(@src(), .{ .name = "Panel", .keywords = bottom, .content = chrome.bottomPane });
+            {
+                var panel = try f.region(@src(), .{
+                    .keywords = bottom,
+                    .name = "Panel",
+                    .content = chrome.bottomPane,
+                    .resize = true,
+                    .hide_when_empty = true,
+                }, .{ .min_size_content = .{ .h = 220 }, .expand = .horizontal });
+                defer panel.deinit();
+            }
+        }
     }
 
-    editor.infobar.draw(editor) catch dvui.log.err("Failed to draw infobar", .{});
     return .ok;
 }
