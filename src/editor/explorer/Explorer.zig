@@ -140,11 +140,11 @@ pub fn draw(
 
     // Two calls rather than one: `pane_vbox` has to deinit between the vertical and horizontal
     // hints, since the horizontal ones are drawn over the outer `vbox` instead.
-    fizzy.draw.drawScrollEdgeShadows(pane_vbox.data().contentRectScale(), null, &explorer.scroll_info, .{});
+    fizzy.core.draw.drawScrollEdgeShadows(pane_vbox.data().contentRectScale(), null, &explorer.scroll_info, .{});
 
     pane_vbox.deinit();
 
-    fizzy.draw.drawScrollEdgeShadows(null, vbox.data().contentRectScale(), &explorer.scroll_info, .{});
+    fizzy.core.draw.drawScrollEdgeShadows(null, vbox.data().contentRectScale(), &explorer.scroll_info, .{});
 
     // Peek-only floating collapse button. Drawn last so it overlays everything else in the
     // explorer pane. Only appears while we're full-screen peeking on a collapsed paned.

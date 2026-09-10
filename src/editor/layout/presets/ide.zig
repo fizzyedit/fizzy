@@ -149,5 +149,5 @@ fn explorerPane(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
 }
 
 fn bottomPane(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
-    return f.editor.panes.draw(f.editor, f, keywords);
+    return f.editor.panel.draw(f.editor, f, keywords);
 }

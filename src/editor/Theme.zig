@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const fizzy = @import("../fizzy.zig");
 
 const Entry = fizzy.Entry;
-const Color = fizzy.math.Color;
+const Color = fizzy.core.math.Color;
 
 const Theme = @This();
 
@@ -151,7 +151,7 @@ pub fn push(theme: *Theme) void {
 }
 
 pub fn loadOrDefault(file: [:0]const u8) !Theme {
-    if (fizzy.fs.read(fizzy.editor().arena, file) catch null) |read| {
+    if (fizzy.core.fs.read(fizzy.editor().arena, file) catch null) |read| {
         const options = std.json.ParseOptions{ .duplicate_field_behavior = .use_first, .ignore_unknown_fields = true };
         if (std.json.parseFromSlice(Theme, fizzy.editor().arena, read, options) catch null) |p| {
             const theme = p.value;

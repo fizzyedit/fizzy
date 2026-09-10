@@ -4,7 +4,7 @@ const dvui = @import("dvui");
 const Dialogs = @import("Dialogs.zig");
 
 pub fn request(file_id: u64) void {
-    var mutex = fizzy.dialogs.dialog(@src(), .{
+    var mutex = fizzy.core.dialogs.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
         .title = "Unsaved changes",
@@ -86,11 +86,11 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
 
 fn onDiscard(file_id: u64) !void {
     try fizzy.editor().rawCloseFileID(file_id);
-    fizzy.dialogs.closeFloatingDialogAnchored();
+    fizzy.core.dialogs.closeFloatingDialogAnchored();
 }
 
 fn onCancel() void {
-    fizzy.dialogs.closeFloatingDialogAnchored();
+    fizzy.core.dialogs.closeFloatingDialogAnchored();
 }
 
 fn beginSaveAndClose(doc: fizzy.sdk.DocHandle, file_id: u64) !void {
@@ -113,24 +113,24 @@ fn onSaveAndClose(file_id: u64) !void {
         const idx = fizzy.editor().open_files.getIndex(file_id) orelse return;
         fizzy.editor().setActiveFile(idx);
         fizzy.editor().pending_close_file_id = file_id;
-        fizzy.dialogs.closeFloatingDialogAnchored();
+        fizzy.core.dialogs.closeFloatingDialogAnchored();
         fizzy.editor().requestSaveAs();
         return;
     }
     if (fizzy.editor().document_watcher) |*w| {
         if (w.hasDiskConflict(file_id)) {
-            fizzy.dialogs.closeFloatingDialogAnchored();
+            fizzy.core.dialogs.closeFloatingDialogAnchored();
             Dialogs.FileChangedOnDisk.request(file_id);
             return;
         }
     }
     if (doc.owner.saveNeedsConfirmation(doc)) {
-        fizzy.dialogs.closeFloatingDialogAnchored();
+        fizzy.core.dialogs.closeFloatingDialogAnchored();
         doc.owner.requestSaveConfirmation(doc, .save_and_close, false);
         return;
     }
     try beginSaveAndClose(doc, file_id);
-    fizzy.dialogs.closeFloatingDialogAnchored();
+    fizzy.core.dialogs.closeFloatingDialogAnchored();
 }
 
 pub fn callAfter(_: dvui.Id, _: dvui.enums.DialogResponse) !void {}

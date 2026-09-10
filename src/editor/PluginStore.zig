@@ -1896,7 +1896,7 @@ fn drawPaneTabs(status: store.Status) void {
     // A refresh over existing cards is a footnote, not a takeover: the cards stay put and this
     // spinner is the only sign a fetch is outstanding.
     if (status == .fetching and have_snapshot) {
-        fizzy.dialogs.bubbleSpinner(@src(), .{
+        fizzy.core.dialogs.bubbleSpinner(@src(), .{
             .min_size_content = .{ .w = 14, .h = 14 },
             .gravity_x = 1.0,
             .gravity_y = 0.5,
@@ -1933,7 +1933,7 @@ fn drawFetchingPlaceholder() void {
     });
     defer row.deinit();
 
-    fizzy.dialogs.bubbleSpinner(@src(), .{
+    fizzy.core.dialogs.bubbleSpinner(@src(), .{
         .min_size_content = .{ .w = 20, .h = 20 },
         .gravity_y = 0.5,
         .color_text = dvui.themeGet().color(.window, .text),
@@ -2056,7 +2056,7 @@ fn drawStoreSection(entries: []const StoreEntry, filter_text: []const u8, status
     scroll.deinit();
 
     const rs = pane_box.data().contentRectScale();
-    fizzy.draw.drawScrollEdgeShadows(rs, rs, &store_scroll_info, .{});
+    fizzy.core.draw.drawScrollEdgeShadows(rs, rs, &store_scroll_info, .{});
 
     return shown;
 }
@@ -2111,7 +2111,7 @@ fn drawInstalledSection(entries: []const StoreEntry, filter_text: []const u8) us
     scroll.deinit();
 
     const rs = pane_box.data().contentRectScale();
-    fizzy.draw.drawScrollEdgeShadows(rs, rs, &installed_scroll_info, .{});
+    fizzy.core.draw.drawScrollEdgeShadows(rs, rs, &installed_scroll_info, .{});
 
     return shown;
 }

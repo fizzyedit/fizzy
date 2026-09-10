@@ -1,12 +1,13 @@
-//! One bottom-panel split: workspace-style tab strip + active registered view.
+//! One pane of fizzy's bottom `Panel`: a workspace-style tab strip plus the surface its
+//! active tab selects. Fizzy's own chrome — see `Panel.zig`.
 const std = @import("std");
 const builtin = @import("builtin");
 
 const dvui = @import("dvui");
-const fizzy = @import("../../../fizzy.zig");
+const fizzy = @import("../../fizzy.zig");
 
-const PaneGroup = @import("PaneGroup.zig");
-const Layout = @import("../Layout.zig");
+const Panel = @import("Panel.zig");
+const Layout = @import("../layout/Layout.zig");
 
 const panel_corner_radius: f32 = 12;
 
@@ -19,7 +20,7 @@ active_view_id: ?[]const u8 = null,
 
 /// Shared with the workbench's document tabs — see `core.widgets.Tabs.TabInfo`. This trio used
 /// to be declared identically in both places.
-tab_info: fizzy.widgets.Tabs.TabInfo = .{},
+tab_info: fizzy.core.widgets.Tabs.TabInfo = .{},
 
 pub fn init(grouping: u64) Pane {
     return .{ .grouping = grouping };
@@ -39,7 +40,7 @@ pub fn drawBackground(grouping: u64) void {
     defer card.deinit();
 }
 
-pub fn draw(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
+pub fn draw(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = true,
@@ -60,7 +61,7 @@ pub fn draw(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout
         }
     }
 
-    if (PaneGroup.surfaces(f, keywords).len >= 1) self.drawTabs(panel, host, f, keywords);
+    if (Panel.surfaces(f, keywords).len >= 1) self.drawTabs(panel, host, f, keywords);
     try self.drawContent(panel, host, f, keywords);
 
     return .ok;
@@ -80,14 +81,14 @@ fn panelContentColor() dvui.Color {
     return content_color;
 }
 
-fn drawTabs(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
+fn drawTabs(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
     defer self.processTabsDrag(panel, host, f, keywords);
 
     // The strip scaffolding — reorder, scroll, per-tab boxes, press/drag handling — is shared
     // with the workbench's document tabs (`core.widgets.Tabs`). What stays here is the part
     // that is actually about *this* strip: which views belong to this grouping, what a tab
     // looks like, and what selecting one means.
-    var strip: fizzy.widgets.Tabs = .init(@src(), &self.tab_info, .{
+    var strip: fizzy.core.widgets.Tabs = .init(@src(), &self.tab_info, .{
         .drag_name = drag_name,
         .id_extra = @intCast(self.grouping),
     });
@@ -105,7 +106,7 @@ fn drawTabs(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout
     else
         null;
 
-    for (PaneGroup.surfaces(f, keywords), 0..) |view, i| {
+    for (Panel.surfaces(f, keywords), 0..) |view, i| {
         if (panel.paneOf(view.id) != self.grouping) continue;
 
         const selected = active_in_this_group and active_index == i;
@@ -132,10 +133,10 @@ fn drawTabs(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout
         }
     }
 
-    strip.finalSlot(PaneGroup.surfaces(f, keywords).len);
+    strip.finalSlot(Panel.surfaces(f, keywords).len);
 }
 
-fn drawContent(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) !void {
+fn drawContent(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) !void {
     var content_vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
@@ -151,10 +152,10 @@ fn drawContent(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Lay
     _ = try f.draw(view);
 }
 
-fn processTabsDrag(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
+fn processTabsDrag(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
     if (self.tab_info.insert_before_index) |insert_before| {
         if (self.tab_info.removed_index) |removed| {
-            if (removed >= PaneGroup.surfaces(f, keywords).len) return;
+            if (removed >= Panel.surfaces(f, keywords).len) return;
             if (removed > insert_before) {
                 panel.swapSurfaces(host, f, keywords, removed, insert_before);
                 self.active_view_id = host.bottom_views.items[insert_before].id;
@@ -170,7 +171,7 @@ fn processTabsDrag(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: 
         } else {
             for (panel.workspaces.values()) |*workspace| {
                 if (workspace.tab_info.removed_index) |removed| {
-                    if (removed >= PaneGroup.surfaces(f, keywords).len) return;
+                    if (removed >= Panel.surfaces(f, keywords).len) return;
                     const view = host.bottom_views.items[removed];
                     if (removed > insert_before) {
                         panel.swapSurfaces(host, f, keywords, removed, insert_before);
@@ -199,7 +200,7 @@ fn processTabsDrag(self: *Pane, panel: *PaneGroup, host: *fizzy.Editor.Host, f: 
     }
 }
 
-fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *PaneGroup, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
+fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
     if (!dvui.dragName(drag_name)) return;
 
     const drag_src = blk: {
@@ -211,7 +212,7 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *PaneGroup, host: 
     if (drag_src == null) return;
     const workspace = drag_src.?.ws;
     const drag_index = drag_src.?.index;
-    if (drag_index >= PaneGroup.surfaces(f, keywords).len) return;
+    if (drag_index >= Panel.surfaces(f, keywords).len) return;
     const dragged_view = host.bottom_views.items[drag_index];
 
     for (dvui.events()) |*e| {

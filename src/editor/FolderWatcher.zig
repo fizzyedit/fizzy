@@ -261,7 +261,7 @@ fn stopWatch(self: *FolderWatcher) void {
 pub fn tick(self: *FolderWatcher, editor: *fizzy.Editor) void {
     if (comptime !have_impl) return;
 
-    const now = fizzy.perf.nanoTimestamp();
+    const now = fizzy.core.perf.nanoTimestamp();
     {
         self.mutex.lock();
         defer self.mutex.unlock();

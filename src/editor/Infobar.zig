@@ -53,7 +53,7 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
             .gravity_y = 0.5,
             .margin = .all(0),
             .padding = .all(0),
-            .color_fill = fizzy.widgets.hoverRestFill(dvui.themeGet().color(.control, .fill_hover)),
+            .color_fill = fizzy.core.widgets.hoverRestFill(dvui.themeGet().color(.control, .fill_hover)),
             .color_fill_hover = dvui.themeGet().color(.control, .fill_hover),
             .color_fill_press = dvui.themeGet().color(.control, .fill_press),
         });

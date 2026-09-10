@@ -333,7 +333,7 @@ pub fn tick(self: *DocumentWatcher, editor: *fizzy.Editor) void {
     // Finish baselines for async saves even when no FS event arrived this frame.
     self.refreshPendingBaselines(editor);
 
-    const now = fizzy.perf.nanoTimestamp();
+    const now = fizzy.core.perf.nanoTimestamp();
     if (self.raw_dirty.swap(false, .acquire)) {
         self.coalesce_deadline_ns = now + debounce_ns;
     }
@@ -387,7 +387,7 @@ fn reconcile(self: *DocumentWatcher, editor: *fizzy.Editor) void {
         self.applyEntry(editor, doc_id);
     }
     if (need_retry) {
-        self.coalesce_deadline_ns = fizzy.perf.nanoTimestamp() + debounce_ns;
+        self.coalesce_deadline_ns = fizzy.core.perf.nanoTimestamp() + debounce_ns;
         wake();
     }
 }

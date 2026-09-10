@@ -81,7 +81,7 @@ var closing = false;
 pub fn active(win: *dvui.Window) bool {
     var it = win.dialogs.iterator(null);
     while (it.next()) |d| {
-        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dialogs.DisplayFn) orelse continue;
+        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.core.dialogs.DisplayFn) orelse continue;
         if (df == dialog) return true;
     }
     return false;
@@ -104,7 +104,7 @@ pub fn request(id: []const u8, display_name: []const u8, new_rows: []Row) void {
     rows = new_rows;
     closing = false;
 
-    var mutex = fizzy.dialogs.dialog(@src(), .{
+    var mutex = fizzy.core.dialogs.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
         .title = "File types",
@@ -168,7 +168,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     if (rows.len == 0) {
         if (!closing) {
             closing = true;
-            fizzy.dialogs.closeFloatingDialogAnchored();
+            fizzy.core.dialogs.closeFloatingDialogAnchored();
         }
         return true;
     }
@@ -263,13 +263,13 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     // question simply goes unanswered until this plugin next arrives (reinstall or first load).
     if (dialogButton(@src(), "Not now", .control, 1, 0) and !closing) {
         closing = true;
-        fizzy.dialogs.closeFloatingDialogAnchored();
+        fizzy.core.dialogs.closeFloatingDialogAnchored();
     }
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
     if (dialogButton(@src(), "Confirm", .highlight, 2, 1) and !closing) {
         confirm();
         closing = true;
-        fizzy.dialogs.closeFloatingDialogAnchored();
+        fizzy.core.dialogs.closeFloatingDialogAnchored();
     }
 
     return true;

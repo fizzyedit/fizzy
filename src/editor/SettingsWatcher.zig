@@ -129,7 +129,7 @@ pub fn stop(self: *SettingsWatcher) void {
 /// Call once per frame. Cheap no-op unless the watcher thread actually saw a change. Coalesces
 /// a burst of raw events (~200ms) on the main thread before reconciling.
 pub fn tick(self: *SettingsWatcher, editor: *fizzy.Editor) void {
-    const now = fizzy.perf.nanoTimestamp();
+    const now = fizzy.core.perf.nanoTimestamp();
     if (self.raw_dirty.swap(false, .acquire)) {
         self.coalesce_deadline_ns = now + debounce_ns;
     }

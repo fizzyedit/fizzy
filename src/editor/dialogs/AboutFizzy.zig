@@ -33,7 +33,7 @@ fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: 
 pub fn active(win: *dvui.Window) bool {
     var it = win.dialogs.iterator(null);
     while (it.next()) |d| {
-        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dialogs.DisplayFn) orelse continue;
+        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.core.dialogs.DisplayFn) orelse continue;
         if (df == dialog) return true;
     }
     return false;
@@ -43,7 +43,7 @@ pub fn request() void {
     if (active(dvui.currentWindow())) return;
     status_line = " ";
     update_ready_after_check = false;
-    var mutex = fizzy.dialogs.dialog(@src(), .{
+    var mutex = fizzy.core.dialogs.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
         .title = "About Fizzy",
@@ -170,7 +170,7 @@ fn consumeCheckResult() void {
         .failed, .oom, .spawn_failed, .none => false,
     };
     if (success) {
-        check_complete_at_ns = fizzy.perf.nanoTimestamp();
+        check_complete_at_ns = fizzy.core.perf.nanoTimestamp();
     } else {
         check_complete_at_ns = null;
     }
@@ -222,7 +222,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
 
     // Fox at the top, centered. Use a fixed natural size (96×96) so it
     // doesn't blow out the dialog regardless of the source PNG's resolution.
-    if (fizzy.image.fromImageFileBytes("fox.png", assets.files.@"fox.png", .ptr)) |fox_src| {
+    if (fizzy.core.image.fromImageFileBytes("fox.png", assets.files.@"fox.png", .ptr)) |fox_src| {
         _ = dvui.image(@src(), .{ .source = fox_src, .shrink = .ratio }, .{
             .gravity_x = 0.5,
             .min_size_content = .{ .w = 96, .h = 96 },
@@ -293,7 +293,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     const finish_elapsed: ?i128 = blk: {
         if (comptime !auto_update.impl) break :blk null;
         const start = check_complete_at_ns orelse break :blk null;
-        const elapsed = fizzy.perf.nanoTimestamp() - start;
+        const elapsed = fizzy.core.perf.nanoTimestamp() - start;
         if (elapsed >= check_done_flash_duration_ns) {
             check_complete_at_ns = null;
             break :blk null;
@@ -310,7 +310,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
         defer spinner_slot.deinit();
 
         if (checking or finish_elapsed != null) {
-            fizzy.dialogs.bubbleSpinner(@src(), .{
+            fizzy.core.dialogs.bubbleSpinner(@src(), .{
                 .expand = .none,
                 .min_size_content = .{ .w = 24, .h = 24 },
                 .gravity_x = 0.5,
@@ -356,7 +356,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
                 update_ready_after_check = false;
                 setStatus(" ");
                 update_notify.kickInstall();
-                fizzy.dialogs.closeFloatingDialogAnchored();
+                fizzy.core.dialogs.closeFloatingDialogAnchored();
             }
         }
     }
@@ -364,7 +364,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });
 
     if (dialogButton(@src(), "Close", .control, 10, 2)) {
-        fizzy.dialogs.closeFloatingDialogAnchored();
+        fizzy.core.dialogs.closeFloatingDialogAnchored();
     }
 
     return true;

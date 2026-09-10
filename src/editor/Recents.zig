@@ -28,12 +28,12 @@ fn trimTrailingPathSeparators(path: []const u8) []const u8 {
     return path[0..end];
 }
 
-/// Everything stored in `folders` / `last_*_folder` is canonical (`fizzy.paths.normalize`), so
+/// Everything stored in `folders` / `last_*_folder` is canonical (`fizzy.core.paths.normalize`), so
 /// `/foo` and `/foo/.` are one entry rather than two rows pointing at the same directory.
 /// Applied on load as well as on append: files written before this normalization existed can
 /// still hold the odd spellings, and those must collapse instead of surviving forever.
 fn canonicalize(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return fizzy.paths.normalize(allocator, trimTrailingPathSeparators(path));
+    return fizzy.core.paths.normalize(allocator, trimTrailingPathSeparators(path));
 }
 
 pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
@@ -41,7 +41,7 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
 
     RecentsMigration.migrateIfNeeded(allocator, path);
 
-    if (fizzy.fs.readZ(allocator, dvui.io, path) catch null) |data| {
+    if (fizzy.core.fs.readZ(allocator, dvui.io, path) catch null) |data| {
         defer allocator.free(data);
 
         if (std.zon.parse.fromSliceAlloc(Disk, allocator, data, null, .{ .ignore_unknown_fields = true }) catch null) |disk| {

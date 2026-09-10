@@ -11,7 +11,7 @@ const keyToSpelling = @import("Key.zig").toSpelling;
 
 /// Which physical modifier `mod+` resolves to. Passed in rather than detected so both branches
 /// are testable without a window — and because fizzy already has to distinguish these at runtime
-/// (`fizzy.platform.isMacOS()` differs from `builtin.os.tag` on wasm).
+/// (`fizzy.core.platform.isMacOS()` differs from `builtin.os.tag` on wasm).
 pub const Platform = enum { mac, other };
 
 pub const Mods = packed struct {

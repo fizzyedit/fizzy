@@ -44,7 +44,7 @@ const menu_model = @import("menu_model.zig");
 ///
 /// Runtime mac detection — `builtin.os.tag.isDarwin()` is `false` for
 /// wasm32-freestanding, so macOS web users would otherwise get the Windows (Ctrl)
-/// bindings. `fizzy.platform.isMacOS()` reads DVUI's `navigator.platform`-derived
+/// bindings. `fizzy.core.platform.isMacOS()` reads DVUI's `navigator.platform`-derived
 /// choice on web and uses `os.tag` on native.
 pub fn register() !void {
     const window = dvui.currentWindow();
@@ -55,7 +55,7 @@ pub fn register() !void {
     //
     // "zoom" is the trackpad-scheme canvas modifier (cmd/ctrl + scroll to zoom). Shared
     // by every `CanvasWidget` consumer (image viewer, pixi, etc.) — not plugin-specific.
-    if (fizzy.platform.isMacOS()) {
+    if (fizzy.core.platform.isMacOS()) {
         try window.keybinds.putNoClobber(window.gpa, "explorer", .{ .command = true, .key = .e });
         try window.keybinds.putNoClobber(window.gpa, "workspace", .{ .command = true, .key = .w });
         try window.keybinds.putNoClobber(window.gpa, "new_file", .{ .command = true, .key = .n });
@@ -678,7 +678,7 @@ pub fn buildKeymap(editor: *Editor) !void {
     }
 
     // Layer 2: fizzy's own default profile.
-    const platform: keymap.Platform = if (fizzy.platform.isMacOS()) .mac else .other;
+    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     for (defaultsFor(editor.keybind_profile)) |d| {
         const text = if (platform == .mac) (d.keys_mac orelse d.keys) else d.keys;
         const stroke = keymap.parseKeys(text, platform) catch |err| {
@@ -751,7 +751,7 @@ fn loadUserOverrides(editor: *Editor) !void {
     };
     defer gpa.free(text);
 
-    const platform: keymap.Platform = if (fizzy.platform.isMacOS()) .mac else .other;
+    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     var file = try keymap.zon.parse(gpa, text, platform);
     errdefer file.deinit(gpa);
 
@@ -970,7 +970,7 @@ fn collectCurrentOverrides(editor: *Editor, gpa: std.mem.Allocator) !std.ArrayLi
 pub fn setUserBinding(editor: *Editor, command: []const u8, keys: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.host.allocator;
-    const platform: keymap.Platform = if (fizzy.platform.isMacOS()) .mac else .other;
+    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     const stroke = try keymap.parseKeys(keys, platform);
 
     var list = try collectCurrentOverrides(editor, gpa);

@@ -154,7 +154,7 @@ pub fn close(self: *CommandPalette) void {
 
 /// Whether the panel's height is still moving — either auto-sizing to a new content height or
 /// collapsing on close.
-fn animatingGeometry(self: *const CommandPalette, win: *fizzy.widgets.FloatingWindowWidget) bool {
+fn animatingGeometry(self: *const CommandPalette, win: *fizzy.core.widgets.FloatingWindowWidget) bool {
     if (self.closing) return true;
     return dvui.animationGet(win.data().id, "_auto_height") != null;
 }
@@ -352,7 +352,7 @@ fn shortcutFor(editor: *Editor, id: []const u8) ?[]const u8 {
     const arena = dvui.currentWindow().arena();
     const found = editor.keymap.bindingsFor(arena, id) catch return null;
     if (found.len == 0) return null;
-    const platform: keymap.Platform = if (fizzy.platform.isMacOS()) .mac else .other;
+    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     return keymap.formatKeys(arena, found[0].stroke, platform) catch null;
 }
 
@@ -434,14 +434,14 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
 
     // Same fizzy as Grid Layout / other dialogs: modal floating window focuses its subwindow
     // (so the text entry can receive keys) and paints a black scrim via `color_text = .black`.
-    fizzy.dialogs.modal_dim_titlebar = true;
+    fizzy.core.dialogs.modal_dim_titlebar = true;
     // Scrim tracks the reveal, so the dim arrives and leaves with the panel instead of snapping
     // to full black on frame one and popping off at the end of the outro. Same base values dvui
     // picks per theme (60 dark / 80 light), scaled.
     const dim_base: f32 = if (theme.dark) 60 else 80;
     const dim_alpha: u8 = @intFromFloat(@round(dim_base * std.math.clamp(self.anim, 0, 1)));
 
-    var win = fizzy.widgets.floatingWindow(@src(), .{
+    var win = fizzy.core.widgets.floatingWindow(@src(), .{
         .modal = true,
         .modal_alpha = dim_alpha,
         .open_flag = &self.fw_open,

@@ -46,7 +46,7 @@ pub fn load(gpa: std.mem.Allocator, project_root_abs: []const u8) !IgnoreRules {
 
     const path = chosen orelse return out;
 
-    const data = fizzy.fs.read(gpa, dvui.io, path) catch return out;
+    const data = fizzy.core.fs.read(gpa, dvui.io, path) catch return out;
     out.blob = data;
 
     var i: usize = 0;

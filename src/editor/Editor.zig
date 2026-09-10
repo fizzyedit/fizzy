@@ -110,7 +110,7 @@ const FolderWatcher = @import("FolderWatcher.zig");
 pub const Workspace = workbench_mod.Workspace;
 pub const Explorer = @import("explorer/Explorer.zig");
 pub const IgnoreRules = @import("explorer/IgnoreRules.zig");
-pub const PaneGroup = @import("layout/panes/PaneGroup.zig");
+pub const Panel = @import("panel/Panel.zig");
 pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
@@ -248,7 +248,7 @@ settings: Settings = undefined,
 recents: Recents = undefined,
 
 explorer: *Explorer,
-panes: *PaneGroup,
+panel: *Panel,
 
 last_titlebar_color: dvui.Color,
 
@@ -484,12 +484,12 @@ pub fn init(
     const config_root: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
         app.root_path
     else config_root_blk: {
-        break :config_root_blk try fizzy.paths.configRoot(dvui.io, arena, fizzy.processEnviron(), app.root_path);
+        break :config_root_blk try fizzy.core.paths.configRoot(dvui.io, arena, fizzy.processEnviron(), app.root_path);
     };
     const config_folder: []const u8 = if (comptime builtin.target.cpu.arch == .wasm32)
         app.root_path
     else config_folder_blk: {
-        break :config_folder_blk try fizzy.paths.configFolder(app.allocator, dvui.io, arena, fizzy.processEnviron(), app.root_path, AppInfo.current.config_dir);
+        break :config_folder_blk try fizzy.core.paths.configFolder(app.allocator, dvui.io, arena, fizzy.processEnviron(), app.root_path, AppInfo.current.config_dir);
     };
 
     // One-time migration: pre-rename builds used `Fizzy/` (capitalized).
@@ -524,7 +524,7 @@ pub fn init(
         .config_folder = config_folder,
         .palette_folder = palette_folder,
         .explorer = try app.allocator.create(Explorer),
-        .panes = try app.allocator.create(PaneGroup),
+        .panel = try app.allocator.create(Panel),
         .sidebar = try .init(),
         .infobar = try .init(),
         .arena = .init(std.heap.page_allocator),
@@ -724,7 +724,7 @@ pub fn init(
         }
     }
 
-    fizzy.perf.console_logging_enabled = Constants.perf_logging;
+    fizzy.core.perf.console_logging_enabled = Constants.perf_logging;
     editor.recents = if (comptime builtin.target.cpu.arch == .wasm32)
         .{ .folders = .init(app.allocator) }
     else
@@ -735,7 +735,7 @@ pub fn init(
     fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) editor.settings.window_opacity_dark else editor.settings.window_opacity_light));
 
     editor.explorer.* = .init();
-    editor.panes.* = .init();
+    editor.panel.* = .init();
     editor.open_files = .empty;
     try editor.workbench.initDefaultWorkspace();
 
@@ -1359,7 +1359,7 @@ fn loadSurfaceKeywordOverrides(editor: *Editor) void {
 
     const settings_path = std.fs.path.join(gpa, &.{ editor.config_folder, "settings.zon" }) catch return;
     defer gpa.free(settings_path);
-    const data = fizzy.fs.readZ(gpa, dvui.io, settings_path) catch return;
+    const data = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch return;
     defer gpa.free(data);
 
     const blocks = SettingsPluginsZon.listPluginBlocks(gpa, data) catch return;
@@ -1417,7 +1417,7 @@ fn seedPluginFlags(editor: *Editor) void {
 
     const settings_path = std.fs.path.join(gpa, &.{ editor.config_folder, "settings.zon" }) catch return;
     defer gpa.free(settings_path);
-    const data = fizzy.fs.readZ(gpa, dvui.io, settings_path) catch null;
+    const data = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
     defer if (data) |d| gpa.free(d);
 
     var dir = std.Io.Dir.cwd().openDir(dvui.io, plugins_dir, .{ .iterate = true }) catch return;
@@ -1738,7 +1738,7 @@ pub fn rebuildExtensionOwnerCache(editor: *Editor) void {
 
     const settings_path = std.fs.path.join(gpa, &.{ editor.config_folder, "settings.zon" }) catch return;
     defer gpa.free(settings_path);
-    const data = fizzy.fs.readZ(gpa, dvui.io, settings_path) catch null;
+    const data = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
     defer if (data) |d| gpa.free(d);
 
     // Stable order: sort ids so a duplicate's winner matches `Host.pluginForExtension`'s own
@@ -1835,7 +1835,7 @@ pub fn resolveExtensionConflict(editor: *Editor, ext: []const u8, chosen_id: []c
 
     const settings_path = try std.fs.path.join(gpa, &.{ editor.config_folder, "settings.zon" });
     defer gpa.free(settings_path);
-    const data = fizzy.fs.readZ(gpa, dvui.io, settings_path) catch null;
+    const data = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
     defer if (data) |d| gpa.free(d);
 
     // Every id with a block on disk, not just the loaded ones — a disabled or uninstalled
@@ -2346,7 +2346,7 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, force: bool) UnloadError!vo
     editor.host.unregisterPlugin(plugin);
     // The bottom panel borrows `BottomView.id` slices (grouping keys, per-split active tab)
     // that live in the image we're about to unmap — drop them while they're still readable.
-    editor.panes.forgetUnregisteredSurfaces(&editor.host);
+    editor.panel.forgetUnregisteredSurfaces(&editor.host);
     fizzy.backend.rebuildDynamicNativeMenus();
     plugin.deinit();
 
@@ -2748,8 +2748,8 @@ fn fizzyDrawMenuItem(ctx: *anyopaque, title: []const u8, command_id: ?[]const u8
     const id_extra: usize = @truncate(std.hash.Wyhash.hash(0, title));
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .id_extra = id_extra });
     defer row.deinit();
-    fizzy.draw.menuRowIcon(icon, dvui.themeGet().color(.window, .text), enabled, id_extra);
-    fizzy.draw.labelWithKeybind(title, kb, enabled, .{ .expand = .horizontal }, .{ .expand = .horizontal });
+    fizzy.core.draw.menuRowIcon(icon, dvui.themeGet().color(.window, .text), enabled, id_extra);
+    fizzy.core.draw.labelWithKeybind(title, kb, enabled, .{ .expand = .horizontal }, .{ .expand = .horizontal });
     return clicked;
 }
 
@@ -2759,14 +2759,14 @@ fn fizzyDrawMenuItem(ctx: *anyopaque, title: []const u8, command_id: ?[]const u8
 /// `.plugins.<id>.settings` blob (R12 nested shape — author fields live under `.settings` so
 /// they can never collide with fizzy-reserved `.enabled`).
 fn fizzyLoadPluginSettingsFile(ctx: *anyopaque, id: []const u8) ?[]u8 {
-    // Wasm: no filesystem; `fizzy.fs.readZ` uses `Io.Dir.cwd()` (posix.AT), which doesn't exist
+    // Wasm: no filesystem; `fizzy.core.fs.readZ` uses `Io.Dir.cwd()` (posix.AT), which doesn't exist
     // for this target — `Host.loadPluginSettings` already short-circuits before ever calling
     // through to here, but this vtable entry is still type-checked for every target regardless.
     if (comptime builtin.target.cpu.arch == .wasm32) return null;
     const editor = fizzyCtx(ctx);
     const path = std.fs.path.join(editor.gpa, &.{ editor.config_folder, "settings.zon" }) catch return null;
     defer editor.gpa.free(path);
-    const data = fizzy.fs.readZ(editor.host.allocator, dvui.io, path) catch return null;
+    const data = fizzy.core.fs.readZ(editor.host.allocator, dvui.io, path) catch return null;
     defer editor.host.allocator.free(data);
     return readPluginSettingsText(editor.host.allocator, data, id);
 }
@@ -2799,7 +2799,7 @@ fn fizzyIsMaximized(ctx: *anyopaque) bool {
     return fizzy.backend.isMaximized(dvui.currentWindow());
 }
 fn fizzyIsMacOS(_: *anyopaque) bool {
-    return fizzy.platform.isMacOS();
+    return fizzy.core.platform.isMacOS();
 }
 fn fizzyAppliesNativeWindowOpacity(_: *anyopaque) bool {
     if (comptime builtin.target.cpu.arch == .wasm32) return false;
@@ -2807,7 +2807,7 @@ fn fizzyAppliesNativeWindowOpacity(_: *anyopaque) bool {
 }
 fn fizzyPanZoomScheme(ctx: *anyopaque) sdk.EditorAPI.PanZoomScheme {
     const editor = fizzyCtx(ctx);
-    return switch (Settings.resolvedPanZoomScheme(&editor.settings, fizzy.platform.isMacOS())) {
+    return switch (Settings.resolvedPanZoomScheme(&editor.settings, fizzy.core.platform.isMacOS())) {
         .mouse => .mouse,
         .trackpad => .trackpad,
     };
@@ -3161,7 +3161,7 @@ pub fn docPath(_: *Editor, doc: sdk.DocHandle) []const u8 {
 /// this every frame with already-canonical abs paths); on miss, collapses `.` / `..` /
 /// duplicate separators so a caller holding `a/./b.zig` still finds a doc stored as `a/b.zig`
 /// (and vice versa for anything opened before `openFilePath` started normalizing). See
-/// `fizzy.paths.normalize`.
+/// `fizzy.core.paths.normalize`.
 pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
     for (editor.open_files.values()) |doc| {
         if (std.mem.eql(u8, editor.docPath(doc), path)) return doc;
@@ -3171,11 +3171,11 @@ pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
     // common case — so every allocation below is paid on every non-open row. Both normalizes are
     // skippable whenever the path is already canonical, which is the norm here: tree rows are
     // joined onto an absolute project root. Checking costs a scan, not a heap allocation.
-    const path_canonical = fizzy.paths.isNormalizedAbsolute(path);
+    const path_canonical = fizzy.core.paths.isNormalizedAbsolute(path);
     const key: []const u8 = if (path_canonical)
         path
     else
-        fizzy.paths.normalize(editor.gpa, path) catch return null;
+        fizzy.core.paths.normalize(editor.gpa, path) catch return null;
     defer if (!path_canonical) editor.gpa.free(@constCast(key));
 
     for (editor.open_files.values()) |doc| {
@@ -3187,8 +3187,8 @@ pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
         if (std.mem.eql(u8, stored, path)) continue;
         // A canonical `stored` normalizes to itself, and both comparisons above already ruled it
         // out — no need to allocate a copy just to re-compare it.
-        if (fizzy.paths.isNormalizedAbsolute(stored)) continue;
-        const stored_canon = fizzy.paths.normalize(editor.gpa, stored) catch continue;
+        if (fizzy.core.paths.isNormalizedAbsolute(stored)) continue;
+        const stored_canon = fizzy.core.paths.normalize(editor.gpa, stored) catch continue;
         defer editor.gpa.free(stored_canon);
         if (std.mem.eql(u8, stored_canon, key)) return doc;
     }
@@ -3320,7 +3320,7 @@ pub fn newFileID(editor: *Editor) u64 {
 
 pub fn markSettingsDirty(editor: *Editor) void {
     editor.settings_dirty = true;
-    editor.settings_save_deadline_ns = fizzy.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
+    editor.settings_save_deadline_ns = fizzy.core.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
 }
 
 /// Same debou
@@ -3329,7 +3329,7 @@ pub fn markSettingsDirty(editor: *Editor) void {
 /// settings.zon write attempt.
 pub fn markWindowRatiosDirty(editor: *Editor) void {
     editor.layout.dirty = true;
-    editor.layout.save_deadline_ns = fizzy.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
+    editor.layout.save_deadline_ns = fizzy.core.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
 }
 
 /// Hand the center region the whole viewport on a collapsed (phone / narrow web) layout: close
@@ -3377,7 +3377,7 @@ fn composeSettingsText(editor: *Editor, gpa: std.mem.Allocator, settings_path: [
     const fizzy_text = try Settings.serialize(&editor.settings, gpa);
     defer gpa.free(fizzy_text);
 
-    const existing = fizzy.fs.readZ(gpa, dvui.io, settings_path) catch null;
+    const existing = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
     defer if (existing) |e| gpa.free(e);
 
     return SettingsPluginsZon.composeMergedText(gpa, fizzy_text, existing, overlay);
@@ -3434,7 +3434,7 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
         while (it.next()) |e| try touched.put(gpa, e.key_ptr.*, {});
     }
 
-    const existing = fizzy.fs.readZ(gpa, dvui.io, settings_path) catch null;
+    const existing = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
     defer if (existing) |e| gpa.free(e);
 
     var overlay: std.ArrayListUnmanaged(SettingsPluginsZon.Entry) = .empty;
@@ -3526,7 +3526,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     const settings_path = std.fs.path.join(gpa, &.{ editor.config_folder, "settings.zon" }) catch return;
     defer gpa.free(settings_path);
 
-    const data = fizzy.fs.readZ(gpa, dvui.io, settings_path) catch return; // deleted/unreadable: nothing to reconcile
+    const data = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch return; // deleted/unreadable: nothing to reconcile
     defer gpa.free(data);
 
     const hash = std.hash.Wyhash.hash(0, data);
@@ -3777,7 +3777,7 @@ pub fn reconcileDiscoveredPlugins(editor: *Editor) void {
 
     const settings_path = std.fs.path.join(gpa, &.{ editor.config_folder, "settings.zon" }) catch return;
     defer gpa.free(settings_path);
-    const data = fizzy.fs.readZ(gpa, dvui.io, settings_path) catch null;
+    const data = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
     defer if (data) |d| gpa.free(d);
 
     editor.pruneMissingUndecidedPlugins(plugins_dir);
@@ -3849,7 +3849,7 @@ fn saveSettingsGuarded(editor: *Editor) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     if (!editor.settings_dirty) return;
 
-    const now = fizzy.perf.nanoTimestamp();
+    const now = fizzy.core.perf.nanoTimestamp();
     if (now < editor.settings_save_deadline_ns) {
         scheduleSaveWakeup(editor.settings_save_deadline_ns - now, 0);
         return;
@@ -3897,7 +3897,7 @@ fn saveWindowRatiosGuarded(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     if (!editor.layout.dirty) return;
 
-    const now = fizzy.perf.nanoTimestamp();
+    const now = fizzy.core.perf.nanoTimestamp();
     if (now < editor.layout.save_deadline_ns) {
         scheduleSaveWakeup(editor.layout.save_deadline_ns - now, 1);
         return;
@@ -3959,7 +3959,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // mid-iteration.
     PluginStore.tick();
 
-    const hitch_watchers = fizzy.hitch.begin(.watchers);
+    const hitch_watchers = fizzy.core.hitch.begin(.watchers);
     // Pick up any external edit to settings.zon (see R11 in docs/PLUGIN_MANIFEST_PLAN.md).
     // Cheap no-op unless the watcher thread actually saw a change.
     if (editor.settings_watcher) |*w| w.tick(editor);
@@ -4038,23 +4038,23 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         }
     }
 
-    defer fizzy.dialogs.modal_dim_titlebar = false;
+    defer fizzy.core.dialogs.modal_dim_titlebar = false;
     editor.setTitlebarColor();
     editor.setWindowStyle();
 
     syncLoadedPluginDvuiContexts(editor);
     {
-        const t = fizzy.hitch.begin(.plugin_hooks);
+        const t = fizzy.core.hitch.begin(.plugin_hooks);
         defer t.end();
         for (editor.host.plugins.items) |plugin| plugin.beginFrame();
     }
-    if (fizzy.perf.record) fizzy.perf.beginFrame();
-    defer if (fizzy.perf.record) fizzy.perf.endFrameAndMaybeLog();
+    if (fizzy.core.perf.record) fizzy.core.perf.beginFrame();
+    defer if (fizzy.core.perf.record) fizzy.core.perf.endFrameAndMaybeLog();
 
     // Reap completed background file loads. Must run BEFORE `pending_composite_warmup` and any
     // workspace/file iteration so that a just-loaded file is visible to the rest of this frame.
     {
-        const t = fizzy.hitch.begin(.loading_jobs);
+        const t = fizzy.core.hitch.begin(.loading_jobs);
         defer t.end();
         editor.processLoadingJobs();
     }
@@ -4065,7 +4065,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // Otherwise the new pane only appears on the next frame, which won't happen until some
     // unrelated event (mouse move, key) wakes the loop.
     {
-        const t = fizzy.hitch.begin(.rebuild_workspaces);
+        const t = fizzy.core.hitch.begin(.rebuild_workspaces);
         defer t.end();
         editor.rebuildWorkspaces() catch {
             dvui.log.err("Failed to rebuild workspaces", .{});
@@ -4073,7 +4073,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     }
 
     if (editor.pending_composite_warmup) {
-        const t = fizzy.hitch.begin(.plugin_hooks);
+        const t = fizzy.core.hitch.begin(.plugin_hooks);
         defer t.end();
         editor.pending_composite_warmup = false;
         for (editor.host.plugins.items) |plugin| plugin.prepareFrame();
@@ -4081,7 +4081,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
     {
         var any_drawing = false;
-        fizzy.perf.draw_stroke_buf_count = 0;
+        fizzy.core.perf.draw_stroke_buf_count = 0;
         // Every plugin, with no early exit: the hook is a broadcast, and a plugin that clears
         // per-frame state as it answers (see `plugins_drawing`) must be asked on every frame it
         // could be drawn on, not only until the first `true`.
@@ -4097,9 +4097,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // "it starts, then freezes until I move the mouse" the graph panel showed once the app
         // was allowed to sleep.
         if (any_drawing) dvui.refresh(null, @src(), null);
-        fizzy.perf.drawFrameBegin(any_drawing);
+        fizzy.core.perf.drawFrameBegin(any_drawing);
     }
-    defer fizzy.perf.drawFrameEnd();
+    defer fizzy.core.perf.drawFrameEnd();
 
     // TODO: Does this need to be here for touchscreen zooming? Or does that belong in canvas?
     // var scaler = dvui.scale(
@@ -4109,7 +4109,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // );
     // defer scaler.deinit();
 
-    const hitch_draw = fizzy.hitch.begin(.draw);
+    const hitch_draw = fizzy.core.hitch.begin(.draw);
     {
 
         // First, window color is set to the opaque color.
@@ -4448,7 +4448,7 @@ pub fn handleNativeMenuAction(editor: *Editor, tag: usize) !void {
 }
 
 pub fn setTitlebarColor(editor: *Editor) void {
-    const color = if (fizzy.dialogs.modal_dim_titlebar) dvui.themeGet().color(.control, .fill).lerp(.black, if (dvui.themeGet().dark) 60.0 / 255.0 else 80.0 / 255.0) else dvui.themeGet().color(.control, .fill);
+    const color = if (fizzy.core.dialogs.modal_dim_titlebar) dvui.themeGet().color(.control, .fill).lerp(.black, if (dvui.themeGet().dark) 60.0 / 255.0 else 80.0 / 255.0) else dvui.themeGet().color(.control, .fill);
 
     if (!std.mem.eql(u8, &editor.last_titlebar_color.toRGBA(), &color.toRGBA())) {
         editor.last_titlebar_color = color;
@@ -4770,9 +4770,9 @@ pub fn close(app: *Entry, editor: *Editor) void {
 /// The single choke point every folder open funnels through (CLI argv, menus, recents, the
 /// SDK's `Host.setProjectFolder`), so `path` is canonicalized here once — plugins, recents and
 /// anything deriving a key from `editor.folder` (a language server's `rootUri`, notably) then
-/// can't disagree about how the same directory is spelled. See `fizzy.paths.normalize`.
+/// can't disagree about how the same directory is spelled. See `fizzy.core.paths.normalize`.
 pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
-    const path = try fizzy.paths.normalize(editor.gpa, path_in);
+    const path = try fizzy.core.paths.normalize(editor.gpa, path_in);
     defer editor.gpa.free(path);
 
     // Opening a folder makes a close queued during this frame's draw moot.
@@ -4879,9 +4879,9 @@ pub fn clearFileTreeTabDragDropState(editor: *Editor) void {
 /// Choke point for every file open (CLI argv, file tree, palette, drag-drop, SDK
 /// `Host.openFilePath`). Canonicalizes `path_in` once so `loading_jobs`, the document's stored
 /// path, and later `docFromPath` lookups all agree — otherwise `foo/./bar.zig` and `foo/bar.zig`
-/// would open as two documents. See `fizzy.paths.normalize`.
+/// would open as two documents. See `fizzy.core.paths.normalize`.
 pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
-    const path = try fizzy.paths.normalize(editor.gpa, path_in);
+    const path = try fizzy.core.paths.normalize(editor.gpa, path_in);
     defer editor.gpa.free(path);
 
     // Already open? Just focus it. (`docFromPath` also collapses lexical variants, so a doc
@@ -4945,7 +4945,7 @@ pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
 pub fn openFileFromBytes(editor: *Editor, path_in: []u8, bytes: []const u8, grouping: u64) !u64 {
     const path = blk: {
         defer editor.gpa.free(path_in);
-        break :blk try fizzy.paths.normalize(editor.gpa, path_in);
+        break :blk try fizzy.core.paths.normalize(editor.gpa, path_in);
     };
 
     // Freed on every exit path below except the success transfer into the plugin document
@@ -5053,13 +5053,13 @@ pub fn cancelAllLoadingJobs(editor: *Editor) void {
     }
 }
 
-/// Iterates the save-complete toast subwindow (`fizzy.dialogs.save_toast_subwindow_id`) and
+/// Iterates the save-complete toast subwindow (`fizzy.core.dialogs.save_toast_subwindow_id`) and
 /// renders each toast inside a self-sized floating column anchored to the bottom-center of
 /// the viewport, so back-to-back saves stack vertically rather than overlapping. Each toast's
 /// display function (`saveCompleteToastDisplay`) builds its own card body + fade-out animator
 /// + self-remove on timer expiry.
 pub fn drawSaveToasts(editor: *Editor) void {
-    if (dvui.toastsFor(fizzy.dialogs.save_toast_subwindow_id) == null) return;
+    if (dvui.toastsFor(fizzy.core.dialogs.save_toast_subwindow_id) == null) return;
 
     // Anchor at the center of the active workspace's canvas rect (in physical pixels). Using
     // `from` + `from_gravity = 0.5,0.5` lets the FloatingWidget self-size to the toast column
@@ -5088,7 +5088,7 @@ pub fn drawSaveToasts(editor: *Editor) void {
     var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .none });
     defer col.deinit();
 
-    var it = dvui.toastsFor(fizzy.dialogs.save_toast_subwindow_id) orelse return;
+    var it = dvui.toastsFor(fizzy.core.dialogs.save_toast_subwindow_id) orelse return;
     while (it.next()) |t| {
         t.display(t.id) catch |err| {
             dvui.log.err("save toast display: {any}", .{err});
@@ -5123,7 +5123,7 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
     // unrelated input (mouse move, etc.) ticks a frame. Schedule a wakeup at the threshold
     // boundary so the overlay shows on time even with the cursor parked.
     if (earliest_pending_start_ns) |start_ns| {
-        const elapsed_ms = @divTrunc(fizzy.perf.nanoTimestamp() - start_ns, std.time.ns_per_ms);
+        const elapsed_ms = @divTrunc(fizzy.core.perf.nanoTimestamp() - start_ns, std.time.ns_per_ms);
         const remaining_ms: i64 = toast_threshold_ms - @as(i64, @intCast(elapsed_ms));
         if (remaining_ms > 0) {
             dvui.timer(dvui.currentWindow().data().id, @intCast(remaining_ms * std.time.us_per_ms));
@@ -5208,7 +5208,7 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
         // Single-line layout: small bubble spinner + "<basename> — <phase>…" on one baseline.
         // Keeps multi-file load lists compact (each row ~26 nat-px tall) while still showing
         // both the file identity and what's currently happening to it.
-        fizzy.dialogs.bubbleSpinner(@src(), .{
+        fizzy.core.dialogs.bubbleSpinner(@src(), .{
             .min_size_content = .{ .w = 18, .h = 18 },
             .gravity_y = 0.5,
             .color_text = dvui.themeGet().color(.content, .text),
@@ -5771,8 +5771,8 @@ pub fn deinit(editor: *Editor) !void {
     editor.settings.deinit(editor.gpa);
 
     editor.explorer.deinit();
-    editor.panes.deinit(editor.gpa);
-    editor.gpa.destroy(editor.panes);
+    editor.panel.deinit(editor.gpa);
+    editor.gpa.destroy(editor.panel);
 
     PluginStore.deinit();
     editor.unloadPluginLibs();

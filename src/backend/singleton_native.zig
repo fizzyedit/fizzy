@@ -287,11 +287,11 @@ pub fn freeResolvedArgv(gpa: std.mem.Allocator, argv: []const []const u8) void {
 
 /// Normalizing (not just joining) matters for the common `fizzy .` invocation: a plain join
 /// yields `<cwd>/.`, which names the right directory but is a distinct string from `<cwd>`
-/// everywhere downstream — see `fizzy.paths.normalize`.
+/// everywhere downstream — see `fizzy.core.paths.normalize`.
 fn resolveAbsolute(gpa: std.mem.Allocator, cwd: []const u8, path: []const u8) ![]u8 {
-    if (std.fs.path.isAbsolute(path)) return fizzy.paths.normalize(gpa, path);
+    if (std.fs.path.isAbsolute(path)) return fizzy.core.paths.normalize(gpa, path);
     if (cwd.len == 0) return error.NoCwd;
-    return fizzy.paths.normalizeJoin(gpa, cwd, path);
+    return fizzy.core.paths.normalizeJoin(gpa, cwd, path);
 }
 
 fn pickUnixSocketDir(buf: *[std.fs.max_path_bytes]u8) []const u8 {

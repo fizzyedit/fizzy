@@ -148,7 +148,7 @@ fn explorerTitle(editor: *Editor) [:0]const u8 {
 /// TEMPORARY: only meaningful on macOS, where the in-app dvui menu bar is normally suppressed
 /// in favor of the native one — see `Menu.debug_force_on_macos`.
 fn isMacOSOnly(_: *Editor) bool {
-    return fizzy.platform.isMacOS();
+    return fizzy.core.platform.isMacOS();
 }
 
 fn dvuiMenuDebugTitle(_: *Editor) [:0]const u8 {

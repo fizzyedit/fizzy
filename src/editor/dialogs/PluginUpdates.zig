@@ -28,7 +28,7 @@ var closing = false;
 pub fn active(win: *dvui.Window) bool {
     var it = win.dialogs.iterator(null);
     while (it.next()) |d| {
-        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.dialogs.DisplayFn) orelse continue;
+        const df = dvui.dataGet(null, d.id, "_displayFn", fizzy.core.dialogs.DisplayFn) orelse continue;
         if (df == dialog) return true;
     }
     return false;
@@ -37,7 +37,7 @@ pub fn active(win: *dvui.Window) bool {
 pub fn request() void {
     if (active(dvui.currentWindow())) return;
     closing = false;
-    var mutex = fizzy.dialogs.dialog(@src(), .{
+    var mutex = fizzy.core.dialogs.dialog(@src(), .{
         .displayFn = dialog,
         .callafterFn = callAfter,
         .title = "Plugin updates",
@@ -84,7 +84,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     if (count == 0) {
         if (!closing) {
             closing = true;
-            fizzy.dialogs.closeFloatingDialogAnchored();
+            fizzy.core.dialogs.closeFloatingDialogAnchored();
         }
         return true;
     }
@@ -142,7 +142,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
     // downloading finishes.
     if (dialogButton(@src(), "Not now", .control, 1, 0) and !closing) {
         closing = true;
-        fizzy.dialogs.closeFloatingDialogAnchored();
+        fizzy.core.dialogs.closeFloatingDialogAnchored();
     }
     if (PluginStore.anyPendingUpdateUnstarted()) {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 10, .h = 1 } });

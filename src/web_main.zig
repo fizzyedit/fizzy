@@ -25,16 +25,16 @@ comptime {
     _ = fizzy.version;
 
     // Math + graphics helpers
-    _ = fizzy.math.checker;
-    _ = fizzy.math.rotate;
-    _ = fizzy.math.lerp;
-    _ = fizzy.image.init;
-    _ = fizzy.image.pixels;
-    _ = fizzy.perf.record;
+    _ = fizzy.core.math.checker;
+    _ = fizzy.core.math.rotate;
+    _ = fizzy.core.math.lerp;
+    _ = fizzy.core.image.init;
+    _ = fizzy.core.image.pixels;
+    _ = fizzy.core.perf.record;
 
     // Custom dvui wrapper + widgets — types compile even though the widget files
     // contain dead `@import("backend")` SDL3 imports at file scope.
-    _ = fizzy.widgets.CanvasWidget;
+    _ = fizzy.core.widgets.CanvasWidget;
 
     // The big ones: Editor + App. Type-level reference only — passes because Zig
     // doesn't fully analyze function bodies until they're actually wired into a

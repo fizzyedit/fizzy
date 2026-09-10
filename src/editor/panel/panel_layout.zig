@@ -1,20 +1,21 @@
-//! Bottom-panel workspace map maintenance + recursive split drawing.
+//! Fizzy's bottom panel: pane map maintenance, and drawing the panes side by side with the
+//! same `core.widgets.Split` the app's regions and the workbench's documents use.
 const std = @import("std");
 const dvui = @import("dvui");
-const fizzy = @import("../../../fizzy.zig");
+const fizzy = @import("../../fizzy.zig");
 
-const PaneGroup = @import("PaneGroup.zig");
+const Panel = @import("Panel.zig");
 const Split = @import("core").widgets.Split;
-const Layout = @import("../Layout.zig");
+const Layout = @import("../layout/Layout.zig");
 const Pane = @import("Pane.zig");
 
 const handle_size = 10;
 const handle_dist = 60;
 
-pub fn rebuildWorkspaces(panel: *PaneGroup, f: *Layout, keywords: []const []const u8) !void {
+pub fn rebuildWorkspaces(panel: *Panel, f: *Layout, keywords: []const []const u8) !void {
     panel.ensurePanes(f, keywords);
 
-    for (PaneGroup.surfaces(f, keywords)) |view| {
+    for (Panel.surfaces(f, keywords)) |view| {
         const grouping = panel.paneOf(view.id);
         if (!panel.workspaces.contains(grouping)) {
             var workspace = Pane.init(grouping);
@@ -27,7 +28,7 @@ pub fn rebuildWorkspaces(panel: *PaneGroup, f: *Layout, keywords: []const []cons
         if (panel.workspaces.count() == 1) break;
 
         var contains = false;
-        for (PaneGroup.surfaces(f, keywords)) |v| {
+        for (Panel.surfaces(f, keywords)) |v| {
             if (panel.paneOf(v.id) == workspace.grouping) {
                 contains = true;
                 break;
@@ -52,7 +53,7 @@ pub fn rebuildWorkspaces(panel: *PaneGroup, f: *Layout, keywords: []const []cons
         if (panel.activeSurfaceIn(f, keywords, workspace.grouping)) |active| {
             if (panel.paneOf(active.id) == workspace.grouping) continue;
         }
-        for (PaneGroup.surfaces(f, keywords)) |v| {
+        for (Panel.surfaces(f, keywords)) |v| {
             if (panel.paneOf(v.id) == workspace.grouping) {
                 workspace.active_view_id = v.id;
                 break;
@@ -69,7 +70,7 @@ pub fn rebuildWorkspaces(panel: *PaneGroup, f: *Layout, keywords: []const []cons
 /// It is now a flat loop over `core.widgets.Split`, so a divider here drags, looks and feels exactly
 /// like a divider anywhere else.
 pub fn drawWorkspaces(
-    panel: *PaneGroup,
+    panel: *Panel,
     host: *fizzy.Editor.Host,
     f: *Layout,
     keywords: []const []const u8,

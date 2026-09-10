@@ -23,7 +23,7 @@ const Disk = struct {
 /// JSON, write an equivalent `zon_path`, and delete the JSON file. No-op (including on
 /// any failure along the way — the caller falls back to defaults as usual) otherwise.
 pub fn migrateIfNeeded(allocator: std.mem.Allocator, zon_path: []const u8) void {
-    if (fizzy.fs.read(allocator, dvui.io, zon_path) catch null) |existing| {
+    if (fizzy.core.fs.read(allocator, dvui.io, zon_path) catch null) |existing| {
         allocator.free(existing);
         return;
     }
@@ -31,7 +31,7 @@ pub fn migrateIfNeeded(allocator: std.mem.Allocator, zon_path: []const u8) void 
     const json_path = siblingJsonPath(allocator, zon_path) catch return;
     defer allocator.free(json_path);
 
-    const data = fizzy.fs.read(allocator, dvui.io, json_path) catch return;
+    const data = fizzy.core.fs.read(allocator, dvui.io, json_path) catch return;
     defer allocator.free(data);
 
     migrate(allocator, zon_path, json_path, data) catch |err| {

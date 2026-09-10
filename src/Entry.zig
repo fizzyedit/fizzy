@@ -13,7 +13,7 @@ const text = @import("text");
 const auto_update = @import("backend/auto_update.zig");
 const update_notify = @import("backend/update_notify.zig");
 const singleton = @import("backend/singleton.zig");
-const paths = fizzy.paths;
+const paths = fizzy.core.paths;
 const Constants = @import("editor/Constants.zig");
 const AppInfo = @import("AppInfo.zig");
 
@@ -182,9 +182,9 @@ var refresh_log_active = false;
 // Runs before the first frame, after backend and dvui.Window.init()
 pub fn AppInit(win: *dvui.Window) !void {
     // Snapshot the platform from DVUI's keybind selection. On native this is a
-    // no-op; on wasm it tells `fizzy.platform.isMacOS()` what browser we're in.
-    fizzy.platform.cacheFromWindow(win);
-    fizzy.hitch.initFromEnv();
+    // no-op; on wasm it tells `fizzy.core.platform.isMacOS()` what browser we're in.
+    fizzy.core.platform.cacheFromWindow(win);
+    fizzy.core.hitch.initFromEnv();
     initRefreshLogFromEnv();
 
     // Apply the macOS window chrome and install the Space monitor while the
@@ -295,8 +295,8 @@ pub fn AppDeinit(_: *dvui.Window) void {
 
 // Run each frame to do normal UI
 pub fn AppFrame() !dvui.App.Result {
-    fizzy.hitch.frameBegin();
-    defer fizzy.hitch.frameEnd();
+    fizzy.core.hitch.frameBegin();
+    defer fizzy.core.hitch.frameEnd();
     singleton.drainPending();
     return try fizzy.editor().tick();
 }

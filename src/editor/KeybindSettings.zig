@@ -216,7 +216,7 @@ pub fn score(query: *const fuzzy.Query) ?f64 {
     }
     if (query.isEmpty()) return 0;
 
-    const platform: keymap.Platform = if (fizzy.platform.isMacOS()) .mac else .other;
+    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     const groups = collectGroups(dvui.currentWindow().arena(), query, platform);
     var best: ?f64 = null;
     for (groups.items) |g| {
@@ -237,7 +237,7 @@ pub fn draw(query: *const fuzzy.Query) void {
 
     const editor = fizzy.editor();
     const theme = dvui.themeGet();
-    const platform: keymap.Platform = if (fizzy.platform.isMacOS()) .mac else .other;
+    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     const arena = dvui.currentWindow().arena();
 
     drawConflicts(editor, platform, theme);
