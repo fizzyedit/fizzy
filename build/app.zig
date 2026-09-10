@@ -164,8 +164,8 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // Which shipped layout shape the region-based layout uses. `ide` is fizzy's own shape; `minimal`
     // and `studio` are deliberately different shapes that load the SAME plugins unchanged —
     // the acceptance test for the layout API (plan, Phase 5).
-    const Shape = enum { ide, minimal, studio };
-    const layout_kind = b.option(Shape, "layout", "Which shipped layout shape to use: ide (default), minimal, studio") orelse .ide;
+    const Shape = enum { ide, minimal, studio, linear };
+    const layout_kind = b.option(Shape, "layout", "Which shipped layout shape to use: ide (default), minimal, studio, linear") orelse .ide;
     build_opts.addOption(Shape, "layout", layout_kind);
     const static_workbench = b.option(
         bool,

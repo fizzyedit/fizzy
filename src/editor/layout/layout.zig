@@ -153,6 +153,8 @@ pub const chrome = @import("chrome.zig");
 pub const ide = @import("ide.zig");
 pub const minimal = @import("minimal.zig");
 pub const studio = @import("studio.zig");
+/// The trial shape for the linear `SplitBox` — see `linear.zig`.
+pub const linear = @import("linear.zig");
 
 /// Run the shape `-Dlayout=` selected. All of them load the same plugins; only the layout differs.
 pub fn run(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
@@ -160,6 +162,7 @@ pub fn run(editor: *fizzy.Editor, f: *Frame) !dvui.App.Result {
         .ide => ide.layout(editor, f),
         .minimal => minimal.layout(editor, f),
         .studio => studio.layout(editor, f),
+        .linear => linear.layout(editor, f),
     };
 }
 
