@@ -20,8 +20,21 @@ selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 /// The user's answer wins over the plugin's declared defaults, which is what makes a wrong
 /// default cost two clicks rather than a plugin release. Keys and values are gpa-owned.
 keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .empty,
-/// Regions declared by this frame's shape. Cleared and rebuilt every frame.
+/// Regions the last completed shape declared — what `Editor.regionFor` answers from.
+///
+/// Deliberately the *previous* frame's set rather than the one being built: a command can run
+/// between frames (a native menu item is dispatched before the shape has drawn anything), and a
+/// command that drives a region — Toggle Explorer, Toggle Panel — must find one. Reading a
+/// half-built list gave it nothing, and the toggle silently did half its job: the menu title
+/// flipped, because that reads a bool, and the sidebar never moved.
+///
+/// Answering from last frame is correct rather than merely convenient: a region's id comes from
+/// its shape's `@src()`, so it is the same id this frame will declare. The one case it cannot
+/// help is a command dispatched before the *first* shape has ever run — there is genuinely no
+/// region yet — which is why this is a swap rather than a claim that ordering no longer matters.
 regions: std.ArrayListUnmanaged(Region) = .empty,
+/// The set the shape currently running is declaring. Swapped into `regions` when it finishes.
+regions_building: std.ArrayListUnmanaged(Region) = .empty,
 /// Every region's remembered extent in **points** — width under a horizontal parent, height
 /// under a vertical one — by the name its shape declared, loaded from
 /// `layout.zon` at startup and written back debounced.

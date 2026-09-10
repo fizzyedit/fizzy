@@ -4285,9 +4285,6 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             }
         }
 
-        // Every frame starts with no bottom split; whichever layout runs states whether it
-        // established one. See `layout.regions`.
-        editor.layout.regions.clearRetainingCapacity();
         editor.pollPendingReveals();
 
         {
@@ -4303,6 +4300,16 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
 
             var layout: Layout = .init(editor);
             const shell_result = presets.run(editor, &layout);
+
+            // The shape has finished declaring regions: publish them. Until this point
+            // `regionFor` answered from the previous frame, which is what lets a command
+            // dispatched between frames drive a region (see `Layout.State.regions`).
+            std.mem.swap(
+                @TypeOf(editor.layout.regions),
+                &editor.layout.regions,
+                &editor.layout.regions_building,
+            );
+            editor.layout.regions_building.clearRetainingCapacity();
 
             // A region is a box, so a shape that declares one and never scopes it leaves the box
             // open and dvui reports the mismatch two widgets later ("not at the top of the widget
@@ -4516,7 +4523,7 @@ pub fn regionFor(editor: *Editor, keywords: []const []const u8) ?Region {
 }
 
 pub fn registerRegion(editor: *Editor, entry: Region) void {
-    editor.layout.regions.append(editor.gpa, entry) catch {};
+    editor.layout.regions_building.append(editor.gpa, entry) catch {};
 }
 
 pub fn revealPosition(editor: *Editor, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
@@ -5707,6 +5714,8 @@ pub fn deinit(editor: *Editor) !void {
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.layout.center_transition.discard();
     editor.layout.center_prev_id = null;
+    editor.layout.regions.deinit(editor.gpa);
+    editor.layout.regions_building.deinit(editor.gpa);
 
     // Stop watchers first, before touching anything they could still be querying —
     // signals background threads, joins them, and tears down OS watches. Clearing the optionals

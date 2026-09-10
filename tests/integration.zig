@@ -1635,3 +1635,55 @@ test "the files service is the app's to provide, and a plugin asking for it gets
     // implementation says so rather than pretending to have written anything.
     try std.testing.expectError(error.NoFileTable, found.createFile("/tmp/fizzy-files-service-test"));
 }
+
+// -- driving a region from outside the layout ---------------------------------------------------
+
+// A native menu item is dispatched *between* frames: the command runs before this frame's shape
+// has declared anything. Toggle Explorer asks `regionFor` for the sidebar and shuts it, so if the
+// region registry is empty at that moment the command silently does half its job — the menu title
+// flips, because that reads a bool, and the sidebar never moves. It was empty, because the
+// registry used to be cleared at the top of the frame and refilled by the shape.
+//
+// The registry now answers from the last completed shape, which is the same set of ids this frame
+// will declare (a region's id comes from its shape's `@src()`).
+test "a command dispatched between frames can still find and shut a region" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+
+    const kw = fizzy.sdk.keywords.ide.sidebar;
+    const id = dvui.Id.zero.update("test.sidebar.region");
+
+    // Nothing declared yet: exactly the state a first-frame command sees, and it must not crash.
+    try std.testing.expect(editor.regionFor(kw) == null);
+
+    // What a shape does when it declares a resizable region.
+    editor.registerRegion(.{ .keywords = kw, .id = id, .default_extent = 260 });
+
+    // Still invisible to a command — the shape has not finished. This is the half-built list the
+    // old code let callers read.
+    try std.testing.expect(editor.regionFor(kw) == null);
+
+    // The shape completes and publishes.
+    std.mem.swap(
+        @TypeOf(editor.layout.regions),
+        &editor.layout.regions,
+        &editor.layout.regions_building,
+    );
+    editor.layout.regions_building.clearRetainingCapacity();
+
+    const region = editor.regionFor(kw) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(id, region.id);
+
+    // And the command's half of the mechanism: shut it, and it reads as shut.
+    dvui.dataSet(null, id, "_size", @as(f32, 260));
+    try std.testing.expect(!region.isClosed());
+    region.close();
+    try std.testing.expect(region.isClosed());
+    region.open();
+    try std.testing.expect(!region.isClosed());
+}
