@@ -112,7 +112,16 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
         }
         Document.rememberPreviewMode(doc.preview_mode, doc.preview_split_ratio_user);
         break :blk dragged;
-    } else Split.eased(split, previewExtent(doc.preview_mode, doc.preview_split_ratio_user, total), 220);
+    } else blk: {
+        const eased = Split.eased(split, previewExtent(doc.preview_mode, doc.preview_split_ratio_user, total), 220);
+        // The split's stored extent is what a press reads to start the drag from, so it has to
+        // agree with what is on screen even when the mode — not a drag — put it there. Without
+        // this, pressing the handle without moving read a `_size` nothing had ever written: the
+        // preview vanished on mouse-down and the mode snapped to raw, and only moving the pointer
+        // brought it back.
+        dvui.dataSet(null, split, "_size", eased);
+        break :blk eased;
+    };
 
     if (width > 0) {
         var pane = dvui.box(@src(), .{ .dir = .vertical }, .{

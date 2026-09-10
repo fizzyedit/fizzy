@@ -5,6 +5,10 @@
 //! this that lets the user move regions at runtime, and is the natural basis for a
 //! Premiere-style shape. Named seam, not built.
 //!
+//! Made with `Layout.region` — `f.region(@src(), .{ … }, .{ … })`, which is re-exported there so
+//! it sits beside `f.split(...)` in a shape. The constructor lives in this file, next to the type
+//! it returns, the same way `core.dvui.split` lives in `Split.zig`.
+//!
 //! `region` draws the region's own contents — its chrome, if it declared any, and the active
 //! matching surface — and leaves the caller positioned in the *remaining* space, so whatever the
 //! layout writes next lands there. That is what removes the `showFirst`/`showSecond` pairs from
@@ -13,6 +17,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const Split = core.dvui.Split;
+const Constants = @import("../Constants.zig");
 const Layout = @import("Layout.zig");
 
 const Region = @This();
@@ -83,7 +88,7 @@ pub fn open(self: Region) void {
 pub const Content = *const fn (f: *Layout, keywords: []const []const u8) anyerror!dvui.App.Result;
 
 /// What a region *is*, as opposed to how it is laid out — which is `dvui.Options`, unchanged.
-pub const Init = struct {
+pub const InitOptions = struct {
     /// Human-facing name, shown wherever a user places a surface by hand.
     name: []const u8 = "",
     /// What kinds of surface this region accepts. Empty means it hosts nothing itself and is
@@ -107,3 +112,207 @@ pub const Init = struct {
     /// that fights you.
     collapsible: bool = false,
 };
+
+/// Declare a region: an area that hosts matching surfaces, holds other regions, or both.
+///
+/// It is a `dvui.box`. The second argument says what the region *is*; the third is dvui's own
+/// `Options`, unchanged — `expand`, `min_size_content`, `padding`, `gravity`, all of it. So the
+/// sizing rules are the ones already in use everywhere else: a child that does not expand along
+/// the axis takes its minimum, and the children that do share what is left.
+///
+/// Scope it and `deinit` it the way you would any box:
+///
+/// ```zig
+/// {
+///     var side = f.region(@src(), .{ .keywords = kw.ide.sidebar, .resize = true },
+///                                  .{ .min_size_content = .{ .w = 240 } });
+///     defer side.deinit();
+/// }
+/// f.split(@src(), .{});
+/// ```
+pub fn region(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: dvui.Options) !Region {
+    if (self.depth >= Layout.max_nesting) {
+        dvui.log.err("layout nests deeper than {d} regions; \"{s}\" ignored", .{ Layout.max_nesting, init_opts.name });
+        return .{};
+    }
+
+    const matches = self.matching(init_opts.keywords);
+    if (init_opts.hide_when_empty and init_opts.keywords.len > 0 and matches.len == 0) return .{};
+
+    // The container this region lands in, if any — the layout's own stack, read directly
+    // rather than through an accessor, so nothing about it appears on the app-facing API.
+    const parent: ?*Layout.Container = if (self.depth == 0) null else &self.containers[self.depth - 1];
+    const axis: dvui.enums.Direction = if (parent) |p| p.dir else .horizontal;
+    const id = dvui.parentGet().extendId(src, opts.idExtra());
+
+    // A resizable region's extent along its parent's axis is whatever the user last dragged it
+    // to, defaulting to the `min_size_content` the shape wrote.
+    var box_opts = opts;
+    var shut_now = false;
+    // The region's reach along its parent's axis, in points: `extent` is what it shows this
+    // frame (mid-animation it is between the two), `default_extent` what it opens to when the
+    // user has never dragged it.
+    var extent: f32 = 0;
+    var default_extent: f32 = 0;
+    if (init_opts.resize) {
+        const given = opts.min_size_content orelse dvui.Size{};
+        const default: f32 = switch (axis) {
+            .horizontal => given.w,
+            .vertical => given.h,
+        };
+        default_extent = default;
+        // Seeded from what the user last left this region at, by name — so a layout persists
+        // across restarts without the framework knowing which regions an app has.
+        if (dvui.dataGet(null, id, "_size", f32) == null) {
+            dvui.dataSet(null, id, "_size", self.editor.regionExtent(init_opts.name, default));
+        }
+
+        // The size the user chose. Auto-collapse must never overwrite it, or folding the window
+        // small destroys the extent it is supposed to restore — which is what "it does not
+        // reopen to its last place" was. The paned shell kept an `uncollapse_ratio` for the same
+        // reason; here the stored size simply stays put and only what is *shown* goes to zero.
+        const chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
+
+        var target = chosen;
+        if (init_opts.collapsible) {
+            const room = if (parent) |p| roomOf(p, axis) else 0;
+            if (room > 0 and room < Constants.min_window_size[0]) target = 0;
+        }
+
+        // Ease toward the target when it moved for a reason other than a drag — the collapse
+        // when the window runs out of room, and the restore when it comes back.
+        //
+        // A drag is exempt, and stays exempt without a flag: the split writes `_shown` alongside
+        // `_size`, so the two agree and nothing kicks off. Easing a drag would be wrong anyway —
+        // a split should sit under the pointer, not lag behind it on a curve.
+        if (dvui.animationGet(id, "_ease")) |a| {
+            extent = a.value();
+        } else {
+            const shown = dvui.dataGet(null, id, "_shown", f32) orelse target;
+            if (shown != target) {
+                dvui.animation(id, "_ease", .{
+                    .start_val = shown,
+                    .end_val = target,
+                    .end_time = Layout.collapse_ms * std.time.us_per_ms,
+                    .easing = dvui.easing.outQuint,
+                });
+                extent = shown;
+            } else {
+                extent = target;
+            }
+        }
+        dvui.dataSet(null, id, "_shown", extent);
+        dvui.dataSet(null, id, "_size", chosen);
+        if (init_opts.name.len > 0) self.editor.setRegionExtent(init_opts.name, chosen);
+
+        // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
+        // wider than the size the user dragged it to simply stays wider, and the split appears to
+        // stop responding once it reaches that content's natural width. Pinning the maximum too
+        // makes the stored size exact and stops a plugin's content dictating the app's
+        // proportions — the hazard `layout.zig` names in its sizing notes.
+        box_opts.min_size_content = switch (axis) {
+            .horizontal => .{ .w = extent, .h = given.h },
+            .vertical => .{ .w = given.w, .h = extent },
+        };
+        box_opts.max_size_content = switch (axis) {
+            .horizontal => .width(extent),
+            .vertical => .height(extent),
+        };
+        if (parent) |p| {
+            // A split declared *before* this region was waiting for a neighbour to resize — the
+            // bottom-panel shape, where the panel comes after its own split. Bind it now; the
+            // split picks it up next frame, the same one-frame settle everything else here uses.
+            if (p.pending_split) |sp| {
+                dvui.dataSet(null, sp, "_after", id);
+                p.pending_split = null;
+            }
+            p.last_resizable = id;
+            // Findable from outside the layout by the keywords it accepts, so a rail button or
+            // a command can open and shut it without knowing what the shape built.
+            if (init_opts.keywords.len > 0) self.editor.registerRegion(.{
+                .keywords = init_opts.keywords,
+                .id = id,
+                .default_extent = default,
+            });
+            if (p.resizable_count < Layout.max_trays) {
+                p.resizables[p.resizable_count] = id;
+                p.resizable_count += 1;
+            }
+        }
+        shut_now = extent <= 0;
+    }
+
+    if (!init_opts.resize) {
+        // A stretchy region must not let its *contents* set a floor under it.
+        //
+        // dvui clamps a widget's reported min size with `max_size_content`, so capping it along
+        // the parent's axis stops the plugin inside from reserving space the app never granted.
+        // Without this the bottom panel cannot be dragged open past whatever the editor above it
+        // wants to be — the neighbour's content, not the layout, decides how far a split travels.
+        // The region clips anyway, so nothing escapes; it just stops pushing back.
+        //
+        // An explicit `max_size_content` from the shape wins: that is the app deciding, which is
+        // the whole point.
+        if (parent != null and opts.max_size_content == null) {
+            const given = opts.min_size_content orelse dvui.Size{};
+            box_opts.max_size_content = switch (axis) {
+                .horizontal => .{ .w = @max(1, given.w), .h = dvui.max_float_safe },
+                .vertical => .{ .w = dvui.max_float_safe, .h = @max(1, given.h) },
+            };
+        }
+
+        // The base of this container: what it insists on keeping is what the trays must leave it.
+        if (parent) |p| {
+            const m = opts.min_size_content orelse dvui.Size{};
+            const along = switch (axis) {
+                .horizontal => m.w,
+                .vertical => m.h,
+            };
+            if (along > p.base_min) p.base_min = along;
+        }
+    }
+
+    const box = dvui.box(src, .{ .dir = init_opts.dir }, box_opts);
+    if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
+    self.containers[self.depth] = .{ .dir = init_opts.dir, .box = box };
+    self.depth += 1;
+
+    // A region clips what it holds. Contents draw at their own natural size, so without this a
+    // region squeezed narrower than its contents simply spills them over its neighbour instead
+    // of getting smaller — which is what a half-closed sidebar looked like.
+    const clip_to = box.data().contentRectScale().r;
+    const prev_clip = dvui.clip(clip_to);
+
+    // Drawn at every size except none. Skipping content at *zero* is just not doing work nobody
+    // can see; skipping it below a threshold would be a policy, and it would also break the
+    // layered form later — a tray blurring what is behind it needs the region underneath to have
+    // drawn, at every size the tray takes.
+    if (!shut_now and init_opts.keywords.len > 0) _ = try drawContents(self, init_opts);
+
+    return .{
+        .keywords = init_opts.keywords,
+        .id = id,
+        .default_extent = default_extent,
+        .box = box,
+        .layout = self,
+        .prev_clip = prev_clip,
+    };
+}
+
+fn roomOf(p: *Layout.Container, axis: dvui.enums.Direction) f32 {
+    const b = p.box orelse return 0;
+    const r = b.data().contentRect();
+    return switch (axis) {
+        .horizontal => r.w,
+        .vertical => r.h,
+    };
+}
+
+/// The region's contents: its own chrome if it declared any, otherwise the active surface.
+///
+/// Everything reachable here is reachable by hand from `matching` / `selected` / `draw`, so a
+/// shape wanting something else writes its own function and passes it as `content`.
+fn drawContents(self: *Layout, opts: InitOptions) !dvui.App.Result {
+    const content = opts.content orelse return self.drawSelected(opts.keywords);
+    return content(self, opts.keywords);
+}
