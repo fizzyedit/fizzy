@@ -78,6 +78,10 @@ pub fn interact(
     // freezes on the first pixel, capture is never given back, and the resize cursor sticks. So
     // once captured we match on ourselves, which the capture branch admits regardless of rect.
     var dist: f32 = std.math.floatMax(f32);
+    // Where the pointer wants the sash, taken from the last motion of the frame and applied once
+    // after the loop. Applying inside it would over-shoot: every motion event would be measured
+    // against the same stale sash position.
+    var drag_to: ?f32 = null;
     for (dvui.events()) |*e| {
         if (e.evt != .mouse) continue;
 
@@ -112,21 +116,36 @@ pub fn interact(
             },
             .motion => if (captured) {
                 e.handle(@src(), wd);
-                if (dvui.dragging(e.evt.mouse.p, null)) |delta| {
-                    const start = dvui.dataGet(null, wd.id, "_start", f32) orelse 0;
-                    const moved = sign * switch (axis) {
-                        .horizontal => delta.x,
-                        .vertical => delta.y,
-                    } / srs.s;
-                    const want = start + moved;
-                    const capped = if (opts.max) |m| @min(want, m) else want;
-                    dvui.dataSet(null, target, "_size", @max(opts.min, capped));
-                    dvui.refresh(null, @src(), wd.id);
+                if (dvui.dragging(e.evt.mouse.p, null) != null) {
+                    drag_to = switch (axis) {
+                        .horizontal => e.evt.mouse.p.x,
+                        .vertical => e.evt.mouse.p.y,
+                    };
                 }
             },
             .position => dvui.cursorSet(cursor),
             else => {},
         }
+    }
+
+    // Drive the size from where the pointer is relative to the sash, not from an accumulated
+    // delta.
+    //
+    // `dvui.dragging` returns the difference since the **previous call**, not since the press
+    // (see `Dragging.get`), so adding it to a baseline captured at press time applies exactly one
+    // frame of movement and then stops — the sash pops once and sits there. Summing it instead
+    // would work but drifts, and drops any motion a frame misses.
+    //
+    // The sash is drawn wherever the stored size puts it, so moving the size by the pointer's
+    // offset from the sash lands the sash under the pointer, and stays exact from then on with
+    // nothing accumulated. `PanedWidget` drives its ratio from the absolute pointer position for
+    // the same reason.
+    if (drag_to) |p| {
+        const current = dvui.dataGet(null, target, "_size", f32) orelse currentExtent(target, axis);
+        const want = current + sign * (p - centre) / srs.s;
+        const capped = if (opts.max) |m| @min(want, m) else want;
+        dvui.dataSet(null, target, "_size", @max(opts.min, capped));
+        dvui.refresh(null, @src(), wd.id);
     }
 
     if (dvui.captured(wd.id)) dist = 0;
@@ -277,6 +296,39 @@ test "dragging the sash resizes the region before it" {
     // the first press jump the region to that width before applying the delta, which reads as
     // the sash popping to a different size the moment you grab it.
     try testing.expectApproxEqAbs(before + 80 / t_scale, t_size, 1.0);
+}
+
+test "the sash follows the pointer across a multi-step drag" {
+    // The regression this exists for: `dvui.dragging` reports the delta since the *previous
+    // call*, so a single-motion test cannot tell a cumulative baseline from an incremental one —
+    // they agree on the first event and only diverge from the second. A real drag is many motion
+    // events across many frames, and the buggy version moved on the first and then sat still.
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+
+    try dvui.testing.settle(twoPaneFrame);
+    const before = t_size;
+    const grab = t_sep_x;
+    const cw = dvui.currentWindow();
+
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab, .y = 100 } });
+    _ = try dvui.testing.step(twoPaneFrame);
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    // Six frames of 20 physical pixels each, the way a real drag arrives.
+    var moved: f32 = 0;
+    for (0..6) |_| {
+        moved += 20;
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab + moved, .y = 100 } });
+        _ = try dvui.testing.step(twoPaneFrame);
+    }
+    _ = try cw.addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    try testing.expectApproxEqAbs(before + moved / t_scale, t_size, 2.0);
+    // And the sash itself ends up under the pointer, which is what "follows the mouse" means.
+    try testing.expectApproxEqAbs(grab + moved, t_sep_x, 4.0);
 }
 
 test "releasing gives capture back, so the cursor does not stick" {
