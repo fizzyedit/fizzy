@@ -185,25 +185,45 @@ pub fn namesOn(state: *State, arena: std.mem.Allocator, side: Side) []const []co
     return out;
 }
 
-/// Persisted names on `side`, plus a collapsed sentinel on the outside whenever the
-/// outer-most tray is open or kept (closed with a surface). An empty closed tray *is*
-/// the sentinel — dragging it out at all creates the next one.
+fn isDragging(state: *State, name: []const u8) bool {
+    for (state.regions.items) |r| {
+        if (!std.mem.eql(u8, r.name, name)) continue;
+        return dvui.dataGet(null, r.id, "_drag", bool) orelse false;
+    }
+    return false;
+}
+
+/// Open or kept trays on `side`, plus one collapsed sentinel on the outside.
+/// Empty closed trays are forgotten here so a drag to the edge cannot leave
+/// two zero-width handles stacked on the same origin.
 fn namesForSide(f: *Layout, side: Side) []const []const u8 {
     const existing = namesOn(f.state, f.arena, side);
-    if (existing.len > 0) {
-        const outer = existing[existing.len - 1];
+    var live: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (existing) |name| {
+        const ext = f.state.extent(name, 0);
+        const kept = if (f.state.assignment(name)) |ids| ids.len > 0 else false;
+        const dragging = isDragging(f.state, name);
+        if (ext > 0 or kept or dragging) {
+            live.append(f.arena, name) catch return existing;
+        } else if (f.state.clearExtent(f.gpa, name)) {
+            f.extents_changed = true;
+        }
+    }
+    const last_needs_sentinel = blk: {
+        if (live.items.len == 0) break :blk true;
+        const outer = live.items[live.items.len - 1];
         const ext = f.state.extent(outer, 0);
         const kept = if (f.state.assignment(outer)) |ids| ids.len > 0 else false;
-        if (ext <= 0 and !kept) return existing;
-    }
+        break :blk ext > 0 or kept;
+    };
+    if (!last_needs_sentinel) return live.items;
+
     const n = nextIndex(f.state, side);
     var buf: [32]u8 = undefined;
-    const raw = std.fmt.bufPrint(&buf, "{s}{d}", .{ edgePrefix(side), n }) catch return existing;
+    const raw = std.fmt.bufPrint(&buf, "{s}{d}", .{ edgePrefix(side), n }) catch return live.items;
     const name = f.state.internName(f.gpa, raw);
-    const out = f.arena.alloc([]const u8, existing.len + 1) catch return existing;
-    @memcpy(out[0..existing.len], existing);
-    out[existing.len] = name;
-    return out;
+    live.append(f.arena, name) catch return live.items;
+    return live.items;
 }
 
 fn edgeRegion(f: *Layout, name: []const u8, axis: dvui.enums.Direction, id_extra: usize) !void {

@@ -202,6 +202,11 @@ pub const Container = struct {
     /// neighbour before it — which is the whole of the resize mechanism: there are no ratios and
     /// no boundary table, just one number per resizable region.
     last_resizable: ?dvui.Id = null,
+    /// A non-resizable child has been declared (the leftover, or a grouping box around it).
+    /// Trays after this face the leftover and take their handle gutter on the leading edge;
+    /// trays before it take the trailing edge. One `handle_size` between cards, not a
+    /// margin on every side.
+    saw_base: bool = false,
 
     /// How far this container reaches along `axis`, in points — its width when horizontal, its
     /// height when vertical. The same single number a region calls its extent, measured for the

@@ -2274,6 +2274,33 @@ test "an empty tray dragged shut is forgotten; one with a surface stays" {
     try std.testing.expectEqual(@as(f32, 0), editor.layout.extent("edge-left-1", -1));
 }
 
+test "two empty closed trays on a side become one sentinel" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    _ = endless.promote(&editor.layout, editor.gpa, .left, 0);
+    _ = endless.promote(&editor.layout, editor.gpa, .left, 0);
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-1", -1));
+    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-2", -1));
+    var lefts: usize = 0;
+    for (editor.layout.regions.items) |r| {
+        if (std.mem.startsWith(u8, r.name, "edge-left-")) lefts += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), lefts);
+}
+
 fn shutNamed(state: *fizzy.Editor.Layout.State, name: []const u8) void {
     _ = state.setExtent(std.testing.allocator, name, 0);
     for (state.regions.items) |r| {

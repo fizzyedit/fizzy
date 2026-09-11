@@ -14,19 +14,14 @@ pub fn mainCanvasVbox(content_color: dvui.Color, background: bool, grouping: u64
     });
 }
 
-/// Rounded card behind empty states (homepage, project hint, etc.).
-///
-/// No top margin, deliberately: a document canvas (`mainCanvasVbox`) starts flush at the top of
-/// the center region, directly under the tab bar / titlebar, and a 10pt gap here made the
-/// homepage and every other card sit lower than the canvas they replace — a visible step when
-/// switching between them, and a mismatch the host cannot compensate for when cross-fading
-/// providers (it has no way to know which shape it is fading between).
+/// Layout box behind empty states (homepage, project hint, etc.). The region is
+/// the card now — a second fill here made Center look like a different widget
+/// than the trays (different radius, no handle gutter).
 pub fn emptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.BoxWidget {
+    _ = content_color;
     return dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .both,
-        .background = true,
-        .color_fill = content_color,
-        .corners = dvui.CornerRect.all(16),
+        .background = false,
         .id_extra = @intCast(grouping),
     });
 }

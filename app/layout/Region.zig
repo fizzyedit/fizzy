@@ -16,9 +16,9 @@
 //! shapes.
 //!
 //! A place (keywords, not a grouping box, not a plugin `manual_contents` region) is itself a
-//! card: window fill, rounded corners, and a gutter the overlay handle sits in. Fizzy's panel
-//! used to paint that card in `Pane`; endless and any other shape then had a bare box butted
-//! against its neighbour, and the handle drew under the next fill.
+//! card: window fill, rounded corners, and a `handle_size` gutter on the split-facing edge
+//! only. Margin on every side made left/right shorter than Center and inset the bottom
+//! from the sides. Fizzy's panel used to paint that card in `Pane`.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
@@ -326,8 +326,9 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         shut_now = extent <= 0;
     }
 
+    const after_base = if (parent) |p| p.saw_base else false;
     if (keywords.len > 0 and !init_opts.manual_contents) {
-        applyPlaceChrome(self, &box_opts, axis, extent, init_opts.resize, shut_now, opts);
+        applyPlaceChrome(self, &box_opts, axis, extent, init_opts.resize, shut_now, after_base, opts);
     }
 
     if (!init_opts.resize) {
@@ -357,6 +358,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
                 .vertical => m.h,
             };
             if (along > p.base_min) p.base_min = along;
+            p.saw_base = true;
         }
     }
 
@@ -425,11 +427,12 @@ const corner_button_size: f32 = 22;
 /// How a place looks: the card the handle gutters against. Matches fizzy's old
 /// `Pane` chrome so every shape gets the same floating tray, not just the IDE panel.
 const place_radius: f32 = 12;
-const place_pad: f32 = 6;
 
-/// Window-fill card, rounded corners, and a gutter that scales in with the
-/// extent so a sentinel crossing zero does not jump by `handle_size`. The
-/// shape's own `background` / `margin` / `padding` / `corners` win.
+/// Window-fill card, rounded corners, and `handle_size` of margin on the split
+/// edge only — the 10pt the overlay handle sits in. The leftover (Center, Main)
+/// is the same card without a margin, so every place lines up and the gap
+/// between two cards is exactly one handle. The shape's own `background` /
+/// `margin` / `corners` win.
 fn applyPlaceChrome(
     self: *Layout,
     box_opts: *dvui.Options,
@@ -437,6 +440,7 @@ fn applyPlaceChrome(
     extent: f32,
     resize: bool,
     shut: bool,
+    after_base: bool,
     given_opts: dvui.Options,
 ) void {
     if (given_opts.background == null) {
@@ -450,17 +454,15 @@ fn applyPlaceChrome(
         }
     }
     if (given_opts.corners == null) box_opts.corners = .all(place_radius);
-    // Stretchy leftover (Center, Main) gets the fill, not a margin: margin would
-    // become a min-size floor and the trays could not take the last of the row.
-    // The gutter lives on the tray — `handle_size` of margin, pinned inside
-    // `extent`, so a sentinel at zero still adds nothing.
-    if (shut or !resize) return;
+    if (shut or !resize or given_opts.margin != null) return;
 
-    const max_gutter = Split.handle_size;
-    const max_chrome = 2 * max_gutter + 2 * place_pad;
-    const t: f32 = if (extent >= max_chrome) 1 else if (extent > 0) extent / max_chrome else 0;
-    if (given_opts.margin == null) box_opts.margin = .all(max_gutter * t);
-    if (given_opts.padding == null) box_opts.padding = .all(place_pad * t);
+    const gutter = if (extent > 0) @min(Split.handle_size, extent) else 0;
+    if (gutter <= 0) return;
+
+    box_opts.margin = switch (axis) {
+        .horizontal => if (after_base) .{ .x = gutter } else .{ .w = gutter },
+        .vertical => if (after_base) .{ .y = gutter } else .{ .h = gutter },
+    };
 
     const extra = box_opts.padSize(.{});
     const given = given_opts.min_size_content orelse dvui.Size{};

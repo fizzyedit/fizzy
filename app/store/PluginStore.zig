@@ -415,26 +415,12 @@ pub fn register(manager: PluginManager) !void {
 }
 
 /// Center provider: a VSCode marketplace-style detail page for the selected plugin. Active only
-/// while `tick` has swapped us in (store tab active + a plugin selected). Same rounded,
-/// content-colored "window" chrome every other center provider uses (`sdk.pane_layout.emptyStateCard`'s
-/// corners, flush to the top of the center region) so this page sizes and insets identically to
-/// the workbench homepage — just stacked vertically (header/tabs/content) instead of that
-/// helper's horizontal direction, so it isn't reused directly.
+/// while `tick` has swapped us in (store tab active + a plugin selected). The region is the
+/// card; this is only the vertical stack (header/tabs/content).
 fn drawReadmeCenter(_: ?*anyopaque) anyerror!dvui.App.Result {
-    const host = app.host;
-    var content_color = dvui.themeGet().color(.window, .fill);
-    switch (builtin.os.tag) {
-        .macos, .windows => {
-            if (!host.isMaximized()) content_color = content_color.opacity(host.contentOpacity());
-        },
-        else => {},
-    }
-
     var pane = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
-        .background = true,
-        .color_fill = content_color,
-        .corners = dvui.CornerRect.all(16),
+        .background = false,
         .id_extra = hashId(readme_center_id),
     });
     defer pane.deinit();
