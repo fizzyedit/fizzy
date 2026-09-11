@@ -147,5 +147,8 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 
 ## When you need more than this file
 
+- **Resuming the library/framework work (bookmark `fizzy-lib`)** → [`docs/LIB_CHECKPOINT.md`](docs/LIB_CHECKPOINT.md):
+  ground rules, what is done, the verification workflow, and the agreed next steps.
+
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
 - Living reshape plan (identity `plugin.zig.zon`, comptime `settings.Schema`, ZON user config, no sidecars) → [`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)
