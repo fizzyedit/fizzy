@@ -2,7 +2,7 @@
 
 Resume point for the "fizzy as a library" work. Written to be picked up cold by any agent or
 person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-11 at bookmark
-`fizzy-lib` (jj change `mpvsomux`, "A region is told what it shows…").
+`fizzy-lib` (jj change `plkoxuum`, "Every region has a corner button…").
 
 ## Ground rules that are easy to get wrong
 
@@ -62,30 +62,35 @@ Capture its window by pid with a Swift `CGWindowListCopyWindowInfo` script + `sc
 <wid>`. Fails (black/none) when the display is locked — fall back to headless integration tests.
 Kill by pid, not `%1`. A second launch hands argv to the first (singleton) and exits.
 
-## In progress: region-centric surface placement
+## Landed: region-centric surface placement
 
-Landed (commit "A region is told what it shows"): the model (`State.assignments`, region name →
-surface ids, persisted in `layout.zon` as `SavedRegion {name, extent?, surfaces?}`), keyword
-matching as the default with assignment overriding wholesale, the old per-surface keyword
-override deleted, and Settings > Layout > **Regions** as a table by region with a checkbox
-popup picker. Integration test: override, duplicate, empty, unknown id, unassign.
+- Model: `State.assignments` (region name → surface ids), persisted in `layout.zon` as
+  `SavedRegion {name, extent?, surfaces?}`; keyword matching is the default, an assignment
+  overrides wholesale; `Layout.matching` answers from it, `unplaced()` reads the registry.
+- `app/layout/Picker.zig`: the surface picker, on `State` (`openPicker(name, anchor)`), drawn
+  once per frame by the app after the shape (`layout.captureUnplaced(); state.picker.draw(&layout)`).
+  Cards carry **snapshots**: a placed surface is photographed where it draws on the next
+  frame (`Layout.draw` → `drawCaptured`, through `dvui.Picture` — a bare render-target switch
+  misses dvui's deferred draw queues); an unplaced one is drawn offscreen for 10 warm-up
+  frames, then photographed (first-frame layout is unsettled and reveals start hidden).
+  `Layout.drawn` decides "drew nowhere". Snapshots are discarded on close/reopen.
+- `Region.init` draws a corner button (hover near top-right) that opens the picker for that
+  region — framework, every app gets it.
+- Settings > Layout > Regions is a table by region that opens the same picker.
 
-Remaining, in order:
+Remaining from this arc:
 
-2. **Picker cards with snapshots**: replace the checkbox list's body with scrollable cards —
-   a **snapshot** preview (render the surface once into a texture target when the menu
-   opens; cache; never live-draw it in the card — widgets would run twice a frame and an
-   unplaced surface has no live pixels), title, owner plugin, checked if in this region.
-4. **Corner button** in `app/layout/Region.zig`: in `deinit`, if the mouse is near the
-   region's top-right, draw a small floating button that opens the same picker for that
-   region. Framework code — every app gets it. The picker must therefore move out of
-   `src/editor/LayoutSettings.zig` into `app/layout/` (it needs only Host + State).
 5. **Endless-handles example app** (`examples/`, its own piece): blank window, dormant split
    handles at the four edges; dragging one out appends a region to a *persisted tree* and a new
    dormant handle appears. The tree names its regions (`edge-left-2`) so assignments stay keyed
    by name. The picker gains a section of store surfaces not yet installed; choosing installs
    and assigns. This is a shape whose layout is data — acceptable as one example file, not as
    a mode on the ide shape.
+
+Known gaps: sidebar surfaces still read fizzy's `explorer.scroll_info` through `EditorAPI`
+(`explorerViewportWidth`), so an offscreen photograph of one is taken against the live
+sidebar's width; fine today, and one more reason to peel that API. The picker's popup is
+`dvui.popup`, which centres when unanchored and clamps to the window otherwise.
 
 ## Next arc after placement: plugins declare regions, documents are surfaces (agreed 2026-09-11)
 
