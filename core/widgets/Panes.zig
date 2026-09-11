@@ -296,7 +296,12 @@ fn dragTo(self: *Panes, i: usize, p: f32, s: f32) void {
         self.available,
     );
 
-    var w = self.w;
+    // A copy — `var w = self.w` was a slice alias, and a slice alias is the bug: `self.w` is this
+    // frame's layout, already half drawn when a drag arrives, and every offset came from it.
+    // Writing the resolved widths back into it gave the pane touching the boundary its new
+    // width under its old offset for one frame, so it ran under the next handle — the very
+    // thing the comment below says is deliberately not done.
+    const w = dvui.currentWindow().arena().dupe(f32, self.w) catch return;
 
     // Before the boundary. `w[i - 1]` takes up the slack; if the boundary has gone past where
     // pane i-1 even starts, that pane is shut and the deficit walks leftward.
@@ -388,17 +393,23 @@ fn draggableRowFrame() !dvui.App.Result {
         defer p.deinit();
         if (t_wide_content) {
             // What a pane really holds: an expanding box with a strip inside it wider than the
-            // pane can be. Nothing about it may leak into where the boundaries sit.
+            // pane can be, and a canvas filling the rest. Nothing about it may leak into where
+            // the boundaries sit, and its right edge is the pane's, every frame.
             var inner = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .id_extra = i });
             defer inner.deinit();
             var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .none, .min_size_content = .{ .w = 900, .h = 24 }, .id_extra = i });
             strip.deinit();
+            var canvas = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .id_extra = i });
+            const cr = canvas.data().borderRectScale().r;
+            t_content_right[i] = cr.x + cr.w;
+            canvas.deinit();
         }
         t_extents[i] = row.extent(i);
         // The pane's *drawn* width, not the one it was given: the two differing is the bug the
         // explicit placement in `pane` exists to prevent.
         t_drawn[i] = p.data().borderRectScale().r.w / p.data().borderRectScale().s;
         t_clip[i] = dvui.clipGet();
+        t_scale = p.data().borderRectScale().s;
         if (i > 0) t_divider_x[i] = p.data().borderRectScale().r.x - Split.handle_size / 2 * p.data().borderRectScale().s;
     }
     t_clip_after = dvui.clipGet();
@@ -407,6 +418,8 @@ fn draggableRowFrame() !dvui.App.Result {
 
 var t_drawn: [3]f32 = @splat(0);
 var t_wide_content = false;
+var t_content_right: [3]f32 = @splat(0);
+var t_scale: f32 = 1;
 var t_clip: [3]dvui.Rect.Physical = @splat(.{});
 var t_clip_after: dvui.Rect.Physical = .{};
 
@@ -517,10 +530,15 @@ test "content wider than its pane does not move any boundary during a drag" {
     var off: f32 = 0;
     for (0..8) |_| {
         off += 20;
+        // Leftward: pane 1 shrinks, pane 2 grows — the growing side is where stale content
+        // width shows as a gap before the next handle.
         _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = start - off, .y = 150 } });
         _ = try dvui.testing.step(draggableRowFrame);
         try testing.expectApproxEqAbs(pinned, t_divider_x[2], 0.5);
         for (0..t_count) |i| try testing.expectApproxEqAbs(t_extents[i], t_drawn[i], 0.5);
+        // The content's right edge is the pane's right edge: no gap, no overhang.
+        const pane1_right = t_divider_x[2] - Split.handle_size / 2 * t_scale;
+        try testing.expectApproxEqAbs(pane1_right, t_content_right[1], 0.5);
     }
     try release();
 }

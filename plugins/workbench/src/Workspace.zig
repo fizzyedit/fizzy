@@ -185,7 +185,9 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
         });
         defer reorderable.deinit();
 
-        const is_selected = selected_index == i;
+        // Active-tab chrome belongs to the one pane that is active: four panes each dressing
+        // their own tab as current is four claims to be where the next command lands.
+        const is_selected = selected_index == i and pane_is_active;
 
         var hbox: dvui.BoxWidget = undefined;
         hbox.init(@src(), .{ .dir = .horizontal }, .{

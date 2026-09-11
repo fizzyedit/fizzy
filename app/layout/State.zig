@@ -100,6 +100,9 @@ center_prev_id: ?[]const u8 = null,
 center_transition: core.anim.Transition = .{},
 /// Keyword sets qualified by the region enclosing theirs, interned. See `qualify`.
 qualified: std.ArrayListUnmanaged(Qualified) = .empty,
+/// Region names interned. The shape's own names are literals; a plugin's are formatted per
+/// frame ("Pane 3") into memory that is gone by the time the registry is read.
+names: std.StringHashMapUnmanaged(void) = .empty,
 
 // ---- the app's side of a region ---------------------------------------------------------------
 //
@@ -202,6 +205,21 @@ fn freeQualified(gpa: std.mem.Allocator, entry: Qualified) void {
 pub fn deinitQualified(self: *State, gpa: std.mem.Allocator) void {
     for (self.qualified.items) |q| freeQualified(gpa, q);
     self.qualified.deinit(gpa);
+    var it = self.names.keyIterator();
+    while (it.next()) |k| gpa.free(k.*);
+    self.names.deinit(gpa);
+}
+
+/// A copy of `name` that outlives the frame — the registry, the assignment table and the picker
+/// all hold a region's name across frames. Same string in, same slice out.
+pub fn internName(self: *State, gpa: std.mem.Allocator, name: []const u8) []const u8 {
+    if (self.names.getKey(name)) |k| return k;
+    const owned = gpa.dupe(u8, name) catch return name;
+    self.names.put(gpa, owned, {}) catch {
+        gpa.free(owned);
+        return name;
+    };
+    return owned;
 }
 
 /// Called by `Region.init` as a shape declares one. Lands in the list being built, which

@@ -590,7 +590,8 @@ pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.To
         return null;
     }
     const r = Region.init(self, @src(), .{
-        .name = spec.name,
+        // A plugin formats its name per frame; everything that holds it holds it across frames.
+        .name = self.state.internName(self.gpa, spec.name),
         .keywords = spec.keywords,
         .shows = spec.shows,
         .dir = spec.dir,
