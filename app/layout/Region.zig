@@ -219,7 +219,24 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     );
 
     const matches = self.matching(keywords);
-    if (init_opts.hide_when_empty and keywords.len > 0 and matches.len == 0) return .{};
+    if (init_opts.hide_when_empty and keywords.len > 0 and matches.len == 0) {
+        // A boundary with nothing on one side is not a boundary.
+        if (parent) |p| p.pending_split = null;
+        // Still a place, even with nothing in it: it stays in the registry so the picker and
+        // the settings table can put something back. Emptied through the picker and then
+        // gone from the picker was a region the user could not get back.
+        self.state.registerRegion(self.gpa, .{
+            .name = init_opts.name,
+            .keywords = keywords,
+            .shows = init_opts.shows,
+            .id = id,
+            .by_name = init_opts.by_name,
+        });
+        return .{};
+    }
+    // The split declared before this region divides it from the one before: drawn now, with
+    // this region known — so a split never precedes a region that is not there.
+    if (init_opts.resize) self.drawPendingSplit(id) else self.drawPendingSplit(null);
 
     // A resizable region's extent along its parent's axis is whatever the user last dragged it
     // to, defaulting to the `min_size_content` the shape wrote.
@@ -283,13 +300,6 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
             .vertical => .height(extent),
         };
         if (parent) |p| {
-            // A split declared *before* this region was waiting for a neighbour to resize — the
-            // bottom-panel shape, where the panel comes after its own split. Bind it now; the
-            // split picks it up next frame, the same one-frame settle everything else here uses.
-            if (p.pending_split) |sp| {
-                dvui.dataSet(null, sp, "_after", id);
-                p.pending_split = null;
-            }
             p.last_resizable = id;
             if (p.resizable_count < Layout.max_trays) {
                 p.resizables[p.resizable_count] = id;
@@ -340,6 +350,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         .shows = init_opts.shows,
         .id = id,
         .default_extent = default_extent,
+        .by_name = init_opts.by_name,
     });
 
     const box = dvui.box(src, .{ .dir = init_opts.dir }, box_opts);

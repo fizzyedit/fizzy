@@ -66,7 +66,7 @@ pub fn draw(query: *const fuzzy.Query) void {
     var any = false;
     for (regions, 0..) |r, i| {
         if (r.name.len == 0) continue;
-        if (filter_rows and !rowMatches(r.name, layout.matching(r.keywords), query)) continue;
+        if (filter_rows and !rowMatches(r.name, layout.matchingIn(&r), query)) continue;
         any = true;
         drawRow(editor, &layout, r, i);
     }
@@ -111,7 +111,7 @@ fn rowMatches(name: []const u8, contents: []const *Surface, query: *const fuzzy.
 fn drawRow(editor: *Editor, layout: *Editor.Layout, region: Editor.Region, idx: usize) void {
     const theme = dvui.themeGet();
     const assigned = editor.layout.assignment(region.name) != null;
-    const contents = layout.matching(region.keywords);
+    const contents = layout.matchingIn(&region);
 
     var block = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx,

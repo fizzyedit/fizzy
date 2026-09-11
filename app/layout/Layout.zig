@@ -165,6 +165,8 @@ depth: usize = 0,
 plugin_regions: [max_nesting]Region = undefined,
 plugin_depth: usize = 0,
 
+pub const PendingSplit = struct { src: std.builtin.SourceLocation, opts: Split.Options };
+
 pub const Container = struct {
     dir: dvui.enums.Direction,
     /// The dotted name of the region this container *is*, which the regions declared inside it
@@ -189,8 +191,11 @@ pub const Container = struct {
     handles: f32 = 0,
     /// The container's own box, for measuring how near the pointer is to a split inside it.
     box: ?*dvui.BoxWidget = null,
-    /// A split that found no resizable region before it, waiting to be bound to the one after.
-    pending_split: ?dvui.Id = null,
+    /// A split declared and not yet drawn. A split is a boundary *between* two regions, so it is
+    /// drawn when the region after it opens — and not at all if that region declines to exist
+    /// (`hide_when_empty`). Drawing it eagerly left a handle with nothing behind it, still
+    /// draggable, still resizing a region that was not there.
+    pending_split: ?PendingSplit = null,
     /// The most recent resizable child. A `split` drags *this* region's stored extent — the
     /// neighbour before it — which is the whole of the resize mechanism: there are no ratios and
     /// no boundary table, just one number per resizable region.
@@ -685,28 +690,34 @@ pub fn split(self: *Layout, src: std.builtin.SourceLocation, opts: Split.Options
         dvui.log.err("split() outside a region does nothing", .{});
         return;
     };
+    if (c.pending_split != null) dvui.log.err("two splits with no region between them; the first is dropped", .{});
+    c.pending_split = .{ .src = src, .opts = opts };
+}
+
+/// Draw the split waiting in the innermost container, now that `after` — the region it divides
+/// from the one before — is about to open. Called by `Region.init` for every region that exists.
+pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
+    const c = self.innermost() orelse return;
+    const pending = c.pending_split orelse return;
+    c.pending_split = null;
     const axis = c.dir;
 
-    var divider = Split.init(src, axis, 0, null);
+    var divider = Split.init(pending.src, axis, 0, null);
     defer divider.deinit();
-    if (!opts.resize) return;
+    if (!pending.opts.resize) return;
 
-    // Which neighbour this split resizes. Preferring the one *before* it makes the sidebar case
-    // work immediately; falling back to the one after is what the bottom panel needs, since a
-    // panel is declared after its own split and cannot be known when the split is drawn. That one
-    // is bound by `region` and read back a frame later.
+    // Which neighbour this split resizes. The one *before* it when there is one (the sidebar);
+    // otherwise the one after, which is the bottom panel's shape and is known now because the
+    // split is drawn as that region opens.
     var sign: f32 = 1;
     const target = c.last_resizable orelse blk: {
         sign = -1;
-        break :blk dvui.dataGet(null, divider.box.data().id, "_after", dvui.Id) orelse {
-            c.pending_split = divider.box.data().id;
-            return;
-        };
+        break :blk after orelse return;
     };
 
     const container = c.box orelse return;
     c.handles += Split.handle_size;
-    divider.drag(container, target, sign, opts, .{
+    divider.drag(container, target, sign, pending.opts, .{
         .extent = c.extent(axis),
         .base_min = c.base_min,
         .handles = c.handles,

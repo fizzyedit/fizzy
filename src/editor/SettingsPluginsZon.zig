@@ -365,7 +365,6 @@ pub fn parseExtensions(gpa: Allocator, text: []const u8) ![]const []const u8 {
     return out.toOwnedSlice(gpa);
 }
 
-
 pub fn freeExtensions(gpa: Allocator, exts: []const []const u8) void {
     for (exts) |e| gpa.free(e);
     gpa.free(exts);
@@ -772,4 +771,3 @@ test "composeMergedText dedents an already-nested block (no indent compounding)"
         \\
     , composed);
 }
-

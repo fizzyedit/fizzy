@@ -26,4 +26,3 @@ pub const perf_logging: bool = false;
 /// Pretend an app update is available (badge + launch toast) — a build-time debug flag now;
 /// flip and rebuild to test the update-available UI.
 pub const debug_simulate_update_available: bool = false;
-

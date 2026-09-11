@@ -386,6 +386,14 @@ fn draggableRowFrame() !dvui.App.Result {
         row.divider(@src(), i);
         var p = row.pane(@src(), i);
         defer p.deinit();
+        if (t_wide_content) {
+            // What a pane really holds: an expanding box with a strip inside it wider than the
+            // pane can be. Nothing about it may leak into where the boundaries sit.
+            var inner = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .id_extra = i });
+            defer inner.deinit();
+            var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .none, .min_size_content = .{ .w = 900, .h = 24 }, .id_extra = i });
+            strip.deinit();
+        }
         t_extents[i] = row.extent(i);
         // The pane's *drawn* width, not the one it was given: the two differing is the bug the
         // explicit placement in `pane` exists to prevent.
@@ -398,6 +406,7 @@ fn draggableRowFrame() !dvui.App.Result {
 }
 
 var t_drawn: [3]f32 = @splat(0);
+var t_wide_content = false;
 var t_clip: [3]dvui.Rect.Physical = @splat(.{});
 var t_clip_after: dvui.Rect.Physical = .{};
 
@@ -488,6 +497,29 @@ test "dragging one boundary leaves the next one exactly where it was, every fram
         try testing.expectApproxEqAbs(third, t_extents[2], 0.5);
         // And every pane is drawn at the width it was given, which is the same statement from
         // the other side.
+        for (0..t_count) |i| try testing.expectApproxEqAbs(t_extents[i], t_drawn[i], 0.5);
+    }
+    try release();
+}
+
+test "content wider than its pane does not move any boundary during a drag" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 600, .h = 300 } });
+    defer t.deinit();
+    clearShares();
+    t_wide_content = true;
+    defer t_wide_content = false;
+    try dvui.testing.settle(draggableRowFrame);
+
+    const start = t_divider_x[1];
+    const pinned = t_divider_x[2];
+    try grabDivider(1);
+    const cw = dvui.currentWindow();
+    var off: f32 = 0;
+    for (0..8) |_| {
+        off += 20;
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = start - off, .y = 150 } });
+        _ = try dvui.testing.step(draggableRowFrame);
+        try testing.expectApproxEqAbs(pinned, t_divider_x[2], 0.5);
         for (0..t_count) |i| try testing.expectApproxEqAbs(t_extents[i], t_drawn[i], 0.5);
     }
     try release();

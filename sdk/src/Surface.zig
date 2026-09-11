@@ -20,7 +20,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const Plugin = @import("Plugin.zig");
-const DocHandle = @import("DocHandle.zig");
 const kw = @import("keywords.zig");
 
 const Surface = @This();
@@ -48,11 +47,6 @@ draw: *const fn (ctx: ?*anyopaque) anyerror!dvui.App.Result,
 /// is selected in the rail, and a plugin's README fills it while its store card is. One rule in
 /// the layout, declared by the surface, instead of a hook per place it can happen.
 takeover_when: ?[]const u8 = null,
-/// The open document this surface draws, when it is one. The app registers a surface per open
-/// file (`document.surfaceId`) so a document is placed, listed and restored like anything else;
-/// a workbench reads the handle back from here — for the tab's dirty dot, its close, the save
-/// commands that act on "the active document" — without a lookup by path.
-document: ?DocHandle = null,
 /// Runtime state, not registration data: the plugin store toggles a built-in off without
 /// unloading it. Set through `Host.setSurfaceHidden`.
 hidden: bool = false,

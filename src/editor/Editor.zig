@@ -3032,7 +3032,6 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
         .owner = doc.owner,
         .title = std.fs.path.basename(ds.id),
         .keywords = sdk.document.keywords,
-        .document = doc,
         .ctx = ds,
         .draw = drawDocSurface,
     });
@@ -5886,6 +5885,7 @@ pub fn deinit(editor: *Editor) !void {
     saveWindowRatiosRaw(editor);
     // Only after the flush above, which writes the assignments out.
     editor.layout.deinitAssignments(editor.gpa);
+    editor.layout.deinitExtents(editor.gpa);
     editor.layout.deinitQualified(editor.gpa);
     editor.layout.picker.close(editor.gpa);
     {

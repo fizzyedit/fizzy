@@ -1922,6 +1922,83 @@ test "the more specific region claims a surface, an equal one shares it" {
     try std.testing.expectEqualStrings("test.doc", layout.matching(main)[0].id);
 }
 
+// The bottom panel's shape: Main, a split, then the panel — declared after its own split and
+// hiding itself when it has nothing to show. With every panel view toggled off, the split used to
+// stay behind as a handle with nothing after it, still draggable. A split is drawn by the region
+// that follows it, or not at all.
+const EmptyPanelFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+    var main_draws: usize = 0;
+
+    fn drawMain(_: ?*anyopaque) anyerror!dvui.App.Result {
+        main_draws += 1;
+        return .ok;
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        main_draws = 0;
+        var layout = fizzy.Editor.Layout.init(&e.host, &e.layout, e.gpa, dvui.currentWindow().arena());
+        {
+            var content = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            defer content.deinit();
+            {
+                var main = try layout.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main }, .{ .expand = .both });
+                defer main.deinit();
+            }
+            layout.split(@src(), .{});
+            {
+                var panel = try layout.region(@src(), .{
+                    .name = "Panel",
+                    .keywords = fizzy.sdk.keywords.ide.panel,
+                    .resize = true,
+                    .hide_when_empty = true,
+                }, .{ .min_size_content = .{ .h = 220 }, .expand = .horizontal });
+                defer panel.deinit();
+            }
+        }
+        if (layout.depth != 0) return error.TestUnexpectedResult;
+        e.layout.publishRegions();
+        return .ok;
+    }
+};
+
+test "a split before a region that hides itself is not drawn, and nothing draws twice" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+
+    try editor.host.registerSurface(.{ .id = "test.main", .title = "Main", .keywords = fizzy.sdk.keywords.ide.main, .draw = EmptyPanelFrame.drawMain });
+    try editor.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = fizzy.sdk.keywords.ide.panel, .draw = EmptyPanelFrame.drawMain });
+
+    EmptyPanelFrame.editor = editor;
+    defer EmptyPanelFrame.editor = null;
+    try dvui.testing.settle(EmptyPanelFrame.frame);
+    // Both surfaces drew (the counter is shared): main once, output once.
+    try std.testing.expectEqual(@as(usize, 2), EmptyPanelFrame.main_draws);
+    try std.testing.expectEqual(@as(usize, 2), editor.layout.regions.items.len);
+
+    // Every panel view toggled off, as the panel's menu does.
+    editor.host.setSurfaceHidden("test.output", true);
+    try dvui.testing.settle(EmptyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), EmptyPanelFrame.main_draws);
+    // The panel drew nothing and no split survived it — but it is still a place the picker can
+    // find, which is how the user gets it back.
+    try std.testing.expectEqual(@as(usize, 2), editor.layout.regions.items.len);
+    try std.testing.expectEqualStrings("Panel", editor.layout.regions.items[1].name);
+
+    // And it comes back.
+    editor.host.setSurfaceHidden("test.output", false);
+    try dvui.testing.settle(EmptyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 2), editor.layout.regions.items.len);
+}
+
 // Two document panes accept the same qualified keywords, and by keyword group they would be one
 // region: one assignment, one active tab. A plugin-declared region resolves by *name* instead,
 // which is what lets a workbench have as many panes as the user opens.

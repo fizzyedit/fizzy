@@ -51,6 +51,13 @@ pub fn deinit(self: *Workspace) void {
     }
 }
 
+/// The document a surface draws, if it is one. By the id's convention rather than a field on
+/// `Surface`: a surface says what it is, and "is a document" is this plugin's question.
+fn documentOf(s: *const sdk.Surface) ?sdk.DocHandle {
+    const path = sdk.document.pathOfSurfaceId(s.id) orelse return null;
+    return runtime.host().docFromPath(path);
+}
+
 /// The region name this pane persists under. One spelling, here, because the app's assignment
 /// table is keyed by it and the workbench has to find last session's panes by it.
 pub fn name(buf: []u8, grouping: u64) []const u8 {
@@ -104,7 +111,7 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
 
     const tabs = region.matching();
     const selected = region.selected();
-    self.active = if (selected) |s| s.document else null;
+    self.active = if (selected) |s| documentOf(s) else null;
 
     if (tabs.len > 0) self.drawTabs(region, tabs, selected);
     try self.drawCanvas(region, tabs.len > 0);
@@ -167,7 +174,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
     };
 
     for (tabs, 0..) |surface, i| {
-        const doc = surface.document orelse continue;
+        const doc = documentOf(surface) orelse continue;
 
         var reorderable = reorder.reorderable(@src(), .{}, .{
             .expand = .vertical,

@@ -63,7 +63,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
         state.discardSnapshots(gpa);
         return;
     };
-    const contents = f.matching(region.keywords);
+    const contents = f.matchingIn(&region);
     const theme = dvui.themeGet();
 
     // Same card as the command palette's panel: translucent content fill, rounded, no border,

@@ -310,6 +310,12 @@ pub fn openPicker(self: *State, gpa: std.mem.Allocator, name: []const u8, anchor
     self.picker.open(gpa, name, anchor);
 }
 
+pub fn deinitExtents(self: *State, gpa: std.mem.Allocator) void {
+    var it = self.extents.keyIterator();
+    while (it.next()) |k| gpa.free(k.*);
+    self.extents.deinit(gpa);
+}
+
 pub fn deinitAssignments(self: *State, gpa: std.mem.Allocator) void {
     var it = self.assignments.iterator();
     while (it.next()) |e| {

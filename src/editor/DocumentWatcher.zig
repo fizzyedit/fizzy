@@ -121,7 +121,6 @@ pub fn start(self: *DocumentWatcher) !void {
 }
 
 /// Safe from the nightwatch handler thread — wakes the blocked event loop for one frame.
-
 /// Main-thread only. Call after mutating open-doc contents so the editor repaints without
 /// waiting for an unrelated input event. `backend.refresh` alone is enough to wake a sleeping
 /// loop from a background thread, but a mid/end-of-frame reload also needs `dvui.refresh` so

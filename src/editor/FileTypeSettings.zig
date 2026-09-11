@@ -35,8 +35,8 @@ const fallback_label = "Text (fallback)";
 /// Terms that name the *table itself* rather than any one extension, so searching "file types"
 /// finds the whole list. Scored one term at a time, for the reason `KeybindSettings` explains.
 const table_keywords = [_][]const u8{
-    "file",      "files",   "filetype", "filetypes", "file type",
-    "extension", "default", "defaults", "opens",     "associate",
+    "file",         "files",   "filetype", "filetypes", "file type",
+    "extension",    "default", "defaults", "opens",     "associate",
     "associations",
 };
 

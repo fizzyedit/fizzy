@@ -60,7 +60,9 @@ pub fn surfaceId(allocator: std.mem.Allocator, owner_id: []const u8, path: []con
 pub const keyword = "document";
 pub const keywords: []const []const u8 = &.{keyword};
 
-/// Whether a surface id names a document, and the path if so.
+/// Whether a surface id names a document, and the path if so. This is how a surface is mapped
+/// back to its document (`host.docFromPath`) — by convention of the id, so `Surface` itself
+/// carries nothing document-shaped.
 pub fn pathOfSurfaceId(id: []const u8) ?[]const u8 {
     const marker = ".doc:";
     const at = std.mem.indexOf(u8, id, marker) orelse return null;
