@@ -271,16 +271,21 @@ export fn fizzy_macos_window_request_clear_frames(frames: c_int) void {
 // the cross-platform ratio save (debounced, on every platform) — so both read-modify-write
 // (`loadWindowFile` then override only their own fields) rather than overwriting the whole file,
 // so neither ever clobbers what the other most recently wrote.
-/// One region's remembered extent, in points, by the name its shape declared.
+/// One region as `layout.zon` remembers it, by the name its shape declared: how wide or tall
+/// the user left it, and what they chose to show in it. Either half may be absent — a region
+/// dragged but never assigned, or assigned but never dragged.
 ///
 /// Replaced the hardcoded `explorer_ratio` / `panel_ratio` pair, which named the two regions fizzy
 /// happens to have — so an app with a "Stack" and a "Strip" could persist nothing, and fizzy's own
 /// furniture was baked into a framework's on-disk format.
-pub const RegionExtent = struct {
+pub const SavedRegion = struct {
     name: []const u8,
     /// Points along the region's own axis: width under a horizontal parent, height under a
     /// vertical one. One number, because a region only ever divides its parent one way.
-    extent: f32,
+    extent: ?f32 = null,
+    /// Surface ids the user assigned, in their order. `null` is "never chose" — the region's
+    /// keywords decide — and an empty list is a region emptied on purpose.
+    surfaces: ?[]const []const u8 = null,
 };
 
 const SavedFrame = struct {
@@ -288,9 +293,11 @@ const SavedFrame = struct {
     y: f64 = 0,
     w: f64 = 0,
     h: f64 = 0,
-    regions: []const RegionExtent = &.{},
+    regions: []const SavedRegion = &.{},
 };
 const layout_file = "layout.zon";
+/// Geometry plus a line or two per region; far more than this is a corrupt file, not a layout.
+const max_layout_file: usize = 64 * 1024;
 /// What `layout.zon` used to be called, read once as a fallback so an existing install keeps its
 /// window position. It only ever held geometry plus two hardcoded region ratios; the name stopped
 /// fitting when regions became something a shape names for itself.
@@ -312,23 +319,21 @@ fn windowFilePath(buf: []u8, dir: []const u8, name: []const u8) ?[:0]const u8 {
 fn loadWindowFile(gpa: std.mem.Allocator, dir: []const u8) SavedFrame {
     var path_buf: [1024]u8 = undefined;
     const path = windowFilePath(&path_buf, dir, layout_file) orelse return .{};
-    const data = std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(4096)) catch blk: {
+    const data = std.Io.Dir.cwd().readFileAlloc(dvui.io, path, gpa, .limited(max_layout_file)) catch blk: {
         // Fall back to the old name once, so an existing install keeps its window position.
         var legacy_buf: [1024]u8 = undefined;
         const legacy = windowFilePath(&legacy_buf, dir, legacy_window_file) orelse return .{};
-        break :blk std.Io.Dir.cwd().readFileAlloc(dvui.io, legacy, gpa, .limited(4096)) catch return .{};
+        break :blk std.Io.Dir.cwd().readFileAlloc(dvui.io, legacy, gpa, .limited(max_layout_file)) catch return .{};
     };
     defer gpa.free(data);
-    var nul_buf: [4097]u8 = undefined;
-    if (data.len >= nul_buf.len) return .{};
-    @memcpy(nul_buf[0..data.len], data);
-    nul_buf[data.len] = 0;
+    const data_z = gpa.dupeZ(u8, data) catch return .{};
+    defer gpa.free(data_z);
     // `fromSliceAlloc`, not `fromSlice`: the region list holds allocated names, and `fromSlice`
     // asserts at comptime that the result contains no pointers.
     return std.zon.parse.fromSliceAlloc(
         SavedFrame,
         gpa,
-        nul_buf[0..data.len :0],
+        data_z,
         null,
         .{ .ignore_unknown_fields = true },
     ) catch .{};
@@ -375,29 +380,58 @@ fn writeSavedFrame(dir: []const u8, x: f64, y: f64, w: f64, h: f64) void {
 /// explorer/panel split ratios. Cross-platform (called from `Editor`'s debounced autosave on
 /// every OS, not just macOS).
 /// Read-modify-write: keeps whatever frame geometry is on disk, replaces the region list.
-pub fn saveRegionExtents(dir: []const u8, extents: []const RegionExtent) void {
+pub fn saveRegions(dir: []const u8, regions: []const SavedRegion) void {
     const gpa = std.heap.page_allocator;
     var f = loadWindowFile(gpa, dir);
     defer std.zon.parse.free(gpa, f);
     const keep = f.regions;
-    f.regions = extents;
+    f.regions = regions;
     writeWindowFile(dir, f);
     f.regions = keep;
 }
 
-/// Every region's remembered extent, in `gpa`-owned memory. Call once at startup; free the
-/// names with `gpa` when done.
-pub fn loadRegionExtents(gpa: std.mem.Allocator, dir: []const u8) []RegionExtent {
+/// Every region `layout.zon` remembers, in `gpa`-owned memory. Call once at startup; free with
+/// `freeRegions`.
+pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8) []SavedRegion {
     const f = loadWindowFile(gpa, dir);
-    const out = gpa.alloc(RegionExtent, f.regions.len) catch {
-        std.zon.parse.free(gpa, f);
-        return &.{};
-    };
-    for (f.regions, 0..) |r, i| {
-        out[i] = .{ .name = gpa.dupe(u8, r.name) catch "", .extent = r.extent };
+    defer std.zon.parse.free(gpa, f);
+    const out = gpa.alloc(SavedRegion, f.regions.len) catch return &.{};
+    var n: usize = 0;
+    for (f.regions) |r| {
+        const name = gpa.dupe(u8, r.name) catch continue;
+        var surfaces: ?[]const []const u8 = null;
+        if (r.surfaces) |ids| {
+            const owned = gpa.alloc([]const u8, ids.len) catch {
+                gpa.free(name);
+                continue;
+            };
+            var m: usize = 0;
+            while (m < ids.len) : (m += 1) {
+                owned[m] = gpa.dupe(u8, ids[m]) catch break;
+            }
+            if (m < ids.len) { // partial: drop the whole region rather than keep half a list
+                for (owned[0..m]) |id| gpa.free(id);
+                gpa.free(owned);
+                gpa.free(name);
+                continue;
+            }
+            surfaces = owned;
+        }
+        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces };
+        n += 1;
     }
-    std.zon.parse.free(gpa, f);
-    return out;
+    return out[0..n];
+}
+
+pub fn freeRegions(gpa: std.mem.Allocator, regions: []SavedRegion) void {
+    for (regions) |r| {
+        gpa.free(r.name);
+        if (r.surfaces) |ids| {
+            for (ids) |id| gpa.free(id);
+            gpa.free(ids);
+        }
+    }
+    gpa.free(regions);
 }
 
 /// True if the saved frame's title strip lands on a connected display (guards

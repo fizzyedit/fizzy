@@ -202,12 +202,13 @@ pub const groups = [_]Group{
         .icon = icons.tvg.lucide.@"panel-left",
         .items = &.{
             .{
-                .label = "Panel placement",
-                .key = "surface_keywords",
-                .description = "Where each plugin's panels draw. A plugin declares the kind of " ++
-                    "place its panel belongs and this layout's regions declare what they accept; " ++
-                    "where the two agree is where it lands. Move one anywhere, or nowhere — the " ++
-                    "choice is remembered per panel.",
+                .label = "Regions",
+                .key = "regions",
+                .description = "What each region of the window shows. A plugin declares the kind " ++
+                    "of place its panels belong and this layout's regions declare what they " ++
+                    "accept; where the two agree is where a panel lands by default. Choose a " ++
+                    "region's contents yourself and that choice is remembered — the same panel " ++
+                    "in two places, or a region left empty, are both allowed.",
                 .keywords = "region placement move panel sidebar surface unplaced keywords",
                 // Every panel is individually searchable — see `LayoutSettings`.
                 .search = .{ .score = LayoutSettings.score, .draw = LayoutSettings.draw },

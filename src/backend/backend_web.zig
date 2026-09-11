@@ -70,16 +70,17 @@ pub fn showWindow(_: *dvui.Window) void {}
 /// Symmetric with the native API: no window geometry to persist on web.
 pub fn saveWindowGeometry(_: *dvui.Window) void {}
 
-/// Symmetric with the native API: no `window.zon` to persist on web.
-pub const RegionExtent = struct { name: []const u8, extent: f32 };
+/// Symmetric with the native API: no `layout.zon` to persist on web.
+pub const SavedRegion = struct { name: []const u8, extent: ?f32 = null, surfaces: ?[]const []const u8 = null };
 
-pub fn saveRegionExtents(_: []const u8, _: []const RegionExtent) void {}
+pub fn saveRegions(_: []const u8, _: []const SavedRegion) void {}
 
-/// Symmetric with the native API: no `window.zon` to read on web — same defaults
-/// `SavedFrame` itself declares natively.
-pub fn loadRegionExtents(_: std.mem.Allocator, _: []const u8) []RegionExtent {
+/// Symmetric with the native API: no `layout.zon` to read on web.
+pub fn loadRegions(_: std.mem.Allocator, _: []const u8) []SavedRegion {
     return &.{};
 }
+
+pub fn freeRegions(_: std.mem.Allocator, _: []SavedRegion) void {}
 
 /// Symmetric with the native API: no AppKit pump on web.
 pub fn macosLaunchComplete() void {}

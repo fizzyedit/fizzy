@@ -209,13 +209,6 @@ plugin_flags_pending: std.StringArrayHashMapUnmanaged(PendingPluginFlags) = .emp
 /// freed when `writeMergedSettings` drains it. Written only by `resolveExtensionConflict`.
 plugin_extensions_pending: std.StringArrayHashMapUnmanaged([]const []const u8) = .empty,
 
-/// Keyword overrides waiting to be written, by the settings block they belong in. Same buffering
-/// as `plugin_extensions_pending`: the user moves a surface, the map records it, and the next
-/// save composes `.plugins.<id>.surface_keywords` from disk plus this.
-///
-/// Keys and the entries' strings are gpa-owned by the editor.
-surface_keywords_pending: std.StringArrayHashMapUnmanaged([]const SettingsPluginsZon.SurfaceKeywords) = .empty,
-
 /// In-memory `ext → owning plugin id` map, rebuilt by `rebuildExtensionOwnerCache` from the
 /// persisted per-plugin `.extensions` lists of the *currently loaded* plugins. Backs
 /// `EditorAPI.extensionOwnerOverride`, i.e. step 1 of `Host.pluginForExtension`.
@@ -566,10 +559,12 @@ pub fn init(
     }
 
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        const extents = fizzy.backend.loadRegionExtents(app.allocator, editor.config_folder);
-        defer app.allocator.free(extents);
-        for (extents) |r| {
-            editor.layout.extents.put(app.allocator, r.name, r.extent) catch continue;
+        // What `layout.zon` remembers per region: its extent, and what the user put in it.
+        const saved = fizzy.backend.loadRegions(app.allocator, editor.config_folder);
+        defer fizzy.backend.freeRegions(app.allocator, saved);
+        for (saved) |r| {
+            if (r.extent) |e| _ = editor.layout.setExtent(app.allocator, r.name, e);
+            if (r.surfaces) |ids| editor.layout.assign(app.allocator, r.name, ids) catch continue;
         }
     }
 
@@ -1358,68 +1353,6 @@ fn isValidPluginId(id: []const u8) bool {
 /// false all mean disabled — R12), and `auto_update_off_ids` from every `.plugins.<id>.auto_update`
 /// that is explicitly `false`. One directory walk and one settings read for both.
 /// Call once after settings load, before `loadUserPlugins`.
-/// Reads every `.plugins.<id>.surface_keywords` block from `settings.zon` into
-/// `surface_keyword_overrides`.
-///
-/// This is what makes a plugin's declared keywords a *default* rather than a decree: if a
-/// surface lands somewhere unhelpful, the user changes where it goes without waiting on a plugin
-/// release. Deliberately tolerant — a malformed override yields fewer entries, never a startup
-/// failure, because this file is one the user is invited to hand-edit.
-fn loadSurfaceKeywordOverrides(editor: *Editor) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = editor.gpa;
-
-    const settings_path = std.fs.path.join(gpa, &.{ editor.config_folder, "settings.zon" }) catch return;
-    defer gpa.free(settings_path);
-    const data = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch return;
-    defer gpa.free(data);
-
-    const blocks = SettingsPluginsZon.listPluginBlocks(gpa, data) catch return;
-    defer SettingsPluginsZon.freeEntries(gpa, blocks);
-
-    for (blocks) |block| {
-        const text = block.text orelse continue;
-        const text_z = gpa.dupeZ(u8, text) catch continue;
-        defer gpa.free(text_z);
-        const kw_text = SettingsPluginsZon.extractField(gpa, text_z, "surface_keywords") orelse continue;
-        defer gpa.free(kw_text);
-
-        const parsed = SettingsPluginsZon.parseSurfaceKeywords(gpa, kw_text) catch continue;
-        defer SettingsPluginsZon.freeSurfaceKeywords(gpa, parsed);
-
-        for (parsed) |entry| {
-            // The map owns its keys and values; `parsed` is freed above.
-            const id_owned = gpa.dupe(u8, entry.surface_id) catch continue;
-            var kws = gpa.alloc([]const u8, entry.keywords.len) catch {
-                gpa.free(id_owned);
-                continue;
-            };
-            var n: usize = 0;
-            for (entry.keywords) |k| {
-                kws[n] = gpa.dupe(u8, k) catch break;
-                n += 1;
-            }
-            kws = kws[0..n];
-            if (n == 0) {
-                gpa.free(id_owned);
-                gpa.free(kws);
-                continue;
-            }
-            const gop = editor.layout.keyword_overrides.getOrPut(gpa, id_owned) catch {
-                gpa.free(id_owned);
-                for (kws) |k| gpa.free(k);
-                gpa.free(kws);
-                continue;
-            };
-            if (gop.found_existing) {
-                gpa.free(id_owned);
-                for (gop.value_ptr.*) |k| gpa.free(k);
-                gpa.free(gop.value_ptr.*);
-            }
-            gop.value_ptr.* = kws;
-        }
-    }
-}
 
 fn seedPluginFlags(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
@@ -1706,79 +1639,6 @@ fn readPluginExtensions(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id
     return SettingsPluginsZon.parseExtensions(gpa, text) catch &.{};
 }
 
-fn readSurfaceKeywords(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id: []const u8) []const SettingsPluginsZon.SurfaceKeywords {
-    const text = readPluginReservedField(gpa, settings_data, id, "surface_keywords") orelse return &.{};
-    defer gpa.free(text);
-    return SettingsPluginsZon.parseSurfaceKeywords(gpa, text) catch &.{};
-}
-
-/// Record where a surface should draw, overriding the keywords its plugin declared.
-///
-/// `block_id` is the `.plugins.<id>` block the override is written into — the owning plugin's id,
-/// or `"fizzy"` for a surface the application itself registered. The override map is keyed by
-/// surface id and read live by the layout, so the move takes effect on the next frame; this is
-/// only about making it survive a restart.
-pub fn setSurfaceKeywords(editor: *Editor, block_id: []const u8, surface_id: []const u8, keywords: []const []const u8) !void {
-    const gpa = editor.gpa;
-
-    // Live: what `Layout.effectiveKeywords` reads.
-    {
-        const owned = try gpa.alloc([]const u8, keywords.len);
-        errdefer gpa.free(owned);
-        var n: usize = 0;
-        errdefer for (owned[0..n]) |k| gpa.free(k);
-        for (keywords) |k| {
-            owned[n] = try gpa.dupe(u8, k);
-            n += 1;
-        }
-        const gop = try editor.layout.keyword_overrides.getOrPut(gpa, surface_id);
-        if (gop.found_existing) {
-            for (gop.value_ptr.*) |k| gpa.free(k);
-            gpa.free(gop.value_ptr.*);
-        } else {
-            gop.key_ptr.* = try gpa.dupe(u8, surface_id);
-        }
-        gop.value_ptr.* = owned;
-    }
-
-    // Buffered for the next write of `settings.zon`.
-    var entry: SettingsPluginsZon.SurfaceKeywords = .{
-        .surface_id = try gpa.dupe(u8, surface_id),
-        .keywords = blk: {
-            const owned = try gpa.alloc([]const u8, keywords.len);
-            for (keywords, 0..) |k, i| owned[i] = try gpa.dupe(u8, k);
-            break :blk owned;
-        },
-    };
-
-    const gop = try editor.surface_keywords_pending.getOrPut(gpa, block_id);
-    if (!gop.found_existing) {
-        gop.key_ptr.* = try gpa.dupe(u8, block_id);
-        gop.value_ptr.* = &.{};
-    }
-
-    // Replace this surface's entry, keep the block's others.
-    var list: std.ArrayListUnmanaged(SettingsPluginsZon.SurfaceKeywords) = .empty;
-    defer list.deinit(gpa);
-    for (gop.value_ptr.*) |e| {
-        if (std.mem.eql(u8, e.surface_id, surface_id)) {
-            gpa.free(e.surface_id);
-            for (e.keywords) |k| gpa.free(k);
-            gpa.free(e.keywords);
-            continue;
-        }
-        try list.append(gpa, e);
-    }
-    try list.append(gpa, entry);
-    entry = undefined;
-    gpa.free(gop.value_ptr.*);
-    gop.value_ptr.* = try list.toOwnedSlice(gpa);
-
-    editor.saveSettingsRaw() catch |err| {
-        dvui.log.err("Failed to persist surface placement ({s}); deferring to autosave", .{@errorName(err)});
-        editor.host.markSettingsDirty();
-    };
-}
 
 fn clearExtensionOwnerCache(editor: *Editor) void {
     const gpa = editor.gpa;
@@ -2594,10 +2454,6 @@ pub fn postInit(editor: *Editor) !void {
     // disabled plugins are skipped at startup and the store's auto-update pass already knows
     // which plugins opted out.
     editor.seedPluginFlags();
-    // Per-surface keyword overrides: the user's answer to "where should this go", which wins
-    // over whatever the plugin declared. Read before plugins draw anything.
-    loadSurfaceKeywordOverrides(editor);
-
     // User-installed plugins from `<config>/plugins/{id}.{dylib,so,dll}`.
     editor.loadUserPlugins(editor.config_folder);
 
@@ -3537,10 +3393,6 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
         var it = pending_exts.iterator();
         while (it.next()) |e| try touched.put(gpa, e.key_ptr.*, {});
     }
-    {
-        var it = editor.surface_keywords_pending.iterator();
-        while (it.next()) |e| try touched.put(gpa, e.key_ptr.*, {});
-    }
 
     const existing = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
     defer if (existing) |e| gpa.free(e);
@@ -3587,13 +3439,6 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
         // Pending owns the list (freed with `pending_exts`); borrow it for composition.
         if (pending_exts.get(id)) |exts| reserved.extensions = exts;
 
-        // Where the user moved a surface. Disk is the base — another block's surfaces are none of
-        // this one's business, but this block may already carry overrides for surfaces the user
-        // has not touched this session.
-        const disk_kw = readSurfaceKeywords(gpa, existing, id);
-        defer SettingsPluginsZon.freeSurfaceKeywords(gpa, disk_kw);
-        reserved.surface_keywords = disk_kw;
-        if (editor.surface_keywords_pending.get(id)) |pending_kw| reserved.surface_keywords = pending_kw;
         if (pending_settings.get(id)) |maybe| {
             // Pending owns this blob (freed with `pending_settings`); borrow for composition.
             if (settings_owned) |s| {
@@ -3611,7 +3456,7 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
         // even when everything else sits at its default (e.g. an extension assigned to a plugin
         // that is currently disabled).
         if (reserved.enabled == null and reserved.auto_update and reserved.extensions.len == 0 and
-            reserved.surface_keywords.len == 0 and settings_text == null)
+            settings_text == null)
         {
             try overlay.append(gpa, .{ .id = id, .text = null });
         } else {
@@ -4024,14 +3869,14 @@ fn saveWindowRatiosGuarded(editor: *Editor) void {
     if (editor.activelyDrawing())
         return;
 
-    editor.saveRegionExtents();
+    editor.saveRegions();
     editor.layout.dirty = false;
 }
 
 /// Flush to disk regardless of idle/drawing deferral — used during shutdown only.
 fn saveWindowRatiosRaw(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    editor.saveRegionExtents();
+    editor.saveRegions();
     editor.layout.dirty = false;
 }
 
@@ -4587,16 +4432,38 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
     try editor.workbench.rebuildWorkspaces();
 }
 
-/// Write every region's extent to `layout.zon`, by name.
-fn saveRegionExtents(editor: *Editor) void {
+/// Write every region's extent and assignment to `layout.zon`, by name. One record per region
+/// whichever half it has, so a region emptied on purpose is written as an empty list.
+fn saveRegions(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    var list: std.ArrayListUnmanaged(fizzy.backend.RegionExtent) = .empty;
-    defer list.deinit(editor.gpa);
-    var it = editor.layout.extents.iterator();
-    while (it.next()) |e| {
-        list.append(editor.gpa, .{ .name = e.key_ptr.*, .extent = e.value_ptr.* }) catch return;
+    const gpa = editor.gpa;
+    var by_name: std.StringArrayHashMapUnmanaged(fizzy.backend.SavedRegion) = .empty;
+    defer by_name.deinit(gpa);
+    {
+        var it = editor.layout.extents.iterator();
+        while (it.next()) |e| {
+            const gop = by_name.getOrPut(gpa, e.key_ptr.*) catch return;
+            if (!gop.found_existing) gop.value_ptr.* = .{ .name = e.key_ptr.* };
+            gop.value_ptr.extent = e.value_ptr.*;
+        }
     }
-    fizzy.backend.saveRegionExtents(editor.config_folder, list.items);
+    {
+        var it = editor.layout.assignments.iterator();
+        while (it.next()) |e| {
+            const gop = by_name.getOrPut(gpa, e.key_ptr.*) catch return;
+            if (!gop.found_existing) gop.value_ptr.* = .{ .name = e.key_ptr.* };
+            gop.value_ptr.surfaces = e.value_ptr.*;
+        }
+    }
+    fizzy.backend.saveRegions(editor.config_folder, by_name.values());
+}
+
+/// Set what region `name` shows, live and remembered. Takes effect on the next frame — the layout
+/// reads assignments as it matches — and reaches `layout.zon` on the same debounced timer the
+/// extents use. `null` hands the region back to its keywords.
+pub fn assignRegion(editor: *Editor, name: []const u8, surfaces: ?[]const []const u8) !void {
+    if (surfaces) |ids| try editor.layout.assign(editor.gpa, name, ids) else editor.layout.unassign(editor.gpa, name);
+    editor.markWindowRatiosDirty();
 }
 
 /// The extent a region should start at: what the user last left it, or the shape's default.
@@ -5896,6 +5763,8 @@ pub fn deinit(editor: *Editor) !void {
 
     if (comptime builtin.target.cpu.arch != .wasm32) try saveSettingsRaw(editor);
     saveWindowRatiosRaw(editor);
+    // Only after the flush above, which writes the assignments out.
+    editor.layout.deinitAssignments(editor.gpa);
     editor.settings.deinit(editor.gpa);
 
     editor.explorer.deinit();

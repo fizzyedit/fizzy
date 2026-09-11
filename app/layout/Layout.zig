@@ -220,23 +220,43 @@ pub const handle_dist = Split.handle_dist;
 // the same mechanism with different numbers, and a window resize grows the stretchy half rather
 // than rescaling the sidebar.
 
-/// The keywords in force for a surface: the user's per-plugin override from `settings.zon` if
-/// present, otherwise the plugin's declared defaults. This is what makes a wrong default cost
-/// two clicks rather than a release.
-fn effectiveKeywords(self: *Layout, s: *const Surface) []const []const u8 {
-    if (self.state.keyword_overrides.get(s.id)) |kw| return kw;
-    return s.keywords;
+/// The user's assignment for the region these keywords belong to, or null when they never
+/// chose and the keywords decide.
+///
+/// Callers hand over keywords, not a region name, because that is what a shape and a pane both
+/// have in hand (`f.matching(keywords)`); the region is found in the registry by keyword group —
+/// this frame's set first, since a region registers before it draws its contents, then last
+/// frame's for anything asked between shapes. Two regions declared with identical keywords share
+/// an assignment, exactly as they already share a selection.
+fn assignedFor(self: *Layout, keywords: []const []const u8) ?[]const []const u8 {
+    const want = sdk.keywords.groupKey(keywords);
+    for (self.state.regions_building.items) |r| {
+        if (sdk.keywords.groupKey(r.keywords) == want) return self.state.assignment(r.name);
+    }
+    for (self.state.regions.items) |r| {
+        if (sdk.keywords.groupKey(r.keywords) == want) return self.state.assignment(r.name);
+    }
+    return null;
 }
 
-/// Every surface currently matching `keywords`, in registration order. Arena-allocated and
-/// valid for this frame only; returns an empty slice rather than erroring so a layout can
-/// always iterate.
+/// Every surface that belongs in the region with `keywords`: the user's assignment when there
+/// is one, in the order they chose, otherwise every surface whose keywords intersect, in
+/// registration order. Arena-allocated and valid for this frame only; returns an empty slice
+/// rather than erroring so a layout can always iterate.
 pub fn matching(self: *Layout, keywords: []const []const u8) []const *Surface {
     var out: std.ArrayListUnmanaged(*Surface) = .empty;
     const a = self.arena;
+    if (self.assignedFor(keywords)) |ids| {
+        for (ids) |id| {
+            const s = self.host.surfaceById(id) orelse continue; // plugin not loaded right now
+            if (s.hidden) continue;
+            out.append(a, s) catch return out.items;
+        }
+        return out.items;
+    }
     for (self.host.surfaces.items) |*s| {
         if (s.hidden) continue;
-        if (!sdk.keywords.intersects(self.effectiveKeywords(s), keywords)) continue;
+        if (!sdk.keywords.intersects(s.keywords, keywords)) continue;
         out.append(a, s) catch return out.items;
     }
     return out.items;
@@ -248,21 +268,24 @@ pub fn surface(self: *Layout, id: []const u8) ?*Surface {
     return self.host.surfaceById(id);
 }
 
-/// Surfaces that match no region this app declared. Never silently lost: the settings UI lists
-/// these so a user (or the plugin author) can see the gap and fix it.
-pub fn unplaced(self: *Layout, declared: []const []const []const u8) []const *Surface {
+/// Surfaces that appear in no region of the last completed shape — neither assigned to one nor
+/// attracted by keywords to an unassigned one. Never silently lost: the settings UI lists these
+/// so a user (or the plugin author) can see the gap and fix it.
+pub fn unplaced(self: *Layout) []const *Surface {
     var out: std.ArrayListUnmanaged(*Surface) = .empty;
     const a = self.arena;
     outer: for (self.host.surfaces.items) |*s| {
         if (s.hidden) continue;
-        const kw = self.effectiveKeywords(s);
-        if (kw.len == 0) continue; // placed by id, not by keyword
-        for (declared) |region_kw| if (sdk.keywords.intersects(kw, region_kw)) continue :outer;
+        if (s.keywords.len == 0) continue; // placed by id, not by keyword
+        for (self.state.regions.items) |r| {
+            if (self.state.assignment(r.name)) |ids| {
+                for (ids) |id| if (std.mem.eql(u8, id, s.id)) continue :outer;
+            } else if (sdk.keywords.intersects(s.keywords, r.keywords)) continue :outer;
+        }
         out.append(a, s) catch return out.items;
     }
     return out.items;
 }
-
 
 fn currentId(self: *Layout, keywords: []const []const u8) ?[]const u8 {
     return self.host.selectionFor(keywords);

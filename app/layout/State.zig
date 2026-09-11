@@ -1,5 +1,5 @@
-//! The application's layout *state*: which surface each region shows, the regions this frame
-//! declared, and every region's remembered extent.
+//! The application's layout *state*: what each region shows, the regions this frame declared,
+//! and every region's remembered extent.
 //!
 //! `Layout.State`, because `Layout` is the thing a shape declares regions *with* and this is
 //! what persists behind it between frames. The field on the app is `layout`.
@@ -19,10 +19,19 @@ const State = @This();
 /// Keyed by group rather than by region so two regions written with the same keywords share a
 /// selection with no wiring between them (see `layout/Layout.zig`).
 selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
-/// Per-surface keyword overrides from `settings.zon` (`.plugins.<id>.surfaces.<sid>.keywords`).
-/// The user's answer wins over the plugin's declared defaults, which is what makes a wrong
-/// default cost two clicks rather than a plugin release. Keys and values are gpa-owned.
-keyword_overrides: std.StringHashMapUnmanaged([]const []const u8) = .empty,
+/// What a region shows, by the name its shape declared — the user's answer to "what goes
+/// *here*", which overrides keyword matching wholesale for that region. An entry with no
+/// surfaces is a region the user deliberately emptied; a region with no entry shows whatever
+/// its keywords attract, which is every region's starting state.
+///
+/// Region-centric rather than surface-centric on purpose. A plugin's keywords are its guess at
+/// the *kind* of place a surface belongs, and the person who can see the layout is the one who
+/// knows where it actually goes. Keying by region also says two things a per-surface override
+/// never could: the same surface in two regions, and a region left empty on purpose.
+///
+/// Keys and every id are gpa-owned; surface ids are duplicated rather than borrowed so an
+/// assignment to a plugin that is not currently loaded survives until it is.
+assignments: std.StringHashMapUnmanaged([]const []const u8) = .empty,
 /// Regions the last completed shape declared — what `Editor.regionFor` answers from.
 ///
 /// Deliberately the *previous* frame's set rather than the one being built: a command can run
@@ -94,6 +103,54 @@ pub fn registerRegion(self: *State, gpa: std.mem.Allocator, entry: Region) void 
 pub fn publishRegions(self: *State) void {
     std.mem.swap(@TypeOf(self.regions), &self.regions, &self.regions_building);
     self.regions_building.clearRetainingCapacity();
+}
+
+/// The surfaces the user assigned to region `name`, in the order they chose; null when they never
+/// touched it and keyword matching decides.
+pub fn assignment(self: *State, name: []const u8) ?[]const []const u8 {
+    return self.assignments.get(name);
+}
+
+/// Set what region `name` shows. An empty list is a real choice — "nothing here" — distinct from
+/// `unassign`, which hands the region back to its keywords.
+pub fn assign(self: *State, gpa: std.mem.Allocator, name: []const u8, surfaces: []const []const u8) !void {
+    const owned = try gpa.alloc([]const u8, surfaces.len);
+    errdefer gpa.free(owned);
+    var n: usize = 0;
+    errdefer for (owned[0..n]) |id| gpa.free(id);
+    for (surfaces) |id| {
+        owned[n] = try gpa.dupe(u8, id);
+        n += 1;
+    }
+    const gop = try self.assignments.getOrPut(gpa, name);
+    if (gop.found_existing) {
+        for (gop.value_ptr.*) |id| gpa.free(id);
+        gpa.free(gop.value_ptr.*);
+    } else {
+        gop.key_ptr.* = gpa.dupe(u8, name) catch |err| {
+            _ = self.assignments.remove(name);
+            return err;
+        };
+    }
+    gop.value_ptr.* = owned;
+}
+
+/// Forget the user's choice for region `name`; its keywords decide again.
+pub fn unassign(self: *State, gpa: std.mem.Allocator, name: []const u8) void {
+    const kv = self.assignments.fetchRemove(name) orelse return;
+    gpa.free(kv.key);
+    for (kv.value) |id| gpa.free(id);
+    gpa.free(kv.value);
+}
+
+pub fn deinitAssignments(self: *State, gpa: std.mem.Allocator) void {
+    var it = self.assignments.iterator();
+    while (it.next()) |e| {
+        gpa.free(e.key_ptr.*);
+        for (e.value_ptr.*) |id| gpa.free(id);
+        gpa.free(e.value_ptr.*);
+    }
+    self.assignments.deinit(gpa);
 }
 
 /// The extent a region should start at: what the user last left it, or the shape's default.

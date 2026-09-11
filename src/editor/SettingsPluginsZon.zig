@@ -341,25 +341,6 @@ pub const Reserved = struct {
     /// May legitimately name an extension the plugin does not offer via `fileTypes` — that is
     /// exactly what "keep Plain Text for `.foo`" records on the fallback editor's own block.
     extensions: []const []const u8 = &.{},
-    /// Per-surface keyword overrides: which *kind of place* each of this plugin's surfaces
-    /// belongs, overriding what the plugin declared. Written as a ZON struct of string tuples:
-    ///
-    ///     .surface_keywords = .{ .@"pixi.sprites" = .{ "reference", "sidebar" } },
-    ///
-    /// This is the escape hatch the whole keyword-matching design depends on: a plugin's
-    /// declared keywords are only a default, and a wrong default has to be fixable by the person
-    /// looking at it rather than by a plugin release. Absent means "use what the plugin
-    /// declared".
-    ///
-    /// Sits in the plugin's own block, beside `.enabled` and `.extensions`, so every per-plugin
-    /// user decision lives in one place.
-    surface_keywords: []const SurfaceKeywords = &.{},
-};
-
-/// One surface's keyword override. `surface_id` is the full, plugin-namespaced surface id.
-pub const SurfaceKeywords = struct {
-    surface_id: []const u8,
-    keywords: []const []const u8,
 };
 
 /// Parses a `.extensions` value blob (`.{ ".png", ".jpg" }`) into owned
@@ -384,68 +365,6 @@ pub fn parseExtensions(gpa: Allocator, text: []const u8) ![]const []const u8 {
     return out.toOwnedSlice(gpa);
 }
 
-/// Parses a `.surface_keywords` value blob into owned entries. Tolerant like `parseExtensions`:
-/// this reads a file the user is invited to hand-edit, so anything malformed yields fewer
-/// entries rather than an error — a bad override must never stop the app from starting.
-pub fn parseSurfaceKeywords(gpa: Allocator, text: []const u8) ![]const SurfaceKeywords {
-    var out: std.ArrayListUnmanaged(SurfaceKeywords) = .empty;
-    errdefer {
-        for (out.items) |e| freeSurfaceKeywordsOne(gpa, e);
-        out.deinit(gpa);
-    }
-    // Entries are always `.@"<surface id>" = .{ "kw", ... }`. The `@"..."` form is required
-    // rather than optional: surface ids are plugin-namespaced and so contain a dot, which ZON
-    // cannot express as a bare field name. Scanning for the literal `.@"` also avoids matching
-    // the `.` of the enclosing `.{`.
-    var rest = text;
-    while (std.mem.indexOf(u8, rest, ".@\"")) |at| {
-        rest = rest[at + 3 ..];
-        const close = std.mem.indexOfScalar(u8, rest, '"') orelse break;
-        const id = rest[0..close];
-        rest = rest[close + 1 ..];
-        if (id.len == 0) continue;
-
-        const list_open = std.mem.indexOfScalar(u8, rest, '{') orelse break;
-        const list_close = std.mem.indexOfScalar(u8, rest[list_open..], '}') orelse break;
-        const body = rest[list_open .. list_open + list_close];
-        rest = rest[list_open + list_close ..];
-
-        var kws: std.ArrayListUnmanaged([]const u8) = .empty;
-        errdefer {
-            for (kws.items) |k| gpa.free(k);
-            kws.deinit(gpa);
-        }
-        var kr = body;
-        while (std.mem.indexOfScalar(u8, kr, '"')) |oq| {
-            kr = kr[oq + 1 ..];
-            const cq = std.mem.indexOfScalar(u8, kr, '"') orelse break;
-            const kw = kr[0..cq];
-            kr = kr[cq + 1 ..];
-            if (kw.len == 0) continue;
-            try kws.append(gpa, try gpa.dupe(u8, kw));
-        }
-        if (kws.items.len == 0) {
-            kws.deinit(gpa);
-            continue;
-        }
-        try out.append(gpa, .{
-            .surface_id = try gpa.dupe(u8, id),
-            .keywords = try kws.toOwnedSlice(gpa),
-        });
-    }
-    return out.toOwnedSlice(gpa);
-}
-
-fn freeSurfaceKeywordsOne(gpa: Allocator, e: SurfaceKeywords) void {
-    for (e.keywords) |k| gpa.free(k);
-    gpa.free(e.keywords);
-    gpa.free(e.surface_id);
-}
-
-pub fn freeSurfaceKeywords(gpa: Allocator, entries: []const SurfaceKeywords) void {
-    for (entries) |e| freeSurfaceKeywordsOne(gpa, e);
-    gpa.free(entries);
-}
 
 pub fn freeExtensions(gpa: Allocator, exts: []const []const u8) void {
     for (exts) |e| gpa.free(e);
@@ -469,19 +388,6 @@ pub fn composePluginIdBlock(gpa: Allocator, reserved: Reserved, settings_text: ?
         for (reserved.extensions, 0..) |ext, i| {
             if (i > 0) try aw.writer.writeAll(",");
             try aw.writer.print(" \"{f}\"", .{std.zig.fmtString(ext)});
-        }
-        try aw.writer.writeAll(" },\n");
-    }
-    if (reserved.surface_keywords.len > 0) {
-        try aw.writer.writeAll("    .surface_keywords = .{");
-        for (reserved.surface_keywords, 0..) |sk, i| {
-            if (i > 0) try aw.writer.writeAll(",");
-            try aw.writer.print(" .@\"{f}\" = .{{", .{std.zig.fmtString(sk.surface_id)});
-            for (sk.keywords, 0..) |kw, j| {
-                if (j > 0) try aw.writer.writeAll(",");
-                try aw.writer.print(" \"{f}\"", .{std.zig.fmtString(kw)});
-            }
-            try aw.writer.writeAll(" }");
         }
         try aw.writer.writeAll(" },\n");
     }
@@ -747,9 +653,6 @@ test "every Reserved field is discoverable by extractField" {
             // must be emitted. `false` is the interesting one — it used to be omitted.
             ?bool => @field(reserved, field.name) = false,
             []const []const u8 => @field(reserved, field.name) = &.{".probe"},
-            []const SurfaceKeywords => @field(reserved, field.name) = &.{
-                .{ .surface_id = "probe.surface", .keywords = &.{"probe"} },
-            },
             else => @compileError("extend this test for Reserved field type " ++ @typeName(field.type)),
         }
         const block = try composePluginIdBlock(testing.allocator, reserved, null);
@@ -870,38 +773,3 @@ test "composeMergedText dedents an already-nested block (no indent compounding)"
     , composed);
 }
 
-test "surface_keywords round-trips through compose and parse" {
-    const gpa = testing.allocator;
-    const entries = [_]SurfaceKeywords{
-        .{ .surface_id = "pixi.sprites", .keywords = &.{ "reference", "sidebar" } },
-        .{ .surface_id = "pixi.tools", .keywords = &.{"bottom"} },
-    };
-    const block = try composePluginIdBlock(gpa, .{ .enabled = true, .surface_keywords = &entries }, null);
-    defer gpa.free(block);
-    const block_z = try gpa.dupeZ(u8, block);
-    defer gpa.free(block_z);
-
-    const kw_text = extractField(gpa, block_z, "surface_keywords").?;
-    defer gpa.free(kw_text);
-
-    const parsed = try parseSurfaceKeywords(gpa, kw_text);
-    defer freeSurfaceKeywords(gpa, parsed);
-
-    try testing.expectEqual(@as(usize, 2), parsed.len);
-    try testing.expectEqualStrings("pixi.sprites", parsed[0].surface_id);
-    try testing.expectEqual(@as(usize, 2), parsed[0].keywords.len);
-    try testing.expectEqualStrings("reference", parsed[0].keywords[0]);
-    try testing.expectEqualStrings("sidebar", parsed[0].keywords[1]);
-    try testing.expectEqualStrings("pixi.tools", parsed[1].surface_id);
-    try testing.expectEqual(@as(usize, 1), parsed[1].keywords.len);
-    try testing.expectEqualStrings("bottom", parsed[1].keywords[0]);
-}
-
-test "parseSurfaceKeywords tolerates malformed input rather than erroring" {
-    const gpa = testing.allocator;
-    for ([_][]const u8{ "", ".{}", ".{ .@\"a\" = }", "garbage", ".{ .@\"a\" = .{} }" }) |bad| {
-        const parsed = try parseSurfaceKeywords(gpa, bad);
-        defer freeSurfaceKeywords(gpa, parsed);
-        try testing.expectEqual(@as(usize, 0), parsed.len);
-    }
-}
