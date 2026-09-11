@@ -53,6 +53,78 @@ pub fn fromImageFileBytesAlloc(
     };
 }
 
+/// Every frame of an animated image, in order, with how long each one is shown. A still
+/// image decodes to one frame; the caller need not special-case it.
+pub const Animation = struct {
+    frames: []dvui.ImageSource,
+    /// Per frame, in milliseconds. Never zero: a GIF may say "0" or "1", which every browser
+    /// treats as "as fast as you can" and clamps — 100 ms is the clamp they settled on.
+    delays_ms: []u32,
+
+    pub fn deinit(self: *Animation, gpa: std.mem.Allocator) void {
+        for (self.frames) |f| switch (f) {
+            .pixelsPMA => |p| gpa.free(p.rgba),
+            else => {},
+        };
+        gpa.free(self.frames);
+        gpa.free(self.delays_ms);
+        self.* = undefined;
+    }
+};
+
+const min_frame_delay_ms: u32 = 20;
+const default_frame_delay_ms: u32 = 100;
+
+/// Decode a GIF into all of its frames, each already composited by stb_image, so playing it
+/// is only a matter of showing `frames[i]` for `delays_ms[i]`. Only GIF carries frames in
+/// stb; for any other format use `fromImageFileBytesAlloc`.
+pub fn fromGifFileBytesAlloc(
+    gpa: std.mem.Allocator,
+    name: []const u8,
+    file_bytes: []const u8,
+    invalidation: dvui.ImageSource.InvalidationStrategy,
+) !Animation {
+    var w: c_int = undefined;
+    var h: c_int = undefined;
+    var frame_count: c_int = undefined;
+    var channels_in_file: c_int = undefined;
+    var delays: [*c]c_int = undefined;
+    const data = dvui.c.stbi_load_gif_from_memory(file_bytes.ptr, @as(c_int, @intCast(file_bytes.len)), &delays, &w, &h, &frame_count, &channels_in_file, 4);
+    if (data == null) {
+        dvui.log.warn("imageTexture stbi_load_gif error on image \"{s}\": {s}\n", .{ name, dvui.c.stbi_failure_reason() });
+        return dvui.StbImageError.stbImageError;
+    }
+    defer dvui.c.stbi_image_free(data);
+    defer dvui.c.stbi_image_free(delays);
+
+    const n: usize = @intCast(@max(frame_count, 1));
+    const frame_bytes: usize = @intCast(w * h * @sizeOf(dvui.Color.PMA));
+
+    const frames = try gpa.alloc(dvui.ImageSource, n);
+    errdefer gpa.free(frames);
+    const delays_ms = try gpa.alloc(u32, n);
+    errdefer gpa.free(delays_ms);
+
+    var made: usize = 0;
+    errdefer for (frames[0..made]) |f| gpa.free(f.pixelsPMA.rgba);
+    while (made < n) : (made += 1) {
+        const src = data[made * frame_bytes ..][0..frame_bytes];
+        frames[made] = .{
+            .pixelsPMA = .{
+                .rgba = dvui.Color.PMA.sliceFromRGBA(gpa.dupe(u8, src) catch return error.MemoryAllocationFailed),
+                .width = @as(u32, @intCast(w)),
+                .height = @as(u32, @intCast(h)),
+                .interpolation = .nearest,
+                .invalidation = invalidation,
+            },
+        };
+        const d: c_int = if (delays != null) delays[made] else 0;
+        delays_ms[made] = if (d < min_frame_delay_ms) default_frame_delay_ms else @intCast(d);
+    }
+
+    return .{ .frames = frames, .delays_ms = delays_ms };
+}
+
 pub fn fromImageFilePath(name: []const u8, path: []const u8, invalidation: dvui.ImageSource.InvalidationStrategy) !dvui.ImageSource {
     const file_byes = try fs.read(core.gpa, dvui.io, path);
     defer core.gpa.free(file_byes);

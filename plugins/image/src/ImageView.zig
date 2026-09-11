@@ -84,7 +84,25 @@ fn drawCheckerboard(doc: *Document, data_rect: dvui.Rect) !void {
     });
 }
 
+/// Step an animation to whichever frame is due, and arm a timer for the next one.
+///
+/// The timer is dvui's own: it wakes the window exactly when the frame's delay elapses, so an
+/// idle viewer with a GIF open redraws at the GIF's rate and not at all otherwise. A frame
+/// that is *overdue* (the window was hidden, a long frame) is not skipped ahead — the next one
+/// simply shows now, which is what every browser does with a stalled GIF.
+fn advanceAnimation(doc: *Document) void {
+    const anim = &(doc.animation orelse return);
+    const id = doc.canvas.id.update("gif frame");
+    if (dvui.timerGet(id)) |remaining| {
+        if (remaining > 0) return;
+        doc.frame = (doc.frame + 1) % anim.frames.len;
+        doc.source = anim.frames[doc.frame];
+    }
+    dvui.timer(id, @intCast(@as(u64, anim.delays_ms[doc.frame]) * std.time.us_per_ms));
+}
+
 fn drawImage(doc: *Document) !void {
+    advanceAnimation(doc);
     try dvui.renderImage(doc.source, .{
         .r = doc.canvas.rect,
         .s = doc.canvas.scale,
