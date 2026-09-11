@@ -5258,10 +5258,18 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
     // Single-line rows keep multi-file loads compact: spinner + "<basename> — <phase>…" on one
     // baseline. `row_h` is the natural-pixel height each row contributes to the card; the
     // header band adds a fixed amount on top.
-    const card_w: f32 = 320;
+    // The card is sized by its content, the way dvui sizes a floating widget: last frame's
+    // recorded min size. That is only known after a frame has drawn it, so the first frame
+    // estimates and asks for another — a fixed height fit the default font and clipped the
+    // rows under a larger one.
+    const src = @src();
+    const card_id = dvui.parentGet().extendId(src, 0);
+    const measured = dvui.minSizeGet(card_id);
+    if (measured == null) dvui.refresh(null, @src(), card_id);
+    const card_w: f32 = @max(320, if (measured) |m| m.w else 0);
     const row_h: f32 = 26;
     const header_h: f32 = 32;
-    const card_h: f32 = header_h + @as(f32, @floatFromInt(visible_count)) * row_h;
+    const card_h: f32 = if (measured) |m| m.h else header_h + @as(f32, @floatFromInt(visible_count)) * row_h;
     const card_rect: dvui.Rect = blk: {
         if (editor.activeWorkspaceCanvasRectPhysical()) |rs_phys| {
             const rs_natural = rs_phys.toNatural();
@@ -5282,7 +5290,7 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
     };
 
     var fw: dvui.FloatingWidget = undefined;
-    fw.init(@src(), .{ .mouse_events = false }, .{
+    fw.init(src, .{ .mouse_events = false }, .{
         .rect = card_rect,
         .background = true,
         // Content-fill @ 0.85 matches the look of the other dialog-style popups in the editor.

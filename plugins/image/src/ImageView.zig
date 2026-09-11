@@ -68,8 +68,11 @@ fn drawFill(image_rect: dvui.Rect) void {
 fn drawCheckerboard(doc: *Document, data_rect: dvui.Rect) !void {
     const bg_screen = doc.canvas.screenFromDataRect(data_rect);
     bg_screen.fill(.all(0), .{ .color = dvui.themeGet().color(.content, .fill), .fade = 1.5 });
-    if (doc.canvas.scale < 0.1) return;
     if (data_rect.w <= 0 or data_rect.h <= 0) return;
+    // The cells scale with the image (`checker_cells_per_axis` across it), so the board stays
+    // legible however far out the view goes; the only zoom at which drawing it is pointless is
+    // one where a cell is narrower than a pixel and the texture can no longer show squares.
+    if (data_rect.w * doc.canvas.scale / checker_cells_per_axis < 1) return;
 
     if (doc.checkerboard_tile == null) {
         doc.checkerboard_tile = core.image.checkerboardTile(checker_tile_pixels, checker_tile_pixels, checker_even, checker_odd);
