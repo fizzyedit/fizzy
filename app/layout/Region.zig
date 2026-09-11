@@ -43,6 +43,19 @@ prev_clip: ?dvui.Rect.Physical = null,
 /// how this behaves, and a split is a separator between two of them.
 box: ?*dvui.BoxWidget = null,
 layout: ?*Layout = null,
+/// Contents and selection resolve by this region's *name*, not by its keyword group. Set for
+/// plugin-declared regions: a plugin's document panes all accept the same qualified keywords,
+/// and by keyword group they would be one region with one assignment and one active tab. The
+/// app's own regions stay keyword-resolved so a chooser written against keywords (the icon
+/// rail) needs no region in hand.
+by_name: bool = false,
+
+/// The key this region's selection lives under in the host — see `Layout.selectedIn`.
+pub fn selectionKey(self: *const Region) u64 {
+    const group = sdk.keywords.groupKey(self.keywords);
+    if (!self.by_name) return group;
+    return group ^ std.hash.Wyhash.hash(0x51a7, self.name);
+}
 
 pub fn deinit(self: *Region) void {
     if (self.prev_clip) |c| dvui.clipSet(c);
@@ -149,6 +162,8 @@ pub const InitOptions = struct {
     /// vtable (`Host.region`), so there is no `*Layout` in its hands and no fn pointer it could
     /// hand back that would take one. It draws its chrome and asks for the contents instead.
     manual_contents: bool = false,
+    /// See `Region.by_name`.
+    by_name: bool = false,
     /// Make this region's extent along its parent's axis draggable by the `split` after it. The
     /// starting extent comes from `min_size_content` in the `dvui.Options`; the user's drag
     /// replaces it and persists.
@@ -363,6 +378,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         .box = box,
         .layout = self,
         .prev_clip = prev_clip,
+        .by_name = init_opts.by_name,
     };
 }
 

@@ -1466,49 +1466,48 @@ test "markdown preview: scrolling through the document never jumps past where it
     // Both samples: PLUGINS.md is the longer one (185 blocks) and has its own tables. Running
     // this only on the table-heavy sample missed it entirely.
     for ([_][]const u8{ md_sample, md_sample_tables, md_sample_images }) |sample| {
-    md_doc = sample;
-    var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
-    defer t.deinit();
-    md_preview = .{};
-    defer md_preview.deinit();
+        md_doc = sample;
+        var t = try dvui.testing.init(.{ .allocator = gpa, .window_size = .{ .w = 900, .h = 700 } });
+        defer t.deinit();
+        md_preview = .{};
+        defer md_preview.deinit();
 
-    try markdownSettle();
-    md_preview.scroll.scrollToOffset(.vertical, 0);
-    try markdownSettle();
+        try markdownSettle();
+        md_preview.scroll.scrollToOffset(.vertical, 0);
+        try markdownSettle();
 
-    // Small steps on purpose. A coarse traversal steps straight over the short blocks — a rule, a
-    // one-line paragraph — and those are exactly the ones a document repeats, so a coarse sweep
-    // never anchors on one and never sees the bug that repetition causes.
-    const step_px: f32 = 100;
-    // Generous: one step of scrolling, plus room for the document's total to still be settling.
-    const tolerance: f32 = step_px + 250;
+        // Small steps on purpose. A coarse traversal steps straight over the short blocks — a rule, a
+        // one-line paragraph — and those are exactly the ones a document repeats, so a coarse sweep
+        // never anchors on one and never sees the bug that repetition causes.
+        const step_px: f32 = 100;
+        // Generous: one step of scrolling, plus room for the document's total to still be settling.
+        const tolerance: f32 = step_px + 250;
 
-    var down: usize = 0;
-    while (down < 220) : (down += 1) {
-        const before = md_preview.scroll.viewport.y;
-        try markdownScroll(-step_px, 2);
-        const after = md_preview.scroll.viewport.y;
-        if (after < before - 1 or after > before + tolerance) {
-            std.debug.print("\nscrolling down: y {d:.1} -> {d:.1} (asked for +{d:.0})\n", .{ before, after, step_px });
-            return error.ScrollJumped;
+        var down: usize = 0;
+        while (down < 220) : (down += 1) {
+            const before = md_preview.scroll.viewport.y;
+            try markdownScroll(-step_px, 2);
+            const after = md_preview.scroll.viewport.y;
+            if (after < before - 1 or after > before + tolerance) {
+                std.debug.print("\nscrolling down: y {d:.1} -> {d:.1} (asked for +{d:.0})\n", .{ before, after, step_px });
+                return error.ScrollJumped;
+            }
         }
-    }
-    try std.testing.expect(md_preview.scroll.viewport.y > 5000); // it really did travel
+        try std.testing.expect(md_preview.scroll.viewport.y > 5000); // it really did travel
 
-    var up: usize = 0;
-    while (up < 260) : (up += 1) {
-        const before = md_preview.scroll.viewport.y;
-        try markdownScroll(step_px, 2);
-        const after = md_preview.scroll.viewport.y;
-        if (after > before + 1 or after < before - tolerance) {
-            std.debug.print("\nscrolling up: y {d:.1} -> {d:.1} (asked for -{d:.0})\n", .{ before, after, step_px });
-            return error.ScrollJumped;
+        var up: usize = 0;
+        while (up < 260) : (up += 1) {
+            const before = md_preview.scroll.viewport.y;
+            try markdownScroll(step_px, 2);
+            const after = md_preview.scroll.viewport.y;
+            if (after > before + 1 or after < before - tolerance) {
+                std.debug.print("\nscrolling up: y {d:.1} -> {d:.1} (asked for -{d:.0})\n", .{ before, after, step_px });
+                return error.ScrollJumped;
+            }
         }
-    }
-    try std.testing.expectApproxEqAbs(@as(f32, 0), md_preview.scroll.viewport.y, 1.0);
+        try std.testing.expectApproxEqAbs(@as(f32, 0), md_preview.scroll.viewport.y, 1.0);
     }
 }
-
 
 // The preview must stop asking for frames. `dvui.Window.end` returns 0 while a refresh is pending
 // ("render again immediately") and null when there is nothing to do — so a preview that keeps
@@ -1555,7 +1554,6 @@ test "markdown preview: stops asking for frames so the app can sleep" {
         if (!try markdownReachesIdle()) return error.PreviewNeverStopsRequestingFramesAfterScrollBack;
     }
 }
-
 
 // Typing, one character at a time, with the preview open beside the editor. This is the single
 // most common thing anyone does with this preview, and every keystroke re-parses the document.
@@ -1922,4 +1920,98 @@ test "the more specific region claims a surface, an equal one shares it" {
     try std.testing.expectEqual(@as(usize, 1), layout.matching(pane).len);
     try std.testing.expectEqual(@as(usize, 1), layout.matching(main).len);
     try std.testing.expectEqualStrings("test.doc", layout.matching(main)[0].id);
+}
+
+// Two document panes accept the same qualified keywords, and by keyword group they would be one
+// region: one assignment, one active tab. A plugin-declared region resolves by *name* instead,
+// which is what lets a workbench have as many panes as the user opens.
+test "two plugin regions with the same keywords keep separate contents and selections" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    try editor.host.registerSurface(.{ .id = "test.a", .title = "A", .keywords = &.{"document"}, .draw = draw });
+    try editor.host.registerSurface(.{ .id = "test.b", .title = "B", .keywords = &.{"document"}, .draw = draw });
+
+    const kw: []const []const u8 = &.{"main.document"};
+    const one: fizzy.Editor.Region = .{ .name = "Pane 1", .keywords = kw, .id = .extendId(null, @src(), 1), .by_name = true };
+    const two: fizzy.Editor.Region = .{ .name = "Pane 2", .keywords = kw, .id = .extendId(null, @src(), 2), .by_name = true };
+    editor.layout.registerRegion(editor.gpa, one);
+    editor.layout.registerRegion(editor.gpa, two);
+    editor.layout.publishRegions();
+
+    var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+
+    // Untouched, both accept both by keyword — the same thing `matching` says.
+    try std.testing.expectEqual(@as(usize, 2), layout.matchingIn(&one).len);
+    try std.testing.expectEqual(@as(usize, 2), layout.matchingIn(&two).len);
+
+    // Assign one pane; the other is unaffected — which by keyword group it could not be.
+    try editor.layout.assign(editor.gpa, "Pane 1", &.{"test.a"});
+    try std.testing.expectEqual(@as(usize, 1), layout.matchingIn(&one).len);
+    try std.testing.expectEqual(@as(usize, 2), layout.matchingIn(&two).len);
+
+    // Selections are per pane as well: choosing B in pane 2 leaves pane 1 on A.
+    layout.selectIn(&two, "test.b");
+    try std.testing.expectEqualStrings("test.b", layout.selectedIn(&two).?.id);
+    try std.testing.expectEqualStrings("test.a", layout.selectedIn(&one).?.id);
+}
+
+// A surface that exists only while another is selected: pixi's packer fills the main area while
+// "Project" is the sidebar's tab, a plugin README while its store card is. Declared by the
+// surface (`takeover_when`), resolved by the layout, so there is one rule instead of a hook per
+// place it can happen.
+test "a takeover surface appears only while its trigger is selected, and then annexes the region" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    const sidebar = fizzy.sdk.keywords.ide.sidebar;
+    const main = fizzy.sdk.keywords.ide.main;
+    try editor.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = sidebar, .draw = draw });
+    try editor.host.registerSurface(.{ .id = "test.project", .title = "Project", .keywords = sidebar, .draw = draw });
+    try editor.host.registerSurface(.{ .id = "test.workspace", .title = "Workspace", .keywords = main, .draw = draw });
+    try editor.host.registerSurface(.{ .id = "test.packer", .title = "Packer", .keywords = main, .draw = draw, .takeover_when = "test.project" });
+
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Sidebar", .keywords = sidebar, .id = .extendId(null, @src(), 1) });
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Main", .keywords = main, .id = .extendId(null, @src(), 2) });
+    editor.layout.publishRegions();
+
+    var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+
+    // Files is the sidebar's default; the packer does not exist.
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(main).len);
+    try std.testing.expectEqualStrings("test.workspace", layout.selected(main).?.id);
+    try std.testing.expectEqual(@as(usize, 0), layout.unplaced().len);
+
+    // Select Project in the sidebar: the packer exists, and it is what Main shows — regardless of
+    // what Main's own selection was.
+    editor.host.setSelectionFor(sidebar, "test.project");
+    try std.testing.expectEqual(@as(usize, 2), layout.matching(main).len);
+    try std.testing.expectEqualStrings("test.packer", layout.selected(main).?.id);
+
+    // Back to Files: the packer is gone again and Main is the workspace.
+    editor.host.setSelectionFor(sidebar, "test.files");
+    try std.testing.expectEqualStrings("test.workspace", layout.selected(main).?.id);
 }

@@ -208,7 +208,6 @@ painters: std.ArrayListUnmanaged(Painter) = .empty,
 /// Extension -> kind declarations; see `FileKind`.
 file_kinds: std.ArrayListUnmanaged(FileKind) = .empty,
 
-
 /// Loaded plugins' settings schemas (`sdk.settings.Schema(...)`), drawn by fizzy's settings
 /// pane while each owner stays registered — see `settings.zig`'s "loaded-only" module doc note.
 /// Cleared for `plugin`'s entries in `unregisterPlugin`; there is no on-disk/embedded fallback
@@ -411,6 +410,21 @@ pub const Region = struct {
         return if (self.host.fizzy_api) |a| try a.drawRegionContents(self.token) else .ok;
     }
 
+    /// What this region shows, in order. A plugin drawing its own chooser (a tab strip) draws it
+    /// from this — the list is the app's, so the picker, an assignment and the strip agree.
+    pub fn matching(self: Region) []const *Surface {
+        return if (self.host.fizzy_api) |a| a.regionMatching(self.token) else &.{};
+    }
+
+    /// The one currently shown, or null when the region is empty.
+    pub fn selected(self: Region) ?*Surface {
+        return if (self.host.fizzy_api) |a| a.regionSelected(self.token) else null;
+    }
+
+    pub fn select(self: Region, id: []const u8) void {
+        if (self.host.fizzy_api) |a| a.regionSelect(self.token, id);
+    }
+
     pub fn deinit(self: Region) void {
         if (self.host.fizzy_api) |a| a.endRegion(self.token);
     }
@@ -431,6 +445,25 @@ pub fn region(self: *Host, spec: RegionSpec) ?Region {
     return .{ .host = self, .token = token };
 }
 
+/// Set what the region named `region_name` shows — the same list the picker writes; `null` hands
+/// it back to its keywords. Addressed by name so a plugin can write to a region it is not
+/// drawing this instant: another pane a tab was dropped on, a pane that does not exist yet, or
+/// last session's panes before any has been declared.
+pub fn assignSurfaces(self: *Host, region_name: []const u8, ids: ?[]const []const u8) !void {
+    if (self.fizzy_api) |a| return a.assignSurfaces(region_name, ids);
+}
+
+/// The assignment under `region_name`, or null when the user never chose. Borrowed; copy before
+/// the next `assignSurfaces`.
+pub fn assignedSurfaces(self: *Host, region_name: []const u8) ?[]const []const u8 {
+    return if (self.fizzy_api) |a| a.assignedSurfaces(region_name) else null;
+}
+
+/// Every region name with an assignment, arena-allocated.
+pub fn assignedRegionNames(self: *Host) []const []const u8 {
+    return if (self.fizzy_api) |a| a.assignedRegionNames() else &.{};
+}
+
 pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
     return if (self.fizzy_api) |a| a.revealPosition(path, line, character, open_side) else false;
 }
@@ -446,7 +479,6 @@ pub fn openOrFocusFileAtGrouping(self: *Host, path: []const u8, grouping: u64) !
 pub fn closeDocById(self: *Host, id: u64) !void {
     if (self.fizzy_api) |a| return a.closeDocById(id);
 }
-
 
 pub fn setProjectFolder(self: *Host, path: []const u8) !void {
     return if (self.fizzy_api) |a| try a.setProjectFolder(path) else error.FizzyApiNotInstalled;
@@ -929,8 +961,6 @@ pub fn drawFileIcon(self: *Host, ext: []const u8, path: []const u8, color: dvui.
     return false;
 }
 
-
-
 /// Register `plugin`'s settings schema (see `settings.zig`'s `make(T).register`). Typically
 /// called once from a plugin's `register(host)`, after loading its persisted values.
 pub fn registerSettingsSchema(self: *Host, schema: SettingsSchema) !void {
@@ -1048,6 +1078,19 @@ pub fn servicesNamed(self: *Host, comptime T: type, buf: []*T) []*T {
 /// content belongs. The app's layout decides where that lands; see `sdk/src/surface.zig`.
 pub fn registerSurface(self: *Host, s: Surface) !void {
     try self.surfaces.append(self.allocator, s);
+}
+
+/// Remove a surface by id. Surfaces are registration data for a plugin's fixed panels, but a
+/// document is a surface that exists exactly while its file is open — so the app registers one
+/// per open file and takes it back here on close. Selections and assignments naming the id are
+/// left alone: an assignment to a document that is not open is how a session is restored.
+pub fn unregisterSurface(self: *Host, id: []const u8) void {
+    for (self.surfaces.items, 0..) |*s, i| {
+        if (std.mem.eql(u8, s.id, id)) {
+            _ = self.surfaces.orderedRemove(i);
+            return;
+        }
+    }
 }
 
 /// Runtime visibility, not registration data — the plugin store toggles a built-in without
@@ -1291,6 +1334,17 @@ pub fn selectionFor(self: *Host, kw: []const []const u8) ?[]const u8 {
 /// is how a chooser and the region it chooses for stay in step with nothing wired between them.
 pub fn setSelectionFor(self: *Host, kw: []const []const u8, id: []const u8) void {
     self.selections.put(self.allocator, keywords.groupKey(kw), id) catch {};
+}
+
+/// The same map under an arbitrary key — how a region that resolves by name rather than by
+/// keyword group (a plugin's document panes) keeps a selection of its own. The app computes
+/// the key (`Region.selectionKey`); nothing else should.
+pub fn selectionForKey(self: *Host, key: u64) ?[]const u8 {
+    return self.selections.get(key);
+}
+
+pub fn setSelectionForKey(self: *Host, key: u64, id: []const u8) void {
+    self.selections.put(self.allocator, key, id) catch {};
 }
 
 /// Whether `plugin` may legitimately own `ext`: it either offers `ext` via `fileTypes`, or it

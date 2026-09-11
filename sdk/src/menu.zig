@@ -7,7 +7,6 @@ pub fn menuItem(
     src: std.builtin.SourceLocation,
     label_str: []const u8,
     init_opts: dvui.MenuItemWidget.InitOptions,
-    
     opts: dvui.Options,
 ) ?dvui.Rect.Natural {
     var mi = dvui.menuItem(src, init_opts, opts);

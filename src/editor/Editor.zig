@@ -2624,6 +2624,12 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .beginRegion = fizzyBeginRegion,
     .drawRegionContents = fizzyDrawRegionContents,
     .endRegion = fizzyEndRegion,
+    .regionMatching = fizzyRegionMatching,
+    .regionSelected = fizzyRegionSelected,
+    .regionSelect = fizzyRegionSelect,
+    .assignSurfaces = fizzyAssignSurfaces,
+    .assignedSurfaces = fizzyAssignedSurfaces,
+    .assignedRegionNames = fizzyAssignedRegionNames,
     .drawFileKindGlyph = fizzyDrawFileKindGlyph,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
@@ -4588,6 +4594,40 @@ fn fizzyDrawRegionContents(ctx: *anyopaque, token: sdk.RegionSpec.Token) anyerro
 fn fizzyEndRegion(ctx: *anyopaque, token: sdk.RegionSpec.Token) void {
     const layout = fizzyCtx(ctx).frame_layout orelse return;
     layout.endPluginRegion(token);
+}
+
+fn fizzyRegionMatching(ctx: *anyopaque, token: sdk.RegionSpec.Token) []const *sdk.Surface {
+    const layout = fizzyCtx(ctx).frame_layout orelse return &.{};
+    return layout.pluginRegionMatching(token);
+}
+
+fn fizzyRegionSelected(ctx: *anyopaque, token: sdk.RegionSpec.Token) ?*sdk.Surface {
+    const layout = fizzyCtx(ctx).frame_layout orelse return null;
+    return layout.pluginRegionSelected(token);
+}
+
+fn fizzyRegionSelect(ctx: *anyopaque, token: sdk.RegionSpec.Token, id: []const u8) void {
+    const layout = fizzyCtx(ctx).frame_layout orelse return;
+    layout.pluginRegionSelect(token, id);
+}
+
+fn fizzyAssignSurfaces(ctx: *anyopaque, region: []const u8, ids: ?[]const []const u8) anyerror!void {
+    const editor = fizzyCtx(ctx);
+    if (ids) |list| try editor.layout.assign(editor.gpa, region, list) else editor.layout.unassign(editor.gpa, region);
+    editor.layout.markDirty();
+}
+
+fn fizzyAssignedSurfaces(ctx: *anyopaque, region: []const u8) ?[]const []const u8 {
+    return fizzyCtx(ctx).layout.assignment(region);
+}
+
+fn fizzyAssignedRegionNames(ctx: *anyopaque) []const []const u8 {
+    const editor = fizzyCtx(ctx);
+    const arena = editor.arena.allocator();
+    var out: std.ArrayListUnmanaged([]const u8) = .empty;
+    var it = editor.layout.assignments.keyIterator();
+    while (it.next()) |k| out.append(arena, k.*) catch break;
+    return out.items;
 }
 
 fn fizzySplitState(ctx: *anyopaque, keywords: []const []const u8) ?sdk.EditorAPI.SplitState {

@@ -266,21 +266,72 @@ fn assignedFor(self: *Layout, keywords: []const []const u8) ?[]const []const u8 
 /// registration order. Arena-allocated and valid for this frame only; returns an empty slice
 /// rather than erroring so a layout can always iterate.
 pub fn matching(self: *Layout, keywords: []const []const u8) []const *Surface {
+    return self.matchingWith(keywords, self.assignedFor(keywords));
+}
+
+/// `matching` for a specific region rather than a keyword group. The two differ only for a
+/// region that resolves **by name** (`Region.by_name`): a plugin's document panes all accept
+/// `main.document`, and finding "the region with these keywords" would hand every pane the
+/// first pane's assignment. The app's own regions are unique per keyword group, so for them
+/// this is `matching`.
+pub fn matchingIn(self: *Layout, r: *const Region) []const *Surface {
+    const assigned = if (r.by_name) self.state.assignment(r.name) else self.assignedFor(r.keywords);
+    return self.matchingWith(r.keywords, assigned);
+}
+
+fn matchingWith(self: *Layout, keywords: []const []const u8, assigned: ?[]const []const u8) []const *Surface {
     var out: std.ArrayListUnmanaged(*Surface) = .empty;
     const a = self.arena;
-    if (self.assignedFor(keywords)) |ids| {
+    if (assigned) |ids| {
         for (ids) |id| {
             const s = self.host.surfaceById(id) orelse continue; // plugin not loaded right now
-            if (s.hidden) continue;
+            if (s.hidden or !self.visibleNow(s)) continue;
             out.append(a, s) catch return out.items;
         }
         return out.items;
     }
     for (self.host.surfaces.items) |*s| {
-        if (s.hidden) continue;
+        if (s.hidden or !self.visibleNow(s)) continue;
         const mine = sdk.keywords.strength(keywords, s.keywords);
         if (mine == .none) continue;
         if (self.claimedElsewhere(keywords, s, mine)) continue;
+        out.append(a, s) catch return out.items;
+    }
+    return out.items;
+}
+
+/// Whether a surface exists right now as far as placement is concerned. Always, unless it is a
+/// takeover (`Surface.takeover_when`), which exists only while its trigger is what some region
+/// shows. Its trigger is looked up with takeovers excluded, so a takeover cannot trigger another
+/// and the question always terminates.
+fn visibleNow(self: *Layout, s: *const Surface) bool {
+    const trigger = s.takeover_when orelse return true;
+    for (self.state.regions.items) |r| {
+        const items = self.plainMatchingIn(&r);
+        const cur = pick(items, self.host.selectionForKey(r.selectionKey())) orelse continue;
+        if (std.mem.eql(u8, cur.id, trigger)) return true;
+    }
+    return false;
+}
+
+/// `matchingIn` with takeovers left out — the list a *trigger* is chosen from.
+fn plainMatchingIn(self: *Layout, r: *const Region) []const *Surface {
+    const assigned = if (r.by_name) self.state.assignment(r.name) else self.assignedFor(r.keywords);
+    var out: std.ArrayListUnmanaged(*Surface) = .empty;
+    const a = self.arena;
+    if (assigned) |ids| {
+        for (ids) |id| {
+            const s = self.host.surfaceById(id) orelse continue;
+            if (s.hidden or s.takeover_when != null) continue;
+            out.append(a, s) catch return out.items;
+        }
+        return out.items;
+    }
+    for (self.host.surfaces.items) |*s| {
+        if (s.hidden or s.takeover_when != null) continue;
+        const mine = sdk.keywords.strength(r.keywords, s.keywords);
+        if (mine == .none) continue;
+        if (self.claimedElsewhere(r.keywords, s, mine)) continue;
         out.append(a, s) catch return out.items;
     }
     return out.items;
@@ -359,12 +410,7 @@ fn currentId(self: *Layout, keywords: []const []const u8) ?[]const u8 {
 /// the remembered id is gone (plugin unloaded, keywords overridden elsewhere), falls back to the
 /// first match rather than drawing nothing.
 pub fn selected(self: *Layout, keywords: []const []const u8) ?*Surface {
-    const items = self.matching(keywords);
-    if (items.len == 0) return null;
-    if (self.currentId(keywords)) |id| {
-        for (items) |s| if (std.mem.eql(u8, s.id, id)) return s;
-    }
-    return items[0];
+    return pick(self.matching(keywords), self.currentId(keywords));
 }
 
 pub fn isSelected(self: *Layout, keywords: []const []const u8, s: *const Surface) bool {
@@ -374,6 +420,30 @@ pub fn isSelected(self: *Layout, keywords: []const []const u8, s: *const Surface
 
 pub fn select(self: *Layout, keywords: []const []const u8, s: *const Surface) void {
     self.host.setSelectionFor(keywords, s.id);
+}
+
+/// `selected` / `select` for a specific region. A by-name region keeps its own selection —
+/// two document panes must not share an active tab — under a key that folds the name into the
+/// keyword group's; an app region's key is the keyword group's alone, so a chooser written
+/// against keywords (the icon rail) and the region it chooses for still agree.
+pub fn selectedIn(self: *Layout, r: *const Region) ?*Surface {
+    return pick(self.matchingIn(r), self.host.selectionForKey(r.selectionKey()));
+}
+
+pub fn selectIn(self: *Layout, r: *const Region, id: []const u8) void {
+    self.host.setSelectionForKey(r.selectionKey(), id);
+}
+
+/// The selection out of `items`: an active takeover if one is among them — it annexes the
+/// region for as long as its trigger holds, which is the whole point of it — else the remembered
+/// id if it is still there, else the first.
+fn pick(items: []const *Surface, current: ?[]const u8) ?*Surface {
+    if (items.len == 0) return null;
+    for (items) |s| if (s.takeover_when != null) return s;
+    if (current) |id| {
+        for (items) |s| if (std.mem.eql(u8, s.id, id)) return s;
+    }
+    return items[0];
 }
 
 /// Draw one surface into the current parent, wrapped in the swap cross-fade so every region gets
@@ -522,6 +592,7 @@ pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.To
         .hide_when_empty = spec.hide_when_empty,
         // The plugin draws its own chrome around the contents, so it says where they go.
         .manual_contents = true,
+        .by_name = true,
     }, .{
         // Truncated because `id_extra` is a `usize`, which is 32 bits on wasm. A plugin's key is
         // an id or a hash, so the low bits are the ones carrying the distinction.
@@ -546,7 +617,30 @@ pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.To
 
 pub fn drawPluginRegionContents(self: *Layout, token: sdk.RegionSpec.Token) !dvui.App.Result {
     const r = self.pluginRegion(token) orelse return .ok;
-    return self.drawSelected(r.keywords);
+    const s = self.selectedIn(r) orelse return .ok;
+    return self.draw(s);
+}
+
+/// A plugin region's contents and selection, by token — what a plugin's own chooser (a tab
+/// strip) is drawn from and writes back to.
+pub fn pluginRegionMatching(self: *Layout, token: sdk.RegionSpec.Token) []const *Surface {
+    const r = self.pluginRegion(token) orelse return &.{};
+    return self.matchingIn(r);
+}
+
+pub fn pluginRegionSelected(self: *Layout, token: sdk.RegionSpec.Token) ?*Surface {
+    const r = self.pluginRegion(token) orelse return null;
+    return self.selectedIn(r);
+}
+
+pub fn pluginRegionSelect(self: *Layout, token: sdk.RegionSpec.Token, id: []const u8) void {
+    const r = self.pluginRegion(token) orelse return;
+    self.selectIn(r, id);
+}
+
+pub fn pluginRegionName(self: *Layout, token: sdk.RegionSpec.Token) []const u8 {
+    const r = self.pluginRegion(token) orelse return "";
+    return r.name;
 }
 
 pub fn endPluginRegion(self: *Layout, token: sdk.RegionSpec.Token) void {

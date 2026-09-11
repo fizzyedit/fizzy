@@ -10,6 +10,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const DocHandle = @import("DocHandle.zig");
 const RegionSpec = @import("RegionSpec.zig");
+const Surface = @import("Surface.zig");
 
 const EditorAPI = @This();
 
@@ -167,6 +168,24 @@ pub const VTable = struct {
     /// Close it. The box closes, the clip is restored, and the region is left in the registry for
     /// the frame — a region that drew is a region the user can place things in.
     endRegion: *const fn (ctx: *anyopaque, token: RegionSpec.Token) void,
+    /// The surfaces the region shows, in order — the user's assignment, else what its keywords
+    /// accept. Arena-allocated, valid this frame. A plugin's own chooser (a tab strip) is drawn
+    /// from this and never from a list of its own.
+    regionMatching: *const fn (ctx: *anyopaque, token: RegionSpec.Token) []const *Surface,
+    /// The surface the region currently shows: the selection if it still exists, else the first.
+    regionSelected: *const fn (ctx: *anyopaque, token: RegionSpec.Token) ?*Surface,
+    regionSelect: *const fn (ctx: *anyopaque, token: RegionSpec.Token, id: []const u8) void,
+    /// Set what a region shows, by the name it is declared under — the same list the picker
+    /// writes. `null` returns the region to its keywords. By name rather than by token so a
+    /// plugin can address a region it is not drawing right now: a tab dropped on another pane,
+    /// a pane that does not exist yet, a session being restored before anything has drawn.
+    assignSurfaces: *const fn (ctx: *anyopaque, region: []const u8, ids: ?[]const []const u8) anyerror!void,
+    /// The assignment for a region name, or null if the user never chose. Borrowed from the app;
+    /// copy before the next assignment write.
+    assignedSurfaces: *const fn (ctx: *anyopaque, region: []const u8) ?[]const []const u8,
+    /// Every region name that has an assignment, arena-allocated. How a plugin finds the panes
+    /// it declared last session before it has declared any this one.
+    assignedRegionNames: *const fn (ctx: *anyopaque) []const []const u8,
     /// Draw the app's glyph for a declared file kind ("image", "source", …), or return false if
     /// this app has no glyph for it.
     ///
@@ -350,7 +369,6 @@ pub fn showSaveDialog(
     self.vtable.showSaveDialog(self.ctx, cb, filters, default_filename, default_folder);
 }
 
-
 pub fn activeDoc(self: EditorAPI) ?DocHandle {
     return self.vtable.activeDoc(self.ctx);
 }
@@ -417,6 +435,30 @@ pub fn drawRegionContents(self: EditorAPI, token: RegionSpec.Token) !dvui.App.Re
 
 pub fn endRegion(self: EditorAPI, token: RegionSpec.Token) void {
     self.vtable.endRegion(self.ctx, token);
+}
+
+pub fn regionMatching(self: EditorAPI, token: RegionSpec.Token) []const *Surface {
+    return self.vtable.regionMatching(self.ctx, token);
+}
+
+pub fn regionSelected(self: EditorAPI, token: RegionSpec.Token) ?*Surface {
+    return self.vtable.regionSelected(self.ctx, token);
+}
+
+pub fn regionSelect(self: EditorAPI, token: RegionSpec.Token, id: []const u8) void {
+    self.vtable.regionSelect(self.ctx, token, id);
+}
+
+pub fn assignSurfaces(self: EditorAPI, region: []const u8, ids: ?[]const []const u8) !void {
+    return self.vtable.assignSurfaces(self.ctx, region, ids);
+}
+
+pub fn assignedSurfaces(self: EditorAPI, region: []const u8) ?[]const []const u8 {
+    return self.vtable.assignedSurfaces(self.ctx, region);
+}
+
+pub fn assignedRegionNames(self: EditorAPI) []const []const u8 {
+    return self.vtable.assignedRegionNames(self.ctx);
 }
 
 pub fn drawFileKindGlyph(self: EditorAPI, kind: []const u8, color: dvui.Color) bool {

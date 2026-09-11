@@ -42,6 +42,15 @@ draw: *const fn (ctx: ?*anyopaque) anyerror!dvui.App.Result,
 /// Optional: while this surface is the one a region shows, it takes over the app's main region
 /// too. Preserves `SidebarView.draw_workspace`.
 draw_workspace: ?*const fn (ctx: ?*anyopaque, pane: *WorkbenchPaneView) anyerror!void = null,
+/// A surface shown **only while another is selected**: the id of that other surface. While it
+/// is the selection of its region, this one is drawn in place of whatever a region accepting
+/// *this* one's keywords would otherwise show, and it is invisible the rest of the time.
+///
+/// This is how a sidebar tab annexes the main area for as long as it is the tab: pixi's packer
+/// (`keywords = {"main"}, takeover_when = "pixi.project"`) fills the workspace while "Project"
+/// is selected in the rail, and a plugin's README fills it while its store card is. One rule in
+/// the layout, declared by the surface, instead of a hook per place it can happen.
+takeover_when: ?[]const u8 = null,
 /// Runtime state, not registration data: the plugin store toggles a built-in off without
 /// unloading it. Set through `Host.setSurfaceHidden`.
 hidden: bool = false,
