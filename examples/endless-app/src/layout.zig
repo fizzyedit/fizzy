@@ -3,14 +3,13 @@
 //! A real consumer copies a shape into its own source (or writes one). This file is that copy:
 //! fizzy compiles it in through `-Dapp-layout=` and calls `layout` instead of a shipped preset.
 //!
-//! Center accepts the IDE main keywords so the workspace draws there with nothing assigned.
-//! Each window edge already has a collapsed region; dragging its split opens it in realtime
-//! and a new collapsed region appears on the outer side. There is no count cap — the split
-//! constraint stops a drag when Center would be left smaller than `min_center`.
+//! Each window edge already has a collapsed region; dragging its split open — any amount —
+//! creates another collapsed handle on the outer side. Closing an empty tray forgets it.
+//! The middle is leftover space, not a privileged editor: it has no default surface and
+//! can be dragged to nothing. The user assigns every region.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
-const sdk = @import("fizzy_sdk");
 
 const Layout = @import("app").layout.Layout;
 const State = @import("app").layout.State;
@@ -24,8 +23,6 @@ pub const Side = enum { left, right, top, bottom };
 
 /// Tests use this as a small drag distance. Any positive extent is an open tray.
 pub const commit_threshold: f32 = 48;
-/// What Center keeps. The split constraint refuses a drag that would leave less.
-pub const min_center: f32 = 80;
 
 /// Headless tests read the left handle's centre after a frame.
 pub var t_left_x: f32 = 0;
@@ -49,10 +46,7 @@ pub fn layout(f: *Layout) !dvui.App.Result {
     }
 
     {
-        var mid = try f.region(@src(), .{ .dir = .vertical }, .{
-            .expand = .both,
-            .min_size_content = .{ .w = min_center, .h = min_center },
-        });
+        var mid = try f.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
         defer mid.deinit();
 
         const tops = namesForSide(f, .top);
@@ -66,12 +60,9 @@ pub fn layout(f: *Layout) !dvui.App.Result {
         {
             var center = try f.region(@src(), .{
                 .name = "Center",
-                .keywords = sdk.keywords.ide.main,
+                .keywords = slot,
                 .by_name = true,
-            }, .{
-                .expand = .both,
-                .min_size_content = .{ .w = min_center, .h = min_center },
-            });
+            }, .{ .expand = .both });
             defer center.deinit();
         }
 
@@ -148,7 +139,7 @@ pub fn promote(state: *State, gpa: std.mem.Allocator, side: Side, extent: f32) [
 }
 
 /// How much of `container` is free for a new region on this axis, after existing edge
-/// regions, their splits, and Center's floor.
+/// regions and their splits. The flex gap has no reserved floor.
 pub fn roomOn(state: *State, container: f32, side: Side) f32 {
     const a: Side = switch (side) {
         .left, .right => .left,
@@ -168,7 +159,7 @@ pub fn roomOn(state: *State, container: f32, side: Side) f32 {
         used += e.value_ptr.*;
     }
     const splits = @as(f32, @floatFromInt(n + 1)) * Split.handle_size;
-    return @max(0, container - used - splits - min_center);
+    return @max(0, container - used - splits);
 }
 
 /// Names on `side`, innermost (closest to Center) first. Arena-backed, this frame only.
@@ -191,11 +182,17 @@ pub fn namesOn(state: *State, arena: std.mem.Allocator, side: Side) []const []co
     return out;
 }
 
-/// Persisted names on `side`, plus a collapsed sentinel on the outside when the outer-most
-/// one is already open (or when the side has none yet).
+/// Persisted names on `side`, plus a collapsed sentinel on the outside whenever the
+/// outer-most tray is open or kept (closed with a surface). An empty closed tray *is*
+/// the sentinel — dragging it out at all creates the next one.
 fn namesForSide(f: *Layout, side: Side) []const []const u8 {
     const existing = namesOn(f.state, f.arena, side);
-    if (existing.len > 0 and f.state.extent(existing[existing.len - 1], 0) <= 0) return existing;
+    if (existing.len > 0) {
+        const outer = existing[existing.len - 1];
+        const ext = f.state.extent(outer, 0);
+        const kept = if (f.state.assignment(outer)) |ids| ids.len > 0 else false;
+        if (ext <= 0 and !kept) return existing;
+    }
     const n = nextIndex(f.state, side);
     var buf: [32]u8 = undefined;
     const raw = std.fmt.bufPrint(&buf, "{s}{d}", .{ edgePrefix(side), n }) catch return existing;

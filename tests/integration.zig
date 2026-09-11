@@ -2220,7 +2220,7 @@ test "dragging the left split opens edge-left-1 during the drag" {
     try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-2", -1));
 }
 
-test "roomOn is leftover after existing edges, splits, and Center's floor" {
+test "roomOn is leftover after existing edges and splits" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
@@ -2231,15 +2231,15 @@ test "roomOn is leftover after existing edges, splits, and Center's floor" {
 
     const empty = endless.roomOn(&editor.layout, 400, .left);
     try std.testing.expect(empty >= endless.commit_threshold);
-    try std.testing.expect(empty <= 400 - endless.min_center);
+    try std.testing.expect(empty <= 400);
 
     _ = endless.promote(&editor.layout, editor.gpa, .left, 120);
     _ = endless.promote(&editor.layout, editor.gpa, .right, 80);
     const leftover = endless.roomOn(&editor.layout, 400, .left);
     try std.testing.expect(leftover < empty);
-    try std.testing.expect(leftover <= 400 - 120 - 80 - endless.min_center);
+    try std.testing.expect(leftover <= 400 - 120 - 80);
 
-    const tight = endless.roomOn(&editor.layout, 120 + 80 + endless.min_center, .left);
+    const tight = endless.roomOn(&editor.layout, 120 + 80 + 3 * 10, .left);
     try std.testing.expectEqual(@as(f32, 0), tight);
 }
 
@@ -2284,7 +2284,7 @@ fn shutNamed(state: *fizzy.Editor.Layout.State, name: []const u8) void {
     }
 }
 
-test "a full axis still has an outer sentinel, and Center keeps its floor" {
+test "a full axis still has an outer sentinel" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 

@@ -219,15 +219,15 @@ size and assignment under the app's name, and answers the app's picker.
 
 A shape whose layout is data, owned by the example — not a shipped fizzy preset.
 
-- `examples/endless-app/src/layout.zig`: Center accepts `ide.main` so the workspace draws
-  there with nothing assigned. Each edge already has a collapsed region; dragging its split
-  opens it in realtime and a new collapsed region appears on the outer side. Edge regions
-  accept `slot` and resolve `by_name` — they stay empty until the picker fills them.
+- `examples/endless-app/src/layout.zig`: the middle is leftover space (`slot`, no default
+  surface) and can be dragged to nothing. Each edge already has a collapsed region; dragging
+  its split any amount opens it and a new collapsed region appears on the outer side. Edge
+  regions accept `slot` and resolve `by_name` — they stay empty until the picker fills them.
 - `Region.drawContents` uses `selectedIn` for by-name regions, so two trays with the same
   keywords do not draw the same assignment. `id_extra` includes the side, so a loop of
   splits from one `@src()` does not collide.
-- There is no `max_trays`: the container tracks resizable ids in an arena list, and the
-  split constraint stops a drag that would leave Center smaller than 80pt.
+- There is no `max_trays`: the container tracks resizable ids in an arena list. The flex
+  gap has no reserved floor.
 - `zig build run` works from `examples/endless-app`. An empty region's corner button stays
   visible; a filled one still hides until the pointer is near.
 - The tree is reconstructed from extent names (`edge-left-1`, …). No new on-disk format.
@@ -236,8 +236,8 @@ A shape whose layout is data, owned by the example — not a shipped fizzy prese
   `-Dlayout=` enum: fizzy uses `src/editor/layout.zig`; minimal, studio and endless
   each own `examples/*/src/layout.zig`.
 - Empty edge trays dragged shut are forgotten (`forget_when_empty`); a tray with an
-  assigned surface closes to the window edge and can reopen. `snap_below` eases the close.
-  Dragging past zero `push_out`s the tray behind it.
+  assigned surface closes to the window edge and can reopen. Dragging past zero
+  `push_out`s only the tray behind it, not the opposite side.
 - `app/layout/Picker.zig`: a Store section lists catalog plugins that are not installed;
   choosing one queues an install and assigns that plugin's surfaces to the region once they
   load (`State.requestStoreInstall`). The store is a hook on `State` so the picker does not

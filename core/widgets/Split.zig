@@ -105,9 +105,10 @@ pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
 
     const room = @max(0, budget - others);
     if (size > room) {
-        if (room == 0) {
-            // Flex is gone. Reclaim from the opposite side so dragging the other
-            // edge still opens a tray instead of sticking.
+        // Reclaim the opposite side only when the shape left the flex gap with
+        // no floor (`base_min` is 0) and that gap is already gone. A declared
+        // floor still means "stop", not "steal from the other edge".
+        if (room == 0 and c.base_min <= 0) {
             var need = size;
             for (c.others) |o| {
                 if (relation(o, target, c.others, c.sign) != .opposite or need <= 0) continue;
