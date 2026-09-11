@@ -187,7 +187,9 @@ pub const Container = struct {
     /// Every resizable region in this container. A split needs them all so `push_out` can
     /// shrink the trays behind the one being dragged. Arena-backed, this frame only — no count cap.
     resizables: std.ArrayListUnmanaged(dvui.Id) = .empty,
-    /// Total extent the splits in this container take between them.
+    /// Kept for the constraint field. Region splits overlay the boundary and do
+    /// not take pack space, so this stays 0 — counting them was a `handle_size`
+    /// jump each time a sentinel appeared.
     handles: f32 = 0,
     /// The container's own box, for measuring how near the pointer is to a split inside it.
     box: ?*dvui.BoxWidget = null,
@@ -706,10 +708,11 @@ pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
     const pending = c.pending_split orelse return;
     c.pending_split = null;
     const axis = c.dir;
-
-    var divider = Split.init(pending.src, axis, pending.opts.id_extra, null);
-    defer divider.deinit();
-    if (!pending.opts.resize) return;
+    if (!pending.opts.resize) {
+        var unused = Split.init(pending.src, axis, pending.opts.id_extra, null);
+        unused.deinit();
+        return;
+    }
 
     // Which neighbour this split resizes. The one *before* it when there is one (the sidebar);
     // otherwise the one after, which is the bottom panel's shape and is known now because the
@@ -721,11 +724,15 @@ pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
     };
 
     const container = c.box orelse return;
-    c.handles += Split.handle_size;
+    // Overlay, not packed: a packed split is a `handle_size` child, so a new
+    // sentinel (or crossing zero) inserts 10pt into the box *and* into the
+    // budget and the tray jumps by exactly that.
+    var divider = Split.init(pending.src, axis, pending.opts.id_extra, Split.overlayRect(container, target, sign, axis));
+    defer divider.deinit();
     divider.drag(container, target, sign, pending.opts, .{
         .extent = c.extent(axis),
         .base_min = c.base_min,
-        .handles = c.handles,
+        .handles = 0,
         .others = c.resizables.items,
         .sign = sign,
     });

@@ -157,12 +157,13 @@ pub const Options = struct {
     push_out: bool = false,
 };
 
-/// Open a split: it takes `handle_size` along the container's axis and stretches across it, so
-/// `dvui.box` reserves the gap the way it reserves any other child.
+/// Open a split: by default it takes `handle_size` along the container's axis and stretches
+/// across it, so `dvui.box` reserves the gap the way it reserves any other child.
 ///
-/// `at` is for a container that places its own children — `Panes` knows every offset in its row,
-/// and a packed handle would sit wherever the pane before it was laid out, which during a drag is
-/// a frame stale. `null` means pack it, which is what a region's container wants.
+/// `at` places the handle without packing it. Region containers pass `overlayRect` so a new
+/// sentinel does not insert `handle_size` into the box. `Panes` places its own children the
+/// same way — a packed handle would sit wherever the pane before it was laid out, which
+/// during a drag is a frame stale. `null` still packs, for a caller that wants a reserved gap.
 ///
 /// `init` + `deinit`, the pairing every dvui widget uses, because that is what this is. The
 /// verb form lives in the namespace above the type — `core.widgets.split(...)` for a plugin,
@@ -268,10 +269,6 @@ pub fn easedKey(id: dvui.Id, target: f32, anim_key: []const u8, shown_key: []con
 /// split, or the near edge of one after it. Neither moves while dragging, which is what makes the
 /// arithmetic absolute.
 pub fn recordEdges(id: dvui.Id, wd: *dvui.WidgetData, axis: dvui.enums.Direction) void {
-    // A drag sizes from these edges. Rewriting them mid-gesture — a new sentinel
-    // appearing insets the region — shrinks `want` and the tray pops closed, then
-    // the next frame restores the edge and it pops open again.
-    if (dvui.dataGet(null, id, "_drag", bool) orelse false) return;
     const r = wd.borderRectScale().r;
     switch (axis) {
         .horizontal => {
@@ -281,6 +278,32 @@ pub fn recordEdges(id: dvui.Id, wd: *dvui.WidgetData, axis: dvui.enums.Direction
         .vertical => {
             dvui.dataSet(null, id, "_org", r.y);
             dvui.dataSet(null, id, "_end", r.y + r.h);
+        },
+    }
+}
+
+/// A handle-sized strip on `target`'s moving edge, in the container's content
+/// coordinates. Used as `init`'s `at` so the split is not a packed child — a packed
+/// child is what makes a new sentinel shove every other split by `handle_size`.
+pub fn overlayRect(
+    container: *dvui.BoxWidget,
+    target: dvui.Id,
+    sign: f32,
+    axis: dvui.enums.Direction,
+) dvui.Rect {
+    const cr = container.data().contentRect();
+    const crs = container.data().contentRectScale();
+    const edge = dvui.dataGet(null, target, if (sign > 0) "_end" else "_org", f32);
+    switch (axis) {
+        .horizontal => {
+            const x = if (edge) |e| (e - crs.r.x) / crs.s else if (sign > 0) 0 else cr.w;
+            const pos = if (sign > 0) x else x - handle_size;
+            return .{ .x = pos, .y = 0, .w = handle_size, .h = cr.h };
+        },
+        .vertical => {
+            const y = if (edge) |e| (e - crs.r.y) / crs.s else if (sign > 0) 0 else cr.h;
+            const pos = if (sign > 0) y else y - handle_size;
+            return .{ .x = 0, .y = pos, .w = cr.w, .h = handle_size };
         },
     }
 }
@@ -432,7 +455,15 @@ pub fn drag(
         // an edge that does not move during the drag makes the size a pure function of where the
         // pointer is, so it leaves a limit the instant the pointer does.
         const current = dvui.dataGet(null, target, "_size", f32) orelse currentExtent(target, axis);
-        const anchor = dvui.dataGet(null, target, if (sign > 0) "_org" else "_end", f32);
+        // The fixed edge at press, not the live `_org`/`_end`. A new sentinel
+        // insets the region and would rewrite those, which shrinks `want` by
+        // `handle_size` and the tray jumps shut.
+        if (dvui.dataGet(null, target, "_drag_anchor", f32) == null) {
+            if (dvui.dataGet(null, target, if (sign > 0) "_org" else "_end", f32)) |a| {
+                dvui.dataSet(null, target, "_drag_anchor", a);
+            }
+        }
+        const anchor = dvui.dataGet(null, target, "_drag_anchor", f32);
         const want = if (anchor) |a|
             (if (sign > 0) (p - a) else (a - p)) / srs.s - handle_size / 2
         else
@@ -451,6 +482,7 @@ pub fn drag(
         dvui.refresh(null, @src(), wd.id);
     } else if (was and !now) {
         dvui.dataRemove(null, target, "_drag");
+        dvui.dataRemove(null, target, "_drag_anchor");
         if (opts.snap_below) |floor| {
             const sz = dvui.dataGet(null, target, "_size", f32) orelse 0;
             if (sz > 0 and sz < floor) {
