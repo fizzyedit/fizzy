@@ -2136,7 +2136,7 @@ const EndlessFrame = struct {
     }
 };
 
-test "promoting an edge is enough for the next frame to declare that region" {
+test "the first frame declares a collapsed sentinel on each edge" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
@@ -2151,19 +2151,28 @@ test "promoting an edge is enough for the next frame to declare that region" {
     defer EndlessFrame.editor = null;
 
     try dvui.testing.settle(EndlessFrame.frame);
-    const before = editor.layout.regions.items.len;
-    _ = endless.promote(&editor.layout, editor.gpa, .left, 160);
-    try dvui.testing.settle(EndlessFrame.frame);
 
-    var found = false;
+    var left = false;
+    var right = false;
+    var top = false;
+    var bottom = false;
+    var center = false;
     for (editor.layout.regions.items) |r| {
-        if (std.mem.eql(u8, r.name, "edge-left-1")) found = true;
+        if (std.mem.eql(u8, r.name, "edge-left-1")) left = true;
+        if (std.mem.eql(u8, r.name, "edge-right-1")) right = true;
+        if (std.mem.eql(u8, r.name, "edge-top-1")) top = true;
+        if (std.mem.eql(u8, r.name, "edge-bottom-1")) bottom = true;
+        if (std.mem.eql(u8, r.name, "Center")) center = true;
     }
-    try std.testing.expect(found);
-    try std.testing.expect(editor.layout.regions.items.len > before);
+    try std.testing.expect(left);
+    try std.testing.expect(right);
+    try std.testing.expect(top);
+    try std.testing.expect(bottom);
+    try std.testing.expect(center);
+    try std.testing.expectEqual(@as(f32, 0), editor.layout.extent("edge-left-1", -1));
 }
 
-test "dragging a dormant left handle past the threshold appends edge-left-1" {
+test "dragging the left split opens edge-left-1 during the drag" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
@@ -2194,17 +2203,19 @@ test "dragging a dormant left handle past the threshold appends edge-left-1" {
         _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x + moved, .y = 150 } });
         _ = try dvui.testing.step(EndlessFrame.frame);
     }
+
+    try std.testing.expect(editor.layout.extent("edge-left-1", 0) >= endless.commit_threshold);
+
     _ = try cw.addEventMouseButton(.left, .release);
     _ = try dvui.testing.step(EndlessFrame.frame);
-    // Promote runs on the release frame; the region is declared on the next one.
     _ = try dvui.testing.step(EndlessFrame.frame);
 
-    var found = false;
+    var next = false;
     for (editor.layout.regions.items) |r| {
-        if (std.mem.eql(u8, r.name, "edge-left-1")) found = true;
+        if (std.mem.eql(u8, r.name, "edge-left-2")) next = true;
     }
-    try std.testing.expect(found);
-    try std.testing.expect(editor.layout.extent("edge-left-1", 0) >= endless.commit_threshold);
+    try std.testing.expect(next);
+    try std.testing.expectEqual(@as(f32, 0), editor.layout.extent("edge-left-2", -1));
 }
 
 test "roomOn is leftover after existing edges, splits, and Center's floor" {
@@ -2230,7 +2241,7 @@ test "roomOn is leftover after existing edges, splits, and Center's floor" {
     try std.testing.expectEqual(@as(f32, 0), tight);
 }
 
-test "a dormant handle does not commit when Center would be left too small" {
+test "a full axis still has an outer sentinel, and Center keeps its floor" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
@@ -2246,23 +2257,12 @@ test "a dormant handle does not commit when Center would be left too small" {
 
     _ = endless.promote(&editor.layout, editor.gpa, .left, 10_000);
     try dvui.testing.settle(EndlessFrame.frame);
-    try std.testing.expect(endless.t_left_room < endless.commit_threshold);
-    try std.testing.expectEqual(@as(f32, 0), endless.t_left_x);
 
-    const cw = dvui.currentWindow();
-    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 8, .y = 150 } });
-    _ = try dvui.testing.step(EndlessFrame.frame);
-    _ = try cw.addEventMouseButton(.left, .press);
-    _ = try dvui.testing.step(EndlessFrame.frame);
-    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 200, .y = 150 } });
-    _ = try dvui.testing.step(EndlessFrame.frame);
-    _ = try cw.addEventMouseButton(.left, .release);
-    _ = try dvui.testing.step(EndlessFrame.frame);
-    _ = try dvui.testing.step(EndlessFrame.frame);
-
-    var extra = false;
+    var sentinel = false;
     for (editor.layout.regions.items) |r| {
-        if (std.mem.eql(u8, r.name, "edge-left-2")) extra = true;
+        if (std.mem.eql(u8, r.name, "edge-left-2")) sentinel = true;
     }
-    try std.testing.expect(!extra);
+    try std.testing.expect(sentinel);
+    try std.testing.expectEqual(@as(f32, 0), editor.layout.extent("edge-left-2", -1));
+    try std.testing.expect(endless.t_left_room < endless.commit_threshold);
 }

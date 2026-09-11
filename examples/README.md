@@ -8,7 +8,7 @@ design, but only an outside package proves *consumability*.
 |---|---|---|
 | `minimal-app` | `-Dlayout=minimal` — one main region, no rail/explorer/panel | `minimalapp`, "Minimal App" |
 | `studio-app` | `-Dlayout=studio` — explorer on the right, short bottom strip, big canvas | `studioapp`, "Studio App" |
-| `endless-app` | its own `src/layout.zig` via `-Dapp-layout=` — blank window, dormant handles on four edges | `endlessapp`, "Endless App" |
+| `endless-app` | its own `src/layout.zig` via `-Dapp-layout=` — Center is the workspace; collapsed splits on four edges | `endlessapp`, "Endless App" |
 
 All three load the identical `workbench` / `text` / `image` / `markdown` plugins, **unchanged**.
 `endless-app` is the consumability test for a consumer-owned shape: fizzy does not ship that
@@ -50,7 +50,8 @@ Notably 25 of 28 build steps still succeeded: the entire dependency graph resolv
 plugin compiled. Exactly one path was wrong, and nothing inside fizzy could have revealed it.
 `b.path("src/App.zig")` resolves against fizzy's build root and is correct in both cases.
 
-CI builds all three examples on macOS and Linux for this reason.
+CI builds all three examples on macOS and Linux for this reason. `endless-app` also has
+`zig build run`, the same step fizzy itself exposes.
 
 ## Not yet covered
 

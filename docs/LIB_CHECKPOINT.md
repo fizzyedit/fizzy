@@ -2,7 +2,7 @@
 
 Resume point for the "fizzy as a library" work. Written to be picked up cold by any agent or
 person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-11 at bookmark
-`fizzy-lib` (jj change pending, endless example owns its layout; no max_trays).
+`fizzy-lib` (jj change pending, endless collapsed splits + by-name draw).
 
 ## Ground rules that are easy to get wrong
 
@@ -219,26 +219,29 @@ size and assignment under the app's name, and answers the app's picker.
 
 A shape whose layout is data, owned by the example — not a shipped fizzy preset.
 
-- `examples/endless-app/src/layout.zig`: blank Center plus a dormant `Split` on each window
-  edge. Dragging a handle inward past 48pt and releasing appends `edge-{side}-{n}` to that
-  edge (extent persisted in `layout.zon`); a new dormant handle stays on the outer side.
-  Indices are never reused, so assignments stay keyed by name. Created regions accept `slot`
-  and resolve `by_name` — nothing matches by keyword until the picker fills them.
-- A handle that would leave Center smaller than 80pt does not exist. There is no `max_trays`:
-  the container tracks resizable ids in an arena list, and the example refuses a new region
-  when leftover space on that axis is below the commit threshold.
+- `examples/endless-app/src/layout.zig`: Center accepts `ide.main` so the workspace draws
+  there with nothing assigned. Each edge already has a collapsed region; dragging its split
+  opens it in realtime and a new collapsed region appears on the outer side. Edge regions
+  accept `slot` and resolve `by_name` — they stay empty until the picker fills them.
+- `Region.drawContents` uses `selectedIn` for by-name regions, so two trays with the same
+  keywords do not draw the same assignment. `id_extra` includes the side, so a loop of
+  splits from one `@src()` does not collide.
+- There is no `max_trays`: the container tracks resizable ids in an arena list, and the
+  split constraint stops a drag that would leave Center smaller than 80pt.
+- `zig build run` works from `examples/endless-app`. An empty region's corner button stays
+  visible; a filled one still hides until the pointer is near.
 - The tree is reconstructed from extent names (`edge-left-1`, …). No new on-disk format.
 - `-Dapp-layout=` is a LazyPath. When set, `presets.run` calls `app_layout.layout(*Layout)`
-  (the file imports `dvui` / `app` / `core` only — not `Editor`). Fizzy's shipped shapes stay
-  `ide | minimal | studio`.
+  (the file imports `dvui` / `app` / `core` / `fizzy_sdk` — not `Editor`). Fizzy's shipped
+  shapes stay `ide | minimal | studio`.
 - `app/layout/Picker.zig`: a Store section lists catalog plugins that are not installed;
   choosing one queues an install and assigns that plugin's surfaces to the region once they
   load (`State.requestStoreInstall`). The store is a hook on `State` so the picker does not
   import `PluginStore` (that module graph is a cycle).
 - Example: `examples/endless-app` (`endlessapp`). CI builds it beside the other two.
-- Tests: names increment per side; promoting is enough for the next frame to declare the
-  region; dragging the left dormant handle past the threshold appends `edge-left-1`; a
-  handle does not commit when Center would be left too small.
+- Tests: names increment per side; the first frame declares a collapsed sentinel on each
+  edge; dragging the left split opens `edge-left-1` during the drag and appends a collapsed
+  `edge-left-2`; a full axis still has an outer sentinel.
 
 ## Also queued (in rough priority)
 
@@ -257,8 +260,7 @@ A shape whose layout is data, owned by the example — not a shipped fizzy prese
 
 ## Recently landed (for orientation, newest first)
 
-- Endless-handles example: dormant edge handles create persisted `edge-{side}-{n}` regions;
-  picker Store section installs and assigns.
+- Endless-handles example: collapsed edge splits, by-name surfaces, `zig build run`.
 - Loading card sizes from content; image checkerboard survives zoom-out.
 - Animated GIF plays in the image viewer (`core.image.Animation`, dvui timer per frame).
 - `.gif/.bmp/.tga` claimed by `image`; `text` refuses binary (`textcore.encoding.looksBinary`);

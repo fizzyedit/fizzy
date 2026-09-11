@@ -221,6 +221,7 @@ pub fn addFizzyExecutableForTarget(
         app_layout_mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
         app_layout_mod.addImport("app", app_module);
         app_layout_mod.addImport("core", core_module);
+        app_layout_mod.addImport("fizzy_sdk", sdk_module);
         exe.root_module.addImport("app_layout", app_layout_mod);
     }
 

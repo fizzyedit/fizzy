@@ -551,6 +551,13 @@ pub fn drawSelected(self: *Layout, keywords: []const []const u8) !dvui.App.Resul
     return self.draw(s);
 }
 
+/// `drawSelected` for a specific region. A by-name region must not draw the first assignment
+/// that happens to share its keywords — that is how every edge tray showed the same surface.
+pub fn drawSelectedIn(self: *Layout, r: *const Region) !dvui.App.Result {
+    const s = self.selectedIn(r) orelse return .ok;
+    return self.draw(s);
+}
+
 // ── The base layer: regions and keywords ────────────────────────────────────────────────────
 //
 // Everything above is the vocabulary — which surfaces exist, which match, which is selected.

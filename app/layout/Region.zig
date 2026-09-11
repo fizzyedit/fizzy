@@ -218,7 +218,10 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         init_opts.keywords,
     );
 
-    const matches = self.matching(keywords);
+    const matches = if (init_opts.by_name)
+        self.matchingIn(&.{ .name = init_opts.name, .keywords = keywords, .by_name = true })
+    else
+        self.matching(keywords);
     if (init_opts.hide_when_empty and keywords.len > 0 and matches.len == 0) {
         // A boundary with nothing on one side is not a boundary.
         if (parent) |p| p.pending_split = null;
@@ -367,7 +370,8 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     const clip_to = box.data().contentRectScale().r;
     const prev_clip = dvui.clip(clip_to);
 
-    if (init_opts.name.len > 0 and keywords.len > 0) cornerButton(self, init_opts.name, box);
+    if (init_opts.name.len > 0 and keywords.len > 0 and !shut_now)
+        cornerButton(self, init_opts, keywords, box);
 
     // Drawn at every size except none. Skipping content at *zero* is just not doing work nobody
     // can see; skipping it below a threshold would be a policy, and it would also break the
@@ -403,13 +407,23 @@ const corner_button_size: f32 = 22;
 ///
 /// Runs before the region's contents and renders after them (`RenderFrontToBack`): dvui gives
 /// an event to the first widget that runs and paints the last one on top, and a corner button
-/// under a scroll area needs both to be it. Shown only while the pointer is near the corner.
-fn cornerButton(self: *Layout, name: []const u8, box: *dvui.BoxWidget) void {
-    const rs = box.data().contentRectScale();
-    const mouse = dvui.currentWindow().mouse_pt;
-    const near = mouse.x >= rs.r.x + rs.r.w - corner_reach * rs.s and mouse.x <= rs.r.x + rs.r.w and
-        mouse.y >= rs.r.y and mouse.y <= rs.r.y + corner_reach * rs.s;
-    if (!near) return;
+/// under a scroll area needs both to be it.
+///
+/// An empty region shows the button always — there is nothing else to find it behind. A filled
+/// one hides it until the pointer is near the corner, so it does not sit on the surface.
+fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, box: *dvui.BoxWidget) void {
+    const filled = self.selectedIn(&.{
+        .name = opts.name,
+        .keywords = keywords,
+        .by_name = opts.by_name,
+    }) != null;
+    if (filled) {
+        const rs = box.data().contentRectScale();
+        const mouse = dvui.currentWindow().mouse_pt;
+        const near = mouse.x >= rs.r.x + rs.r.w - corner_reach * rs.s and mouse.x <= rs.r.x + rs.r.w and
+            mouse.y >= rs.r.y and mouse.y <= rs.r.y + corner_reach * rs.s;
+        if (!near) return;
+    }
 
     var ftb: dvui.RenderFrontToBack = undefined;
     ftb.init();
@@ -425,7 +439,7 @@ fn cornerButton(self: *Layout, name: []const u8, box: *dvui.BoxWidget) void {
             .w = corner_button_size,
             .h = corner_button_size,
         },
-        .padding = dvui.Rect.all(2),
+        .padding = dvui.Rect.all(1),
         .corners = dvui.CornerRect.all(4),
         .background = true,
         .color_fill = theme.color(.control, .fill),
@@ -439,7 +453,7 @@ fn cornerButton(self: *Layout, name: []const u8, box: *dvui.BoxWidget) void {
         .fill_color = if (bw.hovered()) theme.color(.highlight, .fill) else theme.color(.control, .text),
     }, .{ .expand = .both });
     if (bw.clicked()) {
-        self.state.openPicker(self.gpa, name, bw.data().rectScale().r.toNatural().bottomLeft());
+        self.state.openPicker(self.gpa, opts.name, bw.data().rectScale().r.toNatural().bottomLeft());
     }
 }
 
@@ -451,6 +465,12 @@ fn cornerButton(self: *Layout, name: []const u8, box: *dvui.BoxWidget) void {
 /// tab strip inside a sub-region lists what that sub-region accepts and not what its kind accepts
 /// everywhere in the app.
 fn drawContents(self: *Layout, opts: InitOptions, keywords: []const []const u8) !dvui.App.Result {
-    const content = opts.content orelse return self.drawSelected(keywords);
-    return content.draw(content.ctx, self, keywords);
+    if (opts.content) |content| return content.draw(content.ctx, self, keywords);
+    if (opts.by_name) return self.drawSelectedIn(&.{
+        .name = opts.name,
+        .keywords = keywords,
+        .by_name = true,
+        .shows = opts.shows,
+    });
+    return self.drawSelected(keywords);
 }

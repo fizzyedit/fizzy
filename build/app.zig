@@ -609,6 +609,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     endless_layout_mod.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
     endless_layout_mod.addImport("app", app_module_test);
     endless_layout_mod.addImport("core", core_module_test);
+    endless_layout_mod.addImport("fizzy_sdk", sdk_module_test);
     integration_module.addImport("endless_layout", endless_layout_mod);
 
     // The text plugin itself, so integration tests can drive its `TextEntryWidget` directly in
