@@ -30,7 +30,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const AppInfo = @import("../AppInfo.zig");
+const AppInfo = @import("app").AppInfo;
 
 pub const default_progid_extensions = [_]ExtAssoc{
     .{ .ext = ".fiz", .progid = "Fizzy.fiz", .friendly = "Fizzy Document" },

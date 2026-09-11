@@ -24,6 +24,10 @@ pub const SDL_DialogFileFilter = DialogFileFilter;
 
 pub const TitleBarButton = enum { minimize, maximize, close };
 
+/// The web backend allocates nothing on the app's behalf — no native dialogs, no native menu.
+/// Accepted and ignored so the startup path is the same on every target.
+pub fn setAllocator(_: std.mem.Allocator) void {}
+
 pub fn resetTitleBarHints() void {}
 
 pub fn setTitleBarStrip(_: f32, _: i32) void {}

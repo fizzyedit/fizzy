@@ -15,6 +15,11 @@
 //! **An app tells the store about itself once**, through `store.Manager` (see its file), and the
 //! store then talks to nothing else — no `Editor`, no globals belonging to fizzy. That seam is
 //! what makes this framework rather than fizzy's own source.
+/// What makes an application *this* application rather than fizzy: its name, bundle id, config
+/// directory, version, update feed and plugin registry. Every value arrives from the app's own
+/// `build_opts`, so `AppInfo.current` is the identity of whichever app is being built.
+pub const AppInfo = @import("AppInfo.zig");
+
 /// Regions and the splits between them: the whole of how an application divides its window.
 ///
 /// A minimal app is exactly this — regions laid out by dvui's boxes, a split where the user

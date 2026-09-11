@@ -140,7 +140,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const build_opts = b.addOptions();
     build_opts.addOption([]const u8, "app_version", app_version);
 
-    // Application identity (see src/AppInfo.zig). Options rather than literals so an app built
+    // Application identity (see app/AppInfo.zig). Options rather than literals so an app built
     // on fizzy as a library can set them; fizzy passes its own values.
     const app_name = b.option([]const u8, "app-name", "Short lowercase app identifier (exe name, packId, config dir)") orelse "fizzy";
     const app_display_name = b.option([]const u8, "app-display-name", "Human-facing application name") orelse "Fizzy";

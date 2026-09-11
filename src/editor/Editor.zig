@@ -120,7 +120,7 @@ pub const Menu = @import("Menu.zig");
 const presets = @import("layout/presets.zig");
 const Layout = @import("app").layout.Layout;
 const Region = @import("app").layout.Region;
-const AppInfo = @import("../AppInfo.zig");
+const AppInfo = @import("app").AppInfo;
 pub const FileLoadJob = workbench_mod.FileLoadJob;
 
 pub const sdk = fizzy.sdk;

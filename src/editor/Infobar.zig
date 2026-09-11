@@ -1,6 +1,6 @@
 const std = @import("std");
 const fizzy = @import("../fizzy.zig");
-const AppInfo = @import("../AppInfo.zig");
+const AppInfo = @import("app").AppInfo;
 const dvui = @import("dvui");
 const icons = @import("icons");
 const assets = @import("assets");

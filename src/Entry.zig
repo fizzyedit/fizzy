@@ -16,7 +16,7 @@ const update_notify = @import("app").update.update_notify;
 const singleton = @import("app").single_instance;
 const paths = fizzy.core.paths;
 const Constants = @import("editor/Constants.zig");
-const AppInfo = @import("AppInfo.zig");
+const AppInfo = @import("app").AppInfo;
 
 const Entry = @This();
 const Editor = fizzy.Editor;
@@ -137,6 +137,9 @@ pub fn main(main_init: std.process.Init) !u8 {
     main_init_global = main_init;
 
     if (comptime builtin.target.cpu.arch != .wasm32) {
+        // Before anything native allocates on the app's behalf — dialog paths, menu titles.
+        fizzy.backend.setAllocator(appAllocator());
+
         // The lock is per *application*, so fizzy names itself rather than the framework
         // reading fizzy's identity file — which is exactly what made it fizzy's before.
         singleton.setIdentity(AppInfo.bundle_id_z, AppInfo.current.name);

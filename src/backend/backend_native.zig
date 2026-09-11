@@ -1,5 +1,21 @@
 // These are functions specific to the backend, which is currently SDL3
 const fizzy = @import("../fizzy.zig");
+
+/// The application's long-lived allocator, set once at startup.
+///
+/// Everything here that allocates does so on behalf of the app — a dialog's default path, the
+/// recent-folders menu, a plugin-contributed menu item's title — and outlives the frame that
+/// asked for it. Reaching for fizzy's own was the single largest thing keeping this file from
+/// being framework; an app sets it and the rest of this file stops naming fizzy at all.
+var app_gpa: ?std.mem.Allocator = null;
+
+pub fn setAllocator(gpa: std.mem.Allocator) void {
+    app_gpa = gpa;
+}
+
+fn alloc() std.mem.Allocator {
+    return app_gpa orelse @panic("backend used before the app supplied an allocator");
+}
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -11,7 +27,7 @@ const window_layout = @import("app").window.layout;
 const Constants = @import("../editor/Constants.zig");
 const KeybindSettings = @import("../editor/KeybindSettings.zig");
 const menu_model = @import("../editor/menu_model.zig");
-const AppInfo = @import("../AppInfo.zig");
+const AppInfo = @import("app").AppInfo;
 
 // AppKit geometry types for NSView frame/bounds (same layout as Foundation).
 const NSPoint = extern struct { x: f64, y: f64 };
@@ -1429,7 +1445,7 @@ pub fn rebuildDynamicNativeMenus() void {
     // `MenuContribution` that has at least one visible `NativeMenuItem` targeting it.
     // Menus with no native leaf items (in-app-bar-only, or untitled) are skipped.
     var created: std.StringHashMapUnmanaged(objc.Object) = .empty;
-    defer created.deinit(fizzy.entry().allocator);
+    defer created.deinit(alloc());
 
     for (host.menus.items) |mc| {
         if (mc.hidden or mc.title.len == 0) continue;
@@ -1442,8 +1458,8 @@ pub fn rebuildDynamicNativeMenus() void {
         };
         if (!has_items) continue;
 
-        const title_z = fizzy.entry().allocator.dupeZ(u8, mc.title) catch continue;
-        defer fizzy.entry().allocator.free(title_z);
+        const title_z = alloc().dupeZ(u8, mc.title) catch continue;
+        defer alloc().free(title_z);
         const title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{title_z.ptr});
 
         const menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{title_str.value});
@@ -1468,8 +1484,8 @@ pub fn rebuildDynamicNativeMenus() void {
             main_menu.msgSend(void, "addItem:", .{item.value});
         }
 
-        dynamic_top_level_menus.append(fizzy.entry().allocator, .{ .item = item, .menu = menu }) catch {};
-        created.put(fizzy.entry().allocator, mc.id, menu) catch {};
+        dynamic_top_level_menus.append(alloc(), .{ .item = item, .menu = menu }) catch {};
+        created.put(alloc(), mc.id, menu) catch {};
     }
 
     // Pass 2: append every visible `NativeMenuItem` into its resolved parent menu (either a
@@ -1480,8 +1496,8 @@ pub fn rebuildDynamicNativeMenus() void {
         const parent_menu: objc.Object = resolveBuiltinNativeMenu(ni.parent_menu_id) orelse
             (created.get(ni.parent_menu_id) orelse continue);
 
-        const title_z = fizzy.entry().allocator.dupeZ(u8, ni.title) catch continue;
-        defer fizzy.entry().allocator.free(title_z);
+        const title_z = alloc().dupeZ(u8, ni.title) catch continue;
+        defer alloc().free(title_z);
         const title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{title_z.ptr});
 
         const item = parent_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
@@ -1495,13 +1511,13 @@ pub fn rebuildDynamicNativeMenus() void {
         // in `Editor.zig`'s `flushQueuedNativeMenuItems`.
         item.msgSend(void, "setTag:", .{@as(c_long, @intCast(idx))});
         if (ni.sf_symbol) |sym| {
-            if (fizzy.entry().allocator.dupeZ(u8, sym)) |sym_z| {
-                defer fizzy.entry().allocator.free(sym_z);
+            if (alloc().dupeZ(u8, sym)) |sym_z| {
+                defer alloc().free(sym_z);
                 setMenuItemImage(item, NSImage, NSString, sym_z.ptr, title_z.ptr);
             } else |_| {}
         }
 
-        dynamic_leaf_items.append(fizzy.entry().allocator, .{
+        dynamic_leaf_items.append(alloc(), .{
             .parent_menu = parent_menu,
             .item = item,
             .index = idx,
@@ -1767,14 +1783,14 @@ pub fn showSimpleMessage(title: [:0]const u8, message: [:0]const u8) void {
 pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
         if (default_folder) |folder| {
-            break :blk std.fs.path.joinZ(fizzy.entry().allocator, &.{ folder, default_filename }) catch "untitled";
+            break :blk std.fs.path.joinZ(alloc(), &.{ folder, default_filename }) catch "untitled";
         } else if (fizzy.editor().recents.last_save_folder) |last_save_folder| {
-            break :blk std.fs.path.joinZ(fizzy.entry().allocator, &.{ last_save_folder, default_filename }) catch "untitled";
+            break :blk std.fs.path.joinZ(alloc(), &.{ last_save_folder, default_filename }) catch "untitled";
         } else {
-            break :blk std.fs.path.joinZ(fizzy.entry().allocator, &.{ fizzy.editor().folder orelse "", default_filename }) catch "untitled";
+            break :blk std.fs.path.joinZ(alloc(), &.{ fizzy.editor().folder orelse "", default_filename }) catch "untitled";
         }
     };
-    defer fizzy.entry().allocator.free(default);
+    defer alloc().free(default);
     // Do not use our borderless/custom-frame main window as the dialog parent on Windows: the shell
     // may inherit extended style and the picker loses normal frame/close affordances.
     const parent: ?*sdl3.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
@@ -1784,14 +1800,14 @@ pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
 pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
         if (default_folder) |folder| {
-            break :blk std.fs.path.joinZ(fizzy.entry().allocator, &.{ folder, default_filename }) catch "untitled";
+            break :blk std.fs.path.joinZ(alloc(), &.{ folder, default_filename }) catch "untitled";
         } else if (fizzy.editor().recents.last_open_folder) |last_open_folder| {
-            break :blk std.fs.path.joinZ(fizzy.entry().allocator, &.{ last_open_folder, default_filename }) catch "untitled";
+            break :blk std.fs.path.joinZ(alloc(), &.{ last_open_folder, default_filename }) catch "untitled";
         } else {
-            break :blk std.fs.path.joinZ(fizzy.entry().allocator, &.{ fizzy.editor().folder orelse "", default_filename }) catch "untitled";
+            break :blk std.fs.path.joinZ(alloc(), &.{ fizzy.editor().folder orelse "", default_filename }) catch "untitled";
         }
     };
-    defer fizzy.entry().allocator.free(default);
+    defer alloc().free(default);
     const parent: ?*sdl3.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
     sdl3.SDL_ShowOpenFileDialog(GenericOpenDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, filters.ptr, @intCast(filters.len), default.ptr, true);
 }
@@ -1799,16 +1815,16 @@ pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
 pub fn showOpenFolderDialog(cb: *const fn (?[][:0]const u8) void, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
         if (default_folder) |folder| {
-            break :blk std.fmt.allocPrintSentinel(fizzy.entry().allocator, "{s}", .{folder}, 0) catch "untitled";
+            break :blk std.fmt.allocPrintSentinel(alloc(), "{s}", .{folder}, 0) catch "untitled";
         } else {
             if (fizzy.editor().recents.last_open_folder) |last_open_folder| {
-                break :blk std.fmt.allocPrintSentinel(fizzy.entry().allocator, "{s}", .{last_open_folder}, 0) catch "untitled";
+                break :blk std.fmt.allocPrintSentinel(alloc(), "{s}", .{last_open_folder}, 0) catch "untitled";
             } else {
-                break :blk std.fmt.allocPrintSentinel(fizzy.entry().allocator, "{s}", .{fizzy.editor().folder orelse ""}, 0) catch "untitled";
+                break :blk std.fmt.allocPrintSentinel(alloc(), "{s}", .{fizzy.editor().folder orelse ""}, 0) catch "untitled";
             }
         }
     };
-    defer fizzy.entry().allocator.free(default);
+    defer alloc().free(default);
     const parent: ?*sdl3.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
     sdl3.SDL_ShowOpenFolderDialog(GenericOpenDialogCallback, @ptrCast(@alignCast(@constCast(cb))), parent, default.ptr, false);
 }
@@ -1860,7 +1876,7 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: e
     while (files[path_count] != null) : (path_count += 1) {}
 
     if (path_count == 0) {
-        pending_dialog_results.append(fizzy.entry().allocator, .{ .callback = callback, .files = null }) catch {
+        pending_dialog_results.append(alloc(), .{ .callback = callback, .files = null }) catch {
             dvui.log.err("Failed to queue dialog result", .{});
             return;
         };
@@ -1870,16 +1886,16 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: e
 
     // Dupe every path (and the slice holding them) into memory that outlives this callback,
     // since the `files` pointers are only valid for the duration of this call.
-    const zig_files: [][:0]const u8 = fizzy.entry().allocator.alloc([:0]const u8, path_count) catch {
+    const zig_files: [][:0]const u8 = alloc().alloc([:0]const u8, path_count) catch {
         dvui.log.err("Failed to allocate dialog result paths", .{});
         return;
     };
     var allocated: usize = 0;
     for (0..path_count) |i| {
-        zig_files[i] = fizzy.entry().allocator.dupeZ(u8, std.mem.span(files[i])) catch {
+        zig_files[i] = alloc().dupeZ(u8, std.mem.span(files[i])) catch {
             dvui.log.err("Failed to dupe dialog result path", .{});
-            for (zig_files[0..allocated]) |f| fizzy.entry().allocator.free(f);
-            fizzy.entry().allocator.free(zig_files);
+            for (zig_files[0..allocated]) |f| alloc().free(f);
+            alloc().free(zig_files);
             return;
         };
         allocated += 1;
@@ -1889,17 +1905,17 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: e
         if (std.fs.path.dirname(zig_files[0])) |dir| {
             if (mode == .save) {
                 if (fizzy.editor().recents.last_save_folder) |last_save_folder| {
-                    fizzy.entry().allocator.free(last_save_folder);
+                    alloc().free(last_save_folder);
                 }
-                fizzy.editor().recents.last_save_folder = fizzy.entry().allocator.dupe(u8, dir) catch {
+                fizzy.editor().recents.last_save_folder = alloc().dupe(u8, dir) catch {
                     dvui.log.err("Failed to dupe directory {s}", .{dir});
                     return;
                 };
             } else {
                 if (fizzy.editor().recents.last_open_folder) |last_open_folder| {
-                    fizzy.entry().allocator.free(last_open_folder);
+                    alloc().free(last_open_folder);
                 }
-                fizzy.editor().recents.last_open_folder = fizzy.entry().allocator.dupe(u8, dir) catch {
+                fizzy.editor().recents.last_open_folder = alloc().dupe(u8, dir) catch {
                     dvui.log.err("Failed to dupe directory {s}", .{dir});
                     return;
                 };
@@ -1907,10 +1923,10 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: e
         }
     }
 
-    pending_dialog_results.append(fizzy.entry().allocator, .{ .callback = callback, .files = zig_files }) catch {
+    pending_dialog_results.append(alloc(), .{ .callback = callback, .files = zig_files }) catch {
         dvui.log.err("Failed to queue dialog result", .{});
-        for (zig_files) |f| fizzy.entry().allocator.free(f);
-        fizzy.entry().allocator.free(zig_files);
+        for (zig_files) |f| alloc().free(f);
+        alloc().free(zig_files);
         return;
     };
     wakeForDialogResult();

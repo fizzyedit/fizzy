@@ -78,7 +78,7 @@ pub fn addFizzyExecutableForTarget(
     assets_module: *std.Build.Module,
     macos_sdl_paths: ?MacosSdlPaths,
     velopack_enabled: bool,
-    /// The application's short name (see src/AppInfo.zig) — the executable's name. Passed in
+    /// The application's short name (see app/AppInfo.zig) — the executable's name. Passed in
     /// rather than hardcoded so an app built on fizzy as a library names its own binary.
     app_name: []const u8,
 ) !FizzyExecutable {

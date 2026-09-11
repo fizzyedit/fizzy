@@ -41,7 +41,7 @@ pub fn append(comptime level: std.log.Level, comptime scope: @EnumLiteral(), com
     else
         level.asText() ++ "(" ++ @tagName(scope) ++ "): ";
     const text = std.fmt.allocPrint(allocator, prefix ++ format, args) catch return;
-    store(level, @import("../AppInfo.zig").current.name, text);
+    store(level, @import("app").AppInfo.current.name, text);
 }
 
 /// Runtime counterpart of `append`, for callers that only have runtime strings — namely
