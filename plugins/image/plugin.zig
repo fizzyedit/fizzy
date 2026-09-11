@@ -86,7 +86,7 @@ fn deinit(state: *anyopaque) void {
 ///
 /// Exactly what stb_image decodes, no more: a GIF opens as its first frame, and BMP/TGA are
 /// the other still formats it reads. Anything listed here that stb could *not* decode would
-/// fall through to the text plugin, which has nothing sensible to show for a binary file.
+/// fall through to the text plugin, which opens them as plain text.
 const flat_image_extensions = [_][]const u8{ ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tga" };
 
 fn isFlatImageExtension(ext: []const u8) bool {

@@ -387,6 +387,13 @@ pub fn extent(self: *State, name: []const u8, default: f32) f32 {
     return self.extents.get(name) orelse default;
 }
 
+/// Forget a region's persisted extent. Returns true when there was one.
+pub fn clearExtent(self: *State, gpa: std.mem.Allocator, name: []const u8) bool {
+    const kv = self.extents.fetchRemove(name) orelse return false;
+    gpa.free(kv.key);
+    return true;
+}
+
 /// Remember a region's extent. Returns true when the value actually changed, so the application
 /// can decide what "remember" means — fizzy debounces a write to `layout.zon`; another app might
 /// do nothing at all.

@@ -170,19 +170,16 @@ const max_file_bytes: usize = 64 * 1024 * 1024;
 
 /// Build a document from in-memory bytes (browser file picker, or after reading from disk).
 ///
-/// Refuses binary content with `error.BinaryFile` rather than opening it: there is no useful
-/// editor for it, and dvui's text layout asserts on bytes that are not UTF-8.
+/// Unknown and binary files still open: NULs and malformed UTF-8 become U+FFFD so dvui's
+/// text layout can draw them. The fallback editor's job is to show the file, not to refuse it.
 pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
     if (tc.encoding.looksBinary(bytes)) {
-        // Logged here rather than by the host: an error value does not survive the dylib
-        // boundary with its name intact, so this is the only place the reason is known.
-        dvui.log.warn("text: {s} is a binary file; not opening it as text", .{path});
-        return error.BinaryFile;
+        dvui.log.warn("text: {s} has binary bytes; opening as plain text", .{path});
     }
     const gpa = sdk.allocator();
     var text: std.ArrayList(u8) = .empty;
     errdefer text.deinit(gpa);
-    try text.appendSlice(gpa, bytes);
+    try tc.encoding.appendLossy(&text, gpa, bytes);
     const path_copy = try gpa.dupe(u8, path);
     errdefer gpa.free(path_copy);
     // Seed from the persisted `default_md_view` setting (and this session's split ratio). Start
@@ -370,11 +367,9 @@ pub fn reloadFromDisk(self: *Document) !void {
     const gpa = sdk.allocator();
     const bytes = try std.Io.Dir.cwd().readFileAlloc(dvui.io, self.path, gpa, .limited(max_file_bytes));
     defer gpa.free(bytes);
-    // A file that was text when opened and is binary now: keep what the editor has.
-    if (tc.encoding.looksBinary(bytes)) return error.BinaryFile;
 
     self.text.clearRetainingCapacity();
-    try self.text.appendSlice(gpa, bytes);
+    try tc.encoding.appendLossy(&self.text, gpa, bytes);
     self.history.deinit(gpa);
     self.history = .{};
     self.clean_op_id = 0;

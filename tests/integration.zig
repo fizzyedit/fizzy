@@ -2169,7 +2169,7 @@ test "the first frame declares a collapsed sentinel on each edge" {
     try std.testing.expect(top);
     try std.testing.expect(bottom);
     try std.testing.expect(center);
-    try std.testing.expectEqual(@as(f32, 0), editor.layout.extent("edge-left-1", -1));
+    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-1", -1));
 }
 
 test "dragging the left split opens edge-left-1 during the drag" {
@@ -2215,7 +2215,8 @@ test "dragging the left split opens edge-left-1 during the drag" {
         if (std.mem.eql(u8, r.name, "edge-left-2")) next = true;
     }
     try std.testing.expect(next);
-    try std.testing.expectEqual(@as(f32, 0), editor.layout.extent("edge-left-2", -1));
+    // Declared this frame, not persisted — same as the first-frame sentinel.
+    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-2", -1));
 }
 
 test "roomOn is leftover after existing edges, splits, and Center's floor" {
@@ -2241,6 +2242,47 @@ test "roomOn is leftover after existing edges, splits, and Center's floor" {
     try std.testing.expectEqual(@as(f32, 0), tight);
 }
 
+test "an empty tray dragged shut is forgotten; one with a surface stays" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    _ = endless.promote(&editor.layout, editor.gpa, .left, 120);
+    try dvui.testing.settle(EndlessFrame.frame);
+    try std.testing.expect(editor.layout.extent("edge-left-1", -1) > 0);
+
+    shutNamed(&editor.layout, "edge-left-1");
+    try dvui.testing.settle(EndlessFrame.frame);
+    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-1", -1));
+
+    _ = endless.promote(&editor.layout, editor.gpa, .left, 160);
+    try editor.layout.assign(editor.gpa, "edge-left-1", &.{"test.workspace"});
+    try dvui.testing.settle(EndlessFrame.frame);
+    shutNamed(&editor.layout, "edge-left-1");
+    try dvui.testing.settle(EndlessFrame.frame);
+    try std.testing.expectEqual(@as(f32, 0), editor.layout.extent("edge-left-1", -1));
+}
+
+fn shutNamed(state: *fizzy.Editor.Layout.State, name: []const u8) void {
+    _ = state.setExtent(std.testing.allocator, name, 0);
+    for (state.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, name)) {
+            dvui.dataSet(null, r.id, "_size", @as(f32, 0));
+            dvui.dataSet(null, r.id, "_shown", @as(f32, 0));
+        }
+    }
+}
+
 test "a full axis still has an outer sentinel, and Center keeps its floor" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -2263,6 +2305,6 @@ test "a full axis still has an outer sentinel, and Center keeps its floor" {
         if (std.mem.eql(u8, r.name, "edge-left-2")) sentinel = true;
     }
     try std.testing.expect(sentinel);
-    try std.testing.expectEqual(@as(f32, 0), editor.layout.extent("edge-left-2", -1));
+    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-2", -1));
     try std.testing.expect(endless.t_left_room < endless.commit_threshold);
 }

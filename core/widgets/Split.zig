@@ -27,12 +27,12 @@ pub const handle_size: f32 = 10;
 pub const handle_dist: f32 = 60;
 
 /// What the container knows that a single split does not: how much room there is, how much of it
-/// the base region insists on keeping, and which other regions can give way.
+/// the base region insists on keeping, and which other regions exist on the same axis.
 ///
-/// This is why a split *requests* an extent rather than setting one. With a left and a right tray
-/// over one centre, dragging the left one past the point where the centre is at its minimum has
-/// to push the right one out of the way — an answer no region owns on its own. The container
-/// arbitrates; the regions stop owning their sizes independently.
+/// This is why a split *requests* an extent rather than setting one. Growing into the centre
+/// stops when the centre is at its minimum; the other trays stay put. They move only when
+/// `push_out` keeps dragging past this tray's own minimum. The container arbitrates; the
+/// regions stop owning their sizes independently.
 pub const Constraint = struct {
     /// The container's own extent along the axis — one number, the same word every other
     /// distance along a layout axis uses (`Region.default_extent`, `Layout.Container.extent`).
@@ -43,16 +43,16 @@ pub const Constraint = struct {
     base_min: f32 = 0,
     /// Total length the splits themselves take.
     handles: f32 = 0,
-    /// The other resizable regions in this container, which yield once the base is at its
-    /// minimum and the drag still wants more.
+    /// The other resizable regions in this container. A pull (growing into the base) leaves
+    /// them alone. They yield only when `push_out` keeps dragging past this tray's minimum.
     others: []const dvui.Id = &.{},
 };
 
-/// Resolve a requested extent for `target` against the container's constraint, pushing the other
-/// trays back if that is the only way to honour it.
+/// Resolve a requested extent for `target` against the container's constraint.
 ///
-/// Returns the extent `target` should take. Anything the others had to give up has already been
-/// written to them.
+/// A pull takes space from the base and stops when the base is at its minimum — other trays
+/// stay put. `push_out` is the only path that writes other trays: dragging past `min` shrinks
+/// the ones behind this one. Returns the extent `target` should take.
 pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
     // `std.math.clamp` asserts `lower <= upper`, so an explicit `max` below `min` would panic
     // inside the clamp rather than reaching any guard after it.
@@ -71,34 +71,28 @@ pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
         others += dvui.dataGet(null, o, "_size", f32) orelse 0;
     }
 
-    if (size + others <= budget) return size;
+    // Pull: take from the base, not from the other trays. Growing past what the base can
+    // spare just stops — the next region's split stays where it is. A declared `min`
+    // still wins: the base is the one that yields rather than a tray going below what
+    // the shape pinned.
+    const room = @max(0, budget - others);
+    if (size > room) size = @max(opts.min, room);
 
-    // Over budget. Constraints are resolved in a fixed order so a conflict has one answer rather
-    // than depending on which split the user happens to be dragging:
-    //
-    //   1. The other trays give way, nearest the budget first — "push the far sidebar out of the
-    //      way", the behaviour the whole mechanism exists for.
-    //   2. If they are all shut and it still does not fit, the dragged tray stops.
-    //   3. If even that is not enough — every tray at a declared minimum, and the container
-    //      still too small — the **base** is squeezed below `base_min`. It yields last because
-    //      it is the region with somewhere to go: it can scroll or clip, and a tray pinned to a
-    //      minimum by the app cannot.
-    //
-    // Nothing here can produce a negative extent, which is the failure that would otherwise turn
-    // a conflict into a layout that inverts.
-    var excess = size + others - budget;
-    for (c.others) |o| {
-        if (o == target or excess <= 0) continue;
-        const had = dvui.dataGet(null, o, "_size", f32) orelse 0;
-        const give = @min(had, excess);
-        if (give > 0) {
-            dvui.dataSet(null, o, "_size", had - give);
-            dvui.dataSet(null, o, "_shown", had - give);
+    // Push: the drag asked for less than `min`, so shrink the trays behind this one.
+    if (opts.push_out and want < size) {
+        var extra = size - want;
+        for (c.others) |o| {
+            if (o == target or extra <= 0) continue;
+            const had = dvui.dataGet(null, o, "_size", f32) orelse 0;
+            const give = @min(had, extra);
+            if (give > 0) {
+                dvui.dataSet(null, o, "_size", had - give);
+                dvui.dataSet(null, o, "_shown", had - give);
+            }
+            extra -= give;
         }
-        excess -= give;
     }
-    if (excess > 0) size = @max(opts.min, size - excess);
-    return @max(0, size);
+    return size;
 }
 
 pub const Options = struct {
@@ -113,6 +107,12 @@ pub const Options = struct {
     /// Distinguishes two splits declared from the same `@src()` — a loop of edge regions, each
     /// with a split after it. Zero for the ordinary case of one split per source line.
     id_extra: usize = 0,
+    /// On release, an extent below this eases shut (`_size` goes to zero, `_shown` is left
+    /// alone so `eased` plays the close). Null means the released size sticks.
+    snap_below: ?f32 = null,
+    /// When the drag asks for less than `min`, shrink the other trays on this container
+    /// instead of stopping — so an inner tray can push an accidental outer one off the edge.
+    push_out: bool = false,
 };
 
 /// Open a split: it takes `handle_size` along the container's axis and stretches across it, so
@@ -362,6 +362,8 @@ pub fn drag(
     const grabbed = self.grab(container);
     const dist = grabbed.dist;
     const drag_to = grabbed.to;
+    const was = dvui.dataGet(null, wd.id, "_held", bool) orelse false;
+    const now = dvui.captured(wd.id);
 
     // Drive the size from where the pointer is relative to the split, not from an accumulated
     // delta.
@@ -400,7 +402,16 @@ pub fn drag(
         // read this as a change to ease into. A split belongs under the pointer, not on a curve.
         dvui.dataSet(null, target, "_shown", resolved);
         dvui.refresh(null, @src(), wd.id);
+    } else if (was and !now) {
+        if (opts.snap_below) |floor| {
+            const sz = dvui.dataGet(null, target, "_size", f32) orelse 0;
+            if (sz > 0 and sz < floor) {
+                dvui.dataSet(null, target, "_size", @as(f32, 0));
+                dvui.refresh(null, @src(), wd.id);
+            }
+        }
     }
+    dvui.dataSet(null, wd.id, "_held", now);
 
     // A split whose region is shut has nothing beside it to imply that it is there, so it keeps a
     // resting line at the edge and grows the grip out of that on approach. Without it a closed
@@ -797,7 +808,7 @@ test "a tray takes what it asks for while there is room" {
     try testing.expectApproxEqAbs(@as(f32, 100), getSize(right), 0.001);
 }
 
-test "the far tray is pushed back once the base is at its minimum" {
+test "a pull stops when the base is at its minimum and leaves the other tray" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
@@ -807,14 +818,14 @@ test "the far tray is pushed back once the base is at its minimum" {
     setSize(left, 200);
     setSize(right, 200);
 
-    // 1000 long, base keeps 400, splits take 20 -> 580 for the trays. Asking for 500 on the left
-    // leaves 80 for the right, so it has to give up 120.
+    // 1000 long, base keeps 400, splits take 20 -> 580 for the trays. Asking for 500 on the
+    // left would need the right to move; a pull does not, so the left stops at 380.
     const c: Constraint = .{ .extent = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
-    try testing.expectApproxEqAbs(@as(f32, 500), resolve(left, 500, c, .{}), 0.001);
-    try testing.expectApproxEqAbs(@as(f32, 80), getSize(right), 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 380), resolve(left, 500, c, .{}), 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 200), getSize(right), 0.001);
 }
 
-test "a tray that pushes everything shut then stops" {
+test "a pull that asks for more than the whole budget still leaves the other tray" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
     defer t.deinit();
     _ = try dvui.testing.step(twoPaneFrame);
@@ -825,10 +836,25 @@ test "a tray that pushes everything shut then stops" {
     setSize(right, 200);
 
     const c: Constraint = .{ .extent = 1000, .base_min = 400, .handles = 20, .others = &.{ left, right } };
-    // Far more than the whole budget: the right shuts, and the left stops at what is left.
     const got = resolve(left, 5000, c, .{});
-    try testing.expectApproxEqAbs(@as(f32, 0), getSize(right), 0.001);
-    try testing.expectApproxEqAbs(@as(f32, 580), got, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 200), getSize(right), 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 380), got, 0.001);
+}
+
+test "push_out past min shrinks the tray behind" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    const inner: dvui.Id = @enumFromInt(0xC3);
+    const outer: dvui.Id = @enumFromInt(0xC4);
+    setSize(inner, 0);
+    setSize(outer, 120);
+
+    const c: Constraint = .{ .extent = 1000, .base_min = 400, .handles = 20, .others = &.{ inner, outer } };
+    const got = resolve(inner, -80, c, .{ .push_out = true });
+    try testing.expectApproxEqAbs(@as(f32, 0), got, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 40), getSize(outer), 0.001);
 }
 
 test "conflicting minimums squeeze the base rather than inverting the layout" {

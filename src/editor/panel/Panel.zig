@@ -1,6 +1,6 @@
 //! Fizzy's own bottom panel: several tabbed panes side by side, split by the shared `Split`.
 //!
-//! **App furniture, not framework.** A shape asks for it by name — `presets/ide.zig` passes
+//! **App furniture, not framework.** A shape asks for it by name — `layout.zig` passes
 //! `bottomPane` as a region's `content` — and a differently-shaped app either passes
 //! `Layout.tabbed` for a plain tabbed region, nothing at all for the single-surface form
 //! (`presets/studio.zig`), or copies this directory and edits it. It sits here beside

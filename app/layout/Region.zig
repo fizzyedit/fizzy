@@ -49,6 +49,8 @@ layout: ?*Layout = null,
 /// app's own regions stay keyword-resolved so a chooser written against keywords (the icon
 /// rail) needs no region in hand.
 by_name: bool = false,
+/// A tray the next split should keep targeting. Center and grouping boxes are not.
+resize: bool = false,
 
 /// The key this region's selection lives under in the host — see `Layout.selectedIn`.
 pub fn selectionKey(self: *const Region) u64 {
@@ -63,6 +65,13 @@ pub fn deinit(self: *Region) void {
         if (self.layout) |l| {
             std.debug.assert(l.depth > 0);
             l.depth -= 1;
+            // A tray the next split should keep targeting is `resize`. Center and grouping
+            // boxes are not: after they close, the following split sizes the region after
+            // it. Clearing only for empty-keyword groups left Center holding the last top
+            // tray, so the Center–bottom split grew the top instead of the bottom.
+            if (!self.resize and l.depth > 0) {
+                l.containers[l.depth - 1].last_resizable = null;
+            }
         }
         b.deinit();
     }
@@ -98,14 +107,14 @@ pub fn open(self: Region) void {
 /// This replaced a five-value `Chooser` enum, two of whose values (`explorer_chrome`,
 /// `panel_chrome`) named *fizzy's own* furniture from inside the generic layer. That is the
 /// case CLAUDE.md calls a bug in `Layout` rather than a special case: a shape is supposed to be
-/// ordinary code over this API, and an app copying `ide.zig` could not have written those two
+/// ordinary code over this API, and an app copying `src/editor/layout.zig` could not have written those two
 /// values itself. As a function pointer they are just `explorerPane` and `bottomPane` in
-/// `presets/ide.zig` — app code, passed in, replaceable by the app's own loop over `matching` /
+/// `src/editor/layout.zig` — app code, passed in, replaceable by the app's own loop over `matching` /
 /// `selected` / `draw`, which is the governing test for everything here.
 ///
 /// It also retired the two values nothing used (`.tabs`, `.icons`); `Layout.tabbed` is the
 /// first of those as a plain function, and the icon rail was never this shape to begin with —
-/// it sits *beside* the region it chooses for, so `ide.zig` calls it directly and reads the
+/// it sits *beside* the region it chooses for, so fizzy's `layout.zig` calls it directly and reads the
 /// action it returns.
 pub const Content = struct {
     /// Whatever the shape needs to draw its chrome — for fizzy's own shapes, the application.
@@ -170,6 +179,9 @@ pub const InitOptions = struct {
     resize: bool = false,
     /// Collapse while nothing matches, rather than holding empty space open.
     hide_when_empty: bool = false,
+    /// Drop this region from persisted extents when it is closed and has no assigned surface.
+    /// An empty tray dragged shut disappears; one the user filled can close and reopen.
+    forget_when_empty: bool = false,
     /// Start shut when the window has no room to show this region beside everything else.
     ///
     /// Closing itself needs no flag: a region slides continuously from its full size to nothing,
@@ -287,7 +299,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         // carries the asymmetry — out with a little overshoot, in without any (`core.anim.slide`).
         extent = Split.eased(id, target);
         dvui.dataSet(null, id, "_size", chosen);
-        if (init_opts.name.len > 0 and self.state.setExtent(self.gpa, init_opts.name, chosen)) self.extents_changed = true;
+        if (init_opts.name.len > 0) persistExtent(self, init_opts, chosen, extent);
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
         // wider than the size the user dragged it to simply stays wider, and the split appears to
@@ -391,6 +403,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         .layout = self,
         .prev_clip = prev_clip,
         .by_name = init_opts.by_name,
+        .resize = init_opts.resize,
     };
 }
 
@@ -455,6 +468,22 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     if (bw.clicked()) {
         self.state.openPicker(self.gpa, opts.name, bw.data().rectScale().r.toNatural().bottomLeft());
     }
+}
+
+fn persistExtent(self: *Layout, opts: InitOptions, chosen: f32, shown: f32) void {
+    const kept = if (self.state.assignment(opts.name)) |ids| ids.len > 0 else false;
+    if (opts.forget_when_empty and !kept) {
+        if (chosen <= 0 and shown <= 0) {
+            if (self.state.clearExtent(self.gpa, opts.name)) self.extents_changed = true;
+            self.state.unassign(self.gpa, opts.name);
+            return;
+        }
+        if (chosen <= 0) {
+            if (self.state.setExtent(self.gpa, opts.name, 0)) self.extents_changed = true;
+            return;
+        }
+    }
+    if (self.state.setExtent(self.gpa, opts.name, chosen)) self.extents_changed = true;
 }
 
 /// The region's contents: its own chrome if it declared any, otherwise the active surface.

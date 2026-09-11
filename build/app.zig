@@ -156,15 +156,10 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     build_opts.addOption([]const u8, "app_repo_url_fallback", app_repo_url_fallback);
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
 
-    // Which shipped layout shape the region-based layout uses. `ide` is fizzy's own shape; `minimal`
-    // and `studio` are deliberately different shapes that load the SAME plugins unchanged —
-    // the acceptance test for the layout API (plan, Phase 5). A consumer that wants its own
-    // shape passes `-Dapp-layout=` (a LazyPath to its `layout` function) instead of adding a
-    // fourth preset here.
-    const Shape = enum { ide, minimal, studio };
-    const layout_kind = b.option(Shape, "layout", "Which shipped layout shape to use: ide (default), minimal, studio") orelse .ide;
-    const app_layout_path = b.option(std.Build.LazyPath, "app-layout", "App-owned layout file (pub fn layout(*Layout)); takes precedence over -Dlayout=");
-    build_opts.addOption(Shape, "layout", layout_kind);
+    // A consumer that wants its own shape passes `-Dapp-layout=` (a LazyPath to
+    // `pub fn layout(*Layout)`). Fizzy itself uses `src/editor/layout.zig`. There is no
+    // `-Dlayout=` enum of shipped presets — those live in `examples/`.
+    const app_layout_path = b.option(std.Build.LazyPath, "app-layout", "App-owned layout file (pub fn layout(*Layout))");
     build_opts.addOption(bool, "has_app_layout", app_layout_path != null);
     const static_workbench = b.option(
         bool,
@@ -225,7 +220,6 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         pack_opts.addOption(bool, "static_workbench", static_workbench);
         pack_opts.addOption(bool, "static_text", static_text);
         pack_opts.addOption(bool, "static_image", static_image);
-        pack_opts.addOption(Shape, "layout", layout_kind);
         pack_opts.addOption(bool, "has_app_layout", app_layout_path != null);
         break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name, app_layout_path);
     };

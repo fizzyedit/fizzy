@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-/// The general IDE shape (`src/editor/layout/ide.zig`): icon rail, left explorer, bottom panel,
+/// The general IDE shape (`src/editor/layout.zig`): icon rail, left explorer, bottom panel,
 /// main area. What most fizzy-based apps start from, and what a plugin written "for fizzy"
 /// should target unless it has reason not to.
 pub const ide = struct {

@@ -24,8 +24,8 @@ pub const AppInfo = @import("AppInfo.zig");
 ///
 /// A minimal app is exactly this — regions laid out by dvui's boxes, a split where the user
 /// should be able to drag one edge, and plugins drawing into whichever region accepts their
-/// keywords. Nothing here knows what an explorer, a panel or a document is; fizzy's own shapes
-/// (`src/editor/layout/presets/`) are ordinary code on top, and an app writes its own.
+/// keywords. Nothing here knows what an explorer, a panel or a document is; fizzy's own shape
+/// (`src/editor/layout.zig`) is ordinary code on top, and an app writes its own.
 pub const layout = struct {
     pub const Layout = @import("layout/Layout.zig");
     pub const Region = @import("layout/Region.zig");

@@ -6,7 +6,7 @@
 //!
 //! The three pieces, all in this directory: `Layout` is the live view (which surfaces exist,
 //! which match a region, which is selected), `Region.zig` is a named area accepting keywords,
-//! and `presets.zig` dispatches to the shipped shapes in `presets/`. The resizable division
+//! and fizzy's own shape lives in `src/editor/layout.zig`. The resizable division
 //! between two regions is `core.widgets.Split`, and a tab strip is `core.widgets.Tabs` — both in
 //! `core` rather than here because a plugin dylib draws the same ones the app does.
 //!
@@ -102,7 +102,7 @@
 //! It also leaves room for the thing this is ultimately for: once regions are the only unit, a
 //! region can be dragged to move or re-split it at runtime, which is how a Premiere- or
 //! Blender-style app would work. Fizzy itself stays rigid — its shape is fixed by
-//! `presets/ide.zig` — but nothing in the model prevents an app from letting the user rearrange.
+//! `src/editor/layout.zig` — but nothing in the model prevents an app from letting the user rearrange.
 //!
 //! ## Layered regions and blur
 //!
@@ -183,8 +183,8 @@ pub const Container = struct {
     /// The base region's declared minimum along the axis — `min_size_content` on the region in
     /// this container that is not resizable. The app declares it; the framework only reads it.
     base_min: f32 = 0,
-    /// Every resizable region in this container. A split needs them all, because honouring one
-    /// drag can mean pushing the others back. Arena-backed, this frame only — no count cap.
+    /// Every resizable region in this container. A split needs them all so `push_out` can
+    /// shrink the trays behind the one being dragged. Arena-backed, this frame only — no count cap.
     resizables: std.ArrayListUnmanaged(dvui.Id) = .empty,
     /// Total extent the splits in this container take between them.
     handles: f32 = 0,
@@ -565,7 +565,7 @@ pub fn drawSelectedIn(self: *Layout, r: *const Region) !dvui.App.Result {
 // owns the mechanism (paned trees, split ratios, persistence, collapse animation, auto-hide).
 //
 // The test this has to pass is that a shape never writes mechanism. Before it existed,
-// `ide.zig` reached `dock.paned.dragging`, called `animateSplit`, read `split_ratio.*`, kept
+// fizzy's layout reached `dock.paned.dragging`, called `animateSplit`, read `split_ratio.*`, kept
 // `editor.layout.panel_ratio` in sync by hand and published `editor.panes.paned` so other code could
 // find it — none of which an app author should know about, and all of which only worked because
 // fizzy's own shape happens to have a panel.
@@ -793,7 +793,7 @@ pub fn tabs(f: *Layout, keywords: []const []const u8) void {
 /// `.content = Layout.tabbed` and the region is tabbed.
 ///
 /// the icon rail deliberately has no counterpart here. It is a chooser that sits *beside* the
-/// region it chooses for rather than above it (see `ide.zig`), so it is not a region's content
+/// region it chooses for rather than above it (see `src/editor/layout.zig`), so it is not a region's content
 /// and wrapping it as one would only lose the action it returns.
 pub fn tabbed(_: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
     f.tabs(keywords);

@@ -116,8 +116,8 @@ pub const Panel = @import("panel/Panel.zig");
 pub const Sidebar = @import("Sidebar.zig");
 pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
-/// The shipped layout presets and the dispatcher that runs the selected one.
-const presets = @import("layout/presets.zig");
+/// Fizzy's own shape. A consumer that wants another one passes `-Dapp-layout=`.
+const fizzy_layout = @import("layout.zig");
 pub const Layout = @import("app").layout.Layout;
 pub const Region = @import("app").layout.Region;
 const AppInfo = @import("app").AppInfo;
@@ -2393,7 +2393,7 @@ pub fn postInit(editor: *Editor) !void {
             if (comptime build_opts.has_app_layout) {
                 dvui.log.info("layout: app-supplied", .{});
             } else {
-                dvui.log.info("layout: shape '{s}'", .{@tagName(build_opts.layout)});
+                dvui.log.info("layout: fizzy", .{});
             }
     editor.layout.store_catalog = .{
         .uninstalled = storeUninstalled,
@@ -4347,7 +4347,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // declare one of its own through `Host.region`. Cleared below: a `*Layout` that
             // outlives the frame points at a dead local.
             editor.frame_layout = &layout;
-            const shell_result = presets.run(editor, &layout);
+            const shell_result = if (comptime build_opts.has_app_layout)
+                @import("app_layout").layout(&layout)
+            else
+                fizzy_layout.layout(editor, &layout);
 
             // The shape has finished declaring regions: publish them. Until this point
             // `regionFor` answered from the previous frame, which is what lets a command

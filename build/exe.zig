@@ -81,9 +81,9 @@ pub fn addFizzyExecutableForTarget(
     /// The application's short name (see app/AppInfo.zig) — the executable's name. Passed in
     /// rather than hardcoded so an app built on fizzy as a library names its own binary.
     app_name: []const u8,
-    /// Consumer-owned layout file. When set, presets dispatch to `app_layout.layout` instead
-    /// of a shipped `-Dlayout=` preset. The file imports `dvui`, `app`, and `core` only —
-    /// not `fizzy` / `Editor` — so the module graph does not cycle.
+    /// Consumer-owned layout file. When set, Editor calls `app_layout.layout` instead of
+    /// fizzy's own shape. The file imports `dvui`, `app`, `core`, and `fizzy_sdk` — not
+    /// `fizzy` / `Editor` — so the module graph does not cycle.
     app_layout: ?std.Build.LazyPath,
 ) !FizzyExecutable {
     const dvui_dep = if (macos_sdl_paths) |p|

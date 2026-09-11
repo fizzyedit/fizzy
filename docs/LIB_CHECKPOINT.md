@@ -41,8 +41,8 @@ app/       framework an application switches on; never in a dylib. `AppInfo`, `l
            place it needed to name fizzy is a `{ctx, vtable}` seam the app fills in
            (PluginManager, FolderWatcher.Sink, singleton.Sink, auto_update.Hooks, DialogDirs…).
 plugins/   bundled plugins in third-party shape (workbench, text, image, markdown, shared).
-src/       fizzy the application: Entry, editor/ (Editor, presets ide/minimal/studio, panel/,
-           explorer/, LayoutSettings), backend/.
+src/       fizzy the application: Entry, editor/ (Editor, layout.zig, panel/,
+           explorer/, LayoutSettings), backend/. Examples own their layouts.
 build/     app build API (`wireAppModule`, `buildOptsModule` in build/sdk.zig).
 ```
 
@@ -231,9 +231,13 @@ A shape whose layout is data, owned by the example — not a shipped fizzy prese
 - `zig build run` works from `examples/endless-app`. An empty region's corner button stays
   visible; a filled one still hides until the pointer is near.
 - The tree is reconstructed from extent names (`edge-left-1`, …). No new on-disk format.
-- `-Dapp-layout=` is a LazyPath. When set, `presets.run` calls `app_layout.layout(*Layout)`
-  (the file imports `dvui` / `app` / `core` / `fizzy_sdk` — not `Editor`). Fizzy's shipped
-  shapes stay `ide | minimal | studio`.
+- `-Dapp-layout=` is a LazyPath. When set, Editor calls `app_layout.layout(*Layout)`
+  (the file imports `dvui` / `app` / `core` / `fizzy_sdk` — not `Editor`). There is no
+  `-Dlayout=` enum: fizzy uses `src/editor/layout.zig`; minimal, studio and endless
+  each own `examples/*/src/layout.zig`.
+- Empty edge trays dragged shut are forgotten (`forget_when_empty`); a tray with an
+  assigned surface closes to the window edge and can reopen. `snap_below` eases the close.
+  Dragging past zero `push_out`s the tray behind it.
 - `app/layout/Picker.zig`: a Store section lists catalog plugins that are not installed;
   choosing one queues an install and assigns that plugin's surfaces to the region once they
   load (`State.requestStoreInstall`). The store is a hook on `State` so the picker does not
@@ -263,7 +267,8 @@ A shape whose layout is data, owned by the example — not a shipped fizzy prese
 - Endless-handles example: collapsed edge splits, by-name surfaces, `zig build run`.
 - Loading card sizes from content; image checkerboard survives zoom-out.
 - Animated GIF plays in the image viewer (`core.image.Animation`, dvui timer per frame).
-- `.gif/.bmp/.tga` claimed by `image`; `text` refuses binary (`textcore.encoding.looksBinary`);
+- `.gif/.bmp/.tga` claimed by `image`; `text` opens unknown and binary files as plain text
+  (NULs / bad UTF-8 become U+FFFD);
   a failed load no longer deinits an unwritten document buffer; user gets a toast.
 - Every region registers (Main was missing from the placement pane).
 - Region assignments + Regions settings table (replaced the Phase 4b per-surface pane).

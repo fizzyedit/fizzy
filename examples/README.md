@@ -4,19 +4,18 @@ Each directory here is an **independent Zig package** that depends on fizzy and 
 executable. That independence is the point: everything inside fizzy's own build graph proves the
 design, but only an outside package proves *consumability*.
 
+Each example **owns its layout** (`src/layout.zig`, passed as `-Dapp-layout=`). Fizzy does not
+ship these as selectable presets — they show things fizzy itself does not do.
+
 | Example | Shape | Identity |
 |---|---|---|
-| `minimal-app` | `-Dlayout=minimal` — one main region, no rail/explorer/panel | `minimalapp`, "Minimal App" |
-| `studio-app` | `-Dlayout=studio` — explorer on the right, short bottom strip, big canvas | `studioapp`, "Studio App" |
-| `endless-app` | its own `src/layout.zig` via `-Dapp-layout=` — Center is the workspace; collapsed splits on four edges | `endlessapp`, "Endless App" |
+| `minimal-app` | one main region, no rail or panel | `minimalapp`, "Minimal App" |
+| `studio-app` | canvas, explorer on the right, short bottom strip | `studioapp`, "Studio App" |
+| `endless-app` | Center is the workspace; collapsed splits on four edges | `endlessapp`, "Endless App" |
 
 All three load the identical `workbench` / `text` / `image` / `markdown` plugins, **unchanged**.
-`endless-app` is the consumability test for a consumer-owned shape: fizzy does not ship that
-layout as a preset.
 
 ## What a consumer writes
-
-The whole build file:
 
 ```zig
 const fizzy = b.dependency("fizzy", .{
@@ -25,18 +24,20 @@ const fizzy = b.dependency("fizzy", .{
     .@"app-name" = @as([]const u8, "minimalapp"),
     .@"app-display-name" = @as([]const u8, "Minimal App"),
     .@"app-bundle-id" = @as([]const u8, "dev.fizzy.minimalapp"),
-    .@"new-shell" = true,
-    .shell = @as([]const u8, "minimal"),
+    .@"app-layout" = b.path("src/layout.zig"),
 });
-b.installArtifact(fizzy.artifact("minimalapp"));
+const exe = fizzy.artifact("minimalapp");
+b.installArtifact(exe);
+const run_cmd = b.addRunArtifact(exe);
+run_cmd.step.dependOn(b.getInstallStep());
+b.step("run", "Run the app").dependOn(&run_cmd.step);
 ```
 
-No `build/lib.zig`, no bespoke `fizzy.app.create` — ordinary Zig dependency mechanics carry it,
-because Phase 3 made identity a build option and Phase 5 made the layout one. The app gets its
-own executable name, window title, bundle id and config directory
-(`Application Support/minimalapp/`, not `fizzy/`). To bring a shape of your own instead of a
-shipped `-Dlayout=` preset, pass `.@"app-layout" = b.path("src/layout.zig")` — a file exporting
-`pub fn layout(*Layout)`. `endless-app` is that form.
+`src/layout.zig` exports `pub fn layout(*Layout)`. It imports `dvui`, `app`, `core`, and
+`fizzy_sdk` — not `Editor`. The app gets its own executable name, window title, bundle id and
+config directory (`Application Support/minimalapp/`, not `fizzy/`).
+
+`zig build run` works in each example the same way it does for fizzy.
 
 ## The bug this caught
 
@@ -46,12 +47,9 @@ working directory*, which is fizzy's own root when fizzy builds itself — so it
 test passed. The moment an outside package depends on fizzy, cwd is the consumer's directory and
 the build dies with `'src/App.zig' file_hash FileNotFound`.
 
-Notably 25 of 28 build steps still succeeded: the entire dependency graph resolved and every
-plugin compiled. Exactly one path was wrong, and nothing inside fizzy could have revealed it.
-`b.path("src/App.zig")` resolves against fizzy's build root and is correct in both cases.
+`b.path("src/Entry.zig")` resolves against fizzy's build root and is correct in both cases.
 
-CI builds all three examples on macOS and Linux for this reason. `endless-app` also has
-`zig build run`, the same step fizzy itself exposes.
+CI builds all three examples on macOS and Linux for this reason.
 
 ## Not yet covered
 

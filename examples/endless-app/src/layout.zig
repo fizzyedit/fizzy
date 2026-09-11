@@ -45,7 +45,7 @@ pub fn layout(f: *Layout) !dvui.App.Result {
     while (li > 0) {
         li -= 1;
         try edgeRegion(f, lefts[li], .horizontal, extra(.left, li));
-        f.split(@src(), .{ .id_extra = extra(.left, li) });
+        f.split(@src(), .{ .id_extra = extra(.left, li), .snap_below = commit_threshold, .push_out = true });
     }
 
     {
@@ -60,7 +60,7 @@ pub fn layout(f: *Layout) !dvui.App.Result {
         while (ti > 0) {
             ti -= 1;
             try edgeRegion(f, tops[ti], .vertical, extra(.top, ti));
-            f.split(@src(), .{ .id_extra = extra(.top, ti) });
+            f.split(@src(), .{ .id_extra = extra(.top, ti), .snap_below = commit_threshold, .push_out = true });
         }
 
         {
@@ -77,14 +77,14 @@ pub fn layout(f: *Layout) !dvui.App.Result {
 
         const bottoms = namesForSide(f, .bottom);
         for (bottoms, 0..) |name, bi| {
-            f.split(@src(), .{ .id_extra = extra(.bottom, bi) });
+            f.split(@src(), .{ .id_extra = extra(.bottom, bi), .snap_below = commit_threshold, .push_out = true });
             try edgeRegion(f, name, .vertical, extra(.bottom, bi));
         }
     }
 
     const rights = namesForSide(f, .right);
     for (rights, 0..) |name, ri| {
-        f.split(@src(), .{ .id_extra = extra(.right, ri) });
+        f.split(@src(), .{ .id_extra = extra(.right, ri), .snap_below = commit_threshold, .push_out = true });
         try edgeRegion(f, name, .horizontal, extra(.right, ri));
     }
 
@@ -213,6 +213,7 @@ fn edgeRegion(f: *Layout, name: []const u8, axis: dvui.enums.Direction, id_extra
         .keywords = slot,
         .by_name = true,
         .resize = true,
+        .forget_when_empty = true,
     }, .{
         .id_extra = id_extra,
         .min_size_content = switch (axis) {
