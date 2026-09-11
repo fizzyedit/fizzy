@@ -116,6 +116,7 @@
 //! belong to only one module, and `@import("../../core/...")` here would claim it for the root
 //! build module and break `core` as a dependency outright (CLAUDE.md).
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
@@ -203,9 +204,6 @@ pub const Container = struct {
     /// no boundary table, just one number per resizable region.
     last_resizable: ?dvui.Id = null,
     /// A non-resizable child has been declared (the leftover, or a grouping box around it).
-    /// Trays after this face the leftover and take their handle gutter on the leading edge;
-    /// trays before it take the trailing edge. One `handle_size` between cards, not a
-    /// margin on every side.
     saw_base: bool = false,
 
     /// How far this container reaches along `axis`, in points — its width when horizontal, its
@@ -223,7 +221,11 @@ pub const Container = struct {
 
 /// Layouts nest a few levels; anything deeper is a mistake worth reporting rather than
 /// supporting. Keeps the stack a fixed array with no allocation on the layout path.
-pub const max_nesting = 8;
+pub const max_nesting = 16;
+
+/// Empty place created by a runtime split. Nothing a plugin ships matches this
+/// word, so the new side stays empty until the picker fills it.
+pub const slot_keywords: []const []const u8 = &.{"slot"};
 
 // How long a region takes to fold away or come back is `core.anim.slide` — one home for the
 // timing, because a sidebar and a document pane travelling at different speeds reads as broken
@@ -556,14 +558,63 @@ const offscreen_warmup_frames: u8 = 10;
 /// declared region's space.
 pub fn drawSelected(self: *Layout, keywords: []const []const u8) !dvui.App.Result {
     const s = self.selected(keywords) orelse return .ok;
-    return self.draw(s);
+    return self.drawSwapped(sdk.keywords.groupKey(keywords), s);
 }
 
 /// `drawSelected` for a specific region. A by-name region must not draw the first assignment
 /// that happens to share its keywords — that is how every edge tray showed the same surface.
 pub fn drawSelectedIn(self: *Layout, r: *const Region) !dvui.App.Result {
     const s = self.selectedIn(r) orelse return .ok;
+    return self.drawSwapped(r.selectionKey(), s);
+}
+
+/// Capture the outgoing surface and blur-fade to `s`. Keyed by place, not by
+/// surface, so two regions that share a selection still each keep their own
+/// overlay (by-name keys include the region name).
+fn drawSwapped(self: *Layout, slot: u64, s: *Surface) !dvui.App.Result {
+    const rs = dvui.parentGet().data().contentRectScale();
+    const tr = self.state.swapFor(self.gpa, slot) orelse return self.draw(s);
+
+    const Ctx = struct {
+        layout: *Layout,
+        id: []const u8,
+
+        fn drawPrev(ctx: *anyopaque) void {
+            const c: *@This() = @ptrCast(@alignCast(ctx));
+            if (c.layout.host.surfaceById(c.id)) |old| {
+                _ = old.draw(old.ctx) catch {};
+            }
+        }
+
+        fn after(ctx: *anyopaque) void {
+            const c: *@This() = @ptrCast(@alignCast(ctx));
+            c.layout.resetInnermostPack();
+        }
+    };
+
+    var ctx: Ctx = .{ .layout = self, .id = tr.prev_id };
+    const had = tr.prev_id.len > 0;
+    var frame = core.anim.transition(tr, .{
+        .key = std.hash.Wyhash.hash(0, s.id),
+        .rect = rs.r,
+        .kind = .blur,
+        .draw_previous = if (had) Ctx.drawPrev else null,
+        .after_capture = if (had) Ctx.after else null,
+        .ctx = @ptrCast(&ctx),
+    });
+    defer frame.deinit();
+    tr.prev_id = s.id;
     return self.draw(s);
+}
+
+fn resetInnermostPack(self: *Layout) void {
+    const box = if (self.depth > 0) self.containers[self.depth - 1].box else null;
+    const b = box orelse return;
+    b.first_child = true;
+    b.packed_children = 0;
+    b.total_weight = 0;
+    b.min_space_taken = 0;
+    if (builtin.mode == .Debug) b.child_id = .zero;
 }
 
 // ── The base layer: regions and keywords ────────────────────────────────────────────────────
@@ -579,9 +630,20 @@ pub fn drawSelectedIn(self: *Layout, r: *const Region) !dvui.App.Result {
 // fizzy's own shape happens to have a panel.
 
 pub const Region = @import("Region.zig");
+/// Runtime subdivision of a place — see `State.splits`.
+pub const SplitTree = @import("SplitTree.zig");
+
+test {
+    _ = @import("SplitTree.zig");
+    _ = @import("Region.zig");
+}
 /// Declare a region — the verb form of `Region.init`, so a shape writes `f.region(...)` beside
 /// `f.split(...)` and never names the type. Same arrangement as `dvui.box` over `BoxWidget.init`.
 pub const region = Region.init;
+/// Divide a named place horizontally or vertically — the picker's Split.
+pub const splitNamed = Region.splitNamed;
+/// Divide a named place from a specific edge — a view-drag drop onto that side.
+pub const splitOn = Region.splitOn;
 
 // ── Regions a plugin declares ───────────────────────────────────────────────────────────────────
 //

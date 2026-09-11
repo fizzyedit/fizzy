@@ -71,7 +71,13 @@ pub fn showWindow(_: *dvui.Window) void {}
 pub fn saveWindowGeometry(_: *dvui.Window) void {}
 
 /// Symmetric with the native API: no `layout.zon` to persist on web.
-pub const SavedRegion = struct { name: []const u8, extent: ?f32 = null, surfaces: ?[]const []const u8 = null };
+pub const SavedRegion = struct {
+    name: []const u8,
+    extent: ?f32 = null,
+    surfaces: ?[]const []const u8 = null,
+    parent: ?[]const u8 = null,
+    from: ?[]const u8 = null,
+};
 
 pub fn saveRegions(_: []const u8, _: []const SavedRegion) void {}
 

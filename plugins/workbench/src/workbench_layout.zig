@@ -57,12 +57,19 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
         target.addTab(id, false);
     }
 
-    // An empty pane leaves, and takes the active slot with it if it had it.
+    // An empty extra pane eases shut, then leaves. Dropping it here is why a
+    // document split jumped closed while opening still slid.
     var k: usize = 0;
     while (k < wb.workspaces.count()) {
         if (wb.workspaces.count() == 1) break;
         const ws = &wb.workspaces.values()[k];
         if (ws.tabCount() > 0) {
+            k += 1;
+            continue;
+        }
+        const id = paneId(wb, k);
+        if (!core.widgets.Panes.closed(id)) {
+            core.widgets.Panes.close(id);
             k += 1;
             continue;
         }

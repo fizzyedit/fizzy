@@ -439,7 +439,7 @@ test "switching to different content re-reveals" {
 // full-bleed for a document canvas, a rounded card for the homepage / pack window / store page),
 // so fading the incoming one up exposes the window behind it and changes the corner shape
 // mid-swap. Instead the *outgoing* provider draws one more time into a texture, and that snapshot
-// fades out over the incoming one — see `core.anim.transition` and `Editor.drawActiveCenter`.
+// blurs out over the incoming one — see `core.anim.transition` and `Editor.drawActiveCenter`.
 //
 // What matters here is the draw bookkeeping: the outgoing provider gets exactly one extra draw,
 // on the swap frame, and never again. On the testing backend (no render targets) that extra draw
@@ -2093,36 +2093,11 @@ test "a takeover surface appears only while its trigger is selected, and then an
     try std.testing.expectEqualStrings("test.workspace", layout.selected(main).?.id);
 }
 
-// -- endless handles -----------------------------------------------------------------------------
+// -- endless layout ------------------------------------------------------------------------------
 // The example's own layout, not a shipped fizzy preset. Wired as `endless_layout` in
 // `build/app.zig` from `examples/endless-app/src/layout.zig`.
 
 const endless = @import("endless_layout");
-
-test "edge region names increment per side and are never reused" {
-    var ctx = try shim.init(std.testing.allocator);
-    defer ctx.deinit(std.testing.allocator);
-
-    const editor = ctx.editor;
-    editor.gpa = std.testing.allocator;
-    defer editor.layout.deinitExtents(editor.gpa);
-    defer editor.layout.deinitQualified(editor.gpa);
-
-    const a = endless.promote(&editor.layout, editor.gpa, .left, 120);
-    const b = endless.promote(&editor.layout, editor.gpa, .left, 80);
-    const c = endless.promote(&editor.layout, editor.gpa, .right, 200);
-    try std.testing.expectEqualStrings("edge-left-1", a);
-    try std.testing.expectEqualStrings("edge-left-2", b);
-    try std.testing.expectEqualStrings("edge-right-1", c);
-    try std.testing.expectEqual(@as(u32, 3), endless.nextIndex(&editor.layout, .left));
-    try std.testing.expectEqual(@as(u32, 2), endless.nextIndex(&editor.layout, .right));
-    try std.testing.expectEqual(@as(u32, 1), endless.nextIndex(&editor.layout, .top));
-
-    const lefts = endless.namesOn(&editor.layout, dvui.currentWindow().arena(), .left);
-    try std.testing.expectEqual(@as(usize, 2), lefts.len);
-    try std.testing.expectEqualStrings("edge-left-1", lefts[0]);
-    try std.testing.expectEqualStrings("edge-left-2", lefts[1]);
-}
 
 const EndlessFrame = struct {
     var editor: ?*fizzy.Editor = null;
@@ -2136,7 +2111,7 @@ const EndlessFrame = struct {
     }
 };
 
-test "the first frame declares a collapsed sentinel on each edge" {
+test "the first frame declares leftover Center and no edge sentinels" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
@@ -2152,98 +2127,17 @@ test "the first frame declares a collapsed sentinel on each edge" {
 
     try dvui.testing.settle(EndlessFrame.frame);
 
-    var left = false;
-    var right = false;
-    var top = false;
-    var bottom = false;
     var center = false;
+    var edges: usize = 0;
     for (editor.layout.regions.items) |r| {
-        if (std.mem.eql(u8, r.name, "edge-left-1")) left = true;
-        if (std.mem.eql(u8, r.name, "edge-right-1")) right = true;
-        if (std.mem.eql(u8, r.name, "edge-top-1")) top = true;
-        if (std.mem.eql(u8, r.name, "edge-bottom-1")) bottom = true;
         if (std.mem.eql(u8, r.name, "Center")) center = true;
+        if (std.mem.startsWith(u8, r.name, "edge-")) edges += 1;
     }
-    try std.testing.expect(left);
-    try std.testing.expect(right);
-    try std.testing.expect(top);
-    try std.testing.expect(bottom);
     try std.testing.expect(center);
-    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-1", -1));
+    try std.testing.expectEqual(@as(usize, 0), edges);
 }
 
-test "dragging the left split opens edge-left-1 during the drag" {
-    var ctx = try shim.init(std.testing.allocator);
-    defer ctx.deinit(std.testing.allocator);
-
-    const editor = ctx.editor;
-    editor.gpa = std.testing.allocator;
-    defer editor.layout.regions.deinit(editor.gpa);
-    defer editor.layout.regions_building.deinit(editor.gpa);
-    defer editor.layout.deinitExtents(editor.gpa);
-    defer editor.layout.deinitQualified(editor.gpa);
-
-    EndlessFrame.editor = editor;
-    defer EndlessFrame.editor = null;
-
-    try dvui.testing.settle(EndlessFrame.frame);
-    const grab_x = endless.t_left_x;
-    const scale = endless.t_scale;
-    try std.testing.expect(grab_x > 0);
-
-    const cw = dvui.currentWindow();
-    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x, .y = 150 } });
-    _ = try dvui.testing.step(EndlessFrame.frame);
-    _ = try cw.addEventMouseButton(.left, .press);
-    _ = try dvui.testing.step(EndlessFrame.frame);
-
-    var moved: f32 = 0;
-    while (moved < 40 * scale) {
-        moved += 10;
-        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x + moved, .y = 150 } });
-        _ = try dvui.testing.step(EndlessFrame.frame);
-    }
-
-    // Any drag-out keeps the tray — there is no snap threshold.
-    try std.testing.expect(editor.layout.extent("edge-left-1", 0) > 0);
-
-    _ = try cw.addEventMouseButton(.left, .release);
-    _ = try dvui.testing.step(EndlessFrame.frame);
-    _ = try dvui.testing.step(EndlessFrame.frame);
-
-    var next = false;
-    for (editor.layout.regions.items) |r| {
-        if (std.mem.eql(u8, r.name, "edge-left-2")) next = true;
-    }
-    try std.testing.expect(next);
-    // Declared this frame, not persisted — same as the first-frame sentinel.
-    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-2", -1));
-}
-
-test "roomOn is leftover after existing edges and splits" {
-    var ctx = try shim.init(std.testing.allocator);
-    defer ctx.deinit(std.testing.allocator);
-
-    const editor = ctx.editor;
-    editor.gpa = std.testing.allocator;
-    defer editor.layout.deinitExtents(editor.gpa);
-    defer editor.layout.deinitQualified(editor.gpa);
-
-    const empty = endless.roomOn(&editor.layout, 400, .left);
-    try std.testing.expect(empty >= endless.commit_threshold);
-    try std.testing.expect(empty <= 400);
-
-    _ = endless.promote(&editor.layout, editor.gpa, .left, 120);
-    _ = endless.promote(&editor.layout, editor.gpa, .right, 80);
-    const leftover = endless.roomOn(&editor.layout, 400, .left);
-    try std.testing.expect(leftover < empty);
-    try std.testing.expect(leftover <= 400 - 120 - 80);
-
-    const tight = endless.roomOn(&editor.layout, 120 + 80 + 3 * 10, .left);
-    try std.testing.expectEqual(@as(f32, 0), tight);
-}
-
-test "an empty tray dragged shut is forgotten; one with a surface stays" {
+test "a menu split opens an empty place on that axis" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
@@ -2258,23 +2152,30 @@ test "an empty tray dragged shut is forgotten; one with a surface stays" {
     EndlessFrame.editor = editor;
     defer EndlessFrame.editor = null;
 
-    _ = endless.promote(&editor.layout, editor.gpa, .left, 120);
     try dvui.testing.settle(EndlessFrame.frame);
-    try std.testing.expect(editor.layout.extent("edge-left-1", -1) > 0);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.splitNamed("Center", .horizontal);
+    }
+    try dvui.testing.settle(EndlessFrame.frame);
 
-    shutNamed(&editor.layout, "edge-left-1");
-    try dvui.testing.settle(EndlessFrame.frame);
-    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-1", -1));
+    try std.testing.expect(editor.layout.splits.root("Center") != null);
+    try std.testing.expect(editor.layout.splits.canForget("Center/r1"));
+    try std.testing.expect(editor.layout.extent("Center/r1", 0) > 0);
 
-    _ = endless.promote(&editor.layout, editor.gpa, .left, 160);
-    try editor.layout.assign(editor.gpa, "edge-left-1", &.{"test.workspace"});
-    try dvui.testing.settle(EndlessFrame.frame);
-    shutNamed(&editor.layout, "edge-left-1");
-    try dvui.testing.settle(EndlessFrame.frame);
-    try std.testing.expectEqual(@as(f32, 0), editor.layout.extent("edge-left-1", -1));
+    // Leftover keeps a real share. Without the content-size cap, the welcome
+    // screen shoves the new pane (and its sash) to the far edge.
+    var leftover_w: f32 = 0;
+    var created_w: f32 = 0;
+    for (editor.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Center")) leftover_w = r.size.w;
+        if (std.mem.eql(u8, r.name, "Center/r1")) created_w = r.size.w;
+    }
+    try std.testing.expect(leftover_w > 80);
+    try std.testing.expect(created_w > 80);
 }
 
-test "two empty closed trays on a side become one sentinel" {
+test "a leftover split keeps its sash on the leftover side" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
@@ -2283,35 +2184,92 @@ test "two empty closed trays on a side become one sentinel" {
     defer editor.layout.regions.deinit(editor.gpa);
     defer editor.layout.regions_building.deinit(editor.gpa);
     defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
     defer editor.layout.deinitQualified(editor.gpa);
 
     EndlessFrame.editor = editor;
     defer EndlessFrame.editor = null;
 
-    _ = endless.promote(&editor.layout, editor.gpa, .left, 0);
-    _ = endless.promote(&editor.layout, editor.gpa, .left, 0);
+    try dvui.testing.settle(EndlessFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.splitNamed("Center", .horizontal);
+    }
+    try dvui.testing.settle(EndlessFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.splitNamed("Center", .horizontal);
+    }
     try dvui.testing.settle(EndlessFrame.frame);
 
-    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-1", -1));
-    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-2", -1));
-    var lefts: usize = 0;
+    try std.testing.expect(editor.layout.splits.canForget("Center/r2"));
+    var leftover_w: f32 = 0;
+    var inner_w: f32 = 0;
+    var outer_w: f32 = 0;
     for (editor.layout.regions.items) |r| {
-        if (std.mem.startsWith(u8, r.name, "edge-left-")) lefts += 1;
+        if (std.mem.eql(u8, r.name, "Center")) leftover_w = r.size.w;
+        if (std.mem.eql(u8, r.name, "Center/r2")) inner_w = r.size.w;
+        if (std.mem.eql(u8, r.name, "Center/r1")) outer_w = r.size.w;
     }
-    try std.testing.expectEqual(@as(usize, 1), lefts);
+    try std.testing.expect(leftover_w > 40);
+    try std.testing.expect(inner_w > 40);
+    try std.testing.expect(outer_w > 40);
 }
 
-fn shutNamed(state: *fizzy.Editor.Layout.State, name: []const u8) void {
-    _ = state.setExtent(std.testing.allocator, name, 0);
-    for (state.regions.items) |r| {
-        if (std.mem.eql(u8, r.name, name)) {
-            dvui.dataSet(null, r.id, "_size", @as(f32, 0));
-            dvui.dataSet(null, r.id, "_shown", @as(f32, 0));
+const FizzySplitFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.host, &e.layout, e.gpa, dvui.currentWindow().arena());
+        {
+            var main = try layout.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main }, .{ .expand = .both });
+            defer main.deinit();
+        }
+        e.layout.publishRegions();
+        return .ok;
+    }
+};
+
+test "a fizzy Main split is a removable slot, not main.slot" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    FizzySplitFrame.editor = editor;
+    defer FizzySplitFrame.editor = null;
+
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.splitNamed("Main", .horizontal);
+    }
+    try dvui.testing.settle(FizzySplitFrame.frame);
+
+    try std.testing.expect(editor.layout.splits.canForget("Main/r1"));
+    var slot = false;
+    var qualified = false;
+    for (editor.layout.regions.items) |r| {
+        if (!std.mem.eql(u8, r.name, "Main/r1")) continue;
+        try std.testing.expect(r.forget_when_empty);
+        try std.testing.expect(r.by_name);
+        for (r.keywords) |k| {
+            if (std.mem.eql(u8, k, "slot")) slot = true;
+            if (std.mem.endsWith(u8, k, ".slot")) qualified = true;
         }
     }
+    try std.testing.expect(slot);
+    try std.testing.expect(!qualified);
 }
 
-test "a full axis still has an outer sentinel" {
+test "a view-drag split opens on the dropped edge" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
 
@@ -2320,19 +2278,57 @@ test "a full axis still has an outer sentinel" {
     defer editor.layout.regions.deinit(editor.gpa);
     defer editor.layout.regions_building.deinit(editor.gpa);
     defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
     defer editor.layout.deinitQualified(editor.gpa);
 
     EndlessFrame.editor = editor;
     defer EndlessFrame.editor = null;
 
-    _ = endless.promote(&editor.layout, editor.gpa, .left, 10_000);
+    try dvui.testing.settle(EndlessFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        try std.testing.expect(layout.splitOn("Center", .left) != null);
+    }
     try dvui.testing.settle(EndlessFrame.frame);
 
-    var sentinel = false;
-    for (editor.layout.regions.items) |r| {
-        if (std.mem.eql(u8, r.name, "edge-left-2")) sentinel = true;
+    try std.testing.expect(editor.layout.splits.canForget("Center/l1"));
+    try std.testing.expect(editor.layout.extent("Center/l1", 0) > 0);
+}
+
+test "removing a created place drops it from the tree" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    try dvui.testing.settle(EndlessFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.splitNamed("Center", .horizontal);
     }
-    try std.testing.expect(sentinel);
-    try std.testing.expectEqual(@as(f32, -1), editor.layout.extent("edge-left-2", -1));
-    try std.testing.expect(endless.t_left_room < endless.commit_threshold);
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    var created_id: dvui.Id = .zero;
+    for (editor.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Center/r1")) created_id = r.id;
+    }
+    try std.testing.expect(created_id != .zero);
+
+    editor.layout.assign(editor.gpa, "Center/r1", &.{}) catch unreachable;
+    fizzy.core.widgets.Split.close(created_id);
+    dvui.dataSet(null, created_id, "_shown", @as(f32, 0));
+    dvui.dataRemove(null, created_id, "_ease");
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    try std.testing.expect(editor.layout.splits.root("Center") == null);
+    try std.testing.expect(!editor.layout.splits.canForget("Center/r1"));
 }

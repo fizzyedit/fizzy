@@ -211,10 +211,18 @@ pub fn isClosed(id: dvui.Id) bool {
 }
 
 /// Shut it, remembering how big it was so `open` can put it back.
+/// Seeds `_shown` from the current extent so `eased` has somewhere to travel
+/// from — the same trick `takeSlideOpen` uses the other way. Without that, a
+/// missing or leftover-zero `_shown` makes the next frame treat target 0 as
+/// already there, and the pane vanishes instead of folding.
 pub fn close(id: dvui.Id) void {
     const cur = sizeOf(id);
-    if (cur > 0) dvui.dataSet(null, id, "_open", cur);
+    if (cur <= 0) return;
+    dvui.dataSet(null, id, "_open", cur);
+    const shown = dvui.dataGet(null, id, "_shown", f32) orelse cur;
+    dvui.dataSet(null, id, "_shown", if (shown > 0) shown else cur);
     dvui.dataSet(null, id, "_size", @as(f32, 0));
+    dvui.refresh(null, @src(), id);
 }
 
 /// Reopen to the remembered extent, or `fallback` if it has never been open.

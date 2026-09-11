@@ -13,6 +13,7 @@ const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const Region = @import("Region.zig");
 const Picker = @import("Picker.zig");
+pub const SplitTree = @import("SplitTree.zig");
 
 const State = @This();
 
@@ -22,6 +23,37 @@ pub const Snapshot = struct {
     texture: dvui.Texture,
     /// The size it was drawn at, in points — the aspect the card should keep.
     natural: dvui.Size,
+};
+
+/// A view lifted out of its place and dragged to another. The source hole is
+/// empty while this is active; a floating card follows the pointer.
+pub const ViewDrag = struct {
+    /// Interned place name. Empty when nothing is being dragged.
+    name: []const u8 = "",
+    /// Physical size of the source when the drag began.
+    from: dvui.Size.Physical = .{},
+    texture: ?dvui.Texture = null,
+    start_ns: i128 = 0,
+    /// Last dock target, interned. Empty when the pointer is over nothing.
+    preview_name: []const u8 = "",
+    preview_split: ?SplitTree.Side = null,
+    preview_ns: i128 = 0,
+
+    pub fn active(self: ViewDrag) bool {
+        return self.name.len > 0;
+    }
+
+    pub fn discard(self: *ViewDrag) void {
+        if (self.texture) |tex| dvui.Texture.destroyLater(tex);
+        self.* = .{};
+    }
+
+    pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
+        pic.stop();
+        const tex = dvui.textureFromTarget(pic.texture) catch return;
+        if (self.texture) |old| dvui.Texture.destroyLater(old);
+        self.texture = tex;
+    }
 };
 
 /// What the picker needs from a plugin store without importing one. The store's module graph
@@ -96,6 +128,12 @@ regions_building: std.ArrayListUnmanaged(Region) = .empty,
 /// so an app with a "Stack" and a "Strip" could persist nothing, and fizzy's own furniture was
 /// baked into a framework's on-disk format. Those two survive only for the legacy shell.
 extents: std.StringHashMapUnmanaged(f32) = .empty,
+    /// Runtime subdivisions of a shape-declared place. A name not in here is still a leaf.
+    splits: SplitTree.Forest = .{},
+    /// New leaf that should ease open from zero this frame. Interned; empty when none.
+    slide_open: []const u8 = "",
+    /// A place's view being dragged to another place. Empty `name` when idle.
+    view_drag: ViewDrag = .{},
 /// Explorer/panel split ratios — "window shape" state persisted in `window.zon`, not
 /// `settings.zon` (dragging a splitter fires every frame; keeping it out of the settings file
 /// means normal window use never dirties a git-tracked settings.zon). Loaded once at startup
@@ -118,6 +156,11 @@ panel_hidden_for_center: bool = false,
 center_prev_id: ?[]const u8 = null,
 /// Host-owned cross-fade between center providers. See `drawActiveCenter`.
 center_transition: core.anim.Transition = .{},
+/// Per-place swap overlay, keyed by the region's selection key (or keyword
+/// group). Heap-owned so a nested `drawSelected` can grow the map without
+/// dangling the outer frame's pointer. GPU textures, so every entry must be
+/// `discard`ed on teardown.
+swaps: std.AutoHashMapUnmanaged(u64, *core.anim.Transition) = .empty,
 /// Keyword sets qualified by the region enclosing theirs, interned. See `qualify`.
 qualified: std.ArrayListUnmanaged(Qualified) = .empty,
 /// Region names interned. The shape's own names are literals; a plugin's are formatted per
@@ -367,12 +410,114 @@ pub fn clearPendingStore(self: *State, gpa: std.mem.Allocator) void {
 }
 
 pub fn deinitExtents(self: *State, gpa: std.mem.Allocator) void {
+    self.deinitSwaps(gpa);
     var it = self.extents.keyIterator();
     while (it.next()) |k| gpa.free(k.*);
     self.extents.deinit(gpa);
+    self.splits.deinit(gpa);
+}
+
+/// Drop every per-place overlay texture. Safe to call twice — the map is
+/// emptied. Tests that only tear down extents or assignments both reach here.
+pub fn deinitSwaps(self: *State, gpa: std.mem.Allocator) void {
+    var it = self.swaps.valueIterator();
+    while (it.next()) |t| {
+        t.*.discard();
+        gpa.destroy(t.*);
+    }
+    self.swaps.deinit(gpa);
+    self.swaps = .{};
+}
+
+pub fn discardSwaps(self: *State) void {
+    var it = self.swaps.valueIterator();
+    while (it.next()) |t| t.*.discard();
+}
+
+/// The overlay for this place, created on first use. Null only if the map
+/// cannot grow — the caller then draws without a transition.
+pub fn swapFor(self: *State, gpa: std.mem.Allocator, key: u64) ?*core.anim.Transition {
+    if (self.swaps.get(key)) |t| return t;
+    const t = gpa.create(core.anim.Transition) catch return null;
+    t.* = .{};
+    self.swaps.put(gpa, key, t) catch {
+        gpa.destroy(t);
+        return null;
+    };
+    return t;
+}
+
+/// Forget every remembered extent, assignment and runtime split. The next frame
+/// draws the shape's defaults. Widget `_size` is cleared so a leftover drag
+/// does not write itself back.
+pub fn resetLayout(self: *State, gpa: std.mem.Allocator) void {
+    for (self.regions.items) |r| forgetWidgetSize(r.id);
+    for (self.regions_building.items) |r| forgetWidgetSize(r.id);
+
+    var eit = self.extents.keyIterator();
+    while (eit.next()) |k| gpa.free(k.*);
+    self.extents.clearRetainingCapacity();
+
+    var ait = self.assignments.iterator();
+    while (ait.next()) |e| {
+        gpa.free(e.key_ptr.*);
+        for (e.value_ptr.*) |id| gpa.free(id);
+        gpa.free(e.value_ptr.*);
+    }
+    self.assignments.clearRetainingCapacity();
+
+    self.splits.deinit(gpa);
+    self.splits = .{};
+    self.slide_open = "";
+    self.view_drag.discard();
+    self.discardSwaps();
+    self.center_transition.discard();
+    self.center_prev_id = null;
+}
+
+fn forgetWidgetSize(id: dvui.Id) void {
+    if (id == .zero) return;
+    dvui.dataRemove(null, id, "_size");
+    dvui.dataRemove(null, id, "_shown");
+    dvui.dataRemove(null, id, "_ease");
+    dvui.dataRemove(null, id, "_open");
+    dvui.dataRemove(null, id, "_drag");
+    dvui.dataRemove(null, id, "_drag_anchor");
+    dvui.dataRemove(null, id, "_chooser");
+    dvui.dataRemove(null, id, "_chooser_shown");
+    dvui.dataRemove(null, id, "_chooser_press");
+}
+
+pub fn setPlaceMetrics(self: *State, name: []const u8, size: dvui.Size, bounds: dvui.Rect.Physical) void {
+    var i = self.regions_building.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (!std.mem.eql(u8, self.regions_building.items[i].name, name)) continue;
+        self.regions_building.items[i].size = size;
+        self.regions_building.items[i].bounds = bounds;
+        return;
+    }
+}
+
+pub fn placeSize(self: *const State, name: []const u8) ?dvui.Size {
+    for (self.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, name)) return r.size;
+    }
+    return null;
+}
+
+pub fn requestSlideOpen(self: *State, name: []const u8) void {
+    self.slide_open = name;
+}
+
+pub fn takeSlideOpen(self: *State, name: []const u8) bool {
+    if (self.slide_open.len == 0 or !std.mem.eql(u8, self.slide_open, name)) return false;
+    self.slide_open = "";
+    return true;
 }
 
 pub fn deinitAssignments(self: *State, gpa: std.mem.Allocator) void {
+    self.deinitSwaps(gpa);
     var it = self.assignments.iterator();
     while (it.next()) |e| {
         gpa.free(e.key_ptr.*);

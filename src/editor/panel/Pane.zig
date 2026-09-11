@@ -1,6 +1,6 @@
 //! One pane of fizzy's bottom `Panel`: a workspace-style tab strip plus the surface its
-//! active tab selects. Fizzy's own chrome — see `Panel.zig`. The rounded card is the
-//! region's, not this pane's — every shape's places get the same gutter and fill.
+//! active tab selects. Fizzy's own chrome — see `Panel.zig`. The translucent
+//! card is the shape's `placeCard` on the Panel region, not a second fill here.
 const std = @import("std");
 
 const dvui = @import("dvui");
@@ -24,7 +24,7 @@ pub fn init(grouping: u64) Pane {
     return .{ .grouping = grouping };
 }
 
-/// Kept for `Panel.draw`'s empty path. The region is the card now.
+/// Kept for `Panel.draw`'s empty path. A fill belongs on the region's Options.
 pub fn drawBackground(_: u64) void {}
 
 pub fn draw(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) !dvui.App.Result {

@@ -11,7 +11,7 @@ ship these as selectable presets — they show things fizzy itself does not do.
 |---|---|---|
 | `minimal-app` | one main region, no rail or panel | `minimalapp`, "Minimal App" |
 | `studio-app` | canvas, explorer on the right, short bottom strip | `studioapp`, "Studio App" |
-| `endless-app` | Center is the workspace; collapsed splits on four edges | `endlessapp`, "Endless App" |
+| `endless-app` | Center is the workspace; split from the corner menu | `endlessapp`, "Endless App" |
 
 All three load the identical `workbench` / `text` / `image` / `markdown` plugins, **unchanged**.
 

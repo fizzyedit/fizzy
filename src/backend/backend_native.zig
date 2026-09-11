@@ -286,6 +286,9 @@ pub const SavedRegion = struct {
     /// Surface ids the user assigned, in their order. `null` is "never chose" — the region's
     /// keywords decide — and an empty list is a region emptied on purpose.
     surfaces: ?[]const []const u8 = null,
+    /// Runtime split: this leaf was dragged out of `parent` from `from` (left/right/top/bottom).
+    parent: ?[]const u8 = null,
+    from: ?[]const u8 = null,
 };
 
 const SavedFrame = struct {
@@ -417,7 +420,9 @@ pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8) []SavedRegion {
             }
             surfaces = owned;
         }
-        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces };
+        const parent = if (r.parent) |p| gpa.dupe(u8, p) catch null else null;
+        const from = if (r.from) |s| gpa.dupe(u8, s) catch null else null;
+        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces, .parent = parent, .from = from };
         n += 1;
     }
     return out[0..n];
@@ -430,6 +435,8 @@ pub fn freeRegions(gpa: std.mem.Allocator, regions: []SavedRegion) void {
             for (ids) |id| gpa.free(id);
             gpa.free(ids);
         }
+        if (r.parent) |p| gpa.free(p);
+        if (r.from) |s| gpa.free(s);
     }
     gpa.free(regions);
 }

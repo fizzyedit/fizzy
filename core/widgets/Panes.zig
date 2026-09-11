@@ -170,6 +170,26 @@ pub fn deinit(self: *Panes) void {
     self.box.deinit();
 }
 
+/// Ease this pane's share to nothing. `rebuild` keeps the pane in the row
+/// until `closed` — dropping it here is why a document split vanished
+/// instead of folding the way it opened.
+pub fn close(id: dvui.Id) void {
+    const share = dvui.dataGet(null, id, share_key, f32) orelse return;
+    if (share <= 0) return;
+    const shown = dvui.dataGet(null, id, shown_key, f32) orelse share;
+    dvui.dataSet(null, id, shown_key, if (shown > 0) shown else share);
+    dvui.dataSet(null, id, share_key, @as(f32, 0));
+    dvui.refresh(null, @src(), id);
+}
+
+/// Share is gone and the ease has finished. Safe to drop from the row.
+pub fn closed(id: dvui.Id) bool {
+    const share = dvui.dataGet(null, id, share_key, f32) orelse return true;
+    if (share > 0) return false;
+    const shown = dvui.dataGet(null, id, shown_key, f32) orelse 0;
+    return shown <= 0 and dvui.animationGet(id, anim_key) == null;
+}
+
 /// The drawn extent of pane `i` along the axis, in points.
 pub fn extent(self: *Panes, i: usize) f32 {
     if (i >= self.w.len) return self.available / @as(f32, @floatFromInt(@max(1, self.ids.len)));

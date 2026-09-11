@@ -129,6 +129,7 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.copy", .title = "Copy", .bind = "copy", .run = cmdCopy, .isEnabled = cmdCopyEnabled, .icon = icons.tvg.lucide.copy },
     .{ .id = "fizzy.paste", .title = "Paste", .bind = "paste", .run = cmdPaste, .isEnabled = cmdPasteEnabled, .icon = icons.tvg.lucide.@"clipboard-paste" },
     .{ .id = "fizzy.toggleExplorer", .title = "Toggle Explorer", .bind = "explorer", .run = cmdToggleExplorer, .icon = icons.tvg.lucide.@"panel-left" },
+    .{ .id = "fizzy.resetLayout", .title = "Reset Layout", .bind = null, .run = cmdResetLayout, .icon = icons.tvg.lucide.@"rotate-ccw" },
     .{ .id = "fizzy.deleteSelection", .title = "Delete Selection", .bind = "delete_selection_contents", .run = cmdDeleteSelection, .isEnabled = cmdDeleteSelectionEnabled, .icon = icons.tvg.lucide.@"trash-2" },
     .{ .id = "fizzy.accept", .title = "Accept", .bind = "activate", .run = cmdAccept, .isEnabled = cmdAcceptEnabled, .icon = icons.tvg.lucide.check },
     .{ .id = "fizzy.cancel", .title = "Cancel", .bind = "cancel", .run = cmdCancel, .isEnabled = cmdCancelEnabled, .icon = icons.tvg.lucide.x },
@@ -304,6 +305,10 @@ fn cmdToggleExplorer(state: *anyopaque) anyerror!void {
     // A native menu click doesn't arrive as an SDL event, so without this nothing requests the
     // frame the paned needs to animate.
     dvui.refresh(null, @src(), dvui.currentWindow().data().id);
+}
+
+fn cmdResetLayout(state: *anyopaque) anyerror!void {
+    editorFromState(state).resetLayout();
 }
 
 fn cmdShowDvuiDemo(_: *anyopaque) anyerror!void {

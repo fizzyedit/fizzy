@@ -15,10 +15,18 @@
 //! keyword match it was showing into an explicit assignment. That is the honest reading of the
 //! click: the user has now chosen this region's contents, and a plugin loaded later will not
 //! walk in by keyword until they choose again. "Back to defaults" undoes exactly that.
+//! "Clear" and "Remove" are for places the user made: a minted split leaf
+//! (`Main/r1`, `Center/r1`) or a leftover tray whose keyword is `slot`.
+//! Shape-declared Sidebar, Main, and Panel stay and only get "Back to defaults".
+//! Clear empties the assignment. Remove does that and slides the sash shut;
+//! a forgettable tray collapses when the close finishes. Split offers
+//! Vertical or Horizontal — the divider, not the layout axis — and eases
+//! the new place to the middle.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
+const Split = core.widgets.Split;
 const Layout = @import("Layout.zig");
 const State = @import("State.zig");
 
@@ -90,24 +98,99 @@ pub fn draw(self: *Picker, f: *Layout) void {
     defer popup.deinit();
 
     {
-        var head = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .h = 6 } });
-        defer head.deinit();
-        dvui.labelNoFmt(@src(), region.name, .{}, .{ .font = dvui.Font.theme(.heading), .gravity_y = 0.5 });
-        // Why a click behaves differently here than in the panel: this region draws one surface,
-        // so choosing is a swap rather than adding to a set.
-        dvui.labelNoFmt(@src(), switch (region.shows) {
-            .one => "shows one",
-            .many => "shows any number",
-        }, .{}, .{
-            .padding = .{ .x = 8 },
-            .gravity_y = 0.5,
-            .color_text = theme.color(.window, .text).opacity(0.5),
+        var chrome = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .padding = .{ .h = 6 },
         });
-        if (state.assignment(region.name) != null) {
-            if (dvui.button(@src(), "Back to defaults", .{}, .{ .gravity_x = 1.0, .gravity_y = 0.5 })) {
-                state.unassign(gpa, region.name);
-                state.markDirty();
-                dvui.refresh(null, @src(), null);
+        defer chrome.deinit();
+
+        {
+            var title = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+            defer title.deinit();
+            dvui.labelNoFmt(@src(), region.name, .{}, .{
+                .font = dvui.Font.theme(.heading),
+                .gravity_y = 0.5,
+            });
+            dvui.labelNoFmt(@src(), switch (region.shows) {
+                .one => "shows one",
+                .many => "shows any number",
+            }, .{}, .{
+                .font = dvui.Font.theme(.body).larger(-1),
+                .padding = .{ .x = 8 },
+                .gravity_y = 0.5,
+                .color_text = theme.color(.window, .text).opacity(0.5),
+            });
+        }
+
+        {
+            var splits = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .padding = .{ .y = 4 },
+            });
+            defer splits.deinit();
+            // Vertical / Horizontal name the divider: a vertical bar is side by
+            // side (the layout axis is horizontal). The old "split horizontally"
+            // label was that axis and read as the opposite split.
+            var split: dvui.DropdownWidget = undefined;
+            split.init(@src(), .{}, .{
+                .font = actionFont(),
+                .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+                .margin = .{ .w = 4 },
+                .gravity_y = 0.5,
+            });
+            defer split.deinit();
+            {
+                var label = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+                defer label.deinit();
+                dvui.labelNoFmt(@src(), "Split", .{}, .{
+                    .font = actionFont(),
+                    .padding = .{},
+                    .margin = .{},
+                    .gravity_y = 0.5,
+                });
+                dvui.icon(@src(), "split_choice", dvui.entypo.triangle_down, .{}, .{
+                    .padding = .{ .x = 4 },
+                    .gravity_y = 0.5,
+                });
+            }
+            if (split.dropped()) {
+                if (split.addChoiceLabel("Vertical")) {
+                    f.splitNamed(region.name, .horizontal);
+                    self.close(gpa);
+                    state.discardSnapshots(gpa);
+                    return;
+                }
+                if (split.addChoiceLabel("Horizontal")) {
+                    f.splitNamed(region.name, .vertical);
+                    self.close(gpa);
+                    state.discardSnapshots(gpa);
+                    return;
+                }
+            }
+        }
+
+        if (canClearOrRemove(state, &region) or state.assignment(region.name) != null) {
+            var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+            });
+            defer actions.deinit();
+            if (canClearOrRemove(state, &region)) {
+                if (actionButton(@src(), "Clear", 2)) {
+                    clearRegion(f, region.name);
+                }
+                if (actionButton(@src(), "Remove", 3)) {
+                    removeRegion(f, &region);
+                    self.close(gpa);
+                    state.discardSnapshots(gpa);
+                    return;
+                }
+            }
+            if (state.assignment(region.name) != null) {
+                if (actionButtonRight(@src(), "Back to defaults")) {
+                    state.unassign(gpa, region.name);
+                    state.markDirty();
+                    dvui.refresh(null, @src(), null);
+                }
             }
         }
     }
@@ -153,6 +236,13 @@ pub fn draw(self: *Picker, f: *Layout) void {
                         dvui.log.err("failed to assign '{s}': {t}", .{ region.name, err });
                     };
                     f.host.setSelectionForKey(region.selectionKey(), s.id);
+                    // One surface is the whole choice. Leave the popup so the
+                    // corner control can hide on a filled place.
+                    self.close(gpa);
+                    state.discardSnapshots(gpa);
+                    state.markDirty();
+                    dvui.refresh(null, @src(), null);
+                    return;
                 },
                 // A toggle: the region's contents, plus or minus this one, in the order they were
                 // already in.
@@ -236,9 +326,83 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) bool {
     return bw.clicked();
 }
 
+fn actionFont() dvui.Font {
+    return dvui.Font.theme(.body).larger(-1);
+}
+
+fn actionButton(src: std.builtin.SourceLocation, label: []const u8, id_extra: usize) bool {
+    return dvui.button(src, label, .{}, .{
+        .font = actionFont(),
+        .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+        .margin = .{ .w = 4 },
+        .gravity_y = 0.5,
+        .id_extra = id_extra,
+    });
+}
+
+fn actionButtonRight(src: std.builtin.SourceLocation, label: []const u8) bool {
+    return dvui.button(src, label, .{}, .{
+        .font = actionFont(),
+        .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+        .gravity_x = 1.0,
+        .gravity_y = 0.5,
+    });
+}
+
 fn contains(list: []const *sdk.Surface, id: []const u8) bool {
     for (list) |s| if (std.mem.eql(u8, s.id, id)) return true;
     return false;
+}
+
+/// A place the user made, not one the shape declared. Minted split leaves
+/// (`Main/r1`, endless `Center/r1`) and leftover trays that kept `slot`.
+fn canClearOrRemove(state: *State, region: *const Layout.Region) bool {
+    if (region.forget_when_empty or state.splits.canForget(region.name)) return true;
+    return isUserSlot(region);
+}
+
+/// A place the user made, not one the shape declared. Endless trays and leftover
+/// Center use the bare `slot` word; fizzy's keyword regions never do. A
+/// leftover under Main used to be `main.slot` and hid these buttons.
+fn isUserSlot(region: *const Layout.Region) bool {
+    if (!region.by_name) return false;
+    const want = Layout.slot_keywords[0];
+    for (region.keywords) |k| {
+        if (std.mem.eql(u8, k, want)) return true;
+        if (std.mem.endsWith(u8, k, ".slot")) return true;
+    }
+    return false;
+}
+
+/// Empty the place: nothing draws, and keywords no longer attract a replacement.
+fn clearRegion(f: *Layout, name: []const u8) void {
+    f.state.assign(f.gpa, name, &.{}) catch |err| {
+        dvui.log.err("failed to clear '{s}': {t}", .{ name, err });
+        return;
+    };
+    f.state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
+/// Clear, then slide the sash shut. A minted split leaf collapses once the close lands.
+/// The leftover (Center) can be emptied; it is not collapsed.
+fn removeRegion(f: *Layout, region: *const Layout.Region) void {
+    const gpa = f.gpa;
+    f.state.assign(gpa, region.name, &.{}) catch |err| {
+        dvui.log.err("failed to clear '{s}': {t}", .{ region.name, err });
+    };
+    const forget = region.forget_when_empty or f.state.splits.canForget(region.name);
+    if (forget) {
+        if (region.id != .zero and (dvui.dataGet(null, region.id, "_size", f32) orelse 0) > 0) {
+            Split.close(region.id);
+            f.extents_changed = true;
+        } else if (f.state.splits.collapse(gpa, region.name)) {
+            if (f.state.clearExtent(gpa, region.name)) f.extents_changed = true;
+            f.state.unassign(gpa, region.name);
+        }
+    }
+    f.state.markDirty();
+    dvui.refresh(null, @src(), null);
 }
 
 /// If a store install the user started from this picker has loaded, assign its surfaces.

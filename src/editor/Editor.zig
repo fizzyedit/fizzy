@@ -570,6 +570,7 @@ pub fn init(
             if (r.extent) |e| _ = editor.layout.setExtent(app.allocator, r.name, e);
             if (r.surfaces) |ids| editor.layout.assign(app.allocator, r.name, ids) catch continue;
         }
+        loadRuntimeSplits(&editor.layout, app.allocator, saved);
     }
 
     // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
@@ -3110,7 +3111,7 @@ pub fn clearAllWorkspaceCenter(editor: *Editor) void {
     editor.workbench.clearAllWorkspaceCenter();
 }
 
-/// Draws whichever center provider is active, cross-fading when that changes.
+/// Draws whichever center provider is active, blur-fading when that changes.
 ///
 /// Swapping providers replaces the entire center subtree, and each provider paints its own pane
 /// — square and full-bleed for a document canvas, a rounded card for the homepage, the
@@ -3118,8 +3119,10 @@ pub fn clearAllWorkspaceCenter(editor: *Editor) void {
 /// background the host could hold underneath that is correct for both shapes, and dvui also
 /// needs a frame to size the incoming subtree from a cold min-size cache.
 ///
-/// Instead the outgoing provider gets one more draw, recorded into a texture rather than shown,
-/// and that snapshot fades out over the incoming provider. See `core.anim.transition`.
+/// Instead the outgoing provider gets one more draw, recorded into a texture rather than shown.
+/// That snapshot blurs out, the incoming view is photographed at max blur (so it can settle
+/// underneath), and the overlay unsmears. Set `center_transition.pending` to hold at peak
+/// blur until a plugin is ready — nothing here loads one. See `core.anim.transition`.
 fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
     const center = editor.host.selectedSurface(sdk.keywords.ide.main) orelse {
         editor.layout.center_transition.discard();
@@ -3180,6 +3183,7 @@ fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
     var frame = core.anim.transition(&editor.layout.center_transition, .{
         .key = std.hash.Wyhash.hash(0, center.id),
         .rect = rs.r,
+        .kind = .blur,
         .draw_previous = if (prev_id != null) CaptureCtx.draw else null,
         .after_capture = if (prev_id != null) CaptureCtx.afterCapture else null,
         .ctx = @ptrCast(&capture_ctx),
@@ -3382,6 +3386,15 @@ pub fn markSettingsDirty(editor: *Editor) void {
 pub fn markWindowRatiosDirty(editor: *Editor) void {
     editor.layout.dirty = true;
     editor.layout.save_deadline_ns = fizzy.core.perf.nanoTimestamp() + Settings.autosave_timeout_ns;
+}
+
+/// Forget extents, assignments and runtime splits, write an empty region list,
+/// and redraw. Window geometry in `layout.zon` is left alone.
+pub fn resetLayout(editor: *Editor) void {
+    editor.layout.resetLayout(editor.gpa);
+    editor.saveRegions();
+    editor.layout.dirty = false;
+    dvui.refresh(null, @src(), null);
 }
 
 /// Hand the center region the whole viewport on a collapsed (phone / narrow web) layout: close
@@ -4567,7 +4580,40 @@ fn saveRegions(editor: *Editor) void {
             gop.value_ptr.surfaces = e.value_ptr.*;
         }
     }
+    {
+        const links = editor.layout.splits.collectLinks(gpa);
+        defer gpa.free(links);
+        for (links) |l| {
+            const gop = by_name.getOrPut(gpa, l.name) catch continue;
+            if (!gop.found_existing) gop.value_ptr.* = .{ .name = l.name };
+            gop.value_ptr.parent = l.parent;
+            gop.value_ptr.from = @tagName(l.side);
+        }
+    }
     fizzy.backend.saveRegions(editor.config_folder, by_name.values());
+}
+
+fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []const fizzy.backend.SavedRegion) void {
+    const intern = struct {
+        var st: *Layout.State = undefined;
+        fn go(a: std.mem.Allocator, name: []const u8) []const u8 {
+            return st.internName(a, name);
+        }
+    };
+    intern.st = state;
+    const order = gpa.alloc(fizzy.backend.SavedRegion, saved.len) catch return;
+    defer gpa.free(order);
+    @memcpy(order, saved);
+    std.mem.sort(fizzy.backend.SavedRegion, order, {}, struct {
+        fn less(_: void, a: fizzy.backend.SavedRegion, b: fizzy.backend.SavedRegion) bool {
+            return std.mem.count(u8, a.name, "/") < std.mem.count(u8, b.name, "/");
+        }
+    }.less);
+    for (order) |r| {
+        const parent = r.parent orelse continue;
+        const side = Layout.State.SplitTree.parseSide(r.from orelse continue) orelse continue;
+        _ = state.splits.split(gpa, intern.go, parent, side, r.extent orelse 0, r.name);
+    }
 }
 
 /// The extent a region should start at: what the user last left it, or the shape's default.
@@ -5836,6 +5882,8 @@ pub fn deinit(editor: *Editor) !void {
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.layout.center_transition.discard();
     editor.layout.center_prev_id = null;
+    editor.layout.view_drag.discard();
+    editor.layout.deinitSwaps(editor.gpa);
     editor.layout.regions.deinit(editor.gpa);
     editor.layout.regions_building.deinit(editor.gpa);
 

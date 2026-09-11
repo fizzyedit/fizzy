@@ -14,9 +14,8 @@ pub fn mainCanvasVbox(content_color: dvui.Color, background: bool, grouping: u64
     });
 }
 
-/// Layout box behind empty states (homepage, project hint, etc.). The region is
-/// the card now — a second fill here made Center look like a different widget
-/// than the trays (different radius, no handle gutter).
+/// Layout box behind empty states (homepage, project hint, etc.). Transparent:
+/// a fill is the shape's to set on the region, not a second card inside it.
 pub fn emptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.BoxWidget {
     _ = content_color;
     return dvui.box(@src(), .{ .dir = .horizontal }, .{

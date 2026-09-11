@@ -2,8 +2,9 @@
 //!
 //! One place for "what happens while the thing on screen changes", because fizzy had this twice:
 //! a reveal keyed by document id for tab-content swaps, and a bespoke capture-and-fade for
-//! surface swaps. `Layout.draw` runs every region swap through `reveal` now, so a region
-//! cross-fades whatever it shows without the shape asking for it.
+//! surface swaps. `Layout.draw` still fades a first appearance through `reveal`; a swap that
+//! must keep the outgoing pixels (center, a region's selected surface) goes through
+//! `transition`, which can fade those pixels or blur them first.
 //!
 //! Sits under `core` rather than the layout because a plugin dylib animates its own content with
 //! the same code — see `core.widgets` for the divide.
@@ -13,6 +14,8 @@ const builtin = @import("builtin");
 const icons = @import("icons");
 const platform = @import("platform.zig");
 const reveal_phase = @import("reveal.zig");
+pub const crossfade = @import("crossfade.zig");
+pub const Kind = crossfade.Kind;
 
 /// How a pane *travels* when the layout moves it: a region folding away, a sidebar coming back,
 /// a document pane opening beside its neighbour.
@@ -105,7 +108,7 @@ pub const Reveal = struct {
 
 };
 
-/// A cross-fade between two entirely different subtrees, for swaps where revealing the incoming
+/// A swap between two entirely different subtrees, for cases where revealing the incoming
 /// content is not enough on its own.
 ///
 /// `reveal` works when the pane's chrome stays put and only its contents change (a document tab,
@@ -115,10 +118,11 @@ pub const Reveal = struct {
 /// the incoming one up from nothing exposes the window behind it, and the corner shape visibly
 /// changes mid-swap. There is no backdrop the host could draw that is right for both.
 ///
-/// So don't guess: keep the outgoing pixels. The last frame of the outgoing provider is recorded
-/// into a texture (`dvui.Picture` redirects rendering into a render target), then drawn *over*
-/// the incoming provider and faded out. Nothing is ever transparent, no shape is assumed, and the
-/// incoming subtree's settle frame happens underneath a fully opaque snapshot.
+/// So don't guess: keep the pixels. The last frame of the outgoing screen is recorded into a
+/// texture (`dvui.Picture` redirects rendering into a render target) and drawn *over* the
+/// incoming subtree. A fade just drops that overlay's alpha. A blur smears it first, crosses
+/// to a snapshot of the incoming view (itself fully smeared, so a settle frame or a plugin
+/// load can happen underneath), then unsmears. See `core/crossfade.zig` for the clock.
 ///
 /// Prefer `transition` for call sites — it owns swap detection, capture isolation, and teardown.
 /// `CrossFade` remains the low-level primitive those helpers drive.
@@ -128,13 +132,20 @@ pub const CrossFade = struct {
     /// Owned outright — not in dvui's texture cache, so it survives across frames and must be
     /// destroyed explicitly.
     texture: ?dvui.Texture = null,
+    incoming: ?dvui.Texture = null,
     /// Physical rect matching the captured texture exactly (`Picture.start` enlarges to pixel
     /// boundaries; blitting a smaller rect would sample the wrong UVs).
     rect: dvui.Rect.Physical = .{},
+    incoming_rect: dvui.Rect.Physical = .{},
     start_ns: i128 = 0,
-    duration_ns: i128 = 150 * std.time.ns_per_ms,
+    duration_ns: i128 = crossfade.fade_ns,
+    kind: Kind = .fade,
+    /// Frames to wait after the outgoing capture before photographing the incoming view —
+    /// one settle frame under the opaque overlay.
+    incoming_wait: u8 = 0,
+    have_incoming: bool = false,
 
-    /// Begin recording the outgoing content instead of drawing it. Null when the backend has no
+    /// Begin recording instead of drawing to the screen. Null when the backend has no
     /// texture targets (web) or the region is empty — callers then swap without a fade, which is
     /// exactly the old behaviour rather than a broken one.
     pub fn beginCapture(rect: dvui.Rect.Physical) ?dvui.Picture {
@@ -146,7 +157,7 @@ pub const CrossFade = struct {
         return pic;
     }
 
-    /// Take ownership of what `beginCapture` recorded.
+    /// Take ownership of what `beginCapture` recorded as the *outgoing* snapshot.
     ///
     /// Deliberately not `dvui.Picture.deinit`, which draws the texture and destroys it — the
     /// whole point is to keep it for later frames. Any snapshot still fading is dropped first,
@@ -164,40 +175,130 @@ pub const CrossFade = struct {
         self.start_ns = dvui.currentWindow().frame_time_ns;
     }
 
-    /// Draw the outgoing snapshot over what was just drawn, fading out. Call last, and every
-    /// frame — it is a no-op with nothing captured.
-    pub fn draw(self: *CrossFade) void {
-        const tex = self.texture orelse return;
+    /// Take ownership of an *incoming* snapshot. Does not restart the clock or drop the
+    /// outgoing texture — both stay up for the handoff.
+    pub fn endIncoming(self: *CrossFade, pic: *dvui.Picture) void {
+        pic.stop();
+        const tex = dvui.textureFromTarget(pic.texture) catch {
+            self.have_incoming = true;
+            return;
+        };
+        if (self.incoming) |old| dvui.Texture.destroyLater(old);
+        self.incoming = tex;
+        self.incoming_rect = pic.r;
+        self.have_incoming = true;
+    }
 
-        const elapsed = dvui.currentWindow().frame_time_ns - self.start_ns;
-        if (elapsed >= self.duration_ns or self.duration_ns <= 0) {
+    /// Draw the snapshot(s) over what was just drawn. Call last, and every frame — it is a
+    /// no-op with nothing captured. `pending` freezes the timeline at the hold pose.
+    pub fn draw(self: *CrossFade, pending: bool) void {
+        if (self.texture == null and self.incoming == null) return;
+
+        const t = self.progress(pending);
+        if (t >= 1 and !pending) {
             self.discard();
             return;
         }
-        const t: f32 = @floatCast(@as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(self.duration_ns)));
 
-        dvui.renderTexture(tex, .{ .r = self.rect, .s = 1 }, .{
-            .colormod = dvui.Color.white.opacity(1 - dvui.easing.outQuad(t)),
-        }) catch {};
+        const s = crossfade.sample(self.kind, t, pending);
+        if (self.kind == .blur) {
+            if (self.incoming) |tex| blit(tex, self.incoming_rect, s.in_blur, s.in_alpha);
+        }
+        if (self.texture) |tex| blit(tex, self.rect, s.out_blur, s.out_alpha);
 
         // Nothing else is animating, so without this an idle app would sleep mid-fade.
         dvui.refresh(null, @src(), null);
     }
 
+    fn progress(self: *CrossFade, pending: bool) f32 {
+        const now = dvui.currentWindow().frame_time_ns;
+        if (pending) {
+            // Park the clock at the pose `sample(..., pending)` will report, so when the
+            // hold lifts the remaining timeline starts from there rather than from wherever
+            // wall time has wandered.
+            const parked: f32 = switch (self.kind) {
+                .fade => 0,
+                .blur => crossfade.hold,
+            };
+            const parked_ns: i128 = @intFromFloat(@as(f64, parked) * @as(f64, @floatFromInt(self.duration_ns)));
+            self.start_ns = now - parked_ns;
+            return parked;
+        }
+        if (self.duration_ns <= 0) return 1;
+        const elapsed = now - self.start_ns;
+        if (elapsed >= self.duration_ns) return 1;
+        return @floatCast(@as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(self.duration_ns)));
+    }
+
     pub fn discard(self: *CrossFade) void {
         if (self.texture) |tex| dvui.Texture.destroyLater(tex);
+        if (self.incoming) |tex| dvui.Texture.destroyLater(tex);
         self.texture = null;
+        self.incoming = null;
+        self.have_incoming = false;
+        self.incoming_wait = 0;
     }
 };
+
+/// Offset-sample smear. dvui has no GPU blur; a centre plus two rings of eight spokes,
+/// clipped to the dest, is cheap enough to run every overlay frame on every backend.
+pub fn blit(tex: dvui.Texture, dest: dvui.Rect.Physical, blur: f32, alpha: f32) void {
+    if (alpha <= 0.001) return;
+    if (blur <= 0.001) {
+        dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{
+            .colormod = dvui.Color.white.opacity(alpha),
+        }) catch {};
+        return;
+    }
+
+    const max_r = @min(16.0, @min(dest.w, dest.h) * 0.08);
+    const radius = blur * max_r;
+
+    const prev_clip = dvui.clipGet();
+    dvui.clipSet(prev_clip.intersect(dest));
+    defer dvui.clipSet(prev_clip);
+
+    const rings = [_]f32{ 0.5, 1.0 };
+    const spokes: u32 = 8;
+    const samples: f32 = 1 + @as(f32, @floatFromInt(rings.len * spokes));
+    const a = alpha / samples;
+
+    dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{
+        .colormod = dvui.Color.white.opacity(a),
+    }) catch {};
+
+    var i: u32 = 0;
+    while (i < spokes) : (i += 1) {
+        const angle = @as(f32, @floatFromInt(i)) * (std.math.tau / @as(f32, @floatFromInt(spokes)));
+        const cx = @cos(angle);
+        const sy = @sin(angle);
+        for (rings) |ring| {
+            var r = dest;
+            r.x += cx * radius * ring;
+            r.y += sy * radius * ring;
+            dvui.renderTexture(tex, .{ .r = r, .s = 1 }, .{
+                .colormod = dvui.Color.white.opacity(a),
+            }) catch {};
+        }
+    }
+}
 
 /// Host-owned state for one "one of N screens" region. Pair with `transition` each frame.
 pub const Transition = struct {
     cross_fade: CrossFade = .{},
     prev_key: ?u64 = null,
+    /// Last surface drawn in this slot, so a swap can look the outgoing one up by id
+    /// (never cache the pointer: a plugin can unload between frames).
+    prev_id: []const u8 = "",
+    /// Latch: hold at peak-blur outgoing until the incoming view is ready. Cleared by
+    /// the caller; `transition` also accepts a per-frame flag.
+    pending: bool = false,
 
     pub fn discard(self: *Transition) void {
         self.cross_fade.discard();
         self.prev_key = null;
+        self.prev_id = "";
+        self.pending = false;
     }
 };
 
@@ -207,6 +308,13 @@ pub const TransitionOptions = struct {
     key: u64,
     /// Physical region to capture / blit. Typically the parent's `contentRectScale().r`.
     rect: dvui.Rect.Physical,
+    /// Fade the outgoing snapshot, or blur out / hand off / unblur in. Fade is the default
+    /// so existing call sites keep their 150ms cross-fade.
+    kind: Kind = .fade,
+    /// Hold at the outgoing peak this frame. Or set `Transition.pending` and leave this false.
+    pending: bool = false,
+    /// Override the kind's default duration. Null uses `crossfade.durationNs`.
+    duration_ns: ?i128 = null,
     /// How to draw the *outgoing* screen. Called only on the swap frame, and only when the
     /// backend supports render targets. Ignored when `key` is unchanged or this is the first
     /// frame for the region.
@@ -223,21 +331,30 @@ pub const TransitionOptions = struct {
 };
 
 /// Per-frame handle from `transition`. `defer` its `deinit` so the snapshot is blitted after
-/// the incoming content draws.
+/// the incoming content draws — and so an incoming capture started this frame is saved.
 pub const TransitionFrame = struct {
     cross_fade: *CrossFade,
+    incoming: ?dvui.Picture = null,
+    prev_clip: ?dvui.Rect.Physical = null,
+    pending: bool = false,
 
     pub fn deinit(self: *TransitionFrame) void {
-        self.cross_fade.draw();
+        if (self.incoming) |*pic| {
+            self.cross_fade.endIncoming(pic);
+            if (self.prev_clip) |c| dvui.clipSet(c);
+        }
+        self.cross_fade.draw(self.pending);
     }
 };
 
-/// Cross-fade between screens in a host-owned region. Plugins draw normally; the host wraps the
-/// swap so the outgoing frame is captured and faded out over the incoming one.
+/// Cross-fade (or blur-fade) between screens in a host-owned region. Plugins draw normally;
+/// the host wraps the swap so the outgoing frame is captured and drawn over the incoming one.
 ///
 ///     var frame = core.anim.transition(&state, .{
 ///         .key = current_key,
 ///         .rect = rs.r,
+///         .kind = .blur,
+///         .pending = plugin_not_ready,
 ///         .draw_previous = drawOutgoing,
 ///         .ctx = ctx,
 ///     });
@@ -255,8 +372,11 @@ pub const TransitionFrame = struct {
 pub fn transition(state: *Transition, opts: TransitionOptions) TransitionFrame {
     const had_prev = state.prev_key != null;
     const key_changed = !had_prev or state.prev_key.? != opts.key;
+    const pending = opts.pending or state.pending;
 
     if (had_prev and key_changed) {
+        state.cross_fade.kind = opts.kind;
+        state.cross_fade.duration_ns = opts.duration_ns orelse crossfade.durationNs(opts.kind);
         if (opts.draw_previous) |draw_prev| {
             if (CrossFade.beginCapture(opts.rect)) |captured| {
                 var pic = captured;
@@ -267,11 +387,46 @@ pub fn transition(state: *Transition, opts: TransitionOptions) TransitionFrame {
                 draw_prev(opts.ctx);
                 dvui.clipSet(prev_clip);
                 state.cross_fade.endCapture(&pic);
+                if (opts.kind == .blur) {
+                    state.cross_fade.incoming_wait = 1;
+                    state.cross_fade.have_incoming = false;
+                }
                 if (opts.after_capture) |cb| cb(opts.ctx);
             }
+        }
+    } else if (opts.kind == .blur and !state.cross_fade.have_incoming and state.cross_fade.texture != null) {
+        // Photograph incoming at the hold, after `reveal`'s settle+fade (120ms)
+        // has finished under the opaque outgoing overlay (hold is 40% of 480ms).
+        // `pending` keeps a one-frame wait so a just-loaded plugin is not
+        // snapped on its first paint.
+        if (pending) {
+            state.cross_fade.incoming_wait = 1;
+        } else if (state.cross_fade.incoming_wait > 0) {
+            state.cross_fade.incoming_wait -= 1;
+        } else if (crossedHold(&state.cross_fade)) {
+            if (CrossFade.beginCapture(opts.rect)) |pic| {
+                const prev_clip = dvui.clipGet();
+                dvui.clipSet(opts.rect);
+                state.prev_key = opts.key;
+                return .{
+                    .cross_fade = &state.cross_fade,
+                    .incoming = pic,
+                    .prev_clip = prev_clip,
+                    .pending = pending,
+                };
+            }
+            state.cross_fade.have_incoming = true;
         }
     }
 
     state.prev_key = opts.key;
-    return .{ .cross_fade = &state.cross_fade };
+    return .{ .cross_fade = &state.cross_fade, .pending = pending };
+}
+
+fn crossedHold(cf: *const CrossFade) bool {
+    if (cf.duration_ns <= 0) return true;
+    const elapsed = dvui.currentWindow().frame_time_ns - cf.start_ns;
+    if (elapsed <= 0) return false;
+    const t: f32 = @floatCast(@as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(cf.duration_ns)));
+    return t >= crossfade.hold;
 }
