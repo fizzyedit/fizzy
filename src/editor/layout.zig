@@ -6,16 +6,19 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
 const sdk = fizzy.sdk;
+const core = @import("core");
+const app = @import("app");
 
-const Layout = @import("app").layout.Layout;
-const Split = @import("core").widgets.Split;
+const Layout = app.layout.Layout;
+const Split = core.widgets.Split;
 const Menu = @import("Menu.zig");
 
 pub const sidebar = sdk.keywords.ide.sidebar;
 pub const bottom = sdk.keywords.ide.panel;
 pub const main_area = sdk.keywords.ide.main;
 
-pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
+pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
+    const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer body.deinit();
 

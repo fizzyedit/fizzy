@@ -33,9 +33,12 @@ run_cmd.step.dependOn(b.getInstallStep());
 b.step("run", "Run the app").dependOn(&run_cmd.step);
 ```
 
-`src/layout.zig` exports `pub fn layout(*Layout)`. It imports `dvui`, `app`, `core`, and
-`fizzy_sdk` — not `Editor`. The app gets its own executable name, window title, bundle id and
-config directory (`Application Support/minimalapp/`, not `fizzy/`).
+`src/layout.zig` exports `pub fn layout(ctx: ?*anyopaque, f: *Layout)`. It imports `dvui`,
+`app`, `core`, and `fizzy_sdk` — not `Editor`. Mix regions with your own dvui (a menu, a
+rail) and take the app's pointer as `ctx`: set `Host.layout_ctx`, or export
+`pub fn context() ?*anyopaque`. Fizzy fills that slot with `*Editor`. The app gets its own
+executable name, window title, bundle id and config directory
+(`Application Support/minimalapp/`, not `fizzy/`).
 
 `zig build run` works in each example the same way it does for fizzy.
 

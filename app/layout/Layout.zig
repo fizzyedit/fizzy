@@ -50,12 +50,10 @@
 //! regions on an axis rather than a forced tree of two-child panes. Nesting is how you cross
 //! axes — a region's content can be another layout.
 //!
-//! The intended end state is that a layout function contains *nothing else*: no `dvui.box`, no
-//! `dvui.label`, no fizzy widgets intermixed. `region` therefore does double duty, and that is
-//! deliberate rather than an overload: a region **with** keywords is a place surfaces draw; a
-//! region **without** is a plain container you nest more regions in — so it takes box-like
-//! options (`dir`, `expand`) as well as placement ones. There is no third concept, and no reason
-//! for an app author to reach past this API into dvui.
+//! A layout mixes `region` / `split` with whatever dvui the app wants to draw — a menu, an
+//! infobar, a rail. The app's own pointer arrives as `ctx` (`Host.layout_ctx`; fizzy passes
+//! `*Editor`). `region` still does double duty: with keywords it is a place surfaces draw;
+//! without, it is a container for more regions.
 //!
 //! `dir` is what a container region orients — **its child regions and splits**, not content. A
 //! horizontal region lays its children left to right, and a `split` inside it is therefore a
@@ -136,6 +134,9 @@ pub const center_keywords = sdk.keywords.ide.main;
 
 pub const Surface = sdk.Surface;
 
+/// The app's pointer for this frame — `Host.layout_ctx`, or fizzy's `*Editor`.
+/// Same `?*anyopaque` as `Surface.draw` and `Region.Content`.
+ctx: ?*anyopaque = null,
 /// The registries this layout matches against and selects in.
 host: *sdk.Host,
 /// Per-frame scratch: match lists handed to a shape live until the frame ends.

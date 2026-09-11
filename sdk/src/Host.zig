@@ -175,6 +175,11 @@ services: std.ArrayListUnmanaged(ServiceEntry) = .empty,
 /// third. One table, no counter.
 files: ?*core.FileTable = null,
 
+/// The app's own pointer, handed to `layout(ctx, *Layout)` each frame. Fizzy
+/// passes `*Editor` here; another app puts its own state. Same `?*anyopaque`
+/// idiom as `Surface.draw` and `Region.Content`.
+layout_ctx: ?*anyopaque = null,
+
 /// Fizzy's read/utility surface (arena, folder, shared settings, dirty mark),
 /// installed by fizzy during startup. Null until installed (headless/test).
 fizzy_api: ?EditorAPI = null,

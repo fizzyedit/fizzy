@@ -7,7 +7,7 @@ const sdk = @import("fizzy_sdk");
 
 const Layout = @import("app").layout.Layout;
 
-pub fn layout(f: *Layout) !dvui.App.Result {
+pub fn layout(_: ?*anyopaque, f: *Layout) !dvui.App.Result {
     var main = try f.region(@src(), .{
         .name = "Main",
         .keywords = sdk.keywords.ide.main,

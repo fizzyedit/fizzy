@@ -4347,10 +4347,18 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // declare one of its own through `Host.region`. Cleared below: a `*Layout` that
             // outlives the frame points at a dead local.
             editor.frame_layout = &layout;
+            // Same slot fizzy fills with `*Editor`: a consumer sets `Host.layout_ctx`, or
+            // exports `context()` from its layout file.
+            const ctx: ?*anyopaque = if (comptime build_opts.has_app_layout) blk: {
+                const supplied = @import("app_layout");
+                if (comptime @hasDecl(supplied, "context")) break :blk supplied.context();
+                break :blk editor.host.layout_ctx;
+            } else editor;
+            layout.ctx = ctx;
             const shell_result = if (comptime build_opts.has_app_layout)
-                @import("app_layout").layout(&layout)
+                @import("app_layout").layout(ctx, &layout)
             else
-                fizzy_layout.layout(editor, &layout);
+                fizzy_layout.layout(ctx, &layout);
 
             // The shape has finished declaring regions: publish them. Until this point
             // `regionFor` answered from the previous frame, which is what lets a command

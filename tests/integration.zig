@@ -2130,7 +2130,7 @@ const EndlessFrame = struct {
     fn frame() anyerror!dvui.App.Result {
         const e = editor.?;
         var layout = fizzy.Editor.Layout.init(&e.host, &e.layout, e.gpa, dvui.currentWindow().arena());
-        const result = try endless.layout(&layout);
+        const result = try endless.layout(null, &layout);
         e.layout.publishRegions();
         return result;
     }

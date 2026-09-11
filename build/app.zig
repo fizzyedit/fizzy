@@ -157,9 +157,9 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     build_opts.addOption(bool, "velopack_enabled", velopack_enabled);
 
     // A consumer that wants its own shape passes `-Dapp-layout=` (a LazyPath to
-    // `pub fn layout(*Layout)`). Fizzy itself uses `src/editor/layout.zig`. There is no
-    // `-Dlayout=` enum of shipped presets — those live in `examples/`.
-    const app_layout_path = b.option(std.Build.LazyPath, "app-layout", "App-owned layout file (pub fn layout(*Layout))");
+    // `pub fn layout(?*anyopaque, *Layout)`). Fizzy itself uses `src/editor/layout.zig`.
+    // There is no `-Dlayout=` enum of shipped presets — those live in `examples/`.
+    const app_layout_path = b.option(std.Build.LazyPath, "app-layout", "App-owned layout file (pub fn layout(?*anyopaque, *Layout))");
     build_opts.addOption(bool, "has_app_layout", app_layout_path != null);
     const static_workbench = b.option(
         bool,

@@ -9,7 +9,7 @@ const Split = @import("core").widgets.Split;
 
 const Layout = @import("app").layout.Layout;
 
-pub fn layout(f: *Layout) !dvui.App.Result {
+pub fn layout(_: ?*anyopaque, f: *Layout) !dvui.App.Result {
     var body = try f.region(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .padding = .{ .x = Split.handle_size },

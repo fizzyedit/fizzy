@@ -29,7 +29,7 @@ pub var t_left_x: f32 = 0;
 pub var t_scale: f32 = 1;
 pub var t_left_room: f32 = 0;
 
-pub fn layout(f: *Layout) !dvui.App.Result {
+pub fn layout(_: ?*anyopaque, f: *Layout) !dvui.App.Result {
     t_left_x = 0;
     t_scale = 1;
     t_left_room = 0;

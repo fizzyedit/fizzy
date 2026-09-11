@@ -196,7 +196,7 @@ size and assignment under the app's name, and answers the app's picker.
   `setActiveDocIndex` selects by name (`Host.selectInRegion`). `EditorAPI` gained
   `regionMatching/regionSelected/regionSelect/assignSurfaces/assignedSurfaces/
   assignedRegionNames/selectInRegion`.
-- sdk 0.1.64, fingerprint `0xb65d3fe1e02bc4a2`. Tests: same-keyword plugin regions keep
+- sdk 0.1.65, fingerprint `0x14061b7c63fe0b38` (`Host.layout_ctx`). Tests: same-keyword plugin regions keep
   separate contents/selections; takeover appears only while triggered.
 - **Verified by the user's screenshots** after landing: panes, tabs, open-to-the-side. Fixed
   from those screenshots (commits after `nllllosx`): `Surface.document` removed (a document
@@ -231,8 +231,9 @@ A shape whose layout is data, owned by the example — not a shipped fizzy prese
 - `zig build run` works from `examples/endless-app`. An empty region's corner button stays
   visible; a filled one still hides until the pointer is near.
 - The tree is reconstructed from extent names (`edge-left-1`, …). No new on-disk format.
-- `-Dapp-layout=` is a LazyPath. When set, Editor calls `app_layout.layout(*Layout)`
-  (the file imports `dvui` / `app` / `core` / `fizzy_sdk` — not `Editor`). There is no
+- `-Dapp-layout=` is a LazyPath. When set, Editor calls `app_layout.layout(ctx, *Layout)`
+  (the file imports `dvui` / `app` / `core` / `fizzy_sdk` — not `Editor`). `ctx` is
+  `context()` if exported, else `Host.layout_ctx`; fizzy passes `*Editor`. There is no
   `-Dlayout=` enum: fizzy uses `src/editor/layout.zig`; minimal, studio and endless
   each own `examples/*/src/layout.zig`.
 - Empty edge trays dragged shut are forgotten (`forget_when_empty`); a tray with an
