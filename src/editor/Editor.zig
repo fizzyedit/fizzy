@@ -118,8 +118,8 @@ pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
 /// The shipped layout presets and the dispatcher that runs the selected one.
 const presets = @import("layout/presets.zig");
-const Layout = @import("app").layout.Layout;
-const Region = @import("app").layout.Region;
+pub const Layout = @import("app").layout.Layout;
+pub const Region = @import("app").layout.Region;
 const AppInfo = @import("app").AppInfo;
 pub const FileLoadJob = workbench_mod.FileLoadJob;
 
@@ -208,6 +208,13 @@ plugin_flags_pending: std.StringArrayHashMapUnmanaged(PendingPluginFlags) = .emp
 /// rather than two bools: both the key and every extension string are app-allocator-owned and
 /// freed when `writeMergedSettings` drains it. Written only by `resolveExtensionConflict`.
 plugin_extensions_pending: std.StringArrayHashMapUnmanaged([]const []const u8) = .empty,
+
+/// Keyword overrides waiting to be written, by the settings block they belong in. Same buffering
+/// as `plugin_extensions_pending`: the user moves a surface, the map records it, and the next
+/// save composes `.plugins.<id>.surface_keywords` from disk plus this.
+///
+/// Keys and the entries' strings are gpa-owned by the editor.
+surface_keywords_pending: std.StringArrayHashMapUnmanaged([]const SettingsPluginsZon.SurfaceKeywords) = .empty,
 
 /// In-memory `ext → owning plugin id` map, rebuilt by `rebuildExtensionOwnerCache` from the
 /// persisted per-plugin `.extensions` lists of the *currently loaded* plugins. Backs
@@ -1697,6 +1704,80 @@ fn readPluginExtensions(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id
     const text = readPluginReservedField(gpa, settings_data, id, "extensions") orelse return &.{};
     defer gpa.free(text);
     return SettingsPluginsZon.parseExtensions(gpa, text) catch &.{};
+}
+
+fn readSurfaceKeywords(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id: []const u8) []const SettingsPluginsZon.SurfaceKeywords {
+    const text = readPluginReservedField(gpa, settings_data, id, "surface_keywords") orelse return &.{};
+    defer gpa.free(text);
+    return SettingsPluginsZon.parseSurfaceKeywords(gpa, text) catch &.{};
+}
+
+/// Record where a surface should draw, overriding the keywords its plugin declared.
+///
+/// `block_id` is the `.plugins.<id>` block the override is written into — the owning plugin's id,
+/// or `"fizzy"` for a surface the application itself registered. The override map is keyed by
+/// surface id and read live by the layout, so the move takes effect on the next frame; this is
+/// only about making it survive a restart.
+pub fn setSurfaceKeywords(editor: *Editor, block_id: []const u8, surface_id: []const u8, keywords: []const []const u8) !void {
+    const gpa = editor.gpa;
+
+    // Live: what `Layout.effectiveKeywords` reads.
+    {
+        const owned = try gpa.alloc([]const u8, keywords.len);
+        errdefer gpa.free(owned);
+        var n: usize = 0;
+        errdefer for (owned[0..n]) |k| gpa.free(k);
+        for (keywords) |k| {
+            owned[n] = try gpa.dupe(u8, k);
+            n += 1;
+        }
+        const gop = try editor.layout.keyword_overrides.getOrPut(gpa, surface_id);
+        if (gop.found_existing) {
+            for (gop.value_ptr.*) |k| gpa.free(k);
+            gpa.free(gop.value_ptr.*);
+        } else {
+            gop.key_ptr.* = try gpa.dupe(u8, surface_id);
+        }
+        gop.value_ptr.* = owned;
+    }
+
+    // Buffered for the next write of `settings.zon`.
+    var entry: SettingsPluginsZon.SurfaceKeywords = .{
+        .surface_id = try gpa.dupe(u8, surface_id),
+        .keywords = blk: {
+            const owned = try gpa.alloc([]const u8, keywords.len);
+            for (keywords, 0..) |k, i| owned[i] = try gpa.dupe(u8, k);
+            break :blk owned;
+        },
+    };
+
+    const gop = try editor.surface_keywords_pending.getOrPut(gpa, block_id);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = try gpa.dupe(u8, block_id);
+        gop.value_ptr.* = &.{};
+    }
+
+    // Replace this surface's entry, keep the block's others.
+    var list: std.ArrayListUnmanaged(SettingsPluginsZon.SurfaceKeywords) = .empty;
+    defer list.deinit(gpa);
+    for (gop.value_ptr.*) |e| {
+        if (std.mem.eql(u8, e.surface_id, surface_id)) {
+            gpa.free(e.surface_id);
+            for (e.keywords) |k| gpa.free(k);
+            gpa.free(e.keywords);
+            continue;
+        }
+        try list.append(gpa, e);
+    }
+    try list.append(gpa, entry);
+    entry = undefined;
+    gpa.free(gop.value_ptr.*);
+    gop.value_ptr.* = try list.toOwnedSlice(gpa);
+
+    editor.saveSettingsRaw() catch |err| {
+        dvui.log.err("Failed to persist surface placement ({s}); deferring to autosave", .{@errorName(err)});
+        editor.host.markSettingsDirty();
+    };
 }
 
 fn clearExtensionOwnerCache(editor: *Editor) void {
@@ -3456,6 +3537,10 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
         var it = pending_exts.iterator();
         while (it.next()) |e| try touched.put(gpa, e.key_ptr.*, {});
     }
+    {
+        var it = editor.surface_keywords_pending.iterator();
+        while (it.next()) |e| try touched.put(gpa, e.key_ptr.*, {});
+    }
 
     const existing = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
     defer if (existing) |e| gpa.free(e);
@@ -3501,6 +3586,14 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
         }
         // Pending owns the list (freed with `pending_exts`); borrow it for composition.
         if (pending_exts.get(id)) |exts| reserved.extensions = exts;
+
+        // Where the user moved a surface. Disk is the base — another block's surfaces are none of
+        // this one's business, but this block may already carry overrides for surfaces the user
+        // has not touched this session.
+        const disk_kw = readSurfaceKeywords(gpa, existing, id);
+        defer SettingsPluginsZon.freeSurfaceKeywords(gpa, disk_kw);
+        reserved.surface_keywords = disk_kw;
+        if (editor.surface_keywords_pending.get(id)) |pending_kw| reserved.surface_keywords = pending_kw;
         if (pending_settings.get(id)) |maybe| {
             // Pending owns this blob (freed with `pending_settings`); borrow for composition.
             if (settings_owned) |s| {
@@ -3517,7 +3610,9 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
         // A non-empty `extensions` is a real, user-made decision — it keeps the id in the file
         // even when everything else sits at its default (e.g. an extension assigned to a plugin
         // that is currently disabled).
-        if (reserved.enabled == null and reserved.auto_update and reserved.extensions.len == 0 and settings_text == null) {
+        if (reserved.enabled == null and reserved.auto_update and reserved.extensions.len == 0 and
+            reserved.surface_keywords.len == 0 and settings_text == null)
+        {
             try overlay.append(gpa, .{ .id = id, .text = null });
         } else {
             const block = try SettingsPluginsZon.composePluginIdBlock(gpa, reserved, settings_text);

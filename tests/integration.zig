@@ -1682,3 +1682,75 @@ test "a command dispatched between frames can still find and shut a region" {
     region.open();
     try std.testing.expect(!region.isClosed());
 }
+
+// -- moving a surface to another region ---------------------------------------------------------
+
+// The payoff of keyword matching, and the reason free-form strings are safe here: a placement the
+// plugin guessed wrong is two clicks from fixed. The Layout settings pane writes the override and
+// the layout reads it live — this is that path without the dropdown.
+test "a keyword override moves a surface to another region on the next frame" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer {
+        var it = editor.layout.keyword_overrides.iterator();
+        while (it.next()) |e| {
+            editor.gpa.free(e.key_ptr.*);
+            for (e.value_ptr.*) |k| editor.gpa.free(k);
+            editor.gpa.free(e.value_ptr.*);
+        }
+        editor.layout.keyword_overrides.deinit(editor.gpa);
+    }
+    defer {
+        var it = editor.surface_keywords_pending.iterator();
+        while (it.next()) |e| {
+            editor.gpa.free(e.key_ptr.*);
+            for (e.value_ptr.*) |sk| {
+                editor.gpa.free(sk.surface_id);
+                for (sk.keywords) |k| editor.gpa.free(k);
+                editor.gpa.free(sk.keywords);
+            }
+            editor.gpa.free(e.value_ptr.*);
+        }
+        editor.surface_keywords_pending.deinit(editor.gpa);
+    }
+
+    const sidebar = fizzy.sdk.keywords.ide.sidebar;
+    const panel = fizzy.sdk.keywords.ide.panel;
+
+    // A plugin that believes its panel belongs somewhere sidebar-shaped.
+    try editor.host.registerSurface(.{
+        .id = "test.movable",
+        .title = "Movable",
+        .keywords = sidebar,
+        .draw = struct {
+            fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+                return .ok;
+            }
+        }.f,
+    });
+
+    var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+
+    // Where it lands by default: the sidebar, because that is what it asked for.
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(sidebar).len);
+    try std.testing.expectEqual(@as(usize, 0), layout.matching(panel).len);
+
+    // The user picks "Panel" in the settings pane. Persisting is best-effort here — the shim has
+    // no config folder — so the assertion is about the *live* half, which is what moves the panel.
+    editor.setSurfaceKeywords("test.plugin", "test.movable", panel) catch {};
+
+    // Next frame's match, with nothing re-registered and no plugin reloaded.
+    try std.testing.expectEqual(@as(usize, 0), layout.matching(sidebar).len);
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(panel).len);
+
+    // And "nowhere" is a real answer, not an error state: an empty set matches no region, which
+    // is how a user switches a panel off without disabling the plugin that draws it.
+    editor.setSurfaceKeywords("test.plugin", "test.movable", &.{}) catch {};
+    try std.testing.expectEqual(@as(usize, 0), layout.matching(sidebar).len);
+    try std.testing.expectEqual(@as(usize, 0), layout.matching(panel).len);
+}

@@ -22,6 +22,9 @@ const Layout = @import("Layout.zig");
 
 const Region = @This();
 
+/// The human-facing name the shape gave this region — "Sidebar", "Main", "Panel". What a user
+/// picks from when moving a surface somewhere else, so it is worth a real word.
+name: []const u8 = "",
 /// What kinds of surface this region accepts, as its shape declared them.
 keywords: []const []const u8 = &.{},
 /// This region's widget id, stable across frames from the shape's `@src()`.
@@ -243,6 +246,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
             // Findable from outside the layout by the keywords it accepts, so a rail button or
             // a command can open and shut it without knowing what the shape built.
             if (init_opts.keywords.len > 0) self.state.registerRegion(self.gpa, .{
+                .name = init_opts.name,
                 .keywords = init_opts.keywords,
                 .id = id,
                 .default_extent = default,
@@ -303,6 +307,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     if (!shut_now and init_opts.keywords.len > 0) _ = try drawContents(self, init_opts);
 
     return .{
+        .name = init_opts.name,
         .keywords = init_opts.keywords,
         .id = id,
         .default_extent = default_extent,

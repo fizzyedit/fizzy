@@ -1,0 +1,16 @@
+.{
+    .hold_menu_duration_ms = 0,
+    .theme = "",
+    .font_body_size = 0,
+    .font_title_size = 0,
+    .font_heading_size = 0,
+    .font_mono_size = 0,
+    .window_opacity_dark = 0,
+    .window_opacity_light = 0,
+    .content_opacity = 0,
+    .plugins = .{
+        .@"test.plugin" = .{
+            .surface_keywords = .{ .@"test.movable" = .{ } },
+        },
+    },
+}

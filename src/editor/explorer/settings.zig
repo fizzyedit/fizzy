@@ -21,6 +21,7 @@ const core = @import("core");
 const Editor = fizzy.Editor;
 const KeybindSettings = @import("../KeybindSettings.zig");
 const FileTypeSettings = @import("../FileTypeSettings.zig");
+const LayoutSettings = @import("../LayoutSettings.zig");
 
 const fuzzy = core.fuzzy;
 
@@ -193,6 +194,23 @@ pub const groups = [_]Group{
                 .keywords = "file type extension default open association plugin",
                 // Every extension is individually searchable — see `FileTypeSettings`.
                 .search = .{ .score = FileTypeSettings.score, .draw = FileTypeSettings.draw },
+            },
+        },
+    },
+    .{
+        .title = "Layout",
+        .icon = icons.tvg.lucide.@"panel-left",
+        .items = &.{
+            .{
+                .label = "Panel placement",
+                .key = "surface_keywords",
+                .description = "Where each plugin's panels draw. A plugin declares the kind of " ++
+                    "place its panel belongs and this layout's regions declare what they accept; " ++
+                    "where the two agree is where it lands. Move one anywhere, or nowhere — the " ++
+                    "choice is remembered per panel.",
+                .keywords = "region placement move panel sidebar surface unplaced keywords",
+                // Every panel is individually searchable — see `LayoutSettings`.
+                .search = .{ .score = LayoutSettings.score, .draw = LayoutSettings.draw },
             },
         },
     },
