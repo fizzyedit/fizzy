@@ -2,7 +2,7 @@
 
 Resume point for the "fizzy as a library" work. Written to be picked up cold by any agent or
 person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-11 at bookmark
-`fizzy-lib` (jj change `zkxnvzqm`, "The loading card fits its rows…").
+`fizzy-lib` (jj change `mpvsomux`, "A region is told what it shows…").
 
 ## Ground rules that are easy to get wrong
 
@@ -62,31 +62,24 @@ Capture its window by pid with a Swift `CGWindowListCopyWindowInfo` script + `sc
 <wid>`. Fails (black/none) when the display is locked — fall back to headless integration tests.
 Kill by pid, not `%1`. A second launch hands argv to the first (singleton) and exits.
 
-## Next: region-centric surface placement (agreed 2026-09-11, not started)
+## In progress: region-centric surface placement
 
-Replaces the surface-centric "Panel placement" pane (`src/editor/LayoutSettings.zig`) and the
-per-surface keyword override (`State.keyword_overrides`, `Editor.setSurfaceKeywords`,
-`.plugins.<id>.surface_keywords`). The user's question is "what goes *here*", not "where does
-this go"; inverting also gives duplication (one surface in two regions) and deliberately-empty
-regions for free.
+Landed (commit "A region is told what it shows"): the model (`State.assignments`, region name →
+surface ids, persisted in `layout.zon` as `SavedRegion {name, extent?, surfaces?}`), keyword
+matching as the default with assignment overriding wholesale, the old per-surface keyword
+override deleted, and Settings > Layout > **Regions** as a table by region with a checkbox
+popup picker. Integration test: override, duplicate, empty, unknown id, unassign.
 
-1. **Model** (`app/layout/State.zig`): `assignments: region name → []surface id`, persisted at
-   `.layout.regions.<name>`. Keyword matching remains the *default* when a region has no
-   assignment; an assignment overrides wholesale. Delete the keyword-override mechanism (one
-   mechanism, not two). `Layout.matching(keywords)` consults assignments first. Drawing one
-   surface in two regions works as-is: dvui ids differ by parent chain, plugin state is shared.
-   Add integration tests beside the existing "keyword override moves surface" ones in
-   `tests/integration.zig` (which will be rewritten to assignments).
-2. **Picker widget**: scrollable cards, one per surface — a **snapshot** preview (render the
-   surface once into a texture target when the menu opens; cache; never live-draw it in the
-   card — widgets would run twice a frame and unplaced surfaces have no live pixels), title,
-   owner plugin, checked if already in this region. Multi-select (a region shows tabs).
-3. **Settings pane as a table**: rows = regions from the live registry (`editor.layout.regions`),
-   each with its surfaces as chips and the picker behind a button. Replace `LayoutSettings.zig`
-   in place; keep its registration in `src/editor/explorer/settings.zig` (group "Layout").
-4. **Corner button** in `app/layout/Region.zig`: in `deinit`, if the mouse is near the region's
-   top-right, draw a small floating button that opens the same picker for that region. Framework
-   code — every app gets it.
+Remaining, in order:
+
+2. **Picker cards with snapshots**: replace the checkbox list's body with scrollable cards —
+   a **snapshot** preview (render the surface once into a texture target when the menu
+   opens; cache; never live-draw it in the card — widgets would run twice a frame and an
+   unplaced surface has no live pixels), title, owner plugin, checked if in this region.
+4. **Corner button** in `app/layout/Region.zig`: in `deinit`, if the mouse is near the
+   region's top-right, draw a small floating button that opens the same picker for that
+   region. Framework code — every app gets it. The picker must therefore move out of
+   `src/editor/LayoutSettings.zig` into `app/layout/` (it needs only Host + State).
 5. **Endless-handles example app** (`examples/`, its own piece): blank window, dormant split
    handles at the four edges; dragging one out appends a region to a *persisted tree* and a new
    dormant handle appears. The tree names its regions (`edge-left-2`) so assignments stay keyed
@@ -94,7 +87,31 @@ regions for free.
    and assigns. This is a shape whose layout is data — acceptable as one example file, not as
    a mode on the ide shape.
 
-Build 1–3 as one arc, then 4, then 5.
+## Next arc after placement: plugins declare regions, documents are surfaces (agreed 2026-09-11)
+
+Workbench's private subdivision of Main (workspaces, tab groups, tab drag/drop) and the app's
+regions are the same idea at two depths. Unify them:
+
+- A tab group *is* a region accepting `document`; its tabs are `matching(region)`, the active
+  tab is the region's existing selection. Opening a file = registering a surface
+  (`<plugin>.doc:<path>`) and assigning it to the active document region; moving a tab =
+  reassigning; a split = a new region; the same doc in two groups = duplication; session
+  restore = the assignment list.
+- **Keywords stop attracting and start accepting.** Default placement is the *first (or
+  focused) accepting region*, then explicit assignment. Today's one-accepting-region panels
+  are the special case, so nothing visible changes for fizzy.
+- **Namespacing by nesting**: a region declared while drawing inside region Main gets `main.`
+  prefixed automatically; a surface asking `document` matches a region keyword equal to it or
+  ending in `.document`. Plugins never learn the app's names; a plugin's bare `sidebar` region
+  becomes `main.sidebar` and attracts nothing — collision is structurally impossible.
+- Cost: the region registry moves from `app/layout/State` into `Host` beside surfaces so a
+  plugin can declare one across the dylib boundary (vtable on Host: declare region, read/set
+  extent — an ABI fingerprint bump, fine while unpublished); surfaces become dynamic
+  (register/unregister per open file); workbench's Workspace/tab-group code is replaced by
+  regions + assignments — the big rewrite and the one that pays.
+- Order: (a) keyword semantics — accept + first-accepting default + nested prefixing, no ABI
+  change, testable; (b) registry → Host, plugin-declarable; (c) workbench tab groups → regions,
+  documents → surfaces.
 
 ## Also queued (in rough priority)
 
@@ -118,6 +135,6 @@ Build 1–3 as one arc, then 4, then 5.
 - `.gif/.bmp/.tga` claimed by `image`; `text` refuses binary (`textcore.encoding.looksBinary`);
   a failed load no longer deinits an unwritten document buffer; user gets a toast.
 - Every region registers (Main was missing from the placement pane).
-- Phase 4b: panel placement pane with persistence (to be replaced, see above).
+- Region assignments + Regions settings table (replaced the Phase 4b per-surface pane).
 - Native dialogs ask the app for start dirs; AppInfo + backend allocator in `app/`; self-update,
   window geometry, singleton, watchers, store all in `app/`; `files` is a service.
