@@ -148,6 +148,9 @@ gpa: std.mem.Allocator,
 /// Set when a region's remembered extent changed this frame. The application decides what that
 /// means — fizzy debounces a write to `layout.zon`.
 extents_changed: bool = false,
+/// Every surface `draw` ran this frame, so `captureUnplaced` knows which ones genuinely drew
+/// nowhere — as opposed to drew before the picker asked. Arena-backed, per frame.
+drawn: std.ArrayListUnmanaged(*Surface) = .empty,
 
 /// Open regions, innermost last. Every region pushes; its `deinit` pops. This is what lets
 /// `split` know which axis it divides and which neighbour it resizes, without a shape having to
@@ -316,8 +319,11 @@ pub fn select(self: *Layout, keywords: []const []const u8, s: *const Surface) vo
 /// it for free. Keyed by **surface id**, never the parent box id — a box id moves with the
 /// surrounding layout and would restart the fade on changes that are not content swaps (see the
 /// warning at workbench `src/Workspace.zig:768`).
+///
+/// While the picker is collecting (`State.snapshots_wanted`), a surface without a snapshot is
+/// drawn through a texture target and the result both kept and put on screen — the pixels are
+/// the same ones, so nothing blinks, and the surface still ran exactly once.
 pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
-    _ = self;
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(s.id);
     const rv = core.anim.reveal(
@@ -326,8 +332,84 @@ pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
         .{},
     );
     defer rv.deinit();
+    self.drawn.append(self.arena, s) catch {};
+    if (self.state.snapshots_wanted and self.state.snapshot(s.id) == null) {
+        if (try self.drawCaptured(s)) |r| return r;
+    }
     return s.draw(s.ctx);
 }
+
+/// `s.draw` into a texture the size of the current parent's content, then that texture onto the
+/// screen where the surface would have drawn. Null when there is nothing to capture into — a
+/// zero-sized parent, or a backend without render targets — and the caller draws normally.
+///
+/// Through `dvui.Picture` rather than a bare `renderTarget` switch: dvui defers part of its
+/// drawing (strokes after fills, subwindow content) to queues flushed later, and a bare switch
+/// hands those to the screen after the target is gone. `Picture` installs its own queues and
+/// flushes them inside `stop`, which is the difference between a snapshot of a scroll area and
+/// a snapshot of its background.
+fn drawCaptured(self: *Layout, s: *Surface) !?dvui.App.Result {
+    const rs = dvui.parentGet().data().contentRectScale();
+    var pic = dvui.Picture.start(rs.r) orelse return null;
+    // Some backends leave a fresh target uninitialised; the cross-fade learned this the hard way.
+    pic.texture.clear();
+    const old_clip = dvui.clipGet();
+    dvui.clipSet(pic.r);
+    const result = s.draw(s.ctx);
+    dvui.clipSet(old_clip);
+    pic.stop();
+    const texture = dvui.textureFromTarget(pic.texture) catch return try result;
+    dvui.renderTexture(texture, .{ .r = pic.r, .s = rs.s }, .{}) catch {};
+    self.state.takeSnapshot(self.gpa, s.id, .{ .texture = texture, .natural = .{ .w = pic.r.w / rs.s, .h = pic.r.h / rs.s } });
+    return try result;
+}
+
+/// Snapshot every surface that drew nowhere this frame, by drawing each once offscreen at a
+/// fixed size. Only while the picker is collecting and only for surfaces still missing a
+/// snapshot, so a frame with nothing to do costs a lookup. The application calls this after
+/// its shape has run, from the base window.
+///
+/// "Drew nowhere" is decided by `drawn`, not by the missing snapshot: the picker opens
+/// mid-frame, after some regions have already run, and those surfaces must be captured where
+/// they live on the *next* frame rather than photographed offscreen now — an offscreen
+/// picture of the workspace is a picture of an empty box.
+pub fn captureUnplaced(self: *Layout) void {
+    if (!self.state.snapshots_wanted) return;
+    var pending = false;
+    outer: for (self.host.surfaces.items, 0..) |*s, i| {
+        if (s.hidden or self.state.snapshot(s.id) != null) continue;
+        for (self.drawn.items) |d| if (d == s) {
+            pending = true; // drew this frame before the request: in-place capture next frame
+            continue :outer;
+        };
+        var box = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = i,
+            .rect = .{ .x = -20_000, .y = -20_000, .w = offscreen_capture.w, .h = offscreen_capture.h },
+            .background = true,
+            .color_fill = dvui.themeGet().color(.content, .fill),
+        });
+        defer box.deinit();
+        // A subtree drawn for the first time is not yet what it will look like: dvui lays it
+        // out from last frame's sizes, which it has none of, and anything inside that reveals
+        // itself starts hidden. So it is drawn unphotographed for a few frames first — the same
+        // settle-then-show the reveal does on screen, just without an audience.
+        const warm = dvui.dataGet(null, box.data().id, "_warm", u8) orelse 0;
+        if (warm < offscreen_warmup_frames) {
+            _ = s.draw(s.ctx) catch {};
+            dvui.dataSet(null, box.data().id, "_warm", warm + 1);
+            pending = true;
+            continue;
+        }
+        _ = self.drawCaptured(s) catch null;
+    }
+    if (pending) dvui.refresh(null, @src(), null);
+}
+
+/// Where a surface that is not on screen is drawn to be photographed. A sidebar-ish aspect at
+/// a size text is legible in; the card scales it down.
+const offscreen_capture: dvui.Size = .{ .w = 360, .h = 480 };
+/// Long enough for a 120 ms reveal to finish at 60 fps, with a little to spare.
+const offscreen_warmup_frames: u8 = 10;
 
 /// Draw whichever surface is selected for these keywords, into the current parent. Everything
 /// it does is reachable through `matching` / `selected` / `draw`; `region` uses it to fill a
@@ -356,7 +438,6 @@ pub const region = Region.init;
 
 /// What persists behind a `Layout` between frames — selections, declared regions, sizes.
 pub const State = @import("State.zig");
-
 
 /// A draggable divider between the region before it and the region after it — `dvui.separator`
 /// with a drag.

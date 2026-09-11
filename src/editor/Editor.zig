@@ -141,10 +141,6 @@ layout: Layout.State = .{},
 
 arena: std.heap.ArenaAllocator,
 
-
-
-
-
 /// Positions to reveal once their not-yet-open path finishes loading. Set by `revealPosition`
 /// when the target is not open yet and drained once per frame. Previously lived on the workbench
 /// plugin, which is what forced goto-definition to depend on workbench; the queue was incidental
@@ -373,8 +369,6 @@ settings_dirty: bool = false,
 /// Monotonic deadline (`perf.nanoTimestamp()`): autosave runs when dirty and `now >= deadline`.
 settings_save_deadline_ns: i128 = 0,
 
-
-
 /// Watches `<config>/` recursively (via nightwatch — see R12) for external `settings.zon`
 /// changes and newly-created plugin directories, reconciling them live via `tick`. Null on wasm,
 /// on an unsupported OS, or if starting the watch failed — all best-effort: fizzy must never
@@ -397,7 +391,6 @@ folder_watcher: ?FolderWatcher = null,
 /// grace window so `dvui.ContextWidget.updateHold` actually re-runs and gets a chance
 /// to open the hold-to-context menu on touch-only hardware.
 last_touch_press_ns: ?i128 = null,
-
 
 /// dvui resolves a `Font` to a source by exact `(family, weight, style)`; it never synthesizes
 /// an oblique or an embolden. A style with no source here silently falls back to the nearest
@@ -1353,7 +1346,6 @@ fn isValidPluginId(id: []const u8) bool {
 /// false all mean disabled — R12), and `auto_update_off_ids` from every `.plugins.<id>.auto_update`
 /// that is explicitly `false`. One directory walk and one settings read for both.
 /// Call once after settings load, before `loadUserPlugins`.
-
 fn seedPluginFlags(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.gpa;
@@ -1638,7 +1630,6 @@ fn readPluginExtensions(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id
     defer gpa.free(text);
     return SettingsPluginsZon.parseExtensions(gpa, text) catch &.{};
 }
-
 
 fn clearExtensionOwnerCache(editor: *Editor) void {
     const gpa = editor.gpa;
@@ -4260,6 +4251,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // A drag or a collapse moved a region: fizzy's answer to "remember that" is a
             // debounced write to `layout.zon`.
             if (layout.extents_changed) editor.markWindowRatiosDirty();
+            // The picker photographs surfaces that drew nowhere this frame, and floats above
+            // everything the shape drew.
+            layout.captureUnplaced();
+            editor.layout.picker.draw(&layout);
 
             // A region is a box, so a shape that declares one and never scopes it leaves the box
             // open and dvui reports the mismatch two widgets later ("not at the top of the widget
@@ -4456,14 +4451,6 @@ fn saveRegions(editor: *Editor) void {
         }
     }
     fizzy.backend.saveRegions(editor.config_folder, by_name.values());
-}
-
-/// Set what region `name` shows, live and remembered. Takes effect on the next frame — the layout
-/// reads assignments as it matches — and reaches `layout.zon` on the same debounced timer the
-/// extents use. `null` hands the region back to its keywords.
-pub fn assignRegion(editor: *Editor, name: []const u8, surfaces: ?[]const []const u8) !void {
-    if (surfaces) |ids| try editor.layout.assign(editor.gpa, name, ids) else editor.layout.unassign(editor.gpa, name);
-    editor.markWindowRatiosDirty();
 }
 
 /// The extent a region should start at: what the user last left it, or the shape's default.
@@ -5765,6 +5752,7 @@ pub fn deinit(editor: *Editor) !void {
     saveWindowRatiosRaw(editor);
     // Only after the flush above, which writes the assignments out.
     editor.layout.deinitAssignments(editor.gpa);
+    editor.layout.picker.close(editor.gpa);
     editor.settings.deinit(editor.gpa);
 
     editor.explorer.deinit();
@@ -5801,7 +5789,6 @@ pub fn deinit(editor: *Editor) !void {
     editor.folder_retired.deinit(editor.gpa);
     editor.arena.deinit();
 }
-
 
 // ---- SettingsWatcher.Sink: what fizzy reconciles when its config folder changes -------------
 //

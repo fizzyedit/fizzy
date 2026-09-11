@@ -43,10 +43,6 @@ pub fn score(query: *const fuzzy.Query) ?f64 {
     return best;
 }
 
-/// Which region's picker is open, by index into the live registry. One picker at a time.
-var picker_open: bool = false;
-var picker_region: usize = 0;
-
 pub fn draw(query: *const fuzzy.Query) void {
     const editor = fizzy.editor();
     const theme = dvui.themeGet();
@@ -128,14 +124,10 @@ fn drawRow(editor: *Editor, layout: *Editor.Layout, region: Editor.Region, idx: 
         var head = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer head.deinit();
         dvui.labelNoFmt(@src(), region.name, .{}, .{ .gravity_y = 0.5, .font = dvui.Font.theme(.title) });
-        // The button anchors the picker; the popup opens beside it on the next frame.
+        // The picker itself is framework (`app/layout/Picker.zig`), drawn by the frame above
+        // everything; this only opens it, anchored under this row.
         if (dvui.button(@src(), "Choose…", .{}, .{ .gravity_y = 0.5, .gravity_x = 1.0 })) {
-            picker_open = true;
-            picker_region = idx;
-        }
-        if (picker_open and picker_region == idx) {
-            const anchor = head.data().rectScale().r.toNatural().bottomLeft();
-            drawPicker(editor, region, contents, anchor);
+            editor.layout.openPicker(editor.gpa, region.name, head.data().rectScale().r.toNatural().bottomLeft());
         }
     }
 
@@ -159,48 +151,4 @@ fn drawRow(editor: *Editor, layout: *Editor.Layout, region: Editor.Region, idx: 
     });
     tl.addText(line, .{});
     tl.deinit();
-}
-
-/// Every surface, checked if this region shows it; a "back to defaults" item at the end.
-///
-/// Toggling writes the region's full list — what it shows now, plus or minus one — so the first
-/// toggle on a never-assigned region turns the keyword match it was showing into an explicit
-/// assignment. That is the honest reading of the click: the user has now chosen this region's
-/// contents, and a plugin loaded later will no longer walk in by keyword until they choose again.
-fn drawPicker(editor: *Editor, region: Editor.Region, contents: []const *Surface, anchor: dvui.Point.Natural) void {
-    var popup = dvui.popup(@src(), .{ .open_flag = &picker_open, .from = anchor }, .{ .min_size_content = .{ .w = 240 } }) orelse return;
-    defer popup.deinit();
-
-    dvui.labelNoFmt(@src(), region.name, .{}, .{ .font = dvui.Font.theme(.heading), .padding = .{ .h = 4 } });
-
-    for (editor.host.surfaces.items, 0..) |*s, i| {
-        if (s.hidden) continue;
-        var on = contains(contents, s.id);
-        if (dvui.checkbox(@src(), &on, s.title, .{ .id_extra = i, .expand = .horizontal })) {
-            const arena = dvui.currentWindow().arena();
-            var ids = std.ArrayListUnmanaged([]const u8).initCapacity(arena, contents.len + 1) catch return;
-            for (contents) |c| if (!std.mem.eql(u8, c.id, s.id)) ids.appendAssumeCapacity(c.id);
-            if (on) ids.appendAssumeCapacity(s.id);
-            editor.assignRegion(region.name, ids.items) catch |err| {
-                dvui.log.err("failed to assign '{s}': {t}", .{ region.name, err });
-            };
-            dvui.refresh(null, @src(), null);
-        }
-    }
-
-    if (editor.layout.assignment(region.name) != null) {
-        _ = dvui.separator(@src(), .{ .expand = .horizontal, .margin = .{ .y = 4, .h = 4 } });
-        if (dvui.button(@src(), "Back to defaults", .{}, .{ .expand = .horizontal })) {
-            editor.assignRegion(region.name, null) catch |err| {
-                dvui.log.err("failed to reset '{s}': {t}", .{ region.name, err });
-            };
-            picker_open = false;
-            dvui.refresh(null, @src(), null);
-        }
-    }
-}
-
-fn contains(list: []const *Surface, id: []const u8) bool {
-    for (list) |s| if (std.mem.eql(u8, s.id, id)) return true;
-    return false;
 }

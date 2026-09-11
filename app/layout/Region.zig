@@ -324,7 +324,6 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     };
 }
 
-
 /// The region's contents: its own chrome if it declared any, otherwise the active surface.
 ///
 /// Everything reachable here is reachable by hand from `matching` / `selected` / `draw`, so a

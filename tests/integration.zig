@@ -1725,29 +1725,29 @@ test "assigning a region overrides keyword matching, duplicates and empties" {
     // The user puts Movable in the panel. The sidebar is untouched: it still shows both by
     // keyword, because assigning one region says nothing about another — the same surface in
     // two regions is a feature, not a conflict.
-    try editor.assignRegion("Panel", &.{"test.movable"});
+    try editor.layout.assign(editor.gpa, "Panel", &.{"test.movable"});
     try std.testing.expectEqual(@as(usize, 1), layout.matching(panel).len);
     try std.testing.expectEqualStrings("test.movable", layout.matching(panel)[0].id);
     try std.testing.expectEqual(@as(usize, 2), layout.matching(sidebar).len);
 
     // Then trims the sidebar to Other alone: Movable now lives only in the panel.
-    try editor.assignRegion("Sidebar", &.{"test.other"});
+    try editor.layout.assign(editor.gpa, "Sidebar", &.{"test.other"});
     try std.testing.expectEqual(@as(usize, 1), layout.matching(sidebar).len);
     try std.testing.expectEqualStrings("test.other", layout.matching(sidebar)[0].id);
     try std.testing.expectEqual(@as(usize, 0), layout.unplaced().len);
 
     // An empty assignment is a real choice — nothing here — and the surface it orphans is
     // reported rather than lost.
-    try editor.assignRegion("Panel", &.{});
+    try editor.layout.assign(editor.gpa, "Panel", &.{});
     try std.testing.expectEqual(@as(usize, 0), layout.matching(panel).len);
     try std.testing.expectEqual(@as(usize, 1), layout.unplaced().len);
     try std.testing.expectEqualStrings("test.movable", layout.unplaced()[0].id);
 
     // An id no loaded plugin owns is kept, not dropped: it draws once that plugin loads.
-    try editor.assignRegion("Panel", &.{ "ghost.surface", "test.movable" });
+    try editor.layout.assign(editor.gpa, "Panel", &.{ "ghost.surface", "test.movable" });
     try std.testing.expectEqual(@as(usize, 1), layout.matching(panel).len);
 
     // Unassigning hands the region back to its keywords.
-    try editor.assignRegion("Sidebar", null);
+    editor.layout.unassign(editor.gpa, "Sidebar");
     try std.testing.expectEqual(@as(usize, 2), layout.matching(sidebar).len);
 }

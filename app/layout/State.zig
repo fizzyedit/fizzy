@@ -8,11 +8,21 @@
 //! is framework, and the chrome beside it (explorer, sidebar, panes) is fizzy's own. Seventy-five
 //! flat fields made that invisible.
 const std = @import("std");
+const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const Region = @import("Region.zig");
+const Picker = @import("Picker.zig");
 
 const State = @This();
+
+/// A rendered picture of a surface as it last drew, for the picker's cards. Taken by `Layout`
+/// on request (`snapshots_wanted`), one per surface per request, never on an ordinary frame.
+pub const Snapshot = struct {
+    texture: dvui.Texture,
+    /// The size it was drawn at, in points — the aspect the card should keep.
+    natural: dvui.Size,
+};
 
 /// Shell (new-layout) selection state: keyword-group hash -> selected surface id.
 /// Surface ids are registry-owned string literals, so this stores no allocations of its own.
@@ -32,6 +42,17 @@ selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 /// Keys and every id are gpa-owned; surface ids are duplicated rather than borrowed so an
 /// assignment to a plugin that is not currently loaded survives until it is.
 assignments: std.StringHashMapUnmanaged([]const []const u8) = .empty,
+/// Surface id → its snapshot. Keys are gpa-owned copies: a surface can unregister (plugin
+/// unloaded) while the picker is open.
+snapshots: std.StringHashMapUnmanaged(Snapshot) = .empty,
+/// While true, `Layout.draw` captures any surface it draws that has no snapshot yet, and
+/// `Layout.captureUnplaced` draws the rest offscreen once. Set by `openPicker`.
+snapshots_wanted: bool = false,
+/// The one surface picker, if open. On the state rather than in whichever pane opened it so the
+/// settings table and a region's corner button open the same thing, and the app draws it in
+/// one place above everything else (`Picker.draw`).
+picker: Picker = .{},
+
 /// Regions the last completed shape declared — what `Editor.regionFor` answers from.
 ///
 /// Deliberately the *previous* frame's set rather than the one being built: a command can run
@@ -141,6 +162,62 @@ pub fn unassign(self: *State, gpa: std.mem.Allocator, name: []const u8) void {
     gpa.free(kv.key);
     for (kv.value) |id| gpa.free(id);
     gpa.free(kv.value);
+}
+
+/// The debounce between a layout change and its write to disk. Long enough that dragging a
+/// split does not write every frame; short enough that a crash right after a change loses
+/// nothing a user would notice.
+pub const save_debounce_ns: i128 = 500 * std.time.ns_per_ms;
+
+/// Something worth persisting changed: an extent, an assignment. The application's frame flushes
+/// once the deadline passes (fizzy: `saveWindowRatiosRaw`).
+pub fn markDirty(self: *State) void {
+    self.dirty = true;
+    self.save_deadline_ns = core.perf.nanoTimestamp() + save_debounce_ns;
+}
+
+// ---- snapshots and the picker ----------------------------------------------------------------
+
+pub fn snapshot(self: *State, id: []const u8) ?Snapshot {
+    return self.snapshots.get(id);
+}
+
+/// Record a capture. Replaces (and frees) an older one for the same surface.
+pub fn takeSnapshot(self: *State, gpa: std.mem.Allocator, id: []const u8, snap: Snapshot) void {
+    const gop = self.snapshots.getOrPut(gpa, id) catch {
+        dvui.textureDestroyLater(snap.texture);
+        return;
+    };
+    if (gop.found_existing) {
+        dvui.textureDestroyLater(gop.value_ptr.texture);
+    } else {
+        gop.key_ptr.* = gpa.dupe(u8, id) catch {
+            _ = self.snapshots.remove(id);
+            dvui.textureDestroyLater(snap.texture);
+            return;
+        };
+    }
+    gop.value_ptr.* = snap;
+}
+
+/// Drop every snapshot. Textures go at the end of the frame, so a card drawn earlier this frame
+/// is unaffected. Must run between `Window.begin` and `Window.end`.
+pub fn discardSnapshots(self: *State, gpa: std.mem.Allocator) void {
+    var it = self.snapshots.iterator();
+    while (it.next()) |e| {
+        gpa.free(e.key_ptr.*);
+        dvui.textureDestroyLater(e.value_ptr.texture);
+    }
+    self.snapshots.clearRetainingCapacity();
+    self.snapshots_wanted = false;
+}
+
+/// Open the picker for region `name`, anchored at `anchor` (or centred when null), and start
+/// collecting fresh snapshots. Whatever a previous open captured is stale by now.
+pub fn openPicker(self: *State, gpa: std.mem.Allocator, name: []const u8, anchor: ?dvui.Point.Natural) void {
+    self.discardSnapshots(gpa);
+    self.snapshots_wanted = true;
+    self.picker.open(gpa, name, anchor);
 }
 
 pub fn deinitAssignments(self: *State, gpa: std.mem.Allocator) void {
