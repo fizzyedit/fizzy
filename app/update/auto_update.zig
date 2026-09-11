@@ -1,7 +1,20 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_opts = @import("build_opts");
-const file_assoc = @import("file_assoc.zig");
+
+/// What the application wants done at Velopack's lifecycle points — after an install, after an
+/// update, before an uninstall.
+///
+/// Fizzy registers its file associations here; an app that claims no file types leaves these
+/// null and the hooks do nothing. The updater's own job is the same either way, which is why
+/// this is a hook rather than a call into a particular app's registry code.
+pub const Hooks = struct {
+    installed: ?*const fn () void = null,
+    updated: ?*const fn () void = null,
+    uninstalling: ?*const fn () void = null,
+};
+
+pub var hooks: Hooks = .{};
 
 pub const impl: bool = build_opts.velopack_enabled and builtin.target.cpu.arch != .wasm32;
 
@@ -194,20 +207,20 @@ pub fn appRunHook() void {
 }
 
 fn hookAfterInstall(_: ?*anyopaque, _: [*c]const u8) callconv(.c) void {
-    file_assoc.registerAll();
+    if (hooks.installed) |f| f();
     lifecycle_hook_fired = true;
 }
 
 fn hookAfterUpdate(_: ?*anyopaque, _: [*c]const u8) callconv(.c) void {
-    // Velopack's current\fizzy.exe junction always points at the latest version,
-    // so the registered command stays valid across updates. Re-registering on
-    // update is still cheap and self-healing if a registry value drifted.
-    file_assoc.registerAll();
+    // Velopack's `current\<app>.exe` junction always points at the latest version, so whatever
+    // the app registered stays valid across updates. Running the hook again is still cheap and
+    // self-healing if a registry value drifted.
+    if (hooks.updated) |f| f();
     lifecycle_hook_fired = true;
 }
 
 fn hookBeforeUninstall(_: ?*anyopaque, _: [*c]const u8) callconv(.c) void {
-    file_assoc.unregisterAll();
+    if (hooks.uninstalling) |f| f();
     lifecycle_hook_fired = true;
 }
 

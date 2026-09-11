@@ -5,10 +5,12 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
-const AppInfo = @import("../AppInfo.zig");
 
 /// Unused here (one tab is one instance), but declared so this file mirrors the native API.
-pub const app_id = AppInfo.bundle_id_z;
+/// See the native implementation: the app sets this. Unused on the web, where one tab is one
+/// application and there is nothing to lock against.
+pub var app_id: [:0]const u8 = "app.unnamed";
+pub var app_name: []const u8 = "app";
 
 pub fn earlyStartup(_: std.mem.Allocator, _: std.process.Init) !void {}
 
@@ -36,7 +38,7 @@ pub fn collectAndResolveArgv(
 ) ![]const []const u8 {
     const out = try gpa.alloc([]const u8, 1);
     errdefer gpa.free(out);
-    out[0] = try gpa.dupe(u8, AppInfo.current.name);
+    out[0] = try gpa.dupe(u8, app_name);
     return out;
 }
 

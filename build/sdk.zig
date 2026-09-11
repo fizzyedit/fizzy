@@ -89,6 +89,12 @@ pub fn wireAppModule(
     /// The filesystem-watching backend, when this build has one. Absent on the web, where the
     /// watchers are never started.
     nightwatch_module: ?*std.Build.Module,
+    /// The application's build-time identity and feature flags — its repo url, whether it ships
+    /// an updater. Each app generates its own; fizzy's is `build/exe.zig`'s options step.
+    build_opts: *std.Build.Step.Options,
+    /// The single-instance backend (unix sockets / named pipes), when this build has one.
+    /// Absent on the web, where one tab is one application.
+    singleton_module: ?*std.Build.Module,
     consumer: ?*std.Build.Module,
 ) *std.Build.Module {
     const app_module = b.createModule(.{
@@ -102,6 +108,23 @@ pub fn wireAppModule(
     if (icons_module) |icons| app_module.addImport("icons", icons);
     if (markdown_module) |md| app_module.addImport("markdown", md);
     if (nightwatch_module) |nw| app_module.addImport("nightwatch", nw);
+    app_module.addImport("build_opts", buildOptsModule(build_opts));
+    if (singleton_module) |sm| app_module.addImport("singleton_app", sm);
     if (consumer) |c| c.addImport("app", app_module);
     return app_module;
+}
+
+/// One module per `Options` step, shared by every consumer.
+///
+/// `addOptions` creates a *new* module each time it is called, and the generated `options.zig`
+/// would then belong to two of them — which Zig refuses outright ("file exists in modules
+/// build_opts and build_opts0"). The exe, the web build, the tests and the `app` module all read
+/// the same options, so they must all read the same module.
+var build_opts_modules: std.AutoHashMapUnmanaged(*std.Build.Step.Options, *std.Build.Module) = .empty;
+
+pub fn buildOptsModule(opts: *std.Build.Step.Options) *std.Build.Module {
+    if (build_opts_modules.get(opts)) |m| return m;
+    const m = opts.createModule();
+    build_opts_modules.put(opts.step.owner.graph.arena, opts, m) catch @panic("OOM");
+    return m;
 }

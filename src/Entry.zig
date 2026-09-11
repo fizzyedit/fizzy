@@ -10,9 +10,10 @@ const icon = assets.files.@"icon.png";
 const fizzy = @import("fizzy.zig");
 const workbench = @import("workbench");
 const text = @import("text");
-const auto_update = @import("backend/auto_update.zig");
-const update_notify = @import("backend/update_notify.zig");
-const singleton = @import("backend/singleton.zig");
+const auto_update = @import("app").update.auto_update;
+const file_assoc = @import("backend/file_assoc.zig");
+const update_notify = @import("app").update.update_notify;
+const singleton = @import("app").single_instance;
 const paths = fizzy.core.paths;
 const Constants = @import("editor/Constants.zig");
 const AppInfo = @import("AppInfo.zig");
@@ -120,6 +121,13 @@ pub fn main(main_init: std.process.Init) !u8 {
     std.log.info("{s} version {s} ({s})", .{ AppInfo.current.display_name, AppInfo.current.version, @tagName(@import("builtin").mode) });
 
     if (comptime auto_update.impl) {
+        // What fizzy wants done at Velopack's lifecycle points: claim (and release) the file
+        // types it opens. The updater has no opinion about file types — see `auto_update.Hooks`.
+        auto_update.hooks = .{
+            .installed = file_assoc.registerAll,
+            .updated = file_assoc.registerAll,
+            .uninstalling = file_assoc.unregisterAll,
+        };
         // appRunHook handles Velopack's install/uninstall/firstrun CLI flags and
         // does not touch the network. Update checks are user-initiated from the
         // About dialog — startup must not block on connectivity.
@@ -129,6 +137,34 @@ pub fn main(main_init: std.process.Init) !u8 {
     main_init_global = main_init;
 
     if (comptime builtin.target.cpu.arch != .wasm32) {
+        // The lock is per *application*, so fizzy names itself rather than the framework
+        // reading fizzy's identity file — which is exactly what made it fizzy's before.
+        singleton.setIdentity(AppInfo.bundle_id_z, AppInfo.current.name);
+
+        // What fizzy does with a path a second launch forwards: a directory becomes the project
+        // folder, a file becomes a document — and only when nothing is open yet does it look
+        // upward for a project marker first. All of that is fizzy's, so it lives here.
+        singleton.setSink(.{
+            .ctx = undefined,
+            .openFolder = struct {
+                fn f(_: *anyopaque, path: []const u8) anyerror!void {
+                    try fizzy.editor().setProjectFolder(path);
+                }
+            }.f,
+            .openFile = struct {
+                fn f(_: *anyopaque, path: []const u8, project_root: ?[]const u8) anyerror!void {
+                    if (project_root) |root| fizzy.editor().setProjectFolder(root) catch |err| {
+                        std.log.warn("found project root '{s}' but failed to set: {t}", .{ root, err });
+                    };
+                    _ = try fizzy.editor().openFilePath(path, fizzy.editor().currentGroupingID());
+                }
+            }.f,
+            .wantsProjectRoot = struct {
+                fn f(_: *anyopaque) bool {
+                    return fizzy.editor().folder == null;
+                }
+            }.f,
+        });
         try singleton.earlyStartup(appAllocator(), main_init);
     }
 
@@ -271,6 +307,9 @@ pub fn AppInit(win: *dvui.Window) !void {
         fizzy.backend.setWindowStyle(win);
     }
 
+    // The install runs on a background thread and outlives the frame that starts it, so it
+    // needs a long-lived allocator — the app's, which `app/update/` cannot name for itself.
+    update_notify.setAllocator(allocator);
     update_notify.startLaunchCheck(dvui.io, Constants.debug_simulate_update_available);
 
     // From here on the monitor's pump timer may drive frames during macOS

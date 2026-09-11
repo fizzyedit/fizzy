@@ -7,7 +7,6 @@ const std = @import("std");
 const dvui = @import("dvui");
 const auto_update = @import("auto_update.zig");
 const update_install = @import("update_install.zig");
-const fizzy = @import("../fizzy.zig");
 
 const Phase = enum(u8) {
     pending,
@@ -264,11 +263,23 @@ fn displayUpdateToast(id: dvui.Id) !void {
     }
 }
 
+/// The allocator the background install runs on, set once by the application. A long-lived one:
+/// the install outlives the frame that kicked it off.
+var install_gpa: ?std.mem.Allocator = null;
+
+pub fn setAllocator(gpa: std.mem.Allocator) void {
+    install_gpa = gpa;
+}
+
 /// Spawn the background install (idempotent) and arm the progress toast.
 /// Safe to call from any GUI-thread event handler (toast click, dialog button).
 pub fn kickInstall() void {
     if (comptime !auto_update.impl) return;
-    _ = update_install.startOrGet(fizzy.entry().allocator, dvui.io) catch |err| {
+    const gpa = install_gpa orelse {
+        dvui.log.err("update install kicked before the app supplied an allocator", .{});
+        return;
+    };
+    _ = update_install.startOrGet(gpa, dvui.io) catch |err| {
         dvui.log.err("update install kick failed: {any}", .{err});
         dvui.toast(@src(), .{ .message = "Update failed to start — see logs." });
         return;

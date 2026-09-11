@@ -120,7 +120,7 @@ pub fn addFizzyExecutableForTarget(
     exe.root_module.strip = false;
 
     exe.root_module.addImport("assets", assets_module);
-    exe.root_module.addOptions("build_opts", build_opts);
+    exe.root_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
     if (optimize != .Debug) {
         switch (resolved_target.result.os.tag) {
@@ -198,9 +198,15 @@ pub fn addFizzyExecutableForTarget(
     else
         null;
 
+    const singleton_app_dep = b.dependency("dvui_singleton_app", .{
+        .target = resolved_target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("singleton_app", singleton_app_dep.module("singleton_app"));
+
     // The `app` framework module: the plugin store and what it needs. Fizzy is its first
     // consumer, not its owner — see `app/app.zig`.
-    _ = sdk.wireAppModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), core_module, sdk_module, icons_module, markdown_module, if (nightwatch_dep) |dep| dep.module("nightwatch") else null, exe.root_module);
+    _ = sdk.wireAppModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), core_module, sdk_module, icons_module, markdown_module, if (nightwatch_dep) |dep| dep.module("nightwatch") else null, build_opts, singleton_app_dep.module("singleton_app"), exe.root_module);
 
     const workbench_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
         break :blk workbench_plugin.addDylib(b, resolved_target, optimize, .{
@@ -241,11 +247,6 @@ pub fn addFizzyExecutableForTarget(
         });
     } else null;
 
-    const singleton_app_dep = b.dependency("dvui_singleton_app", .{
-        .target = resolved_target,
-        .optimize = optimize,
-    });
-    exe.root_module.addImport("singleton_app", singleton_app_dep.module("singleton_app"));
 
     if (resolved_target.result.os.tag == .macos) {
         if (macos_sdl_paths) |p| {

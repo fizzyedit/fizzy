@@ -43,6 +43,28 @@ pub const watch = struct {
     pub const wake = @import("watch/wake.zig");
 };
 
+/// Keeping the application up to date, and putting the new window where the old one was.
+///
+/// Both are opt-in and both are what an application wants rather than what a plugin does:
+/// `update` is Velopack's install/update/uninstall lifecycle plus the toast that offers it,
+/// `window` is the geometry an app saves so its next launch opens where the last one closed.
+pub const update = struct {
+    pub const auto_update = @import("update/auto_update.zig");
+    pub const update_install = @import("update/update_install.zig");
+    pub const update_notify = @import("update/update_notify.zig");
+};
+
+pub const window = struct {
+    pub const layout = @import("window/window_layout.zig");
+};
+
+/// One application per machine, and a second launch handing its argv to the first.
+///
+/// The lock, the socket and the argv plumbing are the same for every app; what "open this path"
+/// means is not, which is `singleton.Sink`. The app also sets its own `app_id` — the lock is per
+/// application, and two fizzy-based apps must not fight over one.
+pub const single_instance = @import("single_instance/singleton.zig");
+
 pub const store = struct {
     pub const Store = @import("store/PluginStore.zig");
     pub const Manager = @import("store/PluginManager.zig");

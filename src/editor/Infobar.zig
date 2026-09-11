@@ -4,7 +4,7 @@ const AppInfo = @import("../AppInfo.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const assets = @import("assets");
-const update_notify = @import("../backend/update_notify.zig");
+const update_notify = @import("app").update.update_notify;
 const Dialogs = fizzy.Editor.Dialogs;
 /// Font, height, icon side and spacing — fizzy draws every item with these, including
 /// plugin `Entry` chips, so the bar stays uniform as the font setting changes.

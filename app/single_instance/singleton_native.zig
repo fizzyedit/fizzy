@@ -15,15 +15,18 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const singleton_app = @import("singleton_app");
-const fizzy = @import("../fizzy.zig");
-const AppInfo = @import("../AppInfo.zig");
+const core = @import("core");
 
 const log = std.log.scoped(.singleton);
 
 /// The lock every instance of *this* app contends for. It must be the app's own identifier and
 /// not fizzy's: two apps built on fizzy would otherwise share one lock, and launching the second
 /// would forward its argv to the first and exit.
-pub const app_id = AppInfo.bundle_id_z;
+/// The application's identity, set by the app before `earlyStartup`. The lock is *per
+/// application* — two different fizzy-based apps must not fight over one — so this cannot be
+/// read from fizzy's own identity the way it used to be.
+pub var app_id: [:0]const u8 = "app.unnamed";
+pub var app_name: []const u8 = "app";
 
 const PendingOpen = struct { path: []u8 };
 
@@ -172,36 +175,55 @@ fn queueArgvPaths(argv: []const []const u8) void {
     }
 }
 
+/// What the application does with a path a second launch forwarded to this one.
+///
+/// The lock, the socket and the argv plumbing are the same for every app; what "open this" means
+/// is not — fizzy sets a project folder for a directory and opens a document for a file, having
+/// first walked up for a project marker. An app with no documents can point both of these at
+/// something else entirely.
+pub const Sink = struct {
+    ctx: *anyopaque,
+    /// A directory was forwarded.
+    openFolder: *const fn (ctx: *anyopaque, path: []const u8) anyerror!void,
+    /// A file was forwarded. `project_root` is the marker directory found above it, when the app
+    /// asked for that search and one exists.
+    openFile: *const fn (ctx: *anyopaque, path: []const u8, project_root: ?[]const u8) anyerror!void,
+    /// Whether to search upward for a project marker before opening a file — fizzy only does it
+    /// when nothing is open yet.
+    wantsProjectRoot: *const fn (ctx: *anyopaque) bool,
+};
+
+var sink: ?Sink = null;
+
+/// Called once by the application, before `earlyStartup`.
+pub fn setSink(s: Sink) void {
+    sink = s;
+}
+
 fn dispatchPath(path: []const u8) !void {
     const io = state.io;
+    const to = sink orelse return error.NoSink;
+
     // Try as directory first: openDirAbsolute succeeds → it's a folder.
     if (std.Io.Dir.openDirAbsolute(io, path, .{})) |dir| {
         var d = dir;
         d.close(io);
-        try fizzy.editor().setProjectFolder(path);
+        try to.openFolder(to.ctx, path);
         return;
     } else |_| {}
 
-    // It's a file. If no project folder is currently open, walk up the
-    // directory tree looking for a `.fizproject` (or `.pixiproject` for
-    // backwards-compat with pixi) marker and open that as the project
-    // folder first. That way double-clicking any file inside a project
-    // automatically loads the project context.
-    if (fizzy.editor().folder == null) {
-        if (findProjectRoot(state.allocator, path)) |root| {
-            defer state.allocator.free(root);
-            fizzy.editor().setProjectFolder(root) catch |err| {
-                log.warn("found project root '{s}' but failed to set: {t}", .{ root, err });
-            };
-        }
-    }
+    // It's a file. Walk up for a `.fizproject` (or `.pixiproject`) marker when the app wants
+    // that, so double-clicking any file inside a project loads the project context too.
+    var root: ?[]const u8 = null;
+    defer if (root) |r| state.allocator.free(r);
+    if (to.wantsProjectRoot(to.ctx)) root = findProjectRoot(state.allocator, path);
 
     const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| {
         log.warn("open '{s}' failed: {t}", .{ path, err });
         return err;
     };
     file.close(io);
-    _ = try fizzy.editor().openFilePath(path, fizzy.editor().currentGroupingID());
+    try to.openFile(to.ctx, path, root);
 }
 
 /// Walk upward from `file_path`'s parent directory, returning the first
@@ -249,7 +271,7 @@ pub fn collectAndResolveArgv(
     }
 
     const main_init = main_init_opt orelse {
-        const exe = try gpa.dupe(u8, AppInfo.current.name);
+        const exe = try gpa.dupe(u8, app_name);
         try out.append(gpa, exe);
         return out.toOwnedSlice(gpa);
     };
@@ -291,11 +313,11 @@ pub fn freeResolvedArgv(gpa: std.mem.Allocator, argv: []const []const u8) void {
 
 /// Normalizing (not just joining) matters for the common `fizzy .` invocation: a plain join
 /// yields `<cwd>/.`, which names the right directory but is a distinct string from `<cwd>`
-/// everywhere downstream — see `fizzy.core.paths.normalize`.
+/// everywhere downstream — see `core.paths.normalize`.
 fn resolveAbsolute(gpa: std.mem.Allocator, cwd: []const u8, path: []const u8) ![]u8 {
-    if (std.fs.path.isAbsolute(path)) return fizzy.core.paths.normalize(gpa, path);
+    if (std.fs.path.isAbsolute(path)) return core.paths.normalize(gpa, path);
     if (cwd.len == 0) return error.NoCwd;
-    return fizzy.core.paths.normalizeJoin(gpa, cwd, path);
+    return core.paths.normalizeJoin(gpa, cwd, path);
 }
 
 fn pickUnixSocketDir(buf: *[std.fs.max_path_bytes]u8) []const u8 {

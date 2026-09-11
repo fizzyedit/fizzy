@@ -381,7 +381,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ "fizzy-direction-tests", "core/math/direction.zig" },
         .{ "fizzy-easing-tests", "core/math/easing.zig" },
         .{ "fizzy-layout-anchor-tests", "core/math/layout_anchor.zig" },
-        .{ "fizzy-window-layout-tests", "src/backend/window_layout.zig" },
+        .{ "fizzy-window-layout-tests", "app/window/window_layout.zig" },
         .{ "fizzy-plugin-store-tests", "app/store/registry/store.zig" },
         .{ "fizzy-paths-tests", "core/paths.zig" },
         .{ "fizzy-lsp-protocol-tests", "core/lsp/Protocol.zig" },
@@ -527,7 +527,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     fizzy_test_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
     fizzy_test_module.addImport("backend", dvui_testing_dep.module("testing"));
     fizzy_test_module.addImport("assets", assets_module);
-    fizzy_test_module.addOptions("build_opts", build_opts);
+    fizzy_test_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
     // Shared `core` module for the test build (dvui testing backend variant).
     const core_module_test = b.createModule(.{
@@ -568,7 +568,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     }, fizzy_test_module);
     // The `app` framework module (the plugin store), wired the same way the exe and the web
     // build wire it — see `build/sdk.zig`.
-    _ = sdk.wireAppModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), core_module_test, sdk_module_test, icons_test, markdown_module_test, if (nightwatch_test_dep) |dep| dep.module("nightwatch") else null, fizzy_test_module);
+    _ = sdk.wireAppModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), core_module_test, sdk_module_test, icons_test, markdown_module_test, if (nightwatch_test_dep) |dep| dep.module("nightwatch") else null, build_opts, null, fizzy_test_module);
     _ = image_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,

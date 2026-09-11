@@ -25,7 +25,7 @@ const build_opts = @import("build_opts");
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const core = @import("core");
-const update_notify = @import("../backend/update_notify.zig");
+const update_notify = @import("app").update.update_notify;
 
 const Entry = fizzy.Entry;
 const Editor = @This();

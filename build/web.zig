@@ -80,7 +80,7 @@ pub fn addSteps(
     // `build_opts` (app_version, app_repo_url, velopack_enabled) — shared
     // with native. velopack_enabled is whatever was passed via `-Dvelopack`;
     // wasm path is gated by `arch != .wasm32` in `auto_update.impl`.
-    web_exe.root_module.addOptions("build_opts", build_opts);
+    web_exe.root_module.addImport("build_opts", sdk.buildOptsModule(build_opts));
 
     // Shared `core` module for the wasm build (dvui web backend variant).
     const core_module_web = b.createModule(.{
@@ -127,7 +127,7 @@ pub fn addSteps(
 
     // The `app` framework module (the plugin store). Wired exactly as the native build wires
     // it — one helper, so the two cannot drift.
-    _ = sdk.wireAppModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), core_module_web, sdk_module_web, icons_web, markdown_module_web, null, web_exe.root_module);
+    _ = sdk.wireAppModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), core_module_web, sdk_module_web, icons_web, markdown_module_web, null, build_opts, null, web_exe.root_module);
 
     const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
     const install_wasm = b.addInstallArtifact(web_exe, .{
