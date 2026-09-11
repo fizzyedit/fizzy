@@ -2377,12 +2377,12 @@ fn cancelPluginLoadingJobs(editor: *Editor, plugin: *sdk.Plugin) void {
         // `std.Thread.yield()` busy-spin this replaced.
         if (job.future) |*f| f.await(io);
         _ = editor.loading_jobs.remove(job.path);
-        // Drop the partial open without inserting it into `open_files`. `ready`/`failed`
-        // need exactly one `deinitDocumentBuffer`; a `cancelled` job was either freed by the
-        // worker (late cancel) or never constructed (early cancel), so skip it to avoid a
-        // double-free / deinit-on-uninitialized buffer.
+        // Drop the partial open without inserting it into `open_files`. Only `ready` holds a
+        // constructed document needing exactly one `deinitDocumentBuffer`.
         switch (job.currentPhase()) {
-            .ready, .failed => job.owner.deinitDocumentBuffer(job.doc_buf.ptr),
+            .ready => job.owner.deinitDocumentBuffer(job.doc_buf.ptr),
+            // `failed` never constructed a document (see `processLoadingJobs`); `cancelled`
+            // was freed by the worker or never built.
             else => {},
         }
         job.destroy(io);
@@ -5131,9 +5131,20 @@ pub fn processLoadingJobs(editor: *Editor) void {
                     editor.pending_composite_warmup = true;
                 }
             },
+            // A failed load wrote nothing into the staging buffer — `loadDocument` errors
+            // before `out.* = ...` — so there is no document to deinit, only bytes to free.
+            // Deiniting here freed pointers that were never assigned.
             .failed => {
-                dvui.log.err("Failed to open file: {s} ({any})", .{ job.path, job.err });
-                job.owner.deinitDocumentBuffer(job.doc_buf.ptr);
+                // `job.err` is not named here on purpose. A Zig error is an integer numbered
+                // per compilation, so one returned across the dylib boundary carries the
+                // plugin's numbering and `@errorName` would print whichever of *our* errors
+                // happens to share it. Only the plugin can say why; it logs that itself.
+                dvui.log.err("Failed to open file: {s}", .{job.path});
+                dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+                    editor.arena.allocator(),
+                    "Could not open {s}.",
+                    .{std.fs.path.basename(job.path)},
+                ) catch "Could not open file." });
             },
             .cancelled => {
                 job.owner.deinitDocumentBuffer(job.doc_buf.ptr);

@@ -82,7 +82,11 @@ fn deinit(state: *anyopaque) void {
 
 /// The flat-raster formats this viewer opens. One list, used both for the routing offer
 /// (`fileTypes`) and for the file-tree glyph / document checks (`isFlatImageExtension`).
-const flat_image_extensions = [_][]const u8{ ".png", ".jpg", ".jpeg" };
+///
+/// Exactly what stb_image decodes, no more: a GIF opens as its first frame, and BMP/TGA are
+/// the other still formats it reads. Anything listed here that stb could *not* decode would
+/// fall through to the text plugin, which has nothing sensible to show for a binary file.
+const flat_image_extensions = [_][]const u8{ ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tga" };
 
 fn isFlatImageExtension(ext: []const u8) bool {
     for (flat_image_extensions) |e| {

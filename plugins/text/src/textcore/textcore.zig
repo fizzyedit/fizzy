@@ -23,6 +23,7 @@ pub const Transaction = @import("Transaction.zig");
 pub const History = @import("History.zig");
 pub const pairs = @import("pairs.zig");
 pub const completion = @import("completion.zig");
+pub const encoding = @import("encoding.zig");
 
 pub const Granularity = movement.Granularity;
 pub const Dir = movement.Dir;
@@ -38,4 +39,5 @@ test {
     _ = History;
     _ = pairs;
     _ = completion;
+    _ = encoding;
 }
