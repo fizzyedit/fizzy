@@ -11,7 +11,6 @@ const Plugin = @import("Plugin.zig");
 const EditorAPI = @import("EditorAPI.zig");
 const DocHandle = @import("DocHandle.zig");
 const RegionSpec = @import("RegionSpec.zig");
-const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
 const language = @import("language.zig");
 const settings = @import("settings.zig");
 
@@ -462,6 +461,11 @@ pub fn assignedSurfaces(self: *Host, region_name: []const u8) ?[]const []const u
 /// Every region name with an assignment, arena-allocated.
 pub fn assignedRegionNames(self: *Host) []const []const u8 {
     return if (self.fizzy_api) |a| a.assignedRegionNames() else &.{};
+}
+
+/// Make `id` what the region named `region_name` shows, from outside its draw.
+pub fn selectInRegion(self: *Host, region_name: []const u8, id: []const u8) void {
+    if (self.fizzy_api) |a| a.selectInRegion(region_name, id);
 }
 
 pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {

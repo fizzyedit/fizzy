@@ -1,5 +1,5 @@
 //! Shared dvui layout helpers for workbench content panes. Used by the workbench when
-//! drawing document canvases and by plugins that take over a pane via `draw_workspace`
+//! drawing document canvases and by plugins that take over the main area (`Surface.takeover_when`)
 //! (e.g. pixel art's Project atlas preview). Stable `@src()` + `grouping` ids avoid
 //! widget churn when switching between document and project views.
 const dvui = @import("dvui");

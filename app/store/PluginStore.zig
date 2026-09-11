@@ -46,12 +46,6 @@ pub const view_id = "fizzy.store";
 /// the previous center.
 pub const readme_center_id = "fizzy.store.readme";
 
-
-/// True while we have hijacked the active center to show a README, plus the center id to restore
-/// when the selection is cleared or the store tab is no longer active.
-var readme_center_active = false;
-var saved_center: ?[]const u8 = null;
-
 /// Which sub-view the detail center shows below the header — VSCode marketplace-style. Reset to
 /// `.details` whenever the selection changes (`toggleSelect`), so switching plugins never leaves
 /// you stranded on a tab the new selection didn't ask for.
@@ -352,12 +346,15 @@ pub fn register(manager: PluginManager) !void {
         .keywords = sdk.keywords.ide.sidebar,
         .draw = draw,
     });
-    // README center provider. Registered after the workbench center (see `postInit` order) so it
-    // never becomes the default active center; `tick` activates it on demand.
+    // The README takes the main area over while the store is the sidebar's tab
+    // (`takeover_when`); `tick` hides it while no card is selected, which is the other half of
+    // "only while there is something to show".
     try host.registerSurface(.{
         .id = readme_center_id,
         .title = "Plugin README",
         .keywords = sdk.keywords.ide.main,
+        .takeover_when = view_id,
+        .hidden = true,
         .draw = drawReadmeCenter,
     });
 }
@@ -1311,22 +1308,10 @@ pub fn tick() void {
     }
 }
 
-/// Drive the active center from the store selection: while the store tab is active and a plugin
-/// is selected, show its README in the center; otherwise restore whatever center was active when
-/// we took over. Idempotent — safe to call every frame.
+/// The README exists only while a card is selected; the layout handles "and the store tab is
+/// active" through `takeover_when`. Idempotent — safe to call every frame.
 fn syncReadmeCenter() void {
-    const host = app.host;
-    const active_sidebar = host.selectionFor(sdk.keywords.ide.sidebar);
-    const want = active_sidebar != null and std.mem.eql(u8, active_sidebar.?, view_id) and Readme.selectedId() != null;
-    if (want and !readme_center_active) {
-        saved_center = host.selectionFor(sdk.keywords.ide.main);
-        host.setSelectionFor(sdk.keywords.ide.main, readme_center_id);
-        readme_center_active = true;
-    } else if (!want and readme_center_active) {
-        if (saved_center) |id| host.setSelectionFor(sdk.keywords.ide.main, id);
-        saved_center = null;
-        readme_center_active = false;
-    }
+    app.host.setSurfaceHidden(readme_center_id, Readme.selectedId() == null);
 }
 
 /// Select `entry` (showing its README in the center), or clear the selection if it is already the

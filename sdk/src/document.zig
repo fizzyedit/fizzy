@@ -45,3 +45,24 @@ pub fn loadBytesIntoStaging(
     const handled = try plugin.loadDocumentFromBytes(path, bytes, staging.buf.ptr);
     if (!handled) return error.Unsupported;
 }
+
+/// The surface id of an open document: `<owner plugin id>.doc:<path>`. A document is a surface
+/// for exactly as long as it is open — the app registers it when the load lands and takes it
+/// back on close — and this is the one place its id is spelled, because two sides need it: the
+/// app that registers it, and the workbench that assigns it to a pane. Stable across sessions
+/// by construction, which is what makes an assignment to it a way to restore one.
+pub fn surfaceId(allocator: std.mem.Allocator, owner_id: []const u8, path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}.doc:{s}", .{ owner_id, path });
+}
+
+/// The keyword every document surface carries. A shape places documents by accepting this,
+/// qualified by wherever it puts them (`main.document`).
+pub const keyword = "document";
+pub const keywords: []const []const u8 = &.{keyword};
+
+/// Whether a surface id names a document, and the path if so.
+pub fn pathOfSurfaceId(id: []const u8) ?[]const u8 {
+    const marker = ".doc:";
+    const at = std.mem.indexOf(u8, id, marker) orelse return null;
+    return id[at + marker.len ..];
+}

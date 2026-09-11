@@ -1,3 +1,13 @@
+//! One document pane: a region the workbench declares inside the main area, with the tab strip
+//! it draws over that region's surfaces.
+//!
+//! A pane used to be a private subdivision — its own list of documents by grouping, its own
+//! active index into the app's open-file array, its own drag/drop that rewrote both. Now the pane
+//! is a region (`host.region`, keywords `{"document"}`, `shows = .many`) and each open document
+//! is a surface the app registers; the tabs are `region.matching()`, the active tab is the
+//! region's selection, and a tab moved to another pane is an assignment edit. Nothing here
+//! remembers which documents it holds: the app does, by the pane's name, which is also what makes
+//! last session's panes come back.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -8,42 +18,51 @@ const runtime = @import("runtime.zig");
 const icons = @import("icons");
 const math = core.math;
 
-/// Workspaces are drawn recursively inside of the explorer paned widget
-/// second pane, and contains drag/drop enabled tabs. Tabs can freely be dragged to
-/// panes or other tab bars.
-/// Workspaces can potentially draw open files, the project logo, or the project pane
-/// containing the packed atlas.
 pub const Workspace = @This();
 
-open_file_index: usize = 0,
+/// The pane's key: half of its region id, and the number in its name. Minted by
+/// `Workbench.newGroupingID`; the app still calls it a grouping because that is the word on the
+/// document vtable.
 grouping: u64 = 0,
 center: bool = false,
 
-tabs_drag_index: ?usize = null,
+/// What this pane showed last frame, for the commands that act on "the active document" between
+/// frames. Read from the region during draw; never derived from the app's document array.
+active: ?sdk.DocHandle = null,
+
+/// Reorder bookkeeping for the frame: where a tab was lifted from and where it is about to land,
+/// as indices into this pane's tab list.
 tabs_removed_index: ?usize = null,
 tabs_insert_before_index: ?usize = null,
 
-/// Physical-pixel content rect of this workspace's canvas vbox, captured each frame during
-/// `drawCanvas` (or a sidebar view's `draw_workspace` takeover, e.g. pixel art's Project view).
-/// `null` until the workspace has rendered at least once. Used
-/// by the editor-level load/save toast overlays to center cards over the area the user is
-/// actually looking at (rather than the OS window rect).
+/// Physical-pixel content rect of this pane's canvas, captured each frame. `null` until the pane
+/// has rendered once. The editor-level load/save toasts centre over it.
 canvas_rect_physical: ?dvui.Rect.Physical = null,
 
 pub fn init(grouping: u64) Workspace {
     return .{ .grouping = grouping };
 }
 
-/// Release any plugin-owned per-pane canvas chrome. Called when a pane is removed
-/// (`Editor.rebuildWorkspaces`) and for each pane at editor shutdown.
+/// Release any plugin-owned per-pane canvas chrome. Called when a pane is removed and for each
+/// pane at shutdown.
 pub fn deinit(self: *Workspace) void {
     for (runtime.host().plugins.items) |plugin| {
         plugin.removeCanvasPane(self.grouping, runtime.allocator());
     }
 }
 
-const handle_size = 10;
-const handle_dist = 60;
+/// The region name this pane persists under. One spelling, here, because the app's assignment
+/// table is keyed by it and the workbench has to find last session's panes by it.
+pub fn name(buf: []u8, grouping: u64) []const u8 {
+    return std.fmt.bufPrint(buf, "Pane {d}", .{grouping}) catch "Pane";
+}
+
+/// The grouping a pane name encodes, or null if the name is not a pane's.
+pub fn groupingOfName(region_name: []const u8) ?u64 {
+    const prefix = "Pane ";
+    if (!std.mem.startsWith(u8, region_name, prefix)) return null;
+    return std.fmt.parseInt(u64, region_name[prefix.len..], 10) catch null;
+}
 
 const opacity = 60;
 
@@ -61,23 +80,21 @@ const logo_colors: [12]math.Color = [_]math.Color{
     color_3, color_0, color_0,
 };
 
-var dragging: bool = false;
-
 pub fn draw(self: *Workspace) !dvui.App.Result {
-    // Canvas Area
-    var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
+    var name_buf: [32]u8 = undefined;
+    var region = runtime.host().region(.{
+        .name = name(&name_buf, self.grouping),
+        .keywords = sdk.document.keywords,
+        .shows = .many,
+        .key = self.grouping,
         .expand = .both,
-        .gravity_y = 0.0,
-        .id_extra = @intCast(self.grouping),
-    });
-    defer vbox.deinit();
+    }) orelse return .ok;
+    defer region.deinit();
 
-    // Set the active workspace grouping when the user clicks on the workspace rect
+    // Clicking anywhere in the pane makes it the one commands act on.
+    const pane_box = dvui.parentGet().data();
     for (dvui.events()) |*e| {
-        if (!vbox.matchEvent(e)) {
-            continue;
-        }
-
+        if (!dvui.eventMatch(e, .{ .id = pane_box.id, .r = pane_box.rectScale().r })) continue;
         if (e.evt == .mouse) {
             if (e.evt.mouse.action == .press or (e.evt.mouse.action == .position and e.evt.mouse.mod.matchBind("ctrl/cmd"))) {
                 runtime.workbench().open_workspace_grouping = self.grouping;
@@ -85,699 +102,474 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
         }
     }
 
-    // The surface a sidebar-ish region currently shows may optionally take over this workspace
-    // pane's content region (e.g. pixel art's "Project" view renders the packed atlas here
-    // instead of document tabs+canvas). The workbench owns only the pane frame; it hands that
-    // surface the opaque workspace handle.
-    const active = runtime.host().selectedSurface(sdk.keywords.ide.sidebar);
-    if (active != null and active.?.draw_workspace != null) {
-        var pane_view: sdk.WorkbenchPaneView = .{
-            .grouping = self.grouping,
-            .canvas_rect_physical = &self.canvas_rect_physical,
-        };
-        try active.?.draw_workspace.?(active.?.ctx, &pane_view);
-    } else {
-        self.drawTabs();
-        try self.drawCanvas();
-    }
+    const tabs = region.matching();
+    const selected = region.selected();
+    self.active = if (selected) |s| s.document else null;
 
+    if (tabs.len > 0) self.drawTabs(region, tabs, selected);
+    try self.drawCanvas(region, tabs.len > 0);
     return .ok;
 }
 
-/// Same `@src()` for every call so DVUI sees one stable id when switching between `drawCanvas` and
-/// a plugin's `draw_workspace` takeover (avoids first-frame min-size / layout flash). Use `grouping`
-/// so multi-workspace panes stay distinct. Delegates to `sdk.pane_layout` for a single definition.
+/// Same `@src()` for every call so DVUI sees one stable id. Delegates to `sdk.pane_layout`.
 pub fn workspaceMainCanvasVbox(content_color: dvui.Color, background: bool, grouping: u64) *dvui.BoxWidget {
     return sdk.pane_layout.mainCanvasVbox(content_color, background, grouping);
 }
 
-/// Rounded “card” behind the project empty state and the homepage. Delegates to `sdk.pane_layout`.
 pub fn workspaceEmptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.BoxWidget {
     return sdk.pane_layout.emptyStateCard(content_color, grouping);
 }
 
-fn drawTabs(self: *Workspace) void {
-    if (runtime.host().openDocCount() == 0) return;
+fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surface, selected: ?*sdk.Surface) void {
+    defer self.processTabsDrag(region, tabs);
 
-    // Handle dragging of tabs between workspace reorderables (tab bars)
-    defer self.processTabsDrag();
+    var tabs_anim = dvui.animate(@src(), .{ .duration = 500_000, .kind = .vertical, .easing = dvui.easing.outBack }, .{});
+    defer tabs_anim.deinit();
 
-    {
-        var tabs_anim = dvui.animate(@src(), .{ .duration = 500_000, .kind = .vertical, .easing = dvui.easing.outBack }, .{});
-        defer tabs_anim.deinit();
+    var tabs_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .none,
+        .margin = dvui.Rect.all(0),
+        .padding = dvui.Rect.all(0),
+        .id_extra = @intCast(self.grouping),
+    });
+    defer tabs_box.deinit();
 
-        var tabs_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .none,
-            .margin = dvui.Rect.all(0),
+    var scroll_area = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .hide, .vertical_bar = .hide }, .{
+        .expand = .none,
+        .background = false,
+        .margin = dvui.Rect.all(0),
+        .padding = dvui.Rect.all(0),
+        .border = dvui.Rect.all(0),
+        .corners = dvui.CornerRect.all(0),
+        .id_extra = @intCast(self.grouping),
+    });
+    defer scroll_area.deinit();
+
+    var reorder = dvui.reorder(@src(), .{ .drag_name = "tab_drag" }, .{
+        .expand = .none,
+        .background = false,
+    });
+    defer reorder.deinit();
+
+    var tabs_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .none,
+        .margin = dvui.Rect.all(0),
+        .padding = dvui.Rect.all(0),
+        .id_extra = @intCast(self.grouping),
+    });
+    defer tabs_hbox.deinit();
+
+    const pane_is_active = runtime.workbench().open_workspace_grouping == self.grouping;
+    const selected_index: ?usize = blk: {
+        const sel = selected orelse break :blk null;
+        for (tabs, 0..) |t, i| if (t == sel) break :blk i;
+        break :blk null;
+    };
+
+    for (tabs, 0..) |surface, i| {
+        const doc = surface.document orelse continue;
+
+        var reorderable = reorder.reorderable(@src(), .{}, .{
+            .expand = .vertical,
+            .id_extra = i,
             .padding = dvui.Rect.all(0),
-            .id_extra = @intCast(self.grouping),
+            .margin = dvui.Rect.all(0),
+            .border = .all(0),
         });
-        defer tabs_box.deinit();
+        defer reorderable.deinit();
 
-        var scroll_area = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .hide, .vertical_bar = .hide }, .{
+        const is_selected = selected_index == i;
+
+        var hbox: dvui.BoxWidget = undefined;
+        hbox.init(@src(), .{ .dir = .horizontal }, .{
             .expand = .none,
-            .background = false,
-            .margin = dvui.Rect.all(0),
-            .padding = dvui.Rect.all(0),
             .border = dvui.Rect.all(0),
-            .corners = dvui.CornerRect.all(0),
-            .id_extra = @intCast(self.grouping),
+            .color_fill = if (is_selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(runtime.host().contentOpacity()),
+            .background = true,
+            .id_extra = i,
+            .padding = .{ .x = 2, .y = 2, .w = 2, .h = 0 },
+            .margin = dvui.Rect.all(0),
         });
-        defer scroll_area.deinit();
+        defer hbox.deinit();
 
+        const tab_hovered = core.widgets.hovered(hbox.data());
+
+        if (reorderable.floating()) {
+            runtime.workbench().dragging_surface = surface.id;
+            hbox.data().options.color_fill = dvui.themeGet().color(.control, .fill);
+        }
+        hbox.drawBackground();
+
+        if (!is_selected and pane_is_active and reorder.drag_point == null) {
+            // Edge shadows between the active tab and its neighbours.
+            if (selected_index) |si| {
+                if (i + 1 == si) core.draw.drawEdgeShadow(hbox.data().rectScale(), .right, .{});
+                if (i == si + 1) core.draw.drawEdgeShadow(hbox.data().rectScale(), .left, .{});
+            }
+        }
+
+        if (reorderable.removed()) {
+            self.tabs_removed_index = i;
+        } else if (reorderable.insertBefore()) {
+            self.tabs_insert_before_index = i;
+        }
+
+        // Same fixed glyph slot as the file tree.
+        const tab_doc_path = doc.owner.documentPath(doc);
+        const tab_icon_color = dvui.themeGet().color(.control, .text);
         {
-            var tabs = dvui.reorder(@src(), .{ .drag_name = "tab_drag" }, .{
+            var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .x = 4, .w = 2 } });
+            defer icon_slot.deinit();
+            if (!runtime.host().drawFileIcon(std.fs.path.extension(tab_doc_path), tab_doc_path, tab_icon_color)) {
+                dvui.icon(@src(), "file_icon", icons.tvg.lucide.file, .{
+                    .stroke_color = tab_icon_color,
+                }, core.widgets.treeRowIconOptions(.{}));
+            }
+        }
+
+        dvui.labelNoFmt(@src(), surface.title, .{}, .{
+            .color_text = if (is_selected) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
+            .padding = dvui.Rect.all(4),
+            .gravity_y = 0.5,
+        });
+
+        const close_inner = core.dialogs.windowHeaderCloseInnerSide();
+
+        const status_close_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .none,
+            .gravity_y = 0.5,
+            .margin = dvui.Rect.all(0),
+            .padding = core.widgets.tab_status_inset,
+            .min_size_content = .{ .w = close_inner, .h = close_inner },
+        });
+        defer status_close_box.deinit();
+
+        // Saving has priority over hover/close/dirty indicators: the user wants visible
+        // confirmation that the save is in flight, and the slot's size matches the close button
+        // so the layout doesn't shift when saving starts/ends.
+        const save_flash_elapsed = doc.owner.timeSinceSaveCompleteNs(doc);
+        const save_in_check_phase = if (save_flash_elapsed) |elapsed|
+            core.dialogs.bubbleSpinnerSaveInCheckPhase(elapsed)
+        else
+            false;
+        const save_blocks_tab_close = doc.owner.isDocumentSaving(doc) or
+            (doc.owner.showsSaveStatusIndicator(doc) and !save_in_check_phase);
+
+        if (save_blocks_tab_close or (save_in_check_phase and !tab_hovered)) {
+            core.dialogs.bubbleSpinner(@src(), .{
+                .id_extra = i *% 16 + 5,
                 .expand = .none,
-                .background = false,
+                .min_size_content = .{ .w = close_inner, .h = close_inner },
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
+                .color_text = dvui.themeGet().color(.window, .text),
+            }, .{
+                .complete_elapsed_ns = save_flash_elapsed,
             });
-            defer tabs.deinit();
-
-            var tabs_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        } else {
+            var tab_close_button: dvui.ButtonWidget = undefined;
+            tab_close_button.init(@src(), .{ .draw_focus = false }, core.widgets.tabCloseButtonOptions(.{
                 .expand = .none,
-                .margin = dvui.Rect.all(0),
-                .padding = dvui.Rect.all(0),
-                .id_extra = @intCast(self.grouping),
-            });
-            defer tabs_hbox.deinit();
+                .min_size_content = .{ .w = close_inner, .h = close_inner },
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
+                .id_extra = i *% 16 + 1,
+            }));
+            defer tab_close_button.deinit();
 
-            const files_len = runtime.host().openDocCount();
+            tab_close_button.processEvents();
 
-            // Find the neighbouring tabs (within this workspace grouping) of the active tab.
-            var prev_same_group_index: ?usize = null;
-            var next_same_group_index: ?usize = null;
+            const dirty = doc.owner.isDirty(doc);
+            const show_close_visible = tab_hovered or (is_selected and !dirty);
+            const err_accent = dvui.themeGet().color(.err, .fill);
+            const close_hovered = tab_close_button.hovered();
 
-            const active_in_this_group = blk: {
-                if (runtime.workbench().open_workspace_grouping != self.grouping) break :blk false;
-                if (self.open_file_index >= files_len) break :blk false;
-                const active_doc = runtime.host().docByIndex(self.open_file_index) orelse break :blk false;
-                if (active_doc.owner.documentGrouping(active_doc) != self.grouping) break :blk false;
-                break :blk true;
-            };
-
-            if (active_in_this_group) {
-                const active_index = self.open_file_index;
-
-                var j: usize = active_index;
-                while (j > 0) {
-                    j -= 1;
-                    const tab_doc = runtime.host().docByIndex(j) orelse continue;
-                    if (tab_doc.owner.documentGrouping(tab_doc) == self.grouping) {
-                        prev_same_group_index = j;
-                        break;
-                    }
-                }
-
-                j = active_index + 1;
-                while (j < files_len) : (j += 1) {
-                    const tab_doc = runtime.host().docByIndex(j) orelse continue;
-                    if (tab_doc.owner.documentGrouping(tab_doc) == self.grouping) {
-                        next_same_group_index = j;
-                        break;
-                    }
-                }
+            if (show_close_visible and (tab_hovered or close_hovered)) {
+                const rs = tab_close_button.data().borderRectScale();
+                rs.r.fill(.round(8), .{ .color = err_accent });
             }
 
-            for (0..files_len) |i| {
-                const doc = runtime.host().docByIndex(i) orelse continue;
-
-                if (doc.owner.documentGrouping(doc) != self.grouping) continue;
-
-                var reorderable = tabs.reorderable(@src(), .{}, .{
-                    .expand = .vertical,
-                    .id_extra = i,
-                    .padding = dvui.Rect.all(0),
-                    .margin = dvui.Rect.all(0),
-                    .border = .all(0),
-                });
-                defer reorderable.deinit();
-
-                const selected = self.open_file_index == i and runtime.workbench().open_workspace_grouping == self.grouping;
-
-                var hbox: dvui.BoxWidget = undefined;
-                hbox.init(@src(), .{ .dir = .horizontal }, .{
+            if (dirty and !show_close_visible) {
+                dvui.icon(@src(), "dirty_icon", icons.tvg.lucide.@"circle-small", .{
+                    .stroke_color = dvui.themeGet().color(.window, .text),
+                }, .{
                     .expand = .none,
-                    .border = dvui.Rect.all(0),
-                    .color_fill = if (selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(runtime.host().contentOpacity()),
-                    .background = true,
-                    .id_extra = i,
-                    .padding = .{ .x = 2, .y = 2, .w = 2, .h = 0 },
-                    .margin = dvui.Rect.all(0),
-                });
-
-                defer hbox.deinit();
-
-                const tab_hovered = core.widgets.hovered(hbox.data());
-
-                if (reorderable.floating()) {
-                    self.tabs_drag_index = i;
-                    hbox.data().options.color_fill = dvui.themeGet().color(.control, .fill);
-                }
-                hbox.drawBackground();
-
-                if (!selected and active_in_this_group and tabs.drag_point == null) {
-                    // Draw edge shadow between the active tab and its neighbours within this grouping.
-                    if (prev_same_group_index) |prev_index| {
-                        if (i == prev_index) {
-                            // This tab is directly to the left of the active tab.
-                            core.draw.drawEdgeShadow(hbox.data().rectScale(), .right, .{});
-                        }
-                    }
-
-                    if (next_same_group_index) |next_index| {
-                        if (i == next_index) {
-                            // This tab is directly to the right of the active tab.
-                            core.draw.drawEdgeShadow(hbox.data().rectScale(), .left, .{});
-                        }
-                    }
-                }
-
-                if (reorderable.removed()) {
-                    self.tabs_removed_index = i;
-                } else if (reorderable.insertBefore()) {
-                    self.tabs_insert_before_index = i;
-                }
-
-                // Same fixed glyph slot as the file tree — plugin drawers use `expand = .ratio`
-                // and expect a reserved rect. Calling them bare in this horizontal tab row lets
-                // ratio+gravity center the artwork in the whole tab instead of a leading icon.
-                const tab_doc_path = doc.owner.documentPath(doc);
-                const tab_icon_color = dvui.themeGet().color(.control, .text);
-                {
-                    var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .x = 4, .w = 2 } });
-                    defer icon_slot.deinit();
-                    if (!runtime.host().drawFileIcon(std.fs.path.extension(tab_doc_path), tab_doc_path, tab_icon_color)) {
-                        dvui.icon(@src(), "file_icon", icons.tvg.lucide.file, .{
-                            .stroke_color = tab_icon_color,
-                        }, core.widgets.treeRowIconOptions(.{}));
-                    }
-                }
-
-                dvui.label(@src(), "{s}", .{std.fs.path.basename(doc.owner.documentPath(doc))}, .{
-                    .color_text = if (selected) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
-                    .padding = dvui.Rect.all(4),
-                    .gravity_y = 0.5,
-                });
-
-                const close_inner = core.dialogs.windowHeaderCloseInnerSide();
-
-                const status_close_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .expand = .none,
-                    .gravity_y = 0.5,
-                    .margin = dvui.Rect.all(0),
-                    .padding = core.widgets.tab_status_inset,
                     .min_size_content = .{ .w = close_inner, .h = close_inner },
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .id_extra = i *% 16 + 0,
                 });
-                defer status_close_box.deinit();
-
-                // Saving has priority over hover/close/dirty indicators: the user wants visible
-                // confirmation that the save is in flight, and the slot's size matches the close
-                // button so the layout doesn't shift when saving starts/ends. `editor.saving`
-                // can be written by a background save worker (`saveZip`), so we read it with an
-                // atomic load — the write side uses an atomic store in matching `save*` paths.
-                const save_flash_elapsed = doc.owner.timeSinceSaveCompleteNs(doc);
-                const save_in_check_phase = if (save_flash_elapsed) |elapsed|
-                    core.dialogs.bubbleSpinnerSaveInCheckPhase(elapsed)
-                else
-                    false;
-                const save_blocks_tab_close = doc.owner.isDocumentSaving(doc) or
-                    (doc.owner.showsSaveStatusIndicator(doc) and !save_in_check_phase);
-
-                if (save_blocks_tab_close) {
-                    core.dialogs.bubbleSpinner(@src(), .{
-                        .id_extra = i *% 16 + 5,
-                        .expand = .none,
-                        .min_size_content = .{ .w = close_inner, .h = close_inner },
-                        .gravity_x = 0.5,
-                        .gravity_y = 0.5,
-                        .color_text = dvui.themeGet().color(.window, .text),
-                    }, .{
-                        .complete_elapsed_ns = save_flash_elapsed,
-                    });
-                } else if (save_in_check_phase and !tab_hovered) {
-                    core.dialogs.bubbleSpinner(@src(), .{
-                        .id_extra = i *% 16 + 5,
-                        .expand = .none,
-                        .min_size_content = .{ .w = close_inner, .h = close_inner },
-                        .gravity_x = 0.5,
-                        .gravity_y = 0.5,
-                        .color_text = dvui.themeGet().color(.window, .text),
-                    }, .{
-                        .complete_elapsed_ns = save_flash_elapsed,
-                    });
-                } else {
-                    var tab_close_button: dvui.ButtonWidget = undefined;
-                    tab_close_button.init(@src(), .{ .draw_focus = false }, core.widgets.tabCloseButtonOptions(.{
-                        .expand = .none,
-                        .min_size_content = .{ .w = close_inner, .h = close_inner },
-                        .gravity_x = 0.5,
-                        .gravity_y = 0.5,
-                        .id_extra = i *% 16 + 1,
-                    }));
-                    defer tab_close_button.deinit();
-
-                    tab_close_button.processEvents();
-
-                    const dirty = doc.owner.isDirty(doc);
-                    const show_close_visible = tab_hovered or (selected and !dirty);
-                    const err_accent = dvui.themeGet().color(.err, .fill);
-                    const close_hovered = tab_close_button.hovered();
-
-                    if (show_close_visible and (tab_hovered or close_hovered)) {
-                        const rs = tab_close_button.data().borderRectScale();
-                        rs.r.fill(.round(8), .{
-                            .color = err_accent,
-                        });
-                    }
-
-                    if (dirty and !show_close_visible) {
-                        dvui.icon(@src(), "dirty_icon", icons.tvg.lucide.@"circle-small", .{
-                            .stroke_color = dvui.themeGet().color(.window, .text),
-                        }, .{
-                            .expand = .none,
-                            .min_size_content = .{ .w = close_inner, .h = close_inner },
-                            .gravity_x = 0.5,
-                            .gravity_y = 0.5,
-                            .id_extra = i *% 16 + 0,
-                        });
-                    } else {
-                        const icon_color = if (!show_close_visible)
-                            dvui.Color.transparent
-                        else if (tab_hovered or close_hovered)
-                            dvui.Color.white
-                        else
-                            dvui.themeGet().color(.window, .text);
-                        dvui.icon(@src(), "close", icons.tvg.lucide.x, .{
-                            .stroke_color = icon_color,
-                            .fill_color = icon_color,
-                        }, .{
-                            .expand = .none,
-                            .min_size_content = .{ .w = close_inner, .h = close_inner },
-                            .gravity_x = 0.5,
-                            .gravity_y = 0.5,
-                            .id_extra = i *% 16 + 2,
-                            .background = false,
-                            .border = dvui.Rect.all(0),
-                            .box_shadow = null,
-                            .ninepatch_fill = &dvui.Ninepatch.none,
-                            .ninepatch_hover = &dvui.Ninepatch.none,
-                            .ninepatch_press = &dvui.Ninepatch.none,
-                        });
-                    }
-
-                    if (tab_close_button.clicked()) {
-                        runtime.host().closeDocById(doc.id) catch |err| {
-                            dvui.log.err("closeFile: {d} failed: {s}", .{ i, @errorName(err) });
-                        };
-                        break;
-                    }
-                }
-
-                if (selected and !reorderable.floating()) {
-                    core.draw.drawTabActiveIndicator(
-                        reorderable.data().borderRectScale(),
-                        dvui.themeGet().color(.window, .text),
-                    );
-                }
-
-                loop: for (dvui.events()) |*e| {
-                    if (!hbox.matchEvent(e)) {
-                        continue;
-                    }
-
-                    switch (e.evt) {
-                        .mouse => |me| {
-                            if (me.action == .press and me.button.pointer()) {
-                                runtime.host().setActiveDocIndex(i);
-                                dvui.refresh(null, @src(), hbox.data().id);
-
-                                e.handle(@src(), hbox.data());
-                                dvui.captureMouse(hbox.data(), e.num);
-                                dvui.dragPreStart(me.button, me.p, .{ .size = reorderable.data().rectScale().r.size(), .offset = reorderable.data().rectScale().r.topLeft().diff(me.p) });
-                            } else if (me.action == .release and me.button.pointer()) {
-                                dvui.captureMouse(null, e.num);
-                                dvui.dragEnd();
-                            } else if (me.action == .motion) {
-                                if (dvui.captured(hbox.data().id)) {
-                                    e.handle(@src(), hbox.data());
-                                    if (dvui.dragging(me.p, null)) |_| {
-                                        reorderable.reorder.dragStart(reorderable.data().id.asUsize(), me.p, 0); // reorder grabs capture
-                                        break :loop;
-                                    }
-                                }
-                            }
-                        },
-
-                        else => {},
-                    }
-                }
-            }
-            if (tabs.finalSlot()) {
-                self.tabs_insert_before_index = runtime.host().openDocCount();
-            }
-        }
-    }
-}
-
-pub fn processTabsDrag(self: *Workspace) void {
-    if (self.tabs_insert_before_index) |insert_before| {
-        if (self.tabs_removed_index) |removed| { // Dragging from this workspace
-
-            if (removed > runtime.host().openDocCount()) return;
-            if (removed > insert_before) {
-                runtime.host().swapDocs(removed, insert_before);
-                runtime.host().setActiveDocIndex(insert_before);
             } else {
-                if (insert_before > 0) {
-                    runtime.host().swapDocs(removed, insert_before - 1);
-                    runtime.host().setActiveDocIndex(insert_before - 1);
-                } else {
-                    runtime.host().swapDocs(removed, insert_before);
-                    runtime.host().setActiveDocIndex(insert_before);
-                }
+                const icon_color = if (!show_close_visible)
+                    dvui.Color.transparent
+                else if (tab_hovered or close_hovered)
+                    dvui.Color.white
+                else
+                    dvui.themeGet().color(.window, .text);
+                dvui.icon(@src(), "close", icons.tvg.lucide.x, .{
+                    .stroke_color = icon_color,
+                    .fill_color = icon_color,
+                }, .{
+                    .expand = .none,
+                    .min_size_content = .{ .w = close_inner, .h = close_inner },
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .id_extra = i *% 16 + 2,
+                    .background = false,
+                    .border = dvui.Rect.all(0),
+                    .box_shadow = null,
+                    .ninepatch_fill = &dvui.Ninepatch.none,
+                    .ninepatch_hover = &dvui.Ninepatch.none,
+                    .ninepatch_press = &dvui.Ninepatch.none,
+                });
             }
 
-            self.tabs_removed_index = null;
-            self.tabs_insert_before_index = null;
-        } else { // Dragging from another workspace
-            for (runtime.workbench().workspaces.values()) |*workspace| {
-                if (workspace.tabs_removed_index) |removed| {
-                    if (removed > insert_before) {
-                        runtime.host().swapDocs(removed, insert_before);
-                        if (runtime.host().docByIndex(insert_before)) |d| {
-                            d.owner.setDocumentGrouping(d, self.grouping);
-                        }
-                        runtime.host().setActiveDocIndex(insert_before);
-                    } else {
-                        if (insert_before > 0) {
-                            runtime.host().swapDocs(removed, insert_before - 1);
-                            if (runtime.host().docByIndex(insert_before - 1)) |d| {
-                                d.owner.setDocumentGrouping(d, self.grouping);
-                            }
-                            runtime.host().setActiveDocIndex(insert_before - 1);
-                        } else {
-                            runtime.host().swapDocs(removed, insert_before);
-                            if (runtime.host().docByIndex(insert_before)) |d| {
-                                d.owner.setDocumentGrouping(d, self.grouping);
-                            }
-                            runtime.host().setActiveDocIndex(insert_before);
-                        }
-                    }
-
-                    self.tabs_removed_index = null;
-                    self.tabs_insert_before_index = null;
-
-                    workspace.tabs_removed_index = null;
-                    workspace.tabs_insert_before_index = null;
-                }
+            if (tab_close_button.clicked()) {
+                runtime.host().closeDocById(doc.id) catch |err| {
+                    dvui.log.err("closeFile: {d} failed: {s}", .{ i, @errorName(err) });
+                };
+                break;
             }
         }
+
+        if (is_selected and !reorderable.floating()) {
+            core.draw.drawTabActiveIndicator(
+                reorderable.data().borderRectScale(),
+                dvui.themeGet().color(.window, .text),
+            );
+        }
+
+        loop: for (dvui.events()) |*e| {
+            if (!hbox.matchEvent(e)) continue;
+            switch (e.evt) {
+                .mouse => |me| {
+                    if (me.action == .press and me.button.pointer()) {
+                        region.select(surface.id);
+                        runtime.workbench().open_workspace_grouping = self.grouping;
+                        dvui.refresh(null, @src(), hbox.data().id);
+
+                        e.handle(@src(), hbox.data());
+                        dvui.captureMouse(hbox.data(), e.num);
+                        dvui.dragPreStart(me.button, me.p, .{ .size = reorderable.data().rectScale().r.size(), .offset = reorderable.data().rectScale().r.topLeft().diff(me.p) });
+                    } else if (me.action == .release and me.button.pointer()) {
+                        dvui.captureMouse(null, e.num);
+                        dvui.dragEnd();
+                    } else if (me.action == .motion) {
+                        if (dvui.captured(hbox.data().id)) {
+                            e.handle(@src(), hbox.data());
+                            if (dvui.dragging(me.p, null)) |_| {
+                                reorderable.reorder.dragStart(reorderable.data().id.asUsize(), me.p, 0); // reorder grabs capture
+                                break :loop;
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+    if (reorder.finalSlot()) {
+        self.tabs_insert_before_index = tabs.len;
     }
 }
 
-/// Repoint `open_file_index` on workspaces that were showing the dragged tab as active.
-fn repointWorkspacesAfterTabDrag(tab_bar_workspace: ?*Workspace, drag_index: usize) void {
-    const dragged_doc = runtime.host().docByIndex(drag_index) orelse return;
-    if (tab_bar_workspace) |workspace| {
-        if (workspace.open_file_index == runtime.host().docIndex(dragged_doc.id)) {
-            var i: usize = 0;
-            while (i < runtime.host().openDocCount()) : (i += 1) {
-                const doc = runtime.host().docByIndex(i).?;
-                if (doc.owner.documentGrouping(doc) == workspace.grouping and doc.id != dragged_doc.id) {
-                    workspace.open_file_index = i;
-                    break;
-                }
-            }
-        }
-    } else {
-        for (runtime.workbench().workspaces.values()) |*w| {
-            if (w.open_file_index == drag_index) {
-                var i: usize = 0;
-                while (i < runtime.host().openDocCount()) : (i += 1) {
-                    const doc = runtime.host().docByIndex(i).?;
-                    if (doc.owner.documentGrouping(doc) == w.grouping and doc.id != dragged_doc.id) {
-                        w.open_file_index = i;
-                        break;
-                    }
-                }
-            }
-        }
+/// A tab landed: within this pane (reorder) or from another (move). Either way the change is an
+/// assignment edit, and both panes' lists are written whole — this frame's `tabs` is the order
+/// the user saw when they let go.
+fn processTabsDrag(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surface) void {
+    _ = region;
+    const insert_before = self.tabs_insert_before_index orelse return;
+    defer self.tabs_insert_before_index = null;
+    defer self.tabs_removed_index = null;
+
+    const arena = runtime.host().arena();
+    var ids = std.ArrayListUnmanaged([]const u8).initCapacity(arena, tabs.len + 1) catch return;
+    for (tabs) |t| ids.appendAssumeCapacity(t.id);
+
+    if (self.tabs_removed_index) |removed| {
+        if (removed >= ids.items.len) return;
+        const id = ids.orderedRemove(removed);
+        const at = if (removed < insert_before) insert_before - 1 else insert_before;
+        ids.insert(arena, @min(at, ids.items.len), id) catch return;
+        self.setTabs(ids.items, id);
+        return;
+    }
+
+    // From another pane: whichever one lifted the surface this frame.
+    const id = runtime.workbench().dragging_surface orelse return;
+    runtime.workbench().dragging_surface = null;
+    for (runtime.workbench().workspaces.values()) |*other| {
+        if (other.grouping == self.grouping) continue;
+        other.removeTab(id);
+        other.tabs_removed_index = null;
+    }
+    ids.insert(arena, @min(insert_before, ids.items.len), id) catch return;
+    self.setTabs(ids.items, id);
+}
+
+/// Write this pane's tab list and make `focus` its active tab.
+pub fn setTabs(self: *Workspace, ids: []const []const u8, focus: ?[]const u8) void {
+    var buf: [32]u8 = undefined;
+    const region_name = name(&buf, self.grouping);
+    runtime.host().assignSurfaces(region_name, ids) catch |err| {
+        dvui.log.err("pane {d}: {s}", .{ self.grouping, @errorName(err) });
+        return;
+    };
+    if (focus) |id| {
+        runtime.host().selectInRegion(region_name, id);
+        runtime.workbench().open_workspace_grouping = self.grouping;
     }
 }
 
-const WorkspaceTabDragSrc = union(enum) {
-    tab_bar: struct { ws: *Workspace, index: usize },
-    tree_open: usize,
-    tree_closed: []const u8,
-    none,
-
-    fn resolve() WorkspaceTabDragSrc {
-        for (runtime.workbench().workspaces.values()) |*w| {
-            if (w.tabs_drag_index) |i| return .{ .tab_bar = .{ .ws = w, .index = i } };
-        }
-        if (runtime.workbench().tab_drag_from_tree_path) |p| {
-            var i: usize = 0;
-            while (i < runtime.host().openDocCount()) : (i += 1) {
-                const doc = runtime.host().docByIndex(i).?;
-                // `documentByPath` is a *plugin-wide* "does this owner have any document at
-                // all with this path" query, not scoped to `doc` — checking it per-loop-entry
-                // picks whichever document this plugin happens to enumerate first once *any*
-                // of its documents matches, not necessarily index `i` itself. Compare `doc`'s
-                // own path instead (see `Editor.docFromPath`'s fix for the same bug).
-                if (std.mem.eql(u8, doc.owner.documentPath(doc), p)) {
-                    return .{ .tree_open = i };
-                }
+/// Append a surface to this pane's tabs (no-op if already there).
+pub fn addTab(self: *Workspace, id: []const u8, focus: bool) void {
+    var buf: [32]u8 = undefined;
+    const arena = runtime.host().arena();
+    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    if (runtime.host().assignedSurfaces(name(&buf, self.grouping))) |existing| {
+        for (existing) |e| {
+            if (std.mem.eql(u8, e, id)) {
+                if (focus) self.setTabs(existing, id);
+                return;
             }
-            return .{ .tree_closed = p };
+            ids.append(arena, e) catch return;
         }
-        return .none;
     }
-};
+    ids.append(arena, id) catch return;
+    self.setTabs(ids.items, if (focus) id else null);
+}
 
-/// Responsible for handling the cross-widget drag of tabs between multiple workspaces or between tabs and workspaces.
-/// Also handles the same `tab_drag` from the Files tree (see `files.zig` + DVUI reorder_tree cross-widget pattern).
+/// Drop a surface from this pane's tabs, if it is one of them.
+pub fn removeTab(self: *Workspace, id: []const u8) void {
+    var buf: [32]u8 = undefined;
+    const existing = runtime.host().assignedSurfaces(name(&buf, self.grouping)) orelse return;
+    const arena = runtime.host().arena();
+    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var found = false;
+    for (existing) |e| {
+        if (std.mem.eql(u8, e, id)) {
+            found = true;
+            continue;
+        }
+        ids.append(arena, e) catch return;
+    }
+    if (found) self.setTabs(ids.items, null);
+}
+
+/// Drop every tab whose surface id names `path`, whatever plugin's id it carries. True if any did.
+pub fn removeTabsForPath(self: *Workspace, path: []const u8) bool {
+    var buf: [32]u8 = undefined;
+    const existing = runtime.host().assignedSurfaces(name(&buf, self.grouping)) orelse return false;
+    const arena = runtime.host().arena();
+    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    var found = false;
+    for (existing) |e| {
+        if (sdk.document.pathOfSurfaceId(e)) |p| if (std.mem.eql(u8, p, path)) {
+            found = true;
+            continue;
+        };
+        ids.append(arena, e) catch return false;
+    }
+    if (found) self.setTabs(ids.items, null);
+    return found;
+}
+
+/// Whether `id` is one of this pane's tabs, by assignment.
+pub fn hasTab(self: *Workspace, id: []const u8) bool {
+    var buf: [32]u8 = undefined;
+    const existing = runtime.host().assignedSurfaces(name(&buf, self.grouping)) orelse return false;
+    for (existing) |e| if (std.mem.eql(u8, e, id)) return true;
+    return false;
+}
+
+/// How many tabs this pane has by assignment, open or not.
+pub fn tabCount(self: *Workspace) usize {
+    var buf: [32]u8 = undefined;
+    const existing = runtime.host().assignedSurfaces(name(&buf, self.grouping)) orelse return 0;
+    return existing.len;
+}
+
+/// Where a lifted tab or a file-tree row can be dropped: this pane (join it) or, on the last
+/// pane, its right half (a new pane after it).
 pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
     if (!dvui.dragName("tab_drag")) {
         runtime.workbench().clearFileTreeTabDragDropState();
         return;
     }
+    const wb = runtime.workbench();
+    const from_tab: ?[]const u8 = wb.dragging_surface;
+    const from_tree: ?[]const u8 = wb.tab_drag_from_tree_path;
+    if (from_tab == null and from_tree == null) return;
 
-    const drag_src = WorkspaceTabDragSrc.resolve();
-    switch (drag_src) {
-        .none => return,
-        else => {},
-    }
+    const is_last = wb.workspaces.keys()[wb.workspaces.keys().len - 1] == self.grouping;
 
-    events_loop: for (dvui.events()) |*e| {
+    for (dvui.events()) |*e| {
         if (!dvui.eventMatch(e, .{ .id = data.id, .r = data.rectScale().r, .drag_name = "tab_drag" })) continue;
+        if (e.evt != .mouse) continue;
 
-        switch (drag_src) {
-            .none => unreachable,
-            .tab_bar => |tb| {
-                const workspace = tb.ws;
-                const drag_index = tb.index;
+        var right_side = data.rectScale().r;
+        right_side.w /= 2;
+        right_side.x += right_side.w;
+        const to_new_pane = is_last and right_side.contains(e.evt.mouse.p);
+        const target = if (to_new_pane) right_side else data.rectScale().r;
+        if (!target.contains(e.evt.mouse.p)) continue;
 
-                var right_side = data.rectScale().r;
-                right_side.w /= 2;
-                right_side.x += right_side.w;
+        if (e.evt.mouse.action == .position) {
+            target.fill(dvui.CornerRect.Physical.round(target.w / 8), .{
+                .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
+            });
+        }
+        if (e.evt.mouse.action != .release or !e.evt.mouse.button.pointer()) continue;
 
-                if (right_side.contains(e.evt.mouse.p) and runtime.workbench().workspaces.keys()[runtime.workbench().workspaces.keys().len - 1] == self.grouping) {
-                    if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        right_side.fill(dvui.CornerRect.Physical.round(right_side.w / 8), .{
-                            .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
-                        });
-                    }
+        e.handle(@src(), data);
+        dvui.dragEnd();
+        dvui.refresh(null, @src(), data.id);
+        wb.dragging_surface = null;
+        defer wb.clearFileTreeTabDragDropState();
 
-                    if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button.pointer()) {
-                        defer workspace.tabs_drag_index = null;
-                        e.handle(@src(), data);
-                        dvui.dragEnd();
-                        dvui.refresh(null, @src(), data.id);
-                        runtime.workbench().clearFileTreeTabDragDropState();
-
-                        repointWorkspacesAfterTabDrag(workspace, drag_index);
-                        const dragged_doc = runtime.host().docByIndex(drag_index) orelse continue;
-                        const new_g = runtime.workbench().newGroupingID();
-                        dragged_doc.owner.setDocumentGrouping(dragged_doc, new_g);
-                        runtime.workbench().open_workspace_grouping = new_g;
-                    }
-                } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
-                    if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        data.rectScale().r.fill(dvui.CornerRect.Physical.round(data.rectScale().r.w / 8), .{
-                            .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
-                        });
-                    }
-
-                    if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button.pointer()) {
-                        defer workspace.tabs_drag_index = null;
-                        e.handle(@src(), data);
-                        dvui.dragEnd();
-                        dvui.refresh(null, @src(), data.id);
-                        runtime.workbench().clearFileTreeTabDragDropState();
-
-                        repointWorkspacesAfterTabDrag(workspace, drag_index);
-                        const dragged_doc = runtime.host().docByIndex(drag_index) orelse continue;
-                        dragged_doc.owner.setDocumentGrouping(dragged_doc, self.grouping);
-                        runtime.workbench().open_workspace_grouping = self.grouping;
-                        self.open_file_index = runtime.host().docIndex(dragged_doc.id) orelse 0;
-                    }
-                }
-            },
-            .tree_open => |drag_index| {
-                var right_side = data.rectScale().r;
-                right_side.w /= 2;
-                right_side.x += right_side.w;
-
-                if (right_side.contains(e.evt.mouse.p) and runtime.workbench().workspaces.keys()[runtime.workbench().workspaces.keys().len - 1] == self.grouping) {
-                    if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        right_side.fill(dvui.CornerRect.Physical.round(right_side.w / 8), .{
-                            .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
-                        });
-                    }
-
-                    if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button.pointer()) {
-                        e.handle(@src(), data);
-                        dvui.dragEnd();
-                        dvui.refresh(null, @src(), data.id);
-                        runtime.workbench().clearFileTreeTabDragDropState();
-
-                        repointWorkspacesAfterTabDrag(null, drag_index);
-                        const dragged_doc = runtime.host().docByIndex(drag_index) orelse continue;
-                        const new_g = runtime.workbench().newGroupingID();
-                        dragged_doc.owner.setDocumentGrouping(dragged_doc, new_g);
-                        runtime.workbench().open_workspace_grouping = new_g;
-                    }
-                } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
-                    if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        data.rectScale().r.fill(dvui.CornerRect.Physical.round(data.rectScale().r.w / 8), .{
-                            .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
-                        });
-                    }
-
-                    if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button.pointer()) {
-                        e.handle(@src(), data);
-                        dvui.dragEnd();
-                        dvui.refresh(null, @src(), data.id);
-                        runtime.workbench().clearFileTreeTabDragDropState();
-
-                        repointWorkspacesAfterTabDrag(null, drag_index);
-                        const dragged_doc = runtime.host().docByIndex(drag_index) orelse continue;
-                        dragged_doc.owner.setDocumentGrouping(dragged_doc, self.grouping);
-                        runtime.workbench().open_workspace_grouping = self.grouping;
-                        self.open_file_index = runtime.host().docIndex(dragged_doc.id) orelse 0;
-                    }
-                }
-            },
-            .tree_closed => |path| {
-                var right_side = data.rectScale().r;
-                right_side.w /= 2;
-                right_side.x += right_side.w;
-
-                if (right_side.contains(e.evt.mouse.p) and runtime.workbench().workspaces.keys()[runtime.workbench().workspaces.keys().len - 1] == self.grouping) {
-                    if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        right_side.fill(dvui.CornerRect.Physical.round(right_side.w / 8), .{
-                            .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
-                        });
-                    }
-
-                    if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button.pointer()) {
-                        e.handle(@src(), data);
-                        dvui.dragEnd();
-                        dvui.refresh(null, @src(), data.id);
-                        const new_g = runtime.workbench().newGroupingID();
-                        const maybe_idx = runtime.host().openOrFocusFileAtGrouping(path, new_g) catch {
-                            runtime.workbench().clearFileTreeTabDragDropState();
-                            continue :events_loop;
-                        };
-                        if (maybe_idx) |idx| {
-                            // File was already open and moved between groupings — repoint the
-                            // workspaces that were showing it, and focus the new pane now.
-                            repointWorkspacesAfterTabDrag(null, idx);
-                            runtime.workbench().open_workspace_grouping = new_g;
-                        }
-                        // Else: async load — leave `open_workspace_grouping` alone. Switching
-                        // to the not-yet-extant workspace would make `activeFile()` null and
-                        // collapse the bottom panel mid-load; `processLoadingJobs` will focus
-                        // the new pane once the worker lands the file, matching the
-                        // "Open to the side" menu action.
-                        runtime.workbench().clearFileTreeTabDragDropState();
-                    }
-                } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
-                    if (e.evt == .mouse and e.evt.mouse.action == .position) {
-                        data.rectScale().r.fill(dvui.CornerRect.Physical.round(data.rectScale().r.w / 8), .{
-                            .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
-                        });
-                    }
-
-                    if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button.pointer()) {
-                        e.handle(@src(), data);
-                        dvui.dragEnd();
-                        dvui.refresh(null, @src(), data.id);
-                        const maybe_idx = runtime.host().openOrFocusFileAtGrouping(path, self.grouping) catch {
-                            runtime.workbench().clearFileTreeTabDragDropState();
-                            continue :events_loop;
-                        };
-                        if (maybe_idx) |idx| {
-                            repointWorkspacesAfterTabDrag(null, idx);
-                            self.open_file_index = idx;
-                        }
-                        // Else: async load into this workspace's existing grouping. The
-                        // worker's `processLoadingJobs` focus handler will set the active
-                        // file once it lands.
-                        runtime.workbench().clearFileTreeTabDragDropState();
-                    }
-                }
-            },
+        const grouping = if (to_new_pane) wb.newGroupingID() else self.grouping;
+        if (from_tab) |id| {
+            for (wb.workspaces.values()) |*other| other.removeTab(id);
+            const pane = wb.pane(grouping) catch continue;
+            pane.addTab(id, true);
+        } else if (from_tree) |path| {
+            // Already open: it moves. Not yet: it loads into that pane and `rebuildWorkspaces`
+            // seats it when the load lands.
+            if (runtime.host().docFromPath(path)) |doc| {
+                const id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch continue;
+                for (wb.workspaces.values()) |*other| other.removeTab(id);
+                const pane = wb.pane(grouping) catch continue;
+                pane.addTab(id, true);
+            } else {
+                _ = runtime.host().openFilePath(path, grouping) catch {};
+            }
         }
     }
 }
 
-pub fn drawCanvas(self: *Workspace) !void {
+fn drawCanvas(self: *Workspace, region: sdk.Host.Region, has_tabs: bool) !void {
     var content_color = dvui.themeGet().color(.window, .fill);
-
     switch (builtin.os.tag) {
-        .macos => {
-            content_color = if (!runtime.host().isMaximized()) content_color.opacity(runtime.host().contentOpacity()) else content_color;
-        },
-        .windows => {
+        .macos, .windows => {
             content_color = if (!runtime.host().isMaximized()) content_color.opacity(runtime.host().contentOpacity()) else content_color;
         },
         else => {},
     }
 
-    const has_files = runtime.host().openDocCount() > 0;
-
-    var canvas_vbox = workspaceMainCanvasVbox(content_color, has_files, self.grouping);
+    // The document draws its own canvas box (the app's surface does); this one is the pane's
+    // frame around it, and the drop target for tabs.
+    var frame = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .id_extra = @intCast(self.grouping),
+    });
     defer {
-        self.canvas_rect_physical = canvas_vbox.data().contentRectScale().r;
-        dvui.toastsShow(canvas_vbox.data().id, canvas_vbox.data().contentRectScale().r.toNatural());
-        canvas_vbox.deinit();
+        self.canvas_rect_physical = frame.data().contentRectScale().r;
+        frame.deinit();
     }
-    defer self.processTabDrag(canvas_vbox.data());
+    defer self.processTabDrag(frame.data());
 
-    if (has_files) {
-        if (self.open_file_index >= runtime.host().openDocCount()) {
-            self.open_file_index = runtime.host().openDocCount() - 1;
-        }
-
-        if (runtime.host().docByIndex(self.open_file_index)) |doc| {
-            // Switching tabs hands the pane an entirely different widget subtree, which dvui
-            // can only size from the previous frame's min-size cache — so the new document
-            // draws once at the wrong size before snapping. Hide that frame and cross-fade
-            // instead. See `core/reveal.zig`.
-            //
-            // The reveal's own id is source-derived and keyed by pane, deliberately not
-            // `canvas_vbox`'s: that box's id moves with the surrounding layout (panel toggles,
-            // splits), which would restart the fade on changes that aren't content swaps.
-            const rv = core.anim.reveal(
-                dvui.Id.extendId(null, @src(), @truncate(self.grouping)),
-                doc.id,
-                .{},
-            );
-            defer rv.deinit();
-
-            doc.owner.bindDocumentToPane(doc, canvas_vbox.data().id, self, self.center);
-            _ = try doc.owner.drawDocument(doc);
-        }
+    if (has_tabs) {
+        _ = try region.drawContents();
     } else {
         var box = workspaceEmptyStateCard(content_color, self.grouping);
         defer box.deinit();

@@ -300,6 +300,13 @@ themes: std.ArrayList(dvui.Theme) = .empty,
 
 open_files: std.AutoArrayHashMapUnmanaged(u64, sdk.DocHandle) = .empty,
 
+/// An open document's presence in the surface registry, by document id. A document is a surface
+/// for exactly as long as it is open: registered in `insertOpenDoc`, taken back on close. What
+/// this buys is that a document is addressable like every other surface — assigned to a pane
+/// region by name, listed by the picker, restored with a session — while document plugins keep
+/// exactly the vtable they have: the surface's `draw` is `owner.drawDocument`.
+doc_surfaces: std.AutoHashMapUnmanaged(u64, *DocSurface) = .empty,
+
 /// Background file-load jobs in flight. Keyed by absolute path. Each job's worker thread loads
 /// the document bytes off the main thread; the main thread polls via `processLoadingJobs`
 /// and moves completed results into `open_files`. The map owns its key strings via each job's
@@ -2630,6 +2637,7 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .assignSurfaces = fizzyAssignSurfaces,
     .assignedSurfaces = fizzyAssignedSurfaces,
     .assignedRegionNames = fizzyAssignedRegionNames,
+    .selectInRegion = fizzySelectInRegion,
     .drawFileKindGlyph = fizzyDrawFileKindGlyph,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
@@ -2984,6 +2992,13 @@ fn fizzyAbortSaveAllQuit(ctx: *anyopaque) void {
 }
 
 /// Store a loaded/created document in the plugin registry and register its handle.
+const DocSurface = struct {
+    editor: *Editor,
+    doc_id: u64,
+    /// `<owner>.doc:<path>`, gpa-owned; the surface's title is the basename, a slice of it.
+    id: []u8,
+};
+
 pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, id: u64) !void {
     const ptr = try owner.registerOpenDocument(doc_buf);
     try editor.open_files.put(editor.gpa, id, .{
@@ -2994,6 +3009,64 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
     if (editor.document_watcher) |*w| {
         if (editor.docById(id)) |doc| w.track(editor, doc);
     }
+    if (editor.docById(id)) |doc| editor.registerDocSurface(doc) catch |err| {
+        dvui.log.err("document surface for {s}: {t}", .{ owner.documentPath(doc), err });
+    };
+}
+
+fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
+    const gpa = editor.gpa;
+    const ds = try gpa.create(DocSurface);
+    errdefer gpa.destroy(ds);
+    const path = doc.owner.documentPath(doc);
+    ds.* = .{
+        .editor = editor,
+        .doc_id = doc.id,
+        .id = try sdk.document.surfaceId(gpa, doc.owner.id, path),
+    };
+    errdefer gpa.free(ds.id);
+    try editor.doc_surfaces.put(gpa, doc.id, ds);
+    errdefer _ = editor.doc_surfaces.remove(doc.id);
+    try editor.host.registerSurface(.{
+        .id = ds.id,
+        .owner = doc.owner,
+        .title = std.fs.path.basename(ds.id),
+        .keywords = sdk.document.keywords,
+        .document = doc,
+        .ctx = ds,
+        .draw = drawDocSurface,
+    });
+}
+
+fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
+    const kv = editor.doc_surfaces.fetchRemove(doc_id) orelse return;
+    editor.host.unregisterSurface(kv.value.id);
+    editor.gpa.free(kv.value.id);
+    editor.gpa.destroy(kv.value);
+}
+
+/// A document drawn as a surface: the canvas box the workbench used to draw around it, then the
+/// owner's `drawDocument`. The document is looked up by id each time — a plugin can unload
+/// between frames, and the handle in `open_files` is the one that is current.
+fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
+    const ds: *DocSurface = @ptrCast(@alignCast(ctx orelse return .ok));
+    const editor = ds.editor;
+    const doc = editor.docById(ds.doc_id) orelse return .ok;
+
+    var content_color = dvui.themeGet().color(.window, .fill);
+    if (comptime builtin.os.tag == .macos or builtin.os.tag == .windows) {
+        if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color = content_color.opacity(editor.settings.content_opacity);
+    }
+    var canvas = sdk.pane_layout.mainCanvasVbox(content_color, true, @truncate(ds.doc_id));
+    defer {
+        dvui.toastsShow(canvas.data().id, canvas.data().contentRectScale().r.toNatural());
+        canvas.deinit();
+    }
+    // The handle is opaque to every plugin (pixi stores it, never reads through it); the canvas
+    // box id is what a plugin keys its per-pane state on.
+    doc.owner.bindDocumentToPane(doc, canvas.data().id, ds, false);
+    _ = try doc.owner.drawDocument(doc);
+    return .ok;
 }
 pub fn docAt(editor: *Editor, index: usize) ?sdk.DocHandle {
     if (index >= editor.open_files.values().len) return null;
@@ -4621,6 +4694,21 @@ fn fizzyAssignedSurfaces(ctx: *anyopaque, region: []const u8) ?[]const []const u
     return fizzyCtx(ctx).layout.assignment(region);
 }
 
+fn fizzySelectInRegion(ctx: *anyopaque, region: []const u8, id: []const u8) void {
+    const editor = fizzyCtx(ctx);
+    // Either list: this frame's if the shape has declared it already, else last frame's. A
+    // region that exists in neither has not been drawn yet, and its first draw selects the
+    // first thing it shows — which for a pane just created around one document is that one.
+    for (editor.layout.regions_building.items) |r| if (std.mem.eql(u8, r.name, region)) {
+        editor.host.setSelectionForKey(r.selectionKey(), id);
+        return;
+    };
+    for (editor.layout.regions.items) |r| if (std.mem.eql(u8, r.name, region)) {
+        editor.host.setSelectionForKey(r.selectionKey(), id);
+        return;
+    };
+}
+
 fn fizzyAssignedRegionNames(ctx: *anyopaque) []const []const u8 {
     const editor = fizzyCtx(ctx);
     const arena = editor.arena.allocator();
@@ -5698,51 +5786,22 @@ fn closeDocumentResources(_: *Editor, doc: sdk.DocHandle) void {
     doc.owner.unregisterDocument(doc.id);
 }
 
-/// Which tab becomes active when the doc at `index` closes: the nearest tab of the same
-/// grouping to its right, else the nearest one to its left. Neighbor-based rather than
-/// open-order/MRU so closing a run of tabs walks steadily in one direction instead of
-/// snapping back to the first tab.
-///
-/// Returned in post-removal coordinates: `orderedRemove` shifts every later entry down by
-/// one, so a neighbor found after `index` is reported one lower than its current position.
-fn replacementIndexAfterClose(editor: *Editor, index: usize, grouping: u64) ?usize {
-    const docs = editor.open_files.values();
-
-    var right = index + 1;
-    while (right < docs.len) : (right += 1) {
-        if (editor.docGrouping(docs[right]) == grouping) return right - 1;
-    }
-
-    var left = index;
-    while (left > 0) {
-        left -= 1;
-        if (editor.docGrouping(docs[left]) == grouping) return left;
-    }
-
-    return null;
-}
-
 pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     const doc = editor.docAt(index) orelse return;
-    const grouping = editor.docGrouping(doc);
-
-    const replacement_index = editor.replacementIndexAfterClose(index, grouping);
-    editor.workbench.adjustOpenFileIndexAfterClose(grouping, index, replacement_index);
+    editor.workbench.documentClosed(doc);
 
     if (editor.document_watcher) |*w| w.untrack(doc.id);
+    editor.unregisterDocSurface(doc.id);
     editor.closeDocumentResources(doc);
     editor.open_files.orderedRemoveAt(index);
 }
 
 pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     const doc = editor.open_files.get(id) orelse return;
-    const index = editor.open_files.getIndex(id) orelse return;
-    const grouping = editor.docGrouping(doc);
-
-    const replacement_index = editor.replacementIndexAfterClose(index, grouping);
-    editor.workbench.adjustOpenFileIndexAfterClose(grouping, index, replacement_index);
+    editor.workbench.documentClosed(doc);
 
     if (editor.document_watcher) |*w| w.untrack(doc.id);
+    editor.unregisterDocSurface(doc.id);
     editor.closeDocumentResources(doc);
     _ = editor.open_files.orderedRemove(id);
 }
@@ -5829,6 +5888,15 @@ pub fn deinit(editor: *Editor) !void {
     editor.layout.deinitAssignments(editor.gpa);
     editor.layout.deinitQualified(editor.gpa);
     editor.layout.picker.close(editor.gpa);
+    {
+        // The registry itself goes with `host.deinit` below; these are the app's own strings.
+        var it = editor.doc_surfaces.valueIterator();
+        while (it.next()) |ds| {
+            editor.gpa.free(ds.*.id);
+            editor.gpa.destroy(ds.*);
+        }
+        editor.doc_surfaces.deinit(editor.gpa);
+    }
     editor.settings.deinit(editor.gpa);
 
     editor.explorer.deinit();

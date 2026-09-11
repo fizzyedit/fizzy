@@ -186,6 +186,10 @@ pub const VTable = struct {
     /// Every region name that has an assignment, arena-allocated. How a plugin finds the panes
     /// it declared last session before it has declared any this one.
     assignedRegionNames: *const fn (ctx: *anyopaque) []const []const u8,
+    /// Make `id` the selection of the region named `region` — the by-name form of
+    /// `regionSelect`, for a region the caller is not drawing right now: focusing the file a
+    /// load just landed in whichever pane it landed in.
+    selectInRegion: *const fn (ctx: *anyopaque, region: []const u8, id: []const u8) void,
     /// Draw the app's glyph for a declared file kind ("image", "source", …), or return false if
     /// this app has no glyph for it.
     ///
@@ -459,6 +463,10 @@ pub fn assignedSurfaces(self: EditorAPI, region: []const u8) ?[]const []const u8
 
 pub fn assignedRegionNames(self: EditorAPI) []const []const u8 {
     return self.vtable.assignedRegionNames(self.ctx);
+}
+
+pub fn selectInRegion(self: EditorAPI, region: []const u8, id: []const u8) void {
+    self.vtable.selectInRegion(self.ctx, region, id);
 }
 
 pub fn drawFileKindGlyph(self: EditorAPI, kind: []const u8, color: dvui.Color) bool {

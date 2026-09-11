@@ -20,8 +20,8 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const Plugin = @import("Plugin.zig");
+const DocHandle = @import("DocHandle.zig");
 const kw = @import("keywords.zig");
-const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
 
 const Surface = @This();
 
@@ -39,9 +39,6 @@ ctx: ?*anyopaque = null,
 /// Draw the content into the parent the host has established. Immediate mode: expand into the
 /// space you are given.
 draw: *const fn (ctx: ?*anyopaque) anyerror!dvui.App.Result,
-/// Optional: while this surface is the one a region shows, it takes over the app's main region
-/// too. Preserves `SidebarView.draw_workspace`.
-draw_workspace: ?*const fn (ctx: ?*anyopaque, pane: *WorkbenchPaneView) anyerror!void = null,
 /// A surface shown **only while another is selected**: the id of that other surface. While it
 /// is the selection of its region, this one is drawn in place of whatever a region accepting
 /// *this* one's keywords would otherwise show, and it is invisible the rest of the time.
@@ -51,6 +48,11 @@ draw_workspace: ?*const fn (ctx: ?*anyopaque, pane: *WorkbenchPaneView) anyerror
 /// is selected in the rail, and a plugin's README fills it while its store card is. One rule in
 /// the layout, declared by the surface, instead of a hook per place it can happen.
 takeover_when: ?[]const u8 = null,
+/// The open document this surface draws, when it is one. The app registers a surface per open
+/// file (`document.surfaceId`) so a document is placed, listed and restored like anything else;
+/// a workbench reads the handle back from here — for the tab's dirty dot, its close, the save
+/// commands that act on "the active document" — without a lookup by path.
+document: ?DocHandle = null,
 /// Runtime state, not registration data: the plugin store toggles a built-in off without
 /// unloading it. Set through `Host.setSurfaceHidden`.
 hidden: bool = false,

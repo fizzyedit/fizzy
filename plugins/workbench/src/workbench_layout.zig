@@ -11,68 +11,70 @@ const Workspace = @import("Workspace.zig");
 const handle_size = 10;
 const handle_dist = 60;
 
+/// Bring the panes in line with the documents: every open document sits in exactly one pane's
+/// assignment, every pane with nothing assigned is gone (bar the last), and — once — last
+/// session's panes are re-seated from the assignments the app kept for them.
 pub fn rebuildWorkspaces(wb: *Workbench) !void {
     const host = runtime.host();
+    const arena = host.arena();
 
+    if (!wb.restored) {
+        wb.restored = true;
+        for (host.assignedRegionNames()) |region_name| {
+            const grouping = Workspace.groupingOfName(region_name) orelse continue;
+            _ = try wb.pane(grouping);
+            const ids = host.assignedSurfaces(region_name) orelse continue;
+            for (ids) |id| {
+                const path = sdk.document.pathOfSurfaceId(id) orelse continue;
+                if (host.docFromPath(path) != null) continue;
+                _ = host.openFilePath(path, grouping) catch continue;
+            }
+        }
+    }
+
+    // A document nobody holds lands in the pane it was opened toward: the grouping the app
+    // stamped on it, which is the "open to the side" answer or the current pane.
     var i: usize = 0;
     while (i < host.openDocCount()) : (i += 1) {
         const doc = host.docByIndex(i) orelse continue;
-        const grouping = doc.owner.documentGrouping(doc);
-        if (!wb.workspaces.contains(grouping)) {
-            var workspace: Workspace = .init(grouping);
-            var j: usize = 0;
-            while (j < host.openDocCount()) : (j += 1) {
-                const d = host.docByIndex(j) orelse continue;
-                if (d.owner.documentGrouping(d) == grouping) {
-                    workspace.open_file_index = host.docIndex(d.id) orelse 0;
-                }
-            }
-            try wb.workspaces.put(runtime.allocator(), grouping, workspace);
-        }
-    }
-
-    for (wb.workspaces.values()) |*workspace| {
-        if (wb.workspaces.count() == 1) break;
-
-        var contains = false;
-        var k: usize = 0;
-        while (k < host.openDocCount()) : (k += 1) {
-            const doc = host.docByIndex(k) orelse continue;
-            if (doc.owner.documentGrouping(doc) == workspace.grouping) {
-                contains = true;
+        const id = try sdk.document.surfaceId(arena, doc.owner.id, doc.owner.documentPath(doc));
+        var held = false;
+        for (wb.workspaces.values()) |*ws| {
+            if (ws.hasTab(id)) {
+                held = true;
                 break;
             }
         }
-
-        if (!contains) {
-            if (wb.open_workspace_grouping == workspace.grouping) {
-                for (wb.workspaces.values()) |*w| {
-                    if (w.grouping != workspace.grouping) {
-                        wb.open_workspace_grouping = w.grouping;
-                        break;
-                    }
-                }
-            }
-            workspace.deinit();
-            _ = wb.workspaces.orderedRemove(workspace.grouping);
-            break;
+        if (held) continue;
+        // The same file under another owner's id (a plugin installed since last session) would
+        // otherwise sit beside it as a tab that never opens.
+        const path = doc.owner.documentPath(doc);
+        var stale_in: ?u64 = null;
+        for (wb.workspaces.values()) |*ws| {
+            if (ws.removeTabsForPath(path)) stale_in = ws.grouping;
         }
+        const target = try wb.pane(stale_in orelse doc.owner.documentGrouping(doc));
+        target.addTab(id, false);
     }
 
-    for (wb.workspaces.values()) |*workspace| {
-        if (host.docByIndex(workspace.open_file_index)) |doc| {
-            if (doc.owner.documentGrouping(doc) == workspace.grouping) continue;
+    // An empty pane leaves, and takes the active slot with it if it had it.
+    var k: usize = 0;
+    while (k < wb.workspaces.count()) {
+        if (wb.workspaces.count() == 1) break;
+        const ws = &wb.workspaces.values()[k];
+        if (ws.tabCount() > 0) {
+            k += 1;
+            continue;
         }
-        var idx: usize = host.openDocCount();
-        while (idx > 0) {
-            idx -= 1;
-            if (host.docByIndex(idx)) |d| {
-                if (d.owner.documentGrouping(d) == workspace.grouping) {
-                    workspace.open_file_index = idx;
-                    break;
-                }
-            }
-        }
+        var buf: [32]u8 = undefined;
+        host.assignSurfaces(Workspace.name(&buf, ws.grouping), null) catch {};
+        const gone = ws.grouping;
+        ws.deinit();
+        _ = wb.workspaces.orderedRemove(gone);
+        if (wb.open_workspace_grouping == gone) wb.open_workspace_grouping = wb.workspaces.keys()[0];
+    }
+    if (!wb.workspaces.contains(wb.open_workspace_grouping) and wb.workspaces.count() > 0) {
+        wb.open_workspace_grouping = wb.workspaces.keys()[0];
     }
 }
 

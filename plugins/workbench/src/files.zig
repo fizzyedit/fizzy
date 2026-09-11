@@ -368,7 +368,6 @@ fn table() ?*FileTable {
     return runtime.host().files;
 }
 
-
 // ---- file-run virtualization ----------------------------------------------------------------
 //
 // Every row in the tree is a real widget stack — a branch, a caret slot, an icon slot, a label,
@@ -1496,7 +1495,6 @@ fn applyFileMove(unique_id: dvui.Id, tree: *core.widgets.TreeWidget, target_dir:
 
     dvui.dataRemove(null, unique_id, "removed_path");
 }
-
 
 /// "New Folder..." from either context menu (the project row and a folder row run the same
 /// code): create the folder, then hand the tree its path so the row that appears next frame

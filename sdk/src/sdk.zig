@@ -77,8 +77,6 @@ pub const EditorAPI = @import("EditorAPI.zig");
 pub const SaveDialogFilter = EditorAPI.SaveDialogFilter;
 pub const SaveDialogCallback = EditorAPI.SaveDialogCallback;
 
-pub const WorkbenchPane = @import("WorkbenchPane.zig");
-pub const WorkbenchPaneView = WorkbenchPane.WorkbenchPaneView;
 pub const pane_layout = @import("pane_layout.zig");
 pub const infobar = @import("infobar.zig");
 

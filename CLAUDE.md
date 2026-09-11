@@ -99,7 +99,7 @@ Zig files *are* structs, so the repo follows that literally and you should too:
   `const Self = @This();`, and consumers write `const Surface = @import("Surface.zig");` — not a
   file containing `pub const Surface = struct { ... }`, which nests the type one level deeper for
   no reason. Existing examples: `Host.zig`, `Plugin.zig`, `DocHandle.zig`, `Surface.zig`,
-  `WorkbenchPane.zig`.
+  `RegionSpec.zig`.
 - **`lowercase.zig` is a namespace** of related declarations with no single type at its centre:
   `keywords.zig`, `paths.zig`, `regions.zig`, `fingerprint.zig`.
 
