@@ -28,12 +28,13 @@
 //! rescan (same degrade-gracefully spirit as `SettingsWatcher` / `DocumentWatcher`).
 const builtin = @import("builtin");
 const std = @import("std");
-const fizzy = @import("../fizzy.zig");
+const core = @import("core");
+const sdk = @import("fizzy_sdk");
+const wake = @import("wake.zig");
 const dvui = @import("dvui");
 const Allocator = std.mem.Allocator;
 
-const Plugin = fizzy.sdk.Plugin;
-const IgnoreRules = @import("explorer/IgnoreRules.zig");
+const Plugin = sdk.Plugin;
 const folder_events = @import("folder_events.zig");
 const underDotSegment = folder_events.underDotSegment;
 
@@ -149,7 +150,7 @@ const Impl = if (have_impl) struct {
         self.mutex.lock();
         self.shared.push(path, old_path, kind, object);
         self.mutex.unlock();
-        wake();
+        wake.now();
     }
 
     fn onChange(h: *Handler, path: []const u8, event_type: nightwatch.EventType, object_type: nightwatch.ObjectType) error{HandlerFailed}!void {
@@ -161,10 +162,6 @@ const Impl = if (have_impl) struct {
     }
 } else void;
 
-fn wake() void {
-    // Safe from any thread — see `Editor.zig`'s `fizzyRefresh` doc comment.
-    fizzy.entry().window.backend.refresh();
-}
 
 /// Allocates the ring buffers. Does not start nightwatch — `setFolder` does, once a folder is
 /// open and `self` is at its final address.
@@ -257,11 +254,26 @@ fn stopWatch(self: *FolderWatcher) void {
     self.coalesce_deadline_ns = 0;
 }
 
+/// What the application does with a settled batch, and which of them it wants at all.
+///
+/// The watcher's job ends at "these paths changed, coalesced, off the watcher thread". Deciding
+/// that `.zig-cache/` is noise, and deciding who hears about the rest, is the application's — so
+/// both are here rather than inside the watcher, which is what lets this file belong to any app.
+pub const Sink = struct {
+    ctx: *anyopaque,
+    /// False drops the event. Fizzy answers with its ignore rules; an app with none passes
+    /// everything.
+    wanted: *const fn (ctx: *anyopaque, path: []const u8, name: []const u8, kind: std.Io.File.Kind) bool,
+    /// A settled batch. `truncated` means events were dropped before anything could inspect
+    /// them, which is why an all-ignored batch still has to be delivered.
+    changed: *const fn (ctx: *anyopaque, events: []const Plugin.PathEvent, truncated: bool) void,
+};
+
 /// Call once per frame. Cheap no-op unless the watcher thread actually buffered something.
-pub fn tick(self: *FolderWatcher, editor: *fizzy.Editor) void {
+pub fn tick(self: *FolderWatcher, sink: Sink) void {
     if (comptime !have_impl) return;
 
-    const now = fizzy.core.perf.nanoTimestamp();
+    const now = core.perf.nanoTimestamp();
     {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -272,7 +284,7 @@ pub fn tick(self: *FolderWatcher, editor: *fizzy.Editor) void {
     if (self.coalesce_deadline_ns == 0) return;
     if (now < self.coalesce_deadline_ns) {
         // Keep the event loop alive until the coalesce window settles.
-        wake();
+        wake.now();
         return;
     }
     self.coalesce_deadline_ns = 0;
@@ -287,7 +299,6 @@ pub fn tick(self: *FolderWatcher, editor: *fizzy.Editor) void {
     }
     defer self.staging.reset();
 
-    const folder = editor.folder orelse return;
     var n: usize = 0;
     for (self.staging.slice()) |e| {
         const path = self.staging.pathOf(e);
@@ -298,7 +309,7 @@ pub fn tick(self: *FolderWatcher, editor: *fizzy.Editor) void {
             .dir => .directory,
             .file, .unknown => .file,
         };
-        if (editor.ignore.isIgnored(folder, path, name, kind)) continue;
+        if (!sink.wanted(sink.ctx, path, name, kind)) continue;
         self.out[n] = .{
             .path = path,
             .kind = e.kind,
@@ -311,10 +322,7 @@ pub fn tick(self: *FolderWatcher, editor: *fizzy.Editor) void {
     // A truncated batch still has to go out even when every surviving event was ignored: the
     // dropped ones are precisely the events nobody got to inspect.
     if (n == 0 and !self.staging.truncated) return;
-    editor.host.notifyFolderPathsChanged(.{
-        .events = self.out[0..n],
-        .truncated = self.staging.truncated,
-    });
+    sink.changed(sink.ctx, self.out[0..n], self.staging.truncated);
 }
 
 test {

@@ -86,6 +86,9 @@ pub fn wireAppModule(
     sdk_module: *std.Build.Module,
     icons_module: ?*std.Build.Module,
     markdown_module: ?*std.Build.Module,
+    /// The filesystem-watching backend, when this build has one. Absent on the web, where the
+    /// watchers are never started.
+    nightwatch_module: ?*std.Build.Module,
     consumer: ?*std.Build.Module,
 ) *std.Build.Module {
     const app_module = b.createModule(.{
@@ -98,6 +101,7 @@ pub fn wireAppModule(
     app_module.addImport("fizzy_sdk", sdk_module);
     if (icons_module) |icons| app_module.addImport("icons", icons);
     if (markdown_module) |md| app_module.addImport("markdown", md);
+    if (nightwatch_module) |nw| app_module.addImport("nightwatch", nw);
     if (consumer) |c| c.addImport("app", app_module);
     return app_module;
 }

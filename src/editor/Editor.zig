@@ -103,10 +103,11 @@ const SettingsTree = @import("SettingsTree.zig");
 const OutputPanel = @import("OutputPanel.zig");
 const SettingsPluginsZon = @import("SettingsPluginsZon.zig");
 const file_glyphs = @import("file_glyphs.zig");
-const SettingsWatcher = @import("SettingsWatcher.zig");
+const SettingsWatcher = @import("app").watch.SettingsWatcher;
 const Constants = @import("Constants.zig");
 const DocumentWatcher = @import("DocumentWatcher.zig");
-const FolderWatcher = @import("FolderWatcher.zig");
+const Watch = @import("app").watch;
+const FolderWatcher = Watch.FolderWatcher;
 
 pub const Workspace = workbench_mod.Workspace;
 pub const Explorer = @import("explorer/Explorer.zig");
@@ -2608,6 +2609,11 @@ pub fn postInit(editor: *Editor) !void {
     // its final heap address (see `SettingsWatcher.start`'s doc comment). Best-effort
     // throughout: fizzy must never fail to launch just because the watcher couldn't start.
     if (comptime builtin.target.cpu.arch != .wasm32) {
+        // Before any watcher starts: a watcher thread has buffered something and the UI thread
+        // may be parked in the event loop with nothing to draw. `app/watch/` does not know whose
+        // window that is; this is the app answering once.
+        Watch.wake.setHook(wakeEventLoop);
+
         editor.settings_watcher = SettingsWatcher.init(editor.gpa, editor.config_folder) catch |err| blk: {
             dvui.log.warn("settings watcher: failed to init ({s}); external hand-edits / dropped-in plugins won't be picked up live", .{@errorName(err)});
             break :blk null;
@@ -2975,6 +2981,12 @@ fn fizzySave(ctx: *anyopaque) anyerror!void {
 fn fizzyRequestCompositeWarmup(ctx: *anyopaque) void {
     fizzyCtx(ctx).requestPrepareFrame();
 }
+/// How a watcher thread wakes this app — the one thing `app/watch/` cannot answer for itself.
+/// Set before any watcher starts; same call as `fizzyRefresh`, which is why it forwards there.
+fn wakeEventLoop() void {
+    fizzyRefresh(undefined);
+}
+
 fn fizzyRefresh(ctx: *anyopaque) void {
     _ = ctx;
     // Safe from any thread (see `SDLBackend.refresh`'s doc comment) — a single call reliably
@@ -3973,14 +3985,14 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     const hitch_watchers = fizzy.core.hitch.begin(.watchers);
     // Pick up any external edit to settings.zon (see R11 in docs/PLUGIN_MANIFEST_PLAN.md).
     // Cheap no-op unless the watcher thread actually saw a change.
-    if (editor.settings_watcher) |*w| w.tick(editor);
+    if (editor.settings_watcher) |*w| w.tick(editor.configWatchSink());
 
     // Reload clean open docs / flag dirty conflicts when files change on disk.
     if (editor.document_watcher) |*w| w.tick(editor);
 
     // Fan out on-disk changes under the root folder to plugins. Cheap no-op unless the watcher
     // thread buffered something.
-    if (editor.folder_watcher) |*w| w.tick(editor);
+    if (editor.folder_watcher) |*w| w.tick(editor.folderWatchSink());
     hitch_watchers.end();
 
     var needs_save_status_anim_tick = false;
@@ -5807,6 +5819,51 @@ pub fn deinit(editor: *Editor) !void {
     editor.arena.deinit();
 }
 
+
+// ---- SettingsWatcher.Sink: what fizzy reconciles when its config folder changes -------------
+//
+// Four passes in a deliberate order, which is exactly the kind of thing that belongs to the app
+// rather than the watcher: an external enable/disable should settle before a rebuilt dylib is
+// considered for reload.
+
+fn configWatchSink(editor: *Editor) SettingsWatcher.Sink {
+    return .{ .ctx = editor, .changed = configChanged };
+}
+
+fn configChanged(ctx: *anyopaque) void {
+    const editor: *Editor = @ptrCast(@alignCast(ctx));
+    editor.reconcileExternalSettingsChange();
+    // Same watch, different trigger: a rebuilt/reinstalled plugin dylib is an event in this tree
+    // but never moves `settings.zon`'s hash, so it needs its own pass — after the settings one.
+    editor.reconcileChangedPluginBinaries();
+    // And the mirror of that pass for a plugin that is *not* running because its last load
+    // failed: a rebuild is invisible to both `settings.zon`'s hash and `loaded_plugin_libs`.
+    editor.reconcileFailedPluginBinaries();
+    // Same again for a plugin directory that appeared (a `zig build install` from a plugin repo,
+    // or a hand-copied build). Tracked as disabled — never auto-loaded (R12) — so the Plugins tab
+    // can offer it.
+    editor.reconcileDiscoveredPlugins();
+}
+
+// ---- FolderWatcher.Sink: what fizzy does with on-disk changes -----------------------------
+//
+// The watcher coalesces and hands over; these two answer "which of these matter" and "who hears
+// about them" — both of which are fizzy's policy, not the watcher's.
+
+fn folderWatchSink(editor: *Editor) FolderWatcher.Sink {
+    return .{ .ctx = editor, .wanted = folderEventWanted, .changed = folderPathsChanged };
+}
+
+fn folderEventWanted(ctx: *anyopaque, path: []const u8, name: []const u8, kind: std.Io.File.Kind) bool {
+    const editor: *Editor = @ptrCast(@alignCast(ctx));
+    const folder = editor.folder orelse return false;
+    return !editor.ignore.isIgnored(folder, path, name, kind);
+}
+
+fn folderPathsChanged(ctx: *anyopaque, events: []const sdk.Plugin.PathEvent, truncated: bool) void {
+    const editor: *Editor = @ptrCast(@alignCast(ctx));
+    editor.host.notifyFolderPathsChanged(.{ .events = events, .truncated = truncated });
+}
 
 // ---- PluginManager: what the store needs from this application --------------------------
 //

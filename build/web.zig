@@ -127,7 +127,7 @@ pub fn addSteps(
 
     // The `app` framework module (the plugin store). Wired exactly as the native build wires
     // it — one helper, so the two cannot drift.
-    _ = sdk.wireAppModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), core_module_web, sdk_module_web, icons_web, markdown_module_web, web_exe.root_module);
+    _ = sdk.wireAppModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), core_module_web, sdk_module_web, icons_web, markdown_module_web, null, web_exe.root_module);
 
     const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
     const install_wasm = b.addInstallArtifact(web_exe, .{

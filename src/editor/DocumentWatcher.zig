@@ -18,6 +18,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const fizzy = @import("../fizzy.zig");
+const wake = @import("app").watch.wake;
 const dvui = @import("dvui");
 const Allocator = std.mem.Allocator;
 
@@ -86,7 +87,7 @@ const Impl = if (have_impl) struct {
     fn note(h: *Handler) void {
         const impl: *Impl = @fieldParentPtr("handler", h);
         if (impl.raw_dirty) |flag| flag.store(true, .release);
-        wake();
+        wake.now();
     }
 
     fn onChange(h: *Handler, path: []const u8, event_type: nightwatch.EventType, object_type: nightwatch.ObjectType) error{HandlerFailed}!void {
@@ -120,9 +121,6 @@ pub fn start(self: *DocumentWatcher) !void {
 }
 
 /// Safe from the nightwatch handler thread — wakes the blocked event loop for one frame.
-fn wake() void {
-    fizzy.entry().window.backend.refresh();
-}
 
 /// Main-thread only. Call after mutating open-doc contents so the editor repaints without
 /// waiting for an unrelated input event. `backend.refresh` alone is enough to wake a sleeping
@@ -130,7 +128,7 @@ fn wake() void {
 /// the *next* iterate actually redraws.
 fn requestRepaint() void {
     dvui.refresh(null, @src(), null);
-    wake();
+    wake.now();
 }
 
 /// Stops nightwatch and frees all tracking entries. Safe if `start` never ran, and safe to call
@@ -339,7 +337,7 @@ pub fn tick(self: *DocumentWatcher, editor: *fizzy.Editor) void {
     }
     if (self.coalesce_deadline_ns == 0) return;
     if (now < self.coalesce_deadline_ns) {
-        wake();
+        wake.now();
         return;
     }
     self.coalesce_deadline_ns = 0;
@@ -388,7 +386,7 @@ fn reconcile(self: *DocumentWatcher, editor: *fizzy.Editor) void {
     }
     if (need_retry) {
         self.coalesce_deadline_ns = fizzy.core.perf.nanoTimestamp() + debounce_ns;
-        wake();
+        wake.now();
     }
 }
 

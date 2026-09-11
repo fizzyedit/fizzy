@@ -29,6 +29,20 @@ pub const layout = struct {
     pub const State = @import("layout/State.zig");
 };
 
+/// Watching the filesystem for changes the application should react to.
+///
+/// Opt-in: an app that does not want a folder watcher simply never starts one, and the cost is
+/// zero. Each watcher's job ends at "this settled, off the watcher thread" — what is worth
+/// reacting to, and what reacting means, is the app's, which is what `Sink` on each of them is.
+pub const watch = struct {
+    /// On-disk changes under the open project folder, coalesced and filtered by the app.
+    pub const FolderWatcher = @import("watch/FolderWatcher.zig");
+    /// Changes under the app's own config folder — its settings file, its plugin directory.
+    pub const SettingsWatcher = @import("watch/SettingsWatcher.zig");
+    /// How a watcher thread wakes a sleeping UI. Set once by the application.
+    pub const wake = @import("watch/wake.zig");
+};
+
 pub const store = struct {
     pub const Store = @import("store/PluginStore.zig");
     pub const Manager = @import("store/PluginManager.zig");

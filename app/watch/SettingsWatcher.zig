@@ -14,7 +14,9 @@
 //! this codebase), not a hard error.
 const builtin = @import("builtin");
 const std = @import("std");
-const fizzy = @import("../fizzy.zig");
+const core = @import("core");
+const sdk = @import("fizzy_sdk");
+const wake = @import("wake.zig");
 const dvui = @import("dvui");
 const Allocator = std.mem.Allocator;
 
@@ -60,7 +62,7 @@ const Impl = if (have_impl) struct {
     fn note(h: *Handler) void {
         const impl: *Impl = @fieldParentPtr("handler", h);
         if (impl.raw_dirty) |flag| flag.store(true, .release);
-        wake();
+        wake.now();
     }
 
     fn onChange(h: *Handler, path: []const u8, event_type: nightwatch.EventType, object_type: nightwatch.ObjectType) error{HandlerFailed}!void {
@@ -108,11 +110,6 @@ pub fn start(self: *SettingsWatcher) !void {
     }
 }
 
-fn wake() void {
-    // Safe from any thread — see `Editor.zig`'s `fizzyRefresh` doc comment for how this was
-    // verified (a single call reliably wakes the blocked event loop for exactly one frame).
-    fizzy.entry().window.backend.refresh();
-}
 
 /// Stops nightwatch (joins its background thread) and frees owned paths. Safe to call even if
 /// `start` was never called (e.g. `init` succeeded but `start` failed).
@@ -126,30 +123,30 @@ pub fn stop(self: *SettingsWatcher) void {
     self.gpa.free(self.config_folder);
 }
 
+/// What the application reconciles when this tree settles.
+///
+/// One callback, not four: the watcher knows that something under the config folder changed and
+/// nothing more. Which passes that implies — re-read the settings file, notice a rebuilt plugin
+/// dylib, notice a newly dropped-in one — is the application's business, and fizzy's order
+/// between them is fizzy's reasoning (see `Editor.configChanged`).
+pub const Sink = struct {
+    ctx: *anyopaque,
+    changed: *const fn (ctx: *anyopaque) void,
+};
+
 /// Call once per frame. Cheap no-op unless the watcher thread actually saw a change. Coalesces
 /// a burst of raw events (~200ms) on the main thread before reconciling.
-pub fn tick(self: *SettingsWatcher, editor: *fizzy.Editor) void {
-    const now = fizzy.core.perf.nanoTimestamp();
+pub fn tick(self: *SettingsWatcher, sink: Sink) void {
+    const now = core.perf.nanoTimestamp();
     if (self.raw_dirty.swap(false, .acquire)) {
         self.coalesce_deadline_ns = now + debounce_ns;
     }
     if (self.coalesce_deadline_ns == 0) return;
     if (now < self.coalesce_deadline_ns) {
         // Keep the event loop alive until the coalesce window settles.
-        wake();
+        wake.now();
         return;
     }
     self.coalesce_deadline_ns = 0;
-    editor.reconcileExternalSettingsChange();
-    // Same watch, different trigger: a rebuilt/reinstalled plugin dylib is an event in this tree
-    // but never moves `settings.zon`'s hash, so it needs its own pass (which must run after the
-    // settings one — an external enable/disable should settle before we consider reloading).
-    editor.reconcileChangedPluginBinaries();
-    // And the mirror of that pass for a plugin that is *not* running because its last load
-    // failed: a rebuild is invisible to both `settings.zon`'s hash and `loaded_plugin_libs`.
-    editor.reconcileFailedPluginBinaries();
-    // Same again for a plugin directory that appeared (a `zig build install` from a plugin repo,
-    // or a hand-copied build): also an event in this tree, also invisible to `settings.zon`'s
-    // hash. Tracks it as disabled — never auto-loads it (R12) — so the Plugins tab can offer it.
-    editor.reconcileDiscoveredPlugins();
+    sink.changed(sink.ctx);
 }

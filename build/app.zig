@@ -424,7 +424,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ "fizzy-reveal-tests", "core/reveal.zig" },
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.
-        .{ "fizzy-folder-events-tests", "src/editor/folder_events.zig" },
+        .{ "fizzy-folder-events-tests", "app/watch/folder_events.zig" },
     }) |entry| {
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = entry[0],
@@ -568,7 +568,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     }, fizzy_test_module);
     // The `app` framework module (the plugin store), wired the same way the exe and the web
     // build wire it — see `build/sdk.zig`.
-    _ = sdk.wireAppModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), core_module_test, sdk_module_test, icons_test, markdown_module_test, fizzy_test_module);
+    _ = sdk.wireAppModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), core_module_test, sdk_module_test, icons_test, markdown_module_test, if (nightwatch_test_dep) |dep| dep.module("nightwatch") else null, fizzy_test_module);
     _ = image_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
