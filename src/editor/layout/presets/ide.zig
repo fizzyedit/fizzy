@@ -83,6 +83,9 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
         var side = try f.region(@src(), .{
             .name = "Sidebar",
             .keywords = sidebar,
+            // The rail beside it is the chooser, so this region holds as many surfaces as it is
+            // given and shows whichever the rail picked. The picker's cards are toggles here.
+            .shows = .many,
             .content = .{ .ctx = editor, .draw = explorerPane },
             .resize = true,
             .collapsible = true,
@@ -113,6 +116,9 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
         var panel = try f.region(@src(), .{
             .name = "Panel",
             .keywords = bottom,
+            // `bottomPane` draws its own tab strip over every match, and can split the panel
+            // between several of them at once.
+            .shows = .many,
             .content = .{ .ctx = editor, .draw = bottomPane },
             .resize = true,
             .collapsible = true,

@@ -27,6 +27,8 @@ const Region = @This();
 name: []const u8 = "",
 /// What kinds of surface this region accepts, as its shape declared them.
 keywords: []const []const u8 = &.{},
+/// How many of them it can show at once. See `Shows`.
+shows: Shows = .one,
 /// This region's widget id, stable across frames from the shape's `@src()`.
 id: dvui.Id = .zero,
 /// How far this region reaches along its parent's axis when it has never been dragged — the
@@ -100,6 +102,23 @@ pub const Content = struct {
     draw: *const fn (ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) anyerror!dvui.App.Result,
 };
 
+/// How many matching surfaces a region can show at once.
+///
+/// This is not a policy the framework enforces — it is the region *telling the truth about how it
+/// draws*, which is the one thing nothing else can work out. A region with no `content` falls
+/// through to `drawSelected`, so exactly one surface is ever on screen and a second assigned one
+/// would simply be invisible. A region whose chrome loops over `matching` — a tab strip, an icon
+/// rail — shows as many as it is given.
+///
+/// Everything that offers the user a choice reads this. The picker is the reason it exists: over
+/// a `.one` region its cards are a *swap* (choosing writes a single surface and selects it), and
+/// over a `.many` region they are toggles. Before, every region was a set, so assigning two
+/// surfaces to the main area silently hid one of them.
+///
+/// `.one` is the truthful default: a plain region shows one, and a shape that draws a chooser
+/// knows it did.
+pub const Shows = enum { one, many };
+
 /// What a region *is*, as opposed to how it is laid out — which is `dvui.Options`, unchanged.
 pub const InitOptions = struct {
     /// Below this container extent, a `collapsible` region folds itself away — the width at
@@ -113,6 +132,9 @@ pub const InitOptions = struct {
     /// What kinds of surface this region accepts. Empty means it hosts nothing itself and is
     /// purely a container for other regions.
     keywords: []const []const u8 = &.{},
+    /// How many of them it shows at once — `.one` unless this region's `content` draws a chooser.
+    /// See `Shows`; the picker's behaviour follows it.
+    shows: Shows = .one,
     /// The axis this region lays its children along, exactly as `dvui.box`'s `dir`.
     dir: dvui.enums.Direction = .vertical,
     /// Chrome drawn instead of the plain selected surface. See `Content`.
@@ -280,6 +302,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     if (init_opts.keywords.len > 0) self.state.registerRegion(self.gpa, .{
         .name = init_opts.name,
         .keywords = init_opts.keywords,
+        .shows = init_opts.shows,
         .id = id,
         .default_extent = default_extent,
     });
@@ -306,6 +329,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     return .{
         .name = init_opts.name,
         .keywords = init_opts.keywords,
+        .shows = init_opts.shows,
         .id = id,
         .default_extent = default_extent,
         .box = box,

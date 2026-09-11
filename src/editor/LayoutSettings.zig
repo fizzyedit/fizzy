@@ -134,7 +134,14 @@ fn drawRow(editor: *Editor, layout: *Editor.Layout, region: Editor.Region, idx: 
     const arena = dvui.currentWindow().arena();
     const line: []const u8 = if (contents.len == 0)
         (if (assigned) "Empty" else "Nothing matches")
-    else blk: {
+    else if (region.shows == .one) blk: {
+        // A region that draws one surface must not read as holding all of them. Listing every
+        // keyword match here is what made the main area look like it held three panels when it
+        // was showing one and hiding two.
+        const sel = layout.selected(region.keywords) orelse break :blk contents[0].title;
+        if (contents.len == 1) break :blk sel.title;
+        break :blk std.fmt.allocPrint(arena, "{s} — 1 of {d} that fit here", .{ sel.title, contents.len }) catch sel.title;
+    } else blk: {
         var titles = std.ArrayListUnmanaged(u8).empty;
         for (contents, 0..) |s, i| {
             if (i > 0) titles.appendSlice(arena, ", ") catch break;
