@@ -33,6 +33,7 @@ const vtable: sdk.Plugin.VTable = .{
     .loadDocument = loadDocument,
     .loadDocumentFromBytes = loadDocumentFromBytes,
     .documentIdFromBuffer = documentIdFromBuffer,
+    .setDocumentGroupingOnBuffer = setDocumentGroupingOnBuffer,
     .deinitDocumentBuffer = deinitDocumentBuffer,
     .registerOpenDocument = registerOpenDocument,
     .documentPtr = documentPtr,
@@ -121,6 +122,13 @@ fn loadDocumentFromBytes(_: *anyopaque, path: []const u8, bytes: []const u8, out
 }
 fn documentIdFromBuffer(_: *anyopaque, doc: *anyopaque) u64 {
     return docBuf(doc).id;
+}
+/// Where an "Open to the side" lands. The app decides the grouping *before* the load is handed
+/// over and writes it here, on the staging buffer, because the document does not exist as an
+/// open document until the load finishes. Missing this hook is silent: the load succeeds, the
+/// grouping is dropped, and the image opens in the pane the user was already looking at.
+fn setDocumentGroupingOnBuffer(_: *anyopaque, doc: *anyopaque, grouping: u64) void {
+    docBuf(doc).grouping = grouping;
 }
 fn deinitDocumentBuffer(_: *anyopaque, doc: *anyopaque) void {
     docBuf(doc).deinit();

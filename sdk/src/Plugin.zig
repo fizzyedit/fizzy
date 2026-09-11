@@ -308,6 +308,13 @@ pub fn assertEditorVTable(comptime vt: VTable) void {
         if (vt.registerOpenDocument == null) @compileError("Editor vtable missing required hook: registerOpenDocument");
         if (vt.drawDocument == null) @compileError("Editor vtable missing required hook: drawDocument");
         if (vt.documentPtr == null) @compileError("Editor vtable missing required hook: documentPtr");
+        // Required rather than optional because omitting it *loses information silently*: the app
+        // writes the target grouping onto the staging buffer before the load lands, so a plugin
+        // without this hook opens every document in the pane the user was already in and "Open to
+        // the side" appears to do nothing. The image plugin shipped that way, and nothing —
+        // not a log line, not a failed load — said so.
+        if (vt.setDocumentGroupingOnBuffer == null) @compileError("Editor vtable missing required hook: setDocumentGroupingOnBuffer (a document that ignores its grouping cannot be opened to the side)");
+        if (vt.documentGrouping == null) @compileError("Editor vtable missing required hook: documentGrouping");
         if (vt.isDirty == null) @compileError("Editor vtable missing required hook: isDirty");
         if (vt.saveDocument == null) @compileError("Editor vtable missing required hook: saveDocument");
         if (vt.closeDocument == null) @compileError("Editor vtable missing required hook: closeDocument");
