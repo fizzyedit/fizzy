@@ -13,6 +13,35 @@ pub fn setAllocator(gpa: std.mem.Allocator) void {
     app_gpa = gpa;
 }
 
+/// Where a file dialog starts, and what the application learns from where it ended.
+///
+/// A native dialog is platform plumbing; *which directory it opens in* is the application's
+/// memory of what the user was doing. Fizzy answers with its project folder and its last used
+/// save/open directories; an app that remembers nothing returns null and gets the platform
+/// default, which is a perfectly good answer.
+pub const DialogDirs = struct {
+    ctx: *anyopaque,
+    /// The directory a `.save` or `.open` dialog should start in, or null for the platform's
+    /// choice. The returned slice is borrowed for the call only.
+    initial: *const fn (ctx: *anyopaque, mode: DialogMode) ?[]const u8,
+    /// Where the user actually ended up. Called with the chosen file's directory.
+    remember: *const fn (ctx: *anyopaque, mode: DialogMode, dir: []const u8) void,
+};
+
+pub const DialogMode = enum { save, open };
+
+var dialog_dirs: ?DialogDirs = null;
+
+pub fn setDialogDirs(d: DialogDirs) void {
+    dialog_dirs = d;
+}
+
+/// The app's remembered directory for `mode`, or "" when it has none.
+fn initialDir(mode: DialogMode) []const u8 {
+    const d = dialog_dirs orelse return "";
+    return d.initial(d.ctx, mode) orelse "";
+}
+
 fn alloc() std.mem.Allocator {
     return app_gpa orelse @panic("backend used before the app supplied an allocator");
 }
@@ -1782,13 +1811,8 @@ pub fn showSimpleMessage(title: [:0]const u8, message: [:0]const u8) void {
 
 pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
-        if (default_folder) |folder| {
-            break :blk std.fs.path.joinZ(alloc(), &.{ folder, default_filename }) catch "untitled";
-        } else if (fizzy.editor().recents.last_save_folder) |last_save_folder| {
-            break :blk std.fs.path.joinZ(alloc(), &.{ last_save_folder, default_filename }) catch "untitled";
-        } else {
-            break :blk std.fs.path.joinZ(alloc(), &.{ fizzy.editor().folder orelse "", default_filename }) catch "untitled";
-        }
+        const dir = default_folder orelse initialDir(.save);
+        break :blk std.fs.path.joinZ(alloc(), &.{ dir, default_filename }) catch "untitled";
     };
     defer alloc().free(default);
     // Do not use our borderless/custom-frame main window as the dialog parent on Windows: the shell
@@ -1799,13 +1823,8 @@ pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
 
 pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
-        if (default_folder) |folder| {
-            break :blk std.fs.path.joinZ(alloc(), &.{ folder, default_filename }) catch "untitled";
-        } else if (fizzy.editor().recents.last_open_folder) |last_open_folder| {
-            break :blk std.fs.path.joinZ(alloc(), &.{ last_open_folder, default_filename }) catch "untitled";
-        } else {
-            break :blk std.fs.path.joinZ(alloc(), &.{ fizzy.editor().folder orelse "", default_filename }) catch "untitled";
-        }
+        const dir = default_folder orelse initialDir(.open);
+        break :blk std.fs.path.joinZ(alloc(), &.{ dir, default_filename }) catch "untitled";
     };
     defer alloc().free(default);
     const parent: ?*sdl3.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
@@ -1814,15 +1833,8 @@ pub fn showOpenFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const
 
 pub fn showOpenFolderDialog(cb: *const fn (?[][:0]const u8) void, default_folder: ?[]const u8) void {
     const default: [:0]const u8 = blk: {
-        if (default_folder) |folder| {
-            break :blk std.fmt.allocPrintSentinel(alloc(), "{s}", .{folder}, 0) catch "untitled";
-        } else {
-            if (fizzy.editor().recents.last_open_folder) |last_open_folder| {
-                break :blk std.fmt.allocPrintSentinel(alloc(), "{s}", .{last_open_folder}, 0) catch "untitled";
-            } else {
-                break :blk std.fmt.allocPrintSentinel(alloc(), "{s}", .{fizzy.editor().folder orelse ""}, 0) catch "untitled";
-            }
-        }
+        const dir = default_folder orelse initialDir(.open);
+        break :blk std.fmt.allocPrintSentinel(alloc(), "{s}", .{dir}, 0) catch "untitled";
     };
     defer alloc().free(default);
     const parent: ?*sdl3.SDL_Window = if (builtin.os.tag == .windows) null else dvui.currentWindow().backend.impl.window;
@@ -1868,7 +1880,7 @@ fn wakeForDialogResult() void {
     dvui.refresh(fizzy.entry().window, @src(), null);
 }
 
-fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: enum { save, open }) void {
+fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: DialogMode) void {
     const callback: *const fn (?[][:0]const u8) void = @ptrCast(@alignCast(@constCast(cb)));
 
     // Try to count the number of files until we hit a null pointer.
@@ -1901,25 +1913,9 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: e
         allocated += 1;
     }
 
-    { // Save the open or save folder for the next time the dialog is shown
+    { // Tell the app where the user ended up, so the next dialog starts there.
         if (std.fs.path.dirname(zig_files[0])) |dir| {
-            if (mode == .save) {
-                if (fizzy.editor().recents.last_save_folder) |last_save_folder| {
-                    alloc().free(last_save_folder);
-                }
-                fizzy.editor().recents.last_save_folder = alloc().dupe(u8, dir) catch {
-                    dvui.log.err("Failed to dupe directory {s}", .{dir});
-                    return;
-                };
-            } else {
-                if (fizzy.editor().recents.last_open_folder) |last_open_folder| {
-                    alloc().free(last_open_folder);
-                }
-                fizzy.editor().recents.last_open_folder = alloc().dupe(u8, dir) catch {
-                    dvui.log.err("Failed to dupe directory {s}", .{dir});
-                    return;
-                };
-            }
+            if (dialog_dirs) |d| d.remember(d.ctx, mode, dir);
         }
     }
 

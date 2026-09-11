@@ -137,6 +137,38 @@ pub fn main(main_init: std.process.Init) !u8 {
     main_init_global = main_init;
 
     if (comptime builtin.target.cpu.arch != .wasm32) {
+        // Where fizzy's file dialogs start, and what it learns from where they end: its own
+        // recents, falling back to the open project folder. The platform dialog has no memory
+        // of what the user was doing; that memory is the app's.
+        fizzy.backend.setDialogDirs(.{
+            .ctx = undefined,
+            .initial = struct {
+                fn f(_: *anyopaque, mode: fizzy.backend.DialogMode) ?[]const u8 {
+                    const editor = fizzy.editor();
+                    const remembered = switch (mode) {
+                        .save => editor.recents.last_save_folder,
+                        .open => editor.recents.last_open_folder,
+                    };
+                    return remembered orelse editor.folder;
+                }
+            }.f,
+            .remember = struct {
+                fn f(_: *anyopaque, mode: fizzy.backend.DialogMode, dir: []const u8) void {
+                    const editor = fizzy.editor();
+                    const slot = switch (mode) {
+                        .save => &editor.recents.last_save_folder,
+                        .open => &editor.recents.last_open_folder,
+                    };
+                    const copy = editor.gpa.dupe(u8, dir) catch {
+                        std.log.err("failed to remember dialog directory {s}", .{dir});
+                        return;
+                    };
+                    if (slot.*) |old| editor.gpa.free(old);
+                    slot.* = copy;
+                }
+            }.f,
+        });
+
         // Before anything native allocates on the app's behalf — dialog paths, menu titles.
         fizzy.backend.setAllocator(appAllocator());
 

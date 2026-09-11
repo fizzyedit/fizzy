@@ -28,6 +28,19 @@ pub const TitleBarButton = enum { minimize, maximize, close };
 /// Accepted and ignored so the startup path is the same on every target.
 pub fn setAllocator(_: std.mem.Allocator) void {}
 
+pub const DialogMode = enum { save, open };
+
+pub const DialogDirs = struct {
+    ctx: *anyopaque,
+    initial: *const fn (ctx: *anyopaque, mode: DialogMode) ?[]const u8,
+    remember: *const fn (ctx: *anyopaque, mode: DialogMode, dir: []const u8) void,
+};
+
+/// The browser's file picker starts wherever the browser decides; there is no directory to
+/// suggest and none to remember. Accepted and ignored so the startup path is the same on every
+/// target.
+pub fn setDialogDirs(_: DialogDirs) void {}
+
 pub fn resetTitleBarHints() void {}
 
 pub fn setTitleBarStrip(_: f32, _: i32) void {}
