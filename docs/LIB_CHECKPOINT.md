@@ -2,7 +2,7 @@
 
 Resume point for the "fizzy as a library" work. Written to be picked up cold by any agent or
 person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-11 at bookmark
-`fizzy-lib` (jj change `plkoxuum`, "Every region has a corner button…").
+`fizzy-lib` (jj change `nllllosx`, "The workbench's panes are regions…").
 
 ## Ground rules that are easy to get wrong
 
@@ -173,6 +173,43 @@ size and assignment under the app's name, and answers the app's picker.
 - Test: "a plugin declares a region inside the one it was given" — a real frame, a surface
   keyworded `document`, asserting the registry entry reads `main.document` and that the surface
   drew once, inside the pane rather than behind it in Main.
+
+### (c) The workbench's panes are regions, its documents are surfaces — **done**
+
+- **Documents are surfaces the app registers** (`Editor.insertOpenDoc` → `registerDocSurface`;
+  `sdk.document.surfaceId` = `<owner>.doc:<path>`, keywords `{"document"}`, `Surface.document`
+  carries the handle, `draw` = canvas box + `owner.drawDocument`). Taken back on close
+  (`Host.unregisterSurface`). Document plugins are untouched.
+- **A pane is a plugin-declared region** (`plugins/workbench/src/Workspace.zig`): `host.region`
+  named `Pane <grouping>`, `shows = .many`, inside `core.widgets.Panes`. Tabs are
+  `region.matching()`, the active tab is `region.selected()`, a reorder or cross-pane drag is
+  `Host.assignSurfaces` on the panes involved, an empty pane leaves (`rebuildWorkspaces`).
+  A document nobody holds is seated in the pane of the grouping the app stamped on it — the
+  `grouping` hooks on the document vtable survive only as that hint.
+- **By-name resolution** (`Region.by_name`, `Layout.matchingIn/selectedIn/selectIn`,
+  `Host.selectionForKey`) because every pane accepts the same qualified keywords. App regions
+  stay keyword-resolved for the icon rail.
+- **Session restore is the assignment list**: first `rebuildWorkspaces` reads
+  `Host.assignedRegionNames`, recreates each `Pane <n>`, reopens its paths. A path reopening
+  under another owner replaces the stale id in place (`Workspace.removeTabsForPath`).
+- **Takeover surfaces** (`Surface.takeover_when`, agreed with the user over keeping the hook):
+  a surface exists only while the named surface is some region's selection, and then it *is*
+  the selection of any region accepting it (`Layout.visibleNow`, `pick`). Trigger lookup
+  excludes takeovers so it terminates. Store README: `takeover_when = store tab` + `hidden`
+  while no card is selected. `draw_workspace` and `WorkbenchPaneView` are deleted; **pixi's
+  packer must become** `{keywords = {"main"}, takeover_when = "pixi.project"}` when pixi is
+  updated.
+- `Workbench.activeDoc` is what the active pane showed last frame (`Workspace.active`);
+  `setActiveDocIndex` selects by name (`Host.selectInRegion`). `EditorAPI` gained
+  `regionMatching/regionSelected/regionSelect/assignSurfaces/assignedSurfaces/
+  assignedRegionNames/selectInRegion`.
+- sdk 0.1.64, fingerprint `0xb65d3fe1e02bc4a2`. Tests: same-keyword plugin regions keep
+  separate contents/selections; takeover appears only while triggered.
+- **Not yet verified visually** (display locked at the time): the tab strip, drag between
+  panes, drop on the right half to split, session restore. `layout.zon` shows the model is
+  right (`Pane 0` holding both argv files by surface id). First thing to eyeball.
+- Known leftovers: `Workspace.center` / `clearAllWorkspaceCenter` (panel-animating centring)
+  are vestigial; `swapDocs`/`docByIndex` order in `EditorAPI` no longer means tab order.
 
 ## Also queued (in rough priority)
 
