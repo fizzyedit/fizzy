@@ -85,7 +85,7 @@ pub fn drawWorkspaces(
     var i: usize = index;
     while (i < count) : (i += 1) {
         if (i > index) {
-            var divider = Split.init(@src(), .horizontal, i);
+            var divider = Split.init(@src(), .horizontal, i, null);
             defer divider.deinit();
             divider.drag(row, paneId(row, i - 1), 1, .{}, .{
                 .extent = row.data().contentRect().w,

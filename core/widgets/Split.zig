@@ -115,12 +115,22 @@ pub const Options = struct {
 /// Open a split: it takes `handle_size` along the container's axis and stretches across it, so
 /// `dvui.box` reserves the gap the way it reserves any other child.
 ///
+/// `at` is for a container that places its own children — `Panes` knows every offset in its row,
+/// and a packed handle would sit wherever the pane before it was laid out, which during a drag is
+/// a frame stale. `null` means pack it, which is what a region's container wants.
+///
 /// `init` + `deinit`, the pairing every dvui widget uses, because that is what this is. The
 /// verb form lives in the namespace above the type — `core.widgets.split(...)` for a plugin,
 /// `Layout.split(...)` for a shape — exactly as `dvui.box()` sits above `BoxWidget.init`.
-pub fn init(src: std.builtin.SourceLocation, axis: dvui.enums.Direction, id_extra: usize) Split {
+pub fn init(
+    src: std.builtin.SourceLocation,
+    axis: dvui.enums.Direction,
+    id_extra: usize,
+    at: ?dvui.Rect,
+) Split {
     return .{ .axis = axis, .box = dvui.box(src, .{ .dir = axis }, .{
         .id_extra = id_extra,
+        .rect = at,
         .min_size_content = switch (axis) {
             .horizontal => .{ .w = handle_size },
             .vertical => .{ .h = handle_size },
@@ -532,7 +542,7 @@ fn twoPaneFrame() !dvui.App.Result {
         recordEdges(t_target, left.data(), .horizontal);
     }
 
-    var divider = init(@src(), .horizontal, 0);
+    var divider = init(@src(), .horizontal, 0, null);
     {
         const srs = divider.box.data().borderRectScale();
         t_sep_x = srs.r.x + srs.r.w / 2;

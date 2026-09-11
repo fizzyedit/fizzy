@@ -93,7 +93,7 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
     // Ended before the preview pane opens, not deferred: a split is a box, and anything drawn
     // while it is still open becomes its child — which stretches the split across the pane it is
     // supposed to sit beside, and draws the grip in the middle of the preview.
-    var divider = core.widgets.split(@src(), .horizontal, @truncate(id_extra + 0x1100));
+    var divider = core.widgets.split(@src(), .horizontal, @truncate(id_extra + 0x1100), null);
     divider.drag(row, split, -1, .{}, .{ .extent = total, .handles = Split.handle_size });
     const dragging = dvui.captured(divider.box.data().id);
     divider.deinit();

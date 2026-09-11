@@ -462,7 +462,7 @@ pub fn split(self: *Layout, src: std.builtin.SourceLocation, opts: Split.Options
     };
     const axis = c.dir;
 
-    var divider = Split.init(src, axis, 0);
+    var divider = Split.init(src, axis, 0, null);
     defer divider.deinit();
     if (!opts.resize) return;
 

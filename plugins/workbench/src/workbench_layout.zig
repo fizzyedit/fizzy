@@ -91,10 +91,11 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
 /// pointer moved; and once the flexible pane reached the minimum its content wanted, every
 /// boundary in the row locked at once.
 ///
-/// Now it is `core.widgets.Panes`: every pane holds a *share* of the row, a drag trades share
-/// between the two panes it divides and no others, and a window resize is proportional because
-/// nothing is stored in points. `Panes` is the general piece — the app's regions keep the points
-/// model, which is right for a sidebar and wrong for a document.
+/// Now it is `core.widgets.Panes`: every pane holds a *share* of the row, a boundary is a
+/// position the rest of the row gives way to — the pane it touches first, then the one past that
+/// — and a window resize is proportional because nothing is stored in points. `Panes` is the
+/// general piece; the app's regions keep the points model, which is right for a sidebar and wrong
+/// for a document.
 ///
 /// The `index` parameter stays because it is on the host vtable, and is the first pane to draw.
 pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
@@ -110,14 +111,18 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
     const panel_animating_open = if (panel) |p| (p.animating and p.ratio < 1.0) else false;
 
     // One id per pane, keyed by the workspace's grouping rather than its position — see `paneId`.
-    // A stack array because a row of document groups is a handful at most; past that the ids are
-    // truncated and the extra groups share the last pane's share, which is a layout nobody wants
-    // but not a crash.
-    var ids: [max_panes]dvui.Id = undefined;
-    const shown = @min(count - index, max_panes);
-    for (0..shown) |k| ids[k] = paneId(wb, index + k);
+    // Every group gets a pane: there is no cap, because a cap would mean "open to the side" quietly
+    // doing nothing once the user has enough documents open. A row of twenty panes is unusable,
+    // but unusable is the user's call to make and undo by dragging, and a share of a row stays
+    // arithmetic however many there are.
+    const shown = count - index;
+    const ids = dvui.currentWindow().arena().alloc(dvui.Id, shown) catch |err| {
+        dvui.logError(@src(), err, "{d} document panes", .{shown});
+        return .ok;
+    };
+    for (ids, 0..) |*id, k| id.* = paneId(wb, index + k);
 
-    var row = core.widgets.panes(@src(), .horizontal, ids[0..shown], .{});
+    var row = core.widgets.panes(@src(), .horizontal, ids);
     defer row.deinit();
 
     for (0..shown) |k| {
@@ -137,9 +142,6 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
 
     return .ok;
 }
-
-/// Document groups drawn side by side at once. Six is already an unusable number of them.
-const max_panes = 6;
 
 /// A stable id per pane, keyed by the **workspace's grouping** rather than its position.
 ///
