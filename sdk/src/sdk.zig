@@ -58,6 +58,8 @@ pub const HighlightStyle = language.HighlightStyle;
 
 /// A named thing a plugin draws. The app's layout decides where it lands, by keyword.
 pub const Surface = @import("Surface.zig");
+/// A region a plugin declares inside the one it is drawing in. See `Host.region`.
+pub const RegionSpec = @import("RegionSpec.zig");
 /// Conventional region keywords fizzy's own shell accepts.
 pub const keywords = @import("keywords.zig");
 /// What a plugin adds to the menu bar, in-app and native.

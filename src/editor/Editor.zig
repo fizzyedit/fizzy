@@ -138,6 +138,10 @@ pub const Workbench = workbench_mod.Workbench;
 gpa: std.mem.Allocator,
 
 layout: Layout.State = .{},
+/// The per-frame `Layout`, live only while the shape is drawing. A plugin declaring a region
+/// through `Host.region` needs it, and it is a local in the draw loop by design — nothing about a
+/// layout should outlive the frame that drew it.
+frame_layout: ?*Layout = null,
 
 arena: std.heap.ArenaAllocator,
 
@@ -2617,6 +2621,9 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .openOrFocusFileAtGrouping = fizzyOpenOrFocusFileAtGrouping,
     .revealPosition = fizzyRevealPosition,
     .splitState = fizzySplitState,
+    .beginRegion = fizzyBeginRegion,
+    .drawRegionContents = fizzyDrawRegionContents,
+    .endRegion = fizzyEndRegion,
     .drawFileKindGlyph = fizzyDrawFileKindGlyph,
     .closeDocById = fizzyCloseDocById,
     .setProjectFolder = fizzySetProjectFolder,
@@ -4242,6 +4249,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.processPendingSaveAs();
 
             var layout: Layout = .init(&editor.host, &editor.layout, editor.gpa, editor.arena.allocator());
+            // Published for the duration of the shape, so a plugin drawing inside a region can
+            // declare one of its own through `Host.region`. Cleared below: a `*Layout` that
+            // outlives the frame points at a dead local.
+            editor.frame_layout = &layout;
             const shell_result = presets.run(editor, &layout);
 
             // The shape has finished declaring regions: publish them. Until this point
@@ -4255,6 +4266,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // everything the shape drew.
             layout.captureUnplaced();
             editor.layout.picker.draw(&layout);
+            editor.frame_layout = null;
 
             // A region is a box, so a shape that declares one and never scopes it leaves the box
             // open and dvui reports the mismatch two widgets later ("not at the top of the widget
@@ -4555,6 +4567,29 @@ fn fizzyDrawFileKindGlyph(_: *anyopaque, kind: []const u8, color: dvui.Color) bo
 /// Answered from the region rather than a paned widget: `collapsed` is whether it is shut, and
 /// `animating` is whether its extent is easing toward a new one. `ratio` and `dragging` survive
 /// for the ABI — a caller wanting a size should ask for the region.
+// A plugin declaring a region needs the `Layout` this frame's shape is running with, which is a
+// local in the draw loop — there is one only while the shape is being drawn, which is exactly
+// when a plugin can be drawing too. Outside that window these answer "no", and a plugin that
+// asked for a region gets null and draws its contents plainly.
+fn fizzyBeginRegion(ctx: *anyopaque, spec: sdk.RegionSpec) ?sdk.RegionSpec.Token {
+    const editor = fizzyCtx(ctx);
+    const layout = editor.frame_layout orelse {
+        dvui.log.err("plugin region \"{s}\" declared outside the layout", .{spec.name});
+        return null;
+    };
+    return layout.beginPluginRegion(spec);
+}
+
+fn fizzyDrawRegionContents(ctx: *anyopaque, token: sdk.RegionSpec.Token) anyerror!dvui.App.Result {
+    const layout = fizzyCtx(ctx).frame_layout orelse return .ok;
+    return layout.drawPluginRegionContents(token);
+}
+
+fn fizzyEndRegion(ctx: *anyopaque, token: sdk.RegionSpec.Token) void {
+    const layout = fizzyCtx(ctx).frame_layout orelse return;
+    layout.endPluginRegion(token);
+}
+
 fn fizzySplitState(ctx: *anyopaque, keywords: []const []const u8) ?sdk.EditorAPI.SplitState {
     const editor = fizzyCtx(ctx);
     const r = editor.regionFor(keywords) orelse return null;
@@ -5752,6 +5787,7 @@ pub fn deinit(editor: *Editor) !void {
     saveWindowRatiosRaw(editor);
     // Only after the flush above, which writes the assignments out.
     editor.layout.deinitAssignments(editor.gpa);
+    editor.layout.deinitQualified(editor.gpa);
     editor.layout.picker.close(editor.gpa);
     editor.settings.deinit(editor.gpa);
 

@@ -17,6 +17,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
+const sdk = @import("fizzy_sdk");
 const Split = core.widgets.Split;
 const Layout = @import("Layout.zig");
 
@@ -117,7 +118,9 @@ pub const Content = struct {
 ///
 /// `.one` is the truthful default: a plain region shows one, and a shape that draws a chooser
 /// knows it did.
-pub const Shows = enum { one, many };
+/// The SDK's enum, not a copy of it: a plugin declaring a region has to be able to say how its
+/// region draws, and two definitions of `one` would eventually disagree.
+pub const Shows = sdk.RegionSpec.Shows;
 
 /// What a region *is*, as opposed to how it is laid out — which is `dvui.Options`, unchanged.
 pub const InitOptions = struct {
@@ -139,6 +142,13 @@ pub const InitOptions = struct {
     dir: dvui.enums.Direction = .vertical,
     /// Chrome drawn instead of the plain selected surface. See `Content`.
     content: ?Content = null,
+    /// Leave the contents to the caller, which draws them with `Layout.drawSelected` when it
+    /// reaches the right point in its own chrome.
+    ///
+    /// For a caller that cannot pass a `content` function: a plugin declares a region through a
+    /// vtable (`Host.region`), so there is no `*Layout` in its hands and no fn pointer it could
+    /// hand back that would take one. It draws its chrome and asks for the contents instead.
+    manual_contents: bool = false,
     /// Make this region's extent along its parent's axis draggable by the `split` after it. The
     /// starting extent comes from `min_size_content` in the `dvui.Options`; the user's drag
     /// replaces it and persists.
@@ -177,14 +187,24 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         return .{};
     }
 
-    const matches = self.matching(init_opts.keywords);
-    if (init_opts.hide_when_empty and init_opts.keywords.len > 0 and matches.len == 0) return .{};
-
     // The container this region lands in, if any — the layout's own stack, read directly
     // rather than through an accessor, so nothing about it appears on the app-facing API.
     const parent: ?*Layout.Container = if (self.depth == 0) null else &self.containers[self.depth - 1];
     const axis: dvui.enums.Direction = if (parent) |p| p.dir else .horizontal;
     const id = dvui.parentGet().extendId(src, opts.idExtra());
+
+    // Declared inside another region, this one's keywords name a place *within* it: `{"document"}`
+    // inside the main area accepts `main.document`. The shape writes the short word — a sub-region
+    // should not have to know, or repeat, what it is nested in — and a plugin still reaches it by
+    // kind alone. See `Layout.Container.prefix` and `sdk.keywords.Fit`.
+    const keywords = self.state.qualify(
+        self.gpa,
+        if (parent) |p| p.prefix else "",
+        init_opts.keywords,
+    );
+
+    const matches = self.matching(keywords);
+    if (init_opts.hide_when_empty and keywords.len > 0 and matches.len == 0) return .{};
 
     // A resizable region's extent along its parent's axis is whatever the user last dragged it
     // to, defaulting to the `min_size_content` the shape wrote.
@@ -299,9 +319,9 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     // hosts surfaces registers, resizable or not: this used to sit inside the `resize` branch,
     // so a stretchy region like the main area was invisible to the registry, the placement
     // picker never offered "Main", and the surfaces drawing there read as unplaced.
-    if (init_opts.keywords.len > 0) self.state.registerRegion(self.gpa, .{
+    if (keywords.len > 0) self.state.registerRegion(self.gpa, .{
         .name = init_opts.name,
-        .keywords = init_opts.keywords,
+        .keywords = keywords,
         .shows = init_opts.shows,
         .id = id,
         .default_extent = default_extent,
@@ -309,7 +329,13 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
 
     const box = dvui.box(src, .{ .dir = init_opts.dir }, box_opts);
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
-    self.containers[self.depth] = .{ .dir = init_opts.dir, .box = box };
+    self.containers[self.depth] = .{
+        .dir = init_opts.dir,
+        .box = box,
+        // A place names the places inside it; a pure grouping box is not a place, so it hands its
+        // own parent's name down unchanged.
+        .prefix = if (keywords.len > 0) keywords[0] else if (parent) |p| p.prefix else "",
+    };
     self.depth += 1;
 
     // A region clips what it holds. Contents draw at their own natural size, so without this a
@@ -318,17 +344,19 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     const clip_to = box.data().contentRectScale().r;
     const prev_clip = dvui.clip(clip_to);
 
-    if (init_opts.name.len > 0 and init_opts.keywords.len > 0) cornerButton(self, init_opts.name, box);
+    if (init_opts.name.len > 0 and keywords.len > 0) cornerButton(self, init_opts.name, box);
 
     // Drawn at every size except none. Skipping content at *zero* is just not doing work nobody
     // can see; skipping it below a threshold would be a policy, and it would also break the
     // layered form later — a tray blurring what is behind it needs the region underneath to have
     // drawn, at every size the tray takes.
-    if (!shut_now and init_opts.keywords.len > 0) _ = try drawContents(self, init_opts);
+    if (!shut_now and keywords.len > 0 and !init_opts.manual_contents) {
+        _ = try drawContents(self, init_opts, keywords);
+    }
 
     return .{
         .name = init_opts.name,
-        .keywords = init_opts.keywords,
+        .keywords = keywords,
         .shows = init_opts.shows,
         .id = id,
         .default_extent = default_extent,
@@ -395,7 +423,10 @@ fn cornerButton(self: *Layout, name: []const u8, box: *dvui.BoxWidget) void {
 ///
 /// Everything reachable here is reachable by hand from `matching` / `selected` / `draw`, so a
 /// shape wanting something else writes its own function and passes it as `content`.
-fn drawContents(self: *Layout, opts: InitOptions) !dvui.App.Result {
-    const content = opts.content orelse return self.drawSelected(opts.keywords);
-    return content.draw(content.ctx, self, opts.keywords);
+/// `keywords` rather than `opts.keywords`: chrome is handed the region's *qualified* set, so a
+/// tab strip inside a sub-region lists what that sub-region accepts and not what its kind accepts
+/// everywhere in the app.
+fn drawContents(self: *Layout, opts: InitOptions, keywords: []const []const u8) !dvui.App.Result {
+    const content = opts.content orelse return self.drawSelected(keywords);
+    return content.draw(content.ctx, self, keywords);
 }

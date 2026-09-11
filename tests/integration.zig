@@ -1751,3 +1751,175 @@ test "assigning a region overrides keyword matching, duplicates and empties" {
     editor.layout.unassign(editor.gpa, "Sidebar");
     try std.testing.expectEqual(@as(usize, 2), layout.matching(sidebar).len);
 }
+
+// -- regions inside regions ----------------------------------------------------------------------
+
+// A region declared inside another names a place *within* it: a document pane inside the main area
+// accepts `main.document`. The shape writes the short word, because a sub-region should not have to
+// know — or repeat — what it is nested in, and a plugin still reaches it by kind alone.
+//
+// This is the half of sub-regions that has to work before a plugin can declare one: the vocabulary.
+test "a nested region qualifies its keywords, and keeps them across frames" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    const document: []const []const u8 = &.{"document"};
+    const qualified = editor.layout.qualify(editor.gpa, "main", document);
+
+    try std.testing.expectEqual(@as(usize, 1), qualified.len);
+    try std.testing.expectEqualStrings("main.document", qualified[0]);
+
+    // Interned, not arena-allocated: the registry is read a frame *later* than it is written, so
+    // the same request has to come back with the same memory rather than a fresh copy.
+    const again = editor.layout.qualify(editor.gpa, "main", document);
+    try std.testing.expectEqual(qualified.ptr, again.ptr);
+
+    // A shape that writes the qualified form itself is left alone — no `main.main.document`.
+    const already = editor.layout.qualify(editor.gpa, "main", &.{"main.document"});
+    try std.testing.expectEqualStrings("main.document", already[0]);
+
+    // And a region that accepts nothing does not invent a level of vocabulary.
+    try std.testing.expectEqual(@as(usize, 0), editor.layout.qualify(editor.gpa, "main", &.{}).len);
+}
+
+// A plugin declaring a region: the other half of sub-regions, and the reason the vocabulary work
+// above had to come first. The plugin says "a `document` place goes here"; it gets one that
+// accepts `main.document`, because it is declared inside Main and cannot name anything outside it.
+//
+// Driven through `Layout` rather than a loaded dylib, which is where the vtable lands
+// (`Host.region` → `EditorAPI.beginRegion` → `Editor.beginPluginRegion` → this).
+const PluginRegionFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+    var draws: usize = 0;
+
+    fn drawSurface(_: ?*anyopaque) anyerror!dvui.App.Result {
+        draws += 1;
+        return .ok;
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        draws = 0;
+        var layout = fizzy.Editor.Layout.init(&e.host, &e.layout, e.gpa, dvui.currentWindow().arena());
+        {
+            var main = try layout.region(@src(), .{
+                .name = "Main",
+                .keywords = fizzy.sdk.keywords.ide.main,
+            }, .{ .expand = .both });
+            defer main.deinit();
+
+            // Exactly what a plugin's `host.region(...)` does, one call in from the vtable.
+            const token = layout.beginPluginRegion(.{
+                .name = "Pane",
+                .keywords = &.{"document"},
+                .key = 7,
+            }) orelse return error.TestUnexpectedResult;
+            _ = try layout.drawPluginRegionContents(token);
+            layout.endPluginRegion(token);
+        }
+        e.layout.publishRegions();
+        return .ok;
+    }
+};
+
+test "a plugin declares a region inside the one it was given" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    // A surface that only says what kind of thing it is, which is all a document plugin knows.
+    try editor.host.registerSurface(.{
+        .id = "test.doc",
+        .title = "Doc",
+        .keywords = &.{"document"},
+        .draw = PluginRegionFrame.drawSurface,
+    });
+
+    PluginRegionFrame.editor = editor;
+    defer PluginRegionFrame.editor = null;
+    try dvui.testing.settle(PluginRegionFrame.frame);
+
+    // The plugin's region is in the app's registry like any other, under the name an assignment
+    // would persist against — and its keywords are qualified by the region it was declared in.
+    const pane = for (editor.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Pane")) break r;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), pane.keywords.len);
+    try std.testing.expectEqualStrings("main.document", pane.keywords[0]);
+
+    // And the surface drew there — once, inside the pane rather than behind it in Main.
+    try std.testing.expectEqual(@as(usize, 1), PluginRegionFrame.draws);
+}
+
+// Where two regions accept the same surface, the more specific one takes it: a document pane
+// inside the main area, and the main area itself, both accept a surface asking for
+// `main.document` — and without a rule the surface draws twice, once in the pane made for it and
+// once behind that pane.
+//
+// Only a *strictly* stronger claim wins, so the existing promise holds: two regions that accept a
+// surface equally both show it (an icon rail and the pane it chooses for), and an ambiguity the
+// user can see is one they can fix with the picker.
+test "the more specific region claims a surface, an equal one shares it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    const main = fizzy.sdk.keywords.ide.main;
+    const pane: []const []const u8 = &.{"main.document"};
+    const sidebar = fizzy.sdk.keywords.ide.sidebar;
+
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Main", .keywords = main, .id = .extendId(null, @src(), 1) });
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Pane", .keywords = pane, .id = .extendId(null, @src(), 2) });
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Rail", .keywords = sidebar, .id = .extendId(null, @src(), 3) });
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Sidebar", .keywords = sidebar, .id = .extendId(null, @src(), 4) });
+    editor.layout.publishRegions();
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    // One surface that names the sub-place, one that only names its kind.
+    try editor.host.registerSurface(.{ .id = "test.doc", .title = "Doc", .keywords = pane, .draw = draw });
+    try editor.host.registerSurface(.{ .id = "test.kind", .title = "Kind", .keywords = &.{"document"}, .draw = draw });
+    try editor.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = sidebar, .draw = draw });
+
+    var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+
+    // The pane takes both: the exact word, and the kind it qualifies.
+    try std.testing.expectEqual(@as(usize, 2), layout.matching(pane).len);
+
+    // The main area accepts `main.document` too — that is how a plugin written for a nested shape
+    // lands in a flat one — but not while a pane exists to take it.
+    try std.testing.expectEqual(@as(usize, 0), layout.matching(main).len);
+
+    // Nothing is lost: a claimed surface is placed, not unplaced.
+    try std.testing.expectEqual(@as(usize, 0), layout.unplaced().len);
+
+    // Two regions with the same keywords still share, which is the rail and the sidebar.
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(sidebar).len);
+
+    // A region the user assigned by hand does not claim: its contents are exactly the list, and
+    // that list says nothing about what another region's keywords attract.
+    defer editor.layout.deinitAssignments(editor.gpa);
+    try editor.layout.assign(editor.gpa, "Pane", &.{"test.doc"});
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(pane).len);
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(main).len);
+    try std.testing.expectEqualStrings("test.doc", layout.matching(main)[0].id);
+}

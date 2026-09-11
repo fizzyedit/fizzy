@@ -158,8 +158,26 @@ drawn: std.ArrayListUnmanaged(*Surface) = .empty,
 containers: [max_nesting]Container = undefined,
 depth: usize = 0,
 
+/// Open regions declared by *plugins*, innermost last — see `beginPluginRegion`. A separate
+/// stack because these are the ones nobody scoped with a `defer`: the app holds them on the
+/// plugin's behalf between two vtable calls. Bounded by `max_nesting` for the same reason the
+/// container stack is: a layout this deep is a mistake to report, not a case to support.
+plugin_regions: [max_nesting]Region = undefined,
+plugin_depth: usize = 0,
+
 pub const Container = struct {
     dir: dvui.enums.Direction,
+    /// The dotted name of the region this container *is*, which the regions declared inside it
+    /// qualify their keywords with — `"main"` here makes a child's `{"document"}` into
+    /// `{"main.document"}`. Empty for a container that accepts nothing itself: a pure grouping
+    /// box is not a place, so it passes its own parent's name through rather than inventing a
+    /// level of vocabulary a shape never wrote.
+    ///
+    /// A region's *first* keyword, not all of them. `main` names the same place as `center` and
+    /// `workspace`, and qualifying under every synonym would multiply the vocabulary by three to
+    /// say one thing — while `accepts` already lets a surface reach the sub-place by kind
+    /// (`document`) without naming any ancestor at all.
+    prefix: []const u8 = "",
     /// The base region's declared minimum along the axis — `min_size_content` on the region in
     /// this container that is not resizable. The app declares it; the framework only reads it.
     base_min: f32 = 0,
@@ -260,10 +278,52 @@ pub fn matching(self: *Layout, keywords: []const []const u8) []const *Surface {
     }
     for (self.host.surfaces.items) |*s| {
         if (s.hidden) continue;
-        if (!sdk.keywords.intersects(s.keywords, keywords)) continue;
+        const mine = sdk.keywords.strength(keywords, s.keywords);
+        if (mine == .none) continue;
+        if (self.claimedElsewhere(keywords, s, mine)) continue;
         out.append(a, s) catch return out.items;
     }
     return out.items;
+}
+
+/// Is some other region a *more specific* home for `s` than the region with `keywords`?
+///
+/// The rule sub-regions need. A surface asking for `main.document` is accepted by the main area
+/// too (`Fit.place` — the enclosing region takes a surface whose exact place this shape lacks),
+/// so without this it would draw twice: once in the document pane that was made for it and once
+/// behind that pane in the main area itself.
+///
+/// **Only a strictly stronger claim wins.** Two regions that accept a surface equally both show
+/// it, which is the existing promise that the same surface in two places is a feature — an icon
+/// rail and the pane it chooses for, a diagnostics view in the panel and the sidebar. Breaking
+/// such a tie by declaration order would leave the loser mysteriously empty; an ambiguity the
+/// user can see is one they can resolve with the picker.
+///
+/// Regions with an explicit assignment do not claim: their contents are exactly what the user
+/// listed, and that list says nothing about what another region's keywords attract.
+fn claimedElsewhere(
+    self: *Layout,
+    keywords: []const []const u8,
+    s: *const Surface,
+    mine: sdk.keywords.Fit,
+) bool {
+    if (mine == .exact) return false; // nothing outranks the exact word
+    const want = sdk.keywords.groupKey(keywords);
+    // This frame's regions once the shape has started declaring them — a region registers before
+    // it draws its contents, so by the time anything asks, every region declared *above* this one
+    // is present. Last frame's set fills in for the rest, which is the same trade `assignedFor`
+    // and `State.regionFor` make and for the same reason.
+    const declared = if (self.state.regions_building.items.len > 0)
+        self.state.regions_building.items
+    else
+        self.state.regions.items;
+    for (declared) |r| {
+        if (sdk.keywords.groupKey(r.keywords) == want) continue;
+        if (self.state.assignment(r.name) != null) continue;
+        const theirs = sdk.keywords.strength(r.keywords, s.keywords);
+        if (@intFromEnum(theirs) > @intFromEnum(mine)) return true;
+    }
+    return false;
 }
 
 /// A surface by id, regardless of keywords — how an app places a plugin it ships with and
@@ -284,7 +344,7 @@ pub fn unplaced(self: *Layout) []const *Surface {
         for (self.state.regions.items) |r| {
             if (self.state.assignment(r.name)) |ids| {
                 for (ids) |id| if (std.mem.eql(u8, id, s.id)) continue :outer;
-            } else if (sdk.keywords.intersects(s.keywords, r.keywords)) continue :outer;
+            } else if (sdk.keywords.accepts(r.keywords, s.keywords)) continue :outer;
         }
         out.append(a, s) catch return out.items;
     }
@@ -436,6 +496,77 @@ pub const Region = @import("Region.zig");
 /// Declare a region — the verb form of `Region.init`, so a shape writes `f.region(...)` beside
 /// `f.split(...)` and never names the type. Same arrangement as `dvui.box` over `BoxWidget.init`.
 pub const region = Region.init;
+
+// ── Regions a plugin declares ───────────────────────────────────────────────────────────────────
+//
+// A plugin has no `*Layout` — it is a dylib, it holds a `Host`, and the layout API takes a
+// `@src()` and returns a widget. So the three calls it makes through the vtable land here, on the
+// live `Layout` the app is running its shape with (`Host.region` → `EditorAPI.beginRegion` →
+// `Editor.beginPluginRegion` → this).
+//
+// The regions themselves are ordinary: same `Region.init`, same registry, same claiming, same
+// picker. What is different is only that nobody wrote a `@src()` for them, so the id comes from
+// this function's source location plus the caller's `key` — which is why `RegionSpec.key` has to
+// be stable and unique among one caller's regions.
+
+pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.Token {
+    if (self.plugin_depth >= max_nesting) {
+        dvui.log.err("plugin regions nest deeper than {d}; \"{s}\" ignored", .{ max_nesting, spec.name });
+        return null;
+    }
+    const r = Region.init(self, @src(), .{
+        .name = spec.name,
+        .keywords = spec.keywords,
+        .shows = spec.shows,
+        .dir = spec.dir,
+        .hide_when_empty = spec.hide_when_empty,
+        // The plugin draws its own chrome around the contents, so it says where they go.
+        .manual_contents = true,
+    }, .{
+        // Truncated because `id_extra` is a `usize`, which is 32 bits on wasm. A plugin's key is
+        // an id or a hash, so the low bits are the ones carrying the distinction.
+        .id_extra = @truncate(spec.key),
+        .expand = spec.expand,
+        .min_size_content = switch (if (self.innermost()) |c| c.dir else .horizontal) {
+            .horizontal => .{ .w = spec.min_extent },
+            .vertical => .{ .h = spec.min_extent },
+        },
+    }) catch |err| {
+        dvui.logError(@src(), err, "plugin region \"{s}\"", .{spec.name});
+        return null;
+    };
+    // `hide_when_empty` with nothing to show: the region declined to exist, and a caller that
+    // gets a token would draw its chrome around nothing.
+    if (r.box == null) return null;
+
+    self.plugin_regions[self.plugin_depth] = r;
+    self.plugin_depth += 1;
+    return @enumFromInt(self.plugin_depth);
+}
+
+pub fn drawPluginRegionContents(self: *Layout, token: sdk.RegionSpec.Token) !dvui.App.Result {
+    const r = self.pluginRegion(token) orelse return .ok;
+    return self.drawSelected(r.keywords);
+}
+
+pub fn endPluginRegion(self: *Layout, token: sdk.RegionSpec.Token) void {
+    // Strictly nested, like the boxes they are. Closing out of order would deinit the wrong box
+    // and dvui would report it as a stack mismatch two widgets later, naming neither the plugin
+    // nor the region — so say it here while the token still means something.
+    const depth = @intFromEnum(token);
+    if (depth != self.plugin_depth) {
+        dvui.log.err("plugin region closed out of order ({d} of {d} open)", .{ depth, self.plugin_depth });
+        return;
+    }
+    self.plugin_depth -= 1;
+    self.plugin_regions[self.plugin_depth].deinit();
+}
+
+fn pluginRegion(self: *Layout, token: sdk.RegionSpec.Token) ?*Region {
+    const depth = @intFromEnum(token);
+    if (depth == 0 or depth > self.plugin_depth) return null;
+    return &self.plugin_regions[depth - 1];
+}
 
 /// What persists behind a `Layout` between frames — selections, declared regions, sizes.
 pub const State = @import("State.zig");

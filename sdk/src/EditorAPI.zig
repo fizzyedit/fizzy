@@ -9,6 +9,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const DocHandle = @import("DocHandle.zig");
+const RegionSpec = @import("RegionSpec.zig");
 
 const EditorAPI = @This();
 
@@ -146,6 +147,26 @@ pub const VTable = struct {
     /// on `drawWorkspaces`, which only worked because fizzy's own shape has a panel — an app
     /// with a differently-shaped bottom had no way to answer.
     splitState: *const fn (ctx: *anyopaque, keywords: []const []const u8) ?SplitState,
+
+    /// Open a region inside the one this plugin is drawing in, and hand back the app's handle to
+    /// it. Null when the app cannot: nested too deep, or called outside the shape.
+    ///
+    /// The three of these are the whole seam, and the reason it is a seam at all rather than the
+    /// layout API moving into the SDK: a region is the *app's* — it registers in the app's
+    /// registry, persists its size and its assignment under the app's name, answers the app's
+    /// picker. A plugin says what place it wants and the app makes one, exactly as it already
+    /// does for the shape's own regions. The plugin's keywords are qualified by the enclosing
+    /// region on the way in, so a declaration cannot reach outside the place it was given.
+    ///
+    /// Strictly nested, like the box it is: close the innermost one first.
+    beginRegion: *const fn (ctx: *anyopaque, spec: RegionSpec) ?RegionSpec.Token,
+    /// Draw the surfaces the region accepts, *here* — wherever the plugin has reached in its own
+    /// chrome. Separate from `beginRegion` because a tab strip has to be laid out before the
+    /// document it labels, and only the plugin knows where its content goes.
+    drawRegionContents: *const fn (ctx: *anyopaque, token: RegionSpec.Token) anyerror!dvui.App.Result,
+    /// Close it. The box closes, the clip is restored, and the region is left in the registry for
+    /// the frame — a region that drew is a region the user can place things in.
+    endRegion: *const fn (ctx: *anyopaque, token: RegionSpec.Token) void,
     /// Draw the app's glyph for a declared file kind ("image", "source", …), or return false if
     /// this app has no glyph for it.
     ///
@@ -384,6 +405,18 @@ pub fn revealPosition(self: EditorAPI, path: []const u8, line: u32, character: u
 
 pub fn splitState(self: EditorAPI, keywords: []const []const u8) ?SplitState {
     return self.vtable.splitState(self.ctx, keywords);
+}
+
+pub fn beginRegion(self: EditorAPI, spec: RegionSpec) ?RegionSpec.Token {
+    return self.vtable.beginRegion(self.ctx, spec);
+}
+
+pub fn drawRegionContents(self: EditorAPI, token: RegionSpec.Token) !dvui.App.Result {
+    return self.vtable.drawRegionContents(self.ctx, token);
+}
+
+pub fn endRegion(self: EditorAPI, token: RegionSpec.Token) void {
+    self.vtable.endRegion(self.ctx, token);
 }
 
 pub fn drawFileKindGlyph(self: EditorAPI, kind: []const u8, color: dvui.Color) bool {

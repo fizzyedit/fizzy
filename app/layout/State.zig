@@ -98,6 +98,8 @@ panel_hidden_for_center: bool = false,
 center_prev_id: ?[]const u8 = null,
 /// Host-owned cross-fade between center providers. See `drawActiveCenter`.
 center_transition: core.anim.Transition = .{},
+/// Keyword sets qualified by the region enclosing theirs, interned. See `qualify`.
+qualified: std.ArrayListUnmanaged(Qualified) = .empty,
 
 // ---- the app's side of a region ---------------------------------------------------------------
 //
@@ -107,11 +109,99 @@ center_transition: core.anim.Transition = .{},
 
 /// The region accepting `keywords`, or null when this app's shape declared none — a normal
 /// state, not an error.
+///
+/// `intersects`, not `accepts`: a caller here holds a *vocabulary* and wants the region that
+/// speaks it — Toggle Explorer asks for `ide.sidebar` and must find the sidebar whether the
+/// shape declared it qualified or not. Whether a *surface* belongs in a region is the asymmetric
+/// question, and that one goes through `accepts`.
 pub fn regionFor(self: *State, keywords: []const []const u8) ?Region {
     for (self.regions.items) |entry| {
         if (sdk.keywords.intersects(entry.keywords, keywords)) return entry;
     }
     return null;
+}
+
+/// A region's keywords qualified by the region enclosing it: `{"document"}` declared inside the
+/// main area becomes `{"main.document"}`. Interned, and stable for as long as the state lives.
+///
+/// Interned rather than arena-allocated because the registry is read a frame *later* than it is
+/// written — `regionFor` answers a command dispatched between frames from the last completed
+/// shape, and an arena string would be freed by then. There are as many of these as a shape has
+/// nested regions, which is a handful, so the pool is a list and a linear scan.
+///
+/// On allocation failure the region keeps its unqualified keywords: it then accepts the general
+/// kind instead of its own sub-place, which is a shape slightly flatter than the one written
+/// rather than a region that accepts nothing.
+pub fn qualify(
+    self: *State,
+    gpa: std.mem.Allocator,
+    prefix: []const u8,
+    base: []const []const u8,
+) []const []const u8 {
+    if (prefix.len == 0 or base.len == 0) return base;
+
+    for (self.qualified.items) |q| {
+        if (!std.mem.eql(u8, q.prefix, prefix)) continue;
+        if (q.words.len != base.len) continue;
+        var same = true;
+        for (q.base, base) |a, b| same = same and std.mem.eql(u8, a, b);
+        if (same) return q.words;
+    }
+
+    const entry = buildQualified(gpa, prefix, base) catch |err| {
+        dvui.log.err("qualifying {d} keywords under \"{s}\": {any}", .{ base.len, prefix, err });
+        return base;
+    };
+    self.qualified.append(gpa, entry) catch {
+        freeQualified(gpa, entry);
+        return base;
+    };
+    return entry.words;
+}
+
+/// One interned qualified keyword set. `base` is the shape's own set, kept so the next frame's
+/// identical request finds this entry instead of allocating another.
+const Qualified = struct {
+    prefix: []const u8,
+    base: []const []const u8,
+    words: []const []const u8,
+};
+
+fn buildQualified(gpa: std.mem.Allocator, prefix: []const u8, base: []const []const u8) !Qualified {
+    var entry: Qualified = .{ .prefix = "", .base = &.{}, .words = &.{} };
+    errdefer freeQualified(gpa, entry);
+
+    entry.prefix = try gpa.dupe(u8, prefix);
+    const base_copy = try gpa.alloc([]const u8, base.len);
+    entry.base = base_copy;
+    for (base_copy) |*w| w.* = "";
+    for (base_copy, base) |*dst, src| dst.* = try gpa.dupe(u8, src);
+
+    const words = try gpa.alloc([]const u8, base.len);
+    entry.words = words;
+    for (words) |*w| w.* = "";
+    for (words, base) |*dst, src| {
+        // A word that already names a place under this one is left alone: a shape may write the
+        // qualified form itself, and qualifying it twice would invent `main.main.document`.
+        dst.* = if (std.mem.startsWith(u8, src, prefix) and src.len > prefix.len and src[prefix.len] == '.')
+            try gpa.dupe(u8, src)
+        else
+            try std.fmt.allocPrint(gpa, "{s}.{s}", .{ prefix, src });
+    }
+    return entry;
+}
+
+fn freeQualified(gpa: std.mem.Allocator, entry: Qualified) void {
+    if (entry.prefix.len > 0) gpa.free(entry.prefix);
+    for (entry.base) |w| if (w.len > 0) gpa.free(w);
+    if (entry.base.len > 0) gpa.free(entry.base);
+    for (entry.words) |w| if (w.len > 0) gpa.free(w);
+    if (entry.words.len > 0) gpa.free(entry.words);
+}
+
+pub fn deinitQualified(self: *State, gpa: std.mem.Allocator) void {
+    for (self.qualified.items) |q| freeQualified(gpa, q);
+    self.qualified.deinit(gpa);
 }
 
 /// Called by `Region.init` as a shape declares one. Lands in the list being built, which

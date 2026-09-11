@@ -13,8 +13,9 @@ person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-11 at b
 - Another agent session may commit in the same working copy. Check `jj log` before assuming a
   change is yours; describe only what a change actually contains.
 - **Do not publish the SDK version bump / force a store-wide plugin rebuild** while this is
-  experimental. The fingerprint has moved (sdk 0.1.62); pixi (4 calls), brain (1), ghostty (1)
-  still use legacy `register*View` and need source edits + rebuild before any release.
+  experimental. The fingerprint has moved (sdk 0.1.63, `0x36440c0ce10a6c97`); pixi (4 calls),
+  brain (1), ghostty (1) still use legacy `register*View` and need source edits + rebuild before
+  any release. Breaking the ABI is agreed while unreleased — arc (b) below took it deliberately.
 - No single-line wrapper functions; write the library call at the site. Prefer root-cause fixes
   over another patch to the same mechanism; use dvui's public API over touching its state.
 - Gates after any change: `zig build`, `zig build test`, `zig build test-integration`,
@@ -49,7 +50,9 @@ Layout vocabulary: `Layout` is per-frame (`.init(host, state, gpa, arena)`), `St
 (regions registry double-buffered: `regions` = last completed shape, `regions_building`;
 `publishRegions()` after the shape). `Layout.region(...)` returns a `Region` (a box: scope it,
 `defer r.deinit()`); `Layout.split(...)` a `Split` (end before the next pane). Every region with
-keywords registers, resizable or not. Surfaces draw where their keywords intersect a region's.
+keywords registers, resizable or not. A surface draws where a region **accepts** its keywords
+(`sdk.keywords.accepts`, asymmetric; a region nested in another qualifies its keywords with the
+enclosing region's name — see arc (a) below).
 
 ## Verification workflow (what actually works on this machine)
 
@@ -102,21 +105,74 @@ regions are the same idea at two depths. Unify them:
   (`<plugin>.doc:<path>`) and assigning it to the active document region; moving a tab =
   reassigning; a split = a new region; the same doc in two groups = duplication; session
   restore = the assignment list.
-- **Keywords stop attracting and start accepting.** Default placement is the *first (or
-  focused) accepting region*, then explicit assignment. Today's one-accepting-region panels
-  are the special case, so nothing visible changes for fizzy.
-- **Namespacing by nesting**: a region declared while drawing inside region Main gets `main.`
-  prefixed automatically; a surface asking `document` matches a region keyword equal to it or
-  ending in `.document`. Plugins never learn the app's names; a plugin's bare `sidebar` region
-  becomes `main.sidebar` and attracts nothing — collision is structurally impossible.
 - Cost: the region registry moves from `app/layout/State` into `Host` beside surfaces so a
   plugin can declare one across the dylib boundary (vtable on Host: declare region, read/set
   extent — an ABI fingerprint bump, fine while unpublished); surfaces become dynamic
   (register/unregister per open file); workbench's Workspace/tab-group code is replaced by
   regions + assignments — the big rewrite and the one that pays.
-- Order: (a) keyword semantics — accept + first-accepting default + nested prefixing, no ABI
-  change, testable; (b) registry → Host, plugin-declarable; (c) workbench tab groups → regions,
-  documents → surfaces.
+- Order: (a) keyword semantics; (b) registry → Host, plugin-declarable; (c) workbench tab
+  groups → regions, documents → surfaces. **ABI breakage is agreed** (2026-09-11): nothing
+  ships until all three land and the out-of-tree plugins are rebuilt, so (b) need not contort
+  itself to keep the fingerprint.
+
+### (a) Keyword semantics — **done** (`sdk/src/keywords.zig`, `app/layout/`)
+
+Keywords no longer just *attract*; a region **accepts** a surface, asymmetrically, and a keyword
+may name a place inside another (`main.document`). `keywords.Fit` orders the relation:
+
+| Fit | Region | Surface | Meaning |
+|---|---|---|---|
+| `exact` | `main.document` | `main.document` | the same word |
+| `kind` | `main.document` | `document` | the shape says where the plugin's kind lives — the ordinary sub-region case |
+| `place` | `main` | `main.document` | the sub-place does not exist here, so the enclosing region takes it — a plugin written for a nested shape works in a flat one |
+| `none` | `main` | `document` | unrelated. Segment boundaries only: `mainly` is not inside `main` |
+
+- `accepts(region, surface)` / `strength(region, surface)` replace `intersects` everywhere the
+  question is "does this surface belong here" (`Layout.matching`/`unplaced`, `Surface.matches`,
+  `Host.selectedSurface`). `intersects` survives for *vocabulary lookup* — `State.regionFor`,
+  where a command holds `ide.sidebar` and wants whichever region speaks it.
+- **Nesting qualifies automatically.** `Layout.Container.prefix` carries the enclosing region's
+  first keyword (not all its synonyms — `accepts` reaches the sub-place by kind anyway), and
+  `Region.init` runs the child's keywords through `State.qualify`. A container region with no
+  keywords of its own is not a place: it passes its parent's prefix through, which is why
+  fizzy's own shape (`work`/`content` are bare boxes) is unchanged.
+  `qualify` **interns** — the registry is read a frame later than it is written, so arena
+  strings would dangle; it also leaves an already-qualified word alone (no `main.main.document`).
+- **The more specific region claims the surface** (`Layout.claimedElsewhere`), so a document pane
+  inside Main takes what Main would otherwise also draw behind it. Only a *strictly* stronger
+  claim wins: equal acceptance still means both regions show it (icon rail + sidebar), and a
+  region with an explicit assignment does not claim at all. Ties are a visible ambiguity the
+  picker can fix, which beats silently emptying the loser.
+- Tests: `sdk/src/keywords.zig` (fit table, synonyms don't stack), `tests/integration.zig`
+  ("a nested region qualifies its keywords, and keeps them across frames", "the more specific
+  region claims a surface, an equal one shares it").
+
+### (b) A plugin can declare a region — **done** (sdk 0.1.63, fingerprint `0x36440c0ce10a6c97`)
+
+The registry stayed in `app/layout/State`; what moved is the *ability to declare*, as three
+vtable calls, because a region is the app's — it registers in the app's registry, persists its
+size and assignment under the app's name, and answers the app's picker.
+
+- `sdk.RegionSpec` (name, unqualified keywords, `shows`, `dir`, `key`, `hide_when_empty`,
+  `expand`, `min_extent`) + `EditorAPI.beginRegion`/`drawRegionContents`/`endRegion`.
+  `Region.Shows` is now an alias of `RegionSpec.Shows` — one definition.
+- Plugin-facing: `host.region(spec) ?Host.Region`, scoped like the box it is
+  (`defer pane.deinit()`), with `pane.drawContents()` **where the plugin wants the accepted
+  surfaces** — separate from `begin` because a tab strip has to be laid out before the document
+  it labels. App-side that is `Region.InitOptions.manual_contents`, for a caller that cannot pass
+  a `content` fn pointer taking a `*Layout` it does not have.
+- `Layout.beginPluginRegion`/`drawPluginRegionContents`/`endPluginRegion` hold the open regions
+  on a second stack (`plugin_regions`, LIFO, bounded by `max_nesting`, out-of-order close
+  reported here rather than as a dvui stack mismatch two widgets later). The id is this
+  function's `@src()` plus `spec.key`, which is why `key` must be stable and unique per caller
+  per parent. `Editor.frame_layout` publishes the frame's `*Layout` for the duration of the
+  shape and is cleared after the picker draws.
+- Keywords are qualified on the way in, so a plugin **cannot name a place outside the one it was
+  given**: `{"document"}` declared in Main becomes `main.document`. Collision is structural, not
+  policed.
+- Test: "a plugin declares a region inside the one it was given" — a real frame, a surface
+  keyworded `document`, asserting the registry entry reads `main.document` and that the surface
+  drew once, inside the pane rather than behind it in Main.
 
 ## Also queued (in rough priority)
 

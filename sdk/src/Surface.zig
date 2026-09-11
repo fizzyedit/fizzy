@@ -20,6 +20,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const Plugin = @import("Plugin.zig");
+const kw = @import("keywords.zig");
 const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
 
 const Surface = @This();
@@ -57,20 +58,15 @@ pub const Icon = union(enum) {
     none,
 };
 
-/// Case-insensitive keyword intersection — the whole matching rule.
+/// Does this region accept this surface? The whole binding rule, and `keywords.accepts` is the
+/// one implementation of it — the region's vocabulary is the first argument because the question
+/// is asymmetric once keywords can name a place inside another (`keywords.Fit`).
 pub fn matches(self: *const Surface, region_keywords: []const []const u8) bool {
-    for (self.keywords) |k| for (region_keywords) |r| {
-        if (std.ascii.eqlIgnoreCase(k, r)) return true;
-    };
-    return false;
+    return kw.accepts(region_keywords, self.keywords);
 }
 
-/// How strongly this surface matches, for the ambiguity rule: when a surface matches several
-/// regions, the strongest intersection wins.
-pub fn matchStrength(self: *const Surface, region_keywords: []const []const u8) usize {
-    var n: usize = 0;
-    for (self.keywords) |k| for (region_keywords) |r| {
-        if (std.ascii.eqlIgnoreCase(k, r)) n += 1;
-    };
-    return n;
+/// How strongly this region accepts this surface, for the ambiguity rule: where two regions both
+/// accept a surface, the more specific one claims it (`Layout.claimedElsewhere`).
+pub fn matchStrength(self: *const Surface, region_keywords: []const []const u8) kw.Fit {
+    return kw.strength(region_keywords, self.keywords);
 }

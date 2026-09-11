@@ -10,6 +10,7 @@ const runtime = @import("runtime.zig");
 const Plugin = @import("Plugin.zig");
 const EditorAPI = @import("EditorAPI.zig");
 const DocHandle = @import("DocHandle.zig");
+const RegionSpec = @import("RegionSpec.zig");
 const WorkbenchPaneView = @import("WorkbenchPane.zig").WorkbenchPaneView;
 const language = @import("language.zig");
 const settings = @import("settings.zig");
@@ -394,6 +395,40 @@ pub fn docFromPath(self: *Host, path: []const u8) ?DocHandle {
 /// this app's layout declared no such split.
 pub fn splitState(self: *Host, kw: []const []const u8) ?EditorAPI.SplitState {
     return if (self.fizzy_api) |a| a.splitState(kw) else null;
+}
+
+/// An open plugin region: what a plugin holds between declaring a place and closing it.
+///
+/// `init`/`deinit` like the box it is, because that is what a region is everywhere else in fizzy
+/// — a shape scopes one and defers its `deinit`, and a plugin subdividing a region it was given
+/// should read the same way.
+pub const Region = struct {
+    host: *Host,
+    token: RegionSpec.Token,
+
+    /// Draw the surfaces this region accepts, at this point in the plugin's own drawing.
+    pub fn drawContents(self: Region) !dvui.App.Result {
+        return if (self.host.fizzy_api) |a| try a.drawRegionContents(self.token) else .ok;
+    }
+
+    pub fn deinit(self: Region) void {
+        if (self.host.fizzy_api) |a| a.endRegion(self.token);
+    }
+};
+
+/// Declare a region inside the one this plugin is drawing in — a document pane inside the main
+/// area, a sub-pane of a sidebar. Null when the app declined (nested too deep, or called from
+/// outside the shape), which a caller should treat as "draw it yourself, plainly".
+///
+/// The region is the app's: it registers in the app's registry, remembers its size and the user's
+/// assignment under `spec.name`, and answers the app's picker — so a plugin's subdivision gets
+/// everything the shape's own regions have instead of reimplementing a worse version of it. What
+/// the plugin keeps is the *contents*: where its chrome goes, and where `drawContents` puts the
+/// surfaces. See `RegionSpec`.
+pub fn region(self: *Host, spec: RegionSpec) ?Region {
+    const api = self.fizzy_api orelse return null;
+    const token = api.beginRegion(spec) orelse return null;
+    return .{ .host = self, .token = token };
 }
 
 pub fn revealPosition(self: *Host, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
@@ -1059,7 +1094,7 @@ pub fn selectedSurface(self: *Host, kw: []const []const u8) ?*Surface {
     }
     for (self.surfaces.items) |*s| {
         if (s.hidden) continue;
-        if (keywords.intersects(s.keywords, kw)) return s;
+        if (keywords.accepts(kw, s.keywords)) return s;
     }
     return null;
 }
@@ -1068,7 +1103,7 @@ pub fn selectedSurface(self: *Host, kw: []const []const u8) ?*Surface {
 /// panel's `persistent`, generalized.
 pub fn hasPersistentSurface(self: *Host, kw: []const []const u8) bool {
     for (self.surfaces.items) |*s| {
-        if (s.persistent and keywords.intersects(s.keywords, kw)) return true;
+        if (s.persistent and keywords.accepts(kw, s.keywords)) return true;
     }
     return false;
 }
