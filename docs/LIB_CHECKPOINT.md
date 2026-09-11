@@ -2,7 +2,7 @@
 
 Resume point for the "fizzy as a library" work. Written to be picked up cold by any agent or
 person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-11 at bookmark
-`fizzy-lib` (jj change `nllllosx`, "The workbench's panes are regions…").
+`fizzy-lib` (jj change `moywovyk`, "Three pane bugs from a screenshot…").
 
 ## Ground rules that are easy to get wrong
 
@@ -205,11 +205,22 @@ size and assignment under the app's name, and answers the app's picker.
   assignedRegionNames/selectInRegion`.
 - sdk 0.1.64, fingerprint `0xb65d3fe1e02bc4a2`. Tests: same-keyword plugin regions keep
   separate contents/selections; takeover appears only while triggered.
-- **Not yet verified visually** (display locked at the time): the tab strip, drag between
-  panes, drop on the right half to split, session restore. `layout.zon` shows the model is
-  right (`Pane 0` holding both argv files by surface id). First thing to eyeball.
+- **Verified by the user's screenshots** after landing: panes, tabs, open-to-the-side. Fixed
+  from those screenshots (commits after `nllllosx`): `Surface.document` removed (a document
+  is found from its surface id via `sdk.document.pathOfSurfaceId` + `host.docFromPath` — no
+  editor concept on `Surface`); a split is drawn by the region *after* it
+  (`Layout.drawPendingSplit`) so a `hide_when_empty` region leaves no orphan handle, and an
+  emptied region stays in the registry so the picker can refill it; plugin region names are
+  interned (`State.internName` — "Pane N" was a stack buffer read a frame later); `Panes.dragTo`
+  resolved into a slice alias of this frame's widths (pane after the boundary ran under the
+  next handle); only the active pane's tab wears active chrome.
+- **Still to eyeball**: drag a tab between panes; drop on the right half of the last pane to
+  split; close every tab in a pane (pane should leave); quit and relaunch (session restore
+  from `layout.zon`); a pane emptied through its corner-button picker and refilled.
 - Known leftovers: `Workspace.center` / `clearAllWorkspaceCenter` (panel-animating centring)
-  are vestigial; `swapDocs`/`docByIndex` order in `EditorAPI` no longer means tab order.
+  are vestigial; `swapDocs`/`docByIndex` order in `EditorAPI` no longer means tab order;
+  "main rendered twice" reported once with an emptied panel, not reproduced — main draws once
+  in the headless shape test; ask for the exact state if it recurs.
 
 ## Also queued (in rough priority)
 
