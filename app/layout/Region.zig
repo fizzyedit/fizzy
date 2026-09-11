@@ -299,7 +299,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         // carries the asymmetry — out with a little overshoot, in without any (`core.anim.slide`).
         extent = Split.eased(id, target);
         dvui.dataSet(null, id, "_size", chosen);
-        if (init_opts.name.len > 0) persistExtent(self, init_opts, chosen, extent);
+        if (init_opts.name.len > 0) persistExtent(self, init_opts, id, chosen, extent);
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
         // wider than the size the user dragged it to simply stays wider, and the split appears to
@@ -470,9 +470,12 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     }
 }
 
-fn persistExtent(self: *Layout, opts: InitOptions, chosen: f32, shown: f32) void {
+fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, shown: f32) void {
     const kept = if (self.state.assignment(opts.name)) |ids| ids.len > 0 else false;
-    if (opts.forget_when_empty and !kept) {
+    // A live drag writes a zero on the way through closed; forgetting here removes the
+    // region and the next frame recreates a sentinel under the pointer — the pop.
+    const dragging = dvui.dataGet(null, id, "_drag", bool) orelse false;
+    if (opts.forget_when_empty and !kept and !dragging) {
         if (chosen <= 0 and shown <= 0) {
             if (self.state.clearExtent(self.gpa, opts.name)) self.extents_changed = true;
             self.state.unassign(self.gpa, opts.name);

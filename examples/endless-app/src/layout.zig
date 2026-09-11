@@ -22,7 +22,7 @@ pub const slot: []const []const u8 = &.{"slot"};
 
 pub const Side = enum { left, right, top, bottom };
 
-/// Below this, an outer region is still the collapsed sentinel, not an opened tray.
+/// Tests use this as a small drag distance. Any positive extent is an open tray.
 pub const commit_threshold: f32 = 48;
 /// What Center keeps. The split constraint refuses a drag that would leave less.
 pub const min_center: f32 = 80;
@@ -45,7 +45,7 @@ pub fn layout(f: *Layout) !dvui.App.Result {
     while (li > 0) {
         li -= 1;
         try edgeRegion(f, lefts[li], .horizontal, extra(.left, li));
-        f.split(@src(), .{ .id_extra = extra(.left, li), .snap_below = commit_threshold, .push_out = true });
+        f.split(@src(), .{ .id_extra = extra(.left, li), .push_out = true });
     }
 
     {
@@ -60,7 +60,7 @@ pub fn layout(f: *Layout) !dvui.App.Result {
         while (ti > 0) {
             ti -= 1;
             try edgeRegion(f, tops[ti], .vertical, extra(.top, ti));
-            f.split(@src(), .{ .id_extra = extra(.top, ti), .snap_below = commit_threshold, .push_out = true });
+            f.split(@src(), .{ .id_extra = extra(.top, ti), .push_out = true });
         }
 
         {
@@ -77,14 +77,14 @@ pub fn layout(f: *Layout) !dvui.App.Result {
 
         const bottoms = namesForSide(f, .bottom);
         for (bottoms, 0..) |name, bi| {
-            f.split(@src(), .{ .id_extra = extra(.bottom, bi), .snap_below = commit_threshold, .push_out = true });
+            f.split(@src(), .{ .id_extra = extra(.bottom, bi), .push_out = true });
             try edgeRegion(f, name, .vertical, extra(.bottom, bi));
         }
     }
 
     const rights = namesForSide(f, .right);
     for (rights, 0..) |name, ri| {
-        f.split(@src(), .{ .id_extra = extra(.right, ri), .snap_below = commit_threshold, .push_out = true });
+        f.split(@src(), .{ .id_extra = extra(.right, ri), .push_out = true });
         try edgeRegion(f, name, .horizontal, extra(.right, ri));
     }
 

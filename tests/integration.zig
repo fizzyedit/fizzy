@@ -2198,13 +2198,14 @@ test "dragging the left split opens edge-left-1 during the drag" {
     _ = try dvui.testing.step(EndlessFrame.frame);
 
     var moved: f32 = 0;
-    while (moved < endless.commit_threshold * scale + 40) {
-        moved += 20;
+    while (moved < 40 * scale) {
+        moved += 10;
         _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x + moved, .y = 150 } });
         _ = try dvui.testing.step(EndlessFrame.frame);
     }
 
-    try std.testing.expect(editor.layout.extent("edge-left-1", 0) >= endless.commit_threshold);
+    // Any drag-out keeps the tray — there is no snap threshold.
+    try std.testing.expect(editor.layout.extent("edge-left-1", 0) > 0);
 
     _ = try cw.addEventMouseButton(.left, .release);
     _ = try dvui.testing.step(EndlessFrame.frame);

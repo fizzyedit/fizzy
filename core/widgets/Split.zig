@@ -226,6 +226,10 @@ pub fn easedKey(id: dvui.Id, target: f32, anim_key: []const u8, shown_key: []con
 /// split, or the near edge of one after it. Neither moves while dragging, which is what makes the
 /// arithmetic absolute.
 pub fn recordEdges(id: dvui.Id, wd: *dvui.WidgetData, axis: dvui.enums.Direction) void {
+    // A drag sizes from these edges. Rewriting them mid-gesture — a new sentinel
+    // appearing insets the region — shrinks `want` and the tray pops closed, then
+    // the next frame restores the edge and it pops open again.
+    if (dvui.dataGet(null, id, "_drag", bool) orelse false) return;
     const r = wd.borderRectScale().r;
     switch (axis) {
         .horizontal => {
@@ -401,8 +405,10 @@ pub fn drag(
         // Keep the shown extent in step with the target during a drag, so the region does not
         // read this as a change to ease into. A split belongs under the pointer, not on a curve.
         dvui.dataSet(null, target, "_shown", resolved);
+        dvui.dataSet(null, target, "_drag", true);
         dvui.refresh(null, @src(), wd.id);
     } else if (was and !now) {
+        dvui.dataRemove(null, target, "_drag");
         if (opts.snap_below) |floor| {
             const sz = dvui.dataGet(null, target, "_size", f32) orelse 0;
             if (sz > 0 and sz < floor) {
