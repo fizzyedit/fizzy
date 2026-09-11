@@ -8,7 +8,7 @@ const Editor = fizzy.Editor;
 
 const SidebarView = fizzy.sdk.SidebarView;
 const PluginStore = @import("app").store.Store;
-const Layout = @import("layout/Layout.zig");
+const Layout = @import("app").layout.Layout;
 
 pub const Sidebar = @This();
 

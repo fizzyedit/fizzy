@@ -21,7 +21,7 @@ const dvui = @import("dvui");
 const fizzy = @import("../../../fizzy.zig");
 const sdk = fizzy.sdk;
 
-const Layout = @import("../Layout.zig");
+const Layout = @import("app").layout.Layout;
 
 // ── The minimal preset ──────────────────────────────────────────────────────────────────────
 /// One region, and it is the main area. No sidebar or panel vocabulary at all — surfaces asking

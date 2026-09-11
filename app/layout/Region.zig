@@ -18,7 +18,6 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const Split = core.widgets.Split;
-const Constants = @import("../Constants.zig");
 const Layout = @import("Layout.zig");
 
 const Region = @This();
@@ -86,10 +85,23 @@ pub fn open(self: Region) void {
 /// first of those as a plain function, and the icon rail was never this shape to begin with —
 /// it sits *beside* the region it chooses for, so `ide.zig` calls it directly and reads the
 /// action it returns.
-pub const Content = *const fn (f: *Layout, keywords: []const []const u8) anyerror!dvui.App.Result;
+pub const Content = struct {
+    /// Whatever the shape needs to draw its chrome — for fizzy's own shapes, the application.
+    /// A `Layout` deliberately does not carry it: the layout mechanism knows about surfaces,
+    /// regions and splits, and nothing about whose furniture is being drawn. Same `ctx` idiom
+    /// as `Surface.draw`, for the same reason.
+    ctx: ?*anyopaque = null,
+    draw: *const fn (ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) anyerror!dvui.App.Result,
+};
 
 /// What a region *is*, as opposed to how it is laid out — which is `dvui.Options`, unchanged.
 pub const InitOptions = struct {
+    /// Below this container extent, a `collapsible` region folds itself away — the width at
+    /// which a sidebar beside a document stops being a layout and starts being two slivers. A
+    /// number rather than a policy an app configures: it is about how small a pane can be before
+    /// it is useless, not about what the app is for.
+    pub const collapse_below: f32 = 640;
+
     /// Human-facing name, shown wherever a user places a surface by hand.
     name: []const u8 = "",
     /// What kinds of surface this region accepts. Empty means it hosts nothing itself and is
@@ -165,7 +177,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         // Seeded from what the user last left this region at, by name — so a layout persists
         // across restarts without the framework knowing which regions an app has.
         if (dvui.dataGet(null, id, "_size", f32) == null) {
-            dvui.dataSet(null, id, "_size", self.editor.regionExtent(init_opts.name, default));
+            dvui.dataSet(null, id, "_size", self.state.extent(init_opts.name, default));
         }
 
         // The size the user chose. Auto-collapse must never overwrite it, or folding the window
@@ -177,7 +189,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         var target = chosen;
         if (init_opts.collapsible) {
             const available = if (parent) |p| p.extent(axis) else 0;
-            if (available > 0 and available < Constants.min_window_size[0]) target = 0;
+            if (available > 0 and available < InitOptions.collapse_below) target = 0;
         }
 
         // Ease toward the target when it moved for a reason other than a drag — the collapse
@@ -204,7 +216,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         }
         dvui.dataSet(null, id, "_shown", extent);
         dvui.dataSet(null, id, "_size", chosen);
-        if (init_opts.name.len > 0) self.editor.setRegionExtent(init_opts.name, chosen);
+        if (init_opts.name.len > 0 and self.state.setExtent(self.gpa, init_opts.name, chosen)) self.extents_changed = true;
 
         // Pin both ends. A minimum alone is only a floor, so a region whose content wants to be
         // wider than the size the user dragged it to simply stays wider, and the split appears to
@@ -230,7 +242,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
             p.last_resizable = id;
             // Findable from outside the layout by the keywords it accepts, so a rail button or
             // a command can open and shut it without knowing what the shape built.
-            if (init_opts.keywords.len > 0) self.editor.registerRegion(.{
+            if (init_opts.keywords.len > 0) self.state.registerRegion(self.gpa, .{
                 .keywords = init_opts.keywords,
                 .id = id,
                 .default_extent = default,
@@ -307,5 +319,5 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
 /// shape wanting something else writes its own function and passes it as `content`.
 fn drawContents(self: *Layout, opts: InitOptions) !dvui.App.Result {
     const content = opts.content orelse return self.drawSelected(opts.keywords);
-    return content(self, opts.keywords);
+    return content.draw(content.ctx, self, opts.keywords);
 }

@@ -21,7 +21,7 @@ const dvui = @import("dvui");
 const fizzy = @import("../../../fizzy.zig");
 const sdk = fizzy.sdk;
 
-const Layout = @import("../Layout.zig");
+const Layout = @import("app").layout.Layout;
 const Split = @import("core").widgets.Split;
 
 // ── The studio preset ───────────────────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
         f.split(@src(), .{});
 
         // A short strip with no chrome of its own: "this region IS x". The shape an app takes
-        // when it wants, say, just a terminal down there. Adding `.content = Layout.tabbed` gets
+        // when it wants, say, just a terminal down there. Adding `.content = .{ .draw = Layout.tabbed }` gets
         // the tabbed form; `ide.zig` passes its own `bottomPane` for the richer splittable one.
         // The difference is one field.
         {

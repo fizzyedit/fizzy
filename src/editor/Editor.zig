@@ -117,8 +117,8 @@ pub const Infobar = @import("Infobar.zig");
 pub const Menu = @import("Menu.zig");
 /// The shipped layout presets and the dispatcher that runs the selected one.
 const presets = @import("layout/presets.zig");
-const Layout = @import("layout/Layout.zig");
-const Region = @import("layout/Region.zig");
+const Layout = @import("app").layout.Layout;
+const Region = @import("app").layout.Region;
 const AppInfo = @import("../AppInfo.zig");
 pub const FileLoadJob = workbench_mod.FileLoadJob;
 
@@ -4298,18 +4298,16 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.flushQueuedNativeMenuItems();
             editor.processPendingSaveAs();
 
-            var layout: Layout = .init(editor);
+            var layout: Layout = .init(&editor.host, &editor.layout, editor.gpa, editor.arena.allocator());
             const shell_result = presets.run(editor, &layout);
 
             // The shape has finished declaring regions: publish them. Until this point
             // `regionFor` answered from the previous frame, which is what lets a command
             // dispatched between frames drive a region (see `Layout.State.regions`).
-            std.mem.swap(
-                @TypeOf(editor.layout.regions),
-                &editor.layout.regions,
-                &editor.layout.regions_building,
-            );
-            editor.layout.regions_building.clearRetainingCapacity();
+            editor.layout.publishRegions();
+            // A drag or a collapse moved a region: fizzy's answer to "remember that" is a
+            // debounced write to `layout.zon`.
+            if (layout.extents_changed) editor.markWindowRatiosDirty();
 
             // A region is a box, so a shape that declares one and never scopes it leaves the box
             // open and dvui reports the mismatch two widgets later ("not at the top of the widget
@@ -4496,34 +4494,18 @@ fn saveRegionExtents(editor: *Editor) void {
 
 /// The extent a region should start at: what the user last left it, or the shape's default.
 pub fn regionExtent(editor: *Editor, name: []const u8, default: f32) f32 {
-    return editor.layout.extents.get(name) orelse default;
+    return editor.layout.extent(name, default);
 }
 
 /// Remember a region's extent. Debounced to disk by the same timer the window ratios use.
 pub fn setRegionExtent(editor: *Editor, name: []const u8, extent: f32) void {
-    const gop = editor.layout.extents.getOrPut(editor.gpa, name) catch return;
-    if (gop.found_existing and gop.value_ptr.* == extent) return;
-    if (!gop.found_existing) gop.key_ptr.* = editor.gpa.dupe(u8, name) catch {
-        _ = editor.layout.extents.remove(name);
-        return;
-    };
-    gop.value_ptr.* = extent;
-    editor.markWindowRatiosDirty();
+    if (editor.layout.setExtent(editor.gpa, name, extent)) editor.markWindowRatiosDirty();
 }
 
 /// The region accepting `keywords`, or null when this app's shape declared none — a normal
 /// state, not an error.
 pub fn regionFor(editor: *Editor, keywords: []const []const u8) ?Region {
-    for (editor.layout.regions.items) |entry| {
-        for (entry.keywords) |a| for (keywords) |b| {
-            if (std.ascii.eqlIgnoreCase(a, b)) return entry;
-        };
-    }
-    return null;
-}
-
-pub fn registerRegion(editor: *Editor, entry: Region) void {
-    editor.layout.regions_building.append(editor.gpa, entry) catch {};
+    return editor.layout.regionFor(keywords);
 }
 
 pub fn revealPosition(editor: *Editor, path: []const u8, line: u32, character: u32, open_side: bool) !bool {

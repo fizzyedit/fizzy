@@ -6,7 +6,7 @@
 const fizzy = @import("../../fizzy.zig");
 const dvui = @import("dvui");
 const build_opts = @import("build_opts");
-const Layout = @import("Layout.zig");
+const Layout = @import("app").layout.Layout;
 
 pub const ide = @import("presets/ide.zig");
 pub const minimal = @import("presets/minimal.zig");

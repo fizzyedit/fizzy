@@ -15,6 +15,20 @@
 //! **An app tells the store about itself once**, through `store.Manager` (see its file), and the
 //! store then talks to nothing else — no `Editor`, no globals belonging to fizzy. That seam is
 //! what makes this framework rather than fizzy's own source.
+/// Regions and the splits between them: the whole of how an application divides its window.
+///
+/// A minimal app is exactly this — regions laid out by dvui's boxes, a split where the user
+/// should be able to drag one edge, and plugins drawing into whichever region accepts their
+/// keywords. Nothing here knows what an explorer, a panel or a document is; fizzy's own shapes
+/// (`src/editor/layout/presets/`) are ordinary code on top, and an app writes its own.
+pub const layout = struct {
+    pub const Layout = @import("layout/Layout.zig");
+    pub const Region = @import("layout/Region.zig");
+    /// What persists between frames: declared regions, their extents, the user's keyword
+    /// overrides. The application owns one; a `Layout` is per-frame and borrows it.
+    pub const State = @import("layout/State.zig");
+};
+
 pub const store = struct {
     pub const Store = @import("store/PluginStore.zig");
     pub const Manager = @import("store/PluginManager.zig");

@@ -23,7 +23,7 @@ const dvui = @import("dvui");
 const fizzy = @import("../../../fizzy.zig");
 const sdk = fizzy.sdk;
 
-const Layout = @import("../Layout.zig");
+const Layout = @import("app").layout.Layout;
 const Split = @import("core").widgets.Split;
 const Menu = @import("../../Menu.zig");
 const Constants = @import("../../Constants.zig");
@@ -83,7 +83,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
         var side = try f.region(@src(), .{
             .name = "Sidebar",
             .keywords = sidebar,
-            .content = explorerPane,
+            .content = .{ .ctx = editor, .draw = explorerPane },
             .resize = true,
             .collapsible = true,
         }, .{ .min_size_content = .{ .w = 260 }, .expand = .vertical });
@@ -113,7 +113,7 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
         var panel = try f.region(@src(), .{
             .name = "Panel",
             .keywords = bottom,
-            .content = bottomPane,
+            .content = .{ .ctx = editor, .draw = bottomPane },
             .resize = true,
             .collapsible = true,
             .hide_when_empty = true,
@@ -144,10 +144,12 @@ pub fn layout(editor: *fizzy.Editor, f: *Layout) !dvui.App.Result {
 // They are functions only because a `Region.Content` is a function pointer: there is nowhere to
 // write `editor.explorer.draw(...)` as an expression in a struct literal.
 
-fn explorerPane(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
-    return f.editor.explorer.draw(f.editor, f, keywords);
+fn explorerPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
+    const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
+    return editor.explorer.draw(editor, f, keywords);
 }
 
-fn bottomPane(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
-    return f.editor.panel.draw(f.editor, f, keywords);
+fn bottomPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
+    const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
+    return editor.panel.draw(editor, f, keywords);
 }

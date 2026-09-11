@@ -120,10 +120,8 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
-const fizzy = @import("../../fizzy.zig");
-const sdk = fizzy.sdk;
+const sdk = @import("fizzy_sdk");
 const Split = core.widgets.Split;
-const Constants = @import("../Constants.zig");
 
 const Layout = @This();
 
@@ -138,7 +136,18 @@ pub const center_keywords = sdk.keywords.ide.main;
 
 pub const Surface = sdk.Surface;
 
-editor: *fizzy.Editor,
+/// The registries this layout matches against and selects in.
+host: *sdk.Host,
+/// Per-frame scratch: match lists handed to a shape live until the frame ends.
+arena: std.mem.Allocator,
+/// What persists between frames — the declared regions, their extents, the user's keyword
+/// overrides. Owned by the application; a `Layout` is per-frame and this is not.
+state: *State,
+/// Long-lived allocations the state makes (a remembered extent's name).
+gpa: std.mem.Allocator,
+/// Set when a region's remembered extent changed this frame. The application decides what that
+/// means — fizzy debounces a write to `layout.zon`.
+extents_changed: bool = false,
 
 /// Open regions, innermost last. Every region pushes; its `deinit` pops. This is what lets
 /// `split` know which axis it divides and which neighbour it resizes, without a shape having to
@@ -189,8 +198,8 @@ pub const max_trays = 6;
 /// How long a region takes to fold away or come back. Matches the paned shell's feel.
 pub const collapse_ms: i32 = 220;
 
-pub fn init(editor: *fizzy.Editor) Layout {
-    return .{ .editor = editor };
+pub fn init(host: *sdk.Host, state: *State, gpa: std.mem.Allocator, arena: std.mem.Allocator) Layout {
+    return .{ .host = host, .state = state, .gpa = gpa, .arena = arena };
 }
 
 fn innermost(self: *Layout) ?*Container {
@@ -211,15 +220,11 @@ pub const handle_dist = Split.handle_dist;
 // the same mechanism with different numbers, and a window resize grows the stretchy half rather
 // than rescaling the sidebar.
 
-fn arena(self: *Layout) std.mem.Allocator {
-    return self.editor.arena.allocator();
-}
-
 /// The keywords in force for a surface: the user's per-plugin override from `settings.zon` if
 /// present, otherwise the plugin's declared defaults. This is what makes a wrong default cost
 /// two clicks rather than a release.
 fn effectiveKeywords(self: *Layout, s: *const Surface) []const []const u8 {
-    if (self.editor.layout.keyword_overrides.get(s.id)) |kw| return kw;
+    if (self.state.keyword_overrides.get(s.id)) |kw| return kw;
     return s.keywords;
 }
 
@@ -228,8 +233,8 @@ fn effectiveKeywords(self: *Layout, s: *const Surface) []const []const u8 {
 /// always iterate.
 pub fn matching(self: *Layout, keywords: []const []const u8) []const *Surface {
     var out: std.ArrayListUnmanaged(*Surface) = .empty;
-    const a = self.arena();
-    for (self.editor.host.surfaces.items) |*s| {
+    const a = self.arena;
+    for (self.host.surfaces.items) |*s| {
         if (s.hidden) continue;
         if (!sdk.keywords.intersects(self.effectiveKeywords(s), keywords)) continue;
         out.append(a, s) catch return out.items;
@@ -240,15 +245,15 @@ pub fn matching(self: *Layout, keywords: []const []const u8) []const *Surface {
 /// A surface by id, regardless of keywords — how an app places a plugin it ships with and
 /// therefore knows by name (fizzy does this for `workbench.panes`).
 pub fn surface(self: *Layout, id: []const u8) ?*Surface {
-    return self.editor.host.surfaceById(id);
+    return self.host.surfaceById(id);
 }
 
 /// Surfaces that match no region this app declared. Never silently lost: the settings UI lists
 /// these so a user (or the plugin author) can see the gap and fix it.
 pub fn unplaced(self: *Layout, declared: []const []const []const u8) []const *Surface {
     var out: std.ArrayListUnmanaged(*Surface) = .empty;
-    const a = self.arena();
-    outer: for (self.editor.host.surfaces.items) |*s| {
+    const a = self.arena;
+    outer: for (self.host.surfaces.items) |*s| {
         if (s.hidden) continue;
         const kw = self.effectiveKeywords(s);
         if (kw.len == 0) continue; // placed by id, not by keyword
@@ -260,7 +265,7 @@ pub fn unplaced(self: *Layout, declared: []const []const []const u8) []const *Su
 
 
 fn currentId(self: *Layout, keywords: []const []const u8) ?[]const u8 {
-    return self.editor.host.selectionFor(keywords);
+    return self.host.selectionFor(keywords);
 }
 
 /// Which surface is current for this keyword group, or null when nothing matches. Degrades: if
@@ -281,7 +286,7 @@ pub fn isSelected(self: *Layout, keywords: []const []const u8, s: *const Surface
 }
 
 pub fn select(self: *Layout, keywords: []const []const u8, s: *const Surface) void {
-    self.editor.host.setSelectionFor(keywords, s.id);
+    self.host.setSelectionFor(keywords, s.id);
 }
 
 /// Draw one surface into the current parent, wrapped in the swap cross-fade so every region gets
@@ -292,7 +297,7 @@ pub fn draw(self: *Layout, s: *Surface) !dvui.App.Result {
     _ = self;
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(s.id);
-    const rv = fizzy.core.anim.reveal(
+    const rv = core.anim.reveal(
         dvui.Id.extendId(null, @src(), @truncate(hasher.final())),
         hasher.final(),
         .{},
@@ -408,7 +413,7 @@ pub fn tabs(f: *Layout, keywords: []const []const u8) void {
     const surfaces = f.matching(keywords);
     if (surfaces.len == 0) return;
 
-    var strip: fizzy.core.widgets.Tabs = .init(@src(), &tab_info, .{ .drag_name = "fizzy_tab_strip" });
+    var strip: core.widgets.Tabs = .init(@src(), &tab_info, .{ .drag_name = "fizzy_tab_strip" });
     defer strip.deinit();
 
     for (surfaces, 0..) |s, i| {
@@ -445,7 +450,7 @@ pub fn tabs(f: *Layout, keywords: []const []const u8) void {
 /// the icon rail deliberately has no counterpart here. It is a chooser that sits *beside* the
 /// region it chooses for rather than above it (see `ide.zig`), so it is not a region's content
 /// and wrapping it as one would only lose the action it returns.
-pub fn tabbed(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
+pub fn tabbed(_: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
     f.tabs(keywords);
     return f.drawSelected(keywords);
 }
@@ -453,4 +458,4 @@ pub fn tabbed(f: *Layout, keywords: []const []const u8) !dvui.App.Result {
 /// Drag state for `tabStrip`. One strip per app in practice; a layout wanting two independent
 /// strips copies this recipe (see CLAUDE.md's shipped-shapes note) rather than fizzy growing a
 /// handle type for a case nothing has yet.
-var tab_info: fizzy.core.widgets.Tabs.TabInfo = .{};
+var tab_info: core.widgets.Tabs.TabInfo = .{};

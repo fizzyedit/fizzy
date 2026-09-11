@@ -1662,19 +1662,14 @@ test "a command dispatched between frames can still find and shut a region" {
     try std.testing.expect(editor.regionFor(kw) == null);
 
     // What a shape does when it declares a resizable region.
-    editor.registerRegion(.{ .keywords = kw, .id = id, .default_extent = 260 });
+    editor.layout.registerRegion(editor.gpa, .{ .keywords = kw, .id = id, .default_extent = 260 });
 
     // Still invisible to a command — the shape has not finished. This is the half-built list the
     // old code let callers read.
     try std.testing.expect(editor.regionFor(kw) == null);
 
     // The shape completes and publishes.
-    std.mem.swap(
-        @TypeOf(editor.layout.regions),
-        &editor.layout.regions,
-        &editor.layout.regions_building,
-    );
-    editor.layout.regions_building.clearRetainingCapacity();
+    editor.layout.publishRegions();
 
     const region = editor.regionFor(kw) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(id, region.id);

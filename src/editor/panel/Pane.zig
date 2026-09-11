@@ -7,7 +7,7 @@ const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
 
 const Panel = @import("Panel.zig");
-const Layout = @import("../layout/Layout.zig");
+const Layout = @import("app").layout.Layout;
 
 const panel_corner_radius: f32 = 12;
 

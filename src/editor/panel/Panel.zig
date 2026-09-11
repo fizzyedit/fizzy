@@ -15,7 +15,7 @@ const panel_layout = @import("panel_layout.zig");
 const Pane = @import("Pane.zig");
 
 pub const Panel = @This();
-const Layout = @import("../layout/Layout.zig");
+const Layout = @import("app").layout.Layout;
 
 scroll_info: dvui.ScrollInfo = .{
     .horizontal = .auto,

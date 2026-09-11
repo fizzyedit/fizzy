@@ -9,7 +9,10 @@
 //! flat fields made that invisible.
 const std = @import("std");
 const core = @import("core");
+const sdk = @import("fizzy_sdk");
 const Region = @import("Region.zig");
+
+const State = @This();
 
 /// Shell (new-layout) selection state: keyword-group hash -> selected surface id.
 /// Surface ids are registry-owned string literals, so this stores no allocations of its own.
@@ -65,3 +68,49 @@ panel_hidden_for_center: bool = false,
 center_prev_id: ?[]const u8 = null,
 /// Host-owned cross-fade between center providers. See `drawActiveCenter`.
 center_transition: core.anim.Transition = .{},
+
+// ---- the app's side of a region ---------------------------------------------------------------
+//
+// Regions are declared by a shape and driven from outside it — a rail button, a command, a
+// keybind. These four are that seam, and they live on the state rather than on the application
+// because nothing here is fizzy's: a name, an extent, and the set the last shape declared.
+
+/// The region accepting `keywords`, or null when this app's shape declared none — a normal
+/// state, not an error.
+pub fn regionFor(self: *State, keywords: []const []const u8) ?Region {
+    for (self.regions.items) |entry| {
+        if (sdk.keywords.intersects(entry.keywords, keywords)) return entry;
+    }
+    return null;
+}
+
+/// Called by `Region.init` as a shape declares one. Lands in the list being built, which
+/// `publishRegions` swaps into view when the shape finishes.
+pub fn registerRegion(self: *State, gpa: std.mem.Allocator, entry: Region) void {
+    self.regions_building.append(gpa, entry) catch {};
+}
+
+/// The shape has finished declaring: make this frame's regions the ones `regionFor` answers with.
+pub fn publishRegions(self: *State) void {
+    std.mem.swap(@TypeOf(self.regions), &self.regions, &self.regions_building);
+    self.regions_building.clearRetainingCapacity();
+}
+
+/// The extent a region should start at: what the user last left it, or the shape's default.
+pub fn extent(self: *State, name: []const u8, default: f32) f32 {
+    return self.extents.get(name) orelse default;
+}
+
+/// Remember a region's extent. Returns true when the value actually changed, so the application
+/// can decide what "remember" means — fizzy debounces a write to `layout.zon`; another app might
+/// do nothing at all.
+pub fn setExtent(self: *State, gpa: std.mem.Allocator, name: []const u8, value: f32) bool {
+    const gop = self.extents.getOrPut(gpa, name) catch return false;
+    if (gop.found_existing and gop.value_ptr.* == value) return false;
+    if (!gop.found_existing) gop.key_ptr.* = gpa.dupe(u8, name) catch {
+        _ = self.extents.remove(name);
+        return false;
+    };
+    gop.value_ptr.* = value;
+    return true;
+}

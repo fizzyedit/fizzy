@@ -11,7 +11,7 @@ const Editor = fizzy.Editor;
 
 const nfd = @import("nfd");
 const PluginStore = @import("app").store.Store;
-const Layout = @import("../layout/Layout.zig");
+const Layout = @import("app").layout.Layout;
 
 pub const Explorer = @This();
 

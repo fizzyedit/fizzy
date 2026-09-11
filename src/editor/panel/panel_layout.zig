@@ -6,7 +6,7 @@ const fizzy = @import("../../fizzy.zig");
 
 const Panel = @import("Panel.zig");
 const Split = @import("core").widgets.Split;
-const Layout = @import("../layout/Layout.zig");
+const Layout = @import("app").layout.Layout;
 const Pane = @import("Pane.zig");
 
 const handle_size = 10;
