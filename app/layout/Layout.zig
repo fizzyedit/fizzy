@@ -727,6 +727,13 @@ pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
     // Overlay, not packed: a packed split is a `handle_size` child, so a new
     // sentinel (or crossing zero) inserts 10pt into the box *and* into the
     // budget and the tray jumps by exactly that.
+    //
+    // Front-to-back so the handle paints after the region that opens next. The
+    // split runs first (events, grab) and the workspace fill would otherwise
+    // cover a top/left handle — the dimmer sash on Center.
+    var ftb: dvui.RenderFrontToBack = undefined;
+    ftb.init();
+    defer ftb.deinit();
     var divider = Split.init(pending.src, axis, pending.opts.id_extra, Split.overlayRect(container, target, sign, axis));
     defer divider.deinit();
     divider.drag(container, target, sign, pending.opts, .{

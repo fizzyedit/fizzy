@@ -14,6 +14,11 @@
 //! matching surface — and leaves the caller positioned in the *remaining* space, so whatever the
 //! layout writes next lands there. That is what removes the `showFirst`/`showSecond` pairs from
 //! shapes.
+//!
+//! A place (keywords, not a grouping box, not a plugin `manual_contents` region) is itself a
+//! card: window fill, rounded corners, and a gutter the overlay handle sits in. Fizzy's panel
+//! used to paint that card in `Pane`; endless and any other shape then had a bare box butted
+//! against its neighbour, and the handle drew under the next fill.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
@@ -321,6 +326,10 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         shut_now = extent <= 0;
     }
 
+    if (keywords.len > 0 and !init_opts.manual_contents) {
+        applyPlaceChrome(self, &box_opts, axis, extent, init_opts.resize, shut_now, opts);
+    }
+
     if (!init_opts.resize) {
         // A stretchy region must not let its *contents* set a floor under it.
         //
@@ -412,6 +421,62 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
 /// appears while the user is working in the middle of the region.
 const corner_reach: f32 = 56;
 const corner_button_size: f32 = 22;
+
+/// How a place looks: the card the handle gutters against. Matches fizzy's old
+/// `Pane` chrome so every shape gets the same floating tray, not just the IDE panel.
+const place_radius: f32 = 12;
+const place_pad: f32 = 6;
+
+/// Window-fill card, rounded corners, and a gutter that scales in with the
+/// extent so a sentinel crossing zero does not jump by `handle_size`. The
+/// shape's own `background` / `margin` / `padding` / `corners` win.
+fn applyPlaceChrome(
+    self: *Layout,
+    box_opts: *dvui.Options,
+    axis: dvui.enums.Direction,
+    extent: f32,
+    resize: bool,
+    shut: bool,
+    given_opts: dvui.Options,
+) void {
+    if (given_opts.background == null) {
+        box_opts.background = true;
+        if (given_opts.color_fill == null) {
+            var fill = dvui.themeGet().color(.window, .fill);
+            if (self.host.appliesNativeWindowOpacity() and !self.host.isMaximized()) {
+                fill = fill.opacity(self.host.contentOpacity());
+            }
+            box_opts.color_fill = fill;
+        }
+    }
+    if (given_opts.corners == null) box_opts.corners = .all(place_radius);
+    // Stretchy leftover (Center, Main) gets the fill, not a margin: margin would
+    // become a min-size floor and the trays could not take the last of the row.
+    // The gutter lives on the tray — `handle_size` of margin, pinned inside
+    // `extent`, so a sentinel at zero still adds nothing.
+    if (shut or !resize) return;
+
+    const max_gutter = Split.handle_size;
+    const max_chrome = 2 * max_gutter + 2 * place_pad;
+    const t: f32 = if (extent >= max_chrome) 1 else if (extent > 0) extent / max_chrome else 0;
+    if (given_opts.margin == null) box_opts.margin = .all(max_gutter * t);
+    if (given_opts.padding == null) box_opts.padding = .all(place_pad * t);
+
+    const extra = box_opts.padSize(.{});
+    const given = given_opts.min_size_content orelse dvui.Size{};
+    switch (axis) {
+        .horizontal => {
+            const w = @max(0, extent - extra.w);
+            box_opts.min_size_content = .{ .w = w, .h = given.h };
+            box_opts.max_size_content = .width(w);
+        },
+        .vertical => {
+            const h = @max(0, extent - extra.h);
+            box_opts.min_size_content = .{ .w = given.w, .h = h };
+            box_opts.max_size_content = .height(h);
+        },
+    }
+}
 
 /// The small button in a region's top-right corner that opens the picker for it. This is the
 /// piece that makes placement *visual*: a user looks at the place in the window they want to

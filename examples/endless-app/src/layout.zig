@@ -34,6 +34,9 @@ pub fn layout(_: ?*anyopaque, f: *Layout) !dvui.App.Result {
     t_scale = 1;
     t_left_room = 0;
 
+    var margin = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .margin = .all(10) });
+    defer margin.deinit();
+
     var body = try f.region(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer body.deinit();
 

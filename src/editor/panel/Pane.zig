@@ -1,15 +1,13 @@
 //! One pane of fizzy's bottom `Panel`: a workspace-style tab strip plus the surface its
-//! active tab selects. Fizzy's own chrome — see `Panel.zig`.
+//! active tab selects. Fizzy's own chrome — see `Panel.zig`. The rounded card is the
+//! region's, not this pane's — every shape's places get the same gutter and fill.
 const std = @import("std");
-const builtin = @import("builtin");
 
 const dvui = @import("dvui");
 const fizzy = @import("../../fizzy.zig");
 
 const Panel = @import("Panel.zig");
 const Layout = @import("app").layout.Layout;
-
-const panel_corner_radius: f32 = 12;
 
 pub const drag_name = "panel_tab_drag";
 
@@ -26,28 +24,13 @@ pub fn init(grouping: u64) Pane {
     return .{ .grouping = grouping };
 }
 
-/// Rounded panel chrome (window fill + corner radius) used with and without plugin content.
-pub fn drawBackground(grouping: u64) void {
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .both,
-        .background = true,
-        .color_fill = panelContentColor(),
-        .corners = dvui.CornerRect.all(panel_corner_radius),
-        .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-        .gravity_y = 0.0,
-        .id_extra = @intCast(grouping),
-    });
-    defer card.deinit();
-}
+/// Kept for `Panel.draw`'s empty path. The region is the card now.
+pub fn drawBackground(_: u64) void {}
 
 pub fn draw(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) !dvui.App.Result {
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
-        .background = true,
-        .color_fill = panelContentColor(),
-        .corners = dvui.CornerRect.all(panel_corner_radius),
-        .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-        .gravity_y = 0.0,
+        .background = false,
         .id_extra = @intCast(self.grouping),
     });
     defer card.deinit();
@@ -65,20 +48,6 @@ pub fn draw(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, ke
     try self.drawContent(panel, host, f, keywords);
 
     return .ok;
-}
-
-fn panelContentColor() dvui.Color {
-    var content_color = dvui.themeGet().color(.window, .fill);
-    switch (builtin.os.tag) {
-        .macos, .windows => {
-            content_color = if (!fizzy.backend.isMaximized(dvui.currentWindow()))
-                content_color.opacity(fizzy.editor().settings.content_opacity)
-            else
-                content_color;
-        },
-        else => {},
-    }
-    return content_color;
 }
 
 fn drawTabs(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {
