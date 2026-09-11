@@ -726,6 +726,7 @@ pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
         .base_min = c.base_min,
         .handles = c.handles,
         .others = c.resizables.items,
+        .sign = sign,
     });
 }
 

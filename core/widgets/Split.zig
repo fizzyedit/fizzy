@@ -29,10 +29,10 @@ pub const handle_dist: f32 = 60;
 /// What the container knows that a single split does not: how much room there is, how much of it
 /// the base region insists on keeping, and which other regions exist on the same axis.
 ///
-/// This is why a split *requests* an extent rather than setting one. Growing into the centre
-/// stops when the centre is at its minimum; the other trays stay put. They move only when
-/// `push_out` keeps dragging past this tray's own minimum. The container arbitrates; the
-/// regions stop owning their sizes independently.
+/// This is why a split *requests* an extent rather than setting one. Growing into the flex
+/// gap takes from the gap; when the gap is gone the opposite side yields. `push_out` only
+/// moves trays behind this one. The container arbitrates; the regions stop owning their
+/// sizes independently.
 pub const Constraint = struct {
     /// The container's own extent along the axis — one number, the same word every other
     /// distance along a layout axis uses (`Region.default_extent`, `Layout.Container.extent`).
@@ -43,16 +43,48 @@ pub const Constraint = struct {
     base_min: f32 = 0,
     /// Total length the splits themselves take.
     handles: f32 = 0,
-    /// The other resizable regions in this container. A pull (growing into the base) leaves
-    /// them alone. They yield only when `push_out` keeps dragging past this tray's minimum.
+    /// The other resizable regions in this container, in declaration order. Left/top
+    /// trays are listed outer-first; right/bottom trays inner-first, so "behind" and
+    /// "opposite" are just index comparisons against `target` and `sign`.
     others: []const dvui.Id = &.{},
+    /// +1 when the target sits before the split (left/top), -1 when it sits after
+    /// (right/bottom). `resolve` uses this to tell same-side from opposite-side trays.
+    sign: f32 = 1,
 };
+
+/// Whether `o` sits further toward the window edge than `target` (same side), or
+/// on the other side of the flex gap.
+fn relation(o: dvui.Id, target: dvui.Id, others: []const dvui.Id, sign: f32) enum { skip, behind, opposite } {
+    if (o == target) return .skip;
+    const ti = indexOf(target, others) orelse return .opposite;
+    const oi = indexOf(o, others) orelse return .opposite;
+    if (sign > 0) {
+        return if (oi < ti) .behind else .opposite;
+    }
+    return if (oi > ti) .behind else .opposite;
+}
+
+fn indexOf(id: dvui.Id, others: []const dvui.Id) ?usize {
+    for (others, 0..) |o, i| {
+        if (o == id) return i;
+    }
+    return null;
+}
+
+fn shrink(id: dvui.Id, give: f32) void {
+    if (give <= 0) return;
+    const had = dvui.dataGet(null, id, "_size", f32) orelse 0;
+    const next = @max(0, had - give);
+    dvui.dataSet(null, id, "_size", next);
+    dvui.dataSet(null, id, "_shown", next);
+}
 
 /// Resolve a requested extent for `target` against the container's constraint.
 ///
-/// A pull takes space from the base and stops when the base is at its minimum — other trays
-/// stay put. `push_out` is the only path that writes other trays: dragging past `min` shrinks
-/// the ones behind this one. Returns the extent `target` should take.
+/// A pull takes space from the base. When the base still has room, other trays stay
+/// put. When the base is gone, the opposite side yields so a drag from the other
+/// edge can open a tray (a new flex gap). `push_out` shrinks only the trays behind
+/// this one — a right sash past the edge does not close the left.
 pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
     // `std.math.clamp` asserts `lower <= upper`, so an explicit `max` below `min` would panic
     // inside the clamp rather than reaching any guard after it.
@@ -71,24 +103,33 @@ pub fn resolve(target: dvui.Id, want: f32, c: Constraint, opts: Options) f32 {
         others += dvui.dataGet(null, o, "_size", f32) orelse 0;
     }
 
-    // Pull: take from the base, not from the other trays. Growing past what the base can
-    // spare just stops — the next region's split stays where it is. A declared `min`
-    // still wins: the base is the one that yields rather than a tray going below what
-    // the shape pinned.
     const room = @max(0, budget - others);
-    if (size > room) size = @max(opts.min, room);
+    if (size > room) {
+        if (room == 0) {
+            // Flex is gone. Reclaim from the opposite side so dragging the other
+            // edge still opens a tray instead of sticking.
+            var need = size;
+            for (c.others) |o| {
+                if (relation(o, target, c.others, c.sign) != .opposite or need <= 0) continue;
+                const had = dvui.dataGet(null, o, "_size", f32) orelse 0;
+                const give = @min(had, need);
+                shrink(o, give);
+                need -= give;
+            }
+            size = @max(opts.min, size - need);
+        } else {
+            size = @max(opts.min, room);
+        }
+    }
 
     // Push: the drag asked for less than `min`, so shrink the trays behind this one.
     if (opts.push_out and want < size) {
         var extra = size - want;
         for (c.others) |o| {
-            if (o == target or extra <= 0) continue;
+            if (relation(o, target, c.others, c.sign) != .behind or extra <= 0) continue;
             const had = dvui.dataGet(null, o, "_size", f32) orelse 0;
             const give = @min(had, extra);
-            if (give > 0) {
-                dvui.dataSet(null, o, "_size", had - give);
-                dvui.dataSet(null, o, "_shown", had - give);
-            }
+            shrink(o, give);
             extra -= give;
         }
     }
@@ -857,10 +898,44 @@ test "push_out past min shrinks the tray behind" {
     setSize(inner, 0);
     setSize(outer, 120);
 
-    const c: Constraint = .{ .extent = 1000, .base_min = 400, .handles = 20, .others = &.{ inner, outer } };
+    // Right-style: inner then outer, sign -1. Behind is the outer tray.
+    const c: Constraint = .{ .extent = 1000, .base_min = 400, .handles = 20, .others = &.{ inner, outer }, .sign = -1 };
     const got = resolve(inner, -80, c, .{ .push_out = true });
     try testing.expectApproxEqAbs(@as(f32, 0), got, 0.001);
     try testing.expectApproxEqAbs(@as(f32, 40), getSize(outer), 0.001);
+}
+
+test "push_out on the right does not close the left" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    const left: dvui.Id = @enumFromInt(0xC5);
+    const right: dvui.Id = @enumFromInt(0xC6);
+    setSize(left, 160);
+    setSize(right, 0);
+
+    const c: Constraint = .{ .extent = 1000, .base_min = 0, .handles = 20, .others = &.{ left, right }, .sign = -1 };
+    const got = resolve(right, -80, c, .{ .push_out = true });
+    try testing.expectApproxEqAbs(@as(f32, 0), got, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 160), getSize(left), 0.001);
+}
+
+test "a pull with no flex left reclaims the opposite side" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 400, .h = 300 } });
+    defer t.deinit();
+    _ = try dvui.testing.step(twoPaneFrame);
+
+    const left: dvui.Id = @enumFromInt(0xC7);
+    const right: dvui.Id = @enumFromInt(0xC8);
+    setSize(left, 0);
+    setSize(right, 980);
+
+    // Budget is 980; the right tray has it all. Opening the left takes from the right.
+    const c: Constraint = .{ .extent = 1000, .base_min = 0, .handles = 20, .others = &.{ left, right }, .sign = 1 };
+    const got = resolve(left, 120, c, .{});
+    try testing.expectApproxEqAbs(@as(f32, 120), got, 0.001);
+    try testing.expectApproxEqAbs(@as(f32, 860), getSize(right), 0.001);
 }
 
 test "conflicting minimums squeeze the base rather than inverting the layout" {
