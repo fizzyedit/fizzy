@@ -63,6 +63,8 @@ pub fn draw(self: *Picker, f: *Layout) void {
         state.discardSnapshots(gpa);
         return;
     };
+    flushPendingStore(f, &region);
+
     const contents = f.matchingIn(&region);
     const theme = dvui.themeGet();
 
@@ -136,7 +138,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
         // selected surface rather than every surface its keywords attract — several cards lit up
         // in a region that draws one would be reporting a set that does not exist.
         const on = switch (region.shows) {
-            .one => if (f.selected(region.keywords)) |sel| std.mem.eql(u8, sel.id, s.id) else false,
+            .one => if (f.selectedIn(&region)) |sel| std.mem.eql(u8, sel.id, s.id) else false,
             .many => contains(contents, s.id),
         };
         if (card(f, s, on, i)) {
@@ -150,7 +152,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
                     state.assign(gpa, region.name, &.{s.id}) catch |err| {
                         dvui.log.err("failed to assign '{s}': {t}", .{ region.name, err });
                     };
-                    f.host.setSelectionFor(region.keywords, s.id);
+                    f.host.setSelectionForKey(region.selectionKey(), s.id);
                 },
                 // A toggle: the region's contents, plus or minus this one, in the order they were
                 // already in.
@@ -167,6 +169,8 @@ pub fn draw(self: *Picker, f: *Layout) void {
             dvui.refresh(null, @src(), null);
         }
     }
+
+    if (state.store_catalog) |store| drawStoreSection(f, &region, store, &row, &col);
 }
 
 /// One surface: its snapshot scaled to fit, its title, its owner, and a highlight when it is in
@@ -235,4 +239,114 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) bool {
 fn contains(list: []const *sdk.Surface, id: []const u8) bool {
     for (list) |s| if (std.mem.eql(u8, s.id, id)) return true;
     return false;
+}
+
+/// If a store install the user started from this picker has loaded, assign its surfaces.
+fn flushPendingStore(f: *Layout, region: *const Layout.Region) void {
+    const state = f.state;
+    if (state.pending_store_plugin.len == 0) return;
+    if (!std.mem.eql(u8, state.pending_store_region, region.name)) return;
+
+    var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (f.host.surfaces.items) |*s| {
+        const owner = s.owner orelse continue;
+        if (s.hidden) continue;
+        if (std.mem.eql(u8, owner.id, state.pending_store_plugin)) {
+            ids.append(f.arena, s.id) catch return;
+        }
+    }
+    if (ids.items.len == 0) return;
+
+    state.assign(f.gpa, region.name, ids.items) catch |err| {
+        dvui.log.err("failed to assign store plugin to '{s}': {t}", .{ region.name, err });
+        return;
+    };
+    if (region.shows == .one) f.host.setSelectionForKey(region.selectionKey(), ids.items[0]);
+    state.clearPendingStore(f.gpa);
+    state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
+fn drawStoreSection(
+    f: *Layout,
+    region: *const Layout.Region,
+    store: State.StoreCatalog,
+    row: *?*dvui.BoxWidget,
+    col: *usize,
+) void {
+    const offers = store.uninstalled(f.arena);
+    if (offers.len == 0) return;
+
+    if (row.*) |r| {
+        r.deinit();
+        row.* = null;
+    }
+    col.* = 0;
+
+    dvui.labelNoFmt(@src(), "Store", .{}, .{
+        .font = dvui.Font.theme(.heading),
+        .padding = .{ .y = 10, .x = 4 },
+        .color_text = dvui.themeGet().color(.window, .text).opacity(0.6),
+    });
+
+    for (offers, 0..) |offer, i| {
+        if (col.* == 0) {
+            if (row.*) |r| r.deinit();
+            row.* = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 10_000, .expand = .horizontal });
+        }
+        col.* = (col.* + 1) % columns;
+        if (storeCard(offer, store.installing(offer.id), i)) {
+            store.install(offer.id);
+            f.state.requestStoreInstall(f.gpa, region.name, offer.id);
+            dvui.refresh(null, @src(), null);
+        }
+    }
+}
+
+fn storeCard(offer: State.StoreOffer, installing: bool, id_extra: usize) bool {
+    const theme = dvui.themeGet();
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(@src(), .{}, .{
+        .id_extra = id_extra,
+        .margin = dvui.Rect.all(4),
+        .padding = dvui.Rect.all(6),
+        .corners = dvui.CornerRect.all(6),
+        .background = true,
+        .color_fill = theme.color(.control, .fill),
+        .border = dvui.Rect.all(1),
+        .color_border = theme.color(.control, .border),
+    });
+    defer bw.deinit();
+    bw.processEvents();
+    bw.drawBackground();
+
+    var col = dvui.box(@src(), .{ .dir = .vertical }, .{});
+    defer col.deinit();
+
+    {
+        var tile = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .min_size_content = preview,
+            .max_size_content = .size(preview),
+            .background = true,
+            .corners = dvui.CornerRect.all(3),
+            .color_fill = theme.color(.content, .fill),
+        });
+        defer tile.deinit();
+        dvui.labelNoFmt(@src(), if (installing) "Installing…" else "Install", .{}, .{
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+            .color_text = theme.color(.control, .text),
+        });
+    }
+
+    dvui.labelNoFmt(@src(), offer.title, .{}, .{
+        .padding = .{ .y = 4 },
+        .max_size_content = .width(preview.w),
+    });
+    dvui.labelNoFmt(@src(), "Store", .{}, .{
+        .padding = .{},
+        .font = dvui.Font.theme(.heading),
+        .color_text = theme.color(.control, .text),
+    });
+    return bw.clicked() and !installing;
 }

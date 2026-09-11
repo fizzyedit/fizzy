@@ -2092,3 +2092,177 @@ test "a takeover surface appears only while its trigger is selected, and then an
     editor.host.setSelectionFor(sidebar, "test.files");
     try std.testing.expectEqualStrings("test.workspace", layout.selected(main).?.id);
 }
+
+// -- endless handles -----------------------------------------------------------------------------
+// The example's own layout, not a shipped fizzy preset. Wired as `endless_layout` in
+// `build/app.zig` from `examples/endless-app/src/layout.zig`.
+
+const endless = @import("endless_layout");
+
+test "edge region names increment per side and are never reused" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    const a = endless.promote(&editor.layout, editor.gpa, .left, 120);
+    const b = endless.promote(&editor.layout, editor.gpa, .left, 80);
+    const c = endless.promote(&editor.layout, editor.gpa, .right, 200);
+    try std.testing.expectEqualStrings("edge-left-1", a);
+    try std.testing.expectEqualStrings("edge-left-2", b);
+    try std.testing.expectEqualStrings("edge-right-1", c);
+    try std.testing.expectEqual(@as(u32, 3), endless.nextIndex(&editor.layout, .left));
+    try std.testing.expectEqual(@as(u32, 2), endless.nextIndex(&editor.layout, .right));
+    try std.testing.expectEqual(@as(u32, 1), endless.nextIndex(&editor.layout, .top));
+
+    const lefts = endless.namesOn(&editor.layout, dvui.currentWindow().arena(), .left);
+    try std.testing.expectEqual(@as(usize, 2), lefts.len);
+    try std.testing.expectEqualStrings("edge-left-1", lefts[0]);
+    try std.testing.expectEqualStrings("edge-left-2", lefts[1]);
+}
+
+const EndlessFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.host, &e.layout, e.gpa, dvui.currentWindow().arena());
+        const result = try endless.layout(&layout);
+        e.layout.publishRegions();
+        return result;
+    }
+};
+
+test "promoting an edge is enough for the next frame to declare that region" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    try dvui.testing.settle(EndlessFrame.frame);
+    const before = editor.layout.regions.items.len;
+    _ = endless.promote(&editor.layout, editor.gpa, .left, 160);
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    var found = false;
+    for (editor.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "edge-left-1")) found = true;
+    }
+    try std.testing.expect(found);
+    try std.testing.expect(editor.layout.regions.items.len > before);
+}
+
+test "dragging a dormant left handle past the threshold appends edge-left-1" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    try dvui.testing.settle(EndlessFrame.frame);
+    const grab_x = endless.t_left_x;
+    const scale = endless.t_scale;
+    try std.testing.expect(grab_x > 0);
+
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x, .y = 150 } });
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+
+    var moved: f32 = 0;
+    while (moved < endless.commit_threshold * scale + 40) {
+        moved += 20;
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x + moved, .y = 150 } });
+        _ = try dvui.testing.step(EndlessFrame.frame);
+    }
+    _ = try cw.addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    // Promote runs on the release frame; the region is declared on the next one.
+    _ = try dvui.testing.step(EndlessFrame.frame);
+
+    var found = false;
+    for (editor.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "edge-left-1")) found = true;
+    }
+    try std.testing.expect(found);
+    try std.testing.expect(editor.layout.extent("edge-left-1", 0) >= endless.commit_threshold);
+}
+
+test "roomOn is leftover after existing edges, splits, and Center's floor" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    const empty = endless.roomOn(&editor.layout, 400, .left);
+    try std.testing.expect(empty >= endless.commit_threshold);
+    try std.testing.expect(empty <= 400 - endless.min_center);
+
+    _ = endless.promote(&editor.layout, editor.gpa, .left, 120);
+    _ = endless.promote(&editor.layout, editor.gpa, .right, 80);
+    const leftover = endless.roomOn(&editor.layout, 400, .left);
+    try std.testing.expect(leftover < empty);
+    try std.testing.expect(leftover <= 400 - 120 - 80 - endless.min_center);
+
+    const tight = endless.roomOn(&editor.layout, 120 + 80 + endless.min_center, .left);
+    try std.testing.expectEqual(@as(f32, 0), tight);
+}
+
+test "a dormant handle does not commit when Center would be left too small" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    _ = endless.promote(&editor.layout, editor.gpa, .left, 10_000);
+    try dvui.testing.settle(EndlessFrame.frame);
+    try std.testing.expect(endless.t_left_room < endless.commit_threshold);
+    try std.testing.expectEqual(@as(f32, 0), endless.t_left_x);
+
+    const cw = dvui.currentWindow();
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 8, .y = 150 } });
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 200, .y = 150 } });
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    _ = try cw.addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+
+    var extra = false;
+    for (editor.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "edge-left-2")) extra = true;
+    }
+    try std.testing.expect(!extra);
+}

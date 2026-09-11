@@ -181,6 +181,61 @@ pub fn markDiskScanDirty() void {
     disk_scan_dirty = true;
 }
 
+pub const CatalogOffer = struct {
+    id: []const u8,
+    title: []const u8,
+};
+
+/// Catalog plugins that are not on disk and have a build this host can install. Arena-backed.
+/// Empty when the catalog has never loaded, or on wasm (browse-only).
+pub fn uninstalledCatalog(arena: std.mem.Allocator) []const CatalogOffer {
+    if (comptime builtin.target.cpu.arch == .wasm32) return &.{};
+    const c = &(catalog orelse return &.{});
+    const snap = c.acquire();
+    defer c.release();
+    const s = snap orelse return &.{};
+    var out: std.ArrayListUnmanaged(CatalogOffer) = .empty;
+    for (s.summary.plugins) |p| {
+        if (presentLocally(p.id)) continue;
+        const rel = s.shard.releaseFor(p.id) orelse continue;
+        if (rel.downloadFor(compat.hostKey()) == null) continue;
+        if (!releaseSdkSatisfied(rel)) continue;
+        out.append(arena, .{
+            .id = p.id,
+            .title = if (p.name.len > 0) p.name else p.id,
+        }) catch return out.items;
+    }
+    return out.items;
+}
+
+/// Start a download+install for `id`. No-op when there is no compatible release, or on wasm.
+pub fn queueInstall(id: []const u8) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const c = &(catalog orelse return);
+    const snap = c.acquire();
+    defer c.release();
+    const s = snap orelse return;
+    const rel = s.shard.releaseFor(id) orelse return;
+    if (rel.downloadFor(compat.hostKey()) == null) return;
+    if (!releaseSdkSatisfied(rel)) return;
+    startDownload(id, rel, .{ .is_update = false });
+}
+
+pub fn isInstalling(id: []const u8) bool {
+    const job = jobs.get(id) orelse return false;
+    const status: JobStatus = @enumFromInt(job.status.load(.acquire));
+    return status == .downloading or status == .downloaded;
+}
+
+fn presentLocally(id: []const u8) bool {
+    if (isBundled(id)) return true;
+    if (app.host.pluginById(id) != null) return true;
+    if (app.isDisabled(id)) return true;
+    if (app.isFailed(id)) return true;
+    if (isOnDisk(id)) return true;
+    return false;
+}
+
 fn freeDiskIds() void {
     for (disk_ids.items) |id| app.gpa.free(id);
     disk_ids.clearRetainingCapacity();

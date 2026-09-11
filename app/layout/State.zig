@@ -24,6 +24,19 @@ pub const Snapshot = struct {
     natural: dvui.Size,
 };
 
+/// What the picker needs from a plugin store without importing one. The store's module graph
+/// reaches `app.zig`, which owns this file, so a direct import is a cycle.
+pub const StoreOffer = struct {
+    id: []const u8,
+    title: []const u8,
+};
+
+pub const StoreCatalog = struct {
+    uninstalled: *const fn (arena: std.mem.Allocator) []const StoreOffer,
+    install: *const fn (id: []const u8) void,
+    installing: *const fn (id: []const u8) bool,
+};
+
 /// Shell (new-layout) selection state: keyword-group hash -> selected surface id.
 /// Surface ids are registry-owned string literals, so this stores no allocations of its own.
 /// Keyed by group rather than by region so two regions written with the same keywords share a
@@ -52,6 +65,13 @@ snapshots_wanted: bool = false,
 /// settings table and a region's corner button open the same thing, and the app draws it in
 /// one place above everything else (`Picker.draw`).
 picker: Picker = .{},
+/// Filled in by the application when it has a plugin store. Null means the picker only lists
+/// loaded surfaces — tests, and an app that never switched the store on.
+store_catalog: ?StoreCatalog = null,
+/// Region waiting for a store install to finish so its new surfaces can be assigned. Empty
+/// while nothing is pending. gpa-owned.
+pending_store_region: []const u8 = "",
+pending_store_plugin: []const u8 = "",
 
 /// Regions the last completed shape declared — what `Editor.regionFor` answers from.
 ///
@@ -326,6 +346,24 @@ pub fn openPicker(self: *State, gpa: std.mem.Allocator, name: []const u8, anchor
     self.discardSnapshots(gpa);
     self.snapshots_wanted = true;
     self.picker.open(gpa, name, anchor);
+}
+
+/// Remember that region `name` should receive plugin `plugin_id`'s surfaces once it loads.
+pub fn requestStoreInstall(self: *State, gpa: std.mem.Allocator, name: []const u8, plugin_id: []const u8) void {
+    self.clearPendingStore(gpa);
+    self.pending_store_region = gpa.dupe(u8, name) catch return;
+    self.pending_store_plugin = gpa.dupe(u8, plugin_id) catch {
+        gpa.free(self.pending_store_region);
+        self.pending_store_region = "";
+        return;
+    };
+}
+
+pub fn clearPendingStore(self: *State, gpa: std.mem.Allocator) void {
+    if (self.pending_store_region.len > 0) gpa.free(self.pending_store_region);
+    if (self.pending_store_plugin.len > 0) gpa.free(self.pending_store_plugin);
+    self.pending_store_region = "";
+    self.pending_store_plugin = "";
 }
 
 pub fn deinitExtents(self: *State, gpa: std.mem.Allocator) void {

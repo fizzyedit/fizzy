@@ -2382,8 +2382,24 @@ pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
     editor.rebuildExtensionOwnerCache();
 }
 
+fn storeUninstalled(arena: std.mem.Allocator) []const @import("app").layout.State.StoreOffer {
+    const raw = PluginStore.uninstalledCatalog(arena);
+    const out = arena.alloc(@import("app").layout.State.StoreOffer, raw.len) catch return &.{};
+    for (raw, out) |r, *o| o.* = .{ .id = r.id, .title = r.title };
+    return out;
+}
+
 pub fn postInit(editor: *Editor) !void {
-    dvui.log.info("layout: shape '{s}'", .{@tagName(build_opts.layout)});
+            if (comptime build_opts.has_app_layout) {
+                dvui.log.info("layout: app-supplied", .{});
+            } else {
+                dvui.log.info("layout: shape '{s}'", .{@tagName(build_opts.layout)});
+            }
+    editor.layout.store_catalog = .{
+        .uninstalled = storeUninstalled,
+        .install = PluginStore.queueInstall,
+        .installing = PluginStore.isInstalling,
+    };
 
     if (comptime builtin.target.cpu.arch != .wasm32) {
         if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.gpa, "FIZZY_SPLIT_DEBUG")) |v| {
@@ -5887,6 +5903,7 @@ pub fn deinit(editor: *Editor) !void {
     editor.layout.deinitAssignments(editor.gpa);
     editor.layout.deinitExtents(editor.gpa);
     editor.layout.deinitQualified(editor.gpa);
+    editor.layout.clearPendingStore(editor.gpa);
     editor.layout.picker.close(editor.gpa);
     {
         // The registry itself goes with `host.deinit` below; these are the app's own strings.

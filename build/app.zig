@@ -158,10 +158,14 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     // Which shipped layout shape the region-based layout uses. `ide` is fizzy's own shape; `minimal`
     // and `studio` are deliberately different shapes that load the SAME plugins unchanged —
-    // the acceptance test for the layout API (plan, Phase 5).
+    // the acceptance test for the layout API (plan, Phase 5). A consumer that wants its own
+    // shape passes `-Dapp-layout=` (a LazyPath to its `layout` function) instead of adding a
+    // fourth preset here.
     const Shape = enum { ide, minimal, studio };
     const layout_kind = b.option(Shape, "layout", "Which shipped layout shape to use: ide (default), minimal, studio") orelse .ide;
+    const app_layout_path = b.option(std.Build.LazyPath, "app-layout", "App-owned layout file (pub fn layout(*Layout)); takes precedence over -Dlayout=");
     build_opts.addOption(Shape, "layout", layout_kind);
+    build_opts.addOption(bool, "has_app_layout", app_layout_path != null);
     const static_workbench = b.option(
         bool,
         "static-workbench",
@@ -207,7 +211,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     web.addSteps(b, optimize, build_opts, workbench_opts, assets_module);
 
-    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name);
+    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name, app_layout_path);
     const exe = main_fizzy.exe;
 
     const package_fizzy: FizzyExecutable = package_blk: {
@@ -221,7 +225,9 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         pack_opts.addOption(bool, "static_workbench", static_workbench);
         pack_opts.addOption(bool, "static_text", static_text);
         pack_opts.addOption(bool, "static_image", static_image);
-        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name);
+        pack_opts.addOption(Shape, "layout", layout_kind);
+        pack_opts.addOption(bool, "has_app_layout", app_layout_path != null);
+        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name, app_layout_path);
     };
     const exe_for_package = package_fizzy.exe;
 
@@ -568,7 +574,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     }, fizzy_test_module);
     // The `app` framework module (the plugin store), wired the same way the exe and the web
     // build wire it — see `build/sdk.zig`.
-    _ = sdk.wireAppModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), core_module_test, sdk_module_test, icons_test, markdown_module_test, if (nightwatch_test_dep) |dep| dep.module("nightwatch") else null, build_opts, null, fizzy_test_module);
+    const app_module_test = sdk.wireAppModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), core_module_test, sdk_module_test, icons_test, markdown_module_test, if (nightwatch_test_dep) |dep| dep.module("nightwatch") else null, build_opts, null, fizzy_test_module);
     _ = image_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
@@ -592,6 +598,18 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     });
     integration_module.addImport("fizzy", fizzy_test_module);
     integration_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+
+    // The endless example's own layout — not a shipped preset. Tests drive it the way a
+    // consumer would: as a file that imports `app` / `dvui` / `core`.
+    const endless_layout_mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("examples/endless-app/src/layout.zig"),
+    });
+    endless_layout_mod.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+    endless_layout_mod.addImport("app", app_module_test);
+    endless_layout_mod.addImport("core", core_module_test);
+    integration_module.addImport("endless_layout", endless_layout_mod);
 
     // The text plugin itself, so integration tests can drive its `TextEntryWidget` directly in
     // a headless window. Its editing behavior splits in two: the *decisions* live in dvui-free

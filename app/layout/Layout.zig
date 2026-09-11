@@ -184,9 +184,8 @@ pub const Container = struct {
     /// this container that is not resizable. The app declares it; the framework only reads it.
     base_min: f32 = 0,
     /// Every resizable region in this container. A split needs them all, because honouring one
-    /// drag can mean pushing the others back.
-    resizables: [max_trays]dvui.Id = undefined,
-    resizable_count: usize = 0,
+    /// drag can mean pushing the others back. Arena-backed, this frame only — no count cap.
+    resizables: std.ArrayListUnmanaged(dvui.Id) = .empty,
     /// Total extent the splits in this container take between them.
     handles: f32 = 0,
     /// The container's own box, for measuring how near the pointer is to a split inside it.
@@ -217,9 +216,6 @@ pub const Container = struct {
 /// Layouts nest a few levels; anything deeper is a mistake worth reporting rather than
 /// supporting. Keeps the stack a fixed array with no allocation on the layout path.
 pub const max_nesting = 8;
-
-/// Trays per container. More than a handful on one axis is a layout problem, not a use case.
-pub const max_trays = 6;
 
 // How long a region takes to fold away or come back is `core.anim.slide` — one home for the
 // timing, because a sidebar and a document pane travelling at different speeds reads as broken
@@ -703,7 +699,7 @@ pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
     c.pending_split = null;
     const axis = c.dir;
 
-    var divider = Split.init(pending.src, axis, 0, null);
+    var divider = Split.init(pending.src, axis, pending.opts.id_extra, null);
     defer divider.deinit();
     if (!pending.opts.resize) return;
 
@@ -722,7 +718,7 @@ pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
         .extent = c.extent(axis),
         .base_min = c.base_min,
         .handles = c.handles,
-        .others = c.resizables[0..c.resizable_count],
+        .others = c.resizables.items,
     });
 }
 

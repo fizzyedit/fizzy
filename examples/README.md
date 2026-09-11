@@ -6,10 +6,13 @@ design, but only an outside package proves *consumability*.
 
 | Example | Shape | Identity |
 |---|---|---|
-| `minimal-app` | `-Dshell=minimal` — one main region, no rail/explorer/panel | `minimalapp`, "Minimal App" |
-| `studio-app` | `-Dshell=studio` — explorer on the right, short bottom strip, big canvas | `studioapp`, "Studio App" |
+| `minimal-app` | `-Dlayout=minimal` — one main region, no rail/explorer/panel | `minimalapp`, "Minimal App" |
+| `studio-app` | `-Dlayout=studio` — explorer on the right, short bottom strip, big canvas | `studioapp`, "Studio App" |
+| `endless-app` | its own `src/layout.zig` via `-Dapp-layout=` — blank window, dormant handles on four edges | `endlessapp`, "Endless App" |
 
-Both load the identical `workbench` / `text` / `image` / `markdown` plugins, **unchanged**.
+All three load the identical `workbench` / `text` / `image` / `markdown` plugins, **unchanged**.
+`endless-app` is the consumability test for a consumer-owned shape: fizzy does not ship that
+layout as a preset.
 
 ## What a consumer writes
 
@@ -31,7 +34,9 @@ b.installArtifact(fizzy.artifact("minimalapp"));
 No `build/lib.zig`, no bespoke `fizzy.app.create` — ordinary Zig dependency mechanics carry it,
 because Phase 3 made identity a build option and Phase 5 made the layout one. The app gets its
 own executable name, window title, bundle id and config directory
-(`Application Support/minimalapp/`, not `fizzy/`).
+(`Application Support/minimalapp/`, not `fizzy/`). To bring a shape of your own instead of a
+shipped `-Dlayout=` preset, pass `.@"app-layout" = b.path("src/layout.zig")` — a file exporting
+`pub fn layout(*Layout)`. `endless-app` is that form.
 
 ## The bug this caught
 
@@ -45,7 +50,7 @@ Notably 25 of 28 build steps still succeeded: the entire dependency graph resolv
 plugin compiled. Exactly one path was wrong, and nothing inside fizzy could have revealed it.
 `b.path("src/App.zig")` resolves against fizzy's build root and is correct in both cases.
 
-CI builds both examples on macOS and Linux for this reason.
+CI builds all three examples on macOS and Linux for this reason.
 
 ## Not yet covered
 

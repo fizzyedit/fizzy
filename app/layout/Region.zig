@@ -301,10 +301,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         };
         if (parent) |p| {
             p.last_resizable = id;
-            if (p.resizable_count < Layout.max_trays) {
-                p.resizables[p.resizable_count] = id;
-                p.resizable_count += 1;
-            }
+            p.resizables.append(self.arena, id) catch {};
         }
         shut_now = extent <= 0;
     }

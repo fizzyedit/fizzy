@@ -110,6 +110,9 @@ pub const Options = struct {
     /// Largest, or null to allow the full length of the container minus the split itself, so a
     /// region can be dragged fully open. A number here is a deliberate cap, not a default.
     max: ?f32 = null,
+    /// Distinguishes two splits declared from the same `@src()` — a loop of edge regions, each
+    /// with a split after it. Zero for the ordinary case of one split per source line.
+    id_extra: usize = 0,
 };
 
 /// Open a split: it takes `handle_size` along the container's axis and stretches across it, so

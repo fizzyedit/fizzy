@@ -2,7 +2,7 @@
 
 Resume point for the "fizzy as a library" work. Written to be picked up cold by any agent or
 person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-11 at bookmark
-`fizzy-lib` (jj change `moywovyk`, "Three pane bugs from a screenshot…").
+`fizzy-lib` (jj change pending, endless example owns its layout; no max_trays).
 
 ## Ground rules that are easy to get wrong
 
@@ -81,14 +81,7 @@ Kill by pid, not `%1`. A second launch hands argv to the first (singleton) and e
   region — framework, every app gets it.
 - Settings > Layout > Regions is a table by region that opens the same picker.
 
-Remaining from this arc:
-
-5. **Endless-handles example app** (`examples/`, its own piece): blank window, dormant split
-   handles at the four edges; dragging one out appends a region to a *persisted tree* and a new
-   dormant handle appears. The tree names its regions (`edge-left-2`) so assignments stay keyed
-   by name. The picker gains a section of store surfaces not yet installed; choosing installs
-   and assigns. This is a shape whose layout is data — acceptable as one example file, not as
-   a mode on the ide shape.
+Remaining from this arc: none. The endless-handles example landed (see below).
 
 Known gaps: sidebar surfaces still read fizzy's `explorer.scroll_info` through `EditorAPI`
 (`explorerViewportWidth`), so an offscreen photograph of one is taken against the live
@@ -222,6 +215,31 @@ size and assignment under the app's name, and answers the app's picker.
   "main rendered twice" reported once with an emptied panel, not reproduced — main draws once
   in the headless shape test; ask for the exact state if it recurs.
 
+## Landed: endless handles (`examples/endless-app`, `-Dapp-layout=`)
+
+A shape whose layout is data, owned by the example — not a shipped fizzy preset.
+
+- `examples/endless-app/src/layout.zig`: blank Center plus a dormant `Split` on each window
+  edge. Dragging a handle inward past 48pt and releasing appends `edge-{side}-{n}` to that
+  edge (extent persisted in `layout.zon`); a new dormant handle stays on the outer side.
+  Indices are never reused, so assignments stay keyed by name. Created regions accept `slot`
+  and resolve `by_name` — nothing matches by keyword until the picker fills them.
+- A handle that would leave Center smaller than 80pt does not exist. There is no `max_trays`:
+  the container tracks resizable ids in an arena list, and the example refuses a new region
+  when leftover space on that axis is below the commit threshold.
+- The tree is reconstructed from extent names (`edge-left-1`, …). No new on-disk format.
+- `-Dapp-layout=` is a LazyPath. When set, `presets.run` calls `app_layout.layout(*Layout)`
+  (the file imports `dvui` / `app` / `core` only — not `Editor`). Fizzy's shipped shapes stay
+  `ide | minimal | studio`.
+- `app/layout/Picker.zig`: a Store section lists catalog plugins that are not installed;
+  choosing one queues an install and assigns that plugin's surfaces to the region once they
+  load (`State.requestStoreInstall`). The store is a hook on `State` so the picker does not
+  import `PluginStore` (that module graph is a cycle).
+- Example: `examples/endless-app` (`endlessapp`). CI builds it beside the other two.
+- Tests: names increment per side; promoting is enough for the next frame to declare the
+  region; dragging the left dormant handle past the threshold appends `edge-left-1`; a
+  handle does not commit when Center would be left too small.
+
 ## Also queued (in rough priority)
 
 - **Settings and keybinds as app opt-ins**: move the machinery (schema → ZON persistence →
@@ -239,6 +257,8 @@ size and assignment under the app's name, and answers the app's picker.
 
 ## Recently landed (for orientation, newest first)
 
+- Endless-handles example: dormant edge handles create persisted `edge-{side}-{n}` regions;
+  picker Store section installs and assigns.
 - Loading card sizes from content; image checkerboard survives zoom-out.
 - Animated GIF plays in the image viewer (`core.image.Animation`, dvui timer per frame).
 - `.gif/.bmp/.tga` claimed by `image`; `text` refuses binary (`textcore.encoding.looksBinary`);

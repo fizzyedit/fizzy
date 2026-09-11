@@ -81,6 +81,10 @@ pub fn addFizzyExecutableForTarget(
     /// The application's short name (see app/AppInfo.zig) — the executable's name. Passed in
     /// rather than hardcoded so an app built on fizzy as a library names its own binary.
     app_name: []const u8,
+    /// Consumer-owned layout file. When set, presets dispatch to `app_layout.layout` instead
+    /// of a shipped `-Dlayout=` preset. The file imports `dvui`, `app`, and `core` only —
+    /// not `fizzy` / `Editor` — so the module graph does not cycle.
+    app_layout: ?std.Build.LazyPath,
 ) !FizzyExecutable {
     const dvui_dep = if (macos_sdl_paths) |p|
         sdk.dvuiDependency(b, .{
@@ -206,7 +210,19 @@ pub fn addFizzyExecutableForTarget(
 
     // The `app` framework module: the plugin store and what it needs. Fizzy is its first
     // consumer, not its owner — see `app/app.zig`.
-    _ = sdk.wireAppModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), core_module, sdk_module, icons_module, markdown_module, if (nightwatch_dep) |dep| dep.module("nightwatch") else null, build_opts, singleton_app_dep.module("singleton_app"), exe.root_module);
+    const app_module = sdk.wireAppModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), core_module, sdk_module, icons_module, markdown_module, if (nightwatch_dep) |dep| dep.module("nightwatch") else null, build_opts, singleton_app_dep.module("singleton_app"), exe.root_module);
+
+    if (app_layout) |path| {
+        const app_layout_mod = b.createModule(.{
+            .target = resolved_target,
+            .optimize = optimize,
+            .root_source_file = path,
+        });
+        app_layout_mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
+        app_layout_mod.addImport("app", app_module);
+        app_layout_mod.addImport("core", core_module);
+        exe.root_module.addImport("app_layout", app_layout_mod);
+    }
 
     const workbench_dylib: ?*std.Build.Step.Compile = if (resolved_target.result.cpu.arch != .wasm32) blk: {
         break :blk workbench_plugin.addDylib(b, resolved_target, optimize, .{
