@@ -14,6 +14,36 @@ const icons = @import("icons");
 const platform = @import("platform.zig");
 const reveal_phase = @import("reveal.zig");
 
+/// How a pane *travels* when the layout moves it: a region folding away, a sidebar coming back,
+/// a document pane opening beside its neighbour.
+///
+/// Two curves rather than one, because opening and closing are not the same gesture. A pane
+/// sliding **out** is arriving, and overshooting slightly (`outBack`) is what gives it weight —
+/// it reads as a panel thrown into place. A pane sliding **in** is leaving, and must not
+/// overshoot at all: `outBack` on the way to zero pulls the edge *past* the edge of the window
+/// and snaps back, which reads as a glitch rather than a fold.
+///
+/// Durations are long enough to see. The first pass at this was 220ms in both directions with no
+/// overshoot, which is the timing you pick when you are watching a split you dragged yourself;
+/// watched from outside it reads as a jump-cut.
+///
+/// One home for them because three places move panes — `core.widgets.Split.eased`, the layout's
+/// `Region`, and `core.widgets.Panes` — and a layout whose sidebar and whose documents slide at
+/// different speeds feels broken in a way nobody can name.
+pub const slide = struct {
+    pub const out_ms: i32 = 380;
+    pub const in_ms: i32 = 300;
+
+    /// `opening` is "is the thing getting bigger", which is the only question either curve needs.
+    pub fn ms(opening: bool) i32 {
+        return if (opening) out_ms else in_ms;
+    }
+
+    pub fn easing(opening: bool) *const dvui.easing.EasingFn {
+        return if (opening) dvui.easing.outBack else dvui.easing.outQuint;
+    }
+};
+
 /// Hides a pane for the single frame dvui needs to lay out newly-swapped content, then fades it
 /// in — so switching store pages, document tabs or center providers reads as a quick cross-fade
 /// instead of a flash of half-built layout. See `core/reveal.zig` for why that frame exists.

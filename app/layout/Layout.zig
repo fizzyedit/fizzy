@@ -198,8 +198,9 @@ pub const max_nesting = 8;
 /// Trays per container. More than a handful on one axis is a layout problem, not a use case.
 pub const max_trays = 6;
 
-/// How long a region takes to fold away or come back. Matches the paned shell's feel.
-pub const collapse_ms: i32 = 220;
+// How long a region takes to fold away or come back is `core.anim.slide` — one home for the
+// timing, because a sidebar and a document pane travelling at different speeds reads as broken
+// without ever looking wrong in a screenshot.
 
 pub fn init(host: *sdk.Host, state: *State, gpa: std.mem.Allocator, arena: std.mem.Allocator) Layout {
     return .{ .host = host, .state = state, .gpa = gpa, .arena = arena };

@@ -730,20 +730,21 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         plugin_loader_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         plugin_loader_module.addImport("fizzy_sdk", sdk_module_test);
 
-        // The layout split: drag, capture handoff and hit distance. Rooted at the file itself,
-        // which imports nothing but dvui precisely so it can be — every bug it has had was a
-        // dvui event-routing rule, and those need a real Window to reproduce.
+        // How big a pane is: the split's drag, capture handoff and hit distance, and the pane
+        // row's shares. Both need a real Window — every bug either has had was a dvui
+        // event-routing or layout-settle rule, and those do not reproduce on paper. See
+        // `core/sizing_tests.zig` for why the root sits a directory above them.
         const split_tests_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .root_source_file = b.path("core/widgets/Split.zig"),
+            .root_source_file = b.path("core/sizing_tests.zig"),
         });
         split_tests_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
         if (icons_test) |icons| split_tests_module.addImport("icons", icons);
 
         inline for (.{
             .{ "fizzy-sdk-tests", sdk_tests_module },
-            .{ "fizzy-split-tests", split_tests_module },
+            .{ "fizzy-sizing-tests", split_tests_module },
             .{ "fizzy-plugin-loader-tests", plugin_loader_module },
         }) |entry| {
             const t = b.addTest(.{

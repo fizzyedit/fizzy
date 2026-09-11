@@ -204,23 +204,11 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         // A drag is exempt, and stays exempt without a flag: the split writes `_shown` alongside
         // `_size`, so the two agree and nothing kicks off. Easing a drag would be wrong anyway —
         // a split should sit under the pointer, not lag behind it on a curve.
-        if (dvui.animationGet(id, "_ease")) |a| {
-            extent = a.value();
-        } else {
-            const shown = dvui.dataGet(null, id, "_shown", f32) orelse target;
-            if (shown != target) {
-                dvui.animation(id, "_ease", .{
-                    .start_val = shown,
-                    .end_val = target,
-                    .end_time = Layout.collapse_ms * std.time.us_per_ms,
-                    .easing = dvui.easing.outQuint,
-                });
-                extent = shown;
-            } else {
-                extent = target;
-            }
-        }
-        dvui.dataSet(null, id, "_shown", extent);
+        //
+        // `Split.eased` rather than a curve of its own: a region and a document pane sliding at
+        // different speeds is the kind of wrongness nobody can name but everybody feels. It also
+        // carries the asymmetry — out with a little overshoot, in without any (`core.anim.slide`).
+        extent = Split.eased(id, target);
         dvui.dataSet(null, id, "_size", chosen);
         if (init_opts.name.len > 0 and self.state.setExtent(self.gpa, init_opts.name, chosen)) self.extents_changed = true;
 

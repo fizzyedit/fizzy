@@ -35,6 +35,12 @@ pub const Split = @import("widgets/Split.zig");
 /// Open a split — the verb form of `Split.init`, so a caller that never names the type reads
 /// the same as it does for `dvui.box`.
 pub const split = Split.init;
+/// A row of panes that share their container by *share* rather than by points, with a boundary
+/// between each pair. The sizing model documents want, where `Split` alone is the one a sidebar
+/// wants — `Panes` explains the difference at length.
+pub const Panes = @import("widgets/Panes.zig");
+/// Open a row of panes — the verb form of `Panes.init`.
+pub const panes = Panes.init;
 pub const Tabs = @import("widgets/Tabs.zig");
 
 /// Side of the square every glyph in a tree row occupies — the expand/collapse caret, a folder

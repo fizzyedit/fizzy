@@ -113,7 +113,7 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
         Document.rememberPreviewMode(doc.preview_mode, doc.preview_split_ratio_user);
         break :blk dragged;
     } else blk: {
-        const eased = Split.eased(split, previewExtent(doc.preview_mode, doc.preview_split_ratio_user, total), 220);
+        const eased = Split.eased(split, previewExtent(doc.preview_mode, doc.preview_split_ratio_user, total));
         // The split's stored extent is what a press reads to start the drag from, so it has to
         // agree with what is on screen even when the mode — not a drag — put it there. Without
         // this, pressing the handle without moving read a `_size` nothing had ever written: the

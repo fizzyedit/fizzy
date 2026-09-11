@@ -76,7 +76,7 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
     }
 }
 
-/// Draw every workspace side by side, separated by the same split the app's own regions use.
+/// Draw every workspace side by side, separated by a boundary the user can drag.
 ///
 /// This was a **recursion**: each level opened a two-child `PanedWidget` with workspace `index`
 /// in the first half and all the remaining workspaces nested in the second. That is the tree
@@ -84,9 +84,19 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
 /// splitting anything else in the app — it was a second implementation of the same idea, with
 /// its own ratios, its own handle and its own feel.
 ///
-/// Now it is a flat loop: N panes on an axis with `core.widgets.Split` between them, sized in points
-/// like every other region. The `index` parameter stays because it is on the host vtable, and is
-/// the first pane to draw.
+/// It then became a flat row sized in **points**, one number per pane with the first absorbing
+/// the remainder — the model the app's own regions use. That was wrong for documents in a way
+/// that took using it to see: with a single flexible pane, dragging the boundary between panes 2
+/// and 3 grew pane 3 while pane 2 kept its width and slid sideways, so every divider left of the
+/// pointer moved; and once the flexible pane reached the minimum its content wanted, every
+/// boundary in the row locked at once.
+///
+/// Now it is `core.widgets.Panes`: every pane holds a *share* of the row, a drag trades share
+/// between the two panes it divides and no others, and a window resize is proportional because
+/// nothing is stored in points. `Panes` is the general piece — the app's regions keep the points
+/// model, which is right for a sidebar and wrong for a document.
+///
+/// The `index` parameter stays because it is on the host vtable, and is the first pane to draw.
 pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
     const count = wb.workspaces.count();
     if (index >= count) return .ok;
@@ -99,79 +109,37 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
     const panel_dragging = if (panel) |p| p.dragging else false;
     const panel_animating_open = if (panel) |p| (p.animating and p.ratio < 1.0) else false;
 
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both, .background = false });
+    // One id per pane, keyed by the workspace's grouping rather than its position — see `paneId`.
+    // A stack array because a row of document groups is a handful at most; past that the ids are
+    // truncated and the extra groups share the last pane's share, which is a layout nobody wants
+    // but not a crash.
+    var ids: [max_panes]dvui.Id = undefined;
+    const shown = @min(count - index, max_panes);
+    for (0..shown) |k| ids[k] = paneId(wb, index + k);
+
+    var row = core.widgets.panes(@src(), .horizontal, ids[0..shown], .{});
     defer row.deinit();
 
-    var dragging = panel_dragging;
-    // The **first** pane absorbs the remainder; every pane after it carries a size.
-    //
-    // It used to be the last, which meant a pane opened to the side was the unsized one and
-    // simply appeared at whatever was left — instantly, with nothing to animate. Sizing the new
-    // pane instead lets it start at zero and slide in, which is what opening to the side looked
-    // like when it was a paned animating its ratio.
-    var i: usize = index;
-    while (i < count) : (i += 1) {
-        const first = i == index;
-        const id = paneId(wb, i);
+    for (0..shown) |k| {
+        row.divider(@src(), k);
 
-        if (!first) {
-            // The divider before this pane drags *this* pane, anchored to its far edge.
-            var divider = core.widgets.split(@src(), .horizontal, i);
-            defer divider.deinit();
-            divider.drag(row, id, -1, .{}, .{
-                .extent = row.data().contentRect().w,
-                .handles = Split.handle_size * @as(f32, @floatFromInt(count - 1)),
-            });
-            if (dvui.captured(divider.box.data().id)) dragging = true;
-        }
-
-        // Absence means never sized; zero means the user dragged it shut. Reading zero as "needs
-        // a starting size" springs a closed pane back open on the next frame.
-        var width: f32 = 0;
-        if (!first) {
-            const stored = dvui.dataGet(null, id, "_size", f32);
-            const target = stored orelse blk: {
-                // A new pane halves what is left, which is what "open to the side" means: the
-                // group being split gives up half of itself. Shown starts at zero so it slides in.
-                var taken: f32 = 0;
-                var k: usize = index + 1;
-                while (k < i) : (k += 1) taken += dvui.dataGet(null, paneId(wb, k), "_size", f32) orelse 0;
-                const handles = Split.handle_size * @as(f32, @floatFromInt(count - 1));
-                const half = @max(80, (row.data().contentRect().w - taken - handles) / 2);
-                dvui.dataSet(null, id, "_size", half);
-                dvui.dataSet(null, id, "_shown", @as(f32, 0));
-                dvui.refresh(null, @src(), id);
-                break :blk half;
-            };
-            width = Split.eased(id, target, 220);
-        }
-
-        var pane = dvui.box(@src(), .{ .dir = .vertical }, if (first) .{
-            .id_extra = i,
-            .expand = .both,
-            .background = false,
-        } else .{
-            .id_extra = i,
-            .expand = .vertical,
-            .background = false,
-            .min_size_content = .{ .w = width },
-            .max_size_content = .width(width),
-        });
-        if (!first) Split.recordEdges(id, pane.data(), .horizontal);
-
-        const result = try wb.workspaces.values()[i].draw();
+        var pane = row.pane(@src(), k);
+        const result = try wb.workspaces.values()[index + k].draw();
         pane.deinit();
         if (result != .ok) return result;
     }
 
     // Centring is coordinated with the panel exactly as before: while nothing is being dragged,
     // a workspace centres its content if the panel is animating open.
-    if (!dragging and count > 0) {
+    if (!panel_dragging and !row.dragging and count > 0) {
         wb.workspaces.values()[count - 1].center = panel_animating_open;
     }
 
     return .ok;
 }
+
+/// Document groups drawn side by side at once. Six is already an unusable number of them.
+const max_panes = 6;
 
 /// A stable id per pane, keyed by the **workspace's grouping** rather than its position.
 ///

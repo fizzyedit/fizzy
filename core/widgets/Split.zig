@@ -7,6 +7,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
+const anim = @import("../anim.zig");
 
 const Split = @This();
 
@@ -172,24 +173,36 @@ pub fn open(id: dvui.Id, fallback: f32) void {
 /// Callers that size a pane every frame use this instead of the stored size directly, so a new
 /// split slides in rather than appearing at full width. A drag is exempt without a flag: the
 /// drag writes `_shown` alongside `_size`, so the two agree and nothing starts.
-pub fn eased(id: dvui.Id, target: f32, ms: i32) f32 {
-    if (dvui.animationGet(id, "_ease")) |a| {
+///
+/// The curve depends on which way the pane is going — see `core.anim.slide`. Overshooting on the
+/// way *open* is the weight; overshooting on the way *shut* drags the edge past the edge of the
+/// container and back, which is the jitter a closing pane used to have.
+pub fn eased(id: dvui.Id, target: f32) f32 {
+    return easedKey(id, target, "_ease", "_shown");
+}
+
+/// `eased` against a caller-chosen pair of keys, so a second number on the same id can travel on
+/// the same curve — `Panes` eases a *share* while a split eases an extent, and both belong to the
+/// pane they size.
+pub fn easedKey(id: dvui.Id, target: f32, anim_key: []const u8, shown_key: []const u8) f32 {
+    if (dvui.animationGet(id, anim_key)) |a| {
         const v = a.value();
-        dvui.dataSet(null, id, "_shown", v);
+        dvui.dataSet(null, id, shown_key, v);
         return v;
     }
-    const shown = dvui.dataGet(null, id, "_shown", f32) orelse target;
+    const shown = dvui.dataGet(null, id, shown_key, f32) orelse target;
     if (shown != target) {
-        dvui.animation(id, "_ease", .{
+        const opening = target > shown;
+        dvui.animation(id, anim_key, .{
             .start_val = shown,
             .end_val = target,
-            .end_time = ms * std.time.us_per_ms,
-            .easing = dvui.easing.outBack,
+            .end_time = anim.slide.ms(opening) * std.time.us_per_ms,
+            .easing = anim.slide.easing(opening),
         });
-        dvui.dataSet(null, id, "_shown", shown);
+        dvui.dataSet(null, id, shown_key, shown);
         return shown;
     }
-    dvui.dataSet(null, id, "_shown", target);
+    dvui.dataSet(null, id, shown_key, target);
     return target;
 }
 
@@ -213,17 +226,37 @@ pub fn recordEdges(id: dvui.Id, wd: *dvui.WidgetData, axis: dvui.enums.Direction
     }
 }
 
-/// Drag `target`'s stored extent, and draw the split. `sign` is +1 when the target is the region
-/// *before* the split and -1 when it is the one after, so dragging always moves the edge the way
-/// the pointer goes.
-pub fn drag(
-    self: *Split,
-    container: *dvui.BoxWidget,
-    target: dvui.Id,
-    sign: f32,
-    opts: Options,
-    c: Constraint,
-) void {
+/// What the pointer is doing to this split this frame: where it wants the boundary, and how near
+/// it is (which is what the grip is drawn from).
+///
+/// Split out of `drag` so a second sizing model can share the event handling. Everything here is
+/// dvui's routing rules — approach matching on the container, the capture switch, giving capture
+/// back on release — and all of it has been wrong at least once. What a *number* means is the
+/// part that differs: `drag` reads it as one region's extent in points, `Panes` reads it as a
+/// boundary between two shares.
+pub const Grab = struct {
+    /// Pointer position along the axis, in **physical** pixels, on a frame the split is being
+    /// dragged. Null on every other frame.
+    to: ?f32 = null,
+    /// Distance from the split's centre line in points; zero while captured.
+    dist: f32 = std.math.floatMax(f32),
+    /// The split's scale, for converting `to` into points.
+    scale: f32 = 1,
+};
+
+/// Run the split's pointer handling: approach, press, drag, release, cursor.
+///
+/// Events are matched against the **container**, not this thin strip, so the split can grow as
+/// the pointer approaches rather than only reacting once it is already on top of a 10pt target.
+/// `PanedWidget` does the same, and it is the difference between a split that feels findable and
+/// one that does not. Nothing is handled unless the pointer is actually close.
+///
+/// **Except while we hold capture.** dvui's `eventMatch` refuses every widget that is not the
+/// capture holder once a capture is live ("someone else has capture"), so continuing to match on
+/// the container during a drag rejects the motion and release events too — the drag freezes on
+/// the first pixel, capture is never given back, and the resize cursor sticks. So once captured
+/// we match on ourselves, which the capture branch admits regardless of rect.
+pub fn grab(self: *Split, container: *dvui.BoxWidget) Grab {
     const axis = self.axis;
     const wd = self.box.data();
     const srs = wd.borderRectScale();
@@ -238,37 +271,22 @@ pub fn drag(
         .vertical => srs.r.y + srs.r.h / 2,
     };
 
-    // Events are matched against the **container**, not this thin strip, so the split can grow as
-    // the pointer approaches rather than only reacting once it is already on top of a 10pt
-    // target. `PanedWidget` does the same, and it is the difference between a split that feels
-    // findable and one that does not. Nothing is handled unless the pointer is actually close.
-    //
-    // **Except while we hold capture.** dvui's `eventMatch` refuses every widget that is not the
-    // capture holder once a capture is live ("someone else has capture"), so continuing to match
-    // on the container during a drag rejects the motion and release events too — the drag
-    // freezes on the first pixel, capture is never given back, and the resize cursor sticks. So
-    // once captured we match on ourselves, which the capture branch admits regardless of rect.
-    var dist: f32 = std.math.floatMax(f32);
-    // Where the pointer wants the split, taken from the last motion of the frame and applied once
-    // after the loop. Applying inside it would over-shoot: every motion event would be measured
-    // against the same stale split position.
-    var drag_to: ?f32 = null;
+    var out: Grab = .{ .scale = srs.s };
     for (dvui.events()) |*e| {
         if (e.evt != .mouse) continue;
 
         const captured = dvui.captured(wd.id);
         if (captured) {
             if (!dvui.eventMatchSimple(e, wd)) continue;
-            dist = 0;
+            out.dist = 0;
         } else {
-            const cbox = container;
-            if (!dvui.eventMatchSimple(e, cbox.data())) continue;
+            if (!dvui.eventMatchSimple(e, container.data())) continue;
             const p = switch (axis) {
                 .horizontal => e.evt.mouse.p.x,
                 .vertical => e.evt.mouse.p.y,
             };
-            dist = @abs(p - centre) / srs.s;
-            if (dist > handle_size) continue;
+            out.dist = @abs(p - centre) / srs.s;
+            if (out.dist > handle_size) continue;
         }
 
         switch (e.evt.mouse.action) {
@@ -276,9 +294,6 @@ pub fn drag(
                 e.handle(@src(), wd);
                 dvui.captureMouse(wd, e.num);
                 dvui.dragPreStart(e.evt.mouse.button, e.evt.mouse.p, .{ .cursor = cursor });
-                // The extent at grab time, so the drag is measured from where it started
-                // instead of accumulating rounding every frame.
-                dvui.dataSet(null, wd.id, "_start", dvui.dataGet(null, target, "_size", f32) orelse currentExtent(target, axis));
             },
             .release => if (e.evt.mouse.button.pointer() and captured) {
                 e.handle(@src(), wd);
@@ -287,8 +302,11 @@ pub fn drag(
             },
             .motion => if (captured) {
                 e.handle(@src(), wd);
+                // Taken from the last motion of the frame and applied once by the caller.
+                // Applying per event would over-shoot: every motion would be measured against
+                // the same stale split position.
                 if (dvui.dragging(e.evt.mouse.p, null) != null) {
-                    drag_to = switch (axis) {
+                    out.to = switch (axis) {
                         .horizontal => e.evt.mouse.p.x,
                         .vertical => e.evt.mouse.p.y,
                     };
@@ -298,6 +316,39 @@ pub fn drag(
             else => {},
         }
     }
+    if (dvui.captured(wd.id)) out.dist = 0;
+    return out;
+}
+
+/// Draw the split itself: a resting pill that grows into a grip as the pointer approaches.
+pub fn draw(self: *Split, dist: f32) void {
+    const wd = self.box.data();
+    drawSplit(wd, wd.borderRectScale(), self.axis, dist, false);
+}
+
+/// Drag `target`'s stored extent, and draw the split. `sign` is +1 when the target is the region
+/// *before* the split and -1 when it is the one after, so dragging always moves the edge the way
+/// the pointer goes.
+pub fn drag(
+    self: *Split,
+    container: *dvui.BoxWidget,
+    target: dvui.Id,
+    sign: f32,
+    opts: Options,
+    c: Constraint,
+) void {
+    const axis = self.axis;
+    const wd = self.box.data();
+    const srs = wd.borderRectScale();
+
+    const centre = switch (axis) {
+        .horizontal => srs.r.x + srs.r.w / 2,
+        .vertical => srs.r.y + srs.r.h / 2,
+    };
+
+    const grabbed = self.grab(container);
+    const dist = grabbed.dist;
+    const drag_to = grabbed.to;
 
     // Drive the size from where the pointer is relative to the split, not from an accumulated
     // delta.
@@ -337,8 +388,6 @@ pub fn drag(
         dvui.dataSet(null, target, "_shown", resolved);
         dvui.refresh(null, @src(), wd.id);
     }
-
-    if (dvui.captured(wd.id)) dist = 0;
 
     // A split whose region is shut has nothing beside it to imply that it is there, so it keeps a
     // resting line at the edge and grows the grip out of that on approach. Without it a closed
@@ -518,17 +567,17 @@ test "dragging the split resizes the region before it" {
 
     try dvui.testing.settle(twoPaneFrame);
     const before = t_size;
-    const grab = t_sep_x;
+    const grab_x = t_sep_x;
 
     const cw = dvui.currentWindow();
-    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab, .y = 100 } });
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x, .y = 100 } });
     _ = try dvui.testing.step(twoPaneFrame);
 
     _ = try cw.addEventMouseButton(.left, .press);
     _ = try dvui.testing.step(twoPaneFrame);
     try testing.expect(t_captured);
 
-    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab + 80, .y = 100 } });
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x + 80, .y = 100 } });
     _ = try dvui.testing.step(twoPaneFrame);
 
     // The regression: with capture held, matching events on the container makes dvui reject
@@ -552,10 +601,10 @@ test "the split follows the pointer across a multi-step drag" {
 
     try dvui.testing.settle(twoPaneFrame);
     const before = t_size;
-    const grab = t_sep_x;
+    const grab_x = t_sep_x;
     const cw = dvui.currentWindow();
 
-    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab, .y = 100 } });
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x, .y = 100 } });
     _ = try dvui.testing.step(twoPaneFrame);
     _ = try cw.addEventMouseButton(.left, .press);
     _ = try dvui.testing.step(twoPaneFrame);
@@ -564,7 +613,7 @@ test "the split follows the pointer across a multi-step drag" {
     var moved: f32 = 0;
     for (0..6) |_| {
         moved += 20;
-        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab + moved, .y = 100 } });
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x + moved, .y = 100 } });
         _ = try dvui.testing.step(twoPaneFrame);
     }
     _ = try cw.addEventMouseButton(.left, .release);
@@ -572,7 +621,7 @@ test "the split follows the pointer across a multi-step drag" {
 
     try testing.expectApproxEqAbs(before + moved / t_scale, t_size, 2.0);
     // And the split itself ends up under the pointer, which is what "follows the mouse" means.
-    try testing.expectApproxEqAbs(grab + moved, t_sep_x, 4.0);
+    try testing.expectApproxEqAbs(grab_x + moved, t_sep_x, 4.0);
 }
 
 test "releasing gives capture back, so the cursor does not stick" {
@@ -580,14 +629,14 @@ test "releasing gives capture back, so the cursor does not stick" {
     defer t.deinit();
 
     try dvui.testing.settle(twoPaneFrame);
-    const grab = t_sep_x;
+    const grab_x = t_sep_x;
     const cw = dvui.currentWindow();
 
-    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab, .y = 100 } });
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x, .y = 100 } });
     _ = try dvui.testing.step(twoPaneFrame);
     _ = try cw.addEventMouseButton(.left, .press);
     _ = try dvui.testing.step(twoPaneFrame);
-    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab + 40, .y = 100 } });
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x + 40, .y = 100 } });
     _ = try dvui.testing.step(twoPaneFrame);
     _ = try cw.addEventMouseButton(.left, .release);
     _ = try dvui.testing.step(twoPaneFrame);
@@ -671,14 +720,14 @@ test "a drag cannot squeeze the region below its minimum" {
     defer t.deinit();
 
     try dvui.testing.settle(twoPaneFrame);
-    const grab = t_sep_x;
+    const grab_x = t_sep_x;
     const cw = dvui.currentWindow();
 
-    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab, .y = 100 } });
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x, .y = 100 } });
     _ = try dvui.testing.step(twoPaneFrame);
     _ = try cw.addEventMouseButton(.left, .press);
     _ = try dvui.testing.step(twoPaneFrame);
-    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab - 5000, .y = 100 } });
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = grab_x - 5000, .y = 100 } });
     _ = try dvui.testing.step(twoPaneFrame);
 
     try testing.expect(t_size >= 20);
