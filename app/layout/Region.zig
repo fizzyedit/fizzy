@@ -59,7 +59,10 @@ pub fn deinit(self: *Region) void {
 // call `animateSplit` on it, which only worked while a region *was* a paned.
 
 pub fn isClosed(self: Region) bool {
-    return Split.isClosed(self.id);
+    // Absence is not zero: a region that was never sized — a stretchy one that takes what is
+    // left, now that every region registers — has no stored extent and is not shut.
+    const stored = dvui.dataGet(null, self.id, "_size", f32) orelse return false;
+    return stored <= 0;
 }
 
 pub fn close(self: Region) void {
@@ -243,14 +246,6 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
                 p.pending_split = null;
             }
             p.last_resizable = id;
-            // Findable from outside the layout by the keywords it accepts, so a rail button or
-            // a command can open and shut it without knowing what the shape built.
-            if (init_opts.keywords.len > 0) self.state.registerRegion(self.gpa, .{
-                .name = init_opts.name,
-                .keywords = init_opts.keywords,
-                .id = id,
-                .default_extent = default,
-            });
             if (p.resizable_count < Layout.max_trays) {
                 p.resizables[p.resizable_count] = id;
                 p.resizable_count += 1;
@@ -288,6 +283,18 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
             if (along > p.base_min) p.base_min = along;
         }
     }
+
+    // Findable from outside the layout by the keywords it accepts — a rail button or a command
+    // opening and shutting it, the settings pane listing where a panel can go. Every region that
+    // hosts surfaces registers, resizable or not: this used to sit inside the `resize` branch,
+    // so a stretchy region like the main area was invisible to the registry, the placement
+    // picker never offered "Main", and the surfaces drawing there read as unplaced.
+    if (init_opts.keywords.len > 0) self.state.registerRegion(self.gpa, .{
+        .name = init_opts.name,
+        .keywords = init_opts.keywords,
+        .id = id,
+        .default_extent = default_extent,
+    });
 
     const box = dvui.box(src, .{ .dir = init_opts.dir }, box_opts);
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
