@@ -307,6 +307,8 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     const clip_to = box.data().contentRectScale().r;
     const prev_clip = dvui.clip(clip_to);
 
+    if (init_opts.name.len > 0 and init_opts.keywords.len > 0) cornerButton(self, init_opts.name, box);
+
     // Drawn at every size except none. Skipping content at *zero* is just not doing work nobody
     // can see; skipping it below a threshold would be a policy, and it would also break the
     // layered form later — a tray blurring what is behind it needs the region underneath to have
@@ -322,6 +324,59 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         .layout = self,
         .prev_clip = prev_clip,
     };
+}
+
+/// How close the pointer must be to a region's top-right corner, in points, before the button
+/// shows. Far enough that a glance toward the corner finds it; near enough that it never
+/// appears while the user is working in the middle of the region.
+const corner_reach: f32 = 56;
+const corner_button_size: f32 = 22;
+
+/// The small button in a region's top-right corner that opens the picker for it. This is the
+/// piece that makes placement *visual*: a user looks at the place in the window they want to
+/// change and finds the control there, rather than in a settings tree. It is framework, so
+/// every region in every app has it without the shape writing anything.
+///
+/// Runs before the region's contents and renders after them (`RenderFrontToBack`): dvui gives
+/// an event to the first widget that runs and paints the last one on top, and a corner button
+/// under a scroll area needs both to be it. Shown only while the pointer is near the corner.
+fn cornerButton(self: *Layout, name: []const u8, box: *dvui.BoxWidget) void {
+    const rs = box.data().contentRectScale();
+    const mouse = dvui.currentWindow().mouse_pt;
+    const near = mouse.x >= rs.r.x + rs.r.w - corner_reach * rs.s and mouse.x <= rs.r.x + rs.r.w and
+        mouse.y >= rs.r.y and mouse.y <= rs.r.y + corner_reach * rs.s;
+    if (!near) return;
+
+    var ftb: dvui.RenderFrontToBack = undefined;
+    ftb.init();
+    defer ftb.deinit();
+
+    const content = box.data().contentRect();
+    const theme = dvui.themeGet();
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(@src(), .{}, .{
+        .rect = .{
+            .x = content.w - corner_button_size - 4,
+            .y = 4,
+            .w = corner_button_size,
+            .h = corner_button_size,
+        },
+        .padding = dvui.Rect.all(2),
+        .corners = dvui.CornerRect.all(4),
+        .background = true,
+        .color_fill = theme.color(.control, .fill),
+        .border = dvui.Rect.all(1),
+        .color_border = theme.color(.control, .border),
+    });
+    defer bw.deinit();
+    bw.processEvents();
+    bw.drawBackground();
+    dvui.icon(@src(), "regions", dvui.entypo.grid, .{
+        .fill_color = if (bw.hovered()) theme.color(.highlight, .fill) else theme.color(.control, .text),
+    }, .{ .expand = .both });
+    if (bw.clicked()) {
+        self.state.openPicker(self.gpa, name, bw.data().rectScale().r.toNatural().bottomLeft());
+    }
 }
 
 /// The region's contents: its own chrome if it declared any, otherwise the active surface.
