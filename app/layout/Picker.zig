@@ -66,8 +66,19 @@ pub fn draw(self: *Picker, f: *Layout) void {
     const contents = f.matching(region.keywords);
     const theme = dvui.themeGet();
 
+    // Same card as the command palette's panel: translucent content fill, rounded, no border,
+    // soft drop shadow. A floating chooser and a floating palette are the same kind of thing, so
+    // they read as one surface style rather than two.
     var popup = dvui.popup(@src(), .{ .open_flag = &self.is_open, .from = self.anchor }, .{
         .padding = dvui.Rect.all(8),
+        .color_fill = theme.color(.content, .fill).opacity(0.95),
+        .corners = dvui.CornerRect.all(8),
+        .border = .all(0),
+        .box_shadow = .{
+            .fade = 8,
+            .corners = .all(8),
+            .alpha = 0.25,
+        },
     }) orelse {
         // Just closed.
         self.close(gpa);
@@ -123,7 +134,6 @@ pub fn draw(self: *Picker, f: *Layout) void {
             dvui.refresh(null, @src(), null);
         }
     }
-    _ = theme;
 }
 
 /// One surface: its snapshot scaled to fit, its title, its owner, and a highlight when it is in
