@@ -42,6 +42,9 @@ branch_size: Size = .{},
 current_branch_focus_id: ?dvui.Id = null,
 init_options: InitOptions = undefined,
 group: dvui.FocusGroupWidget = undefined,
+    /// False when a focus group is already registered on this subwindow — creating
+    /// another just logs "inactive because nested" every frame.
+    group_active: bool = false,
 /// Drop indicator: last branch that contains the mouse wins
 drop_target_branch_id: ?usize = null,
 drop_target_rs: ?dvui.RectScale = null,
@@ -82,11 +85,18 @@ pub fn init(self: *TreeWidget, src: std.builtin.SourceLocation, init_opts: InitO
 
     dvui.parentSet(self.widget());
 
-    self.group.init(@src(), .{ .nav_key_dir = .vertical }, .{});
-
-    if (self.group.data().accesskit_node()) |ak_node| {
-        AccessKit.nodeAddAction(ak_node, AccessKit.Action.focus);
-        AccessKit.nodeAddAction(ak_node, AccessKit.Action.click);
+    const nested = blk: {
+        const cw = dvui.currentWindow();
+        const sw = cw.subwindows.get(dvui.subwindowCurrentId()) orelse break :blk false;
+        break :blk sw.focus_group != null;
+    };
+    if (!nested) {
+        self.group.init(@src(), .{ .nav_key_dir = .vertical }, .{});
+        self.group_active = true;
+        if (self.group.data().accesskit_node()) |ak_node| {
+            AccessKit.nodeAddAction(ak_node, AccessKit.Action.focus);
+            AccessKit.nodeAddAction(ak_node, AccessKit.Action.click);
+        }
     }
 }
 
@@ -172,7 +182,7 @@ pub fn deinit(self: *TreeWidget) void {
     defer if (dvui.widgetIsAllocated(self)) dvui.widgetFree(self);
     defer self.* = undefined;
 
-    self.group.deinit();
+    if (self.group_active) self.group.deinit();
 
     // Draw drop indicator once; last branch that contained the mouse set drop_target_rs
     if (self.drag_point != null) {
