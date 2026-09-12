@@ -200,7 +200,13 @@ pub const CrossFade = struct {
             return;
         }
 
-        const s = crossfade.sample(self.kind, t, pending);
+        var s = crossfade.sample(self.kind, t, pending);
+        // No incoming picture yet: keep the outgoing cover so the live view
+        // cannot flash through a half-dissolved overlay.
+        if (self.kind == .blur and self.incoming == null) {
+            s.in_alpha = 0;
+            s.out_alpha = 1;
+        }
         if (self.kind == .blur) {
             if (self.incoming) |tex| blit(tex, self.incoming_rect, s.in_blur, s.in_alpha);
         }
@@ -251,33 +257,36 @@ pub fn blit(tex: dvui.Texture, dest: dvui.Rect.Physical, blur: f32, alpha: f32) 
         return;
     }
 
-    const max_r = @min(16.0, @min(dest.w, dest.h) * 0.08);
+    const max_r = @min(22.0, @min(dest.w, dest.h) * 0.10);
     const radius = blur * max_r;
 
     const prev_clip = dvui.clipGet();
     dvui.clipSet(prev_clip.intersect(dest));
     defer dvui.clipSet(prev_clip);
 
-    const rings = [_]f32{ 0.5, 1.0 };
-    const spokes: u32 = 8;
-    const samples: f32 = 1 + @as(f32, @floatFromInt(rings.len * spokes));
-    const a = alpha / samples;
-
+    // A covering copy first so the smear never punches a hole. Offsets sit
+    // on top at low alpha — splitting the only copy across samples used to
+    // make the overlay look grainy and half-transparent.
     dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{
-        .colormod = dvui.Color.white.opacity(a),
+        .colormod = dvui.Color.white.opacity(alpha),
     }) catch {};
+
+    const rings = [_]f32{ 0.45, 0.8, 1.15 };
+    const weights = [_]f32{ 0.22, 0.14, 0.08 };
+    const spokes: u32 = 8;
+    const smear = alpha * blur;
 
     var i: u32 = 0;
     while (i < spokes) : (i += 1) {
         const angle = @as(f32, @floatFromInt(i)) * (std.math.tau / @as(f32, @floatFromInt(spokes)));
         const cx = @cos(angle);
         const sy = @sin(angle);
-        for (rings) |ring| {
+        for (rings, weights) |ring, weight| {
             var r = dest;
             r.x += cx * radius * ring;
             r.y += sy * radius * ring;
             dvui.renderTexture(tex, .{ .r = r, .s = 1 }, .{
-                .colormod = dvui.Color.white.opacity(a),
+                .colormod = dvui.Color.white.opacity(smear * weight),
             }) catch {};
         }
     }
