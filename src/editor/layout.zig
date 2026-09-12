@@ -6,11 +6,9 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
 const sdk = fizzy.sdk;
-const core = @import("core");
 const app = @import("app");
 
 const Layout = app.layout.Layout;
-const Split = core.widgets.Split;
 const Menu = @import("Menu.zig");
 
 pub const sidebar = sdk.keywords.ide.sidebar;
@@ -27,7 +25,6 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     var stack = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = false,
-        .padding = .{ .w = Split.handle_size },
     });
     defer stack.deinit();
 
@@ -65,11 +62,7 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
 
     f.split(@src(), .{});
 
-    // Overlay sashes sit in this gap. Without it the Main/Panel cards paint over them.
-    var content = try f.region(@src(), .{ .dir = .vertical }, .{
-        .expand = .both,
-        .margin = .{ .x = Split.handle_size },
-    });
+    var content = try f.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer content.deinit();
 
     {
@@ -91,7 +84,6 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
         }, placeCard(editor, .{
             .min_size_content = .{ .h = 220 },
             .expand = .horizontal,
-            .margin = .{ .y = Split.handle_size },
         }));
         defer panel.deinit();
     }
@@ -101,7 +93,8 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
 
 /// Window fill, translucent while the OS window is, rounded like the old
 /// place card. Sidebar paints its own chrome; Main and Panel do not.
-/// Split-facing gap is the caller's — overlay sashes sit in that margin.
+/// Padding and margin stay the region's `dvui.Options`. A sash gap is a
+/// packed split, never a handle_size margin on the card.
 const place_radius: f32 = 12;
 
 fn placeCard(editor: *fizzy.Editor, extra: dvui.Options) dvui.Options {
@@ -113,6 +106,10 @@ fn placeCard(editor: *fizzy.Editor, extra: dvui.Options) dvui.Options {
     opts.background = true;
     opts.color_fill = fill;
     opts.corners = dvui.CornerRect.round(place_radius);
+    // Inset the plugin surface inside the card. A sash is a packed split,
+    // not this padding — this only shrinks the content rect.
+    if (opts.padding == null) opts.padding = .all(8);
+    if (opts.margin == null) opts.margin = .{};
     return opts;
 }
 

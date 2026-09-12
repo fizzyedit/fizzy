@@ -252,6 +252,11 @@ pub fn easedKey(id: dvui.Id, target: f32, anim_key: []const u8, shown_key: []con
     if (dvui.animationGet(id, anim_key)) |a| {
         const v = a.value();
         dvui.dataSet(null, id, shown_key, v);
+        // dvui does not keep the window awake for a data-id animation.
+        // Without this a close rides whatever else is refreshing, then
+        // parks until the next mouse move — and persistExtent collapses
+        // the leaf in one frame.
+        dvui.refresh(null, @src(), id);
         return v;
     }
     const shown = dvui.dataGet(null, id, shown_key, f32) orelse target;
@@ -264,6 +269,7 @@ pub fn easedKey(id: dvui.Id, target: f32, anim_key: []const u8, shown_key: []con
             .easing = anim.slide.easing(opening),
         });
         dvui.dataSet(null, id, shown_key, shown);
+        dvui.refresh(null, @src(), id);
         return shown;
     }
     dvui.dataSet(null, id, shown_key, target);

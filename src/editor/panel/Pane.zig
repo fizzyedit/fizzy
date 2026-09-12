@@ -44,10 +44,26 @@ pub fn draw(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, ke
         }
     }
 
-    if (f.matching(keywords).len >= 1) self.drawTabs(panel, host, f, keywords);
+    if (showChooser(f, keywords, self.viewCount(panel, f, keywords))) self.drawTabs(panel, host, f, keywords);
     try self.drawContent(panel, host, f, keywords);
 
     return .ok;
+}
+
+fn viewCount(self: *Pane, panel: *Panel, f: *Layout, keywords: []const []const u8) usize {
+    var n: usize = 0;
+    for (f.matching(keywords)) |view| {
+        if (panel.paneOf(view.id) == self.grouping) n += 1;
+    }
+    return n;
+}
+
+/// Same rule as a place with no custom chrome: a chooser exists only for
+/// Multiple with more than one surface. A single Output is just Output.
+fn showChooser(f: *Layout, keywords: []const []const u8, count: usize) bool {
+    if (count <= 1) return false;
+    const r = f.state.regionFor(keywords) orelse return true;
+    return r.shows == .many;
 }
 
 fn drawTabs(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, keywords: []const []const u8) void {

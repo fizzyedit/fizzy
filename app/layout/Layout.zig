@@ -188,9 +188,8 @@ pub const Container = struct {
     /// Every resizable region in this container. A split needs them all so `push_out` can
     /// shrink the trays behind the one being dragged. Arena-backed, this frame only — no count cap.
     resizables: std.ArrayListUnmanaged(dvui.Id) = .empty,
-    /// Kept for the constraint field. Region splits overlay the boundary and do
-    /// not take pack space, so this stays 0 — counting them was a `handle_size`
-    /// jump each time a sentinel appeared.
+    /// Packed splits in this container, each `Split.handle_size`. The drag
+    /// budget subtracts this so a handle is never eaten by a tray.
     handles: f32 = 0,
     /// The container's own box, for measuring how near the pointer is to a split inside it.
     box: ?*dvui.BoxWidget = null,
@@ -262,12 +261,22 @@ pub const handle_dist = Split.handle_dist;
 /// frame's for anything asked between shapes. Two regions declared with identical keywords share
 /// an assignment, exactly as they already share a selection.
 fn assignedFor(self: *Layout, keywords: []const []const u8) ?[]const []const u8 {
+    const r = self.regionForKeywords(keywords) orelse return null;
+    return ViewDrag.previewAssignment(self, r.name) orelse self.state.assignment(r.name);
+}
+
+fn assignedStored(self: *Layout, keywords: []const []const u8) ?[]const []const u8 {
+    const r = self.regionForKeywords(keywords) orelse return null;
+    return self.state.assignment(r.name);
+}
+
+fn regionForKeywords(self: *Layout, keywords: []const []const u8) ?Region {
     const want = sdk.keywords.groupKey(keywords);
     for (self.state.regions_building.items) |r| {
-        if (sdk.keywords.groupKey(r.keywords) == want) return self.state.assignment(r.name);
+        if (sdk.keywords.groupKey(r.keywords) == want) return r;
     }
     for (self.state.regions.items) |r| {
-        if (sdk.keywords.groupKey(r.keywords) == want) return self.state.assignment(r.name);
+        if (sdk.keywords.groupKey(r.keywords) == want) return r;
     }
     return null;
 }
@@ -277,7 +286,7 @@ fn assignedFor(self: *Layout, keywords: []const []const u8) ?[]const []const u8 
 /// registration order. Arena-allocated and valid for this frame only; returns an empty slice
 /// rather than erroring so a layout can always iterate.
 pub fn matching(self: *Layout, keywords: []const []const u8) []const *Surface {
-    return self.matchingWith(keywords, self.assignedFor(keywords));
+    return self.matchingWith(keywords, self.assignedFor(keywords), false);
 }
 
 /// `matching` for a specific region rather than a keyword group. The two differ only for a
@@ -286,17 +295,29 @@ pub fn matching(self: *Layout, keywords: []const []const u8) []const *Surface {
 /// first pane's assignment. The app's own regions are unique per keyword group, so for them
 /// this is `matching`.
 pub fn matchingIn(self: *Layout, r: *const Region) []const *Surface {
-    const assigned = if (r.by_name) self.state.assignment(r.name) else self.assignedFor(r.keywords);
-    return self.matchingWith(r.keywords, assigned);
+    const stored = if (r.by_name) self.state.assignment(r.name) else self.assignedStored(r.keywords);
+    const assigned = ViewDrag.previewAssignment(self, r.name) orelse stored;
+    // A plugin kind slot (a document pane) only shows what it accepts. Output
+    // dropped on the workbench canvas must not become a document tab. A shape
+    // place (Main, Panel, a leftover Center) may hold anything the user put there.
+    return self.matchingWith(r.keywords, assigned, r.kind_slot);
 }
 
-fn matchingWith(self: *Layout, keywords: []const []const u8, assigned: ?[]const []const u8) []const *Surface {
+/// `matchingIn` without the view-drag preview overlay. Drop, claim, and
+/// `visibleId` have to see the stored assignment, not the landing pose.
+pub fn matchingStored(self: *Layout, r: *const Region) []const *Surface {
+    const assigned = if (r.by_name) self.state.assignment(r.name) else self.assignedStored(r.keywords);
+    return self.matchingWith(r.keywords, assigned, r.kind_slot);
+}
+
+fn matchingWith(self: *Layout, keywords: []const []const u8, assigned: ?[]const []const u8, require_fit: bool) []const *Surface {
     var out: std.ArrayListUnmanaged(*Surface) = .empty;
     const a = self.arena;
     if (assigned) |ids| {
         for (ids) |id| {
             const s = self.host.surfaceById(id) orelse continue; // plugin not loaded right now
             if (s.hidden or !self.visibleNow(s)) continue;
+            if (require_fit and !sdk.keywords.accepts(keywords, s.keywords)) continue;
             out.append(a, s) catch return out.items;
         }
         return out.items;
@@ -334,6 +355,7 @@ fn plainMatchingIn(self: *Layout, r: *const Region) []const *Surface {
         for (ids) |id| {
             const s = self.host.surfaceById(id) orelse continue;
             if (s.hidden or s.takeover_when != null) continue;
+            if (r.kind_slot and !sdk.keywords.accepts(r.keywords, s.keywords)) continue;
             out.append(a, s) catch return out.items;
         }
         return out.items;
@@ -357,19 +379,18 @@ fn plainMatchingIn(self: *Layout, r: *const Region) []const *Surface {
 ///
 /// **Only a strictly stronger claim wins.** Two regions that accept a surface equally both show
 /// it, which is the existing promise that the same surface in two places is a feature — an icon
-/// rail and the pane it chooses for, a diagnostics view in the panel and the sidebar. Breaking
-/// such a tie by declaration order would leave the loser mysteriously empty; an ambiguity the
-/// user can see is one they can resolve with the picker.
+/// rail and the pane it chooses for. Breaking such a tie by declaration order would leave the
+/// loser mysteriously empty; an ambiguity the user can see is one they can resolve with the picker.
 ///
-/// Regions with an explicit assignment do not claim: their contents are exactly what the user
-/// listed, and that list says nothing about what another region's keywords attract.
+/// An assignment is a claim. Output dragged onto Main must leave the panel,
+/// even though the panel's keywords still match it exactly. Same-group
+/// places (rail and sidebar) share one assignment and are not "elsewhere".
 fn claimedElsewhere(
     self: *Layout,
     keywords: []const []const u8,
     s: *const Surface,
     mine: sdk.keywords.Fit,
 ) bool {
-    if (mine == .exact) return false; // nothing outranks the exact word
     const want = sdk.keywords.groupKey(keywords);
     // This frame's regions once the shape has started declaring them — a region registers before
     // it draws its contents, so by the time anything asks, every region declared *above* this one
@@ -379,6 +400,13 @@ fn claimedElsewhere(
         self.state.regions_building.items
     else
         self.state.regions.items;
+    for (declared) |r| {
+        if (sdk.keywords.groupKey(r.keywords) == want) continue;
+        if (self.state.assignment(r.name)) |ids| {
+            for (ids) |id| if (std.mem.eql(u8, id, s.id)) return true;
+        }
+    }
+    if (mine == .exact) return false; // nothing outranks the exact word but an assignment
     for (declared) |r| {
         if (sdk.keywords.groupKey(r.keywords) == want) continue;
         if (self.state.assignment(r.name) != null) continue;
@@ -439,6 +467,10 @@ pub fn select(self: *Layout, keywords: []const []const u8, s: *const Surface) vo
 /// against keywords (the icon rail) and the region it chooses for still agree.
 pub fn selectedIn(self: *Layout, r: *const Region) ?*Surface {
     return pick(self.matchingIn(r), self.host.selectionForKey(r.selectionKey()));
+}
+
+pub fn selectedStored(self: *Layout, r: *const Region) ?*Surface {
+    return pick(self.matchingStored(r), self.host.selectionForKey(r.selectionKey()));
 }
 
 pub fn selectIn(self: *Layout, r: *const Region, id: []const u8) void {
@@ -632,10 +664,16 @@ fn resetInnermostPack(self: *Layout) void {
 pub const Region = @import("Region.zig");
 /// Runtime subdivision of a place — see `State.splits`.
 pub const SplitTree = @import("SplitTree.zig");
+/// What a released view-drag does — see `app/layout/SPLITS.md`.
+pub const Drop = @import("Drop.zig");
+/// Carrying a view from one place to another — the gesture `Drop` decides for.
+pub const ViewDrag = @import("ViewDrag.zig");
 
 test {
     _ = @import("SplitTree.zig");
     _ = @import("Region.zig");
+    _ = @import("Drop.zig");
+    _ = @import("ViewDrag.zig");
 }
 /// Declare a region — the verb form of `Region.init`, so a shape writes `f.region(...)` beside
 /// `f.split(...)` and never names the type. Same arrangement as `dvui.box` over `BoxWidget.init`.
@@ -644,6 +682,8 @@ pub const region = Region.init;
 pub const splitNamed = Region.splitNamed;
 /// Divide a named place from a specific edge — a view-drag drop onto that side.
 pub const splitOn = Region.splitOn;
+/// Move the visible surface from one place to another — a view-drag drop.
+pub const placeVisible = ViewDrag.place;
 
 // ── Regions a plugin declares ───────────────────────────────────────────────────────────────────
 //
@@ -672,6 +712,7 @@ pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.To
         // The plugin draws its own chrome around the contents, so it says where they go.
         .manual_contents = true,
         .by_name = true,
+        .kind_slot = true,
     }, .{
         // Truncated because `id_extra` is a `usize`, which is 32 bits on wasm. A plugin's key is
         // an id or a hash, so the low bits are the ones carrying the distinction.
@@ -776,6 +817,7 @@ pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
     c.pending_split = null;
     const axis = c.dir;
     if (!pending.opts.resize) {
+        c.handles += Split.handle_size;
         var unused = Split.init(pending.src, axis, pending.opts.id_extra, null);
         unused.deinit();
         return;
@@ -790,23 +832,28 @@ pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
         break :blk after orelse return;
     };
 
+    packSplit(self, pending.src, pending.opts.id_extra, target, sign, pending.opts);
+}
+
+/// A `handle_size` child between two regions. The gap is this widget, so a
+/// region's Options.margin is never a sash, and a card cannot paint over it.
+pub fn packSplit(
+    self: *Layout,
+    src: std.builtin.SourceLocation,
+    id_extra: usize,
+    target: dvui.Id,
+    sign: f32,
+    opts: Split.Options,
+) void {
+    const c = self.innermost() orelse return;
     const container = c.box orelse return;
-    // Overlay, not packed: a packed split is a `handle_size` child, so a new
-    // sentinel (or crossing zero) inserts 10pt into the box *and* into the
-    // budget and the tray jumps by exactly that.
-    //
-    // Front-to-back so the handle paints after the region that opens next. The
-    // split runs first (events, grab) and the workspace fill would otherwise
-    // cover a top/left handle — the dimmer sash on Center.
-    var ftb: dvui.RenderFrontToBack = undefined;
-    ftb.init();
-    defer ftb.deinit();
-    var divider = Split.init(pending.src, axis, pending.opts.id_extra, Split.overlayRect(container, target, sign, axis));
+    c.handles += Split.handle_size;
+    var divider = Split.init(src, c.dir, id_extra, null);
     defer divider.deinit();
-    divider.drag(container, target, sign, pending.opts, .{
-        .extent = c.extent(axis),
+    divider.drag(container, target, sign, opts, .{
+        .extent = c.extent(c.dir),
         .base_min = c.base_min,
-        .handles = 0,
+        .handles = c.handles,
         .others = c.resizables.items,
         .sign = sign,
     });
@@ -838,14 +885,22 @@ pub fn drawPendingSplit(self: *Layout, after: ?dvui.Id) void {
 /// and it exists as consumer API rather than as fizzy's own code — the first shape that wants
 /// tabs without splits uses it as-is instead of copying `Panel`.
 pub fn tabs(f: *Layout, keywords: []const []const u8) void {
-    const surfaces = f.matching(keywords);
-    if (surfaces.len == 0) return;
+    const place: Region = .{ .keywords = keywords };
+    tabsIn(f, &place);
+}
+
+/// Tab strip for one place. `tabs` is this keyed by keywords; a by-name
+/// place (a minted split leaf) must not share another place's selection.
+pub fn tabsIn(f: *Layout, r: *const Region) void {
+    const surfaces = f.matchingIn(r);
+    if (surfaces.len <= 1) return;
 
     var strip: core.widgets.Tabs = .init(@src(), &tab_info, .{ .drag_name = "fizzy_tab_strip" });
     defer strip.deinit();
 
     for (surfaces, 0..) |s, i| {
-        const is_selected = f.isSelected(keywords, s);
+        const cur = f.selectedIn(r);
+        const is_selected = if (cur) |sel| std.mem.eql(u8, sel.id, s.id) else false;
         var t = strip.tab(@src(), i, is_selected);
         defer t.deinit();
 
@@ -865,7 +920,7 @@ pub fn tabs(f: *Layout, keywords: []const []const u8) void {
             .gravity_y = 0.5,
         });
 
-        if (t.clicked()) f.select(keywords, s);
+        if (t.clicked()) f.selectIn(r, s.id);
     }
 
     strip.finalSlot(surfaces.len);

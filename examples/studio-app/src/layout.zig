@@ -5,14 +5,12 @@
 //! without the workbench plugin knowing it moved.
 const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
-const Split = @import("core").widgets.Split;
 
 const Layout = @import("app").layout.Layout;
 
 pub fn layout(_: ?*anyopaque, f: *Layout) !dvui.App.Result {
     var body = try f.region(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
-        .padding = .{ .x = Split.handle_size },
     });
     defer body.deinit();
 

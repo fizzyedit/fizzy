@@ -26,6 +26,8 @@ const sdk = @import("fizzy_sdk");
 const Split = core.widgets.Split;
 const Layout = @import("Layout.zig");
 const SplitTree = @import("SplitTree.zig");
+const Drop = @import("Drop.zig");
+const ViewDrag = @import("ViewDrag.zig");
 
 const Region = @This();
 
@@ -55,6 +57,8 @@ layout: ?*Layout = null,
 /// app's own regions stay keyword-resolved so a chooser written against keywords (the icon
 /// rail) needs no region in hand.
 by_name: bool = false,
+/// See `InitOptions.kind_slot`.
+kind_slot: bool = false,
 /// A tray the next split should keep targeting. Center and grouping boxes are not.
 resize: bool = false,
 /// An empty closed tray can disappear — a runtime split, an endless edge.
@@ -74,6 +78,18 @@ pub fn selectionKey(self: *const Region) u64 {
 }
 
 pub fn deinit(self: *Region) void {
+    // Plugin panes skip the corner button, so a retracting slide has to
+    // paint here — still clipped — after their own chrome has drawn.
+    if (self.kind_slot) {
+        if (self.layout) |l| {
+            if (ViewDrag.previewOn(l, self.name)) {
+                if (self.box) |b| {
+                    const rs = b.data().borderRectScale();
+                    ViewDrag.drawHint(l, self.name, rs.r, rs.s);
+                }
+            }
+        }
+    }
     if (self.prev_clip) |c| dvui.clipSet(c);
     if (self.box) |b| {
         if (self.layout) |l| {
@@ -187,6 +203,8 @@ pub const InitOptions = struct {
     manual_contents: bool = false,
     /// See `Region.by_name`.
     by_name: bool = false,
+    /// See `Region.kind_slot`.
+    kind_slot: bool = false,
     /// Make this region's extent along its parent's axis draggable by the `split` after it. The
     /// starting extent comes from `min_size_content` in the `dvui.Options`; the user's drag
     /// replaces it and persists.
@@ -211,10 +229,9 @@ pub const InitOptions = struct {
 ///
 /// It is a `dvui.box`. The second argument says what the region *is*; the third is dvui's own
 /// `Options` and is passed to that box — `expand`, `min_size_content`, `padding`,
-/// `background`, `corners`, `gravity`, all of it. A rounded fill is an Option the
-/// shape sets. So the sizing rules are the ones already in use everywhere else: a
-/// child that does not expand along the axis takes its minimum, and the children
-/// that do share what is left.
+/// `margin`, `background`, `corners`, `gravity`, all of it. A rounded fill is an
+/// Option the shape sets. A sash gap is a packed split (`handle_size` child),
+/// not a margin on the card — plugin surfaces fill this box's content rect.
 ///
 /// Scope it and `deinit` it the way you would any box:
 ///
@@ -242,7 +259,23 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     // inside the main area accepts `main.document`. The shape writes the short word — a sub-region
     // should not have to know, or repeat, what it is nested in — and a plugin still reaches it by
     // kind alone. See `Layout.Container.prefix` and `sdk.keywords.Fit`.
-    const keywords = regionKeywords(self, if (parent) |p| p.prefix else "", init_opts.keywords);
+    //
+    // A leftover origin sits inside the split grouping box. That box already
+    // qualified under the shape's parent and registered as this name. Doing
+    // it again under the box prefix made `main.main`, the grouping box kept
+    // the exact claim, and Split → Vertical drew two empty sides.
+    const keywords = blk: {
+        if (init_opts.omit_edge != null and init_opts.name.len > 0 and self.state.splits.root(init_opts.name) != null) {
+            var i = self.state.regions_building.items.len;
+            while (i > 0) {
+                i -= 1;
+                const r = self.state.regions_building.items[i];
+                if (std.mem.eql(u8, r.name, init_opts.name)) break :blk r.keywords;
+            }
+            break :blk regionKeywords(self, "", init_opts.keywords);
+        }
+        break :blk regionKeywords(self, if (parent) |p| p.prefix else "", init_opts.keywords);
+    };
 
     const matches = if (init_opts.by_name)
         self.matchingIn(&.{ .name = init_opts.name, .keywords = keywords, .by_name = true })
@@ -260,6 +293,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
             .shows = init_opts.shows,
             .id = id,
             .by_name = init_opts.by_name,
+            .kind_slot = init_opts.kind_slot,
             .forget_when_empty = init_opts.forget_when_empty,
             .dir = init_opts.dir,
         });
@@ -396,6 +430,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         .id = id,
         .default_extent = default_extent,
         .by_name = init_opts.by_name,
+        .kind_slot = init_opts.kind_slot,
         .forget_when_empty = init_opts.forget_when_empty,
         .dir = init_opts.dir,
     });
@@ -437,16 +472,35 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     // layered form later — a tray blurring what is behind it needs the region underneath to have
     // drawn, at every size the tray takes.
     //
-    // A place whose view is being dragged is photographed once, then left
-    // empty — the floating card is the view.
+    // Photographed once for the floating card. Landing areas draw the
+    // surfaces live: a swap remaps matching so each place lays out the
+    // other's view; a self-split keeps this place's view (the new leaf
+    // is empty); a cross-place split leaves a hole and draws the moved
+    // view in the incoming pane.
     if (!shut_now and keywords.len > 0 and !init_opts.manual_contents) {
-        if (dragging_this) {
-            try captureDragView(self, init_opts, keywords, clip_to);
-        } else {
+        if (dragging_this) try captureDragView(self, init_opts, keywords, clip_to);
+        const plan = ViewDrag.previewPlan(self, init_opts.name);
+        const keep = ViewDrag.selfSplitting(self);
+        const swapped = ViewDrag.swapping(self);
+        if (plan != null and plan.? == .split)
+            try captureDestView(self, init_opts, keywords, clip_to);
+        if (!dragging_this or keep or swapped) {
+            // Clip to the half this place will actually keep, so the preview
+            // is the result and not a hint about it. Still this same box: a
+            // child box to hold the clip remounts the surface inside it.
+            var leftover_clip: ?dvui.Rect.Physical = null;
+            if (plan) |p| switch (p) {
+                .swap => {},
+                .split => |s| {
+                    const rs = box.data().borderRectScale();
+                    leftover_clip = dvui.clip(ViewDrag.keptHalf(rs.r, s.mint, ViewDrag.previewVisual(self), rs.s));
+                },
+            };
+            defer if (leftover_clip) |c| dvui.clipSet(c);
             _ = try drawContents(self, init_opts, keywords);
         }
     }
-    if (dragging_this) drawViewFloat(self, box);
+    if (dragging_this) ViewDrag.drawFloat(self);
 
     return .{
         .name = init_opts.name,
@@ -458,6 +512,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         .layout = self,
         .prev_clip = prev_clip,
         .by_name = init_opts.by_name,
+        .kind_slot = init_opts.kind_slot,
         .resize = init_opts.resize,
     };
 }
@@ -483,22 +538,27 @@ const corner_button_size: f32 = 22;
 /// read as focus. A filled card still gets a rounded highlight when the pointer is near.
 ///
 /// Drag the button to lift the view. The place stays as a hole; a floating card follows the
-/// pointer (grab offset preserved). Hover another place's edge to preview a split sliding
-/// open; hover the middle to preview a swap.
+/// pointer (grab offset preserved). Hover a place's edge — including this one's — to
+/// preview a split sliding open; hover another place's middle to preview a swap.
 fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, box: *dvui.BoxWidget) void {
     const rs = box.data().borderRectScale();
     const mouse = dvui.currentWindow().mouse_pt;
     const picker_here = self.state.picker.is_open and std.mem.eql(u8, self.state.picker.region, opts.name);
     const filled = regionHasContent(self, opts, keywords);
     const dragging_this = self.state.view_drag.active() and std.mem.eql(u8, self.state.view_drag.name, opts.name);
-    const drop_here = self.state.view_drag.active() and !dragging_this and rs.r.contains(mouse);
+    const over = self.state.view_drag.active() and rs.r.contains(mouse);
+    // Null plan: the middle of the place the drag came from, which is not a
+    // drop at all. Every other reading of the pointer lands somewhere.
+    const drop_here = over and Drop.plan(Drop.kindAt(rs.r, mouse, rs.s), dragging_this) != null;
     const near = mouse.x >= rs.r.x + rs.r.w - corner_reach * rs.s and mouse.x <= rs.r.x + rs.r.w and
         mouse.y >= rs.r.y and mouse.y <= rs.r.y + corner_reach * rs.s;
     const pressing = dvui.dataGet(null, box.data().id, "_chooser_press", bool) orelse false;
-    const available = !filled or picker_here or near or dragging_this or drop_here or pressing;
+    if (self.state.view_drag.active()) ViewDrag.tick(self);
+    const showing = ViewDrag.previewOn(self, opts.name);
+    const available = !filled or picker_here or near or dragging_this or drop_here or pressing or showing;
     const alpha = chooserFade(box.data().id, if (available) 1 else 0);
 
-    if (alpha < 0.01 and !available and !dragging_this) return;
+    if (alpha < 0.01 and !available and !dragging_this and !showing) return;
 
     var ftb: dvui.RenderFrontToBack = undefined;
     ftb.init();
@@ -509,14 +569,17 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     // square outline sitting on the rounded card.
     const corners = box.data().options.cornersGet().scale(rs.s, dvui.CornerRect.Physical);
     const theme = dvui.themeGet();
-    if (!filled or dragging_this) drawEmptyHatch(rs.r, corners, rs.s);
-    if (drop_here) {
-        drawDropHint(self, opts.name, rs.r, corners, mouse, rs.s);
+    // The place the view was lifted out of stands empty — unless it is also
+    // the landing, which draws its own halves.
+    const hole = dragging_this and !ViewDrag.swapping(self) and !ViewDrag.selfSplitting(self);
+    if (!filled or hole) drawEmptyHatch(rs.r, rs.s);
+    if (drop_here or showing) {
+        ViewDrag.drawHint(self, opts.name, rs.r, rs.s);
     } else if (filled and !dragging_this and alpha > 0.01) {
         rs.r.stroke(corners, .{ .color = theme.focus.opacity(alpha), .thickness = 2.0 });
     }
 
-    if (alpha < 0.01 and !pressing and !dragging_this) return;
+    if (alpha < 0.01 and !pressing and !dragging_this and !showing) return;
 
     const content = box.data().contentRect();
     var bw: dvui.ButtonWidget = undefined;
@@ -556,18 +619,14 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
         }
         if (me.action == .motion and (dvui.captured(bw.data().id) or pressing)) {
             if (dvui.dragging(me.p, "fizzy_view") != null) {
-                if (!self.state.view_drag.active()) {
-                    self.state.view_drag.name = self.state.internName(self.gpa, opts.name);
-                    self.state.view_drag.from = rs.r.size();
-                    self.state.view_drag.start_ns = dvui.currentWindow().frame_time_ns;
-                }
+                if (!self.state.view_drag.active()) ViewDrag.begin(self, opts.name, rs.r);
                 dragged = true;
                 dvui.refresh(null, @src(), null);
             }
         }
         if (me.action == .release and me.button.pointer()) {
             if (self.state.view_drag.active() and std.mem.eql(u8, self.state.view_drag.name, opts.name)) {
-                applyViewDrop(self, opts.name, me.p);
+                ViewDrag.apply(self, opts.name, me.p);
                 dragged = true;
             }
             self.state.view_drag.discard();
@@ -628,30 +687,10 @@ fn chooserFade(id: dvui.Id, want: f32) f32 {
     return shown;
 }
 
-const DropKind = union(enum) {
-    swap,
-    split: SplitTree.Side,
-};
-
-/// Near an edge is a split on that side; the middle is a swap. The band is
-/// 36pt, or 28% of the shorter side, so a small place still has a swap target.
-fn dropKind(bounds: dvui.Rect.Physical, mouse: dvui.Point.Physical, scale: f32) DropKind {
-    if (bounds.w <= 0 or bounds.h <= 0) return .swap;
-    const band = @min(36 * scale, @min(bounds.w, bounds.h) * 0.28);
-    const dl = mouse.x - bounds.x;
-    const dr = bounds.x + bounds.w - mouse.x;
-    const dt = mouse.y - bounds.y;
-    const db = bounds.y + bounds.h - mouse.y;
-    const nearest = @min(@min(dl, dr), @min(dt, db));
-    if (nearest > band) return .swap;
-    if (nearest == dl) return .{ .split = .left };
-    if (nearest == dr) return .{ .split = .right };
-    if (nearest == dt) return .{ .split = .top };
-    return .{ .split = .bottom };
-}
-
-fn drawEmptyHatch(bounds: dvui.Rect.Physical, corners: dvui.CornerRect.Physical, scale: f32) void {
-    _ = corners;
+/// A vacant place: diagonal strokes rather than a ring, because a ring on
+/// every empty slot reads as focus. Also the pane a self-split is about to
+/// open, which is vacant for the same reason and should look the same.
+pub fn drawEmptyHatch(bounds: dvui.Rect.Physical, scale: f32) void {
     if (bounds.w <= 0 or bounds.h <= 0) return;
     const prev = dvui.clipGet();
     dvui.clipSet(prev.intersect(bounds));
@@ -670,47 +709,21 @@ fn drawEmptyHatch(bounds: dvui.Rect.Physical, corners: dvui.CornerRect.Physical,
     }
 }
 
-fn previewEase(self: *Layout, dest: []const u8, kind: DropKind) f32 {
-    const split: ?SplitTree.Side = switch (kind) {
-        .swap => null,
-        .split => |s| s,
-    };
-    const now = dvui.currentWindow().frame_time_ns;
-    const name = self.state.internName(self.gpa, dest);
-    const same = std.mem.eql(u8, self.state.view_drag.preview_name, name) and
-        ((self.state.view_drag.preview_split == null) == (split == null)) and
-        (split == null or self.state.view_drag.preview_split.? == split.?);
-    if (!same) {
-        self.state.view_drag.preview_name = name;
-        self.state.view_drag.preview_split = split;
-        self.state.view_drag.preview_ns = now;
+fn captureDestView(
+    self: *Layout,
+    opts: InitOptions,
+    keywords: []const []const u8,
+    rect: dvui.Rect.Physical,
+) !void {
+    if (self.state.view_drag.hover_texture != null and
+        std.mem.eql(u8, self.state.view_drag.hover_name, opts.name)) return;
+    self.state.view_drag.capturing = true;
+    defer self.state.view_drag.capturing = false;
+    if (core.anim.CrossFade.beginCapture(rect)) |captured| {
+        var pic = captured;
+        _ = try drawContents(self, opts, keywords);
+        self.state.view_drag.takeHover(&pic, self.state.internName(self.gpa, opts.name));
     }
-    const dur: f64 = 180 * @as(f64, std.time.ns_per_ms);
-    const elapsed: f64 = @floatFromInt(now - self.state.view_drag.preview_ns);
-    return outCubic(@floatCast(std.math.clamp(elapsed / dur, 0, 1)));
-}
-
-fn slidePreview(bounds: dvui.Rect.Physical, side: SplitTree.Side, t: f32) dvui.Rect.Physical {
-    const u = std.math.clamp(t, 0, 1);
-    var r = bounds;
-    switch (side) {
-        .left => r.w = bounds.w * 0.5 * u,
-        .right => {
-            r.w = bounds.w * 0.5 * u;
-            r.x = bounds.x + bounds.w - r.w;
-        },
-        .top => r.h = bounds.h * 0.5 * u,
-        .bottom => {
-            r.h = bounds.h * 0.5 * u;
-            r.y = bounds.y + bounds.h - r.h;
-        },
-    }
-    return r;
-}
-
-fn outCubic(t: f32) f32 {
-    const u = 1 - t;
-    return 1 - u * u * u;
 }
 
 fn captureDragView(
@@ -720,190 +733,13 @@ fn captureDragView(
     rect: dvui.Rect.Physical,
 ) !void {
     if (self.state.view_drag.texture != null) return;
+    self.state.view_drag.capturing = true;
+    defer self.state.view_drag.capturing = false;
     if (core.anim.CrossFade.beginCapture(rect)) |captured| {
         var pic = captured;
         _ = try drawContents(self, opts, keywords);
         self.state.view_drag.takePicture(&pic);
     }
-}
-
-fn floatTarget(from: dvui.Size.Physical, scale: f32) dvui.Size.Physical {
-    if (from.w <= 0 or from.h <= 0) return .{ .w = 280 * scale, .h = 180 * scale };
-    const max_w = 280 * scale;
-    const max_h = 200 * scale;
-    const aspect = from.w / from.h;
-    var w = @min(from.w, max_w);
-    var h = w / aspect;
-    if (h > max_h) {
-        h = @min(from.h, max_h);
-        w = h * aspect;
-    }
-    return .{ .w = w, .h = h };
-}
-
-fn drawViewFloat(self: *Layout, box: *dvui.BoxWidget) void {
-    _ = box;
-    const d = self.state.view_drag;
-    if (!d.active()) return;
-    const mouse = dvui.currentWindow().mouse_pt;
-    const now = dvui.currentWindow().frame_time_ns;
-    const dur: f64 = 220 * @as(f64, std.time.ns_per_ms);
-    const elapsed: f64 = @floatFromInt(now - d.start_ns);
-    const t = outCubic(@floatCast(std.math.clamp(elapsed / dur, 0, 1)));
-
-    const from = d.from;
-    const scale = dvui.currentWindow().natural_scale;
-    const target = floatTarget(from, scale);
-    const w = from.w + (target.w - from.w) * t;
-    const h = from.h + (target.h - from.h) * t;
-    const sx = if (from.w > 0) w / from.w else 1;
-    const sy = if (from.h > 0) h / from.h else 1;
-    const off = dvui.dragOffset();
-    const tl = mouse.plus(.{ .x = off.x * sx, .y = off.y * sy });
-    const nat = dvui.Rect.Physical.fromPoint(tl).toSize(.{ .w = w, .h = h }).toNatural();
-
-    const theme = dvui.themeGet();
-    var fw: dvui.FloatingWidget = undefined;
-    fw.init(@src(), .{ .mouse_events = false }, .{
-        .rect = .{ .x = nat.x, .y = nat.y, .w = nat.w, .h = nat.h },
-        .padding = .{},
-        .corners = dvui.CornerRect.round(12),
-        .background = true,
-        .color_fill = theme.color(.window, .fill),
-        .border = dvui.Rect.all(1),
-        .color_border = theme.color(.highlight, .fill),
-        .box_shadow = .{
-            .color = .black,
-            .alpha = 0.28,
-            .fade = 12,
-            .offset = .{ .x = 0, .y = 4 },
-            .corners = dvui.CornerRect.round(12),
-        },
-    });
-    defer fw.deinit();
-
-    const dest = fw.data().contentRectScale().r;
-    if (d.texture) |tex| {
-        core.anim.blit(tex, dest, 0, 1);
-    } else {
-        dvui.label(@src(), "view", .{}, .{
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
-            .color_text = theme.color(.control, .text),
-        });
-    }
-    dvui.refresh(null, @src(), null);
-}
-
-fn drawDropHint(
-    self: *Layout,
-    dest: []const u8,
-    bounds: dvui.Rect.Physical,
-    corners: dvui.CornerRect.Physical,
-    mouse: dvui.Point.Physical,
-    scale: f32,
-) void {
-    const focus = dvui.themeGet().focus;
-    const kind = dropKind(bounds, mouse, scale);
-    const t = previewEase(self, dest, kind);
-    const tex = self.state.view_drag.texture;
-    switch (kind) {
-        .swap => {
-            if (tex) |picture| {
-                core.anim.blit(picture, bounds, 0.35 * (1 - t), 0.40 + 0.50 * t);
-            } else {
-                bounds.fill(corners, .{ .color = focus.opacity(0.10 + 0.12 * t), .fade = 1.0 });
-            }
-        },
-        .split => |side| {
-            const pane = slidePreview(bounds, side, t);
-            if (pane.w > 1 and pane.h > 1) {
-                pane.fill(corners, .{ .color = focus.opacity(0.16), .fade = 1.0 });
-                if (tex) |picture| core.anim.blit(picture, pane, 0.2 * (1 - t), 0.85);
-            }
-        },
-    }
-    bounds.stroke(corners, .{ .color = focus.opacity(0.55 + 0.45 * t), .thickness = 2.0 });
-}
-
-fn dropTargetAt(state: *const Layout.State, mouse: dvui.Point.Physical, skip: []const u8) ?[]const u8 {
-    var best: ?[]const u8 = null;
-    var best_area: f32 = std.math.floatMax(f32);
-    for (state.regions.items) |r| considerDrop(&best, &best_area, r, mouse, skip);
-    for (state.regions_building.items) |r| considerDrop(&best, &best_area, r, mouse, skip);
-    return best;
-}
-
-fn considerDrop(best: *?[]const u8, best_area: *f32, r: Region, mouse: dvui.Point.Physical, skip: []const u8) void {
-    if (r.name.len == 0 or std.mem.eql(u8, r.name, skip)) return;
-    if (r.bounds.w <= 0 or r.bounds.h <= 0) return;
-    if (!r.bounds.contains(mouse)) return;
-    const area = r.bounds.w * r.bounds.h;
-    if (area >= best_area.*) return;
-    best.* = r.name;
-    best_area.* = area;
-}
-
-fn placeBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
-    for (state.regions_building.items) |r| {
-        if (std.mem.eql(u8, r.name, name) and r.bounds.w > 0 and r.bounds.h > 0) return r.bounds;
-    }
-    for (state.regions.items) |r| {
-        if (std.mem.eql(u8, r.name, name) and r.bounds.w > 0 and r.bounds.h > 0) return r.bounds;
-    }
-    return null;
-}
-
-fn regionNamed(state: *const Layout.State, name: []const u8) ?*const Region {
-    for (state.regions.items) |*r| {
-        if (std.mem.eql(u8, r.name, name)) return r;
-    }
-    for (state.regions_building.items) |*r| {
-        if (std.mem.eql(u8, r.name, name)) return r;
-    }
-    return null;
-}
-
-/// What this place is showing: an assignment if the user chose, otherwise the
-/// surface keyword matching picked. Moving a keyword-default view has to become
-/// an explicit assignment on the destination or it reappears on the source.
-fn currentViewIds(self: *Layout, name: []const u8) []const []const u8 {
-    if (self.state.assignment(name)) |ids| return ids;
-    const r = regionNamed(self.state, name) orelse return &.{};
-    const s = self.selectedIn(r) orelse return &.{};
-    const one = self.arena.alloc([]const u8, 1) catch return &.{};
-    one[0] = s.id;
-    return one;
-}
-
-fn copyIds(arena: std.mem.Allocator, ids: []const []const u8) []const []const u8 {
-    const out = arena.dupe([]const u8, ids) catch return &.{};
-    return out;
-}
-
-fn applyViewDrop(self: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
-    const dest = dropTargetAt(self.state, mouse, source) orelse return;
-    const bounds = placeBounds(self.state, dest) orelse return;
-    const scale = dvui.currentWindow().natural_scale;
-    const ids = copyIds(self.arena, currentViewIds(self, source));
-    switch (dropKind(bounds, mouse, scale)) {
-        .swap => {
-            const other = copyIds(self.arena, currentViewIds(self, dest));
-            self.state.assign(self.gpa, source, other) catch {};
-            self.state.assign(self.gpa, dest, ids) catch {};
-            if (other.len > 0) if (regionNamed(self.state, source)) |r| self.selectIn(r, other[0]);
-            if (ids.len > 0) if (regionNamed(self.state, dest)) |r| self.selectIn(r, ids[0]);
-        },
-        .split => |side| {
-            if (ids.len == 0) return;
-            const new = splitOn(self, dest, side) orelse return;
-            self.state.assign(self.gpa, new, ids) catch {};
-            self.state.assign(self.gpa, source, &.{}) catch {};
-            if (regionNamed(self.state, new)) |r| self.selectIn(r, ids[0]);
-        },
-    }
-    self.state.markDirty();
-    dvui.refresh(null, @src(), null);
 }
 
 fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, shown: f32) void {
@@ -924,6 +760,7 @@ fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, sho
             if (self.state.clearExtent(self.gpa, opts.name)) self.extents_changed = true;
             if (self.state.splits.collapse(self.gpa, opts.name)) self.extents_changed = true;
             self.state.unassign(self.gpa, opts.name);
+            dvui.refresh(null, @src(), id);
             return;
         }
     }
@@ -939,12 +776,17 @@ fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, sho
 /// everywhere in the app.
 fn drawContents(self: *Layout, opts: InitOptions, keywords: []const []const u8) !dvui.App.Result {
     if (opts.content) |content| return content.draw(content.ctx, self, keywords);
-    if (opts.by_name) return self.drawSelectedIn(&.{
+    const shows = if (opts.name.len > 0) self.state.showsOf(opts.name, opts.shows) else opts.shows;
+    const place: Region = .{
         .name = opts.name,
         .keywords = keywords,
-        .by_name = true,
-        .shows = opts.shows,
-    });
+        .by_name = opts.by_name,
+        .shows = shows,
+    };
+    // Multiple is a place setting: the chooser is the place's, not something
+    // each surface or the shape has to draw.
+    if (shows == .many) self.tabsIn(&place);
+    if (opts.by_name) return self.drawSelectedIn(&place);
     return self.drawSelected(keywords);
 }
 
@@ -1031,10 +873,12 @@ fn initTree(
         }
     }
 
-    // Grouping is only the axis. Fill stays on the leaves so a sash has a
-    // gap between cards instead of sitting on one shared background.
+    // Grouping is only the axis. Fill and padding stay on the leaves so a
+    // sash is a gap between cards, and a region's padding insets the
+    // plugin surface, not the handle.
     box_opts.background = false;
     box_opts.corners = null;
+    box_opts.padding = .{};
     const box = dvui.box(src, .{ .dir = branch.dir }, box_opts);
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
 
@@ -1045,6 +889,7 @@ fn initTree(
         .id = id,
         .default_extent = default_extent,
         .by_name = init_opts.by_name,
+        .kind_slot = init_opts.kind_slot,
         .dir = init_opts.dir,
     });
 
@@ -1066,6 +911,7 @@ fn initTree(
         .layout = self,
         .default_extent = default_extent,
         .by_name = init_opts.by_name,
+        .kind_slot = init_opts.kind_slot,
         .resize = init_opts.resize,
     };
 }
@@ -1089,27 +935,34 @@ fn drawTreeChildren(
     const leftover_b = SplitTree.newIsLeading(branch.side);
     try drawTreeNode(self, src, shape, shape_opts, branch.a, omit_a, leftover_a);
     if (self.depth > 0) self.containers[self.depth - 1].saw_base = true;
+    packTreeSplit(self, src, branch);
     try drawTreeNode(self, src, shape, shape_opts, branch.b, omit_b, leftover_b);
-    const group = if (self.depth > 0) self.containers[self.depth - 1].box else null;
-    if (group) |box| edgeHandleOn(self, box, branch.side, SplitTree.newNameOf(branch));
 }
 
+fn packTreeSplit(self: *Layout, src: std.builtin.SourceLocation, branch: SplitTree.Branch) void {
+    const new_name = SplitTree.newNameOf(branch);
+    const leading = SplitTree.newIsLeading(branch.side);
+    const sign: f32 = if (leading) 1 else -1;
+    const target = if (leading)
+        (if (self.depth > 0) self.containers[self.depth - 1].last_resizable else null) orelse
+            idOf(self.state, new_name) orelse return
+    else
+        dvui.parentGet().extendId(src, nameExtra(new_name));
+    // Own `@src()`, not the place's: the grouping box already used that
+    // source line, and a packed handle with the same id paints a red
+    // duplicate and never settles.
+    self.packSplit(@src(), extraFor(new_name, branch.side), target, sign, .{ .push_out = true });
+}
+
+/// Card chrome for a tree leaf. Padding insets the plugin surface inside
+/// the card. Margin is not copied: a sash-facing margin is how handles
+/// used to pick up extra space on one side.
 fn placeVisual(opts: dvui.Options) dvui.Options {
     return .{
         .background = opts.background,
         .color_fill = opts.color_fill,
         .corners = opts.corners,
-    };
-}
-
-fn handleGutter(side: SplitTree.Side) dvui.Rect {
-    // Half on each facing edge so two cards share one handle-wide gap.
-    const g = Split.handle_size / 2;
-    return switch (side) {
-        .left => .{ .x = g },
-        .right => .{ .w = g },
-        .top => .{ .y = g },
-        .bottom => .{ .h = g },
+        .padding = opts.padding,
     };
 }
 
@@ -1128,8 +981,6 @@ fn drawTreeNode(
             var child_opts = placeVisual(shape_opts);
             child_opts.expand = .both;
             child_opts.id_extra = nameExtra(name);
-            // Both sides of the sash, or the created card paints over the handle.
-            child_opts.margin = handleGutter(omit);
             if (leftover) {
                 if (!std.mem.eql(u8, name, shape.name)) {
                     o = .{
@@ -1143,6 +994,7 @@ fn drawTreeNode(
                 } else {
                     o.resize = false;
                     o.omit_edge = omit;
+                    o.by_name = true;
                     // A leftover Panel must still draw — hiding it leaves a
                     // hole with no sash, no card, and no corner control.
                     o.hide_when_empty = false;
@@ -1236,33 +1088,12 @@ fn drawTreeNode(
     }
 }
 
-fn edgeHandleOn(
-    self: *Layout,
-    box: *dvui.BoxWidget,
-    side: SplitTree.Side,
-    target_name: []const u8,
-) void {
-    const tid = idOf(self.state, target_name) orelse return;
-    const axis = SplitTree.axisOf(side);
-    const sign: f32 = if (SplitTree.newIsLeading(side)) 1 else -1;
-    const at = Split.overlayRect(box, tid, sign, axis);
-    var divider = Split.init(@src(), axis, extraFor(target_name, side), at);
-    defer divider.deinit();
-    const extent = if (self.depth > 0) self.containers[self.depth - 1].extent(axis) else 0;
-    divider.drag(box, tid, sign, .{ .push_out = true }, .{
-        .extent = extent,
-        .base_min = 0,
-        .handles = 0,
-        .sign = sign,
-    });
-}
-
 fn isSlotKeywords(keywords: []const []const u8) bool {
     return keywords.len == 1 and std.mem.eql(u8, keywords[0], Layout.slot_keywords[0]);
 }
 
 fn regionKeywords(self: *Layout, prefix: []const u8, base: []const []const u8) []const []const u8 {
-    // `slot` is a user tray, not a kind. Qualifying it under Main hid Clear/Remove
+    // `slot` is a user tray, not a kind. Qualifying it under Main hid Remove
     // (`main.slot`) the same way `slot.slot` did in endless.
     if (isSlotKeywords(base)) return base;
     return self.state.qualify(self.gpa, prefix, base);
@@ -1274,9 +1105,9 @@ fn placePrefix(keywords: []const []const u8, parent_prefix: []const u8) []const 
     return keywords[0];
 }
 
-/// Divide `name` on `axis`: a new empty place opens on the trailing side and
-/// eases to the middle. `axis` is the layout direction — `.horizontal` is a
-/// vertical divider (side by side). The picker's Split menu names the divider.
+/// Divide `name` on `axis`, keeping its view and opening an empty place beside
+/// it on the trailing side. `axis` is the layout direction — `.horizontal` is a
+/// vertical divider (side by side), which is what the picker's Split menu names.
 pub fn splitNamed(self: *Layout, name: []const u8, axis: dvui.enums.Direction) void {
     const side: SplitTree.Side = switch (axis) {
         .horizontal => .right,
@@ -1310,25 +1141,4 @@ pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u
     self.state.markDirty();
     dvui.refresh(null, @src(), null);
     return new;
-}
-
-test "drop near an edge is a split, the middle is a swap" {
-    const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
-    try std.testing.expectEqual(DropKind.swap, dropKind(r, .{ .x = 100, .y = 50 }, 1));
-    try std.testing.expectEqual(DropKind{ .split = .left }, dropKind(r, .{ .x = 10, .y = 50 }, 1));
-    try std.testing.expectEqual(DropKind{ .split = .right }, dropKind(r, .{ .x = 190, .y = 50 }, 1));
-    try std.testing.expectEqual(DropKind{ .split = .top }, dropKind(r, .{ .x = 100, .y = 8 }, 1));
-    try std.testing.expectEqual(DropKind{ .split = .bottom }, dropKind(r, .{ .x = 100, .y = 94 }, 1));
-}
-
-test "a split preview grows from the hovered edge to half" {
-    const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
-    const none = slidePreview(r, .left, 0);
-    try std.testing.expectEqual(@as(f32, 0), none.w);
-    const half = slidePreview(r, .left, 1);
-    try std.testing.expectEqual(@as(f32, 100), half.w);
-    try std.testing.expectEqual(@as(f32, 0), half.x);
-    const right = slidePreview(r, .right, 1);
-    try std.testing.expectEqual(@as(f32, 100), right.x);
-    try std.testing.expectEqual(@as(f32, 100), right.w);
 }

@@ -20,6 +20,15 @@ pub fn newIsLeading(side: Side) bool {
     return side == .left or side == .top;
 }
 
+pub fn opposite(side: Side) Side {
+    return switch (side) {
+        .left => .right,
+        .right => .left,
+        .top => .bottom,
+        .bottom => .top,
+    };
+}
+
 pub fn parseSide(s: []const u8) ?Side {
     inline for (std.meta.tags(Side)) |tag| {
         if (std.mem.eql(u8, s, @tagName(tag))) return tag;
@@ -285,6 +294,13 @@ fn freeNode(gpa: std.mem.Allocator, node: *Node) void {
 
 fn internLiteral(_: std.mem.Allocator, name: []const u8) []const u8 {
     return name;
+}
+
+test "opposite flips each edge" {
+    try std.testing.expectEqual(Side.right, opposite(.left));
+    try std.testing.expectEqual(Side.left, opposite(.right));
+    try std.testing.expectEqual(Side.bottom, opposite(.top));
+    try std.testing.expectEqual(Side.top, opposite(.bottom));
 }
 
 test "a right split keeps the origin on the left" {

@@ -77,7 +77,10 @@ pub const SavedRegion = struct {
     surfaces: ?[]const []const u8 = null,
     parent: ?[]const u8 = null,
     from: ?[]const u8 = null,
+    shows: ?SavedShows = null,
 };
+
+pub const SavedShows = enum { one, many };
 
 pub fn saveRegions(_: []const u8, _: []const SavedRegion) void {}
 

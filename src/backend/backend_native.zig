@@ -289,7 +289,11 @@ pub const SavedRegion = struct {
     /// Runtime split: this leaf was dragged out of `parent` from `from` (left/right/top/bottom).
     parent: ?[]const u8 = null,
     from: ?[]const u8 = null,
+    /// User override of Single vs Multiple. Null means the shape's default.
+    shows: ?SavedShows = null,
 };
+
+pub const SavedShows = enum { one, many };
 
 const SavedFrame = struct {
     x: f64 = 0,
@@ -422,7 +426,7 @@ pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8) []SavedRegion {
         }
         const parent = if (r.parent) |p| gpa.dupe(u8, p) catch null else null;
         const from = if (r.from) |s| gpa.dupe(u8, s) catch null else null;
-        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces, .parent = parent, .from = from };
+        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces, .parent = parent, .from = from, .shows = r.shows };
         n += 1;
     }
     return out[0..n];

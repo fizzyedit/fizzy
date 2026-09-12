@@ -1,27 +1,22 @@
-//! The surface picker: a popup of cards, one per surface, that sets what one region shows.
+//! Place settings: what one region shows, and how it shows it.
 //!
 //! Opened by name from anywhere — the settings table, a region's own corner button — through
 //! `State.openPicker`, and drawn once per frame by the application through `draw` so it floats
-//! above whatever opened it. One picker at a time: the state holds a single one.
+//! above whatever opened it. One at a time.
 //!
-//! Each card carries a **snapshot** of the surface, not the live surface. Drawing a surface
-//! twice in a frame would run its widgets twice — events reaching both, plugins that assume
-//! one draw per frame breaking — and a surface in no region has no live pixels to show at all.
-//! `Layout` takes the snapshots (`State.snapshots_wanted`) and this only reads them; a card
-//! without one yet shows its title on a blank tile until the capture lands a frame later.
+//! **Single** is one surface, no chooser. **Multiple** is several, and the
+//! place grows a tab strip. The shape's default (Sidebar/Panel many, Main one)
+//! is the starting point; the user's choice is remembered with the layout.
 //!
-//! A click toggles the surface in the region. The write is the region's *full* list — what it
-//! shows now, plus or minus one — so the first toggle on a never-assigned region turns the
-//! keyword match it was showing into an explicit assignment. That is the honest reading of the
-//! click: the user has now chosen this region's contents, and a plugin loaded later will not
-//! walk in by keyword until they choose again. "Back to defaults" undoes exactly that.
-//! "Clear" and "Remove" are for places the user made: a minted split leaf
-//! (`Main/r1`, `Center/r1`) or a leftover tray whose keyword is `slot`.
-//! Shape-declared Sidebar, Main, and Panel stay and only get "Back to defaults".
-//! Clear empties the assignment. Remove does that and slides the sash shut;
-//! a forgettable tray collapses when the close finishes. Split offers
-//! Vertical or Horizontal — the divider, not the layout axis — and eases
-//! the new place to the middle.
+//! Cards assign a surface here. That is how a sidebar view stays in the
+//! sidebar, and how a plugin readme lands in the center — keywords are the
+//! default guess, an assignment is the answer. "Back to defaults" undoes it.
+//!
+//! Each card carries a **snapshot** of the surface, not the live surface.
+//! A **pinned** place (Sidebar, Main, Panel, Center) can be emptied (**Clear**)
+//! or returned to keywords; it cannot be deleted. A **created** place
+//! (`Main/r1`) is **Remove**. Split offers Vertical or Horizontal, and keeps
+//! this place's view beside the new empty one — see `SPLITS.md`.
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
@@ -111,15 +106,25 @@ pub fn draw(self: *Picker, f: *Layout) void {
                 .font = dvui.Font.theme(.heading),
                 .gravity_y = 0.5,
             });
-            dvui.labelNoFmt(@src(), switch (region.shows) {
-                .one => "shows one",
-                .many => "shows any number",
-            }, .{}, .{
-                .font = dvui.Font.theme(.body).larger(-1),
-                .padding = .{ .x = 8 },
-                .gravity_y = 0.5,
-                .color_text = theme.color(.window, .text).opacity(0.5),
+        }
+
+        {
+            var mode = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .padding = .{ .y = 4 },
             });
+            defer mode.deinit();
+            dvui.labelNoFmt(@src(), "Surfaces", .{}, .{
+                .font = actionFont(),
+                .gravity_y = 0.5,
+                .color_text = theme.color(.window, .text).opacity(0.6),
+            });
+            if (modeButton(@src(), "Single", region.shows == .one, 1)) {
+                setShows(f, &region, .one);
+            }
+            if (modeButton(@src(), "Multiple", region.shows == .many, 2)) {
+                setShows(f, &region, .many);
+            }
         }
 
         {
@@ -169,23 +174,27 @@ pub fn draw(self: *Picker, f: *Layout) void {
             }
         }
 
-        if (canClearOrRemove(state, &region) or state.assignment(region.name) != null) {
+        const created = isCreated(state, region.name);
+        const assigned = state.assignment(region.name);
+        const showing = if (assigned) |ids| ids.len > 0 else f.selectedIn(&region) != null;
+        if (created or showing or assigned != null) {
             var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .horizontal,
             });
             defer actions.deinit();
-            if (canClearOrRemove(state, &region)) {
-                if (actionButton(@src(), "Clear", 2)) {
-                    clearRegion(f, region.name);
-                }
+            if (created) {
                 if (actionButton(@src(), "Remove", 3)) {
                     removeRegion(f, &region);
                     self.close(gpa);
                     state.discardSnapshots(gpa);
                     return;
                 }
+            } else if (showing) {
+                if (actionButton(@src(), "Clear", 2)) {
+                    clearRegion(f, region.name);
+                }
             }
-            if (state.assignment(region.name) != null) {
+            if (!created and assigned != null) {
                 if (actionButtonRight(@src(), "Back to defaults")) {
                     state.unassign(gpa, region.name);
                     state.markDirty();
@@ -326,6 +335,33 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) bool {
     return bw.clicked();
 }
 
+fn setShows(f: *Layout, region: *const Layout.Region, shows: Layout.Region.Shows) void {
+    f.state.setShows(f.gpa, region.name, shows);
+    if (shows == .one) {
+        const contents = f.matchingIn(region);
+        if (contents.len > 1) {
+            const keep = if (f.selectedIn(region)) |s| s.id else contents[0].id;
+            f.state.assign(f.gpa, region.name, &.{keep}) catch {};
+            f.host.setSelectionForKey(region.selectionKey(), keep);
+        }
+    }
+    f.state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
+fn modeButton(src: std.builtin.SourceLocation, label: []const u8, on: bool, id_extra: usize) bool {
+    const theme = dvui.themeGet();
+    return dvui.button(src, label, .{}, .{
+        .font = actionFont(),
+        .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+        .margin = .{ .x = 4 },
+        .gravity_y = 0.5,
+        .id_extra = id_extra,
+        .color_fill = if (on) theme.color(.highlight, .fill).opacity(0.25) else null,
+        .color_border = if (on) theme.color(.highlight, .fill) else null,
+    });
+}
+
 fn actionFont() dvui.Font {
     return dvui.Font.theme(.body).larger(-1);
 }
@@ -354,24 +390,9 @@ fn contains(list: []const *sdk.Surface, id: []const u8) bool {
     return false;
 }
 
-/// A place the user made, not one the shape declared. Minted split leaves
-/// (`Main/r1`, endless `Center/r1`) and leftover trays that kept `slot`.
-fn canClearOrRemove(state: *State, region: *const Layout.Region) bool {
-    if (region.forget_when_empty or state.splits.canForget(region.name)) return true;
-    return isUserSlot(region);
-}
-
-/// A place the user made, not one the shape declared. Endless trays and leftover
-/// Center use the bare `slot` word; fizzy's keyword regions never do. A
-/// leftover under Main used to be `main.slot` and hid these buttons.
-fn isUserSlot(region: *const Layout.Region) bool {
-    if (!region.by_name) return false;
-    const want = Layout.slot_keywords[0];
-    for (region.keywords) |k| {
-        if (std.mem.eql(u8, k, want)) return true;
-        if (std.mem.endsWith(u8, k, ".slot")) return true;
-    }
-    return false;
+/// A minted split leaf, not a name the shape declared.
+fn isCreated(state: *State, name: []const u8) bool {
+    return state.splits.canForget(name);
 }
 
 /// Empty the place: nothing draws, and keywords no longer attract a replacement.

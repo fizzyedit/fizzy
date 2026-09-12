@@ -120,9 +120,9 @@ pub const Reveal = struct {
 ///
 /// So don't guess: keep the pixels. The last frame of the outgoing screen is recorded into a
 /// texture (`dvui.Picture` redirects rendering into a render target) and drawn *over* the
-/// incoming subtree. A fade just drops that overlay's alpha. A blur smears it first, crosses
-/// to a snapshot of the incoming view (itself fully smeared, so a settle frame or a plugin
-/// load can happen underneath), then unsmears. See `core/crossfade.zig` for the clock.
+/// incoming subtree. A fade just drops that overlay's alpha. A blur smears it first, then
+/// dissolves — the incoming view is whatever is drawing live underneath. See
+/// `core/crossfade.zig` for the clock.
 ///
 /// Prefer `transition` for call sites — it owns swap detection, capture isolation, and teardown.
 /// `CrossFade` remains the low-level primitive those helpers drive.
@@ -200,16 +200,9 @@ pub const CrossFade = struct {
             return;
         }
 
-        var s = crossfade.sample(self.kind, t, pending);
-        // No incoming picture yet: keep the outgoing cover so the live view
-        // cannot flash through a half-dissolved overlay.
-        if (self.kind == .blur and self.incoming == null) {
-            s.in_alpha = 0;
-            s.out_alpha = 1;
-        }
-        if (self.kind == .blur) {
-            if (self.incoming) |tex| blit(tex, self.incoming_rect, s.in_blur, s.in_alpha);
-        }
+        const s = crossfade.sample(self.kind, t, pending);
+        // One overlay over the live incoming view. A second snapshot on top
+        // is what read as a bright, grainy double exposure.
         if (self.texture) |tex| blit(tex, self.rect, s.out_blur, s.out_alpha);
 
         // Nothing else is animating, so without this an idle app would sleep mid-fade.
@@ -257,24 +250,22 @@ pub fn blit(tex: dvui.Texture, dest: dvui.Rect.Physical, blur: f32, alpha: f32) 
         return;
     }
 
-    const max_r = @min(22.0, @min(dest.w, dest.h) * 0.10);
+    const max_r = @min(14.0, @min(dest.w, dest.h) * 0.06);
     const radius = blur * max_r;
 
     const prev_clip = dvui.clipGet();
     dvui.clipSet(prev_clip.intersect(dest));
     defer dvui.clipSet(prev_clip);
 
-    // A covering copy first so the smear never punches a hole. Offsets sit
-    // on top at low alpha — splitting the only copy across samples used to
-    // make the overlay look grainy and half-transparent.
+    // The image is this copy. Offsets are a soft halo, not another exposure.
     dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{
         .colormod = dvui.Color.white.opacity(alpha),
     }) catch {};
 
-    const rings = [_]f32{ 0.45, 0.8, 1.15 };
-    const weights = [_]f32{ 0.22, 0.14, 0.08 };
+    const rings = [_]f32{ 0.6, 1.0 };
+    const weights = [_]f32{ 0.07, 0.04 };
     const spokes: u32 = 8;
-    const smear = alpha * blur;
+    const smear = alpha * blur * 0.10;
 
     var i: u32 = 0;
     while (i < spokes) : (i += 1) {
@@ -396,46 +387,11 @@ pub fn transition(state: *Transition, opts: TransitionOptions) TransitionFrame {
                 draw_prev(opts.ctx);
                 dvui.clipSet(prev_clip);
                 state.cross_fade.endCapture(&pic);
-                if (opts.kind == .blur) {
-                    state.cross_fade.incoming_wait = 1;
-                    state.cross_fade.have_incoming = false;
-                }
                 if (opts.after_capture) |cb| cb(opts.ctx);
             }
-        }
-    } else if (opts.kind == .blur and !state.cross_fade.have_incoming and state.cross_fade.texture != null) {
-        // Photograph incoming at the hold, after `reveal`'s settle+fade (120ms)
-        // has finished under the opaque outgoing overlay (hold is 40% of 480ms).
-        // `pending` keeps a one-frame wait so a just-loaded plugin is not
-        // snapped on its first paint.
-        if (pending) {
-            state.cross_fade.incoming_wait = 1;
-        } else if (state.cross_fade.incoming_wait > 0) {
-            state.cross_fade.incoming_wait -= 1;
-        } else if (crossedHold(&state.cross_fade)) {
-            if (CrossFade.beginCapture(opts.rect)) |pic| {
-                const prev_clip = dvui.clipGet();
-                dvui.clipSet(opts.rect);
-                state.prev_key = opts.key;
-                return .{
-                    .cross_fade = &state.cross_fade,
-                    .incoming = pic,
-                    .prev_clip = prev_clip,
-                    .pending = pending,
-                };
-            }
-            state.cross_fade.have_incoming = true;
         }
     }
 
     state.prev_key = opts.key;
     return .{ .cross_fade = &state.cross_fade, .pending = pending };
-}
-
-fn crossedHold(cf: *const CrossFade) bool {
-    if (cf.duration_ns <= 0) return true;
-    const elapsed = dvui.currentWindow().frame_time_ns - cf.start_ns;
-    if (elapsed <= 0) return false;
-    const t: f32 = @floatCast(@as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(cf.duration_ns)));
-    return t >= crossfade.hold;
 }

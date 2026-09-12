@@ -1720,13 +1720,13 @@ test "assigning a region overrides keyword matching, duplicates and empties" {
     try std.testing.expectEqual(@as(usize, 0), layout.matching(panel).len);
     try std.testing.expectEqual(@as(usize, 0), layout.unplaced().len);
 
-    // The user puts Movable in the panel. The sidebar is untouched: it still shows both by
-    // keyword, because assigning one region says nothing about another — the same surface in
-    // two regions is a feature, not a conflict.
+    // The user puts Movable in the panel. It leaves the sidebar: a surface
+    // lives in one place, so the panel's assignment claims it.
     try editor.layout.assign(editor.gpa, "Panel", &.{"test.movable"});
     try std.testing.expectEqual(@as(usize, 1), layout.matching(panel).len);
     try std.testing.expectEqualStrings("test.movable", layout.matching(panel)[0].id);
-    try std.testing.expectEqual(@as(usize, 2), layout.matching(sidebar).len);
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(sidebar).len);
+    try std.testing.expectEqualStrings("test.other", layout.matching(sidebar)[0].id);
 
     // Then trims the sidebar to Other alone: Movable now lives only in the panel.
     try editor.layout.assign(editor.gpa, "Sidebar", &.{"test.other"});
@@ -1745,9 +1745,11 @@ test "assigning a region overrides keyword matching, duplicates and empties" {
     try editor.layout.assign(editor.gpa, "Panel", &.{ "ghost.surface", "test.movable" });
     try std.testing.expectEqual(@as(usize, 1), layout.matching(panel).len);
 
-    // Unassigning hands the region back to its keywords.
+    // Unassigning hands the sidebar back to its keywords. Movable stays
+    // on the panel, so the sidebar only attracts Other.
     editor.layout.unassign(editor.gpa, "Sidebar");
-    try std.testing.expectEqual(@as(usize, 2), layout.matching(sidebar).len);
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(sidebar).len);
+    try std.testing.expectEqualStrings("test.other", layout.matching(sidebar)[0].id);
 }
 
 // -- regions inside regions ----------------------------------------------------------------------
@@ -1913,13 +1915,12 @@ test "the more specific region claims a surface, an equal one shares it" {
     // Two regions with the same keywords still share, which is the rail and the sidebar.
     try std.testing.expectEqual(@as(usize, 1), layout.matching(sidebar).len);
 
-    // A region the user assigned by hand does not claim: its contents are exactly the list, and
-    // that list says nothing about what another region's keywords attract.
+    // An assignment is a claim: the surface lives there, not in another
+    // keyword group. Output on Main must leave the panel.
     defer editor.layout.deinitAssignments(editor.gpa);
     try editor.layout.assign(editor.gpa, "Pane", &.{"test.doc"});
     try std.testing.expectEqual(@as(usize, 1), layout.matching(pane).len);
-    try std.testing.expectEqual(@as(usize, 1), layout.matching(main).len);
-    try std.testing.expectEqualStrings("test.doc", layout.matching(main)[0].id);
+    try std.testing.expectEqual(@as(usize, 0), layout.matching(main).len);
 }
 
 // The bottom panel's shape: Main, a split, then the panel — declared after its own split and
@@ -2020,10 +2021,11 @@ test "two plugin regions with the same keywords keep separate contents and selec
     }.f;
     try editor.host.registerSurface(.{ .id = "test.a", .title = "A", .keywords = &.{"document"}, .draw = draw });
     try editor.host.registerSurface(.{ .id = "test.b", .title = "B", .keywords = &.{"document"}, .draw = draw });
+    try editor.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = fizzy.sdk.keywords.ide.panel, .draw = draw });
 
     const kw: []const []const u8 = &.{"main.document"};
-    const one: fizzy.Editor.Region = .{ .name = "Pane 1", .keywords = kw, .id = .extendId(null, @src(), 1), .by_name = true };
-    const two: fizzy.Editor.Region = .{ .name = "Pane 2", .keywords = kw, .id = .extendId(null, @src(), 2), .by_name = true };
+    const one: fizzy.Editor.Region = .{ .name = "Pane 1", .keywords = kw, .id = .extendId(null, @src(), 1), .by_name = true, .kind_slot = true };
+    const two: fizzy.Editor.Region = .{ .name = "Pane 2", .keywords = kw, .id = .extendId(null, @src(), 2), .by_name = true, .kind_slot = true };
     editor.layout.registerRegion(editor.gpa, one);
     editor.layout.registerRegion(editor.gpa, two);
     editor.layout.publishRegions();
@@ -2038,6 +2040,12 @@ test "two plugin regions with the same keywords keep separate contents and selec
     try editor.layout.assign(editor.gpa, "Pane 1", &.{"test.a"});
     try std.testing.expectEqual(@as(usize, 1), layout.matchingIn(&one).len);
     try std.testing.expectEqual(@as(usize, 2), layout.matchingIn(&two).len);
+
+    // Output does not fit a document pane. A drop that landed on the
+    // workbench canvas used to assign it here and draw it as a tab.
+    try editor.layout.assign(editor.gpa, "Pane 1", &.{ "test.output", "test.a" });
+    try std.testing.expectEqual(@as(usize, 1), layout.matchingIn(&one).len);
+    try std.testing.expectEqualStrings("test.a", layout.matchingIn(&one)[0].id);
 
     // Selections are per pane as well: choosing B in pane 2 leaves pane 1 on A.
     layout.selectIn(&two, "test.b");
@@ -2269,6 +2277,52 @@ test "a fizzy Main split is a removable slot, not main.slot" {
     try std.testing.expect(!qualified);
 }
 
+test "a fizzy Main split keeps the workspace on the leftover side" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    const Draw = struct {
+        var count: usize = 0;
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            count += 1;
+            return .ok;
+        }
+    };
+    try editor.host.registerSurface(.{
+        .id = "test.workspace",
+        .title = "Workspace",
+        .keywords = fizzy.sdk.keywords.ide.main,
+        .draw = Draw.f,
+    });
+
+    FizzySplitFrame.editor = editor;
+    defer FizzySplitFrame.editor = null;
+
+    Draw.count = 0;
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    try std.testing.expect(Draw.count > 0);
+
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.splitNamed("Main", .horizontal);
+    }
+
+    Draw.count = 0;
+    try dvui.testing.settle(FizzySplitFrame.frame);
+    try std.testing.expect(Draw.count > 0);
+    try std.testing.expect(editor.layout.splits.canForget("Main/r1"));
+    const created = editor.layout.assignment("Main/r1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 0), created.len);
+}
+
 test "a view-drag split opens on the dropped edge" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -2331,4 +2385,283 @@ test "removing a created place drops it from the tree" {
 
     try std.testing.expect(editor.layout.splits.root("Center") == null);
     try std.testing.expect(!editor.layout.splits.canForget("Center/r1"));
+}
+
+test "a view-drag places the visible surface and empties a last-surface source" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    try editor.host.registerSurface(.{
+        .id = "test.view",
+        .title = "View",
+        .keywords = fizzy.sdk.keywords.ide.main,
+        .draw = draw,
+    });
+
+    try dvui.testing.settle(EndlessFrame.frame);
+    try editor.layout.assign(editor.gpa, "Center", &.{"test.view"});
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        try std.testing.expect(layout.splitOn("Center", .right) != null);
+    }
+    try dvui.testing.settle(EndlessFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.placeVisible("Center", "Center/r1", .swap);
+    }
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    const dest = editor.layout.assignment("Center/r1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), dest.len);
+    try std.testing.expectEqualStrings("test.view", dest[0]);
+    const source = editor.layout.assignment("Center") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 0), source.len);
+
+    var dest_region: ?fizzy.Editor.Layout.Region = null;
+    for (editor.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Center/r1")) dest_region = r;
+    }
+    var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+    const shown = layout.selectedIn(&(dest_region orelse return error.TestExpectedEqual));
+    try std.testing.expect(shown != null);
+    try std.testing.expectEqualStrings("test.view", shown.?.id);
+}
+
+test "a view-drag from a multi place moves only the visible surface" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    try editor.host.registerSurface(.{
+        .id = "test.one",
+        .title = "One",
+        .keywords = fizzy.sdk.keywords.ide.main,
+        .draw = draw,
+    });
+    try editor.host.registerSurface(.{
+        .id = "test.two",
+        .title = "Two",
+        .keywords = fizzy.sdk.keywords.ide.main,
+        .draw = draw,
+    });
+
+    try dvui.testing.settle(EndlessFrame.frame);
+    editor.layout.setShows(editor.gpa, "Center", .many);
+    try editor.layout.assign(editor.gpa, "Center", &.{ "test.one", "test.two" });
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        try std.testing.expect(layout.splitOn("Center", .right) != null);
+    }
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    var center: ?fizzy.Editor.Layout.Region = null;
+    for (editor.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Center")) center = r;
+    }
+    var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+    layout.selectIn(&(center orelse return error.TestExpectedEqual), "test.one");
+    layout.placeVisible("Center", "Center/r1", .swap);
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    const dest = editor.layout.assignment("Center/r1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), dest.len);
+    try std.testing.expectEqualStrings("test.one", dest[0]);
+    const source = editor.layout.assignment("Center") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), source.len);
+    try std.testing.expectEqualStrings("test.two", source[0]);
+}
+
+test "a view-drag can split its own place" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    try editor.host.registerSurface(.{
+        .id = "test.view",
+        .title = "View",
+        .keywords = fizzy.sdk.keywords.ide.main,
+        .draw = draw,
+    });
+
+    try dvui.testing.settle(EndlessFrame.frame);
+    try editor.layout.assign(editor.gpa, "Center", &.{"test.view"});
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.placeVisible("Center", "Center", .{ .split = .bottom });
+    }
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    // Drop on the bottom: view stays on leftover Center (bottom), empty
+    // leaf opens on top. A minted bottom leaf would put the view opposite
+    // the drop — the self-split reversal.
+    try std.testing.expect(editor.layout.splits.canForget("Center/t1"));
+    const created = editor.layout.assignment("Center/t1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 0), created.len);
+    const leftover = editor.layout.assignment("Center") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), leftover.len);
+    try std.testing.expectEqualStrings("test.view", leftover[0]);
+
+    const branch = (editor.layout.splits.root("Center") orelse return error.TestExpectedEqual).kind.branch;
+    try std.testing.expectEqual(fizzy.Editor.Layout.SplitTree.Side.top, branch.side);
+    try std.testing.expectEqualStrings("Center/t1", fizzy.Editor.Layout.SplitTree.leafName(branch.a.*) orelse return error.TestExpectedEqual);
+    try std.testing.expectEqualStrings("Center", fizzy.Editor.Layout.SplitTree.leafName(branch.b.*) orelse return error.TestExpectedEqual);
+}
+
+// The rule in SPLITS.md, measured on screen rather than in the tree: whichever
+// edge the view is dropped on is the half it occupies afterwards. Both cases
+// go through `placeVisible`, the same call a release makes.
+test "a dropped view ends up on the edge it was dropped on" {
+    const Layout = fizzy.Editor.Layout;
+
+    for ([_]struct { side: Layout.SplitTree.Side, leaf: []const u8 }{
+        .{ .side = .top, .leaf = "Center/b1" },
+        .{ .side = .bottom, .leaf = "Center/t1" },
+    }) |case| {
+        var ctx = try shim.init(std.testing.allocator);
+        defer ctx.deinit(std.testing.allocator);
+
+        const editor = ctx.editor;
+        editor.gpa = std.testing.allocator;
+        defer editor.layout.regions.deinit(editor.gpa);
+        defer editor.layout.regions_building.deinit(editor.gpa);
+        defer editor.layout.deinitExtents(editor.gpa);
+        defer editor.layout.deinitAssignments(editor.gpa);
+        defer editor.layout.deinitQualified(editor.gpa);
+
+        const draw = struct {
+            fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+                return .ok;
+            }
+        }.f;
+        try editor.host.registerSurface(.{
+            .id = "test.view",
+            .title = "View",
+            .keywords = fizzy.sdk.keywords.ide.main,
+            .draw = draw,
+        });
+
+        EndlessFrame.editor = editor;
+        defer EndlessFrame.editor = null;
+
+        try dvui.testing.settle(EndlessFrame.frame);
+        try editor.layout.assign(editor.gpa, "Center", &.{"test.view"});
+        {
+            var layout = Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+            layout.placeVisible("Center", "Center", .{ .split = case.side });
+        }
+        try dvui.testing.settle(EndlessFrame.frame);
+
+        // The empty leaf took the far side, so the view's own half is the one
+        // under where the pointer was.
+        try std.testing.expect(editor.layout.splits.canForget(case.leaf));
+        var view_y: f32 = 0;
+        var empty_y: f32 = 0;
+        for (editor.layout.regions.items) |r| {
+            if (std.mem.eql(u8, r.name, "Center")) view_y = r.bounds.y;
+            if (std.mem.eql(u8, r.name, case.leaf)) empty_y = r.bounds.y;
+        }
+        try std.testing.expect(view_y > 0 or empty_y > 0);
+        switch (case.side) {
+            .top => try std.testing.expect(view_y < empty_y),
+            .bottom => try std.testing.expect(view_y > empty_y),
+            else => unreachable,
+        }
+    }
+}
+
+test "a nested document pane rejects a panel surface, a shape place does not" {
+    const Region = fizzy.Editor.Region;
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    const pane: Region = .{ .name = "Pane 1", .keywords = &.{"main.document"}, .by_name = true, .kind_slot = true };
+    const main: Region = .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main };
+    const center: Region = .{ .name = "Center", .keywords = &.{"slot"}, .by_name = true };
+    try std.testing.expect(!ViewDrag.accepts(pane, fizzy.sdk.keywords.ide.panel));
+    try std.testing.expect(ViewDrag.accepts(pane, &.{"document"}));
+    try std.testing.expect(ViewDrag.accepts(main, fizzy.sdk.keywords.ide.panel));
+    try std.testing.expect(ViewDrag.accepts(center, fizzy.sdk.keywords.ide.panel));
+}
+
+test "swapping a panel surface onto main leaves it only on main" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+
+    const main = fizzy.sdk.keywords.ide.main;
+    const panel = fizzy.sdk.keywords.ide.panel;
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Main", .keywords = main, .id = .extendId(null, @src(), 1) });
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Panel", .keywords = panel, .id = .extendId(null, @src(), 2), .shows = .many });
+    editor.layout.publishRegions();
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    try editor.host.registerSurface(.{ .id = "test.workspace", .title = "Workspace", .keywords = main, .draw = draw });
+    try editor.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = panel, .draw = draw });
+
+    var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(panel).len);
+
+    layout.placeVisible("Panel", "Main", .swap);
+
+    const dest = editor.layout.assignment("Main") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), dest.len);
+    try std.testing.expectEqualStrings("test.output", dest[0]);
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(main).len);
+    try std.testing.expectEqualStrings("test.output", layout.matching(main)[0].id);
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(panel).len);
+    try std.testing.expectEqualStrings("test.workspace", layout.matching(panel)[0].id);
 }

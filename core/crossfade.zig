@@ -18,17 +18,13 @@ pub const Sample = struct {
 };
 
 /// Fade is short so a tab still feels instant. Blur is long enough to hide a
-/// settle frame and read as a deliberate handoff rather than a flash.
+/// settle frame without reading as a second exposure.
 pub const fade_ns: i128 = 150 * std.time.ns_per_ms;
-pub const blur_ns: i128 = 560 * std.time.ns_per_ms;
+pub const blur_ns: i128 = 420 * std.time.ns_per_ms;
 
-/// Outgoing is fully blurred; incoming has not been shown yet. `pending` holds
-/// here so a plugin need not load until its view is used.
-pub const hold: f32 = 0.30;
-/// Incoming is fully up under the still-opaque outgoing — both max-blurred.
-pub const overlap_mid: f32 = 0.50;
-/// Outgoing has dissolved; incoming is still max-blurred.
-pub const handoff_end: f32 = 0.72;
+/// Outgoing is fully blurred and still covering. `pending` holds here so a
+/// plugin need not load until its view is used.
+pub const hold: f32 = 0.35;
 
 pub fn durationNs(kind: Kind) i128 {
     return switch (kind) {
@@ -54,42 +50,24 @@ pub fn sample(kind: Kind, t: f32, pending: bool) Sample {
 }
 
 fn sampleBlur(t: f32) Sample {
-    // Incoming fades up *under* a still-opaque outgoing, then outgoing
-    // dissolves. Crossing two partial alphas punched a hole to the live
-    // content and read as a snap rather than a dissolve.
+    // One overlay: the outgoing snapshot blurs, then dissolves over the live
+    // incoming view. Stacking a second full-opacity blurred snapshot is what
+    // read as glare.
     if (t <= hold) {
         const u = t / hold;
         return .{
             .out_blur = smooth(u),
             .out_alpha = 1,
-            .in_blur = 1,
+            .in_blur = 0,
             .in_alpha = 0,
         };
     }
-    if (t <= overlap_mid) {
-        const u = (t - hold) / (overlap_mid - hold);
-        return .{
-            .out_blur = 1,
-            .out_alpha = 1,
-            .in_blur = 1,
-            .in_alpha = smooth(u),
-        };
-    }
-    if (t <= handoff_end) {
-        const u = (t - overlap_mid) / (handoff_end - overlap_mid);
-        return .{
-            .out_blur = 1,
-            .out_alpha = 1 - smooth(u),
-            .in_blur = 1,
-            .in_alpha = 1,
-        };
-    }
-    const u = (t - handoff_end) / (1 - handoff_end);
+    const u = (t - hold) / (1 - hold);
     return .{
         .out_blur = 1,
-        .out_alpha = 0,
-        .in_blur = 1 - smooth(u),
-        .in_alpha = 1,
+        .out_alpha = 1 - smooth(u),
+        .in_blur = 0,
+        .in_alpha = 0,
     };
 }
 
@@ -146,36 +124,20 @@ test "pending freezes blur at the hold no matter where t is" {
     try testing.expectEqual(early.in_alpha, late.in_alpha);
 }
 
-test "both snapshots sit fully overlapping at mid-handoff" {
-    const a = sample(.blur, overlap_mid, false);
-    try testing.expectEqual(@as(f32, 1), a.out_blur);
-    try testing.expectEqual(@as(f32, 1), a.in_blur);
-    try testing.expectApproxEqAbs(@as(f32, 1), a.out_alpha, 1e-5);
-    try testing.expectApproxEqAbs(@as(f32, 1), a.in_alpha, 1e-5);
+test "after the hold the outgoing overlay only fades" {
+    const a = sample(.blur, hold + 0.01, false);
+    const b = sample(.blur, 0.8, false);
+    try testing.expectApproxEqAbs(@as(f32, 1), a.out_blur, 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 1), b.out_blur, 1e-5);
+    try testing.expect(a.out_alpha > b.out_alpha);
+    try testing.expectEqual(@as(f32, 0), a.in_alpha);
+    try testing.expectEqual(@as(f32, 0), b.in_alpha);
 }
 
-test "handoff ends with only the incoming snapshot, still max-blurred" {
-    const a = sample(.blur, handoff_end, false);
-    try testing.expectEqual(@as(f32, 1), a.out_blur);
-    try testing.expectEqual(@as(f32, 1), a.in_blur);
-    try testing.expectApproxEqAbs(@as(f32, 0), a.out_alpha, 1e-5);
-    try testing.expectApproxEqAbs(@as(f32, 1), a.in_alpha, 1e-5);
-}
-
-test "the overlay stays covering through the whole blur" {
-    var i: u32 = 0;
-    while (i <= 20) : (i += 1) {
-        const t = @as(f32, @floatFromInt(i)) / 20;
-        const s = sample(.blur, t, false);
-        try testing.expect(s.out_alpha >= 0.999 or s.in_alpha >= 0.999);
-    }
-}
-
-test "blur ends sharp on the incoming snapshot" {
+test "blur ends with the overlay gone" {
     const a = sample(.blur, 1, false);
     try testing.expectEqual(@as(f32, 0), a.out_alpha);
-    try testing.expectApproxEqAbs(@as(f32, 0), a.in_blur, 1e-5);
-    try testing.expectEqual(@as(f32, 1), a.in_alpha);
+    try testing.expectEqual(@as(f32, 0), a.in_alpha);
 }
 
 test "outgoing blur only rises before the hold" {

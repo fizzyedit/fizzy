@@ -1342,7 +1342,7 @@ pub fn selectionFor(self: *Host, kw: []const []const u8) ?[]const u8 {
 /// Choose the surface for `keywords`. Regions written with the same keywords share this, which
 /// is how a chooser and the region it chooses for stay in step with nothing wired between them.
 pub fn setSelectionFor(self: *Host, kw: []const []const u8, id: []const u8) void {
-    self.selections.put(self.allocator, keywords.groupKey(kw), id) catch {};
+    self.setSelectionForKey(keywords.groupKey(kw), id);
 }
 
 /// The same map under an arbitrary key — how a region that resolves by name rather than by
@@ -1353,7 +1353,11 @@ pub fn selectionForKey(self: *Host, key: u64) ?[]const u8 {
 }
 
 pub fn setSelectionForKey(self: *Host, key: u64, id: []const u8) void {
-    self.selections.put(self.allocator, key, id) catch {};
+    // Store the registry pointer, never a frame-arena copy. A view-drag
+    // used to hand an arena id to a new split; the next frame's `pick`
+    // then compared against freed bytes.
+    const stable = if (self.surfaceById(id)) |s| s.id else return;
+    self.selections.put(self.allocator, key, stable) catch {};
 }
 
 /// Whether `plugin` may legitimately own `ext`: it either offers `ext` via `fileTypes`, or it

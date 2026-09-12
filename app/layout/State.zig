@@ -25,36 +25,8 @@ pub const Snapshot = struct {
     natural: dvui.Size,
 };
 
-/// A view lifted out of its place and dragged to another. The source hole is
-/// empty while this is active; a floating card follows the pointer.
-pub const ViewDrag = struct {
-    /// Interned place name. Empty when nothing is being dragged.
-    name: []const u8 = "",
-    /// Physical size of the source when the drag began.
-    from: dvui.Size.Physical = .{},
-    texture: ?dvui.Texture = null,
-    start_ns: i128 = 0,
-    /// Last dock target, interned. Empty when the pointer is over nothing.
-    preview_name: []const u8 = "",
-    preview_split: ?SplitTree.Side = null,
-    preview_ns: i128 = 0,
-
-    pub fn active(self: ViewDrag) bool {
-        return self.name.len > 0;
-    }
-
-    pub fn discard(self: *ViewDrag) void {
-        if (self.texture) |tex| dvui.Texture.destroyLater(tex);
-        self.* = .{};
-    }
-
-    pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
-        pic.stop();
-        const tex = dvui.textureFromTarget(pic.texture) catch return;
-        if (self.texture) |old| dvui.Texture.destroyLater(old);
-        self.texture = tex;
-    }
-};
+/// A view being carried from one place to another — see `ViewDrag.zig`.
+pub const ViewDrag = @import("ViewDrag.zig");
 
 /// What the picker needs from a plugin store without importing one. The store's module graph
 /// reaches `app.zig`, which owns this file, so a direct import is a cycle.
@@ -87,6 +59,9 @@ selection: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 /// Keys and every id are gpa-owned; surface ids are duplicated rather than borrowed so an
 /// assignment to a plugin that is not currently loaded survives until it is.
 assignments: std.StringHashMapUnmanaged([]const []const u8) = .empty,
+/// User override of how many surfaces a place can show. Absent means the
+/// shape's `shows` (Sidebar/Panel are `.many`; a leftover leaf is `.one`).
+shows: std.StringHashMapUnmanaged(Region.Shows) = .empty,
 /// Surface id → its snapshot. Keys are gpa-owned copies: a surface can unregister (plugin
 /// unloaded) while the picker is open.
 snapshots: std.StringHashMapUnmanaged(Snapshot) = .empty,
@@ -288,7 +263,9 @@ pub fn internName(self: *State, gpa: std.mem.Allocator, name: []const u8) []cons
 /// Called by `Region.init` as a shape declares one. Lands in the list being built, which
 /// `publishRegions` swaps into view when the shape finishes.
 pub fn registerRegion(self: *State, gpa: std.mem.Allocator, entry: Region) void {
-    self.regions_building.append(gpa, entry) catch {};
+    var r = entry;
+    if (r.name.len > 0) r.shows = self.showsOf(r.name, r.shows);
+    self.regions_building.append(gpa, r) catch {};
 }
 
 /// The shape has finished declaring: make this frame's regions the ones `regionFor` answers with.
@@ -304,8 +281,14 @@ pub fn assignment(self: *State, name: []const u8) ?[]const []const u8 {
 }
 
 /// Set what region `name` shows. An empty list is a real choice — "nothing here" — distinct from
-/// `unassign`, which hands the region back to its keywords.
+/// `unassign`, which hands the region back to its keywords. A surface lives in one
+/// place: putting it here takes it out of every other assignment.
 pub fn assign(self: *State, gpa: std.mem.Allocator, name: []const u8, surfaces: []const []const u8) !void {
+    try self.setAssignment(gpa, name, surfaces);
+    for (surfaces) |id| self.evictIdFromOthers(gpa, name, id);
+}
+
+fn setAssignment(self: *State, gpa: std.mem.Allocator, name: []const u8, surfaces: []const []const u8) !void {
     const owned = try gpa.alloc([]const u8, surfaces.len);
     errdefer gpa.free(owned);
     var n: usize = 0;
@@ -325,6 +308,55 @@ pub fn assign(self: *State, gpa: std.mem.Allocator, name: []const u8, surfaces: 
         };
     }
     gop.value_ptr.* = owned;
+}
+
+fn evictIdFromOthers(self: *State, gpa: std.mem.Allocator, keep: []const u8, id: []const u8) void {
+    var names: [32][]const u8 = undefined;
+    var n: usize = 0;
+    var it = self.assignments.iterator();
+    while (it.next()) |e| {
+        if (std.mem.eql(u8, e.key_ptr.*, keep)) continue;
+        for (e.value_ptr.*) |x| {
+            if (!std.mem.eql(u8, x, id)) continue;
+            if (n < names.len) {
+                names[n] = e.key_ptr.*;
+                n += 1;
+            }
+            break;
+        }
+    }
+    for (names[0..n]) |region| {
+        const ids = self.assignment(region) orelse continue;
+        var kept: [32][]const u8 = undefined;
+        var k: usize = 0;
+        for (ids) |x| {
+            if (std.mem.eql(u8, x, id)) continue;
+            if (k < kept.len) {
+                kept[k] = x;
+                k += 1;
+            }
+        }
+        self.setAssignment(gpa, region, kept[0..k]) catch {};
+    }
+}
+
+/// How this place shows surfaces: the user's choice, else the shape's default.
+pub fn showsOf(self: *const State, name: []const u8, fallback: Region.Shows) Region.Shows {
+    return self.shows.get(name) orelse fallback;
+}
+
+/// Remember Single vs Multiple for `name`. Same name interned as assignments.
+pub fn setShows(self: *State, gpa: std.mem.Allocator, name: []const u8, value: Region.Shows) void {
+    const gop = self.shows.getOrPut(gpa, name) catch return;
+    if (gop.found_existing) {
+        gop.value_ptr.* = value;
+        return;
+    }
+    gop.key_ptr.* = gpa.dupe(u8, name) catch {
+        _ = self.shows.remove(name);
+        return;
+    };
+    gop.value_ptr.* = value;
 }
 
 /// Forget the user's choice for region `name`; its keywords decide again.
@@ -465,6 +497,7 @@ pub fn resetLayout(self: *State, gpa: std.mem.Allocator) void {
         gpa.free(e.value_ptr.*);
     }
     self.assignments.clearRetainingCapacity();
+    forgetShows(self, gpa);
 
     self.splits.deinit(gpa);
     self.splits = .{};
@@ -525,6 +558,18 @@ pub fn deinitAssignments(self: *State, gpa: std.mem.Allocator) void {
         gpa.free(e.value_ptr.*);
     }
     self.assignments.deinit(gpa);
+    deinitShows(self, gpa);
+}
+
+fn forgetShows(self: *State, gpa: std.mem.Allocator) void {
+    var it = self.shows.keyIterator();
+    while (it.next()) |k| gpa.free(k.*);
+    self.shows.clearRetainingCapacity();
+}
+
+fn deinitShows(self: *State, gpa: std.mem.Allocator) void {
+    forgetShows(self, gpa);
+    self.shows.deinit(gpa);
 }
 
 /// The extent a region should start at: what the user last left it, or the shape's default.

@@ -90,8 +90,8 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     var tl = dvui.textLayout(@src(), .{}, .{
         .expand = .both,
         .background = false,
-        .margin = .all(2),
-        .padding = .all(0),
+        .margin = .{},
+        .padding = .{},
     });
 
     var shown: usize = 0;
