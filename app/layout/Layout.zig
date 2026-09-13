@@ -845,10 +845,23 @@ pub fn packSplit(
     sign: f32,
     opts: Split.Options,
 ) void {
+    packSplitSized(self, src, id_extra, target, sign, opts, Split.handle_size);
+}
+
+/// `packSplit` with the gap given a width, for a sash closing along with the place beside it.
+pub fn packSplitSized(
+    self: *Layout,
+    src: std.builtin.SourceLocation,
+    id_extra: usize,
+    target: dvui.Id,
+    sign: f32,
+    opts: Split.Options,
+    thickness: f32,
+) void {
     const c = self.innermost() orelse return;
     const container = c.box orelse return;
-    c.handles += Split.handle_size;
-    var divider = Split.init(src, c.dir, id_extra, null);
+    c.handles += thickness;
+    var divider = Split.initSized(src, c.dir, id_extra, null, thickness);
     defer divider.deinit();
     divider.drag(container, target, sign, opts, .{
         .extent = c.extent(c.dir),

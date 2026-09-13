@@ -378,6 +378,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
             p.last_resizable = id;
             p.resizables.append(self.arena, id) catch {};
         }
+        box_opts.padding = foldedPadding(box_opts.paddingGet(), extent, axis);
         shut_now = extent <= 0;
     }
 
@@ -970,7 +971,23 @@ fn packTreeSplit(self: *Layout, src: std.builtin.SourceLocation, branch: SplitTr
     // Own `@src()`, not the place's: the grouping box already used that
     // source line, and a packed handle with the same id paints a red
     // duplicate and never settles.
-    self.packSplit(@src(), extraFor(new_name, branch.side), target, sign, .{ .push_out = true });
+    self.packSplitSized(@src(), extraFor(new_name, branch.side), target, sign, .{ .push_out = true }, sashWidth(self, new_name, target));
+}
+
+/// How wide the sash beside `name` is this frame.
+///
+/// Full width nearly always: a place dragged shut keeps its sash, because that is the handle you
+/// drag it back out by, and several shut places in a row read as the several handles they are.
+/// A place on its way *out* is the exception — emptied, its extent sent to zero, waiting for the
+/// curve to finish before the leaf is dropped. Its sash is 10pt that the pair keeps until the
+/// drop and loses in a single frame at the end, which is the step the eye reads as a pop after
+/// an otherwise smooth close. Following the place down costs nothing to grab, because in a
+/// moment there will be nothing to grab.
+fn sashWidth(self: *Layout, name: []const u8, target: dvui.Id) f32 {
+    const kept = if (self.state.assignment(name)) |ids| ids.len > 0 else false;
+    if (kept or Split.sizeOf(target) > 0) return Split.handle_size;
+    const shown = dvui.dataGet(null, target, "_shown", f32) orelse 0;
+    return std.math.clamp(shown, 0, Split.handle_size);
 }
 
 /// Card chrome for a tree leaf. Padding insets the plugin surface inside
@@ -984,6 +1001,28 @@ fn cardOf(box: *dvui.BoxWidget) ViewDrag.Card {
         .corners = o.cornersGet().scale(box.data().borderRectScale().s, dvui.CornerRect.Physical),
         .fill = o.color(.fill),
         .padding = o.paddingGet(),
+    };
+}
+
+/// A card's padding, folded away over the last stretch of a close.
+///
+/// Padding is room the place takes up, so a card closed to nothing is still as wide as its own
+/// inset — 16pt of stripe that sits there until something removes the place, and then goes in
+/// one frame. Once the extent is under the inset the place is narrower than the gap it wants to
+/// keep inside itself, which is the point at which the inset stops meaning anything; from there
+/// it comes in proportionally, so nothing reaches nothing.
+///
+/// Only along the parent's axis. The cross axis is not closing.
+fn foldedPadding(p: dvui.Rect, extent: f32, axis: dvui.enums.Direction) dvui.Rect {
+    const along = switch (axis) {
+        .horizontal => p.x + p.w,
+        .vertical => p.y + p.h,
+    };
+    if (along <= 0 or extent >= along) return p;
+    const f = @max(0, extent) / along;
+    return switch (axis) {
+        .horizontal => .{ .x = p.x * f, .y = p.y, .w = p.w * f, .h = p.h },
+        .vertical => .{ .x = p.x, .y = p.y * f, .w = p.w, .h = p.h * f },
     };
 }
 

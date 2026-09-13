@@ -107,6 +107,12 @@ behind makes the user tidy up after their own drag.
 The leaf a split *mints* is the exception, and is not the same case: it is empty because it is
 the room being made, not room left over.
 
+A place closing for good reaches nothing, not nearly nothing. Its card's inset folds away with
+the last of its extent and the sash beside it closes with it, so the frame the leaf is finally
+dropped moves nothing at all. Left whole, the two of them are some twenty-odd points that a
+smooth close hands back in one step at the very end — which is the only part of it anyone sees.
+A place merely *shut* keeps its sash: that is the handle you drag it back out by.
+
 ## Edges and bands
 
 Near an edge is 36pt, or 28% of the shorter side, whichever is smaller. The fraction is what

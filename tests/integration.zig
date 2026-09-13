@@ -2688,6 +2688,105 @@ test "a place a split made shuts itself when its last view is carried out" {
     }
 }
 
+// Closing is one motion, and the end of it is the part people watch. A place
+// at zero extent was still as wide as its own card padding, and the sash beside
+// it still a full 10pt — so a close that looked smooth to the eye handed back
+// a last two dozen points in one frame, when the leaf was finally dropped.
+//
+// Staged rather than animated: a test frame's clock jumps far enough to cross
+// the whole curve in three steps, so the way to look at the end of a close is
+// to put the place there — extent gone, a travelling `_shown` to keep the leaf
+// from being collapsed out from under the measurement — and read what it and
+// its sash are still holding.
+/// One place, dressed the way fizzy dresses a place: a card with an inset. The
+/// inset is the point — it is room the place takes up, and a close has to give
+/// it back like everything else.
+const PaddedCardFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.host, &e.layout, e.gpa, dvui.currentWindow().arena());
+        {
+            var main = try layout.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main }, .{
+                .expand = .both,
+                .background = true,
+                .padding = .all(card_inset),
+            });
+            defer main.deinit();
+        }
+        e.layout.publishRegions();
+        return .ok;
+    }
+
+    const card_inset: f32 = 8;
+};
+
+test "a place closing for good is not still holding its padding and its sash" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    PaddedCardFrame.editor = editor;
+    defer PaddedCardFrame.editor = null;
+
+    try dvui.testing.settle(PaddedCardFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.splitNamed("Main", .vertical);
+    }
+    try dvui.testing.settle(PaddedCardFrame.frame);
+
+    const scale = dvui.currentWindow().natural_scale;
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    const open_leaf = ViewDrag.placeBounds(&editor.layout, "Main/b1") orelse return error.TestExpectedEqual;
+    const open_rest = ViewDrag.placeBounds(&editor.layout, "Main") orelse return error.TestExpectedEqual;
+    try std.testing.expectApproxEqAbs(
+        fizzy.Editor.Layout.handle_size * scale,
+        open_leaf.y - (open_rest.y + open_rest.h),
+        1,
+    );
+
+    const leaf_id = blk: {
+        for (editor.layout.regions.items) |r| {
+            if (std.mem.eql(u8, r.name, "Main/b1")) break :blk r.id;
+        }
+        return error.TestExpectedEqual;
+    };
+
+    // Four points from shut and held there: an animation that goes nowhere is
+    // what "still travelling" means to everything reading this — the curve is
+    // live, so the leaf is not collapsed and the frame can be measured. Three
+    // frames to settle at it: the sash reads the extent the place last drew at,
+    // and a place's bounds are published for the frame after they were laid out.
+    const left: f32 = 4;
+    dvui.dataSet(null, leaf_id, "_size", @as(f32, 0));
+    for (0..3) |_| {
+        dvui.animation(leaf_id, "_ease", .{ .start_val = left, .end_val = left, .end_time = 100 * std.time.us_per_s });
+        _ = try dvui.testing.step(PaddedCardFrame.frame);
+    }
+
+    const leaf = ViewDrag.placeBounds(&editor.layout, "Main/b1") orelse return error.TestExpectedEqual;
+    const rest = ViewDrag.placeBounds(&editor.layout, "Main") orelse return error.TestExpectedEqual;
+
+    // Four points of card wearing what four points of card can carry of an 8pt
+    // inset — a quarter of it, so the card is 8pt tall. Kept whole, the inset
+    // alone would hold 16 of the 20pt this place is still taking.
+    const inset = PaddedCardFrame.card_inset * 2 * (left / (PaddedCardFrame.card_inset * 2));
+    try std.testing.expectApproxEqAbs((left + inset) * scale, leaf.h, 1);
+    // And the sash has come down with it, rather than holding a full ten points
+    // of gap open beside a place that is about to not be there — ten points
+    // handed back in one frame at the end of an otherwise smooth close.
+    try std.testing.expectApproxEqAbs(left * scale, leaf.y - (rest.y + rest.h), 1);
+}
+
 // A drag must not change the map it is being read against. It does, twice
 // over: the preview draws the view it is about to land, and the panes *that*
 // declares register as places under the pointer; and the place being split

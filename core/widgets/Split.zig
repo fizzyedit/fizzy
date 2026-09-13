@@ -174,12 +174,27 @@ pub fn init(
     id_extra: usize,
     at: ?dvui.Rect,
 ) Split {
+    return initSized(src, axis, id_extra, at, handle_size);
+}
+
+/// A split thinner than `handle_size`, for the one case that needs it: the gap beside a place
+/// that is closing for good. A sash is 10pt of room, so leaving it at full width while the place
+/// it divides shrinks to nothing means the pair still occupies 10pt when the place is gone, and
+/// loses it in one step the frame the place is dropped. Closing it alongside costs nothing to
+/// grab, because there will be nothing to grab.
+pub fn initSized(
+    src: std.builtin.SourceLocation,
+    axis: dvui.enums.Direction,
+    id_extra: usize,
+    at: ?dvui.Rect,
+    thickness: f32,
+) Split {
     return .{ .axis = axis, .box = dvui.box(src, .{ .dir = axis }, .{
         .id_extra = id_extra,
         .rect = at,
         .min_size_content = switch (axis) {
-            .horizontal => .{ .w = handle_size },
-            .vertical => .{ .h = handle_size },
+            .horizontal => .{ .w = thickness },
+            .vertical => .{ .h = thickness },
         },
         .expand = switch (axis) {
             .horizontal => .vertical,
@@ -610,7 +625,6 @@ fn currentExtent(target: dvui.Id, axis: dvui.enums.Direction) f32 {
     };
 }
 
-
 // ── Tests ───────────────────────────────────────────────────────────────────────────────────
 //
 // Against dvui's testing backend, because every bug this file has had was a dvui event-routing
@@ -1032,4 +1046,3 @@ test "a max below the min does not panic in the clamp" {
     const got = resolve(only, 500, c, .{ .min = 200, .max = 50 });
     try testing.expectApproxEqAbs(@as(f32, 200), got, 0.001);
 }
-
