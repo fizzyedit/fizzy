@@ -96,14 +96,16 @@ pub fn draw(
         .background = false,
     });
 
-    // The Plugins tab owns its own vertical scroll areas (installed + store panes inside
-    // a paned widget). With the default `.auto` vertical mode, each inner scrollArea
-    // reports its full content height as min_size, which bubbles up here and triggers
-    // a second explorer-level vertical bar on top of the pane scrollbars. Pin vertical
-    // scroll to `.given` for that tab so we fill the viewport and let the panes scroll.
+    // Some surfaces carry their own vertical scrolling, because a surface can be put in any
+    // region and only this one supplies a scroll area: the Plugins tab (installed and store
+    // panes inside a paned widget) and Settings. With the default `.auto` vertical mode, each
+    // inner scrollArea reports its full content height as min_size, which bubbles up here and
+    // triggers a second explorer-level bar on top of theirs. Pin vertical scroll to `.given`
+    // for those, so we fill the viewport and let the surface scroll.
     const self_vert_scroll = blk: {
         if (f.selected(keywords)) |view| {
-            break :blk std.mem.eql(u8, view.id, PluginStore.view_id);
+            break :blk std.mem.eql(u8, view.id, PluginStore.view_id) or
+                std.mem.eql(u8, view.id, fizzy.Editor.view_settings);
         }
         break :blk false;
     };

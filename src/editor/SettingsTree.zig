@@ -261,16 +261,26 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
 // ---- drawing ------------------------------------------------------------------------------
 
 pub fn draw() !void {
-    // Cap the pane at the explorer's viewport width.
+    // The pane carries its own scrolling. Settings is a surface, so the user can put it
+    // anywhere a region accepts it — a split of the main area as readily as the sidebar rail —
+    // and only the sidebar happened to wrap what it shows in a scroll area. Everywhere else the
+    // tree simply expanded past the bottom edge with no way to reach the rest of it.
+    var scroll = dvui.scrollArea(@src(), .{ .vertical_bar = .auto_overlay }, .{
+        .expand = .both,
+        .background = false,
+    });
+    defer scroll.deinit();
+
+    // Cap the pane at that viewport's width.
     //
-    // Two things depend on this. The explorer scrolls horizontally (long file paths need it), so
-    // it sizes itself to the widest child min size — and `TextLayoutWidget` documents that with
+    // Two things depend on this. Nothing here scrolls horizontally, so the pane's min width is
+    // a demand on whatever holds it — and `TextLayoutWidget` documents that with
     // `break_lines = true` its min *width* is still the width the text would need **unwrapped**.
     // Left uncapped, every description therefore both widened the pane and, having been handed
     // that width, never wrapped. Clamping the pane's own reported min size (`max_size_content`
     // is what `minSizeSetAndRefresh` clamps against) stops descriptions from driving the width,
     // which in turn gives them a bounded width to wrap inside.
-    const viewport_w = fizzy.editor().explorer.scroll_info.viewport.w;
+    const viewport_w = scroll.si.viewport.w;
     const right_gap: f32 = 20; // clear of the pane's right edge (scrollbar / clip)
 
     var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{
