@@ -48,6 +48,13 @@ preview_name: []const u8 = "",
 /// The edge under the pointer, as read. `Drop.plan` turns it into what will
 /// happen; this stays the raw reading so the plan is derived in one place.
 preview_split: ?SplitTree.Side = null,
+/// The previewed place's whole rect, frozen when the preview was aimed.
+///
+/// The place really pulls back to the half it would keep, so its live bounds
+/// shrink as the pane slides open. Reading those would feed the geometry into
+/// itself — the pane would chase its own edge, and the drop zones would crawl
+/// inward under a pointer that never moved.
+preview_bounds: dvui.Rect.Physical = .{},
 /// 0 shut, 1 fully open. Eases both ways, so leaving a place slides it back.
 preview_t: f32 = 0,
 preview_tick_ns: i128 = 0,
@@ -114,9 +121,12 @@ pub fn shotWanted(l: *Layout, name: []const u8, is_source: bool, plan: ?Drop.Pla
     const d = l.state.view_drag;
     if (!d.active()) return .{};
     var shot: Shot = .{ .card = is_source and d.texture == null };
-    if (plan) |p| if (p == .split) {
+    // Every preview dissolves the place's old pixels away — the pane slides
+    // over them on a split, the other view replaces them on a swap — so any
+    // plan at all needs the still.
+    if (plan != null) {
         shot.hover = d.hover_texture == null or !std.mem.eql(u8, d.hover_name, name);
-    };
+    }
     return shot;
 }
 
@@ -216,6 +226,13 @@ fn consider(best: *?[]const u8, best_area: *f32, r: Region, mouse: dvui.Point.Ph
 }
 
 pub fn placeBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
+    // A place with a preview open has already pulled back to the half it
+    // would keep. The pointer is still aiming at the *place*, so answer with
+    // what it was when the preview opened — otherwise its edges walk inward
+    // under a still pointer and the reading flips on its own.
+    const d = state.view_drag;
+    if (d.preview_bounds.w > 0 and d.preview_bounds.h > 0 and std.mem.eql(u8, d.preview_name, name))
+        return d.preview_bounds;
     for (state.regions_building.items) |r| {
         if (std.mem.eql(u8, r.name, name) and r.bounds.w > 0 and r.bounds.h > 0) return r.bounds;
     }
@@ -317,6 +334,9 @@ fn aim(l: *Layout, d: *ViewDrag, name: []const u8, split: ?SplitTree.Side, t: f3
     d.preview_name = if (name.len > 0) l.state.internName(l.gpa, name) else "";
     d.preview_split = split;
     d.preview_t = t;
+    // Taken here and nowhere else: aiming only happens with the preview fully
+    // shut, which is the one moment the place is still its whole self.
+    d.preview_bounds = if (name.len > 0) placeBounds(l.state, name) orelse .{} else .{};
     // Only a swap needs the destination's own view: a split leaves it in place.
     d.other_id = if (name.len > 0 and split == null) visibleId(l, name) orelse "" else "";
     d.clearHover();
@@ -385,66 +405,96 @@ pub fn previewAssignment(l: *Layout, name: []const u8) ?[]const []const u8 {
 
 // ── Preview geometry ────────────────────────────────────────────────────────────────────────────
 
-/// The half a new pane occupies as it slides in from `side`, at `t`.
-pub fn slideIn(bounds: dvui.Rect.Physical, side: SplitTree.Side, t: f32) dvui.Rect.Physical {
+/// A split opening: where the new pane is, and how far the place being split
+/// has pulled back to make room for it.
+///
+/// One function for all of it, because three different readings of "half of
+/// this place" is how a preview stops matching what it previews. The card
+/// that shrinks, the pane that slides in and the gap between them are all
+/// measured here, from the same numbers a real split would settle at.
+pub const Opening = struct {
+    /// The pane sliding in from `side`, in physical points.
+    pane: dvui.Rect.Physical,
+    /// How far the kept half's edge on `side` has moved: the pane plus the
+    /// sash gap. This is what the place being split insets itself by.
+    inset: f32,
+};
+
+pub fn opening(bounds: dvui.Rect.Physical, side: SplitTree.Side, t: f32, scale: f32) Opening {
     const u = std.math.clamp(t, 0, 1);
-    var r = bounds;
+    const gap = Split.handle_size * scale;
+    const along = switch (side) {
+        .left, .right => bounds.w,
+        .top, .bottom => bounds.h,
+    };
+    // Halved the way a real split halves: the sash comes out of the middle
+    // first, so the two sides end up the same size rather than the new one
+    // being a sash narrower than the old.
+    const full = @max(0, (along - gap) * 0.5);
+    const size = full * u;
+    var pane = bounds;
     switch (side) {
-        .left => r.w = bounds.w * 0.5 * u,
+        .left => pane.w = size,
         .right => {
-            r.w = bounds.w * 0.5 * u;
-            r.x = bounds.x + bounds.w - r.w;
+            pane.w = size;
+            pane.x = bounds.x + bounds.w - size;
         },
-        .top => r.h = bounds.h * 0.5 * u,
+        .top => pane.h = size,
         .bottom => {
-            r.h = bounds.h * 0.5 * u;
-            r.y = bounds.y + bounds.h - r.h;
+            pane.h = size;
+            pane.y = bounds.y + bounds.h - size;
         },
     }
-    return r;
+    return .{ .pane = pane, .inset = size + gap * u };
 }
 
-/// The sash between the two halves, on the incoming pane's inner edge.
-pub fn sashAt(bounds: dvui.Rect.Physical, side: SplitTree.Side, t: f32, scale: f32) dvui.Rect.Physical {
-    const incoming = slideIn(bounds, side, t);
-    const sash = Split.handle_size * scale;
-    return switch (side) {
-        .left => .{ .x = incoming.x + incoming.w, .y = bounds.y, .w = sash, .h = bounds.h },
-        .right => .{ .x = incoming.x - sash, .y = bounds.y, .w = sash, .h = bounds.h },
-        .top => .{ .x = bounds.x, .y = incoming.y + incoming.h, .w = bounds.w, .h = sash },
-        .bottom => .{ .x = bounds.x, .y = incoming.y - sash, .w = bounds.w, .h = sash },
+/// Pull a place back to the half it keeps while a split previews on it.
+///
+/// The place is *laid out* smaller, not clipped: its contents reflow into the
+/// half they will actually have, so what is under the pointer is the
+/// arrangement the release produces rather than a cropped picture of the old
+/// one. A margin does that in place — putting the contents inside a sized
+/// child box would rebuild every widget in them, and a document pane would
+/// lose its scroll and undo every time the pointer brushed an edge.
+///
+/// The pinned size follows the margin down so the *slot* does not change: a
+/// resizable place whose minimum grew by the inset would widen the window's
+/// whole arrangement the moment you hovered its edge.
+pub fn pullBack(
+    l: *Layout,
+    opts: *dvui.Options,
+    mint: SplitTree.Side,
+    axis: dvui.enums.Direction,
+    pinned: bool,
+) void {
+    const d = l.state.view_drag;
+    if (d.preview_bounds.w <= 0 or d.preview_bounds.h <= 0) return;
+    const scale = dvui.currentWindow().natural_scale;
+    if (scale <= 0) return;
+    const inset = opening(d.preview_bounds, mint, previewVisual(l), scale).inset / scale;
+    if (inset <= 0) return;
+
+    var m = opts.margin orelse dvui.Rect{};
+    switch (mint) {
+        .left => m.x += inset,
+        .top => m.y += inset,
+        .right => m.w += inset,
+        .bottom => m.h += inset,
+    }
+    opts.margin = m;
+
+    const along_axis = switch (mint) {
+        .left, .right => axis == .horizontal,
+        .top, .bottom => axis == .vertical,
     };
-}
-
-/// Everything past the sash — the half the place being split keeps, and so
-/// the clip its contents draw under while the preview is open.
-pub fn keptHalf(bounds: dvui.Rect.Physical, side: SplitTree.Side, t: f32, scale: f32) dvui.Rect.Physical {
-    const sash = sashAt(bounds, side, t, scale);
-    return switch (side) {
-        .left => .{
-            .x = sash.x + sash.w,
-            .y = bounds.y,
-            .w = @max(0, bounds.x + bounds.w - (sash.x + sash.w)),
-            .h = bounds.h,
-        },
-        .right => .{
-            .x = bounds.x,
-            .y = bounds.y,
-            .w = @max(0, sash.x - bounds.x),
-            .h = bounds.h,
-        },
-        .top => .{
-            .x = bounds.x,
-            .y = sash.y + sash.h,
-            .w = bounds.w,
-            .h = @max(0, bounds.y + bounds.h - (sash.y + sash.h)),
-        },
-        .bottom => .{
-            .x = bounds.x,
-            .y = bounds.y,
-            .w = bounds.w,
-            .h = @max(0, sash.y - bounds.y),
-        },
+    if (!pinned or !along_axis) return;
+    if (opts.min_size_content) |*min| switch (axis) {
+        .horizontal => min.w = @max(0, min.w - inset),
+        .vertical => min.h = @max(0, min.h - inset),
+    };
+    if (opts.max_size_content) |max| opts.max_size_content = switch (axis) {
+        .horizontal => .width(@max(0, max.w - inset)),
+        .vertical => .height(@max(0, max.h - inset)),
     };
 }
 
@@ -455,56 +505,79 @@ fn outCubic(t: f32) f32 {
 
 // ── Painting ────────────────────────────────────────────────────────────────────────────────────
 
+/// How a place is dressed, so the pane a preview opens is dressed the same.
+///
+/// A preview that draws a bare rectangle where a rounded, padded card is
+/// about to be is a preview of something else. Taken from the destination's
+/// own box rather than guessed, so an app that restyles its places gets a
+/// preview in its own style without saying so.
+pub const Card = struct {
+    corners: dvui.CornerRect.Physical = .{},
+    fill: dvui.Color = .black,
+    padding: dvui.Rect = .{},
+};
+
 /// The landing preview for `dest`: the pane that is opening, what goes in it,
-/// and the destination's outgoing content dissolving behind it.
+/// and the destination's outgoing content dissolving away.
 pub fn drawHint(
     l: *Layout,
     dest: []const u8,
     bounds: dvui.Rect.Physical,
     scale: f32,
+    card: Card,
 ) void {
-    const theme = dvui.themeGet();
     const t = previewVisual(l);
-    const none: dvui.CornerRect.Physical = .{};
+    const d = l.state.view_drag;
+    // The place has pulled back; the opening is measured against what it was.
+    const whole = if (d.preview_bounds.w > 0 and std.mem.eql(u8, d.preview_name, dest))
+        d.preview_bounds
+    else
+        bounds;
+
+    // The pane opens in the space the place gave up, which is outside the
+    // clip the pulled-back card leaves behind — so paint against the place's
+    // whole rect instead of intersecting with what is left of it.
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    dvui.clipSet(whole);
+
     switch (previewPlan(l, dest) orelse return) {
-        // A swap needs no hint of its own: both places are already drawing
-        // the other's view through `previewAssignment`.
-        .swap => {},
+        // Both places are already laying out the other's view. What is left
+        // is making it read as a trade rather than a jump cut: the pixels
+        // that were here blur away over the ones arriving, the same dissolve
+        // a surface change uses anywhere else.
+        .swap => dissolve(l, dest, whole, whole, t),
         .split => |s| {
-            // `mint` is the hole that opens — the dropped edge when the view
+            // `mint` is the pane that opens — the dropped edge when the view
             // moves into it, the far edge when the origin keeps the view.
-            const incoming = slideIn(bounds, s.mint, t);
-            const sash = sashAt(bounds, s.mint, t, scale);
-            if (incoming.w > 1 and incoming.h > 1) {
-                incoming.fill(none, .{ .color = theme.color(.window, .fill), .fade = 1.0 });
-                if (s.fills_mint) {
-                    drawLiveIn(l, incoming, l.state.view_drag.moved_id);
-                } else {
-                    Region.drawEmptyHatch(incoming, scale);
-                }
-                blurOutgoing(l, dest, incoming, bounds, t);
+            const open = opening(whole, s.mint, t, scale);
+            if (open.pane.w <= 1 or open.pane.h <= 1) return;
+            open.pane.fill(card.corners, .{ .color = card.fill, .fade = 1.0 });
+            if (s.fills_mint) {
+                drawLiveIn(l, open.pane, l.state.view_drag.moved_id, card);
+            } else {
+                Region.drawEmptyHatch(open.pane, scale);
             }
-            if (sash.w > 0 and sash.h > 0) {
-                sash.fill(none, .{ .color = theme.color(.window, .fill), .fade = 1.0 });
-            }
+            // Only over the pane: the rest of the place is drawing its real,
+            // re-laid-out half, and blurring that would undo the point.
+            dissolve(l, dest, open.pane, whole, t);
         },
     }
 }
 
-/// The incoming surface, drawn live in the pane that is sliding open. A
-/// float rather than a box in the parent: this runs mid-layout, inside a
-/// place that has already sized itself.
-fn drawLiveIn(l: *Layout, dest: dvui.Rect.Physical, id: []const u8) void {
+/// The incoming surface, drawn live in the pane that is sliding open, in the
+/// same card the place it is landing in wears. A float rather than a box in
+/// the parent: this runs mid-layout, inside a place that has already sized
+/// itself.
+fn drawLiveIn(l: *Layout, dest: dvui.Rect.Physical, id: []const u8, card: Card) void {
     if (id.len == 0 or dest.w < 2 or dest.h < 2) return;
     const s = l.host.surfaceById(id) orelse return;
     const nat = dest.toNatural();
-    const theme = dvui.themeGet();
     var fw: dvui.FloatingWidget = undefined;
     fw.init(@src(), .{ .mouse_events = false }, .{
         .rect = .{ .x = nat.x, .y = nat.y, .w = nat.w, .h = nat.h },
-        .padding = .{},
-        .background = true,
-        .color_fill = theme.color(.window, .fill),
+        .padding = card.padding,
+        .background = false,
     });
     defer fw.deinit();
     const prev_clip = dvui.clip(fw.data().contentRectScale().r);
@@ -512,20 +585,59 @@ fn drawLiveIn(l: *Layout, dest: dvui.Rect.Physical, id: []const u8) void {
     _ = s.draw(s.ctx) catch {};
 }
 
+/// A place's own content, dimmed, while the pointer is over the place the
+/// drag came from.
+///
+/// Your own place is not losing anything — the view is being carried, not
+/// taken away — so hatching it as a hole says the opposite of what dropping
+/// here does. Dimming says "this is the one in your hand" and leaves the
+/// content readable, which is what you are aiming with.
+pub fn dimSource(l: *Layout, rs: dvui.RectScale, corners: dvui.CornerRect.Physical) void {
+    if (!overSelf(l)) return;
+    const theme = dvui.themeGet();
+    // The card, not the content rect the place is clipped to: a dim that
+    // stops short of the padding leaves a bright border around it.
+    const prev = dvui.clipGet();
+    defer dvui.clipSet(prev);
+    dvui.clipSet(rs.r);
+    rs.r.fill(corners, .{ .color = theme.color(.window, .fill).opacity(0.55), .fade = 1.0 });
+}
+
+/// True while the pointer is inside the place the drag came from.
+pub fn overSelf(l: *Layout) bool {
+    const d = l.state.view_drag;
+    if (!d.active()) return false;
+    const bounds = placeBounds(l.state, d.name) orelse return false;
+    return bounds.contains(dvui.currentWindow().mouse_pt);
+}
+
+/// The source's own last pixels blurring away while a swap is previewed —
+/// the far end of the same dissolve the destination is running, so a trade
+/// looks like one motion happening in two places.
+pub fn drawSwapOut(l: *Layout, bounds: dvui.Rect.Physical) void {
+    if (!swapping(l)) return;
+    const tex = l.state.view_drag.texture orelse return;
+    const s = core.anim.crossfade.sample(.blur, previewVisual(l), false);
+    const prev = dvui.clipGet();
+    defer dvui.clipSet(prev);
+    dvui.clipSet(bounds);
+    core.anim.blit(tex, bounds, s.out_blur, s.out_alpha);
+}
+
 /// The destination's last pixels, aligned to the whole place and dissolving
-/// over the pane sliding in — the same outgoing blur a surface change uses,
-/// so a split and a swap read as one family of motion.
-fn blurOutgoing(
+/// away inside `within` — the same outgoing blur a surface change uses, so a
+/// split and a swap read as one family of motion.
+fn dissolve(
     l: *Layout,
     dest_name: []const u8,
-    incoming: dvui.Rect.Physical,
+    within: dvui.Rect.Physical,
     bounds: dvui.Rect.Physical,
     t: f32,
 ) void {
     const tex = l.state.view_drag.hover_texture orelse return;
     if (!std.mem.eql(u8, l.state.view_drag.hover_name, dest_name)) return;
     const s = core.anim.crossfade.sample(.blur, t, false);
-    const prev = dvui.clip(incoming);
+    const prev = dvui.clip(within);
     defer dvui.clipSet(prev);
     core.anim.blit(tex, bounds, s.out_blur, s.out_alpha);
 }
@@ -755,40 +867,43 @@ fn idsReplacing(arena: std.mem.Allocator, ids: []const []const u8, drop: []const
     return out.items;
 }
 
-test "a split preview grows from the dropped edge to half" {
+test "a split preview grows from the dropped edge to an even half" {
     const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
-    try std.testing.expectEqual(@as(f32, 0), slideIn(r, .left, 0).w);
-    const half = slideIn(r, .left, 1);
-    try std.testing.expectEqual(@as(f32, 100), half.w);
-    try std.testing.expectEqual(@as(f32, 0), half.x);
-    const right = slideIn(r, .right, 1);
-    try std.testing.expectEqual(@as(f32, 100), right.x);
-    try std.testing.expectEqual(@as(f32, 100), right.w);
+    const half = (200 - Split.handle_size) / 2;
+
+    try std.testing.expectEqual(@as(f32, 0), opening(r, .left, 0, 1).pane.w);
+
+    const left = opening(r, .left, 1, 1);
+    try std.testing.expectApproxEqAbs(half, left.pane.w, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), left.pane.x, 0.01);
+    // What the pane takes plus the sash is exactly what the place gives up,
+    // so the two halves come out the same size.
+    try std.testing.expectApproxEqAbs(half, 200 - left.inset, 0.01);
+
+    const right = opening(r, .right, 1, 1);
+    try std.testing.expectApproxEqAbs(200 - half, right.pane.x, 0.01);
+    try std.testing.expectApproxEqAbs(half, right.pane.w, 0.01);
 }
 
-test "the preview sash sits on the incoming pane's inner edge" {
+test "a place not being previewed gives up nothing" {
     const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
-    const sash = sashAt(r, .left, 1, 1);
-    try std.testing.expectApproxEqAbs(@as(f32, 100), sash.x, 0.1);
-    try std.testing.expectApproxEqAbs(Split.handle_size, sash.w, 0.1);
+    try std.testing.expectEqual(@as(f32, 0), opening(r, .left, 0, 1).inset);
+    try std.testing.expectEqual(@as(f32, 0), opening(r, .top, 0, 1).inset);
 }
 
-test "the kept half is everything past the sash" {
-    const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
-    // Opening on the left leaves the right; the two never overlap the sash.
-    const kept = keptHalf(r, .left, 1, 1);
-    try std.testing.expectApproxEqAbs(100 + Split.handle_size, kept.x, 0.1);
-    try std.testing.expectApproxEqAbs(100 - Split.handle_size, kept.w, 0.1);
-
-    const kept_top = keptHalf(r, .top, 1, 1);
-    try std.testing.expectApproxEqAbs(50 + Split.handle_size, kept_top.y, 0.1);
-}
-
-test "a place not being previewed keeps its whole self" {
-    const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
-    const kept = keptHalf(r, .left, 0, 1);
-    try std.testing.expectApproxEqAbs(Split.handle_size, kept.x, 0.1);
-    try std.testing.expectApproxEqAbs(200 - Split.handle_size, kept.w, 0.1);
+test "the pane and the place it pulls back from never overlap" {
+    const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 120, .h = 300 };
+    var t: f32 = 0;
+    while (t <= 1.0) : (t += 0.05) {
+        for (std.meta.tags(SplitTree.Side)) |side| {
+            const o = opening(r, side, t, 1);
+            const along = switch (side) {
+                .left, .right => o.pane.w,
+                .top, .bottom => o.pane.h,
+            };
+            try std.testing.expect(o.inset >= along);
+        }
+    }
 }
 
 test "a document pane does not accept a panel surface" {

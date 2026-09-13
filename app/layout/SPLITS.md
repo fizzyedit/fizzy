@@ -58,16 +58,22 @@ result rather than as a symbol for it.
 - **The float never hides.** It is the only thing saying what is being carried. Hiding it over
   a drop target made the gesture look cancelled.
 - **A swap previews by swapping.** Both places remap their assignment for the frame and lay
-  out the other's view for real, blur-fading between the two — the same crossfade a surface
-  change uses anywhere else, so this is not a special motion to learn.
-- **A split previews by splitting.** The pane that will open slides in from its edge, a sash
-  appears at the boundary, and the place being split clips to the half it will keep. Whatever
-  is arriving draws live in the incoming half; a self-split's leaf is empty, so it hatches.
+  out the other's view for real, and each one's old pixels blur away over the new — the same
+  crossfade a surface change uses anywhere else, so this is not a special motion to learn.
+- **A split previews by splitting.** The place being split *pulls back* to the half it will
+  keep — really laid out at that size, its contents reflowed, not a crop of the old picture —
+  and the new pane slides open in the space it gave up, wearing the same card the real one
+  will. Whatever is arriving draws live in it; a self-split's leaf is empty, so it hatches.
+- **Over your own place, your content dims and stays.** The view is in your hand, not gone, so
+  hatching your own place as a hole says the opposite of what dropping there does.
 - **Leaving slides it shut.** The preview eases both directions at the same speed, so brushing
   past a place costs nothing and shows you it cost nothing.
-- **A preview never remounts anything.** The clip that shrinks a place to half is set on the
-  place's own box. Wrapping contents in a child box to clip them would rebuild every widget
-  inside, losing scroll position, selection and undo.
+- **A preview never remounts anything.** The pull-back is a margin on the place's *own* box.
+  Putting the contents inside a sized child box would rebuild every widget in them, and a
+  document pane would lose its scroll, selection and undo each time the pointer brushed an edge.
+- **A place being previewed is measured from the rect it had when you aimed at it.** It shrinks
+  while the pane opens, so reading its live bounds would feed the geometry into itself: the pane
+  would chase its own edge and the drop zones would crawl inward under a pointer that never moved.
 
 ## Where the view goes when a place is split
 

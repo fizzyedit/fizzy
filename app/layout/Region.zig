@@ -85,7 +85,7 @@ pub fn deinit(self: *Region) void {
             if (ViewDrag.previewOn(l, self.name)) {
                 if (self.box) |b| {
                     const rs = b.data().borderRectScale();
-                    ViewDrag.drawHint(l, self.name, rs.r, rs.s);
+                    ViewDrag.drawHint(l, self.name, rs.r, rs.s, cardOf(b));
                 }
             }
         }
@@ -435,6 +435,17 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         .dir = init_opts.dir,
     });
 
+    // A previewed split is laid out, not drawn over: the place really pulls
+    // back to the half it would keep, so the arrangement under the pointer is
+    // the one the release produces. `ViewDrag.pullBack` explains why this is a
+    // margin and not a child box.
+    if (init_opts.name.len > 0) {
+        if (ViewDrag.previewPlan(self, init_opts.name)) |p| switch (p) {
+            .swap => {},
+            .split => |s| ViewDrag.pullBack(self, &box_opts, s.mint, axis, init_opts.resize),
+        };
+    }
+
     const box = dvui.box(src, .{ .dir = init_opts.dir }, box_opts);
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
     if (init_opts.name.len > 0) {
@@ -480,34 +491,26 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     // view in the incoming pane.
     if (!shut_now and keywords.len > 0 and !init_opts.manual_contents) {
         const plan = ViewDrag.previewPlan(self, init_opts.name);
-        const keep = ViewDrag.selfSplitting(self);
         const swapped = ViewDrag.swapping(self);
-        // The source stands empty while its view rides the pointer, unless it
-        // is also where the view lands.
-        const on_screen = !dragging_this or keep or swapped;
+        // The source stands empty while its view rides the pointer — but not
+        // while the pointer is over it. Aiming at your own place must show
+        // your own content, dimmed: that is the thing you are placing.
+        const on_screen = !dragging_this or swapped or ViewDrag.overSelf(self);
         const shot = ViewDrag.shotWanted(self, init_opts.name, dragging_this, plan);
 
-        // Clip to the half this place will actually keep, so the preview is
-        // the result and not a hint about it. Still this same box: a child box
-        // to hold the clip remounts the surface inside it.
-        var kept_half: ?dvui.Rect.Physical = null;
-        if (plan) |p| switch (p) {
-            .swap => {},
-            .split => |s| {
-                const rs = box.data().borderRectScale();
-                kept_half = ViewDrag.keptHalf(rs.r, s.mint, ViewDrag.previewVisual(self), rs.s);
-            },
-        };
-
         if (shot.any()) {
-            try drawContentsPhotographed(self, init_opts, keywords, clip_to, shot, on_screen, kept_half);
+            try drawContentsPhotographed(self, init_opts, keywords, clip_to, shot, on_screen);
         } else if (on_screen) {
-            const prev = if (kept_half) |c| dvui.clip(c) else null;
-            defer if (prev) |c| dvui.clipSet(c);
             _ = try drawContents(self, init_opts, keywords);
         }
     }
-    if (dragging_this) ViewDrag.drawFloat(self);
+    if (dragging_this) {
+        const rs = box.data().borderRectScale();
+        const corners = box_opts.cornersGet().scale(rs.s, dvui.CornerRect.Physical);
+        ViewDrag.drawSwapOut(self, rs.r);
+        ViewDrag.dimSource(self, rs, corners);
+        ViewDrag.drawFloat(self);
+    }
 
     return .{
         .name = init_opts.name,
@@ -576,12 +579,13 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     // square outline sitting on the rounded card.
     const corners = box.data().options.cornersGet().scale(rs.s, dvui.CornerRect.Physical);
     const theme = dvui.themeGet();
-    // The place the view was lifted out of stands empty — unless it is also
-    // the landing, which draws its own halves.
-    const hole = dragging_this and !ViewDrag.swapping(self) and !ViewDrag.selfSplitting(self);
+    // The place the view was lifted out of stands empty — unless it is the
+    // landing, or the pointer is over it, in which case it keeps its content
+    // and dims instead.
+    const hole = dragging_this and !ViewDrag.swapping(self) and !ViewDrag.overSelf(self);
     if (!filled or hole) drawEmptyHatch(rs.r, rs.s);
     if (drop_here or showing) {
-        ViewDrag.drawHint(self, opts.name, rs.r, rs.s);
+        ViewDrag.drawHint(self, opts.name, rs.r, rs.s, cardOf(box));
     } else if (filled and !dragging_this and alpha > 0.01) {
         rs.r.stroke(corners, .{ .color = theme.focus.opacity(alpha), .thickness = 2.0 });
     }
@@ -732,23 +736,18 @@ fn drawContentsPhotographed(
     rect: dvui.Rect.Physical,
     shot: ViewDrag.Shot,
     on_screen: bool,
-    kept_half: ?dvui.Rect.Physical,
 ) !void {
     const captured = core.anim.CrossFade.beginCapture(rect) orelse {
         // No texture targets (web) or nothing to capture: the drag goes
         // without its still rather than the place going without its draw.
-        if (on_screen) {
-            const prev = if (kept_half) |c| dvui.clip(c) else null;
-            defer if (prev) |c| dvui.clipSet(c);
-            _ = try drawContents(self, opts, keywords);
-        }
+        if (on_screen) _ = try drawContents(self, opts, keywords);
         return;
     };
     var pic = captured;
 
-    // Photograph the place as it stands, not as the preview poses it, and at
-    // full size — the blur needs the whole destination even while the kept
-    // half is shrinking under it. The preview clip lands on the blit instead.
+    // Photograph the place as it stands, not as the preview poses it: the
+    // still is taken on the frame the preview is aimed, before the place has
+    // pulled back, which is exactly the picture the dissolve needs.
     self.state.view_drag.capturing = true;
     const prev_clip = dvui.clip(rect);
     _ = try drawContents(self, opts, keywords);
@@ -759,8 +758,6 @@ fn drawContentsPhotographed(
     // blitting the smaller rect would sample the wrong UVs.
     const tex = ViewDrag.keepShot(self, shot, &pic, opts.name) orelse return;
     if (!on_screen) return;
-    const prev = if (kept_half) |c| dvui.clip(c) else null;
-    defer if (prev) |c| dvui.clipSet(c);
     core.anim.blit(tex, pic.r, 0, 1);
 }
 
@@ -979,6 +976,17 @@ fn packTreeSplit(self: *Layout, src: std.builtin.SourceLocation, branch: SplitTr
 /// Card chrome for a tree leaf. Padding insets the plugin surface inside
 /// the card. Margin is not copied: a sash-facing margin is how handles
 /// used to pick up extra space on one side.
+/// What a place looks like, read off the place itself, so a pane a preview
+/// opens is dressed like the pane that will be there.
+fn cardOf(box: *dvui.BoxWidget) ViewDrag.Card {
+    const o = box.data().options;
+    return .{
+        .corners = o.cornersGet().scale(box.data().borderRectScale().s, dvui.CornerRect.Physical),
+        .fill = o.color(.fill),
+        .padding = o.paddingGet(),
+    };
+}
+
 fn placeVisual(opts: dvui.Options) dvui.Options {
     return .{
         .background = opts.background,
