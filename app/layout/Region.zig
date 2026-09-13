@@ -472,31 +472,38 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     // layered form later — a tray blurring what is behind it needs the region underneath to have
     // drawn, at every size the tray takes.
     //
-    // Photographed once for the floating card. Landing areas draw the
+    // Photographed, when the drag needs a still, from this very draw and no
+    // other — see `drawContentsPhotographed`. Landing areas draw the
     // surfaces live: a swap remaps matching so each place lays out the
     // other's view; a self-split keeps this place's view (the new leaf
     // is empty); a cross-place split leaves a hole and draws the moved
     // view in the incoming pane.
     if (!shut_now and keywords.len > 0 and !init_opts.manual_contents) {
-        if (dragging_this) try captureDragView(self, init_opts, keywords, clip_to);
         const plan = ViewDrag.previewPlan(self, init_opts.name);
         const keep = ViewDrag.selfSplitting(self);
         const swapped = ViewDrag.swapping(self);
-        if (plan != null and plan.? == .split)
-            try captureDestView(self, init_opts, keywords, clip_to);
-        if (!dragging_this or keep or swapped) {
-            // Clip to the half this place will actually keep, so the preview
-            // is the result and not a hint about it. Still this same box: a
-            // child box to hold the clip remounts the surface inside it.
-            var leftover_clip: ?dvui.Rect.Physical = null;
-            if (plan) |p| switch (p) {
-                .swap => {},
-                .split => |s| {
-                    const rs = box.data().borderRectScale();
-                    leftover_clip = dvui.clip(ViewDrag.keptHalf(rs.r, s.mint, ViewDrag.previewVisual(self), rs.s));
-                },
-            };
-            defer if (leftover_clip) |c| dvui.clipSet(c);
+        // The source stands empty while its view rides the pointer, unless it
+        // is also where the view lands.
+        const on_screen = !dragging_this or keep or swapped;
+        const shot = ViewDrag.shotWanted(self, init_opts.name, dragging_this, plan);
+
+        // Clip to the half this place will actually keep, so the preview is
+        // the result and not a hint about it. Still this same box: a child box
+        // to hold the clip remounts the surface inside it.
+        var kept_half: ?dvui.Rect.Physical = null;
+        if (plan) |p| switch (p) {
+            .swap => {},
+            .split => |s| {
+                const rs = box.data().borderRectScale();
+                kept_half = ViewDrag.keptHalf(rs.r, s.mint, ViewDrag.previewVisual(self), rs.s);
+            },
+        };
+
+        if (shot.any()) {
+            try drawContentsPhotographed(self, init_opts, keywords, clip_to, shot, on_screen, kept_half);
+        } else if (on_screen) {
+            const prev = if (kept_half) |c| dvui.clip(c) else null;
+            defer if (prev) |c| dvui.clipSet(c);
             _ = try drawContents(self, init_opts, keywords);
         }
     }
@@ -709,37 +716,52 @@ pub fn drawEmptyHatch(bounds: dvui.Rect.Physical, scale: f32) void {
     }
 }
 
-fn captureDestView(
+/// Draw this place's contents *once*, into a texture, and blit those same
+/// pixels back if the place is meant to be on screen.
+///
+/// The drag needs a still of the place — the lifted view for the floating
+/// card, the destination for the outgoing blur. It used to get one from a
+/// second `drawContents` in the same frame, which meant every widget under
+/// the place was built twice and dvui reported a duplicate id for each. One
+/// draw serves both: the screen sees a photograph of itself, which is the
+/// same picture, and every widget is built once.
+fn drawContentsPhotographed(
     self: *Layout,
     opts: InitOptions,
     keywords: []const []const u8,
     rect: dvui.Rect.Physical,
+    shot: ViewDrag.Shot,
+    on_screen: bool,
+    kept_half: ?dvui.Rect.Physical,
 ) !void {
-    if (self.state.view_drag.hover_texture != null and
-        std.mem.eql(u8, self.state.view_drag.hover_name, opts.name)) return;
-    self.state.view_drag.capturing = true;
-    defer self.state.view_drag.capturing = false;
-    if (core.anim.CrossFade.beginCapture(rect)) |captured| {
-        var pic = captured;
-        _ = try drawContents(self, opts, keywords);
-        self.state.view_drag.takeHover(&pic, self.state.internName(self.gpa, opts.name));
-    }
-}
+    const captured = core.anim.CrossFade.beginCapture(rect) orelse {
+        // No texture targets (web) or nothing to capture: the drag goes
+        // without its still rather than the place going without its draw.
+        if (on_screen) {
+            const prev = if (kept_half) |c| dvui.clip(c) else null;
+            defer if (prev) |c| dvui.clipSet(c);
+            _ = try drawContents(self, opts, keywords);
+        }
+        return;
+    };
+    var pic = captured;
 
-fn captureDragView(
-    self: *Layout,
-    opts: InitOptions,
-    keywords: []const []const u8,
-    rect: dvui.Rect.Physical,
-) !void {
-    if (self.state.view_drag.texture != null) return;
+    // Photograph the place as it stands, not as the preview poses it, and at
+    // full size — the blur needs the whole destination even while the kept
+    // half is shrinking under it. The preview clip lands on the blit instead.
     self.state.view_drag.capturing = true;
-    defer self.state.view_drag.capturing = false;
-    if (core.anim.CrossFade.beginCapture(rect)) |captured| {
-        var pic = captured;
-        _ = try drawContents(self, opts, keywords);
-        self.state.view_drag.takePicture(&pic);
-    }
+    const prev_clip = dvui.clip(rect);
+    _ = try drawContents(self, opts, keywords);
+    dvui.clipSet(prev_clip);
+    self.state.view_drag.capturing = false;
+
+    // `pic.r`, not `rect`: `Picture.start` enlarges to pixel boundaries, and
+    // blitting the smaller rect would sample the wrong UVs.
+    const tex = ViewDrag.keepShot(self, shot, &pic, opts.name) orelse return;
+    if (!on_screen) return;
+    const prev = if (kept_half) |c| dvui.clip(c) else null;
+    defer if (prev) |c| dvui.clipSet(c);
+    core.anim.blit(tex, pic.r, 0, 1);
 }
 
 fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, shown: f32) void {

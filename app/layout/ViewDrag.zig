@@ -90,6 +90,57 @@ pub fn takeHover(self: *ViewDrag, pic: *dvui.Picture, name: []const u8) void {
     self.hover_name = name;
 }
 
+/// What photograph this place owes the drag this frame.
+///
+/// A photograph is taken *from the place's own draw*, never from a second
+/// one. Drawing a subtree twice in a frame gives every widget inside it a
+/// duplicate id — dvui paints the lot red and the two copies fight over the
+/// same stored state — and the subtree under a place is the whole editor.
+pub const Shot = struct {
+    /// The lifted view, for the floating card. Taken once, at lift.
+    card: bool = false,
+    /// The destination as it looked before the preview, for the outgoing
+    /// blur. Taken once per place the pointer aims at.
+    hover: bool = false,
+
+    pub fn any(self: Shot) bool {
+        return self.card or self.hover;
+    }
+};
+
+/// Nothing is owed unless a drag is live and the existing texture is missing
+/// or belongs to a different place.
+pub fn shotWanted(l: *Layout, name: []const u8, is_source: bool, plan: ?Drop.Plan) Shot {
+    const d = l.state.view_drag;
+    if (!d.active()) return .{};
+    var shot: Shot = .{ .card = is_source and d.texture == null };
+    if (plan) |p| if (p == .split) {
+        shot.hover = d.hover_texture == null or !std.mem.eql(u8, d.hover_name, name);
+    };
+    return shot;
+}
+
+/// Keep what the place's draw recorded, and hand the texture back so the
+/// caller can blit the very same pixels to the screen.
+///
+/// One capture yields one texture: `textureFromTarget` consumes the render
+/// target. When both are owed the card wins and the hover is taken next
+/// frame — a sixtieth of a second nobody sees, and the alternative is the
+/// second draw this whole arrangement exists to avoid.
+pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture, name: []const u8) ?dvui.Texture {
+    var d = &l.state.view_drag;
+    if (shot.card) {
+        d.takePicture(pic);
+        return d.texture;
+    }
+    if (shot.hover) {
+        d.takeHover(pic, l.state.internName(l.gpa, name));
+        return d.hover_texture;
+    }
+    pic.stop();
+    return null;
+}
+
 pub fn clearHover(self: *ViewDrag) void {
     if (self.hover_texture) |tex| dvui.Texture.destroyLater(tex);
     self.hover_texture = null;

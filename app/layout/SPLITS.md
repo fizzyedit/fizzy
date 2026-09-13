@@ -50,6 +50,11 @@ result rather than as a symbol for it.
 
 - **The float is a photograph.** The dragged surface is captured once, at lift. The card
   following the pointer blits that texture, so no plugin is asked to draw twice in a frame.
+- **A photograph is taken from the place's own draw.** The drag needs two stills — the lifted
+  view for the card, the destination as it stood for the outgoing blur — and both come from the
+  draw the place was going to do anyway, blitted back to the screen afterwards. Never a second
+  `drawContents` in the same frame: that builds every widget under the place twice, and dvui
+  reports a duplicate id for each one of them.
 - **The float never hides.** It is the only thing saying what is being carried. Hiding it over
   a drop target made the gesture look cancelled.
 - **A swap previews by swapping.** Both places remap their assignment for the frame and lay
