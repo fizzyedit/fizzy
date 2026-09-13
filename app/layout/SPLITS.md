@@ -71,9 +71,13 @@ result rather than as a symbol for it.
 - **A preview never remounts anything.** The pull-back is a margin on the place's *own* box.
   Putting the contents inside a sized child box would rebuild every widget in them, and a
   document pane would lose its scroll, selection and undo each time the pointer brushed an edge.
-- **A place being previewed is measured from the rect it had when you aimed at it.** It shrinks
-  while the pane opens, so reading its live bounds would feed the geometry into itself: the pane
-  would chase its own edge and the drop zones would crawl inward under a pointer that never moved.
+- **A drag does not change the map it is read against.** The places, and where they are, are
+  photographed at lift, exactly like the view is. Two loops make this necessary: a preview draws
+  the view it is about to land, and the panes *that* view declares would register as new, smaller
+  places under the pointer; and a place previewing a split pulls back, moving the rect the pointer
+  is aiming at. Either one flips the reading every frame — aim, preview, reading changes, preview
+  closes, reading changes back — which is not a wobble to damp out but a loop to cut. Frozen, the
+  hit-test is a pure function of where the pointer is.
 
 ## Where the view goes when a place is split
 

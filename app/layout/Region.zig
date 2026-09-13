@@ -442,7 +442,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     if (init_opts.name.len > 0) {
         if (ViewDrag.previewPlan(self, init_opts.name)) |p| switch (p) {
             .swap => {},
-            .split => |s| ViewDrag.pullBack(self, &box_opts, s.mint, axis, init_opts.resize),
+            .split => |s| ViewDrag.pullBack(self, init_opts.name, &box_opts, s.mint, axis, init_opts.resize),
         };
     }
 

@@ -48,13 +48,6 @@ preview_name: []const u8 = "",
 /// The edge under the pointer, as read. `Drop.plan` turns it into what will
 /// happen; this stays the raw reading so the plan is derived in one place.
 preview_split: ?SplitTree.Side = null,
-/// The previewed place's whole rect, frozen when the preview was aimed.
-///
-/// The place really pulls back to the half it would keep, so its live bounds
-/// shrink as the pane slides open. Reading those would feed the geometry into
-/// itself — the pane would chase its own edge, and the drop zones would crawl
-/// inward under a pointer that never moved.
-preview_bounds: dvui.Rect.Physical = .{},
 /// 0 shut, 1 fully open. Eases both ways, so leaving a place slides it back.
 preview_t: f32 = 0,
 preview_tick_ns: i128 = 0,
@@ -71,6 +64,21 @@ capturing: bool = false,
 /// The destination as it looked before the preview, for the outgoing blur.
 hover_texture: ?dvui.Texture = null,
 hover_name: []const u8 = "",
+/// The places this drag can land on, and where they were, frozen at lift.
+targets: [max_targets]Target = undefined,
+target_count: usize = 0,
+
+/// One place the pointer can be read against.
+pub const Target = struct {
+    /// Interned, so it outlives the frame the map was taken on.
+    name: []const u8,
+    bounds: dvui.Rect.Physical,
+};
+
+/// Generous: a shape's places plus every pane a plugin opens inside them.
+/// Past this the drag simply cannot aim at the newest places, which is a far
+/// better failure than a map that shifts while you are reading it.
+pub const max_targets = 64;
 
 pub fn active(self: ViewDrag) bool {
     return self.name.len > 0;
@@ -165,9 +173,56 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical) void {
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
     if (visibleId(l, name)) |id| d.moved_id = id;
+    mapTargets(l, d);
 }
 
 // ── What is under the pointer ───────────────────────────────────────────────────────────────────
+
+/// Photograph the places, the way the card photographs the view.
+///
+/// **A drag must not change the map it is being read against.** It does,
+/// constantly, in two ways. A preview draws the view it is about to land, and
+/// whatever regions *that* declares — a workspace's document panes — appear
+/// as new, smaller places under the pointer, which then win on area. And a
+/// place previewing a split pulls back to its half, so the very rect the
+/// pointer is aiming at moves away from the pointer.
+///
+/// Either one makes the reading flip every frame: aim, preview, the reading
+/// changes, the preview closes, the reading changes back. That is not a
+/// wobble to damp out with a threshold — it is a loop, and the only way out
+/// is to cut it. Frozen at lift, the hit-test is a pure function of where the
+/// pointer is, and the drag is as steady as your hand.
+fn mapTargets(l: *Layout, d: *ViewDrag) void {
+    d.target_count = 0;
+    const surface_kw = draggedKeywords(l);
+    // Last frame's registry: complete, where this frame's is still being
+    // filled in around the click that started the drag.
+    const places = if (l.state.regions.items.len > 0)
+        l.state.regions.items
+    else
+        l.state.regions_building.items;
+    for (places) |r| {
+        if (d.target_count == max_targets) break;
+        if (!accepts(r, surface_kw)) continue;
+        if (r.bounds.w <= 0 or r.bounds.h <= 0) continue;
+        d.targets[d.target_count] = .{
+            .name = l.state.internName(l.gpa, r.name),
+            .bounds = r.bounds,
+        };
+        d.target_count += 1;
+    }
+}
+
+/// Where a place was when the drag began, or null if it was not one of the
+/// places this drag can land on.
+fn frozen(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
+    const d = &state.view_drag;
+    if (!d.active()) return null;
+    for (d.targets[0..d.target_count]) |t| {
+        if (std.mem.eql(u8, t.name, name)) return t.bounds;
+    }
+    return null;
+}
 
 fn kindAt(state: *const Layout.State, dest: []const u8, mouse: dvui.Point.Physical, scale: f32) Drop.Kind {
     const dest_b = placeBounds(state, dest) orelse return .swap;
@@ -190,16 +245,26 @@ pub fn targetAt(l: *Layout, mouse: dvui.Point.Physical, source: []const u8) ?[]c
             }
         }
     }
-    const surface_kw = draggedKeywords(l, source);
+    const d = &state.view_drag;
     var best: ?[]const u8 = null;
     var best_area: f32 = std.math.floatMax(f32);
-    for (state.regions.items) |r| consider(&best, &best_area, r, mouse, surface_kw);
-    for (state.regions_building.items) |r| consider(&best, &best_area, r, mouse, surface_kw);
+    for (d.targets[0..d.target_count]) |t| {
+        if (!t.bounds.contains(mouse)) continue;
+        const area = t.bounds.w * t.bounds.h;
+        if (area >= best_area) continue;
+        best = t.name;
+        best_area = area;
+    }
     return best;
 }
 
-fn draggedKeywords(l: *Layout, source: []const u8) []const []const u8 {
-    const id = visibleId(l, source) orelse return &.{};
+/// What the view being carried is, for deciding which places will take it.
+/// The surface lifted at the start, not whatever the source place happens to
+/// be showing — mid-swap it is showing the *other* view, and reading that
+/// would change which places accept the drop halfway through it.
+fn draggedKeywords(l: *Layout) []const []const u8 {
+    const id = l.state.view_drag.moved_id;
+    if (id.len == 0) return &.{};
     const s = l.host.surfaceById(id) orelse return &.{};
     return s.keywords;
 }
@@ -215,24 +280,12 @@ pub fn accepts(r: Region, surface_kw: []const []const u8) bool {
     return sdk.keywords.accepts(r.keywords, surface_kw);
 }
 
-fn consider(best: *?[]const u8, best_area: *f32, r: Region, mouse: dvui.Point.Physical, surface_kw: []const []const u8) void {
-    if (!accepts(r, surface_kw)) return;
-    if (r.bounds.w <= 0 or r.bounds.h <= 0) return;
-    if (!r.bounds.contains(mouse)) return;
-    const area = r.bounds.w * r.bounds.h;
-    if (area >= best_area.*) return;
-    best.* = r.name;
-    best_area.* = area;
-}
-
 pub fn placeBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
-    // A place with a preview open has already pulled back to the half it
-    // would keep. The pointer is still aiming at the *place*, so answer with
-    // what it was when the preview opened — otherwise its edges walk inward
-    // under a still pointer and the reading flips on its own.
-    const d = state.view_drag;
-    if (d.preview_bounds.w > 0 and d.preview_bounds.h > 0 and std.mem.eql(u8, d.preview_name, name))
-        return d.preview_bounds;
+    // Mid-drag, a place is where it was when the drag began — see
+    // `mapTargets`. Everything the gesture measures reads this, so the pane
+    // that slides open, the half the place pulls back to and the edge the
+    // pointer is being tested against are all cut from the same rect.
+    if (frozen(state, name)) |b| return b;
     for (state.regions_building.items) |r| {
         if (std.mem.eql(u8, r.name, name) and r.bounds.w > 0 and r.bounds.h > 0) return r.bounds;
     }
@@ -334,9 +387,6 @@ fn aim(l: *Layout, d: *ViewDrag, name: []const u8, split: ?SplitTree.Side, t: f3
     d.preview_name = if (name.len > 0) l.state.internName(l.gpa, name) else "";
     d.preview_split = split;
     d.preview_t = t;
-    // Taken here and nowhere else: aiming only happens with the preview fully
-    // shut, which is the one moment the place is still its whole self.
-    d.preview_bounds = if (name.len > 0) placeBounds(l.state, name) orelse .{} else .{};
     // Only a swap needs the destination's own view: a split leaves it in place.
     d.other_id = if (name.len > 0 and split == null) visibleId(l, name) orelse "" else "";
     d.clearHover();
@@ -462,16 +512,17 @@ pub fn opening(bounds: dvui.Rect.Physical, side: SplitTree.Side, t: f32, scale: 
 /// whole arrangement the moment you hovered its edge.
 pub fn pullBack(
     l: *Layout,
+    name: []const u8,
     opts: *dvui.Options,
     mint: SplitTree.Side,
     axis: dvui.enums.Direction,
     pinned: bool,
 ) void {
-    const d = l.state.view_drag;
-    if (d.preview_bounds.w <= 0 or d.preview_bounds.h <= 0) return;
+    const whole = placeBounds(l.state, name) orelse return;
+    if (whole.w <= 0 or whole.h <= 0) return;
     const scale = dvui.currentWindow().natural_scale;
     if (scale <= 0) return;
-    const inset = opening(d.preview_bounds, mint, previewVisual(l), scale).inset / scale;
+    const inset = opening(whole, mint, previewVisual(l), scale).inset / scale;
     if (inset <= 0) return;
 
     var m = opts.margin orelse dvui.Rect{};
@@ -527,12 +578,8 @@ pub fn drawHint(
     card: Card,
 ) void {
     const t = previewVisual(l);
-    const d = l.state.view_drag;
     // The place has pulled back; the opening is measured against what it was.
-    const whole = if (d.preview_bounds.w > 0 and std.mem.eql(u8, d.preview_name, dest))
-        d.preview_bounds
-    else
-        bounds;
+    const whole = placeBounds(l.state, dest) orelse bounds;
 
     // The pane opens in the space the place gave up, which is outside the
     // clip the pulled-back card leaves behind — so paint against the place's

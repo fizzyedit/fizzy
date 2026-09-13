@@ -2627,6 +2627,71 @@ test "a nested document pane rejects a panel surface, a shape place does not" {
     try std.testing.expect(ViewDrag.accepts(center, fizzy.sdk.keywords.ide.panel));
 }
 
+// A drag must not change the map it is being read against. It does, twice
+// over: the preview draws the view it is about to land, and the panes *that*
+// declares register as places under the pointer; and the place being split
+// pulls back to its half, moving the rect the pointer is aiming at. Either one
+// flips the reading every frame — the jitter that made dropping into another
+// place impossible. The map is photographed at lift, like the view is.
+test "a drag aims at the places that were there when it began" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+
+    const main_kw = fizzy.sdk.keywords.ide.main;
+    const panel_kw = fizzy.sdk.keywords.ide.panel;
+    const whole: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 800, .h = 400 };
+    const panel_at: dvui.Rect.Physical = .{ .x = 0, .y = 400, .w = 800, .h = 200 };
+    const middle: dvui.Point.Physical = .{ .x = 400, .y = 200 };
+
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Main", .keywords = main_kw, .bounds = whole });
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Panel", .keywords = panel_kw, .bounds = panel_at, .shows = .many });
+    editor.layout.publishRegions();
+
+    var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Panel", panel_at);
+    defer editor.layout.view_drag.discard();
+
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, middle, "Panel") orelse
+        return error.TestExpectedEqual);
+
+    // A pane that exists only because the preview is drawing the incoming view
+    // is smaller than Main and sits right under the pointer. It still loses:
+    // it was not there when the drag began.
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Main", .keywords = main_kw, .bounds = whole });
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Panel", .keywords = panel_kw, .bounds = panel_at, .shows = .many });
+    editor.layout.registerRegion(editor.gpa, .{
+        .name = "Preview pane",
+        .keywords = &.{"main.document"},
+        .by_name = true,
+        .bounds = .{ .x = 380, .y = 180, .w = 120, .h = 80 },
+    });
+    editor.layout.publishRegions();
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, middle, "Panel") orelse
+        return error.TestExpectedEqual);
+
+    // Main pulling back to the half it would keep does not take its own edge
+    // out from under the pointer aiming at it.
+    editor.layout.registerRegion(editor.gpa, .{
+        .name = "Main",
+        .keywords = main_kw,
+        .bounds = .{ .x = 0, .y = 0, .w = 400, .h = 400 },
+    });
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Panel", .keywords = panel_kw, .bounds = panel_at, .shows = .many });
+    editor.layout.publishRegions();
+    const right_half: dvui.Point.Physical = .{ .x = 600, .y = 200 };
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, right_half, "Panel") orelse
+        return error.TestExpectedEqual);
+    try std.testing.expectEqual(whole, ViewDrag.placeBounds(&editor.layout, "Main").?);
+}
+
 test "swapping a panel surface onto main leaves it only on main" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
