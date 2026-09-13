@@ -35,7 +35,10 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
         if (r != .ok) return r;
     }
 
-    var work = try f.region(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+    var work = try f.region(@src(), .{ .dir = .horizontal }, .{
+        .expand = .both,
+        .padding = .{ .w = edge_gutter },
+    });
     defer work.deinit();
 
     {
@@ -96,6 +99,16 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
 /// Padding and margin stay the region's `dvui.Options`. A sash gap is a
 /// packed split, never a handle_size margin on the card.
 const place_radius: f32 = 12;
+
+/// The window fill shows as a frame around the place cards — the icon rail on
+/// the left, the infobar above, the status bar below. The right edge has no
+/// chrome of its own, so the work area insets itself there and the frame
+/// closes; without it Main and Panel run into the window border.
+///
+/// Padding on the work area rather than a margin on each card: a card's margin
+/// would also open this gap either side of an inner sash every time a place is
+/// split, and a sash gap is a packed split.
+const edge_gutter: f32 = 10;
 
 fn placeCard(editor: *fizzy.Editor, extra: dvui.Options) dvui.Options {
     var fill = dvui.themeGet().color(.window, .fill);
