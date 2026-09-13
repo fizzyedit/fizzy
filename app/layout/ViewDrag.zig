@@ -460,6 +460,11 @@ pub fn previewAssignment(l: *Layout, name: []const u8) ?[]const []const u8 {
         return d.moved_ids[0..1];
     }
     if (std.mem.eql(u8, name, d.name)) {
+        // A shelf takes the view; it does not send one back. The hole the
+        // view left is a hole, not the place's current tab riding the other
+        // way — that is a trade, and a trade is what a slot does.
+        const dest_many = if (regionNamed(l.state, d.preview_name)) |r| r.shows == .many else false;
+        if (dest_many) return &.{};
         if (d.other_id.len == 0) return &.{};
         d.other_ids[0] = d.other_id;
         return d.other_ids[0..1];
@@ -808,7 +813,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
             if (s.fills_mint) {
                 l.state.assign(l.gpa, new, &.{moved}) catch {};
                 selectNamed(l, new, moved);
-                removeVisible(l, source, moved);
+                takeOut(l, source, moved, null);
             }
         },
     }
@@ -817,8 +822,14 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     dvui.refresh(null, @src(), null);
 }
 
-/// Trade views. Each place keeps whatever else it was holding: a `.many`
-/// place swaps the visible tab out of its list rather than losing the list.
+/// Land the view. A place that shows many takes it; a place that shows one
+/// trades for it.
+///
+/// The difference is whether anything had to be displaced. A shelf has room,
+/// so the view joins what is already there and the source simply loses it. A
+/// slot has one view in it, and that view has to go somewhere — back where the
+/// new one came from, because nowhere else is anywhere: an unassigned surface
+/// whose place is now spoken for is a surface the user can no longer find.
 fn swap(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) void {
     const other_raw = visibleId(l, dest);
     const other = if (other_raw) |o| ownId(l.arena, o) else null;
@@ -836,41 +847,61 @@ fn swap(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) voi
     }
 
     const dest_shows = if (regionNamed(l.state, dest)) |r| r.shows else .one;
-    const source_shows = if (regionNamed(l.state, source)) |r| r.shows else .one;
-
     if (dest_shows == .many) {
-        if (l.state.assignment(dest)) |ids| {
-            l.state.assign(l.gpa, dest, idsReplacing(l.arena, ids, other orelse "", moved)) catch {};
-        } else {
-            l.state.assign(l.gpa, dest, &.{moved}) catch {};
-        }
-    } else {
-        l.state.assign(l.gpa, dest, &.{moved}) catch {};
+        l.state.assign(l.gpa, dest, idsWith(l.arena, holding(l, dest), moved)) catch {};
+        selectNamed(l, dest, moved);
+        takeOut(l, source, moved, null);
+        return;
     }
-    selectNamed(l, dest, moved);
 
-    if (source_shows == .many) {
-        if (l.state.assignment(source)) |ids| {
-            const kept = idsWithout(l.arena, ids, moved);
-            if (other) |o| {
-                l.state.assign(l.gpa, source, idsReplacing(l.arena, kept, "", o)) catch {};
-                selectNamed(l, source, o);
-            } else {
-                l.state.assign(l.gpa, source, kept) catch {};
-                if (kept.len > 0) selectNamed(l, source, kept[0]);
-            }
-        } else if (other) |o| {
-            l.state.assign(l.gpa, source, &.{o}) catch {};
-            selectNamed(l, source, o);
-        } else {
-            l.state.assign(l.gpa, source, &.{}) catch {};
-        }
-    } else if (other) |o| {
-        l.state.assign(l.gpa, source, &.{o}) catch {};
-        selectNamed(l, source, o);
-    } else {
-        l.state.assign(l.gpa, source, &.{}) catch {};
-    }
+    l.state.assign(l.gpa, dest, &.{moved}) catch {};
+    selectNamed(l, dest, moved);
+    takeOut(l, source, moved, other);
+}
+
+/// What a place is holding: the list it was given, or the one its keywords
+/// attract when it has never been given one. A `.many` place usually has no
+/// list of its own — the sidebar's tabs are every plugin that asked for the
+/// sidebar — and reading only the assignment there says "nothing", which is
+/// how a drop onto the rail used to leave it holding one lone view.
+fn holding(l: *Layout, name: []const u8) []const []const u8 {
+    if (l.state.assignment(name)) |ids| return ids;
+    const r = regionNamed(l.state, name) orelse return &.{};
+    const items = l.matchingStored(r);
+    var out = std.ArrayListUnmanaged([]const u8).initCapacity(l.arena, items.len) catch return &.{};
+    for (items) |s| out.appendAssumeCapacity(s.id);
+    return out.items;
+}
+
+/// Take `moved` out of `name`, putting `give` where it was if the trade sent
+/// one back.
+fn takeOut(l: *Layout, name: []const u8, moved: []const u8, give: ?[]const u8) void {
+    const held = holding(l, name);
+    const kept = if (give) |g|
+        idsReplacing(l.arena, held, moved, g)
+    else
+        idsWithout(l.arena, held, moved);
+
+    // A place whose keywords chose its list, losing a view and getting none
+    // back, is left alone: the destination's assignment already claims the
+    // view away from it. Writing the list down instead would freeze the place
+    // against every surface a plugin registers from here on.
+    if (give != null or l.state.assignment(name) != null)
+        l.state.assign(l.gpa, name, kept) catch {};
+    reselect(l, name, moved, kept);
+}
+
+/// A place never stays selected on a view it no longer holds.
+///
+/// The selection is remembered per place and only *read* against what the
+/// place shows, so a chooser that has already dropped the icon can sit beside
+/// a body still drawing what that icon used to choose — which is what dragging
+/// Files out of the sidebar looked like until you clicked another icon.
+fn reselect(l: *Layout, name: []const u8, gone: []const u8, kept: []const []const u8) void {
+    const key = if (regionNamed(l.state, name)) |r| r.selectionKey() else slotKey(name);
+    const cur = l.host.selectionForKey(key) orelse return;
+    if (!std.mem.eql(u8, cur, gone)) return;
+    if (kept.len > 0) selectNamed(l, name, kept[0]);
 }
 
 fn ownId(arena: std.mem.Allocator, id: []const u8) ?[]const u8 {
@@ -891,8 +922,6 @@ fn selectNamed(l: *Layout, name: []const u8, id: []const u8) void {
     l.host.setSelectionForKey(slotKey(name), stable);
 }
 
-/// Take `id` out of `name`. Writing an empty assignment matters: without one,
-/// keywords would simply attract the view straight back in.
 /// A place that exists only because a split made it, left holding nothing,
 /// shuts itself and hands the room back to its neighbour.
 ///
@@ -926,14 +955,8 @@ fn shutIfEmptied(l: *Layout, name: []const u8) void {
     }
 }
 
-fn removeVisible(l: *Layout, name: []const u8, id: []const u8) void {
-    if (l.state.assignment(name)) |ids| {
-        const kept = idsWithout(l.arena, ids, id);
-        l.state.assign(l.gpa, name, kept) catch {};
-        if (kept.len > 0) selectNamed(l, name, kept[0]);
-        return;
-    }
-    l.state.assign(l.gpa, name, &.{}) catch {};
+fn idsWith(arena: std.mem.Allocator, ids: []const []const u8, add: []const u8) []const []const u8 {
+    return idsReplacing(arena, ids, "", add);
 }
 
 fn idsWithout(arena: std.mem.Allocator, ids: []const []const u8, drop: []const u8) []const []const u8 {

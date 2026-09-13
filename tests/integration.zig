@@ -2898,3 +2898,70 @@ test "swapping a panel surface onto main leaves it only on main" {
     try std.testing.expectEqual(@as(usize, 1), layout.matching(panel).len);
     try std.testing.expectEqualStrings("test.workspace", layout.matching(panel)[0].id);
 }
+
+// A shelf (shows many) takes a view; a slot (shows one) trades for it.
+//
+// Dragging Files out of the sidebar onto Main is the slot case: Main takes
+// Files and sends its workspace back. The shelf must then *stop showing Files*
+// — both in its match list and as its selection — or the explorer body keeps
+// drawing Files beside the rail, which has already dropped the icon, until
+// the user clicks some other icon. That is a chooser and a body that have
+// stopped agreeing about what this place is.
+test "a shelf adds a view and a slot trades for it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+
+    const main = fizzy.sdk.keywords.ide.main;
+    const side = fizzy.sdk.keywords.ide.sidebar;
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Main", .keywords = main, .id = .extendId(null, @src(), 1) });
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Sidebar", .keywords = side, .id = .extendId(null, @src(), 2), .shows = .many });
+    editor.layout.publishRegions();
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    try editor.host.registerSurface(.{ .id = "test.workspace", .title = "Workspace", .keywords = main, .draw = draw });
+    try editor.host.registerSurface(.{ .id = "test.files", .title = "Files", .keywords = side, .draw = draw });
+    try editor.host.registerSurface(.{ .id = "test.plugins", .title = "Plugins", .keywords = side, .draw = draw });
+
+    var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+    editor.host.setSelectionFor(side, "test.files");
+    try std.testing.expectEqualStrings("test.files", layout.selected(side).?.id);
+
+    // Slot: Files leaves the shelf and trades with Main.
+    layout.placeVisible("Sidebar", "Main", .swap);
+
+    try std.testing.expectEqualStrings("test.files", layout.selected(main).?.id);
+    try std.testing.expectEqual(@as(usize, 1), layout.matching(main).len);
+
+    var files_still_here = false;
+    for (layout.matching(side)) |s| {
+        if (std.mem.eql(u8, s.id, "test.files")) files_still_here = true;
+    }
+    try std.testing.expect(!files_still_here);
+    const after = layout.selected(side) orelse return error.TestExpectedEqual;
+    try std.testing.expect(!std.mem.eql(u8, after.id, "test.files"));
+
+    // Shelf: Files joins what is already there; Main is left empty rather
+    // than taking the sidebar's current tab in trade.
+    layout.placeVisible("Main", "Sidebar", .swap);
+    var has_workspace = false;
+    var has_files = false;
+    for (layout.matching(side)) |s| {
+        if (std.mem.eql(u8, s.id, "test.workspace")) has_workspace = true;
+        if (std.mem.eql(u8, s.id, "test.files")) has_files = true;
+    }
+    try std.testing.expect(has_workspace);
+    try std.testing.expect(has_files);
+    try std.testing.expectEqual(@as(usize, 0), layout.matching(main).len);
+    try std.testing.expectEqualStrings("test.files", layout.selected(side).?.id);
+}

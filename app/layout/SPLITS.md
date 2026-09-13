@@ -25,7 +25,8 @@ Everything else follows from that sentence, including the case that is easy to g
 
 | Release | Origin ends up | Minted leaf opens | The leaf holds |
 |---|---|---|---|
-| Middle of another place | — | — | *(swap: the two trade views)* |
+| Middle of a *slot* (shows one) | the dest's view | — | the dragged view *(they trade)* |
+| Middle of a *shelf* (shows many) | nothing back | — | the dragged view, added *(the rest stay)* |
 | Edge of another place | untouched | that edge | the dragged view |
 | Edge of its own place | that edge | the **opposite** edge | empty |
 | Middle of its own place | — | — | *(nothing happens)* |

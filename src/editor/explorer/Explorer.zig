@@ -123,14 +123,21 @@ pub fn draw(
         .background = false,
     });
 
+    // Through the layout, not `Host.selectedSurface`: the host remembers which
+    // view was chosen here and hands it back whether or not this place still
+    // holds it. Drag Files out to the main area and it is claimed by what it
+    // was dropped on — the rail drops the icon, and the host would still hand
+    // back Files to draw in the body, until a click on some other icon moved
+    // the remembered choice. `f.selected` reads the choice against what the
+    // place actually shows, which is the only reading that can never say that.
+    const shown = f.selected(keywords);
+
     if (comptime workbench.has_file_tree) {
-        const active = editor.host.selectionFor(fizzy.sdk.keywords.ide.sidebar);
-        if (active == null or !std.mem.eql(u8, active.?, fizzy.Editor.workbench_files_view)) {
-            editor.resetFileTreeWhenFilesHidden();
-        }
+        const showing_files = if (shown) |s| std.mem.eql(u8, s.id, fizzy.Editor.workbench_files_view) else false;
+        if (!showing_files) editor.resetFileTreeWhenFilesHidden();
     }
 
-    if (editor.host.selectedSurface(fizzy.sdk.keywords.ide.sidebar)) |surface| {
+    if (shown) |surface| {
         _ = try surface.draw(surface.ctx);
     }
 
