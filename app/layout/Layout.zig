@@ -607,6 +607,18 @@ fn drawSwapped(self: *Layout, slot: u64, s: *Surface) !dvui.App.Result {
     const rs = dvui.parentGet().data().contentRectScale();
     const tr = self.state.swapFor(self.gpa, slot) orelse return self.draw(s);
 
+    // A swap preview already dissolves the outgoing still. Starting a second
+    // `transition` here would arm a new clock, and the drop would fire it —
+    // the preview that had just finished would rewind and fade again. Keep
+    // the slot in step with what the preview is showing so the landing is
+    // already the current key.
+    const d = self.state.view_drag;
+    if (d.active() and d.preview_t > 0.001 and d.preview_split == null) {
+        tr.prev_id = s.id;
+        tr.prev_key = std.hash.Wyhash.hash(0, s.id);
+        return self.draw(s);
+    }
+
     const Ctx = struct {
         layout: *Layout,
         id: []const u8,

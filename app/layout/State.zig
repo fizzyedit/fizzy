@@ -103,12 +103,17 @@ regions_building: std.ArrayListUnmanaged(Region) = .empty,
 /// so an app with a "Stack" and a "Strip" could persist nothing, and fizzy's own furniture was
 /// baked into a framework's on-disk format. Those two survive only for the legacy shell.
 extents: std.StringHashMapUnmanaged(f32) = .empty,
-    /// Runtime subdivisions of a shape-declared place. A name not in here is still a leaf.
-    splits: SplitTree.Forest = .{},
-    /// New leaf that should ease open from zero this frame. Interned; empty when none.
-    slide_open: []const u8 = "",
-    /// A place's view being dragged to another place. Empty `name` when idle.
-    view_drag: ViewDrag = .{},
+/// Runtime subdivisions of a shape-declared place. A name not in here is still a leaf.
+splits: SplitTree.Forest = .{},
+/// New leaf that should ease open this frame. Interned; empty when none.
+slide_open: []const u8 = "",
+/// Where that ease starts, 0..1 of the leaf's target. Zero is a first
+/// appearance (picker split). A view-drag that already previewed the
+/// split seeds this from the preview so the real pane does not start
+/// over from nothing — that restart is the snap after a smooth preview.
+slide_open_from: f32 = 0,
+/// A place's view being dragged to another place. Empty `name` when idle.
+view_drag: ViewDrag = .{},
 /// Explorer/panel split ratios — "window shape" state persisted in `window.zon`, not
 /// `settings.zon` (dragging a splitter fires every frame; keeping it out of the settings file
 /// means normal window use never dirties a git-tracked settings.zon). Loaded once at startup
@@ -502,6 +507,7 @@ pub fn resetLayout(self: *State, gpa: std.mem.Allocator) void {
     self.splits.deinit(gpa);
     self.splits = .{};
     self.slide_open = "";
+    self.slide_open_from = 0;
     self.view_drag.discard();
     self.discardSwaps();
     self.center_transition.discard();
@@ -543,10 +549,12 @@ pub fn requestSlideOpen(self: *State, name: []const u8) void {
     self.slide_open = name;
 }
 
-pub fn takeSlideOpen(self: *State, name: []const u8) bool {
-    if (self.slide_open.len == 0 or !std.mem.eql(u8, self.slide_open, name)) return false;
+pub fn takeSlideOpen(self: *State, name: []const u8) ?f32 {
+    if (self.slide_open.len == 0 or !std.mem.eql(u8, self.slide_open, name)) return null;
     self.slide_open = "";
-    return true;
+    const from = std.math.clamp(self.slide_open_from, 0, 1);
+    self.slide_open_from = 0;
+    return from;
 }
 
 pub fn deinitAssignments(self: *State, gpa: std.mem.Allocator) void {

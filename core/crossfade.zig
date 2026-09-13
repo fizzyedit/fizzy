@@ -146,3 +146,23 @@ test "outgoing blur only rises before the hold" {
     try testing.expect(a.out_blur < b.out_blur);
     try testing.expect(b.out_blur < 1);
 }
+
+// The preview's geometry ease is outCubic. Fed to `sample(.blur)` as `t` it
+// crosses the hold — the only part that is a blur — almost immediately, so
+// the motion people saw was the fade tail. A linear clock stays in the blur
+// for the first third.
+test "an eased preview clock is already fading at one fifth of the slide" {
+    const eased = 1 - (1 - 0.2) * (1 - 0.2) * (1 - 0.2);
+    const s = sample(.blur, eased, false);
+    try testing.expect(eased > hold);
+    try testing.expectApproxEqAbs(@as(f32, 1), s.out_blur, 1e-5);
+    try testing.expect(s.out_alpha < 1);
+}
+
+test "a linear preview clock is still blurring at one fifth of the slide" {
+    const s = sample(.blur, 0.2, false);
+    try testing.expect(0.2 < hold);
+    try testing.expect(s.out_blur > 0);
+    try testing.expect(s.out_blur < 1);
+    try testing.expectEqual(@as(f32, 1), s.out_alpha);
+}

@@ -105,7 +105,6 @@ pub const Reveal = struct {
     pub fn deinit(self: Reveal) void {
         dvui.alphaSet(self.prev_alpha);
     }
-
 };
 
 /// A swap between two entirely different subtrees, for cases where revealing the incoming
@@ -239,8 +238,12 @@ pub const CrossFade = struct {
     }
 };
 
-/// Offset-sample smear. dvui has no GPU blur; a centre plus two rings of eight spokes,
+/// Offset-sample smear. dvui has no GPU blur; a centre plus rings of spokes,
 /// clipped to the dest, is cheap enough to run every overlay frame on every backend.
+///
+/// The sharp tap has to give way as blur rises. Drawing it at full strength
+/// and sprinkling a 1% halo around it is how a "blur" read as a fade: the
+/// picture never actually smeared, only its opacity fell.
 pub fn blit(tex: dvui.Texture, dest: dvui.Rect.Physical, blur: f32, alpha: f32) void {
     if (alpha <= 0.001) return;
     if (blur <= 0.001) {
@@ -250,22 +253,24 @@ pub fn blit(tex: dvui.Texture, dest: dvui.Rect.Physical, blur: f32, alpha: f32) 
         return;
     }
 
-    const max_r = @min(14.0, @min(dest.w, dest.h) * 0.06);
+    const max_r = @min(32.0, @min(dest.w, dest.h) * 0.14);
     const radius = blur * max_r;
 
     const prev_clip = dvui.clipGet();
     dvui.clipSet(prev_clip.intersect(dest));
     defer dvui.clipSet(prev_clip);
 
-    // The image is this copy. Offsets are a soft halo, not another exposure.
-    dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{
-        .colormod = dvui.Color.white.opacity(alpha),
-    }) catch {};
+    const sharp = alpha * (1 - blur * 0.80);
+    if (sharp > 0.001) {
+        dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{
+            .colormod = dvui.Color.white.opacity(sharp),
+        }) catch {};
+    }
 
-    const rings = [_]f32{ 0.6, 1.0 };
-    const weights = [_]f32{ 0.07, 0.04 };
+    const rings = [_]f32{ 0.35, 0.7, 1.0 };
+    const weights = [_]f32{ 0.40, 0.35, 0.25 };
     const spokes: u32 = 8;
-    const smear = alpha * blur * 0.10;
+    const smear = alpha * blur * 0.80;
 
     var i: u32 = 0;
     while (i < spokes) : (i += 1) {
@@ -277,7 +282,7 @@ pub fn blit(tex: dvui.Texture, dest: dvui.Rect.Physical, blur: f32, alpha: f32) 
             r.x += cx * radius * ring;
             r.y += sy * radius * ring;
             dvui.renderTexture(tex, .{ .r = r, .s = 1 }, .{
-                .colormod = dvui.Color.white.opacity(smear * weight),
+                .colormod = dvui.Color.white.opacity(smear * weight / @as(f32, @floatFromInt(spokes))),
             }) catch {};
         }
     }

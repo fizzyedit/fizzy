@@ -416,6 +416,14 @@ pub fn previewVisual(l: *Layout) f32 {
     return outCubic(std.math.clamp(l.state.view_drag.preview_t, 0, 1));
 }
 
+/// Linear 0..1 through the preview, for anything that has its own curve —
+/// the dissolve's blur-then-fade is one. Feeding it `previewVisual` instead
+/// spent the hold (the only part that is a blur) in the first few frames of
+/// the ease, and the rest of the motion was just alpha.
+pub fn previewClock(l: *Layout) f32 {
+    return std.math.clamp(l.state.view_drag.preview_t, 0, 1);
+}
+
 /// What `name` is previewing this frame. The preview and the release read the
 /// same `Drop.plan`, so the pane that slides open is the one that lands.
 pub fn previewPlan(l: *Layout, name: []const u8) ?Drop.Plan {
@@ -433,18 +441,16 @@ pub fn selfSplitting(l: *Layout) bool {
         std.mem.eql(u8, d.preview_name, d.name);
 }
 
-/// A swap is being previewed *and the pointer is still on it*. The second
-/// half matters: `preview_t` also eases back down after the pointer leaves,
-/// and the remap must stop the moment the answer changes.
+/// A swap is being previewed. The pose that is already opening is the pose
+/// until it shuts — re-reading the pointer here would flip the remap off the
+/// moment the pointer brushed an edge, which restarts `drawSwapped`'s clock
+/// every frame and is why a dissolve looked like a fade that kept snapping
+/// back to the start.
 pub fn swapping(l: *Layout) bool {
     const d = l.state.view_drag;
     if (!d.active() or d.preview_name.len == 0 or d.preview_t <= 0.001) return false;
     if (d.preview_split != null) return false;
-    if (std.mem.eql(u8, d.preview_name, d.name)) return false;
-    const mouse = dvui.currentWindow().mouse_pt;
-    const dest = targetAt(l, mouse, d.name) orelse return false;
-    if (!std.mem.eql(u8, dest, d.preview_name)) return false;
-    return kindAt(l.state, dest, mouse, dvui.currentWindow().natural_scale) == .swap;
+    return !std.mem.eql(u8, d.preview_name, d.name);
 }
 
 /// What a place should show while a swap is previewed, so both ends lay out
@@ -597,6 +603,7 @@ pub fn drawHint(
     card: Card,
 ) void {
     const t = previewVisual(l);
+    const dissolve_t = previewClock(l);
     // The place has pulled back; the opening is measured against what it was.
     const whole = placeBounds(l.state, dest) orelse bounds;
 
@@ -612,7 +619,7 @@ pub fn drawHint(
         // is making it read as a trade rather than a jump cut: the pixels
         // that were here blur away over the ones arriving, the same dissolve
         // a surface change uses anywhere else.
-        .swap => dissolve(l, dest, whole, whole, t),
+        .swap => dissolve(l, dest, whole, whole, dissolve_t),
         .split => |s| {
             // `mint` is the pane that opens — the dropped edge when the view
             // moves into it, the far edge when the origin keeps the view.
@@ -626,7 +633,7 @@ pub fn drawHint(
             }
             // Only over the pane: the rest of the place is drawing its real,
             // re-laid-out half, and blurring that would undo the point.
-            dissolve(l, dest, open.pane, whole, t);
+            dissolve(l, dest, open.pane, whole, dissolve_t);
         },
     }
 }
@@ -683,7 +690,7 @@ pub fn overSelf(l: *Layout) bool {
 pub fn drawSwapOut(l: *Layout, bounds: dvui.Rect.Physical) void {
     if (!swapping(l)) return;
     const tex = l.state.view_drag.texture orelse return;
-    const s = core.anim.crossfade.sample(.blur, previewVisual(l), false);
+    const s = core.anim.crossfade.sample(.blur, previewClock(l), false);
     const prev = dvui.clipGet();
     defer dvui.clipSet(prev);
     dvui.clipSet(bounds);
@@ -806,6 +813,12 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     switch (plan) {
         .swap => swap(l, source, dest, moved),
         .split => |s| {
+            // A drop that has already previewed this split must not ease the
+            // leaf from zero: the pane is already open, and starting again
+            // snaps the leftover back to full and slides the new side in a
+            // second time. Seed from the preview's own clock so the real
+            // split continues from the size the user was just looking at.
+            l.state.slide_open_from = if (previewOn(l, dest)) previewVisual(l) else 0;
             const new = Region.splitOn(l, dest, s.mint) orelse return;
             // A self-split leaves the view in the origin, which `mint` has
             // already put under the pointer. Moving it onto the fresh leaf
@@ -1022,6 +1035,17 @@ test "the pane and the place it pulls back from never overlap" {
             try std.testing.expect(o.inset >= along);
         }
     }
+}
+
+test "the dissolve clock is the preview's linear time, not its ease" {
+    // outCubic(0.2) is already past the blur hold. The dissolve must not use it.
+    const eased = 1 - (1 - 0.2) * (1 - 0.2) * (1 - 0.2);
+    try std.testing.expect(eased > core.anim.crossfade.hold);
+    const fading = core.anim.crossfade.sample(.blur, eased, false);
+    try std.testing.expect(fading.out_alpha < 1);
+    const blurring = core.anim.crossfade.sample(.blur, 0.2, false);
+    try std.testing.expectEqual(@as(f32, 1), blurring.out_alpha);
+    try std.testing.expect(blurring.out_blur < 1);
 }
 
 test "a document pane does not accept a panel surface" {

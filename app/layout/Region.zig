@@ -331,15 +331,16 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         if (dvui.dataGet(null, id, "_size", f32) == null) {
             dvui.dataSet(null, id, "_size", self.state.extent(init_opts.name, default));
         }
-        if (init_opts.name.len > 0 and self.state.takeSlideOpen(init_opts.name)) {
-            dvui.dataSet(null, id, "_shown", @as(f32, 0));
-        }
-
         // The size the user chose. Auto-collapse must never overwrite it, or folding the window
         // small destroys the extent it is supposed to restore — which is what "it does not
         // reopen to its last place" was. The paned shell kept an `uncollapse_ratio` for the same
         // reason; here the stored size simply stays put and only what is *shown* goes to zero.
         const chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
+        if (init_opts.name.len > 0) {
+            if (self.state.takeSlideOpen(init_opts.name)) |from| {
+                dvui.dataSet(null, id, "_shown", chosen * from);
+            }
+        }
 
         var target = chosen;
         if (init_opts.collapsible) {

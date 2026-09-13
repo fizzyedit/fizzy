@@ -61,6 +61,13 @@ result rather than as a symbol for it.
 - **A swap previews by swapping.** Both places remap their assignment for the frame and lay
   out the other's view for real, and each one's old pixels blur away over the new — the same
   crossfade a surface change uses anywhere else, so this is not a special motion to learn.
+  The dissolve is on the preview's *linear* clock, not the pane's ease: the ease spends the
+  blur (the first third) in a handful of frames and the rest is only alpha. The pose that is
+  already opening stays the pose until it shuts — re-reading the pointer mid-slide restarted
+  the clock every time the pointer brushed an edge.
+- **A drop continues the preview.** A split that has already slid open does not ease the new
+  leaf from zero (that snaps the leftover back to full). A swap that has already remapped
+  does not start a second `transition` on release.
 - **A split previews by splitting.** The place being split *pulls back* to the half it will
   keep — really laid out at that size, its contents reflowed, not a crop of the old picture —
   and the new pane slides open in the space it gave up, wearing the same card the real one
