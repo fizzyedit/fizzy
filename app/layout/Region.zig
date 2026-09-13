@@ -1150,7 +1150,7 @@ pub fn splitNamed(self: *Layout, name: []const u8, axis: dvui.enums.Direction) v
 /// is too small or is not a leaf. A view-drag drop uses this so a left or
 /// top edge can open on that side, not only the trailing one.
 pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u8 {
-    const size = self.state.placeSize(name) orelse return null;
+    const size = ViewDrag.placeSize(self.state, name) orelse return null;
     const span = switch (SplitTree.axisOf(side)) {
         .horizontal => size.w,
         .vertical => size.h,
@@ -1163,7 +1163,9 @@ pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u
         }
     };
     intern.state = self.state;
-    const want = span / 2;
+    // Halved the way the preview halves it — the sash out of the middle, both
+    // sides the same — so what slid open is the size that lands.
+    const want = @max(1, (span - Split.handle_size) / 2);
     const new = self.state.splits.split(self.gpa, intern.go, name, side, want, null) orelse return null;
     if (self.state.setExtent(self.gpa, new, want)) self.extents_changed = true;
     self.state.assign(self.gpa, new, &.{}) catch {};

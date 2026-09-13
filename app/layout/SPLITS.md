@@ -92,6 +92,21 @@ This holds for both entry points:
 The rule keeps a split feeling like a division of something that already exists, rather than
 a replacement of it by two new things.
 
+A split lands where the preview showed it: even halves with the sash out of the middle, both
+measured from the place as it stood *before* it pulled back. Measuring the live place instead
+halves a half — the pane opens at a quarter of what the user was just shown.
+
+## A place a split made shuts when its last view leaves
+
+Carry the last view out of a minted leaf and the leaf slides shut, its neighbour taking the
+room back. The shape's own places do not: Main with nothing in it is still where Main is, and
+a user who empties one expects to put something back. A minted leaf is not furniture — it was
+a container for the view that has just been carried out of it, and leaving a blank rectangle
+behind makes the user tidy up after their own drag.
+
+The leaf a split *mints* is the exception, and is not the same case: it is empty because it is
+the room being made, not room left over.
+
 ## Edges and bands
 
 Near an edge is 36pt, or 28% of the shorter side, whichever is smaller. The fraction is what

@@ -2627,6 +2627,67 @@ test "a nested document pane rejects a panel surface, a shape place does not" {
     try std.testing.expect(ViewDrag.accepts(center, fizzy.sdk.keywords.ide.panel));
 }
 
+// A place a split made is a container for a view, not furniture. Carrying its
+// last view out leaves nothing there to want, so it shuts and its neighbour
+// takes the room back — where emptying one of the shape's own places leaves
+// the place, because that is where the shape says it is.
+test "a place a split made shuts itself when its last view is carried out" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    try editor.host.registerSurface(.{
+        .id = "test.view",
+        .title = "View",
+        .keywords = fizzy.sdk.keywords.ide.main,
+        .draw = draw,
+    });
+
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    try dvui.testing.settle(EndlessFrame.frame);
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.splitNamed("Center", .vertical);
+    }
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    // The made place holds the only view; Center is the empty one.
+    try editor.layout.assign(editor.gpa, "Center/b1", &.{"test.view"});
+    try editor.layout.assign(editor.gpa, "Center", &.{});
+    try dvui.testing.settle(EndlessFrame.frame);
+    try std.testing.expect(editor.layout.splits.root("Center") != null);
+
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+        layout.placeVisible("Center/b1", "Center", .swap);
+    }
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    // The view landed, and the place it came from is gone rather than sitting
+    // there blank waiting to be tidied up.
+    const landed = editor.layout.assignment("Center") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), landed.len);
+    try std.testing.expectEqualStrings("test.view", landed[0]);
+    try std.testing.expect(editor.layout.splits.root("Center") == null);
+    for (editor.layout.regions.items) |r| {
+        try std.testing.expect(!std.mem.eql(u8, r.name, "Center/b1"));
+    }
+}
+
 // A drag must not change the map it is being read against. It does, twice
 // over: the preview draws the view it is about to land, and the panes *that*
 // declares register as places under the pointer; and the place being split
@@ -2650,7 +2711,9 @@ test "a drag aims at the places that were there when it began" {
     const panel_at: dvui.Rect.Physical = .{ .x = 0, .y = 400, .w = 800, .h = 200 };
     const middle: dvui.Point.Physical = .{ .x = 400, .y = 200 };
 
-    editor.layout.registerRegion(editor.gpa, .{ .name = "Main", .keywords = main_kw, .bounds = whole });
+    const full: dvui.Size = .{ .w = 800, .h = 400 };
+
+    editor.layout.registerRegion(editor.gpa, .{ .name = "Main", .keywords = main_kw, .bounds = whole, .size = full });
     editor.layout.registerRegion(editor.gpa, .{ .name = "Panel", .keywords = panel_kw, .bounds = panel_at, .shows = .many });
     editor.layout.publishRegions();
 
@@ -2683,6 +2746,7 @@ test "a drag aims at the places that were there when it began" {
         .name = "Main",
         .keywords = main_kw,
         .bounds = .{ .x = 0, .y = 0, .w = 400, .h = 400 },
+        .size = .{ .w = 400, .h = 400 },
     });
     editor.layout.registerRegion(editor.gpa, .{ .name = "Panel", .keywords = panel_kw, .bounds = panel_at, .shows = .many });
     editor.layout.publishRegions();
@@ -2690,6 +2754,11 @@ test "a drag aims at the places that were there when it began" {
     try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, right_half, "Panel") orelse
         return error.TestExpectedEqual);
     try std.testing.expectEqual(whole, ViewDrag.placeBounds(&editor.layout, "Main").?);
+
+    // And the drop settles the split against that same full measure. Halving
+    // the pulled-back 400 would seat the new pane at a quarter of the place
+    // the preview showed opening.
+    try std.testing.expectEqual(full, ViewDrag.placeSize(&editor.layout, "Main").?);
 }
 
 test "swapping a panel surface onto main leaves it only on main" {

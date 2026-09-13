@@ -73,6 +73,8 @@ pub const Target = struct {
     /// Interned, so it outlives the frame the map was taken on.
     name: []const u8,
     bounds: dvui.Rect.Physical,
+    /// Content size in points, for the extent a landing split settles at.
+    size: dvui.Size,
 };
 
 /// Generous: a shape's places plus every pane a plugin opens inside them.
@@ -208,18 +210,19 @@ fn mapTargets(l: *Layout, d: *ViewDrag) void {
         d.targets[d.target_count] = .{
             .name = l.state.internName(l.gpa, r.name),
             .bounds = r.bounds,
+            .size = r.size,
         };
         d.target_count += 1;
     }
 }
 
-/// Where a place was when the drag began, or null if it was not one of the
+/// What a place was when the drag began, or null if it was not one of the
 /// places this drag can land on.
-fn frozen(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
+fn frozen(state: *const Layout.State, name: []const u8) ?Target {
     const d = &state.view_drag;
     if (!d.active()) return null;
     for (d.targets[0..d.target_count]) |t| {
-        if (std.mem.eql(u8, t.name, name)) return t.bounds;
+        if (std.mem.eql(u8, t.name, name)) return t;
     }
     return null;
 }
@@ -285,7 +288,7 @@ pub fn placeBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Phys
     // `mapTargets`. Everything the gesture measures reads this, so the pane
     // that slides open, the half the place pulls back to and the edge the
     // pointer is being tested against are all cut from the same rect.
-    if (frozen(state, name)) |b| return b;
+    if (frozen(state, name)) |t| return t.bounds;
     for (state.regions_building.items) |r| {
         if (std.mem.eql(u8, r.name, name) and r.bounds.w > 0 and r.bounds.h > 0) return r.bounds;
     }
@@ -293,6 +296,17 @@ pub fn placeBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Phys
         if (std.mem.eql(u8, r.name, name) and r.bounds.w > 0 and r.bounds.h > 0) return r.bounds;
     }
     return null;
+}
+
+/// A place's content size in points, frozen mid-drag for the same reason its
+/// bounds are: a place previewing a split has pulled back to the half it
+/// would keep, and halving *that* to settle the landing split would land the
+/// new pane at a quarter of the place the user was shown.
+pub fn placeSize(state: *const Layout.State, name: []const u8) ?dvui.Size {
+    if (frozen(state, name)) |t| {
+        if (t.size.w > 0 and t.size.h > 0) return t.size;
+    }
+    return state.placeSize(name);
 }
 
 pub fn regionNamed(state: *const Layout.State, name: []const u8) ?*const Region {
@@ -798,6 +812,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
             }
         },
     }
+    shutIfEmptied(l, source);
     l.state.markDirty();
     dvui.refresh(null, @src(), null);
 }
@@ -878,6 +893,39 @@ fn selectNamed(l: *Layout, name: []const u8, id: []const u8) void {
 
 /// Take `id` out of `name`. Writing an empty assignment matters: without one,
 /// keywords would simply attract the view straight back in.
+/// A place that exists only because a split made it, left holding nothing,
+/// shuts itself and hands the room back to its neighbour.
+///
+/// The shape's own places stay. Main with nothing in it is still where Main
+/// is, and a user who empties it expects to be able to put something back. A
+/// minted leaf is not furniture: it was a container for the view that has
+/// just been carried out of it, and leaving a blank rectangle behind makes
+/// the user tidy up after their own drag. `canForget` is exactly that
+/// distinction — a place the tree is allowed to drop.
+///
+/// The leaf a split *mints* is empty on purpose and is never passed here: it
+/// is the room being made, not room left over.
+///
+/// Shut rather than deleted, so it slides closed on the curve it opened on;
+/// `Region.persistExtent` drops the leaf once the animation has finished.
+fn shutIfEmptied(l: *Layout, name: []const u8) void {
+    if (!l.state.splits.canForget(name)) return;
+    if (l.state.assignment(name)) |ids| {
+        if (ids.len > 0) return;
+    }
+    const r = regionNamed(l.state, name) orelse return;
+    if (r.id != .zero and Split.sizeOf(r.id) > 0) {
+        Split.close(r.id);
+        l.extents_changed = true;
+        return;
+    }
+    // Never drawn at a size, so there is nothing to slide: drop it outright.
+    if (l.state.splits.collapse(l.gpa, name)) {
+        if (l.state.clearExtent(l.gpa, name)) l.extents_changed = true;
+        l.state.unassign(l.gpa, name);
+    }
+}
+
 fn removeVisible(l: *Layout, name: []const u8, id: []const u8) void {
     if (l.state.assignment(name)) |ids| {
         const kept = idsWithout(l.arena, ids, id);
