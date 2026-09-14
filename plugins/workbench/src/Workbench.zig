@@ -9,6 +9,7 @@
 //! the label, so an expanding label pushes them to the right edge.
 const std = @import("std");
 const dvui = @import("dvui");
+const core = @import("core");
 const icons = @import("icons");
 const files = @import("files.zig");
 const Workspace = @import("Workspace.zig");
@@ -21,6 +22,9 @@ pub const BranchDecorator = Api.BranchDecorator;
 
 pub const Workbench = @This();
 
+/// The split tree the panes live in. `core.widgets.DockLayout`, one panel per leaf.
+pub const Panes = core.widgets.DockLayout;
+
 allocator: std.mem.Allocator,
 decorators: std.ArrayListUnmanaged(BranchDecorator) = .empty,
 
@@ -28,6 +32,12 @@ decorators: std.ArrayListUnmanaged(BranchDecorator) = .empty,
 /// app's assignment under the pane's name (`Workspace.name`), which is also how last session's
 /// panes are found again.
 workspaces: std.AutoArrayHashMapUnmanaged(u64, Workspace) = .empty,
+/// Where each pane sits: a split tree whose leaves each hold one pane, by its region name
+/// (`Workspace.name`). `workspaces` is *which* panes exist and what they hold; this is their
+/// arrangement — which is beside which, and how the room is shared. Saved to `panes.zon` in the
+/// plugin's own directory whenever it changes (`workbench_layout.savePanes`).
+panes: Panes,
+panes_dirty: bool = false,
 open_workspace_grouping: u64 = 0,
 grouping_id_counter: u64 = 0,
 /// The tab being dragged this frame, by surface id, for the pane it lands in. Borrowed from the
@@ -70,7 +80,10 @@ pub fn clearPendingNewFilePath(self: *Workbench) void {
 }
 
 pub fn init(allocator: std.mem.Allocator) Workbench {
-    return .{ .allocator = allocator };
+    var panes = Panes.init(allocator);
+    panes.owns_panel_ids = true;
+    panes.animated = true;
+    return .{ .allocator = allocator, .panes = panes };
 }
 
 pub fn deinit(self: *Workbench) void {
@@ -82,20 +95,77 @@ pub fn deinit(self: *Workbench) void {
 pub fn initDefaultWorkspace(self: *Workbench) !void {
     self.workspaces = .empty;
     try self.workspaces.put(self.allocator, 0, Workspace.init(0));
+    // The saved arrangement, if any, replaces this on the first rebuild — the load path is not
+    // up yet here. Until then: one pane, filling the tree.
+    const root = try self.panes.allocNodeForRoot();
+    var buf: [32]u8 = undefined;
+    try self.panes.insertTabOwned(root, 0, Workspace.name(&buf, 0));
 }
 
-/// The pane for `grouping`, created if it is new. A pane is a row entry and a region name;
-/// the region itself exists once the pane has drawn.
+/// The pane for `grouping`, created if it is new. A pane is a workspace and a leaf in the
+/// tree; the region itself exists once the pane has drawn. A new pane opens beside the current
+/// one, on its right — that is what "open to the side" means — sliding open from nothing.
 pub fn pane(self: *Workbench, grouping: u64) !*Workspace {
     const gop = try self.workspaces.getOrPut(self.allocator, grouping);
     if (!gop.found_existing) gop.value_ptr.* = Workspace.init(grouping);
     if (grouping > self.grouping_id_counter) self.grouping_id_counter = grouping;
+    try self.seatPane(grouping);
     return gop.value_ptr;
+}
+
+/// The tree leaf holding `grouping`'s pane, or null while it has none.
+pub fn paneLeaf(self: *Workbench, grouping: u64) ?Panes.NodeIndex {
+    var buf: [32]u8 = undefined;
+    return self.panes.findPanel(Workspace.name(&buf, grouping));
+}
+
+/// Give `grouping` a leaf if it has none: the root when the tree is empty, else a split off the
+/// current pane's right edge (or off the last pane, when the current one is gone).
+fn seatPane(self: *Workbench, grouping: u64) !void {
+    if (self.paneLeaf(grouping) != null) return;
+    const root = &self.panes.nodes.items[self.panes.root];
+    if (root.* == .leaf and root.leaf.tabs.items.len == 0) {
+        var buf: [32]u8 = undefined;
+        const pane_name = try self.allocator.dupe(u8, Workspace.name(&buf, grouping));
+        errdefer self.allocator.free(pane_name);
+        try self.panes.insertTab(self.panes.root, 0, pane_name);
+        self.panes_dirty = true;
+        return;
+    }
+    const anchor = if (self.paneLeaf(self.open_workspace_grouping)) |_| self.open_workspace_grouping else blk: {
+        const last = self.panes.lastLeaf(self.panes.root);
+        break :blk Workspace.groupingOfName(self.panes.nodes.items[last].leaf.tabs.items[0]) orelse self.open_workspace_grouping;
+    };
+    try self.paneBeside(grouping, anchor, .right);
+}
+
+/// Open a new pane for `grouping` on `side` of `anchor`'s pane — a drop on a pane's edge. The
+/// workspace is created too, so `pane()` afterwards finds both.
+pub fn paneBeside(self: *Workbench, grouping: u64, anchor: u64, side: Panes.Side) !void {
+    if (self.paneLeaf(grouping) != null) return;
+    const anchor_leaf = self.paneLeaf(anchor) orelse return error.NoSuchPane;
+    var buf: [32]u8 = undefined;
+    const pane_name = try self.allocator.dupe(u8, Workspace.name(&buf, grouping));
+    errdefer self.allocator.free(pane_name);
+    try self.panes.splitLeaf(anchor_leaf, side, pane_name);
+    self.panes_dirty = true;
+    const gop = try self.workspaces.getOrPut(self.allocator, grouping);
+    if (!gop.found_existing) gop.value_ptr.* = Workspace.init(grouping);
+    gop.value_ptr.expecting = true;
+    if (grouping > self.grouping_id_counter) self.grouping_id_counter = grouping;
+}
+
+/// Send an emptied pane's leaf sliding shut. The workspace itself leaves once the leaf has
+/// gone (`workbench_layout.rebuildWorkspaces`).
+pub fn closePane(self: *Workbench, grouping: u64) void {
+    const leaf = self.paneLeaf(grouping) orelse return;
+    self.panes.closeLeaf(leaf);
 }
 
 pub fn deinitWorkspaces(self: *Workbench) void {
     for (self.workspaces.values()) |*workspace| workspace.deinit();
     self.workspaces.deinit(self.allocator);
+    self.panes.deinit();
 }
 
 pub fn currentGroupingID(self: *Workbench) u64 {
@@ -146,19 +216,27 @@ pub fn activeDoc(self: *Workbench) ?sdk.DocHandle {
 }
 
 /// Focus a document: the pane holding it becomes the active pane and it becomes that pane's tab.
-/// A document in no pane yet (its load landed this frame) is seated by `rebuildWorkspaces`
-/// first, so this is called after it.
+/// A document in no pane yet — its load landed this frame, and the app focuses it before
+/// `rebuildWorkspaces` has run — is seated now, in the pane it was opened toward, so the focus
+/// has somewhere to land instead of quietly doing nothing.
 pub fn setActiveDocIndex(self: *Workbench, index: usize) void {
     const doc = runtime.host().docByIndex(index) orelse return;
     const id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return;
     for (self.workspaces.values()) |*ws| {
         if (!ws.hasTab(id)) continue;
-        var buf: [32]u8 = undefined;
-        runtime.host().selectInRegion(Workspace.name(&buf, ws.grouping), id);
-        self.open_workspace_grouping = ws.grouping;
-        ws.active = doc;
+        self.focusIn(ws, doc, id);
         return;
     }
+    const ws = self.pane(doc.owner.documentGrouping(doc)) catch return;
+    ws.addTab(id, true);
+    self.focusIn(ws, doc, id);
+}
+
+fn focusIn(self: *Workbench, ws: *Workspace, doc: sdk.DocHandle, id: []const u8) void {
+    var buf: [32]u8 = undefined;
+    runtime.host().selectInRegion(Workspace.name(&buf, ws.grouping), id);
+    self.open_workspace_grouping = ws.grouping;
+    ws.active = doc;
 }
 
 pub fn activeWorkspaceCanvasRectPhysical(self: *Workbench) ?dvui.Rect.Physical {

@@ -23,6 +23,10 @@ const dialogs = @import("dialogs.zig");
 
 pub const CanvasWidget = @import("widgets/CanvasWidget.zig");
 pub const ReorderWidget = @import("widgets/ReorderWidget.zig");
+/// Fizzy's diverged two-child paned (a `dragging`/`animating` readout and an eased
+/// `animateSplit`). Nothing in-tree draws it any more — the shell and the document row are
+/// `DockingWidget` — but pixi's layers/palette stack does, from its dylib. It stays until pixi
+/// moves onto `dvui.paned` or the tree; do not build anything new on it.
 pub const PanedWidget = @import("widgets/PanedWidget.zig");
 pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
 pub const TreeWidget = @import("widgets/TreeWidget.zig");
@@ -36,6 +40,14 @@ pub const DockLayout = DockingWidget.Layout;
 pub const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
 /// Verb form of `DockingWidget`, same shape as `dvui.dockspace`.
 pub const dockspace = DockingWidget.dockspace;
+
+/// Open a `PanedWidget` — see its note above; pixi is the only consumer.
+pub fn paned(src: std.builtin.SourceLocation, init_opts: PanedWidget.InitOptions, opts: dvui.Options) *PanedWidget {
+    var ret = dvui.widgetAlloc(PanedWidget);
+    ret.init(src, init_opts, opts);
+    ret.processEvents();
+    return ret;
+}
 /// Reorderable tab strip shared by fizzy's bottom panel and the workbench's document tabs.
 /// The draggable split between two regions. Lives here rather than beside the layout because the
 /// workbench draws document splits from inside a dylib and must reach the same one — the same
@@ -44,12 +56,6 @@ pub const Split = @import("widgets/Split.zig");
 /// Open a split — the verb form of `Split.init`, so a caller that never names the type reads
 /// the same as it does for `dvui.box`.
 pub const split = Split.init;
-/// A row of panes that share their container by *share* rather than by points, with a boundary
-/// between each pair. The sizing model documents want, where `Split` alone is the one a sidebar
-/// wants — `Panes` explains the difference at length.
-pub const Panes = @import("widgets/Panes.zig");
-/// Open a row of panes — the verb form of `Panes.init`.
-pub const panes = Panes.init;
 pub const Tabs = @import("widgets/Tabs.zig");
 
 /// Side of the square every glyph in a tree row occupies — the expand/collapse caret, a folder
@@ -102,14 +108,6 @@ pub fn treeRowGlyph(src: std.builtin.SourceLocation, opts: dvui.Options) *dvui.B
         .margin = dvui.Rect.all(0),
     };
     return dvui.box(src, .{ .dir = .horizontal }, defaults.override(opts));
-}
-
-/// Currently this is specialized for the layers paned widget, just includes icon and dragging flag so we know when the pane is dragging
-pub fn paned(src: std.builtin.SourceLocation, init_opts: PanedWidget.InitOptions, opts: dvui.Options) *PanedWidget {
-    var ret = dvui.widgetAlloc(PanedWidget);
-    ret.init(src, init_opts, opts);
-    ret.processEvents();
-    return ret;
 }
 
 pub fn floatingWindow(src: std.builtin.SourceLocation, floating_opts: FloatingWindowWidget.InitOptions, opts: dvui.Options) *FloatingWindowWidget {

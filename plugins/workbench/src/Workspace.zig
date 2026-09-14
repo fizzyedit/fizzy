@@ -25,6 +25,9 @@ pub const Workspace = @This();
 /// document vtable.
 grouping: u64 = 0,
 center: bool = false,
+/// A pane opened by a drop whose document is still loading. Empty for now, but not *emptied*:
+/// `rebuildWorkspaces` must not close it before the load lands. Cleared by `addTab`.
+expecting: bool = false,
 
 /// What this pane showed last frame, for the commands that act on "the active document" between
 /// frames. Read from the region during draw; never derived from the app's document array.
@@ -432,6 +435,7 @@ pub fn setTabs(self: *Workspace, ids: []const []const u8, focus: ?[]const u8) vo
 
 /// Append a surface to this pane's tabs (no-op if already there).
 pub fn addTab(self: *Workspace, id: []const u8, focus: bool) void {
+    self.expecting = false;
     var buf: [32]u8 = undefined;
     const arena = runtime.host().arena();
     var ids: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -498,8 +502,9 @@ pub fn tabCount(self: *Workspace) usize {
     return existing.len;
 }
 
-/// Where a lifted tab or a file-tree row can be dropped: this pane (join it) or, on the last
-/// pane, its right half (a new pane after it).
+/// Where a lifted tab or a file-tree row can be dropped: the middle of this pane joins it; an
+/// edge opens a new pane on that side of it — the same reading the app's places use for a
+/// dragged view (`DockLayout.zoneAt`: edges split, the middle lands here).
 pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
     if (!dvui.dragName("tab_drag")) {
         runtime.workbench().clearFileTreeTabDragDropState();
@@ -510,21 +515,17 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
     const from_tree: ?[]const u8 = wb.tab_drag_from_tree_path;
     if (from_tab == null and from_tree == null) return;
 
-    const is_last = wb.workspaces.keys()[wb.workspaces.keys().len - 1] == self.grouping;
+    const Zones = core.widgets.DockLayout;
+    const bounds = data.rectScale().r;
+    const band = 36.0 * data.rectScale().s;
 
     for (dvui.events()) |*e| {
-        if (!dvui.eventMatch(e, .{ .id = data.id, .r = data.rectScale().r, .drag_name = "tab_drag" })) continue;
+        if (!dvui.eventMatch(e, .{ .id = data.id, .r = bounds, .drag_name = "tab_drag" })) continue;
         if (e.evt != .mouse) continue;
-
-        var right_side = data.rectScale().r;
-        right_side.w /= 2;
-        right_side.x += right_side.w;
-        const to_new_pane = is_last and right_side.contains(e.evt.mouse.p);
-        const target = if (to_new_pane) right_side else data.rectScale().r;
-        if (!target.contains(e.evt.mouse.p)) continue;
+        const hit = Zones.zoneAt(bounds, e.evt.mouse.p, band) orelse continue;
 
         if (e.evt.mouse.action == .position) {
-            target.fill(dvui.CornerRect.Physical.round(target.w / 8), .{
+            hit.rect.fill(dvui.CornerRect.Physical.round(@min(hit.rect.w, hit.rect.h) / 8), .{
                 .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5) },
             });
         }
@@ -536,7 +537,14 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
         wb.dragging_surface = null;
         defer wb.clearFileTreeTabDragDropState();
 
-        const grouping = if (to_new_pane) wb.newGroupingID() else self.grouping;
+        const grouping = switch (hit.zone) {
+            .tab => self.grouping,
+            .split => |side| blk: {
+                const g = wb.newGroupingID();
+                wb.paneBeside(g, self.grouping, side) catch continue;
+                break :blk g;
+            },
+        };
         if (from_tab) |id| {
             for (wb.workspaces.values()) |*other| other.removeTab(id);
             const pane = wb.pane(grouping) catch continue;

@@ -23,14 +23,51 @@ pub const Node = union(enum) {
 
     pub const Split = struct {
         dir: dvui.enums.Direction,
+        /// The first child's share of the split. The persisted, settled value: what a drag
+        /// writes on release and what the widget eases its drawn ratio toward (see
+        /// `DockingWidget`'s `animated` handling). `fixed` overrides it while set.
         ratio: f32 = 0.5,
+        /// One child sized in points instead of by share — a sidebar that stays 260 wide when
+        /// the window grows. The widget derives `ratio` from it each frame and writes a drag
+        /// back to it, so a snapshot round-trips it unchanged.
+        fixed: ?Fixed = null,
+        /// One child sized to its *content* — a layer list that grows with its rows, a palette
+        /// that takes the rest. Each frame the widget reads that child's content minimum along
+        /// the axis, turns it into a share clamped to `[min, max]`, writes it to `ratio` and
+        /// eases the drawn split there. A drag on a fitted split moves `max` (so the user can
+        /// cap it, and the fit stays under the cap); `setRatio` does the same. Snapshot keeps it.
+        fit: ?Fit = null,
         first: NodeIndex,
         second: NodeIndex,
+        /// This split's identity for the life of the layout — see `Leaf.key`.
+        key: u32 = 0,
+        /// Transient: the child that has just been created by a split and should slide open
+        /// from nothing. Set by `splitLeaf`/`splitRoot` when `animated`; the widget consumes
+        /// it on the first frame it draws the split. Never serialized.
+        opening: ?Child = null,
+        /// Transient: the child that is on its way out. The widget eases the split shut over
+        /// it and then applies `.collapse`, which promotes the other child. Set by
+        /// `closeLeaf`, and by an emptied leaf when `animated`. Never serialized.
+        closing: ?Child = null,
+
+        pub const Fixed = struct { child: Child, points: f32 };
+        pub const Fit = struct { child: Child, min: f32 = 0, max: f32 = 1 };
     };
+
+    pub const Child = enum { first, second };
 
     pub const Leaf = struct {
         tabs: std.ArrayList(PanelId) = .empty,
         active: usize = 0,
+        /// A leaf the layout itself declared — an app's "Main", not a pane a drag minted. It is
+        /// never collapsed away: emptied, it stays as an empty leaf the app can fill again, and
+        /// a `.collapse` toward its sibling is refused.
+        pinned: bool = false,
+        /// This leaf's identity for the life of the layout. A node *index* is a slot: a collapse
+        /// promotes the kept child into its parent's slot, and anything keyed by index would
+        /// see that as a different widget and rebuild from scratch. The key travels with the
+        /// node instead. Never serialized; assigned fresh by `nextKey` wherever a node is made.
+        key: u32 = 0,
     };
 };
 
@@ -52,7 +89,61 @@ pub const Mutation = union(enum) {
     remove: PanelId,
     set_active: struct { leaf: NodeIndex, index: usize },
     float: struct { panel: PanelId, rect: dvui.Rect },
+    /// Finish a `closing` split: the child not closing takes the split's slot. Queued by the
+    /// widget once the close animation has run out.
+    collapse: NodeIndex,
+    /// A drag settled a split's share (or its fixed extent). Queued by the widget on release so
+    /// the layout, not the widget's per-frame copy, is what persists.
+    set_ratio: struct { split: NodeIndex, ratio: f32, extent: f32 },
 };
+
+/// Where a point falls on a leaf, in the leaf's own terms: the middle (add as a tab) or one of
+/// the four edge bands (split that side). Pure, so both the preview and the drop read the same
+/// answer, and so it can be tested without a Window.
+pub const Zone = union(enum) {
+    tab,
+    split: Side,
+};
+
+pub const ZoneHit = struct { zone: Zone, rect: dvui.Rect.Physical };
+
+/// The zone at `p` inside leaf rect `r`: a centre inset 30% each side, clamped to `max_edge`
+/// (physical px) thick, and the four edge strips filling the rest. Null when `p` is outside `r`.
+pub fn zoneAt(r: dvui.Rect.Physical, p: dvui.Point.Physical, max_edge: f32) ?ZoneHit {
+    if (!r.contains(p)) return null;
+    const inset_x = @min(r.w * 0.3, max_edge);
+    const inset_y = @min(r.h * 0.3, max_edge);
+
+    const center: dvui.Rect.Physical = .{ .x = r.x + inset_x, .y = r.y + inset_y, .w = @max(0, r.w - 2 * inset_x), .h = @max(0, r.h - 2 * inset_y) };
+    if (center.contains(p)) return .{ .zone = .tab, .rect = center };
+
+    const left: dvui.Rect.Physical = .{ .x = r.x, .y = r.y, .w = inset_x, .h = r.h };
+    if (left.contains(p)) return .{ .zone = .{ .split = .left }, .rect = left };
+    const right: dvui.Rect.Physical = .{ .x = r.x + r.w - inset_x, .y = r.y, .w = inset_x, .h = r.h };
+    if (right.contains(p)) return .{ .zone = .{ .split = .right }, .rect = right };
+    const top: dvui.Rect.Physical = .{ .x = r.x, .y = r.y, .w = r.w, .h = inset_y };
+    if (top.contains(p)) return .{ .zone = .{ .split = .top }, .rect = top };
+    const bottom: dvui.Rect.Physical = .{ .x = r.x, .y = r.y + r.h - inset_y, .w = r.w, .h = inset_y };
+    if (bottom.contains(p)) return .{ .zone = .{ .split = .bottom }, .rect = bottom };
+    return null;
+}
+
+pub const EdgeHit = struct { side: Side, rect: dvui.Rect.Physical };
+
+/// The edge strip of `r` (each `thick` physical px) under `p`, or null — the root-edge zones
+/// that split the whole tree.
+pub fn edgeAt(r: dvui.Rect.Physical, p: dvui.Point.Physical, thick: f32) ?EdgeHit {
+    if (!r.contains(p)) return null;
+    const left: dvui.Rect.Physical = .{ .x = r.x, .y = r.y, .w = thick, .h = r.h };
+    if (left.contains(p)) return .{ .side = .left, .rect = left };
+    const right: dvui.Rect.Physical = .{ .x = r.x + r.w - thick, .y = r.y, .w = thick, .h = r.h };
+    if (right.contains(p)) return .{ .side = .right, .rect = right };
+    const top: dvui.Rect.Physical = .{ .x = r.x, .y = r.y, .w = r.w, .h = thick };
+    if (top.contains(p)) return .{ .side = .top, .rect = top };
+    const bottom: dvui.Rect.Physical = .{ .x = r.x, .y = r.y + r.h - thick, .w = r.w, .h = thick };
+    if (bottom.contains(p)) return .{ .side = .bottom, .rect = bottom };
+    return null;
+}
 
 pub const DockLayout = @This();
 
@@ -66,16 +157,48 @@ floats: std.ArrayList(Float) = .empty,
 /// other stable source for the slugs). Don't set it yourself unless every
 /// `PanelId` you hand this layout is `allocator`-owned.
 owns_panel_ids: bool = false,
+/// Splits and closes animate: a new leaf slides open from nothing and an emptied leaf slides
+/// shut before it is collapsed, instead of both happening in one frame. Off by default so a
+/// layout behaves exactly as it always has for callers that never asked; the widget reads
+/// `Split.opening`/`Split.closing` only when this is set.
+animated: bool = false,
+/// Source of `Leaf.key` / `Split.key`.
+next_key: u32 = 1,
+
+/// A fresh node identity.
+pub fn nextKey(self: *DockLayout) u32 {
+    defer self.next_key += 1;
+    return self.next_key;
+}
+
+/// The identity of `node` — its leaf's or split's `key`.
+pub fn keyOf(self: *const DockLayout, node: NodeIndex) u32 {
+    return switch (self.nodes.items[node]) {
+        .leaf => |l| l.key,
+        .split => |sp| sp.key,
+        .free => 0,
+    };
+}
 
 pub fn init(allocator: std.mem.Allocator) DockLayout {
     return .{ .allocator = allocator };
+}
+
+/// An empty root leaf, for a layout built up from nothing — `initSingleLeaf` without the panel.
+/// Returns the root's index. Only meaningful on a layout that has no nodes yet.
+pub fn allocNodeForRoot(self: *DockLayout) !NodeIndex {
+    std.debug.assert(self.nodes.items.len == 0);
+    const idx = try self.allocNode();
+    self.nodes.items[idx] = .{ .leaf = .{ .key = self.nextKey() } };
+    self.root = idx;
+    return idx;
 }
 
 /// Convenience constructor: a single leaf holding one panel as root.
 pub fn initSingleLeaf(allocator: std.mem.Allocator, panel: PanelId) !DockLayout {
     var self = init(allocator);
     const idx = try self.allocNode();
-    self.nodes.items[idx] = .{ .leaf = .{} };
+    self.nodes.items[idx] = .{ .leaf = .{ .key = self.nextKey() } };
     try self.nodes.items[idx].leaf.tabs.append(allocator, panel);
     self.root = idx;
     return self;
@@ -157,6 +280,18 @@ pub fn firstLeaf(self: *const DockLayout, start: NodeIndex) NodeIndex {
     }
 }
 
+/// Returns the last leaf reached by always descending into `second`, starting at `start`.
+pub fn lastLeaf(self: *const DockLayout, start: NodeIndex) NodeIndex {
+    var idx = start;
+    while (true) {
+        switch (self.nodes.items[idx]) {
+            .split => |s| idx = s.second,
+            .leaf => return idx,
+            .free => unreachable,
+        }
+    }
+}
+
 /// Appends the active panel of every leaf (main tree, depth-first, then floats) to `list`.
 pub fn collectActivePanels(self: *const DockLayout, list: *std.ArrayList(PanelId), allocator: std.mem.Allocator) !void {
     try self.collectActiveFrom(self.root, list, allocator);
@@ -174,11 +309,11 @@ fn collectActiveFrom(self: *const DockLayout, idx: NodeIndex, list: *std.ArrayLi
     }
 }
 
-const Parent = struct { idx: NodeIndex, side: enum { first, second } };
+pub const Parent = struct { idx: NodeIndex, side: enum { first, second } };
 
 /// Linear search from root for the split node whose first/second == `target`.
 /// Floats have no parent (returns null for a float leaf).
-fn findParent(self: *const DockLayout, target: NodeIndex) ?Parent {
+pub fn findParent(self: *const DockLayout, target: NodeIndex) ?Parent {
     return self.findParentFrom(self.root, target);
 }
 
@@ -206,7 +341,7 @@ pub fn splitLeaf(self: *DockLayout, leaf_idx: NodeIndex, side: Side, panel: Pane
     const new_idx = try self.allocNode();
     var new_tabs: std.ArrayList(PanelId) = .empty;
     try new_tabs.append(self.allocator, panel);
-    self.nodes.items[new_idx] = .{ .leaf = .{ .tabs = new_tabs, .active = 0 } };
+    self.nodes.items[new_idx] = .{ .leaf = .{ .tabs = new_tabs, .active = 0, .key = self.nextKey() } };
 
     const dir: dvui.enums.Direction = switch (side) {
         .left, .right => .horizontal,
@@ -217,7 +352,36 @@ pub fn splitLeaf(self: *DockLayout, leaf_idx: NodeIndex, side: Side, panel: Pane
         .right, .bottom => .{ moved_idx, new_idx },
     };
 
-    self.nodes.items[leaf_idx] = .{ .split = .{ .dir = dir, .ratio = 0.5, .first = first, .second = second } };
+    self.nodes.items[leaf_idx] = .{ .split = .{
+        .dir = dir,
+        .ratio = 0.5,
+        .first = first,
+        .second = second,
+        .key = self.nextKey(),
+        .opening = if (self.animated) newChild(side) else null,
+    } };
+}
+
+/// Which child a split on `side` mints: left/top go first.
+pub fn newChild(side: Side) Node.Child {
+    return switch (side) {
+        .left, .top => .first,
+        .right, .bottom => .second,
+    };
+}
+
+pub fn otherChild(c: Node.Child) Node.Child {
+    return switch (c) {
+        .first => .second,
+        .second => .first,
+    };
+}
+
+pub fn childIndex(sp: Node.Split, c: Node.Child) NodeIndex {
+    return switch (c) {
+        .first => sp.first,
+        .second => sp.second,
+    };
 }
 
 /// Wraps the whole tree in a new split (root-edge drop zones): `root`'s
@@ -233,7 +397,7 @@ pub fn splitRoot(self: *DockLayout, side: Side, panel: PanelId) !void {
     const new_idx = try self.allocNode();
     var new_tabs: std.ArrayList(PanelId) = .empty;
     try new_tabs.append(self.allocator, panel);
-    self.nodes.items[new_idx] = .{ .leaf = .{ .tabs = new_tabs, .active = 0 } };
+    self.nodes.items[new_idx] = .{ .leaf = .{ .tabs = new_tabs, .active = 0, .key = self.nextKey() } };
 
     const dir: dvui.enums.Direction = switch (side) {
         .left, .right => .horizontal,
@@ -244,7 +408,115 @@ pub fn splitRoot(self: *DockLayout, side: Side, panel: PanelId) !void {
         .right, .bottom => .{ moved_idx, new_idx },
     };
 
-    self.nodes.items[self.root] = .{ .split = .{ .dir = dir, .ratio = 0.5, .first = first, .second = second } };
+    self.nodes.items[self.root] = .{ .split = .{
+        .dir = dir,
+        .ratio = 0.5,
+        .first = first,
+        .second = second,
+        .key = self.nextKey(),
+        .opening = if (self.animated) newChild(side) else null,
+    } };
+}
+
+/// Send `leaf_idx` on its way out: its parent split eases shut over it and the widget then
+/// applies `.collapse`. A root leaf, a pinned leaf, and a float have nothing to close into and
+/// are left alone. Immediate (no animation) when the layout is not `animated`.
+pub fn closeLeaf(self: *DockLayout, leaf_idx: NodeIndex) void {
+    if (leaf_idx == self.root) return;
+    if (self.nodes.items[leaf_idx] == .leaf and self.nodes.items[leaf_idx].leaf.pinned) return;
+    const parent = self.findParent(leaf_idx) orelse return;
+    const side: Node.Child = switch (parent.side) {
+        .first => .first,
+        .second => .second,
+    };
+    if (!self.animated) {
+        self.collapseSplit(parent.idx, otherChild(side));
+        return;
+    }
+    self.nodes.items[parent.idx].split.closing = side;
+}
+
+/// Keep `leaf_idx` after all: a parent split closing over it stops closing. The widget then eases
+/// it back open to its settled ratio. The counterpart of `closeLeaf`.
+pub fn reopenLeaf(self: *DockLayout, leaf_idx: NodeIndex) void {
+    const parent = self.findParent(leaf_idx) orelse return;
+    const sp = &self.nodes.items[parent.idx].split;
+    const mine: Node.Child = if (parent.side == .first) .first else .second;
+    if (sp.closing == mine) sp.closing = null;
+}
+
+/// Replace split `split_idx` with its `keep` child, freeing the other subtree. The split's
+/// index survives (now holding the kept child's node), so a reference to the split from above
+/// stays valid — the same trick `splitLeaf` uses in the other direction. Refused when the child
+/// being dropped is (or holds) a pinned leaf.
+pub fn collapseSplit(self: *DockLayout, split_idx: NodeIndex, keep: Node.Child) void {
+    const sp = switch (self.nodes.items[split_idx]) {
+        .split => |sp| sp,
+        else => return,
+    };
+    const kept = childIndex(sp, keep);
+    const dropped = childIndex(sp, otherChild(keep));
+    if (self.holdsPinned(dropped)) return;
+
+    self.nodes.items[split_idx] = self.nodes.items[kept];
+    self.nodes.items[kept] = .{ .free = null };
+    self.freeNode(kept);
+    self.freeSubtree(dropped);
+}
+
+fn holdsPinned(self: *const DockLayout, idx: NodeIndex) bool {
+    return switch (self.nodes.items[idx]) {
+        .leaf => |l| l.pinned,
+        .split => |sp| self.holdsPinned(sp.first) or self.holdsPinned(sp.second),
+        .free => false,
+    };
+}
+
+fn freeSubtree(self: *DockLayout, idx: NodeIndex) void {
+    switch (self.nodes.items[idx]) {
+        .split => |sp| {
+            self.freeSubtree(sp.first);
+            self.freeSubtree(sp.second);
+        },
+        .leaf, .free => {},
+    }
+    self.freeNode(idx);
+}
+
+/// The split's settled share, honouring `fixed` against `extent` (the split's length along its
+/// axis, less the handle). What the widget draws toward.
+pub fn targetRatio(sp: Node.Split, extent: f32) f32 {
+    const f = sp.fixed orelse return sp.ratio;
+    if (extent <= 0) return sp.ratio;
+    const share = std.math.clamp(f.points / extent, 0, 1);
+    return switch (f.child) {
+        .first => share,
+        .second => 1 - share,
+    };
+}
+
+/// Record a dragged share on the split — into `fixed.points` when the split is fixed, so the
+/// points are what persist, else into `ratio`.
+pub fn setRatio(self: *DockLayout, split_idx: NodeIndex, ratio: f32, extent: f32) void {
+    const sp = switch (self.nodes.items[split_idx]) {
+        .split => |*sp| sp,
+        else => return,
+    };
+    if (sp.fixed) |*f| {
+        if (extent > 0) f.points = switch (f.child) {
+            .first => ratio * extent,
+            .second => (1 - ratio) * extent,
+        };
+        return;
+    }
+    if (sp.fit) |*f| {
+        // The drag becomes the cap the fit may not exceed (the child's own share of it).
+        f.max = std.math.clamp(switch (f.child) {
+            .first => ratio,
+            .second => 1 - ratio,
+        }, f.min, 1);
+    }
+    sp.ratio = ratio;
 }
 
 /// Inserts `panel` as a new tab in `leaf_idx` at `tab_idx` (clamped) and activates it.
@@ -253,6 +525,14 @@ pub fn insertTab(self: *DockLayout, leaf_idx: NodeIndex, tab_idx: usize, panel: 
     const idx = @min(tab_idx, leaf.tabs.items.len);
     try leaf.tabs.insert(self.allocator, idx, panel);
     leaf.active = idx;
+    // Filled again while on its way out: it stays.
+    if (self.findParent(leaf_idx)) |parent| {
+        const sp = &self.nodes.items[parent.idx].split;
+        if (sp.closing) |c| {
+            const mine: Node.Child = if (parent.side == .first) .first else .second;
+            if (c == mine) sp.closing = null;
+        }
+    }
 }
 
 /// Like `insertTab`, but duplicates `panel` when `owns_panel_ids` is set, so a
@@ -309,20 +589,11 @@ fn removeFromLeaf(self: *DockLayout, leaf_idx: NodeIndex, panel: PanelId) ?Panel
     }
 
     if (leaf_idx == self.root) return removed; // tolerate an empty root leaf
+    if (leaf.pinned) return removed; // a declared place stays, empty
 
-    const parent = self.findParent(leaf_idx) orelse return removed;
-    const split = self.nodes.items[parent.idx].split;
-    const sibling = switch (parent.side) {
-        .first => split.second,
-        .second => split.first,
-    };
-
-    // Promote the sibling's content into the parent's slot (stable index),
-    // then free the emptied leaf and the now-unreferenced sibling slot.
-    self.nodes.items[parent.idx] = self.nodes.items[sibling];
-    self.nodes.items[sibling] = .{ .free = null };
-    self.freeNode(sibling);
-    self.freeNode(leaf_idx);
+    // Slide shut first when animated; the widget collapses it once closed.
+    // Otherwise promote the sibling into the parent's slot right now.
+    self.closeLeaf(leaf_idx);
     return removed;
 }
 
@@ -386,7 +657,7 @@ pub fn floatPanel(self: *DockLayout, panel: PanelId, rect: dvui.Rect) !void {
     const idx = try self.allocNode();
     var tabs: std.ArrayList(PanelId) = .empty;
     try tabs.append(self.allocator, panel);
-    self.nodes.items[idx] = .{ .leaf = .{ .tabs = tabs, .active = 0 } };
+    self.nodes.items[idx] = .{ .leaf = .{ .tabs = tabs, .active = 0, .key = self.nextKey() } };
     try self.floats.append(self.allocator, .{ .leaf = idx, .rect = rect });
 
     if (source_leaf) |sl| _ = self.removeFromLeaf(sl, panel);
@@ -398,6 +669,15 @@ pub fn apply(self: *DockLayout, m: Mutation) !void {
         .remove => |p| self.removePanel(p),
         .set_active => |sa| self.setActive(sa.leaf, sa.index),
         .float => |f| try self.floatPanel(f.panel, f.rect),
+        .collapse => |idx| {
+            const sp = switch (self.nodes.items[idx]) {
+                .split => |sp| sp,
+                else => return,
+            };
+            const going = sp.closing orelse return;
+            self.collapseSplit(idx, otherChild(going));
+        },
+        .set_ratio => |sr| self.setRatio(sr.split, sr.ratio, sr.extent),
     }
 }
 
@@ -417,6 +697,8 @@ pub const Snapshot = struct {
         pub const Split = struct {
             dir: dvui.enums.Direction,
             ratio: f32 = 0.5,
+            fixed: ?Node.Split.Fixed = null,
+            fit: ?Node.Split.Fit = null,
             first: *const Tree,
             second: *const Tree,
         };
@@ -424,6 +706,7 @@ pub const Snapshot = struct {
         pub const Leaf = struct {
             tabs: []const PanelId,
             active: usize = 0,
+            pinned: bool = false,
         };
     };
 
@@ -486,7 +769,7 @@ fn snapshotNode(self: *const DockLayout, idx: NodeIndex, allocator: std.mem.Allo
             errdefer allocator.destroy(second);
             second.* = try self.snapshotNode(sp.second, allocator);
 
-            return .{ .split = .{ .dir = sp.dir, .ratio = sp.ratio, .first = first, .second = second } };
+            return .{ .split = .{ .dir = sp.dir, .ratio = sp.ratio, .fixed = sp.fixed, .fit = sp.fit, .first = first, .second = second } };
         },
         .leaf => |l| return .{ .leaf = try snapshotLeaf(l, allocator) },
         .free => unreachable,
@@ -494,7 +777,7 @@ fn snapshotNode(self: *const DockLayout, idx: NodeIndex, allocator: std.mem.Allo
 }
 
 fn snapshotLeaf(l: Node.Leaf, allocator: std.mem.Allocator) !Snapshot.Tree.Leaf {
-    return .{ .tabs = try allocator.dupe(PanelId, l.tabs.items), .active = l.active };
+    return .{ .tabs = try allocator.dupe(PanelId, l.tabs.items), .active = l.active, .pinned = l.pinned };
 }
 
 /// Rebuilds a live layout from `snap` (typically freshly deserialized). Panel
@@ -521,7 +804,7 @@ fn buildNode(self: *DockLayout, node: Snapshot.Tree) !NodeIndex {
             const first = try self.buildNode(sp.first.*);
             const second = try self.buildNode(sp.second.*);
             const idx = try self.allocNode();
-            self.nodes.items[idx] = .{ .split = .{ .dir = sp.dir, .ratio = sp.ratio, .first = first, .second = second } };
+            self.nodes.items[idx] = .{ .split = .{ .dir = sp.dir, .ratio = sp.ratio, .fixed = sp.fixed, .fit = sp.fit, .first = first, .second = second, .key = self.nextKey() } };
             return idx;
         },
         .leaf => |l| {
@@ -546,7 +829,7 @@ fn buildLeaf(self: *DockLayout, l: Snapshot.Tree.Leaf) !Node.Leaf {
         };
     }
     const active: usize = if (tabs.items.len == 0) 0 else @min(l.active, tabs.items.len - 1);
-    return .{ .tabs = tabs, .active = active };
+    return .{ .tabs = tabs, .active = active, .pinned = l.pinned, .key = self.nextKey() };
 }
 
 test "single leaf init and find" {
@@ -803,4 +1086,67 @@ test "snapshot/fromSnapshot round-trip preserves tree, tabs, and floats" {
 
 test {
     std.testing.refAllDecls(@This());
+}
+
+test "zoneAt: the middle is a tab and each band is its side" {
+    const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
+    try std.testing.expectEqual(Zone.tab, zoneAt(r, .{ .x = 100, .y = 50 }, 40).?.zone);
+    try std.testing.expectEqual(Zone{ .split = .left }, zoneAt(r, .{ .x = 10, .y = 50 }, 40).?.zone);
+    try std.testing.expectEqual(Zone{ .split = .right }, zoneAt(r, .{ .x = 190, .y = 50 }, 40).?.zone);
+    try std.testing.expectEqual(Zone{ .split = .top }, zoneAt(r, .{ .x = 100, .y = 5 }, 40).?.zone);
+    try std.testing.expectEqual(Zone{ .split = .bottom }, zoneAt(r, .{ .x = 100, .y = 95 }, 40).?.zone);
+    try std.testing.expect(zoneAt(r, .{ .x = 300, .y = 50 }, 40) == null);
+}
+
+test "animated: a split opens marked, an emptied leaf closes marked, collapse promotes" {
+    var layout = try DockLayout.initSingleLeaf(std.testing.allocator, "a");
+    defer layout.deinit();
+    layout.animated = true;
+    const root = layout.root;
+
+    try layout.splitLeaf(root, .right, "b");
+    try std.testing.expectEqual(Node.Child.second, layout.nodes.items[root].split.opening.?);
+    layout.nodes.items[root].split.opening = null; // the widget consumed it
+
+    layout.removePanel("b");
+    // Still a split: b's leaf is on its way out, not gone.
+    try std.testing.expectEqual(Node.split, std.meta.activeTag(layout.nodes.items[root]));
+    try std.testing.expectEqual(Node.Child.second, layout.nodes.items[root].split.closing.?);
+
+    try layout.apply(.{ .collapse = root });
+    try std.testing.expectEqual(Node.leaf, std.meta.activeTag(layout.nodes.items[root]));
+    try std.testing.expect(layout.contains("a"));
+}
+
+test "a pinned leaf empties but is never collapsed" {
+    var layout = try DockLayout.initSingleLeaf(std.testing.allocator, "a");
+    defer layout.deinit();
+    const root = layout.root;
+    try layout.splitLeaf(root, .right, "b");
+    const b_leaf = layout.findPanel("b").?;
+    layout.nodes.items[b_leaf].leaf.pinned = true;
+
+    layout.removePanel("b");
+    try std.testing.expectEqual(Node.split, std.meta.activeTag(layout.nodes.items[root]));
+    try std.testing.expectEqual(@as(usize, 0), layout.nodes.items[b_leaf].leaf.tabs.items.len);
+
+    layout.collapseSplit(root, .first); // would drop the pinned leaf: refused
+    try std.testing.expectEqual(Node.split, std.meta.activeTag(layout.nodes.items[root]));
+}
+
+test "a fixed child derives its ratio from points and writes a drag back as points" {
+    var layout = try DockLayout.initSingleLeaf(std.testing.allocator, "a");
+    defer layout.deinit();
+    const root = layout.root;
+    try layout.splitLeaf(root, .left, "side");
+    layout.nodes.items[root].split.fixed = .{ .child = .first, .points = 250 };
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), targetRatio(layout.nodes.items[root].split, 1000), 0.001);
+    layout.setRatio(root, 0.5, 1000);
+    try std.testing.expectApproxEqAbs(@as(f32, 500), layout.nodes.items[root].split.fixed.?.points, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), layout.nodes.items[root].split.ratio, 0.001); // untouched
+
+    const snap = try layout.snapshot(std.testing.allocator);
+    defer snap.deinit(std.testing.allocator);
+    try std.testing.expectApproxEqAbs(@as(f32, 500), snap.root.split.fixed.?.points, 0.001);
 }

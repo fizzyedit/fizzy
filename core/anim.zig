@@ -31,7 +31,7 @@ pub const Kind = crossfade.Kind;
 /// watched from outside it reads as a jump-cut.
 ///
 /// One home for them because three places move panes — `core.widgets.Split.eased`, the layout's
-/// `Region`, and `core.widgets.Panes` — and a layout whose sidebar and whose documents slide at
+/// `Region`, and the pane tree — and a layout whose sidebar and whose documents slide at
 /// different speeds feels broken in a way nobody can name.
 pub const slide = struct {
     pub const out_ms: i32 = 380;

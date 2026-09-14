@@ -1,5 +1,5 @@
-//! Test root for the two files that decide how big a pane is: `widgets/Split.zig` (extents in
-//! points, one number per region) and `widgets/Panes.zig` (shares of a row).
+//! Test root for the files that decide how big a pane is: `widgets/Split.zig` (extents in
+//! points, one number per region) and the split tree in `widgets/DockingWidget*.zig`.
 //!
 //! A root of its own, one directory *above* them, for a build reason worth stating: a test module
 //! rooted at `core/widgets/Split.zig` can only import within `core/widgets/`, and both files reach
@@ -11,7 +11,6 @@
 //! than arithmetic, and reading the code caught none of them.
 test {
     _ = @import("widgets/Split.zig");
-    _ = @import("widgets/Panes.zig");
     // The local copies of upstream's docking + blur (see `widgets.zig`): referenced here so they
     // are analysed — and their own tests run — even before anything in the app draws them.
     _ = @import("widgets/DockingWidget.zig");

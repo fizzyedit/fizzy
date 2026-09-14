@@ -1,15 +1,16 @@
-//! Workspace map maintenance, and drawing the document panes side by side.
+//! Workspace map maintenance, and drawing the document panes as a split tree.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const runtime = @import("runtime.zig");
-const Split = core.widgets.Split;
 const Workbench = @import("Workbench.zig");
 const Workspace = @import("Workspace.zig");
+const Panes = Workbench.Panes;
 
-const handle_size = 10;
-const handle_dist = 60;
+/// Where the arrangement is kept, inside the plugin's own directory.
+const panes_file = "panes.zon";
 
 /// Bring the panes in line with the documents: every open document sits in exactly one pane's
 /// assignment, every pane with nothing assigned is gone (bar the last), and — once — last
@@ -20,6 +21,7 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
 
     if (!wb.restored) {
         wb.restored = true;
+        loadPanes(wb);
         for (host.assignedRegionNames()) |region_name| {
             const grouping = Workspace.groupingOfName(region_name) orelse continue;
             _ = try wb.pane(grouping);
@@ -57,19 +59,22 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
         target.addTab(id, false);
     }
 
-    // An empty extra pane eases shut, then leaves. Dropping it here is why a
-    // document split jumped closed while opening still slid.
+    // An empty extra pane eases shut, then leaves: its leaf is sent closing, the tree drops
+    // the leaf once the slide is over, and only then does the workspace go. Dropping it here
+    // is why a document split once jumped closed while opening still slid.
     var k: usize = 0;
     while (k < wb.workspaces.count()) {
         if (wb.workspaces.count() == 1) break;
         const ws = &wb.workspaces.values()[k];
-        if (ws.tabCount() > 0) {
+        if (ws.tabCount() > 0 or ws.expecting) {
+            // Filled (or about to be) — including one that was on its way out when its
+            // document landed, which is a pane to keep, not a hole to finish closing.
+            if (wb.paneLeaf(ws.grouping)) |leaf| wb.panes.reopenLeaf(leaf);
             k += 1;
             continue;
         }
-        const id = paneId(wb, k);
-        if (!core.widgets.Panes.closed(id)) {
-            core.widgets.Panes.close(id);
+        if (wb.paneLeaf(ws.grouping) != null) {
+            wb.closePane(ws.grouping);
             k += 1;
             continue;
         }
@@ -85,26 +90,18 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
     }
 }
 
-/// Draw every workspace side by side, separated by a boundary the user can drag.
+/// Draw every workspace in its place in the tree, a draggable sash between each pair.
 ///
-/// This was a **recursion**: each level opened a two-child `PanedWidget` with workspace `index`
-/// in the first half and all the remaining workspaces nested in the second. That is the tree
-/// shape a two-child pane forces, and it is why splitting documents behaved differently from
-/// splitting anything else in the app — it was a second implementation of the same idea, with
-/// its own ratios, its own handle and its own feel.
+/// This was a **recursion** of two-child `PanedWidget`s, then a flat row sized in points (one
+/// flexible pane, the rest fixed — dragging one boundary slid every divider left of it), then
+/// `Panes`, a row of shares. Each was its own implementation of "panes beside each other", with
+/// its own feel, beside the app's own regions doing the same job a third way.
 ///
-/// It then became a flat row sized in **points**, one number per pane with the first absorbing
-/// the remainder — the model the app's own regions use. That was wrong for documents in a way
-/// that took using it to see: with a single flexible pane, dragging the boundary between panes 2
-/// and 3 grew pane 3 while pane 2 kept its width and slid sideways, so every divider left of the
-/// pointer moved; and once the flexible pane reached the minimum its content wanted, every
-/// boundary in the row locked at once.
-///
-/// Now it is `core.widgets.Panes`: every pane holds a *share* of the row, a boundary is a
-/// position the rest of the row gives way to — the pane it touches first, then the one past that
-/// — and a window resize is proportional because nothing is stored in points. `Panes` is the
-/// general piece; the app's regions keep the points model, which is right for a sidebar and wrong
-/// for a document.
+/// Now it is `core.widgets.DockingWidget` over `Workbench.panes`: a tree of splits, each a share
+/// of its parent, so a divider moves exactly its own two children and nothing else — and the
+/// same widget the app's regions are moving onto, so a document split and a sidebar split are
+/// one mechanism. A pane opening or closing slides (`DockLayout.animated`); the widget only
+/// draws leaves, and each leaf is a workspace drawing its own tabs (`header = .none`).
 ///
 /// The `index` parameter stays because it is on the host vtable, and is the first pane to draw.
 pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
@@ -119,44 +116,115 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
     const panel_dragging = if (panel) |p| p.dragging else false;
     const panel_animating_open = if (panel) |p| (p.animating and p.ratio < 1.0) else false;
 
-    // One id per pane, keyed by the workspace's grouping rather than its position — see `paneId`.
-    // Every group gets a pane: there is no cap, because a cap would mean "open to the side" quietly
-    // doing nothing once the user has enough documents open. A row of twenty panes is unusable,
-    // but unusable is the user's call to make and undo by dragging, and a share of a row stays
-    // arithmetic however many there are.
-    const shown = count - index;
-    const ids = dvui.currentWindow().arena().alloc(dvui.Id, shown) catch |err| {
-        dvui.logError(@src(), err, "{d} document panes", .{shown});
-        return .ok;
-    };
-    for (ids, 0..) |*id, k| id.* = paneId(wb, index + k);
-
-    var row = core.widgets.panes(@src(), .horizontal, ids);
-    defer row.deinit();
-
-    for (0..shown) |k| {
-        row.divider(@src(), k);
-
-        var pane = row.pane(@src(), k);
-        const result = try wb.workspaces.values()[index + k].draw();
-        pane.deinit();
-        if (result != .ok) return result;
+    var dock = core.widgets.dockspace(@src(), .{
+        .layout = &wb.panes,
+        .header = .none,
+    }, .{ .expand = .both });
+    var result: dvui.App.Result = .ok;
+    while (dock.panel()) |p| {
+        defer p.end();
+        const grouping = Workspace.groupingOfName(p.id) orelse continue;
+        const ws = wb.workspaces.getPtr(grouping) orelse continue;
+        const r = try ws.draw();
+        if (r != .ok) result = r;
     }
+    // Read before `deinit`, which frees the widget.
+    const any_dragging = dock.dragging;
+    if (dock.changed) wb.panes_dirty = true;
+    dock.deinit();
+    if (wb.panes_dirty) savePanes(wb);
+    if (result != .ok) return result;
 
     // Centring is coordinated with the panel exactly as before: while nothing is being dragged,
     // a workspace centres its content if the panel is animating open.
-    if (!panel_dragging and !row.dragging and count > 0) {
+    if (!panel_dragging and !any_dragging and count > 0) {
         wb.workspaces.values()[count - 1].center = panel_animating_open;
     }
 
     return .ok;
 }
 
-/// A stable id per pane, keyed by the **workspace's grouping** rather than its position.
-///
-/// Keying by index attached a size to a *slot*: close a pane, open a document to the side, and
-/// the new group inherited whatever the old occupant of that slot had been dragged to —
-/// including zero, which opened it already shut.
-fn paneId(wb: *Workbench, i: usize) dvui.Id {
-    return dvui.Id.extendId(null, @src(), @truncate(wb.workspaces.keys()[i] +% 0x9E37));
+/// Write the arrangement to the plugin's directory. Skipped on the web, and when the host has
+/// no plugin directory to offer.
+fn savePanes(wb: *Workbench) void {
+    wb.panes_dirty = false;
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const path = panesPath(wb) orelse return;
+    defer wb.allocator.free(path);
+    const snap = wb.panes.snapshot(wb.allocator) catch return;
+    defer snap.deinit(wb.allocator);
+
+    var aw: std.Io.Writer.Allocating = .init(wb.allocator);
+    defer aw.deinit();
+    // `serializeMaxDepth`: a snapshot tree is a recursive type, which `serialize` refuses.
+    std.zon.stringify.serializeMaxDepth(snap, .{}, &aw.writer, 64) catch return;
+    std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = aw.written() }) catch |err| {
+        dvui.log.warn("workbench: could not save {s}: {s}", .{ path, @errorName(err) });
+    };
+}
+
+/// Read the saved arrangement back, if there is one, and give every pane in it a workspace.
+/// A leaf naming a pane that is not a pane is dropped; a tree with nothing left in it is
+/// ignored and the default single pane stays.
+fn loadPanes(wb: *Workbench) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const path = panesPath(wb) orelse return;
+    defer wb.allocator.free(path);
+    const data = std.Io.Dir.cwd().readFileAlloc(dvui.io, path, wb.allocator, .limited(1 << 20)) catch return;
+    defer wb.allocator.free(data);
+    const bytes = wb.allocator.dupeZ(u8, data) catch return;
+    defer wb.allocator.free(bytes);
+    const snap = std.zon.parse.fromSliceAlloc(Panes.Snapshot, wb.allocator, bytes, null, .{ .ignore_unknown_fields = true }) catch |err| {
+        dvui.log.warn("workbench: ignoring {s}: {s}", .{ path, @errorName(err) });
+        return;
+    };
+    defer std.zon.parse.free(wb.allocator, snap);
+
+    var loaded = Panes.fromSnapshot(wb.allocator, snap) catch return;
+    loaded.animated = true;
+    // Drop anything that is not a pane name, and any float — panes do not float (yet).
+    for (loaded.floats.items) |f| loaded.removePanel(loaded.nodes.items[f.leaf].leaf.tabs.items[0]);
+    var i: usize = 0;
+    while (i < loaded.nodes.items.len) : (i += 1) {
+        const n = loaded.nodes.items[i];
+        if (n != .leaf) continue;
+        var j: usize = 0;
+        while (j < n.leaf.tabs.items.len) {
+            if (Workspace.groupingOfName(n.leaf.tabs.items[j]) == null) {
+                loaded.removePanel(n.leaf.tabs.items[j]);
+                continue;
+            }
+            j += 1;
+        }
+    }
+    if (!loaded.contains(blk: {
+        var buf: [32]u8 = undefined;
+        break :blk Workspace.name(&buf, 0);
+    }) and loaded.nodes.items[loaded.root] == .leaf and loaded.nodes.items[loaded.root].leaf.tabs.items.len == 0) {
+        loaded.deinit();
+        return;
+    }
+
+    wb.panes.deinit();
+    wb.panes = loaded;
+    for (wb.panes.nodes.items) |n| {
+        if (n != .leaf) continue;
+        for (n.leaf.tabs.items) |t| {
+            const grouping = Workspace.groupingOfName(t) orelse continue;
+            const gop = wb.workspaces.getOrPut(wb.allocator, grouping) catch continue;
+            if (!gop.found_existing) gop.value_ptr.* = Workspace.init(grouping);
+            if (grouping > wb.grouping_id_counter) wb.grouping_id_counter = grouping;
+        }
+    }
+    if (wb.workspaces.count() > 0 and wb.paneLeaf(wb.open_workspace_grouping) == null) {
+        wb.open_workspace_grouping = wb.workspaces.keys()[0];
+    }
+}
+
+fn panesPath(wb: *Workbench) ?[]u8 {
+    if (comptime builtin.target.cpu.arch == .wasm32) return null;
+    const dir = runtime.host().pluginInstallDir("workbench") orelse return null;
+    defer wb.allocator.free(dir);
+    std.Io.Dir.cwd().createDirPath(dvui.io, dir) catch return null;
+    return std.fs.path.join(wb.allocator, &.{ dir, panes_file }) catch null;
 }

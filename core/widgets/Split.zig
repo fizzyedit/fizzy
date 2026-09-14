@@ -367,7 +367,7 @@ pub const Grab = struct {
 /// the container during a drag rejects the motion and release events too — the drag freezes on
 /// the first pixel, capture is never given back, and the resize cursor sticks. So once captured
 /// we match on ourselves, which the capture branch admits regardless of rect.
-pub fn grab(self: *Split, container: *dvui.BoxWidget) Grab {
+pub fn grab(self: *Split, container: *dvui.WidgetData) Grab {
     const axis = self.axis;
     const wd = self.box.data();
     const srs = wd.borderRectScale();
@@ -391,7 +391,7 @@ pub fn grab(self: *Split, container: *dvui.BoxWidget) Grab {
             if (!dvui.eventMatchSimple(e, wd)) continue;
             out.dist = 0;
         } else {
-            if (!dvui.eventMatchSimple(e, container.data())) continue;
+            if (!dvui.eventMatchSimple(e, container)) continue;
             const p = switch (axis) {
                 .horizontal => e.evt.mouse.p.x,
                 .vertical => e.evt.mouse.p.y,
@@ -457,7 +457,7 @@ pub fn drag(
         .vertical => srs.r.y + srs.r.h / 2,
     };
 
-    const grabbed = self.grab(container);
+    const grabbed = self.grab(container.data());
     const dist = grabbed.dist;
     const drag_to = grabbed.to;
     const was = dvui.dataGet(null, wd.id, "_held", bool) orelse false;

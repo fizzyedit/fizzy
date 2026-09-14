@@ -1,5 +1,5 @@
-//! Docking widget: walks a `Layout.DockLayout` tree, opening a `PanedWidget`
-//! per split and a tabbed header + content box per leaf. Floating leaves are
+//! Docking widget: walks a `Layout.DockLayout` tree, laying out each split itself with a
+//! `Split` sash between its children, and a tabbed header + content box per leaf. Floating leaves are
 //! drawn afterwards in their own `FloatingWindowWidget`s.
 //!
 //! Usage:
@@ -27,6 +27,7 @@ const Widget = dvui.Widget;
 const WidgetData = dvui.WidgetData;
 
 pub const Layout = @import("DockingWidget/Layout.zig");
+const Split = @import("Split.zig");
 
 const Dockspace = @This();
 
@@ -54,7 +55,17 @@ pub const CloseButtonVisibility = enum {
 
 pub const InitOptions = struct {
     layout: *Layout.DockLayout,
-    panelInfo: *const fn (Layout.PanelId) PanelInfo,
+    /// How a leaf's tabs are drawn. Required for `.tabs`; unused for `.none`.
+    panelInfo: ?*const fn (Layout.PanelId) PanelInfo = null,
+    /// `.tabs` draws a tab strip over each leaf (the panel-docking form). `.none` draws only the
+    /// active panel's content: a leaf is then a plain split-tree cell, and whatever chrome it
+    /// wants — its own tab strip, a title — is the caller's, drawn inside `panel()`. Tabs can't
+    /// be dragged between leaves in this form (there is no strip to drag from); a caller moves
+    /// panels through `Layout` mutations instead.
+    header: enum { tabs, none } = .tabs,
+    /// The sash's thickness in logical px. Always reserved, at any ratio — a pane dragged shut
+    /// leaves its handle standing, and shut panes stack theirs.
+    handle_size: f32 = Split.handle_size,
     close_button_visibility: CloseButtonVisibility = .always,
     /// Draws into the trailing header space after a leaf's tab strip, given
     /// the leaf's active `panel`. The area expands to fill the rest of the
@@ -86,8 +97,14 @@ init_opts: InitOptions,
 /// Mutations queued by tab clicks/closes/drags this frame; applied to
 /// `init_opts.layout` in `deinit`.
 mutations: std.ArrayList(Layout.Mutation) = .empty,
-/// True after `deinit` if any mutation was applied (caller should persist).
+/// True once a mutation has been queued this frame (caller should persist). Read it after the
+/// `panel()` loop and before `deinit`, which frees the widget.
 changed: bool = false,
+/// A sash somewhere in the tree is being dragged this frame. Read before `deinit`.
+dragging: bool = false,
+/// A split somewhere in the tree is easing toward its settled ratio this frame. Read before
+/// `deinit`.
+animating: bool = false,
 
 stack: std.ArrayList(StackFrame) = .empty,
 started: bool = false,
@@ -98,6 +115,10 @@ content_box: ?*dvui.BoxWidget = null,
 /// when that option is set. Opened in `openLeaf`, closed last in
 /// `closeContent` (outermost box).
 panel_wrapper: ?*dvui.BoxWidget = null,
+/// The box a leaf is placed in (its cell in the split), outermost of all, and the clip it set.
+leaf_cell: ?*dvui.BoxWidget = null,
+leaf_clip: ?Rect.Physical = null,
+current_leaf: ?Layout.NodeIndex = null,
 
 /// Drop target under the mouse during a "dvui_dock" drag, found while walking
 /// leaves. Root-edge zones are a fallback checked in `deinit` only if no leaf
@@ -111,10 +132,27 @@ pending_drop: ?struct { slug: Layout.PanelId, point: dvui.Point.Physical } = nul
 
 const StackFrame = struct {
     node: Layout.NodeIndex,
-    paned: *dvui.PanedWidget,
+    dir: dvui.enums.Direction,
+    /// The split's cell, relative to the dockspace's content. Splits open no widget of their
+    /// own: every leaf cell and every sash is a direct child of the dockspace, placed by rect,
+    /// so a leaf's widget id does not depend on how deep in the tree it sits — a collapse
+    /// promotes the kept child a level up, and nested boxes would have rebuilt it there.
+    rect: Rect,
+    /// The drawn ratio this frame — the layout's settled `ratio` (or `fixed`) eased toward, and
+    /// what a sash drag moves. Lives in dvui's data store under the dockspace, keyed by node;
+    /// `enterNode` explains the choreography.
+    shown: *f32,
+    /// The split's content length along its axis, in points.
+    extent: f32,
+    /// Where the two children go, relative to the dockspace's content. Recomputed after a drag.
+    first_rect: Rect,
+    second_rect: Rect,
     visited_first: bool = false,
     visited_second: bool = false,
 };
+
+/// How long a split takes to slide open, shut, or to a new settled ratio.
+const ease_us: i32 = 220_000;
 
 const DropTarget = union(enum) {
     tab: struct { leaf: Layout.NodeIndex, index: usize },
@@ -192,7 +230,7 @@ pub fn panel(self: *Dockspace) ?Panel {
         if (self.stack.items.len == 0) {
             if (!self.started) {
                 self.started = true;
-                if (self.enterNode(layout.root)) |p| return p;
+                if (self.enterNode(layout.root, null)) |p| return p;
                 continue;
             }
             return self.nextFloat();
@@ -201,65 +239,470 @@ pub fn panel(self: *Dockspace) ?Panel {
         const frame = &self.stack.items[self.stack.items.len - 1];
         if (!frame.visited_first) {
             frame.visited_first = true;
-            if (frame.paned.showFirst()) {
-                const child = layout.nodes.items[frame.node].split.first;
-                if (self.enterNode(child)) |p| return p;
-            }
+            const child = layout.nodes.items[frame.node].split.first;
+            if (self.enterNode(child, frame.first_rect)) |p| return p;
             continue;
         }
         if (!frame.visited_second) {
             frame.visited_second = true;
-            if (frame.paned.showSecond()) {
-                const child = layout.nodes.items[frame.node].split.second;
-                if (self.enterNode(child)) |p| return p;
-            }
+            const child = layout.nodes.items[frame.node].split.second;
+            if (self.enterNode(child, frame.second_rect)) |p| return p;
             continue;
         }
 
-        frame.paned.deinit();
+        self.leaveSplit(frame);
         _ = self.stack.pop();
     }
 }
 
-/// Enters `node`: for a split, opens a `PanedWidget` and pushes a stack frame
-/// (returns null so the caller loop continues); for a leaf, draws the header
-/// and opens the content box, returning the yielded `Panel`.
-fn enterNode(self: *Dockspace, node: Layout.NodeIndex) ?Panel {
+// Per-split state is keyed by the split's *identity* (`Layout.keyOf`), never its node index: a
+// collapse moves the kept child into its parent's slot, and state keyed by slot would be read
+// by the wrong split afterwards.
+
+fn shownKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
+    return std.fmt.allocPrint(dvui.currentWindow().arena(), "_shown:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_shown";
+}
+
+fn animKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
+    return std.fmt.allocPrint(dvui.currentWindow().arena(), "_ease:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_ease";
+}
+
+/// dvui has no way to drop an animation early; one that is already over is deleted at the start
+/// of the next frame, which is the same thing a frame later.
+fn cancelAnim(id: dvui.Id, key: []const u8) void {
+    if (dvui.animationGet(id, key) == null) return;
+    dvui.animation(id, key, .{ .start_val = 0, .end_val = 0, .end_time = 0 });
+}
+
+/// The ratio a child sits at when it has no width: `first` gone is 0, `second` gone is 1.
+fn shutRatio(child: Layout.Node.Child) f32 {
+    return switch (child) {
+        .first => 0,
+        .second => 1,
+    };
+}
+
+fn along(r: Rect, dir: dvui.enums.Direction) f32 {
+    return switch (dir) {
+        .horizontal => r.w,
+        .vertical => r.h,
+    };
+}
+
+// ── Geometry ────────────────────────────────────────────────────────────────────────────────
+//
+// A split divides its cell into `first`, a sash, and `second`. The sash always takes its full
+// `handle_size`, whatever the ratio: a pane dragged shut leaves its handle standing at the edge,
+// which is the thing you drag it back out by, and several shut in a row stack their handles side
+// by side and read as the several handles they are. So a subtree has a *floor* along an axis —
+// the room its own sashes on that axis need — and a ratio divides what is left above the floors.
+
+/// The least room `node` needs along `dir`: its same-axis sashes, summed; across a cross-axis
+/// split the two children sit one above the other, so the wider of the two.
+fn floorAlong(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction) f32 {
+    const layout = self.init_opts.layout;
+    return switch (layout.nodes.items[node]) {
+        .leaf, .free => 0,
+        .split => |sp| if (sp.dir == dir)
+            self.floorAlong(sp.first, dir) + self.gapOf(node) + self.floorAlong(sp.second, dir)
+        else
+            @max(self.floorAlong(sp.first, dir), self.floorAlong(sp.second, dir)),
+    };
+}
+
+/// The sash's thickness for `node`: `handle_size`, except on a split closing for good, whose
+/// sash folds away with the last of the closing child — a place closing reaches nothing, not
+/// nearly nothing. Left whole, the sash is ten points handed back in one step the frame the
+/// leaf is dropped, which is the only part of an otherwise smooth close anyone sees.
+fn gapOf(self: *Dockspace, node: Layout.NodeIndex) f32 {
+    const gap = self.init_opts.handle_size;
+    const sp = switch (self.init_opts.layout.nodes.items[node]) {
+        .split => |sp| sp,
+        else => return gap,
+    };
+    const going = sp.closing orelse return gap;
+    const shown = dvui.dataGet(null, self.data().id, self.shownKey(node), f32) orelse return gap;
+    // How far the closing child still reaches, as a share of the split's usable room; it is an
+    // emptied leaf, so its length is that share of whatever the split holds. The fold begins
+    // once that is under a sash's width.
+    const extent = dvui.dataGet(null, self.data().id, self.extentKey(node), f32) orelse return gap;
+    const share = switch (going) {
+        .first => shown,
+        .second => 1 - shown,
+    };
+    return @min(gap, @max(0, share * extent));
+}
+
+fn extentKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
+    return std.fmt.allocPrint(dvui.currentWindow().arena(), "_extent:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_extent";
+}
+
+const Division = struct { first: f32, usable: f32, floor_first: f32, floor_second: f32 };
+
+/// How `extent` divides at `ratio`: `first` is the first child's length; `usable` the room the
+/// ratio is a share of (the extent less the sash and both floors).
+fn divide(self: *Dockspace, node: Layout.NodeIndex, extent: f32, ratio: f32) Division {
+    const sp = self.init_opts.layout.nodes.items[node].split;
+    const floor_first = self.floorAlong(sp.first, sp.dir);
+    const floor_second = self.floorAlong(sp.second, sp.dir);
+    const usable = @max(0, extent - self.gapOf(node) - floor_first - floor_second);
+    return .{
+        .first = floor_first + usable * std.math.clamp(ratio, 0, 1),
+        .usable = usable,
+        .floor_first = floor_first,
+        .floor_second = floor_second,
+    };
+}
+
+/// The child rects and sash rect for a split of content size `cr` at `ratio`.
+fn cellRects(self: *Dockspace, node: Layout.NodeIndex, cr: Rect, ratio: f32) struct { first: Rect, second: Rect, sash: Rect } {
+    const sp = self.init_opts.layout.nodes.items[node].split;
+    const gap = self.gapOf(node);
+    const d = self.divide(node, along(cr, sp.dir), ratio);
+    // Absolute within the dockspace: `cr` is the split's own cell there.
+    return switch (sp.dir) {
+        .horizontal => .{
+            .first = .{ .x = cr.x, .y = cr.y, .w = d.first, .h = cr.h },
+            .sash = .{ .x = cr.x + d.first, .y = cr.y, .w = gap, .h = cr.h },
+            .second = .{ .x = cr.x + d.first + gap, .y = cr.y, .w = @max(0, cr.w - d.first - gap), .h = cr.h },
+        },
+        .vertical => .{
+            .first = .{ .x = cr.x, .y = cr.y, .w = cr.w, .h = d.first },
+            .sash = .{ .x = cr.x, .y = cr.y + d.first, .w = cr.w, .h = gap },
+            .second = .{ .x = cr.x, .y = cr.y + d.first + gap, .w = cr.w, .h = @max(0, cr.h - d.first - gap) },
+        },
+    };
+}
+
+fn minKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
+    return std.fmt.allocPrint(dvui.currentWindow().arena(), "_min:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_min";
+}
+
+/// The share a `fit` child needs for its content — what its leaf cell reported last frame —
+/// clamped to the fit's bounds. Null before the child has drawn once (nothing to fit to), or
+/// when the child is not a leaf.
+fn fittedRatio(self: *Dockspace, node: Layout.NodeIndex, fit: Layout.Node.Split.Fit, usable: f32) ?f32 {
+    const layout = self.init_opts.layout;
+    const sp = layout.nodes.items[node].split;
+    const child = Layout.childIndex(sp, fit.child);
+    if (layout.nodes.items[child] != .leaf) return null;
+    if (usable <= 0) return null;
+    const min = dvui.dataGet(null, self.data().id, self.minKey(child), Size) orelse return null;
+    const need = along(.{ .w = min.w, .h = min.h }, sp.dir);
+    const share = std.math.clamp(need / usable, fit.min, fit.max);
+    return switch (fit.child) {
+        .first => share,
+        .second => 1 - share,
+    };
+}
+
+/// The drawn ratio for `node`, seeded at `target`.
+fn shownPtr(self: *Dockspace, node: Layout.NodeIndex, target: f32) *f32 {
+    return dvui.dataGetPtrDefault(null, self.data().id, self.shownKey(node), f32, target);
+}
+
+// ── Dragging a sash: the two sides accordion ─────────────────────────────────────────────────
+//
+// Nested splits on one axis are, to the user, a row of panes with boundaries between them, and
+// a drag moves one boundary. It is resolved on that row, not on the one split's ratio: the
+// boundary goes where the pointer is, and each side of it scales as a group — every pane on the
+// squeezed side shrinks in proportion, keeping its share of that side, down to nothing, and the
+// panes on the other side grow the same way. Drag back and they open out in the same
+// proportions. Every split on the row then reads its ratio off the new positions. Sashes are
+// never scaled: each keeps its full width, so shut panes stack their handles at the boundary.
+
+const Boundary = struct { node: Layout.NodeIndex, pos: f32 };
+
+/// The same-axis splits under `node`, in row order, with each boundary's position (the start
+/// of its sash) relative to the row's origin.
+fn collectRow(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction, origin: f32, extent: f32, out: *std.ArrayList(Boundary)) void {
+    const layout = self.init_opts.layout;
+    const sp = switch (layout.nodes.items[node]) {
+        .split => |sp| sp,
+        else => return,
+    };
+    if (sp.dir != dir) return;
+    const ratio = if (dvui.dataGet(null, self.data().id, self.shownKey(node), f32)) |v| v else Layout.targetRatio(sp, extent);
+    const d = self.divide(node, extent, ratio);
+    self.collectRow(sp.first, dir, origin, d.first, out);
+    out.append(dvui.currentWindow().arena(), .{ .node = node, .pos = origin + d.first }) catch {};
+    self.collectRow(sp.second, dir, origin + d.first + self.gapOf(node), @max(0, extent - d.first - self.gapOf(node)), out);
+}
+
+/// The cells between the row's boundaries, in order — a leaf or a cross-axis subtree — so their
+/// floors can hold a pushed boundary off them.
+fn collectCells(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction, out: *std.ArrayList(Layout.NodeIndex)) void {
     const layout = self.init_opts.layout;
     switch (layout.nodes.items[node]) {
+        .split => |sp| if (sp.dir == dir) {
+            self.collectCells(sp.first, dir, out);
+            self.collectCells(sp.second, dir, out);
+            return;
+        },
+        else => {},
+    }
+    out.append(dvui.currentWindow().arena(), node) catch {};
+}
+
+/// Write the row's positions back as each split's drawn ratio, and queue the settled value.
+fn assignRow(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction, origin: f32, extent: f32, row: []const Boundary) void {
+    const layout = self.init_opts.layout;
+    const sp = switch (layout.nodes.items[node]) {
+        .split => |sp| sp,
+        else => return,
+    };
+    if (sp.dir != dir) return;
+    const pos = for (row) |b| {
+        if (b.node == node) break b.pos;
+    } else return;
+    const gap = self.gapOf(node);
+    const first_len = pos - origin;
+    const d = self.divide(node, extent, 0);
+    const ratio = if (d.usable > 0) std.math.clamp((first_len - d.floor_first) / d.usable, 0, 1) else 0;
+    self.shownPtr(node, ratio).* = ratio;
+    cancelAnim(self.data().id, self.animKey(node));
+    self.queueMutation(.{ .set_ratio = .{ .split = node, .ratio = ratio, .extent = d.usable } });
+    self.assignRow(sp.first, dir, origin, first_len, row);
+    self.assignRow(sp.second, dir, pos + gap, @max(0, extent - first_len - gap), row);
+}
+
+/// Fit `room` (each cell's stretch above its floor) into `total`, keeping proportions. A side that
+/// has been squeezed to nothing has no proportions to keep, so the room goes to the cell nearest
+/// the boundary (`nearest_last` says which end that is).
+fn scaleSide(room: []f32, total: f32, nearest_last: bool) void {
+    if (room.len == 0) return;
+    // Never quite nothing: a side scaled to a hundredth of a point keeps its proportions to
+    // open back out with, where exactly zero would forget them.
+    const fit = @max(0.01, total);
+    var sum: f32 = 0;
+    for (room) |r| sum += r;
+    if (sum > 0.0001) {
+        const f = fit / sum;
+        for (room) |*r| r.* *= f;
+    } else {
+        @memset(room, 0);
+        room[if (nearest_last) room.len - 1 else 0] = fit;
+    }
+}
+
+/// A drag on `frame`'s sash to `to` (physical, along the axis): resolve it on the row the sash
+/// belongs to and write every affected split's ratio.
+fn dragTo(self: *Dockspace, frame: *StackFrame, to: f32) void {
+    const dir = frame.dir;
+    const gap = self.init_opts.handle_size;
+
+    // The row: the outermost same-axis ancestor still open on the stack.
+    var root_i = self.stack.items.len - 1;
+    while (root_i > 0 and self.stack.items[root_i - 1].dir == dir) root_i -= 1;
+    const root = &self.stack.items[root_i];
+    const crs = self.data().contentRectScale();
+    const origin_px = switch (dir) {
+        .horizontal => crs.r.x + root.rect.x * crs.s,
+        .vertical => crs.r.y + root.rect.y * crs.s,
+    };
+    const extent = root.extent;
+
+    var row: std.ArrayList(Boundary) = .empty;
+    self.collectRow(root.node, dir, 0, extent, &row);
+    var cells: std.ArrayList(Layout.NodeIndex) = .empty;
+    self.collectCells(root.node, dir, &cells);
+    if (row.items.len == 0 or cells.items.len != row.items.len + 1) return;
+
+    const k = for (row.items, 0..) |b, i| {
+        if (b.node == frame.node) break i;
+    } else return;
+
+    // The pointer, as the start of this sash; then the floors either side hold it in.
+    var want = (to - origin_px) / crs.s - gap / 2;
+    var lo: f32 = 0;
+    for (cells.items[0 .. k + 1], 0..) |c, i| {
+        lo += self.floorAlong(c, dir);
+        if (i < k) lo += gap;
+    }
+    var hi: f32 = extent - gap;
+    for (cells.items[k + 1 ..], 0..) |c, i| {
+        hi -= self.floorAlong(c, dir);
+        if (i + 1 < cells.items.len - (k + 1)) hi -= gap;
+    }
+    want = std.math.clamp(want, lo, @max(lo, hi));
+
+    // Each cell's room above its floor, as it stands.
+    const n = cells.items.len;
+    const arena = dvui.currentWindow().arena();
+    const room = arena.alloc(f32, n) catch return;
+    for (cells.items, 0..) |c, i| {
+        const start: f32 = if (i == 0) 0 else row.items[i - 1].pos + gap;
+        const end: f32 = if (i == n - 1) extent else row.items[i].pos;
+        room[i] = @max(0, end - start - self.floorAlong(c, dir));
+    }
+
+    // Scale each side to fit, in proportion. A side with no room at all opens nearest first.
+    scaleSide(room[0 .. k + 1], want - lo, true);
+    scaleSide(room[k + 1 ..], hi - want, false);
+
+    // Positions from the rooms.
+    var at: f32 = 0;
+    for (cells.items, 0..) |c, i| {
+        at += self.floorAlong(c, dir) + room[i];
+        if (i < row.items.len) {
+            row.items[i].pos = at;
+            at += gap;
+        }
+    }
+
+    self.assignRow(root.node, dir, 0, extent, row.items);
+    self.dragging = true;
+    dvui.refresh(null, @src(), self.data().id);
+}
+
+/// Close out a split after both children have been walked: ease the drawn ratio toward the
+/// settled one and, once a closing split has shut, collapse it.
+fn leaveSplit(self: *Dockspace, frame: *StackFrame) void {
+    const layout = self.init_opts.layout;
+
+    const sp = layout.nodes.items[frame.node].split;
+    if (!layout.animated or self.dragging) return;
+
+    const d = self.divide(frame.node, frame.extent, 0);
+    const target = if (sp.closing) |c| shutRatio(c) else Layout.targetRatio(sp, d.usable);
+    const key = self.animKey(frame.node);
+    if (dvui.animationGet(self.data().id, key)) |a| {
+        self.animating = true;
+        if (@abs(a.end_val - target) > 0.0005) {
+            // Retargeted mid-slide (a leaf emptied while opening): continue from where it is.
+            dvui.animation(self.data().id, key, .{ .start_val = frame.shown.*, .end_val = target, .end_time = ease_us, .easing = dvui.easing.outCubic });
+        } else {
+            frame.shown.* = a.value();
+            if (a.done()) {
+                frame.shown.* = target;
+                if (sp.closing != null) self.finishClose(frame.node);
+            }
+        }
+        dvui.refresh(null, @src(), self.data().id);
+    } else if (@abs(frame.shown.* - target) > 0.0005) {
+        dvui.animation(self.data().id, key, .{ .start_val = frame.shown.*, .end_val = target, .end_time = ease_us, .easing = dvui.easing.outCubic });
+        dvui.refresh(null, @src(), self.data().id);
+    } else if (sp.closing != null) {
+        self.finishClose(frame.node);
+    }
+}
+
+/// The split has shut over `going`: collapse it. State is keyed by identity, so the kept child's
+/// drawn ratio needs no moving when it takes the split's slot.
+fn finishClose(self: *Dockspace, node: Layout.NodeIndex) void {
+    dvui.dataRemove(null, self.data().id, self.shownKey(node));
+    cancelAnim(self.data().id, self.animKey(node));
+    self.queueMutation(.{ .collapse = node });
+}
+
+/// Enters `node` in `cell` (relative to the current parent's content; null fills it): for a
+/// split, opens its box, runs its sash, and pushes a stack frame (returns null so the caller
+/// loop continues); for a leaf, draws the header and opens the content box, returning the
+/// yielded `Panel`.
+fn enterNode(self: *Dockspace, node: Layout.NodeIndex, cell: ?Rect) ?Panel {
+    const layout = self.init_opts.layout;
+    // A cell squeezed to nothing draws nothing. Not an optimisation: dvui reads a zero-width
+    // `rect` as "use the minimum size", so a pane at zero would come back at its content's
+    // width and paint over whatever is beside it.
+    if (cell) |c| if (c.w <= 0.5 or c.h <= 0.5) return null;
+    switch (layout.nodes.items[node]) {
         .split => |sp| {
-            const p = dvui.paned(@src(), .{
-                .direction = sp.dir,
-                .collapsed_size = 0,
-                .split_ratio = &layout.nodes.items[node].split.ratio,
-                .handle_margin = 4,
-            }, .{ .expand = .both, .id_extra = node });
-            self.stack.append(dvui.currentWindow().arena(), .{ .node = node, .paned = p }) catch {};
+            const cr = cell orelse self.data().contentRect().justSize();
+            const extent = along(cr, sp.dir);
+            dvui.dataSet(null, self.data().id, self.extentKey(node), extent);
+            const d0 = self.divide(node, extent, 0);
+            var target = Layout.targetRatio(sp, d0.usable);
+            if (sp.fit) |fit| if (self.fittedRatio(node, fit, d0.usable)) |r| {
+                target = r;
+                // Written through, so a caller reading `ratio` sees where the fit has settled.
+                layout.nodes.items[node].split.ratio = r;
+            };
+
+            // `shown` is what is drawn; `ratio`/`fixed` is where it settles. The two differ
+            // only mid-slide or mid-drag: a fresh split starts its new child at nothing and
+            // eases to `ratio`; a closing split eases to nothing and is then collapsed
+            // (`leaveSplit`); a drag moves `shown` directly and is written back on release.
+            // Without `animated` there is no gap and the settled ratio is what is drawn.
+            const shown: *f32 = if (layout.animated) blk: {
+                const ptr = self.shownPtr(node, target);
+                if (sp.opening) |c| {
+                    ptr.* = shutRatio(c);
+                    layout.nodes.items[node].split.opening = null;
+                    dvui.animation(self.data().id, self.animKey(node), .{ .start_val = ptr.*, .end_val = target, .end_time = ease_us, .easing = dvui.easing.outCubic });
+                    dvui.refresh(null, @src(), self.data().id);
+                }
+                break :blk ptr;
+            } else blk: {
+                const ptr = self.shownPtr(node, target);
+                ptr.* = target;
+                break :blk ptr;
+            };
+
+            var rects = self.cellRects(node, cr, shown.*);
+            self.stack.append(dvui.currentWindow().arena(), .{
+                .node = node,
+                .dir = sp.dir,
+                .rect = cr,
+                .shown = shown,
+                .extent = extent,
+                .first_rect = rects.first,
+                .second_rect = rects.second,
+            }) catch {};
+            const frame = &self.stack.items[self.stack.items.len - 1];
+
+            // The sash: fizzy's split handle, placed in the gap, matched on the box so it grows
+            // as the pointer approaches. Run before the children so a press near the sash is the
+            // sash's, not the pane's.
+            var sash = Split.initSized(@src(), sp.dir, layout.keyOf(node), rects.sash, self.gapOf(node));
+            const g = sash.grab(self.data());
+            if (dvui.captured(sash.box.data().id)) self.dragging = true;
+            if (g.to) |to| {
+                self.dragTo(frame, to);
+                rects = self.cellRects(node, cr, shown.*);
+                frame.first_rect = rects.first;
+                frame.second_rect = rects.second;
+            }
+            sash.draw(g.dist);
+            sash.deinit();
             return null;
         },
-        .leaf => return self.openLeaf(node),
+        .leaf => return self.openLeaf(node, cell),
         .free => unreachable,
     }
 }
 
-fn openLeaf(self: *Dockspace, node: Layout.NodeIndex) ?Panel {
+fn openLeaf(self: *Dockspace, node: Layout.NodeIndex, cell: ?Rect) ?Panel {
     const layout = self.init_opts.layout;
     const leaf = layout.nodes.items[node].leaf;
     if (leaf.tabs.items.len == 0) return null; // tolerated empty root leaf
 
+    // The leaf's cell in its split. A leaf clips what it holds: a pane squeezed narrower than
+    // its content must get smaller, not spill over its neighbour.
+    self.leaf_cell = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = if (cell == null) .both else .none,
+        .rect = cell,
+        .id_extra = layout.keyOf(node),
+        .background = false,
+    });
+    self.leaf_clip = dvui.clip(self.leaf_cell.?.data().contentRectScale().r);
+    self.current_leaf = node;
+
     if (self.init_opts.panel_background) |bg_opts| {
         const defaults = Options{ .name = "Dockspace.panel_background", .expand = .both };
-        self.panel_wrapper = dvui.box(@src(), .{}, defaults.override(bg_opts).override(.{ .id_extra = node }));
+        self.panel_wrapper = dvui.box(@src(), .{}, defaults.override(bg_opts).override(.{ .id_extra = layout.keyOf(node) }));
     }
 
-    const header_rect = self.drawHeader(node, leaf);
+    const header_rect: ?Rect.Physical = switch (self.init_opts.header) {
+        .tabs => self.drawHeader(node, leaf),
+        .none => null,
+    };
 
     const active_slug = leaf.tabs.items[leaf.active];
     const box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .id_extra = slugIdExtra(active_slug) });
     self.content_box = box;
 
     if (dvui.dragName("dvui_dock")) {
-        self.checkHeaderZone(node, header_rect);
+        if (header_rect) |hr| self.checkHeaderZone(node, hr);
         self.checkLeafZones(node, box.data().contentRectScale().r);
     }
 
@@ -277,48 +720,17 @@ fn checkHeaderZone(self: *Dockspace, node: Layout.NodeIndex, r: Rect.Physical) v
     self.hover_rect = r;
 }
 
-/// Drop-zone geometry for one leaf's content rect `r` (physical): a center
-/// zone (append as a new tab) inset 30% each side from `r`, and N/S/E/W edge
-/// strips (split that side) filling the rest, clamped to 40 logical px thick.
+/// Drop zones for one leaf's content rect `r` (physical) — `Layout.zoneAt` is the geometry: a
+/// centre zone (append as a new tab) and N/S/E/W edge strips (split that side), the strips
+/// clamped to 40 logical px thick.
 fn checkLeafZones(self: *Dockspace, node: Layout.NodeIndex, r: Rect.Physical) void {
     const mouse = dvui.currentWindow().mouse_pt;
-    if (!r.contains(mouse)) return;
-
-    const max_edge = 40.0 * dvui.windowNaturalScale();
-    const inset_x = @min(r.w * 0.3, max_edge);
-    const inset_y = @min(r.h * 0.3, max_edge);
-
-    const center: Rect.Physical = .{ .x = r.x + inset_x, .y = r.y + inset_y, .w = @max(0, r.w - 2 * inset_x), .h = @max(0, r.h - 2 * inset_y) };
-    if (center.contains(mouse)) {
-        const leaf = self.init_opts.layout.nodes.items[node].leaf;
-        self.hover_target = .{ .tab = .{ .leaf = node, .index = leaf.tabs.items.len } };
-        self.hover_rect = center;
-        return;
-    }
-
-    const left: Rect.Physical = .{ .x = r.x, .y = r.y, .w = inset_x, .h = r.h };
-    if (left.contains(mouse)) {
-        self.hover_target = .{ .split = .{ .leaf = node, .side = .left } };
-        self.hover_rect = left;
-        return;
-    }
-    const right: Rect.Physical = .{ .x = r.x + r.w - inset_x, .y = r.y, .w = inset_x, .h = r.h };
-    if (right.contains(mouse)) {
-        self.hover_target = .{ .split = .{ .leaf = node, .side = .right } };
-        self.hover_rect = right;
-        return;
-    }
-    const top: Rect.Physical = .{ .x = r.x, .y = r.y, .w = r.w, .h = inset_y };
-    if (top.contains(mouse)) {
-        self.hover_target = .{ .split = .{ .leaf = node, .side = .top } };
-        self.hover_rect = top;
-        return;
-    }
-    const bottom: Rect.Physical = .{ .x = r.x, .y = r.y + r.h - inset_y, .w = r.w, .h = inset_y };
-    if (bottom.contains(mouse)) {
-        self.hover_target = .{ .split = .{ .leaf = node, .side = .bottom } };
-        self.hover_rect = bottom;
-    }
+    const hit = Layout.zoneAt(r, mouse, 40.0 * dvui.windowNaturalScale()) orelse return;
+    self.hover_rect = hit.rect;
+    self.hover_target = switch (hit.zone) {
+        .tab => .{ .tab = .{ .leaf = node, .index = self.init_opts.layout.nodes.items[node].leaf.tabs.items.len } },
+        .split => |side| .{ .split = .{ .leaf = node, .side = side } },
+    };
 }
 
 /// Root-edge drop zones (24 logical px), checked only if no leaf already
@@ -329,32 +741,9 @@ fn checkRootZones(self: *Dockspace) void {
 
     const r = self.data().contentRectScale().r;
     const mouse = dvui.currentWindow().mouse_pt;
-    if (!r.contains(mouse)) return;
-    const thick = 24.0 * dvui.windowNaturalScale();
-
-    const left: Rect.Physical = .{ .x = r.x, .y = r.y, .w = thick, .h = r.h };
-    if (left.contains(mouse)) {
-        self.hover_target = .{ .split_root = .left };
-        self.hover_rect = left;
-        return;
-    }
-    const right: Rect.Physical = .{ .x = r.x + r.w - thick, .y = r.y, .w = thick, .h = r.h };
-    if (right.contains(mouse)) {
-        self.hover_target = .{ .split_root = .right };
-        self.hover_rect = right;
-        return;
-    }
-    const top: Rect.Physical = .{ .x = r.x, .y = r.y, .w = r.w, .h = thick };
-    if (top.contains(mouse)) {
-        self.hover_target = .{ .split_root = .top };
-        self.hover_rect = top;
-        return;
-    }
-    const bottom: Rect.Physical = .{ .x = r.x, .y = r.y + r.h - thick, .w = r.w, .h = thick };
-    if (bottom.contains(mouse)) {
-        self.hover_target = .{ .split_root = .bottom };
-        self.hover_rect = bottom;
-    }
+    const hit = Layout.edgeAt(r, mouse, 24.0 * dvui.windowNaturalScale()) orelse return;
+    self.hover_target = .{ .split_root = hit.side };
+    self.hover_rect = hit.rect;
 }
 
 /// Resolves a completed drop: moves `slug` to the currently hovered zone, or
@@ -383,6 +772,15 @@ fn closeContent(self: *Dockspace) void {
         w.deinit();
         self.panel_wrapper = null;
     }
+    if (self.leaf_cell) |c| {
+        if (self.leaf_clip) |clip| dvui.clipSet(clip);
+        self.leaf_clip = null;
+        // What the cell's content asked for, for a parent split that fits to it. `min_size`
+        // has accumulated every child's report by now; dvui only stores it at `deinit`.
+        if (self.current_leaf) |leaf| dvui.dataSet(null, self.data().id, self.minKey(leaf), c.data().options.padSize(c.data().min_size));
+        c.deinit();
+        self.leaf_cell = null;
+    }
     if (self.current_float) |f| {
         f.deinit();
         self.current_float = null;
@@ -392,7 +790,7 @@ fn closeContent(self: *Dockspace) void {
 /// Draws the tab strip (plus `drawHeaderExtra`'s trailing content, if set) and
 /// returns the header row's rect (used by `checkHeaderZone`).
 fn drawHeader(self: *Dockspace, node: Layout.NodeIndex, leaf: Layout.Node.Leaf) Rect.Physical {
-    var header_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .id_extra = node });
+    var header_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .id_extra = self.init_opts.layout.keyOf(node) });
     defer header_row.deinit();
 
     // Captured per tab below so `onTabContextMenu` can read a rect back after
@@ -406,11 +804,11 @@ fn drawHeader(self: *Dockspace, node: Layout.NodeIndex, leaf: Layout.Node.Leaf) 
         // width instead, so drops and right-clicks on the empty space reach the
         // app rather than an oversized tab strip.
         const tw_expand: Options.Expand = if (self.init_opts.drawHeaderExtra != null) .none else .horizontal;
-        var tw = dvui.tabs(@src(), .{ .dir = .horizontal }, .{ .expand = tw_expand, .id_extra = node });
+        var tw = dvui.tabs(@src(), .{ .dir = .horizontal }, .{ .expand = tw_expand, .id_extra = self.init_opts.layout.keyOf(node) });
         defer tw.deinit();
 
         for (leaf.tabs.items, 0..) |slug, i| {
-            const info = self.init_opts.panelInfo(slug);
+            const info = if (self.init_opts.panelInfo) |f| f(slug) else PanelInfo{ .title = slug };
             const selected = i == leaf.active;
 
             // App styling first, then the selected-only layer, and finally the
@@ -529,7 +927,7 @@ fn nextFloat(self: *Dockspace) ?Panel {
         }, .{ .id_extra = layout.floats.items[idx].leaf });
         self.current_float = fwin;
 
-        if (self.openLeaf(layout.floats.items[idx].leaf)) |p| return p;
+        if (self.openLeaf(layout.floats.items[idx].leaf, null)) |p| return p;
 
         // Empty float leaf (shouldn't normally happen): close and try the next one.
         fwin.deinit();

@@ -158,6 +158,74 @@ you liked, and it is what dvui's `PanedWidget` already does.
   `BlurBackdrop` in one widget (proves it from a plugin) → `overlay` panel over main →
   `.blur_behind` on a region = bracket the underlying leaf.
 
+  The first target, concretely: **a pane's overflow bleeds under its neighbour.** A text editor's
+  scroll area is wider than the pane; today the excess is simply clipped at the sash. Instead,
+  the part that runs *under* the pane to the right is drawn there as a very heavy, cached blur —
+  just the colour of what is underneath, the window's frosted-glass look applied inside the
+  layout — so the right-hand pane's tab strip sits over a hint of the left pane's text. The
+  scroll area is the natural capture point (it already knows its content rect vs its viewport),
+  and `BlurBackdrop`'s cache keyed on scroll offset is exactly what keeps it cheap. This is the
+  scroll-edge step above, done as an "under the neighbour" rather than a shadow at the edge.
+
+### The shape a layout is written in: a tree value *and* a function
+
+People will expect to write a layout as data:
+
+```zig
+const default_layout = .{ .vsplit = &.{
+    .{ .pane = .{ .name = "sidebar", .plugin = "text-editor" } },
+    .{ .hsplit = &.{
+        .{ .pane = .{ .name = "main", .plugin = "pixel-editor" } },
+        .{ .pane = .{ .name = "bottom", .plugin = "terminal" } },
+    } },
+} };
+```
+
+That is a `DockLayout.Snapshot` with names on the leaves — the *seed* the tree starts from when
+nothing is saved, and what Reset Layout returns to. It is the right form for *arrangement*
+(which is beside which, ratios, `fixed`, `fit`, `pinned`) and the wrong form for everything the
+function form is good at: the rail, the menu bar, the infobar, a filter box above a region, any
+widget an app wants between two places. So keep both, each doing the one thing it is good at:
+
+```zig
+const seed: Layout.Seed = .{ .split = .{ .dir = .horizontal, .fixed = .{ .child = .first, .points = 260 },
+    .first = &.{ .leaf = .{ .name = "Sidebar", .keywords = kw.ide.sidebar, .pinned = true } },
+    .second = &.{ .split = .{ .dir = .vertical, .ratio = 0.75,
+        .first = &.{ .leaf = .{ .name = "Main", .keywords = kw.ide.main, .pinned = true } },
+        .second = &.{ .leaf = .{ .name = "Panel", .keywords = kw.ide.panel, .shows = .many } } } } } };
+
+pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
+    const rail = try editor.sidebar.draw(...);          // ordinary dvui, before the tree
+    var tree = try f.tree(@src(), &seed, .{ .expand = .both });
+    defer tree.deinit();
+    while (tree.leaf()) |l| {                           // each leaf is a region by name
+        defer l.end();
+        if (std.mem.eql(u8, l.name, "Sidebar")) try f.regionIn(l, .{ .content = explorerPane })
+        else try f.regionIn(l, .{});                   // default: the selected matching surface
+    }
+    editor.infobar.draw(editor);                        // ordinary dvui, after
+    return .ok;
+}
+```
+
+The seed names leaves by keywords, not by plugin id — `"plugin": "terminal"` is an
+*assignment*, and assignments are the user's, kept in `layout.zon`; a seed that hard-wires one
+would fight the picker. `f.region` / `f.split` as call-order layout go away; `f.regionIn(leaf)`
+is what is left of `Region.init` once geometry is the tree's. Runtime subdivision, drags,
+floats and (later) OS windows all operate on the same tree, and the workbench's document row
+is a second tree nested in `Main`'s leaf — drags are scoped by keyword acceptance, so a
+document cannot land in a region slot or vice versa.
+
+### Status (2026-09-14)
+
+Done: dvui bumped (docking + `BlurBackdrop`); `DockLayout`/`DockingWidget` copied and extended
+(`fixed`, `fit`, `pinned`, keys, animated open/close/reopen, accordion drags, stacked sashes,
+`zoneAt`/`edgeAt`); the workbench document row is on it; `Panes`/`PanedWidget` deleted;
+`pixi`'s layers/palettes split is on it (`fit`); `zig`/`ghostty`/`atlas` migrated to the
+current SDK (`Painter`, `registerSurface`, `selectionFor`, `Host` doc queries) and installed.
+Next: the shell onto the tree via the seed form above, then `ViewDrag` → surface+kind, then
+blur, then floats → `osWindow`.
+
 ### What gets deleted
 
 `core/widgets/PanedWidget.zig` (dead now), `core/widgets/Panes.zig`, `Split.resolve` +
