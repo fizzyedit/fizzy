@@ -1550,9 +1550,9 @@ fn newDocumentChooserButton(host: *Host, plugin: *Plugin, index: usize) bool {
         .padding = .all(10),
         .corners = dvui.CornerRect.all(12),
         .background = true,
-        .color_fill = theme.color(.content, .fill),
-        .color_fill_hover = theme.color(.control, .fill).opacity(0.5),
-        .color_fill_press = theme.color(.control, .fill_press),
+        .color_fill = .{ .color = theme.color(.content, .fill) },
+        .color_fill_hover = .{ .color = theme.color(.control, .fill).opacity(0.5) },
+        .color_fill_press = .{ .color = theme.color(.control, .fill_press) },
         .box_shadow = .{
             .color = .black,
             .corners = dvui.CornerRect.all(12),
@@ -1572,7 +1572,7 @@ fn newDocumentChooserButton(host: *Host, plugin: *Plugin, index: usize) bool {
             .gravity_x = 0.5,
             .gravity_y = 0.5,
             .font = dvui.Font.theme(.title).larger(16.0),
-            .color_text = theme.color(.window, .text),
+            .color_text = .{ .color = theme.color(.window, .text) },
         });
     }
 

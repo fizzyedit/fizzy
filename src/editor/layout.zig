@@ -117,7 +117,7 @@ fn placeCard(editor: *fizzy.Editor, extra: dvui.Options) dvui.Options {
     }
     var opts = extra;
     opts.background = true;
-    opts.color_fill = fill;
+    opts.color_fill = .{ .color = fill };
     opts.corners = dvui.CornerRect.round(place_radius);
     // Inset the plugin surface inside the card. A sash is a packed split,
     // not this padding — this only shrinks the content rect.

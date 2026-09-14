@@ -26,7 +26,6 @@ fn pillFont() dvui.Font {
     return dvui.Font.theme(.body).larger(-1);
 }
 
-
 const chromeless = dvui.Options{
     .background = false,
     .margin = dvui.Rect{},
@@ -187,7 +186,7 @@ fn drawPreviewTogglePill(doc: *Document, id_extra: u64) void {
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .background = true,
-        .color_fill = dvui.themeGet().fill.opacity(0.92),
+        .color_fill = .{ .color = dvui.themeGet().fill.opacity(0.92) },
         .corners = dvui.CornerRect.all(12),
         .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
         .id_extra = @intCast(id_extra + 0x3000),
@@ -295,7 +294,7 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
             .w = editor_pad_right,
             .h = editor_pad_y,
         },
-        .color_text = dvui.themeGet().color(.content, .text),
+        .color_text = .{ .color = dvui.themeGet().color(.content, .text) },
         .id_extra = @intCast(id_extra + 1),
     }));
     // Not deferred: `pending_scroll_line` below needs to run *after* `te.deinit()` (which is
@@ -587,14 +586,14 @@ const completion_list_max_size: dvui.Size = .{ .w = 280, .h = 200 };
 fn addMatchHighlighted(tl: *dvui.TextLayoutWidget, label: []const u8, query: *const fuzzy.Query) void {
     const plain = dvui.themeGet().color(.control, .text);
     if (query.isEmpty()) {
-        tl.addText(label, .{ .color_text = plain });
+        tl.addText(label, .{ .color_text = .{ .color = plain } });
         return;
     }
 
     var buf: [fuzzy.highlight_buf_len]usize = undefined;
     const hits = fuzzy.highlight(label, query, &buf, .{ .plain = true });
     if (hits.len == 0) {
-        tl.addText(label, .{ .color_text = plain });
+        tl.addText(label, .{ .color_text = .{ .color = plain } });
         return;
     }
 
@@ -606,11 +605,11 @@ fn addMatchHighlighted(tl: *dvui.TextLayoutWidget, label: []const u8, query: *co
             // One `addText` per contiguous matched run, not per character.
             const start = i;
             while (h < hits.len and hits[h] == i) : (h += 1) i += 1;
-            tl.addText(label[start..i], .{ .color_text = matched });
+            tl.addText(label[start..i], .{ .color_text = .{ .color = matched } });
         } else {
             const start = i;
             i = if (h < hits.len) hits[h] else label.len;
-            tl.addText(label[start..i], .{ .color_text = plain });
+            tl.addText(label[start..i], .{ .color_text = .{ .color = plain } });
         }
     }
 }
@@ -653,7 +652,7 @@ fn colorForCompletionKind(ext: []const u8, kind: sdk.language.CompletionKind) dv
     };
     for (ts.highlights) |sh| {
         if (std.mem.eql(u8, sh.name, capture_name)) {
-            if (sh.opts.color_text) |c| return c;
+            if (sh.opts.color_text) |c| return c.toColor();
         }
     }
     return fallback;
@@ -687,7 +686,7 @@ fn drawCompletionList(doc: *Document, ext: []const u8, te: *TextEntryWidget, id_
     }, .{
         .id_extra = @intCast(id_extra + 0x9000),
         .background = true,
-        .color_fill = dvui.themeGet().color(.window, .fill).lighten(if (dvui.themeGet().dark) 5 else -5),
+        .color_fill = .{ .color = dvui.themeGet().color(.window, .fill).lighten(if (dvui.themeGet().dark) 5 else -5) },
         .corners = dvui.CornerRect.all(6),
         .border = dvui.Rect.all(0),
         .box_shadow = .{
@@ -776,7 +775,7 @@ fn drawCompletionList(doc: *Document, ext: []const u8, te: *TextEntryWidget, id_
         const is_selected = te.current_completion.?.selected == i;
 
         if (is_selected) {
-            bw.data().borderAndBackground(.{ .fill_color = dvui.themeGet().color(.window, .fill) });
+            bw.data().borderAndBackground(.{ .fill_color = .{ .color = dvui.themeGet().color(.window, .fill) } });
         }
         const click = bw.clicked();
 
@@ -784,8 +783,8 @@ fn drawCompletionList(doc: *Document, ext: []const u8, te: *TextEntryWidget, id_
 
         const kind_color = colorForCompletionKind(ext, candidate.kind);
         dvui.icon(@src(), "completion_kind_icon", iconForCompletionKind(candidate.kind), .{
-            .fill_color = kind_color,
-            .stroke_color = kind_color,
+            .fill_color = .{ .color = kind_color },
+            .stroke_color = .{ .color = kind_color },
         }, .{
             .min_size_content = .{ .w = 12, .h = 12 },
             .gravity_y = 0.5,
@@ -889,7 +888,7 @@ fn drawCompletionInfoPanel(ext: []const u8, candidate: TextEntryWidget.Completio
     }, .{
         .id_extra = @intCast(id_extra + 0xA000),
         .background = true,
-        .color_fill = dvui.themeGet().color(.window, .fill).lighten(if (dvui.themeGet().dark) 5 else -5),
+        .color_fill = .{ .color = dvui.themeGet().color(.window, .fill).lighten(if (dvui.themeGet().dark) 5 else -5) },
         .corners = dvui.CornerRect.all(6),
         .border = dvui.Rect.all(0),
         .box_shadow = .{
@@ -1142,7 +1141,7 @@ fn drawHoverAndGotoDefinition(doc: *Document, ext: []const u8, te: *TextEntryWid
 /// exclusive per frame rather than ever shown together.
 fn drawHoverLoading(id_extra: u64) void {
     dvui.label(@src(), "Just a moment...", .{}, .{
-        .color_text = dvui.themeGet().color(.window, .text).opacity(0.6),
+        .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) },
         .id_extra = @intCast(id_extra + 0x7400),
     });
 }
@@ -1151,7 +1150,7 @@ fn drawHoverLoading(id_extra: u64) void {
 /// site. Distinct from a confirmed-empty answer (which suppresses the tooltip entirely).
 fn drawHoverLoadingFailed(id_extra: u64) void {
     dvui.label(@src(), "Hover timed out", .{}, .{
-        .color_text = dvui.themeGet().color(.window, .text).opacity(0.6),
+        .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) },
         .id_extra = @intCast(id_extra + 0x7401),
     });
 }
@@ -1342,8 +1341,8 @@ fn drawHoverGoToFooter(
 
     const plain_font = dvui.Font.theme(.body);
     const link_font = plain_font.withUnderline(.{});
-    const plain: dvui.Options = .{ .font = plain_font, .color_text = dvui.themeGet().color(.window, .text) };
-    const link_opts: dvui.Options = .{ .font = link_font, .color_text = dvui.themeGet().color(.highlight, .fill) };
+    const plain: dvui.Options = .{ .font = plain_font, .color_text = .{ .color = dvui.themeGet().color(.window, .text) } };
+    const link_opts: dvui.Options = .{ .font = link_font, .color_text = .{ .color = dvui.themeGet().color(.highlight, .fill) } };
 
     tl.addText("Go to ", plain);
 

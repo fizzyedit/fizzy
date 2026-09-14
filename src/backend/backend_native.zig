@@ -575,8 +575,6 @@ pub const DialogFileFilter = sdl3.SDL_DialogFileFilter;
 /// working. See `setNativeMenuShortcut`.
 var native_menu_items: [menu_model.flat_commands.len]?objc.Object = @splat(null);
 
-
-
 /// Point a menu item at a different chord. `key` is the key-equivalent character (lowercase,
 /// as AppKit expects — the shift modifier is carried in the mask, not the case); passing null
 /// clears the shortcut, which is the right outcome for a chord AppKit can't express.

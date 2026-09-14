@@ -60,14 +60,14 @@ fn drawFill(image_rect: dvui.Rect) void {
         .rect = image_rect,
         .border = dvui.Rect.all(0),
         .background = true,
-        .color_fill = dvui.themeGet().color(.window, .fill),
+        .color_fill = .{ .color = dvui.themeGet().color(.window, .fill) },
     });
     fill_box.deinit();
 }
 
 fn drawCheckerboard(doc: *Document, data_rect: dvui.Rect) !void {
     const bg_screen = doc.canvas.screenFromDataRect(data_rect);
-    bg_screen.fill(.all(0), .{ .color = dvui.themeGet().color(.content, .fill), .fade = 1.5 });
+    bg_screen.fill(.all(0), .{ .color = .{ .color = dvui.themeGet().color(.content, .fill) }, .fade = 1.5 });
     if (data_rect.w <= 0 or data_rect.h <= 0) return;
     // The cells scale with the image (`checker_cells_per_axis` across it), so the board stays
     // legible however far out the view goes; the only zoom at which drawing it is pointless is
@@ -118,7 +118,7 @@ fn drawOutline(canvas: *CanvasWidget) void {
         canvas.rect.topRight(),
         canvas.rect.bottomRight(),
         canvas.rect.bottomLeft(),
-    } }, .{ .thickness = 1, .color = dvui.themeGet().color(.control, .fill_hover), .closed = true });
+    } }, .{ .thickness = 1, .color = .{ .color = dvui.themeGet().color(.control, .fill_hover) }, .closed = true });
 }
 
 fn canvasPanZoomScheme() CanvasWidget.PanZoomScheme {

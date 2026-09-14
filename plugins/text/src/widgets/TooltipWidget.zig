@@ -119,7 +119,7 @@ installed: bool = false,
 pub fn init(self: *TooltipWidget, src: std.builtin.SourceLocation, init_opts: InitOptions) void {
     const options: dvui.Options = .{
         .name = "FizzyTooltip",
-        .color_fill = dvui.themeGet().color(.window, .fill).lighten(if (dvui.themeGet().dark) 5 else -5),
+        .color_fill = .{ .color = dvui.themeGet().color(.window, .fill).lighten(if (dvui.themeGet().dark) 5 else -5) },
         .corners = dvui.CornerRect.all(8),
         .border = dvui.Rect.all(0),
         .background = true,

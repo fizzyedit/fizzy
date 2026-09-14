@@ -230,7 +230,7 @@ pub fn score(query: *const fuzzy.Query) ?f64 {
 pub fn draw(query: *const fuzzy.Query) void {
     if (comptime builtin.target.cpu.arch == .wasm32) {
         dvui.label(@src(), "Keybindings are not available on the web build.", .{}, .{
-            .color_text = dvui.themeGet().color(.window, .text).opacity(0.6),
+            .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) },
         });
         return;
     }
@@ -290,9 +290,9 @@ fn drawOwnerBranch(
     }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
-        .color_fill_hover = theme.color(.control, .fill).opacity(0.5),
-        .color_fill_press = theme.color(.control, .fill_press),
-        .color_fill = core.widgets.hoverRestFill(theme.color(.control, .fill)),
+        .color_fill_hover = .{ .color = theme.color(.control, .fill).opacity(0.5) },
+        .color_fill_press = .{ .color = theme.color(.control, .fill_press) },
+        .color_fill = .{ .color = core.widgets.hoverRestFill(theme.color(.control, .fill)) },
         .padding = dvui.Rect.all(1),
     });
     defer b.deinit();
@@ -306,7 +306,7 @@ fn drawOwnerBranch(
                 @src(),
                 "KeybindOwnerCaret",
                 if (b.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
-                .{ .fill_color = icon_color, .stroke_color = icon_color },
+                .{ .fill_color = .{ .color = icon_color }, .stroke_color = .{ .color = icon_color } },
                 core.widgets.treeRowIconOptions(.{}),
             );
         }
@@ -317,7 +317,7 @@ fn drawOwnerBranch(
                 @src(),
                 "KeybindOwnerIcon",
                 icons.tvg.entypo.folder,
-                .{ .fill_color = icon_color, .stroke_color = icon_color },
+                .{ .fill_color = .{ .color = icon_color }, .stroke_color = .{ .color = icon_color } },
                 core.widgets.treeRowIconOptions(.{}),
             );
         }
@@ -326,7 +326,7 @@ fn drawOwnerBranch(
             .gravity_y = 0.5,
             .expand = .horizontal,
             .font = dvui.Font.theme(.body),
-            .color_text = theme.color(.control, .text),
+            .color_text = .{ .color = theme.color(.control, .text) },
             .margin = .all(0),
             .padding = dvui.Rect.all(3),
         });
@@ -356,7 +356,7 @@ fn recordingDot() void {
     defer b.deinit();
 
     const r = b.data().borderRectScale().r;
-    r.fill(.all(r.h / 2), .{ .color = dvui.themeGet().color(.err, .fill) });
+    r.fill(.all(r.h / 2), .{ .color = .{ .color = dvui.themeGet().color(.err, .fill) } });
 }
 
 fn drawConflicts(editor: *fizzy.Editor, platform: keymap.Platform, theme: dvui.Theme) void {
@@ -366,7 +366,7 @@ fn drawConflicts(editor: *fizzy.Editor, platform: keymap.Platform, theme: dvui.T
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.color(.err, .fill).opacity(0.25),
+        .color_fill = .{ .color = theme.color(.err, .fill).opacity(0.25) },
         .corners = .all(6),
         .padding = dvui.Rect.all(6),
         .margin = .{ .h = 8 },
@@ -382,7 +382,7 @@ fn drawConflicts(editor: *fizzy.Editor, platform: keymap.Platform, theme: dvui.T
         dvui.label(@src(), "{s}: {s} shadows {s}", .{ keys, c.winner, c.loser }, .{
             .id_extra = i,
             .expand = .horizontal,
-            .color_text = theme.color(.window, .text).opacity(0.85),
+            .color_text = .{ .color = theme.color(.window, .text).opacity(0.85) },
         });
     }
 }
@@ -390,7 +390,7 @@ fn drawConflicts(editor: *fizzy.Editor, platform: keymap.Platform, theme: dvui.T
 /// Last-column heading. Not sortable — there is nothing to order by — so it stays a plain label
 /// rather than dvui's sortable heading button.
 fn drawResetHeading(grid: *dvui.GridWidget, cell_opts: dvui.Options, label_opts: dvui.Options) void {
-    const cell = grid.colHeader(2, cell_opts);
+    const cell = grid.colHeader(.{ .col = 2 }, cell_opts);
     defer cell.deinit();
 
     dvui.labelNoFmt(@src(), "Reset", .{}, label_opts.override(.{
@@ -426,7 +426,6 @@ fn drawOwnerGrid(
         // Shortcut and Reset are exempt from the horizontal expand, so they stay at the width
         // their contents need and the Command column absorbs everything left over. This is the
         // new grid's replacement for the old `col_ratios` (-1, 140, 64) proportional layout.
-        .cols_rigid = &.{ 1, 2 },
     }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
@@ -435,7 +434,7 @@ fn drawOwnerGrid(
         .max_size_content = .width(0),
         .padding = .all(0),
         .background = true,
-        .color_fill = theme.color(.window, .fill).opacity(0.25),
+        .color_fill = .{ .color = theme.color(.window, .fill).opacity(0.25) },
         .corners = .all(4),
         // dvui's grid defaults carry `.border = .all(1)`; these tables sit inside the settings
         // tree and are separated by their fill alone.
@@ -463,7 +462,7 @@ fn drawOwnerGrid(
     const key_id = "__fizzy_content_key";
     if (dvui.dataGet(null, grid.data().id, key_id, u64) != content_key) {
         dvui.dataSet(null, grid.data().id, key_id, content_key);
-        grid.autoSize(.{ .auto = .both });
+        grid.autoSize(.both);
     }
 
     // Alphabetical by command until the user clicks a heading. `.unsorted` is only ever the
@@ -479,7 +478,7 @@ fn drawOwnerGrid(
     const heading_cell_opts: dvui.Options = .{
         .padding = .{ .x = 6, .y = 2, .w = 4, .h = 2 },
         .background = true,
-        .color_fill = theme.color(.control, .fill).opacity(0.35),
+        .color_fill = .{ .color = theme.color(.control, .fill).opacity(0.35) },
     };
 
     // The heading control is dvui's own sortable button now, so it draws no fill of its own —
@@ -490,11 +489,11 @@ fn drawOwnerGrid(
         .background = false,
         .corners = .{},
         .font = dvui.Font.theme(.body).withWeight(.bold),
-        .color_text = theme.color(.window, .text).opacity(0.7),
+        .color_text = .{ .color = theme.color(.window, .text).opacity(0.7) },
     };
 
     inline for (.{ .{ 0, "Command" }, .{ 1, "Shortcut" } }) |heading| {
-        const cell = grid.colHeader(heading[0], heading_cell_opts);
+        const cell = grid.colHeader(.{ .col = heading[0] }, heading_cell_opts);
         defer cell.deinit();
         _ = cell.headerSortable(heading[1], heading_label_opts);
     }
@@ -531,7 +530,7 @@ const Banded = struct {
         return .{
             .padding = .{ .x = 6, .y = 2, .w = 4, .h = 2 },
             .background = true,
-            .color_fill = if (row % 2 == 1) self.theme.color(.control, .fill).opacity(0.22) else null,
+            .color_fill = if (row % 2 == 1) .{ .color = self.theme.color(.control, .fill).opacity(0.22) } else null,
         };
     }
 };
@@ -590,7 +589,7 @@ fn drawCommandRow(
             .margin = .all(0),
             .padding = .all(0),
             .font = dvui.Font.theme(.mono).larger(-1),
-            .color_text = theme.color(.window, .text).opacity(0.45),
+            .color_text = .{ .color = theme.color(.window, .text).opacity(0.45) },
         });
     }
 
@@ -613,7 +612,7 @@ fn drawCommandRow(
                 // than the button — dvui clamps it to half the height, which is what makes the
                 // ends semicircular at any row height.
                 .corners = if (is_recording) .all(10_000_000) else null,
-                .color_fill = if (is_recording) theme.color(.err, .fill).opacity(0.18) else null,
+                .color_fill = if (is_recording) .{ .color = theme.color(.err, .fill).opacity(0.18) } else null,
             });
             defer bw.deinit();
             bw.processEvents();
@@ -633,9 +632,9 @@ fn drawCommandRow(
                     .gravity_y = 0.5,
                     .expand = .horizontal,
                     .color_text = if (is_recording)
-                        theme.color(.err, .fill)
+                        .{ .color = theme.color(.err, .fill) }
                     else if (inherited)
-                        theme.color(.control, .text).opacity(0.55)
+                        .{ .color = theme.color(.control, .text).opacity(0.55) }
                     else
                         null,
                 });

@@ -213,7 +213,7 @@ pub const draggableInitOptions = struct {
 
 pub fn draggable(src: std.builtin.SourceLocation, init_opts: draggableInitOptions, opts: dvui.Options) ?dvui.Point.Physical {
     var iw: dvui.IconWidget = undefined;
-    iw.init(src, "reorder_drag_icon", init_opts.tvg_bytes orelse dvui.entypo.menu, .{ .fill_color = init_opts.color, .stroke_color = init_opts.color }, opts);
+    iw.init(src, "reorder_drag_icon", init_opts.tvg_bytes orelse dvui.entypo.menu, .{ .fill_color = .{ .color = init_opts.color }, .stroke_color = .{ .color = init_opts.color } }, opts);
     var ret: ?dvui.Point.Physical = null;
     loop: for (dvui.events()) |*e| {
         if (!iw.matchEvent(e))

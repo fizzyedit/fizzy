@@ -560,7 +560,7 @@ pub fn captureUnplaced(self: *Layout) void {
             .id_extra = i,
             .rect = .{ .x = -20_000, .y = -20_000, .w = offscreen_capture.w, .h = offscreen_capture.h },
             .background = true,
-            .color_fill = dvui.themeGet().color(.content, .fill),
+            .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
         });
         defer box.deinit();
         // A subtree drawn for the first time is not yet what it will look like: dvui lays it
@@ -936,10 +936,10 @@ pub fn tabsIn(f: *Layout, r: *const Region) void {
             s.title;
 
         dvui.label(@src(), "{s}", .{title_upper}, .{
-            .color_text = if (is_selected)
+            .color_text = .{ .color = if (is_selected)
                 dvui.themeGet().color(.highlight, .fill)
             else
-                dvui.themeGet().color(.control, .text),
+                dvui.themeGet().color(.control, .text) },
             .font = dvui.Font.theme(.heading),
             .padding = dvui.Rect.all(4),
             .gravity_y = 0.5,

@@ -9,7 +9,7 @@ pub fn mainCanvasVbox(content_color: dvui.Color, background: bool, grouping: u64
     return dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = background,
-        .color_fill = content_color,
+        .color_fill = .{ .color = content_color },
         .id_extra = @intCast(grouping),
     });
 }

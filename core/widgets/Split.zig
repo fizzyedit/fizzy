@@ -611,7 +611,7 @@ fn drawSplit(
     }
     g = g.outset(dvui.Rect.Physical.all(2 * srs.s));
     dvui.icon(@src(), "grip", grip, .{
-        .stroke_color = dvui.themeGet().color(.content, .fill).opacity(approach),
+        .stroke_color = .{ .color = dvui.themeGet().color(.content, .fill).opacity(approach) },
     }, .{ .rect = srs.rectFromPhysical(g) });
 }
 

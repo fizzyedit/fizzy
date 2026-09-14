@@ -235,7 +235,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
         defer link_row.deinit();
         dvui.link(@src(), .{ .url = "https://fizzyed.it", .label = "fizzyed.it" }, .{
             .font = heading,
-            .color_text = dvui.themeGet().color(.highlight, .fill),
+            .color_text = .{ .color = dvui.themeGet().color(.highlight, .fill) },
         });
     }
 
@@ -314,14 +314,14 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
                 .expand = .none,
                 .min_size_content = .{ .w = 24, .h = 24 },
                 .gravity_x = 0.5,
-                .color_text = dvui.themeGet().color(.control, .text),
+                .color_text = .{ .color = dvui.themeGet().color(.control, .text) },
             }, .{ .complete_elapsed_ns = finish_elapsed });
             dvui.refresh(null, @src(), null);
         }
     }
 
     if (!checking) {
-        dvui.labelNoFmt(@src(), status_line, .{}, .{ .font = body_small, .gravity_x = 0.5, .color_text = dvui.themeGet().color(.control, .text) });
+        dvui.labelNoFmt(@src(), status_line, .{}, .{ .font = body_small, .gravity_x = 0.5, .color_text = .{ .color = dvui.themeGet().color(.control, .text) } });
     }
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 8, .h = 12 } });

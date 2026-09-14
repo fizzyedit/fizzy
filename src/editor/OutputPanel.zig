@@ -82,7 +82,7 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &scroll_info }, .{ .expand = .both, .background = false });
 
     const mono: dvui.Options = .{ .font = dvui.Font.theme(.mono) };
-    const message_color: dvui.Options = .{ .color_text = dvui.themeGet().color(.window, .text).opacity(0.6) };
+    const message_color: dvui.Options = .{ .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) } };
 
     // One shared `TextLayoutWidget` for every line (not one per line): dvui's text
     // selection is per-widget, so a single widget is what lets a click-drag span multiple
@@ -104,10 +104,10 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         // Only the "level(scope): " prefix gets the level color — the message stays the
         // default text color, so a long line doesn't read as one solid block of red/purple.
         if (std.mem.indexOf(u8, line.text, ": ")) |idx| {
-            tl.addText(line.text[0 .. idx + 2], mono.override(.{ .color_text = levelColor(line.level) }));
+            tl.addText(line.text[0 .. idx + 2], mono.override(.{ .color_text = .{ .color = levelColor(line.level) } }));
             tl.addText(line.text[idx + 2 ..], mono.override(message_color));
         } else {
-            tl.addText(line.text, mono.override(.{ .color_text = levelColor(line.level).opacity(0.6) }));
+            tl.addText(line.text, mono.override(.{ .color_text = .{ .color = levelColor(line.level).opacity(0.6) } }));
         }
     }
 
@@ -130,7 +130,7 @@ fn drawTabStrip(scopes: []const []const u8) void {
         .min_size_content = .{ .w = 120 },
         .background = false,
         .gravity_x = 1.0,
-        .color_fill = dvui.themeGet().color(.control, .fill),
+        .color_fill = .{ .color = dvui.themeGet().color(.control, .fill) },
     });
     defer strip.deinit();
 

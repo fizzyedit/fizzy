@@ -59,7 +59,7 @@ pub fn dialog(id: dvui.Id) anyerror!bool {
         @src(),
         "Files download to your browser's download folder.",
         .{},
-        .{ .color_text = dvui.themeGet().color(.control, .text), .margin = .{ .h = 8 } },
+        .{ .color_text = .{ .color = dvui.themeGet().color(.control, .text) }, .margin = .{ .h = 8 } },
     );
 
     const te = dvui.textEntry(@src(), .{ .placeholder = "filename.fiz" }, .{ .expand = .horizontal });

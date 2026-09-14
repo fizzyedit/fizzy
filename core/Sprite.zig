@@ -82,7 +82,7 @@ pub fn draw(
         path.addPoint(r.topRight());
         path.addPoint(r.bottomRight());
         path.addPoint(r.bottomLeft());
-        path.build().stroke(.{ .color = border, .thickness = 1.0, .closed = true });
+        path.build().stroke(.{ .color = .{ .color = border }, .thickness = 1.0, .closed = true });
     }
 
     wd.minSizeSetAndRefresh();

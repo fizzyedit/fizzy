@@ -58,7 +58,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
         @src(),
         "The file explorer is not available in the browser.\n\nUse Open Files to load files from your device.",
         .{},
-        .{ .color_text = dvui.themeGet().color(.window, .text), .margin = .{ .h = 12 } },
+        .{ .color_text = .{ .color = dvui.themeGet().color(.window, .text) }, .margin = .{ .h = 12 } },
     );
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });

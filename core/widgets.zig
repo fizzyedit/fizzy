@@ -27,6 +27,15 @@ pub const PanedWidget = @import("widgets/PanedWidget.zig");
 pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
 pub const TreeWidget = @import("widgets/TreeWidget.zig");
 pub const TreeSelection = @import("widgets/TreeSelection.zig");
+/// Local copies of upstream dvui's `DockingWidget` (+ its `DockLayout` tree) and `BlurBackdrop`,
+/// taken at the current pin so the split-tree/blur work can be iterated here before anything is
+/// proposed upstream. Keep the diff against `dvui-dev/src/{widgets/DockingWidget.zig,
+/// widgets/DockingWidget/Layout.zig,BlurBackdrop.zig}` readable — that diff *is* the proposal.
+pub const DockingWidget = @import("widgets/DockingWidget.zig");
+pub const DockLayout = DockingWidget.Layout;
+pub const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
+/// Verb form of `DockingWidget`, same shape as `dvui.dockspace`.
+pub const dockspace = DockingWidget.dockspace;
 /// Reorderable tab strip shared by fizzy's bottom panel and the workbench's document tabs.
 /// The draggable split between two regions. Lives here rather than beside the layout because the
 /// workbench draws document splits from inside a dylib and must reach the same one — the same

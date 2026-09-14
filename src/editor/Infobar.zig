@@ -53,9 +53,9 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
             .gravity_y = 0.5,
             .margin = .all(0),
             .padding = .all(0),
-            .color_fill = fizzy.core.widgets.hoverRestFill(dvui.themeGet().color(.control, .fill_hover)),
-            .color_fill_hover = dvui.themeGet().color(.control, .fill_hover),
-            .color_fill_press = dvui.themeGet().color(.control, .fill_press),
+            .color_fill = .{ .color = fizzy.core.widgets.hoverRestFill(dvui.themeGet().color(.control, .fill_hover)) },
+            .color_fill_hover = .{ .color = dvui.themeGet().color(.control, .fill_hover) },
+            .color_fill_press = .{ .color = dvui.themeGet().color(.control, .fill_press) },
         });
         defer button.deinit();
         button.processEvents();
@@ -112,7 +112,7 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
             dot.x -= 4.5 * brs.s;
             dot.y -= 4.5 * brs.s;
             dot.fill(dvui.CornerRect.Physical.round(4.5 * brs.s), .{
-                .color = dvui.themeGet().color(.highlight, .fill),
+                .color = .{ .color = dvui.themeGet().color(.highlight, .fill) },
                 .fade = 0,
             });
         }
@@ -125,7 +125,7 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
             @src(),
             "project_icon",
             icons.tvg.entypo.folder,
-            .{ .stroke_color = dvui.themeGet().color(.window, .text), .fill_color = dvui.themeGet().color(.window, .text) },
+            .{ .stroke_color = .{ .color = dvui.themeGet().color(.window, .text) }, .fill_color = .{ .color = dvui.themeGet().color(.window, .text) } },
             // Same square every other glyph in the bar gets, rather than the icon's own natural
             // size — that is what keeps it aligned with the label at any font size.
             .{
@@ -209,7 +209,7 @@ fn drawEntry(id_extra: usize, entry: infobar.Entry) void {
             @src(),
             "plugin_infobar_icon",
             entry.icon,
-            .{ .stroke_color = color, .fill_color = color },
+            .{ .stroke_color = .{ .color = color }, .fill_color = .{ .color = color } },
             .{
                 .id_extra = id_extra,
                 .gravity_y = 0.5,

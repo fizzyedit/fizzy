@@ -181,7 +181,7 @@ pub fn draw() void {
             .expand = .both,
             .gravity_x = 0.5,
             .gravity_y = 0.5,
-            .color_text = dvui.themeGet().color(.window, .text).opacity(0.7),
+            .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.7) },
         });
         return;
     };
@@ -191,19 +191,19 @@ pub fn draw() void {
             .expand = .both,
             .gravity_x = 0.5,
             .gravity_y = 0.5,
-            .color_text = dvui.themeGet().color(.window, .text).opacity(0.7),
+            .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.7) },
         }),
         .not_found => dvui.labelNoFmt(@src(), "No README found for this plugin.", .{}, .{
             .expand = .both,
             .gravity_x = 0.5,
             .gravity_y = 0.5,
-            .color_text = dvui.themeGet().color(.window, .text).opacity(0.7),
+            .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.7) },
         }),
         .failed => dvui.labelNoFmt(@src(), "Could not fetch the README.", .{}, .{
             .expand = .both,
             .gravity_x = 0.5,
             .gravity_y = 0.5,
-            .color_text = dvui.themeGet().color(.err, .text).opacity(0.85),
+            .color_text = .{ .color = dvui.themeGet().color(.err, .text).opacity(0.85) },
         }),
         .ready => {
             const bytes = c.bytes orelse return;

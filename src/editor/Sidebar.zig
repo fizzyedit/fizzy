@@ -150,7 +150,7 @@ fn drawOption(
             .tvg => |bytes| bytes,
             else => dvui.entypo.dot_single,
         },
-        .{ .fill_color = color, .stroke_color = color },
+        .{ .fill_color = .{ .color = color }, .stroke_color = .{ .color = color } },
         .{
             .id_extra = index,
             .min_size_content = .{ .h = size },
@@ -174,7 +174,7 @@ fn drawOption(
         dot.x -= r;
         dot.y -= r;
         dot.fill(dvui.CornerRect.Physical.round(r), .{
-            .color = theme.color(.highlight, .fill),
+            .color = .{ .color = theme.color(.highlight, .fill) },
             .fade = 0,
         });
     }
@@ -202,7 +202,7 @@ fn drawOption(
             .delay = 350_000,
         }, .{
             .id_extra = index,
-            .color_fill = dvui.themeGet().color(.window, .fill),
+            .color_fill = .{ .color = dvui.themeGet().color(.window, .fill) },
             .border = dvui.Rect.all(0),
             .box_shadow = .{
                 .color = .black,

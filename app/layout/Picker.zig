@@ -76,7 +76,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
     // they read as one surface style rather than two.
     var popup = dvui.popup(@src(), .{ .open_flag = &self.is_open, .from = self.anchor }, .{
         .padding = dvui.Rect.all(8),
-        .color_fill = theme.color(.content, .fill).opacity(0.95),
+        .color_fill = .{ .color = theme.color(.content, .fill).opacity(0.95) },
         .corners = dvui.CornerRect.all(8),
         .border = .all(0),
         .box_shadow = .{
@@ -117,7 +117,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
             dvui.labelNoFmt(@src(), "Surfaces", .{}, .{
                 .font = actionFont(),
                 .gravity_y = 0.5,
-                .color_text = theme.color(.window, .text).opacity(0.6),
+                .color_text = .{ .color = theme.color(.window, .text).opacity(0.6) },
             });
             if (modeButton(@src(), "Single", region.shows == .one, 1)) {
                 setShows(f, &region, .one);
@@ -283,9 +283,9 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) bool {
         .padding = dvui.Rect.all(6),
         .corners = dvui.CornerRect.all(6),
         .background = true,
-        .color_fill = if (on) theme.color(.highlight, .fill).opacity(0.25) else theme.color(.control, .fill),
+        .color_fill = .{ .color = if (on) theme.color(.highlight, .fill).opacity(0.25) else theme.color(.control, .fill) },
         .border = dvui.Rect.all(1),
-        .color_border = if (on) theme.color(.highlight, .fill) else theme.color(.control, .border),
+        .color_border = .{ .color = if (on) theme.color(.highlight, .fill) else theme.color(.control, .border) },
     });
     defer bw.deinit();
     bw.processEvents();
@@ -301,7 +301,7 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) bool {
             .max_size_content = .size(preview),
             .background = true,
             .corners = dvui.CornerRect.all(3),
-            .color_fill = theme.color(.content, .fill),
+            .color_fill = .{ .color = theme.color(.content, .fill) },
         });
         defer tile.deinit();
         if (f.state.snapshot(s.id)) |snap| {
@@ -322,14 +322,14 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) bool {
     dvui.labelNoFmt(@src(), s.title, .{}, .{
         .padding = .{ .y = 4 },
         .max_size_content = .width(preview.w),
-        .color_text = if (on) theme.color(.highlight, .fill) else theme.color(.window, .text),
+        .color_text = .{ .color = if (on) theme.color(.highlight, .fill) else theme.color(.window, .text) },
     });
     const owner = if (s.owner) |p| p.display_name else "";
     if (owner.len > 0) {
         dvui.labelNoFmt(@src(), owner, .{}, .{
             .padding = .{},
             .font = dvui.Font.theme(.heading),
-            .color_text = theme.color(.control, .text),
+            .color_text = .{ .color = theme.color(.control, .text) },
         });
     }
     return bw.clicked();
@@ -357,8 +357,8 @@ fn modeButton(src: std.builtin.SourceLocation, label: []const u8, on: bool, id_e
         .margin = .{ .x = 4 },
         .gravity_y = 0.5,
         .id_extra = id_extra,
-        .color_fill = if (on) theme.color(.highlight, .fill).opacity(0.25) else null,
-        .color_border = if (on) theme.color(.highlight, .fill) else null,
+        .color_fill = if (on) .{ .color = theme.color(.highlight, .fill).opacity(0.25) } else null,
+        .color_border = if (on) .{ .color = theme.color(.highlight, .fill) } else null,
     });
 }
 
@@ -471,7 +471,7 @@ fn drawStoreSection(
     dvui.labelNoFmt(@src(), "Store", .{}, .{
         .font = dvui.Font.theme(.heading),
         .padding = .{ .y = 10, .x = 4 },
-        .color_text = dvui.themeGet().color(.window, .text).opacity(0.6),
+        .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) },
     });
 
     for (offers, 0..) |offer, i| {
@@ -497,9 +497,9 @@ fn storeCard(offer: State.StoreOffer, installing: bool, id_extra: usize) bool {
         .padding = dvui.Rect.all(6),
         .corners = dvui.CornerRect.all(6),
         .background = true,
-        .color_fill = theme.color(.control, .fill),
+        .color_fill = .{ .color = theme.color(.control, .fill) },
         .border = dvui.Rect.all(1),
-        .color_border = theme.color(.control, .border),
+        .color_border = .{ .color = theme.color(.control, .border) },
     });
     defer bw.deinit();
     bw.processEvents();
@@ -514,13 +514,13 @@ fn storeCard(offer: State.StoreOffer, installing: bool, id_extra: usize) bool {
             .max_size_content = .size(preview),
             .background = true,
             .corners = dvui.CornerRect.all(3),
-            .color_fill = theme.color(.content, .fill),
+            .color_fill = .{ .color = theme.color(.content, .fill) },
         });
         defer tile.deinit();
         dvui.labelNoFmt(@src(), if (installing) "Installing…" else "Install", .{}, .{
             .gravity_x = 0.5,
             .gravity_y = 0.5,
-            .color_text = theme.color(.control, .text),
+            .color_text = .{ .color = theme.color(.control, .text) },
         });
     }
 
@@ -531,7 +531,7 @@ fn storeCard(offer: State.StoreOffer, installing: bool, id_extra: usize) bool {
     dvui.labelNoFmt(@src(), "Store", .{}, .{
         .padding = .{},
         .font = dvui.Font.theme(.heading),
-        .color_text = theme.color(.control, .text),
+        .color_text = .{ .color = theme.color(.control, .text) },
     });
     return bw.clicked() and !installing;
 }

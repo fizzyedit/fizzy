@@ -1319,8 +1319,8 @@ const BracketMark = struct {
 /// follows the chrome; the glyph colour does not — that's the point of a fixed palette.
 fn bracketStyle(mark: BracketMark) dvui.Options {
     var o: dvui.Options = .{};
-    if (mark.depth) |d| o.color_text = palette.bracket(d);
-    if (mark.caret_match) o.color_fill = dvui.themeGet().color(.highlight, .fill).opacity(0.35);
+    if (mark.depth) |d| o.color_text = .{ .color = palette.bracket(d) };
+    if (mark.caret_match) o.color_fill = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(0.35) };
     return o;
 }
 
@@ -1389,7 +1389,7 @@ pub fn drawCursor(self: *TextEntryWidget) void {
 
         var crect = self.textLayout.cursor_rect.plus(.{ .x = -1 });
         crect.w = 2;
-        self.textLayout.screenRectScale(crect).r.fill(.{}, .{ .color = dvui.themeGet().focus, .fade = 1.0 });
+        self.textLayout.screenRectScale(crect).r.fill(.{}, .{ .color = .{ .color = dvui.themeGet().focus }, .fade = 1.0 });
     }
 }
 

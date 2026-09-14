@@ -221,7 +221,7 @@ fn displayUpdateToast(id: dvui.Id) !void {
         .background = true,
         .corners = dvui.CornerRect.all(1000),
         .padding = .{ .x = 16, .y = 8, .w = 8, .h = 8 },
-        .color_fill = dvui.themeGet().color(.content, .fill),
+        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
         .box_shadow = .{
             .color = .black,
             .offset = .{ .x = -2.0, .y = 2.0 },
@@ -234,7 +234,7 @@ fn displayUpdateToast(id: dvui.Id) !void {
 
     dvui.labelNoFmt(@src(), "Update available!", .{}, .{
         .gravity_y = 0.5,
-        .color_text = dvui.themeGet().color(.content, .text),
+        .color_text = .{ .color = dvui.themeGet().color(.content, .text) },
         .padding = .{ .x = 4, .w = 12 },
     });
 
@@ -323,7 +323,7 @@ fn displayProgressToast(id: dvui.Id) !void {
         .background = true,
         .corners = dvui.CornerRect.all(1000),
         .padding = .{ .x = 16, .y = 8, .w = 8, .h = 8 },
-        .color_fill = dvui.themeGet().color(.content, .fill),
+        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
         .box_shadow = .{
             .color = .black,
             .offset = .{ .x = -2.0, .y = 2.0 },
@@ -337,7 +337,7 @@ fn displayProgressToast(id: dvui.Id) !void {
     const label = update_install.phaseLabel(cur_phase);
     dvui.labelNoFmt(@src(), label, .{}, .{
         .gravity_y = 0.5,
-        .color_text = dvui.themeGet().color(.content, .text),
+        .color_text = .{ .color = dvui.themeGet().color(.content, .text) },
         .padding = .{ .x = 4, .w = 12 },
     });
 

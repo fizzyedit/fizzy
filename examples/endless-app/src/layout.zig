@@ -26,7 +26,7 @@ pub fn layout(_: ?*anyopaque, f: *Layout) !dvui.App.Result {
     }, .{
         .expand = .both,
         .background = true,
-        .color_fill = dvui.themeGet().color(.content, .fill),
+        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
         .corners = dvui.CornerRect.round(12),
     });
     defer center.deinit();

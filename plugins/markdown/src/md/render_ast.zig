@@ -813,7 +813,7 @@ fn addMarkdownLink(
     opts: dvui.Options,
     ctx: RenderContext,
 ) void {
-    const defs: dvui.Options = .{ .color_text = dvui.themeGet().focus, .font = dvui.Font.theme(.body).withUnderline(.{}) };
+    const defs: dvui.Options = .{ .color_text = .{ .color = dvui.themeGet().focus }, .font = dvui.Font.theme(.body).withUnderline(.{}) };
     if (tl.addTextClick(text orelse url, defs.override(opts))) |click_event| {
         const open_side = (click_event == .mouse and (click_event.mouse.button == .middle or click_event.mouse.mod.matchBind("ctrl/cmd")));
         openMarkdownUrl(url, open_side, ctx);
@@ -1122,7 +1122,7 @@ fn renderMarkdownImagePlaceholder(msg: []const u8, ids: *IdGen) void {
     dvui.labelNoFmt(@src(), msg, .{}, .{
         .expand = .horizontal,
         .margin = .{ .y = 2, .h = 2 },
-        .color_text = dvui.themeGet().color(.control, .text).opacity(0.55),
+        .color_text = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.55) },
         .font = dvui.Font.theme(.mono).larger(-1),
         .id_extra = ids.next(),
     });
@@ -1373,7 +1373,7 @@ fn renderImageCaption(alt: []const u8, ctx: RenderContext, ids: *IdGen) void {
     defer cap.deinit();
     addText(cap, alt, .{
         .font = dvui.Font.theme(.body).larger(-1),
-        .color_text = dvui.themeGet().color(.control, .text).opacity(0.65),
+        .color_text = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.65) },
     });
 }
 
@@ -1420,9 +1420,9 @@ fn renderTaskCheckbox(checked: bool, m: MarkerMetrics, ids: *IdGen) void {
         .gravity_y = 0,
         .margin = .{ .y = m.top },
         .background = true,
-        .color_fill = if (checked) theme.color(.highlight, .fill) else theme.color(.control, .fill),
+        .color_fill = .{ .color = if (checked) theme.color(.highlight, .fill) else theme.color(.control, .fill) },
         .border = dvui.Rect.all(1),
-        .color_border = if (checked) theme.color(.highlight, .fill) else theme.border.opacity(0.7),
+        .color_border = .{ .color = if (checked) theme.color(.highlight, .fill) else theme.border.opacity(0.7) },
         .corners = dvui.CornerRect.all(3),
         .id_extra = ids.next(),
     });
@@ -1433,7 +1433,7 @@ fn renderTaskCheckbox(checked: bool, m: MarkerMetrics, ids: *IdGen) void {
             .expand = .ratio,
             .gravity_x = 0.5,
             .gravity_y = 0.5,
-            .color_text = theme.color(.highlight, .text),
+            .color_text = .{ .color = theme.color(.highlight, .text) },
             .id_extra = ids.next(),
         });
     }
@@ -1477,13 +1477,13 @@ fn renderInlineFlowContainer(container: ast.Node, span: dvui.Options, ctx: Rende
                 .link => {
                     const link_font = span.fontGet().withUnderline(.{});
                     const link_color = dvui.themeGet().focus;
-                    renderInlineFlowContainer(node, span.override(.{ .font = link_font, .color_text = link_color }), ctx, ids);
+                    renderInlineFlowContainer(node, span.override(.{ .font = link_font, .color_text = .{ .color = link_color } }), ctx, ids);
                 },
                 else => {
                     if (node.nodeType() == .strikethrough) {
                         const strike_font = span.fontGet().withStrike(.{});
                         const strike_color = dvui.themeGet().color(.control, .text).opacity(0.5);
-                        renderInlineFlowContainer(node, span.override(.{ .font = strike_font, .color_text = strike_color }), ctx, ids);
+                        renderInlineFlowContainer(node, span.override(.{ .font = strike_font, .color_text = .{ .color = strike_color } }), ctx, ids);
                     } else if (node.firstChild()) |_| {
                         renderInlineFlowContainer(node, span, ctx, ids);
                     } else if (node.literal()) |t| {
@@ -1587,7 +1587,7 @@ fn renderWikilink(
             const color = if (res.status == .ambiguous) theme.color(.err, .fill) else theme.focus;
             const opts = span.override(.{
                 .font = span.fontGet().withUnderline(.{}),
-                .color_text = color,
+                .color_text = .{ .color = color },
             });
             if (tl.addTextClick(label, opts)) |click| {
                 const open_side = click == .mouse and
@@ -1603,7 +1603,7 @@ fn renderWikilink(
         // available to say "provisional" with.) Inert until there's a create-note flow.
         .unresolved => addText(tl, label, .{
             .font = span.fontGet().withUnderline(.{ .thick = 0.04 }),
-            .color_text = (span.color_text orelse theme.color(.content, .text)).opacity(0.6),
+            .color_text = (span.color_text orelse dvui.ColorOrGradient.fromColor(theme.color(.content, .text))).opacity(0.6),
         }),
     }
 }
@@ -1624,7 +1624,7 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: ast.Node, span: dvui.Opti
                 addText(tl, t, .{
                     // Match the editor's monospace size (also `Font.theme(.mono)`).
                     .font = dvui.Font.theme(.mono),
-                    .color_text = dvui.themeGet().color(.control, .text).opacity(0.9),
+                    .color_text = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.9) },
                 });
             }
         },
@@ -1643,7 +1643,7 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: ast.Node, span: dvui.Opti
         .link => {
             const link_font = span.fontGet().withUnderline(.{});
             const link_color = dvui.themeGet().focus;
-            const link_opts = span.override(.{ .font = link_font, .color_text = link_color });
+            const link_opts = span.override(.{ .font = link_font, .color_text = .{ .color = link_color } });
             const url = x.linkUrl() orelse "";
             if (url.len == 0) {
                 if (x.firstChild()) |_| renderInlines(tl, x, link_opts, ctx, ids);
@@ -1660,23 +1660,23 @@ fn renderInlineNodeToTl(tl: *dvui.TextLayoutWidget, x: ast.Node, span: dvui.Opti
         .html_inline => {
             if (x.literal()) |t| addText(tl, t, .{
                 .font = dvui.Font.theme(.mono),
-                .color_text = dvui.themeGet().color(.err, .text),
+                .color_text = .{ .color = dvui.themeGet().color(.err, .text) },
             });
         },
         .footnote_reference => {
             if (x.literal()) |t| {
                 const fn_font = dvui.Font.theme(.mono).larger(-1);
                 const fn_color = dvui.themeGet().focus.opacity(0.8);
-                addText(tl, "[^", .{ .font = fn_font, .color_text = fn_color });
-                addText(tl, t, .{ .font = fn_font, .color_text = fn_color });
-                addText(tl, "]", .{ .font = fn_font, .color_text = fn_color });
+                addText(tl, "[^", .{ .font = fn_font, .color_text = .{ .color = fn_color } });
+                addText(tl, t, .{ .font = fn_font, .color_text = .{ .color = fn_color } });
+                addText(tl, "]", .{ .font = fn_font, .color_text = .{ .color = fn_color } });
             }
         },
         else => {
             if (x.nodeType() == .strikethrough) {
                 const strike_font = span.fontGet().withStrike(.{});
                 const strike_color = dvui.themeGet().color(.control, .text).opacity(0.5);
-                renderInlines(tl, x, span.override(.{ .font = strike_font, .color_text = strike_color }), ctx, ids);
+                renderInlines(tl, x, span.override(.{ .font = strike_font, .color_text = .{ .color = strike_color } }), ctx, ids);
             } else if (x.firstChild()) |_| {
                 renderInlines(tl, x, span, ctx, ids);
             } else if (x.literal()) |t| {
@@ -2056,10 +2056,10 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
             dvui.log.warn(
                 "md-diag: block {d} ({s}) EMITTED {d:.0} but table says {d:.0} (recorded {d:.0}, {s}, partial={any}, pinned={any}) at viewport y={d:.0}",
                 .{
-                    index,                                             @tagName(rs.blocks.extents.items[index].kind),
-                    emitted,                                           known_h,
-                    after_h,                                           @tagName(rs.blocks.stateAt(index)),
-                    partial,                                           pin_h != null,
+                    index,          @tagName(rs.blocks.extents.items[index].kind),
+                    emitted,        known_h,
+                    after_h,        @tagName(rs.blocks.stateAt(index)),
+                    partial,        pin_h != null,
                     ctx.viewport.y,
                 },
             );
@@ -2071,7 +2071,6 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
     }
     flushSkip(&skip_run_h, skip_run_id, skip_run_n);
 }
-
 
 /// Draw `code` into `tl` with syntax highlighting, or return false to say "draw it yourself".
 ///
@@ -2400,7 +2399,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 .min_size_content = .{ .w = 3, .h = 0 },
                 .expand = .vertical,
                 .background = true,
-                .color_fill = dvui.themeGet().color(.highlight, .fill).opacity(0.75),
+                .color_fill = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(0.75) },
                 .corners = dvui.CornerRect.all(2),
                 .id_extra = ids.next(),
             });
@@ -2460,7 +2459,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                     } else {
                         dvui.labelNoFmt(@src(), bullet_str, .{}, .{
                             .gravity_y = 0,
-                            .color_text = dvui.themeGet().color(.control, .text).opacity(0.45),
+                            .color_text = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.45) },
                             .id_extra = ids.next(),
                         });
                     }
@@ -2501,10 +2500,10 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 .expand = .horizontal,
                 .margin = .{ .x = block_inset_x, .y = 6, .w = block_inset_x, .h = 6 },
                 .background = true,
-                .color_fill = dvui.themeGet().color(.window, .fill).opacity(0.9),
+                .color_fill = .{ .color = dvui.themeGet().color(.window, .fill).opacity(0.9) },
                 .corners = dvui.CornerRect.all(6),
                 .border = dvui.Rect.all(1),
-                .color_border = dvui.themeGet().border.opacity(0.35),
+                .color_border = .{ .color = dvui.themeGet().border.opacity(0.35) },
                 .id_extra = ids.next(),
             });
             defer outer.deinit();
@@ -2514,14 +2513,14 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                     .expand = .horizontal,
                     .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
                     .background = true,
-                    .color_fill = dvui.themeGet().border.opacity(0.12),
+                    .color_fill = .{ .color = dvui.themeGet().border.opacity(0.12) },
                     .id_extra = ids.next(),
                 });
                 defer hdr.deinit();
                 var tl_i = textLayout(@src(), .{}, .{ .expand = .horizontal, .background = false, .id_extra = ids.next() });
                 addText(tl_i, info, .{
                     .font = dvui.Font.theme(.mono).withWeight(.bold),
-                    .color_text = dvui.themeGet().color(.control, .text).opacity(0.55),
+                    .color_text = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.55) },
                 });
                 tl_i.deinit();
             }
@@ -2560,13 +2559,13 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                     .margin = .{ .x = block_inset_x, .y = 2, .w = block_inset_x, .h = 2 },
                     .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
                     .background = true,
-                    .color_fill = dvui.themeGet().color(.err, .fill).opacity(0.08),
+                    .color_fill = .{ .color = dvui.themeGet().color(.err, .fill).opacity(0.08) },
                     .id_extra = ids.next(),
                 });
                 defer tl.deinit();
                 addText(tl, h, .{
                     .font = dvui.Font.theme(.mono),
-                    .color_text = dvui.themeGet().color(.err, .text).opacity(0.85),
+                    .color_text = .{ .color = dvui.themeGet().color(.err, .text).opacity(0.85) },
                 });
             }
         },
@@ -2632,7 +2631,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
             _ = dvui.separator(@src(), .{
                 .expand = .horizontal,
                 .margin = .{ .y = 10, .h = 10 },
-                .color_fill = dvui.themeGet().border.opacity(0.45),
+                .color_fill = .{ .color = dvui.themeGet().border.opacity(0.45) },
                 .id_extra = ids.next(),
             });
         },
@@ -2646,9 +2645,9 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 });
                 const fn_font = dvui.Font.theme(.mono).larger(-1);
                 const fn_color = dvui.themeGet().focus.opacity(0.8);
-                addText(tl, "[^", .{ .font = fn_font, .color_text = fn_color });
-                addText(tl, name, .{ .font = fn_font, .color_text = fn_color });
-                addText(tl, "]: ", .{ .font = fn_font, .color_text = fn_color });
+                addText(tl, "[^", .{ .font = fn_font, .color_text = .{ .color = fn_color } });
+                addText(tl, name, .{ .font = fn_font, .color_text = .{ .color = fn_color } });
+                addText(tl, "]: ", .{ .font = fn_font, .color_text = .{ .color = fn_color } });
                 tl.deinit();
             }
             var c = n.firstChild();
@@ -2708,10 +2707,10 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 }, .{
                     .expand = .none,
                     .background = true,
-                    .color_fill = dvui.themeGet().color(.window, .fill).opacity(0.3),
+                    .color_fill = .{ .color = dvui.themeGet().color(.window, .fill).opacity(0.3) },
                     .corners = dvui.CornerRect.all(4),
                     .border = dvui.Rect.all(1),
-                    .color_border = dvui.themeGet().border.opacity(0.3),
+                    .color_border = .{ .color = dvui.themeGet().border.opacity(0.3) },
                     .id_extra = ids.next(),
                 });
                 defer g.deinit();
@@ -2729,11 +2728,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                 const col_ws = tableColumnWidths(n, num_cols, table_avail, cell_padding, ctx);
                 if (col_ws.len == num_cols and g.col_widths.len == num_cols) {
                     @memcpy(g.col_widths, col_ws);
-                    g.autoSize(.{
-                        .auto = .rows,
-                        .min_height = 0,
-                        .max_height = dvui.max_float_safe,
-                    });
+                    g.autoSize(.rows);
                 }
 
                 // dvui dropped `CellStyle.Banded` along with the grid rework, so the zebra
@@ -2744,7 +2739,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                         var o: dvui.Options = .{ .padding = padding };
                         if (row % 2 == 1) {
                             o.background = true;
-                            o.color_fill = dvui.themeGet().color(.control, .fill_press);
+                            o.color_fill = .{ .color = dvui.themeGet().color(.control, .fill_press) };
                         }
                         return o;
                     }
@@ -2784,7 +2779,7 @@ fn renderBlock(n: ast.Node, ids: *IdGen, ctx: RenderContext) void {
                         while (cl) |cell| : (cl = cell.nextSibling()) {
                             if (cell.nodeType() != .table_cell) continue;
                             const label = linkLabelPlainText(cell, arena) catch "";
-                            const hcell = g.colHeader(col, banded.opts(0, cell_padding));
+                            const hcell = g.colHeader(.{ .col = col }, banded.opts(0, cell_padding));
                             defer hcell.deinit();
                             dvui.labelNoFmt(@src(), label, .{}, .{
                                 .expand = .horizontal,

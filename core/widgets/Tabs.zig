@@ -204,7 +204,7 @@ pub fn tab(self: *Tabs, src: std.builtin.SourceLocation, index: usize, selected:
         .expand = .none,
         .border = dvui.Rect.all(0),
         .background = floating,
-        .color_fill = if (floating) dvui.themeGet().color(.control, .fill) else .transparent,
+        .color_fill = .{ .color = if (floating) dvui.themeGet().color(.control, .fill) else .transparent },
         .id_extra = index,
         .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
         .margin = dvui.Rect.all(0),

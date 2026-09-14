@@ -458,7 +458,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         // Drives the modal dim fill (`options.color(.text)` + alpha) — must be black like dialogs,
         // not theme text (which is light on dark themes and looked wrong).
         .color_text = .black,
-        .color_fill = theme.color(.content, .fill).opacity(0.95),
+        .color_fill = .{ .color = theme.color(.content, .fill).opacity(0.95) },
         .corners = dvui.CornerRect.all(8),
         .padding = dvui.Rect.all(6),
         .border = .all(0),
@@ -507,7 +507,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
     { // query row
         var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .color_text = text_color,
+            .color_text = .{ .color = text_color },
         });
         defer hbox.deinit();
 
@@ -515,7 +515,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
             @src(),
             "palette-icon",
             if (parsed.mode == .commands) icons.tvg.lucide.terminal else icons.tvg.lucide.search,
-            .{ .stroke_color = text_color },
+            .{ .stroke_color = .{ .color = text_color } },
             .{ .gravity_y = 0.5, .padding = dvui.Rect.all(4) },
         );
 
@@ -525,7 +525,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         }, .{
             .expand = .horizontal,
             .background = false,
-            .color_text = text_color,
+            .color_text = .{ .color = text_color },
             .id_extra = 1,
         });
         // FloatingWindow focuses its subwindow on first frame (size 0); claim the entry for a
@@ -553,7 +553,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         }}, .{
             .expand = .horizontal,
             .padding = dvui.Rect.all(8),
-            .color_text = text_color.opacity(0.6),
+            .color_text = .{ .color = text_color.opacity(0.6) },
         });
     } else {
         // Viewport is last frame's measured content, capped. Below the cap it equals the content
@@ -569,7 +569,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
             .min_size_content = .{ .w = 0, .h = viewport_h },
             .max_size_content = .height(viewport_h),
             .background = false,
-            .color_text = text_color,
+            .color_text = .{ .color = text_color },
         });
         // `si` lives in dvui's data store, not in the widget, so it outlives `deinit` — which is
         // where `ScrollContainerWidget` finalises `virtual_size` from the rows just laid out.
@@ -655,9 +655,9 @@ fn drawRow(
     const is_activated = if (self.activated) |a| a == i else false;
     const is_selected = i == self.selected;
     if (is_activated) {
-        row_r.fill(.all(4), .{ .color = theme.color(.control, .fill_press) });
+        row_r.fill(.all(4), .{ .color = .{ .color = theme.color(.control, .fill_press) } });
     } else if (is_selected) {
-        row_r.fill(.all(4), .{ .color = theme.color(.control, .fill_hover) });
+        row_r.fill(.all(4), .{ .color = .{ .color = theme.color(.control, .fill_hover) } });
     }
 
     if (is_selected and self.scroll_to_selected) {
@@ -681,7 +681,7 @@ fn drawRow(
                 defer icon_slot.deinit();
                 if (!editor.host.drawFileIcon(ext, abs, text_color)) {
                     dvui.icon(@src(), "file", icons.tvg.lucide.file, .{
-                        .stroke_color = text_color,
+                        .stroke_color = .{ .color = text_color },
                     }, core.widgets.treeRowIconOptions(.{}));
                 }
             }
@@ -690,7 +690,7 @@ fn drawRow(
             core.draw.labelHighlighted(@src(), std.fs.path.basename(abs), query, false, .{
                 .gravity_y = 0.5,
                 .padding = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
-                .color_text = text_color,
+                .color_text = .{ .color = text_color },
                 .expand = .none,
             });
             // Dimmed project-relative directory, VSCode-style — also highlight matches so a
@@ -703,7 +703,7 @@ fn drawRow(
                     core.draw.labelHighlighted(@src(), rel, query, false, .{
                         .gravity_y = 0.5,
                         .gravity_x = 0.0,
-                        .color_text = text_color.opacity(0.5),
+                        .color_text = .{ .color = text_color.opacity(0.5) },
                         .expand = .none,
                     });
                 }
@@ -731,7 +731,7 @@ fn drawRow(
                 core.draw.labelHighlighted(@src(), c.title, query, true, .{
                     .margin = dvui.Rect.all(0),
                     .padding = dvui.Rect.all(0),
-                    .color_text = color,
+                    .color_text = .{ .color = color },
                     .expand = .none,
                 });
                 // Dimmed provenance in the mono face — highlighted too, so querying "pixi"
@@ -741,7 +741,7 @@ fn drawRow(
                         .margin = dvui.Rect.all(0),
                         .padding = dvui.Rect.all(0),
                         .font = dvui.Font.theme(.mono).larger(-1),
-                        .color_text = color.opacity(0.5),
+                        .color_text = .{ .color = color.opacity(0.5) },
                         .expand = .none,
                     });
                 }
@@ -755,7 +755,7 @@ fn drawRow(
                 dvui.labelEx(@src(), "{s}", .{keys}, .{ .align_x = 1.0 }, .{
                     .gravity_y = 0.5,
                     .expand = .horizontal,
-                    .color_text = text_color.opacity(0.55),
+                    .color_text = .{ .color = text_color.opacity(0.55) },
                 });
             }
         },

@@ -51,7 +51,7 @@ pub fn draw(query: *const fuzzy.Query) void {
     const regions = editor.layout.regions.items;
     if (regions.len == 0) {
         dvui.labelNoFmt(@src(), "This layout declares no regions to place panels in.", .{}, .{
-            .color_text = theme.color(.control, .text),
+            .color_text = .{ .color = theme.color(.control, .text) },
         });
         return;
     }
@@ -75,7 +75,7 @@ pub fn draw(query: *const fuzzy.Query) void {
     if (stray.len > 0) {
         var block = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .margin = .{ .y = 4, .h = 4 } });
         defer block.deinit();
-        dvui.labelNoFmt(@src(), "Unplaced", .{}, .{ .font = dvui.Font.theme(.title), .color_text = theme.color(.err, .fill) });
+        dvui.labelNoFmt(@src(), "Unplaced", .{}, .{ .font = dvui.Font.theme(.title), .color_text = .{ .color = theme.color(.err, .fill) } });
         var titles = std.ArrayListUnmanaged(u8).empty;
         for (stray, 0..) |s, i| {
             if (i > 0) titles.appendSlice(arena, ", ") catch break;
@@ -86,7 +86,7 @@ pub fn draw(query: *const fuzzy.Query) void {
             .margin = .{ .x = 12 },
             .padding = .{},
             .background = false,
-            .color_text = theme.color(.err, .fill),
+            .color_text = .{ .color = theme.color(.err, .fill) },
         });
         tl.addText(titles.items, .{});
         tl.deinit();
@@ -94,7 +94,7 @@ pub fn draw(query: *const fuzzy.Query) void {
 
     if (!any) {
         dvui.labelNoFmt(@src(), "No matching regions", .{}, .{
-            .color_text = theme.color(.control, .text),
+            .color_text = .{ .color = theme.color(.control, .text) },
         });
     }
 }
@@ -154,7 +154,7 @@ fn drawRow(editor: *Editor, layout: *Editor.Layout, region: Editor.Region, idx: 
         .margin = .{ .x = 12 },
         .padding = .{},
         .background = false,
-        .color_text = theme.color(.control, .text),
+        .color_text = .{ .color = theme.color(.control, .text) },
     });
     tl.addText(line, .{});
     tl.deinit();

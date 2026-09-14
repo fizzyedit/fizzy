@@ -42,9 +42,9 @@ branch_size: Size = .{},
 current_branch_focus_id: ?dvui.Id = null,
 init_options: InitOptions = undefined,
 group: dvui.FocusGroupWidget = undefined,
-    /// False when a focus group is already registered on this subwindow — creating
-    /// another just logs "inactive because nested" every frame.
-    group_active: bool = false,
+/// False when a focus group is already registered on this subwindow — creating
+/// another just logs "inactive because nested" every frame.
+group_active: bool = false,
 /// Drop indicator: last branch that contains the mouse wins
 drop_target_branch_id: ?usize = null,
 drop_target_rs: ?dvui.RectScale = null,
@@ -188,10 +188,10 @@ pub fn deinit(self: *TreeWidget) void {
     if (self.drag_point != null) {
         if (self.drop_target_rs) |*rs| {
             if (self.drop_target_drop_into) {
-                rs.r.stroke(.all(12), .{ .color = dvui.themeGet().focus, .thickness = 2.0 });
+                rs.r.stroke(.all(12), .{ .color = .{ .color = dvui.themeGet().focus }, .thickness = 2.0 });
             } else {
                 rs.r.h = 6.0;
-                rs.r.fill(.all(3), .{ .color = dvui.themeGet().focus, .fade = 1.0 });
+                rs.r.fill(.all(3), .{ .color = .{ .color = dvui.themeGet().focus }, .fade = 1.0 });
             }
         }
     }
@@ -441,9 +441,9 @@ pub const Branch = struct {
                 const slot_rs = self.wd.borderRectScale().r;
                 const over_slot = slot_rs.contains(dvui.currentWindow().mouse_pt);
                 if (over_slot) {
-                    slot_rs.fill(.all(8), .{ .color = dvui.themeGet().color(.content, .fill), .fade = 1.0 });
+                    slot_rs.fill(.all(8), .{ .color = .{ .color = dvui.themeGet().color(.content, .fill) }, .fade = 1.0 });
                 } else {
-                    slot_rs.fill(.all(8), .{ .color = dvui.themeGet().color(.err, .fill), .fade = 0.25 });
+                    slot_rs.fill(.all(8), .{ .color = .{ .color = dvui.themeGet().color(.err, .fill) }, .fade = 0.25 });
                 }
 
                 var npt = dp.plus(dvui.dragOffset().plus(.{ .x = 5, .y = 5 })).toNatural();
@@ -458,7 +458,7 @@ pub const Branch = struct {
                         .min_size_content = drag_min,
                         .background = true,
                         .corners = dvui.CornerRect.all(8),
-                        .color_fill = dvui.themeGet().color(.content, .fill).opacity(0.9),
+                        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill).opacity(0.9) },
                         .box_shadow = .{
                             .fade = 8,
                             .corners = dvui.CornerRect.all(8),

@@ -81,7 +81,7 @@ fn drawDescription(text: []const u8, over: dvui.Options) void {
         .font = dvui.Font.theme(.body),
     };
     var tl = dvui.textLayout(@src(), .{ .break_lines = true }, defaults.override(over));
-    tl.addText(text, .{ .color_text = mutedText(0.8) });
+    tl.addText(text, .{ .color_text = .{ .color = mutedText(0.8) } });
     tl.deinit();
 }
 

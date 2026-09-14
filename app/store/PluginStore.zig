@@ -440,7 +440,7 @@ fn drawReadmeCenter(_: ?*anyopaque) anyerror!dvui.App.Result {
             .expand = .both,
             .gravity_x = 0.5,
             .gravity_y = 0.5,
-            .color_text = dvui.themeGet().color(.window, .text).opacity(0.7),
+            .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.7) },
         });
         return .ok;
     };
@@ -542,7 +542,7 @@ fn drawDetailHeader(entry: StoreEntry) void {
                 @src(),
                 "PluginLogo",
                 icons.tvg.lucide.package,
-                .{ .stroke_color = theme.color(.window, .text) },
+                .{ .stroke_color = .{ .color = theme.color(.window, .text) } },
                 .{ .gravity_y = 0.0, .min_size_content = .{ .w = 64, .h = 64 } },
             );
         }
@@ -577,7 +577,7 @@ fn drawDetailHeader(entry: StoreEntry) void {
         });
         dvui.labelNoFmt(@src(), entry.id, .{}, .{
             .font = dvui.Font.theme(.mono),
-            .color_text = muted,
+            .color_text = .{ .color = muted },
             .expand = .horizontal,
             .max_size_content = .{ .w = detail_header_text_no_floor, .h = std.math.floatMax(f32) },
             .margin = dvui.Rect.all(0),
@@ -598,7 +598,7 @@ fn drawDetailHeader(entry: StoreEntry) void {
                 .padding = dvui.Rect.all(0),
                 .font = dvui.Font.theme(.body),
             });
-            tl.addText(desc, .{ .color_text = theme.color(.window, .text).opacity(0.9) });
+            tl.addText(desc, .{ .color_text = .{ .color = theme.color(.window, .text).opacity(0.9) } });
             tl.deinit();
         }
     }
@@ -647,7 +647,7 @@ fn drawAuthorLine(entry: StoreEntry, muted: dvui.Color) void {
     if (publisher != null and author != null) {
         dvui.labelNoFmt(@src(), " · ", .{}, .{
             .font = dvui.Font.theme(.body),
-            .color_text = muted.opacity(0.6),
+            .color_text = .{ .color = muted.opacity(0.6) },
             .gravity_y = 0.5,
             .margin = dvui.Rect.all(0),
             .padding = dvui.Rect.all(0),
@@ -671,7 +671,7 @@ fn drawCreditLink(src: std.builtin.SourceLocation, text: []const u8, url: ?[]con
     const target = url orelse {
         dvui.labelNoFmt(src, text, .{}, .{
             .font = body,
-            .color_text = muted,
+            .color_text = .{ .color = muted },
             .gravity_y = 0.5,
             .margin = dvui.Rect.all(0),
             .padding = dvui.Rect.all(0),
@@ -681,7 +681,7 @@ fn drawCreditLink(src: std.builtin.SourceLocation, text: []const u8, url: ?[]con
 
     if (dvui.labelClick(src, "{s}", .{text}, .{}, .{
         .font = body.withUnderline(.{}),
-        .color_text = dvui.themeGet().color(.highlight, .fill),
+        .color_text = .{ .color = dvui.themeGet().color(.highlight, .fill) },
         .gravity_y = 0.5,
         .margin = dvui.Rect.all(0),
         .padding = dvui.Rect.all(0),
@@ -721,7 +721,7 @@ fn tabButton(src: std.builtin.SourceLocation, label: []const u8, id_extra: usize
         .border = dvui.Rect.all(0),
         .margin = dvui.Rect.all(2),
         .padding = .{ .x = 4, .y = 6, .w = 4, .h = 4 },
-        .color_text = if (selected) theme.color(.window, .text) else theme.color(.control, .text),
+        .color_text = .{ .color = if (selected) theme.color(.window, .text) else theme.color(.control, .text) },
         .font = tab_font.withSize(tab_font.size),
     });
     var underline = dvui.box(@src(), .{}, .{
@@ -729,7 +729,7 @@ fn tabButton(src: std.builtin.SourceLocation, label: []const u8, id_extra: usize
         .expand = .horizontal,
         .min_size_content = .{ .h = 2 },
         .background = true,
-        .color_fill = if (selected) theme.color(.window, .text) else .transparent,
+        .color_fill = .{ .color = if (selected) theme.color(.window, .text) else .transparent },
     });
     underline.deinit();
 
@@ -747,14 +747,14 @@ fn drawChangelogPlaceholder() void {
     defer box.deinit();
 
     const muted = dvui.themeGet().color(.window, .text).opacity(0.7);
-    dvui.icon(@src(), "ChangelogPlaceholder", icons.tvg.lucide.history, .{ .stroke_color = muted }, .{
+    dvui.icon(@src(), "ChangelogPlaceholder", icons.tvg.lucide.history, .{ .stroke_color = .{ .color = muted } }, .{
         .gravity_x = 0.5,
         .min_size_content = .{ .w = 32, .h = 32 },
         .margin = .{ .h = 8 },
     });
     dvui.labelNoFmt(@src(), "Changelog coming soon", .{}, .{
         .font = dvui.Font.theme(.title),
-        .color_text = muted,
+        .color_text = .{ .color = muted },
         .gravity_x = 0.5,
     });
     var tl = dvui.textLayout(@src(), .{ .break_lines = true }, .{
@@ -764,7 +764,7 @@ fn drawChangelogPlaceholder() void {
         .margin = .{ .y = 6 },
         .font = dvui.Font.theme(.body),
     });
-    tl.addText("Release notes for this plugin will appear here in a future update.", .{ .color_text = muted });
+    tl.addText("Release notes for this plugin will appear here in a future update.", .{ .color_text = .{ .color = muted } });
     tl.deinit();
 }
 
@@ -989,7 +989,7 @@ fn drawUpdateCardControls(entry: StoreEntry) void {
     if (updateStatus(entry.id)) |status| {
         dvui.labelNoFmt(@src(), status, .{}, .{
             .gravity_y = 0.5,
-            .color_text = theme.color(.window, .text).opacity(0.7),
+            .color_text = .{ .color = theme.color(.window, .text).opacity(0.7) },
             .font = dvui.Font.theme(.mono).larger(-1.0),
         });
         return;
@@ -1807,7 +1807,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         @src(),
         "FilterIcon",
         icons.tvg.lucide.search,
-        .{ .stroke_color = dvui.themeGet().color(.window, .text) },
+        .{ .stroke_color = .{ .color = dvui.themeGet().color(.window, .text) } },
         .{ .gravity_y = 0.5, .padding = dvui.Rect.all(0) },
     );
     const filter_edit = dvui.textEntry(@src(), .{ .placeholder = "Filter..." }, .{
@@ -1939,7 +1939,7 @@ fn drawPaneTabs(status: store.Status) void {
             .min_size_content = .{ .w = 14, .h = 14 },
             .gravity_x = 1.0,
             .gravity_y = 0.5,
-            .color_text = dvui.themeGet().color(.window, .text).opacity(0.7),
+            .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.7) },
         }, .{});
     }
 }
@@ -1975,12 +1975,12 @@ fn drawFetchingPlaceholder() void {
     core.dialogs.bubbleSpinner(@src(), .{
         .min_size_content = .{ .w = 20, .h = 20 },
         .gravity_y = 0.5,
-        .color_text = dvui.themeGet().color(.window, .text),
+        .color_text = .{ .color = dvui.themeGet().color(.window, .text) },
         .padding = .{ .w = 10 },
     }, .{});
     dvui.labelNoFmt(@src(), "Fetching store…", .{}, .{
         .gravity_y = 0.5,
-        .color_text = dvui.themeGet().color(.window, .text).opacity(0.8),
+        .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.8) },
     });
 }
 
@@ -2001,14 +2001,14 @@ fn drawUnreachablePlaceholder() void {
     });
     defer col.deinit();
 
-    dvui.icon(@src(), "StoreOffline", icons.tvg.lucide.@"cloud-off", .{ .stroke_color = muted }, .{
+    dvui.icon(@src(), "StoreOffline", icons.tvg.lucide.@"cloud-off", .{ .stroke_color = .{ .color = muted } }, .{
         .gravity_x = 0.5,
         .min_size_content = .{ .w = 28, .h = 28 },
         .margin = .{ .h = 6 },
     });
     dvui.labelNoFmt(@src(), "Can't reach the plugin store", .{}, .{
         .gravity_x = 0.5,
-        .color_text = muted,
+        .color_text = .{ .color = muted },
     });
     var tl = dvui.textLayout(@src(), .{ .break_lines = true }, .{
         .background = false,
@@ -2016,7 +2016,7 @@ fn drawUnreachablePlaceholder() void {
         .max_size_content = .{ .w = 240, .h = std.math.floatMax(f32) },
         .font = dvui.Font.theme(.body),
     });
-    tl.addText("Your installed plugins above still work normally.", .{ .color_text = muted.opacity(0.8) });
+    tl.addText("Your installed plugins above still work normally.", .{ .color_text = .{ .color = muted.opacity(0.8) } });
     tl.deinit();
     if (dvui.button(@src(), "Try again", .{}, .{ .gravity_x = 0.5, .margin = .{ .y = 6 } })) {
         if (catalog) |*c| c.refresh();
@@ -2161,7 +2161,7 @@ fn drawSectionHeader(title: []const u8, id_extra: usize) void {
     dvui.labelNoFmt(@src(), title, .{}, .{
         .id_extra = id_extra,
         .font = dvui.Font.theme(.heading),
-        .color_text = dvui.themeGet().color(.control, .text),
+        .color_text = .{ .color = dvui.themeGet().color(.control, .text) },
         .margin = .{ .x = 4, .y = 6 },
     });
 }
@@ -2276,9 +2276,9 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
         .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
         .corners = dvui.CornerRect.all(8),
         .background = true,
-        .color_fill = fill,
-        .color_fill_hover = theme.color(.control, .fill).opacity(0.5),
-        .color_fill_press = theme.color(.control, .fill).opacity(0.9),
+        .color_fill = .{ .color = fill },
+        .color_fill_hover = .{ .color = theme.color(.control, .fill).opacity(0.5) },
+        .color_fill_press = .{ .color = theme.color(.control, .fill).opacity(0.9) },
     });
     defer bw.deinit();
     // Hover highlight without consuming click events, so the inner controls get first dibs; the
@@ -2305,7 +2305,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
                     @src(),
                     "PluginLogo",
                     icons.tvg.lucide.package,
-                    .{ .stroke_color = theme.color(.window, .text) },
+                    .{ .stroke_color = .{ .color = theme.color(.window, .text) } },
                     .{ .gravity_y = 0.5, .min_size_content = .{ .w = 32, .h = 32 } },
                 );
             }
@@ -2367,7 +2367,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
                 if (releaseDate(entry)) |date| {
                     dvui.labelNoFmt(@src(), date, .{}, .{
                         .font = dvui.Font.theme(.mono),
-                        .color_text = theme.color(.control, .text),
+                        .color_text = .{ .color = theme.color(.control, .text) },
                         .gravity_y = 0.5,
                         .padding = card_text_padding,
                         .margin = .{ .x = 6 },
@@ -2382,7 +2382,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
                 var desc_label: dvui.LabelWidget = undefined;
                 desc_label.initNoFmt(@src(), description, .{}, .{
                     .font = dvui.Font.theme(.body),
-                    .color_text = theme.color(.window, .text).opacity(0.75),
+                    .color_text = .{ .color = theme.color(.window, .text).opacity(0.75) },
                     .expand = .horizontal,
                     .padding = card_text_padding,
                     .max_size_content = .{ .w = card_text_no_floor, .h = std.math.floatMax(f32) },
@@ -2416,7 +2416,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
             if (!opts.compact or author.len > 0) {
                 dvui.labelNoFmt(@src(), author, .{}, .{
                     .font = dvui.Font.theme(.body),
-                    .color_text = theme.color(.control, .text),
+                    .color_text = .{ .color = theme.color(.control, .text) },
                     .expand = .horizontal,
                     .padding = card_text_padding,
                     .max_size_content = .{ .w = card_text_no_floor, .h = std.math.floatMax(f32) },
@@ -2425,7 +2425,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
 
             dvui.labelNoFmt(@src(), row2_text, .{}, .{
                 .font = dvui.Font.theme(.mono),
-                .color_text = theme.color(.control, .text),
+                .color_text = .{ .color = theme.color(.control, .text) },
                 .expand = .horizontal,
                 .padding = card_text_padding,
                 .max_size_content = .{ .w = card_text_no_floor, .h = std.math.floatMax(f32) },
@@ -2451,7 +2451,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
                     @src(),
                     "PluginFailedIcon",
                     icons.tvg.lucide.@"circle-alert",
-                    .{ .stroke_color = theme.color(.err, .fill), .fill_color = theme.color(.err, .fill) },
+                    .{ .stroke_color = .{ .color = theme.color(.err, .fill) }, .fill_color = .{ .color = theme.color(.err, .fill) } },
                     .{ .gravity_y = 0, .margin = .{ .y = 3 }, .min_size_content = .{ .w = 14, .h = 14 } },
                 );
                 var fail_buf: [256]u8 = undefined;
@@ -2466,7 +2466,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
                     .margin = .{ .x = 4 },
                     .font = fail_font.withSize(fail_font.size - 1),
                 });
-                fail_tl.addText(fail_text, .{ .color_text = theme.color(.err, .text) });
+                fail_tl.addText(fail_text, .{ .color_text = .{ .color = theme.color(.err, .text) } });
                 fail_tl.deinit();
             };
         }
@@ -2571,7 +2571,7 @@ fn drawHoverToggles(entry: StoreEntry, card_r: dvui.Rect.Physical, card_hovered:
     // than as a bordered popover of its own invention.
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
         .background = true,
-        .color_fill = theme.color(.content, .fill).opacity(0.85),
+        .color_fill = .{ .color = theme.color(.content, .fill).opacity(0.85) },
         .border = .all(0),
         .corners = dvui.CornerRect.all(10),
         .padding = .all(6),
@@ -2799,7 +2799,7 @@ fn drawNoStoreBuild(entry: StoreEntry, opts: dvui.Options) void {
             @src(),
             "StoreNoBuildAlertIcon",
             icons.tvg.lucide.@"circle-alert",
-            .{ .stroke_color = theme.color(.err, .fill), .fill_color = theme.color(.err, .fill) },
+            .{ .stroke_color = .{ .color = theme.color(.err, .fill) }, .fill_color = .{ .color = theme.color(.err, .fill) } },
             .{ .gravity_y = 0.5, .margin = .{ .x = 2 }, .min_size_content = .{ .w = 14, .h = 14 } },
         );
     }
@@ -2809,7 +2809,7 @@ fn drawNoStoreBuild(entry: StoreEntry, opts: dvui.Options) void {
         if (optimize_mismatch) "Needs release" else if (needs_newer_fizzy) "Update Fizzy" else "No store build",
         .{},
         .{
-            .color_text = theme.color(.err, .text),
+            .color_text = .{ .color = theme.color(.err, .text) },
             .font = dvui.Font.theme(.mono),
             .gravity_y = 0.5,
             .max_size_content = .{ .w = no_build_msg_max_w, .h = std.math.floatMax(f32) },
@@ -2937,12 +2937,12 @@ fn drawCardControls(entry: StoreEntry) void {
     // An in-flight / failed install job preempts the normal controls.
     if (jobs.get(entry.id)) |job| switch (@as(JobStatus, @enumFromInt(job.status.load(.acquire)))) {
         .downloading => {
-            dvui.labelNoFmt(@src(), if (job.is_update) "Updating…" else "Installing…", .{}, .{ .gravity_y = 0.5, .color_text = muted, .font = dvui.Font.theme(.mono) });
+            dvui.labelNoFmt(@src(), if (job.is_update) "Updating…" else "Installing…", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = muted }, .font = dvui.Font.theme(.mono) });
             return;
         },
         .failed => {
             if (selectedRelease(entry)) |rel| {
-                if (dvui.buttonIcon(@src(), "Retry", icons.tvg.lucide.@"rotate-ccw", .{}, .{ .stroke_color = theme.color(.err, .text) }, .{ .gravity_y = 0.5 }))
+                if (dvui.buttonIcon(@src(), "Retry", icons.tvg.lucide.@"rotate-ccw", .{}, .{ .stroke_color = .{ .color = theme.color(.err, .text) } }, .{ .gravity_y = 0.5 }))
                     startDownload(entry.id, rel, .{ .is_update = job.is_update });
             }
             return;
@@ -2952,7 +2952,7 @@ fn drawCardControls(entry: StoreEntry) void {
 
     // Protected universal fallbacks: never disablable / uninstallable.
     if (isBundled(entry.id)) {
-        dvui.labelNoFmt(@src(), "Built-in", .{}, .{ .gravity_y = 0.5, .color_text = muted, .font = dvui.Font.theme(.mono) });
+        dvui.labelNoFmt(@src(), "Built-in", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = muted }, .font = dvui.Font.theme(.mono) });
         return;
     }
 
@@ -3026,14 +3026,14 @@ fn drawCardControls(entry: StoreEntry) void {
                 drawNoStoreBuild(entry, .{ .margin = .{ .x = 4 } });
             }
         }
-        if (dvui.buttonIcon(@src(), "Uninstall", icons.tvg.lucide.@"trash-2", .{}, .{ .stroke_color = theme.color(.err, .text) }, .{ .gravity_y = 0.5 }))
+        if (dvui.buttonIcon(@src(), "Uninstall", icons.tvg.lucide.@"trash-2", .{}, .{ .stroke_color = .{ .color = theme.color(.err, .text) } }, .{ .gravity_y = 0.5 }))
             queueUninstall(entry.id);
         return;
     }
 
     // Available in the store but not installed.
     if (selectedRelease(entry)) |rel| {
-        if (dvui.buttonIcon(@src(), "Install", icons.tvg.lucide.@"arrow-down-to-line", .{}, .{ .stroke_color = theme.color(.control, .text) }, .{ .gravity_y = 0.5 }))
+        if (dvui.buttonIcon(@src(), "Install", icons.tvg.lucide.@"arrow-down-to-line", .{}, .{ .stroke_color = .{ .color = theme.color(.control, .text) } }, .{ .gravity_y = 0.5 }))
             startDownload(entry.id, rel, .{ .is_update = false });
         return;
     }
@@ -3063,12 +3063,12 @@ fn drawStoreCardControls(entry: StoreEntry) void {
     // An in-flight / failed install job preempts the normal controls.
     if (jobs.get(entry.id)) |job| switch (@as(JobStatus, @enumFromInt(job.status.load(.acquire)))) {
         .downloading => {
-            dvui.labelNoFmt(@src(), if (job.is_update) "Updating…" else "Installing…", .{}, .{ .gravity_y = 0.5, .color_text = muted, .font = dvui.Font.theme(.mono) });
+            dvui.labelNoFmt(@src(), if (job.is_update) "Updating…" else "Installing…", .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = muted }, .font = dvui.Font.theme(.mono) });
             return;
         },
         .failed => {
             if (selectedRelease(entry)) |rel| {
-                if (dvui.buttonIcon(@src(), "Retry", icons.tvg.lucide.@"rotate-ccw", .{}, .{ .stroke_color = theme.color(.err, .text) }, .{ .gravity_y = 0.5 }))
+                if (dvui.buttonIcon(@src(), "Retry", icons.tvg.lucide.@"rotate-ccw", .{}, .{ .stroke_color = .{ .color = theme.color(.err, .text) } }, .{ .gravity_y = 0.5 }))
                     startDownload(entry.id, rel, .{ .is_update = job.is_update });
             }
             return;
@@ -3077,7 +3077,7 @@ fn drawStoreCardControls(entry: StoreEntry) void {
     };
 
     if (selectedRelease(entry)) |rel| {
-        if (dvui.buttonIcon(@src(), "Install", icons.tvg.lucide.@"arrow-down-to-line", .{}, .{ .stroke_color = theme.color(.control, .text) }, .{ .gravity_y = 0.5 }))
+        if (dvui.buttonIcon(@src(), "Install", icons.tvg.lucide.@"arrow-down-to-line", .{}, .{ .stroke_color = .{ .color = theme.color(.control, .text) } }, .{ .gravity_y = 0.5 }))
             startDownload(entry.id, rel, .{ .is_update = false });
         return;
     }
@@ -3142,7 +3142,7 @@ fn drawHeader() !void {
         "Refresh",
         icons.tvg.lucide.@"rotate-ccw",
         .{},
-        .{ .stroke_color = dvui.themeGet().color(.control, .text) },
+        .{ .stroke_color = .{ .color = dvui.themeGet().color(.control, .text) } },
         .{ .gravity_x = 1.0, .corners = .all(1000000) },
     )) {
         if (catalog) |*c| c.refresh();

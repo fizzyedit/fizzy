@@ -194,7 +194,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
         defer head.deinit();
         const head_opts: dvui.Options = .{
             .font = body.larger(-1.0),
-            .color_text = theme.color(.content, .text).opacity(0.7),
+            .color_text = .{ .color = theme.color(.content, .text).opacity(0.7) },
             .gravity_y = 0.5,
         };
         dvui.labelNoFmt(@src(), "TYPE", .{}, head_opts.override(.{ .min_size_content = .{ .w = col_ext_w, .h = 0 } }));
@@ -338,7 +338,7 @@ fn addOwnerChoice(dropdown: *dvui.DropdownWidget, choice: Choice) bool {
         _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 12, .h = 1 } });
         dvui.labelNoFmt(@src(), if (choice.builtin) "Built-in" else "Plugin", .{}, opts.override(.{
             .font = dvui.Font.theme(.body).larger(-1.0),
-            .color_text = dvui.themeGet().color(.content, .text).opacity(0.6),
+            .color_text = .{ .color = dvui.themeGet().color(.content, .text).opacity(0.6) },
             .gravity_x = 1.0,
             .gravity_y = 0.5,
         }));

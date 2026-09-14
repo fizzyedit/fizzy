@@ -164,7 +164,7 @@ pub fn score(query: *const fuzzy.Query) ?f64 {
 pub fn draw(query: *const fuzzy.Query) void {
     if (comptime builtin.target.cpu.arch == .wasm32) {
         dvui.label(@src(), "Plugins are not installable on the web build, so there is nothing to assign.", .{}, .{
-            .color_text = dvui.themeGet().color(.window, .text).opacity(0.6),
+            .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) },
         });
         return;
     }
@@ -187,7 +187,7 @@ fn drawConflicts(theme: dvui.Theme) void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.color(.err, .fill).opacity(0.25),
+        .color_fill = .{ .color = theme.color(.err, .fill).opacity(0.25) },
         .corners = .all(6),
         .padding = dvui.Rect.all(6),
         .margin = .{ .h = 8 },
@@ -206,7 +206,7 @@ fn drawConflicts(theme: dvui.Theme) void {
         defer tl.deinit();
         tl.addText(
             "settings.zon was edited by hand. Fizzy left the file alone — pick an owner below to repair it.",
-            .{ .color_text = theme.color(.window, .text).opacity(0.7) },
+            .{ .color_text = .{ .color = theme.color(.window, .text).opacity(0.7) } },
         );
     }
     for (conflicts, 0..) |c, i| {
@@ -216,14 +216,14 @@ fn drawConflicts(theme: dvui.Theme) void {
             }, .{
                 .id_extra = i,
                 .expand = .horizontal,
-                .color_text = theme.color(.window, .text).opacity(0.85),
+                .color_text = .{ .color = theme.color(.window, .text).opacity(0.85) },
             }),
             .stale => dvui.label(@src(), "{s}: assigned to {s}, which no longer opens it — ignored.", .{
                 c.ext, c.loser,
             }, .{
                 .id_extra = i,
                 .expand = .horizontal,
-                .color_text = theme.color(.window, .text).opacity(0.85),
+                .color_text = .{ .color = theme.color(.window, .text).opacity(0.85) },
             }),
         }
     }
@@ -238,7 +238,7 @@ const Banded = struct {
         return .{
             .padding = .{ .x = 6, .y = 2, .w = 4, .h = 2 },
             .background = true,
-            .color_fill = if (row % 2 == 1) self.theme.color(.control, .fill).opacity(0.22) else null,
+            .color_fill = if (row % 2 == 1) .{ .color = self.theme.color(.control, .fill).opacity(0.22) } else null,
         };
     }
 };
@@ -253,13 +253,12 @@ fn drawGrid(rows: []Row, query: *const fuzzy.Query, theme: dvui.Theme) void {
         },
         // Opens in and Reopen stay at the width their contents need; Extension absorbs the
         // leftover — same division of labour as Command / Shortcut / Reset.
-        .cols_rigid = &.{ 1, 2 },
     }, .{
         .expand = .horizontal,
         .max_size_content = .width(0),
         .padding = .all(0),
         .background = true,
-        .color_fill = theme.color(.window, .fill).opacity(0.25),
+        .color_fill = .{ .color = theme.color(.window, .fill).opacity(0.25) },
         .corners = .all(4),
         .border = .{},
     });
@@ -277,7 +276,7 @@ fn drawGrid(rows: []Row, query: *const fuzzy.Query, theme: dvui.Theme) void {
     const key_id = "__fizzy_content_key";
     if (dvui.dataGet(null, grid.data().id, key_id, u64) != content_key) {
         dvui.dataSet(null, grid.data().id, key_id, content_key);
-        grid.autoSize(.{ .auto = .both });
+        grid.autoSize(.both);
     }
 
     // Alphabetical by extension until the user clicks a heading. `.unsorted` is only ever the
@@ -293,7 +292,7 @@ fn drawGrid(rows: []Row, query: *const fuzzy.Query, theme: dvui.Theme) void {
     const heading_cell_opts: dvui.Options = .{
         .padding = .{ .x = 6, .y = 2, .w = 4, .h = 2 },
         .background = true,
-        .color_fill = theme.color(.control, .fill).opacity(0.35),
+        .color_fill = .{ .color = theme.color(.control, .fill).opacity(0.35) },
     };
     const heading_label_opts: dvui.Options = .{
         .expand = .horizontal,
@@ -301,11 +300,11 @@ fn drawGrid(rows: []Row, query: *const fuzzy.Query, theme: dvui.Theme) void {
         .background = false,
         .corners = .{},
         .font = dvui.Font.theme(.body).withWeight(.bold),
-        .color_text = theme.color(.window, .text).opacity(0.7),
+        .color_text = .{ .color = theme.color(.window, .text).opacity(0.7) },
     };
 
     inline for (.{ .{ 0, "Extension" }, .{ 1, "Opens in" } }) |heading| {
-        const cell = grid.colHeader(heading[0], heading_cell_opts);
+        const cell = grid.colHeader(.{ .col = heading[0] }, heading_cell_opts);
         defer cell.deinit();
         _ = cell.headerSortable(heading[1], heading_label_opts);
     }
@@ -327,7 +326,7 @@ fn drawGrid(rows: []Row, query: *const fuzzy.Query, theme: dvui.Theme) void {
 /// Last-column heading. Not sortable — there is nothing to order by — so it stays a plain label
 /// rather than dvui's sortable heading button, same as `KeybindSettings.drawResetHeading`.
 fn drawReopenHeading(grid: *dvui.GridWidget, cell_opts: dvui.Options, label_opts: dvui.Options) void {
-    const cell = grid.colHeader(2, cell_opts);
+    const cell = grid.colHeader(.{ .col = 2 }, cell_opts);
     defer cell.deinit();
 
     dvui.labelNoFmt(@src(), "Reopen", .{}, label_opts.override(.{
@@ -372,8 +371,8 @@ fn drawRow(
 
         if (row.flagged) {
             dvui.icon(@src(), "file_type_conflict", dvui.entypo.warning, .{
-                .stroke_color = theme.color(.err, .fill),
-                .fill_color = theme.color(.err, .fill),
+                .stroke_color = .{ .color = theme.color(.err, .fill) },
+                .fill_color = .{ .color = theme.color(.err, .fill) },
             }, .{ .gravity_y = 0.5, .min_size_content = .{ .w = 12, .h = 12 } });
             _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 4, .h = 1 } });
         }

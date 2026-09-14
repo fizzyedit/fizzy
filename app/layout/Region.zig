@@ -589,7 +589,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     if (drop_here or showing) {
         ViewDrag.drawHint(self, opts.name, rs.r, rs.s, cardOf(box));
     } else if (filled and !dragging_this and alpha > 0.01) {
-        rs.r.stroke(corners, .{ .color = theme.focus.opacity(alpha), .thickness = 2.0 });
+        rs.r.stroke(corners, .{ .color = .{ .color = theme.focus.opacity(alpha) }, .thickness = 2.0 });
     }
 
     if (alpha < 0.01 and !pressing and !dragging_this and !showing) return;
@@ -607,9 +607,9 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
         .padding = dvui.Rect.all(1),
         .corners = dvui.CornerRect.all(4),
         .background = true,
-        .color_fill = theme.color(.control, .fill).opacity(@max(alpha, 0.35)),
+        .color_fill = .{ .color = theme.color(.control, .fill).opacity(@max(alpha, 0.35)) },
         .border = dvui.Rect.all(1),
-        .color_border = theme.color(.control, .border).opacity(@max(alpha, 0.35)),
+        .color_border = .{ .color = theme.color(.control, .border).opacity(@max(alpha, 0.35)) },
     });
     defer bw.deinit();
     bw.processEvents();
@@ -652,7 +652,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     if ((alpha > 0.01 or dragged) and !dragged) {
         bw.drawBackground();
         dvui.icon(@src(), "regions", dvui.entypo.grid, .{
-            .fill_color = if (bw.hovered()) theme.color(.highlight, .fill) else theme.color(.control, .text).opacity(alpha),
+            .fill_color = .{ .color = if (bw.hovered()) theme.color(.highlight, .fill) else theme.color(.control, .text).opacity(alpha) },
         }, .{ .expand = .both });
     }
     if (bw.clicked() and !dragged) {
@@ -717,7 +717,7 @@ pub fn drawEmptyHatch(bounds: dvui.Rect.Physical, scale: f32) void {
         var path: dvui.Path.Builder = .init(dvui.currentWindow().lifo());
         path.addPoint(.{ .x = x, .y = bounds.y + bounds.h });
         path.addPoint(.{ .x = x + span, .y = bounds.y + bounds.h - span });
-        path.build().stroke(.{ .color = color, .thickness = @max(1.0, scale) });
+        path.build().stroke(.{ .color = .{ .color = color }, .thickness = @max(1.0, scale) });
         path.deinit();
     }
 }
@@ -1000,7 +1000,7 @@ fn cardOf(box: *dvui.BoxWidget) ViewDrag.Card {
     const o = box.data().options;
     return .{
         .corners = o.cornersGet().scale(box.data().borderRectScale().s, dvui.CornerRect.Physical),
-        .fill = o.color(.fill),
+        .fill = o.color(.fill).toColor(),
         .padding = o.paddingGet(),
     };
 }

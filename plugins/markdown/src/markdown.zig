@@ -463,7 +463,7 @@ pub fn drawPreview(
     }, .{
         .expand = .both,
         .background = opts.background,
-        .color_fill = opts.color_fill orelse dvui.themeGet().fill,
+        .color_fill = .{ .color = opts.color_fill orelse dvui.themeGet().fill },
         .style = .content,
         .id_extra = @truncate(opts.id_extra),
     });
@@ -553,7 +553,7 @@ pub fn drawPreview(
                 .expand = .both,
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,
-                .color_text = dvui.themeGet().color(.content, .text).opacity(0.55),
+                .color_text = .{ .color = dvui.themeGet().color(.content, .text).opacity(0.55) },
                 .id_extra = @truncate(opts.id_extra),
             },
         );
@@ -566,7 +566,7 @@ pub fn drawPreview(
                 .expand = .both,
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,
-                .color_text = dvui.themeGet().color(.err, .text).opacity(0.85),
+                .color_text = .{ .color = dvui.themeGet().color(.err, .text).opacity(0.85) },
                 .id_extra = @truncate(opts.id_extra),
             },
         );

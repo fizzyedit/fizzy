@@ -100,7 +100,7 @@ pub fn draw() !void {
             @src(),
             "Open a project folder to begin.",
             .{},
-            .{ .color_text = dvui.themeGet().color(.control, .text) },
+            .{ .color_text = .{ .color = dvui.themeGet().color(.control, .text) } },
         );
 
         if (dvui.button(@src(), "Open Folder", .{ .draw_focus = false }, .{ .expand = .horizontal, .style = .highlight })) {
@@ -133,7 +133,7 @@ fn drawWeb() !void {
         });
         tl.addText(
             "Open files from your device to begin.",
-            .{ .color_text = dvui.themeGet().color(.control, .text) },
+            .{ .color_text = .{ .color = dvui.themeGet().color(.control, .text) } },
         );
         tl.deinit();
     }
@@ -169,7 +169,7 @@ pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
         @src(),
         "FilterIcon",
         icons.tvg.lucide.search,
-        .{ .stroke_color = dvui.themeGet().color(.window, .text) },
+        .{ .stroke_color = .{ .color = dvui.themeGet().color(.window, .text) } },
         .{ .gravity_y = 0.5, .padding = dvui.Rect.all(0) },
     );
     const filter_text_edit = dvui.textEntry(@src(), .{ .placeholder = "Filter..." }, .{
@@ -237,7 +237,7 @@ pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
             if (branch.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
             // Same tint the folder rows below use, so the project row's caret doesn't read as a
             // different kind of control from every other caret in the tree.
-            .{ .fill_color = caret_color, .stroke_color = caret_color },
+            .{ .fill_color = .{ .color = caret_color }, .stroke_color = .{ .color = caret_color } },
             core.widgets.treeRowIconOptions(.{}),
         );
     }
@@ -250,13 +250,13 @@ pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
     }
 
     dvui.labelNoFmt(@src(), fmt_string, .{}, .{
-        .color_fill = color,
+        .color_fill = .{ .color = color },
         .font = dvui.Font.theme(.heading),
         .gravity_y = 0.5,
     });
 
     if (branch.expander(@src(), .{ .indent = 24 }, .{
-        .color_fill = dvui.themeGet().color(.control, .fill),
+        .color_fill = .{ .color = dvui.themeGet().color(.control, .fill) },
         .corners = .all(8),
         .expand = .both,
         .margin = .{ .x = 10, .w = 5 },
@@ -433,7 +433,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             .background = false,
             .padding = dvui.Rect.all(0),
             .margin = dvui.Rect.all(0),
-            .color_text = dvui.themeGet().color(.window, .text),
+            .color_text = .{ .color = dvui.themeGet().color(.window, .text) },
             .gravity_y = 0.5,
             .id_extra = id_extra,
             .font = font,
@@ -524,7 +524,7 @@ fn filterLabel(
     query: ?*const fuzzy.Query,
 ) void {
     const opts: dvui.Options = .{
-        .color_text = color,
+        .color_text = .{ .color = color },
         .padding = padding,
         .margin = dvui.Rect.all(0),
         .id_extra = id_extra,
@@ -558,11 +558,11 @@ fn filterLabel(
             // Consume the whole contiguous run of matched bytes in one addText.
             const start = i;
             while (h < hits.len and hits[h] == i) : (h += 1) i += 1;
-            tl.addText(label[start..i], .{ .color_text = matched });
+            tl.addText(label[start..i], .{ .color_text = .{ .color = matched } });
         } else {
             const start = i;
             i = if (h < hits.len) hits[h] else label.len;
-            tl.addText(label[start..i], .{ .color_text = color });
+            tl.addText(label[start..i], .{ .color_text = .{ .color = color } });
         }
     }
 }
@@ -784,12 +784,12 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
                     .id_extra = inner_id_extra.*,
                     .expand = .horizontal,
                     //.color_fill_hover = .fill,
-                    .color_fill_hover = dvui.themeGet().color(.control, .fill).opacity(0.5),
-                    .color_fill_press = dvui.themeGet().color(.control, .fill_press),
-                    .color_fill = if (selected and tree.drag_point == null)
+                    .color_fill_hover = .{ .color = dvui.themeGet().color(.control, .fill).opacity(0.5) },
+                    .color_fill_press = .{ .color = dvui.themeGet().color(.control, .fill_press) },
+                    .color_fill = .{ .color = if (selected and tree.drag_point == null)
                         dvui.themeGet().color(.control, .fill).opacity(0.5)
                     else
-                        core.widgets.hoverRestFill(dvui.themeGet().color(.control, .fill)),
+                        core.widgets.hoverRestFill(dvui.themeGet().color(.control, .fill)) },
                     .padding = dvui.Rect.all(1),
                 });
                 defer branch.deinit();
@@ -1023,7 +1023,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
                                     @src(),
                                     "FileIcon",
                                     icon,
-                                    .{ .stroke_color = icon_color, .fill_color = icon_color },
+                                    .{ .stroke_color = .{ .color = icon_color }, .fill_color = .{ .color = icon_color } },
                                     core.widgets.treeRowIconOptions(.{}),
                                 );
                             }
@@ -1051,7 +1051,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
                                     .min_size_content = .{ .w = 14, .h = 14 },
                                     .gravity_x = 1.0,
                                     .gravity_y = 0.5,
-                                    .color_text = dvui.themeGet().color(.window, .text),
+                                    .color_text = .{ .color = dvui.themeGet().color(.window, .text) },
                                 }, .{
                                     .complete_elapsed_ns = d.owner.timeSinceSaveCompleteNs(d),
                                 });
@@ -1081,8 +1081,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
                                     "DropIcon",
                                     if (branch.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
                                     .{
-                                        .fill_color = icon_color,
-                                        .stroke_color = icon_color,
+                                        .fill_color = .{ .color = icon_color },
+                                        .stroke_color = .{ .color = icon_color },
                                     },
                                     core.widgets.treeRowIconOptions(.{}),
                                 );
@@ -1096,8 +1096,8 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
                                     "FolderIcon",
                                     icons.tvg.entypo.folder,
                                     .{
-                                        .fill_color = icon_color,
-                                        .stroke_color = icon_color,
+                                        .fill_color = .{ .color = icon_color },
+                                        .stroke_color = .{ .color = icon_color },
                                     },
                                     core.widgets.treeRowIconOptions(.{}),
                                 );
@@ -1123,7 +1123,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
                         }
 
                         if (branch.expander(@src(), .{ .indent = expanded_indent }, .{
-                            //.color_border = color.opacity(t),
+                            //.color_border = .{ .color = color.opacity(t) },
                             .expand = .horizontal,
                             .corners = .all(8),
                             // .box_shadow = .{

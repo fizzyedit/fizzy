@@ -302,7 +302,7 @@ pub fn draw() !void {
     if (roots.items.len == 0) {
         dvui.labelNoFmt(@src(), "No matching settings", .{}, .{
             .margin = .{ .x = 4, .y = 12, .w = 4, .h = 4 },
-            .color_text = dvui.themeGet().color(.control, .text),
+            .color_text = .{ .color = dvui.themeGet().color(.control, .text) },
         });
         return;
     }
@@ -341,7 +341,7 @@ fn drawSearchRow() []const u8 {
         @src(),
         "SettingsSearchIcon",
         icons.tvg.lucide.search,
-        .{ .stroke_color = dvui.themeGet().color(.window, .text) },
+        .{ .stroke_color = .{ .color = dvui.themeGet().color(.window, .text) } },
         .{ .gravity_y = 0.5, .padding = dvui.Rect.all(0) },
     );
     const entry = dvui.textEntry(@src(), .{ .placeholder = "Search settings..." }, .{
@@ -375,9 +375,9 @@ fn drawBranch(
     }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
-        .color_fill_hover = theme.color(.control, .fill).opacity(0.5),
-        .color_fill_press = theme.color(.control, .fill_press),
-        .color_fill = core.widgets.hoverRestFill(theme.color(.control, .fill)),
+        .color_fill_hover = .{ .color = theme.color(.control, .fill).opacity(0.5) },
+        .color_fill_press = .{ .color = theme.color(.control, .fill_press) },
+        .color_fill = .{ .color = core.widgets.hoverRestFill(theme.color(.control, .fill)) },
         .padding = dvui.Rect.all(1),
     });
     defer b.deinit();
@@ -386,7 +386,7 @@ fn drawBranch(
 
     const expanded = switch (style) {
         .root => b.expander(@src(), .{ .indent = 24 }, .{
-            .color_fill = theme.color(.control, .fill),
+            .color_fill = .{ .color = theme.color(.control, .fill) },
             .corners = .all(8),
             .expand = .horizontal,
             .margin = .{ .x = 10, .w = 5 },
@@ -495,7 +495,7 @@ fn drawFailure(f: fizzy.Editor.FailedPlugin) void {
         .padding = .{ .x = 3, .w = 3, .y = 1, .h = 3 },
         .font = dvui.Font.theme(.body),
     });
-    tl.addText(text, .{ .color_text = dvui.themeGet().color(.err, .text) });
+    tl.addText(text, .{ .color_text = .{ .color = dvui.themeGet().color(.err, .text) } });
     tl.deinit();
 }
 
@@ -513,7 +513,7 @@ fn drawRow(b: *core.widgets.TreeWidget.Branch, branch: *const Branch, query: *co
             @src(),
             "BranchCaret",
             if (b.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
-            .{ .fill_color = icon_color, .stroke_color = icon_color },
+            .{ .fill_color = .{ .color = icon_color }, .stroke_color = .{ .color = icon_color } },
             core.widgets.treeRowIconOptions(.{}),
         );
     }
@@ -552,7 +552,7 @@ fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) v
             @src(),
             "CategoryIcon",
             glyph,
-            .{ .fill_color = color, .stroke_color = color },
+            .{ .fill_color = .{ .color = color }, .stroke_color = .{ .color = color } },
             core.widgets.treeRowIconOptions(.{}),
         );
         return;
@@ -585,7 +585,7 @@ fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) v
         .padding = dvui.Rect.all(0),
         .margin = dvui.Rect.all(0),
         .font = dvui.Font.theme(.heading),
-        .color_text = dvui.themeGet().color(.window, .text),
+        .color_text = .{ .color = dvui.themeGet().color(.window, .text) },
     });
 }
 
@@ -594,14 +594,14 @@ fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) v
 fn addHighlighted(tl: *dvui.TextLayoutWidget, text: []const u8, query: *const fuzzy.Query) void {
     const plain = dvui.themeGet().color(.control, .text);
     if (query.isEmpty()) {
-        tl.addText(text, .{ .color_text = plain });
+        tl.addText(text, .{ .color_text = .{ .color = plain } });
         return;
     }
 
     var buf: [fuzzy.highlight_buf_len]usize = undefined;
     const hits = fuzzy.highlight(text, query, &buf, .{ .plain = true });
     if (hits.len == 0) {
-        tl.addText(text, .{ .color_text = plain });
+        tl.addText(text, .{ .color_text = .{ .color = plain } });
         return;
     }
 
@@ -613,12 +613,12 @@ fn addHighlighted(tl: *dvui.TextLayoutWidget, text: []const u8, query: *const fu
             // Consume the whole contiguous run of matched bytes in one addText.
             const start = i;
             while (h < hits.len and hits[h] == i) : (h += 1) i += 1;
-            tl.addText(text[start..i], .{ .color_text = matched });
+            tl.addText(text[start..i], .{ .color_text = .{ .color = matched } });
         } else {
             const start = i;
             const next = if (h < hits.len) hits[h] else text.len;
             i = next;
-            tl.addText(text[start..i], .{ .color_text = plain });
+            tl.addText(text[start..i], .{ .color_text = .{ .color = plain } });
         }
     }
 }

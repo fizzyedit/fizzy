@@ -226,7 +226,7 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
         .corners = dvui.CornerRect.all(10),
         .max_size_content = maxSize,
         .border = .all(0),
-        .color_fill = dvui.themeGet().color(.content, .fill).opacity(0.85),
+        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill).opacity(0.85) },
         .box_shadow = .{
             .color = .black,
             .alpha = 0.35,
@@ -452,8 +452,8 @@ fn windowHeaderPaintClose(openflag: ?*bool) void {
 
         if (button.hovered()) {
             dvui.icon(@src(), "close", icons.tvg.lucide.x, .{
-                .stroke_color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10),
-                .fill_color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10),
+                .stroke_color = .{ .color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10) },
+                .fill_color = .{ .color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10) },
             }, .{
                 .expand = .ratio,
                 .gravity_x = 0.5,
@@ -485,8 +485,8 @@ fn windowHeaderPaintKindIcon(header_kind: DialogHeaderKind) void {
     };
 
     dvui.icon(@src(), "dialog_header_accent", tvg, .{
-        .stroke_color = icon_color,
-        .fill_color = icon_color,
+        .stroke_color = .{ .color = icon_color },
+        .fill_color = .{ .color = icon_color },
     }, .{
         .expand = .none,
         .min_size_content = .{ .w = close_side, .h = close_side },
@@ -508,7 +508,7 @@ pub fn windowHeader(str: []const u8, right_str: []const u8, openflag: ?*bool, he
         .expand = .horizontal,
         .name = "WindowHeader",
         .background = true,
-        .color_fill = dvui.themeGet().color(.content, .fill),
+        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
         .corners = dvui.CornerRect.all(10),
     });
     defer row.deinit();
@@ -604,7 +604,7 @@ pub fn spinner(src: std.builtin.SourceLocation, spinner_opts: SpinnerOptions, op
     const end = full_circle * dvui.easing.inSine(t);
 
     path.addArc(r.center(), @min(r.w, r.h) / 3, start, end, false);
-    path.build().stroke(.{ .thickness = 3.0 * rs.s, .color = options.color(.text) });
+    path.build().stroke(.{ .thickness = 3.0 * rs.s, .color = .{ .color = options.color(.text) } });
 }
 
 pub fn toastDisplay(id: dvui.Id) !void {
@@ -625,7 +625,7 @@ pub fn toastDisplay(id: dvui.Id) !void {
         .corners = dvui.CornerRect.all(1000),
         .margin = .all(2),
         .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
-        .color_fill = dvui.themeGet().color(.control, .fill),
+        .color_fill = .{ .color = dvui.themeGet().color(.control, .fill) },
         .box_shadow = .{
             .color = .black,
             .offset = .{ .x = -2.0, .y = 2.0 },
@@ -696,7 +696,7 @@ pub fn bubbleSpinner(
     if (wd.rect.empty()) return;
 
     const rs = wd.contentRectScale();
-    const text_color = options.color(.text);
+    const text_color = options.color(.text).toColor();
 
     if (init.complete_elapsed_ns) |elapsed_ns| {
         if (elapsed_ns >= bubble_save_transition_ns) {
@@ -780,8 +780,8 @@ fn bubbleSpinnerPaintCheck(rs: dvui.RectScale, alpha: f32) void {
     };
     const check_color = saveDoneCheckFill(alpha);
     dvui.renderIcon("bubble_save_done", icons.tvg.lucide.check, icon_rs, .{}, .{
-        .stroke_color = check_color,
-        .fill_color = check_color,
+        .stroke_color = .{ .color = check_color },
+        .fill_color = .{ .color = check_color },
     }) catch |err| {
         dvui.logError(@src(), err, "bubble save check icon", .{});
     };
@@ -801,7 +801,7 @@ fn bubbleSpinnerPaintDot(
     var path: dvui.Path.Builder = .init(dvui.currentWindow().lifo());
     defer path.deinit();
     path.addArc(dot_center, dot_radius, 2 * std.math.pi, 0, true);
-    path.build().fillConvex(.{ .color = color });
+    path.build().fillConvex(.{ .color = .{ .color = color } });
 }
 
 fn bubbleSpinnerSmoothstep(edge0: f32, edge1: f32, x: f32) f32 {
@@ -927,7 +927,7 @@ pub fn saveCompleteToastDisplay(id: dvui.Id) !void {
         .background = true,
         .corners = dvui.CornerRect.all(8),
         .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
-        .color_fill = dvui.themeGet().color(.content, .fill).opacity(0.85),
+        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill).opacity(0.85) },
         .box_shadow = .{
             .color = .black,
             .offset = .{ .x = -2.0, .y = 2.0 },
@@ -939,8 +939,8 @@ pub fn saveCompleteToastDisplay(id: dvui.Id) !void {
     defer card.deinit();
 
     dvui.icon(@src(), "save_check", icons.tvg.lucide.check, .{
-        .stroke_color = dvui.themeGet().color(.highlight, .fill),
-        .fill_color = dvui.themeGet().color(.highlight, .fill),
+        .stroke_color = .{ .color = dvui.themeGet().color(.highlight, .fill) },
+        .fill_color = .{ .color = dvui.themeGet().color(.highlight, .fill) },
     }, .{
         .gravity_y = 0.5,
         .min_size_content = .{ .w = 20, .h = 20 },
@@ -949,7 +949,7 @@ pub fn saveCompleteToastDisplay(id: dvui.Id) !void {
 
     dvui.labelNoFmt(@src(), message, .{}, .{
         .gravity_y = 0.5,
-        .color_text = dvui.themeGet().color(.content, .text),
+        .color_text = .{ .color = dvui.themeGet().color(.content, .text) },
     });
 
     if (dvui.timerDone(id)) {

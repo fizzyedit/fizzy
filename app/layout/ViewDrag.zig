@@ -625,7 +625,7 @@ pub fn drawHint(
             // moves into it, the far edge when the origin keeps the view.
             const open = opening(whole, s.mint, t, scale);
             if (open.pane.w <= 1 or open.pane.h <= 1) return;
-            open.pane.fill(card.corners, .{ .color = card.fill, .fade = 1.0 });
+            open.pane.fill(card.corners, .{ .color = .{ .color = card.fill }, .fade = 1.0 });
             if (s.fills_mint) {
                 drawLiveIn(l, open.pane, l.state.view_drag.moved_id, card);
             } else {
@@ -673,7 +673,7 @@ pub fn dimSource(l: *Layout, rs: dvui.RectScale, corners: dvui.CornerRect.Physic
     const prev = dvui.clipGet();
     defer dvui.clipSet(prev);
     dvui.clipSet(rs.r);
-    rs.r.fill(corners, .{ .color = theme.color(.window, .fill).opacity(0.55), .fade = 1.0 });
+    rs.r.fill(corners, .{ .color = .{ .color = theme.color(.window, .fill).opacity(0.55) }, .fade = 1.0 });
 }
 
 /// True while the pointer is inside the place the drag came from.
@@ -749,9 +749,9 @@ pub fn drawFloat(l: *Layout) void {
         .padding = .{},
         .corners = dvui.CornerRect.round(12),
         .background = true,
-        .color_fill = theme.color(.window, .fill),
+        .color_fill = .{ .color = theme.color(.window, .fill) },
         .border = dvui.Rect.all(1),
-        .color_border = theme.color(.highlight, .fill),
+        .color_border = .{ .color = theme.color(.highlight, .fill) },
         .box_shadow = .{
             .color = .black,
             .alpha = 0.28,
@@ -769,7 +769,7 @@ pub fn drawFloat(l: *Layout) void {
         dvui.label(@src(), "view", .{}, .{
             .gravity_x = 0.5,
             .gravity_y = 0.5,
-            .color_text = theme.color(.control, .text),
+            .color_text = .{ .color = theme.color(.control, .text) },
         });
     }
     dvui.refresh(null, @src(), null);

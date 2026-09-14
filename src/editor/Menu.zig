@@ -16,7 +16,7 @@ pub var mouse_distance: f32 = std.math.floatMax(f32);
 pub var debug_force_on_macos: bool = false;
 
 pub fn draw(editor: *Editor) !dvui.App.Result {
-    const bg_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = false, .color_fill = dvui.themeGet().color(.control, .fill) });
+    const bg_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = false, .color_fill = .{ .color = dvui.themeGet().color(.control, .fill) } });
     defer bg_box.deinit();
 
     var m = dvui.menu(@src(), .horizontal, .{});
@@ -76,7 +76,7 @@ pub fn drawModelMenu(ctx: ?*anyopaque) anyerror!void {
     if (menuItem(@src(), sub.title, .{ .submenu = true }, .{
         .expand = .horizontal,
         .id_extra = extra,
-        .color_text = dvui.themeGet().color(.control, .text),
+        .color_text = .{ .color = dvui.themeGet().color(.control, .text) },
     })) |r| {
         var animator = dvui.animate(@src(), .{
             .kind = .alpha,
@@ -115,7 +115,7 @@ fn drawModelItem(
             if (menuItemWithChevron(@src(), nested.title, .{ .submenu = true }, .{
                 .expand = .horizontal,
                 .id_extra = id_extra,
-                .color_text = dvui.themeGet().color(.window, .text),
+                .color_text = .{ .color = dvui.themeGet().color(.window, .text) },
             })) |r| {
                 var nested_fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
                 defer nested_fw.deinit();
@@ -140,7 +140,7 @@ fn drawModelItem(
             if (menuItemWithHotkey(@src(), c.title.resolve(editor), icon, hotkey, enabled, .{}, .{
                 .expand = .horizontal,
                 .id_extra = id_extra,
-                .color_text = dvui.themeGet().color(.window, .text),
+                .color_text = .{ .color = dvui.themeGet().color(.window, .text) },
             }) != null) {
                 run(c.id);
                 fw.close();
@@ -166,7 +166,7 @@ fn drawRecentFolders(editor: *Editor, id_extra: usize) !void {
     if (menuItemWithChevron(@src(), "Recent Folders", .{ .submenu = true }, .{
         .expand = .horizontal,
         .id_extra = id_extra,
-        .color_text = dvui.themeGet().color(.window, .text),
+        .color_text = .{ .color = dvui.themeGet().color(.window, .text) },
     })) |recents_item| {
         var recents_anim = dvui.animate(@src(), .{
             .kind = .alpha,
@@ -220,7 +220,7 @@ pub fn menuItemWithHotkey(src: std.builtin.SourceLocation, label_str: []const u8
     // here would fire at function exit, *after* the explicit `mi.deinit()` call, closing the
     // parent before its child and panicking ("widget is not closed within its parent").
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .id_extra = opts.id_extra orelse 0 });
-    fizzy.core.draw.menuRowIcon(icon, opts.color_text orelse dvui.themeGet().color(.window, .text), enabled, opts.id_extra orelse 0);
+    fizzy.core.draw.menuRowIcon(icon, if (opts.color_text) |c| c.toColor() else dvui.themeGet().color(.window, .text), enabled, opts.id_extra orelse 0);
     fizzy.core.draw.labelWithKeybind(label_str, hotkey, enabled, opts, opts);
     row.deinit();
 
@@ -242,7 +242,7 @@ pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opt
     label_opts.padding = dvui.Rect.all(0);
 
     if (fizzy.core.widgets.hovered(mi.data())) {
-        label_opts.color_text = dvui.themeGet().color(.window, .text);
+        label_opts.color_text = .{ .color = dvui.themeGet().color(.window, .text) };
     }
 
     dvui.labelNoFmt(@src(), label_str, .{}, label_opts);
@@ -274,14 +274,14 @@ pub fn menuItemWithChevron(src: std.builtin.SourceLocation, label_str: []const u
     label_opts.padding = dvui.Rect.all(0);
 
     if (fizzy.core.widgets.hovered(mi.data())) {
-        label_opts.color_text = dvui.themeGet().color(.window, .text);
+        label_opts.color_text = .{ .color = dvui.themeGet().color(.window, .text) };
     }
 
     dvui.labelNoFmt(@src(), label_str, .{}, label_opts);
 
     dvui.icon(@src(), "chevron_right", dvui.entypo.chevron_small_right, .{
-        .stroke_color = dvui.themeGet().color(.control, .text).opacity(0.5),
-        .fill_color = dvui.themeGet().color(.control, .text).opacity(0.5),
+        .stroke_color = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.5) },
+        .fill_color = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.5) },
     }, .{
         .expand = .none,
         .gravity_x = 1.0,

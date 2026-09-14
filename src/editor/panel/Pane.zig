@@ -105,7 +105,7 @@ fn drawTabs(self: *Pane, panel: *Panel, host: *fizzy.Editor.Host, f: *Layout, ke
             view.title;
 
         dvui.label(@src(), "{s}", .{title_upper}, .{
-            .color_text = if (selected) dvui.themeGet().color(.highlight, .fill) else dvui.themeGet().color(.control, .text),
+            .color_text = .{ .color = if (selected) dvui.themeGet().color(.highlight, .fill) else dvui.themeGet().color(.control, .text) },
             .font = dvui.Font.theme(.heading),
             .padding = dvui.Rect.all(4),
             .gravity_y = 0.5,
@@ -213,7 +213,7 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *Panel, host: *fiz
         if (right_side.contains(e.evt.mouse.p) and last_grouping == self.grouping) {
             if (e.evt.mouse.action == .position) {
                 right_side.fill(dvui.CornerRect.Physical.round(right_side.w / 8), .{
-                    .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
+                    .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5) },
                 });
             }
 
@@ -234,7 +234,7 @@ fn processTabDrag(self: *Pane, data: *dvui.WidgetData, panel: *Panel, host: *fiz
         } else if (data.rectScale().r.contains(e.evt.mouse.p)) {
             if (e.evt.mouse.action == .position) {
                 data.rectScale().r.fill(dvui.CornerRect.Physical.round(data.rectScale().r.w / 8), .{
-                    .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
+                    .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5) },
                 });
             }
 

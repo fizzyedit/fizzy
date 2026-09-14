@@ -12,4 +12,9 @@
 test {
     _ = @import("widgets/Split.zig");
     _ = @import("widgets/Panes.zig");
+    // The local copies of upstream's docking + blur (see `widgets.zig`): referenced here so they
+    // are analysed — and their own tests run — even before anything in the app draws them.
+    _ = @import("widgets/DockingWidget.zig");
+    _ = @import("widgets/DockingWidget/Layout.zig");
+    _ = @import("widgets/BlurBackdrop.zig");
 }

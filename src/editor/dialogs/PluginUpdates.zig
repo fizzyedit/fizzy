@@ -124,7 +124,7 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
         tl.addText(
             "Plugins run as native code inside Fizzy, with the same access to your files as Fizzy " ++
                 "itself. Only update plugins from authors you trust.",
-            .{ .font = body.larger(-1.0), .color_text = theme.color(.err, .fill) },
+            .{ .font = body.larger(-1.0), .color_text = .{ .color = theme.color(.err, .fill) } },
         );
     }
 

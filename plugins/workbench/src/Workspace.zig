@@ -193,7 +193,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
         hbox.init(@src(), .{ .dir = .horizontal }, .{
             .expand = .none,
             .border = dvui.Rect.all(0),
-            .color_fill = if (is_selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(runtime.host().contentOpacity()),
+            .color_fill = .{ .color = if (is_selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(runtime.host().contentOpacity()) },
             .background = true,
             .id_extra = i,
             .padding = .{ .x = 2, .y = 2, .w = 2, .h = 0 },
@@ -205,7 +205,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
 
         if (reorderable.floating()) {
             runtime.workbench().dragging_surface = surface.id;
-            hbox.data().options.color_fill = dvui.themeGet().color(.control, .fill);
+            hbox.data().options.color_fill = .{ .color = dvui.themeGet().color(.control, .fill) };
         }
         hbox.drawBackground();
 
@@ -231,13 +231,13 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
             defer icon_slot.deinit();
             if (!runtime.host().drawFileIcon(std.fs.path.extension(tab_doc_path), tab_doc_path, tab_icon_color)) {
                 dvui.icon(@src(), "file_icon", icons.tvg.lucide.file, .{
-                    .stroke_color = tab_icon_color,
+                    .stroke_color = .{ .color = tab_icon_color },
                 }, core.widgets.treeRowIconOptions(.{}));
             }
         }
 
         dvui.labelNoFmt(@src(), surface.title, .{}, .{
-            .color_text = if (is_selected) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text),
+            .color_text = .{ .color = if (is_selected) dvui.themeGet().color(.window, .text) else dvui.themeGet().color(.control, .text) },
             .padding = dvui.Rect.all(4),
             .gravity_y = 0.5,
         });
@@ -271,7 +271,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
                 .min_size_content = .{ .w = close_inner, .h = close_inner },
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,
-                .color_text = dvui.themeGet().color(.window, .text),
+                .color_text = .{ .color = dvui.themeGet().color(.window, .text) },
             }, .{
                 .complete_elapsed_ns = save_flash_elapsed,
             });
@@ -295,12 +295,12 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
 
             if (show_close_visible and (tab_hovered or close_hovered)) {
                 const rs = tab_close_button.data().borderRectScale();
-                rs.r.fill(.round(8), .{ .color = err_accent });
+                rs.r.fill(.round(8), .{ .color = .{ .color = err_accent } });
             }
 
             if (dirty and !show_close_visible) {
                 dvui.icon(@src(), "dirty_icon", icons.tvg.lucide.@"circle-small", .{
-                    .stroke_color = dvui.themeGet().color(.window, .text),
+                    .stroke_color = .{ .color = dvui.themeGet().color(.window, .text) },
                 }, .{
                     .expand = .none,
                     .min_size_content = .{ .w = close_inner, .h = close_inner },
@@ -316,8 +316,8 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
                 else
                     dvui.themeGet().color(.window, .text);
                 dvui.icon(@src(), "close", icons.tvg.lucide.x, .{
-                    .stroke_color = icon_color,
-                    .fill_color = icon_color,
+                    .stroke_color = .{ .color = icon_color },
+                    .fill_color = .{ .color = icon_color },
                 }, .{
                     .expand = .none,
                     .min_size_content = .{ .w = close_inner, .h = close_inner },
@@ -525,7 +525,7 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
 
         if (e.evt.mouse.action == .position) {
             target.fill(dvui.CornerRect.Physical.round(target.w / 8), .{
-                .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5),
+                .color = .{ .color = dvui.themeGet().color(.highlight, .fill).opacity(0.5) },
             });
         }
         if (e.evt.mouse.action != .release or !e.evt.mouse.button.pointer()) continue;
@@ -647,7 +647,7 @@ pub fn drawHomePage(_: *Workspace) !void {
                         .min_size_content = .{ .w = logo_pixel_size, .h = logo_pixel_size },
                         .id_extra = index,
                         .background = false,
-                        .color_fill = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] },
+                        .color_fill = .{ .color = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] } },
                         .margin = dvui.Rect.all(0),
                         .padding = dvui.Rect.all(0),
                     });
@@ -681,9 +681,9 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .gravity_x = 0.5,
                     .expand = .horizontal,
                     .padding = dvui.Rect.all(2),
-                    .color_fill = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
-                    .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
-                    .color_fill_press = dvui.themeGet().color(.window, .fill_press),
+                    .color_fill = .{ .color = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)) },
+                    .color_fill_hover = .{ .color = dvui.themeGet().color(.window, .fill_hover) },
+                    .color_fill_press = .{ .color = dvui.themeGet().color(.window, .fill_press) },
                 });
                 defer button.deinit();
 
@@ -709,9 +709,9 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .gravity_x = 0.5,
                     .expand = .horizontal,
                     .padding = dvui.Rect.all(2),
-                    .color_fill = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
-                    .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
-                    .color_fill_press = dvui.themeGet().color(.window, .fill_press),
+                    .color_fill = .{ .color = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)) },
+                    .color_fill_hover = .{ .color = dvui.themeGet().color(.window, .fill_hover) },
+                    .color_fill_press = .{ .color = dvui.themeGet().color(.window, .fill_press) },
                 });
                 defer button.deinit();
 
@@ -737,9 +737,9 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .gravity_x = 0.5,
                     .expand = .horizontal,
                     .padding = dvui.Rect.all(2),
-                    .color_fill = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
-                    .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
-                    .color_fill_press = dvui.themeGet().color(.window, .fill_press),
+                    .color_fill = .{ .color = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)) },
+                    .color_fill_hover = .{ .color = dvui.themeGet().color(.window, .fill_hover) },
+                    .color_fill_press = .{ .color = dvui.themeGet().color(.window, .fill_press) },
                 });
                 defer button.deinit();
 
@@ -800,10 +800,10 @@ pub fn drawHomePage(_: *Workspace) !void {
                     .id_extra = i,
                     .margin = dvui.Rect.all(1),
                     .padding = dvui.Rect.all(2),
-                    .color_fill = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)),
-                    .color_fill_hover = dvui.themeGet().color(.window, .fill_hover),
-                    .color_fill_press = dvui.themeGet().color(.window, .fill_press),
-                    .color_text = dvui.themeGet().color(.control, .text).opacity(0.5),
+                    .color_fill = .{ .color = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)) },
+                    .color_fill_hover = .{ .color = dvui.themeGet().color(.window, .fill_hover) },
+                    .color_fill_press = .{ .color = dvui.themeGet().color(.window, .fill_press) },
+                    .color_text = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.5) },
                 })) {
                     try runtime.host().setProjectFolder(folder);
                 }
@@ -868,7 +868,7 @@ pub fn drawBubble(rect: dvui.Rect, rs: dvui.RectScale, color: [4]u8, _: usize) !
         path.addArc(tr, rad_y, dvui.math.pi * 2.0, dvui.math.pi * 1.5, false);
     }
 
-    path.build().fillConvex(.{ .color = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] }, .fade = 1.0 });
+    path.build().fillConvex(.{ .color = .{ .color = .{ .r = color[0], .g = color[1], .b = color[2], .a = color[3] } }, .fade = 1.0 });
 }
 
 // This should never be able to return more than one folder

@@ -2395,11 +2395,11 @@ fn storeUninstalled(arena: std.mem.Allocator) []const @import("app").layout.Stat
 }
 
 pub fn postInit(editor: *Editor) !void {
-            if (comptime build_opts.has_app_layout) {
-                dvui.log.info("layout: app-supplied", .{});
-            } else {
-                dvui.log.info("layout: fizzy", .{});
-            }
+    if (comptime build_opts.has_app_layout) {
+        dvui.log.info("layout: app-supplied", .{});
+    } else {
+        dvui.log.info("layout: fizzy", .{});
+    }
     editor.layout.store_catalog = .{
         .uninstalled = storeUninstalled,
         .install = PluginStore.queueInstall,
@@ -4203,7 +4203,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             .{
                 .expand = .both,
                 .background = true,
-                .color_fill = window_color,
+                .color_fill = .{ .color = window_color },
             },
         );
         defer overall_box.deinit();
@@ -4295,11 +4295,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     .min_size_content = .{ .w = button_w, .h = button_h },
                     .expand = .vertical,
                     .background = is_hover,
-                    .color_fill = hover_fill,
+                    .color_fill = .{ .color = hover_fill },
                 });
                 defer b.deinit();
                 fizzy.backend.setTitleBarCaptionButtonRect(.minimize, b.data().rectScale().r);
-                dvui.icon(@src(), "win_min", icons.tvg.feather.minus, .{ .stroke_color = stroke }, .{
+                dvui.icon(@src(), "win_min", icons.tvg.feather.minus, .{ .stroke_color = .{ .color = stroke } }, .{
                     .expand = .ratio,
                     .padding = .all(7),
                     .margin = .all(0),
@@ -4313,11 +4313,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     .min_size_content = .{ .w = button_w, .h = button_h },
                     .expand = .vertical,
                     .background = is_hover,
-                    .color_fill = hover_fill,
+                    .color_fill = .{ .color = hover_fill },
                 });
                 defer b.deinit();
                 fizzy.backend.setTitleBarCaptionButtonRect(.maximize, b.data().rectScale().r);
-                dvui.icon(@src(), "win_max", icons.tvg.lucide.square, .{ .stroke_color = stroke }, .{
+                dvui.icon(@src(), "win_max", icons.tvg.lucide.square, .{ .stroke_color = .{ .color = stroke } }, .{
                     .expand = .ratio,
                     .padding = .all(9),
                     .margin = .all(0),
@@ -4331,12 +4331,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     .min_size_content = .{ .w = button_w, .h = button_h },
                     .expand = .vertical,
                     .background = is_hover,
-                    .color_fill = close_hover_fill.opacity(0.5),
+                    .color_fill = .{ .color = close_hover_fill.opacity(0.5) },
                 });
                 defer b.deinit();
                 fizzy.backend.setTitleBarCaptionButtonRect(.close, b.data().rectScale().r);
                 dvui.icon(@src(), "win_close", icons.tvg.heroicons.outline.@"x-mark", .{
-                    .stroke_color = if (is_hover) close_hover_stroke else stroke,
+                    .stroke_color = .{ .color = if (is_hover) close_hover_stroke else stroke },
                 }, .{
                     .expand = .ratio,
                     .padding = .all(5),
@@ -4717,7 +4717,7 @@ fn fizzyDrawFileKindGlyph(_: *anyopaque, kind: []const u8, color: dvui.Color) bo
     const glyph = file_glyphs.glyphFor(kind) orelse return false;
     // Same sizing contract every file glyph uses: the caller reserved the slot, so fit to it
     // with `expand = .ratio` rather than picking a size here.
-    dvui.icon(@src(), "FileKindGlyph", glyph, .{ .stroke_color = color, .fill_color = color }, .{
+    dvui.icon(@src(), "FileKindGlyph", glyph, .{ .stroke_color = .{ .color = color }, .fill_color = .{ .color = color } }, .{
         .expand = .ratio,
         .gravity_x = 0.5,
         .gravity_y = 0.5,
@@ -5398,7 +5398,7 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
         .rect = card_rect,
         .background = true,
         // Content-fill @ 0.85 matches the look of the other dialog-style popups in the editor.
-        .color_fill = dvui.themeGet().color(.content, .fill).opacity(0.85),
+        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill).opacity(0.85) },
         .corners = dvui.CornerRect.all(8),
         .box_shadow = .{
             .color = .black,
@@ -5418,7 +5418,7 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
 
     dvui.labelNoFmt(@src(), "Loading…", .{}, .{
         .font = dvui.Font.theme(.heading),
-        .color_text = dvui.themeGet().color(.content, .text),
+        .color_text = .{ .color = dvui.themeGet().color(.content, .text) },
         .padding = .{ .h = 2 },
     });
 
@@ -5441,7 +5441,7 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
         fizzy.core.dialogs.bubbleSpinner(@src(), .{
             .min_size_content = .{ .w = 18, .h = 18 },
             .gravity_y = 0.5,
-            .color_text = dvui.themeGet().color(.content, .text),
+            .color_text = .{ .color = dvui.themeGet().color(.content, .text) },
             .padding = .{ .w = 8 },
         }, .{});
 
@@ -5450,7 +5450,7 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
         dvui.label(@src(), "{s} — {s}…", .{ basename, FileLoadJob.phaseLabel(phase) }, .{
             .expand = .horizontal,
             .gravity_y = 0.5,
-            .color_text = dvui.themeGet().color(.content, .text),
+            .color_text = .{ .color = dvui.themeGet().color(.content, .text) },
         });
     }
 }

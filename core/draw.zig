@@ -14,7 +14,6 @@ const platform = @import("platform.zig");
 const fuzzy = @import("fuzzy.zig");
 const widgets = @import("widgets.zig");
 
-
 /// Draw `text` as a single-line label, tinting the bytes `query` matched with the theme
 /// highlight colour — same treatment as the file-tree filter, settings search, and plugin store.
 ///
@@ -27,7 +26,7 @@ pub fn labelHighlighted(
     plain: bool,
     opts: dvui.Options,
 ) void {
-    const color = opts.color(.text);
+    const color = opts.color(.text).toColor();
     if (query.isEmpty()) {
         dvui.label(src, "{s}", .{text}, opts);
         return;
@@ -50,11 +49,11 @@ pub fn labelHighlighted(
         if (h < hits.len and hits[h] == i) {
             const start = i;
             while (h < hits.len and hits[h] == i) : (h += 1) i += 1;
-            tl.addText(text[start..i], .{ .color_text = matched });
+            tl.addText(text[start..i], .{ .color_text = .{ .color = matched } });
         } else {
             const start = i;
             i = if (h < hits.len) hits[h] else text.len;
-            tl.addText(text[start..i], .{ .color_text = color });
+            tl.addText(text[start..i], .{ .color_text = .{ .color = color } });
         }
     }
 }
@@ -70,14 +69,14 @@ pub fn addHighlightedText(
     plain_color: dvui.Color,
 ) void {
     if (query.isEmpty()) {
-        tl.addText(text, .{ .color_text = plain_color });
+        tl.addText(text, .{ .color_text = .{ .color = plain_color } });
         return;
     }
 
     var buf: [fuzzy.highlight_buf_len]usize = undefined;
     const hits = fuzzy.highlight(text, query, &buf, .{ .plain = plain });
     if (hits.len == 0) {
-        tl.addText(text, .{ .color_text = plain_color });
+        tl.addText(text, .{ .color_text = .{ .color = plain_color } });
         return;
     }
 
@@ -89,11 +88,11 @@ pub fn addHighlightedText(
             // Consume the whole contiguous run of matched bytes in one addText.
             const start = i;
             while (h < hits.len and hits[h] == i) : (h += 1) i += 1;
-            tl.addText(text[start..i], .{ .color_text = matched });
+            tl.addText(text[start..i], .{ .color_text = .{ .color = matched } });
         } else {
             const start = i;
             i = if (h < hits.len) hits[h] else text.len;
-            tl.addText(text[start..i], .{ .color_text = plain_color });
+            tl.addText(text[start..i], .{ .color_text = .{ .color = plain_color } });
         }
     }
 }
@@ -111,7 +110,7 @@ pub fn menuRowIcon(bytes: ?[]const u8, base_color: dvui.Color, enabled: bool, id
     defer glyph.deinit();
     if (bytes) |b| {
         const color = if (enabled) base_color else base_color.opacity(0.5);
-        dvui.icon(@src(), "menu_icon", b, .{ .stroke_color = color, .fill_color = color }, widgets.treeRowIconOptions(.{ .id_extra = id_extra }));
+        dvui.icon(@src(), "menu_icon", b, .{ .stroke_color = .{ .color = color }, .fill_color = .{ .color = color } }, widgets.treeRowIconOptions(.{ .id_extra = id_extra }));
     }
 }
 
@@ -125,7 +124,7 @@ pub fn labelWithKeybind(label_str: []const u8, hotkey: dvui.enums.Keybind, enabl
         if (new_opts.color_text) |c| {
             new_opts.color_text = c.opacity(0.5);
         } else {
-            new_opts.color_text = dvui.themeGet().color(.window, .text).opacity(0.5);
+            new_opts.color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.5) };
         }
     }
 
@@ -133,7 +132,7 @@ pub fn labelWithKeybind(label_str: []const u8, hotkey: dvui.enums.Keybind, enabl
     _ = dvui.spacer(@src(), .{ .min_size_content = .width(12) });
 
     var second_opts = opts.strip();
-    second_opts.color_text = dvui.themeGet().color(.control, .text);
+    second_opts.color_text = .{ .color = dvui.themeGet().color(.control, .text) };
     second_opts.gravity_y = 0.5;
     second_opts.gravity_x = 1.0;
     second_opts.font = dvui.Font.theme(.heading);
@@ -145,13 +144,13 @@ pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.
     var box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = opts.expand, .gravity_x = 1.0 });
     defer box.deinit();
 
-    var color = if (opts.color_text) |c| c else dvui.themeGet().color(.control, .text);
+    var color = if (opts.color_text) |c| c.toColor() else dvui.themeGet().color(.control, .text);
     if (true or enabled) {
         color = color.opacity(0.5);
     }
 
     var second_opts = opts.strip();
-    second_opts.color_text = color;
+    second_opts.color_text = .{ .color = color };
     second_opts.font = dvui.Font.theme(.mono);
     second_opts.gravity_y = 0.5;
 
@@ -174,7 +173,7 @@ pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.
             //if (needs_plus) dvui.labelNoFmt(@src(), "+", .{}, opts.strip()) else needs_plus = true;
             //if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip()) else needs_space = true;
             if (platform.isMacOS()) {
-                dvui.icon(@src(), "cmd", icons.tvg.lucide.command, .{ .stroke_color = color }, .{ .gravity_y = 0.5 });
+                dvui.icon(@src(), "cmd", icons.tvg.lucide.command, .{ .stroke_color = .{ .color = color } }, .{ .gravity_y = 0.5 });
             } else {
                 dvui.labelNoFmt(@src(), "cmd", .{}, second_opts);
             }
@@ -188,7 +187,7 @@ pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.
             //if (needs_plus) dvui.labelNoFmt(@src(), "+", .{}, opts.strip()) else needs_plus = true;
             //if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip()) else needs_space = true;
             if (platform.isMacOS()) {
-                dvui.icon(@src(), "option", icons.tvg.lucide.option, .{ .stroke_color = color }, .{ .gravity_y = 0.5 });
+                dvui.icon(@src(), "option", icons.tvg.lucide.option, .{ .stroke_color = .{ .color = color } }, .{ .gravity_y = 0.5 });
             } else {
                 dvui.labelNoFmt(@src(), "alt", .{}, second_opts);
             }
@@ -280,7 +279,7 @@ pub fn drawTabActiveIndicator(tab: dvui.RectScale, color: dvui.Color) void {
     line.x = @floor(line.x);
     line.w = @ceil(line.w);
     if (line.w <= 0) return;
-    line.fill(.{}, .{ .color = color });
+    line.fill(.{}, .{ .color = .{ .color = color } });
 }
 
 pub fn drawEdgeShadow(container: dvui.RectScale, shadow: Shadow, opts: ShadowOptions) void {
