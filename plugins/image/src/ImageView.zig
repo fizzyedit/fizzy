@@ -20,11 +20,20 @@ pub fn draw(doc: *Document) !void {
         .h = @floatFromInt(doc.height),
     };
 
+    // The viewport is the pane it sits in: no fill of its own (the place card behind it is the
+    // background, at the app's content opacity, the same as under pixi's canvas), and the same
+    // edge shadows pixi draws at the top and left, so the two viewers read as one.
+    const container = dvui.parentGet().data();
+    defer if (!dvui.firstFrame(container.id)) {
+        core.draw.drawEdgeShadow(container.rectScale(), .top, .{});
+        core.draw.drawEdgeShadow(container.rectScale(), .left, .{});
+    };
+
     doc.canvas.install(@src(), .{
         .id = doc.canvas.id,
         .data_size = .{ .w = image_rect.w, .h = image_rect.h },
         .pan_zoom_scheme = canvasPanZoomScheme(),
-    }, .{ .expand = .both });
+    }, .{ .expand = .both, .background = false, .color_fill = .{ .color = .transparent } });
     defer doc.canvas.deinit();
 
     drawShadow(&doc.canvas, image_rect);

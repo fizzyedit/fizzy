@@ -21,6 +21,112 @@ const draw = @import("draw.zig");
 /// dims the titlebar.
 pub var modal_dim_titlebar: bool = false;
 
+/// The host's dialog chrome, handed to a plugin dylib at load (`sdk.runtime.installRuntime`,
+/// from `EditorAPI`). A dylib has its own copy of this file; without these, `dialog` would
+/// register *its* `dialogWindow` with dvui and draw the frame itself — with its own idea of
+/// the style, its own backend hooks, its own build of the frost. With them the plugin
+/// contributes a body (`displayFn`) and the host draws the window around it: one frame, one
+/// frost, one set of settings, whatever SDK the plugin was built against. Null in the host.
+pub const HostChrome = struct {
+    dialog_window: dvui.Dialog.DisplayFn,
+    frost_pane: *const fn (id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32) bool,
+};
+pub var host_chrome: ?HostChrome = null;
+
+/// How the app wants its dialogs to look: the palette's and every `core.dialogs` window's, in
+/// the host and in every plugin dylib alike. Not globals — a dylib has its own copy of this
+/// file, and a global set in the host is never seen there. It lives in the dvui data store on
+/// the window's id instead: one `dvui.Window` is shared by everyone, so `style()` reads the
+/// same bytes wherever it is called from. The host writes it every frame (`publishStyle`).
+pub const Style = extern struct {
+    /// How much a modal window dims what is behind it, 0 (none) to 1. 1 is a little past
+    /// dvui's default scrim (60/255 dark, 80/255 light), which sits at about 0.8 here.
+    modal_dim: f32 = 0.8,
+    /// How much of a dialog is its own colour rather than the frost behind it, 0…1.
+    opacity: f32 = 0.5,
+    /// The frost's blur radius (`FloatingWindowWidget.Frost.radius`); 0 turns the frost off.
+    blur: f32 = 15,
+    /// What a bare stretch of the app's chrome is on screen — the window base (the content
+    /// fill at window opacity, over the OS material). A fully opaque dialog is drawn as
+    /// exactly this, so it matches the explorer's empty space. Only meaningful once the host
+    /// has published (`has_chrome`); until then `chromeColor` reads the theme's content fill,
+    /// so nothing here names a colour of its own.
+    chrome: [4]u8 = .{ 0, 0, 0, 0 },
+    has_chrome: bool = false,
+    /// A light lift over the whole pane, 0…1: white added on top of frost and tint, the way a
+    /// glass material is brighter than what is behind it. Dark content blurs dark; this is
+    /// what keeps a dialog over a dark pane from reading as a black slab. 1 adds ~15% white.
+    lift: f32 = 0.2,
+
+    pub fn chromeColor(self: Style) dvui.Color {
+        if (!self.has_chrome) return dvui.themeGet().color(.content, .fill);
+        return .{ .r = self.chrome[0], .g = self.chrome[1], .b = self.chrome[2], .a = self.chrome[3] };
+    }
+};
+
+const style_key = "fizzy_dialog_style";
+
+/// The host's `Style` for this frame, or the defaults before the host has published one.
+pub fn style() Style {
+    const cw = dvui.currentWindow();
+    return dvui.dataGet(null, cw.data().id, style_key, Style) orelse .{};
+}
+
+/// Host only: write this frame's `Style` where every dylib's `style()` finds it.
+pub fn publishStyle(s: Style) void {
+    const cw = dvui.currentWindow();
+    dvui.dataSet(null, cw.data().id, style_key, s);
+}
+
+/// The frost a dialog asks its floating window for: the style's blur, tinted with the chrome
+/// colour, mixed by its opacity. Null when the blur is off — the caller then paints
+/// `dialogFill()` as an ordinary background.
+pub fn dialogFrost() ?widgets.FloatingWindowWidget.Frost {
+    const s = style();
+    if (s.blur < 1) return null;
+    return .{
+        .radius = s.blur,
+        .tint = s.chromeColor(),
+        .mix = std.math.clamp(s.opacity, 0, 1),
+        .lift = std.math.clamp(s.lift, 0, 1) * lift_max,
+    };
+}
+
+/// How much white `Style.lift = 1` adds.
+const lift_max: f32 = 0.15;
+
+/// Frost any floating surface — a menu, a popover — the way dialogs are frosted, at the app's
+/// dialog style. `rect` is physical, `corners` the surface's own. Draw the surface's shadow
+/// before this and its contents after; paint no fill — the frost's tint is the fill. Returns
+/// false when the style has the blur off: paint `dialogFill()` as a plain background instead.
+pub fn frostPane(id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32) bool {
+    if (host_chrome) |h| return h.frost_pane(id, rect, corners, scale);
+    const f = dialogFrost() orelse return false;
+    widgets.BlurBackdrop.frostPane(id, rect, corners, scale, .{
+        .radius = f.radius,
+        .refresh_ms = f.refresh_ms,
+        .tint = f.tint,
+        .mix = f.mix,
+        .lift = f.lift,
+    });
+    return true;
+}
+
+/// The fill a dialog paints when there is no frost to composite with: the chrome at the
+/// dialog's opacity, lifted the same amount.
+pub fn dialogFill() dvui.Color {
+    const s = style();
+    var c = s.chromeColor();
+    c.a = @intFromFloat(@round(@as(f32, @floatFromInt(c.a)) * std.math.clamp(s.opacity, 0, 1)));
+    return c.lerp(.white, std.math.clamp(s.lift, 0, 1) * lift_max);
+}
+
+/// The scrim alpha for `modal_dim`, scaled by `t` (a window's reveal, 0…1).
+pub fn modalDimAlpha(t: f32) u8 {
+    const base: f32 = if (dvui.themeGet().dark) 75 else 100;
+    return @intFromFloat(@round(base * std.math.clamp(style().modal_dim, 0, 1) * std.math.clamp(t, 0, 1)));
+}
+
 /// Key/id for the dialog close-rect handoff below. A fixed string rather than `@src()`
 /// because `Id.extendId` hashes the *module* pointer, which differs per copy.
 const dialog_close_rect_key = "fizzy_dialog_close_rect_override";
@@ -145,7 +251,13 @@ pub fn dialogCanvasPointerInputSuppressed() bool {
 /// Creates a new file dialog with necessary data set and returns the id mutex.
 /// Caller must unlock the mutex after setting any additional data on the id.
 pub fn dialog(src: std.builtin.SourceLocation, opts: DialogOptions) dvui.IdMutex {
-    const id_mutex = dvui.dialogAdd(opts.window, src, opts.id_extra, opts.windowFn);
+    // The default frame is the host's where there is one (see `HostChrome`); a caller that
+    // brought its own `windowFn` keeps it.
+    const window_fn: dvui.Dialog.DisplayFn = if (opts.windowFn == &dialogWindow)
+        (if (host_chrome) |h| h.dialog_window else opts.windowFn)
+    else
+        opts.windowFn;
+    const id_mutex = dvui.dialogAdd(opts.window, src, opts.id_extra, window_fn);
     const id = id_mutex.id;
 
     dvui.dataSet(opts.window, id, "_modal", opts.modal);
@@ -216,17 +328,19 @@ pub fn dialogWindow(id: dvui.Id) anyerror!void {
 
     var win = widgets.floatingWindow(@src(), .{
         .modal = modal,
+        .modal_alpha = modalDimAlpha(1),
         .center_on = center_on,
         .window_avoid = .nudge,
         .process_events_in_deinit = true,
         .resize = if (resizeable) .all else .none,
+        .frost = dialogFrost(),
     }, .{
         .id_extra = id.asUsize(),
         .color_text = .black,
         .corners = dvui.CornerRect.all(10),
         .max_size_content = maxSize,
         .border = .all(0),
-        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill).opacity(0.85) },
+        .color_fill = .{ .color = dialogFill() },
         .box_shadow = .{
             .color = .black,
             .alpha = 0.35,
@@ -504,11 +618,12 @@ pub fn windowHeader(str: []const u8, right_str: []const u8, openflag: ?*bool, he
         .ok_cancel => false,
     };
 
+    // No fill of its own: the window's frost and tint run under the header the same as under
+    // the body, so a dialog is one pane of glass, not a lid on a box.
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .name = "WindowHeader",
-        .background = true,
-        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill) },
+        .background = false,
         .corners = dvui.CornerRect.all(10),
     });
     defer row.deinit();

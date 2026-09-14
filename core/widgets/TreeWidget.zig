@@ -60,6 +60,12 @@ selected_branch_ids: ?[]const usize = null,
 pub const InitOptions = struct {
     enable_reordering: bool = true,
 
+    /// Own the subwindow's focus group, so arrow keys walk the rows. A tree whose branches hold
+    /// widgets with focus groups of their own (a `dvui.grid`, whose column header opens one)
+    /// must say false: two groups in one subwindow leave the inner one inert, and dvui says so
+    /// on every frame.
+    focus_group: bool = true,
+
     /// If not null, drags give up mouse capture and set this drag name
     drag_name: ?[]const u8 = null,
 };
@@ -90,7 +96,7 @@ pub fn init(self: *TreeWidget, src: std.builtin.SourceLocation, init_opts: InitO
         const sw = cw.subwindows.get(dvui.subwindowCurrentId()) orelse break :blk false;
         break :blk sw.focus_group != null;
     };
-    if (!nested) {
+    if (!nested and init_opts.focus_group) {
         self.group.init(@src(), .{ .nav_key_dir = .vertical }, .{});
         self.group_active = true;
         if (self.group.data().accesskit_node()) |ak_node| {

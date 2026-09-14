@@ -6,7 +6,12 @@
 //! next view is ready; nothing here loads a plugin.
 const std = @import("std");
 
-pub const Kind = enum { fade, blur };
+/// `fade` drops the outgoing snapshot's alpha. `blur` frosts it first, sitting fully covering
+/// through `hold` (so a settle frame, or a plugin load, can hide under it), then dissolves while
+/// the incoming sharpens in. `frost` is a blur with no hold: it frosts *while* it goes and never
+/// fully covers the live view — for a preview whose incoming content is already drawing
+/// underneath, where a held opaque frost reads as a wall of colour rather than a defocus.
+pub const Kind = enum { fade, blur, frost };
 
 /// One sample of the overlay. `*_blur` is 0 sharp … 1 smeared; `*_alpha` is
 /// the snapshot's opacity over whatever is drawing live.
@@ -29,7 +34,7 @@ pub const hold: f32 = 0.35;
 pub fn durationNs(kind: Kind) i128 {
     return switch (kind) {
         .fade => fade_ns,
-        .blur => blur_ns,
+        .blur, .frost => blur_ns,
     };
 }
 
@@ -45,6 +50,10 @@ pub fn sample(kind: Kind, t: f32, pending: bool) Sample {
         .blur => {
             const u = if (pending) hold else std.math.clamp(t, 0, 1);
             return sampleBlur(u);
+        },
+        .frost => {
+            const u = if (pending) hold else std.math.clamp(t, 0, 1);
+            return .{ .out_blur = smooth(u / hold), .out_alpha = 1 - smooth(u) };
         },
     }
 }
@@ -62,12 +71,14 @@ fn sampleBlur(t: f32) Sample {
             .in_alpha = 0,
         };
     }
+    // Past the hold both overlays go together: the outgoing frost dissolves, and the
+    // incoming frost thins over the live view beneath it — the sharpening-in half.
     const u = (t - hold) / (1 - hold);
     return .{
         .out_blur = 1,
         .out_alpha = 1 - smooth(u),
-        .in_blur = 0,
-        .in_alpha = 0,
+        .in_blur = 1,
+        .in_alpha = 1 - smooth(u),
     };
 }
 
@@ -124,14 +135,15 @@ test "pending freezes blur at the hold no matter where t is" {
     try testing.expectEqual(early.in_alpha, late.in_alpha);
 }
 
-test "after the hold the outgoing overlay only fades" {
+test "after the hold both frosts fade: the outgoing dissolves, the incoming sharpens in" {
     const a = sample(.blur, hold + 0.01, false);
     const b = sample(.blur, 0.8, false);
     try testing.expectApproxEqAbs(@as(f32, 1), a.out_blur, 1e-5);
     try testing.expectApproxEqAbs(@as(f32, 1), b.out_blur, 1e-5);
     try testing.expect(a.out_alpha > b.out_alpha);
-    try testing.expectEqual(@as(f32, 0), a.in_alpha);
-    try testing.expectEqual(@as(f32, 0), b.in_alpha);
+    try testing.expectApproxEqAbs(@as(f32, 1), a.in_blur, 1e-5);
+    try testing.expect(a.in_alpha > b.in_alpha);
+    try testing.expect(b.in_alpha > 0);
 }
 
 test "blur ends with the overlay gone" {
@@ -165,4 +177,15 @@ test "a linear preview clock is still blurring at one fifth of the slide" {
     try testing.expect(s.out_blur > 0);
     try testing.expect(s.out_blur < 1);
     try testing.expectEqual(@as(f32, 1), s.out_alpha);
+}
+
+test "frost never covers the live view once it is moving" {
+    const a = sample(.frost, 0.2, false);
+    try testing.expect(a.out_alpha < 1);
+    try testing.expect(a.out_blur > 0);
+    const b = sample(.frost, hold, false);
+    try testing.expectApproxEqAbs(@as(f32, 1), b.out_blur, 1e-5);
+    try testing.expect(b.out_alpha < 0.8);
+    const c = sample(.frost, 1, false);
+    try testing.expectApproxEqAbs(@as(f32, 0), c.out_alpha, 1e-5);
 }

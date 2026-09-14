@@ -42,8 +42,9 @@ name: []const u8 = "",
 from: dvui.Size.Physical = .{},
 /// The lifted surface as it last drew. The floating card is this texture.
 texture: ?dvui.Texture = null,
-/// Its frost, for the swap-out dissolve (`core.anim.Frost`).
+/// Its frost, for the swap-out dissolve (`core.anim.Frost`), and where it was taken.
 frost: core.anim.Frost = .{},
+texture_rect: dvui.Rect.Physical = .{},
 start_ns: i128 = 0,
 /// Place being previewed, interned. Empty when nothing is easing.
 preview_name: []const u8 = "",
@@ -66,6 +67,10 @@ capturing: bool = false,
 /// The destination as it looked before the preview, for the outgoing blur.
 hover_texture: ?dvui.Texture = null,
 hover_frost: core.anim.Frost = .{},
+/// Where `hover_texture` was taken, so it is blitted back at its own size. It is a still of the
+/// place's *content* rect, and possibly already mid pull-back; stretching it to the whole place
+/// made every dissolve a little larger than what it was dissolving from.
+hover_rect: dvui.Rect.Physical = .{},
 hover_name: []const u8 = "",
 /// The places this drag can land on, and where they were, frozen at lift.
 targets: [max_targets]Target = undefined,
@@ -103,6 +108,8 @@ pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
     if (self.texture) |old| dvui.Texture.destroyLater(old);
     self.frost.drop();
     self.texture = tex;
+    self.texture_rect = pic.r;
+    self.frost.prepare(tex);
 }
 
 pub fn takeHover(self: *ViewDrag, pic: *dvui.Picture, name: []const u8) void {
@@ -111,7 +118,9 @@ pub fn takeHover(self: *ViewDrag, pic: *dvui.Picture, name: []const u8) void {
     if (self.hover_texture) |old| dvui.Texture.destroyLater(old);
     self.hover_frost.drop();
     self.hover_texture = tex;
+    self.hover_rect = pic.r;
     self.hover_name = name;
+    self.hover_frost.prepare(tex);
 }
 
 /// What photograph this place owes the drag this frame.
@@ -627,7 +636,7 @@ pub fn drawHint(
         // is making it read as a trade rather than a jump cut: the pixels
         // that were here blur away over the ones arriving, the same dissolve
         // a surface change uses anywhere else.
-        .swap => dissolve(l, dest, whole, whole, dissolve_t),
+        .swap => dissolve(l, dest, whole, .frost, dissolve_t),
         .split => |s| {
             // `mint` is the pane that opens — the dropped edge when the view
             // moves into it, the far edge when the origin keeps the view.
@@ -641,7 +650,7 @@ pub fn drawHint(
             }
             // Only over the pane: the rest of the place is drawing its real,
             // re-laid-out half, and blurring that would undo the point.
-            dissolve(l, dest, open.pane, whole, dissolve_t);
+            dissolve(l, dest, open.pane, .fade, dissolve_t);
         },
     }
 }
@@ -698,29 +707,36 @@ pub fn overSelf(l: *Layout) bool {
 pub fn drawSwapOut(l: *Layout, bounds: dvui.Rect.Physical) void {
     if (!swapping(l)) return;
     const tex = l.state.view_drag.texture orelse return;
-    const s = core.anim.crossfade.sample(.blur, previewClock(l), false);
+    const s = core.anim.crossfade.sample(.frost, previewClock(l), false);
     const prev = dvui.clipGet();
     defer dvui.clipSet(prev);
     dvui.clipSet(bounds);
-    core.anim.blit(tex, l.state.view_drag.frost.of(tex, s.out_blur), bounds, s.out_blur, s.out_alpha);
+    core.anim.blit(tex, &l.state.view_drag.frost, l.state.view_drag.texture_rect, s.out_blur, s.out_alpha);
 }
 
-/// The destination's last pixels, aligned to the whole place and dissolving
-/// away inside `within` — the same outgoing blur a surface change uses, so a
-/// split and a swap read as one family of motion.
+/// The destination's last pixels, drawn back where they were taken and dissolving away inside
+/// `within`.
+///
+/// A *swap* frosts them out (`Kind.frost`: defocus and fade together, never a held opaque
+/// frost — the traded view is already drawing live underneath), so a trade reads as one motion
+/// happening in two places. A *split* only fades them: the pixels under an opening pane
+/// are the edge of content that is still there, sharp, right beside it, and frosting that edge
+/// paints coloured blobs of the neighbour into the new pane. Fading reads as the pane sliding
+/// over what was there, which is what is happening.
 fn dissolve(
     l: *Layout,
     dest_name: []const u8,
     within: dvui.Rect.Physical,
-    bounds: dvui.Rect.Physical,
+    kind: core.anim.Kind,
     t: f32,
 ) void {
-    const tex = l.state.view_drag.hover_texture orelse return;
-    if (!std.mem.eql(u8, l.state.view_drag.hover_name, dest_name)) return;
-    const s = core.anim.crossfade.sample(.blur, t, false);
+    const d = &l.state.view_drag;
+    const tex = d.hover_texture orelse return;
+    if (!std.mem.eql(u8, d.hover_name, dest_name)) return;
+    const s = core.anim.crossfade.sample(kind, t, false);
     const prev = dvui.clip(within);
     defer dvui.clipSet(prev);
-    core.anim.blit(tex, l.state.view_drag.hover_frost.of(tex, s.out_blur), bounds, s.out_blur, s.out_alpha);
+    core.anim.blit(tex, &d.hover_frost, d.hover_rect, s.out_blur, s.out_alpha);
 }
 
 /// The card under the pointer. Always visible while dragging: it is the only

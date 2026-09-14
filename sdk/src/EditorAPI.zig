@@ -75,6 +75,12 @@ pub const VTable = struct {
     /// Fizzy-owned content-area opacity (also drives fizzy's own panes); plugins
     /// read it to match fizzy's own chrome.
     contentOpacity: *const fn (ctx: *anyopaque) f32,
+    /// The host's dialog frame: the function `core.dialogs.dialog` registers with dvui so
+    /// the host draws the window (frost, header, footer, modal dim) around a plugin's body.
+    /// Installed into the dylib's `core.dialogs.host_chrome` at load.
+    dialogWindow: *const fn (ctx: *anyopaque) dvui.Dialog.DisplayFn,
+    /// The host's `core.dialogs.frostPane`, for a plugin's own floating surfaces.
+    frostPane: *const fn (ctx: *anyopaque, id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32) bool,
     /// Whether the OS window is currently maximized (always false on web).
     isMaximized: *const fn (ctx: *anyopaque) bool,
     /// Runtime macOS detection (uses `navigator.platform` on web, `os.tag` on native).
@@ -333,6 +339,14 @@ pub fn paletteFolder(self: EditorAPI) ?[]const u8 {
 
 pub fn markSettingsDirty(self: EditorAPI) void {
     self.vtable.markSettingsDirty(self.ctx);
+}
+
+pub fn dialogWindow(self: EditorAPI) dvui.Dialog.DisplayFn {
+    return self.vtable.dialogWindow(self.ctx);
+}
+
+pub fn frostPane(self: EditorAPI, id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32) bool {
+    return self.vtable.frostPane(self.ctx, id, rect, corners, scale);
 }
 
 pub fn contentOpacity(self: EditorAPI) f32 {

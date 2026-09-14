@@ -2,6 +2,7 @@
 //!
 //! Same role as `examples/*/src/layout.zig`: this file *is* the app's layout. A consumer that
 //! wants a different shape writes its own and passes `-Dapp-layout=`.
+const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
@@ -17,6 +18,8 @@ pub const main_area = sdk.keywords.ide.main;
 
 pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
+    // The blur harness: a frosted card above the shape, declared last so it floats over it.
+    defer blurDemo(editor);
     var body = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
     defer body.deinit();
 
@@ -135,3 +138,52 @@ fn bottomPane(ctx: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.
     const editor: *fizzy.Editor = @ptrCast(@alignCast(ctx.?));
     return editor.panel.draw(editor, f, keywords);
 }
+
+// ── Blur harness ───────────────────────────────────────────────────────────────────────────────
+//
+// `FIZZY_BLUR_DEMO=1` draws a draggable frosted card over the window: a `core.widgets`
+// floating window with the dialog frost (`core.dialogs.dialogFrost`), so it is drawn exactly
+// the way a dialog or the palette is — the deferred capture, the tint, the settings — and can
+// be dragged next to the explorer's empty space to compare, or over another dialog to check
+// the frost sees it. Nothing else reads it.
+
+var blur_demo_on: ?bool = null;
+/// Where the card is; the user drags it around by its header.
+var blur_demo_rect: ?dvui.Rect = null;
+
+fn blurDemoWanted(editor: *fizzy.Editor) bool {
+    if (blur_demo_on == null) {
+        blur_demo_on = if (comptime builtin.target.cpu.arch == .wasm32) false else blk: {
+            const v = std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.gpa, "FIZZY_BLUR_DEMO") catch break :blk false;
+            defer editor.gpa.free(v);
+            dvui.log.info("blur harness on", .{});
+            break :blk true;
+        };
+    }
+    return blur_demo_on.?;
+}
+
+fn blurDemo(editor: *fizzy.Editor) void {
+    if (!blurDemoWanted(editor)) return;
+    if (blur_demo_rect == null) {
+        const win = dvui.windowRect();
+        const w = @min(480, win.w * 0.6);
+        const h = @min(320, win.h * 0.5);
+        blur_demo_rect = .{ .x = (win.w - w) / 2, .y = (win.h - h) / 2, .w = w, .h = h };
+    }
+    var fw = fizzy.core.widgets.floatingWindow(@src(), .{
+        .rect = &blur_demo_rect.?,
+        .open_flag = null,
+        .frost = fizzy.core.dialogs.dialogFrost(),
+    }, .{
+        .color_fill = .{ .color = fizzy.core.dialogs.dialogFill() },
+        .corners = dvui.CornerRect.all(12),
+        .border = .{},
+        .padding = .{},
+        .margin = .{},
+        .box_shadow = .{ .color = .black, .alpha = 0.35, .fade = 10, .corners = dvui.CornerRect.all(12) },
+    });
+    defer fw.deinit();
+    fw.dragAreaSet(dvui.windowHeader("frosted glass", "", null));
+}
+

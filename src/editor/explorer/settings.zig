@@ -126,6 +126,39 @@ pub const groups = [_]Group{
                 .keywords = "transparency alpha",
                 .draw = drawContentOpacity,
             },
+            .{
+                .label = "Modal dim",
+                .key = "modal_dim",
+                .description = "How much a dialog or the command palette darkens everything " ++
+                    "behind it while it is open.",
+                .keywords = "dialog palette scrim dark shade overlay",
+                .draw = drawModalDim,
+            },
+            .{
+                .label = "Dialog opacity",
+                .key = "dialog_opacity",
+                .description = "How much of a dialog or the command palette is its own colour " ++
+                    "rather than the frosted view behind it. At 1 it matches a plain panel " ++
+                    "like the explorer; lower shows more of the blur.",
+                .keywords = "dialog palette transparency alpha glass frost",
+                .draw = drawDialogOpacity,
+            },
+            .{
+                .label = "Dialog blur",
+                .key = "dialog_blur",
+                .description = "How strongly the frosted backdrop under dialogs and the command " ++
+                    "palette blurs what is behind it. 0 turns the frost off.",
+                .keywords = "dialog palette blur frost glass radius",
+                .draw = drawDialogBlur,
+            },
+            .{
+                .label = "Dialog brightness",
+                .key = "dialog_lift",
+                .description = "How much lighter a dialog or the command palette is than what " ++
+                    "is behind it — the lift a glass material has. 0 is none.",
+                .keywords = "dialog palette light bright glass frost lift",
+                .draw = drawDialogLift,
+            },
         },
     },
     .{
@@ -320,6 +353,54 @@ fn drawContentOpacity() void {
         .min = 0.0,
     }, .{ .expand = .horizontal })) {
         fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(fizzy.editor().settings.content_opacity));
+        fizzy.editor().markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+}
+
+fn drawModalDim() void {
+    if (dvui.sliderEntry(@src(), "{d:0.01}", .{
+        .value = &fizzy.editor().settings.modal_dim,
+        .interval = 0.01,
+        .max = 1.0,
+        .min = 0.0,
+    }, .{ .expand = .horizontal })) {
+        fizzy.editor().markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+}
+
+fn drawDialogOpacity() void {
+    if (dvui.sliderEntry(@src(), "{d:0.01}", .{
+        .value = &fizzy.editor().settings.dialog_opacity,
+        .interval = 0.01,
+        .max = 1.0,
+        .min = 0.0,
+    }, .{ .expand = .horizontal })) {
+        fizzy.editor().markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+}
+
+fn drawDialogBlur() void {
+    if (dvui.sliderEntry(@src(), "{d:0.0}", .{
+        .value = &fizzy.editor().settings.dialog_blur,
+        .interval = 1,
+        .max = 48,
+        .min = 0,
+    }, .{ .expand = .horizontal })) {
+        fizzy.editor().markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+}
+
+fn drawDialogLift() void {
+    if (dvui.sliderEntry(@src(), "{d:0.01}", .{
+        .value = &fizzy.editor().settings.dialog_lift,
+        .interval = 0.01,
+        .max = 1.0,
+        .min = 0.0,
+    }, .{ .expand = .horizontal })) {
         fizzy.editor().markSettingsDirty();
         dvui.refresh(null, @src(), null);
     }

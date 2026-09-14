@@ -436,10 +436,9 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
     // (so the text entry can receive keys) and paints a black scrim via `color_text = .black`.
     fizzy.core.dialogs.modal_dim_titlebar = true;
     // Scrim tracks the reveal, so the dim arrives and leaves with the panel instead of snapping
-    // to full black on frame one and popping off at the end of the outro. Same base values dvui
-    // picks per theme (60 dark / 80 light), scaled.
-    const dim_base: f32 = if (theme.dark) 60 else 80;
-    const dim_alpha: u8 = @intFromFloat(@round(dim_base * std.math.clamp(self.anim, 0, 1)));
+    // to full black on frame one and popping off at the end of the outro. Strength is the
+    // `modal_dim` setting, shared with every dialog.
+    const dim_alpha = fizzy.core.dialogs.modalDimAlpha(self.anim);
 
     var win = fizzy.core.widgets.floatingWindow(@src(), .{
         .modal = true,
@@ -454,11 +453,12 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         .size_anchor = .top,
         .auto_size_axes = .vertical,
         .process_events_in_deinit = true,
+        .frost = fizzy.core.dialogs.dialogFrost(),
     }, .{
         // Drives the modal dim fill (`options.color(.text)` + alpha) — must be black like dialogs,
         // not theme text (which is light on dark themes and looked wrong).
         .color_text = .black,
-        .color_fill = .{ .color = theme.color(.content, .fill).opacity(0.95) },
+        .color_fill = .{ .color = fizzy.core.dialogs.dialogFill() },
         .corners = dvui.CornerRect.all(8),
         .padding = dvui.Rect.all(6),
         .border = .all(0),

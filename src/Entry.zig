@@ -372,5 +372,10 @@ pub fn AppFrame() !dvui.App.Result {
     fizzy.core.hitch.frameBegin();
     defer fizzy.core.hitch.frameEnd();
     singleton.drainPending();
+    // The whole frame draws into a texture — see `core.FrameTarget` for why.
+    frame_target.begin();
+    defer frame_target.end();
     return try fizzy.editor().tick();
 }
+
+var frame_target: fizzy.core.FrameTarget = .{};

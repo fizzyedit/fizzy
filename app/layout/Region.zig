@@ -291,7 +291,11 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     // emptied it, every panel view is toggled off — not the view sitting
     // on the pointer. Shape places stay; only a drop commits the hole.
     const matches = self.matchingStored(&probe);
-    if (init_opts.hide_when_empty and keywords.len > 0 and matches.len == 0) {
+    // Cleared through the picker is not "nothing belongs here": the user asked for an empty
+    // place and expects to see it, hatch and all, until they put something back. Only a
+    // place nothing *chose* — every view toggled off, no assignment — folds away.
+    const cleared = if (self.state.assignment(init_opts.name)) |a| a.len == 0 else false;
+    if (init_opts.hide_when_empty and keywords.len > 0 and matches.len == 0 and !cleared) {
         // A boundary with nothing on one side is not a boundary.
         if (parent) |p| p.pending_split = null;
         // Still a place, even with nothing in it: it stays in the registry so the picker and

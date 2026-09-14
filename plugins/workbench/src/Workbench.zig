@@ -199,7 +199,15 @@ pub fn clearAllWorkspaceCenter(self: *Workbench) void {
 /// assignments are what bring the session back.
 pub fn documentClosed(self: *Workbench, doc: sdk.DocHandle) void {
     const id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch return;
-    for (self.workspaces.values()) |*ws| ws.removeTab(id);
+    for (self.workspaces.values()) |*ws| {
+        ws.removeTab(id);
+        // The pane's cached handle is refreshed by its draw; until then it still names this
+        // document, owner pointer included. A plugin reload closes its documents and frees
+        // that owner before anything draws, and the infobar asks `activeDoc()` first.
+        if (ws.active) |active| {
+            if (active.id == doc.id) ws.active = null;
+        }
+    }
 }
 
 pub fn rebuildWorkspaces(self: *Workbench) !void {

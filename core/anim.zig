@@ -132,10 +132,12 @@ pub const CrossFade = struct {
     /// Owned outright — not in dvui's texture cache, so it survives across frames and must be
     /// destroyed explicitly.
     texture: ?dvui.Texture = null,
-    /// The frosted copy of `texture` a blur dissolve mixes toward. Made on the first frame
-    /// that needs it and dropped with `texture` — see `Frost`.
+    /// Full-res Kawase frost of `texture`. Built at capture so the dissolve is
+    /// two quads a frame. Dropped with `texture`.
     frost: Frost = .{},
     incoming: ?dvui.Texture = null,
+    /// The incoming snapshot's frost — what "sharpens in" over the live incoming view.
+    incoming_frost: Frost = .{},
     /// Physical rect matching the captured texture exactly (`Picture.start` enlarges to pixel
     /// boundaries; blitting a smaller rect would sample the wrong UVs).
     rect: dvui.Rect.Physical = .{},
@@ -176,6 +178,7 @@ pub const CrossFade = struct {
         self.texture = tex;
         self.rect = pic.r;
         self.start_ns = dvui.currentWindow().frame_time_ns;
+        if (self.kind != .fade) self.frost.prepare(tex);
     }
 
     /// Take ownership of an *incoming* snapshot. Does not restart the clock or drop the
@@ -206,7 +209,7 @@ pub const CrossFade = struct {
         const s = crossfade.sample(self.kind, t, pending);
         // One overlay over the live incoming view. A second snapshot on top
         // is what read as a bright, grainy double exposure.
-        if (self.texture) |tex| blit(tex, self.frost.of(tex, s.out_blur), self.rect, s.out_blur, s.out_alpha);
+        if (self.texture) |tex| blit(tex, &self.frost, self.rect, s.out_blur, s.out_alpha);
 
         // Nothing else is animating, so without this an idle app would sleep mid-fade.
         dvui.refresh(null, @src(), null);
@@ -220,7 +223,7 @@ pub const CrossFade = struct {
             // wall time has wandered.
             const parked: f32 = switch (self.kind) {
                 .fade => 0,
-                .blur => crossfade.hold,
+                .blur, .frost => crossfade.hold,
             };
             const parked_ns: i128 = @intFromFloat(@as(f64, parked) * @as(f64, @floatFromInt(self.duration_ns)));
             self.start_ns = now - parked_ns;
@@ -236,6 +239,7 @@ pub const CrossFade = struct {
         if (self.texture) |tex| dvui.Texture.destroyLater(tex);
         self.frost.drop();
         if (self.incoming) |tex| dvui.Texture.destroyLater(tex);
+        self.incoming_frost.drop();
         self.texture = null;
         self.incoming = null;
         self.have_incoming = false;
@@ -243,21 +247,16 @@ pub const CrossFade = struct {
     }
 };
 
-/// The blurred companion of a captured snapshot, owned beside it. `of` makes it the first time
-/// a frame asks with `blur > 0` (one dual-Kawase pipeline, then it is one quad a frame), `drop`
-/// goes with the snapshot's own destroy. Owned rather than cached anywhere by texture pointer:
-/// the next capture can land on the same pointer, and a cache would hand it the old frost.
+/// One full-res Kawase frost of a captured snapshot. Built at capture so the
+/// dissolve is two quads a frame, not a stall. Dropped with the snapshot.
 pub const Frost = struct {
     texture: ?dvui.Texture = null,
     tried: bool = false,
 
-    pub fn of(self: *Frost, sharp: dvui.Texture, blur: f32) ?dvui.Texture {
-        if (blur <= 0.001) return self.texture;
-        if (self.texture == null and !self.tried) {
-            self.tried = true;
-            self.texture = BlurBackdrop.blurred(sharp, blur_radius);
-        }
-        return self.texture;
+    pub fn prepare(self: *Frost, sharp: dvui.Texture) void {
+        if (self.tried) return;
+        self.tried = true;
+        self.texture = BlurBackdrop.blurred(sharp, blur_radius);
     }
 
     pub fn drop(self: *Frost) void {
@@ -266,38 +265,143 @@ pub const Frost = struct {
     }
 };
 
-/// Draw a captured overlay. `blur` 0 is a sharp blit (float cards, region stills). Above that,
-/// `blur` 0..1 is a **mix** between the sharp texture and `frost`, its one fixed, heavy
-/// dual-Kawase blur (`Frost.of`): the ramp is continuous and a frame costs two textured quads
-/// whatever `blur` is — there is no pass count to step through, which is what made a per-frame
-/// radius pop from sharp to frosted the moment its first halving kicked in. Without a frost
-/// (no render targets) it is the sharp texture with alpha.
-///
-/// `blur_radius` is the frost: about four halvings, a wash of the outgoing view's colours
-/// with nothing readable in it. One number for every overlay so a sidebar swap and a document
-/// swap dissolve the same way.
+/// Same default as DVUI's BlurBackdrop applets demo.
 pub const blur_radius: f32 = 16;
 
-pub fn blit(tex: dvui.Texture, frost: ?dvui.Texture, dest: dvui.Rect.Physical, blur: f32, alpha: f32) void {
+/// Draw a captured overlay. `blur` 0 is a sharp blit. Above that, mix the
+/// snapshot with its one Kawase frost so the ramp is a defocus, not a snap.
+pub fn blit(tex: dvui.Texture, frost: ?*Frost, dest: dvui.Rect.Physical, blur: f32, alpha: f32) void {
     if (alpha <= 0.001) return;
+    if (frost) |f| {
+        if (blur > 0.001) f.prepare(tex);
+    }
+
+    var r = dest;
+    r.x = @round(r.x);
+    r.y = @round(r.y);
+    r.w = @round(r.w);
+    r.h = @round(r.h);
+    if (r.w < 1 or r.h < 1) return;
+
     const prev_clip = dvui.clipGet();
-    dvui.clipSet(prev_clip.intersect(dest));
+    dvui.clipSet(prev_clip.intersect(r));
     defer dvui.clipSet(prev_clip);
 
     const mix = std.math.clamp(blur, 0, 1);
-    const frosted: ?dvui.Texture = if (mix > 0.001) frost else null;
+    const frost_tex: ?dvui.Texture = if (frost) |f| f.texture else null;
+    const use_frost = mix > 0.001 and frost_tex != null;
 
-    // Frost first, sharp over it, at alphas that composite to exactly `alpha`: two quads at
-    // `a1` and `a2` cover `a1 + a2(1 - a1)`, so a naive split would let the incoming view show
-    // through in the middle of the ramp.
-    const frost_a = if (frosted != null) alpha * mix else 0;
-    if (frosted) |f| {
-        dvui.renderTexture(f, .{ .r = dest, .s = 1 }, .{ .colormod = dvui.Color.white.opacity(frost_a) }) catch {};
+    // A snapshot of a translucent pane (fizzy's are, at content opacity) drawn source-over lets
+    // `(1 - snapshot alpha)` of the live view through even at full overlay alpha — the sharp
+    // incoming view showing through its own blur, which reads as contour rings on pixel art.
+    // What a dissolve means is `dst = (1 - a) * dst + a * snapshot`; no single blend factor
+    // does that, but two do: copy `(1 - a) * under` (the frame, read back from its target),
+    // then add `a * snapshot`. Only immediate rendering can do it — a deferred draw would
+    // queue the blend changes out of order — so a floating card's sharp blit takes the
+    // plain path below, where alpha 1 over an opaque card is exact anyway.
+    if (lerpUnder(r, alpha)) |under| {
+        defer dvui.textureDestroyLater(under);
+        const a = alpha * dvui.currentWindow().alpha;
+        const prev_alpha = dvui.alpha(1);
+        defer dvui.alphaSet(prev_alpha);
+        if (!use_frost) {
+            addOne(tex, r, a);
+        } else {
+            addOne(frost_tex.?, r, a * mix);
+            addOne(tex, r, a * (1 - mix));
+        }
+        return;
     }
-    const sharp_a = if (frost_a >= 0.999) 0 else (alpha - frost_a) / (1 - frost_a);
-    if (sharp_a > 0.001) {
-        dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{ .colormod = dvui.Color.white.opacity(sharp_a) }) catch {};
+
+    if (!use_frost) {
+        blitOne(tex, r, alpha);
+        return;
     }
+    // t=1 is only sharp; t=0 is only frost.
+    blitPair(frost_tex.?, tex, r, 1 - mix, alpha);
+}
+
+/// The first half of the lerp: `r` of the bound target, copied out and written back scaled by
+/// `1 - alpha`. Null (nothing drawn) when the backend cannot: no target bound, no blend
+/// control, or rendering deferred. The returned copy is the caller's to destroy.
+fn lerpUnder(r: dvui.Rect.Physical, alpha: f32) ?dvui.Texture {
+    if (!dvui.Backend.support_texture_blend) return null;
+    const cw = dvui.currentWindow();
+    if (!cw.render_target.rendering) return null;
+    const bound = cw.render_target.texture orelse return null;
+    const src = dvui.Texture.fromTargetTemp(bound) catch return null;
+    const w: u32 = @intFromFloat(r.w);
+    const h: u32 = @intFromFloat(r.h);
+    const step = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return null;
+    var rt = cw.render_target;
+    const off = rt.offset;
+    rt.texture = step;
+    rt.offset = .{};
+    const prev = dvui.renderTarget(rt);
+    {
+        const prev_clip = dvui.clipGet();
+        defer dvui.clipSet(prev_clip);
+        dvui.clipSet(.{ .w = r.w, .h = r.h });
+        const prev_alpha = dvui.alpha(1);
+        defer dvui.alphaSet(prev_alpha);
+        const sw: f32 = @floatFromInt(src.width);
+        const sh: f32 = @floatFromInt(src.height);
+        dvui.renderTexture(src, .{ .r = .{ .w = r.w, .h = r.h }, .s = 1 }, .{
+            .uv = .{ .x = (r.x - off.x) / sw, .y = (r.y - off.y) / sh, .w = r.w / sw, .h = r.h / sh },
+        }) catch {};
+    }
+    _ = dvui.renderTarget(prev);
+    const under = dvui.textureFromTarget(step) catch return null;
+    // Written back with a copy blend, so the region holds exactly `(1 - a) * under`.
+    cw.backend.textureBlend(under, .copy) catch {
+        dvui.textureDestroyLater(under);
+        return null;
+    };
+    const prev_alpha = dvui.alpha(1);
+    defer dvui.alphaSet(prev_alpha);
+    const keep = 1 - std.math.clamp(alpha * prev_alpha, 0, 1);
+    dvui.renderTexture(under, .{ .r = r, .s = 1 }, .{ .colormod = dvui.Color.white.opacity(keep) }) catch {};
+    return under;
+}
+
+/// `weight * tex` added onto the target. The texture's blend is put back to source-over after.
+fn addOne(tex: dvui.Texture, dest: dvui.Rect.Physical, weight: f32) void {
+    if (weight <= 0.001) return;
+    const cw = dvui.currentWindow();
+    cw.backend.textureBlend(tex, .add) catch return;
+    defer cw.backend.textureBlend(tex, .over) catch {};
+    dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{ .colormod = dvui.Color.white.opacity(weight) }) catch {};
+}
+
+/// `top` over `bottom` at mix `t` (1 = only top), covering exactly `alpha`
+/// of the live view. The previous formula filled coverage with the sharp
+/// layer on top, so frost was invisible until mix hit 1 — that snap is the
+/// pop. Weights here are `alpha * t` of top and `alpha * (1-t)` of bottom.
+fn mixAlphas(top_t: f32, alpha: f32) struct { bot: f32, top: f32 } {
+    const t = std.math.clamp(top_t, 0, 1);
+    const a = std.math.clamp(alpha, 0, 1);
+    if (t >= 0.999) return .{ .bot = 0, .top = a };
+    if (t <= 0.001) return .{ .bot = a, .top = 0 };
+    const top_a = a * t;
+    const bot_a = if (top_a >= 0.999) 0 else a * (1 - t) / (1 - top_a);
+    return .{ .bot = bot_a, .top = top_a };
+}
+
+fn blitPair(bottom: dvui.Texture, top: dvui.Texture, dest: dvui.Rect.Physical, t: f32, alpha: f32) void {
+    if (bottom.ptr == top.ptr) {
+        blitOne(top, dest, alpha);
+        return;
+    }
+    const a = mixAlphas(t, alpha);
+    blitOne(bottom, dest, a.bot);
+    blitOne(top, dest, a.top);
+}
+
+fn blitOne(tex: dvui.Texture, dest: dvui.Rect.Physical, alpha: f32) void {
+    if (alpha <= 0.001) return;
+    dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{
+        .colormod = dvui.Color.white.opacity(alpha),
+    }) catch {};
 }
 
 /// Host-owned state for one "one of N screens" region. Pair with `transition` each frame.
@@ -410,5 +514,39 @@ pub fn transition(state: *Transition, opts: TransitionOptions) TransitionFrame {
     }
 
     state.prev_key = opts.key;
-    return .{ .cross_fade = &state.cross_fade, .pending = pending };
+
+    // A blur swap also photographs the incoming view once, a settle frame after the swap (the
+    // first frame it draws has no sizes from last frame and is not what it will look like),
+    // so `CrossFade.draw` can sharpen it in. Fade does not need it.
+    var frame: TransitionFrame = .{ .cross_fade = &state.cross_fade, .pending = pending };
+    const cf = &state.cross_fade;
+    if (cf.kind == .blur and cf.texture != null and cf.incoming == null and !cf.have_incoming and !key_changed) {
+        if (cf.incoming_wait < 1) {
+            cf.incoming_wait += 1;
+        } else if (CrossFade.beginCapture(opts.rect)) |pic| {
+            frame.incoming = pic;
+            frame.prev_clip = dvui.clip(opts.rect);
+        }
+    }
+    return frame;
+}
+
+const testing = std.testing;
+
+test "mix alphas lerp two opaque layers without a snap at 1" {
+    const mid = mixAlphas(0.5, 1);
+    // bottom fully drawn, top at 0.5 over it → 50/50, not "sharp covering frost"
+    try testing.expectApproxEqAbs(@as(f32, 1), mid.bot, 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), mid.top, 1e-5);
+    const coverage = mid.bot + mid.top * (1 - mid.bot);
+    try testing.expectApproxEqAbs(@as(f32, 1), coverage, 1e-5);
+    const frost_w = mid.bot * (1 - mid.top);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), frost_w, 1e-5);
+}
+
+test "mix alphas keep coverage equal to overlay alpha while fading" {
+    const a = mixAlphas(0.5, 0.5);
+    const coverage = a.bot + a.top * (1 - a.bot);
+    try testing.expectApproxEqAbs(@as(f32, 0.5), coverage, 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 0.25), a.top, 1e-5);
 }

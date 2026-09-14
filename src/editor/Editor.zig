@@ -2631,6 +2631,8 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .paletteFolder = fizzyPaletteFolder,
     .markSettingsDirty = fizzyMarkSettingsDirty,
     .contentOpacity = fizzyContentOpacity,
+    .dialogWindow = fizzyDialogWindow,
+    .frostPane = fizzyFrostPane,
     .isMaximized = fizzyIsMaximized,
     .isMacOS = fizzyIsMacOS,
     .appliesNativeWindowOpacity = fizzyAppliesNativeWindowOpacity,
@@ -2789,6 +2791,14 @@ fn fizzyPaletteFolder(ctx: *anyopaque) ?[]const u8 {
 fn fizzyMarkSettingsDirty(ctx: *anyopaque) void {
     fizzyCtx(ctx).markSettingsDirty();
 }
+fn fizzyDialogWindow(_: *anyopaque) dvui.Dialog.DisplayFn {
+    return &fizzy.core.dialogs.dialogWindow;
+}
+
+fn fizzyFrostPane(_: *anyopaque, id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32) bool {
+    return fizzy.core.dialogs.frostPane(id, rect, corners, scale);
+}
+
 fn fizzyContentOpacity(ctx: *anyopaque) f32 {
     return fizzyCtx(ctx).settings.content_opacity;
 }
@@ -3076,11 +3086,10 @@ fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     const editor = ds.editor;
     const doc = editor.docById(ds.doc_id) orelse return .ok;
 
-    var content_color = dvui.themeGet().color(.window, .fill);
-    if (comptime builtin.os.tag == .macos or builtin.os.tag == .windows) {
-        if (!fizzy.backend.isMaximized(dvui.currentWindow())) content_color = content_color.opacity(editor.settings.content_opacity);
-    }
-    var canvas = sdk.pane_layout.mainCanvasVbox(content_color, true, @truncate(ds.doc_id));
+    // No fill: the place card the region draws is the document's background. A second coat of
+    // the same translucent fill here doubled it — darker, and more opaque than the chrome
+    // around it.
+    var canvas = sdk.pane_layout.mainCanvasVbox(dvui.themeGet().color(.window, .fill), false, @truncate(ds.doc_id));
     defer {
         dvui.toastsShow(canvas.data().id, canvas.data().contentRectScale().r.toNatural());
         canvas.deinit();
@@ -3640,6 +3649,10 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.settings.window_opacity_dark = parsed.window_opacity_dark;
     editor.settings.window_opacity_light = parsed.window_opacity_light;
     editor.settings.content_opacity = parsed.content_opacity;
+    editor.settings.modal_dim = parsed.modal_dim;
+    editor.settings.dialog_opacity = parsed.dialog_opacity;
+    editor.settings.dialog_blur = parsed.dialog_blur;
+    editor.settings.dialog_lift = parsed.dialog_lift;
     editor.settings.input_scheme = parsed.input_scheme;
     editor.settings.plugin_update_mode = parsed.plugin_update_mode;
 
@@ -3996,6 +4009,22 @@ const handle_size = 10;
 const handle_dist = 60;
 
 pub fn tick(editor: *Editor) !dvui.App.Result {
+    // How dialogs look this frame — the settings, plus what a bare stretch of chrome is on
+    // screen (the window base: content fill at window opacity over the OS material; opaque
+    // when maximized). Published into the shared dvui window so plugin dylibs' dialogs read
+    // the same values; see `core.dialogs.Style`.
+    {
+        const fill = dvui.themeGet().color(.content, .fill);
+        const chrome = if (editor.host.appliesNativeWindowOpacity() and !editor.host.isMaximized()) fill.opacity(editor.window_opacity) else fill;
+        fizzy.core.dialogs.publishStyle(.{
+            .modal_dim = editor.settings.modal_dim,
+            .opacity = editor.settings.dialog_opacity,
+            .blur = editor.settings.dialog_blur,
+            .lift = editor.settings.dialog_lift,
+            .chrome = .{ chrome.r, chrome.g, chrome.b, chrome.a },
+            .has_chrome = true,
+        });
+    }
     // CORS-fail README images are `<img>` overlays, not canvas pixels. JS hides any
     // overlay this frame doesn't place — but only after a real frame, so sleeping the
     // window (mouse left) does not blank them. See `net_image.beginOverlayFrame`.

@@ -8,6 +8,7 @@
 //! without each plugin remembering to sync it.
 const std = @import("std");
 const core = @import("core");
+const dvui = @import("dvui");
 const Host = @import("Host.zig");
 
 var gpa: std.mem.Allocator = undefined;
@@ -37,8 +38,22 @@ pub fn installRuntime(
         gpa = a.*;
         core.gpa = a.*;
     }
-    if (host_in) |h| host_ptr = h;
+    if (host_in) |h| {
+        host_ptr = h;
+        // The host draws this dylib's dialogs — see `core.dialogs.HostChrome`.
+        if (h.fizzy_api) |api| {
+            core.dialogs.host_chrome = .{
+                .dialog_window = api.dialogWindow(),
+                .frost_pane = hostFrostPane,
+            };
+        }
+    }
     if (state_ptr) |s| injected_state = s;
+}
+
+fn hostFrostPane(id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32) bool {
+    const api = host_ptr.fizzy_api orelse return false;
+    return api.frostPane(id, rect, corners, scale);
 }
 
 pub fn injectedState(comptime T: type) ?*T {

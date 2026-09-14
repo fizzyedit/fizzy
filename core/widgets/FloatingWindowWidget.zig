@@ -2,6 +2,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 
 const Event = dvui.Event;
+const BlurBackdrop = @import("BlurBackdrop.zig");
 const Options = dvui.Options;
 const Point = dvui.Point;
 const Rect = dvui.Rect;
@@ -64,8 +65,37 @@ pub const AutoSizeAxes = enum {
     }
 };
 
+/// A frosted backdrop under a translucent window: what is beneath it, blurred, drawn under its
+/// own `color_fill`. See `BlurBackdrop.Mode.readback` for how the pixels are obtained — it
+/// reads the window's framebuffer as it stands when the floating window is declared, so a
+/// window declared after the content it floats over (which is every dialog, palette and
+/// picker) sees all of it. The read is a GPU sync, so it is repeated only when the window
+/// moves, resizes, or `refresh_ms` has passed.
+pub const Frost = struct {
+    /// Blur strength — halvings; 8 a soft focus, 16 a heavy frost, 32 a wash of colour.
+    radius: f32 = 15,
+    /// How often to re-read what is underneath while nothing about the window itself changes.
+    /// Zero re-reads every frame (live, and a sync per frame).
+    refresh_ms: u32 = 80,
+    /// The window's own colour, composited *with* the frost rather than painted over it:
+    /// `out = (1 - mix) * frost + mix * tint`. The tint's alpha is the coverage the whole thing
+    /// ends up with, so a tint of the app's chrome colour at the chrome's own translucency
+    /// makes a fully-mixed window look exactly like a bare panel — the desktop showing through
+    /// by the same amount — where a fill painted over the frost could only ever be darker.
+    /// Null keeps the ordinary `color_fill` background over the frost.
+    tint: ?dvui.Color = null,
+    /// 0 is all frost, 1 is all tint.
+    mix: f32 = 0.5,
+    /// White added over the whole pane after the mix, 0…1 — a glass material's lift above
+    /// whatever is behind it. Only with `tint`.
+    lift: f32 = 0,
+};
+
 pub const InitOptions = struct {
     modal: bool = false,
+    /// Blur what is beneath the window and draw it under the window's fill. Meant for a
+    /// `color_fill` with some transparency; under an opaque fill it is invisible work.
+    frost: ?Frost = null,
     /// Scrim opacity, defaulting to dvui's per-theme value. Set it to animate the dim in and
     /// out with a window that opens or closes over time (see `CommandPalette`). Same field name
     /// and meaning as upstream dvui's `FloatingWindowWidget`.
@@ -529,11 +559,45 @@ pub fn drawBackground(self: *FloatingWindowWidget) void {
     }
 
     // we are using BoxWidget to do border/background
-    self.layout.init(@src(), .{ .dir = .vertical }, self.options.override(.{ .expand = .both }));
+    if (self.init_options.frost) |frost| {
+        // Shadow, then frost, then fill. The box shadow is a filled, faded rect that covers the
+        // window's own interior too; drawn after the frost (as `borderAndBackground` would) it
+        // laid its black over the glass. The frost replaces what is under the window, so a
+        // shadow drawn first survives only outside it — where a shadow belongs.
+        var box_opts = self.options.override(.{ .expand = .both });
+        box_opts.box_shadow = null;
+        self.layout.init(@src(), .{ .dir = .vertical }, box_opts);
+        if (self.options.box_shadow) |bs| {
+            const brs = self.layout.data().borderRectScale();
+            // `WidgetData.init` would have finalized these against the theme's corner style; we read
+            // the init options, so do it here or a theme-kind corner draws as no corner.
+            const corners = (bs.corners orelse self.layout.data().options.cornersGet()).finalize(self.options.theme);
+            const prect = brs.r.insetAll(brs.s * bs.shrink).offsetPoint(bs.offset.scale(brs.s, dvui.Point.Physical));
+            prect.fill(corners.scale(brs.s, dvui.CornerRect.Physical), .{ .color = .{ .color = bs.color.opacity(bs.alpha) }, .fade = brs.s * bs.fade });
+        }
+        self.drawFrost(frost);
+        // The tint *is* the fill; the box must not paint another over it.
+        if (frost.tint != null) self.layout.data().options.background = false;
+    } else {
+        self.layout.init(@src(), .{ .dir = .vertical }, self.options.override(.{ .expand = .both }));
+    }
     self.layout.drawBackground();
 
     // clip to just our window (layout has the margin)
     _ = dvui.clip(self.layout.data().borderRectScale().r);
+}
+
+/// The frosted backdrop under the window's border rect — `BlurBackdrop.frostPane` at this
+/// window's geometry and corners, keyed by its id.
+fn drawFrost(self: *FloatingWindowWidget, frost: Frost) void {
+    const brs = self.layout.data().borderRectScale();
+    BlurBackdrop.frostPane(self.data().id, brs.r, self.layout.data().options.cornersGet(), brs.s, .{
+        .radius = frost.radius,
+        .refresh_ms = frost.refresh_ms,
+        .tint = frost.tint,
+        .mix = frost.mix,
+        .lift = frost.lift,
+    });
 }
 
 fn dragPart(me: Event.Mouse, rs: RectScale) DragPart {

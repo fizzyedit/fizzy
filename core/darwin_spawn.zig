@@ -54,8 +54,8 @@ pub const Options = struct {
 /// Environment variables forwarded to the child, looked up individually via `getenv()` rather
 /// than by walking this process's `environ` array — see file doc comment.
 const forwarded_env_keys = [_][:0]const u8{
-    "HOME",  "USER",   "LOGNAME", "SHELL",
-    "LANG",  "LC_ALL", "TERM",    "TMPDIR",
+    "HOME",            "USER",           "LOGNAME",       "SHELL",
+    "LANG",            "LC_ALL",         "TERM",          "TMPDIR",
     "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
 };
 

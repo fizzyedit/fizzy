@@ -310,7 +310,9 @@ pub fn draw() !void {
     // Two trees, one per mode. A search force-expands branches, and `TreeWidget` stores expansion
     // per widget id — sharing one id space would bleed "expanded because searching" into the
     // browsing tree's animation state. Separate `id_extra` keeps them cleanly apart.
-    var tree = core.widgets.TreeWidget.tree(@src(), .{}, .{
+    // No focus group of its own: the Keybinds and File Types sections are grids, whose column
+    // headers open one, and a subwindow holds one group.
+    var tree = core.widgets.TreeWidget.tree(@src(), .{ .focus_group = false }, .{
         .id_extra = @intFromBool(searching),
         .expand = .horizontal,
         .background = false,
