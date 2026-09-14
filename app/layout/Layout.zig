@@ -680,9 +680,14 @@ pub const SplitTree = @import("SplitTree.zig");
 pub const Drop = @import("Drop.zig");
 /// Carrying a view from one place to another — the gesture `Drop` decides for.
 pub const ViewDrag = @import("ViewDrag.zig");
+/// The arrangement a shape starts from — see `Seed.zig`. `Layout.Seed` is the tree union.
+pub const Seed = @import("Seed.zig").Tree;
+/// Walker `Layout.tree` returns over a seed-backed dockspace.
+pub const Tree = @import("Tree.zig");
 
 test {
     _ = @import("SplitTree.zig");
+    _ = @import("Seed.zig");
     _ = @import("Region.zig");
     _ = @import("Drop.zig");
     _ = @import("ViewDrag.zig");
@@ -696,6 +701,39 @@ pub const splitNamed = Region.splitNamed;
 pub const splitOn = Region.splitOn;
 /// Move the visible surface from one place to another — a view-drag drop.
 pub const placeVisible = ViewDrag.place;
+
+/// Walk `seed` as a `dockspace(header = .none)`. First call (and Reset Layout) convert the
+/// seed into a live `DockLayout`; after that the persisted tree is what is walked.
+pub fn tree(
+    self: *Layout,
+    src: std.builtin.SourceLocation,
+    seed: *const Seed,
+    opts: dvui.Options,
+) !Tree {
+    try self.state.ensureDock(self.gpa, seed);
+    const dock = if (self.state.dock) |*d| d else unreachable;
+    return .{
+        .dock = core.widgets.dockspace(src, .{
+            .layout = dock,
+            .header = .none,
+        }, opts),
+        .layout = self,
+        .seed = seed,
+    };
+}
+
+/// Draw a region into an already-open tree leaf: keyword qualification, registry, corner
+/// button, contents. Geometry belongs to the tree — there is no box to `deinit`.
+pub fn regionIn(self: *Layout, leaf: Tree.Leaf, init_opts: Region.InitOptions) !void {
+    const box = leaf.panel.dockspace.content_box orelse return;
+    var opts = init_opts;
+    if (opts.name.len == 0) opts.name = leaf.name;
+    if (opts.keywords.len == 0) opts.keywords = leaf.keywords;
+    if (init_opts.name.len == 0) opts.shows = leaf.shows;
+    opts.by_name = true;
+    opts.forget_when_empty = !leaf.pinned;
+    try Region.fillInBox(self, opts, box);
+}
 
 // ── Regions a plugin declares ───────────────────────────────────────────────────────────────────
 //

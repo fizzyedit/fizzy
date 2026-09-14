@@ -575,6 +575,9 @@ pub fn init(
             });
         }
         loadRuntimeSplits(&editor.layout, app.allocator, saved);
+        if (fizzy.backend.loadTree(app.allocator, editor.config_folder)) |d| {
+            editor.layout.pending_dock = d;
+        }
     }
 
     // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
@@ -4606,6 +4609,14 @@ fn saveRegions(editor: *Editor) void {
         }
     }
     fizzy.backend.saveRegions(editor.config_folder, by_name.values());
+    if (editor.layout.dock) |*d| {
+        const snap = d.snapshot(gpa) catch return;
+        defer snap.deinit(gpa);
+        fizzy.backend.saveTree(editor.config_folder, snap);
+    } else if (editor.layout.tree_cleared) {
+        fizzy.backend.saveTree(editor.config_folder, null);
+        editor.layout.tree_cleared = false;
+    }
 }
 
 fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []const fizzy.backend.SavedRegion) void {

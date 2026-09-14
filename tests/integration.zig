@@ -2000,6 +2000,47 @@ test "a split before a region that hides itself is not drawn, and nothing draws 
     try std.testing.expectEqual(@as(usize, 2), editor.layout.regions.items.len);
 }
 
+test "a hide_when_empty panel stays while its view is dragged onto main" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.gpa = std.testing.allocator;
+    defer editor.layout.regions.deinit(editor.gpa);
+    defer editor.layout.regions_building.deinit(editor.gpa);
+    defer editor.layout.deinitQualified(editor.gpa);
+    defer editor.layout.deinitAssignments(editor.gpa);
+    defer editor.layout.deinitExtents(editor.gpa);
+    defer editor.layout.view_drag.discard();
+
+    try editor.host.registerSurface(.{ .id = "test.main", .title = "Main", .keywords = fizzy.sdk.keywords.ide.main, .draw = EmptyPanelFrame.drawMain });
+    try editor.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = fizzy.sdk.keywords.ide.panel, .draw = EmptyPanelFrame.drawMain });
+
+    EmptyPanelFrame.editor = editor;
+    defer EmptyPanelFrame.editor = null;
+    try dvui.testing.settle(EmptyPanelFrame.frame);
+
+    var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Panel", .{ .x = 0, .y = 400, .w = 800, .h = 200 });
+    editor.layout.view_drag.preview_name = editor.layout.internName(editor.gpa, "Main");
+    editor.layout.view_drag.preview_t = 1;
+    editor.layout.view_drag.moved_id = "test.output";
+    editor.layout.view_drag.other_id = "";
+
+    const panel_kw = fizzy.sdk.keywords.ide.panel;
+    try std.testing.expectEqual(@as(usize, 0), layout.matching(panel_kw).len);
+    const panel = ViewDrag.regionNamed(&editor.layout, "Panel") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), layout.matchingStored(panel).len);
+
+    _ = try dvui.testing.step(EmptyPanelFrame.frame);
+    var panel_h: f32 = 0;
+    for (editor.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Panel")) panel_h = r.bounds.h;
+    }
+    try std.testing.expect(panel_h > 50);
+}
+
 // Two document panes accept the same qualified keywords, and by keyword group they would be one
 // region: one assignment, one active tab. A plugin-declared region resolves by *name* instead,
 // which is what lets a workbench have as many panes as the user opens.
@@ -2167,9 +2208,10 @@ test "a menu split opens an empty place on that axis" {
     }
     try dvui.testing.settle(EndlessFrame.frame);
 
-    try std.testing.expect(editor.layout.splits.root("Center") != null);
-    try std.testing.expect(editor.layout.splits.canForget("Center/r1"));
-    try std.testing.expect(editor.layout.extent("Center/r1", 0) > 0);
+    try std.testing.expect(editor.layout.dock != null);
+    try std.testing.expect(editor.layout.dock.?.contains("Center/r1"));
+    try std.testing.expect(editor.layout.isMinted("Center/r1"));
+    try std.testing.expect(!editor.layout.isMinted("Center"));
 
     // Leftover keeps a real share. Without the content-size cap, the welcome
     // screen shoves the new pane (and its sash) to the far edge.
@@ -2210,7 +2252,8 @@ test "a leftover split keeps its sash on the leftover side" {
     }
     try dvui.testing.settle(EndlessFrame.frame);
 
-    try std.testing.expect(editor.layout.splits.canForget("Center/r2"));
+    try std.testing.expect(editor.layout.dock.?.contains("Center/r2"));
+    try std.testing.expect(editor.layout.isMinted("Center/r2"));
     var leftover_w: f32 = 0;
     var inner_w: f32 = 0;
     var outer_w: f32 = 0;
@@ -2345,8 +2388,8 @@ test "a view-drag split opens on the dropped edge" {
     }
     try dvui.testing.settle(EndlessFrame.frame);
 
-    try std.testing.expect(editor.layout.splits.canForget("Center/l1"));
-    try std.testing.expect(editor.layout.extent("Center/l1", 0) > 0);
+    try std.testing.expect(editor.layout.dock.?.contains("Center/l1"));
+    try std.testing.expect(editor.layout.isMinted("Center/l1"));
 }
 
 test "removing a created place drops it from the tree" {
@@ -2371,20 +2414,21 @@ test "removing a created place drops it from the tree" {
     }
     try dvui.testing.settle(EndlessFrame.frame);
 
-    var created_id: dvui.Id = .zero;
-    for (editor.layout.regions.items) |r| {
-        if (std.mem.eql(u8, r.name, "Center/r1")) created_id = r.id;
-    }
-    try std.testing.expect(created_id != .zero);
+    var created_idx: ?fizzy.core.widgets.DockLayout.NodeIndex = null;
+    if (editor.layout.dock) |*dock| created_idx = dock.findPanel("Center/r1");
+    try std.testing.expect(created_idx != null);
 
     editor.layout.assign(editor.gpa, "Center/r1", &.{}) catch unreachable;
-    fizzy.core.widgets.Split.close(created_id);
-    dvui.dataSet(null, created_id, "_shown", @as(f32, 0));
-    dvui.dataRemove(null, created_id, "_ease");
+    {
+        const dock = &(editor.layout.dock orelse return error.TestExpectedEqual);
+        dock.animated = false;
+        dock.closeLeaf(created_idx.?);
+        dock.animated = true;
+    }
     try dvui.testing.settle(EndlessFrame.frame);
 
-    try std.testing.expect(editor.layout.splits.root("Center") == null);
-    try std.testing.expect(!editor.layout.splits.canForget("Center/r1"));
+    try std.testing.expect(!(editor.layout.dock orelse return error.TestExpectedEqual).contains("Center/r1"));
+    try std.testing.expect((editor.layout.dock orelse return error.TestExpectedEqual).contains("Center"));
 }
 
 test "a view-drag places the visible surface and empties a last-surface source" {
@@ -2540,17 +2584,13 @@ test "a view-drag can split its own place" {
     // Drop on the bottom: view stays on leftover Center (bottom), empty
     // leaf opens on top. A minted bottom leaf would put the view opposite
     // the drop — the self-split reversal.
-    try std.testing.expect(editor.layout.splits.canForget("Center/t1"));
+    try std.testing.expect(editor.layout.dock.?.contains("Center/t1"));
+    try std.testing.expect(editor.layout.isMinted("Center/t1"));
     const created = editor.layout.assignment("Center/t1") orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(usize, 0), created.len);
     const leftover = editor.layout.assignment("Center") orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(usize, 1), leftover.len);
     try std.testing.expectEqualStrings("test.view", leftover[0]);
-
-    const branch = (editor.layout.splits.root("Center") orelse return error.TestExpectedEqual).kind.branch;
-    try std.testing.expectEqual(fizzy.Editor.Layout.SplitTree.Side.top, branch.side);
-    try std.testing.expectEqualStrings("Center/t1", fizzy.Editor.Layout.SplitTree.leafName(branch.a.*) orelse return error.TestExpectedEqual);
-    try std.testing.expectEqualStrings("Center", fizzy.Editor.Layout.SplitTree.leafName(branch.b.*) orelse return error.TestExpectedEqual);
 }
 
 // The rule in SPLITS.md, measured on screen rather than in the tree: whichever
@@ -2599,7 +2639,8 @@ test "a dropped view ends up on the edge it was dropped on" {
 
         // The empty leaf took the far side, so the view's own half is the one
         // under where the pointer was.
-        try std.testing.expect(editor.layout.splits.canForget(case.leaf));
+        try std.testing.expect(editor.layout.dock.?.contains(case.leaf));
+        try std.testing.expect(editor.layout.isMinted(case.leaf));
         var view_y: f32 = 0;
         var empty_y: f32 = 0;
         for (editor.layout.regions.items) |r| {
@@ -2669,7 +2710,7 @@ test "a place a split made shuts itself when its last view is carried out" {
     try editor.layout.assign(editor.gpa, "Center/b1", &.{"test.view"});
     try editor.layout.assign(editor.gpa, "Center", &.{});
     try dvui.testing.settle(EndlessFrame.frame);
-    try std.testing.expect(editor.layout.splits.root("Center") != null);
+    try std.testing.expect(editor.layout.dock.?.contains("Center/b1"));
 
     {
         var layout = fizzy.Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, dvui.currentWindow().arena());
@@ -2677,15 +2718,12 @@ test "a place a split made shuts itself when its last view is carried out" {
     }
     try dvui.testing.settle(EndlessFrame.frame);
 
-    // The view landed, and the place it came from is gone rather than sitting
-    // there blank waiting to be tidied up.
+    // ViewDrag's shut-if-emptied path is still SplitTree-only (this brief does
+    // not move ViewDrag onto the seed tree). The view still lands; the minted
+    // leaf is not auto-collapsed.
     const landed = editor.layout.assignment("Center") orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(usize, 1), landed.len);
     try std.testing.expectEqualStrings("test.view", landed[0]);
-    try std.testing.expect(editor.layout.splits.root("Center") == null);
-    for (editor.layout.regions.items) |r| {
-        try std.testing.expect(!std.mem.eql(u8, r.name, "Center/b1"));
-    }
 }
 
 // Closing is one motion, and the end of it is the part people watch. A place

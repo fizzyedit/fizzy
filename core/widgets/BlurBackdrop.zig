@@ -168,7 +168,53 @@ pub fn deinit(self: *BlurBackdrop) void {
     defer _ = dvui.renderTarget(prev1);
     cw.renderCommands(cmds) catch {};
 
-    var cur = dvui.textureFromTarget(full_target) catch return; // destroys full_target
+    const cur = dvui.textureFromTarget(full_target) catch return; // destroys full_target
+    // Capture target is already bound; the outer `defer` restores the window.
+    _ = self.runKawase(cur, true, false);
+}
+
+/// Fizzy addition (proposed for upstream): a dual-Kawase blur of an already-captured texture,
+/// as a new texture the caller owns (destroy it with `dvui.textureDestroyLater`). The same
+/// pipeline `deinit` runs after its own capture, without the bracket. `tex` is not touched.
+/// Null when the backend has no render targets, or `radius_px` is too small for a single pass.
+///
+/// Owned rather than cached here on purpose: a cache keyed by texture pointer would hand a
+/// stale blur to the next capture that happened to land on the same pointer, which is exactly
+/// what two swaps of one region in a row do. The caller already owns the sharp snapshot, so it
+/// owns the frost beside it and drops both together.
+pub fn blurred(tex: Texture, radius_px: f32) ?Texture {
+    var tmp: BlurBackdrop = .{ .radius_px = radius_px };
+    const prev_rendering = dvui.renderingSet(true);
+    defer _ = dvui.renderingSet(prev_rendering);
+    if (!tmp.runKawase(tex, false, true)) return null;
+    return tmp.small;
+}
+
+/// Fizzy addition (proposed for upstream): shared dual-Kawase downsample /
+/// upsample used by both `deinit` (after capturing into `full_target`) and
+/// `fromTexture`.
+///
+/// `own_source` is false when `source` is a caller-owned snapshot — the first
+/// `cur` is then never destroyed. If no pass runs (`radius_px <= 1` →
+/// downscale=1, loops don't run), `small` is left unset so `releaseTexture`
+/// cannot destroy the caller's texture.
+///
+/// `restore_target` saves/restores the current render target around the
+/// passes (`fromTexture`). `deinit` already has an outer restore to the
+/// window target and passes false so we don't rebind a destroyed capture
+/// target mid-pipeline. Restore happens only if a pass actually bound a
+/// step target — a no-op restore would rebind the window (clear-on-bind
+/// flicker).
+///
+fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_target: bool) bool {
+    var cur = source;
+    var own_cur = own_source;
+
+    var prev1: dvui.RenderTarget = undefined;
+    var switched = false;
+    defer if (restore_target and switched) {
+        _ = dvui.renderTarget(prev1);
+    };
 
     // Each halving pass roughly doubles the effective blur radius in source
     // pixels, so after n halvings the total radius is ~2^n. Inverting that
@@ -177,16 +223,22 @@ pub fn deinit(self: *BlurBackdrop) void {
     // intuition well enough: bigger radius looks blurrier, and doubling it
     // looks like about one more halving pass, same as the browser.
     const downscale = 1.0 / @max(1.0, self.radius_px);
-    const target_w: u32 = @max(1, @as(u32, @intFromFloat(@round(r.w * downscale))));
-    const target_h: u32 = @max(1, @as(u32, @intFromFloat(@round(r.h * downscale))));
+    const src_w: f32 = @floatFromInt(source.width);
+    const src_h: f32 = @floatFromInt(source.height);
+    const target_w: u32 = @max(1, @as(u32, @intFromFloat(@round(src_w * downscale))));
+    const target_h: u32 = @max(1, @as(u32, @intFromFloat(@round(src_h * downscale))));
 
     while (cur.width > target_w or cur.height > target_h) {
         const next_w = @max(target_w, cur.width / 2);
         const next_h = @max(target_h, cur.height / 2);
-        const step_target = dvui.textureCreateTarget(.{ .width = next_w, .height = next_h }) catch break;
+        const step_target = dvui.textureCreateTarget(.{ .width = next_w, .height = next_h, .interpolation = .linear }) catch break;
         // Switches straight from `cur`'s target to `step_target` - no need
         // to save/restore per pass, see comment above the outer `defer`.
-        _ = dvui.renderTarget(.{ .texture = step_target, .offset = .{} });
+        const prev = dvui.renderTarget(.{ .texture = step_target, .offset = .{} });
+        if (!switched) {
+            prev1 = prev;
+            switched = true;
+        }
         // The ambient clip rect is in window coordinates (wherever this
         // widget happens to be laid out) and is meaningless once rendering
         // targets `step_target`, whose content is addressed from (0,0) - a
@@ -197,83 +249,97 @@ pub fn deinit(self: *BlurBackdrop) void {
         dvui.clipSet(.{ .w = @floatFromInt(next_w), .h = @floatFromInt(next_h) });
         defer dvui.clipSet(prev_clip);
 
-        // 4-tap diagonal-offset downsample, sampled further out (1.5 source
-        // texels) than the ~0.5-texel implicit box a plain halving pass
-        // would land on - that wider kernel is what keeps the blur
-        // spreading pass over pass instead of just antialiasing. Scaled by
-        // passStrength so a partial (non-halving) pass spreads less.
-        const kawase_offset_texels: f32 = 1.5;
-        const half_u = kawase_offset_texels * passStrength(next_w, cur.width) / @as(f32, @floatFromInt(cur.width));
-        const half_v = kawase_offset_texels * passStrength(next_h, cur.height) / @as(f32, @floatFromInt(cur.height));
-        const taps = [4]dvui.Point{
-            .{ .x = -half_u, .y = -half_v },
-            .{ .x = half_u, .y = -half_v },
-            .{ .x = -half_u, .y = half_v },
-            .{ .x = half_u, .y = half_v },
-        };
-        for (taps, 0..) |tap, i| {
-            const a: f32 = 1.0 / @as(f32, @floatFromInt(i + 1));
-            dvui.renderTexture(cur, .{ .r = .{ .w = @floatFromInt(next_w), .h = @floatFromInt(next_h) } }, .{
-                .uv = .{ .x = tap.x, .y = tap.y, .w = 1, .h = 1 },
-                .colormod = dvui.Color.white.opacity(a),
-            }) catch {};
+        const dest_r: dvui.Rect.Physical = .{ .w = @floatFromInt(next_w), .h = @floatFromInt(next_h) };
+        {
+            // 4-tap diagonal-offset downsample, sampled further out (1.5 source
+            // texels) than the ~0.5-texel implicit box a plain halving pass
+            // would land on - that wider kernel is what keeps the blur
+            // spreading pass over pass instead of just antialiasing. Scaled by
+            // passStrength so a partial (non-halving) pass spreads less.
+            const kawase_offset_texels: f32 = 1.5;
+            const half_u = kawase_offset_texels * passStrength(next_w, cur.width) / @as(f32, @floatFromInt(cur.width));
+            const half_v = kawase_offset_texels * passStrength(next_h, cur.height) / @as(f32, @floatFromInt(cur.height));
+            const taps = [4]dvui.Point{
+                .{ .x = -half_u, .y = -half_v },
+                .{ .x = half_u, .y = -half_v },
+                .{ .x = -half_u, .y = half_v },
+                .{ .x = half_u, .y = half_v },
+            };
+            for (taps, 0..) |tap, i| {
+                const a: f32 = 1.0 / @as(f32, @floatFromInt(i + 1));
+                dvui.renderTexture(cur, .{ .r = dest_r }, .{
+                    .uv = .{ .x = tap.x, .y = tap.y, .w = 1, .h = 1 },
+                    .colormod = dvui.Color.white.opacity(a),
+                }) catch {};
+            }
         }
 
-        dvui.textureDestroyLater(cur);
+        if (own_cur) dvui.textureDestroyLater(cur);
         cur = dvui.textureFromTarget(step_target) catch break; // destroys step_target
+        own_cur = true;
     }
 
     // Upsample back to full size with progressive doubling + a wide
     // multi-tap kernel each step (real "dual Kawase" blur), instead of one
     // big bilinear stretch, which would just show the downsampled blocks.
-    const final_w: u32 = @intFromFloat(r.w);
-    const final_h: u32 = @intFromFloat(r.h);
+    const final_w: u32 = source.width;
+    const final_h: u32 = source.height;
     while (cur.width < final_w or cur.height < final_h) {
         const next_w = @min(final_w, cur.width * 2);
         const next_h = @min(final_h, cur.height * 2);
-        const step_target = dvui.textureCreateTarget(.{ .width = next_w, .height = next_h }) catch break;
-        _ = dvui.renderTarget(.{ .texture = step_target, .offset = .{} });
+        const step_target = dvui.textureCreateTarget(.{ .width = next_w, .height = next_h, .interpolation = .linear }) catch break;
+        const prev = dvui.renderTarget(.{ .texture = step_target, .offset = .{} });
+        if (!switched) {
+            prev1 = prev;
+            switched = true;
+        }
         // See matching comment in the downsample loop above.
         const prev_clip = dvui.clipGet();
         dvui.clipSet(.{ .w = @floatFromInt(next_w), .h = @floatFromInt(next_h) });
         defer dvui.clipSet(prev_clip);
 
-        // 8-tap "dual filter" upsample kernel: 4 cardinal taps (weight 1)
-        // plus 4 diagonal taps (weight 2), offset in units of the smaller
-        // *source* texture's texel size. Composited with the same running-
-        // weighted-average alpha trick as the downsample taps above
-        // (alpha_i = w_i / cumulative_weight_i). Scaled by passStrength so
-        // a partial (non-doubling) pass spreads less, matching the
-        // downsample side.
-        const ou_x = passStrength(cur.width, next_w) / @as(f32, @floatFromInt(cur.width));
-        const ou_y = passStrength(cur.height, next_h) / @as(f32, @floatFromInt(cur.height));
-        const Tap = struct { x: f32, y: f32, w: f32 };
-        const taps = [8]Tap{
-            .{ .x = 0, .y = 2 * ou_y, .w = 1 },
-            .{ .x = ou_x, .y = ou_y, .w = 2 },
-            .{ .x = 2 * ou_x, .y = 0, .w = 1 },
-            .{ .x = ou_x, .y = -ou_y, .w = 2 },
-            .{ .x = 0, .y = -2 * ou_y, .w = 1 },
-            .{ .x = -ou_x, .y = -ou_y, .w = 2 },
-            .{ .x = -2 * ou_x, .y = 0, .w = 1 },
-            .{ .x = -ou_x, .y = ou_y, .w = 2 },
-        };
-        var cum_w: f32 = 0;
-        for (taps) |tap| {
-            cum_w += tap.w;
-            const a = tap.w / cum_w;
-            dvui.renderTexture(cur, .{ .r = .{ .w = @floatFromInt(next_w), .h = @floatFromInt(next_h) } }, .{
-                .uv = .{ .x = tap.x, .y = tap.y, .w = 1, .h = 1 },
-                .colormod = dvui.Color.white.opacity(a),
-            }) catch {};
+        const dest_r: dvui.Rect.Physical = .{ .w = @floatFromInt(next_w), .h = @floatFromInt(next_h) };
+        {
+            // 8-tap "dual filter" upsample kernel: 4 cardinal taps (weight 1)
+            // plus 4 diagonal taps (weight 2), offset in units of the smaller
+            // *source* texture's texel size. Composited with the same running-
+            // weighted-average alpha trick as the downsample taps above
+            // (alpha_i = w_i / cumulative_weight_i). Scaled by passStrength so
+            // a partial (non-doubling) pass spreads less, matching the
+            // downsample side.
+            const ou_x = passStrength(cur.width, next_w) / @as(f32, @floatFromInt(cur.width));
+            const ou_y = passStrength(cur.height, next_h) / @as(f32, @floatFromInt(cur.height));
+            const Tap = struct { x: f32, y: f32, w: f32 };
+            const taps = [8]Tap{
+                .{ .x = 0, .y = 2 * ou_y, .w = 1 },
+                .{ .x = ou_x, .y = ou_y, .w = 2 },
+                .{ .x = 2 * ou_x, .y = 0, .w = 1 },
+                .{ .x = ou_x, .y = -ou_y, .w = 2 },
+                .{ .x = 0, .y = -2 * ou_y, .w = 1 },
+                .{ .x = -ou_x, .y = -ou_y, .w = 2 },
+                .{ .x = -2 * ou_x, .y = 0, .w = 1 },
+                .{ .x = -ou_x, .y = ou_y, .w = 2 },
+            };
+            var cum_w: f32 = 0;
+            for (taps) |tap| {
+                cum_w += tap.w;
+                const a = tap.w / cum_w;
+                dvui.renderTexture(cur, .{ .r = dest_r }, .{
+                    .uv = .{ .x = tap.x, .y = tap.y, .w = 1, .h = 1 },
+                    .colormod = dvui.Color.white.opacity(a),
+                }) catch {};
+            }
         }
 
-        dvui.textureDestroyLater(cur);
+        if (own_cur) dvui.textureDestroyLater(cur);
         cur = dvui.textureFromTarget(step_target) catch break; // destroys step_target
+        own_cur = true;
     }
 
+    if (!own_cur) return false;
     if (self.small) |old| dvui.textureDestroyLater(old);
     self.small = cur;
+    return true;
 }
 
 /// Draw the cached blurred texture over `rect` (set by the last

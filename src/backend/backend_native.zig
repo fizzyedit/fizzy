@@ -48,6 +48,7 @@ fn alloc() std.mem.Allocator {
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
+const core = @import("core");
 const sdl3 = @import("backend").c;
 const objc = @import("objc");
 const win32 = @import("win32");
@@ -301,6 +302,9 @@ const SavedFrame = struct {
     w: f64 = 0,
     h: f64 = 0,
     regions: []const SavedRegion = &.{},
+    /// Live seed-tree arrangement (`DockLayout.snapshot`). Absent in files written before
+    /// the seed form, and while a shape still declares regions by call order.
+    tree: ?core.widgets.DockLayout.Snapshot = null,
 };
 const layout_file = "layout.zon";
 /// Geometry plus a line or two per region; far more than this is a corrupt file, not a layout.
@@ -351,7 +355,7 @@ fn writeWindowFile(dir: []const u8, f: SavedFrame) void {
     const path = windowFilePath(&path_buf, dir, layout_file) orelse return;
     var aw = std.Io.Writer.Allocating.init(std.heap.page_allocator);
     defer aw.deinit();
-    std.zon.stringify.serialize(f, .{}, &aw.writer) catch return;
+    std.zon.stringify.serializeMaxDepth(f, .{}, &aw.writer, 64) catch return;
     std.Io.Dir.createDirAbsolute(dvui.io, dir, .default_dir) catch {};
     std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = aw.written() }) catch {
         std.log.err("failed to write layout.zon", .{});
@@ -395,6 +399,30 @@ pub fn saveRegions(dir: []const u8, regions: []const SavedRegion) void {
     f.regions = regions;
     writeWindowFile(dir, f);
     f.regions = keep;
+}
+
+/// Read-modify-write: keeps frame geometry and the region list, replaces the seed-tree snapshot.
+/// Pass `null` to clear it (Reset Layout). Shapes that never call `Layout.tree` should not call
+/// this, so an existing tree on disk is left alone.
+pub fn saveTree(dir: []const u8, tree: ?core.widgets.DockLayout.Snapshot) void {
+    const gpa = std.heap.page_allocator;
+    var f = loadWindowFile(gpa, dir);
+    defer std.zon.parse.free(gpa, f);
+    const keep = f.tree;
+    f.tree = tree;
+    writeWindowFile(dir, f);
+    f.tree = keep;
+}
+
+/// The saved seed-tree, rebuilt as a live `DockLayout`, or null when the file has none.
+/// Caller owns the result (`DockLayout.deinit`).
+pub fn loadTree(gpa: std.mem.Allocator, dir: []const u8) ?core.widgets.DockLayout {
+    const f = loadWindowFile(gpa, dir);
+    defer std.zon.parse.free(gpa, f);
+    const snap = f.tree orelse return null;
+    var dock = core.widgets.DockLayout.fromSnapshot(gpa, snap) catch return null;
+    dock.animated = true;
+    return dock;
 }
 
 /// Every region `layout.zon` remembers, in `gpa`-owned memory. Call once at startup; free with

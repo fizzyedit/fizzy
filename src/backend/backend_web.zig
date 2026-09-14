@@ -6,6 +6,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const builtin = @import("builtin");
+const core = @import("core");
 
 const WebFileIo = if (builtin.target.cpu.arch == .wasm32)
     @import("../editor/WebFileIo.zig")
@@ -91,9 +92,14 @@ pub fn loadRegions(_: std.mem.Allocator, _: []const u8) []SavedRegion {
 
 pub fn freeRegions(_: std.mem.Allocator, _: []SavedRegion) void {}
 
+pub fn saveTree(_: []const u8, _: ?core.widgets.DockLayout.Snapshot) void {}
+
+pub fn loadTree(_: std.mem.Allocator, _: []const u8) ?core.widgets.DockLayout {
+    return null;
+}
+
 /// Symmetric with the native API: no AppKit pump on web.
 pub fn macosLaunchComplete() void {}
-
 
 pub fn titlebarStripHeight(_: *dvui.Window) f32 {
     return 0;

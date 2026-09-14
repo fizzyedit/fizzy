@@ -27,6 +27,7 @@ const Widget = dvui.Widget;
 const WidgetData = dvui.WidgetData;
 
 pub const Layout = @import("DockingWidget/Layout.zig");
+const row = @import("DockingWidget/row.zig");
 const Split = @import("Split.zig");
 
 const Dockspace = @This();
@@ -337,41 +338,18 @@ fn extentKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
     return std.fmt.allocPrint(dvui.currentWindow().arena(), "_extent:{d}", .{self.init_opts.layout.keyOf(node)}) catch "_extent";
 }
 
-const Division = struct { first: f32, usable: f32, floor_first: f32, floor_second: f32 };
-
 /// How `extent` divides at `ratio`: `first` is the first child's length; `usable` the room the
 /// ratio is a share of (the extent less the sash and both floors).
-fn divide(self: *Dockspace, node: Layout.NodeIndex, extent: f32, ratio: f32) Division {
+fn divide(self: *Dockspace, node: Layout.NodeIndex, extent: f32, ratio: f32) row.Division {
     const sp = self.init_opts.layout.nodes.items[node].split;
-    const floor_first = self.floorAlong(sp.first, sp.dir);
-    const floor_second = self.floorAlong(sp.second, sp.dir);
-    const usable = @max(0, extent - self.gapOf(node) - floor_first - floor_second);
-    return .{
-        .first = floor_first + usable * std.math.clamp(ratio, 0, 1),
-        .usable = usable,
-        .floor_first = floor_first,
-        .floor_second = floor_second,
-    };
+    return row.divide(extent, ratio, self.gapOf(node), self.floorAlong(sp.first, sp.dir), self.floorAlong(sp.second, sp.dir));
 }
 
 /// The child rects and sash rect for a split of content size `cr` at `ratio`.
-fn cellRects(self: *Dockspace, node: Layout.NodeIndex, cr: Rect, ratio: f32) struct { first: Rect, second: Rect, sash: Rect } {
+fn cellRects(self: *Dockspace, node: Layout.NodeIndex, cr: Rect, ratio: f32) @TypeOf(row.cellRects(cr, .horizontal, 0, 0)) {
     const sp = self.init_opts.layout.nodes.items[node].split;
-    const gap = self.gapOf(node);
     const d = self.divide(node, along(cr, sp.dir), ratio);
-    // Absolute within the dockspace: `cr` is the split's own cell there.
-    return switch (sp.dir) {
-        .horizontal => .{
-            .first = .{ .x = cr.x, .y = cr.y, .w = d.first, .h = cr.h },
-            .sash = .{ .x = cr.x + d.first, .y = cr.y, .w = gap, .h = cr.h },
-            .second = .{ .x = cr.x + d.first + gap, .y = cr.y, .w = @max(0, cr.w - d.first - gap), .h = cr.h },
-        },
-        .vertical => .{
-            .first = .{ .x = cr.x, .y = cr.y, .w = cr.w, .h = d.first },
-            .sash = .{ .x = cr.x, .y = cr.y + d.first, .w = cr.w, .h = gap },
-            .second = .{ .x = cr.x, .y = cr.y + d.first + gap, .w = cr.w, .h = @max(0, cr.h - d.first - gap) },
-        },
-    };
+    return row.cellRects(cr, sp.dir, d.first, self.gapOf(node));
 }
 
 fn minKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
@@ -404,12 +382,12 @@ fn shownPtr(self: *Dockspace, node: Layout.NodeIndex, target: f32) *f32 {
 // ── Dragging a sash: the two sides accordion ─────────────────────────────────────────────────
 //
 // Nested splits on one axis are, to the user, a row of panes with boundaries between them, and
-// a drag moves one boundary. It is resolved on that row, not on the one split's ratio: the
-// boundary goes where the pointer is, and each side of it scales as a group — every pane on the
-// squeezed side shrinks in proportion, keeping its share of that side, down to nothing, and the
-// panes on the other side grow the same way. Drag back and they open out in the same
-// proportions. Every split on the row then reads its ratio off the new positions. Sashes are
-// never scaled: each keeps its full width, so shut panes stack their handles at the boundary.
+// a drag moves one boundary. Arithmetic is `row.dragBoundary`: the boundary goes where the
+// pointer is, and each side of it scales as a group — every pane on the squeezed side shrinks
+// in proportion, keeping its share of that side, down to nothing, and the panes on the other
+// side grow the same way. Drag back and they open out in the same proportions. Every split on
+// the row then reads its ratio off the new positions (`row.ratioFor`). Sashes are never scaled:
+// each keeps its full width, so shut panes stack their handles at the boundary.
 
 const Boundary = struct { node: Layout.NodeIndex, pos: f32 };
 
@@ -445,53 +423,33 @@ fn collectCells(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direct
 }
 
 /// Write the row's positions back as each split's drawn ratio, and queue the settled value.
-fn assignRow(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction, origin: f32, extent: f32, row: []const Boundary) void {
+fn assignRow(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction, origin: f32, extent: f32, collected: []const Boundary) void {
     const layout = self.init_opts.layout;
     const sp = switch (layout.nodes.items[node]) {
         .split => |sp| sp,
         else => return,
     };
     if (sp.dir != dir) return;
-    const pos = for (row) |b| {
+    const pos = for (collected) |b| {
         if (b.node == node) break b.pos;
     } else return;
     const gap = self.gapOf(node);
     const first_len = pos - origin;
     const d = self.divide(node, extent, 0);
-    const ratio = if (d.usable > 0) std.math.clamp((first_len - d.floor_first) / d.usable, 0, 1) else 0;
+    const ratio = row.ratioFor(first_len, extent, gap, d.floor_first, d.floor_second);
     self.shownPtr(node, ratio).* = ratio;
     cancelAnim(self.data().id, self.animKey(node));
     self.queueMutation(.{ .set_ratio = .{ .split = node, .ratio = ratio, .extent = d.usable } });
-    self.assignRow(sp.first, dir, origin, first_len, row);
-    self.assignRow(sp.second, dir, pos + gap, @max(0, extent - first_len - gap), row);
+    self.assignRow(sp.first, dir, origin, first_len, collected);
+    self.assignRow(sp.second, dir, pos + gap, @max(0, extent - first_len - gap), collected);
 }
 
-/// Fit `room` (each cell's stretch above its floor) into `total`, keeping proportions. A side that
-/// has been squeezed to nothing has no proportions to keep, so the room goes to the cell nearest
-/// the boundary (`nearest_last` says which end that is).
-fn scaleSide(room: []f32, total: f32, nearest_last: bool) void {
-    if (room.len == 0) return;
-    // Never quite nothing: a side scaled to a hundredth of a point keeps its proportions to
-    // open back out with, where exactly zero would forget them.
-    const fit = @max(0.01, total);
-    var sum: f32 = 0;
-    for (room) |r| sum += r;
-    if (sum > 0.0001) {
-        const f = fit / sum;
-        for (room) |*r| r.* *= f;
-    } else {
-        @memset(room, 0);
-        room[if (nearest_last) room.len - 1 else 0] = fit;
-    }
-}
-
-/// A drag on `frame`'s sash to `to` (physical, along the axis): resolve it on the row the sash
-/// belongs to and write every affected split's ratio.
+/// A drag on `frame`'s sash to `to` (physical, along the axis): gather the row, resolve it
+/// with `row.dragBoundary`, write every affected split's ratio.
 fn dragTo(self: *Dockspace, frame: *StackFrame, to: f32) void {
     const dir = frame.dir;
     const gap = self.init_opts.handle_size;
 
-    // The row: the outermost same-axis ancestor still open on the stack.
     var root_i = self.stack.items.len - 1;
     while (root_i > 0 and self.stack.items[root_i - 1].dir == dir) root_i -= 1;
     const root = &self.stack.items[root_i];
@@ -500,57 +458,28 @@ fn dragTo(self: *Dockspace, frame: *StackFrame, to: f32) void {
         .horizontal => crs.r.x + root.rect.x * crs.s,
         .vertical => crs.r.y + root.rect.y * crs.s,
     };
-    const extent = root.extent;
 
-    var row: std.ArrayList(Boundary) = .empty;
-    self.collectRow(root.node, dir, 0, extent, &row);
+    var collected: std.ArrayList(Boundary) = .empty;
+    self.collectRow(root.node, dir, 0, root.extent, &collected);
     var cells: std.ArrayList(Layout.NodeIndex) = .empty;
     self.collectCells(root.node, dir, &cells);
-    if (row.items.len == 0 or cells.items.len != row.items.len + 1) return;
+    if (collected.items.len == 0 or cells.items.len != collected.items.len + 1) return;
 
-    const k = for (row.items, 0..) |b, i| {
+    const k = for (collected.items, 0..) |b, i| {
         if (b.node == frame.node) break i;
     } else return;
 
-    // The pointer, as the start of this sash; then the floors either side hold it in.
-    var want = (to - origin_px) / crs.s - gap / 2;
-    var lo: f32 = 0;
-    for (cells.items[0 .. k + 1], 0..) |c, i| {
-        lo += self.floorAlong(c, dir);
-        if (i < k) lo += gap;
-    }
-    var hi: f32 = extent - gap;
-    for (cells.items[k + 1 ..], 0..) |c, i| {
-        hi -= self.floorAlong(c, dir);
-        if (i + 1 < cells.items.len - (k + 1)) hi -= gap;
-    }
-    want = std.math.clamp(want, lo, @max(lo, hi));
-
-    // Each cell's room above its floor, as it stands.
-    const n = cells.items.len;
     const arena = dvui.currentWindow().arena();
-    const room = arena.alloc(f32, n) catch return;
-    for (cells.items, 0..) |c, i| {
-        const start: f32 = if (i == 0) 0 else row.items[i - 1].pos + gap;
-        const end: f32 = if (i == n - 1) extent else row.items[i].pos;
-        room[i] = @max(0, end - start - self.floorAlong(c, dir));
-    }
+    const boundaries = arena.alloc(f32, collected.items.len) catch return;
+    const floors = arena.alloc(f32, cells.items.len) catch return;
+    for (collected.items, 0..) |b, i| boundaries[i] = b.pos;
+    for (cells.items, 0..) |c, i| floors[i] = self.floorAlong(c, dir);
 
-    // Scale each side to fit, in proportion. A side with no room at all opens nearest first.
-    scaleSide(room[0 .. k + 1], want - lo, true);
-    scaleSide(room[k + 1 ..], hi - want, false);
+    var r = row.Row{ .boundaries = boundaries, .floors = floors, .gap = gap, .extent = root.extent };
+    row.dragBoundary(&r, k, (to - origin_px) / crs.s - gap / 2);
+    for (collected.items, 0..) |*b, i| b.pos = r.boundaries[i];
 
-    // Positions from the rooms.
-    var at: f32 = 0;
-    for (cells.items, 0..) |c, i| {
-        at += self.floorAlong(c, dir) + room[i];
-        if (i < row.items.len) {
-            row.items[i].pos = at;
-            at += gap;
-        }
-    }
-
-    self.assignRow(root.node, dir, 0, extent, row.items);
+    self.assignRow(root.node, dir, 0, root.extent, collected.items);
     self.dragging = true;
     dvui.refresh(null, @src(), self.data().id);
 }
@@ -829,8 +758,8 @@ fn drawHeader(self: *Dockspace, node: Layout.NodeIndex, leaf: Layout.Node.Leaf) 
             if (i < tab_rects.len) tab_rects[i] = tab.data().rectScale().r;
 
             {
-                var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
-                defer row.deinit();
+                var tab_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+                defer tab_row.deinit();
                 if (info.icon) |ic| dvui.icon(@src(), "docktab_icon", ic, .{}, .{ .gravity_y = 0.5 });
                 dvui.label(@src(), "{s}", .{info.title}, .{ .gravity_y = 0.5 });
                 const show_close = info.closable and switch (self.init_opts.close_button_visibility) {
@@ -1171,8 +1100,8 @@ test "dockspace onTabContextMenu: reads each dockspace's own tab rect, not a sta
                 inited = true;
             }
 
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
-            defer row.deinit();
+            var pair = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
+            defer pair.deinit();
 
             {
                 var side = dvui.box(@src(), .{}, .{ .expand = .both, .tag = "side_a" });

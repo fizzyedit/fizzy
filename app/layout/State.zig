@@ -13,6 +13,7 @@ const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const Region = @import("Region.zig");
 const Picker = @import("Picker.zig");
+const Seed = @import("Seed.zig");
 pub const SplitTree = @import("SplitTree.zig");
 
 const State = @This();
@@ -105,6 +106,14 @@ regions_building: std.ArrayListUnmanaged(Region) = .empty,
 extents: std.StringHashMapUnmanaged(f32) = .empty,
 /// Runtime subdivisions of a shape-declared place. A name not in here is still a leaf.
 splits: SplitTree.Forest = .{},
+/// Live seed-tree layout, when the shape called `Layout.tree`. Null for shapes that still
+/// declare regions by call order.
+dock: ?core.widgets.DockLayout = null,
+/// Loaded from `layout.zon` at startup; `ensureDock` takes it on the first `Layout.tree`.
+pending_dock: ?core.widgets.DockLayout = null,
+/// Reset Layout cleared the tree: the next save writes `tree = null` rather than keeping
+/// whatever is on disk.
+tree_cleared: bool = false,
 /// New leaf that should ease open this frame. Interned; empty when none.
 slide_open: []const u8 = "",
 /// Where that ease starts, 0..1 of the leaf's target. Zero is a first
@@ -263,6 +272,80 @@ pub fn internName(self: *State, gpa: std.mem.Allocator, name: []const u8) []cons
         return name;
     };
     return owned;
+}
+
+/// Build or take the live dock tree. First `Layout.tree` (or the one after Reset Layout)
+/// converts `seed`; a tree loaded from `layout.zon` wins when present.
+pub fn ensureDock(self: *State, gpa: std.mem.Allocator, seed: *const Seed.Tree) !void {
+    if (self.dock != null) return;
+    if (self.pending_dock) |d| {
+        self.dock = d;
+        self.pending_dock = null;
+        return;
+    }
+    self.dock = try seed.toDockLayout(gpa);
+}
+
+pub fn deinitDock(self: *State) void {
+    if (self.dock) |*d| {
+        d.deinit();
+        self.dock = null;
+    }
+    if (self.pending_dock) |*d| {
+        d.deinit();
+        self.pending_dock = null;
+    }
+}
+
+pub fn clearDock(self: *State) void {
+    self.deinitDock();
+    self.tree_cleared = true;
+}
+
+/// On the tree, a leaf that has a sibling to collapse into — minted or declared, since a
+/// declared place's pin moves to whatever is left. Off the tree, never (the old split forest
+/// has its own rule, `isMinted`).
+pub fn canRemove(self: *const State, name: []const u8) bool {
+    const d = if (self.dock) |*d| d else return false;
+    const idx = d.findPanel(name) orelse return false;
+    return d.findParent(idx) != null;
+}
+
+/// The heir of a closed pinned place takes its name: whatever this state keyed by the heir's
+/// old name — its assignment, Single/Multiple, extent — is now the place's, and the closed
+/// place's own entries go with it.
+pub fn renamePlace(self: *State, gpa: std.mem.Allocator, from: []const u8, to: []const u8) void {
+    self.unassign(gpa, to);
+    if (self.assignments.fetchRemove(from)) |kv| {
+        gpa.free(kv.key);
+        self.assign(gpa, to, kv.value) catch {};
+        for (kv.value) |id| gpa.free(id);
+        gpa.free(kv.value);
+    }
+    if (self.shows.fetchRemove(from)) |kv| {
+        gpa.free(kv.key);
+        self.setShows(gpa, to, kv.value);
+    } else {
+        if (self.shows.fetchRemove(to)) |kv| gpa.free(kv.key);
+    }
+    _ = self.clearExtent(gpa, to);
+    if (self.extents.fetchRemove(from)) |kv| {
+        gpa.free(kv.key);
+        _ = self.setExtent(gpa, to, kv.value);
+    }
+    self.markDirty();
+}
+
+/// A leaf the user minted (picker Split), not a seed-declared / pinned place.
+pub fn isMinted(self: *const State, name: []const u8) bool {
+    if (self.dock) |*d| {
+        const idx = d.findPanel(name) orelse return false;
+        return switch (d.nodes.items[idx]) {
+            .leaf => |l| !l.pinned,
+            else => false,
+        };
+    }
+    return self.splits.canForget(name);
 }
 
 /// Called by `Region.init` as a shape declares one. Lands in the list being built, which
@@ -452,6 +535,7 @@ pub fn deinitExtents(self: *State, gpa: std.mem.Allocator) void {
     while (it.next()) |k| gpa.free(k.*);
     self.extents.deinit(gpa);
     self.splits.deinit(gpa);
+    self.deinitDock();
 }
 
 /// Drop every per-place overlay texture. Safe to call twice — the map is
@@ -506,6 +590,7 @@ pub fn resetLayout(self: *State, gpa: std.mem.Allocator) void {
 
     self.splits.deinit(gpa);
     self.splits = .{};
+    self.clearDock();
     self.slide_open = "";
     self.slide_open_from = 0;
     self.view_drag.discard();

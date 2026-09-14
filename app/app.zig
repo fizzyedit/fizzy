@@ -29,6 +29,8 @@ pub const AppInfo = @import("AppInfo.zig");
 pub const layout = struct {
     pub const Layout = @import("layout/Layout.zig");
     pub const Region = @import("layout/Region.zig");
+    pub const Seed = @import("layout/Seed.zig").Tree;
+    pub const Tree = @import("layout/Tree.zig");
     /// What persists between frames: declared regions, their extents, the user's keyword
     /// overrides. The application owns one; a `Layout` is per-frame and borrows it.
     pub const State = @import("layout/State.zig");

@@ -14,6 +14,7 @@ const builtin = @import("builtin");
 const icons = @import("icons");
 const platform = @import("platform.zig");
 const reveal_phase = @import("reveal.zig");
+const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
 pub const crossfade = @import("crossfade.zig");
 pub const Kind = crossfade.Kind;
 
@@ -119,9 +120,9 @@ pub const Reveal = struct {
 ///
 /// So don't guess: keep the pixels. The last frame of the outgoing screen is recorded into a
 /// texture (`dvui.Picture` redirects rendering into a render target) and drawn *over* the
-/// incoming subtree. A fade just drops that overlay's alpha. A blur smears it first, then
-/// dissolves — the incoming view is whatever is drawing live underneath. See
-/// `core/crossfade.zig` for the clock.
+/// incoming subtree. A fade just drops that overlay's alpha. A blur runs a dual-Kawase pass
+/// on it first, then dissolves — the incoming view is whatever is drawing live underneath.
+/// See `core/crossfade.zig` for the clock.
 ///
 /// Prefer `transition` for call sites — it owns swap detection, capture isolation, and teardown.
 /// `CrossFade` remains the low-level primitive those helpers drive.
@@ -131,6 +132,9 @@ pub const CrossFade = struct {
     /// Owned outright — not in dvui's texture cache, so it survives across frames and must be
     /// destroyed explicitly.
     texture: ?dvui.Texture = null,
+    /// The frosted copy of `texture` a blur dissolve mixes toward. Made on the first frame
+    /// that needs it and dropped with `texture` — see `Frost`.
+    frost: Frost = .{},
     incoming: ?dvui.Texture = null,
     /// Physical rect matching the captured texture exactly (`Picture.start` enlarges to pixel
     /// boundaries; blitting a smaller rect would sample the wrong UVs).
@@ -202,7 +206,7 @@ pub const CrossFade = struct {
         const s = crossfade.sample(self.kind, t, pending);
         // One overlay over the live incoming view. A second snapshot on top
         // is what read as a bright, grainy double exposure.
-        if (self.texture) |tex| blit(tex, self.rect, s.out_blur, s.out_alpha);
+        if (self.texture) |tex| blit(tex, self.frost.of(tex, s.out_blur), self.rect, s.out_blur, s.out_alpha);
 
         // Nothing else is animating, so without this an idle app would sleep mid-fade.
         dvui.refresh(null, @src(), null);
@@ -230,6 +234,7 @@ pub const CrossFade = struct {
 
     pub fn discard(self: *CrossFade) void {
         if (self.texture) |tex| dvui.Texture.destroyLater(tex);
+        self.frost.drop();
         if (self.incoming) |tex| dvui.Texture.destroyLater(tex);
         self.texture = null;
         self.incoming = null;
@@ -238,53 +243,60 @@ pub const CrossFade = struct {
     }
 };
 
-/// Offset-sample smear. dvui has no GPU blur; a centre plus rings of spokes,
-/// clipped to the dest, is cheap enough to run every overlay frame on every backend.
-///
-/// The sharp tap has to give way as blur rises. Drawing it at full strength
-/// and sprinkling a 1% halo around it is how a "blur" read as a fade: the
-/// picture never actually smeared, only its opacity fell.
-pub fn blit(tex: dvui.Texture, dest: dvui.Rect.Physical, blur: f32, alpha: f32) void {
-    if (alpha <= 0.001) return;
-    if (blur <= 0.001) {
-        dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{
-            .colormod = dvui.Color.white.opacity(alpha),
-        }) catch {};
-        return;
+/// The blurred companion of a captured snapshot, owned beside it. `of` makes it the first time
+/// a frame asks with `blur > 0` (one dual-Kawase pipeline, then it is one quad a frame), `drop`
+/// goes with the snapshot's own destroy. Owned rather than cached anywhere by texture pointer:
+/// the next capture can land on the same pointer, and a cache would hand it the old frost.
+pub const Frost = struct {
+    texture: ?dvui.Texture = null,
+    tried: bool = false,
+
+    pub fn of(self: *Frost, sharp: dvui.Texture, blur: f32) ?dvui.Texture {
+        if (blur <= 0.001) return self.texture;
+        if (self.texture == null and !self.tried) {
+            self.tried = true;
+            self.texture = BlurBackdrop.blurred(sharp, blur_radius);
+        }
+        return self.texture;
     }
 
-    const max_r = @min(32.0, @min(dest.w, dest.h) * 0.14);
-    const radius = blur * max_r;
+    pub fn drop(self: *Frost) void {
+        if (self.texture) |t| dvui.Texture.destroyLater(t);
+        self.* = .{};
+    }
+};
 
+/// Draw a captured overlay. `blur` 0 is a sharp blit (float cards, region stills). Above that,
+/// `blur` 0..1 is a **mix** between the sharp texture and `frost`, its one fixed, heavy
+/// dual-Kawase blur (`Frost.of`): the ramp is continuous and a frame costs two textured quads
+/// whatever `blur` is — there is no pass count to step through, which is what made a per-frame
+/// radius pop from sharp to frosted the moment its first halving kicked in. Without a frost
+/// (no render targets) it is the sharp texture with alpha.
+///
+/// `blur_radius` is the frost: about four halvings, a wash of the outgoing view's colours
+/// with nothing readable in it. One number for every overlay so a sidebar swap and a document
+/// swap dissolve the same way.
+pub const blur_radius: f32 = 16;
+
+pub fn blit(tex: dvui.Texture, frost: ?dvui.Texture, dest: dvui.Rect.Physical, blur: f32, alpha: f32) void {
+    if (alpha <= 0.001) return;
     const prev_clip = dvui.clipGet();
     dvui.clipSet(prev_clip.intersect(dest));
     defer dvui.clipSet(prev_clip);
 
-    const sharp = alpha * (1 - blur * 0.80);
-    if (sharp > 0.001) {
-        dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{
-            .colormod = dvui.Color.white.opacity(sharp),
-        }) catch {};
+    const mix = std.math.clamp(blur, 0, 1);
+    const frosted: ?dvui.Texture = if (mix > 0.001) frost else null;
+
+    // Frost first, sharp over it, at alphas that composite to exactly `alpha`: two quads at
+    // `a1` and `a2` cover `a1 + a2(1 - a1)`, so a naive split would let the incoming view show
+    // through in the middle of the ramp.
+    const frost_a = if (frosted != null) alpha * mix else 0;
+    if (frosted) |f| {
+        dvui.renderTexture(f, .{ .r = dest, .s = 1 }, .{ .colormod = dvui.Color.white.opacity(frost_a) }) catch {};
     }
-
-    const rings = [_]f32{ 0.35, 0.7, 1.0 };
-    const weights = [_]f32{ 0.40, 0.35, 0.25 };
-    const spokes: u32 = 8;
-    const smear = alpha * blur * 0.80;
-
-    var i: u32 = 0;
-    while (i < spokes) : (i += 1) {
-        const angle = @as(f32, @floatFromInt(i)) * (std.math.tau / @as(f32, @floatFromInt(spokes)));
-        const cx = @cos(angle);
-        const sy = @sin(angle);
-        for (rings, weights) |ring, weight| {
-            var r = dest;
-            r.x += cx * radius * ring;
-            r.y += sy * radius * ring;
-            dvui.renderTexture(tex, .{ .r = r, .s = 1 }, .{
-                .colormod = dvui.Color.white.opacity(smear * weight / @as(f32, @floatFromInt(spokes))),
-            }) catch {};
-        }
+    const sharp_a = if (frost_a >= 0.999) 0 else (alpha - frost_a) / (1 - frost_a);
+    if (sharp_a > 0.001) {
+        dvui.renderTexture(tex, .{ .r = dest, .s = 1 }, .{ .colormod = dvui.Color.white.opacity(sharp_a) }) catch {};
     }
 }
 

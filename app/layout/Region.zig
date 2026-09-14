@@ -277,10 +277,20 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         break :blk regionKeywords(self, if (parent) |p| p.prefix else "", init_opts.keywords);
     };
 
-    const matches = if (init_opts.by_name)
-        self.matchingIn(&.{ .name = init_opts.name, .keywords = keywords, .by_name = true })
-    else
-        self.matching(keywords);
+    const probe: Region = .{
+        .name = init_opts.name,
+        .keywords = keywords,
+        .shows = init_opts.shows,
+        .by_name = init_opts.by_name,
+        .kind_slot = init_opts.kind_slot,
+    };
+    // Stored, not the drag preview: a swap onto Main poses this place as an
+    // empty hole (or as a view that does not match these keywords), and
+    // collapsing then lets Main eat the column until the pointer comes back.
+    // `hide_when_empty` is "nothing belongs here when idle" — the picker
+    // emptied it, every panel view is toggled off — not the view sitting
+    // on the pointer. Shape places stay; only a drop commits the hole.
+    const matches = self.matchingStored(&probe);
     if (init_opts.hide_when_empty and keywords.len > 0 and matches.len == 0) {
         // A boundary with nothing on one side is not a boundary.
         if (parent) |p| p.pending_split = null;
@@ -760,7 +770,7 @@ fn drawContentsPhotographed(
     // blitting the smaller rect would sample the wrong UVs.
     const tex = ViewDrag.keepShot(self, shot, &pic, opts.name) orelse return;
     if (!on_screen) return;
-    core.anim.blit(tex, pic.r, 0, 1);
+    core.anim.blit(tex, null, pic.r, 0, 1);
 }
 
 fn persistExtent(self: *Layout, opts: InitOptions, id: dvui.Id, chosen: f32, shown: f32) void {
@@ -1175,6 +1185,48 @@ fn placePrefix(keywords: []const []const u8, parent_prefix: []const u8) []const 
     return keywords[0];
 }
 
+/// Draw a region into an already-open box — `init` minus geometry. Keyword qualification,
+/// registry, corner button, contents. The box is the caller's (a dockspace leaf cell).
+pub fn fillInBox(self: *Layout, init_opts: InitOptions, box: *dvui.BoxWidget) !void {
+    const parent: ?*Layout.Container = if (self.depth == 0) null else &self.containers[self.depth - 1];
+    const keywords = regionKeywords(self, if (parent) |p| p.prefix else "", init_opts.keywords);
+
+    if (keywords.len > 0) self.state.registerRegion(self.gpa, .{
+        .name = init_opts.name,
+        .keywords = keywords,
+        .shows = init_opts.shows,
+        .id = box.data().id,
+        .by_name = init_opts.by_name,
+        .kind_slot = init_opts.kind_slot,
+        .forget_when_empty = init_opts.forget_when_empty,
+        .dir = init_opts.dir,
+    });
+
+    const cr = box.data().contentRect();
+    self.state.setPlaceMetrics(init_opts.name, .{ .w = cr.w, .h = cr.h }, box.data().borderRectScale().r);
+
+    if (self.depth >= Layout.max_nesting) return;
+    self.containers[self.depth] = .{
+        .dir = init_opts.dir,
+        .box = box,
+        .prefix = placePrefix(keywords, if (parent) |p| p.prefix else ""),
+    };
+    self.depth += 1;
+    defer {
+        self.depth -= 1;
+        self.containers[self.depth].box = null;
+    }
+
+    const clip_to = box.data().contentRectScale().r;
+    const prev_clip = dvui.clip(clip_to);
+    defer dvui.clipSet(prev_clip);
+
+    if (init_opts.name.len > 0 and keywords.len > 0 and !init_opts.manual_contents)
+        cornerButton(self, init_opts, keywords, box);
+    if (keywords.len > 0 and !init_opts.manual_contents)
+        _ = try drawContents(self, init_opts, keywords);
+}
+
 /// Divide `name` on `axis`, keeping its view and opening an empty place beside
 /// it on the trailing side. `axis` is the layout direction — `.horizontal` is a
 /// vertical divider (side by side), which is what the picker's Split menu names.
@@ -1190,6 +1242,8 @@ pub fn splitNamed(self: *Layout, name: []const u8, axis: dvui.enums.Direction) v
 /// is too small or is not a leaf. A view-drag drop uses this so a left or
 /// top edge can open on that side, not only the trailing one.
 pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u8 {
+    if (self.state.dock) |*dock| return splitDock(self, dock, name, side);
+
     const size = ViewDrag.placeSize(self.state, name) orelse return null;
     const span = switch (SplitTree.axisOf(side)) {
         .horizontal => size.w,
@@ -1213,4 +1267,40 @@ pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u
     self.state.markDirty();
     dvui.refresh(null, @src(), null);
     return new;
+}
+
+fn splitDock(
+    self: *Layout,
+    dock: *core.widgets.DockLayout,
+    name: []const u8,
+    side: SplitTree.Side,
+) ?[]const u8 {
+    const size = ViewDrag.placeSize(self.state, name) orelse dvui.Size{ .w = 400, .h = 400 };
+    const span = switch (SplitTree.axisOf(side)) {
+        .horizontal => size.w,
+        .vertical => size.h,
+    };
+    if (span < 8) return null;
+
+    const leaf_idx = dock.findPanel(name) orelse return null;
+    if (dock.nodes.items[leaf_idx] != .leaf) return null;
+
+    const dock_side: core.widgets.DockLayout.Side = switch (side) {
+        .left => .left,
+        .right => .right,
+        .top => .top,
+        .bottom => .bottom,
+    };
+    var buf: [128]u8 = undefined;
+    const raw = @import("Seed.zig").mintName(dock, name, dock_side, &buf) orelse return null;
+    const interned = self.state.internName(self.gpa, raw);
+    const panel = self.gpa.dupe(u8, interned) catch return null;
+    dock.splitLeaf(leaf_idx, dock_side, panel) catch {
+        self.gpa.free(panel);
+        return null;
+    };
+    self.state.assign(self.gpa, interned, &.{}) catch {};
+    self.state.markDirty();
+    dvui.refresh(null, @src(), null);
+    return interned;
 }

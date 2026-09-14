@@ -15,5 +15,6 @@ test {
     // are analysed — and their own tests run — even before anything in the app draws them.
     _ = @import("widgets/DockingWidget.zig");
     _ = @import("widgets/DockingWidget/Layout.zig");
+    _ = @import("widgets/DockingWidget/row.zig");
     _ = @import("widgets/BlurBackdrop.zig");
 }

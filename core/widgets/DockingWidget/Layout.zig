@@ -5,6 +5,14 @@
 const std = @import("std");
 const dvui = @import("dvui");
 
+/// Accordion-row arithmetic used by a sash drag. The widget gathers a `Row`
+/// from the live tree and drawn ratios, calls here, then writes ratios back.
+pub const row = @import("row.zig");
+pub const Row = row.Row;
+pub const dragBoundary = row.dragBoundary;
+pub const ratioFor = row.ratioFor;
+pub const divide = row.divide;
+
 /// App-owned slug identifying a dockable panel. `DockLayout` never dupes or
 /// frees these: the caller must keep the underlying bytes alive for the
 /// lifetime of the layout (typically a static string).
@@ -59,9 +67,12 @@ pub const Node = union(enum) {
     pub const Leaf = struct {
         tabs: std.ArrayList(PanelId) = .empty,
         active: usize = 0,
-        /// A leaf the layout itself declared — an app's "Main", not a pane a drag minted. It is
-        /// never collapsed away: emptied, it stays as an empty leaf the app can fill again, and
-        /// a `.collapse` toward its sibling is refused.
+        /// A leaf the layout itself declared — an app's "Main", not a pane a drag minted. What
+        /// is pinned is the *place*, not the node: emptied, it stays as an empty leaf the app
+        /// can fill again, and if it is closed while it has a sibling, the sibling's first
+        /// leaf becomes pinned in its stead and takes its panel id (see `collapseSplit`,
+        /// `takeRenamed`). Both halves of a split "Main" are removable; the last one standing
+        /// is "Main". It is only refused a collapse when nothing would be left to inherit.
         pinned: bool = false,
         /// This leaf's identity for the life of the layout. A node *index* is a slot: a collapse
         /// promotes the kept child into its parent's slot, and anything keyed by index would
@@ -83,6 +94,8 @@ pub const MoveTarget = union(enum) {
     /// `root` currently holds a leaf or a split.
     split_root: Side,
 };
+
+pub const Renamed = struct { from: []const u8, to: PanelId };
 
 pub const Mutation = union(enum) {
     move: struct { panel: PanelId, target: MoveTarget },
@@ -157,6 +170,10 @@ floats: std.ArrayList(Float) = .empty,
 /// other stable source for the slugs). Don't set it yourself unless every
 /// `PanelId` you hand this layout is `allocator`-owned.
 owns_panel_ids: bool = false,
+/// A pin that moved in the last collapse: the heir leaf used to be `from` and is now `to`.
+/// `from` is a layout-owned copy; `takeRenamed` hands it over and the caller frees it with
+/// `allocator`. `to` is borrowed from the live tree.
+renamed: ?Renamed = null,
 /// Splits and closes animate: a new leaf slides open from nothing and an emptied leaf slides
 /// shut before it is collapsed, instead of both happening in one frame. Off by default so a
 /// layout behaves exactly as it always has for callers that never asked; the widget reads
@@ -205,6 +222,7 @@ pub fn initSingleLeaf(allocator: std.mem.Allocator, panel: PanelId) !DockLayout 
 }
 
 pub fn deinit(self: *DockLayout) void {
+    if (self.renamed) |r| self.allocator.free(r.from);
     for (self.nodes.items) |*n| {
         switch (n.*) {
             .leaf => |*l| self.freeLeafTabs(l),
@@ -419,11 +437,11 @@ pub fn splitRoot(self: *DockLayout, side: Side, panel: PanelId) !void {
 }
 
 /// Send `leaf_idx` on its way out: its parent split eases shut over it and the widget then
-/// applies `.collapse`. A root leaf, a pinned leaf, and a float have nothing to close into and
-/// are left alone. Immediate (no animation) when the layout is not `animated`.
+/// applies `.collapse`. A root leaf and a float have nothing to close into and are left alone.
+/// A pinned leaf closes like any other; its sibling inherits the pin (`collapseSplit`).
+/// Immediate (no animation) when the layout is not `animated`.
 pub fn closeLeaf(self: *DockLayout, leaf_idx: NodeIndex) void {
     if (leaf_idx == self.root) return;
-    if (self.nodes.items[leaf_idx] == .leaf and self.nodes.items[leaf_idx].leaf.pinned) return;
     const parent = self.findParent(leaf_idx) orelse return;
     const side: Node.Child = switch (parent.side) {
         .first => .first,
@@ -447,8 +465,12 @@ pub fn reopenLeaf(self: *DockLayout, leaf_idx: NodeIndex) void {
 
 /// Replace split `split_idx` with its `keep` child, freeing the other subtree. The split's
 /// index survives (now holding the kept child's node), so a reference to the split from above
-/// stays valid — the same trick `splitLeaf` uses in the other direction. Refused when the child
-/// being dropped is (or holds) a pinned leaf.
+/// stays valid — the same trick `splitLeaf` uses in the other direction.
+///
+/// Dropping a pinned leaf hands its pin to the kept side's first leaf, which also takes the
+/// pinned leaf's first panel id (the place's name) — the kept leaf's own id is parked in
+/// `renamed` for the caller to reconcile whatever it keys by that name. One-panel-per-leaf
+/// layouts are what this is for; a tabbed leaf is renamed by its first tab.
 pub fn collapseSplit(self: *DockLayout, split_idx: NodeIndex, keep: Node.Child) void {
     const sp = switch (self.nodes.items[split_idx]) {
         .split => |sp| sp,
@@ -456,7 +478,21 @@ pub fn collapseSplit(self: *DockLayout, split_idx: NodeIndex, keep: Node.Child) 
     };
     const kept = childIndex(sp, keep);
     const dropped = childIndex(sp, otherChild(keep));
-    if (self.holdsPinned(dropped)) return;
+    if (self.findPinnedLeaf(dropped)) |pinned_idx| {
+        const heir = self.firstLeaf(kept);
+        const from = &self.nodes.items[pinned_idx].leaf;
+        const to = &self.nodes.items[heir].leaf;
+        to.pinned = true;
+        if (from.tabs.items.len > 0 and to.tabs.items.len > 0) {
+            // Swap the two ids so the dropped subtree frees the heir's old id along with
+            // everything else it owns — unless the caller wants it, which is what `renamed`
+            // is: a copy that outlives the collapse.
+            const old = to.tabs.items[0];
+            to.tabs.items[0] = from.tabs.items[0];
+            from.tabs.items[0] = old;
+            self.setRenamed(old, to.tabs.items[0]);
+        }
+    }
 
     self.nodes.items[split_idx] = self.nodes.items[kept];
     self.nodes.items[kept] = .{ .free = null };
@@ -464,12 +500,23 @@ pub fn collapseSplit(self: *DockLayout, split_idx: NodeIndex, keep: Node.Child) 
     self.freeSubtree(dropped);
 }
 
-fn holdsPinned(self: *const DockLayout, idx: NodeIndex) bool {
+fn findPinnedLeaf(self: *const DockLayout, idx: NodeIndex) ?NodeIndex {
     return switch (self.nodes.items[idx]) {
-        .leaf => |l| l.pinned,
-        .split => |sp| self.holdsPinned(sp.first) or self.holdsPinned(sp.second),
-        .free => false,
+        .leaf => |l| if (l.pinned) idx else null,
+        .split => |sp| self.findPinnedLeaf(sp.first) orelse self.findPinnedLeaf(sp.second),
+        .free => null,
     };
+}
+
+fn setRenamed(self: *DockLayout, from: []const u8, to: PanelId) void {
+    if (self.renamed) |r| self.allocator.free(r.from);
+    self.renamed = .{ .from = self.allocator.dupe(u8, from) catch return, .to = to };
+}
+
+/// The rename the last collapse made, if any; the caller owns `from` afterwards.
+pub fn takeRenamed(self: *DockLayout) ?Renamed {
+    defer self.renamed = null;
+    return self.renamed;
 }
 
 fn freeSubtree(self: *DockLayout, idx: NodeIndex) void {
@@ -481,6 +528,19 @@ fn freeSubtree(self: *DockLayout, idx: NodeIndex) void {
         .leaf, .free => {},
     }
     self.freeNode(idx);
+}
+
+/// Least room `node` needs along `dir` when every same-axis sash is `gap` thick:
+/// those sashes summed; across a cross-axis split, the wider child. The widget's
+/// own walk substitutes a closing sash's shrinking thickness for `gap`.
+pub fn floorAlong(self: *const DockLayout, node: NodeIndex, dir: dvui.enums.Direction, gap: f32) f32 {
+    return switch (self.nodes.items[node]) {
+        .leaf, .free => 0,
+        .split => |sp| if (sp.dir == dir)
+            self.floorAlong(sp.first, dir, gap) + gap + self.floorAlong(sp.second, dir, gap)
+        else
+            @max(self.floorAlong(sp.first, dir, gap), self.floorAlong(sp.second, dir, gap)),
+    };
 }
 
 /// The split's settled share, honouring `fixed` against `extent` (the split's length along its
@@ -1129,9 +1189,26 @@ test "a pinned leaf empties but is never collapsed" {
     layout.removePanel("b");
     try std.testing.expectEqual(Node.split, std.meta.activeTag(layout.nodes.items[root]));
     try std.testing.expectEqual(@as(usize, 0), layout.nodes.items[b_leaf].leaf.tabs.items.len);
+}
 
-    layout.collapseSplit(root, .first); // would drop the pinned leaf: refused
-    try std.testing.expectEqual(Node.split, std.meta.activeTag(layout.nodes.items[root]));
+test "closing a pinned leaf hands the pin and the name to its sibling" {
+    var layout = try DockLayout.initSingleLeaf(std.testing.allocator, "Main");
+    defer layout.deinit();
+    const root = layout.root;
+    layout.nodes.items[root].leaf.pinned = true;
+    try layout.splitLeaf(root, .right, "Main/r1");
+
+    // Close "Main" itself: the minted sibling becomes "Main", pinned, and its old id is
+    // reported so the app can move what it keyed by it.
+    const main_leaf = layout.findPanel("Main").?;
+    layout.closeLeaf(main_leaf); // not animated: collapses now
+    try std.testing.expectEqual(Node.leaf, std.meta.activeTag(layout.nodes.items[root]));
+    try std.testing.expect(layout.nodes.items[root].leaf.pinned);
+    try std.testing.expectEqualStrings("Main", layout.nodes.items[root].leaf.tabs.items[0]);
+    const r = layout.takeRenamed().?;
+    defer std.testing.allocator.free(r.from);
+    try std.testing.expectEqualStrings("Main/r1", r.from);
+    try std.testing.expectEqualStrings("Main", r.to);
 }
 
 test "a fixed child derives its ratio from points and writes a drag back as points" {
@@ -1149,4 +1226,99 @@ test "a fixed child derives its ratio from points and writes a drag back as poin
     const snap = try layout.snapshot(std.testing.allocator);
     defer snap.deinit(std.testing.allocator);
     try std.testing.expectApproxEqAbs(@as(f32, 500), snap.root.split.fixed.?.points, 0.001);
+}
+
+fn testCellRoom(r: Row, i: usize) f32 {
+    const start: f32 = if (i == 0) 0 else r.boundaries[i - 1] + r.gap;
+    const end: f32 = if (i == r.floors.len - 1) r.extent else r.boundaries[i];
+    return @max(0, end - start - r.floors[i]);
+}
+
+test "dragBoundary: dragging right past two sashes shrinks both cells in proportion and stacks the sashes" {
+    // Three cells, rooms 100 / 50 / 140, two sashes of 10: extent 310.
+    var boundaries = [_]f32{ 100, 160 };
+    var floors = [_]f32{ 0, 0, 0 };
+    var r = Row{ .boundaries = &boundaries, .floors = &floors, .gap = 10, .extent = 310 };
+    dragBoundary(&r, 0, 10_000);
+
+    const hi: f32 = 290; // extent - gap - right floors - the sash between the two right cells
+    try std.testing.expectApproxEqAbs(hi, r.boundaries[0], 0.01);
+    // The two right-hand sashes stack at gap spacing (plus the squeezed-side 0.01pt remnant).
+    try std.testing.expectApproxEqAbs(r.gap, r.boundaries[1] - r.boundaries[0], 0.05);
+    const s1 = testCellRoom(r, 1);
+    const orig1: f32 = 50;
+    const orig2: f32 = 140;
+    try std.testing.expectApproxEqAbs(orig1 / (orig1 + orig2) * 0.01, s1, 0.001);
+}
+
+test "dragBoundary: dragging back restores the same proportions" {
+    var boundaries = [_]f32{ 100, 160 };
+    var floors = [_]f32{ 0, 0, 0 };
+    var r = Row{ .boundaries = &boundaries, .floors = &floors, .gap = 10, .extent = 310 };
+    const orig0 = boundaries[0];
+    const orig1 = boundaries[1];
+    // Past the second sash, but not onto the 0.01pt floor — reconstruction of the last cell stays faithful.
+    dragBoundary(&r, 0, 200);
+    try std.testing.expectApproxEqAbs(@as(f32, 50.0 / 140.0), testCellRoom(r, 1) / testCellRoom(r, 2), 0.001);
+    dragBoundary(&r, 0, orig0);
+    try std.testing.expectApproxEqAbs(orig0, r.boundaries[0], 0.05);
+    try std.testing.expectApproxEqAbs(orig1, r.boundaries[1], 0.05);
+}
+
+test "dragBoundary: a cell's floor holds the boundary off it" {
+    // Middle cell is a cross-axis subtree that needs 40pt of sashes along this axis.
+    var boundaries = [_]f32{ 80, 150 };
+    var floors = [_]f32{ 0, 40, 0 };
+    var r = Row{ .boundaries = &boundaries, .floors = &floors, .gap = 10, .extent = 240 };
+    dragBoundary(&r, 0, 10_000);
+    const lo_right: f32 = 40; // middle floor
+    const hi = 240 - 10 - lo_right - 10; // extent - this sash - right floors - inner sash
+    try std.testing.expectApproxEqAbs(hi, r.boundaries[0], 0.01);
+    const mid_len = r.boundaries[1] - (r.boundaries[0] + r.gap);
+    try std.testing.expect(mid_len + 0.001 >= floors[1]);
+}
+
+test "ratioFor o divide round-trips" {
+    const cases = [_]struct { extent: f32, ratio: f32, gap: f32, ff: f32, fs: f32 }{
+        .{ .extent = 400, .ratio = 0.5, .gap = 10, .ff = 0, .fs = 0 },
+        .{ .extent = 400, .ratio = 0.25, .gap = 10, .ff = 20, .fs = 30 },
+        .{ .extent = 200, .ratio = 0.0, .gap = 8, .ff = 0, .fs = 0 },
+        .{ .extent = 200, .ratio = 1.0, .gap = 8, .ff = 5, .fs = 5 },
+        .{ .extent = 500, .ratio = 0.73, .gap = 10, .ff = 40, .fs = 0 },
+    };
+    for (cases) |c| {
+        const d = divide(c.extent, c.ratio, c.gap, c.ff, c.fs);
+        try std.testing.expectApproxEqAbs(c.ratio, ratioFor(d.first, c.extent, c.gap, c.ff, c.fs), 0.0001);
+        try std.testing.expectApproxEqAbs(d.first, c.ff + d.usable * c.ratio, 0.0001);
+    }
+}
+
+test "dragBoundary: clamps at both ends" {
+    var boundaries = [_]f32{95};
+    var floors = [_]f32{ 0, 0 };
+    var r = Row{ .boundaries = &boundaries, .floors = &floors, .gap = 10, .extent = 200 };
+    dragBoundary(&r, 0, -1_000);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.01), r.boundaries[0], 0.001);
+    boundaries[0] = 95;
+    dragBoundary(&r, 0, 10_000);
+    try std.testing.expectApproxEqAbs(@as(f32, 190), r.boundaries[0], 0.01);
+}
+
+test "floorAlong: same-axis sashes add, a cross-axis subtree takes the wider child" {
+    var layout = try DockLayout.initSingleLeaf(std.testing.allocator, "a");
+    defer layout.deinit();
+    const gap: f32 = 10;
+    try layout.splitLeaf(layout.root, .right, "b");
+    try std.testing.expectApproxEqAbs(gap, layout.floorAlong(layout.root, .horizontal, gap), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), layout.floorAlong(layout.root, .vertical, gap), 0.001);
+
+    try layout.splitLeaf(layout.findPanel("b").?, .right, "c");
+    try std.testing.expectApproxEqAbs(2 * gap, layout.floorAlong(layout.root, .horizontal, gap), 0.001);
+
+    var nested = try DockLayout.initSingleLeaf(std.testing.allocator, "a");
+    defer nested.deinit();
+    try nested.splitLeaf(nested.root, .bottom, "b");
+    try nested.splitLeaf(nested.findPanel("a").?, .right, "a2");
+    try std.testing.expectApproxEqAbs(gap, nested.floorAlong(nested.root, .horizontal, gap), 0.001);
+    try std.testing.expectApproxEqAbs(gap, nested.floorAlong(nested.root, .vertical, gap), 0.001);
 }

@@ -42,6 +42,8 @@ name: []const u8 = "",
 from: dvui.Size.Physical = .{},
 /// The lifted surface as it last drew. The floating card is this texture.
 texture: ?dvui.Texture = null,
+/// Its frost, for the swap-out dissolve (`core.anim.Frost`).
+frost: core.anim.Frost = .{},
 start_ns: i128 = 0,
 /// Place being previewed, interned. Empty when nothing is easing.
 preview_name: []const u8 = "",
@@ -63,6 +65,7 @@ other_ids: [1][]const u8 = .{""},
 capturing: bool = false,
 /// The destination as it looked before the preview, for the outgoing blur.
 hover_texture: ?dvui.Texture = null,
+hover_frost: core.anim.Frost = .{},
 hover_name: []const u8 = "",
 /// The places this drag can land on, and where they were, frozen at lift.
 targets: [max_targets]Target = undefined,
@@ -89,6 +92,8 @@ pub fn active(self: ViewDrag) bool {
 pub fn discard(self: *ViewDrag) void {
     if (self.texture) |tex| dvui.Texture.destroyLater(tex);
     if (self.hover_texture) |tex| dvui.Texture.destroyLater(tex);
+    self.frost.drop();
+    self.hover_frost.drop();
     self.* = .{};
 }
 
@@ -96,6 +101,7 @@ pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
     pic.stop();
     const tex = dvui.textureFromTarget(pic.texture) catch return;
     if (self.texture) |old| dvui.Texture.destroyLater(old);
+    self.frost.drop();
     self.texture = tex;
 }
 
@@ -103,6 +109,7 @@ pub fn takeHover(self: *ViewDrag, pic: *dvui.Picture, name: []const u8) void {
     pic.stop();
     const tex = dvui.textureFromTarget(pic.texture) catch return;
     if (self.hover_texture) |old| dvui.Texture.destroyLater(old);
+    self.hover_frost.drop();
     self.hover_texture = tex;
     self.hover_name = name;
 }
@@ -163,6 +170,7 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture, name: []const u8) ?d
 
 pub fn clearHover(self: *ViewDrag) void {
     if (self.hover_texture) |tex| dvui.Texture.destroyLater(tex);
+    self.hover_frost.drop();
     self.hover_texture = null;
     self.hover_name = "";
 }
@@ -694,7 +702,7 @@ pub fn drawSwapOut(l: *Layout, bounds: dvui.Rect.Physical) void {
     const prev = dvui.clipGet();
     defer dvui.clipSet(prev);
     dvui.clipSet(bounds);
-    core.anim.blit(tex, bounds, s.out_blur, s.out_alpha);
+    core.anim.blit(tex, l.state.view_drag.frost.of(tex, s.out_blur), bounds, s.out_blur, s.out_alpha);
 }
 
 /// The destination's last pixels, aligned to the whole place and dissolving
@@ -712,7 +720,7 @@ fn dissolve(
     const s = core.anim.crossfade.sample(.blur, t, false);
     const prev = dvui.clip(within);
     defer dvui.clipSet(prev);
-    core.anim.blit(tex, bounds, s.out_blur, s.out_alpha);
+    core.anim.blit(tex, l.state.view_drag.hover_frost.of(tex, s.out_blur), bounds, s.out_blur, s.out_alpha);
 }
 
 /// The card under the pointer. Always visible while dragging: it is the only
@@ -764,7 +772,7 @@ pub fn drawFloat(l: *Layout) void {
 
     const dest = fw.data().contentRectScale().r;
     if (d.texture) |tex| {
-        core.anim.blit(tex, dest, 0, 1);
+        core.anim.blit(tex, null, dest, 0, 1);
     } else {
         dvui.label(@src(), "view", .{}, .{
             .gravity_x = 0.5,

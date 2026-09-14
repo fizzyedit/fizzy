@@ -175,21 +175,25 @@ pub fn draw(self: *Picker, f: *Layout) void {
         }
 
         const created = isCreated(state, region.name);
+        // On the tree, any leaf with a sibling can go — a declared place's pin moves to the
+        // sibling. Off it, only a minted leaf can.
+        const removable = created or state.canRemove(region.name);
         const assigned = state.assignment(region.name);
         const showing = if (assigned) |ids| ids.len > 0 else f.selectedIn(&region) != null;
-        if (created or showing or assigned != null) {
+        if (removable or showing or assigned != null) {
             var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .horizontal,
             });
             defer actions.deinit();
-            if (created) {
+            if (removable) {
                 if (actionButton(@src(), "Remove", 3)) {
                     removeRegion(f, &region);
                     self.close(gpa);
                     state.discardSnapshots(gpa);
                     return;
                 }
-            } else if (showing) {
+            }
+            if (!created and showing) {
                 if (actionButton(@src(), "Clear", 2)) {
                     clearRegion(f, region.name);
                 }
@@ -392,7 +396,7 @@ fn contains(list: []const *sdk.Surface, id: []const u8) bool {
 
 /// A minted split leaf, not a name the shape declared.
 fn isCreated(state: *State, name: []const u8) bool {
-    return state.splits.canForget(name);
+    return state.isMinted(name);
 }
 
 /// Empty the place: nothing draws, and keywords no longer attract a replacement.
@@ -406,12 +410,24 @@ fn clearRegion(f: *Layout, name: []const u8) void {
 }
 
 /// Clear, then slide the sash shut. A minted split leaf collapses once the close lands.
-/// The leftover (Center) can be emptied; it is not collapsed.
+/// The leftover (Center) can be emptied; it is not collapsed. A pinned seed leaf cannot
+/// be removed.
 fn removeRegion(f: *Layout, region: *const Layout.Region) void {
     const gpa = f.gpa;
     f.state.assign(gpa, region.name, &.{}) catch |err| {
         dvui.log.err("failed to clear '{s}': {t}", .{ region.name, err });
     };
+    if (f.state.dock) |*dock| {
+        const idx = dock.findPanel(region.name) orelse {
+            f.state.markDirty();
+            dvui.refresh(null, @src(), null);
+            return;
+        };
+        dock.closeLeaf(idx);
+        f.state.markDirty();
+        dvui.refresh(null, @src(), null);
+        return;
+    }
     const forget = region.forget_when_empty or f.state.splits.canForget(region.name);
     if (forget) {
         if (region.id != .zero and (dvui.dataGet(null, region.id, "_size", f32) orelse 0) > 0) {
