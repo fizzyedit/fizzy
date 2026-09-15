@@ -94,6 +94,17 @@ pub fn active(self: ViewDrag) bool {
     return self.name.len > 0;
 }
 
+/// The source of a view lifted out of the picker rather than out of a place.
+/// No shape declares a place by this name, so every question the gesture
+/// asks of its source — its bounds, its assignment, whether it may shut —
+/// answers "none", which is exactly what a view in nobody's hands has.
+pub const loose_source = "\x00picker";
+
+/// A drag with no source place: the view came from the picker.
+pub fn loose(self: ViewDrag) bool {
+    return std.mem.eql(u8, self.name, loose_source);
+}
+
 pub fn discard(self: *ViewDrag) void {
     if (self.texture) |tex| dvui.Texture.destroyLater(tex);
     if (self.hover_texture) |tex| dvui.Texture.destroyLater(tex);
@@ -192,6 +203,22 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical) void {
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
     if (visibleId(l, name)) |id| d.moved_id = id;
+    mapTargets(l, d);
+}
+
+/// Begin carrying surface `id` from the picker. There is no source place,
+/// so nothing stands empty and nothing is photographed: the float starts at
+/// the card that was grabbed and shows the picture the card showed, which
+/// the caller hands over (`State.stealSnapshot`) and the drag destroys.
+pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture: ?dvui.Texture) void {
+    var d = &l.state.view_drag;
+    const s = l.host.surfaceById(id) orelse return;
+    d.name = loose_source;
+    d.from = from.size();
+    d.start_ns = dvui.currentWindow().frame_time_ns;
+    d.moved_id = s.id;
+    d.texture = texture;
+    d.texture_rect = from;
     mapTargets(l, d);
 }
 
@@ -829,7 +856,7 @@ pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
 /// pointer position.
 pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) void {
     const plan = Drop.plan(kind, std.mem.eql(u8, source, dest)) orelse return;
-    const moved = ownId(l.arena, visibleId(l, source) orelse return) orelse return;
+    const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
     if (regionNamed(l.state, dest)) |r| {
         const s = l.host.surfaceById(moved) orelse return;
         if (!accepts(r.*, s.keywords)) return;
@@ -857,6 +884,15 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     shutIfEmptied(l, source);
     l.state.markDirty();
     dvui.refresh(null, @src(), null);
+}
+
+/// The surface a drop from `source` lands: the one the live drag lifted when
+/// it is this drag's source (a picker drag carries a view its source may not
+/// be showing — or, loose, has no source at all), else what the place shows.
+fn movedFrom(l: *Layout, source: []const u8) ?[]const u8 {
+    const d = l.state.view_drag;
+    if (d.active() and d.moved_id.len > 0 and std.mem.eql(u8, d.name, source)) return d.moved_id;
+    return visibleId(l, source);
 }
 
 /// Land the view. A place that shows many takes it; a place that shows one
@@ -913,6 +949,11 @@ fn holding(l: *Layout, name: []const u8) []const []const u8 {
 /// Take `moved` out of `name`, putting `give` where it was if the trade sent
 /// one back.
 fn takeOut(l: *Layout, name: []const u8, moved: []const u8, give: ?[]const u8) void {
+    // Nothing to take it out of: the destination's assignment already claims
+    // the view away from wherever keywords had put it (`State.assign` evicts
+    // it from every other list), and a view the trade sends back has nowhere
+    // to go but its keywords.
+    if (std.mem.eql(u8, name, loose_source)) return;
     const held = holding(l, name);
     const kept = if (give) |g|
         idsReplacing(l.arena, held, moved, g)

@@ -12,6 +12,13 @@
 //! sidebar, and how a plugin readme lands in the center — keywords are the
 //! default guess, an assignment is the answer. "Back to defaults" undoes it.
 //!
+//! A card is also a handle. Dragged out of the popup it becomes the same
+//! floating view the corner button lifts out of a place (`ViewDrag`), and
+//! lands the same way — swapped onto a place, or split off one of its edges —
+//! with the popup gone and the drag previewing on the places themselves. The
+//! picker keeps driving that drag until the button comes up, because the
+//! card that started it went away with the popup.
+//!
 //! Each card carries a **snapshot** of the surface, not the live surface.
 //! A **pinned** place (Sidebar, Main, Panel, Center) can be emptied (**Clear**)
 //! or returned to keywords; it cannot be deleted. A **created** place
@@ -24,6 +31,7 @@ const sdk = @import("fizzy_sdk");
 const Split = core.widgets.Split;
 const Layout = @import("Layout.zig");
 const State = @import("State.zig");
+const ViewDrag = @import("ViewDrag.zig");
 
 const Picker = @This();
 
@@ -33,6 +41,10 @@ is_open: bool = false,
 region: []const u8 = "",
 /// Where to put the popup; centred on the window when null.
 anchor: ?dvui.Point.Natural = null,
+/// A card was dragged out of the popup and is riding the pointer as a loose
+/// `ViewDrag`. The popup is closed; `draw` drives the drag instead until the
+/// button comes up.
+lifted: bool = false,
 
 /// Card geometry, in points. The preview keeps the snapshot's aspect inside this box.
 const preview: dvui.Size = .{ .w = 150, .h = 100 };
@@ -55,6 +67,7 @@ pub fn close(self: *Picker, gpa: std.mem.Allocator) void {
 /// Draw the popup if it is open. Call once per frame after the shape has run. Closing —
 /// by the user or because the region vanished — also discards the snapshots.
 pub fn draw(self: *Picker, f: *Layout) void {
+    if (self.lifted) return self.drawLifted(f);
     if (!self.is_open) return;
     const state = f.state;
     const gpa = f.gpa;
@@ -153,7 +166,7 @@ pub fn draw(self: *Picker, f: *Layout) void {
                     .margin = .{},
                     .gravity_y = 0.5,
                 });
-                dvui.icon(@src(), "split_choice", dvui.entypo.triangle_down, .{}, .{
+                core.icon.icon(@src(), "split_choice", dvui.entypo.triangle_down, .{}, .{
                     .padding = .{ .x = 4 },
                     .gravity_y = 0.5,
                 });
@@ -237,48 +250,66 @@ pub fn draw(self: *Picker, f: *Layout) void {
             .one => if (f.selectedIn(&region)) |sel| std.mem.eql(u8, sel.id, s.id) else false,
             .many => contains(contents, s.id),
         };
-        if (card(f, s, on, i)) {
-            switch (region.shows) {
-                // A swap. The region draws one surface, so a set would be a lie: the second and
-                // third members would exist in the file and never appear on screen. Selecting as
-                // well as assigning is what makes the click land on this frame — the region reads
-                // its selection to decide what to draw, and a one-surface assignment it has never
-                // selected would otherwise wait for the fallback.
-                .one => {
-                    state.assign(gpa, region.name, &.{s.id}) catch |err| {
-                        dvui.log.err("failed to assign '{s}': {t}", .{ region.name, err });
-                    };
-                    f.host.setSelectionForKey(region.selectionKey(), s.id);
-                    // One surface is the whole choice. Leave the popup so the
-                    // corner control can hide on a filled place.
-                    self.close(gpa);
-                    state.discardSnapshots(gpa);
-                    state.markDirty();
-                    dvui.refresh(null, @src(), null);
-                    return;
-                },
-                // A toggle: the region's contents, plus or minus this one, in the order they were
-                // already in.
-                .many => {
-                    var ids = std.ArrayListUnmanaged([]const u8).initCapacity(f.arena, contents.len + 1) catch return;
-                    for (contents) |c| if (!std.mem.eql(u8, c.id, s.id)) ids.appendAssumeCapacity(c.id);
-                    if (!on) ids.appendAssumeCapacity(s.id);
-                    state.assign(gpa, region.name, ids.items) catch |err| {
-                        dvui.log.err("failed to assign '{s}': {t}", .{ region.name, err });
-                    };
-                },
-            }
-            state.markDirty();
-            dvui.refresh(null, @src(), null);
+        switch (card(f, s, on, i)) {
+            .none => continue,
+            .lifted => |hit| {
+                self.lift(f, s, hit);
+                // The button may already be up in this frame's events (a
+                // flick): drive the drag now rather than losing the release.
+                if (self.lifted) self.drawLifted(f);
+                return;
+            },
+            .clicked => {},
         }
+        switch (region.shows) {
+            // A swap. The region draws one surface, so a set would be a lie: the second and
+            // third members would exist in the file and never appear on screen. Selecting as
+            // well as assigning is what makes the click land on this frame — the region reads
+            // its selection to decide what to draw, and a one-surface assignment it has never
+            // selected would otherwise wait for the fallback.
+            .one => {
+                state.assign(gpa, region.name, &.{s.id}) catch |err| {
+                    dvui.log.err("failed to assign '{s}': {t}", .{ region.name, err });
+                };
+                f.host.setSelectionForKey(region.selectionKey(), s.id);
+                // One surface is the whole choice. Leave the popup so the
+                // corner control can hide on a filled place.
+                self.close(gpa);
+                state.discardSnapshots(gpa);
+                state.markDirty();
+                dvui.refresh(null, @src(), null);
+                return;
+            },
+            // A toggle: the region's contents, plus or minus this one, in the order they were
+            // already in.
+            .many => {
+                var ids = std.ArrayListUnmanaged([]const u8).initCapacity(f.arena, contents.len + 1) catch return;
+                for (contents) |c| if (!std.mem.eql(u8, c.id, s.id)) ids.appendAssumeCapacity(c.id);
+                if (!on) ids.appendAssumeCapacity(s.id);
+                state.assign(gpa, region.name, ids.items) catch |err| {
+                    dvui.log.err("failed to assign '{s}': {t}", .{ region.name, err });
+                };
+            },
+        }
+        state.markDirty();
+        dvui.refresh(null, @src(), null);
     }
 
     if (state.store_catalog) |store| drawStoreSection(f, &region, store, &row, &col);
 }
 
+/// What a card did this frame.
+const Hit = union(enum) {
+    none,
+    clicked,
+    /// Dragged past dvui's threshold: where the preview tile was, and the
+    /// event that crossed it, so the drag can take the capture over.
+    lifted: struct { tile: dvui.Rect.Physical, event_num: u16 },
+};
+
 /// One surface: its snapshot scaled to fit, its title, its owner, and a highlight when it is in
-/// the region. Returns true on click.
-fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) bool {
+/// the region. A press that moves far enough lifts the card into a drag instead of clicking.
+fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) Hit {
     const theme = dvui.themeGet();
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{
@@ -293,6 +324,29 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) bool {
     });
     defer bw.deinit();
     bw.processEvents();
+
+    // The tile's rect is remembered from last frame: the press that starts a
+    // drag is read here, before the tile is laid out.
+    const tile_rect = dvui.dataGet(null, bw.data().id, "_tile", dvui.Rect.Physical) orelse bw.data().borderRectScale().r;
+    var lifted: ?Hit = null;
+    for (dvui.events()) |*e| {
+        if (e.evt != .mouse) continue;
+        const me = e.evt.mouse;
+        // The button took the press and the capture; from here the pointer is ours.
+        if (!dvui.captured(bw.data().id)) continue;
+        if (me.action == .press and me.button.pointer()) {
+            dvui.dragPreStart(me.button, me.p, .{
+                .offset = tile_rect.topLeft().diff(me.p),
+                .size = tile_rect.size(),
+                .name = "fizzy_view",
+            });
+        }
+        if (me.action == .motion and dvui.dragging(me.p, "fizzy_view") != null) {
+            e.handle(@src(), bw.data());
+            lifted = .{ .lifted = .{ .tile = tile_rect, .event_num = e.num } };
+            break;
+        }
+    }
     bw.drawBackground();
 
     var col = dvui.box(@src(), .{ .dir = .vertical }, .{});
@@ -308,6 +362,7 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) bool {
             .color_fill = .{ .color = theme.color(.content, .fill) },
         });
         defer tile.deinit();
+        dvui.dataSet(null, bw.data().id, "_tile", tile.data().borderRectScale().r);
         if (f.state.snapshot(s.id)) |snap| {
             const rs = tile.data().contentRectScale();
             const scale = @min(rs.r.w / (snap.natural.w * rs.s), rs.r.h / (snap.natural.h * rs.s));
@@ -336,7 +391,81 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) bool {
             .color_text = .{ .color = theme.color(.control, .text) },
         });
     }
-    return bw.clicked();
+    if (lifted) |hit| return hit;
+    return if (bw.clicked()) .clicked else .none;
+}
+
+/// The capture a loose drag holds while no widget of the picker exists to
+/// hold it: the card is gone with the popup, so the drag is its own widget as
+/// far as dvui's mouse routing is concerned. One id for every such drag, in
+/// the base window, over the whole of it.
+fn looseCapture() dvui.CaptureMouse {
+    return .{
+        .id = dvui.Id.extendId(null, @src(), 0),
+        .rect = dvui.windowRectPixels(),
+        .subwindow_id = dvui.currentWindow().data().id,
+    };
+}
+
+/// A card crossed the drag threshold: hand its picture and the pointer to a
+/// loose `ViewDrag` and shut the popup. The drag is driven by `drawLifted`
+/// from the next frame on.
+fn lift(self: *Picker, f: *Layout, s: *const sdk.Surface, hit: @FieldType(Hit, "lifted")) void {
+    const gpa = f.gpa;
+    const snap = f.state.stealSnapshot(gpa, s.id);
+    ViewDrag.beginLoose(f, s.id, hit.tile, if (snap) |sn| sn.texture else null);
+    if (!f.state.view_drag.active()) {
+        if (snap) |sn| dvui.textureDestroyLater(sn.texture);
+        return;
+    }
+    dvui.captureMouseCustom(looseCapture(), hit.event_num);
+    self.lifted = true;
+    self.close(gpa);
+    f.state.discardSnapshots(gpa);
+    dvui.refresh(null, @src(), null);
+}
+
+/// Drive a loose drag: keep the capture, land or cancel on release, and draw
+/// the float. The places draw their own previews and hints from the drag
+/// state, exactly as they do for a corner-button drag.
+fn drawLifted(self: *Picker, f: *Layout) void {
+    const d = &f.state.view_drag;
+    if (!d.active() or !d.loose()) {
+        // Discarded from outside (a plugin unloaded, the layout was swapped).
+        self.lifted = false;
+        if (dvui.captured(looseCapture().id)) {
+            dvui.captureMouse(null, 0);
+            dvui.dragEnd();
+        }
+        return;
+    }
+    const cm = looseCapture();
+    // Not `captureMouseMaintain`: that walks the subwindow stack and drops
+    // the capture on meeting a modal subwindow above the current one, and
+    // the popup this drag came out of — modal — stays on the stack for one
+    // frame after it stops being drawn. Re-asserting the capture from the
+    // last event on keeps it without retargeting anything already routed.
+    dvui.captureMouseCustom(cm, dvui.currentWindow().event_num);
+    for (dvui.events()) |*e| {
+        if (e.evt != .mouse) continue;
+        if (e.target_widgetId != cm.id) continue;
+        const me = e.evt.mouse;
+        switch (me.action) {
+            .motion => e.handled = true,
+            .release => if (me.button.pointer()) {
+                e.handled = true;
+                ViewDrag.apply(f, ViewDrag.loose_source, me.p);
+                d.discard();
+                self.lifted = false;
+                dvui.captureMouse(null, e.num);
+                dvui.dragEnd();
+                dvui.refresh(null, @src(), null);
+                return;
+            },
+            else => {},
+        }
+    }
+    ViewDrag.drawFloat(f);
 }
 
 fn setShows(f: *Layout, region: *const Layout.Region, shows: Layout.Region.Shows) void {

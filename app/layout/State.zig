@@ -491,6 +491,15 @@ pub fn takeSnapshot(self: *State, gpa: std.mem.Allocator, id: []const u8, snap: 
     gop.value_ptr.* = snap;
 }
 
+/// Take a snapshot out of the set, keeping its texture alive: the caller owns it from here.
+/// How a card lifted out of the picker keeps its picture after the picker closes and
+/// `discardSnapshots` destroys the rest.
+pub fn stealSnapshot(self: *State, gpa: std.mem.Allocator, id: []const u8) ?Snapshot {
+    const kv = self.snapshots.fetchRemove(id) orelse return null;
+    gpa.free(kv.key);
+    return kv.value;
+}
+
 /// Drop every snapshot. Textures go at the end of the frame, so a card drawn earlier this frame
 /// is unaffected. Must run between `Window.begin` and `Window.end`.
 pub fn discardSnapshots(self: *State, gpa: std.mem.Allocator) void {
