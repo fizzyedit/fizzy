@@ -39,6 +39,15 @@ pub const Preview = struct {
     /// The offset `applyAnchor` last wrote. Anything else finding a different one there means the
     /// position was set from outside the frame loop — see `applyAnchor`.
     anchor_applied_y: ?f32 = null,
+    /// The last viewport height the scroll area actually had. dvui sizes a widget from what its
+    /// children reported the frame before, so a window *height* change (a vertical resize drag)
+    /// can hand the scroll area a zero-height rect for a frame while the layout re-settles — and a
+    /// zero viewport reads as "no scroll area, draw the whole document", which for a long README
+    /// is every block laid out and shaped for a frame nobody sees (800 blocks: ~250ms in Debug,
+    /// repeated on every height step of the drag). Standing in with the height we last had keeps
+    /// that frame to the blocks that were on screen; nothing is lost, since the real height comes
+    /// back with the next layout.
+    last_viewport_h: f32 = 0,
     /// Diagnostics only (`render_ast.diag`): last frame's virtual size, to spot the scroll
     /// container's own total moving without any single block tripping the height probe.
     diag_prev_virt: f32 = -1,
@@ -536,11 +545,17 @@ pub fn drawPreview(
             // viewport is all zeros, which would read as "no viewport, draw everything" — and that
             // frame is exactly the one that must not lay out a whole 60KB document, because it is
             // the frame the preview pane opens on. The scroll area's own rect is already known by
-            // then, so it stands in.
-            .viewport = if (state.scroll.viewport.h > 0)
-                state.scroll.viewport
-            else
-                .{ .h = scroll.data().contentRect().h },
+            // then, so it stands in — and when even that is zero (a frame mid vertical resize,
+            // see `last_viewport_h`), the height the area had last frame does.
+            .viewport = viewport: {
+                if (state.scroll.viewport.h > 0) {
+                    state.last_viewport_h = state.scroll.viewport.h;
+                    break :viewport state.scroll.viewport;
+                }
+                const own_h = scroll.data().contentRect().h;
+                if (own_h > 0) break :viewport .{ .h = own_h };
+                break :viewport .{ .y = state.scroll.viewport.y, .h = state.last_viewport_h };
+            },
             .content_origin_y = pad.y,
             .column_width = column_w,
         });

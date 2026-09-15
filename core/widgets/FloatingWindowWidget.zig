@@ -73,7 +73,7 @@ pub const AutoSizeAxes = enum {
 /// moves, resizes, or `refresh_ms` has passed.
 pub const Frost = struct {
     /// Blur strength — halvings; 8 a soft focus, 16 a heavy frost, 32 a wash of colour.
-    radius: f32 = 15,
+    radius: f32 = 20,
     /// How often to re-read what is underneath while nothing about the window itself changes.
     /// Zero re-reads every frame (live, and a sync per frame).
     refresh_ms: u32 = 80,

@@ -111,19 +111,7 @@ fn textureCreateTarget(ctx: ?*anyopaque, options: proxy_bridge.CreateOptions) ca
         .interpolation = @enumFromInt(options.interpolation),
         .wrap_u = @enumFromInt(options.wrap_u),
         .wrap_v = @enumFromInt(options.wrap_v),
-    }) catch return emptyTextureDesc();
-    return proxy_bridge.textureDescFromTarget(target);
-}
-
-fn textureCreatePreciseTarget(ctx: ?*anyopaque, options: proxy_bridge.CreateOptions) callconv(.c) proxy_bridge.TextureDesc {
-    const win = windowFromCtx(ctx);
-    const target = win.backend.textureCreatePreciseTarget(.{
-        .width = options.width,
-        .height = options.height,
-        .format = @enumFromInt(options.format),
-        .interpolation = @enumFromInt(options.interpolation),
-        .wrap_u = @enumFromInt(options.wrap_u),
-        .wrap_v = @enumFromInt(options.wrap_v),
+        .precision = std.enums.fromInt(dvui.Texture.Precision, options.precision) orelse .default,
     }) catch return emptyTextureDesc();
     return proxy_bridge.textureDescFromTarget(target);
 }
@@ -272,7 +260,6 @@ fn ensureTable() void {
         .texture_update_sub_rect = textureUpdateSubRect,
         .texture_destroy = textureDestroy,
         .texture_create_target = textureCreateTarget,
-        .texture_create_precise_target = textureCreatePreciseTarget,
         .texture_blend = textureBlend,
         .texture_read_target = textureReadTarget,
         .texture_destroy_target = textureDestroyTarget,

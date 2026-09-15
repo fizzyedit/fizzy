@@ -235,6 +235,28 @@ fn macosAppPreBeginSync(back: *@import("backend").SDLBackend) void {
     macosSyncRendererSize(back.window, true);
 }
 
+/// Saved vsync setting while a manual live resize has it switched off.
+var macos_live_resize_saved_vsync: ?c_int = null;
+
+/// Frames during a manual live resize are paced by SDL's 60Hz timer inside AppKit's
+/// resize-tracking loop; a vsync-blocking present there only delays the tracker's next
+/// mouse event, so quick drags fall behind the pointer. Off for the drag, restored after.
+export fn fizzy_macos_window_live_resize_vsync(active: c_int) void {
+    if (comptime builtin.os.tag != .macos) return;
+    const window = macos_monitor_window orelse return;
+    const renderer = sdl3.SDL_GetRenderer(window) orelse return;
+    if (active != 0) {
+        if (macos_live_resize_saved_vsync != null) return;
+        var vsync: c_int = 0;
+        if (!sdl3.SDL_GetRenderVSync(renderer, &vsync)) return;
+        macos_live_resize_saved_vsync = vsync;
+        _ = sdl3.SDL_SetRenderVSync(renderer, 0);
+    } else if (macos_live_resize_saved_vsync) |vsync| {
+        macos_live_resize_saved_vsync = null;
+        _ = sdl3.SDL_SetRenderVSync(renderer, vsync);
+    }
+}
+
 export fn fizzy_macos_window_reset_sync_cache() void {
     macos_last_sync_point = .{ 0, 0 };
     macos_last_sync_pixel = .{ 0, 0 };

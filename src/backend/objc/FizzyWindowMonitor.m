@@ -19,6 +19,7 @@ extern void fizzy_macos_window_pump_frame(void);
 extern void fizzy_macos_window_reset_sync_cache(void);
 extern void fizzy_macos_window_request_clear_frames(int frames);
 extern void fizzy_macos_window_commit_steady_state(void);
+extern void fizzy_macos_window_live_resize_vsync(int active);
 /* Pure window-frame decisions live in window_layout.zig (unit-tested); see
  * backend/backend_native.zig for the C-ABI wrappers. */
 extern int fizzy_macos_constrain_is_menu_bar_nudge(double rx, double ry, double rw, double rh,
@@ -186,7 +187,9 @@ static void pump_tick_inner(void) {
     }
 
     fizzy_macos_window_sync_content_views(g_pump_window);
-    fizzy_macos_window_pump_frame();
+    /* A manual drag is already driven by SDL's own live-resize timer; a second
+     * frame per tick from here only blocks the tracking loop on present. */
+    if (!g_manual_live_resize) fizzy_macos_window_pump_frame();
 }
 
 static void request_resize_pump(void *nswindow, int frames) {
@@ -210,8 +213,12 @@ static void request_resize_pump(void *nswindow, int frames) {
 static void note_zoom_state(NSWindow *window) {
     BOOL zoomed = window.zoomed;
     if (g_zoom_state_valid && zoomed != g_was_zoomed) {
-        if (g_was_zoomed && !zoomed) g_unzoom_animating = YES;
-        request_resize_pump((__bridge void *)window, 120);
+        /* Dragging a corner of a zoomed window un-zooms it too, but by hand: AppKit
+         * animates nothing, and SDL's live-resize timer already renders every tick. */
+        if (!g_manual_live_resize) {
+            if (g_was_zoomed && !zoomed) g_unzoom_animating = YES;
+            request_resize_pump((__bridge void *)window, 120);
+        }
     }
     g_was_zoomed = zoomed;
     g_zoom_state_valid = YES;
@@ -619,17 +626,20 @@ void fizzy_macos_window_install_resize_observer(void *nswindow) {
             }
             if ([name isEqualToString:NSWindowWillStartLiveResizeNotification]) {
                 g_manual_live_resize = YES;
+                fizzy_macos_window_live_resize_vsync(1);
             } else if ([name isEqualToString:NSWindowDidEndLiveResizeNotification]) {
                 fizzy_macos_window_sync_content_views(nswindow);
                 g_manual_live_resize = NO;
+                fizzy_macos_window_live_resize_vsync(0);
             }
             note_zoom_state(w);
-            if (g_space_transition || g_unzoom_animating) {
+            if (g_manual_live_resize) {
+                /* Vibrancy host only — SDL resizes its subviews and renders the
+                 * frames during a manual live resize. */
+                fizzy_macos_window_sync_content_views(nswindow);
+            } else if (g_space_transition || g_unzoom_animating) {
                 request_resize_pump(nswindow, 120);
                 pump_tick();
-            } else if (g_manual_live_resize) {
-                /* Vibrancy host only — SDL resizes its subviews during live resize. */
-                fizzy_macos_window_sync_content_views(nswindow);
             }
         }];
     }

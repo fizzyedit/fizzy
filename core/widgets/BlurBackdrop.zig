@@ -210,7 +210,7 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
     const prev_alpha = dvui.alpha(1);
     defer dvui.alphaSet(prev_alpha);
 
-    const step = dvui.Texture.Target.createPrecise(.{ .width = w, .height = h, .interpolation = .linear }) catch return false;
+    const step = dvui.Texture.Target.create(.{ .width = w, .height = h, .interpolation = .linear, .precision = .high }) catch return false;
     var rt = cw.render_target;
     const off = rt.offset;
     rt.texture = step;
@@ -304,7 +304,7 @@ pub fn blurred(tex: Texture, radius_px: f32) ?Texture {
     return tmp.small;
 }
 
-/// The pyramid's levels are precise targets (`Texture.Target.createPrecise`: float where the
+/// The pyramid's levels are precise targets (`CreateOptions.precision = .high`: float where the
 /// backend has it). At 8 bits a dark theme's frost lives in ~30 levels, and rounding it at
 /// every one of the ~8 passes — coarsest at the small levels, then magnified back up — drew
 /// contour blobs instead of a gradient. Only the final texture is 8-bit again.
@@ -353,7 +353,7 @@ fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_tar
     while (cur.width > target_w or cur.height > target_h) {
         const next_w = @max(target_w, cur.width / 2);
         const next_h = @max(target_h, cur.height / 2);
-        const step_target = dvui.Texture.Target.createPrecise(.{ .width = next_w, .height = next_h, .interpolation = .linear }) catch break;
+        const step_target = dvui.Texture.Target.create(.{ .width = next_w, .height = next_h, .interpolation = .linear, .precision = .high }) catch break;
         // Switches straight from `cur`'s target to `step_target` - no need
         // to save/restore per pass, see comment above the outer `defer`.
         const prev = dvui.renderTarget(.{ .texture = step_target, .offset = .{} });
@@ -411,7 +411,7 @@ fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_tar
     while (cur.width < final_w or cur.height < final_h) {
         const next_w = @min(final_w, cur.width * 2);
         const next_h = @min(final_h, cur.height * 2);
-        const step_target = dvui.Texture.Target.createPrecise(.{ .width = next_w, .height = next_h, .interpolation = .linear }) catch break;
+        const step_target = dvui.Texture.Target.create(.{ .width = next_w, .height = next_h, .interpolation = .linear, .precision = .high }) catch break;
         const prev = dvui.renderTarget(.{ .texture = step_target, .offset = .{} });
         if (!switched) {
             prev1 = prev;
@@ -549,7 +549,7 @@ pub fn drawRounded(self: *BlurBackdrop, corners: dvui.CornerRect, scale: f32) vo
 /// Fizzy addition: how a frosted pane is composed. See `frostPane`.
 pub const Pane = struct {
     /// Blur strength — halvings; 8 a soft focus, 16 a heavy frost, 32 a wash of colour.
-    radius: f32 = 15,
+    radius: f32 = 20,
     /// How often to re-read what is underneath while the pane's geometry holds. Zero re-reads
     /// every frame.
     refresh_ms: u32 = 80,

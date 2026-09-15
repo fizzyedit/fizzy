@@ -210,6 +210,41 @@ pub fn documentClosed(self: *Workbench, doc: sdk.DocHandle) void {
     }
 }
 
+/// A document's path changed under it (an explorer rename, a Save As): its tab is keyed by
+/// the surface id the old path spelled, so the pane holding it swaps that id for the new one
+/// in place — same slot, same selection. Without this the tab is orphaned: `documentOf` finds
+/// no document at the old path and skips drawing it, `active` goes null, and every command that
+/// starts from `activeDoc()` — Save first among them — quietly does nothing.
+pub fn documentRenamed(self: *Workbench, doc: sdk.DocHandle, old_id: []const u8) void {
+    const host = runtime.host();
+    const arena = host.arena();
+    const new_id = sdk.document.surfaceId(arena, doc.owner.id, doc.owner.documentPath(doc)) catch return;
+    for (self.workspaces.values()) |*ws| {
+        var buf: [32]u8 = undefined;
+        const region_name = Workspace.name(&buf, ws.grouping);
+        const existing = host.assignedSurfaces(region_name) orelse continue;
+        var ids: std.ArrayListUnmanaged([]const u8) = .empty;
+        var found = false;
+        for (existing) |e| {
+            const keep = if (std.mem.eql(u8, e, old_id)) blk: {
+                found = true;
+                break :blk new_id;
+            } else e;
+            ids.append(arena, keep) catch return;
+        }
+        if (!found) continue;
+        host.assignSurfaces(region_name, ids.items) catch |err| {
+            dvui.log.err("pane {d}: {s}", .{ ws.grouping, @errorName(err) });
+            continue;
+        };
+        // Selection is by id too. Only the pane showing this document re-selects, and only
+        // within itself — this is not a focus change, so `open_workspace_grouping` stays.
+        if (ws.active) |active| {
+            if (active.id == doc.id) host.selectInRegion(region_name, new_id);
+        }
+    }
+}
+
 pub fn rebuildWorkspaces(self: *Workbench) !void {
     return workbench_layout.rebuildWorkspaces(self);
 }

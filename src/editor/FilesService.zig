@@ -12,17 +12,25 @@
 //! plugin asking for it neither knows nor cares which app it got.
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
+const fizzy = @import("../fizzy.zig");
 
 const Host = sdk.Host;
+const Editor = fizzy.Editor;
 
-fn hostOf(ctx: *anyopaque) *Host {
+fn editorOf(ctx: *anyopaque) *Editor {
     return @ptrCast(@alignCast(ctx));
 }
 
-/// The service value to register. `host` is both the context and the state: everything below
-/// works through `Host`'s public document API, so nothing here reaches into `Editor`.
-pub fn api(host: *Host) sdk.services.files.Api {
-    return .{ .ctx = host, .vtable = &vtable };
+fn hostOf(ctx: *anyopaque) *Host {
+    return &editorOf(ctx).host;
+}
+
+/// The service value to register. `editor` is the context; the disk and document halves go
+/// through `Host`'s public document API, and the one thing that needs the app itself is what
+/// a rename leaves behind — the surface and tab keyed by the old path
+/// (`Editor.documentPathChanged`), which no plugin-facing API names.
+pub fn api(editor: *Editor) sdk.services.files.Api {
+    return .{ .ctx = editor, .vtable = &vtable };
 }
 
 const vtable: sdk.services.files.Api.VTable = .{
@@ -64,6 +72,7 @@ fn rename(ctx: *anyopaque, path: []const u8, new_path: []const u8, kind: std.Io.
         .file => {
             const doc = self.docFromPath(path) orelse return;
             try doc.owner.setDocumentPath(doc, new_path);
+            editorOf(ctx).documentPathChanged(doc);
         },
         .directory => {
             var i: usize = 0;
@@ -79,7 +88,9 @@ fn rename(ctx: *anyopaque, path: []const u8, new_path: []const u8, kind: std.Io.
                 defer self.allocator.free(moved);
                 doc.owner.setDocumentPath(doc, moved) catch {
                     std.log.err("failed to update open document path to {s}", .{moved});
+                    continue;
                 };
+                editorOf(ctx).documentPathChanged(doc);
             }
         },
         else => {},

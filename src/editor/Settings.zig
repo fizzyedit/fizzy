@@ -59,13 +59,13 @@ content_opacity: f32 = 0.7,
 modal_dim: f32 = 0.8,
 
 /// How opaque a dialog's or the palette's own fill is over its frosted backdrop, 0 to 1.
-dialog_opacity: f32 = 0.5,
+dialog_opacity: f32 = 0.3,
 
 /// Blur radius of the frosted backdrop under dialogs and the palette; 0 turns it off.
-dialog_blur: f32 = 15,
+dialog_blur: f32 = 20,
 
 /// How much lighter a dialog or the palette is than what is behind it, 0 to 1.
-dialog_lift: f32 = 0.2,
+dialog_lift: f32 = 0.3,
 
 /// Canvas zoom/pan control scheme shared by the image viewer, pixi, and any other
 /// `CanvasWidget` consumer. `auto` picks mouse vs trackpad from `dvui.mouseType()`.

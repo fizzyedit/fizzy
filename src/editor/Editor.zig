@@ -2562,7 +2562,7 @@ pub fn postInit(editor: *Editor) !void {
     // caller already handles. The comptime guard also keeps the implementation out of the wasm
     // build entirely, since taking a function's address forces its analysis.
     if (comptime builtin.target.cpu.arch != .wasm32) {
-        editor.files_service = FilesService.api(&editor.host);
+        editor.files_service = FilesService.api(editor);
         try editor.host.registerService(sdk.services.files.Api, &editor.files_service, null);
     }
 
@@ -3076,6 +3076,25 @@ fn unregisterDocSurface(editor: *Editor, doc_id: u64) void {
     editor.host.unregisterSurface(kv.value.id);
     editor.gpa.free(kv.value.id);
     editor.gpa.destroy(kv.value);
+}
+
+/// The document's path has already changed (an explorer rename, a directory rename above it, a
+/// Save As) and everything keyed by the old spelling has to follow: the surface — its id *is*
+/// `<owner>.doc:<path>` — the pane tab that names that id, and the on-disk watch. Called by
+/// whoever changed the path, after it did; the plugin's `setDocumentPath` is only the string.
+pub fn documentPathChanged(editor: *Editor, doc: sdk.DocHandle) void {
+    const gpa = editor.gpa;
+    const old_id = if (editor.doc_surfaces.get(doc.id)) |ds| gpa.dupe(u8, ds.id) catch null else null;
+    defer if (old_id) |id| gpa.free(id);
+
+    editor.unregisterDocSurface(doc.id);
+    editor.registerDocSurface(doc) catch |err| {
+        dvui.log.err("document surface for {s}: {t}", .{ doc.owner.documentPath(doc), err });
+    };
+    if (old_id) |id| editor.workbench.documentRenamed(doc, id);
+    if (editor.document_watcher) |*w| w.retarget(editor, doc);
+    // Titlebar, tab and menu enablement were drawn this frame from the old path.
+    dvui.refresh(null, @src(), null);
 }
 
 /// A document drawn as a surface: the canvas box the workbench used to draw around it, then the
@@ -4014,8 +4033,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // when maximized). Published into the shared dvui window so plugin dylibs' dialogs read
     // the same values; see `core.dialogs.Style`.
     {
-        const fill = dvui.themeGet().color(.content, .fill);
-        const chrome = if (editor.host.appliesNativeWindowOpacity() and !editor.host.isMaximized()) fill.opacity(editor.window_opacity) else fill;
+        const fill: dvui.Color = dvui.themeGet().color(.content, .fill);
+        const chrome = if (editor.host.appliesNativeWindowOpacity() and !editor.host.isMaximized()) fill else fill;
         fizzy.core.dialogs.publishStyle(.{
             .modal_dim = editor.settings.modal_dim,
             .opacity = editor.settings.dialog_opacity,
@@ -5807,11 +5826,10 @@ pub fn processPendingSaveAs(editor: *Editor) void {
         }
         return;
     };
-    if (editor.document_watcher) |*w| w.retarget(editor, doc);
-    // The document's path and dirty flag both just changed, part-way through a frame that
-    // several consumers (menu enablement, titlebar) have already drawn with the old values.
-    // Ask for one more frame so the new name lands without waiting for the next input event.
-    dvui.refresh(null, @src(), null);
+    // The path and dirty flag both just changed, part-way through a frame that several
+    // consumers have already drawn with the old values; this re-keys what the path names and
+    // asks for the frame that shows the new one.
+    editor.documentPathChanged(doc);
 
     if (editor.pending_close_file_id) |cid| {
         if (doc.id == cid) {

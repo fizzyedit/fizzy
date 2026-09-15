@@ -43,9 +43,9 @@ pub const Style = extern struct {
     /// dvui's default scrim (60/255 dark, 80/255 light), which sits at about 0.8 here.
     modal_dim: f32 = 0.8,
     /// How much of a dialog is its own colour rather than the frost behind it, 0…1.
-    opacity: f32 = 0.5,
+    opacity: f32 = 0.3,
     /// The frost's blur radius (`FloatingWindowWidget.Frost.radius`); 0 turns the frost off.
-    blur: f32 = 15,
+    blur: f32 = 20,
     /// What a bare stretch of the app's chrome is on screen — the window base (the content
     /// fill at window opacity, over the OS material). A fully opaque dialog is drawn as
     /// exactly this, so it matches the explorer's empty space. Only meaningful once the host
@@ -56,7 +56,7 @@ pub const Style = extern struct {
     /// A light lift over the whole pane, 0…1: white added on top of frost and tint, the way a
     /// glass material is brighter than what is behind it. Dark content blurs dark; this is
     /// what keeps a dialog over a dark pane from reading as a black slab. 1 adds ~15% white.
-    lift: f32 = 0.2,
+    lift: f32 = 0.3,
 
     pub fn chromeColor(self: Style) dvui.Color {
         if (!self.has_chrome) return dvui.themeGet().color(.content, .fill);
