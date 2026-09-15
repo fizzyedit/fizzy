@@ -8,9 +8,12 @@ const dvui = @import("dvui");
 const OutputLog = @import("OutputLog.zig");
 
 /// Persisted across frames so we can auto-scroll and detect newly-arrived lines.
-var scroll_info: dvui.ScrollInfo = .{};
+var scroll_info: dvui.ScrollInfo = .{ .horizontal = .auto };
 var follow = true;
-var last_seen_count: usize = 0;
+/// One line's height as the text layout measured it last frame. Zero until measured, which
+/// lays every line out once so there is something to measure.
+var line_pitch: f32 = 0;
+var last_shown: usize = 0;
 
 /// Selected tab, persisted as a bounded copy rather than a slice into `OutputLog`'s ring
 /// buffer — a scope string there can be freed on eviction or plugin unload between frames.
@@ -37,49 +40,76 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // fonts fail to resolve, which logs a warning — reentering `OutputLog.append` on this
     // same thread. Holding the lock that long turns that into a self-deadlock (the log's
     // spinlock is not reentrant), so we copy what we need and unlock before drawing anything.
+    //
+    // Only the lines in the viewport are copied and laid out. The log only grows, and laying
+    // out every line of it each frame — for the fifteen that fit — was a frame cost that grew
+    // with the session. Lines are one row each (`break_lines = false`, the panel scrolls
+    // sideways instead), so a line's row is its index times `line_pitch` and the lines above
+    // and below the viewport are two spacers of their height.
     const arena = dvui.currentWindow().arena();
-    const lines: []const OutputLog.Line = blk: {
+    const selected = selectedScope();
+    var scopes: std.ArrayListUnmanaged([]const u8) = .empty;
+    var shown_total: usize = 0;
+    var lines: []OutputLog.Line = &.{};
+    var first: usize = 0;
+    {
         OutputLog.lock();
         defer OutputLog.unlock();
         const src = OutputLog.items();
-        const copy = arena.alloc(OutputLog.Line, src.len) catch break :blk &.{};
-        for (src, copy) |s, *d| {
+        // Distinct scopes seen so far, in first-seen order — small (one per active plugin), so
+        // a linear scan per line is cheap. Counted here too: the range below needs the total.
+        const shown_idx = arena.alloc(u32, src.len) catch return .ok;
+        for (src, 0..) |line, i| {
+            var seen = false;
+            for (scopes.items) |sc| {
+                if (std.mem.eql(u8, sc, line.scope)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) scopes.append(arena, arena.dupe(u8, line.scope) catch "") catch {};
+            if (selected) |sel| {
+                if (!std.mem.eql(u8, sel, line.scope)) continue;
+            }
+            if (shown_total < shown_idx.len) shown_idx[shown_total] = @intCast(i);
+            shown_total += 1;
+        }
+        var end: usize = shown_total;
+        if (line_pitch > 0 and scroll_info.viewport.h > 0) {
+            // Following the tail: the viewport is about to be at the bottom, so cut the
+            // range there rather than where last frame's offset was.
+            const vp_y = if (follow)
+                @max(0, @as(f32, @floatFromInt(shown_total)) * line_pitch - scroll_info.viewport.h)
+            else
+                scroll_info.viewport.y;
+            first = @min(shown_total, @as(usize, @intFromFloat(@max(0, @floor(vp_y / line_pitch)))));
+            end = @min(shown_total, @as(usize, @intFromFloat(@ceil((vp_y + scroll_info.viewport.h) / line_pitch) + 1)));
+        }
+        lines = arena.alloc(OutputLog.Line, end - first) catch &.{};
+        for (lines, first..) |*d, k| {
+            const line = src[shown_idx[k]];
             d.* = .{
-                .level = s.level,
-                .scope = arena.dupe(u8, s.scope) catch "",
-                .text = arena.dupe(u8, s.text) catch "",
+                .level = line.level,
+                .scope = "",
+                .text = arena.dupe(u8, line.text) catch "",
             };
         }
-        break :blk copy;
-    };
-
-    // Distinct scopes seen so far, in first-seen order — small (one per active plugin), so a
-    // linear scan per line is cheap.
-    var scopes: std.ArrayListUnmanaged([]const u8) = .empty;
-    for (lines) |line| {
-        var seen = false;
-        for (scopes.items) |s| {
-            if (std.mem.eql(u8, s, line.scope)) {
-                seen = true;
-                break;
-            }
-        }
-        if (!seen) scopes.append(arena, line.scope) catch {};
     }
 
     drawTabStrip(scopes.items);
 
-    const selected = selectedScope();
-
     var vbox = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer vbox.deinit();
 
-    if (follow and lines.len != last_seen_count) {
-        scroll_info.scrollToFraction(.vertical, 1.0);
-    }
-    last_seen_count = lines.len;
+    // Held at the bottom every frame while following, not only when a line arrives: the first
+    // frames lay the log out before its size is known, and a scroll asked for then lands at 0.
+    if (follow) scroll_info.scrollToFraction(.vertical, 1.0);
+    const asked_y = scroll_info.viewport.y;
 
     var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &scroll_info }, .{ .expand = .both, .background = false });
+    if (first > 0) {
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = @as(f32, @floatFromInt(first)) * line_pitch }, .expand = .horizontal });
+    }
 
     const mono: dvui.Options = .{ .font = dvui.Font.theme(.mono) };
     const message_color: dvui.Options = .{ .color_text = .{ .color = dvui.themeGet().color(.window, .text).opacity(0.6) } };
@@ -87,8 +117,8 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // One shared `TextLayoutWidget` for every line (not one per line): dvui's text
     // selection is per-widget, so a single widget is what lets a click-drag span multiple
     // lines instead of stopping dead at each line's own boundary.
-    var tl = dvui.textLayout(@src(), .{}, .{
-        .expand = .both,
+    var tl = dvui.textLayout(@src(), .{ .break_lines = false }, .{
+        .expand = .horizontal,
         .background = false,
         .margin = .{},
         .padding = .{},
@@ -96,9 +126,6 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
 
     var shown: usize = 0;
     for (lines) |line| {
-        if (selected) |s| {
-            if (!std.mem.eql(u8, s, line.scope)) continue;
-        }
         if (shown > 0) tl.addText("\n", mono);
         shown += 1;
         // Only the "level(scope): " prefix gets the level color — the message stays the
@@ -111,13 +138,25 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         }
     }
 
+    // Last frame's height over last frame's count: the rect is a frame behind the text.
+    if (last_shown > 0) line_pitch = tl.data().rect.h / @as(f32, @floatFromInt(last_shown));
+    last_shown = shown;
     tl.deinit();
+    const after = shown_total - first - lines.len;
+    if (after > 0) {
+        _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = @as(f32, @floatFromInt(after)) * line_pitch }, .expand = .horizontal });
+    }
     scroll.deinit();
 
-    // Re-arm auto-follow only once the viewport is back at the bottom (whether the user
-    // scrolled back down themselves, or nothing ever pushed it away). Any other position
-    // means the user scrolled up, so leave it be until they return to the bottom.
-    follow = scroll_info.offsetFromMax(.vertical) < 1.0;
+    // Following breaks only when the user scrolls up from where it was put — a viewport that
+    // ended the frame above `asked_y` was moved by a wheel or a bar drag, not by the log
+    // growing under it. It re-arms once the viewport is back at the bottom (whether the user
+    // scrolled back down themselves, or nothing ever pushed it away).
+    if (follow) {
+        if (scroll_info.viewport.y + 1.0 < asked_y) follow = false;
+    } else {
+        follow = scroll_info.offsetFromMax(.vertical) < 1.0;
+    }
     return .ok;
 }
 

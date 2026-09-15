@@ -788,7 +788,7 @@ fn drawCompletionList(doc: *Document, ext: []const u8, te: *TextEntryWidget, id_
         var row = dvui.box(@src(), .{ .dir = .horizontal }, bw.data().options.strip().override(.{ .expand = .horizontal, .gravity_y = 0.5, .background = false }));
 
         const kind_color = colorForCompletionKind(ext, candidate.kind);
-        dvui.icon(@src(), "completion_kind_icon", iconForCompletionKind(candidate.kind), .{
+        core.icon.icon(@src(), "completion_kind_icon", iconForCompletionKind(candidate.kind), .{
             .fill_color = .{ .color = kind_color },
             .stroke_color = .{ .color = kind_color },
         }, .{

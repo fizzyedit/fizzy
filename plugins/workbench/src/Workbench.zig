@@ -313,7 +313,7 @@ fn drawUnsavedDot(_: ?*anyopaque, path: []const u8, id_extra: usize) void {
     const doc = runtime.host().docFromPath(path) orelse return;
     if (doc.owner.showsSaveStatusIndicator(doc)) return;
     if (!doc.owner.isDirty(doc)) return;
-    dvui.icon(@src(), "explorer_dirty", icons.tvg.lucide.@"circle-small", .{
+    core.icon.icon(@src(), "explorer_dirty", icons.tvg.lucide.@"circle-small", .{
         .stroke_color = .{ .color = dvui.themeGet().color(.window, .text) },
     }, .{
         .gravity_x = 1.0,

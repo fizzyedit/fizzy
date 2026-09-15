@@ -121,7 +121,7 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = infobar.item_spacing } });
 
     if (editor.folder) |folder| {
-        dvui.icon(
+        fizzy.core.icon.icon(
             @src(),
             "project_icon",
             icons.tvg.entypo.folder,
@@ -205,7 +205,7 @@ fn drawEntry(id_extra: usize, entry: infobar.Entry) void {
     const color = dvui.themeGet().color(.window, .text);
     const side = infobar.iconSide();
     if (entry.icon.len > 0) {
-        dvui.icon(
+        fizzy.core.icon.icon(
             @src(),
             "plugin_infobar_icon",
             entry.icon,

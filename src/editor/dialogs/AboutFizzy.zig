@@ -222,12 +222,18 @@ pub fn dialog(_: dvui.Id) anyerror!bool {
 
     // Fox at the top, centered. Use a fixed natural size (96×96) so it
     // doesn't blow out the dialog regardless of the source PNG's resolution.
-    if (fizzy.core.image.fromImageFileBytes("fox.png", assets.files.@"fox.png", .ptr)) |fox_src| {
-        _ = dvui.image(@src(), .{ .source = fox_src, .shrink = .ratio }, .{
-            .gravity_x = 0.5,
-            .min_size_content = .{ .w = 96, .h = 96 },
-        });
-    } else |_| {}
+    // `.imageFile` so dvui decodes once and caches the texture — `fromImageFileBytes`
+    // re-decoded the PNG and leaked the pixels every frame, which halved the frame rate
+    // for as long as this dialog was open.
+    const fox_src: dvui.ImageSource = .{ .imageFile = .{
+        .bytes = assets.files.@"fox.png",
+        .name = "fox.png",
+        .interpolation = .nearest,
+    } };
+    _ = dvui.image(@src(), .{ .source = fox_src, .shrink = .ratio }, .{
+        .gravity_x = 0.5,
+        .min_size_content = .{ .w = 96, .h = 96 },
+    });
 
     // Website link.
     {

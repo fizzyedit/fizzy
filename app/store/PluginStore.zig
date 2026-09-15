@@ -538,7 +538,7 @@ fn drawDetailHeader(entry: StoreEntry) void {
         // image doesn't touch the header's own edges, per the "less empty space" ask.
         const drew = StoreIcon.draw(entry.id, 60) or app.host.drawPluginIcon(entry.id);
         if (!drew) {
-            dvui.icon(
+            core.icon.icon(
                 @src(),
                 "PluginLogo",
                 icons.tvg.lucide.package,
@@ -747,7 +747,7 @@ fn drawChangelogPlaceholder() void {
     defer box.deinit();
 
     const muted = dvui.themeGet().color(.window, .text).opacity(0.7);
-    dvui.icon(@src(), "ChangelogPlaceholder", icons.tvg.lucide.history, .{ .stroke_color = .{ .color = muted } }, .{
+    core.icon.icon(@src(), "ChangelogPlaceholder", icons.tvg.lucide.history, .{ .stroke_color = .{ .color = muted } }, .{
         .gravity_x = 0.5,
         .min_size_content = .{ .w = 32, .h = 32 },
         .margin = .{ .h = 8 },
@@ -1803,7 +1803,7 @@ fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
 
     // Filter row — same shape as the file tree (search icon + borderless text entry).
     var filter_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 4 } });
-    dvui.icon(
+    core.icon.icon(
         @src(),
         "FilterIcon",
         icons.tvg.lucide.search,
@@ -2001,7 +2001,7 @@ fn drawUnreachablePlaceholder() void {
     });
     defer col.deinit();
 
-    dvui.icon(@src(), "StoreOffline", icons.tvg.lucide.@"cloud-off", .{ .stroke_color = .{ .color = muted } }, .{
+    core.icon.icon(@src(), "StoreOffline", icons.tvg.lucide.@"cloud-off", .{ .stroke_color = .{ .color = muted } }, .{
         .gravity_x = 0.5,
         .min_size_content = .{ .w = 28, .h = 28 },
         .margin = .{ .h = 6 },
@@ -2301,7 +2301,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
             if (repoSource(entry)) |src| StoreIcon.request(entry.id, src.repo, src.subpath);
             const drew = StoreIcon.draw(entry.id, 32) or app.host.drawPluginIcon(entry.id);
             if (!drew) {
-                dvui.icon(
+                core.icon.icon(
                     @src(),
                     "PluginLogo",
                     icons.tvg.lucide.package,
@@ -2447,7 +2447,7 @@ fn drawCardShell(entry: StoreEntry, controls: *const fn (StoreEntry) void, row2_
 
                 var fail_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 2 } });
                 defer fail_row.deinit();
-                dvui.icon(
+                core.icon.icon(
                     @src(),
                     "PluginFailedIcon",
                     icons.tvg.lucide.@"circle-alert",
@@ -2795,7 +2795,7 @@ fn drawNoStoreBuild(entry: StoreEntry, opts: dvui.Options) void {
     const needs_newer_fizzy = !optimize_mismatch and releaseNeedsNewerFizzy(entry);
 
     if (optimize_mismatch or needs_newer_fizzy) {
-        dvui.icon(
+        core.icon.icon(
             @src(),
             "StoreNoBuildAlertIcon",
             icons.tvg.lucide.@"circle-alert",

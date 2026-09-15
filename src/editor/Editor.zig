@@ -4350,7 +4350,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 });
                 defer b.deinit();
                 fizzy.backend.setTitleBarCaptionButtonRect(.minimize, b.data().rectScale().r);
-                dvui.icon(@src(), "win_min", icons.tvg.feather.minus, .{ .stroke_color = .{ .color = stroke } }, .{
+                core.icon.icon(@src(), "win_min", icons.tvg.feather.minus, .{ .stroke_color = .{ .color = stroke } }, .{
                     .expand = .ratio,
                     .padding = .all(7),
                     .margin = .all(0),
@@ -4368,7 +4368,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 });
                 defer b.deinit();
                 fizzy.backend.setTitleBarCaptionButtonRect(.maximize, b.data().rectScale().r);
-                dvui.icon(@src(), "win_max", icons.tvg.lucide.square, .{ .stroke_color = .{ .color = stroke } }, .{
+                core.icon.icon(@src(), "win_max", icons.tvg.lucide.square, .{ .stroke_color = .{ .color = stroke } }, .{
                     .expand = .ratio,
                     .padding = .all(9),
                     .margin = .all(0),
@@ -4386,7 +4386,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 });
                 defer b.deinit();
                 fizzy.backend.setTitleBarCaptionButtonRect(.close, b.data().rectScale().r);
-                dvui.icon(@src(), "win_close", icons.tvg.heroicons.outline.@"x-mark", .{
+                core.icon.icon(@src(), "win_close", icons.tvg.heroicons.outline.@"x-mark", .{
                     .stroke_color = .{ .color = if (is_hover) close_hover_stroke else stroke },
                 }, .{
                     .expand = .ratio,
@@ -4776,7 +4776,7 @@ fn fizzyDrawFileKindGlyph(_: *anyopaque, kind: []const u8, color: dvui.Color) bo
     const glyph = file_glyphs.glyphFor(kind) orelse return false;
     // Same sizing contract every file glyph uses: the caller reserved the slot, so fit to it
     // with `expand = .ratio` rather than picking a size here.
-    dvui.icon(@src(), "FileKindGlyph", glyph, .{ .stroke_color = .{ .color = color }, .fill_color = .{ .color = color } }, .{
+    core.icon.icon(@src(), "FileKindGlyph", glyph, .{ .stroke_color = .{ .color = color }, .fill_color = .{ .color = color } }, .{
         .expand = .ratio,
         .gravity_x = 0.5,
         .gravity_y = 0.5,

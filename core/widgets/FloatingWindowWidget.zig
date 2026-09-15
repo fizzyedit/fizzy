@@ -67,16 +67,16 @@ pub const AutoSizeAxes = enum {
 
 /// A frosted backdrop under a translucent window: what is beneath it, blurred, drawn under its
 /// own `color_fill`. See `BlurBackdrop.Mode.readback` for how the pixels are obtained — it
-/// reads the window's framebuffer as it stands when the floating window is declared, so a
-/// window declared after the content it floats over (which is every dialog, palette and
-/// picker) sees all of it. The read is a GPU sync, so it is repeated only when the window
-/// moves, resizes, or `refresh_ms` has passed.
+/// reads the frame as it stands when the floating window's commands replay, so a window
+/// declared after the content it floats over (which is every dialog, palette and picker) sees
+/// all of it. The read is a copy on the GPU into targets the window keeps, cheap enough to
+/// repeat every frame; `refresh_ms` can slow it down.
 pub const Frost = struct {
     /// Blur strength — halvings; 8 a soft focus, 16 a heavy frost, 32 a wash of colour.
     radius: f32 = 20,
     /// How often to re-read what is underneath while nothing about the window itself changes.
-    /// Zero re-reads every frame (live, and a sync per frame).
-    refresh_ms: u32 = 80,
+    /// Zero re-reads every frame, so content scrolling under the window moves in its blur.
+    refresh_ms: u32 = 0,
     /// The window's own colour, composited *with* the frost rather than painted over it:
     /// `out = (1 - mix) * frost + mix * tint`. The tint's alpha is the coverage the whole thing
     /// ends up with, so a tint of the app's chrome colour at the chrome's own translucency

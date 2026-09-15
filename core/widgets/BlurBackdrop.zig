@@ -41,8 +41,15 @@ const BlurBackdrop = @This();
 rect: Rect.Physical = .{},
 /// CSS `backdrop-filter: blur(radius_px)`-equivalent blur strength.
 radius_px: f32 = 16,
-/// Cached small texture, redrawn as-is on non-dirty frames.
+/// Cached small texture, redrawn as-is on non-dirty frames. A view of the pyramid's last
+/// level (`levels`), so it lives and dies with that.
 small: ?Texture = null,
+/// Fizzy addition: the pyramid's targets, kept from one capture to the next and reused when
+/// the size still fits. Creating a target is a texture allocation plus a clear — a render-target
+/// switch and a pipeline flush — and a capture needs a dozen; that was most of what a capture
+/// cost, and why one could not be afforded every frame. Slot 0 is the copy of the rect, then
+/// the halvings, then the doublings.
+levels: [max_levels]?Texture.Target = @splat(null),
 /// True until the next `deinit` runs a real capture.
 dirty: bool = true,
 /// Hash of the last `init`'s `rect` + `witness`, for auto-dirty.
@@ -59,6 +66,9 @@ prev_rendering: bool = undefined,
 mode: Mode = .replay,
 
 pub const Mode = enum { replay, readback };
+
+/// Enough for a 16k-pixel rect at radius 2^11, in both directions.
+const max_levels = 24;
 
 /// Get the persistent `BlurBackdrop` for this call site, creating it on
 /// first call. Registers its GPU-texture teardown with dvui's data store so
@@ -182,8 +192,9 @@ pub fn deinit(self: *BlurBackdrop) void {
     cw.renderCommands(cmds) catch {};
 
     const cur = dvui.textureFromTarget(full_target) catch return; // destroys full_target
+    defer dvui.textureDestroyLater(cur);
     // Capture target is already bound; the outer `defer` restores the window.
-    _ = self.runKawase(cur, true, false);
+    _ = self.runKawase(cur, false, 1, 1);
 }
 
 /// Fizzy addition: the fast `.readback`. When the frame is being drawn into a texture
@@ -202,15 +213,21 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
     r.w = @round(r.w);
     r.h = @round(r.h);
     if (r.w < 1 or r.h < 1) return true;
-    const w: u32 = @intFromFloat(r.w);
-    const h: u32 = @intFromFloat(r.h);
+    // At any real radius the copy is taken at half size: the first halving is the largest
+    // pass of the pyramid and the blur that follows swallows what decimating loses, so it is
+    // folded into the copy. The result stops at half size on the way back up for the same
+    // reason (`runKawase`), and the final quad stretches it — the two most expensive passes
+    // of every capture, gone, on a frost that is re-read every frame.
+    const shrink = self.coarse();
+    const w: u32 = @max(1, @as(u32, @intFromFloat(r.w)) / shrink);
+    const h: u32 = @max(1, @as(u32, @intFromFloat(r.h)) / shrink);
 
     const blur_prev_rendering = dvui.renderingSet(true);
     defer _ = dvui.renderingSet(blur_prev_rendering);
     const prev_alpha = dvui.alpha(1);
     defer dvui.alphaSet(prev_alpha);
 
-    const step = dvui.Texture.Target.create(.{ .width = w, .height = h, .interpolation = .linear, .precision = .high }) catch return false;
+    const step = self.level(0, w, h) orelse return false;
     var rt = cw.render_target;
     const off = rt.offset;
     rt.texture = step;
@@ -219,18 +236,53 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
     {
         const prev_clip = dvui.clipGet();
         defer dvui.clipSet(prev_clip);
-        dvui.clipSet(.{ .w = r.w, .h = r.h });
+        const dest: dvui.Rect.Physical = .{ .w = @floatFromInt(w), .h = @floatFromInt(h) };
+        dvui.clipSet(dest);
         // `rect` is in window pixels; the bound target may sit at an offset in the window.
         const sw: f32 = @floatFromInt(src.width);
         const sh: f32 = @floatFromInt(src.height);
-        dvui.renderTexture(src, .{ .r = .{ .w = r.w, .h = r.h }, .s = 1 }, .{
+        // Copy, not over: the level holds the last capture, and the source's alpha (a
+        // see-through window) must land as it is rather than over the old pixels.
+        const copy = tapsBlend(src, .copy);
+        if (!copy) step.clear();
+        defer if (copy) tapsEnd(src, true);
+        dvui.renderTexture(src, .{ .r = dest, .s = 1 }, .{
             .uv = .{ .x = (r.x - off.x) / sw, .y = (r.y - off.y) / sh, .w = r.w / sw, .h = r.h / sh },
         }) catch {};
     }
     _ = dvui.renderTarget(prev);
-    const source = dvui.textureFromTarget(step) catch return false;
-    if (!self.runKawase(source, true, true)) dvui.textureDestroyLater(source);
+    const source = dvui.Texture.fromTargetTemp(step) catch return false;
+    _ = self.runKawase(source, true, 1, shrink);
     return true;
+}
+
+/// How much smaller than the rect the pyramid's ends are: 2 at any radius that blurs, 1 for a
+/// radius too small to hide the decimation.
+fn coarse(self: *const BlurBackdrop) u32 {
+    return if (self.radius_px >= 4) 2 else 1;
+}
+
+/// Fizzy addition: the pyramid target for slot `i` at `w`×`h`, kept from the last capture when
+/// it is that size already, made (and so cleared) otherwise. Null when the backend has none.
+fn level(self: *BlurBackdrop, i: usize, w: u32, h: u32) ?Texture.Target {
+    if (i >= max_levels) return null;
+    if (self.levels[i]) |t| {
+        if (t.width == w and t.height == h) return t;
+        t.destroyLater();
+        self.levels[i] = null;
+    }
+    const t = Texture.Target.create(.{ .width = w, .height = h, .interpolation = .linear, .precision = .high }) catch return null;
+    self.levels[i] = t;
+    return t;
+}
+
+/// Drop every level. `small` is a view of one of them, so it goes too.
+fn releaseLevels(self: *BlurBackdrop) void {
+    for (&self.levels) |*slot| {
+        if (slot.*) |t| t.destroyLater();
+        slot.* = null;
+    }
+    self.small = null;
 }
 
 /// Fizzy addition: the `.readback` capture. Reads `rect` back from the current target as it
@@ -278,10 +330,11 @@ fn deinitReadback(self: *BlurBackdrop) void {
         }
     }
     const source = dvui.textureCreate(pixels, .{ .width = w, .height = h, .interpolation = .linear }) catch return;
+    defer dvui.textureDestroyLater(source);
 
     const blur_prev_rendering = dvui.renderingSet(true);
     defer _ = dvui.renderingSet(blur_prev_rendering);
-    if (!self.runKawase(source, true, true)) dvui.textureDestroyLater(source);
+    _ = self.runKawase(source, true, 1, 1);
 }
 
 /// Fizzy addition (proposed for upstream): a dual-Kawase blur of an already-captured texture,
@@ -300,8 +353,13 @@ pub fn blurred(tex: Texture, radius_px: f32) ?Texture {
     var tmp: BlurBackdrop = .{ .radius_px = radius_px };
     const prev_rendering = dvui.renderingSet(true);
     defer _ = dvui.renderingSet(prev_rendering);
-    if (!tmp.runKawase(tex, false, true)) return null;
-    return tmp.small;
+    defer tmp.releaseLevels();
+    const last = tmp.runKawase(tex, true, 1, 1) orelse return null;
+    // Take the last level out of the pyramid as the caller's own texture; `releaseLevels`
+    // then drops the rest.
+    const out = dvui.textureFromTarget(tmp.levels[last].?) catch return null;
+    tmp.levels[last] = null;
+    return out;
 }
 
 /// The pyramid's levels are precise targets (`CreateOptions.precision = .high`: float where the
@@ -312,10 +370,10 @@ pub fn blurred(tex: Texture, radius_px: f32) ?Texture {
 /// Dual-Kawase downsample / upsample used by both `deinit` (after capturing
 /// into `full_target`) and `blurred` (from an existing snapshot).
 ///
-/// `own_source` is false when `source` is a caller-owned snapshot — the first
-/// `cur` is then never destroyed. If no pass runs (`radius_px <= 1` →
-/// downscale=1, loops don't run), `small` is left unset so `releaseTexture`
-/// cannot destroy the caller's texture.
+/// `source` is the caller's; it is never destroyed here. The passes run through `levels`
+/// from slot `first` on, and the slot of the last level written comes back — `small` is a
+/// view of it. Null when no pass ran (`radius_px <= 1` → downscale=1, loops don't run) or
+/// the backend has no targets; `small` is then left as it was.
 ///
 /// `restore_target` saves/restores the current render target around the
 /// passes (`blurred`). `deinit` already has an outer restore to the
@@ -324,9 +382,12 @@ pub fn blurred(tex: Texture, radius_px: f32) ?Texture {
 /// step target — a no-op restore would rebind the window (clear-on-bind
 /// flicker).
 ///
-fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_target: bool) bool {
+/// `source_coarse` is how many rect pixels one source texel already stands for, so the
+/// radius means the same thing whether the copy was taken full size or not.
+fn runKawase(self: *BlurBackdrop, source: Texture, restore_target: bool, first: usize, source_coarse: u32) ?usize {
     var cur = source;
-    var own_cur = own_source;
+    var slot = first;
+    var last: ?usize = null;
     // The taps are weights of their own; the ambient alpha (a region fading in around the
     // caller) must not scale them too.
     const prev_alpha = dvui.alpha(1);
@@ -344,7 +405,7 @@ fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_tar
     // Approximate (not a real Gaussian-equivalent radius), but tracks CSS
     // intuition well enough: bigger radius looks blurrier, and doubling it
     // looks like about one more halving pass, same as the browser.
-    const downscale = 1.0 / @max(1.0, self.radius_px);
+    const downscale = @as(f32, @floatFromInt(source_coarse)) / @max(1.0, self.radius_px);
     const src_w: f32 = @floatFromInt(source.width);
     const src_h: f32 = @floatFromInt(source.height);
     const target_w: u32 = @max(1, @as(u32, @intFromFloat(@round(src_w * downscale))));
@@ -353,7 +414,7 @@ fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_tar
     while (cur.width > target_w or cur.height > target_h) {
         const next_w = @max(target_w, cur.width / 2);
         const next_h = @max(target_h, cur.height / 2);
-        const step_target = dvui.Texture.Target.create(.{ .width = next_w, .height = next_h, .interpolation = .linear, .precision = .high }) catch break;
+        const step_target = self.level(slot, next_w, next_h) orelse break;
         // Switches straight from `cur`'s target to `step_target` - no need
         // to save/restore per pass, see comment above the outer `defer`.
         const prev = dvui.renderTarget(.{ .texture = step_target, .offset = .{} });
@@ -387,7 +448,7 @@ fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_tar
                 .{ .x = -half_u, .y = half_v },
                 .{ .x = half_u, .y = half_v },
             };
-            const add = tapsBegin(cur);
+            const add = tapsBegin(cur, step_target);
             defer tapsEnd(cur, add);
             for (taps, 0..) |tap, i| {
                 const a: f32 = if (add) 0.25 else 1.0 / @as(f32, @floatFromInt(i + 1));
@@ -395,12 +456,13 @@ fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_tar
                     .uv = .{ .x = tap.x, .y = tap.y, .w = 1, .h = 1 },
                     .colormod = dvui.Color.white.opacity(a),
                 }) catch {};
+                if (add and i == 0) _ = tapsBlend(cur, .add);
             }
         }
 
-        if (own_cur) dvui.textureDestroyLater(cur);
-        cur = dvui.textureFromTarget(step_target) catch break; // destroys step_target
-        own_cur = true;
+        cur = dvui.Texture.fromTargetTemp(step_target) catch break;
+        last = slot;
+        slot += 1;
     }
 
     // Upsample back to full size with progressive doubling + a wide
@@ -411,7 +473,7 @@ fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_tar
     while (cur.width < final_w or cur.height < final_h) {
         const next_w = @min(final_w, cur.width * 2);
         const next_h = @min(final_h, cur.height * 2);
-        const step_target = dvui.Texture.Target.create(.{ .width = next_w, .height = next_h, .interpolation = .linear, .precision = .high }) catch break;
+        const step_target = self.level(slot, next_w, next_h) orelse break;
         const prev = dvui.renderTarget(.{ .texture = step_target, .offset = .{} });
         if (!switched) {
             prev1 = prev;
@@ -444,29 +506,29 @@ fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_tar
                 .{ .x = -2 * ou_x, .y = 0, .w = 1 },
                 .{ .x = -ou_x, .y = ou_y, .w = 2 },
             };
-            const add = tapsBegin(cur);
+            const add = tapsBegin(cur, step_target);
             defer tapsEnd(cur, add);
             var cum_w: f32 = 0;
-            for (taps) |tap| {
+            for (taps, 0..) |tap, i| {
                 cum_w += tap.w;
                 const a = if (add) tap.w / 12.0 else tap.w / cum_w;
                 dvui.renderTexture(cur, .{ .r = dest_r }, .{
                     .uv = .{ .x = tap.x, .y = tap.y, .w = 1, .h = 1 },
                     .colormod = dvui.Color.white.opacity(a),
                 }) catch {};
+                if (add and i == 0) _ = tapsBlend(cur, .add);
             }
         }
 
-        if (own_cur) dvui.textureDestroyLater(cur);
-        cur = dvui.textureFromTarget(step_target) catch break; // destroys step_target
-        own_cur = true;
+        cur = dvui.Texture.fromTargetTemp(step_target) catch break;
+        last = slot;
+        slot += 1;
     }
 
-    if (!own_cur) return false;
+    const done = last orelse return null;
     dither(cur);
-    if (self.small) |old| dvui.textureDestroyLater(old);
     self.small = cur;
-    return true;
+    return done;
 }
 
 /// Fizzy addition: ordered dithering, so the one quantising write left — the finished frost
@@ -479,16 +541,16 @@ fn runKawase(self: *BlurBackdrop, source: Texture, own_source: bool, restore_tar
 ///
 /// The pattern is positive-only (an additive draw cannot subtract), which biases the frost by
 /// half a level; invisible, and less than the bias the taps' own rounding carried before.
-fn dither(level: Texture) void {
+fn dither(last: Texture) void {
     if (!dvui.Backend.support_precise_targets) return;
     const noise = ditherTexture() orelse return;
     const cw = dvui.currentWindow();
     if (!tapsBlend(noise, .add)) return;
     defer cw.backend.textureBlend(noise, .over) catch {};
-    const prev = dvui.renderTarget(.{ .texture = Texture.Target.cast(level), .offset = .{}, .rendering = cw.render_target.rendering });
+    const prev = dvui.renderTarget(.{ .texture = Texture.Target.cast(last), .offset = .{}, .rendering = cw.render_target.rendering });
     defer _ = dvui.renderTarget(prev);
-    const w: f32 = @floatFromInt(level.width);
-    const h: f32 = @floatFromInt(level.height);
+    const w: f32 = @floatFromInt(last.width);
+    const h: f32 = @floatFromInt(last.height);
     const prev_clip = dvui.clipGet();
     defer dvui.clipSet(prev_clip);
     dvui.clipSet(.{ .w = w, .h = h });
@@ -551,8 +613,9 @@ pub const Pane = struct {
     /// Blur strength — halvings; 8 a soft focus, 16 a heavy frost, 32 a wash of colour.
     radius: f32 = 20,
     /// How often to re-read what is underneath while the pane's geometry holds. Zero re-reads
-    /// every frame.
-    refresh_ms: u32 = 80,
+    /// every frame, which is the default now that a re-read is a handful of draws into targets
+    /// the pane keeps: content scrolling under a window moves in its blur at the frame rate.
+    refresh_ms: u32 = 0,
     /// The pane's own colour, composited with the frost: `out = (1 - mix) * frost + mix * tint`.
     /// The tint's alpha is the coverage the whole thing ends up with. Null keeps only the frost.
     tint: ?dvui.Color = null,
@@ -669,13 +732,13 @@ fn frostReplaces(self: *BlurBackdrop) void {
     if (self.small) |tex| _ = tapsBlend(tex, .copy);
 }
 
-/// Release the cached GPU texture. Never called directly by user code -
+/// Release the pyramid (and with it the cached texture). Never called directly by user code -
 /// registered by `get` as the data store's deinit function for this key, so
 /// dvui calls it exactly once, whenever the storage key is finally
 /// reclaimed (e.g. the widget that owns it stops being touched).
 pub fn releaseTexture(ptr: *anyopaque) void {
     const self: *BlurBackdrop = @ptrCast(@alignCast(ptr));
-    if (self.small) |tex| dvui.textureDestroyLater(tex);
+    self.releaseLevels();
     self.* = undefined;
 }
 
@@ -686,8 +749,14 @@ pub fn releaseTexture(ptr: *anyopaque) void {
 /// — a see-through window read back, a pane photographed with its fill at content opacity —
 /// gains ~20% colour *and* alpha per pass, alpha saturates, and the colour overshoots it into
 /// glare. Returns whether additive is on; `tapsEnd` puts the texture's blend back.
-fn tapsBegin(cur: Texture) bool {
-    return tapsBlend(cur, .add);
+/// The first tap of a pass *writes* (`.copy`) and the rest add: a reused level still holds
+/// the last capture, and a copy over it is what a clear plus a sum would give, without the
+/// clear's target switch and flush. The caller switches the source to `.add` after its first
+/// draw. Without blend control the level is cleared here and the taps composite as before.
+fn tapsBegin(cur: Texture, into: Texture.Target) bool {
+    if (tapsBlend(cur, .copy)) return true;
+    into.clear();
+    return false;
 }
 
 fn tapsBlend(tex: Texture, blend: dvui.Backend.TextureBlend) bool {
@@ -716,5 +785,3 @@ fn passStrength(a: u32, b: u32) f32 {
     const ratio = @min(af, bf) / @max(af, bf);
     return @min(1.0, 2 * (1 - ratio));
 }
-
-

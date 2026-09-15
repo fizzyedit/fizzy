@@ -9,6 +9,7 @@
 //! like the app's — see `core.widgets` for the divide.
 const std = @import("std");
 const dvui = @import("dvui");
+const icon_tex = @import("gfx/icon.zig");
 const builtin = @import("builtin");
 const icons = @import("icons");
 const platform = @import("platform.zig");
@@ -565,7 +566,7 @@ fn windowHeaderPaintClose(openflag: ?*bool) void {
         button.drawFocus();
 
         if (button.hovered()) {
-            dvui.icon(@src(), "close", icons.tvg.lucide.x, .{
+            icon_tex.icon(@src(), "close", icons.tvg.lucide.x, .{
                 .stroke_color = .{ .color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10) },
                 .fill_color = .{ .color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10) },
             }, .{
@@ -598,7 +599,7 @@ fn windowHeaderPaintKindIcon(header_kind: DialogHeaderKind) void {
         .err => dvui.themeGet().color(.err, .fill),
     };
 
-    dvui.icon(@src(), "dialog_header_accent", tvg, .{
+    icon_tex.icon(@src(), "dialog_header_accent", tvg, .{
         .stroke_color = .{ .color = icon_color },
         .fill_color = .{ .color = icon_color },
     }, .{
@@ -1053,7 +1054,7 @@ pub fn saveCompleteToastDisplay(id: dvui.Id) !void {
     });
     defer card.deinit();
 
-    dvui.icon(@src(), "save_check", icons.tvg.lucide.check, .{
+    icon_tex.icon(@src(), "save_check", icons.tvg.lucide.check, .{
         .stroke_color = .{ .color = dvui.themeGet().color(.highlight, .fill) },
         .fill_color = .{ .color = dvui.themeGet().color(.highlight, .fill) },
     }, .{

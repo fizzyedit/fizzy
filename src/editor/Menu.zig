@@ -279,7 +279,7 @@ pub fn menuItemWithChevron(src: std.builtin.SourceLocation, label_str: []const u
 
     dvui.labelNoFmt(@src(), label_str, .{}, label_opts);
 
-    dvui.icon(@src(), "chevron_right", dvui.entypo.chevron_small_right, .{
+    fizzy.core.icon.icon(@src(), "chevron_right", dvui.entypo.chevron_small_right, .{
         .stroke_color = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.5) },
         .fill_color = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.5) },
     }, .{

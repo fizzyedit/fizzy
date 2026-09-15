@@ -226,7 +226,7 @@ fn drawCollapseButton(explorer: *Explorer, editor: *fizzy.Editor) void {
     bw.drawBackground();
 
     const icon_color = dvui.themeGet().color(.content, .text);
-    dvui.icon(
+    fizzy.core.icon.icon(
         @src(),
         "collapse_explorer",
         icons.tvg.lucide.@"panel-left-close",

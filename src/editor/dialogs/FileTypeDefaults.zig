@@ -308,7 +308,7 @@ fn drawOwnerDropdown(row: *Row, ri: usize) void {
         var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .vertical });
         defer hbox.deinit();
         dvui.labelNoFmt(@src(), selected.name, .{}, .{ .margin = .all(0), .padding = .all(0), .gravity_y = 0.5 });
-        dvui.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_x = 1.0, .gravity_y = 0.5 });
+        fizzy.core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_x = 1.0, .gravity_y = 0.5 });
     }
 
     if (!dropdown.dropped()) return;

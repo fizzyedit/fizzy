@@ -370,7 +370,7 @@ fn drawRow(
         defer left.deinit();
 
         if (row.flagged) {
-            dvui.icon(@src(), "file_type_conflict", dvui.entypo.warning, .{
+            core.icon.icon(@src(), "file_type_conflict", dvui.entypo.warning, .{
                 .stroke_color = .{ .color = theme.color(.err, .fill) },
                 .fill_color = .{ .color = theme.color(.err, .fill) },
             }, .{ .gravity_y = 0.5, .min_size_content = .{ .w = 12, .h = 12 } });
@@ -430,7 +430,7 @@ fn drawOwnerDropdown(row: Row, ri: usize) void {
             .margin = .all(0),
             .padding = .all(0),
         });
-        dvui.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
+        core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
     }
 
     if (!dropdown.dropped()) return;

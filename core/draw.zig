@@ -8,6 +8,7 @@
 //! does — see `core.widgets` for the divide.
 const std = @import("std");
 const dvui = @import("dvui");
+const icon_tex = @import("gfx/icon.zig");
 const builtin = @import("builtin");
 const icons = @import("icons");
 const platform = @import("platform.zig");
@@ -110,7 +111,7 @@ pub fn menuRowIcon(bytes: ?[]const u8, base_color: dvui.Color, enabled: bool, id
     defer glyph.deinit();
     if (bytes) |b| {
         const color = if (enabled) base_color else base_color.opacity(0.5);
-        dvui.icon(@src(), "menu_icon", b, .{ .stroke_color = .{ .color = color }, .fill_color = .{ .color = color } }, widgets.treeRowIconOptions(.{ .id_extra = id_extra }));
+        icon_tex.icon(@src(), "menu_icon", b, .{ .stroke_color = .{ .color = color }, .fill_color = .{ .color = color } }, widgets.treeRowIconOptions(.{ .id_extra = id_extra }));
     }
 }
 
@@ -173,7 +174,7 @@ pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.
             //if (needs_plus) dvui.labelNoFmt(@src(), "+", .{}, opts.strip()) else needs_plus = true;
             //if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip()) else needs_space = true;
             if (platform.isMacOS()) {
-                dvui.icon(@src(), "cmd", icons.tvg.lucide.command, .{ .stroke_color = .{ .color = color } }, .{ .gravity_y = 0.5 });
+                icon_tex.icon(@src(), "cmd", icons.tvg.lucide.command, .{ .stroke_color = .{ .color = color } }, .{ .gravity_y = 0.5 });
             } else {
                 dvui.labelNoFmt(@src(), "cmd", .{}, second_opts);
             }
@@ -187,7 +188,7 @@ pub fn keybindLabels(self: *const dvui.enums.Keybind, enabled: bool, opts: dvui.
             //if (needs_plus) dvui.labelNoFmt(@src(), "+", .{}, opts.strip()) else needs_plus = true;
             //if (needs_space) dvui.labelNoFmt(@src(), " ", .{}, opts.strip()) else needs_space = true;
             if (platform.isMacOS()) {
-                dvui.icon(@src(), "option", icons.tvg.lucide.option, .{ .stroke_color = .{ .color = color } }, .{ .gravity_y = 0.5 });
+                icon_tex.icon(@src(), "option", icons.tvg.lucide.option, .{ .stroke_color = .{ .color = color } }, .{ .gravity_y = 0.5 });
             } else {
                 dvui.labelNoFmt(@src(), "alt", .{}, second_opts);
             }

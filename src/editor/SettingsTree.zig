@@ -188,12 +188,12 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
             if (s < child.score) child.score = s;
         }
         if (child.leaves.items.len == 0) continue;
-        std.sort.block(Leaf, child.leaves.items, {}, lowerLeaf);
+        if (!query.isEmpty()) std.sort.block(Leaf, child.leaves.items, {}, lowerLeaf);
         if (child.score < fizzy_branch.score) fizzy_branch.score = child.score;
         fizzy_branch.children.append(arena, child) catch {};
     }
     if (fizzy_branch.children.items.len > 0) {
-        std.sort.block(Branch, fizzy_branch.children.items, {}, lowerBranch);
+        if (!query.isEmpty()) std.sort.block(Branch, fizzy_branch.children.items, {}, lowerBranch);
         roots.append(arena, fizzy_branch) catch {};
     }
 
@@ -231,7 +231,7 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
             if (s < branch.score) branch.score = s;
         }
         if (branch.leaves.items.len == 0) continue;
-        std.sort.block(Leaf, branch.leaves.items, {}, lowerLeaf);
+        if (!query.isEmpty()) std.sort.block(Leaf, branch.leaves.items, {}, lowerLeaf);
         roots.append(arena, branch) catch {};
     }
 
@@ -339,7 +339,7 @@ fn drawSearchRow() []const u8 {
     var hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     defer hbox.deinit();
 
-    dvui.icon(
+    core.icon.icon(
         @src(),
         "SettingsSearchIcon",
         icons.tvg.lucide.search,
@@ -511,7 +511,7 @@ fn drawRow(b: *core.widgets.TreeWidget.Branch, branch: *const Branch, query: *co
     {
         var slot = core.widgets.treeRowGlyph(@src(), .{});
         defer slot.deinit();
-        _ = dvui.icon(
+        _ = core.icon.icon(
             @src(),
             "BranchCaret",
             if (b.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
@@ -529,14 +529,23 @@ fn drawRow(b: *core.widgets.TreeWidget.Branch, branch: *const Branch, query: *co
 
     // Label chrome matches the file tree's folder rows (`editableLabel`): 3px padding, no
     // margin, expanding. Roots keep the heading font (project-name weight); categories use body.
-    var tl = dvui.textLayout(@src(), .{ .break_lines = false }, .{
+    const title_opts: dvui.Options = .{
         .gravity_y = 0.5,
         .background = false,
         .expand = .horizontal,
         .margin = dvui.Rect.all(0),
         .padding = dvui.Rect.all(3),
         .font = if (style == .root) dvui.Font.theme(.heading) else dvui.Font.theme(.body),
-    });
+    };
+    if (query.isEmpty()) {
+        // A text layout exists to colour the matched bytes; with nothing to match it is a
+        // label that costs several times what a label does, on every row, every frame.
+        dvui.labelNoFmt(@src(), branch.title, .{}, title_opts.override(.{
+            .color_text = .{ .color = dvui.themeGet().color(.control, .text) },
+        }));
+        return;
+    }
+    var tl = dvui.textLayout(@src(), .{ .break_lines = false }, title_opts);
     addHighlighted(tl, branch.title, query);
     tl.deinit();
 }
@@ -550,7 +559,7 @@ fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) v
         // bug for Debugging — so the row says what it configures. A folder would only say
         // "there are more rows under here", which the caret already does.
         const glyph = if (branch.group) |g| g.icon else icons.tvg.entypo.folder;
-        _ = dvui.icon(
+        _ = core.icon.icon(
             @src(),
             "CategoryIcon",
             glyph,

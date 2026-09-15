@@ -7,6 +7,14 @@
 //! and a pipeline stall on top, which is what dropped the frame rate with the palette open.
 //! Drawing the frame to a target costs one full-window textured quad per frame.
 //!
+//! The window itself is not touched until `end`. dvui's backend clears the window at
+//! `Window.begin`; the first render-target switch of the frame flushes that clear, and on Metal
+//! the window's first draw is what acquires the swapchain drawable — at the very start of the
+//! frame, which stalls the CPU until the GPU has finished an earlier frame and holds the whole
+//! frame's work back from overlapping it. So the backend's clear is turned off (`init`) and the
+//! blit writes the frame with a copy blend over whatever the drawable held; the drawable is
+//! then acquired at the end of the frame, when the frame is ready, and the CPU and GPU pipeline.
+//!
 //! Wraps the app's frame function: `begin` after `Window.begin`, `end` before `Window.end`.
 //! `end` runs dvui's own end-of-frame rendering (the deferred subwindows: floating windows,
 //! dialogs, the palette) so those land in the target too, then unbinds it and draws it. On a
@@ -18,6 +26,13 @@ const FrameTarget = @This();
 
 target: ?dvui.Texture.Target = null,
 bound: bool = false,
+
+/// Once, after the backend exists: stop it clearing the window each frame (see above). The
+/// SDL backend is the only one that does; others have nothing to turn off.
+pub fn init() void {
+    const impl = dvui.currentWindow().backend.impl;
+    if (@hasField(@TypeOf(impl.*), "clear_window_on_begin")) impl.clear_window_on_begin = false;
+}
 
 /// Bind a window-sized target, made fresh when the window's pixel size changes.
 pub fn begin(self: *FrameTarget) void {
@@ -65,8 +80,14 @@ pub fn end(self: *FrameTarget) void {
     dvui.clipSet(dvui.windowRectPixels());
     const prev_alpha = dvui.alpha(1);
     defer dvui.alphaSet(prev_alpha);
-    // The window was cleared to transparent by the backend, so drawing the (premultiplied)
-    // frame over it reproduces exactly what drawing straight to the window would have.
+    // Written, not blended: the window was not cleared (see above), so the frame's own alpha
+    // must land as it is — a see-through window blended over last frame's pixels would not be.
+    // Where the backend cannot set a copy blend the window is still cleared and over is exact.
+    const copy = if (dvui.Backend.support_texture_blend) blk: {
+        cw.backend.textureBlend(tex, .copy) catch break :blk false;
+        break :blk true;
+    } else false;
+    defer if (copy) cw.backend.textureBlend(tex, .over) catch {};
     dvui.renderTexture(tex, .{ .r = dvui.windowRectPixels(), .s = 1 }, .{}) catch {};
 }
 

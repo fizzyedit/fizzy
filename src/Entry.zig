@@ -257,6 +257,7 @@ pub fn AppInit(win: *dvui.Window) !void {
     fizzy.core.platform.cacheFromWindow(win);
     fizzy.core.hitch.initFromEnv();
     initRefreshLogFromEnv();
+    fizzy.core.FrameTarget.init();
 
     // Apply the macOS window chrome and install the Space monitor while the
     // window is still hidden (see startOptions: opts.hidden = true), so the

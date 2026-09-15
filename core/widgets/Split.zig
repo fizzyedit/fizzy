@@ -6,6 +6,7 @@
 //! event-routing rules rather than layout logic. It depends on nothing but dvui.
 const std = @import("std");
 const dvui = @import("dvui");
+const icon_tex = @import("../gfx/icon.zig");
 const icons = @import("icons");
 const anim = @import("../anim.zig");
 
@@ -610,7 +611,7 @@ fn drawSplit(
         },
     }
     g = g.outset(dvui.Rect.Physical.all(2 * srs.s));
-    dvui.icon(@src(), "grip", grip, .{
+    icon_tex.icon(@src(), "grip", grip, .{
         .stroke_color = .{ .color = dvui.themeGet().color(.content, .fill).opacity(approach) },
     }, .{ .rect = srs.rectFromPhysical(g) });
 }

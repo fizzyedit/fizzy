@@ -233,7 +233,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
             var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .x = 4, .w = 2 } });
             defer icon_slot.deinit();
             if (!runtime.host().drawFileIcon(std.fs.path.extension(tab_doc_path), tab_doc_path, tab_icon_color)) {
-                dvui.icon(@src(), "file_icon", icons.tvg.lucide.file, .{
+                core.icon.icon(@src(), "file_icon", icons.tvg.lucide.file, .{
                     .stroke_color = .{ .color = tab_icon_color },
                 }, core.widgets.treeRowIconOptions(.{}));
             }
@@ -302,7 +302,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
             }
 
             if (dirty and !show_close_visible) {
-                dvui.icon(@src(), "dirty_icon", icons.tvg.lucide.@"circle-small", .{
+                core.icon.icon(@src(), "dirty_icon", icons.tvg.lucide.@"circle-small", .{
                     .stroke_color = .{ .color = dvui.themeGet().color(.window, .text) },
                 }, .{
                     .expand = .none,
@@ -318,7 +318,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
                     dvui.Color.white
                 else
                     dvui.themeGet().color(.window, .text);
-                dvui.icon(@src(), "close", icons.tvg.lucide.x, .{
+                core.icon.icon(@src(), "close", icons.tvg.lucide.x, .{
                     .stroke_color = .{ .color = icon_color },
                     .fill_color = .{ .color = icon_color },
                 }, .{

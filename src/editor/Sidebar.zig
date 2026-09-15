@@ -141,7 +141,7 @@ fn drawOption(
     // Apply both fill and stroke: Entypo glyphs are fill-based, Lucide (and most
     // plugin icons) are stroke-based. Setting only one leaves the other at DVUI's
     // default white — which is how a stroke icon looks "full white" in the rail.
-    dvui.icon(
+    fizzy.core.icon.icon(
         @src(),
         view.id,
         // A surface's icon is format-tagged and optional; the rail draws tvg. A surface with a

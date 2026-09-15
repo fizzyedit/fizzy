@@ -165,7 +165,7 @@ pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
 
     // Right margin keeps the entry clear of the overlay scrollbar that draws over the pane's right edge.
     var filter_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .w = 10 } });
-    dvui.icon(
+    core.icon.icon(
         @src(),
         "FilterIcon",
         icons.tvg.lucide.search,
@@ -231,7 +231,7 @@ pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
     {
         var caret_slot = core.widgets.treeRowGlyph(@src(), .{});
         defer caret_slot.deinit();
-        _ = dvui.icon(
+        _ = core.icon.icon(
             @src(),
             "FolderIcon",
             if (branch.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
@@ -1019,7 +1019,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
                                     .tar, ._7z, .zip => icons.tvg.entypo.archive,
                                     else => icons.tvg.entypo.archive,
                                 };
-                                dvui.icon(
+                                core.icon.icon(
                                     @src(),
                                     "FileIcon",
                                     icon,
@@ -1076,7 +1076,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
                             {
                                 var caret_slot = core.widgets.treeRowGlyph(@src(), .{});
                                 defer caret_slot.deinit();
-                                _ = dvui.icon(
+                                _ = core.icon.icon(
                                     @src(),
                                     "DropIcon",
                                     if (branch.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
@@ -1091,7 +1091,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
                             {
                                 var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
                                 defer icon_slot.deinit();
-                                _ = dvui.icon(
+                                _ = core.icon.icon(
                                     @src(),
                                     "FolderIcon",
                                     icons.tvg.entypo.folder,

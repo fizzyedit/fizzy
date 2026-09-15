@@ -302,7 +302,7 @@ fn drawOwnerBranch(
         {
             var slot = core.widgets.treeRowGlyph(@src(), .{});
             defer slot.deinit();
-            _ = dvui.icon(
+            _ = core.icon.icon(
                 @src(),
                 "KeybindOwnerCaret",
                 if (b.expanded) icons.tvg.entypo.@"down-open" else icons.tvg.entypo.@"right-open",
@@ -313,7 +313,7 @@ fn drawOwnerBranch(
         {
             var slot = core.widgets.treeRowGlyph(@src(), .{ .margin = .{ .w = 2 } });
             defer slot.deinit();
-            _ = dvui.icon(
+            _ = core.icon.icon(
                 @src(),
                 "KeybindOwnerIcon",
                 icons.tvg.entypo.folder,

@@ -67,6 +67,9 @@ anim: f32 = 0,
 /// under its content makes the scrollbar appear permanently (`virtual_size.h > viewport.h`).
 /// Sizing the viewport from the same number the container measured makes them agree exactly.
 list_content_h: f32 = 0,
+/// One row's pitch as it measured last frame — `row_height` plus the row box's padding. What
+/// the rows outside the viewport stand in as: a spacer of this many times their count.
+row_pitch: f32 = row_height + 4,
 /// Playing the outro. `open` stays true throughout so the palette keeps drawing — this is also
 /// what lets an activated row hold its pressed highlight instead of vanishing on click.
 closing: bool = false,
@@ -511,7 +514,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         });
         defer hbox.deinit();
 
-        _ = dvui.icon(
+        _ = core.icon.icon(
             @src(),
             "palette-icon",
             if (parsed.mode == .commands) icons.tvg.lucide.terminal else icons.tvg.lucide.search,
@@ -575,8 +578,37 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         // where `ScrollContainerWidget` finalises `virtual_size` from the rows just laid out.
         const si = scroll.si;
 
-        for (rows, 0..) |row, i| {
+        // Only the rows in the viewport are built. With no query every command is a row —
+        // hundreds of boxes, icons and labels for the ten that are visible, and the palette
+        // was costing more than the frame under it. The rest is a spacer of their height, so
+        // the scrollbar and the offsets are what they would be with every row laid out.
+        const pitch = @max(1, self.row_pitch);
+        var first: usize = 0;
+        var end: usize = rows.len;
+        if (si.viewport.h > 0) {
+            // A pending keyboard move lands its row in the viewport before the range is cut,
+            // or the row would be skipped and never get to ask for the scroll itself.
+            if (self.scroll_to_selected and self.selected < rows.len) {
+                const top = @as(f32, @floatFromInt(self.selected)) * pitch;
+                if (top < si.viewport.y) {
+                    si.scrollToOffset(.vertical, top);
+                } else if (top + pitch > si.viewport.y + si.viewport.h) {
+                    si.scrollToOffset(.vertical, top + pitch - si.viewport.h);
+                }
+            }
+            first = @intFromFloat(@max(0, @floor(si.viewport.y / pitch)));
+            end = @intFromFloat(@ceil((si.viewport.y + si.viewport.h) / pitch) + 1);
+            first = @min(first, rows.len);
+            end = @min(end, rows.len);
+        }
+        if (first > 0) {
+            _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = @as(f32, @floatFromInt(first)) * pitch }, .expand = .horizontal, .id_extra = 0 });
+        }
+        for (rows[first..end], first..) |row, i| {
             self.drawRow(editor, row, i, parsed.mode, &query, rows);
+        }
+        if (end < rows.len) {
+            _ = dvui.spacer(@src(), .{ .min_size_content = .{ .h = @as(f32, @floatFromInt(rows.len - end)) * pitch }, .expand = .horizontal, .id_extra = 1 });
         }
         scroll.deinit();
 
@@ -620,6 +652,7 @@ fn drawRow(
         .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
     });
     defer rb.deinit();
+    if (i == 0) self.row_pitch = rb.data().rect.h;
 
     const row_r = rb.data().borderRectScale().r;
     const mouse_pt = dvui.currentWindow().mouse_pt;
@@ -680,7 +713,7 @@ fn drawRow(
                 var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .w = 4 } });
                 defer icon_slot.deinit();
                 if (!editor.host.drawFileIcon(ext, abs, text_color)) {
-                    dvui.icon(@src(), "file", icons.tvg.lucide.file, .{
+                    core.icon.icon(@src(), "file", icons.tvg.lucide.file, .{
                         .stroke_color = .{ .color = text_color },
                     }, core.widgets.treeRowIconOptions(.{}));
                 }

@@ -18,6 +18,7 @@
 //! node indices (and thus `split_ratio` pointers) valid for the whole frame.
 const std = @import("std");
 const dvui = @import("dvui");
+const icon_tex = @import("../gfx/icon.zig");
 
 const Options = dvui.Options;
 const Rect = dvui.Rect;
@@ -760,7 +761,7 @@ fn drawHeader(self: *Dockspace, node: Layout.NodeIndex, leaf: Layout.Node.Leaf) 
             {
                 var tab_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
                 defer tab_row.deinit();
-                if (info.icon) |ic| dvui.icon(@src(), "docktab_icon", ic, .{}, .{ .gravity_y = 0.5 });
+                if (info.icon) |ic| icon_tex.icon(@src(), "docktab_icon", ic, .{}, .{ .gravity_y = 0.5 });
                 dvui.label(@src(), "{s}", .{info.title}, .{ .gravity_y = 0.5 });
                 const show_close = info.closable and switch (self.init_opts.close_button_visibility) {
                     .always => true,

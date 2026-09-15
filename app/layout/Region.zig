@@ -665,7 +665,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
 
     if ((alpha > 0.01 or dragged) and !dragged) {
         bw.drawBackground();
-        dvui.icon(@src(), "regions", dvui.entypo.grid, .{
+        core.icon.icon(@src(), "regions", dvui.entypo.grid, .{
             .fill_color = .{ .color = if (bw.hovered()) theme.color(.highlight, .fill) else theme.color(.control, .text).opacity(alpha) },
         }, .{ .expand = .both });
     }
