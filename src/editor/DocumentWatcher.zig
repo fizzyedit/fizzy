@@ -300,7 +300,7 @@ fn applyEntry(self: *DocumentWatcher, editor: *fizzy.Editor, doc_id: u64) void {
     const hash = hashFile(self.gpa, entry.path) orelse return;
     if (hash == entry.last_hash) return;
 
-    const doc = editor.docById(doc_id) orelse return;
+    const doc = editor.app.docById(doc_id) orelse return;
 
     if (entry.pending_baseline or doc.owner.isDocumentSaving(doc)) {
         entry.last_hash = hash;
@@ -347,7 +347,7 @@ fn refreshPendingBaselines(self: *DocumentWatcher, editor: *fizzy.Editor) void {
     var it = self.by_id.iterator();
     while (it.next()) |e| {
         if (!e.value_ptr.pending_baseline) continue;
-        const doc = editor.docById(e.key_ptr.*) orelse continue;
+        const doc = editor.app.docById(e.key_ptr.*) orelse continue;
         if (doc.owner.isDocumentSaving(doc)) continue;
         if (doc.owner.isDirty(doc)) continue;
         e.value_ptr.pending_baseline = false;

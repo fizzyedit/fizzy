@@ -465,7 +465,7 @@ fn assign(editor: *fizzy.Editor, ext: []const u8, id: []const u8) void {
 fn drawReopenAction(row: Row, ri: usize) void {
     const editor = fizzy.editor();
     const arena = dvui.currentWindow().arena();
-    const stale = editor.staleOpenDocsForExtension(arena, row.ext) catch &.{};
+    const stale = editor.app.staleOpenDocsForExtension(arena, row.ext) catch &.{};
 
     // Always occupy the column so showing/hiding a button never shifts widths — same as Reset.
     if (stale.len == 0) {

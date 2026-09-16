@@ -132,7 +132,7 @@ fn drawOption(
 
     // Only the store view can carry one; nothing else in the rail has a pending-decision notion.
     const undecided_count: usize = if (std.mem.eql(u8, view.id, PluginStore.view_id))
-        editor.undecidedPluginCount()
+        editor.app.undecidedPluginCount()
     else
         0;
 

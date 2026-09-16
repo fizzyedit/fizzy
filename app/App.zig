@@ -10,8 +10,15 @@ const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
+const builtin = @import("builtin");
+const SettingsPluginsZon = @import("settings/SettingsPluginsZon.zig");
 
 const App = @This();
+
+/// Three-way form of `readPluginEnabled`: `.unset` (no `.enabled` field on record at all) is
+/// what separates a freshly dropped-in plugin from one the user deliberately switched off — both
+/// are "not enabled", but only the first is an undecided offer (see `undecided_plugin_ids`).
+pub const PluginEnabledState = enum { unset, enabled, disabled };
 
 const Layout = @import("layout/Layout.zig");
 const Host = sdk.Host;
@@ -296,3 +303,434 @@ pub const PendingReveal = struct {
     line: u32,
     character: u32,
 };
+
+/// True when `id` takes store updates — the default for every plugin, so this answers "not on the
+/// opt-out list". Says nothing about *how* an update is applied: that is
+/// `Settings.plugin_update_mode`, which `PluginStore`'s pass reads once for all plugins.
+pub fn isPluginAutoUpdate(app: *const App, id: []const u8) bool {
+    for (app.auto_update_off_ids.items) |d| {
+        if (std.mem.eql(u8, d, id)) return false;
+    }
+    return true;
+}
+
+pub fn isPluginDisabled(app: *App, id: []const u8) bool {
+    for (app.disabled_plugin_ids.items) |d| {
+        if (std.mem.eql(u8, d, id)) return true;
+    }
+    return false;
+}
+
+/// True when `id` is on disk but fizzy has never been told whether to run it (no
+/// `.plugins.<id>.enabled` on record) — see `undecided_plugin_ids`. The store draws these with a
+/// "Load" button rather than the settled Enabled checkbox a deliberately-disabled plugin gets.
+pub fn isPluginUndecided(app: *const App, id: []const u8) bool {
+    for (app.undecided_plugin_ids.items) |d| {
+        if (std.mem.eql(u8, d, id)) return true;
+    }
+    return false;
+}
+
+/// True when `id` looks like a real plugin id (ASCII identifier), not corrupted settings data.
+pub fn isValidPluginId(id: []const u8) bool {
+    if (id.len == 0 or id.len > 64) return false;
+    if (!std.unicode.utf8ValidateSlice(id)) return false;
+    for (id) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_') return false;
+    }
+    return true;
+}
+
+/// Mirror `id`'s auto-update flag into the runtime opt-out list. Runtime bookkeeping only —
+/// persistence goes through `setPluginAutoUpdate`.
+pub fn trackAutoUpdate(app: *App, id: []const u8, on: bool) !void {
+    if (on) {
+        for (app.auto_update_off_ids.items, 0..) |d, i| {
+            if (std.mem.eql(u8, d, id)) {
+                app.gpa.free(app.auto_update_off_ids.orderedRemove(i));
+                return;
+            }
+        }
+        return;
+    }
+    if (!app.isPluginAutoUpdate(id)) return; // already opted out
+    if (!isValidPluginId(id)) return error.InvalidPluginId;
+    const dup = try app.gpa.dupe(u8, id);
+    errdefer app.gpa.free(dup);
+    try app.auto_update_off_ids.append(app.gpa, dup);
+}
+
+/// Add `id` to the runtime disabled bookkeeping list if not already present. Does **not**
+/// write settings — a freshly dropped-in plugin stays off-disk-silent until the user enables it.
+pub fn trackDisabledPlugin(app: *App, id: []const u8) !void {
+    if (app.isPluginDisabled(id)) return;
+    if (!isValidPluginId(id)) return error.InvalidPluginId;
+    const dup = try app.gpa.dupe(u8, id);
+    errdefer app.gpa.free(dup);
+    try app.disabled_plugin_ids.append(app.gpa, dup);
+}
+
+/// Mark `id` as an undiscovered-until-now drop-in. Writes nothing: the whole point is that no
+/// `.enabled` field exists yet.
+pub fn trackUndecidedPlugin(app: *App, id: []const u8) !void {
+    if (app.isPluginUndecided(id)) return;
+    if (!isValidPluginId(id)) return error.InvalidPluginId;
+    const dup = try app.gpa.dupe(u8, id);
+    errdefer app.gpa.free(dup);
+    try app.undecided_plugin_ids.append(app.gpa, dup);
+}
+
+pub fn untrackDisabledPlugin(app: *App, id: []const u8) void {
+    for (app.disabled_plugin_ids.items, 0..) |d, i| {
+        if (std.mem.eql(u8, d, id)) {
+            const owned = app.disabled_plugin_ids.orderedRemove(i);
+            app.gpa.free(owned);
+            return;
+        }
+    }
+}
+
+/// Drop `id`'s undecided status — called from every path that records an explicit decision
+/// (`setPluginEnabledPersisted`, either direction) or removes the plugin entirely
+/// (`uninstallPlugin`).
+pub fn untrackUndecidedPlugin(app: *App, id: []const u8) void {
+    for (app.undecided_plugin_ids.items, 0..) |d, i| {
+        if (std.mem.eql(u8, d, id)) {
+            app.gpa.free(app.undecided_plugin_ids.orderedRemove(i));
+            return;
+        }
+    }
+}
+
+/// How many on-disk plugins are waiting for a load decision — what the sidebar's Plugins badge
+/// counts (see `Sidebar.drawOption`). Kept honest by `pruneMissingUndecidedPlugins`.
+pub fn undecidedPluginCount(app: *const App) usize {
+    return app.undecided_plugin_ids.items.len;
+}
+
+pub fn appendLoadedPluginLib(app: *App, loaded: PluginLoader.LoadedLib) !void {
+    const id_owned = try app.gpa.dupe(u8, loaded.plugin_id);
+    var stored = loaded;
+    stored.plugin_id = id_owned;
+    try app.loaded_plugin_libs.append(app.gpa, stored);
+}
+
+/// Drop any recorded load-failure for `id` (freeing its strings). Called when the plugin later
+/// loads successfully or is uninstalled, so a stale failure no longer lingers in the UI / dialog.
+pub fn clearFailedUserPlugin(app: *App, id: []const u8) void {
+    var i: usize = 0;
+    while (i < app.failed_user_plugins.items.len) {
+        if (std.mem.eql(u8, app.failed_user_plugins.items[i].id, id)) {
+            const f = app.failed_user_plugins.orderedRemove(i);
+            app.gpa.free(f.id);
+            app.gpa.free(f.reason);
+            if (f.detail) |d| app.gpa.free(d);
+        } else i += 1;
+    }
+}
+
+/// `Host.pluginForExtension`, but pretending `skip` is not loaded — what would open `ext` if this
+/// plugin had never arrived. Mirrors that function's resolution order exactly, including its
+/// alphabetical tie-break, so the "prior owner" shown in the dialog is the one the user would
+/// actually have gotten.
+pub fn extensionOwnerExcluding(app: *App, ext: []const u8, skip: *sdk.Plugin) ?*sdk.Plugin {
+    if (app.extension_owner.get(ext)) |owner_id| {
+        if (app.host.pluginById(owner_id)) |p| {
+            if (p != skip and app.host.ownsExtension(p, ext)) return p;
+        }
+    }
+    var best: ?*sdk.Plugin = null;
+    for (app.host.plugins.items) |plugin| {
+        if (plugin == skip) continue;
+        for (plugin.fileTypes()) |e| {
+            if (std.mem.eql(u8, e, ext)) {
+                if (best == null or std.mem.lessThan(u8, plugin.id, best.?.id)) best = plugin;
+                break;
+            }
+        }
+    }
+    if (best) |p| return p;
+    return app.host.fallback_editor;
+}
+
+pub fn clearExtensionOwnerCache(app: *App) void {
+    const gpa = app.gpa;
+    {
+        var it = app.extension_owner.iterator();
+        while (it.next()) |e| {
+            gpa.free(e.key_ptr.*);
+            gpa.free(e.value_ptr.*);
+        }
+        app.extension_owner.clearAndFree(gpa);
+    }
+    for (app.extension_conflicts.items) |c| {
+        gpa.free(c.ext);
+        gpa.free(c.loser);
+        if (c.winner) |w| gpa.free(w);
+    }
+    app.extension_conflicts.clearAndFree(gpa);
+}
+
+pub fn recordExtensionConflict(
+    app: *App,
+    ext: []const u8,
+    winner: ?[]const u8,
+    loser: []const u8,
+    kind: ExtensionConflict.Kind,
+) void {
+    const gpa = app.gpa;
+    const ext_owned = gpa.dupe(u8, ext) catch return;
+    errdefer gpa.free(ext_owned);
+    const loser_owned = gpa.dupe(u8, loser) catch {
+        gpa.free(ext_owned);
+        return;
+    };
+    errdefer gpa.free(loser_owned);
+    const winner_owned: ?[]const u8 = if (winner) |w| (gpa.dupe(u8, w) catch {
+        gpa.free(ext_owned);
+        gpa.free(loser_owned);
+        return;
+    }) else null;
+    app.extension_conflicts.append(gpa, .{
+        .ext = ext_owned,
+        .winner = winner_owned,
+        .loser = loser_owned,
+        .kind = kind,
+    }) catch {
+        gpa.free(ext_owned);
+        gpa.free(loser_owned);
+        if (winner_owned) |w| gpa.free(w);
+    };
+}
+
+pub fn docAt(app: *App, index: usize) ?sdk.DocHandle {
+    if (index >= app.open_files.values().len) return null;
+    return app.open_files.values()[index];
+}
+
+pub fn docById(app: *App, id: u64) ?sdk.DocHandle {
+    return app.open_files.get(id);
+}
+
+pub fn newFileID(app: *App) u64 {
+    app.file_id_counter += 1;
+    return app.file_id_counter;
+}
+
+/// Heap-owned path like `untitled-1`, unique among open-document basenames.
+pub fn allocNextUntitledPath(app: *App) ![]u8 {
+    var max_n: u32 = 0;
+    for (app.open_files.values()) |doc| {
+        const base = std.fs.path.basename(doc.owner.documentPath(doc));
+        if (std.mem.startsWith(u8, base, "untitled-")) {
+            const suffix = base["untitled-".len..];
+            const n = std.fmt.parseUnsigned(u32, suffix, 10) catch continue;
+            max_n = @max(max_n, n);
+        } else if (std.mem.eql(u8, base, "untitled")) {
+            max_n = @max(max_n, 1);
+        }
+    }
+    return std.fmt.allocPrint(app.gpa, "untitled-{d}", .{max_n + 1});
+}
+
+pub fn abortSaveAllQuit(app: *App) void {
+    app.quit_save_all_ids.clearAndFree(app.gpa);
+    app.quit_saves_in_flight.clearRetainingCapacity();
+    app.quit_in_progress = false;
+    app.pending_close_file_id = null;
+    app.pending_quit_continue = false;
+}
+
+/// Move the current folder string out of `folder` without freeing it — see `folder_retired`.
+pub fn retireFolder(app: *App) void {
+    const folder = app.folder orelse return;
+    app.folder = null;
+    app.folder_retired.append(app.gpa, folder) catch app.gpa.free(folder);
+}
+
+/// Release folder strings retired by earlier frames. Called at the top of `tick`, before
+/// anything draws, which is the one point at which nothing can still be holding one.
+pub fn releaseRetiredFolders(app: *App) void {
+    for (app.folder_retired.items) |folder| app.gpa.free(folder);
+    app.folder_retired.clearRetainingCapacity();
+}
+
+/// `<config>/plugins/<id>/<id>.<ext>` — where a user plugin's build lives. Caller frees.
+pub fn userPluginPath(gpa: std.mem.Allocator, app: *App, id: []const u8) ![]u8 {
+    const file_name = try PluginLoader.pluginFilename(id, gpa);
+    defer gpa.free(file_name);
+    return std.fs.path.join(gpa, &.{ app.config_folder, "plugins", id, file_name });
+}
+
+/// Point a loaded plugin's stamp at whatever is on disk now. See the re-stamp comment in
+/// `reconcileChangedPluginBinaries`; no-op if `id` isn't loaded or the file can't be stat'd.
+pub fn restampLoadedPlugin(app: *App, id: []const u8) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    for (app.loaded_plugin_libs.items) |*loaded| {
+        if (!std.mem.eql(u8, loaded.plugin_id, id)) continue;
+        const st = std.Io.Dir.cwd().statFile(dvui.io, loaded.path, .{}) catch return;
+        loaded.source_mtime_ns = st.mtime.nanoseconds;
+        loaded.source_size = st.size;
+        return;
+    }
+}
+
+/// True if `plugin` owns any currently-dirty open document.
+pub fn pluginHasDirtyDocs(app: *App, plugin: *sdk.Plugin) bool {
+    for (app.open_files.values()) |doc| {
+        if (doc.owner == plugin and doc.owner.isDirty(doc)) return true;
+    }
+    return false;
+}
+
+/// True if `plugin` owns any document with an async save still in flight.
+pub fn pluginHasSavingDocs(app: *App, plugin: *sdk.Plugin) bool {
+    for (app.open_files.values()) |doc| {
+        if (doc.owner == plugin and doc.owner.isDocumentSaving(doc)) return true;
+    }
+    return false;
+}
+
+pub fn saving(app: *App) bool {
+    for (app.open_files.values()) |doc| {
+        if (doc.owner.isDocumentSaving(doc)) return true;
+    }
+    return false;
+}
+
+/// Open documents of extension `ext` whose owner is no longer the plugin that would open `ext`
+/// today — i.e. documents left behind by a reassignment. Reassigning never closes anything, so
+/// these keep working under their original owner; this is what lets the File Types table offer
+/// to reopen them. Returned ids are stable across the call; the slice is caller-owned.
+pub fn staleOpenDocsForExtension(app: *App, gpa: std.mem.Allocator, ext: []const u8) ![]u64 {
+    const want = app.host.pluginForExtension(ext) orelse return &.{};
+    var out: std.ArrayListUnmanaged(u64) = .empty;
+    errdefer out.deinit(gpa);
+    for (app.open_files.values()) |doc| {
+        if (doc.owner == want) continue;
+        const path = doc.owner.documentPath(doc);
+        if (!std.mem.eql(u8, std.fs.path.extension(path), ext)) continue;
+        try out.append(gpa, doc.id);
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+/// Reads `.plugins.<id>.auto_update` from already-loaded `settings_data`. **Defaults to true** —
+/// a missing `.plugins`, a missing id, or an omitted field all mean "keep this plugin current";
+/// only an explicit `false` opts out. Deliberately the inverse of `readPluginEnabled`'s default:
+/// a plugin has to be turned on by hand, but once it is on it tracks the store unless told
+/// otherwise.
+pub fn readPluginAutoUpdate(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id: []const u8) bool {
+    const text = readPluginReservedField(gpa, settings_data, id, "auto_update") orelse return true;
+    defer gpa.free(text);
+    return !std.mem.eql(u8, std.mem.trim(u8, text, " \t\r\n"), "false");
+}
+
+/// Reads `.plugins.<id>.enabled` from already-loaded `settings_data` (null source → false).
+/// Missing `.plugins` / missing id / missing or non-`true` `.enabled` all mean disabled.
+pub fn readPluginEnabled(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id: []const u8) bool {
+    return readPluginEnabledState(gpa, settings_data, id) == .enabled;
+}
+
+pub fn readPluginEnabledState(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id: []const u8) PluginEnabledState {
+    const text = readPluginReservedField(gpa, settings_data, id, "enabled") orelse return .unset;
+    defer gpa.free(text);
+    return if (std.mem.eql(u8, std.mem.trim(u8, text, " \t\r\n"), "true")) .enabled else .disabled;
+}
+
+/// Reads `.plugins.<id>.extensions` from already-loaded `settings_data`. Empty (never null) when
+/// absent or unparseable — a hand-edited file must degrade to "no explicit choice", not an error.
+/// Caller frees with `SettingsPluginsZon.freeExtensions`.
+pub fn readPluginExtensions(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id: []const u8) []const []const u8 {
+    const text = readPluginReservedField(gpa, settings_data, id, "extensions") orelse return &.{};
+    defer gpa.free(text);
+    return SettingsPluginsZon.parseExtensions(gpa, text) catch &.{};
+}
+
+/// Reads one fizzy-reserved `.plugins.<id>.<field>` value as verbatim text (caller-owned), or
+/// null when any level of the nest is absent. Shared by the `.enabled` / `.auto_update` readers,
+/// which differ only in how they interpret a missing value.
+pub fn readPluginReservedField(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id: []const u8, field: []const u8) ?[]u8 {
+    const data = settings_data orelse return null;
+    const plugins = SettingsPluginsZon.extractField(gpa, data, "plugins") orelse return null;
+    defer gpa.free(plugins);
+    const plugins_z = gpa.dupeZ(u8, plugins) catch return null;
+    defer gpa.free(plugins_z);
+    const id_block = SettingsPluginsZon.extractField(gpa, plugins_z, id) orelse return null;
+    defer gpa.free(id_block);
+    const id_z = gpa.dupeZ(u8, id_block) catch return null;
+    defer gpa.free(id_z);
+    return SettingsPluginsZon.extractField(gpa, id_z, field);
+}
+
+/// Reads `.plugins.<id>.settings` from already-loaded `settings_data`. Null if absent.
+pub fn readPluginSettingsText(gpa: std.mem.Allocator, settings_data: ?[:0]const u8, id: []const u8) ?[]u8 {
+    const data = settings_data orelse return null;
+    const plugins = SettingsPluginsZon.extractField(gpa, data, "plugins") orelse return null;
+    defer gpa.free(plugins);
+    const plugins_z = gpa.dupeZ(u8, plugins) catch return null;
+    defer gpa.free(plugins_z);
+    const id_block = SettingsPluginsZon.extractField(gpa, plugins_z, id) orelse return null;
+    defer gpa.free(id_block);
+    const id_z = gpa.dupeZ(u8, id_block) catch return null;
+    defer gpa.free(id_z);
+    return SettingsPluginsZon.extractField(gpa, id_z, "settings");
+}
+
+/// Wake a frame once `remaining_ns` has elapsed so a debounced save actually fires while the app
+/// is otherwise idle. Without this, the very event that dirtied the state (a settings-pane click,
+/// a splitter drag release) is typically the *last* one before the app goes back to sleep, so no
+/// frame ever runs to observe the deadline — the write, and everything that hangs off it (the
+/// open settings.zon tab's reload via `writeMergedSettings`' `notifyPathChanged`), would wait on
+/// some unrelated input instead. Same pattern/rationale as `drawSaveToasts`' threshold wakeup.
+/// In-frame only; both callers run inside `tick`. `id_extra` keeps the two debounces from
+/// sharing (and overwriting) one timer slot.
+pub fn scheduleSaveWakeup(remaining_ns: i128, id_extra: usize) void {
+    const remaining_us = @divTrunc(remaining_ns, std.time.ns_per_us);
+    const clamped: i32 = if (remaining_us >= std.math.maxInt(i32))
+        std.math.maxInt(i32)
+    else
+        @intCast(@max(1, remaining_us));
+    dvui.timer(dvui.Id.extendId(null, @src(), id_extra), clamped);
+}
+
+pub fn themeFilenameToName(trimmed: []const u8) ?[]const u8 {
+    const pairs = [_]struct { stub: []const u8, canonical: []const u8 }{
+        .{ .stub = "fizzy_dark.json", .canonical = "Fizzy Dark" },
+        .{ .stub = "fizzy_light.json", .canonical = "Fizzy Light" },
+    };
+    for (pairs) |p| {
+        if (std.mem.eql(u8, trimmed, p.stub)) return p.canonical;
+    }
+    return null;
+}
+
+/// Human-readable, actionable explanation for a `PluginLoader.LoadError`.
+pub fn pluginLoadFailureReason(err: PluginLoader.LoadError) []const u8 {
+    return switch (err) {
+        error.AbiMismatch => "built against an incompatible Fizzy SDK — rebuild the plugin against this Fizzy build",
+        error.AbiBuildEnvMismatch => "SDK versions match, but optimize mode does not match",
+        error.SdkVersionMismatch => "requires a newer Fizzy SDK — update Fizzy or install a matching plugin build",
+        error.PluginIdMismatch => "plugin id in the dylib does not match its filename — rename the file or fix manifest.id",
+        error.DylibOpenFailed => "the plugin library could not be opened (missing file, wrong architecture, or unresolved symbols)",
+        error.RegisterRejected => "the plugin's register() was rejected (often a duplicate plugin id — a built-in or another plugin already claims it)",
+        error.AbiFingerprintSymbolMissing,
+        error.RegisterSymbolMissing,
+        error.SetGlobalsSymbolMissing,
+        error.SetDvuiContextSymbolMissing,
+        error.SetRenderBridgeSymbolMissing,
+        error.SdkVersionSymbolMissing,
+        => "the plugin is missing required entry symbols — rebuild it from a current root.zig template",
+    };
+}
+
+pub fn formatPluginProbeDetail(allocator: std.mem.Allocator, info: PluginLoader.PluginVersionInfo) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "plugin {d}.{d}.{d}, min SDK {d}.{d}.{d}", .{
+        info.plugin_version.major,
+        info.plugin_version.minor,
+        info.plugin_version.patch,
+        info.min_sdk_version.major,
+        info.min_sdk_version.minor,
+        info.min_sdk_version.patch,
+    });
+}

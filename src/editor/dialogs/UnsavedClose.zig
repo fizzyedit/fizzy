@@ -21,7 +21,7 @@ pub fn request(file_id: u64) void {
 }
 
 fn fileBasename(file_id: u64) []const u8 {
-    const doc = fizzy.editor().docById(file_id) orelse return "?";
+    const doc = fizzy.editor().app.docById(file_id) orelse return "?";
     return std.fs.path.basename(doc.owner.documentPath(doc));
 }
 
@@ -108,7 +108,7 @@ fn beginSaveAndClose(doc: fizzy.sdk.DocHandle, file_id: u64) !void {
 }
 
 fn onSaveAndClose(file_id: u64) !void {
-    const doc = fizzy.editor().docById(file_id) orelse return;
+    const doc = fizzy.editor().app.docById(file_id) orelse return;
     if (!doc.owner.documentHasRecognizedSaveExtension(doc)) {
         const idx = fizzy.editor().app.open_files.getIndex(file_id) orelse return;
         fizzy.editor().workbench.setActiveDocIndex(idx);
