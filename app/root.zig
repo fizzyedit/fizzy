@@ -19,6 +19,8 @@
 /// directory, version, update feed and plugin registry. Every value arrives from the app's own
 /// `build_opts`, so `AppInfo.current` is the identity of whichever app is being built.
 pub const AppInfo = @import("AppInfo.zig");
+/// The host runtime an application embeds — see the file.
+pub const App = @import("App.zig");
 
 /// User configuration on disk: `settings.zon` (the app's own record plus every plugin's
 /// `.plugins.<id>` block), its migration from older layouts, and the shared settings-row chrome.

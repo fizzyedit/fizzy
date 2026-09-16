@@ -25,7 +25,7 @@ pub const OutputLog = @import("editor/OutputLog.zig");
 //
 // Phase 2 of the fizzy-as-a-library work replaced the public mutable globals with accessors.
 // Editor-scoped logic now takes an explicit `*Editor` (and reaches the allocator through
-// `editor.gpa`); what remains behind these accessors is code that genuinely has no place to
+// `editor.app.gpa`); what remains behind these accessors is code that genuinely has no place to
 // receive one:
 //
 //   * OS / dvui callbacks invoked with no context pointer — native file-dialog callbacks

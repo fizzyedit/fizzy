@@ -82,7 +82,7 @@ pub const Item = union(enum) {
     command: CommandItem,
     separator,
     submenu: Submenu,
-    /// The recents list, filled at draw time from `editor.recents`.
+    /// The recents list, filled at draw time from `editor.app.recents`.
     recent_folders,
     /// Plugin-contributed section parented to this menu id (e.g. "fizzy.menu.edit").
     plugin_section: []const u8,
@@ -104,7 +104,7 @@ fn canSave(editor: *Editor) bool {
 }
 
 fn canSaveAll(editor: *Editor) bool {
-    for (editor.open_files.values()) |doc| {
+    for (editor.app.open_files.values()) |doc| {
         if (doc.owner.isDirty(doc) and doc.owner.documentHasRecognizedSaveExtension(doc)) return true;
     }
     return false;

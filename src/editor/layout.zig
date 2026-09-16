@@ -115,8 +115,8 @@ const edge_gutter: f32 = 10;
 
 fn placeCard(editor: *fizzy.Editor, extra: dvui.Options) dvui.Options {
     var fill = dvui.themeGet().color(.window, .fill);
-    if (editor.host.appliesNativeWindowOpacity() and !editor.host.isMaximized()) {
-        fill = fill.opacity(editor.host.contentOpacity());
+    if (editor.app.host.appliesNativeWindowOpacity() and !editor.app.host.isMaximized()) {
+        fill = fill.opacity(editor.app.host.contentOpacity());
     }
     var opts = extra;
     opts.background = true;
@@ -154,8 +154,8 @@ var blur_demo_rect: ?dvui.Rect = null;
 fn blurDemoWanted(editor: *fizzy.Editor) bool {
     if (blur_demo_on == null) {
         blur_demo_on = if (comptime builtin.target.cpu.arch == .wasm32) false else blk: {
-            const v = std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.gpa, "FIZZY_BLUR_DEMO") catch break :blk false;
-            defer editor.gpa.free(v);
+            const v = std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_BLUR_DEMO") catch break :blk false;
+            defer editor.app.gpa.free(v);
             dvui.log.info("blur harness on", .{});
             break :blk true;
         };

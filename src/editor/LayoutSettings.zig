@@ -32,11 +32,11 @@ pub fn score(query: *const fuzzy.Query) ?f64 {
     var best: ?f64 = fuzzy.scoreBest(&section_keywords, query, .{ .plain = true });
     // Every surface's and region's name is searchable: looking for "sprites" should find the
     // row that holds pixi's sprite panel, not just a section called Layout.
-    for (editor.host.surfaces.items) |*s| {
+    for (editor.app.host.surfaces.items) |*s| {
         const sc = fuzzy.score(s.title, query, .{ .plain = true }) orelse continue;
         if (best == null or sc < best.?) best = sc;
     }
-    for (editor.layout.regions.items) |r| {
+    for (editor.app.layout.regions.items) |r| {
         const sc = fuzzy.score(r.name, query, .{ .plain = true }) orelse continue;
         if (best == null or sc < best.?) best = sc;
     }
@@ -48,7 +48,7 @@ pub fn draw(query: *const fuzzy.Query) void {
     const theme = dvui.themeGet();
     const arena = dvui.currentWindow().arena();
 
-    const regions = editor.layout.regions.items;
+    const regions = editor.app.layout.regions.items;
     if (regions.len == 0) {
         dvui.labelNoFmt(@src(), "This layout declares no regions to place panels in.", .{}, .{
             .color_text = .{ .color = theme.color(.control, .text) },
@@ -57,7 +57,7 @@ pub fn draw(query: *const fuzzy.Query) void {
     }
 
     // The same resolver the layout uses, so a row shows exactly what the region draws.
-    var layout = Editor.Layout.init(&editor.host, &editor.layout, editor.gpa, arena);
+    var layout = Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, arena);
 
     // A query that found this section by its own name ("layout", "region") wants the whole
     // table; one that found it through a region or panel name wants just those rows.
@@ -110,7 +110,7 @@ fn rowMatches(name: []const u8, contents: []const *Surface, query: *const fuzzy.
 /// row of tiles either truncates or pushes the button out of sight.
 fn drawRow(editor: *Editor, layout: *Editor.Layout, region: Editor.Region, idx: usize) void {
     const theme = dvui.themeGet();
-    const assigned = editor.layout.assignment(region.name) != null;
+    const assigned = editor.app.layout.assignment(region.name) != null;
     const contents = layout.matchingIn(&region);
 
     var block = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -127,7 +127,7 @@ fn drawRow(editor: *Editor, layout: *Editor.Layout, region: Editor.Region, idx: 
         // The picker itself is framework (`app/layout/Picker.zig`), drawn by the frame above
         // everything; this only opens it, anchored under this row.
         if (dvui.button(@src(), "Settings…", .{}, .{ .gravity_y = 0.5, .gravity_x = 1.0 })) {
-            editor.layout.openPicker(editor.gpa, region.name, head.data().rectScale().r.toNatural().bottomLeft());
+            editor.app.layout.openPicker(editor.app.gpa, region.name, head.data().rectScale().r.toNatural().bottomLeft());
         }
     }
 

@@ -100,7 +100,7 @@ pub fn wireAppModule(
     const app_module = b.createModule(.{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("app/app.zig"),
+        .root_source_file = b.path("app/root.zig"),
     });
     app_module.addImport("dvui", dvui_module);
     app_module.addImport("core", core_module);

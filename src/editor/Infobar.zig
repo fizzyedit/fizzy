@@ -120,7 +120,7 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
 
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = infobar.item_spacing } });
 
-    if (editor.folder) |folder| {
+    if (editor.app.folder) |folder| {
         fizzy.core.icon.icon(
             @src(),
             "project_icon",
@@ -177,12 +177,12 @@ fn drawPluginEntries(bar_h: f32) void {
 }
 
 fn collectedEntries() []const infobar.Entry {
-    const arena = fizzy.editor().host.arena();
+    const arena = fizzy.editor().app.host.arena();
     var list: std.ArrayList(infobar.Entry) = .empty;
     const active = fizzy.editor().activeDoc();
     const owner: ?*fizzy.sdk.Plugin = if (active) |doc| doc.owner else null;
     if (owner) |o| appendFrom(&list, arena, o, active);
-    for (fizzy.editor().host.plugins.items) |p| {
+    for (fizzy.editor().app.host.plugins.items) |p| {
         if (p == owner) continue;
         appendFrom(&list, arena, p, active);
     }

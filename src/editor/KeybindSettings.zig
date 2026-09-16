@@ -120,7 +120,7 @@ fn ownerPrefix(id: []const u8) []const u8 {
 fn ownerLabel(owner: []const u8) []const u8 {
     if (std.mem.eql(u8, owner, "fizzy")) return "Fizzy";
     const editor = fizzy.editor();
-    if (editor.host.pluginById(owner)) |p| return p.display_name;
+    if (editor.app.host.pluginById(owner)) |p| return p.display_name;
     return owner;
 }
 
@@ -140,7 +140,7 @@ fn collectGroups(
     const table_hit = fuzzy.scoreBest(&table_keywords, query, .{ .plain = true });
     var any_row = false;
 
-    for (editor.host.commands.items, 0..) |c, ci| {
+    for (editor.app.host.commands.items, 0..) |c, ci| {
         const owner = ownerPrefix(c.id);
         const group = blk: {
             for (groups.items) |*g| {
@@ -175,7 +175,7 @@ fn collectGroups(
         const s = table_hit orelse return .empty;
         for (groups.items) |*g| {
             g.score = s;
-            for (editor.host.commands.items, 0..) |c, ci| {
+            for (editor.app.host.commands.items, 0..) |c, ci| {
                 if (!std.mem.eql(u8, ownerPrefix(c.id), g.owner)) continue;
                 const keys = if (shortcutFor(editor, c.id, platform)) |sc| sc.keys else "";
                 g.rows.append(arena, .{ .cmd = c, .keys = keys, .score = s, .tie = ci }) catch {};
@@ -360,7 +360,7 @@ fn recordingDot() void {
 }
 
 fn drawConflicts(editor: *fizzy.Editor, platform: Keymap.Platform, theme: dvui.Theme) void {
-    const conflicts = editor.keybind_conflicts orelse return;
+    const conflicts = editor.app.keybind_conflicts orelse return;
     if (conflicts.len == 0) return;
 
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -696,7 +696,7 @@ fn shortcutFor(editor: *fizzy.Editor, id: []const u8, platform: Keymap.Platform)
 
 fn directShortcut(editor: *fizzy.Editor, id: []const u8, platform: Keymap.Platform) ?[]const u8 {
     const arena = dvui.currentWindow().arena();
-    const found = editor.keymap.bindingsFor(arena, id) catch return null;
+    const found = editor.app.keymap.bindingsFor(arena, id) catch return null;
     if (found.len == 0) return null;
     // Prefer the highest-source binding (user > plugin > profile > dvui).
     var best = found[0];
@@ -723,8 +723,8 @@ fn pollRecording(editor: *fizzy.Editor, command: []const u8, platform: Keymap.Pl
         if (Keymap.keyIsModifier(chord.key)) continue;
 
         e.handle(@src(), dvui.currentWindow().data());
-        const keys = Keymap.formatKeys(editor.host.allocator, .{ .first = chord }, platform) catch return true;
-        defer editor.host.allocator.free(keys);
+        const keys = Keymap.formatKeys(editor.app.host.allocator, .{ .first = chord }, platform) catch return true;
+        defer editor.app.host.allocator.free(keys);
         Keybinds.setUserBinding(editor, command, keys) catch |err| {
             dvui.log.err("set keybind for '{s}' failed: {s}", .{ command, @errorName(err) });
         };

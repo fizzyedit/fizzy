@@ -25,8 +25,8 @@ pub const Ctx = struct {
         // A test that registers a surface (`registerSurface`) puts it in a
         // host-owned list, so the host has to come down with the rest. Safe on the zeroed host
         // below: every registry in it is an empty `ArrayListUnmanaged`/`HashMapUnmanaged`.
-        self.editor.host.deinit();
-        self.editor.arena.deinit();
+        self.editor.app.host.deinit();
+        self.editor.app.arena.deinit();
         gpa.destroy(self.editor);
         gpa.destroy(self.app);
         self.t.deinit();
@@ -54,8 +54,8 @@ pub fn init(gpa: std.mem.Allocator) !Ctx {
     // top of that test rather than expanding the shim.
     const editor_ptr = try gpa.create(fizzy.Editor);
     @memset(@as([*]u8, @ptrCast(editor_ptr))[0..@sizeOf(fizzy.Editor)], 0);
-    editor_ptr.arena = std.heap.ArenaAllocator.init(gpa);
-    editor_ptr.host.allocator = gpa;
+    editor_ptr.app.arena = std.heap.ArenaAllocator.init(gpa);
+    editor_ptr.app.host.allocator = gpa;
 
     fizzy.setInstances(app_ptr, editor_ptr);
 

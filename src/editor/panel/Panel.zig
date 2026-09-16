@@ -44,7 +44,7 @@ pub fn draw(panel: *Panel, editor: *fizzy.Editor, f: *Layout, keywords: []const 
     });
     defer vbox.deinit();
 
-    const host = &editor.host;
+    const host = &editor.app.host;
     if (f.matching(keywords).len == 0) {
         Pane.drawBackground(0);
         return .ok;

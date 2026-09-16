@@ -13,7 +13,7 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 ```
 
 - **`sdk/src/`** — the entire contract. `Host` (registries + service locator), `Plugin` (identity + vtable of hooks Fizzy calls), `Surface` (the one drawable contribution: keywords say where it may go, the app's regions accept it), `RegionSpec` (a plugin declaring a place of its own inside the one it was given), `DocHandle` (opaque `{ptr, id, owner}` — Fizzy routes every doc op to `owner`, never inspects `ptr`), `EditorAPI` (Fizzy's own read/util surface plugins reach back through), `keywords.zig` (how a region accepts a surface), `dylib.zig`/`dvui_context.zig` (runtime-library C-ABI + dvui injection).
-- **`app/`** — the framework an application switches on, never in a dylib: `layout` (Layout/Region/State, the picker, view drags, split trees), `store`, `update`, `watch`, `window`, `single_instance`. Everywhere it needed to name fizzy is a `{ctx, vtable}` seam the app fills in.
+- **`app/`** — the framework an application switches on, never in a dylib: `App` (the host runtime state — host, documents, settings, keymap, layout state, watchers; fizzy's `Editor` embeds one as `editor.app`), `layout` (Layout/Region/State, the picker, view drags, split trees), `settings`, `keymap`, `Recents`, `store`, `update`, `watch`, `window`, `single_instance`. The module root is `app/root.zig`. Everywhere it needed to name fizzy is a `{ctx, vtable}` seam the app fills in.
 - **`src/editor/`** — Fizzy itself: `Editor.zig` (frame loop, plugin registration/loading), `layout.zig` (fizzy's shape), `Menu.zig`, `Sidebar.zig`, `Settings.zig`, etc.
 - **`core/`** — the shared floor used by Fizzy *and* plugins: `widgets` (Split, DockingWidget, Tabs, Tree, Canvas, BlurBackdrop), `anim`, `dialogs`, `draw`, `icon`, `image`, math, fs, paths, platform detection. Not plugin-owned; don't move it. (`Atlas`/`Sprite` are there only because pixi still loads its packed UI atlas through them — see the note in `core/core.zig`.) `core.fuzzy` is the one matcher behind every filter box in the app (settings tree, file tree, plugin store, LSP completions) — wrap zf through it rather than matching by hand, and remember **lower scores are better**. Draw icons with `core.icon.icon`, not `dvui.icon` — same arguments, cached as a texture.
 - **`plugins/`** — bundled built-in plugins. Each is file-for-file the **same shape a third-party plugin would use**: root `plugin.zig` + identity-only `plugin.zig.zon` + `build.zig` + `build.zig.zon` (optional `src/**`), plus fizzy-internal glue in `static/`. No author `root.zig` or `<name>.zig` hub — the build helper generates the dylib entry; files use named imports (`fizzy_sdk`/`dvui`/…). Builds standalone with `cd plugins/<name> && zig build`.
@@ -110,7 +110,9 @@ Use `git mv -f old.zig tmp && git mv -f tmp New.zig` (two steps) when changing o
 check `git status --porcelain` actually shows the rename before committing.
 
 The same case-insensitivity will silently destroy work: `rm sdk/src/surface.zig` deletes
-`sdk/src/Surface.zig`. Watch for it when converting a file to the capitalized form.
+`sdk/src/Surface.zig`, and *writing* `app/App.zig` overwrites `app/app.zig`. Watch for it when
+converting a file to the capitalized form, and never keep two names differing only by case in
+one directory — that is why the `app` module root is `app/root.zig`, not `app/app.zig`.
 
 ## Build
 

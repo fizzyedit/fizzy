@@ -265,7 +265,11 @@ for its chrome, the shape), holding a `*App`. `Entry.zig` stays fizzy's dvui ent
 both. Not a rename: files hold `app: *App`, and the framework module is `@import("app")`.
 
 Done: `app.settings` (Settings, migration, ZON surgery, row chrome, plugin pane),
-`app.Recents`, `app.keymap` moved as-is — they had no fizzy coupling.
+`app.Recents`, `app.keymap` moved as-is — they had no fizzy coupling. `app/App.zig` exists and
+holds the runtime *state* (43 fields: allocators, config folders, `host`, `file_table`,
+plugin lists and pending flags, extension ownership, keymap state, settings, recents,
+folder, open documents, save/close/quit bookkeeping, watchers, `layout`); `Editor` embeds it
+as `app` and every reader says `editor.app.x`. The methods are still on `Editor`.
 
 What blocks a wholesale move is that `Editor.zig` imports what `app/` cannot see; each is a
 seam to add, then the section moves. Inventory (from grepping the file):

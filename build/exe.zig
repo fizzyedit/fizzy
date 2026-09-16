@@ -210,7 +210,7 @@ pub fn addFizzyExecutableForTarget(
     exe.root_module.addImport("singleton_app", singleton_app_dep.module("singleton_app"));
 
     // The `app` framework module: the plugin store and what it needs. Fizzy is its first
-    // consumer, not its owner — see `app/app.zig`.
+    // consumer, not its owner — see `app/root.zig`.
     const app_module = sdk.wireAppModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), core_module, sdk_module, icons_module, markdown_module, if (nightwatch_dep) |dep| dep.module("nightwatch") else null, build_opts, singleton_app_dep.module("singleton_app"), exe.root_module);
 
     if (app_layout) |path| {

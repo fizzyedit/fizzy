@@ -33,7 +33,7 @@ pub fn draw(editor: *Editor) !dvui.App.Result {
 
     // Fizzy owns only the menu bar container + theme; the top-level menus are
     // plugin (and fizzy built-in) contributions, drawn in registration order.
-    for (editor.host.menus.items) |*menu| {
+    for (editor.app.host.menus.items) |*menu| {
         if (menu.hidden) continue;
         menu.draw(menu.ctx) catch |err| {
             dvui.log.err("Menu contribution failed: {any}", .{err});
@@ -48,7 +48,7 @@ pub fn draw(editor: *Editor) !dvui.App.Result {
 ///
 /// Every item in both menu bars names a command and does nothing else.
 fn run(id: []const u8) void {
-    fizzy.editor().host.runCommand(id) catch |err| {
+    fizzy.editor().app.host.runCommand(id) catch |err| {
         dvui.log.err("menu command '{s}' failed: {s}", .{ id, @errorName(err) });
     };
 }
@@ -133,7 +133,7 @@ fn drawModelItem(
             // fizzy command is registered there too (`Keybinds.registerCommands`), so this and
             // `Editor.fizzyDrawMenuItem` (the plugin-section row equivalent) resolve it the same
             // way instead of each menu item duplicating an icon assignment of its own.
-            const icon: ?[]const u8 = if (editor.host.command(c.id)) |cmd| cmd.icon else null;
+            const icon: ?[]const u8 = if (editor.app.host.command(c.id)) |cmd| cmd.icon else null;
 
             if (menuItemWithHotkey(@src(), c.title.resolve(editor), icon, hotkey, enabled, .{}, .{
                 .expand = .horizontal,
@@ -156,7 +156,7 @@ fn hotkeyFor(editor: *Editor, command_id: []const u8) dvui.enums.Keybind {
 }
 
 fn drawRecentFolders(editor: *Editor, id_extra: usize) !void {
-    if (editor.recents.folders.items.len == 0) return;
+    if (editor.app.recents.folders.items.len == 0) return;
 
     if (menuItemWithChevron(@src(), "Recent Folders", .{ .submenu = true }, .{
         .expand = .horizontal,
@@ -175,9 +175,9 @@ fn drawRecentFolders(editor: *Editor, id_extra: usize) !void {
         var vert_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .none });
         defer vert_box.deinit();
 
-        var i: usize = editor.recents.folders.items.len;
+        var i: usize = editor.app.recents.folders.items.len;
         while (i > 0) : (i -= 1) {
-            const folder = editor.recents.folders.items[i - 1];
+            const folder = editor.app.recents.folders.items[i - 1];
             if (menuItem(@src(), folder, .{}, .{
                 .expand = .horizontal,
                 .font = dvui.Font.theme(.mono),
@@ -307,7 +307,7 @@ pub fn menuItemWithChevron(src: std.builtin.SourceLocation, label_str: []const u
 pub fn drawMenuSections(parent_menu_id: []const u8) !void {
     const sub = model.submenuFor(parent_menu_id) orelse return;
     var drew_separator = false;
-    for (fizzy.editor().host.menu_sections.items) |*section| {
+    for (fizzy.editor().app.host.menu_sections.items) |*section| {
         if (section.hidden) continue;
         if (!model.menuMatches(sub, section.parent_menu_id)) continue;
         if (!drew_separator) {

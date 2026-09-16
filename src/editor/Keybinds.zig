@@ -178,7 +178,7 @@ fn cmdOpenFiles(_: *anyopaque) anyerror!void {
 }
 
 fn cmdNewFile(state: *anyopaque) anyerror!void {
-    editorFromState(state).host.requestNewDocument(null, 0);
+    editorFromState(state).app.host.requestNewDocument(null, 0);
 }
 fn cmdSave(state: *anyopaque) anyerror!void {
     try editorFromState(state).save();
@@ -332,7 +332,7 @@ fn cmdReportBug(_: *anyopaque) anyerror!void {
 pub fn registerCommands(editor: *Editor) !void {
     fizzy_plugin.state = editor;
     inline for (fizzy_commands) |c| {
-        try editor.host.registerCommand(.{
+        try editor.app.host.registerCommand(.{
             .id = c.id,
             .owner = &fizzy_plugin,
             .title = c.title,
@@ -566,7 +566,7 @@ pub fn chordShadowed(editor: *Editor, command_id: []const u8) bool {
 /// `cmd+f` formatting: the menu, `Keybinds.tick` and AppKit all agree on the winner, and Open
 /// Folder shows no chord because it no longer has one.
 fn shadowedByHigherLayer(editor: *Editor, binding: Keymap.Binding, command_id: []const u8) bool {
-    for (editor.keymap.bindings.items) |other| {
+    for (editor.app.keymap.bindings.items) |other| {
         const other_cmd = other.command orelse continue;
         if (std.mem.eql(u8, other_cmd, command_id)) continue;
         if (!other.stroke.eql(binding.stroke)) continue;
@@ -607,7 +607,7 @@ pub fn syncNativeMenuShortcuts(editor: *Editor) void {
 
     // Plugin items (`Host.registerNativeMenuItem`) get their chord restamped too, whatever the
     // user bound.
-    for (editor.host.native_menu_items.items, 0..) |ni, index| {
+    for (editor.app.host.native_menu_items.items, 0..) |ni, index| {
         const command_id = ni.command orelse {
             fizzy.backend.setDynamicNativeMenuShortcut(index, null, 0);
             continue;
@@ -652,7 +652,7 @@ pub fn menuKeybindFor(editor: *Editor, command_id: []const u8) dvui.enums.Keybin
 /// Highest-precedence binding for `command` (user > plugin > profile > dvui), or null.
 fn bestBinding(editor: *Editor, command: []const u8) ?Keymap.Binding {
     var best: ?Keymap.Binding = null;
-    for (editor.keymap.bindings.items) |b| {
+    for (editor.app.keymap.bindings.items) |b| {
         const cmd = b.command orelse continue;
         if (!std.mem.eql(u8, cmd, command)) continue;
         if (best) |cur| {
@@ -678,7 +678,7 @@ pub fn nativeMenuOwnsChord(editor: *Editor, id: []const u8) bool {
 
 /// Whether a visible plugin `NativeMenuItem` names `command_id`.
 fn nativeMenuItemFor(editor: *Editor, command_id: []const u8) bool {
-    for (editor.host.native_menu_items.items) |ni| {
+    for (editor.app.host.native_menu_items.items) |ni| {
         if (ni.hidden) continue;
         const cmd = ni.command orelse continue;
         if (std.mem.eql(u8, cmd, command_id)) return true;
@@ -686,19 +686,19 @@ fn nativeMenuItemFor(editor: *Editor, command_id: []const u8) bool {
     return false;
 }
 
-/// Rebuild `editor.keymap` from the finished `dvui.Window.keybinds` map. Called at the end of
+/// Rebuild `editor.app.keymap` from the finished `dvui.Window.keybinds` map. Called at the end of
 /// `Editor.rebuildKeybinds`, so it sees dvui's defaults, fizzy's own binds, and every loaded
 /// plugin's contributions in one pass.
 pub fn buildKeymap(editor: *Editor) !void {
-    const gpa = editor.host.allocator;
+    const gpa = editor.app.host.allocator;
     const window = dvui.currentWindow();
 
-    editor.keymap.deinit(gpa);
-    editor.keymap = .{};
+    editor.app.keymap.deinit(gpa);
+    editor.app.keymap = .{};
 
-    if (editor.keybind_conflicts) |prev| {
+    if (editor.app.keybind_conflicts) |prev| {
         gpa.free(prev);
-        editor.keybind_conflicts = null;
+        editor.app.keybind_conflicts = null;
     }
 
     // Layer 1 (lowest): whatever ended up in dvui's bind map — dvui's own defaults, fizzy's own
@@ -708,7 +708,7 @@ pub fn buildKeymap(editor: *Editor) !void {
         const cmd = fizzyCommandForBind(kv.key_ptr.*) orelse continue;
         // Modifier-only binds ("shift", "zoom", "ctrl/cmd") have no key and can't be a chord.
         const chord = adapter.fromKeybind(kv.value_ptr.*) orelse continue;
-        try editor.keymap.add(gpa, .{
+        try editor.app.keymap.add(gpa, .{
             .stroke = .{ .first = chord },
             .command = cmd.id,
             .source = .dvui,
@@ -723,18 +723,18 @@ pub fn buildKeymap(editor: *Editor) !void {
             dvui.log.err("default keybind '{s}' for '{s}' is invalid: {s}", .{ text, d.command, @errorName(err) });
             continue;
         };
-        try editor.keymap.add(gpa, .{ .stroke = stroke, .command = d.command, .source = .profile });
+        try editor.app.keymap.add(gpa, .{ .stroke = stroke, .command = d.command, .source = .profile });
     }
 
     // Layer 2b: owner-scoped plugin defaults (C2-lite). Higher source than profile so they win
     // when their owner is active; `owner_id` keeps them inert otherwise.
     for (plugin_owner_defaults) |d| {
-        if (editor.host.command(d.command) == null) continue;
+        if (editor.app.host.command(d.command) == null) continue;
         const stroke = Keymap.parseKeys(d.keys, platform) catch |err| {
             dvui.log.err("plugin keybind '{s}' for '{s}' is invalid: {s}", .{ d.keys, d.command, @errorName(err) });
             continue;
         };
-        try editor.keymap.add(gpa, .{
+        try editor.app.keymap.add(gpa, .{
             .stroke = stroke,
             .command = d.command,
             .source = .plugin,
@@ -753,7 +753,7 @@ pub fn buildKeymap(editor: *Editor) !void {
     syncNativeMenuShortcuts(editor);
 
     // Cache conflicts for the Keyboard Shortcuts settings pane.
-    editor.keybind_conflicts = editor.keymap.conflicts(gpa) catch |err| blk: {
+    editor.app.keybind_conflicts = editor.app.keymap.conflicts(gpa) catch |err| blk: {
         dvui.log.err("keybind conflicts() failed: {s}", .{@errorName(err)});
         break :blk null;
     };
@@ -763,14 +763,14 @@ pub fn buildKeymap(editor: *Editor) !void {
 /// never written out, so a user who has rebound nothing has no file at all.
 fn loadUserOverrides(editor: *Editor) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = editor.host.allocator;
+    const gpa = editor.app.host.allocator;
 
-    if (editor.keybinds_overrides) |*f| {
+    if (editor.app.keybinds_overrides) |*f| {
         f.deinit(gpa);
-        editor.keybinds_overrides = null;
+        editor.app.keybinds_overrides = null;
     }
 
-    const path = try std.fs.path.join(gpa, &.{ editor.config_folder, "keybinds.zon" });
+    const path = try std.fs.path.join(gpa, &.{ editor.app.config_folder, "keybinds.zon" });
     defer gpa.free(path);
 
     const text = std.Io.Dir.cwd().readFileAllocOptions(
@@ -799,10 +799,10 @@ fn loadUserOverrides(editor: *Editor) !void {
 
     const view = try file.toBindings(gpa, .user);
     defer gpa.free(view);
-    for (view) |b| try editor.keymap.add(gpa, b);
+    for (view) |b| try editor.app.keymap.add(gpa, b);
 
     // The keymap borrows this File's strings, so it has to outlive the keymap.
-    editor.keybinds_overrides = file;
+    editor.app.keybinds_overrides = file;
 }
 
 // ---- projection back into dvui's bind map -------------------------------------------------------
@@ -839,7 +839,7 @@ fn fizzyBindForCommand(id: []const u8) ?[]const u8 {
 fn projectUserOverrides(editor: *Editor) void {
     const window = dvui.currentWindow();
 
-    for (editor.keymap.bindings.items) |b| {
+    for (editor.app.keymap.bindings.items) |b| {
         if (b.source != .user) continue;
         const command = b.command orelse continue;
 
@@ -909,7 +909,7 @@ pub fn tick() !void {
                 if (ke.action != .down and ke.action != .repeat) continue;
 
                 const chord = adapter.chordFrom(ke) orelse continue;
-                switch (editor.keymap.resolve(chord, ctx, active_owner)) {
+                switch (editor.app.keymap.resolve(chord, ctx, active_owner)) {
                     .none => {},
                     // `pending` (first half of a chord) and `unbound` both *claim* the key, and
                     // ought to mark the event handled so it doesn't also reach a widget. Neither
@@ -936,7 +936,7 @@ pub fn tick() !void {
                         // commands need to know that, or they synthesize a second one.
                         running_from_key_event = true;
                         defer running_from_key_event = false;
-                        editor.host.runCommand(id) catch |err| {
+                        editor.app.host.runCommand(id) catch |err| {
                             dvui.log.err("command '{s}' failed: {s}", .{ id, @errorName(err) });
                         };
                     },
@@ -957,13 +957,13 @@ fn ownerIdForCommand(command: []const u8) ?[]const u8 {
 }
 
 fn keybindsPath(editor: *Editor, gpa: std.mem.Allocator) ![]u8 {
-    return try std.fs.path.join(gpa, &.{ editor.config_folder, "keybinds.zon" });
+    return try std.fs.path.join(gpa, &.{ editor.app.config_folder, "keybinds.zon" });
 }
 
 /// Rewrite `keybinds.zon` from `bindings`, then rebuild the live keymap.
 fn writeAndReload(editor: *Editor, bindings: []const Keymap.zon.OwnedBinding) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = editor.host.allocator;
+    const gpa = editor.app.host.allocator;
     const path = try keybindsPath(editor, gpa);
     defer gpa.free(path);
 
@@ -989,7 +989,7 @@ fn collectCurrentOverrides(editor: *Editor, gpa: std.mem.Allocator) !std.ArrayLi
         out.deinit(gpa);
     }
 
-    if (editor.keybinds_overrides) |file| {
+    if (editor.app.keybinds_overrides) |file| {
         for (file.bindings) |b| {
             try out.append(gpa, .{
                 .keys = try gpa.dupe(u8, b.keys),
@@ -1007,7 +1007,7 @@ fn collectCurrentOverrides(editor: *Editor, gpa: std.mem.Allocator) !std.ArrayLi
 /// Set (or replace) the user override for `command`. `keys` is VSCode grammar (`mod+p`).
 pub fn setUserBinding(editor: *Editor, command: []const u8, keys: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = editor.host.allocator;
+    const gpa = editor.app.host.allocator;
     const platform: Keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     const stroke = try Keymap.parseKeys(keys, platform);
 
@@ -1044,7 +1044,7 @@ pub fn setUserBinding(editor: *Editor, command: []const u8, keys: []const u8) !v
 /// Remove the user override for `command`, restoring the profile/plugin default.
 pub fn clearUserBinding(editor: *Editor, command: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const gpa = editor.host.allocator;
+    const gpa = editor.app.host.allocator;
 
     var list = try collectCurrentOverrides(editor, gpa);
     defer {
@@ -1071,7 +1071,7 @@ pub fn clearUserBinding(editor: *Editor, command: []const u8) !void {
 
 /// True when `command` has a user-layer override in the live keymap.
 pub fn hasUserOverride(editor: *Editor, command: []const u8) bool {
-    for (editor.keymap.bindings.items) |b| {
+    for (editor.app.keymap.bindings.items) |b| {
         if (b.source != .user) continue;
         const c = b.command orelse continue;
         if (std.mem.eql(u8, c, command)) return true;

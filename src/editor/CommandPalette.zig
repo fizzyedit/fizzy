@@ -192,10 +192,10 @@ fn modeAndQuery(text: []const u8) struct { mode: Mode, query: []const u8 } {
 
 fn ensureIndex(self: *CommandPalette, editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const root = editor.folder orelse return;
+    const root = editor.app.folder orelse return;
     if (self.index_built and std.mem.eql(u8, self.index_root, root)) return;
 
-    const gpa = editor.gpa;
+    const gpa = editor.app.gpa;
     self.freeIndex(gpa);
     if (!std.mem.eql(u8, self.index_root, root)) {
         if (self.index_root.len > 0) gpa.free(self.index_root);
@@ -213,14 +213,14 @@ fn indexDir(self: *CommandPalette, editor: *Editor, directory: []const u8, depth
     if (depth > max_index_depth or self.index.items.len >= max_index_files) return;
 
     const io = dvui.io;
-    const gpa = editor.gpa;
+    const gpa = editor.app.gpa;
     var dir = std.Io.Dir.cwd().openDir(io, directory, .{
         .access_sub_paths = true,
         .iterate = true,
     }) catch return;
     defer dir.close(io);
 
-    const root = editor.folder orelse return;
+    const root = editor.app.folder orelse return;
 
     var iter = dir.iterate();
     while (iter.next(io) catch null) |entry| {
@@ -230,7 +230,7 @@ fn indexDir(self: *CommandPalette, editor: *Editor, directory: []const u8, depth
         var keep = false;
         defer if (!keep) gpa.free(abs_path);
 
-        if (editor.host.isPathIgnored(root, abs_path, entry.name, entry.kind)) continue;
+        if (editor.app.host.isPathIgnored(root, abs_path, entry.name, entry.kind)) continue;
 
         switch (entry.kind) {
             .file => {
@@ -270,7 +270,7 @@ const Row = union(Mode) {
 
 fn collectFileRows(self: *CommandPalette, editor: *Editor, query: *const fuzzy.Query) []Row {
     const arena = dvui.currentWindow().arena();
-    const root = editor.folder orelse return &.{};
+    const root = editor.app.folder orelse return &.{};
 
     var hits: std.ArrayListUnmanaged(fuzzy.Ranked(usize)) = .empty;
     for (self.index.items, 0..) |abs, i| {
@@ -319,7 +319,7 @@ fn collectCommandRows(editor: *Editor, query: *const fuzzy.Query) []Row {
     const arena = dvui.currentWindow().arena();
 
     var hits: std.ArrayListUnmanaged(fuzzy.Ranked(usize)) = .empty;
-    for (editor.host.commands.items, 0..) |c, i| {
+    for (editor.app.host.commands.items, 0..) |c, i| {
         if (!shouldShowCommand(editor, c.id)) continue;
         // Match against the title, the id, *and* the owning plugin's name, so "Save All",
         // "fizzy.saveAll" and "pixi" (to list everything pixi contributes) all find rows.
@@ -338,12 +338,12 @@ fn collectCommandRows(editor: *Editor, query: *const fuzzy.Query) []Row {
     var rows: std.ArrayListUnmanaged(Row) = .empty;
     for (hits.items) |h| {
         if (rows.items.len >= max_rows) break;
-        const c = editor.host.commands.items[h.item];
+        const c = editor.app.host.commands.items[h.item];
         rows.append(arena, .{ .commands = .{
             .id = c.id,
             .title = c.title,
             .source = if (c.owner) |o| o.display_name else null,
-            .enabled = editor.host.commandEnabled(c.id),
+            .enabled = editor.app.host.commandEnabled(c.id),
             .icon = c.icon,
         } }) catch break;
     }
@@ -353,7 +353,7 @@ fn collectCommandRows(editor: *Editor, query: *const fuzzy.Query) []Row {
 /// Shortcut hint for a command, or null when it has none.
 fn shortcutFor(editor: *Editor, id: []const u8) ?[]const u8 {
     const arena = dvui.currentWindow().arena();
-    const found = editor.keymap.bindingsFor(arena, id) catch return null;
+    const found = editor.app.keymap.bindingsFor(arena, id) catch return null;
     if (found.len == 0) return null;
     const platform: Keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     return Keymap.formatKeys(arena, found[0].stroke, platform) catch null;
@@ -381,7 +381,7 @@ fn activate(self: *CommandPalette, editor: *Editor, rows: []const Row) void {
             if (!c.enabled) return;
             self.activated = idx;
             self.close();
-            editor.host.runCommand(c.id) catch |err| {
+            editor.app.host.runCommand(c.id) catch |err| {
                 dvui.log.err("palette: command '{s}' failed: {s}", .{ c.id, @errorName(err) });
             };
         },
@@ -551,7 +551,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         // No scroll area, so the label's own min size is the panel's — auto-size shrinks to it.
         self.list_content_h = 0;
         dvui.label(@src(), "{s}", .{switch (parsed.mode) {
-            .files => if (editor.folder == null) "No folder open" else "No matching files",
+            .files => if (editor.app.folder == null) "No folder open" else "No matching files",
             .commands => "No matching commands",
         }}, .{
             .expand = .horizontal,
@@ -711,7 +711,7 @@ fn drawRow(
             {
                 var icon_slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .w = 4 } });
                 defer icon_slot.deinit();
-                if (!editor.host.drawFileIcon(ext, abs, text_color)) {
+                if (!editor.app.host.drawFileIcon(ext, abs, text_color)) {
                     core.icon.icon(@src(), "file", icons.tvg.lucide.file, .{
                         .stroke_color = .{ .color = text_color },
                     }, core.widgets.treeRowIconOptions(.{}));
@@ -727,7 +727,7 @@ fn drawRow(
             });
             // Dimmed project-relative directory, VSCode-style — also highlight matches so a
             // query like `src/` lights up the path rather than looking like a miss.
-            if (editor.folder) |root| {
+            if (editor.app.folder) |root| {
                 const arena = dvui.currentWindow().arena();
                 const dir = std.fs.path.dirname(abs) orelse root;
                 const rel = std.fs.path.relativePosix(arena, ".", root, dir) catch "";

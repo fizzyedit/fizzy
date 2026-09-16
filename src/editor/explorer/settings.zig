@@ -285,7 +285,7 @@ fn drawTheme() void {
     if (dropdown.dropped()) {
         for (fizzy.editor().themes.items) |theme| {
             if (dropdown.addChoiceLabel(theme.name)) {
-                Editor.Settings.setThemeName(&fizzy.editor().settings, fizzy.entry().allocator, theme.name) catch {
+                Editor.Settings.setThemeName(&fizzy.editor().app.settings, fizzy.entry().allocator, theme.name) catch {
                     dvui.log.err("Failed to store theme name", .{});
                     break;
                 };
@@ -316,29 +316,29 @@ fn fontSizeSlider(src: std.builtin.SourceLocation, value: *f32) void {
 }
 
 fn drawBodyFontSize() void {
-    fontSizeSlider(@src(), &fizzy.editor().settings.font_body_size);
+    fontSizeSlider(@src(), &fizzy.editor().app.settings.font_body_size);
 }
 
 fn drawHeadingFontSize() void {
-    fontSizeSlider(@src(), &fizzy.editor().settings.font_heading_size);
+    fontSizeSlider(@src(), &fizzy.editor().app.settings.font_heading_size);
 }
 
 fn drawTitleFontSize() void {
-    fontSizeSlider(@src(), &fizzy.editor().settings.font_title_size);
+    fontSizeSlider(@src(), &fizzy.editor().app.settings.font_title_size);
 }
 
 fn drawMonoFontSize() void {
-    fontSizeSlider(@src(), &fizzy.editor().settings.font_mono_size);
+    fontSizeSlider(@src(), &fizzy.editor().app.settings.font_mono_size);
 }
 
 fn drawWindowOpacity() void {
     if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &if (dvui.themeGet().dark) fizzy.editor().settings.window_opacity_dark else fizzy.editor().settings.window_opacity_light,
+        .value = &if (dvui.themeGet().dark) fizzy.editor().app.settings.window_opacity_dark else fizzy.editor().app.settings.window_opacity_light,
         .interval = 0.01,
         .max = 1.0,
         .min = 0.0,
     }, .{ .expand = .horizontal })) {
-        fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) fizzy.editor().settings.window_opacity_dark else fizzy.editor().settings.window_opacity_light));
+        fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) fizzy.editor().app.settings.window_opacity_dark else fizzy.editor().app.settings.window_opacity_light));
         fizzy.editor().markSettingsDirty();
         dvui.refresh(null, @src(), null);
     }
@@ -346,12 +346,12 @@ fn drawWindowOpacity() void {
 
 fn drawContentOpacity() void {
     if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &fizzy.editor().settings.content_opacity,
+        .value = &fizzy.editor().app.settings.content_opacity,
         .interval = 0.01,
         .max = 1.0,
         .min = 0.0,
     }, .{ .expand = .horizontal })) {
-        fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(fizzy.editor().settings.content_opacity));
+        fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(fizzy.editor().app.settings.content_opacity));
         fizzy.editor().markSettingsDirty();
         dvui.refresh(null, @src(), null);
     }
@@ -359,7 +359,7 @@ fn drawContentOpacity() void {
 
 fn drawModalDim() void {
     if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &fizzy.editor().settings.modal_dim,
+        .value = &fizzy.editor().app.settings.modal_dim,
         .interval = 0.01,
         .max = 1.0,
         .min = 0.0,
@@ -371,7 +371,7 @@ fn drawModalDim() void {
 
 fn drawDialogOpacity() void {
     if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &fizzy.editor().settings.dialog_opacity,
+        .value = &fizzy.editor().app.settings.dialog_opacity,
         .interval = 0.01,
         .max = 1.0,
         .min = 0.0,
@@ -383,7 +383,7 @@ fn drawDialogOpacity() void {
 
 fn drawDialogBlur() void {
     if (dvui.sliderEntry(@src(), "{d:0.0}", .{
-        .value = &fizzy.editor().settings.dialog_blur,
+        .value = &fizzy.editor().app.settings.dialog_blur,
         .interval = 1,
         .max = 48,
         .min = 0,
@@ -395,7 +395,7 @@ fn drawDialogBlur() void {
 
 fn drawDialogLift() void {
     if (dvui.sliderEntry(@src(), "{d:0.01}", .{
-        .value = &fizzy.editor().settings.dialog_lift,
+        .value = &fizzy.editor().app.settings.dialog_lift,
         .interval = 0.01,
         .max = 1.0,
         .min = 0.0,
@@ -408,14 +408,14 @@ fn drawDialogLift() void {
 // ---- Input ------------------------------------------------------------------------------
 
 fn drawHoldMenuDuration() void {
-    var hold_menu_ms: f32 = @floatFromInt(fizzy.editor().settings.hold_menu_duration_ms);
+    var hold_menu_ms: f32 = @floatFromInt(fizzy.editor().app.settings.hold_menu_duration_ms);
     if (dvui.sliderEntry(@src(), "{d:0.0} ms", .{
         .value = &hold_menu_ms,
         .interval = 50,
         .max = 1500,
         .min = 100,
     }, .{ .expand = .horizontal })) {
-        fizzy.editor().settings.hold_menu_duration_ms = @intFromFloat(hold_menu_ms);
+        fizzy.editor().app.settings.hold_menu_duration_ms = @intFromFloat(hold_menu_ms);
         fizzy.editor().applyHoldMenuDuration();
         fizzy.editor().markSettingsDirty();
         dvui.refresh(null, @src(), null);
@@ -435,7 +435,7 @@ fn drawInputScheme() void {
         .gravity_x = 1.0,
     });
 
-    const label_text: []const u8 = switch (fizzy.editor().settings.input_scheme) {
+    const label_text: []const u8 = switch (fizzy.editor().app.settings.input_scheme) {
         .auto => switch (dvui.mouseType()) {
             .unknown => "Auto",
             .mouse, .trackpad => |hint| std.fmt.allocPrint(dvui.currentWindow().arena(), "Auto ({s})", .{@tagName(hint)}) catch "Auto",
@@ -455,7 +455,7 @@ fn drawInputScheme() void {
             .{ "Trackpad", Editor.Settings.InputScheme.trackpad },
         }) |choice| {
             if (dropdown.addChoiceLabel(choice[0])) {
-                fizzy.editor().settings.input_scheme = choice[1];
+                fizzy.editor().app.settings.input_scheme = choice[1];
                 fizzy.editor().markSettingsDirty();
                 dvui.refresh(null, @src(), null);
             }
@@ -481,7 +481,7 @@ fn drawPluginUpdateMode() void {
         .gravity_x = 1.0,
     });
 
-    const label_text: []const u8 = switch (fizzy.editor().settings.plugin_update_mode) {
+    const label_text: []const u8 = switch (fizzy.editor().app.settings.plugin_update_mode) {
         .prompt => "Prompt",
         .silent => "Silent",
     };
@@ -496,7 +496,7 @@ fn drawPluginUpdateMode() void {
             .{ "Silent", Editor.Settings.PluginUpdateMode.silent },
         }) |choice| {
             if (dropdown.addChoiceLabel(choice[0])) {
-                fizzy.editor().settings.plugin_update_mode = choice[1];
+                fizzy.editor().app.settings.plugin_update_mode = choice[1];
                 fizzy.editor().markSettingsDirty();
                 dvui.refresh(null, @src(), null);
             }

@@ -72,15 +72,15 @@ pub fn pollOpenPicker(editor: *fizzy.Editor) void {
     open_picker_id = null;
 
     for (uploaded) |wasm_file| {
-        const bytes = wasm_file.readData(editor.gpa) catch |err| {
+        const bytes = wasm_file.readData(editor.app.gpa) catch |err| {
             dvui.log.err("Failed to read uploaded file {s}: {any}", .{ wasm_file.name, err });
             continue;
         };
-        defer editor.gpa.free(bytes);
+        defer editor.app.gpa.free(bytes);
 
-        const path_owned = editor.gpa.dupe(u8, wasm_file.name) catch continue;
+        const path_owned = editor.app.gpa.dupe(u8, wasm_file.name) catch continue;
         if (editor.openFileFromBytes(path_owned, bytes, open_grouping)) |doc_id| {
-            if (editor.open_files.getIndex(doc_id)) |idx| {
+            if (editor.app.open_files.getIndex(doc_id)) |idx| {
                 editor.workbench.setActiveDocIndex(idx);
                 editor.pending_composite_warmup = true;
             }

@@ -735,10 +735,10 @@ export fn FizzyNativeMenuActionEnabled(tag: c_int) callconv(.c) bool {
 export fn FizzyNativeMenuGenericActionEnabled(tag: c_int) callconv(.c) bool {
     if (KeybindSettings.isRecording()) return false;
     if (tag < 0) return true;
-    const items = fizzy.editor().host.native_menu_items.items;
+    const items = fizzy.editor().app.host.native_menu_items.items;
     if (tag >= items.len) return true;
     const cmd = items[@intCast(tag)].command orelse return true;
-    return fizzy.editor().host.commandEnabled(cmd);
+    return fizzy.editor().app.host.commandEnabled(cmd);
 }
 
 /// Current label for a model item, so state-dependent titles ("Show Explorer" / "Hide
@@ -759,7 +759,7 @@ export fn FizzyNativeMenuAboutAction() callconv(.c) void {
 }
 var pending_native_menu_about: std.atomic.Value(bool) = .init(false);
 
-/// A Recent Folders click. The index is into `editor.recents.folders`, newest last.
+/// A Recent Folders click. The index is into `editor.app.recents.folders`, newest last.
 export fn FizzyNativeRecentFolderAction(index: c_int) callconv(.c) void {
     if (index < 0) return;
     pending_native_recent_folder.store(index, .release);
@@ -1523,7 +1523,7 @@ fn resolveBuiltinNativeMenu(id: []const u8) ?objc.Object {
     return null;
 }
 
-/// Rebuild every plugin-contributed native menu item from the current `fizzy.editor().host`
+/// Rebuild every plugin-contributed native menu item from the current `fizzy.editor().app.host`
 /// registry state. Tears down the previous dynamic set first, so this is safe (and cheap
 /// enough) to call on every plugin load/unload/hide-toggle — a full rebuild avoids diffing
 /// against arbitrary prior state, at the cost of some churn AppKit already expects from
@@ -1544,7 +1544,7 @@ pub fn rebuildDynamicNativeMenus() void {
     }
     dynamic_top_level_menus.clearRetainingCapacity();
 
-    const host = &fizzy.editor().host;
+    const host = &fizzy.editor().app.host;
 
     const NSMenu = objc.getClass("NSMenu") orelse return;
     const NSMenuItem = objc.getClass("NSMenuItem") orelse return;
@@ -1815,7 +1815,7 @@ pub fn rebuildNativeRecentFolders() void {
     menu.msgSend(void, "removeAllItems", .{});
 
     const empty = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"".ptr});
-    const folders = fizzy.editor().recents.folders.items;
+    const folders = fizzy.editor().app.recents.folders.items;
 
     // Newest first, matching the dvui menu's reverse walk.
     var i: usize = folders.len;

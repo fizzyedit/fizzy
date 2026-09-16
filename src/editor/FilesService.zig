@@ -22,7 +22,7 @@ fn editorOf(ctx: *anyopaque) *Editor {
 }
 
 fn hostOf(ctx: *anyopaque) *Host {
-    return &editorOf(ctx).host;
+    return &editorOf(ctx).app.host;
 }
 
 /// The service value to register. `editor` is the context; the disk and document halves go

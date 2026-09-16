@@ -74,11 +74,11 @@ fn collectRows(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayLis
     const table_hit = fuzzy.scoreBest(&table_keywords, query, .{ .plain = true });
 
     var exts: std.StringArrayHashMapUnmanaged(void) = .empty;
-    for (editor.host.plugins.items) |plugin| {
+    for (editor.app.host.plugins.items) |plugin| {
         for (plugin.fileTypes()) |e| exts.put(arena, e, {}) catch return rows;
     }
-    for (editor.extension_owner.keys()) |e| exts.put(arena, e, {}) catch return rows;
-    for (editor.extension_conflicts.items) |c| exts.put(arena, c.ext, {}) catch return rows;
+    for (editor.app.extension_owner.keys()) |e| exts.put(arena, e, {}) catch return rows;
+    for (editor.app.extension_conflicts.items) |c| exts.put(arena, c.ext, {}) catch return rows;
 
     const keys = arena.dupe([]const u8, exts.keys()) catch return rows;
     std.mem.sort([]const u8, keys, {}, struct {
@@ -88,15 +88,15 @@ fn collectRows(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayLis
     }.lt);
 
     for (keys, 0..) |ext, i| {
-        const owner = editor.host.pluginForExtension(ext);
+        const owner = editor.app.host.pluginForExtension(ext);
         const owner_name = if (owner) |o|
-            (if (o == editor.host.fallback_editor) fallback_label else o.display_name)
+            (if (o == editor.app.host.fallback_editor) fallback_label else o.display_name)
         else
             "—";
 
         var candidates: std.ArrayListUnmanaged(*fizzy.sdk.Plugin) = .empty;
-        for (editor.host.plugins.items) |plugin| {
-            if (plugin == editor.host.fallback_editor) continue;
+        for (editor.app.host.plugins.items) |plugin| {
+            if (plugin == editor.app.host.fallback_editor) continue;
             for (plugin.fileTypes()) |e| {
                 if (std.mem.eql(u8, e, ext)) {
                     candidates.append(arena, plugin) catch {};
@@ -111,7 +111,7 @@ fn collectRows(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayLis
         }.lt);
 
         var flagged = false;
-        for (editor.extension_conflicts.items) |c| {
+        for (editor.app.extension_conflicts.items) |c| {
             if (std.mem.eql(u8, c.ext, ext)) {
                 flagged = true;
                 break;
@@ -180,7 +180,7 @@ pub fn draw(query: *const fuzzy.Query) void {
 }
 
 fn drawConflicts(theme: dvui.Theme) void {
-    const conflicts = fizzy.editor().extension_conflicts.items;
+    const conflicts = fizzy.editor().app.extension_conflicts.items;
     if (conflicts.len == 0) return;
 
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -440,7 +440,7 @@ fn drawOwnerDropdown(row: Row, ri: usize) void {
             return;
         }
     }
-    if (editor.host.fallback_editor) |text| {
+    if (editor.app.host.fallback_editor) |text| {
         if (dropdown.addChoiceLabel(fallback_label)) {
             assign(editor, row.ext, text.id);
             return;

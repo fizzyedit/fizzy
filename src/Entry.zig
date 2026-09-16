@@ -146,24 +146,24 @@ pub fn main(main_init: std.process.Init) !u8 {
                 fn f(_: *anyopaque, mode: fizzy.backend.DialogMode) ?[]const u8 {
                     const editor = fizzy.editor();
                     const remembered = switch (mode) {
-                        .save => editor.recents.last_save_folder,
-                        .open => editor.recents.last_open_folder,
+                        .save => editor.app.recents.last_save_folder,
+                        .open => editor.app.recents.last_open_folder,
                     };
-                    return remembered orelse editor.folder;
+                    return remembered orelse editor.app.folder;
                 }
             }.f,
             .remember = struct {
                 fn f(_: *anyopaque, mode: fizzy.backend.DialogMode, dir: []const u8) void {
                     const editor = fizzy.editor();
                     const slot = switch (mode) {
-                        .save => &editor.recents.last_save_folder,
-                        .open => &editor.recents.last_open_folder,
+                        .save => &editor.app.recents.last_save_folder,
+                        .open => &editor.app.recents.last_open_folder,
                     };
-                    const copy = editor.gpa.dupe(u8, dir) catch {
+                    const copy = editor.app.gpa.dupe(u8, dir) catch {
                         std.log.err("failed to remember dialog directory {s}", .{dir});
                         return;
                     };
-                    if (slot.*) |old| editor.gpa.free(old);
+                    if (slot.*) |old| editor.app.gpa.free(old);
                     slot.* = copy;
                 }
             }.f,
@@ -196,7 +196,7 @@ pub fn main(main_init: std.process.Init) !u8 {
             }.f,
             .wantsProjectRoot = struct {
                 fn f(_: *anyopaque) bool {
-                    return fizzy.editor().folder == null;
+                    return fizzy.editor().app.folder == null;
                 }
             }.f,
         });
@@ -361,7 +361,7 @@ pub fn AppDeinit(_: *dvui.Window) void {
     // Persist the current windowed frame while the window still exists. No-op off macOS.
     fizzy.backend.saveWindowGeometry(fizzy.entry().window);
     // `editor.deinit` runs each plugin's `deinit` first (pixi's persists its `.fizproject` and
-    // frees its own state + packer while `editor.host`/folder are still live).
+    // frees its own state + packer while `editor.app.host`/folder are still live).
     fizzy.editor().deinit() catch unreachable;
     // Tear down the singleton listener after the editor so any callback
     // currently in flight finishes before we free state it touches.

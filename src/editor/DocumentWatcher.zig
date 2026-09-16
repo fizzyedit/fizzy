@@ -282,7 +282,7 @@ pub fn notifyPathChanged(self: *DocumentWatcher, editor: *fizzy.Editor, path: []
     }
     // Normalization can disagree with the path stored at track time (symlink / cwd); fall
     // back to comparing against every open doc fizzy knows about.
-    for (editor.open_files.values()) |doc| {
+    for (editor.app.open_files.values()) |doc| {
         const doc_path = doc.owner.documentPath(doc);
         if (doc_path.len == 0) continue;
         const doc_norm = normalizePath(self.gpa, doc_path) catch continue;

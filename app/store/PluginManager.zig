@@ -17,7 +17,7 @@ const std = @import("std");
 const sdk = @import("fizzy_sdk");
 /// Via `app.zig` so this picks up the wasm stub on a web build: `LoadedLib` holds a `DynLib`,
 /// which does not exist there.
-const PluginLoader = @import("../app.zig").store.Loader;
+const PluginLoader = @import("../root.zig").store.Loader;
 
 const PluginManager = @This();
 

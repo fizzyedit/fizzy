@@ -198,7 +198,7 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
     }
 
     // --- one branch per plugin that registered a schema
-    for (editor.host.settings_schemas.items, 0..) |*schema, si| {
+    for (editor.app.host.settings_schemas.items, 0..) |*schema, si| {
         // Branch title is the plugin's display name (store / sidebar), not `schema.title` —
         // that field is a leftover section label (e.g. "Text Editor") and reads as a different
         // product from the plugin itself ("Text").
@@ -236,13 +236,13 @@ fn collect(arena: std.mem.Allocator, query: *const fuzzy.Query) std.ArrayListUnm
     }
 
     // --- plugins that failed to load: one branch each, carrying the failure reason
-    for (editor.failed_user_plugins.items, 0..) |f, fi| {
+    for (editor.app.failed_user_plugins.items, 0..) |f, fi| {
         const title = PluginStore.displayName(f.id);
         const s = fuzzy.scoreBest(&.{ title, f.id, f.reason }, query, .{ .plain = true }) orelse continue;
         var branch: Branch = .{
             .title = title,
             .score = s,
-            .tie = editor.host.settings_schemas.items.len + fi + 1,
+            .tie = editor.app.host.settings_schemas.items.len + fi + 1,
             .failed = f,
             // Distinct from a loaded plugin's key: the same id can legitimately appear in both
             // lists, and the two rows expand independently.
@@ -584,7 +584,7 @@ fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) v
     // Plugin branch. `drawPluginIcon` is the same hook the plugin store's cards use, so a plugin
     // that ships an icon is recognisable in both places.
     const plugin_id = if (branch.schema) |s| s.owner.id else if (branch.failed) |f| f.id else "";
-    if (plugin_id.len > 0 and fizzy.editor().host.drawPluginIcon(plugin_id)) return;
+    if (plugin_id.len > 0 and fizzy.editor().app.host.drawPluginIcon(plugin_id)) return;
 
     // No icon of its own: fall back to the plugin's initial in the theme's *text* color, the same
     // stand-in `Host`'s plugin button uses. A generic package glyph tinted with a row *fill*
