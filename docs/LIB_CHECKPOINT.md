@@ -278,11 +278,19 @@ method still on `Editor` reaches something fizzy-only — the next step is seams
 
 What blocks a wholesale move is that `Editor.zig` imports what `app/` cannot see; each is a
 seam to add, then the section moves. Inventory (from grepping the file):
-- **Bundled plugins** (`workbench_mod`/`text_mod`/`image_mod`/`markdown_mod`, the
-  `workbench: Workbench` field, `Workspace`, `FileLoadJob`): the app must not hold a plugin's
-  state. `App` gets a list of `Plugin` registrations from the application; the workbench's
-  own state stays behind its `files`/`workbench` services and `Host` (the "static/dylib
-  duplicate globals" note in memory is the same problem).
+- **Bundled plugins** — *the list is build data now*: `build/sdk.zig`'s
+  `bundledPluginsModule` generates a `bundled_plugins` module (`pub const modules = .{
+  @import("workbench"), … }`) that the runtime iterates for registration, the bundled-id
+  check, each built-in's manifest, the dylib-or-static load (`App.bundledDylibEnabled`,
+  `App.loadBundledDylib`) and per-frame hooks. Nothing in the runtime names a plugin except
+  the workbench (agreed 2026-09-16: an app should be able to embed whatever plugins it lists
+  in its `build.zig.zon`). What is still missing for that: (1) the consumer-facing build API
+  — `b.dependency("fizzy", options)` cannot carry plugin modules, so a consumer needs a
+  function it calls with its plugin dependencies' static modules (each plugin package
+  exporting one); (2) the `workbench: Workbench` field, `Workspace`, `FileLoadJob`,
+  `view_files` — the app must not hold a plugin's state, and the workbench's own state has
+  to live behind its services and `Host` (the "static/dylib duplicate globals" note in memory
+  is the same problem).
 - **fizzy's contributions** referenced directly: `Keybinds.register/registerCommands/tick/
   buildKeymap`, `menu_model.menu_bar`, `Menu.drawModelMenu`, `Sidebar.drawOption`,
   `SettingsTree.draw`, `OutputPanel.draw`, `Explorer.settings`, `Dialogs.*`. Each becomes an

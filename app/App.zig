@@ -11,6 +11,7 @@ const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
 const builtin = @import("builtin");
+const build_opts = @import("build_opts");
 const SettingsPluginsZon = @import("settings/SettingsPluginsZon.zig");
 
 const App = @This();
@@ -966,4 +967,42 @@ pub fn waitForPluginSaves(app: *App, plugin: *sdk.Plugin) void {
     while (app.pluginHasSavingDocs(plugin)) {
         std.Thread.yield() catch {};
     }
+}
+
+/// Whether a bundled plugin should be loaded from `{exe_dir}/plugins/<id>/` rather than the
+/// copy linked in: never on wasm, not when the build pinned it static
+/// (`build_opts.static_<id>`), and not when `FIZZY_STATIC_<ID>=1` is set — the bisection
+/// switch for dylib loading trouble.
+pub fn bundledDylibEnabled(gpa: std.mem.Allocator, comptime id: []const u8) bool {
+    if (comptime builtin.target.cpu.arch == .wasm32) return false;
+    if (comptime @hasDecl(build_opts, "static_" ++ id)) {
+        if (comptime @field(build_opts, "static_" ++ id)) return false;
+    }
+    const env_name = comptime blk: {
+        var buf: [id.len]u8 = undefined;
+        for (id, 0..) |c, i| buf[i] = std.ascii.toUpper(c);
+        break :blk "FIZZY_STATIC_" ++ buf;
+    };
+    if (std.process.Environ.getAlloc(core.platform.processEnviron(), gpa, env_name)) |v| {
+        defer gpa.free(v);
+        return v.len == 0 or v[0] == '0';
+    } else |_| {}
+    return true;
+}
+
+/// Load `{exe_dir}/plugins/<id>/<id>.{ext}` and register it through its dylib entry. `extra`
+/// is the entry's third argument — what a plugin's dylib convention asks the application for,
+/// null for most.
+pub fn loadBundledDylib(app: *App, exe_dir: []const u8, id: []const u8, extra: ?*anyopaque) !void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    const path = try PluginLoader.builtinPluginPath(app.gpa, exe_dir, id);
+    errdefer app.gpa.free(path);
+    const loaded = try PluginLoader.loadAndRegister(&app.host, app.gpa, path, id, .{
+        .gpa = &app.gpa,
+        .arg_b = @ptrCast(&app.host),
+        .arg_c = extra,
+    });
+    try app.appendLoadedPluginLib(loaded);
+    app.syncLoadedPluginDvuiContexts();
+    app.syncLoadedPluginRenderBridge();
 }

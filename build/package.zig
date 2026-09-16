@@ -84,11 +84,11 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                 sh.addFileArg(exe_for_package.getEmittedBin());
                 break :blk sh;
             };
-    
+
             //const dotnet_tool_restore = velopack.addDotnetToolRestoreStep(b);
             //const vpk_vendor_repair = velopack.addVpkVendorRepairStep(b);
             //vpk_vendor_repair.step.dependOn(&dotnet_tool_restore.step);
-    
+
             const vpk_pkg_sh = b.addSystemCommand(&.{"dotnet"});
             vpk_pkg_sh.addArg("vpk");
             // When packaging a foreign-OS bundle, vpk needs an OS directive (e.g. `vpk [win] pack ...`)
@@ -116,11 +116,11 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                 .windows => "fizzy.exe",
                 else => "fizzy",
             });
-    
+
             vpk_pkg_sh.addArg("--delta");
             vpk_pkg_sh.addArg("None");
             vpk_pkg_sh.addArg("--yes");
-    
+
             vpk_pkg_sh.addArg("--outputDir");
             // `addOutputDirectoryArg` takes a basename — Zig manages the actual
             // path under the run step's cache dir. The `addInstallDirectory`
@@ -165,7 +165,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
                     vpk_pkg_sh.addArg("--icon");
                     const icns_path = b.path("assets/macos/fizzy.icns").getPath3(b, &vpk_pkg_sh.step).toString(b.allocator) catch |e| std.debug.panic("icns path: {}", .{e});
                     vpk_pkg_sh.addArg(icns_path);
-    
+
                     if (macos_sign_app_identity) |id| {
                         vpk_pkg_sh.addArg("--signAppIdentity");
                         vpk_pkg_sh.addArg(id);
@@ -195,32 +195,32 @@ pub fn addSteps(opts: Options) *std.Build.Step {
             // can otherwise capture+drop stdio on certain runner configs.
             vpk_pkg_sh.stdio = .inherit;
             try velopack.attachMksquashfsToVpkRun(b, vz, vpk_pkg_sh, target);
-    
+
             //vpk_pkg_sh.step.dependOn(&vpk_vendor_repair.step);
             vpk_pkg_sh.step.dependOn(pack_stage_tail);
-    
+
             const build_package_install = b.addInstallDirectory(.{
                 .source_dir = vpk_pkg_out_dir,
                 .install_dir = zig_out_install_dir,
                 .install_subdir = "",
             });
-    
+
             package_step.dependOn(&build_package_install.step);
         },
         else => {
             package_step.dependOn(&b.addFail("Velopack packaging is only supported for Linux, macOS, and Windows targets").step);
         },
     }
-    
+
     const desktop_step = b.step("desktop", "Alias for `zig build package`");
     desktop_step.dependOn(package_step);
-    
+
     const packageall_step = b.step("packageall", "Six zig build package runs; use -Dwindows-msvc-libc= or -Dfetch-msvc for Windows children from macOS/Linux");
     if (no_emit) {
         packageall_step.dependOn(&b.addFail("cannot run `packageall` with -Dno-emit").step);
     } else {
         const packageall_optimize_arg = b.fmt("-Doptimize={s}", .{@tagName(optimize)});
-    
+
         // Build order is deliberately fail-fast: Windows first (most likely to
         // fail on a fresh CI runner because of MSVC SDK setup, libc.ini paths,
         // and cross-compile ABI surprises), then Linux (mksquashfs / AppImage
@@ -235,7 +235,7 @@ pub fn addSteps(opts: Options) *std.Build.Step {
             "x86_64-macos",
             "aarch64-macos",
         };
-    
+
         var prev_step: ?*std.Build.Step = null;
         for (packageall_triples) |triple| {
             const zig_pkg_run = b.addSystemCommand(&.{
@@ -259,6 +259,6 @@ pub fn addSteps(opts: Options) *std.Build.Step {
         }
         packageall_step.dependOn(prev_step.?);
     }
-    
+
     return package_step;
 }

@@ -45,15 +45,11 @@ const KeybindSettings = @import("KeybindSettings.zig");
 pub const menu_model = @import("menu_model.zig");
 
 const workbench_mod = @import("workbench");
-const text_mod = @import("text");
-const markdown_mod = @import("markdown");
-const image_mod = @import("image");
 
-/// The bundled built-in modules, exactly the ones `postInit` imports and registers above.
-/// Each exports its own `pub const plugin_id` (single source of truth — see e.g. `text_mod.plugin_id`)
-/// instead of this list retyping the id strings a second time; adding a 5th built-in is one
-/// line here, alongside its import/registration, not a separately-maintained string list.
-const bundled_modules = .{ workbench_mod, text_mod, image_mod, markdown_mod };
+/// The plugins this application links in, as the build listed them (`bundled_plugins` is
+/// generated — see `build/sdk.zig`'s `bundledPluginsModule`). Each exports `plugin_id`,
+/// `plugin_options.manifest_zon` and `register(host)`.
+const bundled_plugins = @import("bundled_plugins").modules;
 
 const PluginLoader = @import("app").store.Loader;
 const PluginStore = @import("app").store.Store;
@@ -580,107 +576,8 @@ pub fn init(
 /// Stable fizzy-builtin contribution id.
 pub const view_settings = "fizzy.settings";
 
-fn loadWorkbenchFromDylibEnabled(gpa: std.mem.Allocator) bool {
-    if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    if (comptime build_opts.static_workbench) return false;
-    if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), gpa, "FIZZY_STATIC_WORKBENCH")) |v| {
-        defer gpa.free(v);
-        return v.len == 0 or v[0] == '0';
-    } else |_| {}
-    return true;
-}
-
-fn loadTextFromDylibEnabled(gpa: std.mem.Allocator) bool {
-    if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    if (comptime build_opts.static_text) return false;
-    if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), gpa, "FIZZY_STATIC_TEXT")) |v| {
-        defer gpa.free(v);
-        return v.len == 0 or v[0] == '0';
-    } else |_| {}
-    return true;
-}
-
-fn loadMarkdownFromDylibEnabled(gpa: std.mem.Allocator) bool {
-    if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), gpa, "FIZZY_STATIC_MARKDOWN")) |v| {
-        defer gpa.free(v);
-        return v.len == 0 or v[0] == '0';
-    } else |_| {}
-    return true;
-}
-
-fn loadImageFromDylibEnabled(gpa: std.mem.Allocator) bool {
-    if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    if (comptime build_opts.static_image) return false;
-    if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), gpa, "FIZZY_STATIC_IMAGE")) |v| {
-        defer gpa.free(v);
-        return v.len == 0 or v[0] == '0';
-    } else |_| {}
-    return true;
-}
-
 /// Stable workbench sidebar view id (matches `workbench.view_files`).
 pub const workbench_files_view = workbench_mod.view_files;
-
-/// Load `{exe_dir}/plugins/workbench.{ext}` and register via dylib entry.
-pub fn loadWorkbenchDylib(editor: *Editor, exe_dir: []const u8) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const path = try PluginLoader.builtinPluginPath(editor.app.gpa, exe_dir, "workbench");
-    errdefer editor.app.gpa.free(path);
-    const loaded = try PluginLoader.loadAndRegister(&editor.app.host, editor.app.gpa, path, "workbench", .{
-        .gpa = &editor.app.gpa,
-        .arg_b = @ptrCast(&editor.app.host), // workbench convention: arg_b = *Host
-        .arg_c = @ptrCast(&editor.workbench), // arg_c = *Workbench
-    });
-    try App.appendLoadedPluginLib(&editor.app, loaded);
-    App.syncLoadedPluginDvuiContexts(&editor.app);
-    App.syncLoadedPluginRenderBridge(&editor.app);
-}
-
-/// Load `{exe_dir}/plugins/text.{ext}` and register via dylib entry.
-pub fn loadTextDylib(editor: *Editor, exe_dir: []const u8) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const path = try PluginLoader.builtinPluginPath(editor.app.gpa, exe_dir, "text");
-    errdefer editor.app.gpa.free(path);
-    const loaded = try PluginLoader.loadAndRegister(&editor.app.host, editor.app.gpa, path, "text", .{
-        .gpa = &editor.app.gpa,
-        .arg_b = @ptrCast(&editor.app.host),
-        .arg_c = null,
-    });
-    try App.appendLoadedPluginLib(&editor.app, loaded);
-    App.syncLoadedPluginDvuiContexts(&editor.app);
-    App.syncLoadedPluginRenderBridge(&editor.app);
-}
-
-/// Load `{exe_dir}/plugins/markdown.{ext}` and register via dylib entry.
-pub fn loadMarkdownDylib(editor: *Editor, exe_dir: []const u8) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const path = try PluginLoader.builtinPluginPath(editor.app.gpa, exe_dir, "markdown");
-    errdefer editor.app.gpa.free(path);
-    const loaded = try PluginLoader.loadAndRegister(&editor.app.host, editor.app.gpa, path, "markdown", .{
-        .gpa = &editor.app.gpa,
-        .arg_b = @ptrCast(&editor.app.host),
-        .arg_c = null,
-    });
-    try App.appendLoadedPluginLib(&editor.app, loaded);
-    App.syncLoadedPluginDvuiContexts(&editor.app);
-    App.syncLoadedPluginRenderBridge(&editor.app);
-}
-
-/// Load `{exe_dir}/plugins/image.{ext}` and register via dylib entry.
-pub fn loadImageDylib(editor: *Editor, exe_dir: []const u8) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    const path = try PluginLoader.builtinPluginPath(editor.app.gpa, exe_dir, "image");
-    errdefer editor.app.gpa.free(path);
-    const loaded = try PluginLoader.loadAndRegister(&editor.app.host, editor.app.gpa, path, "image", .{
-        .gpa = &editor.app.gpa,
-        .arg_b = @ptrCast(&editor.app.host),
-        .arg_c = null,
-    });
-    try App.appendLoadedPluginLib(&editor.app, loaded);
-    App.syncLoadedPluginDvuiContexts(&editor.app);
-    App.syncLoadedPluginRenderBridge(&editor.app);
-}
 
 pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
@@ -849,7 +746,7 @@ fn unloadPluginLibs(editor: *Editor) void {
 /// store-managed, and may legitimately be rediscovered under its own id while scanning the
 /// user plugins directory — see `loadUserPlugins`'s already-registered branch).
 fn isBundledPluginId(id: []const u8) bool {
-    inline for (bundled_modules) |m| {
+    inline for (bundled_plugins) |m| {
         if (std.mem.eql(u8, m.plugin_id, id)) return true;
     }
     return false;
@@ -864,7 +761,7 @@ fn isBundledPluginId(id: []const u8) bool {
 /// helper meant to be called fresh every frame (like the store card labels), so the caller never
 /// has to free it, and no `manifest_cache` entry is needed for built-ins.
 pub fn builtinManifest(editor: *Editor, id: []const u8) ?sdk.Manifest {
-    inline for (bundled_modules) |m| {
+    inline for (bundled_plugins) |m| {
         if (std.mem.eql(u8, m.plugin_id, id)) {
             const frame_gpa = editor.app.arena.allocator();
             const zon = frame_gpa.dupeZ(u8, m.plugin_options.manifest_zon) catch return null;
@@ -1655,37 +1552,19 @@ pub fn postInit(editor: *Editor) !void {
     // near-empty fizzy's content: it iterates the Host registries rather than
     // hardcoding panes. Web-safe — the draw fns reach the same inline code the
     // editor tick already runs on wasm. Order = sidebar order.
-    // These 4 built-ins default to dylib-first with a static fallback, but none of them
-    // are actually shipped as dylibs right now (they keep the third-party shape purely as
-    // a template/example) — so the dylib load "fails" and falls back to static on every
-    // run. Not worth logging until that changes.
-    if (loadWorkbenchFromDylibEnabled(editor.app.gpa)) {
-        editor.loadWorkbenchDylib(fizzy.entry().root_path) catch {
-            try workbench_mod.register(&editor.app.host);
-        };
-    } else {
-        try workbench_mod.register(&editor.app.host);
-    }
-    if (loadTextFromDylibEnabled(editor.app.gpa)) {
-        editor.loadTextDylib(fizzy.entry().root_path) catch {
-            try text_mod.register(&editor.app.host);
-        };
-    } else {
-        try text_mod.register(&editor.app.host);
-    }
-    if (loadImageFromDylibEnabled(editor.app.gpa)) {
-        editor.loadImageDylib(fizzy.entry().root_path) catch {
-            try image_mod.register(&editor.app.host);
-        };
-    } else {
-        try image_mod.register(&editor.app.host);
-    }
-    if (loadMarkdownFromDylibEnabled(editor.app.gpa)) {
-        editor.loadMarkdownDylib(fizzy.entry().root_path) catch {
-            try markdown_mod.register(&editor.app.host);
-        };
-    } else {
-        try markdown_mod.register(&editor.app.host);
+    // Every bundled plugin: its dylib beside the exe when there is one, else the copy linked
+    // in. None of the bundled four ship as dylibs today, so the load "fails" and the static
+    // copy registers on every run; not worth logging until that changes. The workbench's
+    // dylib entry takes the workbench state fizzy still holds as `arg_c`.
+    inline for (bundled_plugins) |m| {
+        const extra: ?*anyopaque = if (comptime std.mem.eql(u8, m.plugin_id, "workbench")) @ptrCast(&editor.workbench) else null;
+        if (App.bundledDylibEnabled(editor.app.gpa, m.plugin_id)) {
+            editor.app.loadBundledDylib(fizzy.entry().root_path, m.plugin_id, extra) catch {
+                try m.register(&editor.app.host);
+            };
+        } else {
+            try m.register(&editor.app.host);
+        }
     }
 
     // Seed the runtime disabled / auto-update-off sets from settings before scanning, so
@@ -3118,7 +2997,13 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // CORS-fail README images are `<img>` overlays, not canvas pixels. JS hides any
     // overlay this frame doesn't place — but only after a real frame, so sleeping the
     // window (mouse left) does not blank them. See `net_image.beginOverlayFrame`.
-    if (comptime builtin.target.cpu.arch == .wasm32) markdown_mod.beginWebOverlayFrame();
+    // A bundled plugin that needs a call each frame declares one; on web the markdown
+    // preview's remote-image overlay is the one that does.
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        inline for (bundled_plugins) |m| {
+            if (comptime @hasDecl(m, "beginWebOverlayFrame")) m.beginWebOverlayFrame();
+        }
+    }
 
     // Folder lifetime, before anything draws: free the strings earlier frames retired, then
     // apply a close queued from last frame's draw. `EditorAPI.folder` hands out the pointer

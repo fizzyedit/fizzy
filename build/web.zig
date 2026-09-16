@@ -101,20 +101,20 @@ pub fn addSteps(
     // lazy analysis skips file-scope consts that no reachable body uses.
     // So no `backend` module is wired in for the web build.
 
-    _ = workbench_plugin.addStaticModule(b, web_target, optimize, .{
+    const workbench_module_web = workbench_plugin.addStaticModule(b, web_target, optimize, .{
         .dvui = dvui_web_dep.module("dvui_web"),
         .core = core_module_web,
         .sdk = sdk_module_web,
         .icons = icons_web,
         .backend = null,
     }, workbench_opts, web_exe.root_module);
-    _ = text_plugin.addStaticModule(b, web_target, optimize, .{
+    const text_module_web = text_plugin.addStaticModule(b, web_target, optimize, .{
         .dvui = dvui_web_dep.module("dvui_web"),
         .core = core_module_web,
         .sdk = sdk_module_web,
         .icons = icons_web,
     }, web_exe.root_module);
-    _ = image_plugin.addStaticModule(b, web_target, optimize, .{
+    const image_module_web = image_plugin.addStaticModule(b, web_target, optimize, .{
         .dvui = dvui_web_dep.module("dvui_web"),
         .core = core_module_web,
         .sdk = sdk_module_web,
@@ -124,10 +124,18 @@ pub fn addSteps(
         .core = core_module_web,
         .sdk = sdk_module_web,
     }, web_exe.root_module);
+    const bundled_web = sdk.bundledPluginsModule(b, web_target, optimize, &.{
+        .{ .name = "workbench", .module = workbench_module_web },
+        .{ .name = "text", .module = text_module_web },
+        .{ .name = "image", .module = image_module_web },
+        .{ .name = "markdown", .module = markdown_module_web },
+    });
+    web_exe.root_module.addImport("bundled_plugins", bundled_web);
 
     // The `app` framework module (the plugin store). Wired exactly as the native build wires
     // it — one helper, so the two cannot drift.
-    _ = sdk.wireAppModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), core_module_web, sdk_module_web, icons_web, markdown_module_web, null, build_opts, null, web_exe.root_module);
+    const app_module_web = sdk.wireAppModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), core_module_web, sdk_module_web, icons_web, markdown_module_web, null, build_opts, null, web_exe.root_module);
+    app_module_web.addImport("bundled_plugins", bundled_web);
 
     const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
     const install_wasm = b.addInstallArtifact(web_exe, .{

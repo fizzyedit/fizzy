@@ -176,20 +176,20 @@ pub fn addFizzyExecutableForTarget(
 
     const sdk_module = sdk.wireSdkModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), proxy_bridge_host_mod, core_module, exe.root_module);
     const sdk_proxy_module = sdk.wireSdkModule(b, resolved_target, optimize, dvui_proxy_mod, proxy_bridge_plugin_mod, core_proxy_module, null);
-    _ = workbench_plugin.addStaticModule(b, resolved_target, optimize, .{
+    const workbench_module = workbench_plugin.addStaticModule(b, resolved_target, optimize, .{
         .dvui = dvui_dep.module("dvui_sdl3"),
         .core = core_module,
         .sdk = sdk_module,
         .icons = icons_module,
         .backend = dvui_dep.module("sdl3"),
     }, workbench_opts, exe.root_module);
-    _ = text_plugin.addStaticModule(b, resolved_target, optimize, .{
+    const text_module = text_plugin.addStaticModule(b, resolved_target, optimize, .{
         .dvui = dvui_dep.module("dvui_sdl3"),
         .core = core_module,
         .sdk = sdk_module,
         .icons = icons_module,
     }, exe.root_module);
-    _ = image_plugin.addStaticModule(b, resolved_target, optimize, .{
+    const image_module = image_plugin.addStaticModule(b, resolved_target, optimize, .{
         .dvui = dvui_dep.module("dvui_sdl3"),
         .core = core_module,
         .sdk = sdk_module,
@@ -203,6 +203,18 @@ pub fn addFizzyExecutableForTarget(
     else
         null;
 
+    // What this application bundles, as build data: a generated module whose `modules` tuple
+    // names every statically linked plugin, so the runtime registers, probes and falls back
+    // to whatever is listed here and never a plugin by name. An app built on fizzy lists its
+    // own.
+    const bundled = sdk.bundledPluginsModule(b, resolved_target, optimize, &.{
+        .{ .name = "workbench", .module = workbench_module },
+        .{ .name = "text", .module = text_module },
+        .{ .name = "image", .module = image_module },
+        .{ .name = "markdown", .module = markdown_module },
+    });
+    exe.root_module.addImport("bundled_plugins", bundled);
+
     const singleton_app_dep = b.dependency("dvui_singleton_app", .{
         .target = resolved_target,
         .optimize = optimize,
@@ -212,6 +224,7 @@ pub fn addFizzyExecutableForTarget(
     // The `app` framework module: the plugin store and what it needs. Fizzy is its first
     // consumer, not its owner — see `app/root.zig`.
     const app_module = sdk.wireAppModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), core_module, sdk_module, icons_module, markdown_module, if (nightwatch_dep) |dep| dep.module("nightwatch") else null, build_opts, singleton_app_dep.module("singleton_app"), exe.root_module);
+    app_module.addImport("bundled_plugins", bundled);
 
     if (app_layout) |path| {
         const app_layout_mod = b.createModule(.{
@@ -264,7 +277,6 @@ pub fn addFizzyExecutableForTarget(
             .proxy_bridge = proxy_bridge_plugin_mod,
         });
     } else null;
-
 
     if (resolved_target.result.os.tag == .macos) {
         if (macos_sdl_paths) |p| {
