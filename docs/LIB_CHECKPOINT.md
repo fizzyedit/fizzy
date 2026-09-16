@@ -269,7 +269,12 @@ Done: `app.settings` (Settings, migration, ZON surgery, row chrome, plugin pane)
 holds the runtime *state* (43 fields: allocators, config folders, `host`, `file_table`,
 plugin lists and pending flags, extension ownership, keymap state, settings, recents,
 folder, open documents, save/close/quit bookkeeping, watchers, `layout`); `Editor` embeds it
-as `app` and every reader says `editor.app.x`. The methods are still on `Editor`.
+as `app` and every reader says `editor.app.x`. Fifty methods that touch only that state are
+`App`'s now (plugin id/lib bookkeeping, `.plugins.<id>` readers, extension ownership,
+failure records, settings reconcile, the flat-layout migration, document lookups). Every
+method still on `Editor` reaches something fizzy-only — the next step is seams, not moves:
+`/tmp/movable.py`-style analysis (a fn is movable iff its body touches only `app` fields and
+`App` methods and none of the fizzy imports) now returns only vtable adapters.
 
 What blocks a wholesale move is that `Editor.zig` imports what `app/` cannot see; each is a
 seam to add, then the section moves. Inventory (from grepping the file):
