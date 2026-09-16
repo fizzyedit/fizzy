@@ -152,11 +152,11 @@ pub fn stop(self: *DocumentWatcher) void {
 
 /// Begin watching `doc` if it has a real on-disk path. No-op on wasm / when nightwatch isn't
 /// running / when the path can't be hashed (missing untitled, etc.).
-pub fn track(self: *DocumentWatcher, editor: *fizzy.Editor, doc: fizzy.sdk.DocHandle) void {
+pub fn track(self: *DocumentWatcher, doc: fizzy.sdk.DocHandle) void {
     if (comptime !have_impl) return;
     if (self.impl.nw == null) return;
 
-    const path = editor.docPath(doc);
+    const path = doc.owner.documentPath(doc);
     if (path.len == 0) return;
     // Untitled docs (never written) must not be watched — there's nothing on disk yet.
     if (!doc.owner.documentHasRecognizedSaveExtension(doc)) return;
@@ -215,9 +215,9 @@ pub fn untrack(self: *DocumentWatcher, doc_id: u64) void {
 }
 
 /// Retarget watches after Save As (or any `setDocumentPath`).
-pub fn retarget(self: *DocumentWatcher, editor: *fizzy.Editor, doc: fizzy.sdk.DocHandle) void {
+pub fn retarget(self: *DocumentWatcher, doc: fizzy.sdk.DocHandle) void {
     self.untrack(doc.id);
-    self.track(editor, doc);
+    self.track(doc);
 }
 
 /// True when disk changed while this doc was dirty — `Editor.save` must confirm first.
@@ -283,13 +283,13 @@ pub fn notifyPathChanged(self: *DocumentWatcher, editor: *fizzy.Editor, path: []
     // Normalization can disagree with the path stored at track time (symlink / cwd); fall
     // back to comparing against every open doc fizzy knows about.
     for (editor.open_files.values()) |doc| {
-        const doc_path = editor.docPath(doc);
+        const doc_path = doc.owner.documentPath(doc);
         if (doc_path.len == 0) continue;
         const doc_norm = normalizePath(self.gpa, doc_path) catch continue;
         defer self.gpa.free(doc_norm);
         if (!std.mem.eql(u8, doc_norm, norm)) continue;
         // Ensure we're tracking it (open before watcher started, or watch() failed).
-        if (self.by_id.get(doc.id) == null) self.track(editor, doc);
+        if (self.by_id.get(doc.id) == null) self.track(doc);
         self.applyEntry(editor, doc.id);
         return;
     }

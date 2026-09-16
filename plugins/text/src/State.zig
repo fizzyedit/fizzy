@@ -6,7 +6,7 @@ const Settings = @import("Settings.zig");
 
 const State = @This();
 
-const Schema = sdk.settings.Schema(Settings);
+pub const Schema = sdk.settings.Schema(Settings);
 
 /// Heap-allocated per document (not stored by value) so the pointer handed out as
 /// `DocHandle.ptr` stays stable for the document's whole lifetime — a value stored
@@ -37,10 +37,6 @@ pub fn docByPath(self: *State, path: []const u8) ?*Document {
         if (std.mem.eql(u8, doc.path, path)) return doc;
     }
     return null;
-}
-
-pub fn loadSettings(self: *State, host: *sdk.Host) void {
-    Schema.load(host, "text", &self.settings);
 }
 
 /// Register schema with the Host — fizzy draws shared controls from `Schema.settings`.

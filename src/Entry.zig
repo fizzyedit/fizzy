@@ -191,7 +191,7 @@ pub fn main(main_init: std.process.Init) !u8 {
                     if (project_root) |root| fizzy.editor().setProjectFolder(root) catch |err| {
                         std.log.warn("found project root '{s}' but failed to set: {t}", .{ root, err });
                     };
-                    _ = try fizzy.editor().openFilePath(path, fizzy.editor().currentGroupingID());
+                    _ = try fizzy.editor().openFilePath(path, fizzy.editor().workbench.currentGroupingID());
                 }
             }.f,
             .wantsProjectRoot = struct {

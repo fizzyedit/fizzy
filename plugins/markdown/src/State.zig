@@ -10,7 +10,7 @@ pub const State = struct {
     /// Persisted via `Host.loadPluginSettings`/`storePluginSettings` — see `Settings.zig`.
     settings: Settings = .{},
 
-    const Schema = sdk.settings.Schema(Settings);
+    pub const Schema = sdk.settings.Schema(Settings);
 
     pub fn destroy(self: *State, gpa: std.mem.Allocator) void {
         for (self.previews.values()) |*p| p.deinit();
@@ -21,10 +21,6 @@ pub const State = struct {
         const gop = self.previews.getOrPut(gpa, id) catch @panic("OOM");
         if (!gop.found_existing) gop.value_ptr.* = .{};
         return gop.value_ptr;
-    }
-
-    pub fn loadSettings(self: *State, host: *sdk.Host) void {
-        Schema.load(host, "markdown", &self.settings);
     }
 
     pub fn registerSettings(self: *State, host: *sdk.Host, plugin: *sdk.Plugin) !void {

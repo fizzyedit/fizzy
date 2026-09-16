@@ -22,7 +22,7 @@ pub fn request(file_id: u64) void {
 
 fn fileBasename(file_id: u64) []const u8 {
     const doc = fizzy.editor().docById(file_id) orelse return "?";
-    return std.fs.path.basename(fizzy.editor().docPath(doc));
+    return std.fs.path.basename(doc.owner.documentPath(doc));
 }
 
 fn dialogButton(src: std.builtin.SourceLocation, label_text: []const u8, style: dvui.Theme.Style.Name, tab_idx: u16, id_extra: usize) bool {
@@ -97,7 +97,7 @@ fn beginSaveAndClose(doc: fizzy.sdk.DocHandle, file_id: u64) !void {
     if (doc.owner.isDocumentSaving(doc)) return;
     if (comptime @import("builtin").target.cpu.arch == .wasm32) {
         const idx = fizzy.editor().open_files.getIndex(file_id) orelse return;
-        fizzy.editor().setActiveFile(idx);
+        fizzy.editor().workbench.setActiveDocIndex(idx);
         fizzy.editor().pending_close_file_id = file_id;
         fizzy.editor().requestWebSaveDialog(.save);
         return;
@@ -111,7 +111,7 @@ fn onSaveAndClose(file_id: u64) !void {
     const doc = fizzy.editor().docById(file_id) orelse return;
     if (!doc.owner.documentHasRecognizedSaveExtension(doc)) {
         const idx = fizzy.editor().open_files.getIndex(file_id) orelse return;
-        fizzy.editor().setActiveFile(idx);
+        fizzy.editor().workbench.setActiveDocIndex(idx);
         fizzy.editor().pending_close_file_id = file_id;
         fizzy.core.dialogs.closeFloatingDialogAnchored();
         fizzy.editor().requestSaveAs();

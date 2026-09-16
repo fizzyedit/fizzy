@@ -1744,12 +1744,6 @@ fn recordExtensionConflict(
     };
 }
 
-/// The plugin id the user assigned as `ext`'s default owner, or null. Backs
-/// `EditorAPI.extensionOwnerOverride`, i.e. step 1 of `Host.pluginForExtension`.
-pub fn extensionOwner(editor: *Editor, ext: []const u8) ?[]const u8 {
-    return editor.extension_owner.get(ext);
-}
-
 /// **The only function that writes `.extensions` to disk**, and it runs only in direct response
 /// to an explicit user decision — the install-time dialog's Confirm, or a File Types dropdown.
 /// No load or reconcile path may call it.
@@ -2028,7 +2022,7 @@ fn appendFileTypeDialogRow(
 /// alphabetical tie-break, so the "prior owner" shown in the dialog is the one the user would
 /// actually have gotten.
 fn extensionOwnerExcluding(editor: *Editor, ext: []const u8, skip: *sdk.Plugin) ?*sdk.Plugin {
-    if (editor.extensionOwner(ext)) |owner_id| {
+    if (editor.extension_owner.get(ext)) |owner_id| {
         if (editor.host.pluginById(owner_id)) |p| {
             if (p != skip and editor.host.ownsExtension(p, ext)) return p;
         }
@@ -2057,7 +2051,7 @@ pub fn staleOpenDocsForExtension(editor: *Editor, gpa: std.mem.Allocator, ext: [
     errdefer out.deinit(gpa);
     for (editor.open_files.values()) |doc| {
         if (doc.owner == want) continue;
-        const path = editor.docPath(doc);
+        const path = doc.owner.documentPath(doc);
         if (!std.mem.eql(u8, std.fs.path.extension(path), ext)) continue;
         try out.append(gpa, doc.id);
     }
@@ -2080,9 +2074,9 @@ pub fn reopenDocsUnderCurrentOwner(editor: *Editor, doc_ids: []const u64) struct
         }
         // Both the path and the grouping live in the owner's image / bookkeeping, which the
         // close below tears down — copy them first.
-        const path = gpa.dupe(u8, editor.docPath(doc)) catch continue;
+        const path = gpa.dupe(u8, doc.owner.documentPath(doc)) catch continue;
         defer gpa.free(path);
-        const grouping = editor.docGrouping(doc);
+        const grouping = doc.owner.documentGrouping(doc);
         editor.rawCloseFileID(doc_id) catch |err| {
             dvui.log.err("reopen '{s}': close failed: {s}", .{ path, @errorName(err) });
             continue;
@@ -2754,7 +2748,7 @@ fn fizzyArena(ctx: *anyopaque) std.mem.Allocator {
 
 fn fizzyExtensionOwnerOverride(ctx: *anyopaque, ext: []const u8) ?[]const u8 {
     const editor: *Editor = @ptrCast(@alignCast(ctx));
-    return editor.extensionOwner(ext);
+    return editor.extension_owner.get(ext);
 }
 fn fizzyFolder(ctx: *anyopaque) ?[]const u8 {
     return fizzyCtx(ctx).folder;
@@ -2828,7 +2822,7 @@ fn fizzyOpenDocCount(ctx: *anyopaque) usize {
     return fizzyCtx(ctx).open_files.count();
 }
 fn fizzySetActiveDocIndex(ctx: *anyopaque, index: usize) void {
-    fizzyCtx(ctx).setActiveFile(index);
+    fizzyCtx(ctx).workbench.setActiveDocIndex(index);
 }
 fn fizzyAllocDocId(ctx: *anyopaque) u64 {
     return fizzyCtx(ctx).newFileID();
@@ -2910,7 +2904,7 @@ fn fizzySetExplorerBranchOpen(ctx: *anyopaque, branch_id: dvui.Id, open: bool) v
     }
 }
 fn fizzyDrawWorkspaces(ctx: *anyopaque, index: usize) anyerror!dvui.App.Result {
-    return drawWorkspaces(fizzyCtx(ctx), index);
+    return fizzyCtx(ctx).workbench.drawWorkspaces(index);
 }
 fn fizzyShowOpenFolderDialog(ctx: *anyopaque, cb: sdk.EditorAPI.OpenPathsCallback, default_folder: ?[]const u8) void {
     _ = ctx;
@@ -3010,7 +3004,7 @@ pub fn insertOpenDoc(editor: *Editor, doc_buf: *anyopaque, owner: *sdk.Plugin, i
         .id = id,
     });
     if (editor.document_watcher) |*w| {
-        if (editor.docById(id)) |doc| w.track(editor, doc);
+        if (editor.docById(id)) |doc| w.track(doc);
     }
     if (editor.docById(id)) |doc| editor.registerDocSurface(doc) catch |err| {
         dvui.log.err("document surface for {s}: {t}", .{ owner.documentPath(doc), err });
@@ -3061,7 +3055,7 @@ pub fn documentPathChanged(editor: *Editor, doc: sdk.DocHandle) void {
         dvui.log.err("document surface for {s}: {t}", .{ doc.owner.documentPath(doc), err });
     };
     if (old_id) |id| editor.workbench.documentRenamed(doc, id);
-    if (editor.document_watcher) |*w| w.retarget(editor, doc);
+    if (editor.document_watcher) |*w| w.retarget(doc);
     // Titlebar, tab and menu enablement were drawn this frame from the old path.
     dvui.refresh(null, @src(), null);
 }
@@ -3101,13 +3095,9 @@ pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
     return editor.workbench.activeDoc();
 }
 
-pub fn clearFileTreeDataId(editor: *Editor) void {
-    editor.workbench.clearFileTreeDataId();
-}
-
 /// Files sidebar inactive — drop tree dvui stash and tab-drag state.
 pub fn resetFileTreeWhenFilesHidden(editor: *Editor) void {
-    editor.clearFileTreeDataId();
+    editor.workbench.clearFileTreeDataId();
     editor.clearFileTreeTabDragDropState();
 }
 
@@ -3123,7 +3113,7 @@ pub fn resetFileTreeWhenFilesHidden(editor: *Editor) void {
 /// That snapshot blurs out, the incoming view is photographed at max blur (so it can settle
 /// underneath), and the overlay unsmears. Set `center_transition.pending` to hold at peak
 /// blur until a plugin is ready — nothing here loads one. See `core.anim.transition`.
-fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
+pub fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
     const center = editor.host.selectedSurface(sdk.keywords.ide.main) orelse {
         editor.layout.center_transition.discard();
         editor.layout.center_prev_id = null;
@@ -3194,25 +3184,6 @@ fn drawActiveCenter(editor: *Editor) !dvui.App.Result {
     return try center.draw(center.ctx);
 }
 
-/// Test seam: `drawActiveCenter` is the unit under test in `tests/integration.zig`, and the
-/// frame loop around it needs far more of the editor than the shim brings up.
-pub fn drawActiveCenterForTest(editor: *Editor) !dvui.App.Result {
-    return drawActiveCenter(editor);
-}
-
-/// Workbench routing helpers (type-agnostic; dispatch through `doc.owner`).
-pub fn docGrouping(_: *Editor, doc: sdk.DocHandle) u64 {
-    return doc.owner.documentGrouping(doc);
-}
-
-pub fn setDocGrouping(_: *Editor, doc: sdk.DocHandle, grouping: u64) void {
-    doc.owner.setDocumentGrouping(doc, grouping);
-}
-
-pub fn docPath(_: *Editor, doc: sdk.DocHandle) []const u8 {
-    return doc.owner.documentPath(doc);
-}
-
 /// Looks up an open document by path. Exact match first (the hot path — file-tree paint hits
 /// this every frame with already-canonical abs paths); on miss, collapses `.` / `..` /
 /// duplicate separators so a caller holding `a/./b.zig` still finds a doc stored as `a/b.zig`
@@ -3220,7 +3191,7 @@ pub fn docPath(_: *Editor, doc: sdk.DocHandle) []const u8 {
 /// `fizzy.core.paths.normalize`.
 pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
     for (editor.open_files.values()) |doc| {
-        if (std.mem.eql(u8, editor.docPath(doc), path)) return doc;
+        if (std.mem.eql(u8, doc.owner.documentPath(doc), path)) return doc;
     }
 
     // The file tree calls this once per row per frame, and the miss (file not open) is by far the
@@ -3235,7 +3206,7 @@ pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
     defer if (!path_canonical) editor.gpa.free(@constCast(key));
 
     for (editor.open_files.values()) |doc| {
-        const stored = editor.docPath(doc);
+        const stored = doc.owner.documentPath(doc);
         if (std.mem.eql(u8, stored, key)) return doc;
         // Skip a second normalize when the stored spelling already matched `path` above, or
         // already equals `key`. Only needed when a pre-normalization doc still carries a `.`
@@ -3355,14 +3326,6 @@ pub fn applySettingsTheme(editor: *Editor) !void {
 pub fn applyHoldMenuDuration(editor: *Editor) void {
     const ms = @max(@as(u32, 100), editor.settings.hold_menu_duration_ms);
     fizzy.entry().window.hold_menu_duration_ns = @as(i128, ms) * 1_000_000;
-}
-
-pub fn currentGroupingID(editor: *Editor) u64 {
-    return editor.workbench.currentGroupingID();
-}
-
-pub fn newGroupingID(editor: *Editor) u64 {
-    return editor.workbench.newGroupingID();
 }
 
 pub fn newFileID(editor: *Editor) u64 {
@@ -4666,7 +4629,7 @@ pub fn revealPosition(editor: *Editor, path: []const u8, line: u32, character: u
         // the document is never drawn to consume `pending_cursor`, and the jump looks like a
         // no-op. `open_side` is ignored here — an already-open target is focused where it
         // lives, the same way the file tree's "Open to the side" does not move an open file.
-        if (editor.open_files.getIndex(doc.id)) |idx| editor.setActiveFile(idx);
+        if (editor.open_files.getIndex(doc.id)) |idx| editor.workbench.setActiveDocIndex(idx);
         return true;
     }
 
@@ -4814,10 +4777,6 @@ fn fizzyRevealPosition(ctx: *anyopaque, path: []const u8, line: u32, character: 
     return revealPosition(fizzyCtx(ctx), path, line, character, open_side);
 }
 
-pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
-    return editor.workbench.drawWorkspaces(index);
-}
-
 pub fn abortSaveAllQuit(editor: *Editor) void {
     editor.quit_save_all_ids.clearAndFree(editor.gpa);
     editor.quit_saves_in_flight.clearRetainingCapacity();
@@ -4882,7 +4841,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
             // Save As dialog needs a single active file — bail out of the parallel
             // kickoff for this one and let the existing Save As + pending_close_file_id
             // flow handle it. Next frame, pending_quit_continue will re-enter us.
-            if (editor.open_files.getIndex(id)) |idx| editor.setActiveFile(idx);
+            if (editor.open_files.getIndex(id)) |idx| editor.workbench.setActiveDocIndex(idx);
             editor.pending_close_file_id = id;
             editor.quit_in_progress = true;
             editor.requestSaveAs();
@@ -4891,14 +4850,14 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
         if (doc.owner.saveNeedsConfirmation(doc)) {
             // Flat-raster prompt is a modal dialog — same reason as Save As, do
             // it serially and rejoin afterwards.
-            if (editor.open_files.getIndex(id)) |idx| editor.setActiveFile(idx);
+            if (editor.open_files.getIndex(id)) |idx| editor.workbench.setActiveDocIndex(idx);
             doc.owner.requestSaveConfirmation(doc, .save_and_close, true);
             return;
         }
         if (editor.document_watcher) |*w| {
             if (w.hasDiskConflict(id)) {
                 // Same serial treatment as Save As / flat-raster confirm.
-                if (editor.open_files.getIndex(id)) |idx| editor.setActiveFile(idx);
+                if (editor.open_files.getIndex(id)) |idx| editor.workbench.setActiveDocIndex(idx);
                 Dialogs.FileChangedOnDisk.request(id);
                 return;
             }
@@ -5058,8 +5017,8 @@ pub fn saving(editor: *Editor) bool {
 pub fn openOrFocusFileAtGrouping(editor: *Editor, path: []const u8, grouping: u64) !?usize {
     if (editor.docFromPath(path)) |doc| {
         const idx = editor.open_files.getIndex(doc.id) orelse return error.Unexpected;
-        editor.setDocGrouping(doc, grouping);
-        editor.setActiveFile(idx);
+        doc.owner.setDocumentGrouping(doc, grouping);
+        editor.workbench.setActiveDocIndex(idx);
         return idx;
     }
     _ = try editor.openFilePath(path, grouping);
@@ -5088,7 +5047,7 @@ pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
     // opened under a pre-normalization spelling is still found.)
     if (editor.docFromPath(path)) |doc| {
         if (editor.open_files.getIndex(doc.id)) |i| {
-            editor.setActiveFile(i);
+            editor.workbench.setActiveDocIndex(i);
         }
         return false;
     }
@@ -5156,7 +5115,7 @@ pub fn openFileFromBytes(editor: *Editor, path_in: []u8, bytes: []const u8, grou
 
     if (editor.docFromPath(path)) |existing| {
         if (editor.open_files.getIndex(existing.id)) |idx| {
-            editor.setActiveFile(idx);
+            editor.workbench.setActiveDocIndex(idx);
         }
         return error.AlreadyOpen;
     }
@@ -5218,7 +5177,7 @@ pub fn processLoadingJobs(editor: *Editor) void {
                     std.mem.eql(u8, editor.last_load_request_path.?, job.path);
                 if (should_focus) {
                     if (editor.open_files.getIndex(id)) |idx| {
-                        editor.setActiveFile(idx);
+                        editor.workbench.setActiveDocIndex(idx);
                         editor.last_load_request_path = null;
                     }
                     editor.pending_composite_warmup = true;
@@ -5251,10 +5210,6 @@ pub fn processLoadingJobs(editor: *Editor) void {
     }
 }
 
-pub fn activeWorkspaceCanvasRectPhysical(editor: *Editor) ?dvui.Rect.Physical {
-    return editor.workbench.activeWorkspaceCanvasRectPhysical();
-}
-
 /// Cancel every in-flight load. Workers exit at the next cancellation checkpoint (after
 /// `fromPath` returns) and discard their results. Used on app quit.
 pub fn cancelAllLoadingJobs(editor: *Editor) void {
@@ -5276,7 +5231,7 @@ pub fn drawSaveToasts(editor: *Editor) void {
     // `from` + `from_gravity = 0.5,0.5` lets the FloatingWidget self-size to the toast column
     // and centers it around the anchor. Falls back to the window center if no workspace has
     // rendered yet.
-    const anchor_physical: dvui.Point.Physical = if (editor.activeWorkspaceCanvasRectPhysical()) |r| .{
+    const anchor_physical: dvui.Point.Physical = if (editor.workbench.activeWorkspaceCanvasRectPhysical()) |r| .{
         .x = r.x + r.w * 0.5,
         .y = r.y + r.h * 0.5,
     } else blk: {
@@ -5364,7 +5319,7 @@ pub fn drawLoadingOverlay(editor: *Editor) void {
     const header_h: f32 = 32;
     const card_h: f32 = if (measured) |m| m.h else header_h + @as(f32, @floatFromInt(visible_count)) * row_h;
     const card_rect: dvui.Rect = blk: {
-        if (editor.activeWorkspaceCanvasRectPhysical()) |rs_phys| {
+        if (editor.workbench.activeWorkspaceCanvasRectPhysical()) |rs_phys| {
             const rs_natural = rs_phys.toNatural();
             break :blk .{
                 .x = rs_natural.x + (rs_natural.w - card_w) * 0.5,
@@ -5472,7 +5427,7 @@ pub fn newFile(editor: *Editor, path: []const u8, grid: sdk.EditorAPI.NewDocGrid
 
     const id = owner.documentIdFromBuffer(staging.buf.ptr);
     try editor.insertOpenDoc(staging.buf.ptr, owner, id);
-    editor.setActiveFile(editor.open_files.count() - 1);
+    editor.workbench.setActiveDocIndex(editor.open_files.count() - 1);
     editor.pending_composite_warmup = true;
 
     return editor.docById(id) orelse return error.FailedToCreateFile;
@@ -5482,7 +5437,7 @@ pub fn newFile(editor: *Editor, path: []const u8, grid: sdk.EditorAPI.NewDocGrid
 pub fn allocNextUntitledPath(editor: *Editor) ![]u8 {
     var max_n: u32 = 0;
     for (editor.open_files.values()) |doc| {
-        const base = std.fs.path.basename(editor.docPath(doc));
+        const base = std.fs.path.basename(doc.owner.documentPath(doc));
         if (std.mem.startsWith(u8, base, "untitled-")) {
             const suffix = base["untitled-".len..];
             const n = std.fmt.parseUnsigned(u32, suffix, 10) catch continue;
@@ -5492,16 +5447,6 @@ pub fn allocNextUntitledPath(editor: *Editor) ![]u8 {
         }
     }
     return std.fmt.allocPrint(editor.gpa, "untitled-{d}", .{max_n + 1});
-}
-
-/// Opens the New File dialog via the plugin that provides one (dispatched by `Host`); on confirm
-/// the owner creates an in-memory `untitled-n` document (or on-disk when a parent folder is set).
-pub fn requestNewFileDialog(editor: *Editor) void {
-    editor.host.requestNewDocument(null, 0);
-}
-
-pub fn setActiveFile(editor: *Editor, index: usize) void {
-    editor.workbench.setActiveDocIndex(index);
 }
 
 /// Dispatch a generic fizzy action to the active document owner's command (`<owner_id>.<action>`).
@@ -5618,7 +5563,7 @@ pub fn save(editor: *Editor) !void {
 pub fn requestWebSaveDialog(editor: *Editor, kind: Dialogs.WebSaveAs.Kind) void {
     if (comptime builtin.target.cpu.arch != .wasm32) return;
     const doc = editor.activeDoc() orelse return;
-    Dialogs.WebSaveAs.request(std.fs.path.basename(editor.docPath(doc)), kind);
+    Dialogs.WebSaveAs.request(std.fs.path.basename(doc.owner.documentPath(doc)), kind);
 }
 
 /// Kick off an async save for every dirty file with a recognized extension.
@@ -5637,7 +5582,7 @@ pub fn saveAll(editor: *Editor) !void {
         }
         if (editor.document_watcher) |*w| w.markPendingBaseline(doc.id);
         doc.owner.saveDocument(doc) catch |err| {
-            dvui.log.err("Save All: file {s} failed: {s}", .{ editor.docPath(doc), @errorName(err) });
+            dvui.log.err("Save All: file {s} failed: {s}", .{ doc.owner.documentPath(doc), @errorName(err) });
             continue;
         };
         if (editor.document_watcher) |*w| w.noteSaved(doc.id);
@@ -5664,7 +5609,7 @@ pub fn requestSaveAs(editor: *Editor) void {
         return;
     };
     defer editor.gpa.free(def);
-    const current_file_dir: ?[]const u8 = std.fs.path.dirname(editor.docPath(doc));
+    const current_file_dir: ?[]const u8 = std.fs.path.dirname(doc.owner.documentPath(doc));
     fizzy.backend.showSaveFileDialog(saveAsDialogCallback, &save_as_dialog_filters, def, current_file_dir);
 }
 

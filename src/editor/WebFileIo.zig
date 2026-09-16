@@ -44,7 +44,7 @@ pub fn showOpenFileDialog(
 ) void {
     if (comptime builtin.target.cpu.arch != .wasm32) return;
     open_callback = cb;
-    open_grouping = fizzy.editor().currentGroupingID();
+    open_grouping = fizzy.editor().workbench.currentGroupingID();
     open_picker_id = dvui.Id.extendId(null, @src(), 0);
     // No accept filter — text is the fallback owner for any extension, and other plugins
     // offer their own types via `fileTypes`.
@@ -81,7 +81,7 @@ pub fn pollOpenPicker(editor: *fizzy.Editor) void {
         const path_owned = editor.gpa.dupe(u8, wasm_file.name) catch continue;
         if (editor.openFileFromBytes(path_owned, bytes, open_grouping)) |doc_id| {
             if (editor.open_files.getIndex(doc_id)) |idx| {
-                editor.setActiveFile(idx);
+                editor.workbench.setActiveDocIndex(idx);
                 editor.pending_composite_warmup = true;
             }
         } else |_| {}

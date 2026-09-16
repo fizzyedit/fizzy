@@ -373,7 +373,7 @@ fn activate(self: *CommandPalette, editor: *Editor, rows: []const Row) void {
         .files => |abs| {
             self.activated = idx;
             self.close();
-            _ = editor.openFilePath(abs, editor.currentGroupingID()) catch {
+            _ = editor.openFilePath(abs, editor.workbench.currentGroupingID()) catch {
                 dvui.log.err("palette: failed to open {s}", .{abs});
             };
         },

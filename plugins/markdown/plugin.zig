@@ -74,7 +74,7 @@ pub fn register(host: *sdk.Host) !void {
     // only valid once the plugin runtime has been injected — see `render_ast.highlight_host`.
     render_ast.highlight_host = host;
     plugin.state = @ptrCast(&plugin_state);
-    plugin_state.loadSettings(host);
+    State.Schema.load(host, "markdown", &plugin_state.settings);
     try host.registerPlugin(&plugin);
     try plugin_state.registerSettings(host, &plugin);
     try host.registerLanguageSupport(language_support);

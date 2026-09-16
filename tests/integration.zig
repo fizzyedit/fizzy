@@ -463,7 +463,7 @@ var center_frame_ctx: *fizzy.Editor = undefined;
 fn centerFrame() !dvui.App.Result {
     var b = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer b.deinit();
-    return fizzy.Editor.drawActiveCenterForTest(center_frame_ctx);
+    return fizzy.Editor.drawActiveCenter(center_frame_ctx);
 }
 
 test "a provider swap degrades cleanly when the backend has no render targets" {

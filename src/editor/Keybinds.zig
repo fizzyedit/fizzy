@@ -180,7 +180,7 @@ fn cmdOpenFiles(_: *anyopaque) anyerror!void {
 }
 
 fn cmdNewFile(state: *anyopaque) anyerror!void {
-    editorFromState(state).requestNewFileDialog();
+    editorFromState(state).host.requestNewDocument(null, 0);
 }
 fn cmdSave(state: *anyopaque) anyerror!void {
     try editorFromState(state).save();

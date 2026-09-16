@@ -85,7 +85,7 @@ pub fn register(host: *sdk.Host) !void {
     const st = try gpa.create(State);
     errdefer gpa.destroy(st);
     st.* = .{};
-    st.loadSettings(host);
+    State.Schema.load(host, "text", &st.settings);
     plugin.state = @ptrCast(st);
 
     try host.registerPlugin(&plugin);

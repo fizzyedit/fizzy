@@ -120,15 +120,6 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     return .ok;
 }
 
-/// Same `@src()` for every call so DVUI sees one stable id. Delegates to `sdk.pane_layout`.
-pub fn workspaceMainCanvasVbox(content_color: dvui.Color, background: bool, grouping: u64) *dvui.BoxWidget {
-    return sdk.pane_layout.mainCanvasVbox(content_color, background, grouping);
-}
-
-pub fn workspaceEmptyStateCard(content_color: dvui.Color, grouping: u64) *dvui.BoxWidget {
-    return sdk.pane_layout.emptyStateCard(content_color, grouping);
-}
-
 fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surface, selected: ?*sdk.Surface) void {
     defer self.processTabsDrag(region, tabs);
 
@@ -587,7 +578,7 @@ fn drawCanvas(self: *Workspace, region: sdk.Host.Region, has_tabs: bool) !void {
     if (has_tabs) {
         _ = try region.drawContents();
     } else {
-        var box = workspaceEmptyStateCard(content_color, self.grouping);
+        var box = sdk.pane_layout.emptyStateCard(content_color, self.grouping);
         defer box.deinit();
 
         const alpha = dvui.alpha(1.0);
