@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
-const fizzy = @import("../fizzy.zig");
+const core = @import("core");
+const sdk = @import("fizzy_sdk");
 const std = @import("std");
 const dvui = @import("dvui");
 const SettingsMigration = @import("SettingsMigration.zig");
@@ -109,13 +110,13 @@ pub fn setThemeName(settings: *Settings, allocator: std.mem.Allocator, name: []c
 /// `serialize`'s doc comment) are ignored, both for forward-compat with newer on-disk shapes and
 /// because `.plugins` is read separately, per-plugin, via `Host.loadPluginSettings`.
 pub fn load(allocator: std.mem.Allocator, path: []const u8, plugins_dir: ?[]const u8) !Settings {
-    // Wasm: no on-disk config; `fizzy.core.fs` uses `Io.Dir.cwd()` (posix.AT).
+    // Wasm: no on-disk config; `core.fs` uses `Io.Dir.cwd()` (posix.AT).
     if (comptime builtin.target.cpu.arch == .wasm32) return default(allocator);
 
     SettingsMigration.mergeLegacyPerPluginFiles(allocator, path, plugins_dir);
     SettingsMigration.migrateToPerPluginEnabled(allocator, path, plugins_dir);
 
-    const data = fizzy.core.fs.readZ(allocator, dvui.io, path) catch return default(allocator);
+    const data = core.fs.readZ(allocator, dvui.io, path) catch return default(allocator);
     defer allocator.free(data);
 
     const parsed = parseOnly(allocator, data) catch |err| {

@@ -20,6 +20,29 @@
 /// `build_opts`, so `AppInfo.current` is the identity of whichever app is being built.
 pub const AppInfo = @import("AppInfo.zig");
 
+/// User configuration on disk: `settings.zon` (the app's own record plus every plugin's
+/// `.plugins.<id>` block), its migration from older layouts, and the shared settings-row chrome.
+pub const settings = struct {
+    pub const Settings = @import("settings/Settings.zig");
+    pub const Migration = @import("settings/SettingsMigration.zig");
+    pub const PluginsZon = @import("settings/SettingsPluginsZon.zig");
+    pub const Row = @import("settings/SettingRow.zig");
+    pub const PluginPane = @import("settings/PluginSettingsPane.zig");
+};
+
+/// Recently opened folders, persisted as `recents.zon`.
+pub const Recents = @import("Recents.zig");
+
+/// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
+pub const keymap = struct {
+    pub const Keymap = @import("keymap/keymap.zig").Keymap;
+    pub const root = @import("keymap/keymap.zig");
+    pub const Key = @import("keymap/Key.zig");
+    pub const chord = @import("keymap/chord.zig");
+    pub const zon = @import("keymap/zon.zig");
+    pub const dvui_adapter = @import("keymap/dvui_adapter.zig");
+};
+
 /// Regions and the splits between them: the whole of how an application divides its window.
 ///
 /// A minimal app is exactly this — regions laid out by dvui's boxes, a split where the user

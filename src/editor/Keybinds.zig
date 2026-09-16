@@ -18,8 +18,8 @@ const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const sdk = @import("fizzy_sdk");
-const keymap = @import("keymap/keymap.zig");
-const adapter = @import("keymap/dvui_adapter.zig");
+const keymap = @import("app").keymap.root;
+const adapter = @import("app").keymap.dvui_adapter;
 
 pub const Keybinds = @This();
 

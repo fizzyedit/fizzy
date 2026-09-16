@@ -30,8 +30,8 @@ const update_notify = @import("app").update.update_notify;
 const Entry = fizzy.Entry;
 const Editor = @This();
 
-pub const Recents = @import("Recents.zig");
-pub const Settings = @import("Settings.zig");
+pub const Recents = @import("app").Recents;
+pub const Settings = @import("app").settings.Settings;
 
 /// One id's pending fizzy-reserved `.plugins.<id>` field writes. A null field means "not
 /// touched this cycle" — `writeMergedSettings` reads that half back off disk instead, so
@@ -98,10 +98,9 @@ const PluginManager = @import("app").store.Manager;
 /// Fizzy's implementation of the `files` service. Public so a test — or an app copying fizzy —
 /// can register it explicitly rather than only through `postInit`.
 pub const FilesService = @import("FilesService.zig");
-const PluginSettingsPane = @import("PluginSettingsPane.zig");
 const SettingsTree = @import("SettingsTree.zig");
 const OutputPanel = @import("OutputPanel.zig");
-const SettingsPluginsZon = @import("SettingsPluginsZon.zig");
+const SettingsPluginsZon = @import("app").settings.PluginsZon;
 const file_glyphs = @import("file_glyphs.zig");
 const SettingsWatcher = @import("app").watch.SettingsWatcher;
 const Constants = @import("Constants.zig");
@@ -230,12 +229,12 @@ dvui_default_keybinds: std.StringHashMapUnmanaged(dvui.enums.Keybind) = .empty,
 /// Resolved keybinding table: chord -> command id. Rebuilt by `Keybinds.buildKeymap`
 /// whenever `rebuildKeybinds` runs (plugin load/unload), so a plugin's binds never outlive
 /// the image their strings live in.
-keymap: @import("keymap/keymap.zig").Keymap = .{},
+keymap: @import("app").keymap.root.Keymap = .{},
 /// Parsed `keybinds.zon`. Held because `keymap` borrows its command-id and owner-id strings —
 /// it must outlive the keymap and is replaced wholesale on every rebuild.
-keybinds_overrides: ?@import("keymap/keymap.zig").zon.File = null,
+keybinds_overrides: ?@import("app").keymap.root.zon.File = null,
 /// Cached `Keymap.conflicts()` result from the last rebuild — owned, freed on next rebuild.
-keybind_conflicts: ?[]@import("keymap/keymap.zig").Conflict = null,
+keybind_conflicts: ?[]@import("app").keymap.root.Conflict = null,
 /// Which default keymap fizzy starts from.
 keybind_profile: Keybinds.Profile = .vscode,
 /// VSCode-style Quick Open / command palette overlay.

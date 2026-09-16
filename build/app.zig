@@ -386,7 +386,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ "fizzy-paths-tests", "core/paths.zig" },
         .{ "fizzy-lsp-protocol-tests", "core/lsp/Protocol.zig" },
         .{ "fizzy-lsp-uri-tests", "core/lsp/UriUtil.zig" },
-        .{ "fizzy-settings-plugins-zon-tests", "src/editor/SettingsPluginsZon.zig" },
+        .{ "fizzy-settings-plugins-zon-tests", "app/settings/SettingsPluginsZon.zig" },
         // std-only despite living under sdk/src/ — and the SDK-rooted test artifact
         // below never reaches it (nothing in the graph forces `sdk.manifest`), so it
         // needs its own root either way.
@@ -401,7 +401,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ "fizzy-textcore-tests", "plugins/text/src/textcore/textcore.zig" },
         // Keybinding parse/resolve core. Deliberately dvui-free (see keymap.zig) — dvui's
         // keybind map can't express chords and is keyed by bind name, not command.
-        .{ "fizzy-keymap-tests", "src/editor/keymap/keymap.zig" },
+        .{ "fizzy-keymap-tests", "app/keymap/keymap.zig" },
         // `<img>` scanning for the markdown preview's raw-HTML blocks. Under plugins/
         // but std-only by design (see html_images.zig), so it tests from the app build.
         .{ "fizzy-md-html-images-tests", "plugins/markdown/src/md/html_images.zig" },

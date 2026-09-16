@@ -18,7 +18,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const fizzy = @import("../fizzy.zig");
 const fuzzy = @import("core").fuzzy;
-const keymap = @import("keymap/keymap.zig");
+const keymap = @import("app").keymap.root;
 const Keybinds = @import("Keybinds.zig");
 
 const Editor = @import("Editor.zig");

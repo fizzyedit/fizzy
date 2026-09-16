@@ -446,7 +446,7 @@ persisted — go through the settings pane or `applyZon`, or you'll leak the sch
 Author fields live under `.settings` so they can never collide with the Fizzy-reserved
 `.enabled` / `.auto_update` / `.extensions`. Only fields whose payload differs from the cell's declared default is written; an all-default
 value removes that plugin's `.settings` (and if also disabled, the whole `.plugins.<id>` entry).
-`src/editor/SettingsPluginsZon.zig` locates/composes fields by source byte-span via the same
+`app/settings/SettingsPluginsZon.zig` locates/composes fields by source byte-span via the same
 `std.zig.Ast`/`ZonGen` machinery `std.zon.parse` uses, so nothing else in the file is
 re-serialized. Reads (`Host.loadPluginSettings`) return the `.settings` sub-blob for the plugin
 currently calling `register()`. A plugin's settings survive uninstall (only the dylib/directory
@@ -1362,7 +1362,7 @@ drop straight into the plugins directory, exactly like §2.6.
 | `sdk/src/manifest.zig` | `Manifest` — the `plugin.zig.zon` shape (`id`/`name`/`version`/`min_sdk_version`/`description`/`tags`/`author`/`author_url`) + `parse`/`free`, read back out of a loaded dylib at runtime. The typed shape actually baked into a dylib's C-ABI exports is `dylib.Identity` (build-injected, never runtime-parsed) |
 | `sdk/src/settings.zig` | Comptime settings API (`sdk.settings.Schema(T)`) — see §3.1.1 |
 | `app/layout/` | The region registry, picker and assignment persistence (`layout.zon`) — app-side, not part of the SDK |
-| `src/editor/SettingsPluginsZon.zig` | ZON-AST byte-span surgery for `settings.zon`'s merged `.plugins.<id>` fields — fizzy-only, not part of the SDK |
+| `app/settings/SettingsPluginsZon.zig` | ZON-AST byte-span surgery for `settings.zon`'s merged `.plugins.<id>` fields — fizzy-only, not part of the SDK |
 | `app/watch/SettingsWatcher.zig` | Thin nightwatch adapter for live external `settings.zon` / dropped-in plugin reconciliation (see above) — fizzy-only, not part of the SDK |
 | `app/watch/FolderWatcher.zig`, `folder_events.zig` | Recursive watch on the open folder, fanned out to plugins as `folderPathsChanged` (§3.2). The only watcher adapter whose output leaves fizzy; nightwatch stays behind the hook so it can be swapped per platform. `folder_events.zig` is the std-only buffering/filtering half, split out so it can be unit-tested |
 | `sdk/plugin_sdk.zig` | `fizzy.plugin.create` / `.install` / `.addCModule` — the build-side API a plugin's `build.zig` calls |

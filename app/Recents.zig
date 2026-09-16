@@ -1,8 +1,9 @@
 const std = @import("std");
-const fizzy = @import("../fizzy.zig");
+const core = @import("core");
+const sdk = @import("fizzy_sdk");
 const dvui = @import("dvui");
 const RecentsMigration = @import("RecentsMigration.zig");
-const Constants = @import("Constants.zig");
+const max_recents: usize = 10;
 
 const Recents = @This();
 
@@ -28,12 +29,12 @@ fn trimTrailingPathSeparators(path: []const u8) []const u8 {
     return path[0..end];
 }
 
-/// Everything stored in `folders` / `last_*_folder` is canonical (`fizzy.core.paths.normalize`), so
+/// Everything stored in `folders` / `last_*_folder` is canonical (`core.paths.normalize`), so
 /// `/foo` and `/foo/.` are one entry rather than two rows pointing at the same directory.
 /// Applied on load as well as on append: files written before this normalization existed can
 /// still hold the odd spellings, and those must collapse instead of surviving forever.
 fn canonicalize(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return fizzy.core.paths.normalize(allocator, trimTrailingPathSeparators(path));
+    return core.paths.normalize(allocator, trimTrailingPathSeparators(path));
 }
 
 pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
@@ -41,7 +42,7 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
 
     RecentsMigration.migrateIfNeeded(allocator, path);
 
-    if (fizzy.core.fs.readZ(allocator, dvui.io, path) catch null) |data| {
+    if (core.fs.readZ(allocator, dvui.io, path) catch null) |data| {
         defer allocator.free(data);
 
         if (std.zon.parse.fromSliceAlloc(Disk, allocator, data, null, .{ .ignore_unknown_fields = true }) catch null) |disk| {
@@ -92,8 +93,8 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
 pub fn indexOfFolder(recents: *Recents, path: []const u8) ?usize {
     if (recents.folders.items.len == 0) return null;
 
-    const canon_key = canonicalize(fizzy.entry().allocator, path) catch null;
-    defer if (canon_key) |k| fizzy.entry().allocator.free(k);
+    const canon_key = canonicalize(recents.folders.allocator, path) catch null;
+    defer if (canon_key) |k| recents.folders.allocator.free(k);
     const key: []const u8 = canon_key orelse trimTrailingPathSeparators(path);
 
     for (recents.folders.items, 0..) |folder, i| {
@@ -106,20 +107,20 @@ pub fn indexOfFolder(recents: *Recents, path: []const u8) ?usize {
 /// Takes ownership of `path`.
 pub fn appendFolder(recents: *Recents, path: []const u8) !void {
     const canon_owned = dup: {
-        defer fizzy.entry().allocator.free(path);
-        break :dup try canonicalize(fizzy.entry().allocator, path);
+        defer recents.folders.allocator.free(path);
+        break :dup try canonicalize(recents.folders.allocator, path);
     };
 
     if (recents.indexOfFolder(canon_owned)) |index| {
-        fizzy.entry().allocator.free(canon_owned);
+        recents.folders.allocator.free(canon_owned);
         const folder = recents.folders.orderedRemove(index);
         try recents.folders.append(folder);
         return;
     }
 
-    if (recents.folders.items.len >= Constants.max_recents) {
+    if (recents.folders.items.len >= max_recents) {
         const oldest = recents.folders.orderedRemove(0);
-        fizzy.entry().allocator.free(oldest);
+        recents.folders.allocator.free(oldest);
     }
 
     try recents.folders.append(canon_owned);

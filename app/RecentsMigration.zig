@@ -2,7 +2,8 @@
 //! docs/PLUGIN_MANIFEST_PLAN.md R3). All `std.json` usage on the recents path is isolated
 //! to this file so it can be deleted once every install has migrated.
 const std = @import("std");
-const fizzy = @import("../fizzy.zig");
+const core = @import("core");
+const sdk = @import("fizzy_sdk");
 const dvui = @import("dvui");
 
 /// Legacy `recents.json` shape (see pre-R3 `Recents.zig`).
@@ -23,7 +24,7 @@ const Disk = struct {
 /// JSON, write an equivalent `zon_path`, and delete the JSON file. No-op (including on
 /// any failure along the way — the caller falls back to defaults as usual) otherwise.
 pub fn migrateIfNeeded(allocator: std.mem.Allocator, zon_path: []const u8) void {
-    if (fizzy.core.fs.read(allocator, dvui.io, zon_path) catch null) |existing| {
+    if (core.fs.read(allocator, dvui.io, zon_path) catch null) |existing| {
         allocator.free(existing);
         return;
     }
@@ -31,7 +32,7 @@ pub fn migrateIfNeeded(allocator: std.mem.Allocator, zon_path: []const u8) void 
     const json_path = siblingJsonPath(allocator, zon_path) catch return;
     defer allocator.free(json_path);
 
-    const data = fizzy.core.fs.read(allocator, dvui.io, json_path) catch return;
+    const data = core.fs.read(allocator, dvui.io, json_path) catch return;
     defer allocator.free(data);
 
     migrate(allocator, zon_path, json_path, data) catch |err| {

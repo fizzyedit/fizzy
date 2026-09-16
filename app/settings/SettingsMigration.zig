@@ -5,7 +5,8 @@
 //! 2. `migrateToPerPluginEnabled` — pre-R12 flat `.plugins.<id> = .{ <author fields> }` + top-level
 //!    `disabled_plugins` into nested `.{ .enabled = …, .settings = .{ … } }` (R12).
 const std = @import("std");
-const fizzy = @import("../fizzy.zig");
+const core = @import("core");
+const sdk = @import("fizzy_sdk");
 const dvui = @import("dvui");
 const Settings = @import("Settings.zig");
 const SettingsPluginsZon = @import("SettingsPluginsZon.zig");
@@ -39,10 +40,10 @@ fn mergeOne(allocator: std.mem.Allocator, settings_zon_path: []const u8, plugins
     const legacy_path = try std.fmt.allocPrint(allocator, "{s}/{s}{s}", .{ plugins_dir, id, legacy_suffix });
     defer allocator.free(legacy_path);
 
-    const legacy_text = try fizzy.core.fs.read(allocator, dvui.io, legacy_path);
+    const legacy_text = try core.fs.read(allocator, dvui.io, legacy_path);
     defer allocator.free(legacy_text);
 
-    const existing = fizzy.core.fs.readZ(allocator, dvui.io, settings_zon_path) catch null;
+    const existing = core.fs.readZ(allocator, dvui.io, settings_zon_path) catch null;
     defer if (existing) |e| allocator.free(e);
 
     const composed = try SettingsPluginsZon.upsertOne(allocator, existing, .{ .id = id, .text = legacy_text });
@@ -67,7 +68,7 @@ const LegacyDisk = struct {
 /// disabled. Idempotent: already-nested blocks are left alone; a file with no legacy list and no
 /// flat blocks is a no-op. Best-effort throughout.
 pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path: []const u8, plugins_dir: ?[]const u8) void {
-    const data = fizzy.core.fs.readZ(allocator, dvui.io, settings_zon_path) catch return;
+    const data = core.fs.readZ(allocator, dvui.io, settings_zon_path) catch return;
     defer allocator.free(data);
 
     @setEvalBranchQuota(10_000);

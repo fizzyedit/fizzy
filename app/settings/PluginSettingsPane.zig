@@ -11,8 +11,9 @@
 //! this one's.
 const std = @import("std");
 const dvui = @import("dvui");
-const fizzy = @import("../fizzy.zig");
-const settings = fizzy.sdk.settings;
+const core = @import("core");
+const sdk = @import("fizzy_sdk");
+const settings = sdk.settings;
 
 /// Draw the control for `field` — no label. `SettingsTree` draws the setting name above this.
 pub fn drawField(schema: *const settings.SettingsSchema, field: settings.Setting, field_index: usize, id_extra: usize) !void {
@@ -90,7 +91,7 @@ pub fn drawField(schema: *const settings.SettingsSchema, field: settings.Setting
             const idx = access.getEnumIndex(value, field_index);
             const current = if (idx < choices.len) choices[idx] else "?";
             dvui.label(@src(), "{s}", .{current}, .{ .margin = .all(0), .padding = .all(0) });
-            fizzy.core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
+            core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
             hbox.deinit();
 
             if (dropdown.dropped()) {
@@ -176,7 +177,7 @@ fn drawIntChoices(schema: *const settings.SettingsSchema, field: settings.Settin
     });
     const label_text = std.fmt.allocPrint(dvui.currentWindow().arena(), "{d}", .{current}) catch "?";
     dvui.label(@src(), "{s}", .{label_text}, .{ .margin = .all(0), .padding = .all(0) });
-    fizzy.core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
+    core.icon.icon(@src(), "dropdown_triangle", dvui.entypo.triangle_down, .{}, .{ .gravity_y = 0.5 });
     hbox.deinit();
 
     if (dropdown.dropped()) {
