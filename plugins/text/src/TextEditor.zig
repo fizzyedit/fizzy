@@ -63,9 +63,8 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
     // stop, so the preview slides in and out from the right like a document opening to the side
     // rather than the pane's contents being swapped underneath the user.
     //
-    // It is `core.widgets.Split` — the same divider the app's own regions, the document panes and the
-    // bottom panel use, sized in points. A `PanedWidget` here was a second implementation of the
-    // same idea, with its own ratio, its own handle and its own feel.
+    // `core.widgets.Split` — the same divider the app's own regions, the document panes and the
+    // bottom panel use, sized in points.
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .both,
         .background = false,

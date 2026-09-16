@@ -1167,7 +1167,7 @@ pub fn registerNativeMenuItem(self: *Host, item: NativeMenuItem) !void {
 
 // ---- commands --------------------------------------------------------------
 
-/// Register a plugin command. Ids should be plugin-namespaced (`"pixelart.packProject"`).
+/// Register a plugin command. Ids should be plugin-namespaced (`"pixi.packProject"`).
 pub fn registerCommand(self: *Host, cmd: Command) !void {
     try self.commands.append(self.allocator, cmd);
 }

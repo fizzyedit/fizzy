@@ -1,10 +1,8 @@
 //! Fizzy keybindings: the default bind table, fizzy's own commands, and key dispatch.
 //!
-//! Keys used to be wired straight to `fizzy.editor().*` calls by a hardcoded if-chain, which meant
-//! nothing was addressable by id and so nothing could be rebound. Now every fizzy action is a
-//! registered `Command`, and `tick()` resolves a key event to a command id through
-//! `keymap.Keymap` and runs it via the Host registry — the same registry plugin commands live
-//! in, which is what makes a single rebindable table (and, later, a command palette) possible.
+//! Every fizzy action is a registered `Command`, and `tick()` resolves a key event to a command
+//! id through `keymap.Keymap` and runs it via the Host registry — the same registry plugin
+//! commands live in, which is what makes one rebindable table and the command palette possible.
 //!
 //! **Migration shape.** dvui's `Window.keybinds` map is still the source of the *default* key
 //! for each action: dvui seeds its own binds, `register()` below adds fizzy's own, and plugins
@@ -607,10 +605,8 @@ pub fn syncNativeMenuShortcuts(editor: *Editor) void {
         }
     }
 
-    // Plugin items (`Host.registerNativeMenuItem`). Before this they were built with an empty
-    // key equivalent and never restamped, so a plugin action with a perfectly good chord — the
-    // text plugin's Format Document, pixi's Transform / Grid Layout — showed none in the macOS
-    // Edit menu no matter what the user bound it to.
+    // Plugin items (`Host.registerNativeMenuItem`) get their chord restamped too, whatever the
+    // user bound.
     for (editor.host.native_menu_items.items, 0..) |ni, index| {
         const command_id = ni.command orelse {
             fizzy.backend.setDynamicNativeMenuShortcut(index, null, 0);
@@ -824,9 +820,9 @@ fn loadUserOverrides(editor: *Editor) !void {
 pub const bind_override_prefix = "bind.";
 
 /// The dvui bind name a fizzy command's key is mirrored onto, so a rebind also moves the
-/// built-in bind dvui's own widgets match on. The menus no longer go through this — they ask
-/// the keymap directly (`menuKeybindFor`), which answers for every command rather than only the
-/// ones that happen to have a dvui bind name.
+/// built-in bind dvui's own widgets match on. The menus ask the keymap directly
+/// (`menuKeybindFor`), which answers for every command rather than only the ones that happen
+/// to have a dvui bind name.
 fn fizzyBindForCommand(id: []const u8) ?[]const u8 {
     inline for (fizzy_commands) |c| {
         if (std.mem.eql(u8, c.id, id)) return c.bind;

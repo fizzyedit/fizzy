@@ -667,11 +667,8 @@ fn resetInnermostPack(self: *Layout) void {
 // This is the layer a *layout* is written against: a shape declares regions, and the framework
 // owns the mechanism (paned trees, split ratios, persistence, collapse animation, auto-hide).
 //
-// The test this has to pass is that a shape never writes mechanism. Before it existed,
-// fizzy's layout reached `dock.paned.dragging`, called `animateSplit`, read `split_ratio.*`, kept
-// `editor.layout.panel_ratio` in sync by hand and published `editor.panes.paned` so other code could
-// find it — none of which an app author should know about, and all of which only worked because
-// fizzy's own shape happens to have a panel.
+// The test this has to pass is that a shape never writes mechanism: nothing here should be
+// something an app author has to know about, and nothing may assume fizzy's own shape.
 
 pub const Region = @import("Region.zig");
 /// Runtime subdivision of a place — see `State.splits`.

@@ -6,7 +6,7 @@
 //!
 //! `ctx` is contribution-owned opaque state passed back to its `draw` fn (null for contributions
 //! that reach through the `fizzy.*` globals directly). `id`s are stable and plugin-namespaced
-//! (e.g. `"pixelart.sprites"`) so selection state and cross-plugin references survive without a
+//! (e.g. `"pixi.sprites"`) so selection state and cross-plugin references survive without a
 //! compile-time dependency.
 //!
 //! The immediate-mode `draw` contributions and the pure-data `NativeMenuItem` are two

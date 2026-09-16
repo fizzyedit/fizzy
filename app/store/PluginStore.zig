@@ -3101,8 +3101,6 @@ const fizzy_repo_url = "https://github.com/fizzyedit/fizzy";
 /// built-in: the registry homepage (repo root) for anything with a store presence, or the
 /// fizzy monorepo subdirectory for a bundled built-in. Sideloaded/local plugins with no
 /// registry entry have no known repo, so this is null and the store shows "no README found".
-/// Built-in / sideloaded plugins gain a `repository` field with the Phase 4a manifest bump,
-/// which can replace the bundled-only fallback below.
 fn repoSource(entry: StoreEntry) ?RepoSource {
     if (entry.registry) |r| {
         if (r.homepage.len > 0) return .{ .repo = r.homepage };

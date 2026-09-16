@@ -2,11 +2,9 @@
 //! (`Plugin.fileTypes`) overlap something another plugin already opens — including the very
 //! common case where the prior owner was only the `text` fallback ("a new plugin wants `.txt`").
 //!
-//! **Why this exists.** Which plugin opens a file used to be a silent numeric contest between
-//! plugin authors (`fileTypePriority`, now removed): nothing stopped a third-party plugin from
-//! claiming a low number for an extension it had no business monopolizing, and the user had no
-//! way to see or override the outcome. Ownership is now an explicit, persisted user decision,
-//! and this window is where that decision gets made the first time it comes up.
+//! **Why this exists.** Which plugin opens a file is an explicit, persisted user decision, not
+//! a priority contest between plugin authors, and this window is where that decision gets made
+//! the first time it comes up.
 //!
 //! **Why it never nags.** There is deliberately no *per-extension* "already asked" record on disk
 //! — such a record cannot tell "nothing has changed since we asked" apart from "a *different* new

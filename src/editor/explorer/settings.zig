@@ -1,7 +1,6 @@
 //! The fizzy's own settings, as data.
 //!
-//! These used to be drawn inline inside nested `dvui.groupBox`es. They're now a flat declarative
-//! table: `SettingsTree` renders them as branches/leaves of the settings tree and matches the
+//! A flat declarative table: `SettingsTree` renders them as branches/leaves of the settings tree and matches the
 //! user's search text against `label` + `keywords` without drawing anything, so a group with no
 //! surviving leaves can be skipped entirely.
 //!

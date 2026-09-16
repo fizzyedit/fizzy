@@ -2,11 +2,8 @@
 //!
 //! Both menu bars are rendered from this one tree: `Menu.zig` draws it with dvui, and
 //! `backend_native.buildMenuBar` builds the macOS `NSMenu` from it. Neither owns a list of
-//! items, so an entry added here appears in both by construction — which is the whole point.
-//! Before this, every item was written out in both places (plus an `NSMenuItem` selector, an
-//! `NativeMenuAction` variant, and an Objective-C forwarding method), and the two had already
-//! drifted: the macOS View menu said "Show Explorer" even when the explorer was open, and
-//! Recent Folders existed only in the dvui menu.
+//! items, so an entry added here appears in both by construction — which is the whole point:
+//! two hand-kept lists drift.
 //!
 //! An item names a **command** and nothing else — see `Keybinds.fizzy_commands`. Titles,
 //! enablement and shortcuts are either declared here once or derived from the command, never

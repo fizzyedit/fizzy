@@ -6,39 +6,40 @@ Cross-platform, open-source general editor written in Zig, UI via [DVUI](https:/
 
 ## The core idea: fizzy + plugins
 
-Fizzy the app is itself a near-empty host (window, frame loop, menu/sidebar/panel layout, document model) that owns **no editing features**. Everything the user sees — pixel-art editing, the file explorer/tabs/splits, text editing — is contributed by **plugins** that register against a stable SDK. Plugins never import each other; they meet only at the SDK.
+Fizzy the app is itself a near-empty host (window, frame loop, layout shape, document model) that owns **no editing features**. Everything the user sees — pixel-art editing, the file explorer/tabs/splits, text editing — is contributed by **plugins** that register against a stable SDK. Plugins never import each other; they meet only at the SDK.
 
 ```
 Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(host) + vtable)
 ```
 
-- **`sdk/src/`** — the entire contract. `Host` (registries + service locator), `Plugin` (identity + vtable of hooks Fizzy calls), `DocHandle` (opaque `{ptr, id, owner}` — Fizzy routes every doc op to `owner`, never inspects `ptr`), `EditorAPI` (Fizzy's own read/util surface plugins reach back through), `regions.zig` (sidebar/bottom/center/menu/settings/command contribution structs), `dylib.zig`/`dvui_context.zig` (runtime-library C-ABI + dvui injection).
-- **`src/editor/`** — Fizzy itself: `Editor.zig` (frame loop, plugin registration/loading), `PluginLoader.zig` (dlopen), `Menu.zig`, `Sidebar.zig`, `Settings.zig`, etc.
-- **`core/`** — the shared floor used by Fizzy *and* plugins: `widgets` (Split, Tabs, Tree, Canvas), `anim`, `dialogs`, `draw`, math, gfx, fs, paths, platform detection. Not plugin-owned; don't move it. (`Atlas`/`Sprite` are there only because pixi still loads its packed UI atlas through them — see the note in `core/core.zig`.) `core.fuzzy` is the one matcher behind every filter box in the app (settings tree, file tree, plugin store, LSP completions) — wrap zf through it rather than matching by hand, and remember **lower scores are better**.
+- **`sdk/src/`** — the entire contract. `Host` (registries + service locator), `Plugin` (identity + vtable of hooks Fizzy calls), `Surface` (the one drawable contribution: keywords say where it may go, the app's regions accept it), `RegionSpec` (a plugin declaring a place of its own inside the one it was given), `DocHandle` (opaque `{ptr, id, owner}` — Fizzy routes every doc op to `owner`, never inspects `ptr`), `EditorAPI` (Fizzy's own read/util surface plugins reach back through), `keywords.zig` (how a region accepts a surface), `dylib.zig`/`dvui_context.zig` (runtime-library C-ABI + dvui injection).
+- **`app/`** — the framework an application switches on, never in a dylib: `layout` (Layout/Region/State, the picker, view drags, split trees), `store`, `update`, `watch`, `window`, `single_instance`. Everywhere it needed to name fizzy is a `{ctx, vtable}` seam the app fills in.
+- **`src/editor/`** — Fizzy itself: `Editor.zig` (frame loop, plugin registration/loading), `layout.zig` (fizzy's shape), `Menu.zig`, `Sidebar.zig`, `Settings.zig`, etc.
+- **`core/`** — the shared floor used by Fizzy *and* plugins: `widgets` (Split, DockingWidget, Tabs, Tree, Canvas, BlurBackdrop), `anim`, `dialogs`, `draw`, `icon`, `image`, math, fs, paths, platform detection. Not plugin-owned; don't move it. (`Atlas`/`Sprite` are there only because pixi still loads its packed UI atlas through them — see the note in `core/core.zig`.) `core.fuzzy` is the one matcher behind every filter box in the app (settings tree, file tree, plugin store, LSP completions) — wrap zf through it rather than matching by hand, and remember **lower scores are better**. Draw icons with `core.icon.icon`, not `dvui.icon` — same arguments, cached as a texture.
 - **`plugins/`** — bundled built-in plugins. Each is file-for-file the **same shape a third-party plugin would use**: root `plugin.zig` + identity-only `plugin.zig.zon` + `build.zig` + `build.zig.zon` (optional `src/**`), plus fizzy-internal glue in `static/`. No author `root.zig` or `<name>.zig` hub — the build helper generates the dylib entry; files use named imports (`fizzy_sdk`/`dvui`/…). Builds standalone with `cd plugins/<name> && zig build`.
 
 **Two link modes, one source:** built-in plugins compile **static** (linked directly, all targets incl. web) or **dynamic** (`.dylib`/`.so`/`.dll`, desktop-only, `dlopen`'d — this is how third-party plugins ship too). `FIZZY_STATIC_<NAME>=1` env var forces static for a given built-in (useful when debugging dylib loading).
 
 ## Currently bundled plugins (check `ls plugins/` — this list moves)
 
-- **`workbench`** — file tree, tabs/splits, center provider; owns no documents. Exposes a `workbench-api` service other plugins use to open/close/manage files without importing workbench.
-- **`text`** — generic text/code editor; fallback owner for any file extension nothing else claims. (Recently renamed from `code`.)
-- **`image`** — read-only PNG/JPG/JPEG viewer with zoom/pan (fallback when pixi is not installed).
+- **`workbench`** — file tree and the document panes (each pane is a region the plugin declares; each open document is a surface the app registers); owns no documents. Exposes a `files` service other plugins use to open/close/manage files without importing workbench.
+- **`text`** — generic text/code editor; fallback owner for any file extension nothing else claims.
+- **`image`** — read-only PNG/JPG/GIF/BMP/TGA viewer with zoom/pan (fallback when pixi is not installed).
 - **`markdown`** — `.md` preview utility plugin.
 - `shared` — build helpers used across plugins' `static/integration.zig` (not a plugin itself).
 
-**Pixi (pixel-art editor) has been extracted out of this repo** into an external, third-party-style plugin ([`fizzyedit/pixi`](https://github.com/fizzyedit/pixi), `~/dev/fizzyedit/pixi`) — it ships and updates purely through the plugin store (`docs/PLUGINS.md` §6), with no special treatment in Fizzy itself. Older docs/handoffs (`HANDOFF.md`) still describe pixi as in-tree — that's historical, not current. **Trust `ls plugins/` and `git log` over any doc's plugin list.**
+**Pixi (pixel-art editor) lives outside this repo** as a third-party-style plugin ([`fizzyedit/pixi`](https://github.com/fizzyedit/pixi), `~/dev/fizzyedit/pixi`) — it ships and updates purely through the plugin store (`docs/PLUGINS.md` §6), with no special treatment in Fizzy itself. **Trust `ls plugins/` and `jj log` over any doc's plugin list.**
 
 ## Writing a plugin
 
 1. Copy `plugins/text/` as your template (or `plugins/image/` for a document-owning viewer).
-2. Add identity-only `plugin.zig.zon` (`id`/`name`/`version`/`min_sdk_version`). Implement root `plugin.zig`: `Plugin` + `register(host)` + vtable; call `host.register{SidebarView,BottomView,CenterProvider,Menu,Command,Service,…}` as needed.
-3. Plugin prefs: `sdk.settings.Schema(struct { … })` then `.register(host, &plugin, …)` — Fizzy draws them only while the plugin is loaded (no SettingsSection). User config on disk is ZON (`settings.zon` / `recents.zon`).
-4. Editor plugins implement the document vtable cluster; workbench-style plugins register a center provider + sidebar views instead.
+2. Add identity-only `plugin.zig.zon` (`id`/`name`/`version`/`min_sdk_version`). Implement root `plugin.zig`: `Plugin` + `register(host)` + vtable; call `host.register{Surface,Menu,Command,Service,…}` as needed. A surface's keywords (`sdk.keywords`) say where it may go; the app's regions accept it, and the user can move it with the picker.
+3. Plugin prefs: `sdk.settings.Schema(struct { … })` then `.register(host, &plugin, …)` — Fizzy draws them only while the plugin is loaded. User config on disk is ZON (`settings.zon` / `recents.zon`).
+4. Editor plugins implement the document vtable cluster; a plugin that lays out documents itself declares its panes with `host.region(spec)` and draws the accepted surfaces where it wants them.
 5. User-invoked actions are **`Command`s** — `"<active_owner_id>.<action>"`.
 6. `zig build install` drops `{id}/{id}.dylib` (its own directory) into the fizzy plugins dir (no sidecar `.zon`).
 7. Memory: `host.allocator` vs `host.arena()`; never touch `dvui.currentWindow().gpa` directly.
-8. ABI: structural fingerprint at `dlopen` (`fizzy_plugin_abi_fingerprint`); bumps are rare/deliberate.
+8. ABI: structural fingerprint at `dlopen` (`fizzy_plugin_abi_fingerprint`). The SDK is at 0.2.0, unreleased: the fingerprint may move freely under it (update `recorded_sdk_shape_fingerprint`), the version does not until it ships.
 
 Full contract: **[`docs/PLUGINS.md`](docs/PLUGINS.md)**. Living reshape plan: **[`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)**.
 
@@ -51,45 +52,42 @@ repo itself is [`fizzyedit/plugins`](https://github.com/fizzyedit/plugins) and t
 release CI is [`fizzyedit/plugin-build-action`](https://github.com/fizzyedit/plugin-build-action).
 Don't trust older narrative docs that call this forward-looking/not-yet-built.
 
-## Historical docs (not current — don't re-derive architecture from these)
-
-- **`HANDOFF.md`** — historical Phase 4 handoff (compile-time modular separation, predates the
-  pixi extraction and the `code`→`text` rename). Superseded by `docs/PLUGINS.md` for anything
-  plugin-related; useful only for the older "how did we get here" narrative.
-
 ## Shipped shapes, meant to be copied (dvui's methodology)
 
 Fizzy follows dvui's approach to widgets, one level up: it ships a handful of **layout shapes**
-(`src/editor/shell/{ide,minimal,studio}.zig`) rather than a configurable layout engine. An app
+(fizzy's own in `src/editor/layout.zig`; `examples/{minimal,studio,endless}-app/src/layout.zig`) rather than a configurable layout engine. An app
 either picks one as-is and writes no layout code at all, or **copies** the closest one into its
 own source and edits it.
 
 That constrains how these are written, and the constraint is the point:
 
-- A shape is ordinary code over the public `Frame` API — a couple of dozen lines. Nothing in it
+- A shape is ordinary code over the public `Layout` API — a couple of dozen lines. Nothing in it
   may be privileged or reach into fizzy internals a copier could not reach, or copying becomes
   forking.
 - Prefer adding a *new shape* over adding an option to an existing one. A mode flag is declared
   policy; a second file the user can read end to end is not.
-- Anything a shape needs that only fizzy can provide is a bug in `Frame`, not a reason for a
-  special case. `Editor.shell_bottom_split` exists because a plugin was reaching for a widget the
-  shape happened to create — the fix was to make the shape *state* it, not to bless the shape.
+- Anything a shape needs that only fizzy can provide is a bug in `Layout`, not a reason for a
+  special case. A plugin that needs something from the shape asks the framework (a region by
+  its keywords, `host.region`), never a widget the shape happened to create.
 
 ## Where things live
 
 ```
-core/      the shared floor both an app and a plugin dylib draw with — widgets (Split, Tabs,
-           Tree, Canvas), anim, dialogs, draw, fs, paths, math, fuzzy, lsp
+core/      the shared floor both an app and a plugin dylib draw with — widgets (Split,
+           DockingWidget, Tabs, Tree, Canvas), anim, dialogs, draw, icon, image, fs, paths,
+           math, fuzzy, lsp
 sdk/       the plugin contract: `sdk/src/**` is the SDK itself, the files beside it are its
            build surface (this directory ships standalone as `fizzy-sdk-v*.tar.gz`)
+app/       the framework an application switches on — layout, store, update, watch, window,
+           single_instance; never compiled into a dylib
 plugins/   the bundled plugins, in the exact shape a third-party plugin has
-examples/  apps built on fizzy
+examples/  apps built on fizzy (minimal, studio, endless), each owning its own layout shape
 src/       fizzy the application — `Entry`, `editor/`, `backend/`
 build/     the app build API
 ```
 
-A consumer reaches for `core/` and `sdk/`; `src/` is fizzy's own source and nothing outside
-fizzy should need to look in it.
+A plugin reaches for `core/` and `sdk/`; an app additionally for `app/`; `src/` is fizzy's own
+source and nothing outside fizzy should need to look in it.
 
 ## File naming: a file is a struct
 
@@ -101,7 +99,7 @@ Zig files *are* structs, so the repo follows that literally and you should too:
   no reason. Existing examples: `Host.zig`, `Plugin.zig`, `DocHandle.zig`, `Surface.zig`,
   `RegionSpec.zig`.
 - **`lowercase.zig` is a namespace** of related declarations with no single type at its centre:
-  `keywords.zig`, `paths.zig`, `regions.zig`, `fingerprint.zig`.
+  `keywords.zig`, `paths.zig`, `document.zig`, `fingerprint.zig`.
 
 ### Case-renaming an existing file is a CI trap
 

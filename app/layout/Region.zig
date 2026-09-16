@@ -110,8 +110,7 @@ pub fn deinit(self: *Region) void {
 // Opening and shutting from outside the layout — a rail button, a command, a keybind. These
 // work on the copy `Editor.regionFor` hands back as well as on a live one, which is why they
 // touch only `id` and `default_extent`: everything they need is a persisted extent under an id,
-// never a widget pointer. `Explorer` used to reach for the `PanedWidget` behind the sidebar and
-// call `animateSplit` on it, which only worked while a region *was* a paned.
+// never a widget pointer.
 
 pub fn isClosed(self: Region) bool {
     // Absence is not zero: a region that was never sized — a stretchy one that takes what is
@@ -346,9 +345,8 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
             dvui.dataSet(null, id, "_size", self.state.extent(init_opts.name, default));
         }
         // The size the user chose. Auto-collapse must never overwrite it, or folding the window
-        // small destroys the extent it is supposed to restore — which is what "it does not
-        // reopen to its last place" was. The paned shell kept an `uncollapse_ratio` for the same
-        // reason; here the stored size simply stays put and only what is *shown* goes to zero.
+        // small destroys the extent it is supposed to restore: the stored size stays put and
+        // only what is *shown* goes to zero.
         const chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
         if (init_opts.name.len > 0) {
             if (self.state.takeSlideOpen(init_opts.name)) |from| {
@@ -433,9 +431,8 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
 
     // Findable from outside the layout by the keywords it accepts — a rail button or a command
     // opening and shutting it, the settings pane listing where a panel can go. Every region that
-    // hosts surfaces registers, resizable or not: this used to sit inside the `resize` branch,
-    // so a stretchy region like the main area was invisible to the registry, the placement
-    // picker never offered "Main", and the surfaces drawing there read as unplaced.
+    // hosts surfaces registers, resizable or not — a stretchy region like the main area must be
+    // in the registry too, or the picker never offers it and its surfaces read as unplaced.
     // A leftover leaf that kept a minted name must not overwrite the pinned
     // subtree registered under that name — the parent sash still targets it.
     const leftover_leaf = init_opts.omit_edge != null and !init_opts.resize;
@@ -740,11 +737,10 @@ pub fn drawEmptyHatch(bounds: dvui.Rect.Physical, scale: f32) void {
 /// pixels back if the place is meant to be on screen.
 ///
 /// The drag needs a still of the place — the lifted view for the floating
-/// card, the destination for the outgoing blur. It used to get one from a
-/// second `drawContents` in the same frame, which meant every widget under
-/// the place was built twice and dvui reported a duplicate id for each. One
-/// draw serves both: the screen sees a photograph of itself, which is the
-/// same picture, and every widget is built once.
+/// card, the destination for the outgoing blur. A second `drawContents` in
+/// the same frame would build every widget under the place twice (dvui
+/// reports a duplicate id for each), so one draw serves both: the screen sees
+/// a photograph of itself, which is the same picture.
 fn drawContentsPhotographed(
     self: *Layout,
     opts: InitOptions,

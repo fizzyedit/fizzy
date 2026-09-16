@@ -46,9 +46,7 @@ pub fn draw(editor: *Editor) !dvui.App.Result {
 /// File menu (workbench contribution).
 /// Run the command a menu item stands for.
 ///
-/// Every item in both menu bars names a command and does nothing else. Before this, each item's
-/// action was written out here *and* in the macOS menu path *and* as the command body in
-/// `Keybinds` — three copies that had already drifted apart.
+/// Every item in both menu bars names a command and does nothing else.
 fn run(id: []const u8) void {
     fizzy.editor().host.runCommand(id) catch |err| {
         dvui.log.err("menu command '{s}' failed: {s}", .{ id, @errorName(err) });
@@ -151,11 +149,8 @@ fn drawModelItem(
 
 /// The chord shown beside a row, straight from the keymap `Keybinds.tick` dispatches out of.
 ///
-/// This used to go via the command's dvui *bind name* (`dvui.Window.keybinds`), which only
-/// worked for the subset of commands that have one. Anything bound purely through the keymap —
-/// a command with no dvui bind (`fizzy.quickOpen`), or any plugin command the user gave a chord
-/// in the Keyboard Shortcuts pane — resolved to nothing and drew a blank accelerator, even
-/// though the chord worked. Asking the keymap directly is one lookup for every command.
+/// From the keymap, not the command's dvui *bind name*: a command with no dvui bind
+/// (`fizzy.quickOpen`) or a plugin command the user gave a chord has an accelerator too.
 fn hotkeyFor(editor: *Editor, command_id: []const u8) dvui.enums.Keybind {
     return fizzy.Editor.Keybinds.menuKeybindFor(editor, command_id);
 }
@@ -301,10 +296,7 @@ pub fn menuItemWithChevron(src: std.builtin.SourceLocation, label_str: []const u
 /// registered under one of a menu's legacy alias ids (e.g. `"workbench.menu.file"`, still a
 /// published contract per `Submenu.aliases`'s doc comment) is found here too. The native macOS
 /// builder (`backend_native.zig`'s `resolveBuiltinNativeMenu`) already resolved aliases for its
-/// own leaf items; this used to be the one place in the menu that didn't, so a plugin section
-/// registered under a pre-rename id (pixi's Edit-menu "Grid Layout" section, back when Edit's id
-/// was still `shell.menu.edit`) appeared in the native bar but silently never drew in this
-/// in-app one.
+/// own leaf items.
 ///
 /// Draws a single separator ahead of the whole group, not one per section (or per row within a
 /// section — `Editor.fizzyDrawMenuItem`, the widget every section's `draw` goes through, no

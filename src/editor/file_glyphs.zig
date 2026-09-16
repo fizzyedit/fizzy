@@ -6,8 +6,7 @@
 //!
 //! It lives in exactly one place on purpose. The file tree and the tab bar are drawn by entirely
 //! separate code — different files, and in the tree's case a different plugin — and they have to
-//! show the same file the same way. Previously they agreed only because both happened to call
-//! the same plugin-supplied drawer; now they agree because they read the same table.
+//! show the same file the same way, which they do because they read the same table.
 const std = @import("std");
 const dvui = @import("dvui");
 

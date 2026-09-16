@@ -48,7 +48,7 @@ pub const PathChanges = struct {
 state: *anyopaque,
 vtable: *const VTable,
 
-/// Stable, unique identifier (snake_case), e.g. "pixelart", "workbench".
+/// Stable, unique identifier (snake_case), e.g. "pixi", "workbench".
 id: []const u8,
 /// User-facing name shown in UI.
 display_name: []const u8,
@@ -290,7 +290,7 @@ pub const VTable = struct {
 
     // NOTE: editing actions (copy / paste / transform / accept-edit / cancel-edit /
     // delete-selection) are deliberately NOT hooks here. They are user-invoked and their meaning
-    // varies per editor, so a plugin registers them as `Command`s (e.g. `"pixelart.copy"`) and
+    // varies per editor, so a plugin registers them as `Command`s (e.g. `"pixi.copy"`) and
     // fizzy dispatches its Edit-menu / keybinds to `"<active_owner_id>.<action>"`. See the
     // commands section in docs/PLUGINS.md.
 };

@@ -1,8 +1,8 @@
 # fizzy-lib checkpoint
 
 Resume point for the "fizzy as a library" work. Written to be picked up cold by any agent or
-person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-11 at bookmark
-`fizzy-lib` (jj change pending, endless collapsed splits + by-name draw).
+person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-16 at bookmark
+`fizzy-lib` (cleanup pass in progress; SDK at 0.2.0).
 
 ## Ground rules that are easy to get wrong
 
@@ -12,14 +12,17 @@ person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-11 at b
   after describing. Do not touch `main`, graphl, or dvui.
 - Another agent session may commit in the same working copy. Check `jj log` before assuming a
   change is yours; describe only what a change actually contains.
-- **Do not publish the SDK version bump / force a store-wide plugin rebuild** while this is
-  experimental. The fingerprint has moved (sdk 0.1.63, `0x36440c0ce10a6c97`); pixi (4 calls),
-  brain (1), ghostty (1) still use legacy `register*View` and need source edits + rebuild before
-  any release. Breaking the ABI is agreed while unreleased — arc (b) below took it deliberately.
+- **The SDK is 0.2.0 and unreleased.** The ABI fingerprint may move freely under it: update
+  `recorded_sdk_shape_fingerprint` in `sdk/src/version.zig` from the compile error, leave the
+  version alone. The first release of 0.2.0 is the first release of the library-shaped SDK;
+  pixi, brain, ghostty and zig are rebuilt against it (not migrated) — see the queue below.
 - No single-line wrapper functions; write the library call at the site. Prefer root-cause fixes
   over another patch to the same mechanism; use dvui's public API over touching its state.
 - Gates after any change: `zig build`, `zig build test`, `zig build test-integration`,
   `zig build check-web`, `zig build test-sdk-version`. All green at this checkpoint.
+- Draw icons with `core.icon.icon` (cached texture), never `dvui.icon` (a mesh replayed every
+  frame). Profile with `sample` on a sandbox instance (see the perf memory notes) before
+  optimising anything; the frame is measured, not guessed.
 - A Zig `error` **does not survive the dylib boundary with its name** (errors are integers
   numbered per compilation). Never `@errorName` an error returned from a plugin vtable; the
   plugin logs the reason on its side. A shared SDK error enum would fix this (ABI change,
@@ -43,7 +46,9 @@ app/       framework an application switches on; never in a dylib. `AppInfo`, `l
 plugins/   bundled plugins in third-party shape (workbench, text, image, markdown, shared).
 src/       fizzy the application: Entry, editor/ (Editor, layout.zig, panel/,
            explorer/, LayoutSettings), backend/. Examples own their layouts.
-build/     app build API (`wireAppModule`, `buildOptsModule` in build/sdk.zig).
+build/     app build API (`wireAppModule`, `buildOptsModule` in build/sdk.zig). A consumer is an
+           independent package: `b.dependency("fizzy", .{ .@"app-name", .@"app-layout", … })`
+           and `fizzy.artifact(name)` — `examples/*` are exactly that and build standalone.
 ```
 
 Layout vocabulary: `Layout` is per-frame (`.init(host, state, gpa, arena)`), `State` persists
@@ -189,9 +194,8 @@ size and assignment under the app's name, and answers the app's picker.
   a surface exists only while the named surface is some region's selection, and then it *is*
   the selection of any region accepting it (`Layout.visibleNow`, `pick`). Trigger lookup
   excludes takeovers so it terminates. Store README: `takeover_when = store tab` + `hidden`
-  while no card is selected. `draw_workspace` and `WorkbenchPaneView` are deleted; **pixi's
-  packer must become** `{keywords = {"main"}, takeover_when = "pixi.project"}` when pixi is
-  updated.
+  while no card is selected. **pixi's packer must become**
+  `{keywords = {"main"}, takeover_when = "pixi.project"}` when pixi is updated.
 - `Workbench.activeDoc` is what the active pane showed last frame (`Workspace.active`);
   `setActiveDocIndex` selects by name (`Host.selectInRegion`). `EditorAPI` gained
   `regionMatching/regionSelected/regionSelect/assignSurfaces/assignedSurfaces/
@@ -210,10 +214,7 @@ size and assignment under the app's name, and answers the app's picker.
 - **Still to eyeball**: drag a tab between panes; drop on the right half of the last pane to
   split; close every tab in a pane (pane should leave); quit and relaunch (session restore
   from `layout.zon`); a pane emptied through its corner-button picker and refilled.
-- Known leftovers: `Workspace.center` / `clearAllWorkspaceCenter` (panel-animating centring)
-  are vestigial; `swapDocs`/`docByIndex` order in `EditorAPI` no longer means tab order;
-  "main rendered twice" reported once with an emptied panel, not reproduced — main draws once
-  in the headless shape test; ask for the exact state if it recurs.
+- Known leftover: `docByIndex` order in `EditorAPI` is registration order, not tab order.
 
 ## Landed: endless handles (`examples/endless-app`, `-Dapp-layout=`)
 
@@ -250,6 +251,10 @@ A shape whose layout is data, owned by the example — not a shipped fizzy prese
 
 ## Also queued (in rough priority)
 
+- **Update pixi/brain/ghostty/zig to SDK 0.2.0** so the store, placement and services can be
+  tested end to end (touches four repos; do as its own pass). pixi's packer becomes
+  `{keywords = {"main"}, takeover_when = "pixi.project"}`; its `dvui.icon` calls become
+  `core.icon.icon`; `Atlas`/`Sprite` move from `core` into pixi with it.
 - **Settings and keybinds as app opt-ins**: move the machinery (schema → ZON persistence →
   settings tree → watcher reconcile; keybind table → chord matching → command dispatch) from
   `src/editor/` to `app/`; fizzy registers its own sections/bindings the way a plugin does.
@@ -258,13 +263,20 @@ A shape whose layout is data, owned by the example — not a shipped fizzy prese
 - Titlebar as configuration (height, menu, traffic lights, caption buttons).
 - `Editor` → `App` rename (~460 refs; do not touch `EditorAPI`).
 - Keep peeling `EditorAPI` into services (`showSaveDialog`, `drawFileKindGlyph`, `revealPosition`).
-- Update pixi/brain/ghostty to the new SDK so the store, placement and services can be tested
-  end to end (touches three repos; do as its own pass).
-- `PanedWidget`/`core.widgets.paned` have zero callers → delete. `Atlas`/`Sprite` → pixi.
+- Layered regions (`.blur_behind`) — design in `app/layout/LAYERS.md`; `BlurBackdrop` and
+  frosted floating windows exist, the region property does not.
 - `DocumentWatcher` stays in src until a document-reload seam exists.
 
 ## Recently landed (for orientation, newest first)
 
+- Cleanup pass: dead SDK members (`swapDocs`, `splitState`) and unreferenced functions gone,
+  Editor pass-throughs written at their call sites, stale docs (`FINDINGS`, `REVIEW`, `PHASE4`,
+  `PHASE5`, `PACKAGES`) deleted, `CLAUDE.md`/`PLUGINS.md` describe the tree as it is.
+- Perf: `FrameTarget` no longer serializes CPU behind GPU (window clear off, copy-blend blit);
+  frost pyramid persistent and half-res, re-read every frame; `core.icon`; palette, output log
+  and settings tree bounded by what is visible.
+- Picker cards drag out as a loose `ViewDrag`; frosted floating windows and dialogs
+  (`BlurBackdrop.frostPane`); the workbench pane row is a `DockingWidget` split tree.
 - Endless-handles example: collapsed edge splits, by-name surfaces, `zig build run`.
 - Loading card sizes from content; image checkerboard survives zoom-out.
 - Animated GIF plays in the image viewer (`core.image.Animation`, dvui timer per frame).
@@ -272,6 +284,6 @@ A shape whose layout is data, owned by the example — not a shipped fizzy prese
   (NULs / bad UTF-8 become U+FFFD);
   a failed load no longer deinits an unwritten document buffer; user gets a toast.
 - Every region registers (Main was missing from the placement pane).
-- Region assignments + Regions settings table (replaced the Phase 4b per-surface pane).
+- Region assignments + Regions settings table.
 - Native dialogs ask the app for start dirs; AppInfo + backend allocator in `app/`; self-update,
   window geometry, singleton, watchers, store all in `app/`; `files` is a service.

@@ -1,7 +1,7 @@
 //! A named, invocable action a plugin registers with the Host. Fizzy, menus, and keybindings
 //! trigger it by `id` via `Host.runCommand(id)` **without knowing what it does** — this is how a
 //! plugin contributes its own features (atlas pack, raster transform, a grid-layout dialog, …)
-//! without the SDK or fizzy naming them. Ids are plugin-namespaced (`"pixelart.packProject"`).
+//! without the SDK or fizzy naming them. Ids are plugin-namespaced (`"pixi.packProject"`).
 //! The owner resolves any context it needs (active doc, selection, …) inside `run`; fizzy passes
 //! only the owner's opaque state.
 const Plugin = @import("Plugin.zig");

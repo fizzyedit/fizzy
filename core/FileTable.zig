@@ -4,23 +4,16 @@
 //! them — must agree about what exists, and neither should pay to find out twice. So the set is
 //! **not** owned by either of them. The host owns one `FileTable` and hands it out through
 //! `sdk.Host`; plugin code calls these methods directly, and the framework is the only meeting
-//! point. Nothing here knows a tree or a tab exists.
-//!
-//! Before this existed the caches below were module-level `var`s inside the workbench plugin,
-//! and that module is compiled *twice* — once into fizzy, once into the dylib — so there were
-//! literally two of every cache, kept roughly in step by a shared `disk_generation` counter that
-//! each copy polled to decide when to throw its own work away. One table with no generation
-//! counter replaces all of it.
+//! point. Nothing here knows a tree or a tab exists. (A built-in plugin is compiled twice — into
+//! fizzy and into its dylib — so state that lived in the plugin existed twice too.)
 //!
 //! ## Why it is a cache and not just `Dir.iterate`
 //!
-//! The unfiltered tree used to re-read every expanded directory straight from disk on *every
-//! frame*: `openDir` + `iterate`, an arena dupe per name, a full sort, and an ignore check per
-//! entry. On a normal project that is invisible. On a vault with a few hundred thousand markdown
-//! files in one directory it is megabytes of arena churn and a sort of the whole listing per
-//! frame, which is half of why such a folder drops the app to single-digit FPS. (The other half
-//! is drawing a widget per row, which is the caller's problem — see the virtualized file run in
-//! the file tree.)
+//! Reading an expanded directory straight from disk every frame — `openDir` + `iterate`, an
+//! arena dupe per name, a full sort, an ignore check per entry — is invisible on a normal
+//! project and single-digit FPS on a vault with a few hundred thousand files in one directory.
+//! (Drawing a widget per row is the other half, and the caller's problem — see the virtualized
+//! file run in the file tree.)
 //!
 //! So a listing is read once and kept. Freshness comes from the folder watcher fizzy already
 //! runs on the open root, via `invalidateListing` / `noteFileModified`; when there is no watcher

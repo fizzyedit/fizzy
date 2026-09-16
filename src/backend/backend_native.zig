@@ -728,13 +728,10 @@ export fn FizzyNativeMenuActionEnabled(tag: c_int) callconv(.c) bool {
 
 /// Same idea as `FizzyNativeMenuActionEnabled` above, but for a plugin-contributed
 /// `NativeMenuItem` (`tag` indexes `host.native_menu_items`, like `FizzyNativeMenuGenericAction`
-/// resolves). These have no `visible`/`enabled` fields of their own — pixi's Transform/Grid
-/// Layout and text's Format Document used to be always-enabled here regardless of the active
-/// document, which is the other half of why they disagreed with the in-app menu (the dvui side
-/// used to hide the row entirely instead; `Editor.fizzyDrawMenuItem` now greys it the same way
-/// this does). An item names its `Command` via `NativeMenuItem.command` precisely so a shared
-/// enabled state doesn't have to be duplicated per platform; no `command` means "always enabled",
-/// same as a dvui row with no `command_id`.
+/// resolves). These have no `visible`/`enabled` fields of their own: an item names its `Command`
+/// via `NativeMenuItem.command` so the enabled state is the command's, on both menu bars
+/// (`Editor.fizzyDrawMenuItem` greys the in-app row the same way). No `command` means "always
+/// enabled", same as a dvui row with no `command_id`.
 export fn FizzyNativeMenuGenericActionEnabled(tag: c_int) callconv(.c) bool {
     if (KeybindSettings.isRecording()) return false;
     if (tag < 0) return true;
@@ -746,8 +743,7 @@ export fn FizzyNativeMenuGenericActionEnabled(tag: c_int) callconv(.c) bool {
 
 /// Current label for a model item, so state-dependent titles ("Show Explorer" / "Hide
 /// Explorer") track the app. AppKit menus are retained state; validation runs just before a
-/// menu displays, which is when this is called. The macOS View menu used to say "Show
-/// Explorer" permanently, because its title was baked in at construction.
+/// menu displays, which is when this is called.
 export fn FizzyNativeMenuItemTitle(tag: c_int) callconv(.c) ?[*:0]const u8 {
     if (tag < 0) return null;
     const item = menu_model.byTag(@intCast(tag)) orelse return null;

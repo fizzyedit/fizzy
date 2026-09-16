@@ -6,9 +6,8 @@
 //! matches `KeybindSettings` so the two panes read as one table style.
 //!
 //! **This is the permanent home of a decision the install-time dialog only asks about once.**
-//! Ownership is an explicit, persisted user choice (`.plugins.<id>.extensions` in `settings.zon`)
-//! rather than the numeric contest between plugin authors it used to be, and every route to
-//! changing it — this pane's dropdown and `Dialogs.FileTypeDefaults`' Confirm — goes through the
+//! Ownership is an explicit, persisted user choice (`.plugins.<id>.extensions` in `settings.zon`),
+//! and every route to changing it — this pane's dropdown and `Dialogs.FileTypeDefaults`' Confirm — goes through the
 //! single writer, `Editor.resolveExtensionConflict`.
 //!
 //! **Conflicts are surfaced, not silently resolved.** `Editor.rebuildExtensionOwnerCache` is

@@ -927,8 +927,8 @@ fn swap(l: *Layout, source: []const u8, dest: []const u8, moved: []const u8) voi
 /// What a place is holding: the list it was given, or the one its keywords
 /// attract when it has never been given one. A `.many` place usually has no
 /// list of its own — the sidebar's tabs are every plugin that asked for the
-/// sidebar — and reading only the assignment there says "nothing", which is
-/// how a drop onto the rail used to leave it holding one lone view.
+/// sidebar — and reading only the assignment there says "nothing", so a drop
+/// onto the rail would leave it holding one lone view.
 fn holding(l: *Layout, name: []const u8) []const []const u8 {
     if (l.state.assignment(name)) |ids| return ids;
     const r = regionNamed(l.state, name) orelse return &.{};

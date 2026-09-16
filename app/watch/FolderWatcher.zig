@@ -5,8 +5,7 @@
 //! `SettingsWatcher` reconciles `settings.zon`; `DocumentWatcher` reloads open tabs. Neither
 //! helps a plugin that cares about files nobody has open — a file tree that should show what an
 //! agent just created, a link indexer whose graph goes stale when a wikilink is deleted from a
-//! closed file, a language server owing `didChangeWatchedFiles`. Before this, each of those
-//! would have had to pin nightwatch itself and stand up its own thread over the same tree.
+//! closed file, a language server owing `didChangeWatchedFiles`.
 //!
 //! Three things belong on this side of the SDK boundary rather than in each plugin:
 //!

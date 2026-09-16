@@ -1,10 +1,6 @@
-//! Everything that makes a fizzy-based application *this* application rather than fizzy.
-//!
-//! Before this existed, ~20 identity literals were scattered across as many files — the window
-//! title in `Entry.zig`, the bundle id in the SDL metadata call, `"fizzy"` hardcoded inside
-//! `core/paths.configFolder`, the registry URL in `PluginStore`, the theme names inline in
-//! `Editor.init`, the exe name and vpk packId in the build scripts. An app built on fizzy as a
-//! library has to be able to set all of them, so they collapse into one record.
+//! Everything that makes a fizzy-based application *this* application rather than fizzy: the
+//! window title, bundle id, config folder, registry URL, theme names, exe name — one record an
+//! app built on fizzy fills in, instead of literals scattered through the tree.
 //!
 //! Values arrive from the build (`build_opts`) so the same record is available at comptime for
 //! the build graph and at runtime for the editor.

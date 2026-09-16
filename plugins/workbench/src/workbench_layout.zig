@@ -92,12 +92,7 @@ pub fn rebuildWorkspaces(wb: *Workbench) !void {
 
 /// Draw every workspace in its place in the tree, a draggable sash between each pair.
 ///
-/// This was a **recursion** of two-child `PanedWidget`s, then a flat row sized in points (one
-/// flexible pane, the rest fixed — dragging one boundary slid every divider left of it), then
-/// `Panes`, a row of shares. Each was its own implementation of "panes beside each other", with
-/// its own feel, beside the app's own regions doing the same job a third way.
-///
-/// Now it is `core.widgets.DockingWidget` over `Workbench.panes`: a tree of splits, each a share
+/// `core.widgets.DockingWidget` over `Workbench.panes`: a tree of splits, each a share
 /// of its parent, so a divider moves exactly its own two children and nothing else — and the
 /// same widget the app's regions are moving onto, so a document split and a sidebar split are
 /// one mechanism. A pane opening or closing slides (`DockLayout.animated`); the widget only

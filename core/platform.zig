@@ -33,8 +33,7 @@ pub fn cacheFromWindow(win: *dvui.Window) void {
     cached_is_macos = kb.command orelse false;
 }
 
-/// True if the running platform is macOS. Use this anywhere fizzy previously
-/// had `builtin.os.tag == .macos` and the check needs to be right on web.
+/// True if the running platform is macOS — unlike `builtin.os.tag == .macos`, right on web too.
 pub inline fn isMacOS() bool {
     return cached_is_macos;
 }

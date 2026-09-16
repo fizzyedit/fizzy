@@ -214,10 +214,6 @@ pub fn deinit(self: *Split) void {
 /// These are the whole protocol for driving a region programmatically — the rail button, a
 /// command, a keybind. They move the *stored* size; `Frame.region` eases the drawn size toward
 /// it, so a caller gets the animation without knowing there is one.
-///
-/// Before this, opening the explorer meant reaching for the `PanedWidget` behind it and calling
-/// `animateSplit`. That only worked while a region *was* a paned, which is exactly the kind of
-/// reach-through that made the old shell impossible to reshape.
 pub fn sizeOf(id: dvui.Id) f32 {
     return dvui.dataGet(null, id, "_size", f32) orelse 0;
 }
@@ -359,9 +355,9 @@ pub const Grab = struct {
 /// Run the split's pointer handling: approach, press, drag, release, cursor.
 ///
 /// Events are matched against the **container**, not this thin strip, so the split can grow as
-/// the pointer approaches rather than only reacting once it is already on top of a 10pt target.
-/// `PanedWidget` does the same, and it is the difference between a split that feels findable and
-/// one that does not. Nothing is handled unless the pointer is actually close.
+/// the pointer approaches rather than only reacting once it is already on top of a 10pt target —
+/// the difference between a split that feels findable and one that does not. Nothing is
+/// handled unless the pointer is actually close.
 ///
 /// **Except while we hold capture.** dvui's `eventMatch` refuses every widget that is not the
 /// capture holder once a capture is live ("someone else has capture"), so continuing to match on
@@ -474,8 +470,7 @@ pub fn drag(
     //
     // The split is drawn wherever the stored size puts it, so moving the size by the pointer's
     // offset from the split lands the split under the pointer, and stays exact from then on with
-    // nothing accumulated. `PanedWidget` drives its ratio from the absolute pointer position for
-    // the same reason.
+    // nothing accumulated.
     if (drag_to) |p| {
         // Size from the region's fixed edge, not from a correction applied to the current size.
         //
@@ -561,7 +556,7 @@ fn drawSplit(
         .horizontal => srs.r.h,
         .vertical => srs.r.w,
     };
-    // At rest a short pill; under the pointer a fifth of the edge, matching `PanedWidget`.
+    // At rest a short pill; under the pointer a fifth of the edge.
     const rest_len = @min(edge, 28 * srs.s);
     const full_len = edge / 5;
     const len = rest_len + (@max(full_len, rest_len) - rest_len) * approach;
@@ -587,9 +582,8 @@ fn drawSplit(
     }
     // `.round`, not `.all`. `CornerRect.all(r)` means "the theme's corner *kind*, at radius r",
     // and fizzy's theme squares its corners — so the radius was being honoured and the shape
-    // ignored, and the pill came out a rectangle. `PanedWidget` has the same line and the same
-    // square handle. A split is a grip, not a panel: it should read as a pill whatever the theme
-    // does to boxes.
+    // ignored, and the pill came out a rectangle. A split is a grip, not a panel: it should read
+    // as a pill whatever the theme does to boxes.
     r.fill(.round(thick / 2), .{ .color = wd.options.color(.text).opacity(alpha), .fade = 1.0 });
 
     // The grip only once the pointer is close enough for the pill to have room for it — drawing

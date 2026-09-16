@@ -1,9 +1,9 @@
 # Fizzy Plugin System
 
-Fizzy is itself a near-empty host — a window, a frame loop, and a menu/sidebar/panel layout — with
-no editing features of its own. Everything the user sees (the file explorer, tabs/splits, the
-pixel-art editor, the text editor) is contributed by **plugins** that register against a stable
-SDK. The same plugin source compiles two ways: statically into the app, or as a runtime dynamic
+Fizzy is itself a near-empty host — a window, a frame loop, and a layout shape made of regions —
+with no editing features of its own. Everything the user sees (the file explorer, tabs/splits,
+the pixel-art editor, the text editor) is contributed by **plugins** that register against a
+stable SDK. The same plugin source compiles two ways: statically into the app, or as a runtime dynamic
 library (`.dylib`/`.so`/`.dll`) that any third-party author can build and ship independently.
 
 This doc is written **progressively**: it starts from an empty folder and ends with your plugin
@@ -25,7 +25,7 @@ the first time; use it as reference after that.
 ```
         ┌─────────────────────────────────────────────────────────┐
         │                        Fizzy (Editor)                   │
-        │  window · frame loop · menu/sidebar/panel layout · docs │
+        │  window · frame loop · layout shape (regions) · docs    │
         │                                                         │
         │   ┌──────────────┐        ┌──────────────────────────┐  │
         │   │     Host     │<------>│        EditorAPI         │  │
@@ -45,13 +45,18 @@ the first time; use it as reference after that.
 |------|------|
 | `Host` | What Fizzy hands every plugin. Holds the **registries** (Fizzy iterates these instead of hardcoding panes) + a **service locator** for inter-plugin APIs. |
 | `Plugin` | A plugin's identity + **vtable** of optional hooks. Fizzy calls these; a plugin implements only what it needs. |
-| `DocHandle` | Opaque handle to an open document: `{ ptr, id, owner: *Plugin }`. Fizzy stores these per tab and **routes every document operation to `owner`** — it never inspects `ptr`. |
-| `regions` | The contribution structs a plugin registers: `SidebarView`, `BottomView`, `CenterProvider`, `MenuContribution`, `Command`, `LanguageSupport`, … There is no settings region here — see `sdk.settings` below. |
+| `DocHandle` | Opaque handle to an open document: `{ ptr, id, owner: *Plugin }`. Fizzy **routes every document operation to `owner`** — it never inspects `ptr`. Every open document is also a `Surface` the app registers (§3.1.2). |
+| `Surface` (`Surface.zig`) | The one drawable contribution: `{ id, title, keywords, draw, … }`. A surface says what *kind of place* it belongs (`keywords`), never where it goes; the app's regions accept it by keyword and the user can move it with the region picker. |
+| `RegionSpec` (`RegionSpec.zig`) | A region a plugin declares *inside* the one it is drawing in (`host.region(spec)`), so its subdivision gets the app's picker, persistence and assignments instead of a private reimplementation. This is how the workbench's document panes exist. |
+| `keywords` (`keywords.zig`) | The keyword presets fizzy's shapes accept (`sdk.keywords.ide.sidebar` / `.panel` / `.main`) and the `accepts`/`Fit` rule that binds a surface to a region. |
+| `Command`, `menus` | An invocable, plugin-namespaced action (`"<plugin>.<action>"`), and what a plugin adds to the menu bar (`MenuContribution`, `MenuSectionContribution`, `NativeMenuItem`). |
+| `LanguageSupport` (`language.zig`) | Highlighting / preview / hover / completion / format hooks looked up by file extension, for plugins that do not own documents (§3.8). |
 | `sdk.settings` (`settings.zig`) | Comptime settings API: `sdk.settings.Schema(struct { … })` over `Value(T, .{ .description = … })` cells derives a persisted-values type + a `SettingsSchema` you register with the Host. Fizzy's settings pane draws it for you — no hand-rolled dvui settings section. |
+| `sdk.services` | Optional, versioned capabilities looked up by name (`files`, `workbench`, `markdown`, `wikilink`) — §3.10. |
 | `dylib` / `dvui_context` | The C-ABI entry contract + dvui-context injection used when a plugin is loaded as a runtime library. |
 
 **Fizzy owns no features.** Each frame it iterates the Host registries and draws whatever
-plugins contributed. Adding a pane, panel tab, menu, document type, or settings section is a
+plugins contributed. Adding a surface, menu, command, document type, or settings section is a
 `Host.register*` call from inside a plugin's `register` — never an edit to Fizzy itself.
 
 ### Two link modes, one source
@@ -139,16 +144,16 @@ sidecar next to the installed dylib — the plugins directory holds only the bui
 ### 2.3 `build.zig.zon` — declare the fizzy dependency
 
 Fizzy isn't a package you install separately — a plugin depends on **the fizzy repo itself** as a
-Zig package, pinned by a **`sdk-v<sdk_version>` tag** (e.g. `sdk-v0.1.35`), not an arbitrary
+Zig package, pinned by a **`sdk-v<sdk_version>` tag** (e.g. `sdk-v0.2.0`), not an arbitrary
 commit SHA. That tag is pushed automatically at the exact commit where the matching `sdk_version`
-was recorded in `sdk/src/version.zig` (see §5) — pin against it and the ref you're reading in
+was recorded in `sdk/sdk_version.zig` (see §5) — pin against it and the ref you're reading in
 `build.zig.zon` tells you, at a glance, which SDK contract you're building against. Use
 `zig fetch` to fill in the hash — pin the **SDK release asset**, not the git archive of the tag:
 
 ```sh
 mkdir my-plugin && cd my-plugin
 zig fetch --save=fizzy \
-  https://github.com/fizzyedit/fizzy/releases/download/sdk-v0.1.42/fizzy-sdk-v0.1.42.tar.gz
+  https://github.com/fizzyedit/fizzy/releases/download/sdk-v0.2.0/fizzy-sdk-v0.2.0.tar.gz
 ```
 
 which produces:
@@ -163,7 +168,7 @@ which produces:
     .fingerprint = 0x0000000000000000, // zig fills this in on first `zig build`
     .dependencies = .{
         .fizzy = .{
-            .url = "https://github.com/fizzyedit/fizzy/releases/download/sdk-v0.1.42/fizzy-sdk-v0.1.42.tar.gz",
+            .url = "https://github.com/fizzyedit/fizzy/releases/download/sdk-v0.2.0/fizzy-sdk-v0.2.0.tar.gz",
             .hash = "<hash zig fetch printed>",
         },
     },
@@ -287,8 +292,8 @@ startup: no `--prefix`, no manual copy:
 | Linux | `~/.config/fizzy/plugins/` |
 | Windows | `%LOCALAPPDATA%/fizzy/plugins/` |
 
-Relaunch Fizzy. Your plugin registers, but since it contributes no sidebar view or menu yet,
-there's nothing to see — that's expected. Section 3 adds a visible pane.
+Relaunch Fizzy. Your plugin registers, but since it contributes no surface or menu yet,
+there's nothing to see — that's expected. Section 3 adds a visible surface.
 
 `zig build install` also leaves `zig-out/my_plugin/my_plugin.<ext>` behind, which is what
 packaging / the release CI in §6 grabs. Your plugin's own directory (`Host.pluginInstallDir(id)`)
@@ -310,32 +315,43 @@ pub fn register(host: *sdk.Host) !void {
     plugin.state = @ptrCast(&plugin_state);
     try host.registerPlugin(&plugin);               // identity + vtable — always first
 
-    try host.registerSidebarView(.{ .id = "my_plugin.hello", .owner = &plugin, .title = "My Plugin", .draw = drawHello });
-    try host.registerBottomView(.{ … });             // a bottom-panel tab
-    try host.registerCenterProvider(.{ … });         // takes over the whole center region (workbench-style)
-    try host.registerMenu(.{ … });                   // a top-level menubar entry
+    try host.registerSurface(.{                       // something to draw (see 3.1.2)
+        .id = "my_plugin.hello",
+        .owner = &plugin,
+        .title = "My Plugin",
+        .keywords = sdk.keywords.ide.sidebar,         // what kind of place it belongs
+        .draw = drawHello,                            // fn (ctx: ?*anyopaque) anyerror!dvui.App.Result
+    });
+    try host.registerMenu(.{ … });                    // a top-level menubar entry
     try host.registerMenuSection(.{ … });             // inject an item into a menu you don't own
     try host.registerNativeMenuItem(.{ … });          // native macOS NSMenu leaf (mirrors a Menu*/MenuSection item)
-    try host.registerService("my_plugin", &api, &plugin); // an API other plugins can look up
+    try host.registerService(MyApi, &api, &plugin);   // an API other plugins can look up (see 3.10)
     try host.registerCommand(.{ … });                 // an invocable action (see 3.4)
-    try host.registerFileRowFillColor(.{ … });         // tint file-tree rows for your file types
-    try host.registerFileIcon(.{ … });                 // draw a custom file-tree icon
-    try host.registerPluginIcon(.{ … });               // optional loaded-plugin store icon fallback
+    try host.registerLanguageSupport(.{ … });         // highlighting/preview/LSP hooks by extension (see 3.8)
+    try host.registerFileKind(.{ … });                // "what kind of file is .foo" — the app draws the glyph
+    try host.registerPainter(.{ … });                 // draw content-derived artwork yourself (thumbnails, logo)
+    try host.registerFileRowFillColor(.{ … });        // tint file-tree rows for your file types
+    host.registerFallbackEditor(&plugin);             // `text` only — opens whatever nobody else owns (see 3.11)
 }
 ```
 
-Each contribution struct (defined in [`sdk/src/regions.zig`](../sdk/src/regions.zig)) takes a
-stable, namespaced `id`, the owning `*Plugin`, and a `draw`/resolver fn. Fizzy renders the
-set — and shows a tab strip automatically when more than one plugin contributes to the same
-region. Everything registered here is torn down automatically on unload (disable/uninstall via
-the plugin store) and re-added on load.
+Each contribution struct takes a stable, namespaced `id`, the owning `*Plugin`, and a
+`draw`/resolver fn. Everything registered here is torn down automatically on unload
+(disable/uninstall via the plugin store) and re-added on load.
+
+**File icons are a kind, not a glyph.** `registerFileKind` returns a free-form kind string
+(`"image"`, `"source"`, …) for an extension and the *app* decides what that kind looks like, so
+the file tree and the tab bar agree by construction. `registerPainter` is the escape hatch for
+artwork only the plugin can draw — `Painter.Subject` is `.file{ ext, path, color }` for a row or
+tab, or `.plugin_logo` for the store card and settings tree. Fizzy reserves the slot; draw with
+`expand = .ratio` and return `false` to decline so the caller can fall back.
 
 **Store card icons (`ICON.png`).** The Plugins tab fetches `ICON.png` from your plugin
 repository (same `homepage` URL and subdirectory convention as `README.md`) so icons appear in
 the store *before* installation. Commit `ICON.png` at your repo root (or under
 `plugins/<id>/` for built-ins in the fizzy monorepo). No copy goes into the central
 [`fizzyedit/plugins`](https://github.com/fizzyedit/plugins) registry — only `README.md` and
-`ICON.png` are pulled from your repo at browse time. `registerPluginIcon` remains an optional
+`ICON.png` are pulled from your repo at browse time. A `Painter` answering `.plugin_logo` is the
 fallback when a loaded plugin has no fetchable `ICON.png` (e.g. a sideloaded dylib with no known
 `homepage`).
 
@@ -450,8 +466,7 @@ explicit `.enabled = false`: such a build is **undecided** — nobody has been a
 Plugins rail icon carries a count badge, and the installed card gets a **Load** button. Loading it
 is treated as a first install, so it also raises the file-type ownership prompt (§3.11) when the
 extensions it offers overlap something else. A plugin the user deliberately disabled has an
-explicit `.enabled = false`, is a settled decision, and stays quiet. A plugin the user
-deliberately disabled has an explicit `.enabled = false`, is a settled decision, and stays quiet.
+explicit `.enabled = false`, is a settled decision, and stays quiet.
 
 **Which events re-ask about file types.** The presence of `.enabled` is fizzy's record that it has
 asked about this plugin at all, and the rule is one sentence: *fizzy asks when a plugin arrives,
@@ -489,6 +504,93 @@ zon blob and notifies `Plugin.VTable.settingsChanged`.
 registered — there's no dylib settings probe and no embedded settings-zon export. A disabled
 plugin gets an Enabled-toggle-only row instead of its fields.
 
+### 3.1.2 Surfaces and regions — what you draw, and where it lands
+
+A **surface** is the single drawable contribution. It says what it *is*, never where it goes:
+
+```zig
+// sdk/src/Surface.zig
+id: []const u8,                              // "workbench.files", "pixi.sprites" — stable, plugin-namespaced
+owner: ?*Plugin = null,
+title: []const u8,
+icon: ?Icon = null,                          // .{ .tvg = … } / .{ .png = … } / .none — the app may ignore it
+keywords: []const []const u8 = &.{},         // the kinds of place this content belongs
+ctx: ?*anyopaque = null,
+draw: *const fn (ctx: ?*anyopaque) anyerror!dvui.App.Result,
+takeover_when: ?[]const u8 = null,           // shown only while this other surface id is selected
+hidden: bool = false,                        // runtime state, set via Host.setSurfaceHidden
+persistent: bool = false,                    // keep the region drawn with no active document
+```
+
+The app's layout shape is a tree of **regions**, each declaring which keywords it accepts. A
+surface draws in a region when the region **accepts** its keywords (`sdk.keywords.accepts`); the
+user can override that per surface with the region picker (the corner button on every region,
+or Settings › Layout), and that assignment is persisted. Keywords are free-form strings, so
+inventing a kind of panel never touches the ABI. Fizzy's shipped shapes accept these presets
+(`sdk/src/keywords.zig`):
+
+| Preset | Words | Meant for |
+|---|---|---|
+| `sdk.keywords.ide.sidebar` | `sidebar`, `explorer` | things you pick *from* — file trees, outlines |
+| `sdk.keywords.ide.panel` | `bottom`, `panel`, `output` | things a task *produces* — logs, diagnostics |
+| `sdk.keywords.ide.main` | `main`, `center`, `workspace` | the thing being worked on |
+| `sdk.document.keywords` | `document` | one open document (the app registers these, see below) |
+
+A keyword may name a place *inside* another, dot-separated (`main.document`). `keywords.Fit`
+orders how well a region word fits a surface word, and the best fit across both sets decides:
+
+| Fit | Region | Surface | Meaning |
+|---|---|---|---|
+| `exact` | `main.document` | `main.document` | the same word |
+| `kind` | `main.document` | `document` | the shape says where the plugin's kind lives — the ordinary sub-region case |
+| `place` | `main` | `main.document` | the sub-place does not exist here, so the enclosing region takes it |
+| `none` | `main` | `document` | unrelated; segment boundaries only, so `mainly` is not inside `main` |
+
+Where two regions both accept a surface, the strictly more specific one claims it; equal
+acceptance means both show it (an icon rail and the sidebar it drives), and the picker is where
+the user resolves a tie.
+
+**Takeover.** `takeover_when = "<surface id>"` makes a surface exist only while that other
+surface is some region's selection, and then it *is* the selection of any region accepting it.
+Pixi's project preview (`keywords = sdk.keywords.ide.main, takeover_when = "pixi.project"`) fills
+the main area while "Project" is the sidebar tab; the store's README fills it while a plugin card is selected. One
+rule in the layout, declared on the surface, instead of a hook per place it can happen.
+
+**Documents are surfaces.** When a load lands the app registers one surface per open document —
+id `sdk.document.surfaceId(owner_id, path)` (`"<owner>.doc:<path>"`), keywords `{"document"}`,
+`draw` = a canvas box plus `owner.drawDocument(doc)` — and unregisters it on close
+(`Host.unregisterSurface`). A document plugin never sees this; it implements the vtable in §3.2.
+`sdk.document.pathOfSurfaceId` + `host.docFromPath` map a surface back to its `DocHandle`.
+
+**A plugin can declare a region** inside the one it is drawing in, with `host.region(spec)`.
+The region is the app's — it registers in the app's registry, remembers its size and the user's
+assignment under `spec.name`, and answers the picker — while the plugin keeps the *contents*:
+where its chrome goes, and where `drawContents` puts the accepted surfaces. This is how the
+workbench's document panes work (`plugins/workbench/src/Workspace.zig`):
+
+```zig
+var pane = host.region(.{
+    .name = "Pane 1",                 // human-facing, and the key an assignment persists under
+    .keywords = sdk.document.keywords, // unqualified: written "document", becomes "main.document"
+    .shows = .many,                    // how many accepted surfaces it shows at once (.one | .many)
+    .key = grouping,                   // stable + unique per caller per parent: half of the widget id
+}) orelse return .ok;                  // null = the app declined; draw it yourself, plainly
+defer pane.deinit();
+
+const tabs = pane.matching();          // []const *Surface, the app's ordered list
+const active = pane.selected();        // ?*Surface
+drawTabStrip(tabs, active);            // the plugin's own chrome; pane.select(id) on click
+_ = try pane.drawContents();           // the accepted surfaces, where the plugin wants them
+```
+
+Keywords are qualified on the way in with the enclosing region's name, so a plugin cannot name
+a place outside the one it was given — `{"document"}` declared in Main accepts `main.document`
+and nothing else. `RegionSpec` also carries `dir`, `hide_when_empty`, `expand` and `min_extent`.
+Outside a region's draw, `host.assignSurfaces(name, ids)` / `assignedSurfaces(name)` /
+`assignedRegionNames()` / `selectInRegion(name, id)` read and write the same assignment list
+the picker uses — a tab dragged to another pane is an assignment edit, and session restore is
+the assignment list read back.
+
 ### 3.2 The `Plugin` vtable — the universal editor protocol
 
 `Plugin.vtable` is generic: every field is an optional fn pointer taking the plugin's opaque
@@ -500,12 +602,15 @@ plugin gets an Enabled-toggle-only row instead of its fields.
   document watcher reloads clean open tabs when the file changes on disk), `closeDocument`,
   `isDirty`, `undo`/`redo`/`canUndo`/`canRedo`, plus opaque document-buffer management for the
   async load path.
-- **Document metadata at the workbench boundary** — `bindDocumentToPane`, `documentGrouping`,
-  `documentPath`, `setDocumentPath`, dirty/save indicators. These keep `DocHandle` opaque so the
-  file-management plugin never sees a plugin-specific type.
-- **Rendering** — `drawDocument(doc)` (the document's content in a tab/pane),
-  `infobarEntries(active_doc)` (icon + text chips Fizzy draws in the infobar; plugins
-  do not draw into the bar).
+- **Document metadata at the pane boundary** — `bindDocumentToPane`, `documentGrouping` /
+  `setDocumentGrouping` / `setDocumentGroupingOnBuffer` (the pane a document is seated in — the
+  app stamps the target grouping on the staging buffer before the load lands, which is what
+  makes "open to the side" work), `documentPath`, `setDocumentPath`, `revealPosition`,
+  dirty/save indicators. These keep `DocHandle` opaque so the plugin drawing tabs never sees a
+  plugin-specific type.
+- **Rendering** — `drawDocument(doc)` (the document's content, called through the document's
+  surface wherever a region accepting `document` shows it), `infobarEntries(active_doc)` (icon
+  + text chips Fizzy draws in the infobar; plugins do not draw into the bar).
 - **Per-frame phases** — `beginFrame`, `prepareFrame`, `tickKeybinds`, `tickOpenDocuments`,
   `tickActiveDocument`, `drawOverlay`, `endFrame`, `needsContinuousRepaint`. A plugin does its own
   domain work *inside* these generic phases (see the lifecycle table below for exactly when each
@@ -525,15 +630,17 @@ like `pixi` implements the document + rendering hooks but contributes no file tr
 #### Required vs optional
 
 Every vtable field is an optional fn pointer, so the type system requires nothing. But to
-function *as an editor* (open/draw/save files) you must implement the document cluster:
+function *as an editor* (open/draw/save files) you must implement the document cluster, which
+`Plugin.assertEditorVTable(vtable)` checks at compile time:
 
-> `documentStackSize` · `documentStackAlign` · `loadDocument` ·
-> `documentIdFromBuffer` · `registerOpenDocument` · `documentPtr` · `deinitDocumentBuffer` ·
-> `drawDocument` · `saveDocument` · `isDirty`
+> `loadDocument` · `documentStackSize` · `documentStackAlign` · `registerOpenDocument` ·
+> `drawDocument` · `documentPtr` · `setDocumentGroupingOnBuffer` · `documentGrouping` ·
+> `isDirty` · `saveDocument` · `closeDocument`
 
-Everything else is genuinely optional — implement only what your plugin needs. Use
-`Plugin.assertEditorVTable(vtable)` / `Plugin.assertUtilityVTable(vtable)` at compile time to
-catch a vtable shaped for the wrong kind of plugin (see §3.7 for the shapes).
+Everything else is genuinely optional — implement only what your plugin needs. Put
+`comptime { sdk.Plugin.assertEditorVTable(vtable); }` (or `assertUtilityVTable`, which rejects a
+vtable that implements any document hook) beside the vtable, as `text`, `image` and `markdown`
+do, so a vtable shaped for the wrong kind of plugin fails to compile (see §3.7 for the shapes).
 
 #### When & where each hook fires
 
@@ -544,12 +651,12 @@ paired `host.*` request. Call sites are in `src/editor/Editor.zig` (verify line 
 
 | Hook | Model | When / where |
 |---|---|---|
-| `beginFrame` | broadcast | top of the draw, before workspace rebuild (`renderFrame`) |
+| `beginFrame` | broadcast | top of the draw, before the layout shape runs |
 | `prepareFrame` | requested | after layout, before draw — only when `pending_composite_warmup` was set by `host.requestPrepareFrame()` |
 | `needsContinuousRepaint` | broadcast | Fizzy's "should I keep repainting vs idle" decision |
 | `tickOpenDocuments` | broadcast | early per-frame tick; return true → request a follow-up anim frame |
-| `drawDocument(doc)` | active-doc | center region, when the workbench draws the focused tab |
-| `tickActiveDocument(id)` | broadcast | inside the active document container (has the timer-anchor id) |
+| `drawDocument(doc)` | active-doc | from the document's surface `draw`, inside whichever region shows that surface (a workbench pane) |
+| `tickActiveDocument(id)` | broadcast | inside the layout root (has the timer-anchor id) |
 | `endFrame` | broadcast | `defer` at the end of the document-container block |
 | `tickKeybinds` | broadcast | after the center draw, before Fizzy's global keybinds |
 | `drawOverlay` | broadcast | right after `tickKeybinds`, on top of the frame |
@@ -568,7 +675,7 @@ load-worker thread** (touch only the host allocator + the given buffer, no dvui)
 
 `documentContentChanged` covers buffers *this editor* has open. `folderPathsChanged` covers the
 rest of the tree: a note an agent wrote, a `git checkout`, a file deleted in Finder. It fires
-`[broadcast]` from `FolderWatcher.tick` on the UI thread, with a coalesced batch:
+`[broadcast]` from `app/watch/FolderWatcher.zig` on the UI thread, with a coalesced batch:
 
 ```zig
 fn folderPathsChanged(state: *anyopaque, changes: sdk.Plugin.PathChanges) void {
@@ -634,11 +741,12 @@ Fizzy triggers it by id via `host.runCommand("<id>")` **without knowing what it 
 
 ```zig
 try host.registerCommand(.{
-    .id = "pixi.packProject",       // plugin-namespaced
+    .id = sdk.Plugin.commandId("pixi", "packProject"), // "pixi.packProject" — plugin-namespaced
     .owner = &plugin,
     .title = "Pack Project",
     .run = packProjectCommand,      // fn(state) anyerror!void — resolves its own context
     .isEnabled = packProjectEnabled, // optional gate
+    .icon = icons.tvg.lucide.package, // optional TVG bytes, drawn ahead of the label in menus + palette
 });
 ```
 
@@ -662,8 +770,9 @@ try host.registerNativeMenuItem(.{ …, .command = "pixi.gridLayout", .sf_symbol
 ```
 
 Both fields are optional; omit them for a row with no command behind it, which then simply
-carries no accelerator. `drawMenuItem`'s second parameter used to be a dvui *bind name* — a
-separate flat namespace plugin commands have no entry in — so it never resolved to anything.
+carries no accelerator. `drawMenuItem` is the only way to draw a row from a `registerMenuSection`
+callback — it goes through `EditorAPI` so the row is fizzy's own menu widget, chord and icon
+included.
 
 **Command palette flattening.** Document verbs that Fizzy forwards (`copy`, `paste`, `undo`,
 `redo`, `deleteSelection`, `acceptEdit`, `cancelEdit`) appear **once** in the palette as the
@@ -703,13 +812,13 @@ case-insensitive until the query itself contains a capital.
 
 Informal categories, not a declared field — `plugin.zig.zon` carries identity only (§2.2).
 What actually determines a plugin's shape is which vtable hooks it implements, checked at
-compile time by `Plugin.assertEditorVTable`/`assertUtilityVTable` (§3.6).
+compile time by `Plugin.assertEditorVTable`/`assertUtilityVTable` (§3.2).
 
 | Shape | Implements | Example |
 |---------|------------|---------|
-| **Editor** | Document vtable cluster + optional panes/commands | `pixi`, `text` |
-| **Workbench** | Center provider + file tree, no documents | `workbench` |
-| **Utility** | Menus/commands/settings only, no document hooks | `markdown` (preview only) |
+| **Editor** | Document vtable cluster + optional surfaces/commands | `pixi`, `text`, `image` |
+| **Workbench** | A `main` surface that declares document pane regions + a `sidebar` file tree; no document hooks | `workbench` |
+| **Utility** | Menus/commands/settings/language support/services only, no document hooks | `markdown` |
 
 ### 3.8 Language support — highlighting and preview without owning documents
 
@@ -765,8 +874,9 @@ already imports (`core` is wired into `Modules` for every plugin, same as `fizzy
 complete, server-agnostic LSP client: process lifecycle, JSON-RPC framing, per-request-kind
 caching/debouncing/negative-caching, capability negotiation (position encoding,
 `completionItem/resolve` support), and answering server-initiated requests
-(`workspace/configuration`, `client/registerCapability`, …). It backs the bundled `zig` plugin
-(zls) today; See `core/lsp/Client.zig`'s own doc comments for the full threading model.
+(`workspace/configuration`, `client/registerCapability`, …). It backs the
+[`zig`](https://github.com/fizzyedit/zig) plugin (zls); see `core/lsp/Client.zig`'s own doc
+comments for the full threading model.
 
 Your plugin supplies only what's specific to your server, via `Client.Config`:
 
@@ -827,25 +937,49 @@ LSP-spec behavior `core.lsp.Client` already implements once, for every server.
 
 ### 3.10 Inter-plugin services
 
-`registerService(name, ptr, owner)` publishes an API under a string name;
-`host.getServiceTyped(SomeApi)` looks it up by that API type's `service_name`. Fizzy stores only
-an `*anyopaque` — it never interprets a service — so the API struct's *layout* is part of the ABI
-fingerprint and every service type used across dylibs is listed in `dylib.zig`'s
-`sdk_boundary_types`.
+A service is a capability offered by **name and version** rather than by the ABI. The API type
+declares both, and the Host stores only an `*anyopaque` plus that version:
 
-The SDK ships definitions for the services plugins in this ecosystem publish, in
+```zig
+pub const Api = struct {
+    pub const service_version: u32 = 1;   // bump whenever this struct's layout changes
+    pub const service_name = "files";
+    ctx: *anyopaque,
+    vtable: *const VTable,
+    …
+};
+
+pub fn registerService(self: *Host, comptime T: type, impl: *T, owner: ?*Plugin) !void
+pub fn getServiceTyped(self: *Host, comptime T: type) ?*T
+pub fn servicesNamed(self: *Host, comptime T: type, buf: []*T) []*T   // every provider, in order — the hook form
+```
+
+`getServiceTyped` returns null both when nothing provides the name **and** when the provider's
+`service_version` differs from the caller's — a mismatch is logged and refused rather than cast,
+because the two sides are separate compilations. That is what lets an application define
+services of its own (a CAD app's geometry API) without the SDK-wide fingerprint knowing the type
+exists; the SDK's own service types are additionally listed in `dylib.zig`'s
+`sdk_boundary_types`. Services cross the boundary in both directions: an app offers one for
+plugins to call, and a plugin registers one for the app (or another plugin) to call back into.
+
+The SDK ships definitions for the services in this ecosystem, in
 [`sdk/src/services/`](../sdk/src/services/):
 
 | Service | Provider | What it's for |
 |---|---|---|
-| `"workbench"` | `workbench` | Open/close/save documents, enumerate open tabs, file-tree operations, `revealPosition` |
+| `"files"` | the application (fizzy: `src/editor/FilesService.zig`) | `createFile` / `createDir` / `rename` / `delete` / `move` on disk, with open documents rewritten or closed in step. Absent on web |
+| `"workbench"` | `workbench` | Only what the thing drawing tabs is the authority on: `currentGrouping` / `newGrouping` (which pane a new document lands in — pass to `host.openFilePath`) and `registerBranchDecorator` (draw on every file-tree row) |
 | `"markdown"` | `markdown` | Render a markdown byte slice into the current dvui parent (native only — absent on web) |
 | `"wikilink"` | any indexer (e.g. `brain`) | Resolve `[[Note]]` to a file, plus completion candidates and index state |
 
+Everything a plugin might reasonably ask *fizzy* for lives on `Host` instead — `openFilePath`,
+`closeDocById`, `docFromPath`, `revealPosition`, `setProjectFolder`, `isPathIgnored`, … — where it
+degrades to a no-op in an app that ships no workbench rather than being unreachable.
+
 **Every lookup must tolerate absence.** A service's provider may be uninstalled, disabled, or
-simply not built for this target — `markdown` is missing on web, and `wikilink` is missing unless
-the user installed an indexer. The idiom is one line, and the fallback is a real behavior, not an
-error path:
+simply not built for this target — `files` and `markdown` are missing on web, and `wikilink` is
+missing unless the user installed an indexer. The idiom is one line, and the fallback is a real
+behavior, not an error path:
 
 ```zig
 const wl = sdk.host().getServiceTyped(sdk.services.wikilink.Api) orelse {
@@ -928,8 +1062,6 @@ on the chosen plugin's own `settings.zon` block, and can be changed any time und
 
 ---
 
----
-
 ## 4. Two plugins working together (`pixi` + `workbench`)
 
 **The crucial property: they do not import each other.** They collaborate entirely through the
@@ -938,16 +1070,22 @@ editor plugin.
 
 `pixi.register`:
 - Offers its file types via `fileTypes` (`.pixi`, `.fiz`, `.png`, …) — an offer, not a claim; see §3.11.
-- `registerSidebarView` ×3 — Tools, Sprites, Project.
-- `registerBottomView` — the Sprites panel tab.
-- `sdk.settings.Schema(…).register`, `registerFileRowFillColor`.
+- `registerSurface` with `sdk.keywords.ide.sidebar` — Tools, Sprites, Project — and one with
+  `sdk.keywords.ide.panel` for the Sprites panel tab.
+- `registerSurface` for the project preview with `keywords = sdk.keywords.ide.main,
+  takeover_when = "pixi.project"` — it fills the main area for as long as Project is the sidebar
+  tab (§3.1.2).
+- `sdk.settings.Schema(…).register`, `registerFileRowFillColor`, `registerPainter` (sprite
+  thumbnails in the tree, the store-card logo).
 - Implements the document + rendering vtable hooks (load/save/undo/`drawDocument`/…).
 
-`workbench.register`:
-- `registerSidebarView` — the Files tree.
-- `registerCenterProvider` — owns the entire center region: tabs/splits + canvas layout.
-- `registerService("workbench", …)` — the file-management API other plugins use instead of
-  importing workbench (open/close/save a doc, list open docs, file-tree ops, row decorators).
+`workbench.register` ([`plugins/workbench/plugin.zig`](../plugins/workbench/plugin.zig)):
+- `registerSurface` `"workbench.files"` with `sdk.keywords.ide.sidebar` — the Files tree.
+- `registerSurface` `"workbench.workspaces"` with `sdk.keywords.ide.main` — its `draw` splits the
+  main area into panes, and each pane is a `host.region` accepting `document` (§3.1.2).
+- The `"workbench"` service (§3.10): which pane a newly opened document lands in, and row
+  decorators. Creating/renaming/deleting files goes through the app's `"files"` service, which
+  the workbench looks up like any other plugin would.
 
 ### Opening and drawing a document
 
@@ -955,27 +1093,28 @@ editor plugin.
 user clicks foo.fiz in workbench's Files tree
         │
         ▼
-host.pluginForExtension(".fiz")  ──►  pixi  (user's assignment, else sole claimant)
+host.openFilePath(path, grouping)  ──►  host.pluginForExtension(".fiz") = pixi
+        │                                (user's assignment, else sole claimant)
+        ▼
+pixi.loadDocument(path)            ──►  builds its File into the staging buffer (load-worker thread)
         │
         ▼
-pixi.loadDocument(path)          ──►  builds its File, returns an opaque buffer
+fizzy inserts DocHandle{ id, ptr=File, owner=pixi } and registers a Surface
+        { id = "pixi.doc:<path>", keywords = {"document"} }, assigned to "Pane <grouping>"
         │
         ▼
-fizzy inserts DocHandle{ id, ptr=File, owner=pixi } into Editor.open_files
+workbench's pane region accepts it: the tab strip is pane.matching(), and
+        pane.drawContents() runs the document surface's draw
         │
         ▼
-workbench (center provider) draws a tab for it, and to render the body calls
-        doc.owner.drawDocument(doc)
-        │
-        ▼
-pixi draws its canvas inside the workbench tab/split
+        doc.owner.drawDocument(doc)  ──►  pixi draws its canvas inside the pane
 ```
 
 Every later action follows the same rule — save, dirty-dot, undo/redo, grouping, path, and
 infobar chips (`infobarEntries`) all route to the owning plugin; workbench never knows it's a
-pixel-art file. A new editor
-plugin drops in with **no fizzy or workbench changes**: register its file types, implement the
-document + `drawDocument` hooks, and its documents coexist in the same tabs/splits.
+pixel-art file. A new editor plugin drops in with **no fizzy or workbench changes**: offer its
+file types, implement the document + `drawDocument` hooks, and its documents coexist in the same
+panes.
 
 ---
 
@@ -986,7 +1125,7 @@ Fizzy uses three independent versions:
 | Version | Owner | Purpose |
 |---------|-------|---------|
 | **App version** | Fizzy release (`build.zig.zon`) | User-facing editor release; does **not** gate plugin loading |
-| **SDK version** | `sdk/src/version.zig` (`sdk_version`) | ABI contract; bumps when the plugin boundary changes. Every bump gets an `sdk-v<version>` git tag **and** a `fizzy-sdk-v*` release asset (auto-pushed by CI — see §2.3) as the pin point for plugin `build.zig.zon`s |
+| **SDK version** | `sdk/sdk_version.zig` (`sdk_version`, re-exported by `sdk/src/version.zig`) | ABI contract; bumps when the plugin boundary changes. Every bump gets an `sdk-v<version>` git tag **and** a `fizzy-sdk-v*` release asset (auto-pushed by CI — see §2.3) as the pin point for plugin `build.zig.zon`s |
 | **Plugin version** | Author `plugin.zig.zon` `.version` | Plugin's own release semver — the single source of truth, forwarded into the build (`fizzy_plugin_options`) and embedded in the dylib's `fizzy_plugin_manifest_zon`/`fizzy_plugin_version` exports |
 
 At load time the host checks, in order:
@@ -1018,6 +1157,17 @@ CI enforces the pairing on the fizzy side: `zig build test-sdk-version` fails at
 the live shape fingerprint (`dylib.sdk_shape_fingerprint`) drifts from the recorded literal
 (`recorded_sdk_shape_fingerprint` in `sdk/src/version.zig`) without an accompanying `sdk_version`
 bump.
+
+The three fields of `sdk_version` are a convention, not semver's — `sdkVersionSatisfies` is a
+plain lexicographic compare with no "0.x is special" carve-out:
+
+- **patch** — bumped on every `recorded_sdk_shape_fingerprint` change that ships.
+- **minor** — a compatibility *epoch*: a deliberate, announced hard break. **0.2.0** is the first
+  release of the library-shaped SDK (`core/`, `sdk/`, `app/`; regions and surfaces); 0.1.x plugins
+  do not load against it and are rebuilt, not migrated. **While 0.2.0 is unreleased the
+  fingerprint moves freely under it** — the recorded literal is updated, the version is left
+  alone, and a plugin pinned to the working tree rebuilds.
+- **major** — stays 0 until there is a stable 1.0 contract to commit to.
 
 On the plugin side, `fizzy.plugin.install` wires a `check` build step that prints what your
 *pinned `sdk-v*` tag* computes for `sdk_version` + ReleaseFast `abi_fingerprint`. The release
@@ -1199,20 +1349,27 @@ drop straight into the plugins directory, exactly like §2.6.
 | `sdk/src/Plugin.zig` | Plugin identity + the vtable of hooks |
 | `sdk/src/DocHandle.zig` | Opaque document handle (`owner`-routed) |
 | `sdk/src/EditorAPI.zig` | Fizzy's read/utility surface plugins reach back through |
-| `sdk/src/regions.zig` | Sidebar/bottom/center/menu/settings/command contribution structs |
+| `sdk/src/Surface.zig` | The one drawable contribution: id, title, keywords, `draw`, `takeover_when` — §3.1.2 |
+| `sdk/src/RegionSpec.zig` | A region a plugin declares inside the one it draws in (`host.region`) — §3.1.2 |
+| `sdk/src/keywords.zig` | Keyword presets (`ide.sidebar` / `.panel` / `.main`) and the `accepts` / `Fit` binding rule |
+| `sdk/src/document.zig` | Document staging helpers + `surfaceId` / `pathOfSurfaceId` / `keywords` for document surfaces |
+| `sdk/src/Command.zig`, `menus.zig` | `Command` and the menu contribution structs (`MenuContribution`, `MenuSectionContribution`, `NativeMenuItem`) |
+| `sdk/src/services/` | Service API definitions: `files`, `workbench`, `markdown`, `wikilink` — §3.10 |
 | `sdk/src/language.zig` | `LanguageSupport` registry — documentOpened/hover/goto-definition/completion/signature-help/format/highlighting/preview hooks looked up by file extension |
 | `core/lsp/Client.zig` | Server-agnostic LSP client (JSON-RPC framing, caching, threading) shared by every language plugin — see §3.9 |
 | `sdk/src/dylib.zig`, `dvui_context.zig` | Runtime-library C entry contract + dvui injection |
-| `sdk/src/version.zig` | SDK version + ABI fingerprint CI lock |
-| `sdk/src/manifest.zig` | `Manifest` — the `plugin.zig.zon` shape (`id`/`name`/`version`/`min_sdk_version`/`description`/`tags`) + `parse`/`free`, read back out of a loaded dylib at runtime. The typed shape actually baked into a dylib's C-ABI exports is `dylib.Identity` (build-injected, never runtime-parsed) |
+| `sdk/sdk_version.zig`, `sdk/src/version.zig` | The one place `sdk_version` is edited, and the ABI fingerprint CI lock (`recorded_sdk_shape_fingerprint`) |
+| `sdk/src/manifest.zig` | `Manifest` — the `plugin.zig.zon` shape (`id`/`name`/`version`/`min_sdk_version`/`description`/`tags`/`author`/`author_url`) + `parse`/`free`, read back out of a loaded dylib at runtime. The typed shape actually baked into a dylib's C-ABI exports is `dylib.Identity` (build-injected, never runtime-parsed) |
 | `sdk/src/settings.zig` | Comptime settings API (`sdk.settings.Schema(T)`) — see §3.1.1 |
+| `app/layout/` | The region registry, picker and assignment persistence (`layout.zon`) — app-side, not part of the SDK |
 | `src/editor/SettingsPluginsZon.zig` | ZON-AST byte-span surgery for `settings.zon`'s merged `.plugins.<id>` fields — fizzy-only, not part of the SDK |
-| `src/editor/SettingsWatcher.zig` | Thin nightwatch adapter for live external `settings.zon` / dropped-in plugin reconciliation (see above) — fizzy-only, not part of the SDK |
-| `src/editor/FolderWatcher.zig`, `folder_events.zig` | Recursive watch on the open folder, fanned out to plugins as `folderPathsChanged` (§3.2). The only watcher adapter whose output leaves fizzy; nightwatch stays behind the hook so it can be swapped per platform. `folder_events.zig` is the std-only buffering/filtering half, split out so it can be unit-tested |
+| `app/watch/SettingsWatcher.zig` | Thin nightwatch adapter for live external `settings.zon` / dropped-in plugin reconciliation (see above) — fizzy-only, not part of the SDK |
+| `app/watch/FolderWatcher.zig`, `folder_events.zig` | Recursive watch on the open folder, fanned out to plugins as `folderPathsChanged` (§3.2). The only watcher adapter whose output leaves fizzy; nightwatch stays behind the hook so it can be swapped per platform. `folder_events.zig` is the std-only buffering/filtering half, split out so it can be unit-tested |
 | `sdk/plugin_sdk.zig` | `fizzy.plugin.create` / `.install` / `.addCModule` — the build-side API a plugin's `build.zig` calls |
-| `plugins/text/` | Canonical document-owning editor plugin — copy to start a new editor plugin |
-| `plugins/image/` | Read-only image viewer (PNG/JPG/JPEG) with zoom/pan |
-| `plugins/workbench/` | Reference file-management (workbench-shape) plugin |
+| `plugins/text/` | Canonical document-owning editor plugin (and the fallback editor) — copy to start a new editor plugin |
+| `plugins/image/` | Read-only image viewer (PNG/JPG/JPEG) with zoom/pan — the smallest document-owning plugin |
+| `plugins/markdown/` | Utility plugin: language support (preview) + the `markdown` service |
+| `plugins/workbench/` | Reference file-management plugin: Files tree surface, main-area surface declaring document pane regions, the `workbench` service |
 | [`fizzyedit/pixi`](https://github.com/fizzyedit/pixi) | Reference third-party editor plugin, incl. vendored C deps + packed assets |
 | [`fizzyedit/zig`](https://github.com/fizzyedit/zig) | Reference LSP-backed language plugin (zls) — see §3.9 |
 | [`fizzyedit/plugins`](https://github.com/fizzyedit/plugins) | The store registry/aggregator |
@@ -1224,7 +1381,7 @@ drop straight into the plugins directory, exactly like §2.6.
 |--------|---------|
 | `fizzy_plugin_abi_fingerprint` | Must match host or load is rejected |
 | `fizzy_plugin_sdk_version` / `_min_sdk_version` / `_version` / `_id` / `_name` | Identity, read from `plugin.zig.zon` at build time (`fizzy_plugin_options`) |
-| `fizzy_plugin_manifest_zon` | The plugin's embedded `plugin.zig.zon` source text — lets the loader probe identity (and self-heal a missing on-disk sidecar, historically) without a full `register` |
+| `fizzy_plugin_manifest_zon` | The plugin's embedded `plugin.zig.zon` source text — lets the loader probe identity without a full `register` |
 | `fizzy_plugin_register` | Calls your `plugin.zig`'s `register(host)` |
 | `fizzy_plugin_set_globals` | Host injects allocator + `*Host` into the SDK (`sdk.allocator()` / `sdk.host()`) |
 | `fizzy_plugin_set_dvui_context` | Host injects live dvui window/io before draw |
@@ -1265,5 +1422,6 @@ plugins/<name>/
 `static/integration.zig` defines `addStaticModule` (linked into the app) and `addDylib` (the
 bundled dylib); the root build aggregates every plugin's integration in
 [`build/plugins.zig`](../build/plugins.zig). Built-ins register in
-[`Editor.zig`](../src/editor/Editor.zig) `postInit` via `try <name>_mod.register(&editor.host)`.
-(`pixi` used to be built-in; it now ships only through the store path in §6.)
+[`Editor.zig`](../src/editor/Editor.zig) `postInit` via `try <name>_mod.register(&editor.host)`;
+`bundled_modules` there is the list. `pixi` is not a built-in — it ships only through the store
+path in §6, with no special treatment in fizzy.

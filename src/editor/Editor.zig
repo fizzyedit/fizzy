@@ -146,10 +146,8 @@ frame_layout: ?*Layout = null,
 arena: std.heap.ArenaAllocator,
 
 /// Positions to reveal once their not-yet-open path finishes loading. Set by `revealPosition`
-/// when the target is not open yet and drained once per frame. Previously lived on the workbench
-/// plugin, which is what forced goto-definition to depend on workbench; the queue was incidental
-/// to that service rather than meaningful to it. Rare and short-lived (usually at most one, from
-/// a single goto-definition), so a linear per-frame scan is fine.
+/// when the target is not open yet and drained once per frame. Rare and short-lived (usually at
+/// most one, from a single goto-definition), so a linear per-frame scan is fine.
 pending_reveals: std.ArrayListUnmanaged(PendingReveal) = .empty,
 
 config_folder: []const u8,
@@ -1056,10 +1054,9 @@ fn pluginLoadFailureReason(err: PluginLoader.LoadError) []const u8 {
 /// replacing any earlier record for the same id.
 ///
 /// Every path that loads a user plugin routes its failures here — the startup scan *and* the live
-/// ones (`loadUserPluginById`, reached from enable, store install, and update). A live load that
-/// failed silently used to leave the plugin in none of the three lists the store's installed pane
-/// is built from (loaded / disabled / failed), so a wrong-SDK build would simply vanish from the
-/// UI: nothing to reinstall, nothing to uninstall, no way back short of a restart.
+/// ones (`loadUserPluginById`, reached from enable, store install, and update), so a failed
+/// plugin is always in one of the three lists the store's installed pane is built from
+/// (loaded / disabled / failed) rather than vanishing from the UI.
 fn recordLoadFailure(editor: *Editor, id: []const u8, path: []const u8, err: PluginLoader.LoadError) void {
     const reason = pluginLoadFailureReason(err);
     const probe = PluginLoader.probeVersionInfo(path);
@@ -2676,19 +2673,12 @@ fn fizzyLogLine(ctx: *anyopaque, level: std.log.Level, scope: []const u8, messag
 /// `enabled` is read straight off the registered `Command` (absent `isEnabled` = enabled) rather
 /// than threaded through the vtable as its own parameter, so a plugin section's row can be greyed
 /// out — same as fizzy's own menu rows (`Menu.menuItemWithHotkey`) — without an SDK/ABI
-/// change: `Host.commandEnabled` already existed for the command palette. Before this, a
-/// section's `draw` callback had to early-return entirely to avoid a permanently-clickable row
-/// for the wrong document (pixi's Transform/Grid Layout, text's Format Document), which made the
-/// row disappear here while the *native* macOS menu — a static bar with no per-row enabled hook
-/// at all — kept showing it, greyed or not. Reading the command's own `isEnabled` here instead
-/// lets the plugin draw the row unconditionally and get correct greying for free.
+/// change: `Host.commandEnabled` already existed for the command palette. A plugin draws its
+/// row unconditionally and gets correct greying for free, on both menu bars.
 ///
 /// Draws no separator of its own — `Menu.drawMenuSections` draws exactly one ahead of the whole
-/// plugin-contributed group for a menu, not one per row. This used to draw its own leading
-/// separator, which was fine while a section's early return meant at most one row ever appeared
-/// per menu; once sections stopped early-returning (same doc comment above), the Edit menu could
-/// carry three rows (pixi's Transform, pixi's Grid Layout, text's Format Document) each drawing
-/// its own separator, so every greyed-out row looked like its own group.
+/// plugin-contributed group for a menu, not one per row, or every greyed-out row would look
+/// like its own group.
 fn fizzyDrawMenuItem(ctx: *anyopaque, title: []const u8, command_id: ?[]const u8) bool {
     const editor = fizzyCtx(ctx);
     const enabled = if (command_id) |id| editor.host.commandEnabled(id) else true;
@@ -3060,8 +3050,7 @@ pub fn documentPathChanged(editor: *Editor, doc: sdk.DocHandle) void {
     dvui.refresh(null, @src(), null);
 }
 
-/// A document drawn as a surface: the canvas box the workbench used to draw around it, then the
-/// owner's `drawDocument`. The document is looked up by id each time — a plugin can unload
+/// A document drawn as a surface: the canvas box around it, then the owner's `drawDocument`. The document is looked up by id each time — a plugin can unload
 /// between frames, and the handle in `open_files` is the one that is current.
 fn drawDocSurface(ctx: ?*anyopaque) anyerror!dvui.App.Result {
     const ds: *DocSurface = @ptrCast(@alignCast(ctx orelse return .ok));
@@ -4502,12 +4491,7 @@ pub fn flushQueuedNativeMenuItems(editor: *Editor) void {
     }
 }
 
-/// Run the command a menu-bar item stands for.
-///
-/// This used to be a switch that reimplemented every action a third time (`Menu.zig` had its
-/// own inline copy, `Keybinds` had the command body), and the copies had drifted — the menu-bar
-/// Open Folder went through `fizzy.backend` while the command went straight to
-/// `dvui.dialogNative*`, which no-ops on web. The item now names a command and nothing else.
+/// Run the command a menu-bar item stands for. The item names a command and nothing else.
 pub fn handleNativeMenuAction(editor: *Editor, tag: usize) !void {
     const item = menu_model.byTag(tag) orelse {
         dvui.log.err("native menu tag {d} is not a model item", .{tag});
@@ -5999,9 +5983,9 @@ fn folderPathsChanged(ctx: *anyopaque, events: []const sdk.Plugin.PathEvent, tru
 
 // ---- PluginManager: what the store needs from this application --------------------------
 //
-// Fizzy filling in the seam the store now talks to (`PluginManager.zig`). Every member is
-// forwarding to state fizzy already owned; the point is that the store no longer reaches for
-// `fizzy.editor()` to find it, so a different app supplies its own and gets the same store.
+// Fizzy filling in the seam the store talks to (`PluginManager.zig`). Every member forwards to
+// state fizzy owns; the store never reaches for `fizzy.editor()`, so a different app supplies
+// its own and gets the same store.
 
 fn pmSelf(ctx: *anyopaque) *Editor {
     return @ptrCast(@alignCast(ctx));

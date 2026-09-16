@@ -322,10 +322,9 @@ const scroll_edge_epsilon: f32 = 0.5;
 ///
 /// **This is the one definition of that behaviour.** Every viewport in the app routes through it
 /// so they can't drift: explorer, sidebar, both store panes, the text editor, markdown previews,
-/// and the workspace's recents list. Most of those previously hand-rolled it, and several tested
-/// only `virtual_size > viewport` for the bottom/right edge — which left the hint showing even
-/// when scrolled all the way to that end, telling the user there was more to see when there
-/// wasn't. Call this instead of `drawEdgeShadow` for anything that is a scroll viewport; reach
+/// and the workspace's recents list. (Testing only `virtual_size > viewport` for the
+/// bottom/right edge leaves the hint showing when scrolled all the way to that end.)
+/// Call this instead of `drawEdgeShadow` for anything that is a scroll viewport; reach
 /// for `drawEdgeShadow` directly only for shadows that aren't about hidden scroll content (the
 /// workspace draws one between the active tab and its neighbours, for instance).
 ///

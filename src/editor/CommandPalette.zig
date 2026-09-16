@@ -682,9 +682,8 @@ fn drawRow(
         }
     }
 
-    // The activated row reads as pressed for the whole outro. Before this the palette closed on
-    // the same frame as the click, so the row you picked disappeared out from under the cursor
-    // with no acknowledgement that it was the one that ran.
+    // The activated row reads as pressed for the whole outro, so the row you picked does not
+    // disappear from under the cursor with no acknowledgement that it was the one that ran.
     const is_activated = if (self.activated) |a| a == i else false;
     const is_selected = i == self.selected;
     if (is_activated) {
