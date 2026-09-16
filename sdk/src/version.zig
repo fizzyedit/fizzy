@@ -46,12 +46,12 @@ pub const VersionTriplet = dylib.VersionTriplet;
 /// (major, minor, patch) compare with no semver "0.x is special" carve-out, so each field's
 /// meaning is a convention this project enforces by discipline, not by the type system:
 ///
-///   * **patch** — bump on every `recorded_sdk_shape_fingerprint` change. This is the field that
-///     moved (as `minor`) for every 0.5.0–0.35.0 entry in the changelog below; from 0.1.35 on,
-///     ordinary boundary changes bump patch instead.
-///   * **minor** — a manually-bumped compatibility *epoch*, reserved for a deliberate, announced
-///     hard break (e.g. "pre-1.0 pins are no longer supported, rebuild against the new epoch").
-///     Left untouched otherwise. Bump this, not major, for that.
+///   * **patch** — bump on every `recorded_sdk_shape_fingerprint` change that ships.
+///   * **minor** — a compatibility *epoch*: a deliberate, announced hard break. 0.2.0 is the
+///     first release of the library-shaped SDK (`core/`, `sdk/`, `app/`; regions and surfaces);
+///     0.1.x plugins do not load against it and are rebuilt, not migrated. While 0.2.0 is
+///     unreleased the fingerprint moves freely under it — update the recorded literal, leave
+///     the version alone.
 ///   * **major** — stays 0 until there's an actual stable 1.0 contract to commit to.
 ///
 /// The value itself lives in `sdk/sdk_version.zig` — the single place it is ever edited — not
