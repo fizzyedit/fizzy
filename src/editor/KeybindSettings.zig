@@ -29,7 +29,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const core = @import("core");
 const fizzy = @import("../fizzy.zig");
-const keymap = @import("app").keymap.root;
+const Keymap = @import("app").keymap.Keymap;
 const adapter = @import("app").keymap.dvui_adapter;
 const Keybinds = @import("Keybinds.zig");
 
@@ -129,7 +129,7 @@ fn ownerLabel(owner: []const u8) []const u8 {
 fn collectGroups(
     arena: std.mem.Allocator,
     query: *const fuzzy.Query,
-    platform: keymap.Platform,
+    platform: Keymap.Platform,
 ) std.ArrayListUnmanaged(Group) {
     const editor = fizzy.editor();
     var groups: std.ArrayListUnmanaged(Group) = .empty;
@@ -216,7 +216,7 @@ pub fn score(query: *const fuzzy.Query) ?f64 {
     }
     if (query.isEmpty()) return 0;
 
-    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
+    const platform: Keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     const groups = collectGroups(dvui.currentWindow().arena(), query, platform);
     var best: ?f64 = null;
     for (groups.items) |g| {
@@ -237,7 +237,7 @@ pub fn draw(query: *const fuzzy.Query) void {
 
     const editor = fizzy.editor();
     const theme = dvui.themeGet();
-    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
+    const platform: Keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     const arena = dvui.currentWindow().arena();
 
     drawConflicts(editor, platform, theme);
@@ -276,7 +276,7 @@ fn drawOwnerBranch(
     query: *const fuzzy.Query,
     searching: bool,
     id_extra: usize,
-    platform: keymap.Platform,
+    platform: Keymap.Platform,
     theme: dvui.Theme,
 ) void {
     // While searching every branch is forced open and `open_owners` is left untouched, so
@@ -359,7 +359,7 @@ fn recordingDot() void {
     r.fill(.all(r.h / 2), .{ .color = .{ .color = dvui.themeGet().color(.err, .fill) } });
 }
 
-fn drawConflicts(editor: *fizzy.Editor, platform: keymap.Platform, theme: dvui.Theme) void {
+fn drawConflicts(editor: *fizzy.Editor, platform: Keymap.Platform, theme: dvui.Theme) void {
     const conflicts = editor.keybind_conflicts orelse return;
     if (conflicts.len == 0) return;
 
@@ -378,7 +378,7 @@ fn drawConflicts(editor: *fizzy.Editor, platform: keymap.Platform, theme: dvui.T
         .expand = .horizontal,
     });
     for (conflicts, 0..) |c, i| {
-        const keys = keymap.formatKeys(dvui.currentWindow().arena(), c.stroke, platform) catch "?";
+        const keys = Keymap.formatKeys(dvui.currentWindow().arena(), c.stroke, platform) catch "?";
         dvui.label(@src(), "{s}: {s} shadows {s}", .{ keys, c.winner, c.loser }, .{
             .id_extra = i,
             .expand = .horizontal,
@@ -404,7 +404,7 @@ fn drawOwnerGrid(
     group: *const Group,
     query: *const fuzzy.Query,
     id_extra: usize,
-    platform: keymap.Platform,
+    platform: Keymap.Platform,
     theme: dvui.Theme,
 ) void {
     var grid = dvui.grid(@src(), .{
@@ -555,7 +555,7 @@ fn drawCommandRow(
     c: fizzy.sdk.Host.Command,
     query: *const fuzzy.Query,
     row: usize,
-    platform: keymap.Platform,
+    platform: Keymap.Platform,
     theme: dvui.Theme,
     banded: Banded,
 ) void {
@@ -682,7 +682,7 @@ const Shortcut = struct {
     inherited: bool = false,
 };
 
-fn shortcutFor(editor: *fizzy.Editor, id: []const u8, platform: keymap.Platform) ?Shortcut {
+fn shortcutFor(editor: *fizzy.Editor, id: []const u8, platform: Keymap.Platform) ?Shortcut {
     if (directShortcut(editor, id, platform)) |keys| return .{ .keys = keys };
 
     // A plugin's document verb (`pixi.copy`) is invoked through the Fizzy forwarder that owns
@@ -694,7 +694,7 @@ fn shortcutFor(editor: *fizzy.Editor, id: []const u8, platform: keymap.Platform)
     return .{ .keys = keys, .inherited = true };
 }
 
-fn directShortcut(editor: *fizzy.Editor, id: []const u8, platform: keymap.Platform) ?[]const u8 {
+fn directShortcut(editor: *fizzy.Editor, id: []const u8, platform: Keymap.Platform) ?[]const u8 {
     const arena = dvui.currentWindow().arena();
     const found = editor.keymap.bindingsFor(arena, id) catch return null;
     if (found.len == 0) return null;
@@ -703,7 +703,7 @@ fn directShortcut(editor: *fizzy.Editor, id: []const u8, platform: keymap.Platfo
     for (found[1..]) |b| {
         if (@intFromEnum(b.source) >= @intFromEnum(best.source)) best = b;
     }
-    return keymap.formatKeys(arena, best.stroke, platform) catch null;
+    return Keymap.formatKeys(arena, best.stroke, platform) catch null;
 }
 
 /// Returns true when recording finished (a chord was captured).
@@ -712,7 +712,7 @@ fn directShortcut(editor: *fizzy.Editor, id: []const u8, platform: keymap.Platfo
 /// put on it. The ways out are clicking the row again (which toggles recording off) and the row's
 /// Reset button. The one thing still skipped is a bare modifier — those are waited on, since
 /// every press of one is the start of a chord the user hasn't finished typing.
-fn pollRecording(editor: *fizzy.Editor, command: []const u8, platform: keymap.Platform) bool {
+fn pollRecording(editor: *fizzy.Editor, command: []const u8, platform: Keymap.Platform) bool {
     for (dvui.events()) |*e| {
         if (e.handled) continue;
         if (e.evt != .key) continue;
@@ -720,10 +720,10 @@ fn pollRecording(editor: *fizzy.Editor, command: []const u8, platform: keymap.Pl
         if (ke.action != .down) continue;
 
         const chord = adapter.chordFrom(ke) orelse continue;
-        if (keymap.keyIsModifier(chord.key)) continue;
+        if (Keymap.keyIsModifier(chord.key)) continue;
 
         e.handle(@src(), dvui.currentWindow().data());
-        const keys = keymap.formatKeys(editor.host.allocator, .{ .first = chord }, platform) catch return true;
+        const keys = Keymap.formatKeys(editor.host.allocator, .{ .first = chord }, platform) catch return true;
         defer editor.host.allocator.free(keys);
         Keybinds.setUserBinding(editor, command, keys) catch |err| {
             dvui.log.err("set keybind for '{s}' failed: {s}", .{ command, @errorName(err) });

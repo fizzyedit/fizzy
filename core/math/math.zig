@@ -36,10 +36,8 @@ pub const sqrt2: f32 = 1.414213562373095;
 
 pub const Direction = @import("direction.zig").Direction;
 
-const color = @import("color.zig");
-pub const Color = color.Color;
-pub const Colors = color.Colors;
-pub const blendPmaSrcOver = color.blendPmaSrcOver;
+pub const Color = @import("Color.zig");
+pub const blendPmaSrcOver = Color.blendPmaSrcOver;
 
 pub const Point = struct { x: i32, y: i32 };
 

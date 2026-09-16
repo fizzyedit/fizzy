@@ -35,9 +35,8 @@ pub const Recents = @import("Recents.zig");
 
 /// Key chords → command ids: the table, its ZON form, chord matching, and the dvui adapter.
 pub const keymap = struct {
-    pub const Keymap = @import("keymap/keymap.zig").Keymap;
-    pub const root = @import("keymap/keymap.zig");
-    pub const Key = @import("keymap/Key.zig");
+    pub const Keymap = @import("keymap/Keymap.zig");
+    pub const key = @import("keymap/key.zig");
     pub const chord = @import("keymap/chord.zig");
     pub const zon = @import("keymap/zon.zig");
     pub const dvui_adapter = @import("keymap/dvui_adapter.zig");

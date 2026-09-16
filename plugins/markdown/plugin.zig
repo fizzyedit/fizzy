@@ -1,7 +1,7 @@
 const std = @import("std");
 const sdk = @import("fizzy_sdk");
 const dvui = @import("dvui");
-const State = @import("src/State.zig").State;
+const State = @import("src/State.zig");
 const md = @import("src/markdown.zig");
 
 /// Re-exported for fizzy's own use of the preview renderer outside this plugin's own

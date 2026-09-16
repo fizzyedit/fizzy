@@ -18,7 +18,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const fizzy = @import("../fizzy.zig");
 const fuzzy = @import("core").fuzzy;
-const keymap = @import("app").keymap.root;
+const Keymap = @import("app").keymap.Keymap;
 const Keybinds = @import("Keybinds.zig");
 
 const Editor = @import("Editor.zig");
@@ -355,8 +355,8 @@ fn shortcutFor(editor: *Editor, id: []const u8) ?[]const u8 {
     const arena = dvui.currentWindow().arena();
     const found = editor.keymap.bindingsFor(arena, id) catch return null;
     if (found.len == 0) return null;
-    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
-    return keymap.formatKeys(arena, found[0].stroke, platform) catch null;
+    const platform: Keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
+    return Keymap.formatKeys(arena, found[0].stroke, platform) catch null;
 }
 
 // ---- activation ---------------------------------------------------------------------------

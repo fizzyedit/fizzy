@@ -390,7 +390,6 @@ pub fn docFromPath(self: *Host, path: []const u8) ?DocHandle {
 
 /// Open `path` if needed and put the caret at `line`/`character`. Host state — a plugin doing
 /// goto-definition needs no workbench service for this. Returns false when nothing can open it.
-
 /// An open plugin region: what a plugin holds between declaring a place and closing it.
 ///
 /// `init`/`deinit` like the box it is, because that is what a region is everywhere else in fizzy

@@ -37,7 +37,7 @@ pub const Settings = @import("app").settings.Settings;
 /// touched this cycle" — `writeMergedSettings` reads that half back off disk instead, so
 /// toggling auto-update can never clobber a concurrent enable/disable or vice versa.
 /// One persisted `.extensions` entry fizzy declined to honor, surfaced to the user rather than
-/// silently ignored — the same treatment `keymap.Conflict` gets in the Keyboard Shortcuts pane.
+/// silently ignored — the same treatment `Keymap.Conflict` gets in the Keyboard Shortcuts pane.
 ///
 /// **Fizzy never produces one of these itself.** `resolveExtensionConflict` is the app's single
 /// writer and always strips an extension from every other plugin's list before adding it, so a
@@ -229,12 +229,12 @@ dvui_default_keybinds: std.StringHashMapUnmanaged(dvui.enums.Keybind) = .empty,
 /// Resolved keybinding table: chord -> command id. Rebuilt by `Keybinds.buildKeymap`
 /// whenever `rebuildKeybinds` runs (plugin load/unload), so a plugin's binds never outlive
 /// the image their strings live in.
-keymap: @import("app").keymap.root.Keymap = .{},
+keymap: @import("app").keymap.Keymap = .{},
 /// Parsed `keybinds.zon`. Held because `keymap` borrows its command-id and owner-id strings —
 /// it must outlive the keymap and is replaced wholesale on every rebuild.
-keybinds_overrides: ?@import("app").keymap.root.zon.File = null,
+keybinds_overrides: ?@import("app").keymap.Keymap.zon.File = null,
 /// Cached `Keymap.conflicts()` result from the last rebuild — owned, freed on next rebuild.
-keybind_conflicts: ?[]@import("app").keymap.root.Conflict = null,
+keybind_conflicts: ?[]@import("app").keymap.Keymap.Conflict = null,
 /// Which default keymap fizzy starts from.
 keybind_profile: Keybinds.Profile = .vscode,
 /// VSCode-style Quick Open / command palette overlay.
@@ -1295,12 +1295,12 @@ fn isBundledPluginId(id: []const u8) bool {
 /// Returned in the editor's per-frame arena, not the persistent allocator — this is a UI display
 /// helper meant to be called fresh every frame (like the store card labels), so the caller never
 /// has to free it, and no `manifest_cache` entry is needed for built-ins.
-pub fn builtinManifest(editor: *Editor, id: []const u8) ?sdk.manifest.Manifest {
+pub fn builtinManifest(editor: *Editor, id: []const u8) ?sdk.Manifest {
     inline for (bundled_modules) |m| {
         if (std.mem.eql(u8, m.plugin_id, id)) {
             const frame_gpa = editor.arena.allocator();
             const zon = frame_gpa.dupeZ(u8, m.plugin_options.manifest_zon) catch return null;
-            return sdk.manifest.parse(frame_gpa, zon) catch return null;
+            return sdk.Manifest.parse(frame_gpa, zon) catch return null;
         }
     }
     return null;
@@ -6049,7 +6049,7 @@ const plugin_manager_vtable: PluginManager.VTable = .{
         }
     }.f,
     .builtinManifest = struct {
-        fn f(ctx: *anyopaque, id: []const u8) ?sdk.manifest.Manifest {
+        fn f(ctx: *anyopaque, id: []const u8) ?sdk.Manifest {
             return pmSelf(ctx).builtinManifest(id);
         }
     }.f,

@@ -28,7 +28,7 @@ const Widget = dvui.Widget;
 const WidgetData = dvui.WidgetData;
 
 pub const Layout = @import("DockingWidget/Layout.zig");
-const row = @import("DockingWidget/row.zig");
+const Row = @import("DockingWidget/Row.zig");
 const Split = @import("Split.zig");
 
 const Dockspace = @This();
@@ -341,16 +341,16 @@ fn extentKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
 
 /// How `extent` divides at `ratio`: `first` is the first child's length; `usable` the room the
 /// ratio is a share of (the extent less the sash and both floors).
-fn divide(self: *Dockspace, node: Layout.NodeIndex, extent: f32, ratio: f32) row.Division {
+fn divide(self: *Dockspace, node: Layout.NodeIndex, extent: f32, ratio: f32) Row.Division {
     const sp = self.init_opts.layout.nodes.items[node].split;
-    return row.divide(extent, ratio, self.gapOf(node), self.floorAlong(sp.first, sp.dir), self.floorAlong(sp.second, sp.dir));
+    return Row.divide(extent, ratio, self.gapOf(node), self.floorAlong(sp.first, sp.dir), self.floorAlong(sp.second, sp.dir));
 }
 
 /// The child rects and sash rect for a split of content size `cr` at `ratio`.
-fn cellRects(self: *Dockspace, node: Layout.NodeIndex, cr: Rect, ratio: f32) @TypeOf(row.cellRects(cr, .horizontal, 0, 0)) {
+fn cellRects(self: *Dockspace, node: Layout.NodeIndex, cr: Rect, ratio: f32) @TypeOf(Row.cellRects(cr, .horizontal, 0, 0)) {
     const sp = self.init_opts.layout.nodes.items[node].split;
     const d = self.divide(node, along(cr, sp.dir), ratio);
-    return row.cellRects(cr, sp.dir, d.first, self.gapOf(node));
+    return Row.cellRects(cr, sp.dir, d.first, self.gapOf(node));
 }
 
 fn minKey(self: *Dockspace, node: Layout.NodeIndex) []const u8 {
@@ -383,11 +383,11 @@ fn shownPtr(self: *Dockspace, node: Layout.NodeIndex, target: f32) *f32 {
 // ── Dragging a sash: the two sides accordion ─────────────────────────────────────────────────
 //
 // Nested splits on one axis are, to the user, a row of panes with boundaries between them, and
-// a drag moves one boundary. Arithmetic is `row.dragBoundary`: the boundary goes where the
+// a drag moves one boundary. Arithmetic is `Row.dragBoundary`: the boundary goes where the
 // pointer is, and each side of it scales as a group — every pane on the squeezed side shrinks
 // in proportion, keeping its share of that side, down to nothing, and the panes on the other
 // side grow the same way. Drag back and they open out in the same proportions. Every split on
-// the row then reads its ratio off the new positions (`row.ratioFor`). Sashes are never scaled:
+// the row then reads its ratio off the new positions (`Row.ratioFor`). Sashes are never scaled:
 // each keeps its full width, so shut panes stack their handles at the boundary.
 
 const Boundary = struct { node: Layout.NodeIndex, pos: f32 };
@@ -437,7 +437,7 @@ fn assignRow(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction
     const gap = self.gapOf(node);
     const first_len = pos - origin;
     const d = self.divide(node, extent, 0);
-    const ratio = row.ratioFor(first_len, extent, gap, d.floor_first, d.floor_second);
+    const ratio = Row.ratioFor(first_len, extent, gap, d.floor_first, d.floor_second);
     self.shownPtr(node, ratio).* = ratio;
     cancelAnim(self.data().id, self.animKey(node));
     self.queueMutation(.{ .set_ratio = .{ .split = node, .ratio = ratio, .extent = d.usable } });
@@ -446,7 +446,7 @@ fn assignRow(self: *Dockspace, node: Layout.NodeIndex, dir: dvui.enums.Direction
 }
 
 /// A drag on `frame`'s sash to `to` (physical, along the axis): gather the row, resolve it
-/// with `row.dragBoundary`, write every affected split's ratio.
+/// with `Row.dragBoundary`, write every affected split's ratio.
 fn dragTo(self: *Dockspace, frame: *StackFrame, to: f32) void {
     const dir = frame.dir;
     const gap = self.init_opts.handle_size;
@@ -476,8 +476,8 @@ fn dragTo(self: *Dockspace, frame: *StackFrame, to: f32) void {
     for (collected.items, 0..) |b, i| boundaries[i] = b.pos;
     for (cells.items, 0..) |c, i| floors[i] = self.floorAlong(c, dir);
 
-    var r = row.Row{ .boundaries = boundaries, .floors = floors, .gap = gap, .extent = root.extent };
-    row.dragBoundary(&r, k, (to - origin_px) / crs.s - gap / 2);
+    var r = Row{ .boundaries = boundaries, .floors = floors, .gap = gap, .extent = root.extent };
+    r.dragBoundary(k, (to - origin_px) / crs.s - gap / 2);
     for (collected.items, 0..) |*b, i| b.pos = r.boundaries[i];
 
     self.assignRow(root.node, dir, 0, root.extent, collected.items);

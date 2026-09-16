@@ -388,9 +388,9 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ "fizzy-lsp-uri-tests", "core/lsp/UriUtil.zig" },
         .{ "fizzy-settings-plugins-zon-tests", "app/settings/SettingsPluginsZon.zig" },
         // std-only despite living under sdk/src/ — and the SDK-rooted test artifact
-        // below never reaches it (nothing in the graph forces `sdk.manifest`), so it
+        // below never reaches it (nothing in the graph forces `sdk.Manifest`), so it
         // needs its own root either way.
-        .{ "fizzy-sdk-manifest-tests", "sdk/src/manifest.zig" },
+        .{ "fizzy-sdk-manifest-tests", "sdk/src/Manifest.zig" },
         // The `[[wikilink]]` tokenizer. std-only on purpose: it's shared verbatim by the
         // markdown renderer and by out-of-tree indexers, so it must not depend on dvui or
         // anything else the SDK-rooted artifact drags in.
@@ -401,7 +401,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         .{ "fizzy-textcore-tests", "plugins/text/src/textcore/textcore.zig" },
         // Keybinding parse/resolve core. Deliberately dvui-free (see keymap.zig) — dvui's
         // keybind map can't express chords and is keyed by bind name, not command.
-        .{ "fizzy-keymap-tests", "app/keymap/keymap.zig" },
+        .{ "fizzy-keymap-tests", "app/keymap/Keymap.zig" },
         // `<img>` scanning for the markdown preview's raw-HTML blocks. Under plugins/
         // but std-only by design (see html_images.zig), so it tests from the app build.
         .{ "fizzy-md-html-images-tests", "plugins/markdown/src/md/html_images.zig" },
@@ -734,7 +734,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // import *and actually referenced* — dylib.zig, fingerprint.zig, settings.zig,
     // version.zig, Host.zig. A file only reached through an unreferenced `pub const
     // x = @import(…)` in sdk.zig is analyzed lazily and its tests never run (that is
-    // why manifest.zig has its own root in the unit list above); when adding tests
+    // why Manifest.zig has its own root in the unit list above); when adding tests
     // to a new SDK file, check the reported test count actually went up.
     {
         const sdk_tests_module = sdk.wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), dvui_test_proxy_bridge, core_module_test, null);

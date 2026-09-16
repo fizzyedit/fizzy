@@ -97,8 +97,7 @@ pub fn refresh() void {
 pub const document = @import("document.zig");
 
 /// The declarative `plugin.zig.zon` manifest types (see `docs/PLUGIN_MANIFEST_PLAN.md`).
-pub const manifest = @import("manifest.zig");
-pub const Manifest = manifest.Manifest;
+pub const Manifest = @import("Manifest.zig");
 
 /// Services: capability offered by name and version rather than by the ABI.
 ///

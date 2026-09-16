@@ -90,7 +90,7 @@ pub const VTable = struct {
     failures: *const fn (ctx: *anyopaque) []const Failure,
     /// Identity for a plugin compiled into the binary, which has no `plugin.zig.zon` on disk.
     /// Null for an app that bundles none.
-    builtinManifest: *const fn (ctx: *anyopaque, id: []const u8) ?sdk.manifest.Manifest,
+    builtinManifest: *const fn (ctx: *anyopaque, id: []const u8) ?sdk.Manifest,
 
     // ---- actions ---------------------------------------------------------------------------
     install: *const fn (ctx: *anyopaque, id: []const u8) anyerror!void,
@@ -134,7 +134,7 @@ pub fn loadedLibs(self: PluginManager) []const PluginLoader.LoadedLib {
 pub fn failures(self: PluginManager) []const Failure {
     return self.vtable.failures(self.ctx);
 }
-pub fn builtinManifest(self: PluginManager, id: []const u8) ?sdk.manifest.Manifest {
+pub fn builtinManifest(self: PluginManager, id: []const u8) ?sdk.Manifest {
     return self.vtable.builtinManifest(self.ctx, id);
 }
 pub fn install(self: PluginManager, id: []const u8) anyerror!void {

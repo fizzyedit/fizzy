@@ -1,4 +1,4 @@
-//! Pure arithmetic for a same-axis row of split cells: accordion sash drags,
+//! A same-axis row of split cells, and the pure arithmetic over one: accordion sash drags,
 //! `divide` / `ratioFor`, and the child rects of one split.
 //!
 //! No widget state, no allocator, no tree walk. `DockingWidget` gathers a `Row`
@@ -17,12 +17,12 @@ pub const Division = struct { first: f32, usable: f32, floor_first: f32, floor_s
 /// A row of cells along one axis, with a sash of thickness `gap` between each
 /// pair. `boundaries[k]` is the start of sash `k` (so there is one more floor
 /// than there are boundaries).
-pub const Row = struct {
-    boundaries: []f32,
-    floors: []f32,
-    gap: f32,
-    extent: f32,
-};
+const Row = @This();
+
+boundaries: []f32,
+floors: []f32,
+gap: f32,
+extent: f32,
 
 /// Drag boundary `k` to `to`: each side accordions in proportion, never below
 /// its floors; sashes keep `gap`.

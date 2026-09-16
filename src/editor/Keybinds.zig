@@ -1,7 +1,7 @@
 //! Fizzy keybindings: the default bind table, fizzy's own commands, and key dispatch.
 //!
 //! Every fizzy action is a registered `Command`, and `tick()` resolves a key event to a command
-//! id through `keymap.Keymap` and runs it via the Host registry — the same registry plugin
+//! id through `Keymap` and runs it via the Host registry — the same registry plugin
 //! commands live in, which is what makes one rebindable table and the command palette possible.
 //!
 //! **Migration shape.** dvui's `Window.keybinds` map is still the source of the *default* key
@@ -18,7 +18,7 @@ const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const sdk = @import("fizzy_sdk");
-const keymap = @import("app").keymap.root;
+const Keymap = @import("app").keymap.Keymap;
 const adapter = @import("app").keymap.dvui_adapter;
 
 pub const Keybinds = @This();
@@ -350,7 +350,7 @@ pub fn registerCommands(editor: *Editor) !void {
 pub const Profile = enum { vscode };
 
 /// A default binding, resolved per platform. `mod` is Command on macOS and Control elsewhere
-/// (see `keymap.chord`), so most entries need only one spelling.
+/// (see `Keymap.chord`), so most entries need only one spelling.
 const DefaultBind = struct {
     command: []const u8,
     keys: []const u8,
@@ -462,7 +462,7 @@ fn fizzyCommandForBind(name: []const u8) ?FizzyCommand {
 /// The AppKit key-equivalent character for a key, or null for keys a plain `NSMenuItem`
 /// shortcut can't express (function keys, arrows, keypad). Lowercase throughout: AppKit takes
 /// shift from the modifier mask, and an uppercase character would demand shift on its own.
-fn nsKeyEquivalent(key: keymap.Key) ?[]const u8 {
+fn nsKeyEquivalent(key: Keymap.Key) ?[]const u8 {
     return switch (key) {
         .a => "a",
         .b => "b",
@@ -565,7 +565,7 @@ pub fn chordShadowed(editor: *Editor, command_id: []const u8) bool {
 /// `cmd+f` to Format Document, which fizzy's own profile hands to Open Folder, has to end with
 /// `cmd+f` formatting: the menu, `Keybinds.tick` and AppKit all agree on the winner, and Open
 /// Folder shows no chord because it no longer has one.
-fn shadowedByHigherLayer(editor: *Editor, binding: keymap.Binding, command_id: []const u8) bool {
+fn shadowedByHigherLayer(editor: *Editor, binding: Keymap.Binding, command_id: []const u8) bool {
     for (editor.keymap.bindings.items) |other| {
         const other_cmd = other.command orelse continue;
         if (std.mem.eql(u8, other_cmd, command_id)) continue;
@@ -630,7 +630,7 @@ pub fn syncNativeMenuShortcuts(editor: *Editor) void {
 /// A binding another layer has taken over (`shadowedByHigherLayer`) shows nothing: the chord is
 /// no longer this command's, in the menu or anywhere else, and advertising it would promise a
 /// key that runs something else.
-pub fn strokeForCommand(editor: *Editor, command_id: []const u8) ?keymap.Stroke {
+pub fn strokeForCommand(editor: *Editor, command_id: []const u8) ?Keymap.Stroke {
     if (bestBinding(editor, command_id)) |b| {
         return if (shadowedByHigherLayer(editor, b, command_id)) null else b.stroke;
     }
@@ -650,8 +650,8 @@ pub fn menuKeybindFor(editor: *Editor, command_id: []const u8) dvui.enums.Keybin
 }
 
 /// Highest-precedence binding for `command` (user > plugin > profile > dvui), or null.
-fn bestBinding(editor: *Editor, command: []const u8) ?keymap.Binding {
-    var best: ?keymap.Binding = null;
+fn bestBinding(editor: *Editor, command: []const u8) ?Keymap.Binding {
+    var best: ?Keymap.Binding = null;
     for (editor.keymap.bindings.items) |b| {
         const cmd = b.command orelse continue;
         if (!std.mem.eql(u8, cmd, command)) continue;
@@ -716,10 +716,10 @@ pub fn buildKeymap(editor: *Editor) !void {
     }
 
     // Layer 2: fizzy's own default profile.
-    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
+    const platform: Keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     for (defaultsFor(editor.keybind_profile)) |d| {
         const text = if (platform == .mac) (d.keys_mac orelse d.keys) else d.keys;
-        const stroke = keymap.parseKeys(text, platform) catch |err| {
+        const stroke = Keymap.parseKeys(text, platform) catch |err| {
             dvui.log.err("default keybind '{s}' for '{s}' is invalid: {s}", .{ text, d.command, @errorName(err) });
             continue;
         };
@@ -730,7 +730,7 @@ pub fn buildKeymap(editor: *Editor) !void {
     // when their owner is active; `owner_id` keeps them inert otherwise.
     for (plugin_owner_defaults) |d| {
         if (editor.host.command(d.command) == null) continue;
-        const stroke = keymap.parseKeys(d.keys, platform) catch |err| {
+        const stroke = Keymap.parseKeys(d.keys, platform) catch |err| {
             dvui.log.err("plugin keybind '{s}' for '{s}' is invalid: {s}", .{ d.keys, d.command, @errorName(err) });
             continue;
         };
@@ -789,8 +789,8 @@ fn loadUserOverrides(editor: *Editor) !void {
     };
     defer gpa.free(text);
 
-    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
-    var file = try keymap.zon.parse(gpa, text, platform);
+    const platform: Keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
+    var file = try Keymap.zon.parse(gpa, text, platform);
     errdefer file.deinit(gpa);
 
     for (file.diagnostics) |d| {
@@ -872,12 +872,12 @@ fn projectUserOverrides(editor: *Editor) void {
 
 /// Context flags for `when` matching. Only what fizzy can answer today; grows as bindings
 /// need finer gates.
-fn currentContext(editor: *Editor) keymap.When {
+fn currentContext(editor: *Editor) Keymap.When {
     return .{
         .editor_focused = editor.activeDoc() != null,
         .explorer_focused = !editor.explorer.closed,
         .modal_open = editor.command_palette.open,
-        // Declared by `keymap.When` since it was written but never filled in, so any `when`
+        // Declared by `Keymap.When` since it was written but never filled in, so any `when`
         // clause mentioning text input could not match. `dvui.wantTextInput` is the signal.
         .text_input_focused = editor.text_input_focused,
     };
@@ -961,13 +961,13 @@ fn keybindsPath(editor: *Editor, gpa: std.mem.Allocator) ![]u8 {
 }
 
 /// Rewrite `keybinds.zon` from `bindings`, then rebuild the live keymap.
-fn writeAndReload(editor: *Editor, bindings: []const keymap.zon.OwnedBinding) !void {
+fn writeAndReload(editor: *Editor, bindings: []const Keymap.zon.OwnedBinding) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.host.allocator;
     const path = try keybindsPath(editor, gpa);
     defer gpa.free(path);
 
-    const text = try keymap.zon.format(gpa, bindings);
+    const text = try Keymap.zon.format(gpa, bindings);
     defer gpa.free(text);
 
     if (bindings.len == 0) {
@@ -982,8 +982,8 @@ fn writeAndReload(editor: *Editor, bindings: []const keymap.zon.OwnedBinding) !v
     editor.rebuildKeybinds();
 }
 
-fn collectCurrentOverrides(editor: *Editor, gpa: std.mem.Allocator) !std.ArrayList(keymap.zon.OwnedBinding) {
-    var out: std.ArrayList(keymap.zon.OwnedBinding) = .empty;
+fn collectCurrentOverrides(editor: *Editor, gpa: std.mem.Allocator) !std.ArrayList(Keymap.zon.OwnedBinding) {
+    var out: std.ArrayList(Keymap.zon.OwnedBinding) = .empty;
     errdefer {
         for (out.items) |*b| b.deinit(gpa);
         out.deinit(gpa);
@@ -1008,8 +1008,8 @@ fn collectCurrentOverrides(editor: *Editor, gpa: std.mem.Allocator) !std.ArrayLi
 pub fn setUserBinding(editor: *Editor, command: []const u8, keys: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.host.allocator;
-    const platform: keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
-    const stroke = try keymap.parseKeys(keys, platform);
+    const platform: Keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
+    const stroke = try Keymap.parseKeys(keys, platform);
 
     var list = try collectCurrentOverrides(editor, gpa);
     defer {

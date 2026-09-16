@@ -1,7 +1,7 @@
 //! The one file in `keymap/` that imports dvui.
 //!
 //! Everything else in this tree is deliberately dvui-free so it can be unit-tested from the app
-//! build (see `keymap.zig`). This file is the boundary: it converts dvui key events *in*, and
+//! build (see `Keymap.zig`). This file is the boundary: it converts dvui key events *in*, and
 //! projects single-stroke bindings back *out* into `dvui.Window.keybinds`.
 //!
 //! That projection is not optional. `TextEntryWidget` calls `ke.matchBind("char_left")` and
@@ -11,18 +11,18 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
-const keymap = @import("keymap.zig");
+const Keymap = @import("Keymap.zig");
 
-const Key = keymap.Key;
-const Chord = keymap.Chord;
-const Mods = keymap.Mods;
+const Key = Keymap.Key;
+const Chord = Keymap.Chord;
+const Mods = Keymap.Mods;
 
-// `keymap.Key`'s tags are intentionally spelled exactly like `dvui.enums.Key`'s so conversion is
+// `Keymap.Key`'s tags are intentionally spelled exactly like `dvui.enums.Key`'s so conversion is
 // by name. This catches drift at compile time instead of silently dropping a key at runtime.
 comptime {
     for (std.enums.values(Key)) |k| {
         if (!@hasField(dvui.enums.Key, @tagName(k))) {
-            @compileError("keymap.Key." ++ @tagName(k) ++
+            @compileError("Keymap.Key." ++ @tagName(k) ++
                 " has no dvui.enums.Key counterpart — dvui's key enum has changed");
         }
     }

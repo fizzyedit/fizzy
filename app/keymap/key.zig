@@ -1,7 +1,7 @@
 //! Physical key identity, plus the VSCode-compatible spellings used in `keybinds.zon`.
 //!
 //! Deliberately **not** `dvui.enums.Key`, so the whole `keymap/` tree stays dvui-free and
-//! unit-testable from the app build (see `keymap.zig`). The tag names are kept identical to
+//! unit-testable from the app build (see `Keymap.zig`). The tag names are kept identical to
 //! dvui's so the adapter that does import dvui (`keymap_dvui.zig`) can convert by name and
 //! `comptime`-assert that no tag has drifted, rather than hand-maintaining a 118-arm switch.
 

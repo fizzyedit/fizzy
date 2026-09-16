@@ -129,7 +129,6 @@ pub const LineIndex = struct {
         }.order);
         return @intCast(at -| 1);
     }
-
 };
 
 /// A cursor over `Data`. Copied freely; the tree owns the storage.

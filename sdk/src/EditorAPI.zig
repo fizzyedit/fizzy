@@ -136,7 +136,6 @@ pub const VTable = struct {
     /// pane animation with the bottom split. Before, it was smuggled in as three out-parameters
     /// on `drawWorkspaces`, which only worked because fizzy's own shape has a panel — an app
     /// with a differently-shaped bottom had no way to answer.
-
     /// Open a region inside the one this plugin is drawing in, and hand back the app's handle to
     /// it. Null when the app cannot: nested too deep, or called outside the shape.
     ///
@@ -416,7 +415,6 @@ pub fn openOrFocusFileAtGrouping(self: EditorAPI, path: []const u8, grouping: u6
 pub fn revealPosition(self: EditorAPI, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
     return self.vtable.revealPosition(self.ctx, path, line, character, open_side);
 }
-
 
 pub fn beginRegion(self: EditorAPI, spec: RegionSpec) ?RegionSpec.Token {
     return self.vtable.beginRegion(self.ctx, spec);

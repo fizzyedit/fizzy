@@ -30,12 +30,12 @@
 
 const std = @import("std");
 const chord_mod = @import("chord.zig");
-const keymap = @import("keymap.zig");
+const Keymap = @import("Keymap.zig");
 
 const Allocator = std.mem.Allocator;
 const Stroke = chord_mod.Stroke;
 const Platform = chord_mod.Platform;
-const When = keymap.When;
+const When = Keymap.When;
 
 pub const OwnedBinding = struct {
     /// Verbatim key text as written by the user, so a round-trip through parse+format doesn't
@@ -84,8 +84,8 @@ pub const File = struct {
 
     /// Borrowed view for feeding into a `Keymap`. The returned slice borrows this `File`'s
     /// strings, so it must not outlive it.
-    pub fn toBindings(self: File, gpa: Allocator, source: keymap.Source) ![]keymap.Binding {
-        const out = try gpa.alloc(keymap.Binding, self.bindings.len);
+    pub fn toBindings(self: File, gpa: Allocator, source: Keymap.Source) ![]Keymap.Binding {
+        const out = try gpa.alloc(Keymap.Binding, self.bindings.len);
         for (self.bindings, out) |b, *o| {
             o.* = .{
                 .stroke = b.stroke,
@@ -438,7 +438,7 @@ test "parses fizzy and plugin blocks" {
     try t.expectEqualStrings("text", f.bindings[2].owner_id.?);
     try t.expect(f.bindings[2].stroke.isChord());
     try t.expectEqualStrings("workbench", f.bindings[3].owner_id.?);
-    try t.expectEqual(keymap.Key.backslash, f.bindings[3].stroke.first.key);
+    try t.expectEqual(Keymap.Key.backslash, f.bindings[3].stroke.first.key);
 }
 
 test "when clauses parse" {
@@ -567,7 +567,7 @@ test "backslash keys survive a write/read cycle" {
     const a = t.allocator;
     var f = try parse(a, ".{ .fizzy = .{ .{ .keys = \"ctrl+\\\\\", .command = \"fizzy.split\" } } }", .other);
     defer f.deinit(a);
-    try t.expectEqual(keymap.Key.backslash, f.bindings[0].stroke.first.key);
+    try t.expectEqual(Keymap.Key.backslash, f.bindings[0].stroke.first.key);
 
     const written = try format(a, f.bindings);
     defer a.free(written);
@@ -575,7 +575,7 @@ test "backslash keys survive a write/read cycle" {
     defer a.free(written_z);
     var again = try parse(a, written_z, .other);
     defer again.deinit(a);
-    try t.expectEqual(keymap.Key.backslash, again.bindings[0].stroke.first.key);
+    try t.expectEqual(Keymap.Key.backslash, again.bindings[0].stroke.first.key);
 }
 
 test "legacy .shell block and shell.* command ids still load" {
@@ -594,11 +594,11 @@ test "toBindings feeds a Keymap" {
     const view = try f.toBindings(a, .user);
     defer a.free(view);
 
-    var k: keymap.Keymap = .{};
+    var k: Keymap = .{};
     defer k.deinit(a);
     for (view) |b| try k.add(a, b);
 
     const r = k.resolve((try chord_mod.parseKeys("ctrl+s", .other)).first, .{}, null);
     try t.expectEqualStrings("fizzy.save", r.command);
-    try t.expectEqual(keymap.Source.user, view[0].source);
+    try t.expectEqual(Keymap.Source.user, view[0].source);
 }

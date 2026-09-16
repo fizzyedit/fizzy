@@ -21,32 +21,32 @@ pub fn versionTriplet(v: std.SemanticVersion) [3]u32 {
 
 /// The declarative `plugin.zig.zon` manifest. See the module doc comment and
 /// `docs/PLUGIN_MANIFEST_PLAN.md`.
-pub const Manifest = struct {
-    id: []const u8,
-    name: []const u8,
-    /// Semver string, validated post-parse (see `parse`) rather than typed `std.SemanticVersion`
-    /// so zon parsing stays a plain string round-trip; the build helper forwards this from
-    /// `build.zig.zon`.
-    version: []const u8,
-    /// "" = built against whatever SDK the plugin's build pinned; no floor enforced.
-    min_sdk_version: []const u8 = "",
-    /// One-line, user-facing summary shown on the plugin's store detail page and its card.
-    /// "" is a valid (if discouraged) value — the detail page just shows nothing where a
-    /// description would go, same as a registry entry with an empty `description`.
-    description: []const u8 = "",
-    /// Free-form category/keyword strings (e.g. `.{ "editor", "pixel-art" }`) used for store
-    /// search/scoring. An empty list is valid — same "nothing to show" treatment as `description`.
-    tags: []const []const u8 = &.{},
-    /// Display credit for whoever wrote the plugin — **cosmetic and self-asserted**, so it is
-    /// never a trust signal. The store pairs it with a `publisher`, which is derived server-side
-    /// from the release URL the binary actually came from and is the attestable half of the two
-    /// (see `docs/PLUGINS.md` §6.4). Deliberately *not* a registry-only field like `publisher`:
-    /// a plugin with no registry entry should still be able to credit its author.
-    author: []const u8 = "",
-    /// Optional link for `author` (personal site, profile, mastodon, …). Ignored when `author` is
-    /// empty. Only `http`/`https` are ever opened — see `PluginStore.drawAuthorLine`.
-    author_url: []const u8 = "",
-};
+const Manifest = @This();
+
+id: []const u8,
+name: []const u8,
+/// Semver string, validated post-parse (see `parse`) rather than typed `std.SemanticVersion`
+/// so zon parsing stays a plain string round-trip; the build helper forwards this from
+/// `build.zig.zon`.
+version: []const u8,
+/// "" = built against whatever SDK the plugin's build pinned; no floor enforced.
+min_sdk_version: []const u8 = "",
+/// One-line, user-facing summary shown on the plugin's store detail page and its card.
+/// "" is a valid (if discouraged) value — the detail page just shows nothing where a
+/// description would go, same as a registry entry with an empty `description`.
+description: []const u8 = "",
+/// Free-form category/keyword strings (e.g. `.{ "editor", "pixel-art" }`) used for store
+/// search/scoring. An empty list is valid — same "nothing to show" treatment as `description`.
+tags: []const []const u8 = &.{},
+/// Display credit for whoever wrote the plugin — **cosmetic and self-asserted**, so it is
+/// never a trust signal. The store pairs it with a `publisher`, which is derived server-side
+/// from the release URL the binary actually came from and is the attestable half of the two
+/// (see `docs/PLUGINS.md` §6.4). Deliberately *not* a registry-only field like `publisher`:
+/// a plugin with no registry entry should still be able to credit its author.
+author: []const u8 = "",
+/// Optional link for `author` (personal site, profile, mastodon, …). Ignored when `author` is
+/// empty. Only `http`/`https` are ever opened — see `PluginStore.drawAuthorLine`.
+author_url: []const u8 = "",
 
 /// Parse a `plugin.zig.zon` source buffer (must be NUL-terminated, e.g. read via
 /// `dupeZ`/`readFileAllocOptions` with a sentinel) into a `Manifest`. Validates `version` (and

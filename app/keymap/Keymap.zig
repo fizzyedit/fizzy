@@ -15,8 +15,8 @@
 
 const std = @import("std");
 
-pub const Key = @import("Key.zig").Key;
-pub const keyIsModifier = @import("Key.zig").isModifier;
+pub const Key = @import("key.zig").Key;
+pub const keyIsModifier = @import("key.zig").isModifier;
 const chord_mod = @import("chord.zig");
 pub const zon = @import("zon.zig");
 
@@ -152,268 +152,268 @@ pub const Conflict = struct {
     loser: []const u8,
 };
 
-pub const Keymap = struct {
-    bindings: std.ArrayList(Binding) = .empty,
-    /// Half-entered chord, if any.
-    pending: ?Chord = null,
+const Keymap = @This();
 
-    pub fn deinit(self: *Keymap, gpa: Allocator) void {
-        self.bindings.deinit(gpa);
-        self.* = .{};
+bindings: std.ArrayList(Binding) = .empty,
+/// Half-entered chord, if any.
+pending: ?Chord = null,
+
+pub fn deinit(self: *Keymap, gpa: Allocator) void {
+    self.bindings.deinit(gpa);
+    self.* = .{};
+}
+
+pub fn add(self: *Keymap, gpa: Allocator, b: Binding) !void {
+    try self.bindings.append(gpa, b);
+}
+
+/// Cancel a half-entered chord — call on focus loss or Escape, so a stray `ctrl+k` doesn't
+/// silently eat the next keystroke minutes later.
+pub fn cancelPending(self: *Keymap) void {
+    self.pending = null;
+}
+
+/// Best binding for `stroke` in context `ctx`: highest `source`, then most specific `when`.
+/// Bindings with `owner_id` only apply when that id matches `active_owner` (decision 1B:
+/// active document owner wins on shared chords; otherwise fizzy/profile binding fires).
+fn best(self: Keymap, stroke: Stroke, ctx: When, active_owner: ?[]const u8) ?Binding {
+    var winner: ?Binding = null;
+    for (self.bindings.items) |b| {
+        if (!b.stroke.eql(stroke)) continue;
+        if (!b.when.matches(ctx)) continue;
+        if (b.owner_id) |oid| {
+            const ao = active_owner orelse continue;
+            if (!std.mem.eql(u8, oid, ao)) continue;
+        }
+        const w = winner orelse {
+            winner = b;
+            continue;
+        };
+        const b_rank = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
+        const w_rank = (@as(u16, @intFromEnum(w.source)) << 8) | w.when.weight();
+        // Owner-scoped bindings beat otherwise equal-rank global ones — that's the whole
+        // point of active-owner conflict resolution (pixi Export vs fizzy Quick Open).
+        const b_owner_boost: u16 = if (b.owner_id != null) 1 else 0;
+        const w_owner_boost: u16 = if (w.owner_id != null) 1 else 0;
+        const b_total = (b_rank << 1) | b_owner_boost;
+        const w_total = (w_rank << 1) | w_owner_boost;
+        // >= so a later entry at equal rank wins: within one layer, last one loaded wins.
+        if (b_total >= w_total) winner = b;
     }
+    return winner;
+}
 
-    pub fn add(self: *Keymap, gpa: Allocator, b: Binding) !void {
-        try self.bindings.append(gpa, b);
+/// Is `c` the opening stroke of some chord that could still apply here?
+fn opensChord(self: Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) bool {
+    for (self.bindings.items) |b| {
+        if (b.stroke.second == null) continue;
+        if (b.command == null) continue;
+        if (!b.stroke.first.eql(c)) continue;
+        if (!b.when.matches(ctx)) continue;
+        if (b.owner_id) |oid| {
+            const ao = active_owner orelse continue;
+            if (!std.mem.eql(u8, oid, ao)) continue;
+        }
+        return true;
     }
+    return false;
+}
 
-    /// Cancel a half-entered chord — call on focus loss or Escape, so a stray `ctrl+k` doesn't
-    /// silently eat the next keystroke minutes later.
-    pub fn cancelPending(self: *Keymap) void {
+/// Feed one key press. Stateful: consecutive calls complete a chord.
+/// `active_owner` is the focused document's plugin id, or null when none.
+pub fn resolve(self: *Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) Resolution {
+    // Modifier keys alone never resolve, and must not cancel a pending chord — otherwise
+    // pressing Ctrl for the second half of `ctrl+k ctrl+c` would abort the chord.
+    if (keyIsModifier(c.key)) return .none;
+
+    if (self.pending) |first| {
         self.pending = null;
-    }
-
-    /// Best binding for `stroke` in context `ctx`: highest `source`, then most specific `when`.
-    /// Bindings with `owner_id` only apply when that id matches `active_owner` (decision 1B:
-    /// active document owner wins on shared chords; otherwise fizzy/profile binding fires).
-    fn best(self: Keymap, stroke: Stroke, ctx: When, active_owner: ?[]const u8) ?Binding {
-        var winner: ?Binding = null;
-        for (self.bindings.items) |b| {
-            if (!b.stroke.eql(stroke)) continue;
-            if (!b.when.matches(ctx)) continue;
-            if (b.owner_id) |oid| {
-                const ao = active_owner orelse continue;
-                if (!std.mem.eql(u8, oid, ao)) continue;
-            }
-            const w = winner orelse {
-                winner = b;
-                continue;
-            };
-            const b_rank = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
-            const w_rank = (@as(u16, @intFromEnum(w.source)) << 8) | w.when.weight();
-            // Owner-scoped bindings beat otherwise equal-rank global ones — that's the whole
-            // point of active-owner conflict resolution (pixi Export vs fizzy Quick Open).
-            const b_owner_boost: u16 = if (b.owner_id != null) 1 else 0;
-            const w_owner_boost: u16 = if (w.owner_id != null) 1 else 0;
-            const b_total = (b_rank << 1) | b_owner_boost;
-            const w_total = (w_rank << 1) | w_owner_boost;
-            // >= so a later entry at equal rank wins: within one layer, last one loaded wins.
-            if (b_total >= w_total) winner = b;
-        }
-        return winner;
-    }
-
-    /// Is `c` the opening stroke of some chord that could still apply here?
-    fn opensChord(self: Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) bool {
-        for (self.bindings.items) |b| {
-            if (b.stroke.second == null) continue;
-            if (b.command == null) continue;
-            if (!b.stroke.first.eql(c)) continue;
-            if (!b.when.matches(ctx)) continue;
-            if (b.owner_id) |oid| {
-                const ao = active_owner orelse continue;
-                if (!std.mem.eql(u8, oid, ao)) continue;
-            }
-            return true;
-        }
-        return false;
-    }
-
-    /// Feed one key press. Stateful: consecutive calls complete a chord.
-    /// `active_owner` is the focused document's plugin id, or null when none.
-    pub fn resolve(self: *Keymap, c: Chord, ctx: When, active_owner: ?[]const u8) Resolution {
-        // Modifier keys alone never resolve, and must not cancel a pending chord — otherwise
-        // pressing Ctrl for the second half of `ctrl+k ctrl+c` would abort the chord.
-        if (keyIsModifier(c.key)) return .none;
-
-        if (self.pending) |first| {
-            self.pending = null;
-            const full: Stroke = .{ .first = first, .second = c };
-            if (self.best(full, ctx, active_owner)) |b| {
-                return if (b.command) |cmd| .{ .command = cmd } else .unbound;
-            }
-            // A chord was started but the second stroke matched nothing: swallow it rather than
-            // letting a half-typed `ctrl+k x` fire whatever `x` happens to be bound to.
-            return .unbound;
-        }
-
-        // A single-stroke binding beats an unstarted chord on the same opening key, unless the
-        // single-stroke binding is a lower-priority layer.
-        const single: Stroke = .{ .first = c };
-        const single_match = self.best(single, ctx, active_owner);
-
-        if (self.opensChord(c, ctx, active_owner)) {
-            if (single_match) |b| {
-                if (b.source == .user) {
-                    return if (b.command) |cmd| .{ .command = cmd } else .unbound;
-                }
-            }
-            self.pending = c;
-            return .pending;
-        }
-
-        if (single_match) |b| {
+        const full: Stroke = .{ .first = first, .second = c };
+        if (self.best(full, ctx, active_owner)) |b| {
             return if (b.command) |cmd| .{ .command = cmd } else .unbound;
         }
-        return .none;
+        // A chord was started but the second stroke matched nothing: swallow it rather than
+        // letting a half-typed `ctrl+k x` fire whatever `x` happens to be bound to.
+        return .unbound;
     }
 
-    /// Every binding currently mapped to `command` — for rendering shortcut hints and the
-    /// Keyboard Shortcuts pane.
-    pub fn bindingsFor(self: Keymap, gpa: Allocator, command: []const u8) ![]Binding {
-        var out: std.ArrayList(Binding) = .empty;
-        errdefer out.deinit(gpa);
-        for (self.bindings.items) |b| {
-            const cmd = b.command orelse continue;
-            if (std.mem.eql(u8, cmd, command)) try out.append(gpa, b);
+    // A single-stroke binding beats an unstarted chord on the same opening key, unless the
+    // single-stroke binding is a lower-priority layer.
+    const single: Stroke = .{ .first = c };
+    const single_match = self.best(single, ctx, active_owner);
+
+    if (self.opensChord(c, ctx, active_owner)) {
+        if (single_match) |b| {
+            if (b.source == .user) {
+                return if (b.command) |cmd| .{ .command = cmd } else .unbound;
+            }
         }
-        return out.toOwnedSlice(gpa);
+        self.pending = c;
+        return .pending;
     }
 
-    /// Bindings that share a chord but don't always fire together. Includes classic layer
-    /// shadowing (user beats profile) and active-owner forks (fizzy Quick Open vs pixi Export
-    /// on `mod+p`) so the settings pane can warn about them.
-    ///
-    /// Collapses before reporting:
-    /// 1. Duplicate entries for the same command (e.g. `fizzy.openFolder` from both the dvui
-    ///    `open_folder` bind and the profile default) keep only the highest-ranked claim.
-    /// 2. Within one owner bucket (all-global, or one plugin), only *adjacent* ranks are
-    ///    reported — if A shadows B and B shadows C, "A shadows C" is omitted because C is
-    ///    already dead under B.
-    /// 3. Owner-scoped claims fork against the top global on that chord (context-dependent).
-    pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
-        const Claim = struct {
-            stroke: Stroke,
-            when: When,
-            command: []const u8,
-            owner_id: ?[]const u8,
-            rank: u16,
-            index: usize,
-        };
+    if (single_match) |b| {
+        return if (b.command) |cmd| .{ .command = cmd } else .unbound;
+    }
+    return .none;
+}
 
-        var claims: std.ArrayList(Claim) = .empty;
-        defer claims.deinit(gpa);
+/// Every binding currently mapped to `command` — for rendering shortcut hints and the
+/// Keyboard Shortcuts pane.
+pub fn bindingsFor(self: Keymap, gpa: Allocator, command: []const u8) ![]Binding {
+    var out: std.ArrayList(Binding) = .empty;
+    errdefer out.deinit(gpa);
+    for (self.bindings.items) |b| {
+        const cmd = b.command orelse continue;
+        if (std.mem.eql(u8, cmd, command)) try out.append(gpa, b);
+    }
+    return out.toOwnedSlice(gpa);
+}
 
-        for (self.bindings.items, 0..) |b, i| {
-            const cmd = b.command orelse continue;
-            const rank: u16 = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
-            for (claims.items) |*c| {
-                if (!c.stroke.eql(b.stroke) or !c.when.eql(b.when)) continue;
-                if (!std.mem.eql(u8, c.command, cmd)) continue;
-                // Later equal-rank wins — same tie-break `best()` uses.
-                if (rank >= c.rank) {
-                    c.rank = rank;
-                    c.owner_id = b.owner_id;
-                    c.index = i;
-                }
-                break;
+/// Bindings that share a chord but don't always fire together. Includes classic layer
+/// shadowing (user beats profile) and active-owner forks (fizzy Quick Open vs pixi Export
+/// on `mod+p`) so the settings pane can warn about them.
+///
+/// Collapses before reporting:
+/// 1. Duplicate entries for the same command (e.g. `fizzy.openFolder` from both the dvui
+///    `open_folder` bind and the profile default) keep only the highest-ranked claim.
+/// 2. Within one owner bucket (all-global, or one plugin), only *adjacent* ranks are
+///    reported — if A shadows B and B shadows C, "A shadows C" is omitted because C is
+///    already dead under B.
+/// 3. Owner-scoped claims fork against the top global on that chord (context-dependent).
+pub fn conflicts(self: Keymap, gpa: Allocator) ![]Conflict {
+    const Claim = struct {
+        stroke: Stroke,
+        when: When,
+        command: []const u8,
+        owner_id: ?[]const u8,
+        rank: u16,
+        index: usize,
+    };
+
+    var claims: std.ArrayList(Claim) = .empty;
+    defer claims.deinit(gpa);
+
+    for (self.bindings.items, 0..) |b, i| {
+        const cmd = b.command orelse continue;
+        const rank: u16 = (@as(u16, @intFromEnum(b.source)) << 8) | b.when.weight();
+        for (claims.items) |*c| {
+            if (!c.stroke.eql(b.stroke) or !c.when.eql(b.when)) continue;
+            if (!std.mem.eql(u8, c.command, cmd)) continue;
+            // Later equal-rank wins — same tie-break `best()` uses.
+            if (rank >= c.rank) {
+                c.rank = rank;
+                c.owner_id = b.owner_id;
+                c.index = i;
+            }
+            break;
+        } else {
+            try claims.append(gpa, .{
+                .stroke = b.stroke,
+                .when = b.when,
+                .command = cmd,
+                .owner_id = b.owner_id,
+                .rank = rank,
+                .index = i,
+            });
+        }
+    }
+
+    var out: std.ArrayList(Conflict) = .empty;
+    errdefer out.deinit(gpa);
+
+    var seen_group = try gpa.alloc(bool, claims.items.len);
+    defer gpa.free(seen_group);
+    @memset(seen_group, false);
+
+    const byRankDesc = struct {
+        fn less(cs: []Claim, a: usize, b: usize) bool {
+            const ca = cs[a];
+            const cb = cs[b];
+            if (ca.rank != cb.rank) return ca.rank > cb.rank;
+            return ca.index > cb.index;
+        }
+    }.less;
+
+    for (claims.items, 0..) |seed, si| {
+        if (seen_group[si]) continue;
+
+        var group: std.ArrayList(usize) = .empty;
+        defer group.deinit(gpa);
+        for (claims.items, 0..) |c, ci| {
+            if (!c.stroke.eql(seed.stroke) or !c.when.eql(seed.when)) continue;
+            seen_group[ci] = true;
+            try group.append(gpa, ci);
+        }
+
+        // Bucket by owner_id (null = global). Chain within a bucket; owner buckets fork
+        // against the global bucket's top claim.
+        var bucket_keys: std.ArrayList(?[]const u8) = .empty;
+        defer bucket_keys.deinit(gpa);
+        var buckets: std.ArrayList(std.ArrayList(usize)) = .empty;
+        defer {
+            for (buckets.items) |*bkt| bkt.deinit(gpa);
+            buckets.deinit(gpa);
+        }
+
+        for (group.items) |ci| {
+            const key = claims.items[ci].owner_id;
+            const bkt_i = for (bucket_keys.items, 0..) |k, bi| {
+                if (k == null and key == null) break bi;
+                if (k != null and key != null and std.mem.eql(u8, k.?, key.?)) break bi;
+            } else null;
+            if (bkt_i) |bi| {
+                try buckets.items[bi].append(gpa, ci);
             } else {
-                try claims.append(gpa, .{
-                    .stroke = b.stroke,
-                    .when = b.when,
-                    .command = cmd,
-                    .owner_id = b.owner_id,
-                    .rank = rank,
-                    .index = i,
+                try bucket_keys.append(gpa, key);
+                var bkt: std.ArrayList(usize) = .empty;
+                try bkt.append(gpa, ci);
+                try buckets.append(gpa, bkt);
+            }
+        }
+
+        var global_top: ?[]const u8 = null;
+        for (bucket_keys.items, 0..) |key, bi| {
+            const bkt = &buckets.items[bi];
+            std.mem.sort(usize, bkt.items, claims.items, byRankDesc);
+
+            // Adjacent shadow links only.
+            var i: usize = 0;
+            while (i + 1 < bkt.items.len) : (i += 1) {
+                const w = claims.items[bkt.items[i]];
+                const l = claims.items[bkt.items[i + 1]];
+                try out.append(gpa, .{
+                    .stroke = seed.stroke,
+                    .when = seed.when,
+                    .winner = w.command,
+                    .loser = l.command,
+                });
+            }
+
+            if (key == null and bkt.items.len > 0) {
+                global_top = claims.items[bkt.items[0]].command;
+            }
+        }
+
+        // Owner-scoped top vs global top — context-dependent, either can win.
+        if (global_top) |gt| {
+            for (bucket_keys.items, 0..) |key, bi| {
+                if (key == null) continue;
+                const bkt = buckets.items[bi];
+                if (bkt.items.len == 0) continue;
+                const owner_cmd = claims.items[bkt.items[0]].command;
+                try out.append(gpa, .{
+                    .stroke = seed.stroke,
+                    .when = seed.when,
+                    .winner = owner_cmd,
+                    .loser = gt,
                 });
             }
         }
-
-        var out: std.ArrayList(Conflict) = .empty;
-        errdefer out.deinit(gpa);
-
-        var seen_group = try gpa.alloc(bool, claims.items.len);
-        defer gpa.free(seen_group);
-        @memset(seen_group, false);
-
-        const byRankDesc = struct {
-            fn less(cs: []Claim, a: usize, b: usize) bool {
-                const ca = cs[a];
-                const cb = cs[b];
-                if (ca.rank != cb.rank) return ca.rank > cb.rank;
-                return ca.index > cb.index;
-            }
-        }.less;
-
-        for (claims.items, 0..) |seed, si| {
-            if (seen_group[si]) continue;
-
-            var group: std.ArrayList(usize) = .empty;
-            defer group.deinit(gpa);
-            for (claims.items, 0..) |c, ci| {
-                if (!c.stroke.eql(seed.stroke) or !c.when.eql(seed.when)) continue;
-                seen_group[ci] = true;
-                try group.append(gpa, ci);
-            }
-
-            // Bucket by owner_id (null = global). Chain within a bucket; owner buckets fork
-            // against the global bucket's top claim.
-            var bucket_keys: std.ArrayList(?[]const u8) = .empty;
-            defer bucket_keys.deinit(gpa);
-            var buckets: std.ArrayList(std.ArrayList(usize)) = .empty;
-            defer {
-                for (buckets.items) |*bkt| bkt.deinit(gpa);
-                buckets.deinit(gpa);
-            }
-
-            for (group.items) |ci| {
-                const key = claims.items[ci].owner_id;
-                const bkt_i = for (bucket_keys.items, 0..) |k, bi| {
-                    if (k == null and key == null) break bi;
-                    if (k != null and key != null and std.mem.eql(u8, k.?, key.?)) break bi;
-                } else null;
-                if (bkt_i) |bi| {
-                    try buckets.items[bi].append(gpa, ci);
-                } else {
-                    try bucket_keys.append(gpa, key);
-                    var bkt: std.ArrayList(usize) = .empty;
-                    try bkt.append(gpa, ci);
-                    try buckets.append(gpa, bkt);
-                }
-            }
-
-            var global_top: ?[]const u8 = null;
-            for (bucket_keys.items, 0..) |key, bi| {
-                const bkt = &buckets.items[bi];
-                std.mem.sort(usize, bkt.items, claims.items, byRankDesc);
-
-                // Adjacent shadow links only.
-                var i: usize = 0;
-                while (i + 1 < bkt.items.len) : (i += 1) {
-                    const w = claims.items[bkt.items[i]];
-                    const l = claims.items[bkt.items[i + 1]];
-                    try out.append(gpa, .{
-                        .stroke = seed.stroke,
-                        .when = seed.when,
-                        .winner = w.command,
-                        .loser = l.command,
-                    });
-                }
-
-                if (key == null and bkt.items.len > 0) {
-                    global_top = claims.items[bkt.items[0]].command;
-                }
-            }
-
-            // Owner-scoped top vs global top — context-dependent, either can win.
-            if (global_top) |gt| {
-                for (bucket_keys.items, 0..) |key, bi| {
-                    if (key == null) continue;
-                    const bkt = buckets.items[bi];
-                    if (bkt.items.len == 0) continue;
-                    const owner_cmd = claims.items[bkt.items[0]].command;
-                    try out.append(gpa, .{
-                        .stroke = seed.stroke,
-                        .when = seed.when,
-                        .winner = owner_cmd,
-                        .loser = gt,
-                    });
-                }
-            }
-        }
-
-        return out.toOwnedSlice(gpa);
     }
-};
+
+    return out.toOwnedSlice(gpa);
+}
 
 // -- tests ----------------------------------------------------------------------------------------
 

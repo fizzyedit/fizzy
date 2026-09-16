@@ -6,12 +6,8 @@ const std = @import("std");
 const dvui = @import("dvui");
 
 /// Accordion-row arithmetic used by a sash drag. The widget gathers a `Row`
-/// from the live tree and drawn ratios, calls here, then writes ratios back.
-pub const row = @import("row.zig");
-pub const Row = row.Row;
-pub const dragBoundary = row.dragBoundary;
-pub const ratioFor = row.ratioFor;
-pub const divide = row.divide;
+/// from the live tree and drawn ratios, calls there, then writes ratios back.
+pub const Row = @import("Row.zig");
 
 /// App-owned slug identifying a dockable panel. `DockLayout` never dupes or
 /// frees these: the caller must keep the underlying bytes alive for the
@@ -1239,7 +1235,7 @@ test "dragBoundary: dragging right past two sashes shrinks both cells in proport
     var boundaries = [_]f32{ 100, 160 };
     var floors = [_]f32{ 0, 0, 0 };
     var r = Row{ .boundaries = &boundaries, .floors = &floors, .gap = 10, .extent = 310 };
-    dragBoundary(&r, 0, 10_000);
+    r.dragBoundary(0, 10_000);
 
     const hi: f32 = 290; // extent - gap - right floors - the sash between the two right cells
     try std.testing.expectApproxEqAbs(hi, r.boundaries[0], 0.01);
@@ -1258,9 +1254,9 @@ test "dragBoundary: dragging back restores the same proportions" {
     const orig0 = boundaries[0];
     const orig1 = boundaries[1];
     // Past the second sash, but not onto the 0.01pt floor — reconstruction of the last cell stays faithful.
-    dragBoundary(&r, 0, 200);
+    r.dragBoundary(0, 200);
     try std.testing.expectApproxEqAbs(@as(f32, 50.0 / 140.0), testCellRoom(r, 1) / testCellRoom(r, 2), 0.001);
-    dragBoundary(&r, 0, orig0);
+    r.dragBoundary(0, orig0);
     try std.testing.expectApproxEqAbs(orig0, r.boundaries[0], 0.05);
     try std.testing.expectApproxEqAbs(orig1, r.boundaries[1], 0.05);
 }
@@ -1270,7 +1266,7 @@ test "dragBoundary: a cell's floor holds the boundary off it" {
     var boundaries = [_]f32{ 80, 150 };
     var floors = [_]f32{ 0, 40, 0 };
     var r = Row{ .boundaries = &boundaries, .floors = &floors, .gap = 10, .extent = 240 };
-    dragBoundary(&r, 0, 10_000);
+    r.dragBoundary(0, 10_000);
     const lo_right: f32 = 40; // middle floor
     const hi = 240 - 10 - lo_right - 10; // extent - this sash - right floors - inner sash
     try std.testing.expectApproxEqAbs(hi, r.boundaries[0], 0.01);
@@ -1287,8 +1283,8 @@ test "ratioFor o divide round-trips" {
         .{ .extent = 500, .ratio = 0.73, .gap = 10, .ff = 40, .fs = 0 },
     };
     for (cases) |c| {
-        const d = divide(c.extent, c.ratio, c.gap, c.ff, c.fs);
-        try std.testing.expectApproxEqAbs(c.ratio, ratioFor(d.first, c.extent, c.gap, c.ff, c.fs), 0.0001);
+        const d = Row.divide(c.extent, c.ratio, c.gap, c.ff, c.fs);
+        try std.testing.expectApproxEqAbs(c.ratio, Row.ratioFor(d.first, c.extent, c.gap, c.ff, c.fs), 0.0001);
         try std.testing.expectApproxEqAbs(d.first, c.ff + d.usable * c.ratio, 0.0001);
     }
 }
@@ -1297,10 +1293,10 @@ test "dragBoundary: clamps at both ends" {
     var boundaries = [_]f32{95};
     var floors = [_]f32{ 0, 0 };
     var r = Row{ .boundaries = &boundaries, .floors = &floors, .gap = 10, .extent = 200 };
-    dragBoundary(&r, 0, -1_000);
+    r.dragBoundary(0, -1_000);
     try std.testing.expectApproxEqAbs(@as(f32, 0.01), r.boundaries[0], 0.001);
     boundaries[0] = 95;
-    dragBoundary(&r, 0, 10_000);
+    r.dragBoundary(0, 10_000);
     try std.testing.expectApproxEqAbs(@as(f32, 190), r.boundaries[0], 0.01);
 }
 

@@ -5,9 +5,9 @@
 //! into a lookup-by-name design later would mean rewriting the dispatch rather than extending it.
 
 const std = @import("std");
-const Key = @import("Key.zig").Key;
-const keyFromSpelling = @import("Key.zig").fromSpelling;
-const keyToSpelling = @import("Key.zig").toSpelling;
+const Key = @import("key.zig").Key;
+const keyFromSpelling = @import("key.zig").fromSpelling;
+const keyToSpelling = @import("key.zig").toSpelling;
 
 /// Which physical modifier `mod+` resolves to. Passed in rather than detected so both branches
 /// are testable without a window — and because fizzy already has to distinguish these at runtime
@@ -254,7 +254,7 @@ test "format round-trips" {
 
 test "every key formats to something that parses back" {
     for (std.enums.values(Key)) |k| {
-        if (@import("Key.zig").isModifier(k)) continue;
+        if (@import("key.zig").isModifier(k)) continue;
         const s: Stroke = .{ .first = .{ .key = k, .mods = .{ .ctrl = true, .alt = true } } };
         const text = try formatKeys(t.allocator, s, .other);
         defer t.allocator.free(text);
