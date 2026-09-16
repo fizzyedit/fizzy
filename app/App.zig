@@ -15,6 +15,23 @@ const SettingsPluginsZon = @import("settings/SettingsPluginsZon.zig");
 
 const App = @This();
 
+/// A file's mtime + size, the pair every "did this build change underneath us?" check in this
+/// file compares. Zeroes when the file could not be stat'd, which reads as "matches nothing".
+pub const FileStamp = struct {
+    mtime_ns: i128 = 0,
+    size: u64 = 0,
+
+    pub fn of(path: []const u8) FileStamp {
+        if (comptime builtin.target.cpu.arch == .wasm32) return .{};
+        const st = std.Io.Dir.cwd().statFile(dvui.io, path, .{}) catch return .{};
+        return .{ .mtime_ns = st.mtime.nanoseconds, .size = st.size };
+    }
+
+    pub fn eql(self: FileStamp, other: FileStamp) bool {
+        return self.mtime_ns == other.mtime_ns and self.size == other.size;
+    }
+};
+
 /// Three-way form of `readPluginEnabled`: `.unset` (no `.enabled` field on record at all) is
 /// what separates a freshly dropped-in plugin from one the user deliberately switched off — both
 /// are "not enabled", but only the first is an undecided offer (see `undecided_plugin_ids`).
@@ -733,4 +750,220 @@ pub fn formatPluginProbeDetail(allocator: std.mem.Allocator, info: PluginLoader.
         info.min_sdk_version.minor,
         info.min_sdk_version.patch,
     });
+}
+
+/// Tear down a document via its owning plugin, falling back to a direct `deinit`.
+/// Removes the entry from the plugin's document registry; fizzy still removes
+/// the matching `DocHandle` from `open_files`.
+pub fn closeDocumentResources(_: *App, doc: sdk.DocHandle) void {
+    _ = doc.owner.closeDocument(doc);
+    doc.owner.unregisterDocument(doc.id);
+}
+
+/// Queue the project close; the teardown runs at the top of the next frame
+/// (`applyPendingFolderClose`).
+///
+/// Deferred because this is reachable from inside a plugin's draw — the file tree's
+/// project-row context menu calls it through `Host.closeProjectFolder` and then goes on to
+/// draw the project row, its rows, and its ignore-screened listings using the folder it read
+/// before the menu ran. Tearing all of that down underneath the draw that is still using it
+/// crashes in whatever touches the folder string next.
+pub fn closeProjectFolder(app: *App) void {
+    if (app.folder == null) return;
+    app.pending_folder_close = true;
+}
+
+/// One-shot: moves any pre-R10 flat `{plugins_dir}/{id}.{ext}` into its own
+/// `{plugins_dir}/{id}/{id}.{ext}` directory (see docs/PLUGIN_MANIFEST_PLAN.md R10). Collects the
+/// list of flat files first, then renames in a second pass, so mutating the directory never races
+/// the iterator that's still walking it. Best-effort: a single failed rename is logged and
+/// skipped rather than aborting the rest.
+pub fn migrateFlatPluginLayout(allocator: std.mem.Allocator, plugins_dir: []const u8, ext_suffix: []const u8) void {
+    var flat_ids: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer {
+        for (flat_ids.items) |id| allocator.free(id);
+        flat_ids.deinit(allocator);
+    }
+    {
+        var dir = std.Io.Dir.cwd().openDir(dvui.io, plugins_dir, .{ .iterate = true }) catch return;
+        defer dir.close(dvui.io);
+        var iter = dir.iterate();
+        while (iter.next(dvui.io) catch null) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.name, ext_suffix)) continue;
+            const dot = std.mem.lastIndexOf(u8, entry.name, ".") orelse continue;
+            const id = entry.name[0..dot];
+            if (id.len == 0) continue;
+            const dup = allocator.dupe(u8, id) catch continue;
+            flat_ids.append(allocator, dup) catch allocator.free(dup);
+        }
+    }
+
+    for (flat_ids.items) |id| {
+        const new_dir = std.fs.path.join(allocator, &.{ plugins_dir, id }) catch continue;
+        defer allocator.free(new_dir);
+        std.Io.Dir.createDirAbsolute(dvui.io, new_dir, .default_dir) catch {}; // best-effort; exists is fine
+
+        const file_name = PluginLoader.pluginFilename(id, allocator) catch continue;
+        defer allocator.free(file_name);
+        const old_path = std.fs.path.join(allocator, &.{ plugins_dir, file_name }) catch continue;
+        defer allocator.free(old_path);
+        const new_path = std.fs.path.join(allocator, &.{ new_dir, file_name }) catch continue;
+        defer allocator.free(new_path);
+
+        std.Io.Dir.renameAbsolute(old_path, new_path, dvui.io) catch |err| {
+            dvui.log.warn("plugin '{s}': failed to migrate to its own directory: {s}", .{ id, @errorName(err) });
+        };
+    }
+}
+
+/// Drop undecided entries whose `plugins/<id>/` directory is gone — the author deleted or moved
+/// the build instead of answering the offer. Without this the rail badge would advertise a
+/// decision the user can no longer make. Called from `reconcileDiscoveredPlugins`, which the
+/// watcher already runs for any change under `<config>/` (a deleted directory very much included).
+pub fn pruneMissingUndecidedPlugins(app: *App, plugins_dir: []const u8) void {
+    const gpa = app.gpa;
+    var i: usize = app.undecided_plugin_ids.items.len;
+    while (i > 0) {
+        i -= 1;
+        const id = app.undecided_plugin_ids.items[i];
+        const dir_path = std.fs.path.join(gpa, &.{ plugins_dir, id }) catch continue;
+        defer gpa.free(dir_path);
+        var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{}) catch {
+            gpa.free(app.undecided_plugin_ids.orderedRemove(i));
+            continue;
+        };
+        dir.close(dvui.io);
+    }
+}
+
+/// For every currently-loaded plugin with a registered settings schema, re-reads its
+/// `.plugins.<id>.settings` blob and applies it if (and only if) it actually changed since the
+/// last time we applied one — `SettingsSchema.last_applied_hash` is what stops a change to *one*
+/// plugin's settings from spuriously renotifying *every other* loaded plugin just because the
+/// whole file's hash moved (see `reconcileExternalSettingsChange`'s hash-gate, which only tells
+/// us the file changed, not which plugin's part of it did).
+pub fn reconcilePluginSettings(app: *App) void {
+    for (app.host.settings_schemas.items) |*schema| {
+        const blob = app.host.loadPluginSettings(schema.owner.id) orelse {
+            // Settings section removed (all-defaults) — apply an empty blob so the live value
+            // resets to T's own declared defaults, but only when we previously had something.
+            if (schema.last_applied_hash == 0) continue;
+            schema.access.applyBlob(schema.value, schema.owner, ".{}");
+            schema.last_applied_hash = 0;
+            dvui.log.info("settings watcher: cleared settings for '{s}' (external edit)", .{schema.owner.id});
+            continue;
+        };
+        defer app.host.allocator.free(blob);
+        const hash = std.hash.Wyhash.hash(0, blob);
+        if (hash == schema.last_applied_hash) continue;
+        schema.access.applyBlob(schema.value, schema.owner, blob);
+        schema.last_applied_hash = hash;
+        dvui.log.info("settings watcher: applied external settings change for '{s}'", .{schema.owner.id});
+    }
+}
+
+/// Record a load failure for `id` (probing the on-disk build at `path` for its version/detail),
+/// replacing any earlier record for the same id.
+///
+/// Every path that loads a user plugin routes its failures here — the startup scan *and* the live
+/// ones (`loadUserPluginById`, reached from enable, store install, and update), so a failed
+/// plugin is always in one of the three lists the store's installed pane is built from
+/// (loaded / disabled / failed) rather than vanishing from the UI.
+pub fn recordLoadFailure(app: *App, id: []const u8, path: []const u8, err: PluginLoader.LoadError) void {
+    const reason = App.pluginLoadFailureReason(err);
+    const probe = PluginLoader.probeVersionInfo(path);
+    const detail: ?[]const u8 = if (probe) |info|
+        App.formatPluginProbeDetail(app.gpa, info) catch null
+    else
+        null;
+    defer if (detail) |d| app.gpa.free(d);
+    // `recordPluginFailure` appends unconditionally; drop any prior record so repeated attempts
+    // (enable → fail → enable → fail) leave one row, not a growing pile of duplicate cards.
+    app.clearFailedUserPlugin(id);
+    app.recordPluginFailure(id, reason, detail, if (probe) |info| info.plugin_version else null, .of(path));
+}
+
+/// Record a failed user-plugin load so the UI can surface it. `id` and `reason` are copied
+/// (the caller keeps ownership of its arguments). Best-effort: on OOM the failure is dropped
+/// after being logged at the call site.
+pub fn recordPluginFailure(
+    app: *App,
+    id: []const u8,
+    reason: []const u8,
+    detail: ?[]const u8,
+    plugin_version: ?std.SemanticVersion,
+    stamp: FileStamp,
+) void {
+    const id_owned = app.gpa.dupe(u8, id) catch return;
+    const reason_owned = app.gpa.dupe(u8, reason) catch {
+        app.gpa.free(id_owned);
+        return;
+    };
+    const detail_owned: ?[]const u8 = if (detail) |d| app.gpa.dupe(u8, d) catch null else null;
+    if (detail_owned == null and detail != null) {
+        app.gpa.free(id_owned);
+        app.gpa.free(reason_owned);
+        return;
+    }
+    app.failed_user_plugins.append(app.gpa, .{
+        .id = id_owned,
+        .reason = reason_owned,
+        .detail = detail_owned,
+        .plugin_version = plugin_version,
+        .source_mtime_ns = stamp.mtime_ns,
+        .source_size = stamp.size,
+    }) catch {
+        app.gpa.free(id_owned);
+        app.gpa.free(reason_owned);
+        if (detail_owned) |d| app.gpa.free(d);
+    };
+}
+
+/// Buffer `id`'s complete new `.extensions` list. Takes ownership of `exts` and every string in
+/// it. Buffered rather than written per call so one Confirm covering several extensions produces
+/// a single `settings.zon` write; `resolveExtensionConflict` flushes at the end.
+pub fn setPluginExtensionsPersisted(app: *App, id: []const u8, exts: []const []const u8) !void {
+    const gpa = app.gpa;
+    errdefer SettingsPluginsZon.freeExtensions(gpa, exts);
+    if (app.plugin_extensions_pending.getPtr(id)) |slot| {
+        SettingsPluginsZon.freeExtensions(gpa, slot.*);
+        slot.* = exts;
+        return;
+    }
+    const key = try gpa.dupe(u8, id);
+    errdefer gpa.free(key);
+    try app.plugin_extensions_pending.put(gpa, key, exts);
+}
+
+/// Push host dvui state into every loaded plugin dylib image.
+pub fn syncLoadedPluginDvuiContexts(app: *App) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    for (app.loaded_plugin_libs.items) |loaded| {
+        sdk.dvui_context.syncHostIntoPlugin(loaded.set_dvui_context);
+    }
+}
+
+pub fn syncLoadedPluginGlobals(app: *App, plugin_id: []const u8, arg_b: *anyopaque, arg_c: ?*anyopaque) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    for (app.loaded_plugin_libs.items) |loaded| {
+        if (!std.mem.eql(u8, loaded.plugin_id, plugin_id)) continue;
+        loaded.set_globals(@ptrCast(&app.gpa), arg_b, arg_c);
+    }
+}
+
+/// Inject the host render bridge into every loaded plugin dylib (proxy backend).
+pub fn syncLoadedPluginRenderBridge(app: *App) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
+    for (app.loaded_plugin_libs.items) |loaded| {
+        sdk.render_bridge.syncHostIntoPlugin(loaded.set_render_bridge);
+    }
+}
+
+/// Spin until none of `plugin`'s open documents report `isDocumentSaving`. Called from
+/// `unloadPlugin` on the GUI thread while the save-queue worker runs concurrently.
+pub fn waitForPluginSaves(app: *App, plugin: *sdk.Plugin) void {
+    while (app.pluginHasSavingDocs(plugin)) {
+        std.Thread.yield() catch {};
+    }
 }

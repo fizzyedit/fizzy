@@ -622,30 +622,6 @@ fn loadImageFromDylibEnabled(gpa: std.mem.Allocator) bool {
 /// Stable workbench sidebar view id (matches `workbench.view_files`).
 pub const workbench_files_view = workbench_mod.view_files;
 
-/// Push host dvui state into every loaded plugin dylib image.
-pub fn syncLoadedPluginDvuiContexts(editor: *Editor) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    for (editor.app.loaded_plugin_libs.items) |loaded| {
-        sdk.dvui_context.syncHostIntoPlugin(loaded.set_dvui_context);
-    }
-}
-
-/// Inject the host render bridge into every loaded plugin dylib (proxy backend).
-pub fn syncLoadedPluginRenderBridge(editor: *Editor) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    for (editor.app.loaded_plugin_libs.items) |loaded| {
-        sdk.render_bridge.syncHostIntoPlugin(loaded.set_render_bridge);
-    }
-}
-
-fn syncLoadedPluginGlobals(editor: *Editor, plugin_id: []const u8, arg_b: *anyopaque, arg_c: ?*anyopaque) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    for (editor.app.loaded_plugin_libs.items) |loaded| {
-        if (!std.mem.eql(u8, loaded.plugin_id, plugin_id)) continue;
-        loaded.set_globals(@ptrCast(&editor.app.gpa), arg_b, arg_c);
-    }
-}
-
 /// Load `{exe_dir}/plugins/workbench.{ext}` and register via dylib entry.
 pub fn loadWorkbenchDylib(editor: *Editor, exe_dir: []const u8) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
@@ -657,8 +633,8 @@ pub fn loadWorkbenchDylib(editor: *Editor, exe_dir: []const u8) !void {
         .arg_c = @ptrCast(&editor.workbench), // arg_c = *Workbench
     });
     try App.appendLoadedPluginLib(&editor.app, loaded);
-    syncLoadedPluginDvuiContexts(editor);
-    syncLoadedPluginRenderBridge(editor);
+    App.syncLoadedPluginDvuiContexts(&editor.app);
+    App.syncLoadedPluginRenderBridge(&editor.app);
 }
 
 /// Load `{exe_dir}/plugins/text.{ext}` and register via dylib entry.
@@ -672,8 +648,8 @@ pub fn loadTextDylib(editor: *Editor, exe_dir: []const u8) !void {
         .arg_c = null,
     });
     try App.appendLoadedPluginLib(&editor.app, loaded);
-    syncLoadedPluginDvuiContexts(editor);
-    syncLoadedPluginRenderBridge(editor);
+    App.syncLoadedPluginDvuiContexts(&editor.app);
+    App.syncLoadedPluginRenderBridge(&editor.app);
 }
 
 /// Load `{exe_dir}/plugins/markdown.{ext}` and register via dylib entry.
@@ -687,8 +663,8 @@ pub fn loadMarkdownDylib(editor: *Editor, exe_dir: []const u8) !void {
         .arg_c = null,
     });
     try App.appendLoadedPluginLib(&editor.app, loaded);
-    syncLoadedPluginDvuiContexts(editor);
-    syncLoadedPluginRenderBridge(editor);
+    App.syncLoadedPluginDvuiContexts(&editor.app);
+    App.syncLoadedPluginRenderBridge(&editor.app);
 }
 
 /// Load `{exe_dir}/plugins/image.{ext}` and register via dylib entry.
@@ -702,126 +678,8 @@ pub fn loadImageDylib(editor: *Editor, exe_dir: []const u8) !void {
         .arg_c = null,
     });
     try App.appendLoadedPluginLib(&editor.app, loaded);
-    syncLoadedPluginDvuiContexts(editor);
-    syncLoadedPluginRenderBridge(editor);
-}
-
-/// A file's mtime + size, the pair every "did this build change underneath us?" check in this
-/// file compares. Zeroes when the file could not be stat'd, which reads as "matches nothing".
-const FileStamp = struct {
-    mtime_ns: i128 = 0,
-    size: u64 = 0,
-
-    fn of(path: []const u8) FileStamp {
-        if (comptime builtin.target.cpu.arch == .wasm32) return .{};
-        const st = std.Io.Dir.cwd().statFile(dvui.io, path, .{}) catch return .{};
-        return .{ .mtime_ns = st.mtime.nanoseconds, .size = st.size };
-    }
-
-    fn eql(self: FileStamp, other: FileStamp) bool {
-        return self.mtime_ns == other.mtime_ns and self.size == other.size;
-    }
-};
-
-/// Record a failed user-plugin load so the UI can surface it. `id` and `reason` are copied
-/// (the caller keeps ownership of its arguments). Best-effort: on OOM the failure is dropped
-/// after being logged at the call site.
-fn recordPluginFailure(
-    editor: *Editor,
-    id: []const u8,
-    reason: []const u8,
-    detail: ?[]const u8,
-    plugin_version: ?std.SemanticVersion,
-    stamp: FileStamp,
-) void {
-    const id_owned = editor.app.gpa.dupe(u8, id) catch return;
-    const reason_owned = editor.app.gpa.dupe(u8, reason) catch {
-        editor.app.gpa.free(id_owned);
-        return;
-    };
-    const detail_owned: ?[]const u8 = if (detail) |d| editor.app.gpa.dupe(u8, d) catch null else null;
-    if (detail_owned == null and detail != null) {
-        editor.app.gpa.free(id_owned);
-        editor.app.gpa.free(reason_owned);
-        return;
-    }
-    editor.app.failed_user_plugins.append(editor.app.gpa, .{
-        .id = id_owned,
-        .reason = reason_owned,
-        .detail = detail_owned,
-        .plugin_version = plugin_version,
-        .source_mtime_ns = stamp.mtime_ns,
-        .source_size = stamp.size,
-    }) catch {
-        editor.app.gpa.free(id_owned);
-        editor.app.gpa.free(reason_owned);
-        if (detail_owned) |d| editor.app.gpa.free(d);
-    };
-}
-
-/// Record a load failure for `id` (probing the on-disk build at `path` for its version/detail),
-/// replacing any earlier record for the same id.
-///
-/// Every path that loads a user plugin routes its failures here — the startup scan *and* the live
-/// ones (`loadUserPluginById`, reached from enable, store install, and update), so a failed
-/// plugin is always in one of the three lists the store's installed pane is built from
-/// (loaded / disabled / failed) rather than vanishing from the UI.
-fn recordLoadFailure(editor: *Editor, id: []const u8, path: []const u8, err: PluginLoader.LoadError) void {
-    const reason = App.pluginLoadFailureReason(err);
-    const probe = PluginLoader.probeVersionInfo(path);
-    const detail: ?[]const u8 = if (probe) |info|
-        App.formatPluginProbeDetail(editor.app.gpa, info) catch null
-    else
-        null;
-    defer if (detail) |d| editor.app.gpa.free(d);
-    // `recordPluginFailure` appends unconditionally; drop any prior record so repeated attempts
-    // (enable → fail → enable → fail) leave one row, not a growing pile of duplicate cards.
-    editor.app.clearFailedUserPlugin(id);
-    editor.recordPluginFailure(id, reason, detail, if (probe) |info| info.plugin_version else null, .of(path));
-}
-
-/// One-shot: moves any pre-R10 flat `{plugins_dir}/{id}.{ext}` into its own
-/// `{plugins_dir}/{id}/{id}.{ext}` directory (see docs/PLUGIN_MANIFEST_PLAN.md R10). Collects the
-/// list of flat files first, then renames in a second pass, so mutating the directory never races
-/// the iterator that's still walking it. Best-effort: a single failed rename is logged and
-/// skipped rather than aborting the rest.
-fn migrateFlatPluginLayout(allocator: std.mem.Allocator, plugins_dir: []const u8, ext_suffix: []const u8) void {
-    var flat_ids: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer {
-        for (flat_ids.items) |id| allocator.free(id);
-        flat_ids.deinit(allocator);
-    }
-    {
-        var dir = std.Io.Dir.cwd().openDir(dvui.io, plugins_dir, .{ .iterate = true }) catch return;
-        defer dir.close(dvui.io);
-        var iter = dir.iterate();
-        while (iter.next(dvui.io) catch null) |entry| {
-            if (entry.kind != .file) continue;
-            if (!std.mem.endsWith(u8, entry.name, ext_suffix)) continue;
-            const dot = std.mem.lastIndexOf(u8, entry.name, ".") orelse continue;
-            const id = entry.name[0..dot];
-            if (id.len == 0) continue;
-            const dup = allocator.dupe(u8, id) catch continue;
-            flat_ids.append(allocator, dup) catch allocator.free(dup);
-        }
-    }
-
-    for (flat_ids.items) |id| {
-        const new_dir = std.fs.path.join(allocator, &.{ plugins_dir, id }) catch continue;
-        defer allocator.free(new_dir);
-        std.Io.Dir.createDirAbsolute(dvui.io, new_dir, .default_dir) catch {}; // best-effort; exists is fine
-
-        const file_name = PluginLoader.pluginFilename(id, allocator) catch continue;
-        defer allocator.free(file_name);
-        const old_path = std.fs.path.join(allocator, &.{ plugins_dir, file_name }) catch continue;
-        defer allocator.free(old_path);
-        const new_path = std.fs.path.join(allocator, &.{ new_dir, file_name }) catch continue;
-        defer allocator.free(new_path);
-
-        std.Io.Dir.renameAbsolute(old_path, new_path, dvui.io) catch |err| {
-            dvui.log.warn("plugin '{s}': failed to migrate to its own directory: {s}", .{ id, @errorName(err) });
-        };
-    }
+    App.syncLoadedPluginDvuiContexts(&editor.app);
+    App.syncLoadedPluginRenderBridge(&editor.app);
 }
 
 pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
@@ -836,7 +694,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
         else => ".so",
     };
 
-    migrateFlatPluginLayout(editor.app.gpa, plugins_dir, ext_suffix);
+    App.migrateFlatPluginLayout(editor.app.gpa, plugins_dir, ext_suffix);
 
     // Leftover fresh-load temp copies from a previous run (see `PluginLoader.copyToFreshLoadPath`)
     // — safe to clear unconditionally here since nothing is loaded from this directory yet.
@@ -884,7 +742,7 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
             } else {
                 dvui.log.err("user plugin '{s}': id already registered by a built-in; skipped", .{plugin_id});
                 const probe = PluginLoader.probeVersionInfo(path);
-                editor.recordPluginFailure(plugin_id, "id already registered by a built-in plugin", null, if (probe) |info| info.plugin_version else null, .of(path));
+                editor.app.recordPluginFailure(plugin_id, "id already registered by a built-in plugin", null, if (probe) |info| info.plugin_version else null, .of(path));
             }
             editor.app.gpa.free(path);
             continue;
@@ -897,14 +755,14 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
             .arg_c = null,
         }) catch |err| {
             dvui.log.err("user plugin '{s}' ({s}): load failed: {s} — {s}", .{ plugin_id, path, @errorName(err), App.pluginLoadFailureReason(err) });
-            editor.recordLoadFailure(plugin_id, path, err);
+            editor.app.recordLoadFailure(plugin_id, path, err);
             editor.app.gpa.free(path);
             continue;
         };
 
         App.appendLoadedPluginLib(&editor.app, loaded) catch {
             dvui.log.err("user plugin '{s}': out of memory storing LoadedLib", .{plugin_id});
-            editor.recordPluginFailure(plugin_id, "ran out of memory while loading", null, loaded.version_info.plugin_version, .of(loaded.path));
+            editor.app.recordPluginFailure(plugin_id, "ran out of memory while loading", null, loaded.version_info.plugin_version, .of(loaded.path));
             continue;
         };
         dvui.log.info("user plugin '{s}' loaded from {s} in {d}ms", .{
@@ -922,8 +780,8 @@ pub fn loadUserPlugins(editor: *Editor, config_folder: []const u8) void {
     });
 
     if (loaded_any) {
-        syncLoadedPluginDvuiContexts(editor);
-        syncLoadedPluginRenderBridge(editor);
+        App.syncLoadedPluginDvuiContexts(&editor.app);
+        App.syncLoadedPluginRenderBridge(&editor.app);
     }
 }
 
@@ -1073,26 +931,6 @@ pub fn setPluginAutoUpdate(editor: *Editor, id: []const u8, on: bool) !void {
     try editor.app.trackAutoUpdate(id, on);
     errdefer editor.app.trackAutoUpdate(id, !on) catch {};
     try editor.setPluginFlagsPersisted(id, .{ .auto_update = on });
-}
-
-/// Drop undecided entries whose `plugins/<id>/` directory is gone — the author deleted or moved
-/// the build instead of answering the offer. Without this the rail badge would advertise a
-/// decision the user can no longer make. Called from `reconcileDiscoveredPlugins`, which the
-/// watcher already runs for any change under `<config>/` (a deleted directory very much included).
-fn pruneMissingUndecidedPlugins(editor: *Editor, plugins_dir: []const u8) void {
-    const gpa = editor.app.gpa;
-    var i: usize = editor.app.undecided_plugin_ids.items.len;
-    while (i > 0) {
-        i -= 1;
-        const id = editor.app.undecided_plugin_ids.items[i];
-        const dir_path = std.fs.path.join(gpa, &.{ plugins_dir, id }) catch continue;
-        defer gpa.free(dir_path);
-        var dir = std.Io.Dir.cwd().openDir(dvui.io, dir_path, .{}) catch {
-            gpa.free(editor.app.undecided_plugin_ids.orderedRemove(i));
-            continue;
-        };
-        dir.close(dvui.io);
-    }
 }
 
 /// Buffer per-plugin fizzy-reserved field writes (`.enabled` / `.auto_update`) and flush
@@ -1289,7 +1127,7 @@ pub fn resolveExtensionConflict(editor: *Editor, ext: []const u8, chosen_id: []c
             next.deinit(gpa);
             continue;
         }
-        try editor.setPluginExtensionsPersisted(entry.id, try next.toOwnedSlice(gpa));
+        try editor.app.setPluginExtensionsPersisted(entry.id, try next.toOwnedSlice(gpa));
     }
 
     // The chosen plugin may have no block on disk yet (first ever decision about it).
@@ -1300,27 +1138,11 @@ pub fn resolveExtensionConflict(editor: *Editor, ext: []const u8, chosen_id: []c
             next.deinit(gpa);
         }
         try next.append(gpa, try gpa.dupe(u8, ext));
-        try editor.setPluginExtensionsPersisted(chosen_id, try next.toOwnedSlice(gpa));
+        try editor.app.setPluginExtensionsPersisted(chosen_id, try next.toOwnedSlice(gpa));
     }
 
     try editor.flushPluginExtensionWrites();
     editor.rebuildExtensionOwnerCache();
-}
-
-/// Buffer `id`'s complete new `.extensions` list. Takes ownership of `exts` and every string in
-/// it. Buffered rather than written per call so one Confirm covering several extensions produces
-/// a single `settings.zon` write; `resolveExtensionConflict` flushes at the end.
-fn setPluginExtensionsPersisted(editor: *Editor, id: []const u8, exts: []const []const u8) !void {
-    const gpa = editor.app.gpa;
-    errdefer SettingsPluginsZon.freeExtensions(gpa, exts);
-    if (editor.app.plugin_extensions_pending.getPtr(id)) |slot| {
-        SettingsPluginsZon.freeExtensions(gpa, slot.*);
-        slot.* = exts;
-        return;
-    }
-    const key = try gpa.dupe(u8, id);
-    errdefer gpa.free(key);
-    try editor.app.plugin_extensions_pending.put(gpa, key, exts);
 }
 
 /// Flush buffered `.extensions` writes immediately, like `setPluginFlagsPersisted` does for the
@@ -1576,12 +1398,12 @@ pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
         // a build that fails a live load stays visible in the store's installed pane with its
         // Reinstall/Uninstall controls instead of disappearing until the next restart.
         dvui.log.err("user plugin '{s}' ({s}): load failed: {s} — {s}", .{ id, path, @errorName(err), App.pluginLoadFailureReason(err) });
-        editor.recordLoadFailure(id, path, err);
+        editor.app.recordLoadFailure(id, path, err);
         return err;
     };
     try editor.app.appendLoadedPluginLib(loaded);
-    syncLoadedPluginDvuiContexts(editor);
-    syncLoadedPluginRenderBridge(editor);
+    App.syncLoadedPluginDvuiContexts(&editor.app);
+    App.syncLoadedPluginRenderBridge(&editor.app);
     rebuildKeybinds(editor);
     fizzy.backend.rebuildDynamicNativeMenus();
     // The plugin now loads cleanly; drop any prior failure record so the store/dialog stop
@@ -1600,14 +1422,6 @@ pub fn installAndLoadPlugin(editor: *Editor, id: []const u8) !void {
     try editor.loadUserPluginById(id);
     editor.rebuildExtensionOwnerCache();
     try editor.maybeShowFileTypeDialog(id);
-}
-
-/// Spin until none of `plugin`'s open documents report `isDocumentSaving`. Called from
-/// `unloadPlugin` on the GUI thread while the save-queue worker runs concurrently.
-fn waitForPluginSaves(editor: *Editor, plugin: *sdk.Plugin) void {
-    while (App.pluginHasSavingDocs(&editor.app, plugin)) {
-        std.Thread.yield() catch {};
-    }
 }
 
 /// Cancel and await every in-flight `FileLoadJob` owned by `plugin`, then drop its staging
@@ -1675,7 +1489,7 @@ pub fn unloadPlugin(editor: *Editor, id: []const u8, force: bool) UnloadError!vo
     if (!force and editor.app.pluginHasDirtyDocs(plugin)) return error.DirtyDocuments;
 
     // Let in-flight async saves finish while the owning `File` records still exist.
-    editor.waitForPluginSaves(plugin);
+    editor.app.waitForPluginSaves(plugin);
 
     // Cancel + await any in-flight file loads owned by this plugin so no worker calls into
     // the dylib after we `dlclose` it below.
@@ -1929,7 +1743,7 @@ pub fn postInit(editor: *Editor) !void {
     // keybind map. Fizzy already registered its global/navigation/region binds
     // in `Keybinds.register` (during `init`, before this runs), so the two halves
     // are disjoint — no `putNoClobber` clash. Runs on all targets (web included).
-    syncLoadedPluginDvuiContexts(editor);
+    App.syncLoadedPluginDvuiContexts(&editor.app);
     const window = dvui.currentWindow();
     for (editor.app.host.plugins.items) |plugin| try plugin.contributeKeybinds(window);
     // Startup's only pass over the finished bind map. `rebuildKeybinds` covers later plugin
@@ -2267,7 +2081,7 @@ fn fizzySetProjectFolder(ctx: *anyopaque, path: []const u8) anyerror!void {
     return fizzyCtx(ctx).setProjectFolder(path);
 }
 fn fizzyCloseProjectFolder(ctx: *anyopaque) void {
-    fizzyCtx(ctx).closeProjectFolder();
+    fizzyCtx(ctx).app.closeProjectFolder();
 }
 fn fizzyRecentFolderCount(ctx: *anyopaque) usize {
     return fizzyCtx(ctx).app.recents.folders.items.len;
@@ -3003,7 +2817,7 @@ pub fn reconcileExternalSettingsChange(editor: *Editor) void {
     editor.applyHoldMenuDuration();
 
     editor.reconcilePluginEnabled(data);
-    editor.reconcilePluginSettings();
+    editor.app.reconcilePluginSettings();
 
     // Mark this content as "known" now that it's fully applied, so neither the next autosave
     // nor a spurious re-wake re-triggers this same reconciliation again. Note a later call in
@@ -3140,7 +2954,7 @@ pub fn reconcileFailedPluginBinaries(editor: *Editor) void {
         if (editor.app.isPluginDisabled(f.id)) continue;
         const path = App.userPluginPath(gpa, &editor.app, f.id) catch continue;
         defer gpa.free(path);
-        const stamp: FileStamp = .of(path);
+        const stamp: App.FileStamp = .of(path);
         // Zeroes mean the build is gone or unreadable right now (a rebuild deletes and rewrites
         // it): nothing to load, and the next watcher event brings the finished file.
         if (stamp.mtime_ns == 0 and stamp.size == 0) continue;
@@ -3187,7 +3001,7 @@ pub fn reconcileDiscoveredPlugins(editor: *Editor) void {
     const data = fizzy.core.fs.readZ(gpa, dvui.io, settings_path) catch null;
     defer if (data) |d| gpa.free(d);
 
-    editor.pruneMissingUndecidedPlugins(plugins_dir);
+    editor.app.pruneMissingUndecidedPlugins(plugins_dir);
 
     var dir = std.Io.Dir.cwd().openDir(dvui.io, plugins_dir, .{ .iterate = true }) catch return;
     defer dir.close(dvui.io);
@@ -3221,32 +3035,6 @@ pub fn reconcileDiscoveredPlugins(editor: *Editor) void {
         // user hits Refresh.
         PluginStore.markDiskScanDirty();
         dvui.log.info("settings watcher: discovered dropped-in plugin '{s}' (not loaded until the user says so)", .{id});
-    }
-}
-
-/// For every currently-loaded plugin with a registered settings schema, re-reads its
-/// `.plugins.<id>.settings` blob and applies it if (and only if) it actually changed since the
-/// last time we applied one — `SettingsSchema.last_applied_hash` is what stops a change to *one*
-/// plugin's settings from spuriously renotifying *every other* loaded plugin just because the
-/// whole file's hash moved (see `reconcileExternalSettingsChange`'s hash-gate, which only tells
-/// us the file changed, not which plugin's part of it did).
-fn reconcilePluginSettings(editor: *Editor) void {
-    for (editor.app.host.settings_schemas.items) |*schema| {
-        const blob = editor.app.host.loadPluginSettings(schema.owner.id) orelse {
-            // Settings section removed (all-defaults) — apply an empty blob so the live value
-            // resets to T's own declared defaults, but only when we previously had something.
-            if (schema.last_applied_hash == 0) continue;
-            schema.access.applyBlob(schema.value, schema.owner, ".{}");
-            schema.last_applied_hash = 0;
-            dvui.log.info("settings watcher: cleared settings for '{s}' (external edit)", .{schema.owner.id});
-            continue;
-        };
-        defer editor.app.host.allocator.free(blob);
-        const hash = std.hash.Wyhash.hash(0, blob);
-        if (hash == schema.last_applied_hash) continue;
-        schema.access.applyBlob(schema.value, schema.owner, blob);
-        schema.last_applied_hash = hash;
-        dvui.log.info("settings watcher: applied external settings change for '{s}'", .{schema.owner.id});
     }
 }
 
@@ -3448,7 +3236,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     editor.setTitlebarColor();
     editor.setWindowStyle();
 
-    syncLoadedPluginDvuiContexts(editor);
+    App.syncLoadedPluginDvuiContexts(&editor.app);
     {
         const t = fizzy.core.hitch.begin(.plugin_hooks);
         defer t.end();
@@ -4298,19 +4086,6 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     if (editor.app.folder_watcher) |*w| w.setFolder(editor.app.folder);
 }
 
-/// Queue the project close; the teardown runs at the top of the next frame
-/// (`applyPendingFolderClose`).
-///
-/// Deferred because this is reachable from inside a plugin's draw — the file tree's
-/// project-row context menu calls it through `Host.closeProjectFolder` and then goes on to
-/// draw the project row, its rows, and its ignore-screened listings using the folder it read
-/// before the menu ran. Tearing all of that down underneath the draw that is still using it
-/// crashes in whatever touches the folder string next.
-pub fn closeProjectFolder(editor: *Editor) void {
-    if (editor.app.folder == null) return;
-    editor.app.pending_folder_close = true;
-}
-
 /// Perform a close queued by `closeProjectFolder` during an earlier frame.
 fn applyPendingFolderClose(editor: *Editor) void {
     if (!editor.app.pending_folder_close) return;
@@ -5093,21 +4868,13 @@ pub fn closeFile(editor: *Editor, index: usize) !void {
     try editor.closeFileID(doc.id);
 }
 
-/// Tear down a document via its owning plugin, falling back to a direct `deinit`.
-/// Removes the entry from the plugin's document registry; fizzy still removes
-/// the matching `DocHandle` from `open_files`.
-fn closeDocumentResources(_: *Editor, doc: sdk.DocHandle) void {
-    _ = doc.owner.closeDocument(doc);
-    doc.owner.unregisterDocument(doc.id);
-}
-
 pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     const doc = editor.app.docAt(index) orelse return;
     editor.workbench.documentClosed(doc);
 
     if (editor.document_watcher) |*w| w.untrack(doc.id);
     editor.unregisterDocSurface(doc.id);
-    editor.closeDocumentResources(doc);
+    editor.app.closeDocumentResources(doc);
     editor.app.open_files.orderedRemoveAt(index);
 }
 
@@ -5117,7 +4884,7 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
 
     if (editor.document_watcher) |*w| w.untrack(doc.id);
     editor.unregisterDocSurface(doc.id);
-    editor.closeDocumentResources(doc);
+    editor.app.closeDocumentResources(doc);
     _ = editor.app.open_files.orderedRemove(id);
 }
 
