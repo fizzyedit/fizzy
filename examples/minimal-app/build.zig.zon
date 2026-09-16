@@ -7,6 +7,8 @@
         // Fizzy consumed as a library. A real downstream app would use the release tarball URL;
         // a relative path keeps this example building against the working tree.
         .fizzy = .{ .path = "../.." },
+        // A plugin this app bundles beyond fizzy's own. A real app pins a release tarball.
+        .hello = .{ .path = "../hello-plugin" },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },
 }

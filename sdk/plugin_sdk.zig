@@ -457,6 +457,10 @@ pub const PluginArtifact = struct {
     /// The author's `plugin.zig` module — importable from the generated root as `"plugin_impl"`
     /// (an internal wiring detail; the field here is named for what it actually is).
     module: *std.Build.Module,
+    /// The same source as a module an application bundles statically, exported from the package
+    /// as `"plugin"`. A `build.zig` that adds the plugin's own dependencies to `module` adds
+    /// them here too.
+    static: *std.Build.Module,
 };
 
 /// Generate the hidden dylib root module: `std_options` (routes this dylib's `std.log`/`dvui.log`
@@ -538,7 +542,22 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
     });
     lib.linker_allow_shlib_undefined = true;
     lib.root_module.export_symbol_names = &dylib_exports;
-    return .{ .lib = lib, .module = plugin_module };
+
+    // The same `plugin.zig` as a module an application can link in (`fizzy.buildApp`), exported
+    // as `"plugin"`. Its `dvui`/`core`/`fizzy_sdk` imports are the application's, wired by
+    // fizzy's build when it bundles the plugin; only the plugin's own dependencies and its
+    // manifest are attached here. A separate options step from the dylib's, so the generated
+    // file never belongs to two modules of one compilation.
+    const static_module = b.addModule("plugin", .{
+        .target = opts.target,
+        .optimize = opts.optimize,
+        .root_source_file = opts.root_source_file orelse b.path("plugin.zig"),
+        .link_libc = opts.link_libc and opts.target.result.cpu.arch != .wasm32,
+    });
+    static_module.addAnonymousImport("plugin_zon", .{ .root_source_file = b.path("plugin.zig.zon") });
+    static_module.addOptions(plugin_options_import, pluginOptions(b, m.id, m.name, m.version, m.min_sdk_version, m.raw));
+
+    return .{ .lib = lib, .module = plugin_module, .static = static_module };
 }
 
 pub fn exportModules(

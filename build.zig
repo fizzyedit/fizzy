@@ -22,11 +22,60 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    try @import("build/app.zig").build(b, target, optimize, .{
+    const base: @import("build/app.zig").Options = .{
         .windows_msvc_libc_opt = windows_msvc_libc_opt,
         .fetch_msvc_opt = fetch_msvc_opt,
         .macos_sign_app_identity = macos_sign_app_identity,
         .macos_sign_install_identity = macos_sign_install_identity,
         .macos_notary_profile = macos_notary_profile,
-    });
+    };
+
+    // A consumer that bundles plugins of its own cannot say so through `b.dependency`
+    // options (a plugin is a module from another package, not a value), so it passes
+    // `defer-app` here and calls `buildApp` below with its plugin modules instead.
+    const app = @import("build/app.zig");
+    const cfg = try app.readConfig(b, target, base) orelse return;
+    if (b.option(bool, "defer-app", "Do not build the application here; the consumer calls `buildApp` with its own plugins") orelse false) {
+        deferred = .{ .target = target, .optimize = optimize, .base = base, .cfg = cfg };
+        return;
+    }
+    try app.construct(b, target, optimize, base, cfg);
+}
+
+/// What `build` parsed for a `defer-app` consumer, so `buildApp` need not re-declare the
+/// standard options on the same builder.
+var deferred: ?struct {
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    base: @import("build/app.zig").Options,
+    cfg: @import("build/app.zig").Config,
+} = null;
+
+pub const BundledPlugin = @import("build/sdk.zig").BundledPlugin;
+
+/// Build the application in a consumer's graph, with the plugins the consumer bundles.
+///
+/// ```zig
+/// const fizzy = @import("fizzy");
+/// const fizzy_dep = b.dependency("fizzy", .{
+///     .target = target,
+///     .optimize = optimize,
+///     .@"defer-app" = true,
+///     .@"app-name" = @as([]const u8, "myapp"),
+///     .@"app-layout" = b.path("src/layout.zig"),
+/// });
+/// try fizzy.buildApp(fizzy_dep, &.{
+///     .{ .name = "pixi", .module = b.dependency("pixi", .{ .target = target, .optimize = optimize }).module("plugin") },
+/// });
+/// b.installArtifact(fizzy_dep.artifact("myapp"));
+/// ```
+///
+/// `name` is the plugin's id (its root's `plugin_id`); `module` its static module, which the
+/// plugin package exports and which fizzy wires to `dvui`, `core`, `fizzy_sdk` and `icons`.
+/// Fizzy's own four are always bundled ahead of these.
+pub fn buildApp(fizzy_dep: *std.Build.Dependency, plugins: []const BundledPlugin) !void {
+    const d = deferred orelse @panic("fizzy.buildApp: pass `.@\"defer-app\" = true` to b.dependency(\"fizzy\", …) first");
+    var opts = d.base;
+    opts.app_plugins = plugins;
+    try @import("build/app.zig").construct(fizzy_dep.builder, d.target, d.optimize, opts, d.cfg);
 }

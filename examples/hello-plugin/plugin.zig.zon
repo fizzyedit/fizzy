@@ -1,0 +1,7 @@
+.{
+    .id = "hello",
+    .name = "Hello",
+    .version = "0.1.0",
+    .min_sdk_version = "",
+    .description = "The smallest plugin: one surface that says hello.",
+}

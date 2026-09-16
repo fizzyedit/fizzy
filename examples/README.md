@@ -12,8 +12,10 @@ ship these as selectable presets — they show things fizzy itself does not do.
 | `minimal-app` | one main region, no rail or panel | `minimalapp`, "Minimal App" |
 | `studio-app` | canvas, explorer on the right, short bottom strip | `studioapp`, "Studio App" |
 | `endless-app` | Center is the workspace; split from the corner menu | `endlessapp`, "Endless App" |
+| `hello-plugin` | not an app: the smallest third-party-shaped plugin, one sidebar surface | id `hello` |
 
-All three load the identical `workbench` / `text` / `image` / `markdown` plugins, **unchanged**.
+All three apps load the identical `workbench` / `text` / `image` / `markdown` plugins,
+**unchanged**; `minimal-app` additionally bundles `hello-plugin` from its own `build.zig.zon`.
 
 ## What a consumer writes
 
@@ -41,6 +43,36 @@ executable name, window title, bundle id and config directory
 (`Application Support/minimalapp/`, not `fizzy/`).
 
 `zig build run` works in each example the same way it does for fizzy.
+
+## Bundling plugins of your own
+
+A plugin is a package (its `build.zig` calls `fizzy.plugin.create`, which exports the plugin's
+source as the `"plugin"` module besides building its dylib). List it in your `build.zig.zon`,
+then hand its module to fizzy — which `b.dependency` options cannot carry, so the app is built
+in two steps: `defer-app`, then `buildApp`:
+
+```zig
+const fizzy = @import("fizzy");
+
+const fizzy_dep = b.dependency("fizzy", .{
+    .target = target,
+    .optimize = optimize,
+    .@"defer-app" = true,
+    .@"app-name" = @as([]const u8, "minimalapp"),
+    .@"app-layout" = b.path("src/layout.zig"),
+});
+const hello = b.dependency("hello", .{ .target = target, .optimize = optimize });
+try fizzy.buildApp(fizzy_dep, &.{
+    .{ .name = "hello", .module = hello.module("plugin") },
+});
+const exe = fizzy_dep.artifact("minimalapp");
+```
+
+`name` is the plugin's id. The plugin is linked in and registered like fizzy's own four (the
+build lists them all in a generated `bundled_plugins` module); a dylib of the same id beside
+the executable takes precedence, as for the built-ins. Everything the plugin's own
+`build.zig` adds to `plugin.static` (its dependencies) comes along; `dvui`, `core`,
+`fizzy_sdk` and `icons` are fizzy's.
 
 ## The bug this caught
 

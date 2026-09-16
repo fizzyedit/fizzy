@@ -43,6 +43,15 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 
 Full contract: **[`docs/PLUGINS.md`](docs/PLUGINS.md)**. Living reshape plan: **[`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)**.
 
+## Bundling plugins into an app
+
+Which plugins an executable links in is build data: `build/sdk.zig`'s `bundledPluginsModule`
+generates `bundled_plugins` (`pub const modules = .{ @import("workbench"), … }`) and the
+runtime iterates it — nothing in `app/` or `src/` names a plugin except the workbench (its
+state still lives on the Editor). An app built on fizzy adds its own with `defer-app` +
+`fizzy.buildApp(fizzy_dep, &.{ .{ .name, .module = dep.module("plugin") } })`; see
+`examples/README.md` and `examples/minimal-app`, which bundles `examples/hello-plugin`.
+
 ## Plugin store: built, not forward-looking
 
 The plugin registry/install flow (author repo → release CI → `fizzyedit/plugins` registry →

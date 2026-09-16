@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
 
     const created = fizzy.plugin.create(b, .{ .target = target, .optimize = optimize });
     created.module.addOptions("workbench_opts", workbench_opts);
+    created.static.addOptions("workbench_opts", workbench_opts);
 
     if (b.lazyDependency("icons", .{ .target = target, .optimize = optimize })) |dep| {
         created.module.addImport("icons", dep.module("icons"));

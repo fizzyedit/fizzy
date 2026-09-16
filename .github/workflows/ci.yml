@@ -96,7 +96,7 @@ jobs:
       - name: Build external consumer apps (fizzy as a library)
         if: matrix.name != 'Windows'
         run: |
-          for app in examples/minimal-app examples/studio-app examples/endless-app; do
+          for app in examples/hello-plugin examples/minimal-app examples/studio-app examples/endless-app; do
             echo "::group::$app"
             (cd "$app" && zig build --summary all)
             echo "::endgroup::"

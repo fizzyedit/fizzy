@@ -284,13 +284,16 @@ seam to add, then the section moves. Inventory (from grepping the file):
   check, each built-in's manifest, the dylib-or-static load (`App.bundledDylibEnabled`,
   `App.loadBundledDylib`) and per-frame hooks. Nothing in the runtime names a plugin except
   the workbench (agreed 2026-09-16: an app should be able to embed whatever plugins it lists
-  in its `build.zig.zon`). What is still missing for that: (1) the consumer-facing build API
-  — `b.dependency("fizzy", options)` cannot carry plugin modules, so a consumer needs a
-  function it calls with its plugin dependencies' static modules (each plugin package
-  exporting one); (2) the `workbench: Workbench` field, `Workspace`, `FileLoadJob`,
-  `view_files` — the app must not hold a plugin's state, and the workbench's own state has
-  to live behind its services and `Host` (the "static/dylib duplicate globals" note in memory
-  is the same problem).
+  in its `build.zig.zon`). **Done:** `fizzy.plugin.create` exports the plugin's source as the
+  `"plugin"` module; a consumer passes `defer-app` to `b.dependency("fizzy")` and calls
+  `fizzy.buildApp(fizzy_dep, app_plugins)` (`build/app.zig` is split into `readConfig` +
+  `construct` so the deferred build still consumes its options); `build/exe.zig` copies each
+  app plugin's module per executable (the packaged exe has its own framework modules).
+  `examples/hello-plugin` + `examples/minimal-app` are the acceptance test and CI builds them.
+  **Left:** the `workbench: Workbench` field, `Workspace`, `FileLoadJob`, `view_files` — the
+  app must not hold a plugin's state, and the workbench's own state has to live behind its
+  services and `Host` (the "static/dylib duplicate globals" note in memory is the same
+  problem).
 - **fizzy's contributions** referenced directly: `Keybinds.register/registerCommands/tick/
   buildKeymap`, `menu_model.menu_bar`, `Menu.drawModelMenu`, `Sidebar.drawOption`,
   `SettingsTree.draw`, `OutputPanel.draw`, `Explorer.settings`, `Dialogs.*`. Each becomes an

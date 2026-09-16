@@ -86,6 +86,10 @@ pub fn addFizzyExecutableForTarget(
     /// `Host.layout_ctx`. The file imports `dvui`, `app`, `core`, and `fizzy_sdk` — not
     /// `fizzy` / `Editor` — so the module graph does not cycle.
     app_layout: ?std.Build.LazyPath,
+    /// Plugins the application bundles beyond fizzy's own four: each a static module from a
+    /// plugin package (`plugin_dep.module("plugin")`), linked in and listed in the generated
+    /// `bundled_plugins` module under its plugin id.
+    app_plugins: []const sdk.BundledPlugin,
 ) !FizzyExecutable {
     const dvui_dep = if (macos_sdl_paths) |p|
         sdk.dvuiDependency(b, .{
@@ -207,12 +211,43 @@ pub fn addFizzyExecutableForTarget(
     // names every statically linked plugin, so the runtime registers, probes and falls back
     // to whatever is listed here and never a plugin by name. An app built on fizzy lists its
     // own.
-    const bundled = sdk.bundledPluginsModule(b, resolved_target, optimize, &.{
+    var bundled_list: std.ArrayList(sdk.BundledPlugin) = .empty;
+    try bundled_list.appendSlice(b.allocator, &.{
         .{ .name = "workbench", .module = workbench_module },
         .{ .name = "text", .module = text_module },
         .{ .name = "image", .module = image_module },
         .{ .name = "markdown", .module = markdown_module },
     });
+    for (app_plugins) |p| {
+        const src_mod = p.module orelse {
+            try bundled_list.append(b.allocator, p);
+            continue;
+        };
+        // A copy per executable, not the plugin package's module itself: this function builds
+        // more than one exe (the packaged, Velopack-linked one beside the plain one), each with
+        // its own `dvui`/`core`/`fizzy_sdk`, and one module cannot import both sets. The copy
+        // keeps the plugin's own imports — its manifest options, its dependencies — and gets
+        // this exe's framework modules.
+        const m = b.createModule(.{
+            .target = resolved_target,
+            .optimize = optimize,
+            .root_source_file = src_mod.root_source_file,
+            .link_libc = resolved_target.result.cpu.arch != .wasm32,
+        });
+        var it = src_mod.import_table.iterator();
+        while (it.next()) |kv| {
+            const name = kv.key_ptr.*;
+            if (std.mem.eql(u8, name, "dvui") or std.mem.eql(u8, name, "core") or std.mem.eql(u8, name, "fizzy_sdk") or std.mem.eql(u8, name, "icons")) continue;
+            m.addImport(name, kv.value_ptr.*);
+        }
+        m.addImport("dvui", dvui_dep.module("dvui_sdl3"));
+        m.addImport("core", core_module);
+        m.addImport("fizzy_sdk", sdk_module);
+        if (icons_module) |icons| m.addImport("icons", icons);
+        exe.root_module.addImport(p.name, m);
+        try bundled_list.append(b.allocator, .{ .name = p.name, .module = m });
+    }
+    const bundled = sdk.bundledPluginsModule(b, resolved_target, optimize, bundled_list.items);
     exe.root_module.addImport("bundled_plugins", bundled);
 
     const singleton_app_dep = b.dependency("dvui_singleton_app", .{

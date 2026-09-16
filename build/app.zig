@@ -10,6 +10,8 @@ const dvui = fizzy_sdk.dvui;
 const velopack = @import("velopack.zig");
 
 pub const Options = struct {
+    /// Plugins the application bundles beyond fizzy's own — see `build.zig`'s `buildApp`.
+    app_plugins: []const @import("sdk.zig").BundledPlugin = &.{},
     windows_msvc_libc_opt: ?[]const u8 = null,
     fetch_msvc_opt: ?bool = null,
     macos_sign_app_identity: ?[]const u8 = null,
@@ -18,6 +20,50 @@ pub const Options = struct {
 };
 
 pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: Options) !void {
+    const cfg = try readConfig(b, target, opts) orelse return;
+    try construct(b, target, optimize, opts, cfg);
+}
+
+/// Everything `build` reads before it constructs anything — the options, the version, the
+/// generated option steps. Split from the construction so a consumer that defers the app
+/// (`build.zig`'s `defer-app`) consumes its options now and constructs later, with its own
+/// plugins.
+pub const Config = struct {
+    vz: velopack.Dep,
+    macos_sdl_paths: ?@import("common.zig").MacosSdlPaths,
+    zig_out_subdir: []const u8,
+    zig_out_install_dir: std.Build.InstallDir,
+    target_is_windows_msvc: bool,
+    cross_win_msvc: bool,
+    effective_win_libc: ?[]const u8,
+    velopack_supported_for_target: bool,
+    velopack_enabled: bool,
+    velopack_required_fail: ?*std.Build.Step,
+    no_emit: bool,
+    app_version: []const u8,
+    build_opts: *std.Build.Step.Options,
+    app_name: []const u8,
+    app_repo_url: []const u8,
+    app_repo_url_fallback: []const u8,
+    app_layout_path: ?std.Build.LazyPath,
+    static_workbench: bool,
+    static_text: bool,
+    static_image: bool,
+    workbench_opts: *std.Build.Step.Options,
+    msvcup_before_compile: *std.Build.Step.Run,
+    accesskit: dvui.AccesskitOptions,
+    test_filters: []const []const u8,
+    macos_sign_app_identity: ?[]const u8,
+    macos_sign_install_identity: ?[]const u8,
+    macos_notary_profile: ?[]const u8,
+    windows_msvc_libc_opt: ?[]const u8,
+    fetch_msvc: bool,
+    win_libc: velopack.ResolvedWindowsMsvcLibc,
+};
+
+/// Phase one of `build`: read every option and set up the option steps. Null on the
+/// configure pass where Velopack is not fetched yet (Zig fetches it and runs again).
+pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options) !?Config {
     const windows_msvc_libc_opt = opts.windows_msvc_libc_opt;
     const fetch_msvc_opt = opts.fetch_msvc_opt;
     const macos_sign_app_identity = opts.macos_sign_app_identity;
@@ -27,20 +73,9 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // Resolve Velopack lazily (app-only; plugins depend on `sdk/` which has no Velopack).
     // First configure pass returns null → Zig fetches velopack_zig and re-runs build();
     // the second pass proceeds with a valid handle.
-    const vz = b.lazyDependency("velopack_zig", .{}) orelse return;
+    const vz = b.lazyDependency("velopack_zig", .{}) orelse return null;
 
     const common = @import("common.zig");
-    const plugins = @import("plugins.zig");
-    const sdk = @import("sdk.zig");
-    const fizzy_exe = @import("exe.zig");
-    const web = @import("web.zig");
-    const package = @import("package.zig");
-    const msvc = @import("msvc.zig");
-
-    const workbench_plugin = plugins.workbench;
-    const text_plugin = plugins.text;
-    const image_plugin = plugins.image;
-    const FizzyExecutable = fizzy_exe.FizzyExecutable;
 
     // Built-in plugins are embedded by importing their `static/integration.zig` directly
     // (via build/plugins.zig); the root build owns the module graph, so there is no plugin
@@ -128,8 +163,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     // Empty by default (no fallback).
     const app_repo_url_fallback = b.option([]const u8, "repo-url-fallback", "Comma-separated fallback GitHub repo URLs for Velopack auto-update, tried after -Drepo-url") orelse "";
 
-    var version_owned: ?[]u8 = null;
-    defer if (version_owned) |buf| b.allocator.free(buf);
+    var version_owned: ?[]u8 = null; // lives as long as the build process
 
     const app_version: []const u8 = if (app_version_opt) |v| v else blk: {
         const raw = b.build_root.handle.readFileAlloc(b.graph.io, "VERSION", b.allocator, std.Io.Limit.limited(256)) catch |e| std.debug.panic("read VERSION: {}", .{e});
@@ -195,6 +229,89 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     const accesskit = b.option(dvui.AccesskitOptions, "accesskit", "Enable accesskit") orelse .off;
 
+    const test_filters = b.option(
+        []const []const u8,
+        "test-filter",
+        "Skip tests that do not match any filter",
+    ) orelse &[0][]const u8{};
+    return .{
+        .vz = vz,
+        .macos_sdl_paths = macos_sdl_paths,
+        .zig_out_subdir = zig_out_subdir,
+        .zig_out_install_dir = zig_out_install_dir,
+        .target_is_windows_msvc = target_is_windows_msvc,
+        .cross_win_msvc = cross_win_msvc,
+        .effective_win_libc = effective_win_libc,
+        .velopack_supported_for_target = velopack_supported_for_target,
+        .velopack_enabled = velopack_enabled,
+        .velopack_required_fail = velopack_required_fail,
+        .no_emit = no_emit,
+        .app_version = app_version,
+        .build_opts = build_opts,
+        .app_name = app_name,
+        .app_repo_url = app_repo_url,
+        .app_repo_url_fallback = app_repo_url_fallback,
+        .app_layout_path = app_layout_path,
+        .static_workbench = static_workbench,
+        .static_text = static_text,
+        .static_image = static_image,
+        .workbench_opts = workbench_opts,
+        .msvcup_before_compile = msvcup_before_compile,
+        .accesskit = accesskit,
+        .test_filters = test_filters,
+        .macos_sign_app_identity = macos_sign_app_identity,
+        .macos_sign_install_identity = macos_sign_install_identity,
+        .macos_notary_profile = macos_notary_profile,
+        .windows_msvc_libc_opt = windows_msvc_libc_opt,
+        .fetch_msvc = fetch_msvc,
+        .win_libc = win_libc,
+    };
+}
+
+/// Phase two of `build`: the executables, the web build, tests, packaging.
+pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, opts: Options, cfg: Config) !void {
+    const common = @import("common.zig");
+    const plugins = @import("plugins.zig");
+    const sdk = @import("sdk.zig");
+    const fizzy_exe = @import("exe.zig");
+    const web = @import("web.zig");
+    const package = @import("package.zig");
+    const msvc = @import("msvc.zig");
+    const workbench_plugin = plugins.workbench;
+    const text_plugin = plugins.text;
+    const image_plugin = plugins.image;
+    const FizzyExecutable = fizzy_exe.FizzyExecutable;
+    const vz = cfg.vz;
+    const macos_sdl_paths = cfg.macos_sdl_paths;
+    const zig_out_subdir = cfg.zig_out_subdir;
+    const zig_out_install_dir = cfg.zig_out_install_dir;
+    const target_is_windows_msvc = cfg.target_is_windows_msvc;
+    const cross_win_msvc = cfg.cross_win_msvc;
+    const effective_win_libc = cfg.effective_win_libc;
+    const velopack_supported_for_target = cfg.velopack_supported_for_target;
+    const velopack_enabled = cfg.velopack_enabled;
+    const velopack_required_fail = cfg.velopack_required_fail;
+    const no_emit = cfg.no_emit;
+    const app_version = cfg.app_version;
+    const build_opts = cfg.build_opts;
+    const app_name = cfg.app_name;
+    const app_repo_url = cfg.app_repo_url;
+    const app_repo_url_fallback = cfg.app_repo_url_fallback;
+    const app_layout_path = cfg.app_layout_path;
+    const static_workbench = cfg.static_workbench;
+    const static_text = cfg.static_text;
+    const static_image = cfg.static_image;
+    const workbench_opts = cfg.workbench_opts;
+    const msvcup_before_compile = cfg.msvcup_before_compile;
+    const accesskit = cfg.accesskit;
+    const test_filters = cfg.test_filters;
+    const macos_sign_app_identity = cfg.macos_sign_app_identity;
+    const macos_sign_install_identity = cfg.macos_sign_install_identity;
+    const macos_notary_profile = cfg.macos_notary_profile;
+    const windows_msvc_libc_opt = cfg.windows_msvc_libc_opt;
+    const fetch_msvc = cfg.fetch_msvc;
+    const win_libc = cfg.win_libc;
+
     const assetpack = @import("assetpack");
     const assets_module = assetpack.pack(b, b.path("assets"), .{});
 
@@ -206,7 +323,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 
     web.addSteps(b, optimize, build_opts, workbench_opts, assets_module);
 
-    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name, app_layout_path);
+    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins);
     const exe = main_fizzy.exe;
 
     const package_fizzy: FizzyExecutable = package_blk: {
@@ -221,7 +338,7 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
         pack_opts.addOption(bool, "static_text", static_text);
         pack_opts.addOption(bool, "static_image", static_image);
         pack_opts.addOption(bool, "has_app_layout", app_layout_path != null);
-        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name, app_layout_path);
+        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name, app_layout_path, opts.app_plugins);
     };
     const exe_for_package = package_fizzy.exe;
 
@@ -352,12 +469,6 @@ pub fn build(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     //
     // Both share the same `zig build test` and `zig build check`
     // entry points.
-
-    const test_filters = b.option(
-        []const []const u8,
-        "test-filter",
-        "Skip tests that do not match any filter",
-    ) orelse &[0][]const u8{};
 
     // `zig build test` is the CI entry point and must stay self-contained: pure
     // unit tests only, no dvui/SDL/Velopack/MSVC. Integration tests live under

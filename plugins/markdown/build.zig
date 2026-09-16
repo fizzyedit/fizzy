@@ -6,7 +6,9 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const plugin = fizzy.plugin.create(b, .{ .target = target, .optimize = optimize });
-    plugin.module.addImport("md4zig", md4zigModule(b, target, optimize));
+    const md4zig = md4zigModule(b, target, optimize);
+    plugin.module.addImport("md4zig", md4zig);
+    plugin.static.addImport("md4zig", md4zig);
 
     fizzy.plugin.install(b, plugin.lib, .{});
 

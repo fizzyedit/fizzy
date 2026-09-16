@@ -1,0 +1,12 @@
+.{
+    .name = .hello,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{ "build.zig", "build.zig.zon", "plugin.zig", "plugin.zig.zon" },
+    .fingerprint = 0x3610a686e2a05173,
+    .dependencies = .{
+        // A real plugin pins the `fizzy-sdk-v*` release asset; the relative path keeps this
+        // example building against the working tree.
+        .fizzy = .{ .path = "../../sdk" },
+    },
+}
