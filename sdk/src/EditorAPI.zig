@@ -47,22 +47,6 @@ pub const PanZoomScheme = enum { mouse, trackpad };
 ctx: *anyopaque,
 vtable: *const VTable,
 
-/// The state of the split governing a region.
-///
-/// Named for the split rather than the region because every field here belongs to the split:
-/// a region has no ratio or drag state of its own. Size is deliberately absent — a plugin
-/// drawing into a region already knows its own rect from dvui and does not need fizzy to
-/// report it.
-pub const SplitState = struct {
-    /// Fraction of its parent the docked side occupies.
-    ratio: f32,
-    collapsed: bool,
-    /// True while the user is dragging this split. Worth checking before starting an animation
-    /// of your own, so the two do not fight.
-    dragging: bool,
-    animating: bool,
-};
-
 pub const VTable = struct {
     /// Fizzy's per-frame arena allocator (reset every frame; do not free).
     arena: *const fn (ctx: *anyopaque) std.mem.Allocator,
@@ -118,7 +102,6 @@ pub const VTable = struct {
     setActiveDocIndex: *const fn (ctx: *anyopaque, index: usize) void,
     /// Swap the open documents at indices `a` and `b` (used by tab drag-reorder). Fizzy
     /// owns the open-document collection; this is the only mutation of its order plugins do.
-    swapDocs: *const fn (ctx: *anyopaque, a: usize, b: usize) void,
     /// Allocate the next fizzy document id (monotonic).
     allocDocId: *const fn (ctx: *anyopaque) u64,
 
@@ -153,7 +136,6 @@ pub const VTable = struct {
     /// pane animation with the bottom split. Before, it was smuggled in as three out-parameters
     /// on `drawWorkspaces`, which only worked because fizzy's own shape has a panel — an app
     /// with a differently-shaped bottom had no way to answer.
-    splitState: *const fn (ctx: *anyopaque, keywords: []const []const u8) ?SplitState,
 
     /// Open a region inside the one this plugin is drawing in, and hand back the app's handle to
     /// it. Null when the app cannot: nested too deep, or called outside the shape.
@@ -411,10 +393,6 @@ pub fn setActiveDocIndex(self: EditorAPI, index: usize) void {
     self.vtable.setActiveDocIndex(self.ctx, index);
 }
 
-pub fn swapDocs(self: EditorAPI, a: usize, b: usize) void {
-    self.vtable.swapDocs(self.ctx, a, b);
-}
-
 pub fn allocDocId(self: EditorAPI) u64 {
     return self.vtable.allocDocId(self.ctx);
 }
@@ -439,9 +417,6 @@ pub fn revealPosition(self: EditorAPI, path: []const u8, line: u32, character: u
     return self.vtable.revealPosition(self.ctx, path, line, character, open_side);
 }
 
-pub fn splitState(self: EditorAPI, keywords: []const []const u8) ?SplitState {
-    return self.vtable.splitState(self.ctx, keywords);
-}
 
 pub fn beginRegion(self: EditorAPI, spec: RegionSpec) ?RegionSpec.Token {
     return self.vtable.beginRegion(self.ctx, spec);

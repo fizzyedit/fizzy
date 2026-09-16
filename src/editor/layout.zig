@@ -186,4 +186,3 @@ fn blurDemo(editor: *fizzy.Editor) void {
     defer fw.deinit();
     fw.dragAreaSet(dvui.windowHeader("frosted glass", "", null));
 }
-

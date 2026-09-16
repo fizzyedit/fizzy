@@ -862,10 +862,6 @@ pub fn viewportFromScreenPoint(self: *CanvasWidget, screen: dvui.Point.Physical)
     return self.scroll_rect_scale.pointFromPhysical(screen);
 }
 
-pub fn screenFromViewportPoint(self: *CanvasWidget, viewport: dvui.Point) dvui.Point.Physical {
-    return self.scroll_rect_scale.pointToPhysical(viewport);
-}
-
 pub fn dataFromScreenRect(self: *CanvasWidget, screen: dvui.Rect.Physical) dvui.Rect {
     return self.screen_rect_scale.rectFromPhysical(screen);
 }
@@ -876,10 +872,6 @@ pub fn screenFromDataRect(self: *CanvasWidget, data: dvui.Rect) dvui.Rect.Physic
 
 pub fn viewportFromScreenRect(self: *CanvasWidget, screen: dvui.Rect.Physical) dvui.Rect {
     return self.scroll_rect_scale.rectFromPhysical(screen);
-}
-
-pub fn screenFromViewportRect(self: *CanvasWidget, viewport: dvui.Rect) dvui.Rect.Physical {
-    return self.scroll_rect_scale.rectToPhysical(viewport);
 }
 
 /// True when `p` is inside the scroll area's visible viewport (not the panned image bounds).

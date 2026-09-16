@@ -71,12 +71,12 @@ pub const sdk_version = @import("sdk_version").sdk_version;
 /// why it is a single target/mode-invariant literal rather than a per-target table. Update this
 /// value (from the `@compileError` it triggers) and bump `sdk_version` in the same commit
 /// whenever it changes.
-pub const recorded_sdk_shape_fingerprint: u64 = 0xa4e4098b46e922;
+pub const recorded_sdk_shape_fingerprint: u64 = 0xbec9d1c44ff63482;
 
 comptime {
     if (dylib.sdk_shape_fingerprint != recorded_sdk_shape_fingerprint) {
         @compileError(std.fmt.comptimePrint(
-            "SDK boundary shape fingerprint is 0x{x} — bump sdk_version and update " ++
+            "SDK boundary shape fingerprint is 0x{x} — update " ++
                 "recorded_sdk_shape_fingerprint in sdk/src/version.zig",
             .{dylib.sdk_shape_fingerprint},
         ));

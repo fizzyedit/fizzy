@@ -54,8 +54,6 @@ pub fn getHoveredTitleBarButton() ?TitleBarButton {
     return null;
 }
 
-pub fn performWindowButton(_: *dvui.Window, _: TitleBarButton) void {}
-
 pub fn isMaximized(_: *dvui.Window) bool {
     return true;
 }
@@ -191,8 +189,6 @@ pub fn rebuildDynamicNativeMenus() void {}
 /// The dvui menu re-reads the recents list every frame, so there is no retained
 /// native submenu to rebuild here (see `backend_native.rebuildNativeRecentFolders`).
 pub fn rebuildNativeRecentFolders() void {}
-
-pub fn showSimpleMessage(_: [:0]const u8, _: [:0]const u8) void {}
 
 pub fn showSaveFileDialog(
     cb: *const fn (?[][:0]const u8) void,

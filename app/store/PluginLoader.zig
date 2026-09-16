@@ -124,18 +124,6 @@ pub fn builtinPluginPath(
     return std.fs.path.join(allocator, &.{ exe_dir, "plugins", name, file_name });
 }
 
-/// Resolve a plugin dylib path: `FIZZY_PLUGIN_PATH` when set, else the built-in layout above.
-pub fn resolvePluginPath(
-    allocator: std.mem.Allocator,
-    exe_dir: []const u8,
-    builtin_name: []const u8,
-) ![]const u8 {
-    if (std.process.Environ.getAlloc(nativeEnviron(), allocator, "FIZZY_PLUGIN_PATH")) |override| {
-        return override;
-    } else |_| {}
-    return builtinPluginPath(allocator, exe_dir, builtin_name);
-}
-
 fn nativeEnviron() std.process.Environ {
     if (builtin.os.tag == .windows) {
         return .{ .block = .global };

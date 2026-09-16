@@ -1620,7 +1620,7 @@ test "the files service is the app's to provide, and a plugin asking for it gets
     // has to know about. This is the degradation every call site is written against.
     try std.testing.expect(editor.host.getServiceTyped(files_api) == null);
 
-    var service = fizzy.Editor.FilesService.api(&editor.host);
+    var service = fizzy.Editor.FilesService.api(editor);
     try editor.host.registerService(files_api, &service, null);
 
     const found = editor.host.getServiceTyped(files_api) orelse return error.TestUnexpectedResult;

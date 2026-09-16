@@ -44,12 +44,6 @@ pub const When = packed struct {
     completion_visible: bool = false,
     modal_open: bool = false,
 
-    pub fn isAny(self: When) bool {
-        return !self.editor_focused and !self.text_input_focused and
-            !self.explorer_focused and !self.panel_focused and
-            !self.completion_visible and !self.modal_open;
-    }
-
     /// Does a binding requiring `self` apply in the live context `ctx`? Every flag the binding
     /// asks for must be present; flags it doesn't ask about are ignored.
     pub fn matches(self: When, ctx: When) bool {

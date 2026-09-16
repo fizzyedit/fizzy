@@ -162,11 +162,6 @@ pub fn revealMain(self: PluginManager) void {
     self.vtable.revealMain(self.ctx);
 }
 
-/// The install directory: `plugins/` under the app's config folder. Caller frees.
-pub fn pluginsDir(self: PluginManager, a: std.mem.Allocator) ![]u8 {
-    return std.fs.path.join(a, &.{ self.config_folder, "plugins" });
-}
-
 /// True when `id` has a dylib on disk that was refused at load.
 pub fn isFailed(self: PluginManager, id: []const u8) bool {
     return self.failure(id) != null;

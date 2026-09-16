@@ -108,14 +108,6 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
     const count = wb.workspaces.count();
     if (index >= count) return .ok;
 
-    // The bottom split's state, asked for directly rather than handed in as three out-parameters
-    // on the call. Those parameters only worked because fizzy's own shape has a panel; an app
-    // whose bottom region is laid out differently — or absent — had no way to supply them.
-    // Absent is a normal answer, and means "no bottom split to coordinate with".
-    const panel = runtime.host().splitState(sdk.keywords.ide.panel);
-    const panel_dragging = if (panel) |p| p.dragging else false;
-    const panel_animating_open = if (panel) |p| (p.animating and p.ratio < 1.0) else false;
-
     var dock = core.widgets.dockspace(@src(), .{
         .layout = &wb.panes,
         .header = .none,
@@ -128,18 +120,10 @@ pub fn drawWorkspaces(wb: *Workbench, index: usize) !dvui.App.Result {
         const r = try ws.draw();
         if (r != .ok) result = r;
     }
-    // Read before `deinit`, which frees the widget.
-    const any_dragging = dock.dragging;
     if (dock.changed) wb.panes_dirty = true;
     dock.deinit();
     if (wb.panes_dirty) savePanes(wb);
     if (result != .ok) return result;
-
-    // Centring is coordinated with the panel exactly as before: while nothing is being dragged,
-    // a workspace centres its content if the panel is animating open.
-    if (!panel_dragging and !any_dragging and count > 0) {
-        wb.workspaces.values()[count - 1].center = panel_animating_open;
-    }
 
     return .ok;
 }

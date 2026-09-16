@@ -57,24 +57,6 @@ pub const Color = struct {
             .w = self.value[3],
         };
     }
-
-    pub fn toU32(self: Color) u32 {
-        const Packed = packed struct(u32) {
-            r: u8,
-            g: u8,
-            b: u8,
-            a: u8,
-        };
-
-        const p = Packed{
-            .r = @as(u8, @intFromFloat(self.value[0] * 255.0)),
-            .g = @as(u8, @intFromFloat(self.value[1] * 255.0)),
-            .b = @as(u8, @intFromFloat(self.value[2] * 255.0)),
-            .a = @as(u8, @intFromFloat(self.value[3] * 255.0)),
-        };
-
-        return @as(u32, @bitCast(p));
-    }
 };
 
 pub const Colors = struct {

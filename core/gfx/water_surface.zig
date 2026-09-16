@@ -36,13 +36,6 @@ pub fn slotLeftCol(d: i64) f32 {
     return slot * @as(f32, @floatFromInt(cols_per_slot));
 }
 
-/// Field-column coordinate for a continuous slot offset (for sampling the
-/// waterline between cards). `d_cont` is the fractional offset from the focus.
-pub fn colForOffset(d_cont: f32) f32 {
-    return (@as(f32, @floatFromInt(field_center)) + d_cont) * @as(f32, @floatFromInt(cols_per_slot)) +
-        @as(f32, @floatFromInt(cols_per_slot)) * 0.5;
-}
-
 const max_height: f32 = 1.85;
 const max_vel: f32 = 10.5;
 
@@ -201,16 +194,6 @@ pub const WaterSurface = struct {
     pub fn visualSlopeAt(self: *const WaterSurface, col: f32) f32 {
         const c = std.math.clamp(col, 0.45, @as(f32, @floatFromInt(grid_n - 1)) - 0.45);
         return (self.visualHeightAt(c + 0.45) - self.visualHeightAt(c - 0.45)) * 0.98;
-    }
-
-    /// Signed slope of the simulation field (internal / energy).
-    pub fn slopeAt(self: *const WaterSurface, col: f32) f32 {
-        const c = std.math.clamp(col, 1, @as(f32, @floatFromInt(grid_n - 2)));
-        const idx0: usize = @intFromFloat(@floor(c));
-        const t = c - @as(f32, @floatFromInt(idx0));
-        const s0 = self.height[idx0 + 1] - self.height[idx0 - 1];
-        const s1 = self.height[@min(idx0 + 2, grid_n - 1)] - self.height[idx0];
-        return std.math.lerp(s0, s1, t) * 0.5;
     }
 
     /// Mean per-cell disturbance — used to stop refreshing once the water settles.

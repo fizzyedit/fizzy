@@ -808,11 +808,6 @@ pub fn pluginRegionSelect(self: *Layout, token: sdk.RegionSpec.Token, id: []cons
     self.selectIn(r, id);
 }
 
-pub fn pluginRegionName(self: *Layout, token: sdk.RegionSpec.Token) []const u8 {
-    const r = self.pluginRegion(token) orelse return "";
-    return r.name;
-}
-
 pub fn endPluginRegion(self: *Layout, token: sdk.RegionSpec.Token) void {
     // Strictly nested, like the boxes they are. Closing out of order would deinit the wrong box
     // and dvui would report it as a stack mismatch two widgets later, naming neither the plugin

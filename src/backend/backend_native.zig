@@ -1005,12 +1005,6 @@ pub fn getHoveredTitleBarButton() ?TitleBarButton {
 // Performs the window button action (minimize, maximize/restore, close). The subclass calls this directly
 // on WM_NCLBUTTONDOWN for our registered button rects. Public so callers without a mouse path (e.g. a
 // right-click system menu or keyboard shortcut) can still trigger it. Windows only.
-pub fn performWindowButton(win: *dvui.Window, button: TitleBarButton) void {
-    if (builtin.os.tag != .windows) return;
-    const hwnd = getWin32Hwnd(win) orelse return;
-    performWindowButtonHwnd(@ptrCast(hwnd), button);
-}
-
 fn performWindowButtonHwnd(hwnd_h: win32.foundation.HWND, button: TitleBarButton) void {
     // We strip WS_SYSMENU from the window style to hide the OS-drawn caption buttons,
     // so WM_SYSCOMMAND(SC_MINIMIZE/MAXIMIZE/CLOSE) is no longer reliable. Drive the actions
@@ -1894,12 +1888,6 @@ pub fn pollPendingGenericNativeMenuAction() ?usize {
     const tag = pending_generic_native_menu_action_tag.swap(-1, .acq_rel);
     if (tag < 0) return null;
     return @intCast(tag);
-}
-
-pub fn showSimpleMessage(title: [:0]const u8, message: [:0]const u8) void {
-    if (sdl3.SDL_ShowSimpleMessageBox(sdl3.SDL_MESSAGEBOX_INFORMATION, title, message, dvui.currentWindow().backend.impl.window)) {
-        std.log.debug("true!", .{});
-    }
 }
 
 pub fn showSaveFileDialog(cb: *const fn (?[][:0]const u8) void, filters: []const DialogFileFilter, default_filename: []const u8, default_folder: ?[]const u8) void {

@@ -477,14 +477,6 @@ pub fn previewPlan(l: *Layout, name: []const u8) ?Drop.Plan {
     return Drop.plan(kind, std.mem.eql(u8, name, d.name));
 }
 
-/// The source place is previewing a split of itself, so it must keep drawing
-/// its view rather than standing empty behind the floating card.
-pub fn selfSplitting(l: *Layout) bool {
-    const d = l.state.view_drag;
-    return d.active() and d.preview_split != null and d.preview_t > 0.001 and
-        std.mem.eql(u8, d.preview_name, d.name);
-}
-
 /// A swap is being previewed. The pose that is already opening is the pose
 /// until it shuts — re-reading the pointer here would flip the remap off the
 /// moment the pointer brushed an edge, which restarts `drawSwapped`'s clock

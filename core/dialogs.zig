@@ -1011,11 +1011,6 @@ fn bubbleSpinnerPaintSavePop(r: dvui.Rect.Physical, text_color: dvui.Color, pop_
     }
 }
 
-/// Paints the fizzy ring (same geometry as [`bubbleSpinner`]) for compositing with other layers.
-pub fn bubbleSpinnerPaintDots(r: dvui.Rect.Physical, t: f32, text_color: dvui.Color) void {
-    bubbleSpinnerPaintSpin(r, t, text_color);
-}
-
 /// Subwindow id used for save-complete toasts. Distinct from the canvas subwindow so
 /// `Workspace.drawCanvas`'s `toastsShow` won't render them — instead `Editor.drawSaveToasts`
 /// iterates this id and renders centered cards matching the loading-overlay style.

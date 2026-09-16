@@ -1527,24 +1527,6 @@ pub fn createFolderInteractive(parent: []const u8) void {
     };
 }
 
-/// Remove stale selections whose underlying file no longer exists (e.g. moved by a multi-drag).
-pub fn pruneMissingSelections() void {
-    var i: usize = 0;
-    while (i < selected_paths.count()) {
-        const entry = selected_paths.entries.get(i);
-        std.Io.Dir.accessAbsolute(dvui.io, entry.value, .{}) catch {
-            const removed = selected_paths.fetchSwapRemove(entry.key) orelse {
-                i += 1;
-                continue;
-            };
-            if (selected_id == removed.key) selected_id = null;
-            runtime.allocator().free(removed.value);
-            continue;
-        };
-        i += 1;
-    }
-}
-
 pub fn extension(file: []const u8) Extension {
     const ext = std.fs.path.extension(file);
     if (std.mem.eql(u8, ext, "")) return .hidden;

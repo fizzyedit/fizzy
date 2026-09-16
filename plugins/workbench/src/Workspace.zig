@@ -24,7 +24,6 @@ pub const Workspace = @This();
 /// `Workbench.newGroupingID`; the app still calls it a grouping because that is the word on the
 /// document vtable.
 grouping: u64 = 0,
-center: bool = false,
 /// A pane opened by a drop whose document is still loading. Empty for now, but not *emptied*:
 /// `rebuildWorkspaces` must not close it before the load lands. Cleared by `addTab`.
 expecting: bool = false,

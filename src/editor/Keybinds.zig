@@ -690,10 +690,6 @@ fn nativeMenuItemFor(editor: *Editor, command_id: []const u8) bool {
     return false;
 }
 
-pub fn isNativeMenuCommandOnMacOS(id: []const u8) bool {
-    return menu_model.contains(id);
-}
-
 /// Rebuild `editor.keymap` from the finished `dvui.Window.keybinds` map. Called at the end of
 /// `Editor.rebuildKeybinds`, so it sees dvui's defaults, fizzy's own binds, and every loaded
 /// plugin's contributions in one pass.

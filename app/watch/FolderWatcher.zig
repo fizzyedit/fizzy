@@ -162,7 +162,6 @@ const Impl = if (have_impl) struct {
     }
 } else void;
 
-
 /// Allocates the ring buffers. Does not start nightwatch — `setFolder` does, once a folder is
 /// open and `self` is at its final address.
 pub fn init(gpa: Allocator) !FolderWatcher {

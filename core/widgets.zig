@@ -12,7 +12,7 @@
 //!   `core.widgets`    what both sides draw with. No layout vocabulary, no plugin vocabulary.
 //!   `fizzy.sdk`       the plugin contract — `Host`, `Surface`, `Plugin`. Draws nothing itself.
 //!
-//! Widgets are `init` + `deinit`, like dvui's own; the verb form (`split`, `paned`, `reorder`,
+//! Widgets are `init` + `deinit`, like dvui's own; the verb form (`split`, `reorder`,
 //! `floatingWindow`) sits here in the namespace, the way `dvui.box` sits over `BoxWidget.init`.
 const std = @import("std");
 const dvui = @import("dvui");
@@ -23,11 +23,6 @@ const dialogs = @import("dialogs.zig");
 
 pub const CanvasWidget = @import("widgets/CanvasWidget.zig");
 pub const ReorderWidget = @import("widgets/ReorderWidget.zig");
-/// Fizzy's diverged two-child paned (a `dragging`/`animating` readout and an eased
-/// `animateSplit`). Nothing in-tree draws it any more — the shell and the document row are
-/// `DockingWidget` — but pixi's layers/palette stack does, from its dylib. It stays until pixi
-/// moves onto `dvui.paned` or the tree; do not build anything new on it.
-pub const PanedWidget = @import("widgets/PanedWidget.zig");
 pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
 pub const TreeWidget = @import("widgets/TreeWidget.zig");
 pub const TreeSelection = @import("widgets/TreeSelection.zig");
@@ -41,13 +36,6 @@ pub const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
 /// Verb form of `DockingWidget`, same shape as `dvui.dockspace`.
 pub const dockspace = DockingWidget.dockspace;
 
-/// Open a `PanedWidget` — see its note above; pixi is the only consumer.
-pub fn paned(src: std.builtin.SourceLocation, init_opts: PanedWidget.InitOptions, opts: dvui.Options) *PanedWidget {
-    var ret = dvui.widgetAlloc(PanedWidget);
-    ret.init(src, init_opts, opts);
-    ret.processEvents();
-    return ret;
-}
 /// Reorderable tab strip shared by fizzy's bottom panel and the workbench's document tabs.
 /// The draggable split between two regions. Lives here rather than beside the layout because the
 /// workbench draws document splits from inside a dylib and must reach the same one — the same

@@ -410,22 +410,6 @@ pub const Branch = struct {
         return self.floating_widget != null;
     }
 
-    /// True while this branch is a secondary source of an active multi-drag (dragged but not the
-    /// primary "floating ghost" row). Callers can use this to render the row as a placeholder slot.
-    pub fn dragSourceSecondary(self: *Branch) bool {
-        if (self.tree.drag_point == null or self.tree.drag_ending) return false;
-        const bid = self.init_options.branch_id orelse self.data().id.asUsize();
-        if (self.tree.id_branch) |idb| {
-            if (idb == bid) return false;
-        }
-        if (self.tree.drag_branch_ids) |ids| {
-            for (ids) |id| {
-                if (id == bid) return true;
-            }
-        }
-        return false;
-    }
-
     pub fn install(self: *Branch) void {
         self.installed = true;
         var check_button_hovered: bool = false;

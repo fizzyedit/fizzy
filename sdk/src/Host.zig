@@ -376,10 +376,6 @@ pub fn setActiveDocIndex(self: *Host, index: usize) void {
     if (self.fizzy_api) |a| a.setActiveDocIndex(index);
 }
 
-pub fn swapDocs(self: *Host, a_index: usize, b_index: usize) void {
-    if (self.fizzy_api) |a| a.swapDocs(a_index, b_index);
-}
-
 pub fn allocDocId(self: *Host) u64 {
     return if (self.fizzy_api) |a| a.allocDocId() else 0;
 }
@@ -394,11 +390,6 @@ pub fn docFromPath(self: *Host, path: []const u8) ?DocHandle {
 
 /// Open `path` if needed and put the caret at `line`/`character`. Host state — a plugin doing
 /// goto-definition needs no workbench service for this. Returns false when nothing can open it.
-/// The split governing the region matching `kw` — ratio, collapsed, mid-drag — or null when
-/// this app's layout declared no such split.
-pub fn splitState(self: *Host, kw: []const []const u8) ?EditorAPI.SplitState {
-    return if (self.fizzy_api) |a| a.splitState(kw) else null;
-}
 
 /// An open plugin region: what a plugin holds between declaring a place and closing it.
 ///

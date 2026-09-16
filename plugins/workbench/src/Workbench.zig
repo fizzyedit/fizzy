@@ -188,13 +188,6 @@ pub fn clearFileTreeDataId(self: *Workbench) void {
     self.file_tree_data_id = null;
 }
 
-/// Explorer peek/collapse hides the workspace subtree; clear latched center flags.
-pub fn clearAllWorkspaceCenter(self: *Workbench) void {
-    for (self.workspaces.values()) |*ws| {
-        ws.center = false;
-    }
-}
-
 /// A document closed by the user: its tab leaves every pane. Not called at shutdown, where the
 /// assignments are what bring the session back.
 pub fn documentClosed(self: *Workbench, doc: sdk.DocHandle) void {

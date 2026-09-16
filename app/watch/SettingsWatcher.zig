@@ -110,7 +110,6 @@ pub fn start(self: *SettingsWatcher) !void {
     }
 }
 
-
 /// Stops nightwatch (joins its background thread) and frees owned paths. Safe to call even if
 /// `start` was never called (e.g. `init` succeeded but `start` failed).
 pub fn stop(self: *SettingsWatcher) void {

@@ -20,10 +20,6 @@ pub const LoadedLib = struct {
     version_info: PluginVersionInfo = .{},
 };
 
-pub fn resolvePluginPath(_: std.mem.Allocator, _: []const u8, _: []const u8) ![]const u8 {
-    return error.Unsupported;
-}
-
 pub fn loadAndRegister(_: anytype, _: []const u8) LoadError!void {
     return error.Unsupported;
 }

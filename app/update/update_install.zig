@@ -115,10 +115,6 @@ pub fn phaseLabel(p: Phase) []const u8 {
     };
 }
 
-pub fn errorMessage(job: *const UpdateJob) []const u8 {
-    return job.err_msg_buf[0..job.err_msg_len];
-}
-
 // ----------------------------------------------------------------------------
 // Worker
 // ----------------------------------------------------------------------------

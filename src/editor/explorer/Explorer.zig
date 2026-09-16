@@ -54,12 +54,6 @@ pub fn open(explorer: *Explorer, editor: *fizzy.Editor) void {
     if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.open();
 }
 
-pub fn peekOpen(explorer: *Explorer, editor: *fizzy.Editor) void {
-    explorer.peek_open = true;
-    explorer.closed = false;
-    if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.open();
-}
-
 pub fn peekClose(explorer: *Explorer, editor: *fizzy.Editor) void {
     explorer.peek_open = false;
     explorer.closed = true;

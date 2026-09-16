@@ -36,18 +36,6 @@ pub const TabInfo = struct {
     drag_index: ?usize = null,
     removed_index: ?usize = null,
     insert_before_index: ?usize = null,
-
-    /// True when a drag finished this frame and the caller should apply a move.
-    pub fn pendingMove(self: TabInfo) ?struct { from: usize, to: usize } {
-        const from = self.removed_index orelse return null;
-        const to = self.insert_before_index orelse return null;
-        return .{ .from = from, .to = if (to > from) to - 1 else to };
-    }
-
-    pub fn clearMove(self: *TabInfo) void {
-        self.removed_index = null;
-        self.insert_before_index = null;
-    }
 };
 
 pub const Options = struct {

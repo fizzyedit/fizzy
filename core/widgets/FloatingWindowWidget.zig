@@ -865,12 +865,6 @@ pub fn closeAnimateCollapse(self: *FloatingWindowWidget) void {
     dvui.dataSet(null, self.data().id, "_close_rect", close_rect);
 }
 
-/// Request that the window center itself on its parent (or
-/// InitOptions.center_on). This takes effect next frame.
-pub fn autoPosition(self: *FloatingWindowWidget) void {
-    self.auto_pos = true;
-}
-
 pub fn close(self: *FloatingWindowWidget) void {
     if (self.init_options.open_flag) |of| {
         of.* = false;

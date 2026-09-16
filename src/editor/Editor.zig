@@ -834,16 +834,6 @@ fn loadImageFromDylibEnabled(gpa: std.mem.Allocator) bool {
 /// Stable workbench sidebar view id (matches `workbench.view_files`).
 pub const workbench_files_view = workbench_mod.view_files;
 
-/// Registered workbench plugin (dylib or static). Panics if missing after `postInit`.
-pub fn workbenchPlugin(editor: *Editor) *sdk.Plugin {
-    return editor.host.pluginById("workbench") orelse @panic("workbench plugin not registered");
-}
-
-/// Registered text plugin (dylib or static). Panics if missing after `postInit`.
-pub fn textPlugin(editor: *Editor) *sdk.Plugin {
-    return editor.host.pluginById("text") orelse @panic("text plugin not registered");
-}
-
 /// Push host dvui state into every loaded plugin dylib image.
 pub fn syncLoadedPluginDvuiContexts(editor: *Editor) void {
     if (comptime builtin.target.cpu.arch == .wasm32) return;
@@ -866,11 +856,6 @@ fn syncLoadedPluginGlobals(editor: *Editor, plugin_id: []const u8, arg_b: *anyop
         if (!std.mem.eql(u8, loaded.plugin_id, plugin_id)) continue;
         loaded.set_globals(@ptrCast(&editor.gpa), arg_b, arg_c);
     }
-}
-
-/// Re-inject host-owned Globals into a loaded workbench dylib.
-pub fn syncLoadedWorkbenchGlobals(editor: *Editor) void {
-    syncLoadedPluginGlobals(editor, "workbench", @ptrCast(&editor.host), @ptrCast(&editor.workbench));
 }
 
 fn appendLoadedPluginLib(editor: *Editor, loaded: PluginLoader.LoadedLib) !void {
@@ -1021,15 +1006,6 @@ fn recordPluginFailure(
         editor.gpa.free(reason_owned);
         if (detail_owned) |d| editor.gpa.free(d);
     };
-}
-
-/// True if `id` is a user plugin present on disk that failed to load (ABI/SDK mismatch, etc.).
-/// Lets the store offer replace/uninstall actions for a broken build instead of a dead end.
-pub fn isFailedUserPlugin(editor: *Editor, id: []const u8) bool {
-    for (editor.failed_user_plugins.items) |f| {
-        if (std.mem.eql(u8, f.id, id)) return true;
-    }
-    return false;
 }
 
 /// Drop any recorded load-failure for `id` (freeing its strings). Called when the plugin later
@@ -2646,14 +2622,12 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .docIndex = fizzyDocIndex,
     .openDocCount = fizzyOpenDocCount,
     .setActiveDocIndex = fizzySetActiveDocIndex,
-    .swapDocs = fizzySwapDocs,
     .allocDocId = fizzyAllocDocId,
     .explorerViewportWidth = fizzyExplorerViewportWidth,
     .docFromPath = fizzyDocFromPath,
     .openFilePath = fizzyOpenFilePath,
     .openOrFocusFileAtGrouping = fizzyOpenOrFocusFileAtGrouping,
     .revealPosition = fizzyRevealPosition,
-    .splitState = fizzySplitState,
     .beginRegion = fizzyBeginRegion,
     .drawRegionContents = fizzyDrawRegionContents,
     .endRegion = fizzyEndRegion,
@@ -2855,11 +2829,6 @@ fn fizzyOpenDocCount(ctx: *anyopaque) usize {
 }
 fn fizzySetActiveDocIndex(ctx: *anyopaque, index: usize) void {
     fizzyCtx(ctx).setActiveFile(index);
-}
-fn fizzySwapDocs(ctx: *anyopaque, a: usize, b: usize) void {
-    const editor = fizzyCtx(ctx);
-    std.mem.swap(sdk.DocHandle, &editor.open_files.values()[a], &editor.open_files.values()[b]);
-    std.mem.swap(u64, &editor.open_files.keys()[a], &editor.open_files.keys()[b]);
 }
 fn fizzyAllocDocId(ctx: *anyopaque) u64 {
     return fizzyCtx(ctx).newFileID();
@@ -3142,10 +3111,6 @@ pub fn resetFileTreeWhenFilesHidden(editor: *Editor) void {
     editor.clearFileTreeTabDragDropState();
 }
 
-pub fn clearAllWorkspaceCenter(editor: *Editor) void {
-    editor.workbench.clearAllWorkspaceCenter();
-}
-
 /// Draws whichever center provider is active, blur-fading when that changes.
 ///
 /// Swapping providers replaces the entire center subtree, and each provider paints its own pane
@@ -3284,10 +3249,6 @@ pub fn docFromPath(editor: *Editor, path: []const u8) ?sdk.DocHandle {
         if (std.mem.eql(u8, stored_canon, key)) return doc;
     }
     return null;
-}
-
-pub fn bindDocToPane(_: *Editor, doc: sdk.DocHandle, canvas_id: dvui.Id, workspace: *anyopaque, center: bool) void {
-    doc.owner.bindDocumentToPane(doc, canvas_id, workspace, center);
 }
 
 /// Ensures `{config}/themes` exists and scans `*.json` for future user themes (loaded entries are prepended before Fizzy themes).
@@ -4690,16 +4651,6 @@ fn loadRuntimeSplits(state: *Layout.State, gpa: std.mem.Allocator, saved: []cons
     }
 }
 
-/// The extent a region should start at: what the user last left it, or the shape's default.
-pub fn regionExtent(editor: *Editor, name: []const u8, default: f32) f32 {
-    return editor.layout.extent(name, default);
-}
-
-/// Remember a region's extent. Debounced to disk by the same timer the window ratios use.
-pub fn setRegionExtent(editor: *Editor, name: []const u8, extent: f32) void {
-    if (editor.layout.setExtent(editor.gpa, name, extent)) editor.markWindowRatiosDirty();
-}
-
 /// The region accepting `keywords`, or null when this app's shape declared none — a normal
 /// state, not an error.
 pub fn regionFor(editor: *Editor, keywords: []const []const u8) ?Region {
@@ -4787,11 +4738,6 @@ fn fizzyDrawFileKindGlyph(_: *anyopaque, kind: []const u8, color: dvui.Color) bo
     return true;
 }
 
-/// A region's state, under the name the SDK still calls `splitState`.
-///
-/// Answered from the region rather than a paned widget: `collapsed` is whether it is shut, and
-/// `animating` is whether its extent is easing toward a new one. `ratio` and `dragging` survive
-/// for the ABI — a caller wanting a size should ask for the region.
 // A plugin declaring a region needs the `Layout` this frame's shape is running with, which is a
 // local in the draw loop — there is one only while the shape is being drawn, which is exactly
 // when a plugin can be drawing too. Outside that window these answer "no", and a plugin that
@@ -4864,27 +4810,11 @@ fn fizzyAssignedRegionNames(ctx: *anyopaque) []const []const u8 {
     return out.items;
 }
 
-fn fizzySplitState(ctx: *anyopaque, keywords: []const []const u8) ?sdk.EditorAPI.SplitState {
-    const editor = fizzyCtx(ctx);
-    const r = editor.regionFor(keywords) orelse return null;
-    const easing = dvui.animationGet(r.id, "_ease") != null;
-    return .{
-        .ratio = if (easing) 0 else 1,
-        .collapsed = r.isClosed(),
-        .dragging = false,
-        .animating = easing,
-    };
-}
-
 fn fizzyRevealPosition(ctx: *anyopaque, path: []const u8, line: u32, character: u32, open_side: bool) anyerror!bool {
     return revealPosition(fizzyCtx(ctx), path, line, character, open_side);
 }
 
 pub fn drawWorkspaces(editor: *Editor, index: usize) !dvui.App.Result {
-    // The panel split's state used to be gathered here and handed to the workbench as three
-    // out-parameters. It now asks for it itself through `Host.splitState`, which works in an app
-    // whose bottom region is shaped differently or absent — this could only ever answer for
-    // fizzy's own shape.
     return editor.workbench.drawWorkspaces(index);
 }
 
@@ -5572,12 +5502,6 @@ pub fn requestNewFileDialog(editor: *Editor) void {
 
 pub fn setActiveFile(editor: *Editor, index: usize) void {
     editor.workbench.setActiveDocIndex(index);
-}
-
-pub fn forceCloseFile(editor: *Editor, index: usize) !void {
-    if (editor.docAt(index) != null) {
-        return editor.rawCloseFile(index);
-    }
 }
 
 /// Dispatch a generic fizzy action to the active document owner's command (`<owner_id>.<action>`).
