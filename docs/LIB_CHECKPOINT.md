@@ -249,15 +249,57 @@ A shape whose layout is data, owned by the example — not a shipped fizzy prese
   edge; dragging the left split opens `edge-left-1` during the drag and appends a collapsed
   `edge-left-2`; a full axis still has an outer sentinel.
 
+## In progress: `Editor.zig` → `app/App.zig` (agreed 2026-09-16)
+
+`src/editor/Editor.zig` (6100 lines, 250 functions) is almost entirely the host runtime an app
+on fizzy needs unchanged: plugin lifecycle, file-type ownership, the document model and its
+save/close flows, the `EditorAPI` adapters, settings persistence and reconcile, keybind
+dispatch, region/surface bookkeeping, and the four seams `app/` already calls back through
+(`SettingsWatcher.Sink`, `FolderWatcher.Sink`, `PluginManager`, `auto_update.Hooks`). What is
+fizzy's own is small: `layout.zig` (the shape), `menu_model`/`Menu`, `fizzy_commands` in
+`Keybinds`, `explorer/settings.zig`, themes and fonts, `Entry.zig`, and the chrome widgets.
+
+Target: `app/App.zig` is the runtime, holding that state and owning `Host`; `Editor` is
+fizzy's contributions, registered the way a plugin does (commands, settings groups, surfaces
+for its chrome, the shape), holding a `*App`. `Entry.zig` stays fizzy's dvui entry and builds
+both. Not a rename: files hold `app: *App`, and the framework module is `@import("app")`.
+
+Done: `app.settings` (Settings, migration, ZON surgery, row chrome, plugin pane),
+`app.Recents`, `app.keymap` moved as-is — they had no fizzy coupling.
+
+What blocks a wholesale move is that `Editor.zig` imports what `app/` cannot see; each is a
+seam to add, then the section moves. Inventory (from grepping the file):
+- **Bundled plugins** (`workbench_mod`/`text_mod`/`image_mod`/`markdown_mod`, the
+  `workbench: Workbench` field, `Workspace`, `FileLoadJob`): the app must not hold a plugin's
+  state. `App` gets a list of `Plugin` registrations from the application; the workbench's
+  own state stays behind its `files`/`workbench` services and `Host` (the "static/dylib
+  duplicate globals" note in memory is the same problem).
+- **fizzy's contributions** referenced directly: `Keybinds.register/registerCommands/tick/
+  buildKeymap`, `menu_model.menu_bar`, `Menu.drawModelMenu`, `Sidebar.drawOption`,
+  `SettingsTree.draw`, `OutputPanel.draw`, `Explorer.settings`, `Dialogs.*`. Each becomes an
+  `App.Hooks` member or a registration the application performs in its own init.
+- **Assets and platform**: fonts (`assets`), `objc`, `fizzy.backend`, `fizzy.entry()`,
+  `Constants`. Fonts and window constants belong on `AppInfo`; backend calls behind a seam
+  like the existing `DialogDirs`.
+- `DocumentWatcher`, `FilesService`, `file_glyphs`: framework, move with the sections that
+  use them (`DocumentWatcher` needs no seam once documents live on `App`).
+
+Order that keeps every change green: (1) `App` struct in `app/App.zig` holding `gpa`,
+`arena`, `config_folder`, `host`, `file_table`, `layout`, settings/recents/keymap state,
+watchers — `Editor` embeds it and its methods move over one `// ----` section at a time,
+callers rewritten `editor.x` → `editor.app.x`; (2) the bundled-plugin and contribution
+hooks; (3) documents and save/close flows; (4) `EditorAPI` adapters last, at which point
+`Editor` is the thin layer and `Entry` constructs `App{ .info, .hooks }`.
+
 ## Also queued (in rough priority)
 
 - **Update pixi/brain/ghostty/zig to SDK 0.2.0** so the store, placement and services can be
   tested end to end (touches four repos; do as its own pass). pixi's packer becomes
   `{keywords = {"main"}, takeover_when = "pixi.project"}`; its `dvui.icon` calls become
   `core.icon.icon`; `Atlas`/`Sprite` move from `core` into pixi with it.
-- **Settings and keybinds as app opt-ins**: move the machinery (schema → ZON persistence →
-  settings tree → watcher reconcile; keybind table → chord matching → command dispatch) from
-  `src/editor/` to `app/`; fizzy registers its own sections/bindings the way a plugin does.
+- **Settings and keybinds as app opt-ins**: the machinery is in `app/` now; the state and the
+  dispatch move with the App extraction above, and fizzy registers its own sections/bindings
+  the way a plugin does.
 - **Native menu as a runtime app-supplied model**: `src/backend/backend_native.zig` still builds
   the menu from a comptime `menu_model` with `fizzy.editor()` refs. Then backend chrome → `app/`.
 - Titlebar as configuration (height, menu, traffic lights, caption buttons).
