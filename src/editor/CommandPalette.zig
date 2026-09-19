@@ -103,9 +103,17 @@ index_root: []u8 = &.{},
 /// `index.items.len` because a legitimately empty result (unreadable folder, every entry
 /// ignored) would otherwise re-walk the whole tree on every frame the palette is open.
 index_built: bool = false,
+/// The file ranking for `file_hits_query`, as indices into `index`, best first. Ranking is the
+/// palette's whole per-frame cost when nothing else is happening — scoring every indexed path
+/// again for a query that has not changed — so it is done once per query and reused until the
+/// text or the index changes. Owned.
+file_hits: std.ArrayList(usize) = .empty,
+file_hits_query: [256]u8 = @splat(0),
+file_hits_valid: bool = false,
 
 pub fn deinit(self: *CommandPalette, gpa: std.mem.Allocator) void {
     self.freeIndex(gpa);
+    self.file_hits.deinit(gpa);
     if (self.index_root.len > 0) gpa.free(self.index_root);
     self.* = .{};
 }
@@ -113,6 +121,8 @@ pub fn deinit(self: *CommandPalette, gpa: std.mem.Allocator) void {
 fn freeIndex(self: *CommandPalette, gpa: std.mem.Allocator) void {
     for (self.index.items) |p| gpa.free(p);
     self.index.clearRetainingCapacity();
+    self.file_hits.clearRetainingCapacity();
+    self.file_hits_valid = false;
 }
 
 fn queryText(self: *const CommandPalette) []const u8 {
@@ -268,13 +278,22 @@ const Row = union(Mode) {
     },
 };
 
-fn collectFileRows(self: *CommandPalette, editor: *Editor, query: *const fuzzy.Query) []Row {
-    const arena = dvui.currentWindow().arena();
-    const root = editor.app.folder orelse return &.{};
+/// `abs` relative to the project root. Every indexed path was joined onto the root by
+/// `indexDir`, so this is a slice, not `relativePosix` — which resolved and re-tokenised both
+/// paths, and did so for every file on every frame.
+fn relativeToRoot(root: []const u8, abs: []const u8) []const u8 {
+    if (!std.mem.startsWith(u8, abs, root)) return abs;
+    return std.mem.trimStart(u8, abs[root.len..], &.{ '/', '\\' });
+}
 
+fn rankFiles(self: *CommandPalette, gpa: std.mem.Allocator, root: []const u8, query: *const fuzzy.Query, query_text: []const u8) void {
+    self.file_hits.clearRetainingCapacity();
+    self.file_hits_valid = false;
+
+    const arena = dvui.currentWindow().arena();
     var hits: std.ArrayListUnmanaged(fuzzy.Ranked(usize)) = .empty;
     for (self.index.items, 0..) |abs, i| {
-        const rel = std.fs.path.relativePosix(arena, ".", root, abs) catch continue;
+        const rel = relativeToRoot(root, abs);
         // `plain = false`: these are real paths, so zf's basename weighting is what makes
         // `filz` rank `src/files.zig` above a path that merely contains those letters.
         const score = if (query.isEmpty()) @as(f64, 0) else (fuzzy.score(rel, query, .{ .plain = false }) orelse continue);
@@ -283,12 +302,24 @@ fn collectFileRows(self: *CommandPalette, editor: *Editor, query: *const fuzzy.Q
     }
     fuzzy.sort(usize, hits.items);
 
-    var rows: std.ArrayListUnmanaged(Row) = .empty;
-    for (hits.items) |h| {
-        if (rows.items.len >= max_rows) break;
-        rows.append(arena, .{ .files = self.index.items[h.item] }) catch break;
+    for (hits.items[0..@min(hits.items.len, max_rows)]) |h| {
+        self.file_hits.append(gpa, h.item) catch return;
     }
-    return rows.items;
+    @memcpy(self.file_hits_query[0..query_text.len], query_text);
+    @memset(self.file_hits_query[query_text.len..], 0);
+    self.file_hits_valid = true;
+}
+
+fn collectFileRows(self: *CommandPalette, editor: *Editor, query: *const fuzzy.Query, query_text: []const u8) []Row {
+    const arena = dvui.currentWindow().arena();
+    const root = editor.app.folder orelse return &.{};
+
+    const cached = self.file_hits_valid and std.mem.eql(u8, query_text, std.mem.sliceTo(&self.file_hits_query, 0));
+    if (!cached) self.rankFiles(editor.app.gpa, root, query, query_text);
+
+    const rows = arena.alloc(Row, self.file_hits.items.len) catch return &.{};
+    for (self.file_hits.items, rows) |i, *row| row.* = .{ .files = self.index.items[i] };
+    return rows;
 }
 
 const document_verbs = Keybinds.document_verbs;
@@ -497,7 +528,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
 
     if (parsed.mode == .files) self.ensureIndex(editor);
     const rows = switch (parsed.mode) {
-        .files => self.collectFileRows(editor, &query),
+        .files => self.collectFileRows(editor, &query, parsed.query),
         .commands => collectCommandRows(editor, &query),
     };
     if (self.selected >= rows.len) self.selected = if (rows.len == 0) 0 else rows.len - 1;
@@ -728,9 +759,7 @@ fn drawRow(
             // Dimmed project-relative directory, VSCode-style — also highlight matches so a
             // query like `src/` lights up the path rather than looking like a miss.
             if (editor.app.folder) |root| {
-                const arena = dvui.currentWindow().arena();
-                const dir = std.fs.path.dirname(abs) orelse root;
-                const rel = std.fs.path.relativePosix(arena, ".", root, dir) catch "";
+                const rel = relativeToRoot(root, std.fs.path.dirname(abs) orelse root);
                 if (rel.len > 0) {
                     core.draw.labelHighlighted(@src(), rel, query, false, .{
                         .gravity_y = 0.5,

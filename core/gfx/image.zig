@@ -336,6 +336,11 @@ pub fn setPixelIndex(source: dvui.ImageSource, index: usize, color: [4]u8) void 
     pixels(source)[index] = color;
 }
 
+/// Used by pixi (out of tree).
+pub fn clearRect(source: dvui.ImageSource, rect: dvui.Rect) void {
+    setRect(source, rect, .{ 0, 0, 0, 0 });
+}
+
 pub fn setRect(source: dvui.ImageSource, rect: dvui.Rect, color: [4]u8) void {
     const x = @as(usize, @intFromFloat(rect.x));
     const y = @as(usize, @intFromFloat(rect.y));

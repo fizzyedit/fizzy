@@ -862,6 +862,12 @@ pub fn viewportFromScreenPoint(self: *CanvasWidget, screen: dvui.Point.Physical)
     return self.scroll_rect_scale.pointFromPhysical(screen);
 }
 
+/// Used by pixi (out of tree) — `core` is public surface, so in-repo callers are not the test
+/// for whether a helper is dead.
+pub fn dataFromScreenRect(self: *CanvasWidget, screen: dvui.Rect.Physical) dvui.Rect {
+    return self.screen_rect_scale.rectFromPhysical(screen);
+}
+
 pub fn screenFromDataRect(self: *CanvasWidget, data: dvui.Rect) dvui.Rect.Physical {
     return self.screen_rect_scale.rectToPhysical(data);
 }
