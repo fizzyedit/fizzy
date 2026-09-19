@@ -201,6 +201,16 @@ fn cmdRedo(state: *anyopaque) anyerror!void {
 /// the command palette, where no such event exists.
 var running_from_key_event: bool = false;
 
+/// Run `id` as if it came from a key event — for a native macOS menu item fired by its ⌘-key
+/// equivalent, whose keystroke AppKit still passes on to SDL afterwards. Clipboard verbs then
+/// leave the focused widget to the real event instead of synthesizing one (see
+/// `clipboardVerb`), which is what pasted twice into a settings field.
+pub fn runCommandWithKeyEventInFlight(editor: *Editor, id: []const u8) !void {
+    running_from_key_event = true;
+    defer running_from_key_event = false;
+    try editor.app.host.runCommand(id);
+}
+
 /// Copy/Paste must reach exactly one target: the active document's editor, or some other
 /// focused widget (Output Panel, a settings filter, a plugin search box) — never both.
 ///
@@ -219,11 +229,11 @@ var running_from_key_event: bool = false;
 /// adopted the convention (no `isEnabled`, or one that only tracks selection): it still gets the
 /// verb, preserving the old behaviour rather than silently losing copy in that plugin.
 ///
-/// The forwarding stays conditional. On macOS `cmd+c` never arrives as an SDL key event —
-/// AppKit matches the menu's key equivalent first — so the event must be synthesized. Elsewhere
-/// the real event is still in flight (dispatch doesn't mark it handled) and synthesizing would
-/// make the widget act twice. Menu clicks and palette invocations carry no key event anywhere,
-/// so they always synthesize.
+/// The forwarding stays conditional. When the verb was reached from a key event — the SDL
+/// key path on every OS, or on macOS a native menu item fired by its ⌘-key equivalent, whose
+/// keystroke AppKit passes on to SDL afterwards — the real event is still in flight (dispatch
+/// doesn't mark it handled) and synthesizing would make the widget act twice. Menu clicks and
+/// palette invocations carry no key event anywhere, so they always synthesize.
 fn clipboardVerb(editor: *Editor, comptime bind: []const u8) anyerror!void {
     if (editor.activeDocCommandEnabled(bind)) return runDocumentClipboardVerb(editor, bind);
 

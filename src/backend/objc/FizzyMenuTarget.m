@@ -5,7 +5,9 @@
  * index among `menu_model`'s command items. Zig resolves it back to a command id and runs it.
  * This replaced fourteen one-line forwarding methods, one per `NativeMenuAction` variant — the
  * enum and the methods existed only to carry this integer across the boundary. */
-extern void FizzyNativeMenuAction(int tag);
+/* `from_key`: the item fired as a ⌘-key equivalent rather than a click. AppKit then *also*
+ * hands the keystroke on to SDL, so fizzy must not synthesize a second one for it. */
+extern void FizzyNativeMenuAction(int tag, bool from_key);
 
 /* Called from Zig for plugin-contributed native menu items (see `genericMenuAction:` below).
  * Zig looks the tag up against `host.native_menu_items`, resolved fresh at click time. */
@@ -49,7 +51,9 @@ extern void FizzyNativeMenuAboutAction(void);
 @implementation FizzyMenuTarget
 - (void)menuAction:(id)sender {
     NSMenuItem *item = (NSMenuItem *)sender;
-    FizzyNativeMenuAction((int)[item tag]);
+    NSEvent *ev = [NSApp currentEvent];
+    bool from_key = ev != nil && [ev type] == NSEventTypeKeyDown;
+    FizzyNativeMenuAction((int)[item tag], from_key);
 }
 - (void)genericMenuAction:(id)sender {
     NSMenuItem *item = (NSMenuItem *)sender;

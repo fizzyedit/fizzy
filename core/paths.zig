@@ -13,7 +13,35 @@ const builtin = @import("builtin");
 /// boundary (argv resolution, `setProjectFolder`, `openFilePath` / `docFromPath`, recents
 /// load/append) so nothing downstream can ever see the odd spelling.
 pub fn normalize(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (mountPrefixLen(path)) |n| {
+        // Only the part after the mount is a path; the prefix is a name. `resolvePosix` with a
+        // leading `/` never consults the cwd, and a mount's paths are `/`-separated whatever
+        // the OS.
+        const tail = try std.fs.path.resolvePosix(allocator, &.{ "/", path[n..] });
+        defer allocator.free(tail);
+        if (tail.len == 1) return allocator.dupe(u8, path[0..n]);
+        return std.mem.concat(allocator, u8, &.{ path[0..n], tail });
+    }
     return std.fs.path.resolve(allocator, &.{path});
+}
+
+/// Length of the mount prefix of a path on a mounted filesystem — `gdrive://me` in
+/// `gdrive://me/Notes/a.md` — or null for a path on the disk. A prefix is `scheme://host`, up
+/// to but not including the first `/` after the `://`; the scheme is letters, digits, `+`,
+/// `-` and `.` and starts with a letter, so a Windows drive (`C:\`) never qualifies.
+pub fn mountPrefixLen(path: []const u8) ?usize {
+    const sep = std.mem.indexOf(u8, path, "://") orelse return null;
+    if (sep == 0 or !std.ascii.isAlphabetic(path[0])) return null;
+    for (path[0..sep]) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or c == '+' or c == '-' or c == '.')) return null;
+    }
+    const host_start = sep + 3;
+    const host_end = std.mem.indexOfScalarPos(u8, path, host_start, '/') orelse path.len;
+    return host_end;
+}
+
+pub fn isMountPath(path: []const u8) bool {
+    return mountPrefixLen(path) != null;
 }
 
 /// True when `normalize(path)` would return `path` byte-for-byte, decided without allocating.
@@ -24,11 +52,20 @@ pub fn normalize(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 /// time. Testing first lets those callers skip the allocation entirely and fall back to
 /// `normalize` only for the odd spellings it exists to repair.
 pub fn isNormalizedAbsolute(path: []const u8) bool {
+    if (mountPrefixLen(path)) |n| {
+        // The prefix itself is the mount's root; anything after it is judged as a POSIX tail.
+        if (n == path.len) return true;
+        return isNormalizedPosixTail(path[n..]);
+    }
     if (!std.fs.path.isAbsolute(path)) return false;
     // On Windows `resolve` also rewrites separators and drive-letter case; not worth
     // replicating, so only the POSIX shape claims the fast path.
     if (builtin.os.tag == .windows) return false;
+    return isNormalizedPosixTail(path);
+}
 
+fn isNormalizedPosixTail(path: []const u8) bool {
+    if (path.len == 0 or path[0] != '/') return false;
     if (std.mem.eql(u8, path, "/")) return true;
     // A trailing separator is always dropped by `resolve`.
     if (path[path.len - 1] == '/') return false;
@@ -61,9 +98,41 @@ test isNormalizedAbsolute {
     }
 }
 
+test "mount paths normalize after the prefix and never touch the cwd" {
+    const gpa = std.testing.allocator;
+    try std.testing.expectEqual(@as(?usize, 11), mountPrefixLen("gdrive://me/Notes/a.md"));
+    try std.testing.expectEqual(@as(?usize, 11), mountPrefixLen("gdrive://me"));
+    try std.testing.expectEqual(@as(?usize, null), mountPrefixLen("/usr/local"));
+    try std.testing.expectEqual(@as(?usize, null), mountPrefixLen("C:\\x"));
+    try std.testing.expectEqual(@as(?usize, null), mountPrefixLen("://nope"));
+
+    const cases = [_][2][]const u8{
+        .{ "gdrive://me/Notes/a.md", "gdrive://me/Notes/a.md" },
+        .{ "gdrive://me/Notes//a.md", "gdrive://me/Notes/a.md" },
+        .{ "gdrive://me/Notes/../a.md", "gdrive://me/a.md" },
+        .{ "gdrive://me/Notes/", "gdrive://me/Notes" },
+        .{ "gdrive://me/", "gdrive://me" },
+        .{ "gdrive://me", "gdrive://me" },
+    };
+    for (cases) |c| {
+        const n = try normalize(gpa, c[0]);
+        defer gpa.free(n);
+        try std.testing.expectEqualStrings(c[1], n);
+        try std.testing.expect(isNormalizedAbsolute(c[1]));
+    }
+    try std.testing.expect(!isNormalizedAbsolute("gdrive://me/Notes/"));
+    try std.testing.expect(!isNormalizedAbsolute("gdrive://me/./a"));
+
+    const joined = try normalizeJoin(gpa, "/home/x", "gdrive://me/a/../b.md");
+    defer gpa.free(joined);
+    try std.testing.expectEqualStrings("gdrive://me/b.md", joined);
+}
+
 /// `normalize` of `base` joined with `path`; an absolute `path` wins outright (so a
 /// cwd + argv pair resolves the way a shell would).
 pub fn normalizeJoin(allocator: std.mem.Allocator, base: []const u8, path: []const u8) ![]u8 {
+    // A mount path is absolute in its own namespace; the cwd has nothing to add to it.
+    if (isMountPath(path)) return normalize(allocator, path);
     return std.fs.path.resolve(allocator, &.{ base, path });
 }
 

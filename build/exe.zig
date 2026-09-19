@@ -13,6 +13,7 @@ const workbench_plugin = plugins.workbench;
 const text_plugin = plugins.text;
 const markdown_plugin = plugins.markdown;
 const image_plugin = plugins.image;
+const archive_plugin = plugins.archive;
 const MacosSdlPaths = common.MacosSdlPaths;
 
 /// Install stripped exe + built-in plugin dylibs for `vpk pack --packDir`.
@@ -198,6 +199,11 @@ pub fn addFizzyExecutableForTarget(
         .core = core_module,
         .sdk = sdk_module,
     }, exe.root_module);
+    const archive_module = archive_plugin.addStaticModule(b, resolved_target, optimize, .{
+        .dvui = dvui_dep.module("dvui_sdl3"),
+        .core = core_module,
+        .sdk = sdk_module,
+    }, exe.root_module);
     const markdown_module: ?*std.Build.Module = if (resolved_target.result.cpu.arch != .wasm32)
         markdown_plugin.addStaticModule(b, resolved_target, optimize, .{
             .dvui = dvui_dep.module("dvui_sdl3"),
@@ -216,6 +222,7 @@ pub fn addFizzyExecutableForTarget(
         .{ .name = "workbench", .module = workbench_module },
         .{ .name = "text", .module = text_module },
         .{ .name = "image", .module = image_module },
+        .{ .name = "archive", .module = archive_module },
         .{ .name = "markdown", .module = markdown_module },
     });
     for (app_plugins) |p| {

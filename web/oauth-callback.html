@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fizzy</title>
+<body style="font-family:system-ui;background:#1d2029;color:#e6e6e6;display:grid;place-items:center;height:100vh;margin:0">
+<p>Returning to fizzy…</p>
+<script>
+  // The far end of a web OAuth round trip (see core/transport/WebOAuth.zig): the provider sent
+  // the browser here with its result in the query or the fragment. Hand it to the page that
+  // opened this popup and close. Nothing is parsed or stored here.
+  if (window.opener) {
+    window.opener.postMessage({ fizzyOAuth: location.search + location.hash }, location.origin);
+    window.close();
+  } else {
+    document.querySelector("p").textContent = "Open fizzy and sign in from there.";
+  }
+</script>

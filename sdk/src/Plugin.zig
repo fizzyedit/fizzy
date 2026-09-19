@@ -105,6 +105,15 @@ pub const VTable = struct {
     setDocumentGroupingOnBuffer: ?*const fn (state: *anyopaque, doc: *anyopaque, grouping: u64) void = null,
     createDocument: ?*const fn (state: *anyopaque, path: []const u8, grid: EditorAPI.NewDocGrid, out_doc: *anyopaque) anyerror!void = null,
     saveDocument: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
+    /// The document's saved form as bytes, for the host to write wherever the document lives —
+    /// a cloud mount, or the browser's download. Owned by the caller, allocated with
+    /// `allocator`. With `documentWritten` this is the storage-agnostic half of saving: an
+    /// owner that implements both never has to know what a `gdrive://` path is, and
+    /// `saveDocument` stays the disk-only path for owners that write files themselves.
+    documentBytes: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]u8 = null,
+    /// The host wrote what `documentBytes` returned, to `path`. Clear dirty state as
+    /// `saveDocument` would; when `path` differs from the document's own, adopt it (Save As).
+    documentWritten: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8) anyerror!void = null,
     closeDocument: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
     /// Reload `doc` from its on-disk path, replacing in-memory contents and clearing dirty
     /// state / undo history as appropriate. Called by fizzy's document watcher when a
@@ -465,6 +474,21 @@ pub fn isDirty(self: Plugin, doc: DocHandle) bool {
 
 pub fn saveDocument(self: Plugin, doc: DocHandle) !void {
     if (self.vtable.saveDocument) |f| try f(self.state, doc);
+}
+
+/// Null when the owner has no storage-agnostic save (`documentBytes`), in which case the host
+/// cannot write it anywhere but the disk.
+pub fn documentBytes(self: Plugin, doc: DocHandle, allocator: std.mem.Allocator) !?[]u8 {
+    const f = self.vtable.documentBytes orelse return null;
+    return try f(self.state, doc, allocator);
+}
+
+pub fn documentWritten(self: Plugin, doc: DocHandle, path: []const u8) !void {
+    if (self.vtable.documentWritten) |f| try f(self.state, doc, path);
+}
+
+pub fn canSaveThroughHost(self: Plugin) bool {
+    return self.vtable.documentBytes != null;
 }
 
 /// Reload from disk. Returns whether the plugin handled it (`false` = no hook).

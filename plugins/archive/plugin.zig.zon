@@ -1,0 +1,8 @@
+.{
+    .id = "archive",
+    .name = "Archive",
+    .version = "0.1.0",
+    .min_sdk_version = "",
+    .description = "Opens a .zip as a mounted folder in the explorer; download it again with your changes.",
+    .tags = .{ "archive", "zip", "mount" },
+}

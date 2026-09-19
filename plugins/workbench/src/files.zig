@@ -70,11 +70,6 @@ pub const Extension = enum {
 };
 
 pub fn draw() !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) {
-        try drawWeb();
-        return;
-    }
-
     // `tab_drag` matches workspace tab strips so file rows can drop on the canvas like tabs (DVUI reorder_tree cross-widget pattern).
     var tree = core.widgets.TreeWidget.tree(@src(), .{ .enable_reordering = true, .drag_name = "tab_drag" }, .{ .background = false, .expand = .both });
     defer tree.deinit();
@@ -92,30 +87,47 @@ pub fn draw() !void {
     // Safe as long as `selected_paths` isn't mutated between now and `tree.deinit`.
     tree.selected_branch_ids = selectionBranchIdsForMultiDrag(dvui.currentWindow().arena()) catch selected_paths.keys();
 
-    if (runtime.host().folder()) |path| {
-        try drawFiles(path, tree);
-    } else {
-        runtime.workbench().file_tree_data_id = null;
-        dvui.labelNoFmt(
-            @src(),
-            "Open a project folder to begin.",
-            .{},
-            .{ .color_text = .{ .color = dvui.themeGet().color(.control, .text) } },
-        );
+    // The roots: the project folder (never on the web, which has no disk) and every mounted
+    // filesystem — a zip the user opened, a cloud drive they signed into. Each is a tree of
+    // its own under one filter; the table answers them all the same way.
+    const folder: ?[]const u8 = if (comptime builtin.target.cpu.arch == .wasm32) null else runtime.host().folder();
+    const mounts: []const FileTable.Mount = if (table()) |files| files.mountList() else &.{};
 
-        if (dvui.button(@src(), "Open Folder", .{ .draw_focus = false }, .{ .expand = .horizontal, .style = .highlight })) {
-            // Route through the backend abstraction (native = OS dialog, web = file input
-            // element), not `dvui.dialogNativeFolderSelect`, which has no wasm implementation
-            // and silently no-ops — same fix as the homepage button and File menu item.
-            runtime.host().showOpenFolderDialog(Workspace.setProjectFolderCallback, null);
-        }
+    if (folder == null and mounts.len == 0) {
+        runtime.workbench().file_tree_data_id = null;
+        if (comptime builtin.target.cpu.arch == .wasm32) try drawWebEmpty() else drawNativeEmpty();
+        return;
+    }
+
+    const filter_text = try drawFilter(tree);
+    var index: usize = 0;
+    if (folder) |path| {
+        try drawRoot(path, .{ .disk = {} }, tree, filter_text, index);
+        index += 1;
+    }
+    for (mounts) |m| {
+        try drawRoot(m.prefix, .{ .mount = {} }, tree, filter_text, index);
+        index += 1;
     }
 }
 
-fn drawWeb() !void {
-    var tree = core.widgets.TreeWidget.tree(@src(), .{}, .{ .background = false, .expand = .both });
-    defer tree.deinit();
+fn drawNativeEmpty() void {
+    dvui.labelNoFmt(
+        @src(),
+        "Open a project folder to begin.",
+        .{},
+        .{ .color_text = .{ .color = dvui.themeGet().color(.control, .text) } },
+    );
 
+    if (dvui.button(@src(), "Open Folder", .{ .draw_focus = false }, .{ .expand = .horizontal, .style = .highlight })) {
+        // Route through the backend abstraction (native = OS dialog, web = file input
+        // element), not `dvui.dialogNativeFolderSelect`, which has no wasm implementation
+        // and silently no-ops — same fix as the homepage button and File menu item.
+        runtime.host().showOpenFolderDialog(Workspace.setProjectFolderCallback, null);
+    }
+}
+
+fn drawWebEmpty() !void {
     const viewport_w = runtime.host().explorerViewportWidth();
     const wrap_w: f32 = if (viewport_w > 0) viewport_w else 200;
 
@@ -132,7 +144,7 @@ fn drawWeb() !void {
             .background = false,
         });
         tl.addText(
-            "Open files from your device to begin.",
+            "Open files from your device to begin. A .zip opens as a folder.",
             .{ .color_text = .{ .color = dvui.themeGet().color(.control, .text) } },
         );
         tl.deinit();
@@ -154,14 +166,15 @@ fn drawWeb() !void {
     }
 }
 
-pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
-    const files = table() orelse return;
+/// The filter box above the roots. Returns the live filter text (arena-backed for the frame).
+fn drawFilter(tree: *core.widgets.TreeWidget) ![]const u8 {
+    const files = table() orelse return "";
     // Nothing is mid-walk at this point, so this is the one safe moment to free listings that
     // last frame's draw invalidated while it was still reading them.
     files.releaseRetired();
 
-    const unique_id = dvui.parentGet().extendId(@src(), 0);
-    runtime.workbench().file_tree_data_id = unique_id;
+    runtime.workbench().file_tree_data_id = dvui.parentGet().extendId(@src(), 0);
+    _ = tree;
 
     // Right margin keeps the entry clear of the overlay scrollbar that draws over the pane's right edge.
     var filter_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .w = 10 } });
@@ -183,16 +196,31 @@ pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
     // Closing the filter ends the session the path index was built for: the next one re-walks, so
     // files created or removed while the box was closed can't linger in the results.
     if (filter_text.len == 0) files.invalidateIndex();
+    return filter_text;
+}
 
-    // Resolve before taking the basename. Launching as `fizzy .` (or any relative path) makes
-    // `basename` return the literal "." and the project row's title becomes a single unreadable
-    // period instead of the folder's name.
-    const folder = blk: {
-        const base = std.fs.path.basename(path);
-        if (base.len > 0 and !std.mem.eql(u8, base, ".") and !std.mem.eql(u8, base, "..")) break :blk base;
-        const resolved = std.fs.path.resolve(dvui.currentWindow().arena(), &.{path}) catch break :blk base;
-        const resolved_base = std.fs.path.basename(resolved);
-        break :blk if (resolved_base.len > 0) resolved_base else base;
+/// What a root is, which decides its row's menu: a project folder can be closed and revealed
+/// on disk; a mount is owned by whichever plugin mounted it and has no disk to reveal.
+const RootKind = union(enum) { disk, mount };
+
+/// One root of the explorer: a project folder or a mount, expanded, with its own row menu.
+/// `index` keeps several roots' widget ids apart.
+fn drawRoot(path: []const u8, kind: RootKind, tree: *core.widgets.TreeWidget, filter_text: []const u8, index: usize) !void {
+    const unique_id = runtime.workbench().file_tree_data_id orelse return;
+
+    const folder = switch (kind) {
+        // A mount's name is what follows `scheme://` — the archive, the account.
+        .mount => path[(std.mem.indexOf(u8, path, "://") orelse 0) + 3 ..],
+        // Resolve before taking the basename. Launching as `fizzy .` (or any relative path)
+        // makes `basename` return the literal "." and the project row's title becomes a single
+        // unreadable period instead of the folder's name.
+        .disk => blk: {
+            const base = std.fs.path.basename(path);
+            if (base.len > 0 and !std.mem.eql(u8, base, ".") and !std.mem.eql(u8, base, "..")) break :blk base;
+            const resolved = std.fs.path.resolve(dvui.currentWindow().arena(), &.{path}) catch break :blk base;
+            const resolved_base = std.fs.path.basename(resolved);
+            break :blk if (resolved_base.len > 0) resolved_base else base;
+        },
     };
 
     const branch = tree.branch(@src(), .{
@@ -200,7 +228,7 @@ pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
         .animation_duration = 450_000,
         .animation_easing = dvui.easing.outBack,
     }, .{
-        .id_extra = 0,
+        .id_extra = index,
         .expand = .both,
         .color_fill = .transparent,
         .margin = dvui.Rect.all(0),
@@ -213,7 +241,7 @@ pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
         defer context.deinit();
 
         if (context.activePoint()) |point| {
-            try showRootProjectContextMenu(point, path, tree);
+            try showRootProjectContextMenu(point, path, kind, tree);
         }
     }
 
@@ -286,14 +314,14 @@ pub fn drawFiles(path: []const u8, tree: *core.widgets.TreeWidget) !void {
             defer blank_ctx.deinit();
 
             if (blank_ctx.activePoint()) |point| {
-                try showRootProjectContextMenu(point, path, tree);
+                try showRootProjectContextMenu(point, path, kind, tree);
             }
         }
     }
 }
 
 /// Context menu for the project root directory: close project, reveal on disk, new file / folder.
-fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u8, tree: *core.widgets.TreeWidget) !void {
+fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u8, kind: RootKind, tree: *core.widgets.TreeWidget) !void {
     var fw2 = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(point) }, .{ .box_shadow = .{
         .color = .black,
         .offset = .{ .x = 0, .y = 0 },
@@ -305,22 +333,24 @@ fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u
 
     const root_branch_id = dvui.Id.update(tree.data().id, project_path);
 
-    if ((dvui.menuItemLabel(@src(), "Close", .{}, .{
-        .expand = .horizontal,
-    })) != null) {
-        runtime.host().closeProjectFolder();
+    if (kind == .disk) {
+        if ((dvui.menuItemLabel(@src(), "Close", .{}, .{
+            .expand = .horizontal,
+        })) != null) {
+            runtime.host().closeProjectFolder();
 
-        fw2.close();
-    }
+            fw2.close();
+        }
 
-    _ = dvui.separator(@src(), .{ .expand = .horizontal });
+        _ = dvui.separator(@src(), .{ .expand = .horizontal });
 
-    if ((dvui.menuItemLabel(@src(), open_message, .{}, .{ .expand = .horizontal })) != null) {
-        runtime.host().openInFileBrowser(project_path) catch {
-            dvui.log.err("Failed to open file browser", .{});
-        };
+        if ((dvui.menuItemLabel(@src(), open_message, .{}, .{ .expand = .horizontal })) != null) {
+            runtime.host().openInFileBrowser(project_path) catch {
+                dvui.log.err("Failed to open file browser", .{});
+            };
 
-        fw2.close();
+            fw2.close();
+        }
     }
 
     if ((dvui.menuItemLabel(@src(), "New File...", .{}, .{ .expand = .horizontal })) != null) {
@@ -476,13 +506,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
 
             defer edit_id = null;
 
-            const valid_path = blk: {
-                std.Io.Dir.accessAbsolute(dvui.io, full_path, .{}) catch {
-                    break :blk false;
-                };
-
-                break :blk true;
-            };
+            const valid_path = if (table()) |files| files.exists(full_path) else false;
 
             if (parent_folder) |folder| {
                 new_path = try std.fs.path.join(dvui.currentWindow().arena(), &.{ folder, te.getText() });
@@ -1379,21 +1403,25 @@ fn openablePath(abs_path: []const u8) bool {
     return runtime.host().pluginForExtension(std.fs.path.extension(abs_path)) != null;
 }
 
+/// Every openable file beneath `root_abs`, through the table's listings so a mount walks the
+/// same way the disk does. A directory a slow mount has not answered yet contributes nothing
+/// this time — the same files the tree could not have shown either.
 fn appendOpenableFilesInTree(arena: std.mem.Allocator, root_abs: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
-    const io = dvui.io;
-    var dir = std.Io.Dir.openDirAbsolute(io, root_abs, .{ .iterate = true }) catch |err| {
-        dvui.log.err("Failed to open directory for open: {s} ({any})", .{ root_abs, err });
-        return;
-    };
-    defer dir.close(io);
-    var walker = try dir.walk(arena);
-    defer walker.deinit();
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file) continue;
-        const full = try std.fs.path.join(arena, &.{ root_abs, entry.path });
-        if (!openablePath(full)) continue;
-        try out.append(arena, try arena.dupe(u8, full));
+    const files = table() orelse return;
+    const listing = files.listDir(root_abs) orelse return;
+    for (listing.entries) |entry| {
+        const full = try joinChild(arena, root_abs, entry.name);
+        switch (entry.kind) {
+            .directory => try appendOpenableFilesInTree(arena, full, out),
+            else => if (openablePath(full)) try out.append(arena, full),
+        }
     }
+}
+
+/// `dir` + `name` the way the table keys them: a mount's paths are `/`-separated whatever the OS.
+fn joinChild(arena: std.mem.Allocator, dir: []const u8, name: []const u8) ![]u8 {
+    if (core.paths.isMountPath(dir)) return std.mem.concat(arena, u8, &.{ dir, "/", name });
+    return std.fs.path.join(arena, &.{ dir, name });
 }
 
 /// Top-most selection (no selected ancestor), then every openable canvas file: each selected file,
@@ -1482,8 +1510,10 @@ fn applyFileMove(unique_id: dvui.Id, tree: *core.widgets.TreeWidget, target_dir:
         selected_id = null;
         for (paths.items) |old_path| {
             const base = std.fs.path.basename(old_path);
-            const new_path = std.fs.path.join(arena, &.{ target_dir, base }) catch continue;
-            std.Io.Dir.accessAbsolute(dvui.io, new_path, .{}) catch continue;
+            const new_path = joinChild(arena, target_dir, base) catch continue;
+            if (table()) |files| {
+                if (!files.exists(new_path)) continue;
+            }
             const new_id = dvui.Id.update(tree.data().id, new_path).asUsize();
             selectionPut(new_id, new_path);
             selected_id = new_id;
@@ -1513,8 +1543,9 @@ pub fn createFolderInteractive(parent: []const u8) void {
             "New Folder"
         else
             std.fmt.bufPrint(&name_buf, "New Folder {d}", .{n}) catch return;
-        const candidate = std.fs.path.join(arena, &.{ parent, name }) catch return;
-        std.Io.Dir.accessAbsolute(dvui.io, candidate, .{}) catch break candidate;
+        const candidate = joinChild(arena, parent, name) catch return;
+        const taken = if (table()) |files| files.exists(candidate) else false;
+        if (!taken) break candidate;
     } else return;
 
     const fs = runtime.files() orelse return;

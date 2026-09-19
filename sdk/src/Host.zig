@@ -555,6 +555,22 @@ pub fn refresh(self: *Host) void {
     if (self.fizzy_api) |a| a.refresh();
 }
 
+/// Mount a filesystem at `prefix` (`gdrive://<account>`): every path under it — in the file
+/// tree, the `files` service, document open and save — is answered by `fs` instead of the disk,
+/// with the prefix stripped so the backend sees `/Notes/a.md`. The host pumps `fs` once per
+/// frame; the plugin keeps it alive until `unmount`. An app with no file table (nothing to
+/// draw a mount in) refuses rather than pretending. See `core.FileTable` and `core.vfs`.
+pub fn mount(self: *Host, prefix: []const u8, fs: core.vfs.Fs) !void {
+    const files = self.files orelse return error.NoFileTable;
+    try files.mount(prefix, fs);
+}
+
+/// Release a mount. Listings under it are dropped and its in-flight requests cancelled, so
+/// nothing calls back into a filesystem the plugin is about to tear down.
+pub fn unmount(self: *Host, prefix: []const u8) void {
+    if (self.files) |files| files.unmount(prefix);
+}
+
 pub fn allocUntitledPath(self: *Host) ![]u8 {
     return if (self.fizzy_api) |a| try a.allocUntitledPath() else error.FizzyApiNotInstalled;
 }

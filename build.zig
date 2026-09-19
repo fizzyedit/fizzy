@@ -28,6 +28,12 @@ pub fn build(b: *std.Build) !void {
         .macos_sign_app_identity = macos_sign_app_identity,
         .macos_sign_install_identity = macos_sign_install_identity,
         .macos_notary_profile = macos_notary_profile,
+        // What fizzy-the-app ships in its web build beyond the built-ins. The browser cannot
+        // load a plugin at runtime, so this is the one place a third-party plugin is named
+        // in this repo — as build data, the way an app built on fizzy lists its own. By
+        // directory while the plugin is a sibling checkout (see `Options.web_plugin_dirs`);
+        // by URL-pinned dependency (`web_plugin_deps`) once it is published.
+        .web_plugin_dirs = &.{"../fizzyedit/zig-drive"},
     };
 
     // A consumer that bundles plugins of its own cannot say so through `b.dependency`

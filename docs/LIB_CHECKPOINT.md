@@ -313,7 +313,7 @@ hooks; (3) documents and save/close flows; (4) `EditorAPI` adapters last, at whi
 
 ## Also queued (in rough priority)
 
-- **Update pixi/brain/ghostty/zig to SDK 0.2.0** so the store, placement and services can be
+- **Update pixi/atlas/ghostty/zig to SDK 0.2.0** so the store, placement and services can be
   tested end to end (touches four repos; do as its own pass). pixi's packer becomes
   `{keywords = {"main"}, takeover_when = "pixi.project"}`; its `dvui.icon` calls become
   `core.icon.icon`; `Atlas`/`Sprite` move from `core` into pixi with it.

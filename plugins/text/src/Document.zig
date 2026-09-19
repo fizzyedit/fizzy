@@ -361,6 +361,26 @@ pub fn save(self: *Document) !void {
     self.notifyContentChanged();
 }
 
+/// The bytes `save` would write, for a host that does the writing itself (a mounted drive).
+pub fn savedBytes(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
+    return allocator.dupe(u8, self.text.items);
+}
+
+/// The host wrote `savedBytes()` to `path`: the same bookkeeping `save` does after its write, plus
+/// adopting `path` when it is not ours yet (Save As).
+pub fn written(self: *Document, path: []const u8) !void {
+    if (!std.mem.eql(u8, path, self.path)) {
+        const gpa = sdk.allocator();
+        const path_copy = try gpa.dupe(u8, path);
+        gpa.free(self.path);
+        self.path = path_copy;
+        self.unsaved = false;
+    }
+    self.history.closeGroup();
+    self.clean_op_id = self.history.topOpId();
+    self.notifyContentChanged();
+}
+
 /// Replace in-memory contents from disk and clear undo history (external change / discard).
 pub fn reloadFromDisk(self: *Document) !void {
     if (comptime is_wasm) return error.Unsupported;

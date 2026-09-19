@@ -1,0 +1,19 @@
+.{
+    .name = .archive,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "plugin.zig",
+        "plugin.zig.zon",
+        "src",
+        "static",
+    },
+    .fingerprint = 0xd5fc5d9c22241954,
+    .dependencies = .{
+        .fizzy = .{
+            .path = "../../sdk",
+        },
+    },
+}

@@ -143,7 +143,8 @@ pub fn takeTrackpadPinchRatio() f32 {
 
 /// Mirrors the native signature: a tag into `menu_model.flat_commands`. No native menu bar
 /// on web, so nothing is ever pending.
-pub fn pollPendingNativeMenuAction() ?usize {
+pub const NativeMenuAction = struct { index: usize, from_key: bool };
+pub fn pollPendingNativeMenuAction() ?NativeMenuAction {
     return null;
 }
 

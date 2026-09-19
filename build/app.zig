@@ -12,6 +12,18 @@ const velopack = @import("velopack.zig");
 pub const Options = struct {
     /// Plugins the application bundles beyond fizzy's own — see `build.zig`'s `buildApp`.
     app_plugins: []const @import("sdk.zig").BundledPlugin = &.{},
+    /// Dependencies (by the name in `build.zig.zon`) whose `"plugin"` module the **web** build
+    /// links in. The browser cannot `dlopen`, so a plugin exists there only if the application
+    /// bundles it; this is fizzy-the-app's list, resolved for the wasm target. Each is looked
+    /// up lazily, so a missing dependency only costs the web target that plugin. For a
+    /// URL-pinned package; a *path* to a sibling checkout cannot go here (its own `fizzy`
+    /// dependency would name this repo's `sdk/` under a second path, which Zig refuses) —
+    /// that is what `web_plugin_dirs` is for.
+    web_plugin_deps: []const []const u8 = &.{},
+    /// Plugin checkouts (directories holding `plugin.zig` + `plugin.zig.zon`) the **web** build
+    /// links in, taken by path outside the package graph. Local development's answer to
+    /// `web_plugin_deps`; a directory that is missing is skipped with a note.
+    web_plugin_dirs: []const []const u8 = &.{},
     windows_msvc_libc_opt: ?[]const u8 = null,
     fetch_msvc_opt: ?bool = null,
     macos_sign_app_identity: ?[]const u8 = null,
@@ -321,7 +333,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // web.js, index.html, NotoSansKR-Regular.ttf}`, deployable as-is to a static host.
     // ---------------------------------------------------------------
 
-    web.addSteps(b, optimize, build_opts, workbench_opts, assets_module);
+    web.addSteps(b, optimize, build_opts, workbench_opts, assets_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs);
 
     const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins);
     const exe = main_fizzy.exe;
@@ -581,6 +593,21 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = "fizzy-file-table-tests",
             .root_module = file_table_module,
+            .filters = test_filters,
+        }));
+    }
+
+    // `core.transport.Native` — `std.http.Client` on a thread, tested against a loopback
+    // `std.http.Server` — and the `core.vfs` contract's own tests (`Mem`, zip). No dvui.
+    {
+        const transport_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("core/transport_tests.zig"),
+        });
+        try unit_test_artifacts.append(b.allocator, b.addTest(.{
+            .name = "fizzy-native-transport-tests",
+            .root_module = transport_module,
             .filters = test_filters,
         }));
     }

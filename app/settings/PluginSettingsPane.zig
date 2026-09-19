@@ -146,11 +146,25 @@ fn drawString(schema: *const settings.SettingsSchema, field_index: usize, id_ext
 
     var entry: dvui.TextEntryWidget = undefined;
     entry.init(@src(), .{}, .{ .id_extra = id_extra, .expand = .horizontal });
-    const focused = dvui.focusedWidgetId() == entry.data().id;
-    if (!focused and !std.mem.eql(u8, entry.getText(), current)) entry.textSet(current, false);
+    const id = entry.data().id;
+    const focused = dvui.focusedWidgetId() == id;
+    // An edit commits on Enter or when focus leaves the field — a value typed and then clicked
+    // away from is what the user meant, not something to revert. Only a field that is not
+    // being edited at all is refreshed from the stored value (an external settings change).
+    const was_focused = dvui.dataGet(null, id, "was_focused", bool) orelse false;
+    dvui.dataSet(null, id, "was_focused", focused);
+    const left = was_focused and !focused;
+    if (left or entry.enter_pressed) {
+        if (!std.mem.eql(u8, entry.getText(), current)) {
+            access.setString(value, field_index, entry.getText());
+            access.persist(value, schema.owner);
+        }
+    } else if (!focused and !std.mem.eql(u8, entry.getText(), current)) {
+        entry.textSet(current, false);
+    }
     entry.processEvents();
     entry.draw();
-    if (entry.enter_pressed and !std.mem.eql(u8, entry.getText(), current)) {
+    if (entry.enter_pressed and !std.mem.eql(u8, entry.getText(), access.getString(value, field_index))) {
         access.setString(value, field_index, entry.getText());
         access.persist(value, schema.owner);
     }

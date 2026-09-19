@@ -144,6 +144,7 @@
       // `dvui` import object into `instantiateStreaming`, so we add a `fizzy`
       // namespace on the way through — same trick as the trackpad export, inverted.
       const utf8 = new TextDecoder();
+      const utf8encode = (s) => new TextEncoder().encode(s);
       let wasmInstance = null;
       const overlayUrls = new Map();
       const overlays = new Map();
@@ -227,6 +228,82 @@
             if (!entry) return;
             entry.img.remove();
             overlays.delete(id);
+          },
+          // A full request for `core.transport.Web`: any method, headers as `Name: value`
+          // lines, a body, and the status back with the bytes. Cloud drives speak through
+          // this; `fizzy_web_fetch` below stays the GET-only path the store uses.
+          fizzy_web_request(id, methodPtr, methodLen, urlPtr, urlLen, headersPtr, headersLen, bodyPtr, bodyLen) {
+            const inst = wasmInstance;
+            if (!inst) return;
+            const mem = inst.exports.memory.buffer;
+            const method = utf8.decode(new Uint8Array(mem, methodPtr, methodLen));
+            const url = utf8.decode(new Uint8Array(mem, urlPtr, urlLen));
+            const headers = new Headers();
+            for (const line of utf8.decode(new Uint8Array(mem, headersPtr, headersLen)).split("\n")) {
+              const at = line.indexOf(": ");
+              if (at > 0) headers.append(line.slice(0, at), line.slice(at + 2));
+            }
+            // Copied: the wasm buffer may move before fetch reads it.
+            const body = bodyLen > 0 ? new Uint8Array(mem, bodyPtr, bodyLen).slice() : undefined;
+            const fail = () => {
+              inst.exports.FizzyWebRequestFailed(id);
+              if (dvuiApp) dvuiApp.requestRender();
+            };
+            fetch(url, { method, headers, body, cache: "no-store" }).then((res) => {
+              return res.arrayBuffer().then((buf) => {
+                const bytes = new Uint8Array(buf);
+                const ptr = inst.exports.FizzyWebRequestAlloc(id, bytes.length);
+                if (!ptr) return fail();
+                if (bytes.length > 0) new Uint8Array(inst.exports.memory.buffer, ptr, bytes.length).set(bytes);
+                inst.exports.FizzyWebRequestReady(id, res.status, ptr, bytes.length);
+                if (dvuiApp) dvuiApp.requestRender();
+              });
+            }).catch(fail);
+          },
+          // A web OAuth round trip for whichever plugin asks (core/transport/WebOAuth.zig): open
+          // the provider's URL in a popup and hand back what it redirected to
+          // oauth-callback.html with. Provider-agnostic on purpose.
+          fizzy_web_oauth_open(urlPtr, urlLen) {
+            const inst = wasmInstance;
+            if (!inst) return;
+            const url = utf8.decode(new Uint8Array(inst.exports.memory.buffer, urlPtr, urlLen));
+            const fail = () => {
+              inst.exports.FizzyWebOAuthFailed();
+              if (dvuiApp) dvuiApp.requestRender();
+            };
+            let settled = false;
+            const onMessage = (ev) => {
+              if (ev.origin !== location.origin || !ev.data || typeof ev.data.fizzyOAuth !== "string") return;
+              settled = true;
+              window.removeEventListener("message", onMessage);
+              const bytes = utf8encode(ev.data.fizzyOAuth);
+              const ptr = inst.exports.FizzyWebOAuthAlloc(bytes.length);
+              if (!ptr) return fail();
+              new Uint8Array(inst.exports.memory.buffer, ptr, bytes.length).set(bytes);
+              inst.exports.FizzyWebOAuthResult(ptr, bytes.length);
+              if (dvuiApp) dvuiApp.requestRender();
+            };
+            window.addEventListener("message", onMessage);
+            const popup = window.open(url, "fizzy-oauth", "popup,width=520,height=680");
+            if (!popup) {
+              window.removeEventListener("message", onMessage);
+              return fail();
+            }
+            const watch = setInterval(() => {
+              if (settled) return clearInterval(watch);
+              if (popup.closed) {
+                clearInterval(watch);
+                window.removeEventListener("message", onMessage);
+                fail();
+              }
+            }, 500);
+          },
+          fizzy_web_oauth_callback_url(bufPtr, bufLen) {
+            const inst = wasmInstance;
+            if (!inst) return 0;
+            const bytes = utf8encode(location.origin + "/oauth-callback.html");
+            if (bytes.length <= bufLen) new Uint8Array(inst.exports.memory.buffer, bufPtr, bytes.length).set(bytes);
+            return bytes.length;
           },
           // Byte fetch for the store catalog / READMEs / icons — no rasterize, just GET.
           fizzy_web_fetch(id, urlPtr, urlLen) {

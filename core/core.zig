@@ -73,6 +73,20 @@ pub const fuzzy = @import("fuzzy.zig");
 /// The project's file set: one cached, searchable view of what is on disk, owned by the host and
 /// shared by every plugin that cares about files. See `FileTable.zig`.
 pub const FileTable = @import("FileTable.zig");
+/// The mountable-filesystem contract (`vfs.Fs`): path-addressed, completion-based, wasm-safe.
+/// A cloud plugin mounts one on the host's `FileTable`; the local disk is `LocalFs` behind the
+/// same interface. See `docs/CLOUD_FS_PLAN.md`.
+pub const vfs = @import("vfs/vfs.zig");
+pub const LocalFs = @import("LocalFs.zig");
+/// `vfs.http.Transport` implementations: the browser's `fetch` on the web build, a
+/// `std.http.Client` per request on a thread everywhere else. A cloud plugin picks by target.
+pub const transport = struct {
+    pub const Web = if (@import("builtin").target.cpu.arch == .wasm32) @import("transport/WebTransport.zig") else struct {};
+    /// A popup-based OAuth round trip for any provider (wasm only): open the URL, get the
+    /// redirect's query/fragment back. What a cloud plugin signs in with on the web.
+    pub const WebOAuth = if (@import("builtin").target.cpu.arch == .wasm32) @import("transport/WebOAuth.zig") else struct {};
+    pub const Native = if (@import("builtin").target.cpu.arch != .wasm32) @import("transport/NativeTransport.zig") else struct {};
+};
 
 /// Fixed Fizzy accent colours — theme-independent. See `palette.zig`.
 pub const palette = @import("palette.zig");

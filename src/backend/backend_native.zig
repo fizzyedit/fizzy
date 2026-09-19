@@ -672,11 +672,23 @@ pub const modifier_control: c_ulong = NSEventModifierFlagControl;
 // Queue a single pending native action id.
 // This may be written from an AppKit callback thread, so use an atomic.
 var pending_native_menu_action_id: std.atomic.Value(c_int) = .init(-1);
+/// Whether the pending action fired as a key equivalent (see `NativeMenuAction.from_key`).
+var pending_native_menu_action_from_key: std.atomic.Value(bool) = .init(false);
 
 /// Called from FizzyMenuTarget.m when user picks a native menu item. Runs on main thread.
-export fn FizzyNativeMenuAction(id: c_int) void {
+export fn FizzyNativeMenuAction(id: c_int, from_key: bool) void {
+    pending_native_menu_action_from_key.store(from_key, .release);
     pending_native_menu_action_id.store(id, .release);
 }
+
+/// A native menu item the user activated. `from_key` means a ⌘-key equivalent, not a click:
+/// AppKit runs the menu action *and* passes the keystroke on to SDL, so the key event is still
+/// on its way to whatever widget has focus — a command that would otherwise synthesize one
+/// (paste into a text field) must not.
+pub const NativeMenuAction = struct {
+    index: usize,
+    from_key: bool,
+};
 
 // Queue a single pending generic (plugin `NativeMenuItem`) action tag. Same threading note
 // as `pending_native_menu_action_id` above.
@@ -1872,10 +1884,10 @@ fn addNativeMenuItemWithTarget(menu: objc.Object, _: objc.Class, NSStringClass: 
 }
 
 /// Returns and clears a pending native menu action (macOS menu bar). Call once per frame; on non-macOS always returns null.
-pub fn pollPendingNativeMenuAction() ?usize {
+pub fn pollPendingNativeMenuAction() ?NativeMenuAction {
     const id = pending_native_menu_action_id.swap(-1, .acq_rel);
     if (id < 0 or id >= menu_model.flat_commands.len) return null;
-    return @intCast(id);
+    return .{ .index = @intCast(id), .from_key = pending_native_menu_action_from_key.load(.acquire) };
 }
 
 /// Returns and clears a pending generic native menu item tag (plugin `NativeMenuItem`s).

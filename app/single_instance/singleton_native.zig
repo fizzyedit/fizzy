@@ -204,6 +204,14 @@ fn dispatchPath(path: []const u8) !void {
     const io = state.io;
     const to = sink orelse return error.NoSink;
 
+    // A path on a mounted filesystem is not the disk's to inspect: the app decides what it
+    // is once the mount answers. Handed over as a file — a folder there is opened from the
+    // explorer, not from argv.
+    if (core.paths.isMountPath(path)) {
+        try to.openFile(to.ctx, path, null);
+        return;
+    }
+
     // Try as directory first: openDirAbsolute succeeds → it's a folder.
     if (std.Io.Dir.openDirAbsolute(io, path, .{})) |dir| {
         var d = dir;
@@ -315,7 +323,7 @@ pub fn freeResolvedArgv(gpa: std.mem.Allocator, argv: []const []const u8) void {
 /// yields `<cwd>/.`, which names the right directory but is a distinct string from `<cwd>`
 /// everywhere downstream — see `core.paths.normalize`.
 fn resolveAbsolute(gpa: std.mem.Allocator, cwd: []const u8, path: []const u8) ![]u8 {
-    if (std.fs.path.isAbsolute(path)) return core.paths.normalize(gpa, path);
+    if (std.fs.path.isAbsolute(path) or core.paths.isMountPath(path)) return core.paths.normalize(gpa, path);
     if (cwd.len == 0) return error.NoCwd;
     return core.paths.normalizeJoin(gpa, cwd, path);
 }

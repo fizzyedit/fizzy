@@ -65,6 +65,8 @@ const vtable: sdk.Plugin.VTable = .{
     .reloadDocument = reloadDocument,
     .isDirty = isDirty,
     .saveDocument = saveDocument,
+    .documentBytes = documentBytes,
+    .documentWritten = documentWritten,
     // text saves are small and synchronous, so the async path just saves in place
     .saveDocumentAsync = saveDocument,
     .documentDefaultSaveAsFilename = documentDefaultSaveAsFilename,
@@ -328,6 +330,19 @@ fn saveDocument(state: *anyopaque, handle: DocHandle) anyerror!void {
     const st: *State = @ptrCast(@alignCast(state));
     if (st.settings.format_on_save.get()) formatDocument(doc);
     try doc.save();
+}
+/// The storage-agnostic half of saving: the host writes these wherever the document lives
+/// (a mounted drive) and reports back through `documentWritten`. Format-on-save applies here
+/// exactly as it does in `saveDocument`.
+fn documentBytes(state: *anyopaque, handle: DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    const st: *State = @ptrCast(@alignCast(state));
+    if (st.settings.format_on_save.get()) formatDocument(doc);
+    return doc.savedBytes(allocator);
+}
+fn documentWritten(_: *anyopaque, handle: DocHandle, path: []const u8) anyerror!void {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    try doc.written(path);
 }
 fn documentDefaultSaveAsFilename(_: *anyopaque, handle: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;

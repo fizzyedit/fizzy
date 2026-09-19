@@ -18,8 +18,19 @@
 //! So a listing is read once and kept. Freshness comes from the folder watcher fizzy already
 //! runs on the open root, via `invalidateListing` / `noteFileModified`; when there is no watcher
 //! backend for the platform, entries fall back to a short TTL so outside edits still show up.
+//!
+//! ## Mounts: the disk is one filesystem among several
+//!
+//! Every read and write goes through a `vfs.Fs` — the local disk (`LocalFs`) for an ordinary
+//! path, or whichever mount claims the path's prefix (`gdrive://<account>`). A cloud plugin
+//! registers a mount through `Host.mount`; nothing here knows what is behind it. The one thing
+//! a mount changes is *when* an answer arrives: `vfs.Fs` completes asynchronously, so a miss on
+//! a cloud directory returns null this frame and the listing appears (with `env.refresh`) when
+//! the response lands. The local mount answers inside the same call, exactly as before.
 const std = @import("std");
 const fuzzy = @import("fuzzy.zig");
+const vfs = @import("vfs/vfs.zig");
+const LocalFs = @import("LocalFs.zig");
 
 const FileTable = @This();
 
@@ -57,6 +68,9 @@ pub const Env = struct {
     ctx: ?*anyopaque = null,
     root: *const fn (ctx: ?*anyopaque) ?[]const u8 = noRoot,
     watching: *const fn (ctx: ?*anyopaque) bool = notWatching,
+    /// A listing or mutation that was pending has landed: whatever draws the table should run
+    /// another frame. Only a mount that answers later ever triggers it.
+    refresh: *const fn (ctx: ?*anyopaque) void = noRefresh,
     ignored: *const fn (
         ctx: ?*anyopaque,
         root: []const u8,
@@ -71,10 +85,13 @@ pub const Env = struct {
     fn notWatching(_: ?*anyopaque) bool {
         return false;
     }
+    fn noRefresh(_: ?*anyopaque) void {}
     fn notIgnored(_: ?*anyopaque, _: []const u8, _: []const u8, _: []const u8, _: std.Io.File.Kind) bool {
         return false;
     }
 };
+
+const max_path_len: usize = if (@import("builtin").target.cpu.arch == .wasm32) 4096 else std.fs.max_path_bytes;
 
 /// Refuse to index a pathological tree rather than stall a frame. A project past this many files
 /// still searches — just over the first `max_indexed_files` discovered.
@@ -102,6 +119,15 @@ gpa: std.mem.Allocator,
 io: std.Io,
 env: Env = .{},
 
+/// The disk, behind the same interface as every mount. Its `fs()` is taken fresh each time
+/// rather than stored: a `FileTable` is moved into its final home after `init`.
+local: LocalFs,
+/// Prefix-claimed filesystems, longest prefix wins. See `mount`.
+mounts: std.ArrayListUnmanaged(Mount) = .empty,
+/// Directories asked of a mount whose answer has not landed yet, keyed by full path (owned by
+/// the job). A second `listDir` for one of these waits rather than asking twice.
+pending: std.StringArrayHashMapUnmanaged(*ListJob) = .empty,
+
 /// Keyed by absolute directory path (owned). Values are boxed because a listing is borrowed
 /// across a whole draw and the map rehashes as nested directories are read, which would
 /// otherwise move the value out from under the loop iterating it.
@@ -122,37 +148,148 @@ retired: std.ArrayListUnmanaged(*Listing) = .empty,
 // caller has expanded. So the project is walked **once per search session** into this index, and
 // each keystroke only re-ranks strings already in memory.
 
-/// Absolute paths of every non-ignored file in the project. Owned.
+/// Full paths of every non-ignored file under every indexed root. Owned.
 index: std.ArrayListUnmanaged([]u8) = .empty,
-/// Project root the index was built for; empty when there is no index. Owned.
-index_root: []u8 = &.{},
-/// Set when a search session ends, so the next one rebuilds from disk rather than ranking a
-/// snapshot that may be minutes old. Also set by every invalidation below.
+/// The roots the index covers — a tree drawing the disk beside a mount searches both. Owned.
+index_roots: std.ArrayListUnmanaged([]u8) = .empty,
+/// Set when a search session ends, so the next one rebuilds rather than ranking a snapshot that
+/// may be minutes old. Also set by every invalidation below.
 index_stale: bool = true,
+/// The walk filling the index, while one is running. The disk finishes inside the `search`
+/// call that started it; a cloud root keeps going across frames, the index growing as each
+/// listing lands, until every directory has answered.
+index_job: ?*IndexJob = null,
+/// Bumped whenever the index's contents change, so a cached ranking knows it is over.
+index_generation: u64 = 0,
 
 /// Last ranking, reused while neither the query nor the index has changed. Without this the
 /// whole index is re-scored on every frame the caller draws, not just on each keystroke.
 results: std.ArrayListUnmanaged(Entry) = .empty,
 results_query: []u8 = &.{},
+results_root: []u8 = &.{},
+results_generation: u64 = 0,
 results_valid: bool = false,
 
 pub fn init(gpa: std.mem.Allocator, io: std.Io) FileTable {
-    return .{ .gpa = gpa, .io = io };
+    return .{ .gpa = gpa, .io = io, .local = .init(gpa, io) };
 }
 
 pub fn deinit(self: *FileTable) void {
+    for (self.pending.values()) |job| {
+        job.fs.cancel(job.job);
+        job.destroy();
+    }
+    self.pending.deinit(self.gpa);
+    for (self.mounts.items) |m| self.gpa.free(m.prefix);
+    self.mounts.deinit(self.gpa);
+    self.local.deinit();
+
     self.freeIndex();
     self.index.deinit(self.gpa);
-    if (self.index_root.len > 0) self.gpa.free(self.index_root);
-    self.index_root = &.{};
+    self.index_roots.deinit(self.gpa);
     self.results.deinit(self.gpa);
     if (self.results_query.len > 0) self.gpa.free(self.results_query);
     self.results_query = &.{};
+    if (self.results_root.len > 0) self.gpa.free(self.results_root);
+    self.results_root = &.{};
 
     self.invalidateListings();
     self.releaseRetired();
     self.listings.deinit(self.gpa);
     self.retired.deinit(self.gpa);
+}
+
+// ---- mounts ----------------------------------------------------------------------------------
+
+/// A filesystem answering every path under `prefix`. A path is on the mount when it equals the
+/// prefix or continues it with a `/`; the mount itself sees the remainder rooted at `/`
+/// (`gdrive://me/Notes/a.md` → `/Notes/a.md`), so a backend never learns the host's naming.
+pub const Mount = struct {
+    prefix: []u8,
+    fs: vfs.Fs,
+};
+
+/// Where a path is answered from: the filesystem, the path as that filesystem wants it, and
+/// the mount (null for the disk).
+pub const Resolved = struct {
+    fs: vfs.Fs,
+    rel: []const u8,
+    mount: ?*const Mount,
+};
+
+/// Claim `prefix` for `fs`. Re-mounting an existing prefix replaces the filesystem in place.
+pub fn mount(self: *FileTable, prefix: []const u8, fs: vfs.Fs) !void {
+    for (self.mounts.items) |*m| {
+        if (std.mem.eql(u8, m.prefix, prefix)) {
+            m.fs = fs;
+            self.invalidateAll();
+            return;
+        }
+    }
+    const owned = try self.gpa.dupe(u8, prefix);
+    errdefer self.gpa.free(owned);
+    try self.mounts.append(self.gpa, .{ .prefix = owned, .fs = fs });
+    self.invalidateAll();
+}
+
+/// Release `prefix`. Listings under it are dropped, and a pending job for it is cancelled — the
+/// filesystem behind it is about to go away, so its callbacks must not run.
+pub fn unmount(self: *FileTable, prefix: []const u8) void {
+    for (self.mounts.items, 0..) |m, i| {
+        if (!std.mem.eql(u8, m.prefix, prefix)) continue;
+        var p: usize = 0;
+        while (p < self.pending.count()) {
+            const job = self.pending.values()[p];
+            if (!pathOnMount(job.directory, prefix)) {
+                p += 1;
+                continue;
+            }
+            job.fs.cancel(job.job);
+            self.pending.swapRemoveAt(p);
+            job.destroy();
+        }
+        self.gpa.free(m.prefix);
+        _ = self.mounts.orderedRemove(i);
+        self.invalidateAll();
+        return;
+    }
+}
+
+pub fn mountList(self: *const FileTable) []const Mount {
+    return self.mounts.items;
+}
+
+/// The filesystem for `path`. The longest matching prefix wins; no match means the disk.
+pub fn resolve(self: *FileTable, path: []const u8) Resolved {
+    var best: ?*const Mount = null;
+    for (self.mounts.items) |*m| {
+        if (!pathOnMount(path, m.prefix)) continue;
+        if (best == null or m.prefix.len > best.?.prefix.len) best = m;
+    }
+    const m = best orelse return .{ .fs = self.local.fs(), .rel = path, .mount = null };
+    const rest = path[m.prefix.len..];
+    return .{ .fs = m.fs, .rel = if (rest.len == 0) "/" else rest, .mount = m };
+}
+
+/// Whether `path` is on a mount at all — the question a caller asks before handing a path to
+/// something that only understands the disk (a watcher, a shell, a process).
+pub fn isMounted(self: *const FileTable, path: []const u8) bool {
+    for (self.mounts.items) |m| {
+        if (pathOnMount(path, m.prefix)) return true;
+    }
+    return false;
+}
+
+fn pathOnMount(path: []const u8, prefix: []const u8) bool {
+    if (!std.mem.startsWith(u8, path, prefix)) return false;
+    return path.len == prefix.len or path[prefix.len] == '/';
+}
+
+/// Deliver every mount's completions. Once per frame from the host, before anything draws, so a
+/// listing that landed since last frame is in the cache by the time the tree asks for it.
+pub fn pump(self: *FileTable) void {
+    self.local.fs().pump();
+    for (self.mounts.items) |m| m.fs.pump();
 }
 
 // ---- invalidation ----------------------------------------------------------------------------
@@ -162,6 +299,14 @@ pub fn deinit(self: *FileTable) void {
 pub fn invalidateIndex(self: *FileTable) void {
     self.index_stale = true;
     self.results_valid = false;
+    // A walk still in flight is for a session that just ended: stop asking.
+    if (self.index_job) |job| job.cancel();
+}
+
+/// Whether a search's index is still being filled — a caller can show "searching…" beside
+/// partial results rather than an empty list that later fills in.
+pub fn indexing(self: *const FileTable) bool {
+    return self.index_job != null;
 }
 
 /// Drop every cached listing. Callers re-read whatever they draw on the next frame.
@@ -213,8 +358,10 @@ pub fn releaseRetired(self: *FileTable) void {
 
 // ---- listing ---------------------------------------------------------------------------------
 
-/// Cached, sorted, ignore-screened listing for `directory`, reading it from disk on a miss.
-/// Null when the directory can't be opened.
+/// Cached, sorted, ignore-screened listing for `directory`, asking its filesystem on a miss.
+///
+/// Null when the directory can't be read — or, on a mount that answers later, until it has:
+/// the request is in flight, `env.refresh` fires when it lands, and the next call returns it.
 pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
     const now = self.nowMs();
 
@@ -226,42 +373,81 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
         self.retireAt(idx);
     }
 
+    if (self.pending.contains(directory)) return null;
     if (self.listings.count() >= max_cached_dirs) self.invalidateListings();
 
-    const io = self.io;
-    const gpa = self.gpa;
-    var dir = std.Io.Dir.cwd().openDir(io, directory, .{ .access_sub_paths = true, .iterate = true }) catch return null;
-    defer dir.close(io);
+    const job = ListJob.create(self, directory) catch return null;
+    self.pending.put(self.gpa, job.directory, job) catch {
+        job.destroy();
+        return null;
+    };
+    const target = self.resolve(directory);
+    job.fs = target.fs;
+    job.job = target.fs.listDir(self.gpa, target.rel, ListJob.onListed, job) catch {
+        _ = self.pending.swapRemove(job.directory);
+        job.destroy();
+        return null;
+    };
+    // The disk answers inside `pump`; a cloud mount answers on a later one. Either way the
+    // completion installs the listing, so one more lookup is the whole difference.
+    target.fs.pump();
+    if (self.listings.get(directory)) |listing| return listing;
+    return null;
+}
 
+/// One directory asked of a filesystem. Owns the path (which is also the `pending` key).
+const ListJob = struct {
+    table: *FileTable,
+    directory: []u8,
+    fs: vfs.Fs = undefined,
+    job: vfs.Job = .{ .id = 0 },
+    asked_at_ms: i64,
+
+    fn create(table: *FileTable, directory: []const u8) !*ListJob {
+        const job = try table.gpa.create(ListJob);
+        errdefer table.gpa.destroy(job);
+        job.* = .{ .table = table, .directory = try table.gpa.dupe(u8, directory), .asked_at_ms = table.nowMs() };
+        return job;
+    }
+
+    fn destroy(job: *ListJob) void {
+        job.table.gpa.free(job.directory);
+        job.table.gpa.destroy(job);
+    }
+
+    fn onListed(ctx: ?*anyopaque, result: vfs.Error![]vfs.Entry) void {
+        const job: *ListJob = @ptrCast(@alignCast(ctx.?));
+        const table = job.table;
+        defer job.destroy();
+        _ = table.pending.swapRemove(job.directory);
+        const entries = result catch return;
+        defer vfs.freeEntries(table.gpa, entries);
+        table.install(job.directory, entries, job.asked_at_ms);
+        table.env.refresh(table.env.ctx);
+    }
+};
+
+/// Screen, sort and cache a listing that just arrived for `directory`.
+fn install(self: *FileTable, directory: []const u8, raw: []const vfs.Entry, read_at_ms: i64) void {
+    const gpa = self.gpa;
     var entries: std.ArrayListUnmanaged(Entry) = .empty;
     const proj_root = self.env.root(self.env.ctx);
-    // The ignore check wants an absolute path but doesn't keep it, so it's built into a stack
+    // The ignore check wants a full path but doesn't keep it, so it's built into a stack
     // buffer: joining through an allocator here would mean one allocation per entry on a listing
-    // that can be hundreds of thousands long.
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    // that can be hundreds of thousands long. (`max_path_bytes` is the OS's; freestanding has
+    // no PATH_MAX, and a mount's paths are bounded by the same 4 KiB every OS settles on.)
+    var path_buf: [max_path_len]u8 = undefined;
 
-    var iter = dir.iterate();
-    while (iter.next(io) catch null) |entry| {
-        const abs_path: ?[]const u8 = std.fmt.bufPrint(
-            &path_buf,
-            "{s}" ++ std.fs.path.sep_str ++ "{s}",
-            .{ directory, entry.name },
-        ) catch null;
-
+    const on_mount = self.isMounted(directory);
+    for (raw) |entry| {
+        const kind: std.Io.File.Kind = if (entry.kind == .dir) .directory else .file;
         if (proj_root) |root| {
-            const abs = abs_path orelse continue;
-            if (self.env.ignored(self.env.ctx, root, abs, entry.name, entry.kind)) continue;
-        }
-
-        const kind: std.Io.File.Kind = switch (entry.kind) {
-            .directory => .directory,
-            .file => .file,
-            else => if (abs_path) |abs|
-                (if (isDirAbsolute(io, abs)) .directory else .file)
+            const abs = (if (on_mount)
+                std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ directory, entry.name })
             else
-                .file,
-        };
-
+                std.fmt.bufPrint(&path_buf, "{s}" ++ std.fs.path.sep_str ++ "{s}", .{ directory, entry.name })) catch continue;
+            if (self.env.ignored(self.env.ctx, root, abs, entry.name, kind)) continue;
+        }
         const name = gpa.dupe(u8, entry.name) catch continue;
         entries.append(gpa, .{ .name = name, .kind = kind }) catch {
             gpa.free(name);
@@ -272,7 +458,7 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
     const owned = entries.toOwnedSlice(gpa) catch {
         for (entries.items) |e| gpa.free(e.name);
         entries.deinit(gpa);
-        return null;
+        return;
     };
     std.mem.sort(Entry, owned, {}, entryLessThan);
 
@@ -282,20 +468,21 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
     const listing = gpa.create(Listing) catch {
         for (owned) |e| gpa.free(e.name);
         gpa.free(owned);
-        return null;
+        return;
     };
-    listing.* = .{ .entries = owned, .dir_count = dir_count, .read_at_ms = now };
+    listing.* = .{ .entries = owned, .dir_count = dir_count, .read_at_ms = read_at_ms };
 
+    // A listing for this directory may have been installed meanwhile (an invalidation raced a
+    // slow mount); the newer one wins and the older is retired like any other.
+    if (self.listings.getIndex(directory)) |idx| self.retireAt(idx);
     const key = gpa.dupe(u8, directory) catch {
         self.freeListing(listing);
-        return null;
+        return;
     };
     self.listings.put(gpa, key, listing) catch {
         gpa.free(key);
         self.freeListing(listing);
-        return null;
     };
-    return listing;
 }
 
 // ---- search ----------------------------------------------------------------------------------
@@ -319,9 +506,13 @@ pub fn search(
     var query = fuzzy.Query.init(query_text);
     if (query.isEmpty()) return &.{};
 
-    // Ranking depends only on the query and the index, and both change far less often than
-    // frames do — a caller redraws on hover, scroll, animation, every peer widget.
-    if (self.results_valid and std.mem.eql(u8, self.results_query, query_text)) {
+    // Ranking depends only on the query, the root and the index, and all three change far less
+    // often than frames do — a caller redraws on hover, scroll, animation, every peer widget.
+    if (self.results_valid and
+        self.results_generation == self.index_generation and
+        std.mem.eql(u8, self.results_query, query_text) and
+        std.mem.eql(u8, self.results_root, root))
+    {
         return self.results.items;
     }
 
@@ -330,7 +521,8 @@ pub fn search(
     var hits: std.ArrayListUnmanaged(Hit) = .empty;
 
     for (self.index.items, 0..) |abs_path, i| {
-        const rel = std.fs.path.relativePosix(arena, ".", root, abs_path) catch continue;
+        // Only what sits under this root; the index may cover others too.
+        const rel = relativeTo(abs_path, root) orelse continue;
         const score = fuzzy.score(rel, &query, .{ .plain = false }) orelse continue;
         // Shorter paths win ties — the same tie-break zf's own frontend uses.
         hits.append(arena, .{ .item = i, .score = score, .tie = rel.len }) catch break;
@@ -352,64 +544,205 @@ pub fn search(
 
     if (self.results_query.len > 0) gpa.free(self.results_query);
     self.results_query = gpa.dupe(u8, query_text) catch &.{};
+    if (self.results_root.len > 0) gpa.free(self.results_root);
+    self.results_root = gpa.dupe(u8, root) catch &.{};
+    self.results_generation = self.index_generation;
     // A failed dupe just means the next frame re-ranks; never claim a cache we can't key.
-    self.results_valid = self.results_query.len == query_text.len;
+    self.results_valid = self.results_query.len == query_text.len and self.results_root.len == root.len;
 
     return self.results.items;
 }
 
-/// Rebuild the index for `root` if it's missing, stale, or was built for a different project.
-fn ensureIndex(self: *FileTable, root: []const u8) void {
-    if (!self.index_stale and std.mem.eql(u8, self.index_root, root)) return;
-
-    self.freeIndex();
-    if (!std.mem.eql(u8, self.index_root, root)) {
-        if (self.index_root.len > 0) self.gpa.free(self.index_root);
-        self.index_root = self.gpa.dupe(u8, root) catch &.{};
-    }
-    self.indexDir(root, 0);
-    self.index_stale = false;
+/// `path` relative to `root` with the separator dropped, or null when it is not beneath it.
+/// A plain prefix strip rather than `std.fs.path.relative`: the walk built these paths by
+/// joining onto `root`, so the prefix is exact, and a mount's `gdrive://…` is not a path the
+/// OS helpers would know how to relate.
+fn relativeTo(path: []const u8, root: []const u8) ?[]const u8 {
+    if (path.len <= root.len or !std.mem.startsWith(u8, path, root)) return null;
+    const sep = path[root.len];
+    if (sep != '/' and sep != std.fs.path.sep) return null;
+    return path[root.len + 1 ..];
 }
 
-/// Depth-first walk honouring the same ignore rules a listing does, so a search never surfaces
-/// something an unfiltered tree deliberately hides (`.git`, `node_modules`, …). Written by hand
-/// rather than with `Dir.walk` precisely because it has to *prune* ignored directories — a walker
-/// that descends into `node_modules` first and filters after is the slow thing this replaced.
-fn indexDir(self: *FileTable, directory: []const u8, depth: usize) void {
-    if (depth > max_index_depth) return;
-    if (self.index.items.len >= max_indexed_files) return;
+/// Make sure `root` is being indexed: drop a stale index, then start a walk for any root the
+/// index does not cover yet. The disk finishes here; a mount finishes on later frames.
+fn ensureIndex(self: *FileTable, root: []const u8) void {
+    if (self.index_stale) {
+        self.freeIndex();
+        self.index_stale = false;
+    }
+    for (self.index_roots.items) |r| {
+        if (std.mem.eql(u8, r, root)) return;
+    }
+    const owned = self.gpa.dupe(u8, root) catch return;
+    self.index_roots.append(self.gpa, owned) catch {
+        self.gpa.free(owned);
+        return;
+    };
 
-    const io = self.io;
-    const gpa = self.gpa;
-    var dir = std.Io.Dir.cwd().openDir(io, directory, .{ .access_sub_paths = true, .iterate = true }) catch return;
-    defer dir.close(io);
+    const job = self.index_job orelse IndexJob.create(self) catch return;
+    self.index_job = job;
+    job.ask(root, 0);
+    job.drive();
+}
 
-    var iter = dir.iterate();
-    while (iter.next(io) catch null) |entry| {
-        if (self.index.items.len >= max_indexed_files) return;
+/// Depth-first over listings, honouring the same ignore rules a listing does so a search never
+/// surfaces something an unfiltered tree deliberately hides (`.git`, `node_modules`, …).
+/// Written as a chain of `listDir` completions rather than a walker because a mount cannot be
+/// walked synchronously; pruning happens where a directory is *asked for*, so `node_modules` is
+/// never listed at all — the slow thing the old walker replaced.
+const IndexJob = struct {
+    table: *FileTable,
+    /// Directories asked and not yet answered.
+    in_flight: std.ArrayListUnmanaged(*DirReq) = .empty,
+    /// Listings answered since the last `drive` iteration — how it knows the disk is still
+    /// answering inline.
+    answered: usize = 0,
 
-        const abs_path = std.fs.path.join(gpa, &.{ directory, entry.name }) catch continue;
-        var keep = false;
-        defer if (!keep) gpa.free(abs_path);
+    const DirReq = struct {
+        job: *IndexJob,
+        directory: []u8,
+        depth: usize,
+        fs: vfs.Fs,
+        handle: vfs.Job,
+    };
 
-        if (self.env.root(self.env.ctx)) |proj_root| {
-            if (self.env.ignored(self.env.ctx, proj_root, abs_path, entry.name, entry.kind)) continue;
+    fn create(table: *FileTable) !*IndexJob {
+        const job = try table.gpa.create(IndexJob);
+        job.* = .{ .table = table };
+        return job;
+    }
+
+    /// Stop the walk: every outstanding request is cancelled so no listing lands on a table
+    /// that has moved on. What was indexed so far stays until `freeIndex`.
+    fn cancel(job: *IndexJob) void {
+        const table = job.table;
+        for (job.in_flight.items) |req| {
+            req.fs.cancel(req.handle);
+            table.gpa.free(req.directory);
+            table.gpa.destroy(req);
         }
+        job.in_flight.deinit(table.gpa);
+        table.index_job = null;
+        table.gpa.destroy(job);
+    }
 
-        switch (entry.kind) {
-            .file => {
-                self.index.append(gpa, abs_path) catch continue;
-                keep = true;
+    fn ask(job: *IndexJob, directory: []const u8, depth: usize) void {
+        const table = job.table;
+        if (depth > max_index_depth) return;
+        if (table.index.items.len >= max_indexed_files) return;
+        const req = table.gpa.create(DirReq) catch return;
+        req.* = .{
+            .job = job,
+            .directory = table.gpa.dupe(u8, directory) catch {
+                table.gpa.destroy(req);
+                return;
             },
-            .directory => self.indexDir(abs_path, depth + 1),
-            else => {},
+            .depth = depth,
+            .fs = undefined,
+            .handle = undefined,
+        };
+        const target = table.resolve(directory);
+        req.fs = target.fs;
+        req.handle = target.fs.listDir(table.gpa, target.rel, onListed, req) catch {
+            table.gpa.free(req.directory);
+            table.gpa.destroy(req);
+            return;
+        };
+        job.in_flight.append(table.gpa, req) catch {
+            target.fs.cancel(req.handle);
+            table.gpa.free(req.directory);
+            table.gpa.destroy(req);
+        };
+    }
+
+    /// Pump for as long as answers keep coming inside the call — the whole disk, in practice.
+    /// A mount that answers later leaves the job in place for the per-frame pump.
+    fn drive(job: *IndexJob) void {
+        const table = job.table;
+        while (true) {
+            if (job.in_flight.items.len == 0) {
+                // Nothing left to hear back from (or nothing could be asked): finished, not
+                // cancelled — same teardown.
+                job.cancel();
+                return;
+            }
+            job.answered = 0;
+            table.pump();
+            // The last answer's `settle` may have torn the job down inside that pump.
+            if (table.index_job != job) return;
+            if (job.answered == 0) return;
         }
     }
+
+    fn onListed(ctx: ?*anyopaque, result: vfs.Error![]vfs.Entry) void {
+        const req: *DirReq = @ptrCast(@alignCast(ctx.?));
+        const job = req.job;
+        const table = job.table;
+        const gpa = table.gpa;
+        defer {
+            gpa.free(req.directory);
+            gpa.destroy(req);
+        }
+        for (job.in_flight.items, 0..) |r, i| {
+            if (r == req) {
+                _ = job.in_flight.swapRemove(i);
+                break;
+            }
+        }
+        job.answered += 1;
+
+        const entries = result catch return job.settle();
+        defer vfs.freeEntries(gpa, entries);
+
+        const on_mount = table.isMounted(req.directory);
+        const proj_root = table.env.root(table.env.ctx);
+        for (entries) |entry| {
+            if (table.index.items.len >= max_indexed_files) break;
+            const child = joinChild(gpa, req.directory, entry.name, on_mount) catch continue;
+            var keep = false;
+            defer if (!keep) gpa.free(child);
+
+            const kind: std.Io.File.Kind = if (entry.kind == .dir) .directory else .file;
+            if (proj_root) |root| {
+                if (table.env.ignored(table.env.ctx, root, child, entry.name, kind)) continue;
+            }
+            switch (entry.kind) {
+                .file => {
+                    table.index.append(gpa, child) catch continue;
+                    keep = true;
+                },
+                .dir => job.ask(child, req.depth + 1),
+            }
+        }
+        table.index_generation += 1;
+        job.settle();
+    }
+
+    /// After a listing: if it was the last one and nothing is driving the walk from a `search`
+    /// call, the job is over and whoever draws should re-rank.
+    fn settle(job: *IndexJob) void {
+        const table = job.table;
+        table.results_valid = false;
+        if (job.in_flight.items.len != 0) return;
+        job.cancel();
+        table.env.refresh(table.env.ctx);
+    }
+};
+
+/// `dir` + `name`: a mount's paths are `/`-separated whatever the OS.
+fn joinChild(gpa: std.mem.Allocator, dir: []const u8, name: []const u8, on_mount: bool) ![]u8 {
+    if (on_mount) return std.mem.concat(gpa, u8, &.{ dir, "/", name });
+    return std.fs.path.join(gpa, &.{ dir, name });
 }
 
 fn freeIndex(self: *FileTable) void {
+    if (self.index_job) |job| job.cancel();
     for (self.index.items) |p| self.gpa.free(p);
     self.index.clearRetainingCapacity();
+    for (self.index_roots.items) |r| self.gpa.free(r);
+    self.index_roots.clearRetainingCapacity();
+    self.index_generation += 1;
     // Results borrow the index strings.
     self.results_valid = false;
     self.results.clearRetainingCapacity();
@@ -426,39 +759,110 @@ fn freeIndex(self: *FileTable) void {
 // Nothing here knows that documents exist. Keeping an open document's path in step with a rename
 // is the host's job, because only the host can see the document set — see `Host.renamePath`.
 
-/// Create an empty file at absolute `path`.
-pub fn createFile(self: *FileTable, path: []const u8) !void {
-    self.invalidateAll();
-    var handle = try std.Io.Dir.createFileAbsolute(self.io, path, .{});
-    handle.close(self.io);
+/// Every mutation completes through `cb`, on the caller's thread, from `pump` — for the disk,
+/// before the call returns; for a cloud mount, on a later frame. The table's caches are dropped
+/// on completion, whichever it is, so the caller never has to remember to invalidate.
+pub const DoneFn = vfs.DoneFn;
+
+/// Create an empty file at `path`.
+pub fn createFile(self: *FileTable, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) !void {
+    const m = try Mutation.create(self, cb, ctx);
+    const target = self.resolve(path);
+    _ = target.fs.createFile(target.rel, Mutation.onDone, m) catch |err| {
+        m.destroy();
+        return err;
+    };
+    target.fs.pump();
 }
 
-/// Create a directory at absolute `path`. Parents must already exist.
-pub fn createDir(self: *FileTable, path: []const u8) !void {
-    self.invalidateAll();
-    try std.Io.Dir.createDirAbsolute(self.io, path, .default_dir);
+/// Create a directory at `path`. Parents must already exist.
+pub fn createDir(self: *FileTable, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) !void {
+    const m = try Mutation.create(self, cb, ctx);
+    const target = self.resolve(path);
+    _ = target.fs.mkdir(target.rel, Mutation.onDone, m) catch |err| {
+        m.destroy();
+        return err;
+    };
+    target.fs.pump();
 }
 
-/// Delete absolute `path`, which must be a file or an empty directory.
-pub fn remove(self: *FileTable, path: []const u8) !void {
-    self.invalidateAll();
-    if (self.isDir(path)) {
-        try std.Io.Dir.deleteDirAbsolute(self.io, path);
-    } else {
-        try std.Io.Dir.deleteFileAbsolute(self.io, path);
+/// Delete `path`, which must be a file or an empty directory.
+pub fn remove(self: *FileTable, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) !void {
+    const m = try Mutation.create(self, cb, ctx);
+    const target = self.resolve(path);
+    _ = target.fs.remove(target.rel, Mutation.onDone, m) catch |err| {
+        m.destroy();
+        return err;
+    };
+    target.fs.pump();
+}
+
+/// Rename `old_path` to `new_path`, a file or a directory. Both must be on the same mount: a
+/// move between the disk and a cloud drive is a copy, which nothing here does yet.
+pub fn rename(self: *FileTable, old_path: []const u8, new_path: []const u8, cb: DoneFn, ctx: ?*anyopaque) !void {
+    const from = self.resolve(old_path);
+    const to = self.resolve(new_path);
+    if (from.mount != to.mount) return error.CrossMountRename;
+    const m = try Mutation.create(self, cb, ctx);
+    _ = from.fs.rename(from.rel, to.rel, Mutation.onDone, m) catch |err| {
+        m.destroy();
+        return err;
+    };
+    from.fs.pump();
+}
+
+/// The bookkeeping around one mutation's completion: invalidate, then tell the caller.
+const Mutation = struct {
+    table: *FileTable,
+    cb: DoneFn,
+    ctx: ?*anyopaque,
+
+    fn create(table: *FileTable, cb: DoneFn, ctx: ?*anyopaque) !*Mutation {
+        const m = try table.gpa.create(Mutation);
+        m.* = .{ .table = table, .cb = cb, .ctx = ctx };
+        return m;
     }
+
+    fn destroy(m: *Mutation) void {
+        m.table.gpa.destroy(m);
+    }
+
+    fn onDone(ctx: ?*anyopaque, result: vfs.Error!void) void {
+        const m: *Mutation = @ptrCast(@alignCast(ctx.?));
+        defer m.destroy();
+        m.table.invalidateAll();
+        m.cb(m.ctx, result);
+        m.table.env.refresh(m.table.env.ctx);
+    }
+};
+
+/// Whether anything is at `abs`. On a mount, answered from the parent's cached listing (a
+/// draw-time question cannot wait on a round trip), so a name the tree has not listed yet
+/// reads as absent — the same answer the tree itself would draw.
+pub fn exists(self: *FileTable, abs: []const u8) bool {
+    if (!self.isMounted(abs)) return LocalFs.existsAbsolute(self.io, abs);
+    const parent = std.fs.path.dirname(abs) orelse return false;
+    if (self.resolve(abs).rel.len <= 1) return true; // the mount's root
+    const listing = self.listings.get(parent) orelse return false;
+    const name = std.fs.path.basename(abs);
+    for (listing.entries) |e| {
+        if (std.mem.eql(u8, e.name, name)) return true;
+    }
+    return false;
 }
 
-/// Rename absolute `old_path` to absolute `new_path`. Works for a file or a directory.
-pub fn rename(self: *FileTable, old_path: []const u8, new_path: []const u8) !void {
-    self.invalidateAll();
-    try std.Io.Dir.renameAbsolute(old_path, new_path, self.io);
-}
-
-/// Whether `abs` names a directory. False for anything that can't be stat'd, so a caller
-/// treating a vanished path as a file is the safe default.
-pub fn isDir(self: *const FileTable, abs: []const u8) bool {
-    return isDirAbsolute(self.io, abs);
+/// Whether `abs` names a directory. False for anything that can't be answered, so a caller
+/// treating a vanished path as a file is the safe default. On a mount the answer comes from the
+/// parent's cached listing — asking the mount would mean waiting, and this is a draw-time query.
+pub fn isDir(self: *FileTable, abs: []const u8) bool {
+    if (!self.isMounted(abs)) return LocalFs.isDirAbsolute(self.io, abs);
+    const parent = std.fs.path.dirname(abs) orelse return false;
+    const listing = self.listings.get(parent) orelse return false;
+    const name = std.fs.path.basename(abs);
+    for (listing.entries[0..listing.dir_count]) |e| {
+        if (std.mem.eql(u8, e.name, name)) return true;
+    }
+    return false;
 }
 
 // ---- internals -------------------------------------------------------------------------------
@@ -520,11 +924,6 @@ fn listingHasFile(listing: *const Listing, name: []const u8) bool {
         }
     }
     return false;
-}
-
-fn isDirAbsolute(io: std.Io, abs: []const u8) bool {
-    const st = std.Io.Dir.cwd().statFile(io, abs, .{}) catch return false;
-    return st.kind == .directory;
 }
 
 /// Monotonic milliseconds. The boot clock rather than a wall clock: a TTL must not be perturbed
@@ -668,6 +1067,268 @@ test "noteFileModified re-reads a parent only for a name it has not seen" {
     // A name the listing has never seen — macOS reports a brand-new file this way — must drop it.
     table.noteFileModified(try fx.join(arena, "gamma.zig"));
     try t.expectEqual(@as(usize, 0), table.listings.count());
+}
+
+/// Records what a mutation's completion said, for the tests below.
+const DoneSink = struct {
+    calls: usize = 0,
+    err: ?vfs.Error = null,
+    fn onDone(ctx: ?*anyopaque, result: vfs.Error!void) void {
+        const self: *DoneSink = @ptrCast(@alignCast(ctx.?));
+        self.calls += 1;
+        result catch |err| {
+            self.err = err;
+        };
+    }
+};
+
+test "disk mutations complete inside the call and drop the caches" {
+    const t = std.testing;
+    var arena_state = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+    var sink: DoneSink = .{};
+
+    _ = table.listDir(fx.root) orelse return error.ListingFailed;
+    try table.createFile(try fx.join(arena, "gamma.zig"), DoneSink.onDone, &sink);
+    try t.expectEqual(@as(usize, 1), sink.calls);
+    try t.expect(sink.err == null);
+    try t.expectEqual(@as(usize, 0), table.listings.count());
+    const listing = table.listDir(fx.root) orelse return error.ListingFailed;
+    try t.expectEqual(@as(usize, 4), listing.entries.len);
+
+    try table.createDir(try fx.join(arena, "docs"), DoneSink.onDone, &sink);
+    try t.expect(table.isDir(try fx.join(arena, "docs")));
+    try table.rename(try fx.join(arena, "docs"), try fx.join(arena, "notes"), DoneSink.onDone, &sink);
+    try t.expect(table.isDir(try fx.join(arena, "notes")));
+    try table.remove(try fx.join(arena, "notes"), DoneSink.onDone, &sink);
+    try t.expect(!table.isDir(try fx.join(arena, "notes")));
+    try t.expectEqual(@as(usize, 4), sink.calls);
+
+    // A failure is reported the same way, not thrown from the call.
+    try table.remove(try fx.join(arena, "nope"), DoneSink.onDone, &sink);
+    try t.expectEqual(vfs.Error.NotFound, sink.err.?);
+}
+
+test "a mount answers paths under its prefix; the disk keeps the rest" {
+    const t = std.testing;
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+
+    var mem = try vfs.Mem.init(t.allocator);
+    defer mem.deinit();
+    try mem.put("/a.txt", "hi");
+    try table.mount("mem://box", mem.fs());
+    defer table.unmount("mem://box");
+
+    // Prefix stripping: the mount sees `/`, not `mem://box`.
+    const r = table.resolve("mem://box");
+    try t.expect(r.mount != null);
+    try t.expectEqualStrings("/", r.rel);
+    try t.expectEqualStrings("/a.txt", table.resolve("mem://box/a.txt").rel);
+    try t.expect(table.resolve("mem://boxes/a.txt").mount == null); // not a prefix match
+    try t.expect(table.resolve(fx.root).mount == null);
+
+    // `Mem` completes on pump, and listDir pumps, so this is a hit on the first call.
+    const listing = table.listDir("mem://box") orelse return error.ListingFailed;
+    try t.expectEqual(@as(usize, 1), listing.entries.len);
+    try t.expectEqualStrings("a.txt", listing.entries[0].name);
+
+    var sink: DoneSink = .{};
+    try table.createDir("mem://box/sub", DoneSink.onDone, &sink);
+    try t.expect(sink.err == null);
+    _ = table.listDir("mem://box") orelse return error.ListingFailed;
+    try t.expect(table.isDir("mem://box/sub"));
+    try t.expect(!table.isDir("mem://box/a.txt"));
+
+    // Across mounts is refused up front — nothing is half-moved.
+    try t.expectError(error.CrossMountRename, table.rename("mem://box/a.txt", fx.root, DoneSink.onDone, &sink));
+
+    // The disk still works beside it.
+    try t.expect(table.listDir(fx.root) != null);
+}
+
+test "a mount that answers later is pending, then installed" {
+    const t = std.testing;
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+
+    // A filesystem that never answers inside the call: `Mem` behind a gate that swallows the
+    // first pump, standing in for a network round trip.
+    const Gated = struct {
+        inner: vfs.Fs,
+        held: usize = 0,
+        fn gatedList(ptr: *anyopaque, allocator: std.mem.Allocator, path: []const u8, cb: vfs.ListDirFn, ctx: ?*anyopaque) vfs.Error!vfs.Job {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.held = 1;
+            return self.inner.listDir(allocator, path, cb, ctx);
+        }
+        fn gatedPump(ptr: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            if (self.held > 0) {
+                self.held -= 1;
+                return;
+            }
+            self.inner.pump();
+        }
+        fn gatedCancel(ptr: *anyopaque, job: vfs.Job) void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.inner.cancel(job);
+        }
+        fn unsupportedDone(_: *anyopaque, _: []const u8, _: vfs.DoneFn, _: ?*anyopaque) vfs.Error!vfs.Job {
+            return error.Unsupported;
+        }
+        const vt: vfs.Fs.VTable = .{
+            .listDir = gatedList,
+            .stat = undefined,
+            .readFile = undefined,
+            .writeFile = undefined,
+            .createFile = unsupportedDone,
+            .mkdir = unsupportedDone,
+            .rename = undefined,
+            .remove = unsupportedDone,
+            .cancel = gatedCancel,
+            .pump = gatedPump,
+        };
+    };
+    var mem = try vfs.Mem.init(t.allocator);
+    defer mem.deinit();
+    try mem.put("/late.txt", "");
+    var gated: Gated = .{ .inner = mem.fs() };
+    try table.mount("slow://", .{ .ptr = &gated, .vtable = &Gated.vt });
+    defer table.unmount("slow://");
+
+    try t.expect(table.listDir("slow://") == null);
+    try t.expectEqual(@as(usize, 1), table.pending.count());
+    // Asking again does not ask the mount again.
+    try t.expect(table.listDir("slow://") == null);
+    try t.expectEqual(@as(usize, 1), table.pending.count());
+    // The host's per-frame pump lands it.
+    table.pump();
+    try t.expectEqual(@as(usize, 0), table.pending.count());
+    const listing = table.listDir("slow://") orelse return error.ListingFailed;
+    try t.expectEqualStrings("late.txt", listing.entries[0].name);
+}
+
+test "search walks a mount, and the disk beside it, as separate roots of one index" {
+    const t = std.testing;
+    var arena_state = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+
+    var mem = try vfs.Mem.init(t.allocator);
+    defer mem.deinit();
+    try mem.putDir("/notes");
+    try mem.put("/notes/main.md", "");
+    try mem.putDir("/ignored");
+    try mem.put("/ignored/main.txt", "");
+    try table.mount("mem://box", mem.fs());
+    defer table.unmount("mem://box");
+
+    // A mount root: walked through its listings, pruned by the same ignore rule as the disk.
+    const cloud = table.search("mem://box", "main", arena);
+    try t.expectEqual(@as(usize, 1), cloud.len);
+    try t.expectEqualStrings("main.md", cloud[0].name);
+    try t.expectEqualStrings("mem://box/notes", cloud[0].dir.?);
+    try t.expect(!table.indexing());
+
+    // The disk root joins the same index; each search sees only its own root.
+    const disk = table.search(fx.root, "main", arena);
+    try t.expectEqual(@as(usize, 1), disk.len);
+    try t.expectEqualStrings("main.zig", disk[0].name);
+    try t.expectEqual(@as(usize, 2), table.index_roots.items.len);
+    // …and switching back is a re-rank, not a rebuild.
+    const before = table.index_generation;
+    try t.expectEqual(@as(usize, 1), table.search("mem://box", "main", arena).len);
+    try t.expectEqual(before, table.index_generation);
+}
+
+test "search over a mount that answers later fills in across frames" {
+    const t = std.testing;
+    var arena_state = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+
+    // Every listing is held back one pump — a two-level tree takes two frames to index.
+    const Slow = struct {
+        inner: vfs.Fs,
+        hold: bool = false,
+        fn listSlow(ptr: *anyopaque, allocator: std.mem.Allocator, path: []const u8, cb: vfs.ListDirFn, ctx: ?*anyopaque) vfs.Error!vfs.Job {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.hold = true;
+            return self.inner.listDir(allocator, path, cb, ctx);
+        }
+        fn pumpSlow(ptr: *anyopaque) void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            if (self.hold) {
+                self.hold = false;
+                return;
+            }
+            self.inner.pump();
+        }
+        fn cancelSlow(ptr: *anyopaque, job: vfs.Job) void {
+            const self: *@This() = @ptrCast(@alignCast(ptr));
+            self.inner.cancel(job);
+        }
+        const vt: vfs.Fs.VTable = .{
+            .listDir = listSlow,
+            .stat = undefined,
+            .readFile = undefined,
+            .writeFile = undefined,
+            .createFile = undefined,
+            .mkdir = undefined,
+            .rename = undefined,
+            .remove = undefined,
+            .cancel = cancelSlow,
+            .pump = pumpSlow,
+        };
+    };
+    var mem = try vfs.Mem.init(t.allocator);
+    defer mem.deinit();
+    try mem.put("/top.md", "");
+    try mem.putDir("/deep");
+    try mem.put("/deep/inner.md", "");
+    var slow: Slow = .{ .inner = mem.fs() };
+    try table.mount("slow://x", .{ .ptr = &slow, .vtable = &Slow.vt });
+    defer table.unmount("slow://x");
+
+    // Nothing has answered yet: no results, but the walk is on.
+    try t.expectEqual(@as(usize, 0), table.search("slow://x", "md", arena).len);
+    try t.expect(table.indexing());
+    // Frame 1: the root lands — `top.md` is searchable, `deep/` has been asked.
+    table.pump();
+    try t.expectEqual(@as(usize, 1), table.search("slow://x", "md", arena).len);
+    try t.expect(table.indexing());
+    // `deep/` was asked during that pump, so it is held through the next one and lands on the
+    // one after: partial results stay put in between.
+    table.pump();
+    try t.expectEqual(@as(usize, 1), table.search("slow://x", "md", arena).len);
+    try t.expect(table.indexing());
+    table.pump();
+    try t.expectEqual(@as(usize, 2), table.search("slow://x", "md", arena).len);
+    try t.expect(!table.indexing());
+
+    // Ending the session mid-walk cancels it cleanly (nothing leaks, nothing lands later).
+    table.invalidateIndex();
+    try t.expectEqual(@as(usize, 0), table.search("slow://x", "md", arena).len);
+    try t.expect(table.indexing());
+    table.invalidateIndex();
+    try t.expect(!table.indexing());
+    table.pump();
 }
 
 test "nameOrder is case-insensitive but total" {

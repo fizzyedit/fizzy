@@ -64,6 +64,7 @@ const file_glyphs = @import("file_glyphs.zig");
 const SettingsWatcher = @import("app").watch.SettingsWatcher;
 const Constants = @import("Constants.zig");
 const DocumentWatcher = @import("DocumentWatcher.zig");
+const MountIo = @import("MountIo.zig");
 const Watch = @import("app").watch;
 const FolderWatcher = Watch.FolderWatcher;
 
@@ -161,7 +162,7 @@ window_opacity: f32 = 1.0,
 window_opacity_anim: f32 = -1.0,
 
 /// Menu-bar clicks waiting for a safe point in the frame. Each is a `menu_model` tag.
-pending_native_menu_actions: [16]usize = undefined,
+pending_native_menu_actions: [16]fizzy.backend.NativeMenuAction = undefined,
 
 pending_native_menu_actions_len: u8 = 0,
 
@@ -178,6 +179,10 @@ pending_composite_warmup: bool = false,
 /// `Plugin.reloadDocument`; dirty docs set a conflict flag and `save` shows
 /// `FileChangedOnDisk`. Null on wasm / unsupported OS / start failure — best-effort.
 document_watcher: ?DocumentWatcher = null,
+
+/// Documents on a mounted filesystem, opened and saved through the mount. `undefined` until
+/// `init` has a stable `*Editor` to hand it (it calls back into the editor on completion).
+mount_io: MountIo = undefined,
 
 /// Timestamp of the most recent touch press anywhere in the app, or null if there
 /// hasn't been one. `Editor.draw` forces a per-frame refresh during the post-press
@@ -1540,13 +1545,24 @@ pub fn postInit(editor: *Editor) !void {
     // editor's final address. The table answers three questions it can't itself — where the
     // project is, whether the watcher is live, which paths are ignored — and in exchange holds
     // the caches every plugin that draws files then shares.
+    editor.mount_io = MountIo.init(editor);
     editor.app.file_table.env = .{
         .ctx = editor,
         .root = fileTableRoot,
         .watching = fileTableWatching,
+        .refresh = fileTableRefresh,
         .ignored = fileTableIgnored,
     };
     editor.app.host.files = &editor.app.file_table;
+    // The web transport's JS callbacks are wasm exports, which exist only if the file is
+    // analysed; a plugin that mounts a cloud drive is what uses it, but the page must have
+    // the exports whether or not one is bundled.
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        comptime {
+            _ = fizzy.core.transport.Web;
+            _ = fizzy.core.transport.WebOAuth;
+        }
+    }
 
     // Register plugin contributions (sidebar/bottom/center/menus). These are the
     // near-empty fizzy's content: it iterates the Host registries rather than
@@ -1987,6 +2003,9 @@ fn fileTableRoot(ctx: ?*anyopaque) ?[]const u8 {
 fn fileTableWatching(ctx: ?*anyopaque) bool {
     return fizzyFolderWatchActive(ctx.?);
 }
+fn fileTableRefresh(ctx: ?*anyopaque) void {
+    fizzyRefresh(ctx.?);
+}
 fn fileTableIgnored(
     ctx: ?*anyopaque,
     project_root: []const u8,
@@ -2141,7 +2160,9 @@ fn registerDocSurface(editor: *Editor, doc: sdk.DocHandle) !void {
     try editor.app.host.registerSurface(.{
         .id = ds.id,
         .owner = doc.owner,
-        .title = std.fs.path.basename(ds.id),
+        // The path half of the id, not the whole id: a browser upload's path is a bare name
+        // with no separator, and `basename` of the whole id would then be `owner.doc:name`.
+        .title = std.fs.path.basename(sdk.document.pathOfSurfaceId(ds.id) orelse ds.id),
         .keywords = sdk.document.keywords,
         .ctx = ds,
         .draw = drawDocSurface,
@@ -3010,6 +3031,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // itself, so both have to land where no draw can be holding it. See `folder_retired`.
     editor.app.releaseRetiredFolders();
     editor.applyPendingFolderClose();
+    // Mounted filesystems deliver here — a cloud listing that landed since last frame is in
+    // the table's cache before the tree asks for it.
+    editor.app.file_table.pump();
 
     editor.window_opacity = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
 
@@ -3484,7 +3508,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     return .ok;
 }
 
-fn queueNativeMenuAction(editor: *Editor, action: usize) void {
+fn queueNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuAction) void {
     if (editor.pending_native_menu_actions_len >= editor.pending_native_menu_actions.len) {
         // If we ever overflow, drop the action rather than crashing.
         return;
@@ -3535,13 +3559,16 @@ pub fn flushQueuedNativeMenuItems(editor: *Editor) void {
 }
 
 /// Run the command a menu-bar item stands for. The item names a command and nothing else.
-pub fn handleNativeMenuAction(editor: *Editor, tag: usize) !void {
-    const item = menu_model.byTag(tag) orelse {
-        dvui.log.err("native menu tag {d} is not a model item", .{tag});
+pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuAction) !void {
+    const item = menu_model.byTag(action.index) orelse {
+        dvui.log.err("native menu tag {d} is not a model item", .{action.index});
         return;
     };
     const id = item.id;
-    editor.app.host.runCommand(id) catch |err| {
+    // A key equivalent's keystroke is still on its way through SDL to the focused widget;
+    // tell the command so it doesn't synthesize a second one (a pasted-twice text field).
+    const run = if (action.from_key) Keybinds.runCommandWithKeyEventInFlight(editor, id) else editor.app.host.runCommand(id);
+    run catch |err| {
         dvui.log.err("native menu command '{s}' failed: {s}", .{ id, @errorName(err) });
     };
 }
@@ -3810,7 +3837,7 @@ fn tickPendingSaveCloses(editor: *Editor) void {
     while (i < editor.app.pending_close_after_save.count()) {
         const id = editor.app.pending_close_after_save.keys()[i];
         if (editor.app.docById(id)) |doc| {
-            if (doc.owner.isDocumentSaving(doc)) {
+            if (editor.docSaving(doc)) {
                 i += 1;
                 continue;
             }
@@ -3875,8 +3902,15 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
             w.markPendingBaseline(id);
         }
 
-        // Async-safe path: kick off, move to in-flight, drop from queue.
-        doc.owner.saveDocumentAsync(doc) catch |err| {
+        // Async-safe path: kick off, move to in-flight, drop from queue. A mounted document's
+        // write is async by nature and `docSaving` below waits on it.
+        if (editor.mount_io.owns(doc.owner.documentPath(doc))) {
+            editor.saveThroughMount(doc) catch |err| {
+                dvui.log.err("Save all quit kickoff: {s}", .{@errorName(err)});
+                editor.app.abortSaveAllQuit();
+                return;
+            };
+        } else doc.owner.saveDocumentAsync(doc) catch |err| {
             dvui.log.err("Save all quit kickoff: {s}", .{@errorName(err)});
             editor.app.abortSaveAllQuit();
             return;
@@ -3897,7 +3931,7 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
         while (i < editor.app.quit_saves_in_flight.count()) {
             const id = editor.app.quit_saves_in_flight.keys()[i];
             if (editor.app.docById(id)) |doc| {
-                if (doc.owner.isDocumentSaving(doc)) {
+                if (editor.docSaving(doc)) {
                     i += 1;
                     continue;
                 }
@@ -4036,6 +4070,10 @@ pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
         editor.last_load_request_path = existing_key;
         return false;
     }
+
+    // A mounted path has no file for a worker to open: it is read through the mount and
+    // opened from the bytes when they land — on any target, the browser included.
+    if (editor.mount_io.owns(path)) return editor.mount_io.open(path, grouping);
 
     // Resolve the owning plugin from the file-type registry before spawning. No owner
     // means no plugin claims this extension — reject here rather than spawning a worker
@@ -4511,6 +4549,10 @@ pub fn save(editor: *Editor) !void {
         doc.owner.requestSaveConfirmation(doc, .editor_save, false);
         return;
     }
+    if (editor.mount_io.owns(doc.owner.documentPath(doc))) {
+        try editor.saveThroughMount(doc);
+        return;
+    }
     if (comptime builtin.target.cpu.arch == .wasm32) {
         editor.requestWebSaveDialog(.save);
         return;
@@ -4518,6 +4560,36 @@ pub fn save(editor: *Editor) !void {
     if (editor.document_watcher) |*w| w.markPendingBaseline(doc.id);
     try doc.owner.saveDocument(doc);
     if (editor.document_watcher) |*w| w.noteSaved(doc.id);
+}
+
+/// Save a document that lives on a mount: its owner serializes, the mount writes, and the
+/// owner hears back when the write lands. An owner without `documentBytes` cannot save there
+/// at all, which is said once rather than failing silently.
+fn saveThroughMount(editor: *Editor, doc: sdk.DocHandle) !void {
+    editor.mount_io.save(doc, doc.owner.documentPath(doc)) catch |err| switch (err) {
+        error.SaveInProgress => {},
+        error.OwnerCannotSaveToMount => {
+            dvui.log.err("{s} cannot be saved to a mounted drive by its editor", .{doc.owner.documentPath(doc)});
+            dvui.toast(@src(), .{ .message = "This editor cannot save to a mounted drive." });
+        },
+        else => return err,
+    };
+}
+
+/// Web only: serialize `doc` and hand it to the browser as a download named `path`'s basename,
+/// then tell the owner it was written under that name.
+fn downloadDocument(editor: *Editor, doc: sdk.DocHandle, path: []const u8) !void {
+    if (comptime builtin.target.cpu.arch != .wasm32) return error.Unsupported;
+    const bytes = (try doc.owner.documentBytes(doc, editor.app.gpa)) orelse return error.Unsupported;
+    defer editor.app.gpa.free(bytes);
+    try dvui.backend.downloadData(std.fs.path.basename(path), bytes);
+    try doc.owner.documentWritten(doc, path);
+    editor.documentPathChanged(doc);
+}
+
+/// Whether a save is in flight for `doc`, whichever side is doing the writing.
+pub fn docSaving(editor: *Editor, doc: sdk.DocHandle) bool {
+    return doc.owner.isDocumentSaving(doc) or editor.mount_io.saving(doc.id);
 }
 
 /// Browser: pick download filename/extension before encoding (`processPendingSaveAs`).
@@ -4540,6 +4612,12 @@ pub fn saveAll(editor: *Editor) !void {
         if (doc.owner.saveNeedsConfirmation(doc)) continue;
         if (editor.document_watcher) |*w| {
             if (w.hasDiskConflict(doc.id)) continue;
+        }
+        if (editor.mount_io.owns(doc.owner.documentPath(doc))) {
+            editor.saveThroughMount(doc) catch |err| {
+                dvui.log.err("Save All: file {s} failed: {s}", .{ doc.owner.documentPath(doc), @errorName(err) });
+            };
+            continue;
         }
         if (editor.document_watcher) |*w| w.markPendingBaseline(doc.id);
         doc.owner.saveDocument(doc) catch |err| {
@@ -4648,6 +4726,24 @@ pub fn processPendingSaveAs(editor: *Editor) void {
         return;
     };
 
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        // The browser's "save" is a download. An owner with the storage-agnostic hooks needs
+        // no code of its own for it: serialize, hand the bytes to the browser, and treat the
+        // chosen name as the document's from here on.
+        if (doc.owner.canSaveThroughHost()) {
+            editor.downloadDocument(doc, path) catch |err| dvui.log.err("Save As: {any}", .{err});
+            return;
+        }
+    }
+    if (editor.mount_io.owns(path)) {
+        // The owner adopts the new path when the write lands (`documentWritten`), and
+        // `documentPathChanged` runs there; nothing below applies until then.
+        editor.mount_io.save(doc, path) catch |err| switch (err) {
+            error.OwnerCannotSaveToMount => dvui.toast(@src(), .{ .message = "This editor cannot save to a mounted drive." }),
+            else => dvui.log.err("Save As: {any}", .{err}),
+        };
+        return;
+    }
     doc.owner.saveDocumentAs(doc, path, dvui.currentWindow()) catch |err| {
         if (err == error.UnsupportedSaveExtension) {
             dvui.log.err("Save As: choose extension .fiz, .png, .jpg, or .jpeg (got {s})", .{std.fs.path.extension(path)});
@@ -4831,6 +4927,7 @@ pub fn deinit(editor: *Editor) !void {
         }
         editor.loading_jobs.deinit(editor.app.gpa);
     }
+    editor.mount_io.deinit();
 
     editor.workbench.clearFileTreeTabDragDropState();
 
