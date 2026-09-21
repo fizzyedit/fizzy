@@ -56,6 +56,11 @@ pub const Listing = struct {
     /// Count of leading `.directory` entries; `entries[dir_count..]` is the uniform-height run.
     dir_count: usize,
     read_at_ms: i64,
+    /// The filesystem answered with an error, remembered as empty for `failed_retry_ms` so a
+    /// directory that is on screen is not re-asked at frame rate — but asked again after that,
+    /// because a mount's failure is usually a moment's (an expired token, a network blip) and a
+    /// mount listing is otherwise never re-read on its own.
+    failed: bool = false,
 };
 
 /// What the table has to ask the application, and cannot answer itself: where the project is,
@@ -117,6 +122,8 @@ const max_cached_dirs: usize = 1024;
 /// Re-read interval used *only* when there is no live folder watcher, so a caller still notices
 /// outside edits on a platform with no watcher backend.
 const unwatched_ttl_ms: i64 = 1000;
+/// How long a failed listing stands before it is asked again.
+const failed_retry_ms: i64 = 5000;
 
 gpa: std.mem.Allocator,
 /// Set once by the host. Every read below goes through it, so nothing here needs dvui — which
@@ -378,7 +385,9 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
         // never TTL'd: its listing stands until the mounting plugin invalidates it (a drive's
         // change feed) or nothing ever will (a zip) — re-reading it every second would mean a
         // round trip per second and a branch that empties while each one is in flight.
-        if (self.isMounted(directory) or self.env.watching(self.env.ctx) or now - listing.read_at_ms < unwatched_ttl_ms) {
+        const ttl: i64 = if (listing.failed) failed_retry_ms else unwatched_ttl_ms;
+        const fresh = now - listing.read_at_ms < ttl;
+        if (fresh or (!listing.failed and (self.isMounted(directory) or self.env.watching(self.env.ctx)))) {
             return listing;
         }
         self.retireAt(idx);
@@ -432,11 +441,12 @@ const ListJob = struct {
         defer job.destroy();
         _ = table.pending.swapRemove(job.directory);
         const entries = result catch |err| {
-            // Remembered as empty for the unwatched TTL rather than asked again next frame —
+            // Remembered as empty for `failed_retry_ms` rather than asked again next frame —
             // a directory that answers `Unauthorized` or `NotFound` would otherwise be
             // re-requested at frame rate for as long as it is on screen.
             std.log.warn("listing {s} failed: {t}", .{ job.directory, err });
             table.install(job.directory, &.{}, job.asked_at_ms);
+            if (table.listings.get(job.directory)) |l| l.failed = true;
             table.env.refresh(table.env.ctx);
             return;
         };
@@ -1415,6 +1425,36 @@ test "a mount's listing outlives the unwatched TTL" {
     @constCast(first).read_at_ms -= 10 * unwatched_ttl_ms;
     try t.expectEqual(first, table.listDir("mem://box").?);
     try t.expectEqual(@as(usize, 0), table.pending.count());
+}
+
+test "a mount's failed listing is empty for a while, then asked again" {
+    const t = std.testing;
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+    var mem = try vfs.Mem.init(t.allocator);
+    defer mem.deinit();
+    try mem.put("/a.txt", "");
+    try table.mount("mem://box", mem.fs());
+    defer table.unmount("mem://box");
+    // A directory the mount does not have: it answers NotFound.
+    _ = table.listDir("mem://box/missing");
+    table.pump();
+    const failed = table.listDir("mem://box/missing") orelse return error.ListingFailed;
+    try t.expect(failed.failed);
+    try t.expectEqual(@as(usize, 0), failed.entries.len);
+    // Not re-asked at frame rate.
+    try t.expectEqual(failed, table.listDir("mem://box/missing").?);
+    try t.expectEqual(@as(usize, 0), table.pending.count());
+    // Once the retry window passes it is asked again — and by then the directory exists.
+    try mem.putDir("/missing");
+    try mem.put("/missing/b.txt", "");
+    @constCast(failed).read_at_ms -= 2 * failed_retry_ms;
+    _ = table.listDir("mem://box/missing");
+    table.pump();
+    const again = table.listDir("mem://box/missing") orelse return error.ListingFailed;
+    try t.expect(!again.failed);
+    try t.expectEqualStrings("b.txt", again.entries[0].name);
 }
 
 test "a mount that answers later is pending, then installed" {
