@@ -2024,7 +2024,16 @@ fn fileTableRefresh(ctx: ?*anyopaque) void {
     fizzyRefresh(ctx.?);
 }
 fn fileTableUnmounting(ctx: ?*anyopaque, prefix: []const u8) void {
-    fizzyCtx(ctx.?).doc_io.unmounting(prefix);
+    const editor = fizzyCtx(ctx.?);
+    editor.doc_io.unmounting(prefix);
+    // The root was this mount (a drive signed out, an archive tab closed): close it, the way a
+    // deleted folder would leave nothing to show. Queued, not applied, since an unmount can
+    // arrive from inside a draw.
+    if (editor.app.folder) |f| {
+        if (std.mem.startsWith(u8, f, prefix) and (f.len == prefix.len or f[prefix.len] == '/')) {
+            editor.app.host.closeProjectFolder();
+        }
+    }
 }
 fn fileTableIgnored(
     ctx: ?*anyopaque,
@@ -4012,6 +4021,18 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     const path = try fizzy.core.paths.normalize(editor.app.gpa, path_in);
     defer editor.app.gpa.free(path);
 
+    // A root on a mount — a drive, a zip — is only openable while that mount exists. From
+    // Recents after a sign-out, it does not.
+    const on_mount = fizzy.core.paths.isMountPath(path);
+    if (on_mount and !editor.app.file_table.isMounted(path)) {
+        dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+            editor.app.arena.allocator(),
+            "{s} is not connected. Sign in or open it first.",
+            .{path[0..(fizzy.core.paths.mountPrefixLen(path) orelse path.len)]},
+        ) catch "That location is not connected." });
+        return error.NotMounted;
+    }
+
     // Opening a folder makes a close queued during this frame's draw moot.
     editor.app.pending_folder_close = false;
 
@@ -4032,10 +4053,12 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     }
 
     for (editor.app.host.plugins.items) |plugin| plugin.onFolderOpen(editor.app.gpa);
-    editor.ignore = try IgnoreRules.load(editor.app.gpa, path);
+    // `.gitignore` and the folder watcher are the disk's; a mount's freshness is its plugin's
+    // (a drive's change feed), and its listings hide nothing.
+    editor.ignore = if (on_mount) .{} else try IgnoreRules.load(editor.app.gpa, path);
     // After `ignore` — `FolderWatcher.tick` filters through it, and arming first would let a
     // burst arrive while the rules still belong to the previous folder.
-    if (editor.app.folder_watcher) |*w| w.setFolder(editor.app.folder);
+    if (editor.app.folder_watcher) |*w| w.setFolder(if (on_mount) null else editor.app.folder);
 }
 
 /// Perform a close queued by `closeProjectFolder` during an earlier frame.

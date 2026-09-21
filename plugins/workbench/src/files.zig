@@ -87,28 +87,19 @@ pub fn draw() !void {
     // Safe as long as `selected_paths` isn't mutated between now and `tree.deinit`.
     tree.selected_branch_ids = selectionBranchIdsForMultiDrag(dvui.currentWindow().arena()) catch selected_paths.keys();
 
-    // The roots: the project folder (never on the web, which has no disk) and every mounted
-    // filesystem — a zip the user opened, a cloud drive they signed into. Each is a tree of
-    // its own under one filter; the table answers them all the same way.
-    const folder: ?[]const u8 = if (comptime builtin.target.cpu.arch == .wasm32) null else runtime.host().folder();
-    const mounts: []const FileTable.Mount = if (table()) |files| files.mountList() else &.{};
-
-    if (folder == null and mounts.len == 0) {
+    // One root: the open folder, whatever backs it — a directory on the disk, a zip the user
+    // opened, a cloud drive they signed into. Opening any of them replaces the root, and Close
+    // closes it; the table answers them all the same way.
+    const folder: ?[]const u8 = runtime.host().folder();
+    const path = folder orelse {
         runtime.workbench().file_tree_data_id = null;
         if (comptime builtin.target.cpu.arch == .wasm32) try drawWebEmpty() else drawNativeEmpty();
         return;
-    }
+    };
 
     const filter_text = try drawFilter(tree);
-    var index: usize = 0;
-    if (folder) |path| {
-        try drawRoot(path, .{ .disk = {} }, tree, filter_text, index);
-        index += 1;
-    }
-    for (mounts) |m| {
-        try drawRoot(m.prefix, .{ .mount = {} }, tree, filter_text, index);
-        index += 1;
-    }
+    const kind: RootKind = if (core.paths.isMountPath(path)) .{ .mount = {} } else .{ .disk = {} };
+    try drawRoot(path, kind, tree, filter_text, 0);
 }
 
 fn drawNativeEmpty() void {
@@ -199,8 +190,8 @@ fn drawFilter(tree: *core.widgets.TreeWidget) ![]const u8 {
     return filter_text;
 }
 
-/// What a root is, which decides its row's menu: a project folder can be closed and revealed
-/// on disk; a mount is owned by whichever plugin mounted it and has no disk to reveal.
+/// What backs the root, which decides its row's menu: a disk folder can be revealed in the
+/// file browser; a mount cannot. Both close.
 const RootKind = union(enum) { disk, mount };
 
 /// One root of the explorer: a project folder or a mount, expanded, with its own row menu.
@@ -333,17 +324,17 @@ fn showRootProjectContextMenu(point: dvui.Point.Natural, project_path: []const u
 
     const root_branch_id = dvui.Id.update(tree.data().id, project_path);
 
+    if ((dvui.menuItemLabel(@src(), "Close", .{}, .{
+        .expand = .horizontal,
+    })) != null) {
+        runtime.host().closeProjectFolder();
+
+        fw2.close();
+    }
+
+    _ = dvui.separator(@src(), .{ .expand = .horizontal });
+
     if (kind == .disk) {
-        if ((dvui.menuItemLabel(@src(), "Close", .{}, .{
-            .expand = .horizontal,
-        })) != null) {
-            runtime.host().closeProjectFolder();
-
-            fw2.close();
-        }
-
-        _ = dvui.separator(@src(), .{ .expand = .horizontal });
-
         if ((dvui.menuItemLabel(@src(), open_message, .{}, .{ .expand = .horizontal })) != null) {
             runtime.host().openInFileBrowser(project_path) catch {
                 dvui.log.err("Failed to open file browser", .{});

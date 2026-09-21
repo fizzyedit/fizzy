@@ -123,6 +123,11 @@ fn registerOpenDocument(state: *anyopaque, file: *anyopaque) anyerror!*anyopaque
     try st.docs.put(sdk.allocator(), doc.id, doc.*);
     const stable = st.docs.getPtr(doc.id).?;
     stable.mount() catch |err| dvui.log.err("archive: could not mount {s}: {t}", .{ stable.prefix, err });
+    // The archive becomes the open root — there is one, and opening anything replaces it.
+    // Closing this tab unmounts, which closes the root again.
+    if (stable.mounted) {
+        sdk.host().setProjectFolder(stable.prefix) catch |err| dvui.log.err("archive: could not open {s}: {t}", .{ stable.prefix, err });
+    }
     return stable;
 }
 fn documentPtr(state: *anyopaque, id: u64) ?*anyopaque {
@@ -177,7 +182,7 @@ fn drawDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
     for (doc.mem.nodes.values()) |n| {
         if (n.kind == .file) files += 1;
     }
-    const line = std.fmt.allocPrint(arena, "Mounted at {s} — {d} file{s}. Browse and edit it in the explorer.", .{
+    const line = std.fmt.allocPrint(arena, "Open as {s} — {d} file{s}. Browse and edit it in the explorer; closing this tab closes it.", .{
         doc.prefix, files, if (files == 1) "" else "s",
     }) catch "";
     dvui.labelNoFmt(@src(), line, .{}, .{});
