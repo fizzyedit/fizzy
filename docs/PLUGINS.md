@@ -1100,6 +1100,13 @@ redirect's query/fragment; `Host.getSecret`/`setSecret` keep a refresh token out
 `settings.zon` (a `0600` file today, the OS keychain behind the same call later); and
 `settings.Value` `.secret = true` masks a credential in the settings pane.
 
+A plugin that signs in somewhere also registers an `accounts.Provider`
+(`host.registerAccountProvider`): its name, the accounts currently signed in (label and an
+optional picture), a sign-in action, and the rows of each account's submenu. Fizzy draws the
+one account glyph at the bottom of the rail and the list it opens — every provider's accounts
+with their pictures, each with its own submenu, then a "Sign in to …" row per provider. A
+plugin never draws in the rail for this; `host.registerRailItem` is for other small things.
+
 `fizzyedit/zig-drive` (Google Drive) is the worked example; `plugins/archive` mounts a `.zip`
 through `core.vfs.Mem` in a few dozen lines. The design and its remaining edges are in
 `docs/CLOUD_FS_PLAN.md`.

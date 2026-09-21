@@ -8,6 +8,7 @@ const Editor = fizzy.Editor;
 
 const SidebarView = fizzy.sdk.SidebarView;
 const PluginStore = @import("app").store.Store;
+const Accounts = @import("Accounts.zig");
 const Layout = @import("app").layout.Layout;
 
 pub const Sidebar = @This();
@@ -89,7 +90,9 @@ pub fn draw(_: Sidebar, editor: *Editor, f: *Layout, keywords: []const []const u
         });
         defer bottom.deinit();
 
-        // Plugin-drawn items first (an account disc, a badge), then fizzy's own two.
+        // The account disc, when anything can be signed in to; then plugin-drawn items (a
+        // badge, a status light); then fizzy's own two.
+        if (editor.app.host.account_providers.items.len != 0) try Accounts.drawRailDisc(editor, 20);
         for (editor.app.host.rail_items.items, 0..) |item, i| {
             if (item.hidden) continue;
             var slot = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .background = false, .min_size_content = .{ .h = 20 } });

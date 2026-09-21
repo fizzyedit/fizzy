@@ -64,6 +64,7 @@ pub const RegionSpec = @import("RegionSpec.zig");
 pub const keywords = @import("keywords.zig");
 /// What a plugin adds to the menu bar, in-app and native.
 pub const menus = @import("menus.zig");
+pub const accounts = @import("accounts.zig");
 pub const MenuContribution = menus.MenuContribution;
 pub const MenuSectionContribution = menus.MenuSectionContribution;
 pub const NativeMenuItem = menus.NativeMenuItem;

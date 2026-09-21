@@ -30,6 +30,7 @@ pub const MenuContribution = @import("menus.zig").MenuContribution;
 pub const MenuSectionContribution = @import("menus.zig").MenuSectionContribution;
 pub const NativeMenuItem = @import("menus.zig").NativeMenuItem;
 pub const RailItemContribution = @import("menus.zig").RailItemContribution;
+pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
 
 /// Per-plugin opaque settings blobs pending a write: plugin id -> serialized zon text, or `null`
@@ -232,6 +233,8 @@ menus: std.ArrayListUnmanaged(MenuContribution) = .empty,
 menu_sections: std.ArrayListUnmanaged(MenuSectionContribution) = .empty,
 /// Plugin-drawn items at the bottom of the rail (`RailItemContribution`).
 rail_items: std.ArrayListUnmanaged(RailItemContribution) = .empty,
+/// Who the user is signed in as, per service (`accounts.Provider`). The host draws the disc.
+account_providers: std.ArrayListUnmanaged(accounts.Provider) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
 /// `NativeMenuItem`.
 native_menu_items: std.ArrayListUnmanaged(NativeMenuItem) = .empty,
@@ -267,6 +270,7 @@ pub fn deinit(self: *Host) void {
     self.menus.deinit(self.allocator);
     self.menu_sections.deinit(self.allocator);
     self.rail_items.deinit(self.allocator);
+    self.account_providers.deinit(self.allocator);
     self.native_menu_items.deinit(self.allocator);
     self.commands.deinit(self.allocator);
     self.language_support.deinit(self.allocator);
@@ -761,6 +765,7 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(MenuContribution, &self.menus, plugin);
     removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
     removeOwned(RailItemContribution, &self.rail_items, plugin);
+    removeOwned(accounts.Provider, &self.account_providers, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
     removeOwned(Command, &self.commands, plugin);
     removeOwned(LanguageSupport, &self.language_support, plugin);
@@ -1199,6 +1204,12 @@ pub fn registerMenuSection(self: *Host, section: MenuSectionContribution) !void 
 /// Put something small at the bottom of the rail — see `RailItemContribution`.
 pub fn registerRailItem(self: *Host, item: RailItemContribution) !void {
     try self.rail_items.append(self.allocator, item);
+}
+
+/// Tell the host about a service the user can be signed in to — see `accounts.Provider`. The
+/// host draws the account disc in the rail and lists every provider's accounts in one menu.
+pub fn registerAccountProvider(self: *Host, provider: accounts.Provider) !void {
+    try self.account_providers.append(self.allocator, provider);
 }
 
 /// Register a native-menu leaf item; see `NativeMenuItem`. No-op on platforms with
