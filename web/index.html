@@ -374,6 +374,22 @@
           inst.exports.FizzyWebPluginRequest(ptr, bytes.length);
         }
         if (dvuiApp) dvuiApp.requestRender();
+        // `?open=<url>`: fetch a file and open it as an upload would be (a zip becomes the
+        // root folder). After the plugins, so the one that owns it may be among them.
+        for (const url of new URLSearchParams(location.search).getAll("open")) {
+          fetch(url, { cache: "no-store" }).then((r) => r.arrayBuffer()).then((buf) => {
+            const inst2 = wasmInstance;
+            const name = utf8encode(url.split("/").pop().split("?")[0]);
+            const namePtr = inst2.exports.FizzyWebPluginAlloc(name.length, 1);
+            const bytes = new Uint8Array(buf);
+            const bytesPtr = inst2.exports.FizzyWebPluginAlloc(bytes.length, 1);
+            if (!namePtr || !bytesPtr) return;
+            new Uint8Array(inst2.exports.memory.buffer, namePtr, name.length).set(name);
+            new Uint8Array(inst2.exports.memory.buffer, bytesPtr, bytes.length).set(bytes);
+            inst2.exports.FizzyWebOpenBytes(namePtr, name.length, bytesPtr, bytes.length);
+            if (dvuiApp) dvuiApp.requestRender();
+          }).catch((err) => console.error("fizzy: could not open", url, err));
+        }
       }
 
       // ---- plugins at runtime: wasm side modules -------------------------------------------

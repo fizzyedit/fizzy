@@ -1390,6 +1390,23 @@ export fn FizzyWebPluginRequest(id_ptr: [*]const u8, id_len: usize) void {
     const url = std.fmt.bufPrint(&buf, "plugins/{s}/{s}.wasm", .{ id, id }) catch return;
     editor.loadWebPlugin(id, url) catch |err| dvui.log.err("web plugin '{s}': {s}", .{ id, @errorName(err) });
 }
+/// The page opens a file it fetched (`?open=<url>` — a zip vault for a demo, say) exactly as
+/// an upload: by name and bytes, through the plugin that owns the extension.
+export fn FizzyWebOpenBytes(name_ptr: [*]const u8, name_len: usize, bytes_ptr: [*]u8, bytes_len: usize) void {
+    if (comptime builtin.target.cpu.arch != .wasm32) return;
+    const editor = web_editor orelse return;
+    const bytes = bytes_ptr[0..bytes_len];
+    defer editor.app.gpa.free(bytes);
+    const path = editor.app.gpa.dupe(u8, name_ptr[0..name_len]) catch return;
+    if (editor.openFileFromBytes(path, bytes, 0)) |doc_id| {
+        if (editor.app.open_files.getIndex(doc_id)) |idx| {
+            editor.workbench.setActiveDocIndex(idx);
+            editor.pending_composite_warmup = true;
+        }
+    } else |err| dvui.log.err("web: could not open {s}: {s}", .{ name_ptr[0..name_len], @errorName(err) });
+    editor.app.host.refresh();
+}
+
 /// The one editor, for the page's calls. Set by `postInit` on the web.
 var web_editor: ?*Editor = null;
 
