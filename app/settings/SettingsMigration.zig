@@ -49,7 +49,7 @@ fn mergeOne(allocator: std.mem.Allocator, settings_zon_path: []const u8, plugins
     const composed = try SettingsPluginsZon.upsertOne(allocator, existing, .{ .id = id, .text = legacy_text });
     defer allocator.free(composed);
 
-    try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = settings_zon_path, .data = composed });
+    try core.fs.write(dvui.io, settings_zon_path, composed);
     std.Io.Dir.deleteFileAbsolute(dvui.io, legacy_path) catch |err| {
         dvui.log.warn("settings: migrated legacy '{s}' settings but failed to delete old file: {s}", .{ id, @errorName(err) });
     };
@@ -172,7 +172,7 @@ pub fn migrateToPerPluginEnabled(allocator: std.mem.Allocator, settings_zon_path
     };
     defer allocator.free(composed);
 
-    std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = settings_zon_path, .data = composed }) catch |err| {
+    core.fs.write(dvui.io, settings_zon_path, composed) catch |err| {
         dvui.log.warn("settings: failed to write R12-migrated settings.zon ({s})", .{@errorName(err)});
         return;
     };

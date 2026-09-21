@@ -772,7 +772,6 @@ pub fn buildKeymap(editor: *Editor) !void {
 /// Read and apply `<config>/keybinds.zon`. A missing file is the normal case — defaults are
 /// never written out, so a user who has rebound nothing has no file at all.
 fn loadUserOverrides(editor: *Editor) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.app.host.allocator;
 
     if (editor.app.keybinds_overrides) |*f| {
@@ -783,14 +782,7 @@ fn loadUserOverrides(editor: *Editor) !void {
     const path = try std.fs.path.join(gpa, &.{ editor.app.config_folder, "keybinds.zon" });
     defer gpa.free(path);
 
-    const text = std.Io.Dir.cwd().readFileAllocOptions(
-        dvui.io,
-        path,
-        gpa,
-        .limited(1024 * 1024),
-        .of(u8),
-        0,
-    ) catch |err| switch (err) {
+    const text = fizzy.core.fs.readZ(gpa, dvui.io, path) catch |err| switch (err) {
         error.FileNotFound => return,
         else => {
             dvui.log.err("keybinds.zon read failed: {s}", .{@errorName(err)});
@@ -972,7 +964,6 @@ fn keybindsPath(editor: *Editor, gpa: std.mem.Allocator) ![]u8 {
 
 /// Rewrite `keybinds.zon` from `bindings`, then rebuild the live keymap.
 fn writeAndReload(editor: *Editor, bindings: []const Keymap.zon.OwnedBinding) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.app.host.allocator;
     const path = try keybindsPath(editor, gpa);
     defer gpa.free(path);
@@ -981,12 +972,9 @@ fn writeAndReload(editor: *Editor, bindings: []const Keymap.zon.OwnedBinding) !v
     defer gpa.free(text);
 
     if (bindings.len == 0) {
-        std.Io.Dir.cwd().deleteFile(dvui.io, path) catch |err| switch (err) {
-            error.FileNotFound => {},
-            else => return err,
-        };
+        try fizzy.core.fs.remove(dvui.io, path);
     } else {
-        try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = text });
+        try fizzy.core.fs.write(dvui.io, path, text);
     }
 
     editor.rebuildKeybinds();
@@ -1016,7 +1004,6 @@ fn collectCurrentOverrides(editor: *Editor, gpa: std.mem.Allocator) !std.ArrayLi
 
 /// Set (or replace) the user override for `command`. `keys` is VSCode grammar (`mod+p`).
 pub fn setUserBinding(editor: *Editor, command: []const u8, keys: []const u8) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.app.host.allocator;
     const platform: Keymap.Platform = if (fizzy.core.platform.isMacOS()) .mac else .other;
     const stroke = try Keymap.parseKeys(keys, platform);
@@ -1053,7 +1040,6 @@ pub fn setUserBinding(editor: *Editor, command: []const u8, keys: []const u8) !v
 
 /// Remove the user override for `command`, restoring the profile/plugin default.
 pub fn clearUserBinding(editor: *Editor, command: []const u8) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.app.host.allocator;
 
     var list = try collectCurrentOverrides(editor, gpa);

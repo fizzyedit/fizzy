@@ -51,11 +51,7 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
             for (disk.folders) |folder| {
                 // A folder on a mount (`gdrive://…`) is not the disk's to check: it exists
                 // whenever its plugin is signed in, which is decided at open time.
-                const present = core.paths.isMountPath(folder) or blk: {
-                    var d = std.Io.Dir.openDirAbsolute(dvui.io, folder, .{}) catch break :blk false;
-                    d.close(dvui.io);
-                    break :blk true;
-                };
+                const present = core.paths.isMountPath(folder) or core.LocalFs.isDirAbsolute(dvui.io, folder);
                 if (present) {
                     const canon = canonicalize(allocator, folder) catch continue;
 
@@ -141,7 +137,7 @@ pub fn save(recents: *Recents, allocator: std.mem.Allocator, path: []const u8) !
     defer aw.deinit();
     try std.zon.stringify.serialize(disk, .{}, &aw.writer);
 
-    try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = path, .data = aw.written() });
+    try core.fs.write(dvui.io, path, aw.written());
 }
 
 pub fn deinit(recents: *Recents, allocator: std.mem.Allocator) void {

@@ -319,6 +319,27 @@
               if (dvuiApp) dvuiApp.requestRender();
             });
           },
+          // `core.fs` on the web: the app's own small files (settings.zon, recents.zon,
+          // keybinds.zon) live in localStorage, keyed by the path the app would have used.
+          fizzy_web_storage_get(keyPtr, keyLen, bufPtr, bufLen) {
+            const key = "fizzy.file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
+            let value = null;
+            try { value = localStorage.getItem(key); } catch (_) {}
+            if (value === null) return 0xffffffff;
+            const bytes = utf8encode(value);
+            if (bytes.length <= bufLen) new Uint8Array(wasmInstance.exports.memory.buffer, bufPtr, bytes.length).set(bytes);
+            return bytes.length;
+          },
+          fizzy_web_storage_set(keyPtr, keyLen, valPtr, valLen) {
+            const mem = wasmInstance.exports.memory.buffer;
+            const key = "fizzy.file:" + utf8.decode(new Uint8Array(mem, keyPtr, keyLen));
+            const value = utf8.decode(new Uint8Array(mem, valPtr, valLen));
+            try { localStorage.setItem(key, value); } catch (err) { console.warn("fizzy: could not store", key, err); }
+          },
+          fizzy_web_storage_remove(keyPtr, keyLen) {
+            const key = "fizzy.file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
+            try { localStorage.removeItem(key); } catch (_) {}
+          },
           fizzy_web_plugin_forget(idPtr, idLen) {
             forgetPlugin(utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, idPtr, idLen)));
           },

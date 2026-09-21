@@ -24,6 +24,8 @@ const Disk = struct {
 /// JSON, write an equivalent `zon_path`, and delete the JSON file. No-op (including on
 /// any failure along the way — the caller falls back to defaults as usual) otherwise.
 pub fn migrateIfNeeded(allocator: std.mem.Allocator, zon_path: []const u8) void {
+    // The web never had the JSON file.
+    if (comptime @import("builtin").target.cpu.arch == .wasm32) return;
     if (core.fs.read(allocator, dvui.io, zon_path) catch null) |existing| {
         allocator.free(existing);
         return;

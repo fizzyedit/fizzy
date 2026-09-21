@@ -536,12 +536,9 @@ pub fn init(
     }
 
     fizzy.core.perf.console_logging_enabled = Constants.perf_logging;
-    editor.app.recents = if (comptime builtin.target.cpu.arch == .wasm32)
-        .{ .folders = .init(app.allocator) }
-    else
-        Recents.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.app.config_folder, "recents.zon" })) catch .{
-            .folders = .init(app.allocator),
-        };
+    editor.app.recents = Recents.load(app.allocator, try std.fs.path.join(app.allocator, &.{ editor.app.config_folder, "recents.zon" })) catch .{
+        .folders = .init(app.allocator),
+    };
 
     fizzy.backend.setTitlebarColor(dvui.currentWindow(), dvui.themeGet().color(.content, .fill).opacity(if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light));
 
@@ -1328,7 +1325,11 @@ pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
 pub fn loadWebPlugin(editor: *Editor, id: []const u8, url: []const u8) !void {
     if (comptime builtin.target.cpu.arch != .wasm32) return error.NotUnloadable;
     if (editor.app.host.pluginById(id) != null) return;
+    // Two requests for one id before the first lands (the page's remembered list and a
+    // `?plugin=` of the same id, say) would register it twice; the second one waits for nothing.
+    if (web_loads_in_flight.contains(id)) return;
     const gpa = editor.app.gpa;
+    try web_loads_in_flight.put(gpa, try gpa.dupe(u8, id), {});
     const req = try gpa.create(WebPluginRequest);
     errdefer gpa.destroy(req);
     req.* = .{ .editor = editor, .id = try gpa.dupe(u8, id), .url = try gpa.dupe(u8, url) };
@@ -1345,6 +1346,7 @@ const WebPluginRequest = struct {
         const editor = req.editor;
         const gpa = editor.app.gpa;
         defer {
+            if (web_loads_in_flight.fetchRemove(req.id)) |kv| gpa.free(kv.key);
             gpa.free(req.id);
             gpa.destroy(req);
             // `url` lives on as `LoadedLib.path` when the load succeeded.
@@ -1409,6 +1411,8 @@ export fn FizzyWebOpenBytes(name_ptr: [*]const u8, name_len: usize, bytes_ptr: [
 
 /// The one editor, for the page's calls. Set by `postInit` on the web.
 var web_editor: ?*Editor = null;
+/// Plugin ids the page is fetching for us right now.
+var web_loads_in_flight: std.StringHashMapUnmanaged(void) = .empty;
 
 /// Install (file already downloaded to the plugins dir by the store backend) + load live.
 /// Writes `.plugins.<id>.enabled = true` immediately so the plugin stays enabled across restarts
@@ -2647,9 +2651,6 @@ fn composeSettingsText(editor: *Editor, gpa: std.mem.Allocator, settings_path: [
 }
 
 fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
-    // Wasm: no on-disk config; `composeSettingsText` reads via `Io.Dir.cwd()` (posix.AT), which
-    // doesn't exist for this target.
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.app.gpa;
 
     var pending_settings = editor.app.host.takePendingPluginSettings();
@@ -2774,7 +2775,7 @@ fn writeMergedSettings(editor: *Editor, settings_path: []const u8) !void {
     const hash = std.hash.Wyhash.hash(0, composed);
     if (editor.app.settings_last_saved_hash == hash) return;
 
-    try std.Io.Dir.cwd().writeFile(dvui.io, .{ .sub_path = settings_path, .data = composed });
+    try fizzy.core.fs.write(dvui.io, settings_path, composed);
     editor.app.settings_last_saved_hash = hash;
     // Open settings.zon tab (if any) must pick this up — don't wait on a per-file FS event.
     if (editor.document_watcher) |*w| w.notifyPathChanged(editor, settings_path);
@@ -3069,8 +3070,6 @@ pub fn reconcileDiscoveredPlugins(editor: *Editor) void {
 
 /// Debounced autosave (defers while a canvas stroke is active).
 fn saveSettingsGuarded(editor: *Editor) !void {
-    // Wasm: settings live in memory only; `writeMergedSettings` uses `Io.Dir.cwd()` (posix.AT).
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     if (!editor.app.settings_dirty) return;
 
     const now = fizzy.core.perf.nanoTimestamp();
@@ -4148,6 +4147,12 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     editor.app.folder = try editor.app.gpa.dupe(u8, path);
     editor.command_palette.invalidate();
     try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path));
+    // Written now, not only at quit: a browser tab is closed, never quit, so the web keeps
+    // recents only if they are stored as they change. Cheap enough to do everywhere.
+    if (std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) |recents_path| {
+        defer editor.app.gpa.free(recents_path);
+        editor.app.recents.save(editor.app.gpa, recents_path) catch |err| dvui.log.warn("recents: not saved: {s}", .{@errorName(err)});
+    } else |_| {}
     // The dvui menu re-reads recents every frame; the macOS submenu is retained state.
     fizzy.backend.rebuildNativeRecentFolders();
     if (editor.app.host.selectedSurface(sdk.keywords.ide.sidebar)) |s| {
@@ -5110,15 +5115,12 @@ pub fn deinit(editor: *Editor) !void {
     editor.app.quit_saves_in_flight.deinit(editor.app.gpa);
     editor.app.pending_close_after_save.deinit(editor.app.gpa);
 
-    // Recents persist via Io.Dir.cwd writes — no FS on wasm; skip persist.
-    if (comptime builtin.target.cpu.arch != .wasm32) {
-        editor.app.recents.save(editor.app.gpa, try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) catch {
-            dvui.log.err("Failed to save recents", .{});
-        };
-    }
+    editor.app.recents.save(editor.app.gpa, try std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) catch {
+        dvui.log.err("Failed to save recents", .{});
+    };
     editor.app.recents.deinit(editor.app.gpa);
 
-    if (comptime builtin.target.cpu.arch != .wasm32) try saveSettingsRaw(editor);
+    try saveSettingsRaw(editor);
     saveWindowRatiosRaw(editor);
     // Only after the flush above, which writes the assignments out.
     editor.app.layout.deinitAssignments(editor.app.gpa);

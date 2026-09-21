@@ -110,11 +110,12 @@ pub fn setThemeName(settings: *Settings, allocator: std.mem.Allocator, name: []c
 /// `serialize`'s doc comment) are ignored, both for forward-compat with newer on-disk shapes and
 /// because `.plugins` is read separately, per-plugin, via `Host.loadPluginSettings`.
 pub fn load(allocator: std.mem.Allocator, path: []const u8, plugins_dir: ?[]const u8) !Settings {
-    // Wasm: no on-disk config; `core.fs` uses `Io.Dir.cwd()` (posix.AT).
-    if (comptime builtin.target.cpu.arch == .wasm32) return default(allocator);
-
-    SettingsMigration.mergeLegacyPerPluginFiles(allocator, path, plugins_dir);
-    SettingsMigration.migrateToPerPluginEnabled(allocator, path, plugins_dir);
+    // The web has no per-plugin files to migrate; its settings are `localStorage` behind
+    // `core.fs`, the same call as the disk.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        SettingsMigration.mergeLegacyPerPluginFiles(allocator, path, plugins_dir);
+        SettingsMigration.migrateToPerPluginEnabled(allocator, path, plugins_dir);
+    }
 
     const data = core.fs.readZ(allocator, dvui.io, path) catch return default(allocator);
     defer allocator.free(data);
