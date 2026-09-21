@@ -44,6 +44,27 @@ pub fn isMountPath(path: []const u8) bool {
     return mountPrefixLen(path) != null;
 }
 
+/// `dir` + `name`, the way the file table keys them: a mount's paths are `/`-separated on every
+/// OS, the disk's use the native separator. `std.fs.path.join` on a mount path would produce
+/// `gdrive://me\Notes\x` on Windows. Caller owns.
+pub fn join(allocator: std.mem.Allocator, dir: []const u8, name: []const u8) ![]u8 {
+    if (isMountPath(dir)) {
+        if (dir.len > 0 and dir[dir.len - 1] == '/') return std.mem.concat(allocator, u8, &.{ dir, name });
+        return std.mem.concat(allocator, u8, &.{ dir, "/", name });
+    }
+    return std.fs.path.join(allocator, &.{ dir, name });
+}
+
+test join {
+    const gpa = std.testing.allocator;
+    const a = try join(gpa, "gdrive://me", "Notes");
+    defer gpa.free(a);
+    try std.testing.expectEqualStrings("gdrive://me/Notes", a);
+    const b = try join(gpa, "gdrive://me/Notes", "x.md");
+    defer gpa.free(b);
+    try std.testing.expectEqualStrings("gdrive://me/Notes/x.md", b);
+}
+
 /// True when `normalize(path)` would return `path` byte-for-byte, decided without allocating.
 ///
 /// `normalize` costs a heap allocation plus a full `resolve` walk, and the hot callers

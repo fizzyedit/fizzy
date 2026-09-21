@@ -221,15 +221,13 @@ a blocking fetch (the worker owns an orphaned job; tested at <100 ms with a held
 (Google rejects `addParents == removeParents`). The layering/path-pin/GIS-outside-the-frame
 points went away with the move out of tree.
 
+Also fixed since: **D15** a mount's completions land only on the host's per-frame pump, never
+inside a draw-time call (the disk still answers in the call); **D8** `Env.unmounting(prefix)`
+lets `MountIo` cancel loads and saves against a mount before it goes (tested); **D5** a
+document whose save did not land stays open and aborts the quit; **D14** `core.paths.join` is
+mount-aware and every join in the tree and the files service uses it.
+
 Still open, in the order they should be taken:
-- **D15** an in-call `pump` on a mount delivers every completion mid-draw (`FileTable.listDir`,
-  `MountIo`, mutations). Pump inline only for the disk, or add `Fs.pumpJob(job)`.
-- **D8** `unmount` never reaches `MountIo` (a sign-out mid-open leaves the load; mid-save
-  leaves `docSaving` true). Add `Env.unmounted(prefix)`.
-- **D5** quit save-all closes a document whose mount write failed; re-check `isDirty` and
-  abort the quit.
-- **D14** Windows joins on mount paths (`std.fs.path.join` in `FilesService.move` and five
-  spots in `workbench/src/files.zig`); a mount-aware `core.paths.join`.
 - Secrets: the refresh token and desktop secret sit unmasked in `settings.zon` and the pane.
   `settings.Value` `.secret` (masked, excluded from export), then a `Host.secrets` seam with
   keychain/libsecret/DPAPI backends.

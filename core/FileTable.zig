@@ -71,6 +71,10 @@ pub const Env = struct {
     /// A listing or mutation that was pending has landed: whatever draws the table should run
     /// another frame. Only a mount that answers later ever triggers it.
     refresh: *const fn (ctx: ?*anyopaque) void = noRefresh,
+    /// `prefix` is about to be unmounted and its filesystem torn down: anything the host has in
+    /// flight against it (a document being read or written) must be cancelled now, while the
+    /// filesystem still exists to cancel on.
+    unmounting: *const fn (ctx: ?*anyopaque, prefix: []const u8) void = noUnmounting,
     ignored: *const fn (
         ctx: ?*anyopaque,
         root: []const u8,
@@ -86,6 +90,7 @@ pub const Env = struct {
         return false;
     }
     fn noRefresh(_: ?*anyopaque) void {}
+    fn noUnmounting(_: ?*anyopaque, _: []const u8) void {}
     fn notIgnored(_: ?*anyopaque, _: []const u8, _: []const u8, _: []const u8, _: std.Io.File.Kind) bool {
         return false;
     }
@@ -237,6 +242,8 @@ pub fn mount(self: *FileTable, prefix: []const u8, fs: vfs.Fs) !void {
 pub fn unmount(self: *FileTable, prefix: []const u8) void {
     for (self.mounts.items, 0..) |m, i| {
         if (!std.mem.eql(u8, m.prefix, prefix)) continue;
+        self.env.unmounting(self.env.ctx, prefix);
+        if (self.index_job) |job| job.cancel();
         var p: usize = 0;
         while (p < self.pending.count()) {
             const job = self.pending.values()[p];
@@ -388,9 +395,9 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
         job.destroy();
         return null;
     };
-    // The disk answers inside `pump`; a cloud mount answers on a later one. Either way the
-    // completion installs the listing, so one more lookup is the whole difference.
-    target.fs.pump();
+    // The disk answers inside this call; a mount answers from the host's per-frame `pump`,
+    // never here — this runs mid-draw, and a mount's completions may open or close documents.
+    if (target.mount == null) target.fs.pump();
     if (self.listings.get(directory)) |listing| return listing;
     return null;
 }
@@ -676,7 +683,9 @@ const IndexJob = struct {
                 return;
             }
             job.answered = 0;
-            table.pump();
+            // Only the disk answers inside the call (see `listDir`); a mount's listings land
+            // on the host's per-frame pump and the walk carries on from there.
+            table.local.fs().pump();
             // The last answer's `settle` may have torn the job down inside that pump.
             if (table.index_job != job) return;
             if (job.answered == 0) return;
@@ -780,7 +789,7 @@ pub fn createFile(self: *FileTable, path: []const u8, cb: DoneFn, ctx: ?*anyopaq
         m.destroy();
         return err;
     };
-    target.fs.pump();
+    if (target.mount == null) target.fs.pump();
 }
 
 /// Create a directory at `path`. Parents must already exist.
@@ -791,7 +800,7 @@ pub fn createDir(self: *FileTable, path: []const u8, cb: DoneFn, ctx: ?*anyopaqu
         m.destroy();
         return err;
     };
-    target.fs.pump();
+    if (target.mount == null) target.fs.pump();
 }
 
 /// Delete `path`, which must be a file or an empty directory.
@@ -802,7 +811,7 @@ pub fn remove(self: *FileTable, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) 
         m.destroy();
         return err;
     };
-    target.fs.pump();
+    if (target.mount == null) target.fs.pump();
 }
 
 /// Rename `old_path` to `new_path`, a file or a directory. Both must be on the same mount: a
@@ -816,7 +825,7 @@ pub fn rename(self: *FileTable, old_path: []const u8, new_path: []const u8, cb: 
         m.destroy();
         return err;
     };
-    from.fs.pump();
+    if (from.mount == null) from.fs.pump();
 }
 
 /// The bookkeeping around one mutation's completion: invalidate, then tell the caller.
@@ -1143,16 +1152,23 @@ test "a mount answers paths under its prefix; the disk keeps the rest" {
     try t.expect(table.resolve("mem://boxes/a.txt").mount == null); // not a prefix match
     try t.expect(table.resolve(fx.root).mount == null);
 
-    // `Mem` completes on pump, and listDir pumps, so this is a hit on the first call.
+    // A mount answers on the host's per-frame pump, never inside the call: the first ask
+    // is pending, the next frame has it.
+    try t.expect(table.listDir("mem://box") == null);
+    table.pump();
     const listing = table.listDir("mem://box") orelse return error.ListingFailed;
     try t.expectEqual(@as(usize, 1), listing.entries.len);
     try t.expectEqualStrings("a.txt", listing.entries[0].name);
 
     var sink: DoneSink = .{};
     try table.createDir("mem://box/sub", DoneSink.onDone, &sink);
+    table.pump();
     try t.expect(sink.err == null);
+    _ = table.listDir("mem://box");
+    table.pump();
     _ = table.listDir("mem://box") orelse return error.ListingFailed;
     try t.expect(table.isDir("mem://box/sub"));
+    try t.expect(table.isDir("mem://box"));
     try t.expect(!table.isDir("mem://box/a.txt"));
 
     // Across mounts is refused up front — nothing is half-moved.
@@ -1218,7 +1234,8 @@ test "a mount that answers later is pending, then installed" {
     // Asking again does not ask the mount again.
     try t.expect(table.listDir("slow://") == null);
     try t.expectEqual(@as(usize, 1), table.pending.count());
-    // The host's per-frame pump lands it.
+    // The gate swallows one pump; the host's next per-frame pump lands it.
+    table.pump();
     table.pump();
     try t.expectEqual(@as(usize, 0), table.pending.count());
     const listing = table.listDir("slow://") orelse return error.ListingFailed;
@@ -1244,7 +1261,11 @@ test "search walks a mount, and the disk beside it, as separate roots of one ind
     try table.mount("mem://box", mem.fs());
     defer table.unmount("mem://box");
 
-    // A mount root: walked through its listings, pruned by the same ignore rule as the disk.
+    // A mount root: walked through its listings (which land on the frame pump — two levels,
+    // two frames), pruned by the same ignore rule as the disk.
+    try t.expectEqual(@as(usize, 0), table.search("mem://box", "main", arena).len);
+    table.pump();
+    table.pump();
     const cloud = table.search("mem://box", "main", arena);
     try t.expectEqual(@as(usize, 1), cloud.len);
     try t.expectEqualStrings("main.md", cloud[0].name);
@@ -1318,15 +1339,13 @@ test "search over a mount that answers later fills in across frames" {
     // Nothing has answered yet: no results, but the walk is on.
     try t.expectEqual(@as(usize, 0), table.search("slow://x", "md", arena).len);
     try t.expect(table.indexing());
-    // Frame 1: the root lands — `top.md` is searchable, `deep/` has been asked.
+    // The gate holds each listing for one pump. Frame 2: the root lands — `top.md` is
+    // searchable, `deep/` has been asked; two frames later it lands too.
+    table.pump();
     table.pump();
     try t.expectEqual(@as(usize, 1), table.search("slow://x", "md", arena).len);
     try t.expect(table.indexing());
-    // `deep/` was asked during that pump, so it is held through the next one and lands on the
-    // one after: partial results stay put in between.
     table.pump();
-    try t.expectEqual(@as(usize, 1), table.search("slow://x", "md", arena).len);
-    try t.expect(table.indexing());
     table.pump();
     try t.expectEqual(@as(usize, 2), table.search("slow://x", "md", arena).len);
     try t.expect(!table.indexing());
@@ -1338,6 +1357,31 @@ test "search over a mount that answers later fills in across frames" {
     table.invalidateIndex();
     try t.expect(!table.indexing());
     table.pump();
+}
+
+test "unmount tells the host first, while the filesystem still exists" {
+    const t = std.testing;
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+    const Seen = struct {
+        var prefix: []const u8 = "";
+        var mounted_then: bool = false;
+        var table_ptr: *FileTable = undefined;
+        fn f(_: ?*anyopaque, p: []const u8) void {
+            prefix = p;
+            mounted_then = table_ptr.isMounted(p);
+        }
+    };
+    Seen.table_ptr = table;
+    table.env.unmounting = Seen.f;
+    var mem = try vfs.Mem.init(t.allocator);
+    defer mem.deinit();
+    try table.mount("mem://gone", mem.fs());
+    table.unmount("mem://gone");
+    try t.expectEqualStrings("mem://gone", Seen.prefix);
+    try t.expect(Seen.mounted_then);
+    try t.expect(!table.isMounted("mem://gone"));
 }
 
 test "nameOrder is case-insensitive but total" {

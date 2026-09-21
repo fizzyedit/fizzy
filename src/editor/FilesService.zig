@@ -214,7 +214,7 @@ const Op = struct {
 fn move(ctx: *anyopaque, path: []const u8, target_dir: []const u8) anyerror!bool {
     const self = hostOf(ctx);
     const base = std.fs.path.basename(path);
-    const new_path = try std.fs.path.join(self.allocator, &.{ target_dir, base });
+    const new_path = try core.paths.join(self.allocator, target_dir, base);
     defer self.allocator.free(new_path);
     if (std.mem.eql(u8, path, new_path)) return false;
 

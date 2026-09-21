@@ -52,6 +52,38 @@ pub fn saving(self: *const MountIo, doc_id: u64) bool {
     return self.saves.contains(doc_id);
 }
 
+/// `prefix` is going away (`FileTable.Env.unmounting`): drop every open and save against it.
+/// A load just never lands; a save leaves its document dirty, which is the truth.
+pub fn unmounting(self: *MountIo, prefix: []const u8) void {
+    const files = &self.editor.app.file_table;
+    var i: usize = 0;
+    while (i < self.loads.count()) {
+        const load = self.loads.values()[i];
+        if (!onPrefix(load.path, prefix)) {
+            i += 1;
+            continue;
+        }
+        files.resolve(load.path).fs.cancel(load.job);
+        self.loads.swapRemoveAt(i);
+        load.destroy();
+    }
+    i = 0;
+    while (i < self.saves.count()) {
+        const pending = self.saves.values()[i];
+        if (!onPrefix(pending.path, prefix)) {
+            i += 1;
+            continue;
+        }
+        files.resolve(pending.path).fs.cancel(pending.job);
+        self.saves.swapRemoveAt(i);
+        pending.destroy();
+    }
+}
+
+fn onPrefix(path: []const u8, prefix: []const u8) bool {
+    return std.mem.startsWith(u8, path, prefix) and (path.len == prefix.len or path[prefix.len] == '/');
+}
+
 // ---- open ----------------------------------------------------------------------------------
 
 /// Read `path` through its mount and open it from the bytes. `path` is canonical already.
@@ -76,7 +108,8 @@ pub fn open(self: *MountIo, path: []const u8, grouping: u64) !bool {
 
     const target = editor.app.file_table.resolve(path);
     load.job = try target.fs.readFile(editor.app.gpa, target.rel, Load.onRead, load);
-    target.fs.pump();
+    // Delivered from the host's per-frame pump, never inside this call: an open can be asked
+    // for mid-draw, and its completion registers a document.
     return true;
 }
 
@@ -153,7 +186,6 @@ pub fn save(self: *MountIo, doc: sdk.DocHandle, path: []const u8) !void {
 
     const target = editor.app.file_table.resolve(path);
     job.job = try target.fs.writeFile(target.rel, job.bytes, Save.onWritten, job);
-    target.fs.pump();
 }
 
 const Save = struct {
@@ -196,7 +228,6 @@ const Save = struct {
             job.destroy();
             return;
         };
-        target.fs.pump();
     }
 
     fn onWritten(ctx: ?*anyopaque, result: core.vfs.Error!void) void {
@@ -221,9 +252,9 @@ const Save = struct {
                 const target = editor.app.file_table.resolve(job.path);
                 job.job = target.fs.createFile(target.rel, Save.onCreated, job) catch {
                     _ = io.saves.swapRemove(job.doc_id);
+                    keep = false;
                     return;
                 };
-                target.fs.pump();
                 return;
             }
             dvui.log.err("Failed to save {s}: {t}", .{ job.path, err });

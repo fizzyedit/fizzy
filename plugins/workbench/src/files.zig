@@ -509,7 +509,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
             const valid_path = if (table()) |files| files.exists(full_path) else false;
 
             if (parent_folder) |folder| {
-                new_path = try std.fs.path.join(dvui.currentWindow().arena(), &.{ folder, te.getText() });
+                new_path = try core.paths.join(dvui.currentWindow().arena(), folder, te.getText());
             } else {
                 new_path = try std.fs.path.join(dvui.currentWindow().arena(), &.{te.getText()});
             }
@@ -761,10 +761,7 @@ pub fn recurseFiles(root_directory: []const u8, outer_tree: *core.widgets.TreeWi
             var row_y: f32 = 0;
             {
                 const entry_dir = entry.dir orelse directory;
-                const abs_path = try std.fs.path.join(
-                    dvui.currentWindow().arena(),
-                    &.{ entry_dir, entry.name },
-                );
+                const abs_path = try core.paths.join(dvui.currentWindow().arena(), entry_dir, entry.name);
 
                 inner_id_extra.* = dvui.Id.update(tree.data().id, abs_path).asUsize();
 
@@ -1285,7 +1282,7 @@ fn appendRowOrder(
 ) void {
     const listing = (table() orelse return).listDir(directory) orelse return;
     for (listing.entries) |e| {
-        const abs = std.fs.path.join(arena, &.{ directory, e.name }) catch continue;
+        const abs = core.paths.join(arena, directory, e.name) catch continue;
         const branch_id = tree_id.update(abs);
         out.append(arena, .{ .id = branch_id.asUsize(), .path = abs }) catch return;
         if (e.kind == .directory and runtime.host().explorerBranchIsOpen(branch_id)) {
@@ -1308,7 +1305,7 @@ fn flushPendingFileShiftRange(
     if (ranked) |list| {
         // A filter is active: row order is the ranked list, not the tree.
         for (list) |e| {
-            const abs = std.fs.path.join(arena, &.{ e.dir orelse root_directory, e.name }) catch continue;
+            const abs = core.paths.join(arena, e.dir orelse root_directory, e.name) catch continue;
             rows.append(arena, .{ .id = tree.data().id.update(abs).asUsize(), .path = abs }) catch break;
         }
     } else {
@@ -1418,10 +1415,8 @@ fn appendOpenableFilesInTree(arena: std.mem.Allocator, root_abs: []const u8, out
     }
 }
 
-/// `dir` + `name` the way the table keys them: a mount's paths are `/`-separated whatever the OS.
 fn joinChild(arena: std.mem.Allocator, dir: []const u8, name: []const u8) ![]u8 {
-    if (core.paths.isMountPath(dir)) return std.mem.concat(arena, u8, &.{ dir, "/", name });
-    return std.fs.path.join(arena, &.{ dir, name });
+    return core.paths.join(arena, dir, name);
 }
 
 /// Top-most selection (no selected ancestor), then every openable canvas file: each selected file,

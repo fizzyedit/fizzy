@@ -1551,6 +1551,7 @@ pub fn postInit(editor: *Editor) !void {
         .root = fileTableRoot,
         .watching = fileTableWatching,
         .refresh = fileTableRefresh,
+        .unmounting = fileTableUnmounting,
         .ignored = fileTableIgnored,
     };
     editor.app.host.files = &editor.app.file_table;
@@ -2005,6 +2006,9 @@ fn fileTableWatching(ctx: ?*anyopaque) bool {
 }
 fn fileTableRefresh(ctx: ?*anyopaque) void {
     fizzyRefresh(ctx.?);
+}
+fn fileTableUnmounting(ctx: ?*anyopaque, prefix: []const u8) void {
+    fizzyCtx(ctx.?).mount_io.unmounting(prefix);
 }
 fn fileTableIgnored(
     ctx: ?*anyopaque,
@@ -3841,6 +3845,12 @@ fn tickPendingSaveCloses(editor: *Editor) void {
                 i += 1;
                 continue;
             }
+            if (doc.owner.isDirty(doc)) {
+                // Save-then-close whose save failed: keep the tab, and its edits, open.
+                dvui.log.err("{s} did not save; leaving it open", .{doc.owner.documentPath(doc)});
+                _ = editor.app.pending_close_after_save.swapRemove(id);
+                continue;
+            }
             editor.rawCloseFileID(id) catch |err| {
                 dvui.log.err("Post-save close failed: {s}", .{@errorName(err)});
             };
@@ -3934,6 +3944,13 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
                 if (editor.docSaving(doc)) {
                     i += 1;
                     continue;
+                }
+                if (doc.owner.isDirty(doc)) {
+                    // The write did not land (a mount that refused, a network that went
+                    // away); closing now would discard the only copy. Stay open.
+                    dvui.log.err("Save all quit: {s} did not save; not quitting", .{doc.owner.documentPath(doc)});
+                    editor.app.abortSaveAllQuit();
+                    return;
                 }
                 editor.rawCloseFileID(id) catch |err| {
                     dvui.log.err("Save all quit close: {s}", .{@errorName(err)});
