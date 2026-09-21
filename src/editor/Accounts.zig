@@ -28,19 +28,13 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     const arena = host.arena();
     const theme = dvui.themeGet();
 
-    var any_signed_in = false;
-    for (host.account_providers.items) |p| {
-        if (p.hidden) continue;
-        if (p.accounts(arena).len != 0) any_signed_in = true;
-    }
-
     // The same cell as every other rail icon (`Sidebar.drawOption`): a button the icon's
     // height, the glyph in it, nothing else. Click toggles the list.
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{ .min_size_content = .{ .h = size } });
     defer bw.deinit();
     bw.processEvents();
-    const color = if (any_signed_in) theme.color(.highlight, .fill) else if (bw.hovered() or open) theme.color(.window, .text) else theme.color(.window, .fill);
+    const color = if (bw.hovered() or open) theme.color(.window, .text) else theme.color(.window, .fill);
     fizzy.core.icon.icon(@src(), "accounts", dvui.entypo.user, .{ .fill_color = .{ .color = color }, .stroke_color = .{ .color = color } }, .{
         .min_size_content = .{ .h = size },
     });

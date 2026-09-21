@@ -1410,9 +1410,17 @@ pub fn setSelectionForKey(self: *Host, key: u64, id: []const u8) void {
 /// extension since the user assigned it no longer owns it.
 pub fn ownsExtension(self: *Host, plugin: *Plugin, ext: []const u8) bool {
     for (plugin.fileTypes()) |e| {
-        if (std.mem.eql(u8, e, ext)) return true;
+        if (std.ascii.eqlIgnoreCase(e, ext)) return true;
     }
     return plugin == self.fallback_editor;
+}
+
+/// `ext` lowercased into `buf`, so `.JPG` resolves like `.jpg`: plugins declare lowercase
+/// extensions and the user's `.extensions` record is keyed the same way. An extension too long
+/// for the buffer matches nothing anyway and is returned as is.
+pub fn lowerExtension(buf: *[64]u8, ext: []const u8) []const u8 {
+    if (ext.len > buf.len) return ext;
+    return std.ascii.lowerString(buf, ext);
 }
 
 /// The plugin that opens files with extension `ext` (including the dot, `""` for none), or
@@ -1425,7 +1433,9 @@ pub fn ownsExtension(self: *Host, plugin: *Plugin, ext: []const u8) bool {
 ///      already have caught; as a safety net, pick the alphabetically-first id so the result
 ///      never depends on dylib load/scan order. Nothing is written to disk here.
 ///   3. Otherwise the registered fallback editor.
-pub fn pluginForExtension(self: *Host, ext: []const u8) ?*Plugin {
+pub fn pluginForExtension(self: *Host, raw_ext: []const u8) ?*Plugin {
+    var buf: [64]u8 = undefined;
+    const ext = lowerExtension(&buf, raw_ext);
     if (self.fizzy_api) |a| {
         if (a.extensionOwnerOverride(ext)) |owner_id| {
             if (self.pluginById(owner_id)) |p| {

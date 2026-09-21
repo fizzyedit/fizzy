@@ -454,7 +454,9 @@ pub fn clearFailedUserPlugin(app: *App, id: []const u8) void {
 /// plugin had never arrived. Mirrors that function's resolution order exactly, including its
 /// alphabetical tie-break, so the "prior owner" shown in the dialog is the one the user would
 /// actually have gotten.
-pub fn extensionOwnerExcluding(app: *App, ext: []const u8, skip: *sdk.Plugin) ?*sdk.Plugin {
+pub fn extensionOwnerExcluding(app: *App, raw_ext: []const u8, skip: *sdk.Plugin) ?*sdk.Plugin {
+    var buf: [64]u8 = undefined;
+    const ext = sdk.Host.lowerExtension(&buf, raw_ext);
     if (app.extension_owner.get(ext)) |owner_id| {
         if (app.host.pluginById(owner_id)) |p| {
             if (p != skip and app.host.ownsExtension(p, ext)) return p;
