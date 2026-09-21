@@ -36,11 +36,14 @@ const wasm = struct {
 const max_body: usize = 256 * 1024 * 1024;
 
 const Pending = struct {
+    id: u32,
     allocator: std.mem.Allocator,
     cb: vfs.http.DoneFn,
     ctx: ?*anyopaque,
     /// Set by the JS side; null until then.
     result: ?vfs.Error!vfs.http.Response = null,
+    in_batch: bool = false,
+    cancelled: bool = false,
 };
 
 var gpa: ?std.mem.Allocator = null;
@@ -59,13 +62,16 @@ fn request(_: *anyopaque, allocator: std.mem.Allocator, req: vfs.http.Request, c
     const a = gpa orelse return error.Unsupported;
     const p = try a.create(Pending);
     errdefer a.destroy(p);
-    p.* = .{ .allocator = allocator, .cb = cb, .ctx = ctx };
+    p.* = .{ .id = 0, .allocator = allocator, .cb = cb, .ctx = ctx };
 
     // Headers as lines; the JS side splits them back out. Built here so the import takes one
     // buffer rather than a table of pointers.
     var lines: std.ArrayListUnmanaged(u8) = .empty;
     defer lines.deinit(a);
     for (req.headers) |h| {
+        // The line format is the protocol between Zig and JS; a CR/LF in a value would end
+        // the line early (or trap the frame inside `Headers.append`), so it is refused here.
+        if (std.mem.indexOfAny(u8, h.name, "\r\n:") != null or std.mem.indexOfAny(u8, h.value, "\r\n") != null) return error.Http;
         try lines.appendSlice(a, h.name);
         try lines.appendSlice(a, ": ");
         try lines.appendSlice(a, h.value);
@@ -74,6 +80,7 @@ fn request(_: *anyopaque, allocator: std.mem.Allocator, req: vfs.http.Request, c
 
     const id = next_id;
     next_id +%= 1;
+    p.id = id;
     try pending.put(a, id, p);
     const method = req.method.asSlice();
     wasm.fizzy_web_request(id, method.ptr, method.len, req.url.ptr, req.url.len, lines.items.ptr, lines.items.len, req.body.ptr, req.body.len);
@@ -87,22 +94,29 @@ fn cancel(_: *anyopaque, job: vfs.http.Job) void {
     if (p.result) |r| {
         if (r) |resp| resp.deinit(p.allocator) else |_| {}
     }
-    a.destroy(p);
+    // Sitting in the batch `pump` is delivering: it must not deliver (or free) it after us.
+    p.cancelled = true;
+    if (!p.in_batch) a.destroy(p);
 }
 
 fn pump(_: *anyopaque) void {
     const a = gpa orelse return;
     // Collect first: a callback may start another request, which must not land in the list
-    // being walked.
-    var done: std.ArrayListUnmanaged(struct { id: u32, p: *Pending }) = .empty;
+    // being walked — and may cancel a later one, which is then skipped and freed here.
+    var done: std.ArrayListUnmanaged(*Pending) = .empty;
     defer done.deinit(a);
-    for (pending.keys(), pending.values()) |id, p| {
-        if (p.result != null) done.append(a, .{ .id = id, .p = p }) catch break;
+    for (pending.values()) |p| {
+        if (p.result != null) {
+            p.in_batch = true;
+            done.append(a, p) catch break;
+        }
     }
-    for (done.items) |d| {
-        _ = pending.swapRemove(d.id);
-        d.p.cb(d.p.ctx, d.p.result.?);
-        a.destroy(d.p);
+    for (done.items) |p| {
+        if (!p.cancelled) {
+            _ = pending.swapRemove(p.id);
+            p.cb(p.ctx, p.result.?);
+        }
+        a.destroy(p);
     }
 }
 

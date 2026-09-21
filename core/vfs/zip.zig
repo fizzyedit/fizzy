@@ -20,8 +20,16 @@ const Allocator = std.mem.Allocator;
 pub const Error = error{
     InvalidArchive,
     Unsupported,
+    /// The archive claims more than `max_total_bytes` once inflated — a zip bomb, or simply
+    /// more than a page should hold.
+    TooLarge,
     OutOfMemory,
 };
+
+/// Inflated bytes an archive may claim in total. Every entry's `uncompressed_size` is trusted
+/// only up to this sum; the header value is 32-bit, so without it a small archive could ask
+/// for 4 GiB per entry.
+pub const max_total_bytes: u64 = 1 << 30;
 
 /// Every entry of `bytes` into `mem`, creating parents as needed. Entries that collide with
 /// something already there are skipped — an archive unpacked twice is not an error.
@@ -29,23 +37,30 @@ pub fn unpackInto(mem: *Mem, bytes: []const u8) Error!void {
     const end = findEndRecord(bytes) orelse return error.InvalidArchive;
     if (end.need_zip64()) return error.Unsupported;
 
-    var off: usize = end.central_directory_offset;
+    // All offset arithmetic in u64: on wasm32 `usize` is 32 bits and a crafted
+    // `compressed_size` could wrap `data_off + size` back below `data_off`, past the bounds
+    // check and into memory beyond the archive.
+    const len: u64 = bytes.len;
+    var budget: u64 = max_total_bytes;
+    var off: u64 = end.central_directory_offset;
     var i: usize = 0;
     while (i < end.record_count_total) : (i += 1) {
         const hdr = readStruct(zip.CentralDirectoryFileHeader, bytes, off) orelse return error.InvalidArchive;
         if (!std.mem.eql(u8, &hdr.signature, &zip.central_file_header_sig)) return error.InvalidArchive;
         const name_off = off + @sizeOf(zip.CentralDirectoryFileHeader);
         const name_end = name_off + hdr.filename_len;
-        if (name_end > bytes.len) return error.InvalidArchive;
-        const raw_name = bytes[name_off..name_end];
+        if (name_end > len) return error.InvalidArchive;
+        const raw_name = bytes[@intCast(name_off)..@intCast(name_end)];
         off = name_end + hdr.extra_len + hdr.comment_len;
 
         if (hdr.flags.encrypted) return error.Unsupported;
         const local = readStruct(zip.LocalFileHeader, bytes, hdr.local_file_header_offset) orelse return error.InvalidArchive;
         if (!std.mem.eql(u8, &local.signature, &zip.local_file_header_sig)) return error.InvalidArchive;
-        const data_off = @as(usize, hdr.local_file_header_offset) + @sizeOf(zip.LocalFileHeader) + local.filename_len + local.extra_len;
-        const data_end = data_off + hdr.compressed_size;
-        if (data_end > bytes.len) return error.InvalidArchive;
+        const data_off: u64 = @as(u64, hdr.local_file_header_offset) + @sizeOf(zip.LocalFileHeader) + local.filename_len + local.extra_len;
+        const data_end: u64 = data_off + hdr.compressed_size;
+        if (data_end > len) return error.InvalidArchive;
+        if (hdr.uncompressed_size > budget) return error.TooLarge;
+        budget -= hdr.uncompressed_size;
 
         const path = try mountPath(mem.allocator, raw_name);
         defer mem.allocator.free(path);
@@ -61,7 +76,7 @@ pub fn unpackInto(mem: *Mem, bytes: []const u8) Error!void {
             continue;
         }
 
-        const data = try inflate(mem.allocator, bytes[data_off..data_end], hdr.compression_method, hdr.uncompressed_size);
+        const data = try inflate(mem.allocator, bytes[@intCast(data_off)..@intCast(data_end)], hdr.compression_method, hdr.uncompressed_size);
         defer mem.allocator.free(data);
         mem.put(path, data) catch |err| switch (err) {
             error.Exists => {},
@@ -167,12 +182,34 @@ fn findEndRecord(bytes: []const u8) ?zip.EndRecord {
     return readStruct(zip.EndRecord, bytes, pos);
 }
 
+test "truncated and inflated-size-lying archives are refused, not read past" {
+    const a = std.testing.allocator;
+    var src = try Mem.init(a);
+    defer src.deinit();
+    try src.put("/a.txt", "hello");
+    const good = try pack(a, &src);
+    defer a.free(good);
+
+    // Chop the data out from under the central directory's offsets.
+    var dst = try Mem.init(a);
+    defer dst.deinit();
+    try std.testing.expectError(error.InvalidArchive, unpackInto(&dst, good[0 .. good.len - 30]));
+
+    // Lie about the inflated size past the budget.
+    const bad = try a.dupe(u8, good);
+    defer a.free(bad);
+    const cd = std.mem.indexOf(u8, bad, "PK\x01\x02").?;
+    const size_at = cd + 24; // uncompressed_size in the central header
+    std.mem.writeInt(u32, bad[size_at..][0..4], 0xFFFF_FFFF, .little);
+    try std.testing.expectError(error.TooLarge, unpackInto(&dst, bad));
+}
+
 /// 1980-01-01, the earliest date the format can express.
 const dos_epoch_date: u16 = (1 << 5) | 1;
 
-fn readStruct(comptime T: type, bytes: []const u8, off: usize) ?T {
+fn readStruct(comptime T: type, bytes: []const u8, off: u64) ?T {
     if (off + @sizeOf(T) > bytes.len) return null;
-    var v: T = @bitCast(bytes[off..][0..@sizeOf(T)].*);
+    var v: T = @bitCast(bytes[@intCast(off)..][0..@sizeOf(T)].*);
     if (@import("builtin").cpu.arch.endian() == .big) std.mem.byteSwapAllFields(T, &v);
     return v;
 }

@@ -236,9 +236,11 @@ fn cancel(ptr: *anyopaque, job: vfs.Job) void {
 
 fn pump(ptr: *anyopaque) void {
     const self: *LocalFs = @ptrCast(@alignCast(ptr));
-    var taken = self.ready.take();
-    defer taken.deinit(self.gpa);
-    for (taken.items) |item| item.payload.deliver();
+    self.ready.drain({}, struct {
+        fn f(_: void, c: Completion) void {
+            c.deliver();
+        }
+    }.f);
 }
 
 pub fn existsAbsolute(io: std.Io, abs: []const u8) bool {

@@ -166,6 +166,9 @@ pub const Mem = struct {
     }
 
     fn writeImpl(self: *Mem, path: []const u8, bytes: []const u8) Fs.Error!void {
+        // Create-or-replace, like a disk: a Save As onto a mount writes a file that is not
+        // there yet.
+        if (!self.nodes.contains(path)) return self.insert(path, .file, bytes);
         const node = try self.get(path);
         if (node.kind != .file) return error.NotAFile;
         const copy = try self.allocator.dupe(u8, bytes);
@@ -193,6 +196,8 @@ pub const Mem = struct {
     fn renameImpl(self: *Mem, path: []const u8, new_path: []const u8) Fs.Error!void {
         if (Fs.isRoot(path) or Fs.isRoot(new_path)) return error.Unsupported;
         if (std.mem.eql(u8, path, new_path)) return;
+        // Into its own subtree would orphan everything beneath it.
+        if (std.mem.startsWith(u8, new_path, path) and new_path[path.len] == '/') return error.Unsupported;
         _ = try self.get(path);
         const new_parent = try self.get(Fs.dirname(new_path));
         if (new_parent.kind != .dir) return error.NotADirectory;
@@ -244,9 +249,11 @@ pub const Mem = struct {
 
     fn pump(ptr: *anyopaque) void {
         const self: *Mem = @ptrCast(@alignCast(ptr));
-        var taken = self.completions.take();
-        defer taken.deinit(self.allocator);
-        for (taken.items) |item| item.payload.deliver();
+        self.completions.drain({}, struct {
+            fn f(_: void, c: Completion) void {
+                c.deliver();
+            }
+        }.f);
     }
 };
 
@@ -359,6 +366,52 @@ test "memory fs: list, read, write, mkdir, rename, remove" {
     _ = try fs.listDir(allocator, "/", Sink.onList, &sink);
     fs.pump();
     try std.testing.expectEqual(@as(usize, 0), sink.entries.?.len);
+}
+
+test "memory fs: rename into its own subtree is refused; writeFile creates" {
+    const allocator = std.testing.allocator;
+    var store = try Mem.init(allocator);
+    defer store.deinit();
+    const fs = store.fs();
+    var sink: Sink = .{ .allocator = allocator };
+    defer sink.reset();
+    _ = try fs.mkdir("/a", Sink.onDone, &sink);
+    _ = try fs.rename("/a", "/a/b", Sink.onDone, &sink);
+    fs.pump();
+    try std.testing.expectEqual(Fs.Error.Unsupported, sink.err.?);
+    sink.reset();
+    _ = try fs.writeFile("/a/new.txt", "fresh", Sink.onDone, &sink);
+    fs.pump();
+    try std.testing.expect(sink.err == null);
+    sink.reset();
+    _ = try fs.readFile(allocator, "/a/new.txt", Sink.onRead, &sink);
+    fs.pump();
+    try std.testing.expectEqualStrings("fresh", sink.bytes.?);
+}
+
+test "memory fs: cancelling a later job from inside a callback skips it" {
+    const allocator = std.testing.allocator;
+    var store = try Mem.init(allocator);
+    defer store.deinit();
+    const fs = store.fs();
+    const Chain = struct {
+        fs: Fs.Fs,
+        later: Fs.Job = .{ .id = 0 },
+        later_calls: usize = 0,
+        fn first(ctx: ?*anyopaque, _: Fs.Error![]Fs.Entry) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.fs.cancel(self.later);
+        }
+        fn second(ctx: ?*anyopaque, _: Fs.Error![]Fs.Entry) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.later_calls += 1;
+        }
+    };
+    var chain: Chain = .{ .fs = fs };
+    _ = try fs.listDir(allocator, "/", Chain.first, &chain);
+    chain.later = try fs.listDir(allocator, "/", Chain.second, &chain);
+    fs.pump();
+    try std.testing.expectEqual(@as(usize, 0), chain.later_calls);
 }
 
 test "memory fs: cancel drops the callback" {

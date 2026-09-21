@@ -26,7 +26,7 @@ pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
     errdefer gpa.free(path_copy);
 
     const stem = std.fs.path.stem(std.fs.path.basename(path));
-    const prefix = try std.fmt.allocPrint(gpa, "zip://{s}", .{if (stem.len > 0) stem else "archive"});
+    const prefix = try uniquePrefix(gpa, if (stem.len > 0) stem else "archive");
     errdefer gpa.free(prefix);
 
     const mem = try gpa.create(core.vfs.Mem);
@@ -42,6 +42,26 @@ pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
         .mem = mem,
         .clean_generation = mem.generation,
     };
+}
+
+/// `zip://<stem>`, or `zip://<stem> (2)`, … when that prefix is already mounted: two archives
+/// with one name must not share a mount, or closing either unmounts both.
+fn uniquePrefix(gpa: std.mem.Allocator, stem: []const u8) ![]u8 {
+    const files = sdk.host().files orelse return std.fmt.allocPrint(gpa, "zip://{s}", .{stem});
+    var n: usize = 1;
+    while (n < 1000) : (n += 1) {
+        const candidate = if (n == 1)
+            try std.fmt.allocPrint(gpa, "zip://{s}", .{stem})
+        else
+            try std.fmt.allocPrint(gpa, "zip://{s} ({d})", .{ stem, n });
+        var taken = false;
+        for (files.mountList()) |m| {
+            if (std.mem.eql(u8, m.prefix, candidate)) taken = true;
+        }
+        if (!taken) return candidate;
+        gpa.free(candidate);
+    }
+    return error.TooManyArchives;
 }
 
 /// Native: read the archive from disk. Web has no disk; archives arrive as bytes.

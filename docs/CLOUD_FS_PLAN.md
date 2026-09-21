@@ -204,6 +204,42 @@ Landed as zig-drive `pxvpqtnz`. 18 tests, `check-wasm` links.
 - Web end-to-end on `zig build web` served locally with the localhost JS origin registered on
   the Web OAuth client.
 
+## The 2026-09 review (`docs/REVIEW_2026-09.md` §5), folded in
+
+Fixed, with tests where the review named one: **D1** in-flight listing vs. `forget` (no `.?`
+on the index; a forgotten ancestor fails that listing), **D2** cancel during delivery
+(`Completions.drain` marks a later job of the batch skipped; the Drive client, `Mem`,
+`LocalFs`, both transports honour it), **D3** refresh storm (failure backs off a minute; a
+400/401 refresh signs out), **D4** a failed mount listing is remembered for the TTL, **D6**
+edits during an upload stay dirty (`savedBytes` records the op id), **D7** Save As onto a
+mount creates then writes (`Mem.writeFile` is create-or-replace too), **D9** cancel never joins
+a blocking fetch (the worker owns an orphaned job; tested at <100 ms with a held connection),
+**D10** the loopback accepts until the request carrying `state` (idle/favicon connections are
+404'd; tested) and closes once, **D11** zip offsets in `u64` with a 1 GiB inflate budget
+(tested), **D12** `Mem.rename` into its own subtree refused, **D13** `isDir` on a mount root,
+**D17** unique archive prefixes, the header CR/LF injection, the same-folder Drive rename
+(Google rejects `addParents == removeParents`). The layering/path-pin/GIS-outside-the-frame
+points went away with the move out of tree.
+
+Still open, in the order they should be taken:
+- **D15** an in-call `pump` on a mount delivers every completion mid-draw (`FileTable.listDir`,
+  `MountIo`, mutations). Pump inline only for the disk, or add `Fs.pumpJob(job)`.
+- **D8** `unmount` never reaches `MountIo` (a sign-out mid-open leaves the load; mid-save
+  leaves `docSaving` true). Add `Env.unmounted(prefix)`.
+- **D5** quit save-all closes a document whose mount write failed; re-check `isDirty` and
+  abort the quit.
+- **D14** Windows joins on mount paths (`std.fs.path.join` in `FilesService.move` and five
+  spots in `workbench/src/files.zig`); a mount-aware `core.paths.join`.
+- Secrets: the refresh token and desktop secret sit unmasked in `settings.zon` and the pane.
+  `settings.Value` `.secret` (masked, excluded from export), then a `Host.secrets` seam with
+  keychain/libsecret/DPAPI backends.
+- One `std.http.Client` shared per transport (a CA rescan and TLS handshake per request now).
+- `changes.list` polling → `Client.forget` + `invalidateListing`; `modifiedTime` precondition
+  before a write, reusing the on-disk-conflict UI.
+- Cross-mount copy (`FileTable.copyTree`) for disk↔drive drags.
+- The web Google Picker for `drive.file`; owner migration of pixi/atlas onto
+  `documentBytes`/`documentWritten`.
+
 ## Out of scope for this pass
 
 Dropbox/OneDrive backends (the seam is the deliverable; a second backend is the proof it

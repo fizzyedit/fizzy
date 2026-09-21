@@ -162,6 +162,8 @@ const Save = struct {
     path: []u8,
     bytes: []u8,
     job: core.vfs.Job = .{ .id = 0 },
+    /// The write came back `NotFound` once and the file has been created since.
+    created: bool = false,
 
     fn create(io: *MountIo, doc_id: u64, path: []const u8, bytes: []u8) !*Save {
         const gpa = io.editor.app.gpa;
@@ -178,14 +180,52 @@ const Save = struct {
         gpa.destroy(job);
     }
 
+    fn onCreated(ctx: ?*anyopaque, result: core.vfs.Error!void) void {
+        const job: *Save = @ptrCast(@alignCast(ctx.?));
+        const io = job.io;
+        const editor = io.editor;
+        result catch |err| {
+            _ = io.saves.swapRemove(job.doc_id);
+            dvui.log.err("Failed to create {s}: {t}", .{ job.path, err });
+            job.destroy();
+            return;
+        };
+        const target = editor.app.file_table.resolve(job.path);
+        job.job = target.fs.writeFile(target.rel, job.bytes, Save.onWritten, job) catch {
+            _ = io.saves.swapRemove(job.doc_id);
+            job.destroy();
+            return;
+        };
+        target.fs.pump();
+    }
+
     fn onWritten(ctx: ?*anyopaque, result: core.vfs.Error!void) void {
         const job: *Save = @ptrCast(@alignCast(ctx.?));
         const io = job.io;
         const editor = io.editor;
-        defer job.destroy();
+        // The retry path below re-queues the job; only a final outcome frees it.
+        var keep = false;
+        defer if (!keep) job.destroy();
         _ = io.saves.swapRemove(job.doc_id);
 
         result catch |err| {
+            if (err == error.NotFound and !job.created) {
+                // Save As onto a mount: the file is not there yet. Create it, then write again
+                // — the backend's `writeFile` is replace, not create.
+                job.created = true;
+                keep = true;
+                io.saves.put(editor.app.gpa, job.doc_id, job) catch {
+                    keep = false;
+                    return;
+                };
+                const target = editor.app.file_table.resolve(job.path);
+                job.job = target.fs.createFile(target.rel, Save.onCreated, job) catch {
+                    _ = io.saves.swapRemove(job.doc_id);
+                    return;
+                };
+                target.fs.pump();
+                return;
+            }
             dvui.log.err("Failed to save {s}: {t}", .{ job.path, err });
             dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
                 editor.app.arena.allocator(),

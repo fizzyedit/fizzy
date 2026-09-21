@@ -83,10 +83,20 @@ pub fn Completions(comptime Payload: type) type {
         pub const Item = struct {
             id: u64,
             payload: Payload,
+            /// Cancelled while `drain` was already delivering the batch it sits in. The
+            /// caller has taken the payload back; `drain` skips it.
+            skipped: bool = false,
+            /// Its callback is running: a `remove` now would pull the payload out from under
+            /// it, so `remove` declines and the caller leaves it to `drain`.
+            active: bool = false,
         };
 
         allocator: Allocator,
         items: std.ArrayList(Item) = .empty,
+        /// The batch `drain` is delivering right now, so a `remove` from inside a callback can
+        /// still find a later item of the same batch and mark it skipped instead of letting it
+        /// be delivered on memory the caller just freed.
+        delivering: std.ArrayList(Item) = .empty,
         next_id: u64 = 1,
 
         pub fn init(allocator: Allocator) Self {
@@ -95,6 +105,7 @@ pub fn Completions(comptime Payload: type) type {
 
         pub fn deinit(self: *Self) void {
             self.items.deinit(self.allocator);
+            self.delivering.deinit(self.allocator);
         }
 
         pub fn nextId(self: *Self) u64 {
@@ -108,21 +119,40 @@ pub fn Completions(comptime Payload: type) type {
         }
 
         /// Drop the completion for `id`, handing back its payload so the caller can free what it
-        /// carried. Null when nothing is queued under that id.
+        /// carried. Null when nothing is queued under that id — including one whose callback
+        /// is running at this very moment, which the caller must leave to `drain`.
         pub fn remove(self: *Self, id: u64) ?Payload {
             for (self.items.items, 0..) |item, i| {
                 if (item.id == id) return self.items.orderedRemove(i).payload;
             }
+            for (self.delivering.items) |*item| {
+                if (item.id == id and !item.skipped and !item.active) {
+                    item.skipped = true;
+                    return item.payload;
+                }
+            }
             return null;
         }
 
-        /// Take everything queued so far. Callbacks may start new jobs while these are being
-        /// delivered; those land in the fresh list and wait for the next `pump`. The caller
-        /// deinits the returned list with this queue's allocator.
-        pub fn take(self: *Self) std.ArrayList(Item) {
-            const taken = self.items;
+        /// Deliver everything queued so far through `deliver`, on this thread. A callback may
+        /// start new jobs (they wait for the next drain) or cancel later ones in this batch
+        /// (they are skipped). Re-entered from a callback, it does nothing: the outer drain is
+        /// still walking the batch.
+        pub fn drain(self: *Self, ctx: anytype, comptime deliver: fn (@TypeOf(ctx), Payload) void) void {
+            if (self.delivering.items.len != 0) return;
+            self.delivering = self.items;
             self.items = .empty;
-            return taken;
+            defer {
+                self.delivering.deinit(self.allocator);
+                self.delivering = .empty;
+            }
+            var i: usize = 0;
+            while (i < self.delivering.items.len) : (i += 1) {
+                const item = &self.delivering.items[i];
+                if (item.skipped) continue;
+                item.active = true;
+                deliver(ctx, item.payload);
+            }
         }
     };
 }

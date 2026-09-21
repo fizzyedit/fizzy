@@ -19,6 +19,12 @@ wake: ?*const fn () void = null,
 mutex: SpinLock = .{},
 /// Every request started and not yet delivered or cancelled.
 jobs: std.AutoArrayHashMapUnmanaged(u64, *Job) = .empty,
+/// Cancelled while the worker was still inside `fetch` (which has no timeout). The worker
+/// owns them from then on and destroys them when it returns — waiting for it here would stall
+/// the UI thread for a round trip, or forever.
+orphans: std.AutoArrayHashMapUnmanaged(u64, *Job) = .empty,
+/// The job whose callback `pump` is inside; a cancel of it from that callback is a no-op.
+delivering: ?*Job = null,
 next_id: u64 = 1,
 
 const SpinLock = struct {
@@ -45,6 +51,11 @@ const Job = struct {
     /// Written by the worker under the owner's mutex, read by `pump` under it.
     result: ?vfs.Error!vfs.http.Response = null,
     cancelled: bool = false,
+    /// `deinit` will join this thread and destroy the job; the worker must then leave both.
+    joined_by_deinit: bool = false,
+    /// Finished and picked up by the `pump` in progress, which will deliver or (if cancelled
+    /// meanwhile by an earlier callback of the same batch) skip and destroy it.
+    in_batch: bool = false,
     thread: ?std.Thread = null,
 
     fn destroy(job: *Job) void {
@@ -67,7 +78,8 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, wake: ?*const fn () void) Native
     return .{ .gpa = gpa, .io = io, .wake = wake };
 }
 
-/// Waits for every worker still running; their responses are dropped.
+/// Waits for every worker still running (the one place that does — the transport's memory
+/// is about to go away under them); their responses are dropped.
 pub fn deinit(self: *NativeTransport) void {
     var threads: std.ArrayListUnmanaged(std.Thread) = .empty;
     defer threads.deinit(self.gpa);
@@ -76,12 +88,19 @@ pub fn deinit(self: *NativeTransport) void {
         defer self.mutex.unlock();
         for (self.jobs.values()) |job| {
             job.cancelled = true;
+            job.joined_by_deinit = true;
+            if (job.thread) |t| threads.append(self.gpa, t) catch {};
+        }
+        for (self.orphans.values()) |job| {
+            job.joined_by_deinit = true;
             if (job.thread) |t| threads.append(self.gpa, t) catch {};
         }
     }
     for (threads.items) |t| t.join();
     for (self.jobs.values()) |job| job.destroy();
+    for (self.orphans.values()) |job| job.destroy();
     self.jobs.deinit(self.gpa);
+    self.orphans.deinit(self.gpa);
 }
 
 pub fn transport(self: *NativeTransport) vfs.http.Transport {
@@ -144,16 +163,33 @@ fn request(ptr: *anyopaque, allocator: std.mem.Allocator, req: vfs.http.Request,
 fn worker(job: *Job) void {
     const result = perform(job);
     const self = job.owner;
+    const wake = self.wake;
     self.mutex.lock();
+    if (job.joined_by_deinit) {
+        // `deinit` holds the thread handle and will join it, then destroy the job.
+        job.result = result;
+        self.mutex.unlock();
+        return;
+    }
+    if (job.cancelled) {
+        // Ours now (see `cancel`): nobody is listening. Free the response and the job; the
+        // thread detaches itself since no one will join it.
+        _ = self.orphans.swapRemove(job.id);
+        if (job.thread) |t| t.detach();
+        job.thread = null;
+        self.mutex.unlock();
+        if (result) |resp| resp.deinit(job.allocator) else |_| {}
+        job.destroy();
+        return;
+    }
     job.result = result;
     if (job.thread) |t| {
-        // The job outlives this thread only through `pump` or `deinit`, both of which join or
-        // detach it; a completed worker needs no join.
+        // A completed worker needs no join; `pump` frees the job.
         t.detach();
         job.thread = null;
     }
     self.mutex.unlock();
-    if (self.wake) |w| w();
+    if (wake) |w| w();
 }
 
 fn perform(job: *Job) vfs.Error!vfs.http.Response {
@@ -189,13 +225,26 @@ fn cancel(ptr: *anyopaque, handle: vfs.http.Job) void {
         self.mutex.unlock();
         return;
     };
+    if (self.delivering == job) {
+        // Its own callback is what is cancelling it; `pump` destroys it once that returns.
+        self.mutex.unlock();
+        return;
+    }
     _ = self.jobs.swapRemove(handle.id);
     job.cancelled = true;
-    const thread = job.thread;
-    job.thread = null;
+    if (job.in_batch) {
+        // `pump` is walking a batch this job is in; it skips and frees a cancelled one.
+        self.mutex.unlock();
+        return;
+    }
+    if (job.result == null) {
+        // Still inside `fetch`. Never wait for that here (D9): hand the job to its worker.
+        self.orphans.put(self.gpa, job.id, job) catch {};
+        self.mutex.unlock();
+        return;
+    }
+    // Finished: the worker is gone (detached) and nothing else holds the job.
     self.mutex.unlock();
-    // The worker may still be inside `fetch`; wait for it rather than free under its feet.
-    if (thread) |t| t.join();
     job.destroy();
 }
 
@@ -207,15 +256,30 @@ fn pump(ptr: *anyopaque) void {
         self.mutex.lock();
         defer self.mutex.unlock();
         for (self.jobs.values()) |job| {
-            if (job.result != null) done.append(self.gpa, job) catch break;
+            if (job.result != null and !job.in_batch) {
+                job.in_batch = true;
+                done.append(self.gpa, job) catch break;
+            }
         }
-        for (done.items) |job| _ = self.jobs.swapRemove(job.id);
     }
-    // Outside the lock: a callback may start another request.
+    // Outside the lock: a callback may start another request, or cancel a later job of this
+    // batch — which is then skipped here rather than delivered.
     for (done.items) |job| {
-        const result = job.result.?;
-        job.result = null; // ownership of the body passes to the callback
-        job.cb(job.ctx, result);
+        self.mutex.lock();
+        const cancelled = job.cancelled;
+        if (!cancelled) {
+            _ = self.jobs.swapRemove(job.id);
+            self.delivering = job;
+        }
+        self.mutex.unlock();
+        if (!cancelled) {
+            const result = job.result.?;
+            job.result = null; // ownership of the body passes to the callback
+            job.cb(job.ctx, result);
+            self.mutex.lock();
+            self.delivering = null;
+            self.mutex.unlock();
+        }
         job.destroy();
     }
 }
@@ -350,4 +414,42 @@ test "a request round-trips through a loopback server and lands from pump" {
     t.cancel(job);
     t.pump();
     try std.testing.expectEqual(@as(usize, 0), sink2.calls);
+}
+
+test "cancel returns at once while the server is still holding the connection" {
+    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    // A listener that accepts and then never answers.
+    const addr = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try addr.listen(io, .{ .reuse_address = true });
+    const Hold = struct {
+        fn run(s: *std.Io.net.Server, held_io: std.Io, release: *std.atomic.Value(bool)) void {
+            const stream = s.accept(held_io) catch return;
+            while (!release.load(.acquire)) std.Io.sleep(held_io, .fromMicroseconds(1000), .awake) catch {};
+            stream.close(held_io);
+        }
+    };
+    var release: std.atomic.Value(bool) = .init(false);
+    const holder = try std.Thread.spawn(.{}, Hold.run, .{ &server, io, &release });
+
+    var nt = NativeTransport.init(a, io, null);
+    const t = nt.transport();
+    const url = try std.fmt.allocPrint(a, "http://127.0.0.1:{d}/", .{server.socket.address.getPort()});
+    defer a.free(url);
+    var sink: Sink = .{ .allocator = a };
+    const job = try t.request(a, .{ .method = .GET, .url = url }, Sink.onDone, &sink);
+    std.Io.sleep(io, .fromMicroseconds(20_000), .awake) catch {};
+
+    const before = std.Io.Clock.boot.now(io).nanoseconds;
+    t.cancel(job);
+    const took_ms = @divTrunc(std.Io.Clock.boot.now(io).nanoseconds - before, std.time.ns_per_ms);
+    try std.testing.expect(took_ms < 100);
+    try std.testing.expectEqual(@as(usize, 0), sink.calls);
+
+    // Let the worker finish and free the orphan, then tear down.
+    release.store(true, .release);
+    holder.join();
+    nt.deinit();
+    server.deinit(io);
 }

@@ -420,7 +420,15 @@ const ListJob = struct {
         const table = job.table;
         defer job.destroy();
         _ = table.pending.swapRemove(job.directory);
-        const entries = result catch return;
+        const entries = result catch |err| {
+            // Remembered as empty for the unwatched TTL rather than asked again next frame —
+            // a directory that answers `Unauthorized` or `NotFound` would otherwise be
+            // re-requested at frame rate for as long as it is on screen.
+            std.log.warn("listing {s} failed: {t}", .{ job.directory, err });
+            table.install(job.directory, &.{}, job.asked_at_ms);
+            table.env.refresh(table.env.ctx);
+            return;
+        };
         defer vfs.freeEntries(table.gpa, entries);
         table.install(job.directory, entries, job.asked_at_ms);
         table.env.refresh(table.env.ctx);
@@ -856,6 +864,7 @@ pub fn exists(self: *FileTable, abs: []const u8) bool {
 /// parent's cached listing — asking the mount would mean waiting, and this is a draw-time query.
 pub fn isDir(self: *FileTable, abs: []const u8) bool {
     if (!self.isMounted(abs)) return LocalFs.isDirAbsolute(self.io, abs);
+    if (self.resolve(abs).rel.len <= 1) return true; // the mount's root
     const parent = std.fs.path.dirname(abs) orelse return false;
     const listing = self.listings.get(parent) orelse return false;
     const name = std.fs.path.basename(abs);

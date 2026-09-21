@@ -65,6 +65,8 @@ line_count: usize = 1,
 /// inferred from the path (e.g. `""`/no extension) — an intentionally extensionless real
 /// file like `Makefile` must not be mistaken for an untitled document.
 unsaved: bool = false,
+/// The op id `savedBytes` last serialized at; what `written` makes the clean point.
+serialized_op_id: u64 = 0,
 
 /// Selection, mirrored from the `TextEntryWidget` after every draw (`TextEditor.draw`) so
 /// the Copy/Paste commands — invoked from the Edit menu / native menu, outside any frame's
@@ -362,12 +364,17 @@ pub fn save(self: *Document) !void {
 }
 
 /// The bytes `save` would write, for a host that does the writing itself (a mounted drive).
-pub fn savedBytes(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
+/// Remembers which edit those bytes stand for: the write lands later, and edits typed in the
+/// meantime must still count as unsaved when it does.
+pub fn savedBytes(self: *Document, allocator: std.mem.Allocator) ![]u8 {
+    self.history.closeGroup();
+    self.serialized_op_id = self.history.topOpId();
     return allocator.dupe(u8, self.text.items);
 }
 
 /// The host wrote `savedBytes()` to `path`: the same bookkeeping `save` does after its write, plus
-/// adopting `path` when it is not ours yet (Save As).
+/// adopting `path` when it is not ours yet (Save As). Clean up to the edit that was serialized,
+/// not up to now.
 pub fn written(self: *Document, path: []const u8) !void {
     if (!std.mem.eql(u8, path, self.path)) {
         const gpa = sdk.allocator();
@@ -376,8 +383,7 @@ pub fn written(self: *Document, path: []const u8) !void {
         self.path = path_copy;
         self.unsaved = false;
     }
-    self.history.closeGroup();
-    self.clean_op_id = self.history.topOpId();
+    self.clean_op_id = self.serialized_op_id;
     self.notifyContentChanged();
 }
 
