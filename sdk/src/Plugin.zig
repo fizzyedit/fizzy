@@ -72,7 +72,10 @@ pub const SaveConfirmMode = enum { editor_save, save_and_close };
 pub const VTable = struct {
     /// Tear down `state`. Called when the plugin is unregistered / app shuts down.
     deinit: ?*const fn (state: *anyopaque) void = null,
-    /// One-time plugin setup (e.g. background worker threads).
+    /// One-time plugin setup (e.g. background worker threads). Runs after the host has
+    /// injected its dvui globals into the plugin's image — unlike `register`, where in a dylib
+    /// `dvui.io` / `dvui.currentWindow()` are not yet valid. Anything that captures them
+    /// (a transport, a worker) belongs here.
     initPlugin: ?*const fn (state: *anyopaque) anyerror!void = null,
 
     /// The static, enumerable set of file extensions (each including the dot, e.g. ".fiz")

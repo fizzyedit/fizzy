@@ -1308,6 +1308,12 @@ pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     try editor.app.appendLoadedPluginLib(loaded);
     App.syncLoadedPluginDvuiContexts(&editor.app);
     App.syncLoadedPluginRenderBridge(&editor.app);
+    // The same one-time setup startup gives every plugin (`initPlugin`), now that this image
+    // has the host's dvui globals — a plugin that spawns a worker or captures `dvui.io` there
+    // must see the real one, not the `undefined` it had during `register`.
+    for (editor.app.host.plugins.items) |p| {
+        if (std.mem.eql(u8, p.id, id)) try p.initPlugin();
+    }
     rebuildKeybinds(editor);
     fizzy.backend.rebuildDynamicNativeMenus();
     // The plugin now loads cleanly; drop any prior failure record so the store/dialog stop
