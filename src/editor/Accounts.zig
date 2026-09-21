@@ -120,33 +120,57 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     if (which % 64 >= accounts.len) return;
     const a = accounts[which % 64];
     const at = anchor.toNatural();
+    const list_top = list.rect.toNatural();
     // Overlapping the list by a sliver, so the pointer crosses from the row into the submenu
-    // without passing over a gap that would read as "outside" and close it.
-    var sub = Popover.init(@src(), .{ .rect = &sub_rect, .anchor = .{ .x = at.x + at.w - 10, .y = at.y - 7 }, .id_extra = 1 });
+    // without passing over a gap that would read as "outside" and close it; top edges level.
+    var sub = Popover.init(@src(), .{ .rect = &sub_rect, .anchor = .{ .x = at.x + at.w - 10, .y = list_top.y }, .id_extra = 1 });
     defer sub.deinit();
     sub_phys = sub.rect;
     if (p.menu(a.id)) open = false;
 }
 
 /// A provider's submenu row, for `Host.drawMenuItem` while `drawing_rows`: the popover shell
-/// around fizzy's usual icon + label + chord. Returns whether it was clicked.
+/// around an icon, the title and its chord — laid out on the same columns as an account row
+/// (`accountRowContent`), so the two levels line up. Returns whether it was clicked.
 pub fn drawMenuRow(title: []const u8, icon: ?[]const u8, kb: dvui.enums.Keybind, enabled: bool) bool {
+    const theme = dvui.themeGet();
     const id_extra: usize = @truncate(std.hash.Wyhash.hash(0, title));
     var r = Popover.row(@src(), .{ .enabled = enabled, .id_extra = id_extra });
     defer r.deinit();
-    fizzy.core.draw.menuRowIcon(icon, dvui.themeGet().color(.control, .text), enabled, id_extra);
-    fizzy.core.draw.labelWithKeybind(title, kb, enabled, .{ .expand = .horizontal }, .{ .expand = .horizontal });
+    const text_color = if (enabled) theme.color(.control, .text) else theme.color(.control, .text).opacity(0.5);
+    {
+        // The same cell an account's disc takes; the command's icon sits in it, centred.
+        var cell = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = id_extra, .min_size_content = .{ .w = row_disc, .h = row_disc }, .max_size_content = .size(.{ .w = row_disc, .h = row_disc }), .gravity_y = 0.5, .margin = .{ .w = row_disc_gap }, .background = false, .padding = .all(0) });
+        defer cell.deinit();
+        if (icon) |b| {
+            fizzy.core.icon.icon(@src(), "menu_icon", b, .{ .stroke_color = .{ .color = text_color }, .fill_color = .{ .color = text_color } }, .{
+                .id_extra = id_extra,
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
+                .min_size_content = .{ .h = row_disc - 4 },
+                .margin = .all(0),
+                .padding = .all(0),
+            });
+        }
+    }
+    dvui.labelNoFmt(@src(), title, .{}, .{ .id_extra = id_extra, .gravity_y = 0.5, .margin = .all(0), .padding = .all(0), .color_text = .{ .color = text_color } });
+    _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 16, .h = 1 }, .expand = .horizontal, .id_extra = id_extra });
+    fizzy.core.draw.keybindLabels(&kb, enabled, .{ .id_extra = id_extra, .gravity_y = 0.5, .gravity_x = 1.0 });
     return r.clicked;
 }
+
+/// The picture/icon cell every popover row starts with, and the gap after it.
+const row_disc: f32 = 18;
+const row_disc_gap: f32 = 8;
 
 /// An account row's content: its picture in a small disc (or a user glyph), the label, a
 /// chevron for the submenu.
 fn accountRowContent(label: []const u8, avatar: ?dvui.ImageSource) void {
     const theme = dvui.themeGet();
-    const disc: f32 = 18;
+    const disc: f32 = row_disc;
     {
         // The disc: a spacer reserves the cell; the picture (or glyph) is drawn into it.
-        const cell = dvui.spacer(@src(), .{ .min_size_content = .{ .w = disc, .h = disc }, .gravity_y = 0.5, .margin = .{ .w = 8 } });
+        const cell = dvui.spacer(@src(), .{ .min_size_content = .{ .w = disc, .h = disc }, .gravity_y = 0.5, .margin = .{ .w = row_disc_gap } });
         const rs = cell.rectScale();
         const side = disc * rs.s;
         const cx = rs.r.x + rs.r.w / 2;
