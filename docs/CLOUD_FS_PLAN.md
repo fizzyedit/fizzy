@@ -190,9 +190,9 @@ Landed as zig-drive `pxvpqtnz`. 18 tests, `check-wasm` links.
 - First real run (desktop): sign-in completed and the refresh token was saved; the `about`
   call then returned 403 *API not enabled* — README step 2 had been skipped. `Full Drive
   access` setting added because `drive.file` shows an empty drive on the desktop.
-- Not yet: the `changes.list` poll (a mount is "last write wins" and re-lists on each search
-  session); the explorer's web empty state still says "Open Files", not "Connect Google
-  Drive" (the File menu has it).
+- Not yet: the explorer's web empty state still says "Open Files", not "Connect Google
+  Drive" (the File menu has it). Writes are "last write wins" until the `modifiedTime`
+  precondition lands.
 - Publisher setup, step by step: `~/dev/fizzyedit/zig-drive/README.md`.
 
 ### 6. Verification
@@ -234,8 +234,9 @@ pool, one TLS handshake per host).
 Still open, in the order they should be taken:
 - Secrets on disk: still plaintext in `settings.zon`. A `Host.secrets` seam with
   keychain/libsecret/DPAPI backends is the next step.
-- `changes.list` polling → `Client.forget` + `invalidateListing`; `modifiedTime` precondition
-  before a write, reusing the on-disk-conflict UI.
+- `modifiedTime` precondition before a write, reusing the on-disk-conflict UI (the
+  `changes.list` poll now exists: every 5 s while mounted, it forgets what changed and
+  invalidates those listings — the mount's watcher).
 - Cross-mount copy (`FileTable.copyTree`) for disk↔drive drags.
 - The web Google Picker for `drive.file`; owner migration of pixi/atlas onto
   `documentBytes`/`documentWritten`.
