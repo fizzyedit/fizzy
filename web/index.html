@@ -319,6 +319,9 @@
               if (dvuiApp) dvuiApp.requestRender();
             });
           },
+          fizzy_web_plugin_forget(idPtr, idLen) {
+            forgetPlugin(utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, idPtr, idLen)));
+          },
           fizzy_web_oauth_callback_url(bufPtr, bufLen) {
             const inst = target();
             if (!inst) return 0;
@@ -363,16 +366,42 @@
 
       // `?plugin=<id>` loads `plugins/<id>/<id>.wasm` beside the app once it is up — the
       // developer's way in until the store serves web builds.
+      // Plugins the store installed on an earlier visit, by id → URL. The page's memory, since
+      // the app has no settings file here; forgotten on uninstall.
+      const rememberedKey = "fizzy.web_plugins";
+      function rememberedPlugins() {
+        try { return JSON.parse(localStorage.getItem(rememberedKey) || "{}"); } catch (_) { return {}; }
+      }
+      function rememberPlugin(id, url) {
+        try {
+          const all = rememberedPlugins();
+          all[id] = url;
+          localStorage.setItem(rememberedKey, JSON.stringify(all));
+        } catch (_) {}
+      }
+      function forgetPlugin(id) {
+        try {
+          const all = rememberedPlugins();
+          delete all[id];
+          localStorage.setItem(rememberedKey, JSON.stringify(all));
+        } catch (_) {}
+      }
+      function requestPlugin(id, url) {
+        const inst = wasmInstance;
+        const idBytes = utf8encode(id);
+        const urlBytes = utf8encode(url || "");
+        const idPtr = inst.exports.FizzyWebPluginAlloc(idBytes.length, 1);
+        const urlPtr = urlBytes.length ? inst.exports.FizzyWebPluginAlloc(urlBytes.length, 1) : 0;
+        if (!idPtr || (urlBytes.length && !urlPtr)) return;
+        new Uint8Array(inst.exports.memory.buffer, idPtr, idBytes.length).set(idBytes);
+        if (urlBytes.length) new Uint8Array(inst.exports.memory.buffer, urlPtr, urlBytes.length).set(urlBytes);
+        inst.exports.FizzyWebPluginRequest(idPtr, idBytes.length, urlPtr, urlBytes.length);
+      }
       function requestUrlPlugins() {
         const inst = wasmInstance;
         if (!inst || !inst.exports.FizzyWebPluginRequest) return;
-        for (const id of new URLSearchParams(location.search).getAll("plugin")) {
-          const bytes = utf8encode(id);
-          const ptr = inst.exports.FizzyWebPluginAlloc(bytes.length, 1);
-          if (!ptr) continue;
-          new Uint8Array(inst.exports.memory.buffer, ptr, bytes.length).set(bytes);
-          inst.exports.FizzyWebPluginRequest(ptr, bytes.length);
-        }
+        for (const [id, url] of Object.entries(rememberedPlugins())) requestPlugin(id, url);
+        for (const id of new URLSearchParams(location.search).getAll("plugin")) requestPlugin(id, "");
         if (dvuiApp) dvuiApp.requestRender();
         // `?open=<url>`: fetch a file and open it as an upload would be (a zip becomes the
         // root folder). After the plugins, so the one that owns it may be among them.
@@ -483,6 +512,11 @@
         for (let i = 0; i < pluginEntryPoints.length; i++) indices[i] = base + i;
         loadedPlugins.set(url, instance);
         host.exports.FizzyWebPluginReady(req, list, pluginEntryPoints.length);
+        // The id is the segment before the file: `plugins/<id>/<id>.wasm`, or the store's
+        // `<id>-web-wasm32.wasm`; remembering by URL alone would do, but the host forgets by id.
+        const file = url.split("/").pop().split("?")[0];
+        const id = file.replace(/-web-wasm32\.wasm$/, "").replace(/\.wasm$/, "");
+        rememberPlugin(id, url);
       }
 
       function hideUnplacedOverlays() {

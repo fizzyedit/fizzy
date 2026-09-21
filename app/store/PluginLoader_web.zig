@@ -101,7 +101,14 @@ pub fn pluginExtension() []const u8 {
 
 const wasm = struct {
     extern "fizzy" fn fizzy_web_plugin_load(req: u32, url_ptr: [*]const u8, url_len: usize) void;
+    extern "fizzy" fn fizzy_web_plugin_forget(id_ptr: [*]const u8, id_len: usize) void;
 };
+
+/// Drop `id` from the plugins the page brings back on the next visit (the page remembers
+/// every plugin it linked, in `localStorage`, and requests them again at startup).
+pub fn forget(id: []const u8) void {
+    wasm.fizzy_web_plugin_forget(id.ptr, id.len);
+}
 
 /// What the page reports for a request, delivered on `pump`.
 pub const Arrival = struct {

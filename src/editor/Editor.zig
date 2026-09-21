@@ -1380,14 +1380,14 @@ const WebPluginRequest = struct {
     }
 };
 
-/// The page asks for a plugin (`?plugin=<id>` on the URL, for now): `plugins/<id>/<id>.wasm`
-/// beside the app.
-export fn FizzyWebPluginRequest(id_ptr: [*]const u8, id_len: usize) void {
+/// The page asks for a plugin: `?plugin=<id>` on the URL (`plugins/<id>/<id>.wasm` beside
+/// the app), or one it remembered from a store install (by its URL).
+export fn FizzyWebPluginRequest(id_ptr: [*]const u8, id_len: usize, url_ptr: [*]const u8, url_len: usize) void {
     if (comptime builtin.target.cpu.arch != .wasm32) return;
     const editor = web_editor orelse return;
     const id = id_ptr[0..id_len];
     var buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&buf, "plugins/{s}/{s}.wasm", .{ id, id }) catch return;
+    const url = if (url_len != 0) url_ptr[0..url_len] else std.fmt.bufPrint(&buf, "plugins/{s}/{s}.wasm", .{ id, id }) catch return;
     editor.loadWebPlugin(id, url) catch |err| dvui.log.err("web plugin '{s}': {s}", .{ id, @errorName(err) });
 }
 /// The page opens a file it fetched (`?open=<url>` — a zip vault for a demo, say) exactly as
@@ -1580,7 +1580,12 @@ pub fn updatePlugin(editor: *Editor, id: []const u8, force: bool) !void {
 /// note, so reinstalling later restores the old configuration. `force` controls dirty-document
 /// handling on the unload.
 pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return error.NotUnloadable;
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        // A side module cannot leave the page; it stays until reload. What "uninstall" can do
+        // is forget it, so the next visit does not bring it back (see `loadWebPlugin`).
+        PluginLoader.forget(id);
+        return error.NotUnloadable;
+    }
     if (isBundledPluginId(id)) return error.NotUnloadable;
     if (editor.app.host.pluginById(id) != null) try editor.unloadPlugin(id, force);
     // Drop runtime disabled bookkeeping — the plugin no longer exists to be disabled. Its
