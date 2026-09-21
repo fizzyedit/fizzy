@@ -11,6 +11,11 @@ const Menu = @import("Menu.zig");
 
 const Editor = fizzy.Editor;
 
+/// Whether the list is showing. One list per app, so one flag.
+var open: bool = false;
+/// The list's rect last frame, so a click inside it does not count as "elsewhere".
+var list_rect: dvui.Rect.Physical = .{};
+
 /// Draw the disc as one rail cell. Drawn only when a provider exists (`Sidebar`).
 pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     const host = &editor.app.host;
@@ -23,43 +28,27 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
         if (p.accounts(arena).len != 0) any_signed_in = true;
     }
 
-    // A one-item vertical menu so the disc behaves like a bar item: click opens, hover keeps
-    // it open, a click elsewhere closes — dvui's own menu rules.
-    var m = dvui.menu(@src(), .vertical, .{});
-    defer m.deinit();
-
-    var mi = dvui.menuItem(@src(), .{ .submenu = true }, .{ .min_size_content = .{ .h = size }, .expand = .horizontal });
-    const active = mi.activeRect();
-    const hovered = fizzy.core.widgets.hovered(mi.data());
-
-    // A user glyph inside a ring, a true circle the size of an icon, centred in the cell. The
-    // ring lights up when anyone is signed in; the pictures are in the list, not here.
-    const rs = mi.data().contentRectScale();
-    const side = size * rs.s;
-    const cx = rs.r.x + rs.r.w / 2;
-    const cy = rs.r.y + rs.r.h / 2;
-    const ring = if (any_signed_in) theme.color(.highlight, .fill) else if (hovered or active != null) theme.color(.window, .text) else theme.color(.window, .fill);
-    {
-        var path: dvui.Path.Builder = .init(dvui.currentWindow().arena());
-        path.addArc(.{ .x = cx, .y = cy }, side / 2, 0, std.math.tau, false);
-        const circle = path.build();
-        circle.fillConvex(.{ .color = .{ .color = theme.color(.window, .fill).opacity(0.35) }, .fade = 1.0 });
-        circle.stroke(.{ .thickness = 1.0 * rs.s, .color = .{ .color = ring }, .closed = true });
-    }
-    const glyph = size * 0.55;
-    fizzy.core.icon.icon(@src(), "accounts", dvui.entypo.user, .{ .fill_color = .{ .color = ring }, .stroke_color = .{ .color = ring } }, .{
-        .min_size_content = .{ .w = glyph, .h = glyph },
-        .gravity_x = 0.5,
-        .gravity_y = 0.5,
-        .padding = dvui.Rect.all(0),
-        .margin = dvui.Rect.all(0),
+    // The same cell as every other rail icon (`Sidebar.drawOption`): a button the icon's
+    // height, the glyph in it, nothing else. Click toggles the list.
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(@src(), .{}, .{ .min_size_content = .{ .h = size } });
+    defer bw.deinit();
+    bw.processEvents();
+    const color = if (any_signed_in) theme.color(.highlight, .fill) else if (bw.hovered() or open) theme.color(.window, .text) else theme.color(.window, .fill);
+    fizzy.core.icon.icon(@src(), "accounts", dvui.entypo.user, .{ .fill_color = .{ .color = color }, .stroke_color = .{ .color = color } }, .{
+        .min_size_content = .{ .h = size },
     });
-    mi.deinit();
-
-    const from = active orelse return;
-    // Open to the right of the disc, not below: the rail is at the screen's left edge.
+    if (bw.clicked()) open = !open;
+    if (!open) return;
+    // A click anywhere outside the list closes it, like a menu.
+    for (dvui.events()) |*e| {
+        if (e.evt == .mouse and e.evt.mouse.action == .press and !bw.data().borderRectScale().r.contains(e.evt.mouse.p) and !list_rect.contains(e.evt.mouse.p)) open = false;
+    }
+    const from = bw.data().borderRectScale().r.toNatural();
+    // Open to the right of the icon, not below: the rail is at the screen's left edge.
     var fw = dvui.floatingMenu(@src(), .{ .from = .{ .x = from.x + from.w, .y = from.y, .w = 0, .h = from.h }, .avoid = .horizontal }, .{});
     defer fw.deinit();
+    list_rect = fw.data().borderRectScale().r;
 
     var rows: usize = 0;
     for (host.account_providers.items, 0..) |p, pi| {
@@ -70,7 +59,10 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
             if (accountRow(label, a.avatar, extra)) |r| {
                 var sub = dvui.floatingMenu(@src(), .{ .from = r }, .{ .id_extra = extra });
                 defer sub.deinit();
-                if (p.menu(a.id)) fw.close();
+                if (p.menu(a.id)) {
+                    open = false;
+                    fw.close();
+                }
             }
             rows += 1;
         }
@@ -82,6 +74,7 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
         offered += 1;
         const label = std.fmt.allocPrint(arena, "Sign in to {s}…", .{p.name}) catch p.name;
         if (dvui.menuItemLabel(@src(), label, .{}, .{ .expand = .horizontal, .id_extra = pi, .color_text = .{ .color = theme.color(.control, .text) } }) != null) {
+            open = false;
             fw.close();
             p.signIn();
         }

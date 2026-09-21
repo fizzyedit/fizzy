@@ -34,9 +34,10 @@ pub const Provider = struct {
         /// Start a sign-in (a browser, a dialog). Null when the provider cannot add one — a
         /// single-account service already signed in.
         signIn: ?*const fn (ctx: ?*anyopaque) void = null,
-        /// Draw the rows of one account's submenu (open, settings, sign out …) with dvui's
-        /// menu items — the host has opened the floating menu already. Return true when a
-        /// row was chosen so the host closes the whole menu.
+        /// Draw the rows of one account's submenu (open, settings, sign out …) with
+        /// `Host.drawMenuItem` — never dvui's menu widgets directly: in a dylib those belong
+        /// to a dvui copy with no open menu. The host has opened the floating menu already.
+        /// Return true when a row was chosen so the host closes the whole menu.
         menu: *const fn (ctx: ?*anyopaque, account_id: []const u8) bool,
     };
 
