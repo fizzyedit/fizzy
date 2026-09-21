@@ -9,6 +9,23 @@ const core_mod = fizzy_sdk.core_module;
 const dvui = fizzy_sdk.dvui;
 const velopack = @import("velopack.zig");
 
+/// A plugin checkout for the web build, with the modules its own `build.zig` would have added
+/// beside the SDK's (a bundled library under `src/`, say) — the web build has no way to run that
+/// `build.zig`, so they are named here.
+pub const WebPluginDir = struct {
+    dir: []const u8,
+    modules: []const ExtraModule = &.{},
+    pub const ExtraModule = struct {
+        /// The import name the plugin uses.
+        name: []const u8,
+        /// Root source file, relative to `dir`.
+        root: []const u8,
+        /// Whether the module itself imports `dvui` / `core`.
+        dvui: bool = true,
+        core: bool = false,
+    };
+};
+
 pub const Options = struct {
     /// Plugins the application bundles beyond fizzy's own — see `build.zig`'s `buildApp`.
     app_plugins: []const @import("sdk.zig").BundledPlugin = &.{},
@@ -23,7 +40,7 @@ pub const Options = struct {
     /// Plugin checkouts (directories holding `plugin.zig` + `plugin.zig.zon`) the **web** build
     /// links in, taken by path outside the package graph. Local development's answer to
     /// `web_plugin_deps`; a directory that is missing is skipped with a note.
-    web_plugin_dirs: []const []const u8 = &.{},
+    web_plugin_dirs: []const WebPluginDir = &.{},
     windows_msvc_libc_opt: ?[]const u8 = null,
     fetch_msvc_opt: ?bool = null,
     macos_sign_app_identity: ?[]const u8 = null,

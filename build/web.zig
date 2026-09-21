@@ -18,7 +18,7 @@ pub fn addSteps(
     assets_module: *std.Build.Module,
     app_plugins: []const sdk.BundledPlugin,
     web_plugin_deps: []const []const u8,
-    web_plugin_dirs: []const []const u8,
+    web_plugin_dirs: []const @import("app.zig").WebPluginDir,
 ) void {
     const web_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,
@@ -164,7 +164,8 @@ pub fn addSteps(
     // the far end of a popup round trip that is the plugin's, not fizzy's — a provider's
     // folder picker, say. `core.transport.WebOAuth.pageUrl` finds them.
     var web_pages: std.ArrayList(struct { id: []const u8, dir: []const u8 }) = .empty;
-    for (web_plugin_dirs) |dir| {
+    for (web_plugin_dirs) |wp| {
+        const dir = wp.dir;
         const zon_path = b.pathJoin(&.{ dir, "plugin.zig.zon" });
         b.build_root.handle.access(b.graph.io, zon_path, .{}) catch {
             std.debug.print("fizzy web: plugin checkout '{s}' not found; the web build goes without it\n", .{dir});
@@ -184,6 +185,18 @@ pub fn addSteps(
         m.addImport("core", core_module_web);
         m.addImport("fizzy_sdk", sdk_module_web);
         if (icons_web) |icons| m.addImport("icons", icons);
+        for (wp.modules) |extra| {
+            const em = b.createModule(.{
+                .target = web_target,
+                .optimize = optimize,
+                .root_source_file = b.path(b.pathJoin(&.{ dir, extra.root })),
+                .link_libc = false,
+                .single_threaded = true,
+            });
+            if (extra.dvui) em.addImport("dvui", dvui_web_dep.module("dvui_web"));
+            if (extra.core) em.addImport("core", core_module_web);
+            m.addImport(extra.name, em);
+        }
         bundled_list.append(b.allocator, .{ .name = b.dupe(manifest.id), .module = m }) catch @panic("OOM");
         web_pages.append(b.allocator, .{ .id = b.dupe(manifest.id), .dir = dir }) catch @panic("OOM");
     }
