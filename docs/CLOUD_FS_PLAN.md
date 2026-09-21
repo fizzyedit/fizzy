@@ -244,8 +244,11 @@ Still open, in the order they should be taken:
   is still to come.
 - (done) a move across mounts (`FileTable.MoveJob`) copies the tree entry by entry, then
   removes the source; nothing is removed until every copy landed. Tested disk↔`Mem` both ways.
-- The web Google Picker for `drive.file`; owner migration of pixi/atlas onto
-  `documentBytes`/`documentWritten`.
+- The web Google Picker for `drive.file` (needs a Google **API key** — a third credential —
+  and Google-hosted picker JS; web only).
+- (done in pixi's working tree, uncommitted there) pixi implements `documentBytes`/
+  `documentWritten` over its existing encoders, so a `.pixi`/`.png` on a mount saves. atlas,
+  ghostty and zig own no documents.
 
 ## Out of scope for this pass
 
