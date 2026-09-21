@@ -758,61 +758,8 @@ pub fn drawHomePage(_: *Workspace) !void {
             }
         }
 
-        {
-            var recents_box = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .expand = .none,
-                .gravity_x = 0.5,
-                .margin = .{ .y = 40 },
-                .max_size_content = .{ .h = 120, .w = std.math.floatMax(f32) },
-            });
-            defer recents_box.deinit();
-
-            var scroll_area = dvui.scrollArea(@src(), .{ .vertical = .auto, .horizontal = .none }, .{
-                .expand = .both,
-                .background = false,
-                .color_fill = .transparent,
-            });
-            // Captured before `deinit`; the hints are drawn after the buttons below so they sit
-            // over them. This block used to draw them here, before its own content, which put
-            // them underneath it.
-            const scroll_rs = scroll_area.data().rectScale();
-
-            var i: usize = runtime.host().recentFolderCount();
-            while (i > 0) : (i -= 1) {
-                var anim = dvui.animate(@src(), .{
-                    .kind = .horizontal,
-                    .duration = 150_000 + 150_000 * @as(i32, @intCast(i)),
-                    .easing = dvui.easing.outBack,
-                }, .{
-                    .id_extra = i,
-                    .expand = .horizontal,
-                });
-                defer anim.deinit();
-
-                const folder = runtime.host().recentFolderAt(i - 1) orelse continue;
-                if (dvui.button(@src(), folder, .{
-                    .draw_focus = false,
-                }, .{
-                    .expand = .horizontal,
-                    .font = dvui.Font.theme(.mono),
-                    .id_extra = i,
-                    .margin = dvui.Rect.all(1),
-                    .padding = dvui.Rect.all(2),
-                    .color_fill = .{ .color = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)) },
-                    .color_fill_hover = .{ .color = dvui.themeGet().color(.window, .fill_hover) },
-                    .color_fill_press = .{ .color = dvui.themeGet().color(.window, .fill_press) },
-                    .color_text = .{ .color = dvui.themeGet().color(.control, .text).opacity(0.5) },
-                })) {
-                    try runtime.host().setProjectFolder(folder);
-                }
-            }
-
-            const si = scroll_area.si.*;
-            scroll_area.deinit();
-            // Faint on purpose here (the list sits on the empty-workspace backdrop, not in a
-            // panel), unlike the default weight every other viewport uses.
-            core.draw.drawScrollEdgeShadows(scroll_rs, null, &si, .{ .opacity = 0.15 });
-        }
+        // Recent folders are the File menu's (File › Open Recent): the home page keeps to the
+        // three verbs, which stays true whatever the folder is backed by.
     }
 }
 
