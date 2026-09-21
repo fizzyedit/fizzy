@@ -4,4 +4,5 @@
 test {
     _ = @import("transport/NativeTransport.zig");
     _ = @import("vfs/vfs.zig");
+    _ = @import("LocalFs.zig");
 }

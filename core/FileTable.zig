@@ -1389,7 +1389,12 @@ test "a move across mounts copies the tree and removes the source" {
     var sink: DoneSink = .{};
     try table.rename(try fx.join(arena, "src"), "mem://box/src", DoneSink.onDone, &sink);
     var frames: usize = 0;
-    while (sink.calls == 0 and frames < 64) : (frames += 1) table.pump();
+    // A local read now lands from the `Io`'s pool (see `LocalFs.readFile`), so this is frames
+    // of pumping with a yield between, not a fixed count of synchronous turns.
+    while (sink.calls == 0 and frames < 100_000) : (frames += 1) {
+        table.pump();
+        std.Thread.yield() catch {};
+    }
     try t.expectEqual(@as(usize, 1), sink.calls);
     try t.expect(sink.err == null);
     try t.expectEqualStrings("", mem.nodes.get("/src/main.zig").?.bytes);

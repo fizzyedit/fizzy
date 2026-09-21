@@ -2,10 +2,16 @@
 //! lives on this machine or on a cloud mount.
 //!
 //! Paths are the OS's own absolute paths — the local mount has no prefix to strip. Every op
-//! runs to completion inside its start call (the disk is synchronous here, as it always was)
-//! and the result is parked until `pump`, which is the `vfs.Fs` contract. `FileTable` pumps
-//! the mount it just asked right away, so a local listing still comes back in the same call
-//! that requested it and nothing above notices a difference.
+//! but a read runs to completion inside its start call (the disk is synchronous here, as it
+//! always was) and the result is parked until `pump`, which is the `vfs.Fs` contract.
+//! `FileTable` pumps the mount it just asked right away, so a local listing still comes back
+//! in the same call that requested it and nothing above notices a difference.
+//!
+//! A read is the one op worth overlapping: a cold index of a large vault is hundreds of
+//! thousands of small files, each ~120 µs of waiting when nothing else is in flight. `readFile`
+//! goes through `io.async`, which the host's threaded `Io` runs on its pool and a
+//! single-threaded `Io` (tests, or a saturated pool) runs inline — one implementation, and
+//! the caller that issues a window of reads and pumps gets the overlap where it exists.
 const std = @import("std");
 const builtin = @import("builtin");
 const vfs = @import("vfs/vfs.zig");
@@ -20,6 +26,40 @@ const no_disk = builtin.target.cpu.arch == .wasm32;
 gpa: std.mem.Allocator,
 io: std.Io,
 ready: vfs.http.Completions(Completion),
+/// Reads in flight on `io.async`, by job id. Guarded by `lock`; the futures themselves are
+/// awaited from `pump` only once their task has set `done`.
+reads: std.AutoArrayHashMapUnmanaged(u64, *ReadJob) = .empty,
+lock: SpinLock = .{},
+
+const SpinLock = struct {
+    inner: std.atomic.Mutex = .unlocked,
+    fn acquire(self: *SpinLock) void {
+        // The browser has one thread and no disk; nothing contends.
+        if (no_disk) return;
+        while (!self.inner.tryLock()) std.Thread.yield() catch {};
+    }
+    fn release(self: *SpinLock) void {
+        if (no_disk) return;
+        self.inner.unlock();
+    }
+};
+
+const ReadJob = struct {
+    owner: *LocalFs,
+    id: u64,
+    allocator: std.mem.Allocator,
+    cb: vfs.ReadFn,
+    ctx: ?*anyopaque,
+    path: []u8,
+    future: std.Io.Future(vfs.Error!vfs.Read) = undefined,
+    done: std.atomic.Value(bool) = .init(false),
+    cancelled: bool = false,
+
+    fn run(job: *ReadJob) vfs.Error!vfs.Read {
+        defer job.done.store(true, .release);
+        return job.owner.readImpl(job.allocator, job.path);
+    }
+};
 
 const Completion = union(enum) {
     list: struct { allocator: std.mem.Allocator, cb: vfs.ListDirFn, ctx: ?*anyopaque, result: vfs.Error![]vfs.Entry },
@@ -50,6 +90,13 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io) LocalFs {
 }
 
 pub fn deinit(self: *LocalFs) void {
+    // Every read still running finishes on its own; wait for it, drop what it read.
+    for (self.reads.values()) |job| {
+        if (job.future.await(self.io)) |r| job.allocator.free(r.bytes) else |_| {}
+        self.gpa.free(job.path);
+        self.gpa.destroy(job);
+    }
+    self.reads.deinit(self.gpa);
     for (self.ready.items.items) |item| item.payload.discard();
     self.ready.deinit();
 }
@@ -188,7 +235,27 @@ fn readImpl(self: *LocalFs, allocator: std.mem.Allocator, path: []const u8) vfs.
 
 fn readFile(ptr: *anyopaque, allocator: std.mem.Allocator, path: []const u8, cb: vfs.ReadFn, ctx: ?*anyopaque) vfs.Error!vfs.Job {
     const self: *LocalFs = @ptrCast(@alignCast(ptr));
-    return self.queue(.{ .read = .{ .allocator = allocator, .cb = cb, .ctx = ctx, .result = self.readImpl(allocator, path) } });
+    const job = try self.gpa.create(ReadJob);
+    errdefer self.gpa.destroy(job);
+    const owned_path = try self.gpa.dupe(u8, path);
+    errdefer self.gpa.free(owned_path);
+    self.lock.acquire();
+    const id = self.ready.nextId();
+    self.lock.release();
+    job.* = .{ .owner = self, .id = id, .allocator = allocator, .cb = cb, .ctx = ctx, .path = owned_path };
+    self.lock.acquire();
+    defer self.lock.release();
+    try self.reads.put(self.gpa, id, job);
+    // Registered before it starts, so a task that finishes inline is already there for `pump`
+    // to find. `concurrent` rather than `async`: a queued-but-not-yet-running task is what
+    // overlaps the disk; when no thread is available (single-threaded `Io`) the read simply
+    // happens here.
+    job.future = self.io.concurrent(ReadJob.run, .{job}) catch blk: {
+        var f: std.Io.Future(vfs.Error!vfs.Read) = .{ .any_future = null, .result = undefined };
+        f.result = ReadJob.run(job);
+        break :blk f;
+    };
+    return .{ .id = id };
 }
 
 fn writeImpl(self: *LocalFs, path: []const u8, bytes: []const u8, opts: vfs.WriteOptions) vfs.Error!void {
@@ -241,11 +308,42 @@ fn remove(ptr: *anyopaque, path: []const u8, cb: vfs.DoneFn, ctx: ?*anyopaque) v
 
 fn cancel(ptr: *anyopaque, job: vfs.Job) void {
     const self: *LocalFs = @ptrCast(@alignCast(ptr));
+    self.lock.acquire();
+    const read = self.reads.get(job.id);
+    if (read) |r| r.cancelled = true;
+    self.lock.release();
+    if (read != null) return; // delivered as nothing by the next pump
     if (self.ready.remove(job.id)) |completion| completion.discard();
 }
 
 fn pump(ptr: *anyopaque) void {
     const self: *LocalFs = @ptrCast(@alignCast(ptr));
+    // Reads that have landed, collected under the lock and delivered outside it: a callback may
+    // start another read or cancel one.
+    var done: std.ArrayListUnmanaged(*ReadJob) = .empty;
+    defer done.deinit(self.gpa);
+    {
+        self.lock.acquire();
+        defer self.lock.release();
+        var i: usize = 0;
+        while (i < self.reads.count()) {
+            const job = self.reads.values()[i];
+            if (job.done.load(.acquire)) {
+                done.append(self.gpa, job) catch break;
+                self.reads.swapRemoveAt(i);
+            } else i += 1;
+        }
+    }
+    for (done.items) |job| {
+        const result = job.future.await(self.io);
+        if (job.cancelled) {
+            if (result) |r| job.allocator.free(r.bytes) else |_| {}
+        } else {
+            job.cb(job.ctx, result);
+        }
+        self.gpa.free(job.path);
+        self.gpa.destroy(job);
+    }
     self.ready.drain({}, struct {
         fn f(_: void, c: Completion) void {
             c.deliver();
@@ -263,4 +361,33 @@ pub fn isDirAbsolute(io: std.Io, abs: []const u8) bool {
     if (no_disk) return false;
     const st = std.Io.Dir.cwd().statFile(io, abs, .{}) catch return false;
     return st.kind == .directory;
+}
+
+test "a read lands through pump" {
+    if (no_disk) return error.SkipZigTest;
+    const t = std.testing;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "a.txt", .data = "hello" });
+    const abs = try tmp.dir.realPathFileAlloc(io, "a.txt", t.allocator);
+    defer t.allocator.free(abs);
+    var local = LocalFs.init(t.allocator, io);
+    defer local.deinit();
+    const Sink = struct {
+        got: ?[]u8 = null,
+        fn onRead(ctx: ?*anyopaque, result: vfs.Error!vfs.Read) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx.?));
+            self.got = (result catch return).bytes;
+        }
+    };
+    var sink: Sink = .{};
+    _ = try local.fs().readFile(t.allocator, abs, Sink.onRead, &sink);
+    var spins: usize = 0;
+    while (sink.got == null and spins < 200_000) : (spins += 1) {
+        local.fs().pump();
+        std.Thread.yield() catch {};
+    }
+    defer if (sink.got) |g| t.allocator.free(g);
+    try t.expectEqualStrings("hello", sink.got orelse return error.NeverLanded);
 }
