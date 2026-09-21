@@ -101,6 +101,10 @@ pub fn addSteps(
         "stbi_failure_reason",
         "stbi_image_free",
         "stbi_info_from_memory",
+        // libm entry points a plugin's optimized build calls by name (`src/web_main.zig`
+        // defines them for this purpose: a side module has no compiler-rt of its own).
+        "ldexpf",
+        "ldexp",
     };
     // The function table is the page's (growable), so a plugin's functions can join it.
     web_exe.import_table = true;

@@ -490,6 +490,11 @@
         env.__stack_pointer = host.exports.__stack_pointer;
         env.__memory_base = new WebAssembly.Global({ value: "i32", mutable: false }, memoryBase);
         env.__table_base = new WebAssembly.Global({ value: "i32", mutable: false }, tableBase);
+        // Say which import the host lacks, rather than the linker's "Import #12".
+        const missing = WebAssembly.Module.imports(module)
+          .filter((i) => i.module === "env" && i.kind === "function" && !(i.name in env))
+          .map((i) => i.name);
+        if (missing.length) throw new Error("the host does not export: " + missing.join(", "));
         const holder = { inst: null };
         const instance = await WebAssembly.instantiate(module, {
           env,

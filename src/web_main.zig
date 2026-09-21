@@ -48,3 +48,16 @@ pub const dvui_app: dvui.App = fizzy.Entry.dvui_app;
 pub const main = dvui.App.main;
 pub const panic = dvui.App.panic;
 pub const std_options: std.Options = fizzy.Entry.std_options;
+
+// ---- libm for plugins ---------------------------------------------------------------------
+//
+// A plugin built as a wasm side module has no compiler-rt of its own, and its optimized build
+// calls a few libm entry points by name (`@exp2` lowering, `ldexp`); Debug builds inline them.
+// The page resolves a side module's `env` imports from this module's exports, so the host
+// provides them here. Exported by `build/web.zig`.
+export fn ldexpf(x: f32, n: i32) f32 {
+    return std.math.ldexp(x, n);
+}
+export fn ldexp(x: f64, n: i32) f64 {
+    return std.math.ldexp(x, n);
+}
