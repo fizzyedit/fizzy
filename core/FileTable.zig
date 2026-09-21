@@ -814,12 +814,13 @@ pub fn remove(self: *FileTable, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) 
     if (target.mount == null) target.fs.pump();
 }
 
-/// Rename `old_path` to `new_path`, a file or a directory. Both must be on the same mount: a
-/// move between the disk and a cloud drive is a copy, which nothing here does yet.
+/// Rename `old_path` to `new_path`, a file or a directory. Across mounts — the disk to a
+/// drive, a zip to the disk — nothing can rename, so it is a copy of the tree followed by a
+/// removal of the source (`MoveJob`), which takes as many round trips as there are entries.
 pub fn rename(self: *FileTable, old_path: []const u8, new_path: []const u8, cb: DoneFn, ctx: ?*anyopaque) !void {
     const from = self.resolve(old_path);
     const to = self.resolve(new_path);
-    if (from.mount != to.mount) return error.CrossMountRename;
+    if (from.mount != to.mount) return MoveJob.start(self, old_path, new_path, cb, ctx);
     const m = try Mutation.create(self, cb, ctx);
     _ = from.fs.rename(from.rel, to.rel, Mutation.onDone, m) catch |err| {
         m.destroy();
@@ -827,6 +828,187 @@ pub fn rename(self: *FileTable, old_path: []const u8, new_path: []const u8, cb: 
     };
     if (from.mount == null) from.fs.pump();
 }
+
+/// A move between two filesystems: copy every entry over, then remove the originals. One
+/// operation at a time — each step lands on a pump (the disk's inline, a mount's per frame),
+/// so a directory of a thousand files is a thousand-odd steps; that is the cost of there being
+/// no rename between a disk and a drive. A failure part-way stops there, leaving what was
+/// copied in place and the source intact from that entry on — nothing is removed until every
+/// copy has landed.
+const MoveJob = struct {
+    table: *FileTable,
+    cb: DoneFn,
+    ctx: ?*anyopaque,
+    /// Pairs still to copy, in discovery order (a directory's children are appended when it
+    /// is listed).
+    queue: std.ArrayListUnmanaged(Pair) = .empty,
+    /// Source paths to remove once everything is copied, files first, then directories
+    /// deepest-first (they were pushed as they were entered, so reverse order).
+    remove_files: std.ArrayListUnmanaged([]u8) = .empty,
+    remove_dirs: std.ArrayListUnmanaged([]u8) = .empty,
+    /// The entry in flight, and the bytes being carried for a file.
+    current: ?Pair = null,
+    bytes: ?[]u8 = null,
+    /// Removal phase: index into `remove_files`, then `remove_dirs` from the back.
+    removing_files: usize = 0,
+    removing_dirs: usize = 0,
+    phase: enum { copying, removing_files, removing_dirs } = .copying,
+
+    const Pair = struct { src: []u8, dst: []u8, is_dir: bool };
+
+    fn start(table: *FileTable, src: []const u8, dst: []const u8, cb: DoneFn, ctx: ?*anyopaque) !void {
+        const gpa = table.gpa;
+        const job = try gpa.create(MoveJob);
+        errdefer gpa.destroy(job);
+        job.* = .{ .table = table, .cb = cb, .ctx = ctx };
+        errdefer job.destroy();
+        try job.push(src, dst, table.isDir(src));
+        table.invalidateIndex();
+        job.next();
+    }
+
+    fn destroy(job: *MoveJob) void {
+        const gpa = job.table.gpa;
+        for (job.queue.items) |p| {
+            gpa.free(p.src);
+            gpa.free(p.dst);
+        }
+        job.queue.deinit(gpa);
+        for (job.remove_files.items) |p| gpa.free(p);
+        job.remove_files.deinit(gpa);
+        for (job.remove_dirs.items) |p| gpa.free(p);
+        job.remove_dirs.deinit(gpa);
+        if (job.current) |c| {
+            gpa.free(c.src);
+            gpa.free(c.dst);
+        }
+        if (job.bytes) |b| gpa.free(b);
+        gpa.destroy(job);
+    }
+
+    fn push(job: *MoveJob, src: []const u8, dst: []const u8, is_dir: bool) !void {
+        const gpa = job.table.gpa;
+        const s = try gpa.dupe(u8, src);
+        errdefer gpa.free(s);
+        const d = try gpa.dupe(u8, dst);
+        errdefer gpa.free(d);
+        try job.queue.append(gpa, .{ .src = s, .dst = d, .is_dir = is_dir });
+    }
+
+    fn finish(job: *MoveJob, result: vfs.Error!void) void {
+        job.table.invalidateAll();
+        job.cb(job.ctx, result);
+        job.table.env.refresh(job.table.env.ctx);
+        job.destroy();
+    }
+
+    /// Start the next step, whatever phase we are in. Every callback ends here.
+    fn next(job: *MoveJob) void {
+        job.nextInner() catch |err| job.finish(err);
+    }
+
+    fn nextInner(job: *MoveJob) vfs.Error!void {
+        const table = job.table;
+        if (job.current) |c| {
+            table.gpa.free(c.src);
+            table.gpa.free(c.dst);
+            job.current = null;
+        }
+        switch (job.phase) {
+            .copying => {
+                if (job.queue.items.len == 0) {
+                    job.phase = .removing_files;
+                    return job.nextInner();
+                }
+                const pair = job.queue.orderedRemove(0);
+                job.current = pair;
+                const src = table.resolve(pair.src);
+                if (pair.is_dir) {
+                    _ = try src.fs.listDir(table.gpa, src.rel, onListed, job);
+                } else {
+                    _ = try src.fs.readFile(table.gpa, src.rel, onRead, job);
+                }
+                if (src.mount == null) src.fs.pump();
+            },
+            .removing_files => {
+                if (job.removing_files == job.remove_files.items.len) {
+                    job.phase = .removing_dirs;
+                    return job.nextInner();
+                }
+                const path = job.remove_files.items[job.removing_files];
+                job.removing_files += 1;
+                const src = table.resolve(path);
+                _ = try src.fs.remove(src.rel, onStep, job);
+                if (src.mount == null) src.fs.pump();
+            },
+            .removing_dirs => {
+                if (job.removing_dirs == job.remove_dirs.items.len) return job.finish({});
+                // Deepest first: they were recorded as entered.
+                const path = job.remove_dirs.items[job.remove_dirs.items.len - 1 - job.removing_dirs];
+                job.removing_dirs += 1;
+                const src = table.resolve(path);
+                _ = try src.fs.remove(src.rel, onStep, job);
+                if (src.mount == null) src.fs.pump();
+            },
+        }
+    }
+
+    /// A directory's listing: create it at the destination, queue its children.
+    fn onListed(ctx: ?*anyopaque, result: vfs.Error![]vfs.Entry) void {
+        const job: *MoveJob = @ptrCast(@alignCast(ctx.?));
+        const table = job.table;
+        const entries = result catch |err| return job.finish(err);
+        defer vfs.freeEntries(table.gpa, entries);
+        const pair = job.current.?;
+        job.onListedInner(pair, entries) catch |err| return job.finish(err);
+    }
+
+    fn onListedInner(job: *MoveJob, pair: Pair, entries: []const vfs.Entry) vfs.Error!void {
+        const table = job.table;
+        const gpa = table.gpa;
+        for (entries) |e| {
+            const s = try joinChild(gpa, pair.src, e.name, table.isMounted(pair.src));
+            defer gpa.free(s);
+            const d = try joinChild(gpa, pair.dst, e.name, table.isMounted(pair.dst));
+            defer gpa.free(d);
+            try job.push(s, d, e.kind == .dir);
+        }
+        try job.remove_dirs.append(gpa, try gpa.dupe(u8, pair.src));
+        const dst = table.resolve(pair.dst);
+        _ = try dst.fs.mkdir(dst.rel, onStep, job);
+        if (dst.mount == null) dst.fs.pump();
+    }
+
+    /// A file's bytes: write them at the destination.
+    fn onRead(ctx: ?*anyopaque, result: vfs.Error!vfs.Read) void {
+        const job: *MoveJob = @ptrCast(@alignCast(ctx.?));
+        const table = job.table;
+        const read = result catch |err| return job.finish(err);
+        job.bytes = read.bytes;
+        const pair = job.current.?;
+        const dst = table.resolve(pair.dst);
+        _ = dst.fs.writeFile(dst.rel, read.bytes, .{}, onWritten, job) catch |err| return job.finish(err);
+        if (dst.mount == null) dst.fs.pump();
+    }
+
+    fn onWritten(ctx: ?*anyopaque, result: vfs.Error!void) void {
+        const job: *MoveJob = @ptrCast(@alignCast(ctx.?));
+        const gpa = job.table.gpa;
+        if (job.bytes) |b| gpa.free(b);
+        job.bytes = null;
+        result catch |err| return job.finish(err);
+        const pair = job.current.?;
+        job.remove_files.append(gpa, gpa.dupe(u8, pair.src) catch return job.finish(error.OutOfMemory)) catch return job.finish(error.OutOfMemory);
+        job.next();
+    }
+
+    /// A mkdir or a removal landed.
+    fn onStep(ctx: ?*anyopaque, result: vfs.Error!void) void {
+        const job: *MoveJob = @ptrCast(@alignCast(ctx.?));
+        result catch |err| return job.finish(err);
+        job.next();
+    }
+};
 
 /// The bookkeeping around one mutation's completion: invalidate, then tell the caller.
 const Mutation = struct {
@@ -1171,11 +1353,45 @@ test "a mount answers paths under its prefix; the disk keeps the rest" {
     try t.expect(table.isDir("mem://box"));
     try t.expect(!table.isDir("mem://box/a.txt"));
 
-    // Across mounts is refused up front — nothing is half-moved.
-    try t.expectError(error.CrossMountRename, table.rename("mem://box/a.txt", fx.root, DoneSink.onDone, &sink));
 
     // The disk still works beside it.
     try t.expect(table.listDir(fx.root) != null);
+}
+
+test "a move across mounts copies the tree and removes the source" {
+    const t = std.testing;
+    var arena_state = std.heap.ArenaAllocator.init(t.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+    var mem = try vfs.Mem.init(t.allocator);
+    defer mem.deinit();
+    try table.mount("mem://box", mem.fs());
+    defer table.unmount("mem://box");
+
+    // The fixture's `src/` (with main.zig) goes onto the mount.
+    var sink: DoneSink = .{};
+    try table.rename(try fx.join(arena, "src"), "mem://box/src", DoneSink.onDone, &sink);
+    var frames: usize = 0;
+    while (sink.calls == 0 and frames < 64) : (frames += 1) table.pump();
+    try t.expectEqual(@as(usize, 1), sink.calls);
+    try t.expect(sink.err == null);
+    try t.expectEqualStrings("", mem.nodes.get("/src/main.zig").?.bytes);
+    try t.expect(mem.nodes.get("/src").?.kind == .dir);
+    try t.expect(!table.exists(try fx.join(arena, "src")));
+
+    // And a single file back to the disk.
+    try mem.put("/src/back.txt", "home");
+    sink = .{};
+    try table.rename("mem://box/src/back.txt", try fx.join(arena, "back.txt"), DoneSink.onDone, &sink);
+    frames = 0;
+    while (sink.calls == 0 and frames < 64) : (frames += 1) table.pump();
+    try t.expect(sink.err == null);
+    const got = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try fx.join(arena, "back.txt"), arena, .limited(64));
+    try t.expectEqualStrings("home", got);
+    try t.expect(!mem.nodes.contains("/src/back.txt"));
 }
 
 test "a mount that answers later is pending, then installed" {

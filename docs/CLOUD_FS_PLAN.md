@@ -108,10 +108,8 @@ Landed as zig-drive `pxvpqtnz`. 18 tests, `check-wasm` links.
   going. One index covers several roots at once (the disk beside a mount), each `search(root)`
   ranking only its own. Ending a session cancels an unfinished walk. A cloud session re-walks
   on every new search; the snapshot/`changes.list` work in decision 3 is what makes that cheap.
-- Left for later, on purpose: a cross-mount rename is refused (`error.CrossMountRename`)
-  rather than copied; the workbench does not yet draw a mount as a second root (step 5);
-  Windows `sep_str` joins for mount paths (`core.paths` scheme-aware helpers) are unaudited
-  beyond `FilesService.isStrictPathDescendant` and `FileTable.joinChild`.
+- (since resolved) cross-mount moves copy then remove; the workbench draws mounts as roots;
+  joins are mount-aware.
 
 ### 2b. a zip archive as a mount (PhysicsFS-style) — DONE
 
@@ -240,7 +238,8 @@ Still open, in the order they should be taken:
   `modifiedTime` before uploading; `Mem` and `LocalFs` compare theirs. A `Conflict` leaves the
   document dirty with a toast; the next save from the user overwrites. Proper reload/merge UI
   is still to come.
-- Cross-mount copy (`FileTable.copyTree`) for disk↔drive drags.
+- (done) a move across mounts (`FileTable.MoveJob`) copies the tree entry by entry, then
+  removes the source; nothing is removed until every copy landed. Tested disk↔`Mem` both ways.
 - The web Google Picker for `drive.file`; owner migration of pixi/atlas onto
   `documentBytes`/`documentWritten`.
 
