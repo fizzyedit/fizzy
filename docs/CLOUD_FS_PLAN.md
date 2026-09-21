@@ -246,8 +246,13 @@ Still open, in the order they should be taken:
   is still to come.
 - (done) a move across mounts (`FileTable.MoveJob`) copies the tree entry by entry, then
   removes the source; nothing is removed until every copy landed. Tested disk↔`Mem` both ways.
-- The web Google Picker for `drive.file` (needs a Google **API key** — a third credential —
-  and Google-hosted picker JS; web only).
+- (done) Google's own folder picker is the folder chooser on both targets (`api_key` in
+  `credentials.zon`): the web build opens the plugin's `web/picker.html` (copied to
+  `plugins/drive/` by the web build, reached via `WebOAuth.pageUrl`) through the same popup
+  round trip as sign-in; the desktop serves the same page from the loopback listener and
+  opens it in the system browser. The picked folder re-roots the mount
+  (`gdrive://<account>/<folder>`); "Open Google Drive" re-roots at My Drive. The in-app
+  `FolderChooser` dialog is gone.
 - (done in pixi's working tree, uncommitted there) pixi implements `documentBytes`/
   `documentWritten` over its existing encoders, so a `.pixi`/`.png` on a mount saves. atlas,
   ghostty and zig own no documents.

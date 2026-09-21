@@ -68,6 +68,18 @@ pub fn callbackUrl(allocator: std.mem.Allocator) ![]u8 {
     return allocator.dupe(u8, buf[0..n]);
 }
 
+/// The URL of another page shipped beside the app — a plugin's own (`plugins/<id>/<file>`,
+/// copied from the plugin's `web/` directory by fizzy's web build) — for `begin`: the same
+/// popup round trip, with that page posting the result. Caller owns.
+pub fn pageUrl(allocator: std.mem.Allocator, rel: []const u8) ![]u8 {
+    var buf: [512]u8 = undefined;
+    const n = wasm.fizzy_web_oauth_callback_url(&buf, buf.len);
+    if (n > buf.len) return error.NameTooLong;
+    const base = buf[0..n];
+    const dir = base[0 .. (std.mem.lastIndexOfScalar(u8, base, '/') orelse return error.InvalidUrl) + 1];
+    return std.mem.concat(allocator, u8, &.{ dir, rel });
+}
+
 comptime {
     _ = &FizzyWebOAuthAlloc;
     _ = &FizzyWebOAuthResult;

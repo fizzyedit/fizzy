@@ -160,6 +160,10 @@ pub fn addSteps(
         const dep = b.lazyDependency(dep_name, .{ .target = web_target, .optimize = optimize }) orelse continue;
         bundled_list.append(b.allocator, .{ .name = dep_name, .module = rehome(b, web_target, optimize, dep.module("plugin"), dvui_web_dep.module("dvui_web"), core_module_web, sdk_module_web, icons_web) }) catch @panic("OOM");
     }
+    // A plugin may ship pages of its own beside the app (its `web/` directory → `plugins/<id>/`):
+    // the far end of a popup round trip that is the plugin's, not fizzy's — a provider's
+    // folder picker, say. `core.transport.WebOAuth.pageUrl` finds them.
+    var web_pages: std.ArrayList(struct { id: []const u8, dir: []const u8 }) = .empty;
     for (web_plugin_dirs) |dir| {
         const zon_path = b.pathJoin(&.{ dir, "plugin.zig.zon" });
         b.build_root.handle.access(b.graph.io, zon_path, .{}) catch {
@@ -181,6 +185,7 @@ pub fn addSteps(
         m.addImport("fizzy_sdk", sdk_module_web);
         if (icons_web) |icons| m.addImport("icons", icons);
         bundled_list.append(b.allocator, .{ .name = b.dupe(manifest.id), .module = m }) catch @panic("OOM");
+        web_pages.append(b.allocator, .{ .id = b.dupe(manifest.id), .dir = dir }) catch @panic("OOM");
     }
     const bundled_web = sdk.bundledPluginsModule(b, web_target, optimize, bundled_list.items);
     web_exe.root_module.addImport("bundled_plugins", bundled_web);
@@ -235,6 +240,20 @@ pub fn addSteps(
         web_install_dir,
         "oauth-callback.html",
     ).step);
+    for (web_pages.items) |page| {
+        const web_dir = b.pathJoin(&.{ page.dir, "web" });
+        var d = b.build_root.handle.openDir(b.graph.io, web_dir, .{ .iterate = true }) catch continue;
+        defer d.close(b.graph.io);
+        var it = d.iterate();
+        while (it.next(b.graph.io) catch null) |entry| {
+            if (entry.kind != .file) continue;
+            web_step.dependOn(&b.addInstallFileWithDir(
+                b.path(b.pathJoin(&.{ web_dir, entry.name })),
+                web_install_dir,
+                b.pathJoin(&.{ "plugins", page.id, entry.name }),
+            ).step);
+        }
+    }
 
     // Compile-only smoke check for the wasm target. Pairs with `check` (unit
     // tests). Catches regressions where someone reaches a wasm-incompatible
