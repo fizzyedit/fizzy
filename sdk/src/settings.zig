@@ -77,6 +77,8 @@ pub const Setting = struct {
     /// What the setting does, in a sentence or two. Required at declaration — see `Options`.
     description: []const u8,
     kind: Kind,
+    /// A credential (a token, a client secret): drawn masked, and never shown in full.
+    secret: bool = false,
 };
 
 /// Per-setting metadata, supplied as the second (comptime) parameter of `Value`.
@@ -93,6 +95,9 @@ pub const Options = struct {
     min: ?f64 = null,
     max: ?f64 = null,
     step: ?f64 = null,
+    /// A string that is a credential: the settings pane masks it like a password field. It is
+    /// still stored in `settings.zon` (a keychain-backed store is the next step, not this one).
+    secret: bool = false,
 };
 
 /// One self-describing setting. Use it as a field type in the struct handed to `Schema`, with the
@@ -223,6 +228,7 @@ fn buildSettings(comptime T: type) [std.meta.fields(T).len]Setting {
             .label = opts.name orelse deriveLabel(f.name),
             .description = opts.description,
             .kind = kindFor(f.type.Payload, opts),
+            .secret = opts.secret,
         };
     }
     return out;

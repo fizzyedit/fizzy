@@ -12,6 +12,10 @@ const NativeTransport = @This();
 
 gpa: std.mem.Allocator,
 io: std.Io,
+/// One client for every request: its connection pool is what makes the second request to a
+/// host cheap (a per-request client re-read the CA bundle and re-did the TLS handshake every
+/// time). `fetch` is safe from several threads at once; the pool is locked inside.
+client: std.http.Client,
 /// Wake the UI when a response is ready. Safe to call from any thread, or absent.
 wake: ?*const fn () void = null,
 /// Guards `jobs` and every job's `result`/`thread`. Every locked region is O(1) map work —
@@ -75,7 +79,7 @@ const Job = struct {
 };
 
 pub fn init(gpa: std.mem.Allocator, io: std.Io, wake: ?*const fn () void) NativeTransport {
-    return .{ .gpa = gpa, .io = io, .wake = wake };
+    return .{ .gpa = gpa, .io = io, .client = .{ .allocator = gpa, .io = io }, .wake = wake };
 }
 
 /// Waits for every worker still running (the one place that does — the transport's memory
@@ -101,6 +105,7 @@ pub fn deinit(self: *NativeTransport) void {
     for (self.orphans.values()) |job| job.destroy();
     self.jobs.deinit(self.gpa);
     self.orphans.deinit(self.gpa);
+    self.client.deinit();
 }
 
 pub fn transport(self: *NativeTransport) vfs.http.Transport {
@@ -194,9 +199,6 @@ fn worker(job: *Job) void {
 
 fn perform(job: *Job) vfs.Error!vfs.http.Response {
     const self = job.owner;
-    var client: std.http.Client = .{ .allocator = self.gpa, .io = self.io };
-    defer client.deinit();
-
     var body: std.Io.Writer.Allocating = .init(job.allocator);
     errdefer body.deinit();
 
@@ -207,7 +209,7 @@ fn perform(job: *Job) vfs.Error!vfs.http.Response {
         .PUT => .PUT,
         .DELETE => .DELETE,
     };
-    const result = client.fetch(.{
+    const result = self.client.fetch(.{
         .location = .{ .url = job.url },
         .method = method,
         .payload = if (job.body.len != 0) job.body else null,

@@ -103,7 +103,7 @@ pub fn drawField(schema: *const settings.SettingsSchema, field: settings.Setting
                 }
             }
         },
-        .string => try drawString(schema, field_index, id_extra),
+        .string => try drawString(schema, field, field_index, id_extra),
         .color => {
             dvui.label(@src(), "(color picker TBD)", .{}, .{ .id_extra = id_extra });
         },
@@ -139,13 +139,14 @@ fn drawZon(schema: *const settings.SettingsSchema, field_index: usize, id_extra:
 /// external change (a hand-edit reconciled by `SettingsWatcher`) shows up here without the pane
 /// needing its own change notification. `Access.setString` copies the bytes into schema-owned
 /// storage, so nothing here has to outlive the frame.
-fn drawString(schema: *const settings.SettingsSchema, field_index: usize, id_extra: usize) !void {
+fn drawString(schema: *const settings.SettingsSchema, field: settings.Setting, field_index: usize, id_extra: usize) !void {
     const access = schema.access;
     const value = schema.value;
     const current = access.getString(value, field_index);
 
     var entry: dvui.TextEntryWidget = undefined;
-    entry.init(@src(), .{}, .{ .id_extra = id_extra, .expand = .horizontal });
+    // A credential is masked like a password field; it can be replaced, never read back.
+    entry.init(@src(), .{ .password_char = if (field.secret) "•" else null }, .{ .id_extra = id_extra, .expand = .horizontal });
     const id = entry.data().id;
     const focused = dvui.focusedWidgetId() == id;
     // An edit commits on Enter or when focus leaves the field — a value typed and then clicked

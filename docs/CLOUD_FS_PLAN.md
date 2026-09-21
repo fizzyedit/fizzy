@@ -227,11 +227,13 @@ lets `MountIo` cancel loads and saves against a mount before it goes (tested); *
 document whose save did not land stays open and aborts the quit; **D14** `core.paths.join` is
 mount-aware and every join in the tree and the files service uses it.
 
+Since then: `settings.Value` has `.secret` (the pane masks it; the Drive plugin marks the client
+secret and refresh token), and the native transport shares one `std.http.Client` (connection
+pool, one TLS handshake per host).
+
 Still open, in the order they should be taken:
-- Secrets: the refresh token and desktop secret sit unmasked in `settings.zon` and the pane.
-  `settings.Value` `.secret` (masked, excluded from export), then a `Host.secrets` seam with
-  keychain/libsecret/DPAPI backends.
-- One `std.http.Client` shared per transport (a CA rescan and TLS handshake per request now).
+- Secrets on disk: still plaintext in `settings.zon`. A `Host.secrets` seam with
+  keychain/libsecret/DPAPI backends is the next step.
 - `changes.list` polling → `Client.forget` + `invalidateListing`; `modifiedTime` precondition
   before a write, reusing the on-disk-conflict UI.
 - Cross-mount copy (`FileTable.copyTree`) for disk↔drive drags.
