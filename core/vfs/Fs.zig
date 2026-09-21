@@ -38,6 +38,8 @@ pub const Error = error{
     Io,
     InvalidJson,
     Cancelled,
+    /// `writeFile` with `if_unmodified_ms`: the file changed since then. Nothing was written.
+    Conflict,
     OutOfMemory,
 };
 
@@ -58,6 +60,20 @@ pub const Stat = struct {
     modified_ms: i64 = 0,
 };
 
+/// What `readFile` hands back: the bytes, and when the file was last modified as of that read
+/// — the value to pass back as `WriteOptions.if_unmodified_ms` so a later write cannot clobber
+/// an edit made elsewhere in between. 0 when the backend cannot say.
+pub const Read = struct {
+    bytes: []u8,
+    modified_ms: i64 = 0,
+};
+
+pub const WriteOptions = struct {
+    /// Refuse (`error.Conflict`) if the file's modification time is not this one — a
+    /// compare-and-swap on the file. Null writes unconditionally.
+    if_unmodified_ms: ?i64 = null,
+};
+
 pub fn freeEntries(allocator: Allocator, entries: []Entry) void {
     for (entries) |entry| allocator.free(entry.name);
     allocator.free(entries);
@@ -70,7 +86,7 @@ pub const Job = struct {
 
 pub const ListDirFn = *const fn (ctx: ?*anyopaque, result: Error![]Entry) void;
 pub const StatFn = *const fn (ctx: ?*anyopaque, result: Error!Stat) void;
-pub const ReadFn = *const fn (ctx: ?*anyopaque, result: Error![]u8) void;
+pub const ReadFn = *const fn (ctx: ?*anyopaque, result: Error!Read) void;
 pub const DoneFn = *const fn (ctx: ?*anyopaque, result: Error!void) void;
 
 /// Host-owned backend. Function pointers keep this wasm-safe (no std.http, no OS filesystem).
@@ -87,8 +103,8 @@ pub const Fs = struct {
         listDir: *const fn (ptr: *anyopaque, allocator: Allocator, path: []const u8, cb: ListDirFn, ctx: ?*anyopaque) Error!Job,
         stat: *const fn (ptr: *anyopaque, path: []const u8, cb: StatFn, ctx: ?*anyopaque) Error!Job,
         readFile: *const fn (ptr: *anyopaque, allocator: Allocator, path: []const u8, cb: ReadFn, ctx: ?*anyopaque) Error!Job,
-        /// `bytes` must stay valid until the callback runs.
-        writeFile: *const fn (ptr: *anyopaque, path: []const u8, bytes: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job,
+        /// `bytes` must stay valid until the callback runs. Create-or-replace, like a disk.
+        writeFile: *const fn (ptr: *anyopaque, path: []const u8, bytes: []const u8, opts: WriteOptions, cb: DoneFn, ctx: ?*anyopaque) Error!Job,
         /// Create an empty file. Parents must exist.
         createFile: *const fn (ptr: *anyopaque, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job,
         /// Create a directory. Parents must exist.
@@ -113,8 +129,8 @@ pub const Fs = struct {
     pub fn readFile(self: Fs, allocator: Allocator, path: []const u8, cb: ReadFn, ctx: ?*anyopaque) Error!Job {
         return self.vtable.readFile(self.ptr, allocator, path, cb, ctx);
     }
-    pub fn writeFile(self: Fs, path: []const u8, bytes: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job {
-        return self.vtable.writeFile(self.ptr, path, bytes, cb, ctx);
+    pub fn writeFile(self: Fs, path: []const u8, bytes: []const u8, opts: WriteOptions, cb: DoneFn, ctx: ?*anyopaque) Error!Job {
+        return self.vtable.writeFile(self.ptr, path, bytes, opts, cb, ctx);
     }
     pub fn createFile(self: Fs, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job {
         return self.vtable.createFile(self.ptr, path, cb, ctx);

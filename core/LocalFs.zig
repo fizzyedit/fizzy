@@ -24,13 +24,13 @@ ready: vfs.http.Completions(Completion),
 const Completion = union(enum) {
     list: struct { allocator: std.mem.Allocator, cb: vfs.ListDirFn, ctx: ?*anyopaque, result: vfs.Error![]vfs.Entry },
     stat: struct { cb: vfs.StatFn, ctx: ?*anyopaque, result: vfs.Error!vfs.Stat },
-    read: struct { allocator: std.mem.Allocator, cb: vfs.ReadFn, ctx: ?*anyopaque, result: vfs.Error![]u8 },
+    read: struct { allocator: std.mem.Allocator, cb: vfs.ReadFn, ctx: ?*anyopaque, result: vfs.Error!vfs.Read },
     done: struct { cb: vfs.DoneFn, ctx: ?*anyopaque, result: vfs.Error!void },
 
     fn discard(self: Completion) void {
         switch (self) {
             .list => |c| if (c.result) |entries| vfs.freeEntries(c.allocator, entries) else |_| {},
-            .read => |c| if (c.result) |bytes| c.allocator.free(bytes) else |_| {},
+            .read => |c| if (c.result) |r| c.allocator.free(r.bytes) else |_| {},
             .stat, .done => {},
         }
     }
@@ -92,7 +92,7 @@ const NoDisk = struct {
     fn readFile(_: *anyopaque, _: std.mem.Allocator, _: []const u8, _: vfs.ReadFn, _: ?*anyopaque) vfs.Error!vfs.Job {
         return error.Unsupported;
     }
-    fn writeFile(_: *anyopaque, _: []const u8, _: []const u8, _: vfs.DoneFn, _: ?*anyopaque) vfs.Error!vfs.Job {
+    fn writeFile(_: *anyopaque, _: []const u8, _: []const u8, _: vfs.WriteOptions, _: vfs.DoneFn, _: ?*anyopaque) vfs.Error!vfs.Job {
         return error.Unsupported;
     }
     fn done(_: *anyopaque, _: []const u8, _: vfs.DoneFn, _: ?*anyopaque) vfs.Error!vfs.Job {
@@ -179,8 +179,11 @@ fn stat(ptr: *anyopaque, path: []const u8, cb: vfs.StatFn, ctx: ?*anyopaque) vfs
 /// multi-gigabyte file into memory because someone clicked it.
 const max_read_bytes: usize = 1 << 30;
 
-fn readImpl(self: *LocalFs, allocator: std.mem.Allocator, path: []const u8) vfs.Error![]u8 {
-    return std.Io.Dir.cwd().readFileAlloc(self.io, path, allocator, .limited(max_read_bytes)) catch |err| mapErr(err);
+fn readImpl(self: *LocalFs, allocator: std.mem.Allocator, path: []const u8) vfs.Error!vfs.Read {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(self.io, path, allocator, .limited(max_read_bytes)) catch |err| return mapErr(err);
+    errdefer allocator.free(bytes);
+    const st = self.statImpl(path) catch return .{ .bytes = bytes };
+    return .{ .bytes = bytes, .modified_ms = st.modified_ms };
 }
 
 fn readFile(ptr: *anyopaque, allocator: std.mem.Allocator, path: []const u8, cb: vfs.ReadFn, ctx: ?*anyopaque) vfs.Error!vfs.Job {
@@ -188,10 +191,17 @@ fn readFile(ptr: *anyopaque, allocator: std.mem.Allocator, path: []const u8, cb:
     return self.queue(.{ .read = .{ .allocator = allocator, .cb = cb, .ctx = ctx, .result = self.readImpl(allocator, path) } });
 }
 
-fn writeFile(ptr: *anyopaque, path: []const u8, bytes: []const u8, cb: vfs.DoneFn, ctx: ?*anyopaque) vfs.Error!vfs.Job {
+fn writeImpl(self: *LocalFs, path: []const u8, bytes: []const u8, opts: vfs.WriteOptions) vfs.Error!void {
+    if (opts.if_unmodified_ms) |expected| {
+        const st = self.statImpl(path) catch |err| return if (err == error.NotFound) error.Conflict else err;
+        if (st.modified_ms != expected) return error.Conflict;
+    }
+    std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = path, .data = bytes }) catch |err| return mapErr(err);
+}
+
+fn writeFile(ptr: *anyopaque, path: []const u8, bytes: []const u8, opts: vfs.WriteOptions, cb: vfs.DoneFn, ctx: ?*anyopaque) vfs.Error!vfs.Job {
     const self: *LocalFs = @ptrCast(@alignCast(ptr));
-    const result: vfs.Error!void = std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = path, .data = bytes }) catch |err| mapErr(err);
-    return self.queue(.{ .done = .{ .cb = cb, .ctx = ctx, .result = result } });
+    return self.queue(.{ .done = .{ .cb = cb, .ctx = ctx, .result = self.writeImpl(path, bytes, opts) } });
 }
 
 fn createImpl(self: *LocalFs, path: []const u8) vfs.Error!void {

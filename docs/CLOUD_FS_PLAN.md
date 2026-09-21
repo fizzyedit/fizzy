@@ -191,8 +191,8 @@ Landed as zig-drive `pxvpqtnz`. 18 tests, `check-wasm` links.
   call then returned 403 *API not enabled* — README step 2 had been skipped. `Full Drive
   access` setting added because `drive.file` shows an empty drive on the desktop.
 - Not yet: the explorer's web empty state still says "Open Files", not "Connect Google
-  Drive" (the File menu has it). Writes are "last write wins" until the `modifiedTime`
-  precondition lands.
+  Drive" (the File menu has it). Writes carry a `modifiedTime` precondition; a conflict is a toast and a dirty
+  document, not a silent overwrite.
 - Publisher setup, step by step: `~/dev/fizzyedit/zig-drive/README.md`.
 
 ### 6. Verification
@@ -234,9 +234,12 @@ pool, one TLS handshake per host).
 Still open, in the order they should be taken:
 - Secrets on disk: still plaintext in `settings.zon`. A `Host.secrets` seam with
   keychain/libsecret/DPAPI backends is the next step.
-- `modifiedTime` precondition before a write, reusing the on-disk-conflict UI (the
-  `changes.list` poll now exists: every 5 s while mounted, it forgets what changed and
-  invalidates those listings — the mount's watcher).
+- (done) `vfs.Fs.readFile` returns the file's modified time with the bytes and `writeFile`
+  takes `if_unmodified_ms`; `MountIo` remembers each open document's and passes it on save
+  (a stat after a successful write refreshes it). The Drive client checks Drive's live
+  `modifiedTime` before uploading; `Mem` and `LocalFs` compare theirs. A `Conflict` leaves the
+  document dirty with a toast; the next save from the user overwrites. Proper reload/merge UI
+  is still to come.
 - Cross-mount copy (`FileTable.copyTree`) for disk↔drive drags.
 - The web Google Picker for `drive.file`; owner migration of pixi/atlas onto
   `documentBytes`/`documentWritten`.

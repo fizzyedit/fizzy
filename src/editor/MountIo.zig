@@ -24,6 +24,13 @@ loads: std.StringArrayHashMapUnmanaged(*Load) = .empty,
 /// Saves in flight, keyed by document id. A document with a save pending is not closed by the
 /// quit flow until it lands — the bytes are the only copy.
 saves: std.AutoArrayHashMapUnmanaged(u64, *Save) = .empty,
+/// When each open document's file was last modified as of the read that opened it (or the
+/// write that last saved it) — the precondition every save carries, so an edit made elsewhere
+/// in between is a `Conflict` rather than a silent overwrite. Absent (0) means unconditional.
+known_mtime: std.AutoArrayHashMapUnmanaged(u64, i64) = .empty,
+/// Documents whose next save overwrites regardless: the user was told of the conflict and
+/// chose to save again.
+force_next: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
 
 pub fn init(editor: *Editor) MountIo {
     return .{ .editor = editor };
@@ -41,6 +48,14 @@ pub fn deinit(self: *MountIo) void {
         pending.destroy();
     }
     self.saves.deinit(self.editor.app.gpa);
+    self.known_mtime.deinit(self.editor.app.gpa);
+    self.force_next.deinit(self.editor.app.gpa);
+}
+
+/// A document is gone; forget what was known about its file.
+pub fn documentClosed(self: *MountIo, doc_id: u64) void {
+    _ = self.known_mtime.swapRemove(doc_id);
+    _ = self.force_next.swapRemove(doc_id);
 }
 
 /// Whether `path` is one this file handles. Everything else is the disk's.
@@ -134,7 +149,7 @@ const Load = struct {
         gpa.destroy(load);
     }
 
-    fn onRead(ctx: ?*anyopaque, result: core.vfs.Error![]u8) void {
+    fn onRead(ctx: ?*anyopaque, result: core.vfs.Error!core.vfs.Read) void {
         const load: *Load = @ptrCast(@alignCast(ctx.?));
         const io = load.io;
         const editor = io.editor;
@@ -142,7 +157,7 @@ const Load = struct {
         defer load.destroy();
         _ = io.loads.swapRemove(load.path);
 
-        const bytes = result catch |err| {
+        const read = result catch |err| {
             dvui.log.err("Failed to open {s}: {t}", .{ load.path, err });
             dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
                 editor.app.arena.allocator(),
@@ -151,6 +166,7 @@ const Load = struct {
             ) catch "Could not open file." });
             return;
         };
+        const bytes = read.bytes;
         defer gpa.free(bytes);
 
         // `openFileFromBytes` takes the path; it wants its own copy to own.
@@ -159,6 +175,7 @@ const Load = struct {
             if (err != error.AlreadyOpen) dvui.log.err("Failed to open {s}: {t}", .{ load.path, err });
             return;
         };
+        if (read.modified_ms != 0) io.known_mtime.put(gpa, id, read.modified_ms) catch {};
         if (load.focus) {
             if (editor.app.open_files.getIndex(id)) |idx| editor.workbench.setActiveDocIndex(idx);
             editor.pending_composite_warmup = true;
@@ -181,11 +198,17 @@ pub fn save(self: *MountIo, doc: sdk.DocHandle, path: []const u8) !void {
 
     const job = try Save.create(self, doc.id, path, bytes);
     errdefer job.destroy();
+    // The precondition: the file as it was when this document read (or last wrote) it. A
+    // Save As to another path has no such history; nor does a save the user chose to force.
+    const same_path = std.mem.eql(u8, path, doc.owner.documentPath(doc));
+    if (same_path and self.force_next.swapRemove(doc.id) == false) {
+        if (self.known_mtime.get(doc.id)) |mtime| job.if_unmodified_ms = mtime;
+    }
     try self.saves.put(gpa, doc.id, job);
     errdefer _ = self.saves.swapRemove(doc.id);
 
     const target = editor.app.file_table.resolve(path);
-    job.job = try target.fs.writeFile(target.rel, job.bytes, Save.onWritten, job);
+    job.job = try target.fs.writeFile(target.rel, job.bytes, .{ .if_unmodified_ms = job.if_unmodified_ms }, Save.onWritten, job);
 }
 
 const Save = struct {
@@ -196,6 +219,7 @@ const Save = struct {
     job: core.vfs.Job = .{ .id = 0 },
     /// The write came back `NotFound` once and the file has been created since.
     created: bool = false,
+    if_unmodified_ms: ?i64 = null,
 
     fn create(io: *MountIo, doc_id: u64, path: []const u8, bytes: []u8) !*Save {
         const gpa = io.editor.app.gpa;
@@ -223,7 +247,7 @@ const Save = struct {
             return;
         };
         const target = editor.app.file_table.resolve(job.path);
-        job.job = target.fs.writeFile(target.rel, job.bytes, Save.onWritten, job) catch {
+        job.job = target.fs.writeFile(target.rel, job.bytes, .{}, Save.onWritten, job) catch {
             _ = io.saves.swapRemove(job.doc_id);
             job.destroy();
             return;
@@ -240,6 +264,18 @@ const Save = struct {
         _ = io.saves.swapRemove(job.doc_id);
 
         result catch |err| {
+            if (err == error.Conflict) {
+                // Someone else's edit is on the drive. Nothing was written; the document
+                // stays dirty, and the next save from the user goes through regardless.
+                io.force_next.put(editor.app.gpa, job.doc_id, {}) catch {};
+                dvui.log.warn("{s} changed on the drive since it was opened", .{job.path});
+                dvui.toast(@src(), .{ .message = std.fmt.allocPrint(
+                    editor.app.arena.allocator(),
+                    "{s} changed on the drive since you opened it. Save again to overwrite it, or Save As to keep both.",
+                    .{std.fs.path.basename(job.path)},
+                ) catch "The file changed on the drive since you opened it. Save again to overwrite." });
+                return;
+            }
             if (err == error.NotFound and !job.created) {
                 // Save As onto a mount: the file is not there yet. Create it, then write again
                 // — the backend's `writeFile` is replace, not create.
@@ -274,7 +310,40 @@ const Save = struct {
             return;
         };
         if (renamed) editor.documentPathChanged(doc);
+        // What we just wrote is now the known state; the backend's own modified time is not
+        // known until the next read, so a stat is asked for and the precondition waits on it.
+        _ = io.known_mtime.swapRemove(job.doc_id);
+        const target = editor.app.file_table.resolve(job.path);
+        const probe = MtimeProbe.create(io, job.doc_id) catch null;
+        if (probe) |p| {
+            _ = target.fs.stat(target.rel, MtimeProbe.onStat, p) catch p.destroy();
+        }
         editor.app.file_table.noteFileModified(job.path);
         editor.app.host.refresh();
+    }
+};
+
+/// After a write: ask the backend when the file is now modified, so the next save's
+/// precondition is the write we made rather than the read before it.
+const MtimeProbe = struct {
+    io: *MountIo,
+    doc_id: u64,
+
+    fn create(io: *MountIo, doc_id: u64) !*MtimeProbe {
+        const p = try io.editor.app.gpa.create(MtimeProbe);
+        p.* = .{ .io = io, .doc_id = doc_id };
+        return p;
+    }
+    fn destroy(p: *MtimeProbe) void {
+        p.io.editor.app.gpa.destroy(p);
+    }
+    fn onStat(ctx: ?*anyopaque, result: core.vfs.Error!core.vfs.Stat) void {
+        const p: *MtimeProbe = @ptrCast(@alignCast(ctx.?));
+        defer p.destroy();
+        const st = result catch return;
+        if (st.modified_ms == 0) return;
+        // Only if no newer save has started meanwhile (its own probe will answer).
+        if (p.io.saves.contains(p.doc_id)) return;
+        p.io.known_mtime.put(p.io.editor.app.gpa, p.doc_id, st.modified_ms) catch {};
     }
 };

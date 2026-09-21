@@ -4871,6 +4871,7 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     editor.workbench.documentClosed(doc);
 
     if (editor.document_watcher) |*w| w.untrack(doc.id);
+    editor.mount_io.documentClosed(doc.id);
     editor.unregisterDocSurface(doc.id);
     editor.app.closeDocumentResources(doc);
     editor.app.open_files.orderedRemoveAt(index);
@@ -4881,6 +4882,7 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     editor.workbench.documentClosed(doc);
 
     if (editor.document_watcher) |*w| w.untrack(doc.id);
+    editor.mount_io.documentClosed(doc.id);
     editor.unregisterDocSurface(doc.id);
     editor.app.closeDocumentResources(doc);
     _ = editor.app.open_files.orderedRemove(id);
