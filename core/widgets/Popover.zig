@@ -63,6 +63,8 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: InitOptions) Popover {
             .alpha = 0.25,
         },
     });
+    // Not a window anyone drags: no drag area, so the pointer over it is not the move cursor.
+    win.dragAreaSet(.{});
     return .{ .win = win, .rect = win.data().borderRectScale().r };
 }
 
@@ -121,6 +123,7 @@ pub fn row(src: std.builtin.SourceLocation, opts: RowOptions) Row {
             }
         }
     }
+    if (hovered) dvui.cursorSet(.hand);
     if (hovered or opts.active) {
         r.fill(.all(4 * box.data().rectScale().s), .{ .color = .{ .color = theme.color(.control, .fill_hover) }, .fade = 1.0 });
     }
