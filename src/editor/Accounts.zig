@@ -44,8 +44,10 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     const prev_root = dvui.MenuWidget.Root.set(.{ .ptr = &open, .close = menuRootClose });
     defer _ = dvui.MenuWidget.Root.set(prev_root);
     // Open to the right of the icon, not below: the rail is at the screen's left edge.
-    var fw = dvui.floatingMenu(@src(), .{ .from = .{ .x = from.x + from.w, .y = from.y, .w = 0, .h = from.h }, .avoid = .horizontal }, .{});
+    // Drawn like a dialog — its frost, corners and shadow — not like a menubar menu.
+    var fw = dvui.floatingMenu(@src(), .{ .from = .{ .x = from.x + from.w, .y = from.y, .w = 0, .h = from.h }, .avoid = .horizontal }, fizzy.core.dialogs.popoverOptions());
     defer fw.deinit();
+    fizzy.core.dialogs.frostPopover(fw);
 
     var rows: usize = 0;
     for (host.account_providers.items, 0..) |p, pi| {
@@ -54,8 +56,11 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
             const label = std.fmt.allocPrint(arena, "{s} ({s})", .{ a.label, p.name }) catch a.label;
             const extra = pi * 64 + ai;
             if (accountRow(label, a.avatar, extra)) |r| {
-                var sub = dvui.floatingMenu(@src(), .{ .from = r }, .{ .id_extra = extra });
+                var sub_opts = fizzy.core.dialogs.popoverOptions();
+                sub_opts.id_extra = extra;
+                var sub = dvui.floatingMenu(@src(), .{ .from = r }, sub_opts);
                 defer sub.deinit();
+                fizzy.core.dialogs.frostPopover(sub);
                 if (p.menu(a.id)) {
                     open = false;
                     fw.close();

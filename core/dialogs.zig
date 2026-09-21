@@ -113,6 +113,38 @@ pub fn frostPane(id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect
     return true;
 }
 
+/// The corner radius a popover (a floating menu drawn like a dialog) uses.
+pub const popover_corners: dvui.CornerRect = .all(8);
+
+/// Options for a `dvui.floatingMenu` that should look like a dialog: no border, the dialog's
+/// corners and shadow, and no fill of its own — `frostPopover` paints that once the menu is
+/// up. The menu widget draws its shadow first and nothing else, so the frost lands between
+/// the shadow and the rows, the order `dialog` uses.
+pub fn popoverOptions() dvui.Options {
+    return .{
+        .border = .all(0),
+        .background = false,
+        .corners = popover_corners,
+        .padding = .all(4),
+        .box_shadow = .{
+            .color = .black,
+            .corners = popover_corners,
+            .fade = 4,
+            .alpha = 0.25,
+        },
+    };
+}
+
+/// Frost an open `dvui.floatingMenu` created with `popoverOptions` — call right after its
+/// init, before drawing rows — or paint `dialogFill()` when the style has the blur off.
+pub fn frostPopover(fw: *dvui.FloatingMenuWidget) void {
+    const brs = fw.scroll.data().borderRectScale();
+    const corners = popover_corners.scale(brs.s, dvui.CornerRect.Physical);
+    if (!frostPane(fw.data().id, brs.r, popover_corners, brs.s)) {
+        brs.r.fill(corners, .{ .color = .{ .color = dialogFill() } });
+    }
+}
+
 /// The fill a dialog paints when there is no frost to composite with: the chrome at the
 /// dialog's opacity, lifted the same amount.
 pub fn dialogFill() dvui.Color {
