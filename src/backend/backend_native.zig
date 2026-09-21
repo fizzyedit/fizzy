@@ -1732,7 +1732,10 @@ pub fn setupMacOSMenuBar() void {
                         }
                     },
 
-                    .plugin_section, .submenu => {},
+                    // Natively an open action is the plugin's own `NativeMenuItem`, appended
+                    // to File with the rest of its native items; the fixed slot is the in-app
+                    // bar's.
+                    .open_actions, .plugin_section, .submenu => {},
                 }
             }
 

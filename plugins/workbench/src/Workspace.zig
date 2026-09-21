@@ -729,6 +729,35 @@ pub fn drawHomePage(_: *Workspace) !void {
                 }
             }
 
+            // Plugins' own ways to open a folder — a cloud drive's picker — right after fizzy's,
+            // the same slot the File menu gives them. Only those enabled now (signed in).
+            for (runtime.host().open_actions.items, 0..) |action, ai| {
+                if (!runtime.host().openActionShown(action)) continue;
+                var button: dvui.ButtonWidget = undefined;
+                button.init(@src(), .{ .draw_focus = true }, .{
+                    .id_extra = ai,
+                    .gravity_x = 0.5,
+                    .expand = .horizontal,
+                    .padding = dvui.Rect.all(2),
+                    .color_fill = .{ .color = core.widgets.hoverRestFill(dvui.themeGet().color(.window, .fill_hover)) },
+                    .color_fill_hover = .{ .color = dvui.themeGet().color(.window, .fill_hover) },
+                    .color_fill_press = .{ .color = dvui.themeGet().color(.window, .fill_press) },
+                });
+                defer button.deinit();
+                button.processEvents();
+                button.drawBackground();
+                core.draw.labelWithKeybind(
+                    action.title,
+                    .{},
+                    true,
+                    .{ .padding = dvui.Rect.all(4) },
+                    .{ .padding = dvui.Rect.all(4), .expand = .horizontal },
+                );
+                if (button.clicked()) {
+                    runtime.host().runCommand(action.command) catch |err| dvui.log.warn("workbench: {s}: {t}", .{ action.id, err });
+                }
+            }
+
             {
                 var button: dvui.ButtonWidget = undefined;
                 button.init(@src(), .{ .draw_focus = true }, .{

@@ -1,43 +1,41 @@
-//! The account glyph at the bottom of the rail and the list it opens: every signed-in identity
-//! from every registered `sdk.accounts.Provider` ("me@x (Google Drive)", "me (GitHub)"), each
-//! with its picture in a disc and the provider's own submenu (open, sign out …), then a
-//! sign-in row for each provider with room for one. Nothing here knows a service; the
-//! providers do.
+//! The account glyph at the bottom of the rail and the flyout it opens: every signed-in
+//! identity from every registered `sdk.accounts.Provider` ("me@x (Google Drive)", "me
+//! (GitHub)"), each with its picture in a disc and the provider's own submenu (open, sign
+//! out …), then a sign-in row for each provider with nobody signed in. Nothing here knows a
+//! service; the providers do.
+//!
+//! Two levels, one `core.widgets.Popover` each: the list beside the rail, and the submenu
+//! beside the hovered account row. A press anywhere else closes both.
 const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
 const sdk = @import("fizzy_sdk");
-const Menu = @import("Menu.zig");
 
 const Editor = fizzy.Editor;
+const Popover = fizzy.core.widgets.Popover;
 
-/// Whether the list is showing. One list per app, so one flag.
+/// Whether the flyout is showing. One flyout per app, so one flag.
 var open: bool = false;
-/// True while the list's rows are being drawn, so `Host.drawMenuItem` (a provider's submenu
-/// rows) styles them as popover rows rather than menubar rows.
+/// The list's and the submenu's rects: persistent because the popovers animate their size
+/// through them; zeroed when the flyout (re)opens so each grows from its anchor.
+var list_rect: dvui.Rect = .{};
+var sub_rect: dvui.Rect = .{};
+/// The account row whose submenu is open: `provider_index * 64 + account_index`.
+var sub_for: ?usize = null;
+/// The submenu's physical rect last frame, so hovering into it keeps it open.
+var sub_phys: dvui.Rect.Physical = .{};
+/// True while the flyout's rows are being drawn, so `Host.drawMenuItem` (a provider's submenu
+/// rows) draws a popover row rather than a menubar row.
 pub var drawing_rows: bool = false;
 
-/// The list's and its open submenu's rects as of last frame: a press anywhere else closes
-/// the list. Both, because a press on a submenu row lands outside the list — the first cut
-/// tested the list alone and closed on the very press that should have chosen the row.
-var list_rect: dvui.Rect.Physical = .{};
-var sub_rect: dvui.Rect.Physical = .{};
-
-/// dvui closes the menu chain itself when an item is chosen or focus moves to another
-/// window, and tells the chain's root through this.
-fn menuRootClose(_: *anyopaque, _: dvui.MenuWidget.CloseReason) void {
-    open = false;
-    dvui.refresh(null, @src(), null);
-}
-
-/// Draw the disc as one rail cell. Drawn only when a provider exists (`Sidebar`).
+/// Draw the glyph as one rail cell. Drawn only when a provider exists (`Sidebar`).
 pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     const host = &editor.app.host;
     const arena = host.arena();
     const theme = dvui.themeGet();
 
     // The same cell as every other rail icon (`Sidebar.drawOption`): a button the icon's
-    // height, the glyph in it, nothing else. Click toggles the list.
+    // height, the glyph in it, nothing else. Click toggles the flyout.
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{ .min_size_content = .{ .h = size } });
     defer bw.deinit();
@@ -46,83 +44,103 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     fizzy.core.icon.icon(@src(), "accounts", dvui.entypo.user, .{ .fill_color = .{ .color = color }, .stroke_color = .{ .color = color } }, .{
         .min_size_content = .{ .h = size },
     });
-    if (bw.clicked()) open = !open;
+    if (bw.clicked()) {
+        open = !open;
+        if (open) {
+            list_rect = .{};
+            sub_rect = .{};
+            sub_for = null;
+            sub_phys = .{};
+        }
+    }
     if (!open) return;
-    // A press on anything else — the window, another rail icon — closes the list.
-    for (dvui.events()) |*e| {
-        if (e.evt != .mouse or e.evt.mouse.action != .press) continue;
-        const p = e.evt.mouse.p;
-        if (bw.data().borderRectScale().r.contains(p) or list_rect.contains(p) or sub_rect.contains(p)) continue;
+    const button_r = bw.data().borderRectScale().r;
+    if (Popover.outside(&.{ button_r, list_rect.scale(dvui.windowNaturalScale(), dvui.Rect.Physical), sub_phys })) {
         open = false;
         return;
     }
-    const from = bw.data().borderRectScale().r.toNatural();
-    const prev_root = dvui.MenuWidget.Root.set(.{ .ptr = &open, .close = menuRootClose });
-    defer _ = dvui.MenuWidget.Root.set(prev_root);
-    // Open to the right of the icon, not below: the rail is at the screen's left edge.
-    // Drawn like a dialog — its frost, corners and shadow — not like a menubar menu.
-    var fw = dvui.floatingMenu(@src(), .{ .from = .{ .x = from.x + from.w, .y = from.y, .w = 0, .h = from.h }, .avoid = .horizontal }, fizzy.core.dialogs.popoverOptions());
-    defer fw.deinit();
-    fizzy.core.dialogs.frostPopover(fw);
-    list_rect = fw.data().borderRectScale().r;
-    sub_rect = .{};
+
+    // Beside the icon, not below: the rail is at the screen's left edge.
+    const from = button_r.toNatural();
+    var list = Popover.init(@src(), .{ .rect = &list_rect, .anchor = .{ .x = from.x + from.w + 4, .y = from.y - 4 } });
+    defer list.deinit();
     drawing_rows = true;
     defer drawing_rows = false;
-    // Thrown open from the rail with the store card's overshoot; the menu's width follows.
-    var slide = dvui.animate(@src(), .{ .kind = .horizontal, .duration = 250_000, .easing = dvui.easing.outBack }, .{ .expand = .horizontal });
-    defer slide.deinit();
 
     var rows: usize = 0;
+    var hovered_any: ?usize = null;
+    var sub_anchor: ?dvui.Rect.Physical = null;
     for (host.account_providers.items, 0..) |p, pi| {
         if (p.hidden) continue;
         for (p.accounts(arena), 0..) |a, ai| {
-            const label = std.fmt.allocPrint(arena, "{s} ({s})", .{ a.label, p.name }) catch a.label;
             const extra = pi * 64 + ai;
-            if (accountRow(label, a.avatar, extra)) |r| {
-                var sub_opts = fizzy.core.dialogs.popoverOptions();
-                sub_opts.id_extra = extra;
-                var sub = dvui.floatingMenu(@src(), .{ .from = r }, sub_opts);
-                defer sub.deinit();
-                fizzy.core.dialogs.frostPopover(sub);
-                sub_rect = sub.data().borderRectScale().r;
-                if (p.menu(a.id)) {
-                    open = false;
-                    fw.close();
-                }
-            }
+            const label = std.fmt.allocPrint(arena, "{s} ({s})", .{ a.label, p.name }) catch a.label;
+            var r = Popover.row(@src(), .{ .id_extra = extra, .active = sub_for == extra });
+            accountRowContent(label, a.avatar);
+            if (r.hovered or r.clicked) hovered_any = extra;
+            if (sub_for == extra) sub_anchor = r.rect();
+            r.deinit();
             rows += 1;
         }
     }
-    // A sign-in row only for a provider with nobody signed in: one identity per provider.
     var offered: usize = 0;
     for (host.account_providers.items, 0..) |p, pi| {
         if (p.hidden or !p.canSignIn() or p.accounts(arena).len != 0) continue;
         if (offered == 0 and rows > 0) _ = dvui.separator(@src(), .{ .expand = .horizontal, .margin = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
         offered += 1;
         const label = std.fmt.allocPrint(arena, "Sign in to {s}…", .{p.name}) catch p.name;
-        var row_opts = fizzy.core.dialogs.popoverRowOptions();
-        row_opts.id_extra = pi;
-        if (dvui.menuItemLabel(@src(), label, .{}, row_opts) != null) {
+        var r = Popover.row(@src(), .{ .id_extra = pi });
+        dvui.labelNoFmt(@src(), label, .{}, .{ .gravity_y = 0.5, .margin = .all(0), .padding = .all(0) });
+        r.deinit();
+        if (r.clicked) {
             open = false;
-            fw.close();
             p.signIn();
         }
     }
     if (rows == 0 and offered == 0) {
-        dvui.labelNoFmt(@src(), "No accounts", .{}, .{ .color_text = .{ .color = theme.color(.control, .text) } });
+        dvui.labelNoFmt(@src(), "No accounts", .{}, .{ .padding = .all(6) });
     }
+
+    // Hovering an account row opens its submenu (and moves it from another row); the
+    // submenu stays while the mouse is over it.
+    if (hovered_any) |h| {
+        if (sub_for != h) {
+            sub_for = h;
+            sub_rect = .{};
+            sub_phys = .{};
+        }
+    } else if (sub_for != null and !sub_phys.contains(dvui.currentWindow().mouse_pt)) {
+        sub_for = null;
+        sub_phys = .{};
+    }
+    const anchor = sub_anchor orelse return;
+    const which = sub_for orelse return;
+    const p = host.account_providers.items[which / 64];
+    const accounts = p.accounts(arena);
+    if (which % 64 >= accounts.len) return;
+    const a = accounts[which % 64];
+    const at = anchor.toNatural();
+    var sub = Popover.init(@src(), .{ .rect = &sub_rect, .anchor = .{ .x = at.x + at.w + 8, .y = at.y - 7 }, .id_extra = 1 });
+    defer sub.deinit();
+    sub_phys = sub.rect;
+    if (p.menu(a.id)) open = false;
 }
 
-/// One account's row: its picture in a small disc (or a user glyph), the label, a chevron
-/// for the submenu. Returns the row's rect while its submenu should be open.
-fn accountRow(label: []const u8, avatar: ?dvui.ImageSource, extra: usize) ?dvui.Rect.Natural {
-    const theme = dvui.themeGet();
-    var row_opts = fizzy.core.dialogs.popoverRowOptions();
-    row_opts.id_extra = extra;
-    var mi = dvui.menuItem(@src(), .{ .submenu = true }, row_opts);
-    const ret = mi.activeRect();
+/// A provider's submenu row, for `Host.drawMenuItem` while `drawing_rows`: the popover shell
+/// around fizzy's usual icon + label + chord. Returns whether it was clicked.
+pub fn drawMenuRow(title: []const u8, icon: ?[]const u8, kb: dvui.enums.Keybind, enabled: bool) bool {
+    const id_extra: usize = @truncate(std.hash.Wyhash.hash(0, title));
+    var r = Popover.row(@src(), .{ .enabled = enabled, .id_extra = id_extra });
+    defer r.deinit();
+    fizzy.core.draw.menuRowIcon(icon, dvui.themeGet().color(.control, .text), enabled, id_extra);
+    fizzy.core.draw.labelWithKeybind(title, kb, enabled, .{ .expand = .horizontal }, .{ .expand = .horizontal });
+    return r.clicked;
+}
 
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .background = false, .padding = dvui.Rect.all(0), .margin = dvui.Rect.all(0) });
+/// An account row's content: its picture in a small disc (or a user glyph), the label, a
+/// chevron for the submenu.
+fn accountRowContent(label: []const u8, avatar: ?dvui.ImageSource) void {
+    const theme = dvui.themeGet();
     const disc: f32 = 18;
     {
         // The disc: a spacer reserves the cell; the picture (or glyph) is drawn into it.
@@ -147,15 +165,10 @@ fn accountRow(label: []const u8, avatar: ?dvui.ImageSource, extra: usize) ?dvui.
             circle.stroke(.{ .thickness = 1.0 * rs.s, .color = .{ .color = c.opacity(0.6) }, .closed = true });
         }
     }
-    var label_opts: dvui.Options = .{ .gravity_y = 0.5, .margin = dvui.Rect.all(0), .padding = dvui.Rect.all(0), .color_text = .{ .color = theme.color(.control, .text) } };
-    if (fizzy.core.widgets.hovered(mi.data())) label_opts.color_text = .{ .color = theme.color(.window, .text) };
-    dvui.labelNoFmt(@src(), label, .{}, label_opts);
-    _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 12, .h = 1 }, .expand = .horizontal });
+    dvui.labelNoFmt(@src(), label, .{}, .{ .gravity_y = 0.5, .margin = .all(0), .padding = .all(0) });
+    _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 16, .h = 1 }, .expand = .horizontal });
     fizzy.core.icon.icon(@src(), "chevron_right", dvui.entypo.chevron_small_right, .{
         .stroke_color = .{ .color = theme.color(.control, .text).opacity(0.5) },
         .fill_color = .{ .color = theme.color(.control, .text).opacity(0.5) },
-    }, .{ .gravity_x = 1.0, .gravity_y = 0.5, .margin = dvui.Rect.all(0), .padding = dvui.Rect.all(0) });
-    row.deinit();
-    mi.deinit();
-    return ret;
+    }, .{ .gravity_x = 1.0, .gravity_y = 0.5, .margin = .all(0), .padding = .all(0) });
 }

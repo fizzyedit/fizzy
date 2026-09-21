@@ -48,6 +48,22 @@ pub const MenuSectionContribution = struct {
     draw: *const fn (ctx: ?*anyopaque) anyerror!void,
 };
 
+/// Another way to open something, beside fizzy's own New File / Open Folder / Open Files:
+/// "Open Drive Folder" from a cloud plugin, say. Pure data — a title and the `Command` it
+/// runs — so fizzy can put it wherever those verbs appear: the File menu (right after Open
+/// Files, in-app and native) and the workbench's home page. Shown only while the command
+/// reports enabled, so a cloud plugin lists its action only once someone is signed in.
+pub const OpenAction = struct {
+    id: []const u8,
+    owner: ?*Plugin = null,
+    title: []const u8,
+    /// The registered `Command` this runs; its `isEnabled` decides whether the action shows.
+    command: []const u8,
+    /// SF Symbol for the native menu row, as `NativeMenuItem.sf_symbol`.
+    sf_symbol: ?[]const u8 = null,
+    hidden: bool = false,
+};
+
 /// A small thing drawn at the bottom of the rail, above the store and settings icons — an
 /// account disc, a sync badge, a status light. Fizzy provides the slot and the row; the plugin
 /// draws what goes in it (and any popup it opens), sized like the rail's own icons. Not a

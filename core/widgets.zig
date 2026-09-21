@@ -33,6 +33,7 @@ pub const TreeSelection = @import("widgets/TreeSelection.zig");
 pub const DockingWidget = @import("widgets/DockingWidget.zig");
 pub const DockLayout = DockingWidget.Layout;
 pub const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
+pub const Popover = @import("widgets/Popover.zig");
 /// Verb form of `DockingWidget`, same shape as `dvui.dockspace`.
 pub const dockspace = DockingWidget.dockspace;
 

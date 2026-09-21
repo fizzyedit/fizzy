@@ -110,7 +110,9 @@ pub fn menuRowIcon(bytes: ?[]const u8, base_color: dvui.Color, enabled: bool, id
     var glyph = widgets.treeRowGlyph(@src(), .{ .id_extra = id_extra, .margin = .{ .w = 6 } });
     defer glyph.deinit();
     if (bytes) |b| {
-        const color = if (enabled) base_color else base_color.opacity(0.5);
+        // Disabled is the colour half-way to the menu's fill, opaque: a translucent icon is a
+        // mesh whose overlapping triangles double-blend (the web build draws them as a mesh).
+        const color = if (enabled) base_color else base_color.lerp(dvui.themeGet().color(.control, .fill), 0.5);
         icon_tex.icon(@src(), "menu_icon", b, .{ .stroke_color = .{ .color = color }, .fill_color = .{ .color = color } }, widgets.treeRowIconOptions(.{ .id_extra = id_extra }));
     }
 }

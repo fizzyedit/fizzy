@@ -1841,20 +1841,22 @@ fn fizzyDrawMenuItem(ctx: *anyopaque, title: []const u8, command_id: ?[]const u8
         const c = editor.app.host.command(id) orelse break :blk null;
         break :blk c.icon;
     } else null;
-    // A row in the account popover (`Accounts`) takes that popover's row look.
-    var row_opts: dvui.Options = if (Accounts.drawing_rows) fizzy.core.dialogs.popoverRowOptions() else .{ .expand = .horizontal };
-    // `Wyhash.hash` always returns `u64`; `id_extra` is `usize`, which is 32-bit on
-    // wasm32 — truncate rather than relying on the width match that only holds natively.
-    row_opts.id_extra = @truncate(std.hash.Wyhash.hash(0, title));
-    var mi = dvui.menuItem(@src(), .{}, row_opts);
-    defer mi.deinit();
-    const clicked = enabled and mi.activeRect() != null;
     // Same resolution fizzy's own menu rows use (`Menu.hotkeyFor`), so a plugin row and a
     // fizzy row bound to the same chord can never disagree about what to display.
     const kb: dvui.enums.Keybind = if (command_id) |id|
         Keybinds.menuKeybindFor(editor, id)
     else
         .{};
+    // A row in the account flyout (`Accounts`) is a popover row, not a dvui menu item.
+    if (Accounts.drawing_rows) return Accounts.drawMenuRow(title, icon, kb, enabled);
+    var mi = dvui.menuItem(@src(), .{}, .{
+        .expand = .horizontal,
+        // `Wyhash.hash` always returns `u64`; `id_extra` is `usize`, which is 32-bit on
+        // wasm32 — truncate rather than relying on the width match that only holds natively.
+        .id_extra = @truncate(std.hash.Wyhash.hash(0, title)),
+    });
+    defer mi.deinit();
+    const clicked = enabled and mi.activeRect() != null;
     const id_extra: usize = @truncate(std.hash.Wyhash.hash(0, title));
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .id_extra = id_extra });
     defer row.deinit();

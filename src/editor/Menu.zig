@@ -107,6 +107,17 @@ fn drawModelItem(
 
         .recent_folders => try drawRecentFolders(editor, id_extra),
 
+        .open_actions => {
+            const host = &editor.app.host;
+            for (host.open_actions.items) |a| {
+                if (!host.openActionShown(a)) continue;
+                if (host.drawMenuItem(a.title, a.command)) {
+                    fw.close();
+                    host.runCommand(a.command) catch |err| dvui.log.warn("open action {s}: {t}", .{ a.id, err });
+                }
+            }
+        },
+
         .submenu => |nested| {
             // No nested submenus in the bar today; the model allows them, so handle rather
             // than silently drop.

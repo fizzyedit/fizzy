@@ -30,6 +30,7 @@ pub const MenuContribution = @import("menus.zig").MenuContribution;
 pub const MenuSectionContribution = @import("menus.zig").MenuSectionContribution;
 pub const NativeMenuItem = @import("menus.zig").NativeMenuItem;
 pub const RailItemContribution = @import("menus.zig").RailItemContribution;
+pub const OpenAction = @import("menus.zig").OpenAction;
 pub const accounts = @import("accounts.zig");
 pub const Command = @import("Command.zig");
 
@@ -233,6 +234,8 @@ menus: std.ArrayListUnmanaged(MenuContribution) = .empty,
 menu_sections: std.ArrayListUnmanaged(MenuSectionContribution) = .empty,
 /// Plugin-drawn items at the bottom of the rail (`RailItemContribution`).
 rail_items: std.ArrayListUnmanaged(RailItemContribution) = .empty,
+/// More ways to open something, listed beside fizzy's own (`OpenAction`).
+open_actions: std.ArrayListUnmanaged(OpenAction) = .empty,
 /// Who the user is signed in as, per service (`accounts.Provider`). The host draws the disc.
 account_providers: std.ArrayListUnmanaged(accounts.Provider) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
@@ -270,6 +273,7 @@ pub fn deinit(self: *Host) void {
     self.menus.deinit(self.allocator);
     self.menu_sections.deinit(self.allocator);
     self.rail_items.deinit(self.allocator);
+    self.open_actions.deinit(self.allocator);
     self.account_providers.deinit(self.allocator);
     self.native_menu_items.deinit(self.allocator);
     self.commands.deinit(self.allocator);
@@ -764,6 +768,7 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(Surface, &self.surfaces, plugin);
     removeOwned(MenuContribution, &self.menus, plugin);
     removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
+    removeOwned(OpenAction, &self.open_actions, plugin);
     removeOwned(RailItemContribution, &self.rail_items, plugin);
     removeOwned(accounts.Provider, &self.account_providers, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
@@ -1204,6 +1209,16 @@ pub fn registerMenuSection(self: *Host, section: MenuSectionContribution) !void 
 /// Put something small at the bottom of the rail — see `RailItemContribution`.
 pub fn registerRailItem(self: *Host, item: RailItemContribution) !void {
     try self.rail_items.append(self.allocator, item);
+}
+
+/// Add a way to open something beside Open Folder / Open Files — see `OpenAction`.
+pub fn registerOpenAction(self: *Host, action: OpenAction) !void {
+    try self.open_actions.append(self.allocator, action);
+}
+
+/// Whether `action` should be listed right now: not hidden, and its command enabled.
+pub fn openActionShown(self: *Host, action: OpenAction) bool {
+    return !action.hidden and self.commandEnabled(action.command);
 }
 
 /// Tell the host about a service the user can be signed in to — see `accounts.Provider`. The

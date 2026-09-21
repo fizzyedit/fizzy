@@ -1106,6 +1106,13 @@ optional picture), a sign-in action, and the rows of each account's submenu. Fiz
 one account glyph at the bottom of the rail and the list it opens — every provider's accounts
 with their pictures, each with its own submenu, then a "Sign in to …" row per provider. A
 plugin never draws in the rail for this; `host.registerRailItem` is for other small things.
+Signing in mounts and nothing more — the explorer shows nothing until the user opens something.
+For that the plugin registers an `OpenAction` (`host.registerOpenAction`: a title and the
+command it runs), and fizzy lists it beside its own New File / Open Folder / Open Files — in
+the File menu right after Open Files, and on the workbench's home page — for as long as the
+command reports enabled. A submenu row on the account ("Open Drive Folder", "Sign out") is
+drawn through `Host.drawMenuItem`, never dvui's menu widgets: a dylib's dvui has no open
+menu to put an item in.
 
 `fizzyedit/zig-drive` (Google Drive) is the worked example; `plugins/archive` mounts a `.zip`
 through `core.vfs.Mem` in a few dozen lines. The design and its remaining edges are in

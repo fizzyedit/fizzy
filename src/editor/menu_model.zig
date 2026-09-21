@@ -84,6 +84,8 @@ pub const Item = union(enum) {
     submenu: Submenu,
     /// The recents list, filled at draw time from `editor.app.recents`.
     recent_folders,
+    /// Plugins' `OpenAction`s (`host.open_actions`), the ones currently enabled.
+    open_actions,
     /// Plugin-contributed section parented to this menu id (e.g. "fizzy.menu.edit").
     plugin_section: []const u8,
 };
@@ -159,6 +161,7 @@ const file_items = [_]Item{
     .{ .command = .{ .id = "fizzy.openFolder", .title = .{ .static = "Open Folder" }, .sf_symbol = "folder" } },
     // Not "doc.on.doc": that is the system's Copy glyph, which the Edit menu below uses.
     .{ .command = .{ .id = "fizzy.openFiles", .title = .{ .static = "Open Files" }, .sf_symbol = "doc.text" } },
+    .open_actions,
     .separator,
     .recent_folders,
     .separator,
