@@ -13,8 +13,14 @@ const Editor = fizzy.Editor;
 
 /// Whether the list is showing. One list per app, so one flag.
 var open: bool = false;
-/// The list's rect last frame, so a click inside it does not count as "elsewhere".
-var list_rect: dvui.Rect.Physical = .{};
+
+/// dvui closes the menu chain itself — a click elsewhere, focus lost, an item chosen — and
+/// tells the chain's root through this; doing our own outside-click test instead closed the
+/// list on the press that opened a submenu row, before its release could choose anything.
+fn menuRootClose(_: *anyopaque, _: dvui.MenuWidget.CloseReason) void {
+    open = false;
+    dvui.refresh(null, @src(), null);
+}
 
 /// Draw the disc as one rail cell. Drawn only when a provider exists (`Sidebar`).
 pub fn drawRailDisc(editor: *Editor, size: f32) !void {
@@ -40,15 +46,12 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     });
     if (bw.clicked()) open = !open;
     if (!open) return;
-    // A click anywhere outside the list closes it, like a menu.
-    for (dvui.events()) |*e| {
-        if (e.evt == .mouse and e.evt.mouse.action == .press and !bw.data().borderRectScale().r.contains(e.evt.mouse.p) and !list_rect.contains(e.evt.mouse.p)) open = false;
-    }
     const from = bw.data().borderRectScale().r.toNatural();
+    const prev_root = dvui.MenuWidget.Root.set(.{ .ptr = &open, .close = menuRootClose });
+    defer _ = dvui.MenuWidget.Root.set(prev_root);
     // Open to the right of the icon, not below: the rail is at the screen's left edge.
     var fw = dvui.floatingMenu(@src(), .{ .from = .{ .x = from.x + from.w, .y = from.y, .w = 0, .h = from.h }, .avoid = .horizontal }, .{});
     defer fw.deinit();
-    list_rect = fw.data().borderRectScale().r;
 
     var rows: usize = 0;
     for (host.account_providers.items, 0..) |p, pi| {
@@ -67,9 +70,10 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
             rows += 1;
         }
     }
+    // A sign-in row only for a provider with nobody signed in: one identity per provider.
     var offered: usize = 0;
     for (host.account_providers.items, 0..) |p, pi| {
-        if (p.hidden or !p.canSignIn()) continue;
+        if (p.hidden or !p.canSignIn() or p.accounts(arena).len != 0) continue;
         if (offered == 0 and rows > 0) _ = dvui.separator(@src(), .{ .expand = .horizontal });
         offered += 1;
         const label = std.fmt.allocPrint(arena, "Sign in to {s}…", .{p.name}) catch p.name;
