@@ -12,8 +12,11 @@ var scroll_info: dvui.ScrollInfo = .{ .horizontal = .auto };
 var follow = true;
 /// One line's height as the text layout measured it last frame. Zero until measured, which
 /// lays every line out once so there is something to measure.
+/// Height of one log row. Taken from the mono font each frame, never measured off the laid-out
+/// text: a measurement is a frame behind and was divided by a line count that changes as the
+/// viewport moves, so the estimate drifted, the spacers changed height, the viewport clamped,
+/// the visible range moved, and the panel oscillated for as long as the log overflowed it.
 var line_pitch: f32 = 0;
-var last_shown: usize = 0;
 
 /// Selected tab, persisted as a bounded copy rather than a slice into `OutputLog`'s ring
 /// buffer — a scope string there can be freed on eviction or plugin unload between frames.
@@ -48,6 +51,7 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
     // and below the viewport are two spacers of their height.
     const arena = dvui.currentWindow().arena();
     const selected = selectedScope();
+    line_pitch = dvui.Font.theme(.mono).lineHeight();
     var scopes: std.ArrayListUnmanaged([]const u8) = .empty;
     var shown_total: usize = 0;
     var lines: []OutputLog.Line = &.{};
@@ -138,9 +142,6 @@ pub fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
         }
     }
 
-    // Last frame's height over last frame's count: the rect is a frame behind the text.
-    if (last_shown > 0) line_pitch = tl.data().rect.h / @as(f32, @floatFromInt(last_shown));
-    last_shown = shown;
     tl.deinit();
     const after = shown_total - first - lines.len;
     if (after > 0) {
