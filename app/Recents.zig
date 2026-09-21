@@ -49,10 +49,14 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
             defer std.zon.parse.free(allocator, disk);
 
             for (disk.folders) |folder| {
-                if (std.Io.Dir.openDirAbsolute(dvui.io, folder, .{})) |d| {
-                    var dd = d;
-                    dd.close(dvui.io);
-
+                // A folder on a mount (`gdrive://…`) is not the disk's to check: it exists
+                // whenever its plugin is signed in, which is decided at open time.
+                const present = core.paths.isMountPath(folder) or blk: {
+                    var d = std.Io.Dir.openDirAbsolute(dvui.io, folder, .{}) catch break :blk false;
+                    d.close(dvui.io);
+                    break :blk true;
+                };
+                if (present) {
                     const canon = canonicalize(allocator, folder) catch continue;
 
                     // Duplicates collapse onto the *later* row — the list is ordered
@@ -65,7 +69,7 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !Recents {
                     }
 
                     try folders.append(canon);
-                } else |_| {}
+                }
             }
 
             return .{
