@@ -34,7 +34,6 @@ pub fn build(b: *std.Build) !void {
         // directory while the plugin is a sibling checkout (see `Options.web_plugin_dirs`);
         // by URL-pinned dependency (`web_plugin_deps`) once it is published.
         .web_plugin_dirs = &.{
-            .{ .dir = "../fizzyedit/zig-drive" },
             .{ .dir = "../fizzyedit/atlas", .modules = &.{
                 .{ .name = "batch2d", .root = "src/batch2d/root.zig" },
                 .{ .name = "content_graph", .root = "src/index/content_graph.zig", .dvui = false },

@@ -75,7 +75,34 @@ pub fn addSteps(
         "FizzyWebOAuthAlloc",
         "FizzyWebOAuthResult",
         "FizzyWebOAuthFailed",
+        // Plugins loaded at runtime (wasm side modules — `web/index.html`'s `loadPlugin`):
+        // the host's side of the handshake, and what a side module links against — the
+        // stack pointer it shares, dvui's C shims and stb, which it imports from `env`.
+        "FizzyWebPluginAlloc",
+        "FizzyWebPluginReady",
+        "FizzyWebPluginFailed",
+        "FizzyWebPluginRequest",
+        "__stack_pointer",
+        "dvui_c_alloc",
+        "dvui_c_free",
+        "dvui_c_realloc_sized",
+        "dvui_c_panic",
+        "dvui_c_sqrt",
+        "dvui_c_pow",
+        "dvui_c_floor",
+        "dvui_c_ceil",
+        "dvui_c_fmod",
+        "dvui_c_cos",
+        "dvui_c_acos",
+        "dvui_c_fabs",
+        "dvui_c_strlen",
+        "stbi_load_from_memory",
+        "stbi_failure_reason",
+        "stbi_image_free",
+        "stbi_info_from_memory",
     };
+    // The function table is the page's (growable), so a plugin's functions can join it.
+    web_exe.import_table = true;
 
     // `icons` (pure-Zig icon data) is referenced at file scope in
     // `src/dvui.zig` and `src/editor/Infobar.zig`. Wired in so any future

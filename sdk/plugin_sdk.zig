@@ -334,6 +334,7 @@ fn pluginExt(os_tag: std.Target.Os.Tag) []const u8 {
     return switch (os_tag) {
         .windows => "dll",
         .macos => "dylib",
+        .freestanding => "wasm",
         else => "so",
     };
 }
@@ -506,7 +507,7 @@ fn generatedDylibRoot(
         .target = target,
         .optimize = optimize,
         .root_source_file = root_path,
-        .link_libc = true,
+        .link_libc = target.result.cpu.arch != .wasm32,
     });
     mod.addImport("fizzy_sdk", sdk_mod);
     mod.addImport("plugin_impl", plugin_mod);
@@ -525,7 +526,7 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
         .target = opts.target,
         .optimize = opts.optimize,
         .root_source_file = opts.root_source_file orelse b.path("plugin.zig"),
-        .link_libc = opts.link_libc,
+        .link_libc = opts.link_libc and opts.target.result.cpu.arch != .wasm32,
     });
     addImports(plugin_module, plugin_modules);
     plugin_module.addAnonymousImport("plugin_zon", .{ .root_source_file = b.path("plugin.zig.zon") });
@@ -535,6 +536,7 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
 
     const root_mod = generatedDylibRoot(b, opts.target, opts.optimize, plugin_modules.sdk, plugin_module);
 
+    const is_wasm = opts.target.result.cpu.arch == .wasm32;
     const lib = b.addLibrary(.{
         .name = m.id,
         .linkage = .dynamic,
@@ -542,6 +544,19 @@ pub fn create(b: *std.Build, opts: CreateOptions) PluginArtifact {
     });
     lib.linker_allow_shlib_undefined = true;
     lib.root_module.export_symbol_names = &dylib_exports;
+    if (is_wasm) {
+        // A wasm *side module* (Emscripten's term): position-independent, no entry, no
+        // threads, loaded into the web host's memory and function table at runtime — the
+        // dylib model with table indices for function pointers. See `docs/REVIEW_2026-09.md`
+        // §2 and `web/index.html`'s loader.
+        lib.root_module.pic = true;
+        lib.root_module.single_threaded = true;
+        lib.entry = .disabled;
+        lib.rdynamic = true;
+        // Whatever the module does not define is an `env` import the loader resolves from
+        // the host: dvui's C shims (`dvui_c_alloc`, …) and the `fizzy_web_*` JS calls.
+        lib.import_symbols = true;
+    }
 
     // The same `plugin.zig` as a module an application can link in (`fizzy.buildApp`), exported
     // as `"plugin"`. Its `dvui`/`core`/`fizzy_sdk` imports are the application's, wired by
@@ -565,7 +580,19 @@ pub fn exportModules(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) !void {
-    const dvui_dep = b.dependency("dvui", .{
+    // A wasm side module has no libc and no C libraries of its own: fonts and images are the
+    // host's (rendered through the bridge), and the web has no tree-sitter to run.
+    const is_wasm = target.result.cpu.arch == .wasm32;
+    const dvui_dep = if (is_wasm) b.dependency("dvui", .{
+        .target = target,
+        .optimize = optimize,
+        .backend = .proxy,
+        .accesskit = .off,
+        .libc = false,
+        .freetype = false,
+        .@"stb-image" = false,
+        .@"tree-sitter" = false,
+    }) else b.dependency("dvui", .{
         .target = target,
         .optimize = optimize,
         .backend = .proxy,
@@ -578,7 +605,7 @@ pub fn exportModules(
         .target = target,
         .optimize = optimize,
         .root_source_file = repoPath(b, "core/core.zig"),
-        .link_libc = true,
+        .link_libc = !is_wasm,
     });
     _ = core_module.addImports(b, core_mod, dvui_proxy_mod, target, optimize);
 

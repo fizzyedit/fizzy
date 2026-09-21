@@ -324,7 +324,9 @@ pub fn semverFromTriplet(t: VersionTriplet) std.SemanticVersion {
 pub fn stdOptions(comptime id: []const u8) std.Options {
     const Impl = struct {
         fn logFn(comptime level: std.log.Level, comptime scope: @EnumLiteral(), comptime format: []const u8, args: anytype) void {
-            dvui.App.logFn(level, scope, format, args);
+            // A wasm side module has no stderr of its own (std's default sink wants a
+            // threaded Io); the host's panel is the only sink there.
+            if (comptime @import("builtin").target.cpu.arch != .wasm32) dvui.App.logFn(level, scope, format, args);
             const msg = std.fmt.allocPrint(runtime.allocator(), format, args) catch return;
             defer runtime.allocator().free(msg);
             runtime.host().logLine(level, id, msg);

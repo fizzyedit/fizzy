@@ -1322,6 +1322,77 @@ pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     editor.app.clearFailedUserPlugin(id);
 }
 
+/// Web: fetch and link a plugin built as a wasm side module from `url`, then register it
+/// exactly as `loadUserPluginById` would — on the frame the page reports it linked. `id` is
+/// what the plugin must declare. The URL is kept for the loaded-libs list.
+pub fn loadWebPlugin(editor: *Editor, id: []const u8, url: []const u8) !void {
+    if (comptime builtin.target.cpu.arch != .wasm32) return error.NotUnloadable;
+    if (editor.app.host.pluginById(id) != null) return;
+    const gpa = editor.app.gpa;
+    const req = try gpa.create(WebPluginRequest);
+    errdefer gpa.destroy(req);
+    req.* = .{ .editor = editor, .id = try gpa.dupe(u8, id), .url = try gpa.dupe(u8, url) };
+    _ = try PluginLoader.begin(gpa, req.url, WebPluginRequest.arrived, req);
+}
+
+const WebPluginRequest = struct {
+    editor: *Editor,
+    id: []u8,
+    url: []u8,
+
+    fn arrived(ctx: ?*anyopaque, arrival: PluginLoader.Arrival) void {
+        const req: *WebPluginRequest = @ptrCast(@alignCast(ctx.?));
+        const editor = req.editor;
+        const gpa = editor.app.gpa;
+        defer {
+            gpa.free(req.id);
+            gpa.destroy(req);
+            // `url` lives on as `LoadedLib.path` when the load succeeded.
+        }
+        const lib = arrival.lib orelse {
+            dvui.log.err("web plugin '{s}' ({s}): the page could not load it", .{ req.id, req.url });
+            gpa.free(req.url);
+            return;
+        };
+        const loaded = PluginLoader.loadAndRegister(&editor.app.host, gpa, req.url, req.id, lib, .{
+            .gpa = &editor.app.gpa,
+            .arg_b = @ptrCast(&editor.app.host),
+            .arg_c = null,
+        }) catch |err| {
+            dvui.log.err("web plugin '{s}' ({s}): load failed: {s}", .{ req.id, req.url, @errorName(err) });
+            gpa.free(req.url);
+            return;
+        };
+        editor.app.appendLoadedPluginLib(loaded) catch {
+            dvui.log.err("web plugin '{s}': out of memory storing LoadedLib", .{req.id});
+            return;
+        };
+        App.syncLoadedPluginDvuiContexts(&editor.app);
+        App.syncLoadedPluginRenderBridge(&editor.app);
+        for (editor.app.host.plugins.items) |p| {
+            if (std.mem.eql(u8, p.id, req.id)) p.initPlugin() catch |err| {
+                dvui.log.err("web plugin '{s}': initPlugin failed: {s}", .{ req.id, @errorName(err) });
+            };
+        }
+        rebuildKeybinds(editor);
+        dvui.log.info("web plugin '{s}' loaded from {s}", .{ req.id, req.url });
+        editor.app.host.refresh();
+    }
+};
+
+/// The page asks for a plugin (`?plugin=<id>` on the URL, for now): `plugins/<id>/<id>.wasm`
+/// beside the app.
+export fn FizzyWebPluginRequest(id_ptr: [*]const u8, id_len: usize) void {
+    if (comptime builtin.target.cpu.arch != .wasm32) return;
+    const editor = web_editor orelse return;
+    const id = id_ptr[0..id_len];
+    var buf: [512]u8 = undefined;
+    const url = std.fmt.bufPrint(&buf, "plugins/{s}/{s}.wasm", .{ id, id }) catch return;
+    editor.loadWebPlugin(id, url) catch |err| dvui.log.err("web plugin '{s}': {s}", .{ id, @errorName(err) });
+}
+/// The one editor, for the page's calls. Set by `postInit` on the web.
+var web_editor: ?*Editor = null;
+
 /// Install (file already downloaded to the plugins dir by the store backend) + load live.
 /// Writes `.plugins.<id>.enabled = true` immediately so the plugin stays enabled across restarts
 /// (store installs auto-load; a manually dropped-in dylib does not — see R12).
@@ -1605,6 +1676,10 @@ pub fn postInit(editor: *Editor) !void {
     editor.rebuildExtensionOwnerCache();
 
     for (editor.app.host.plugins.items) |p| try p.initPlugin();
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        web_editor = editor;
+        PluginLoader.init(editor.app.gpa);
+    }
 
     // Fizzy built-in: Plugin store (owner = null; not a plugin). Registered just before
     // Settings so its icon sits directly above the cog in the sidebar rail.
@@ -3056,6 +3131,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         inline for (bundled_plugins) |m| {
             if (comptime @hasDecl(m, "beginWebOverlayFrame")) m.beginWebOverlayFrame();
         }
+        // Plugins the page has finished linking since last frame register now.
+        PluginLoader.pump();
     }
 
     // Folder lifetime, before anything draws: free the strings earlier frames retired, then

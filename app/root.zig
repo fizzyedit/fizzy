@@ -99,11 +99,10 @@ pub const single_instance = @import("single_instance/singleton.zig");
 pub const store = struct {
     pub const Store = @import("store/PluginStore.zig");
     pub const Manager = @import("store/PluginManager.zig");
-    /// Runtime plugin loading is native-only — there is no `dlopen` in a browser, and web
-    /// builds link their plugins statically. The stub keeps the *types* so cross-platform code
-    /// (the store's installed list) compiles either way; on wasm the list is simply always empty.
+    /// Runtime plugin loading: `dlopen` natively; on the web a wasm side module the page links
+    /// into its function table (`PluginLoader_web.zig`). Same `LoadedLib` read-shape on both.
     pub const Loader = if (@import("builtin").target.cpu.arch == .wasm32)
-        @import("store/PluginLoader_stub.zig")
+        @import("store/PluginLoader_web.zig")
     else
         @import("store/PluginLoader.zig");
     pub const registry = @import("store/registry/store.zig");

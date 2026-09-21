@@ -944,14 +944,12 @@ pub fn setPluginExtensionsPersisted(app: *App, id: []const u8, exts: []const []c
 
 /// Push host dvui state into every loaded plugin dylib image.
 pub fn syncLoadedPluginDvuiContexts(app: *App) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     for (app.loaded_plugin_libs.items) |loaded| {
         sdk.dvui_context.syncHostIntoPlugin(loaded.set_dvui_context);
     }
 }
 
 pub fn syncLoadedPluginGlobals(app: *App, plugin_id: []const u8, arg_b: *anyopaque, arg_c: ?*anyopaque) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     for (app.loaded_plugin_libs.items) |loaded| {
         if (!std.mem.eql(u8, loaded.plugin_id, plugin_id)) continue;
         loaded.set_globals(@ptrCast(&app.gpa), arg_b, arg_c);
@@ -960,7 +958,6 @@ pub fn syncLoadedPluginGlobals(app: *App, plugin_id: []const u8, arg_b: *anyopaq
 
 /// Inject the host render bridge into every loaded plugin dylib (proxy backend).
 pub fn syncLoadedPluginRenderBridge(app: *App) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     for (app.loaded_plugin_libs.items) |loaded| {
         sdk.render_bridge.syncHostIntoPlugin(loaded.set_render_bridge);
     }
