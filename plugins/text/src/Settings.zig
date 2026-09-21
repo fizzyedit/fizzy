@@ -41,14 +41,3 @@ rainbow_brackets: settings.Value(bool, .{
 format_on_save: settings.Value(bool, .{
     .description = "Reformat the document with the language's formatter each time it is saved.",
 }) = .init(false),
-
-/// Experiment: when a text pane's scroll content is wider than the viewport, the overflow
-/// strip to the **right** (later DockingWidget sibling) is drawn as a heavy cached blur so
-/// the neighbour's chrome sits over a frosted ghost of this pane's text. Off by default
-/// so the clipped sash and the bleed can be compared side by side. Does not bleed left —
-/// a right pane's overflow would paint over a neighbour already drawn.
-frosted_overflow: settings.Value(bool, .{
-    .name = "Frosted overflow bleed",
-    .description = "In a split, draw this editor's horizontal overflow under the pane to " ++
-        "its right as a heavy frosted-glass blur. Later-sibling direction only; off by default.",
-}) = .init(false),

@@ -1,7 +1,6 @@
 //! Monospace text editor: line numbers + local `TextEntryWidget` with optional tree-sitter
 //! highlighting and an optional raw|preview split when a language plugin registers a preview.
 const std = @import("std");
-const builtin = @import("builtin");
 const dvui = @import("dvui");
 const core = @import("core");
 const sdk = @import("fizzy_sdk");
@@ -19,10 +18,6 @@ const editor_pad_right: f32 = 8;
 const line_number_pad_left: f32 = 4;
 const text_gap_after_numbers: f32 = 12;
 const syntax_highlight_max_bytes: usize = 4 * 1024 * 1024;
-/// Width of the frosted strip drawn to the right of the pane, after the sash. Tab-strip-ish.
-const frost_bleed_pts: f32 = 40;
-/// Kawase radius for the overflow strip — large on purpose, a colour hint not readable text.
-const frost_radius_px: f32 = 64;
 
 /// The raw|split|preview bar sits *over* the document, so it reads as chrome rather than content:
 /// one text size down from the body font, with tighter button padding to match. A function, not a
@@ -365,7 +360,6 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
 
     const editor_rs = row.data().borderRectScale();
     const scroll_rs = te.scroll.data().contentRectScale();
-    drawFrostedOverflow(doc, &te, scroll_rs, font, line_height);
     // Horizontal scroll hints are dropped while the preview shares the pane: the right-edge one
     // lands in exactly the same pixels as the constant split edge below, and two shadows stacked
     // there read as a heavier, darker band than either edge anywhere else in the app.
@@ -1793,179 +1787,6 @@ fn editNotifyEnd(ctx: *anyopaque, sel_after: tc.Range) void {
 }
 
 const max_text_bytes: usize = 64 * 1024 * 1024;
-
-/// Recapture count, incremented only when BlurBackdrop actually re-blurs. Logged when
-/// `FIZZY_TEXT_BLEED_DEBUG=1` so an idle frame can be shown not to increment.
-var frost_recapture_count: u32 = 0;
-var frost_debug_frames: u32 = 0;
-
-fn frostBleedDebug() bool {
-    if (comptime builtin.target.cpu.arch == .wasm32) return false;
-    const raw = std.c.getenv("FIZZY_TEXT_BLEED_DEBUG") orelse return false;
-    return raw[0] == '1' and raw[1] == 0;
-}
-
-fn frostBleedDebugWrite(comptime fmt: []const u8, args: anytype) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
-    std.debug.print("text-bleed: " ++ fmt, args);
-}
-
-/// Draw this pane's horizontal overflow as a heavy cached blur to the **right** of the
-/// scroll viewport, after the sash.
-///
-/// Experiment limitation: DockingWidget walks first→second, so a left pane's bleed lands
-/// under the right leaf's chrome naturally. A right pane bleeding left would paint *over*
-/// a neighbour already drawn. This prototype only bleeds toward later siblings (right).
-///
-/// The blit is outside the pane clip (`dvui.clipSet` to the bleed rect, restored after)
-/// and never covers the sash (`Split.handle_size` is skipped). Capture uses BlurBackdrop's
-/// init/deinit bracket (no `fromTexture` yet) keyed on scroll offset + size; idle frames
-/// are one textured quad.
-fn drawFrostedOverflow(
-    doc: *Document,
-    te: *TextEntryWidget,
-    scroll_rs: dvui.RectScale,
-    font: dvui.Font,
-    line_height: f32,
-) void {
-    const setting_on = plugin_impl.statePtr().settings.frosted_overflow.get();
-    if (frostBleedDebug()) {
-        frost_debug_frames += 1;
-        if (frost_debug_frames == 1 or frost_debug_frames % 60 == 0) {
-            frostBleedDebugWrite("frame {d} setting={d} recaptures={d}\n", .{
-                frost_debug_frames,
-                @intFromBool(setting_on),
-                frost_recapture_count,
-            });
-        }
-    }
-    if (!setting_on) return;
-    if (scroll_rs.r.empty()) return;
-
-    const si = te.scroll.si;
-    const overflow_right = si.virtual_size.w > si.viewport.x + si.viewport.w + 0.5;
-    if (!overflow_right) return;
-
-    const scale = scroll_rs.s;
-    const sash_w = Split.handle_size * scale;
-    const bleed_w = frost_bleed_pts * scale;
-    const pane_right = scroll_rs.r.x + scroll_rs.r.w;
-    const bleed_phys = dvui.Rect.Physical{
-        .x = pane_right + sash_w,
-        .y = scroll_rs.r.y,
-        .w = bleed_w,
-        .h = scroll_rs.r.h,
-    };
-    const dest = bleed_phys.intersect(dvui.windowRectPixels());
-    if (dest.empty() or dest.w < 1 or dest.h < 1) return;
-
-    const bleed_nat = dvui.windowRectScale().rectFromPhysical(dest);
-    const witness = extern struct {
-        vx: f32,
-        vy: f32,
-        vw: f32,
-        vh: f32,
-        virt_w: f32,
-        bw: f32,
-        bh: f32,
-        op: u64,
-    }{
-        .vx = si.viewport.x,
-        .vy = si.viewport.y,
-        .vw = si.viewport.w,
-        .vh = si.viewport.h,
-        .virt_w = si.virtual_size.w,
-        .bw = dest.w,
-        .bh = dest.h,
-        .op = doc.history.topOpId(),
-    };
-
-    const blur = core.widgets.BlurBackdrop.get(@src());
-    blur.radius_px = frost_radius_px;
-    blur.init(bleed_nat, witness);
-    if (blur.dirty) {
-        drawFrostedOverflowContents(doc, si, scroll_rs, dest, font, line_height);
-        if (frostBleedDebug()) {
-            frost_recapture_count += 1;
-            frostBleedDebugWrite("recapture #{d} scroll {d:.0},{d:.0} dest {d:.0}x{d:.0}\n", .{
-                frost_recapture_count,
-                si.viewport.x,
-                si.viewport.y,
-                dest.w,
-                dest.h,
-            });
-        }
-    }
-    blur.deinit();
-
-    const prev_clip = dvui.clipGet();
-    dvui.clipSet(dest);
-    blur.draw();
-    dvui.clipSet(prev_clip);
-}
-
-fn drawFrostedOverflowContents(
-    doc: *Document,
-    si: *const dvui.ScrollInfo,
-    scroll_rs: dvui.RectScale,
-    dest: dvui.Rect.Physical,
-    font: dvui.Font,
-    line_height: f32,
-) void {
-    const prev_clip = dvui.clipGet();
-    dvui.clipSet(dest);
-    defer dvui.clipSet(prev_clip);
-
-    dest.fill(.{}, .{ .color = .{ .color = dvui.themeGet().color(.window, .fill) } });
-
-    const scale = scroll_rs.s;
-    const cell = font.textSize("M").w;
-    if (cell <= 0 or line_height <= 0) return;
-
-    const tab_size: u8 = @intFromEnum(plugin_impl.statePtr().settings.tab_size.get());
-    const bleed_content_x = si.viewport.x + si.viewport.w + Split.handle_size;
-    const start_col: u32 = @intFromFloat(@max(0, @floor(bleed_content_x / cell)));
-
-    const first_line: usize = @intCast(@max(0, @as(i64, @intFromFloat((si.viewport.y - editor_pad_y) / line_height))));
-    const text = doc.text.items;
-    var byte_off: usize = 0;
-    var skipped: usize = 0;
-    while (skipped < first_line and byte_off < text.len) {
-        if (text[byte_off] == '\n') skipped += 1;
-        byte_off += 1;
-    }
-
-    const color = dvui.themeGet().color(.content, .text);
-    var line: usize = first_line;
-    var y_nat: f32 = editor_pad_y + @as(f32, @floatFromInt(line)) * line_height - si.viewport.y;
-    const view_h_nat = scroll_rs.r.h / scale;
-
-    while (line < doc.line_count and y_nat < view_h_nat + line_height) {
-        const line_start = byte_off;
-        while (byte_off < text.len and text[byte_off] != '\n') byte_off += 1;
-        const line_bytes = text[line_start..byte_off];
-        if (byte_off < text.len and text[byte_off] == '\n') byte_off += 1;
-
-        const start_byte = tc.LineIndex.offsetAtColIn(line_bytes, 0, line_bytes.len, start_col, tab_size);
-        const overflow = line_bytes[start_byte..];
-        if (overflow.len > 0) {
-            const col = tc.LineIndex.colBetween(line_bytes, 0, start_byte, tab_size);
-            const content_x = @as(f32, @floatFromInt(col)) * cell;
-            const x_phys = scroll_rs.r.x + (content_x - si.viewport.x) * scale;
-            const y_phys = scroll_rs.r.y + y_nat * scale;
-            const size = font.textSize(overflow).scale(scale, dvui.Size.Physical);
-            dvui.renderText(.{
-                .font = font,
-                .text = overflow,
-                .rs = .{ .r = .{ .x = x_phys, .y = y_phys, .w = size.w, .h = size.h }, .s = scale },
-                .color = color,
-            }) catch {};
-        }
-
-        line += 1;
-        y_nat += line_height;
-    }
-}
 
 fn lineNumberColumnWidth(line_count: usize, font: dvui.Font) f32 {
     var buf: [16]u8 = undefined;
