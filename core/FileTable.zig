@@ -374,7 +374,11 @@ pub fn listDir(self: *FileTable, directory: []const u8) ?*const Listing {
 
     if (self.listings.getIndex(directory)) |idx| {
         const listing = self.listings.values()[idx];
-        if (self.env.watching(self.env.ctx) or now - listing.read_at_ms < unwatched_ttl_ms) {
+        // The TTL is the disk's fallback for a platform with no folder watcher. A mount is
+        // never TTL'd: its listing stands until the mounting plugin invalidates it (a drive's
+        // change feed) or nothing ever will (a zip) — re-reading it every second would mean a
+        // round trip per second and a branch that empties while each one is in flight.
+        if (self.isMounted(directory) or self.env.watching(self.env.ctx) or now - listing.read_at_ms < unwatched_ttl_ms) {
             return listing;
         }
         self.retireAt(idx);
@@ -1392,6 +1396,25 @@ test "a move across mounts copies the tree and removes the source" {
     const got = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try fx.join(arena, "back.txt"), arena, .limited(64));
     try t.expectEqualStrings("home", got);
     try t.expect(!mem.nodes.contains("/src/back.txt"));
+}
+
+test "a mount's listing outlives the unwatched TTL" {
+    const t = std.testing;
+    var fx = try Fixture.init(t.allocator);
+    defer fx.deinit();
+    const table = fx.wire();
+    var mem = try vfs.Mem.init(t.allocator);
+    defer mem.deinit();
+    try mem.put("/a.txt", "");
+    try table.mount("mem://box", mem.fs());
+    defer table.unmount("mem://box");
+    _ = table.listDir("mem://box");
+    table.pump();
+    const first = table.listDir("mem://box") orelse return error.ListingFailed;
+    // Pretend a long time passed: the listing is still the same allocation, not re-asked.
+    @constCast(first).read_at_ms -= 10 * unwatched_ttl_ms;
+    try t.expectEqual(first, table.listDir("mem://box").?);
+    try t.expectEqual(@as(usize, 0), table.pending.count());
 }
 
 test "a mount that answers later is pending, then installed" {
