@@ -303,6 +303,23 @@ pub fn paletteFolder(self: *Host) ?[]const u8 {
     return if (self.fizzy_api) |a| a.paletteFolder() else null;
 }
 
+/// A credential the plugin keeps on the user's behalf — a refresh token, an API key — stored
+/// by the app outside `settings.zon` (which is exported, diffed, watched and drawn in a pane):
+/// a `0600` file today, the OS keychain behind the same call later. Keys are plugin-namespaced
+/// (`drive.refresh_token`). Borrowed until the next `setSecret` of that key; null when unset,
+/// and always null on the web, which has no private storage — keep a session token in memory
+/// there and ask again.
+pub fn getSecret(self: *Host, key: []const u8) ?[]const u8 {
+    return if (self.fizzy_api) |a| a.getSecret(key) else null;
+}
+
+/// Store a credential (an empty value removes it). Errors where there is nowhere private to
+/// put it.
+pub fn setSecret(self: *Host, key: []const u8, value: []const u8) !void {
+    const a = self.fizzy_api orelse return error.FizzyApiNotInstalled;
+    try a.setSecret(key, value);
+}
+
 /// Mark fizzy settings dirty so the debounced autosave persists them.
 pub fn markSettingsDirty(self: *Host) void {
     if (self.fizzy_api) |a| a.markSettingsDirty();

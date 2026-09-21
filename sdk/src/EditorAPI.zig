@@ -56,6 +56,11 @@ pub const VTable = struct {
     paletteFolder: *const fn (ctx: *anyopaque) ?[]const u8,
     /// Mark fizzy's settings dirty so the debounced autosave persists them.
     markSettingsDirty: *const fn (ctx: *anyopaque) void,
+    /// A credential kept for a plugin, by key (`<plugin>.<what>`), outside `settings.zon` —
+    /// see `Host.getSecret`. Borrowed until the next set of that key; null when unset.
+    getSecret: *const fn (ctx: *anyopaque, key: []const u8) ?[]const u8,
+    /// Store (an empty value removes). Fails on a build with no private storage (the web).
+    setSecret: *const fn (ctx: *anyopaque, key: []const u8, value: []const u8) anyerror!void,
     /// Fizzy-owned content-area opacity (also drives fizzy's own panes); plugins
     /// read it to match fizzy's own chrome.
     contentOpacity: *const fn (ctx: *anyopaque) f32,
@@ -320,6 +325,14 @@ pub fn paletteFolder(self: EditorAPI) ?[]const u8 {
 
 pub fn markSettingsDirty(self: EditorAPI) void {
     self.vtable.markSettingsDirty(self.ctx);
+}
+
+pub fn getSecret(self: EditorAPI, key: []const u8) ?[]const u8 {
+    return self.vtable.getSecret(self.ctx, key);
+}
+
+pub fn setSecret(self: EditorAPI, key: []const u8, value: []const u8) anyerror!void {
+    return self.vtable.setSecret(self.ctx, key, value);
 }
 
 pub fn dialogWindow(self: EditorAPI) dvui.Dialog.DisplayFn {

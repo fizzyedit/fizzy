@@ -507,6 +507,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .{ "fizzy-window-layout-tests", "app/window/window_layout.zig" },
         .{ "fizzy-plugin-store-tests", "app/store/registry/store.zig" },
         .{ "fizzy-paths-tests", "core/paths.zig" },
+        // The credential store behind `Host.secrets`: a 0600 file, keyed, round-tripped.
+        .{ "fizzy-secrets-tests", "app/Secrets.zig" },
         .{ "fizzy-lsp-protocol-tests", "core/lsp/Protocol.zig" },
         .{ "fizzy-lsp-uri-tests", "core/lsp/UriUtil.zig" },
         .{ "fizzy-settings-plugins-zon-tests", "app/settings/SettingsPluginsZon.zig" },

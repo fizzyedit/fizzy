@@ -9,6 +9,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
+pub const Secrets = @import("Secrets.zig");
 const sdk = @import("fizzy_sdk");
 const builtin = @import("builtin");
 const build_opts = @import("build_opts");
@@ -82,6 +83,8 @@ files_service: sdk.services.files.Api = undefined,
 /// `postInit`, since the ignore rules and the watcher it asks about live on this same `Editor`
 /// and so need its final address.
 file_table: core.FileTable,
+/// Credentials plugins keep on the user's behalf, out of `settings.zon`. See `Secrets.zig`.
+secrets: Secrets,
 
 /// Keeps plugin dylibs mapped while their vtables are live (native only).
 loaded_plugin_libs: std.ArrayListUnmanaged(PluginLoader.LoadedLib) = .empty,

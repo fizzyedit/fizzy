@@ -324,6 +324,7 @@ pub fn init(
             .palette_folder = palette_folder,
             .host = .init(app.allocator),
             .file_table = .init(app.allocator, dvui.io),
+            .secrets = try .init(app.allocator, dvui.io, config_folder),
         },
         .explorer = try app.allocator.create(Explorer),
         .panel = try app.allocator.create(Panel),
@@ -1737,6 +1738,8 @@ const fizzy_api_vtable: sdk.EditorAPI.VTable = .{
     .extensionOwnerOverride = fizzyExtensionOwnerOverride,
     .folder = fizzyFolder,
     .paletteFolder = fizzyPaletteFolder,
+    .getSecret = fizzyGetSecret,
+    .setSecret = fizzySetSecret,
     .markSettingsDirty = fizzyMarkSettingsDirty,
     .contentOpacity = fizzyContentOpacity,
     .dialogWindow = fizzyDialogWindow,
@@ -1886,6 +1889,12 @@ fn fizzyFolder(ctx: *anyopaque) ?[]const u8 {
 }
 fn fizzyPaletteFolder(ctx: *anyopaque) ?[]const u8 {
     return fizzyCtx(ctx).app.palette_folder;
+}
+fn fizzyGetSecret(ctx: *anyopaque, key: []const u8) ?[]const u8 {
+    return fizzyCtx(ctx).app.secrets.get(key);
+}
+fn fizzySetSecret(ctx: *anyopaque, key: []const u8, value: []const u8) anyerror!void {
+    return fizzyCtx(ctx).app.secrets.set(key, value);
 }
 fn fizzyMarkSettingsDirty(ctx: *anyopaque) void {
     fizzyCtx(ctx).markSettingsDirty();
@@ -4998,6 +5007,7 @@ pub fn deinit(editor: *Editor) !void {
     // reach `host.files`, and this frees what it would read.
     editor.app.host.files = null;
     editor.app.file_table.deinit();
+    editor.app.secrets.deinit();
 
     // Pixel-art state is owned by the pixi plugin now: its `pluginDeinit` (run in the plugin
     // loop above) persists the project and frees its own state + packer.

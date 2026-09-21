@@ -229,9 +229,13 @@ Since then: `settings.Value` has `.secret` (the pane masks it; the Drive plugin 
 secret and refresh token), and the native transport shares one `std.http.Client` (connection
 pool, one TLS handshake per host).
 
+Since then: `Host.getSecret`/`setSecret` — the seam for credentials, backed today by
+`app/Secrets.zig` (`<config>/secrets`, `key=base64` lines, created `0600`, written whole and
+renamed into place; tested). The Drive plugin keeps its refresh token there and moves an old
+one out of settings on load. OS keychain backends slot in behind the same two calls.
+
 Still open, in the order they should be taken:
-- Secrets on disk: still plaintext in `settings.zon`. A `Host.secrets` seam with
-  keychain/libsecret/DPAPI backends is the next step.
+- Keychain / libsecret / DPAPI backends for `Secrets` (the file store is the fallback).
 - (done) `vfs.Fs.readFile` returns the file's modified time with the bytes and `writeFile`
   takes `if_unmodified_ms`; `MountIo` remembers each open document's and passes it on save
   (a stat after a successful write refreshes it). The Drive client checks Drive's live
