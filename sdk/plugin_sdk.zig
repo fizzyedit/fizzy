@@ -249,7 +249,10 @@ pub fn install(b: *std.Build, lib: *std.Build.Step.Compile, opts: InstallOptions
     // zig-out/sdk-meta.json — same pin/optimize-class as the dylib; CI reads this on all targets.
     b.getInstallStep().dependOn(addSdkMeta(b, lib));
 
-    // {config}/fizzy/plugins/{name}/{name}.{ext} — so the running editor picks it up (dev convenience).
+    // {config}/fizzy/plugins/{name}/{name}.{ext} — so the running editor picks it up (dev
+    // convenience). Not for a wasm build: the browser has no plugins directory, and the desktop
+    // editor would only find a file it cannot open.
+    if (lib.rootModuleTarget().cpu.arch == .wasm32) return;
     const dev = b.allocator.create(DevInstall) catch @panic("OOM");
     dev.* = .{
         .step = std.Build.Step.init(.{

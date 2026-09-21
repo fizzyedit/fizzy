@@ -12,6 +12,8 @@ const builtin = @import("builtin");
 /// The host's `os-arch` key, matching the registry `downloads` object keys
 /// (e.g. "macos-aarch64"). Comptime-known.
 pub fn hostKey() []const u8 {
+    // The web: one key for the wasm side module a plugin publishes for the browser.
+    if (builtin.target.cpu.arch == .wasm32) return "web-wasm32";
     const os = switch (builtin.os.tag) {
         .macos => "macos",
         .linux => "linux",

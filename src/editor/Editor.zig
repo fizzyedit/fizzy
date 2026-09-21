@@ -5274,6 +5274,11 @@ const plugin_manager_vtable: PluginManager.VTable = .{
             return pmSelf(ctx).installAndLoadPlugin(id);
         }
     }.f,
+    .installFromUrl = struct {
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8) anyerror!void {
+            return pmSelf(ctx).loadWebPlugin(id, url);
+        }
+    }.f,
     .update = struct {
         fn f(ctx: *anyopaque, id: []const u8, force: bool) anyerror!void {
             return pmSelf(ctx).updatePlugin(id, force);

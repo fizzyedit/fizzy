@@ -94,6 +94,10 @@ pub const VTable = struct {
 
     // ---- actions ---------------------------------------------------------------------------
     install: *const fn (ctx: *anyopaque, id: []const u8) anyerror!void,
+    /// The web's install: fetch and link a plugin's wasm side module straight from its release
+    /// URL (there is no plugins directory to download into). Null for an app that does not
+    /// load web plugins.
+    installFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8) anyerror!void = null,
     update: *const fn (ctx: *anyopaque, id: []const u8, force: bool) anyerror!void,
     uninstall: *const fn (ctx: *anyopaque, id: []const u8, force: bool) anyerror!void,
     setEnabled: *const fn (ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) anyerror!void,
@@ -139,6 +143,10 @@ pub fn builtinManifest(self: PluginManager, id: []const u8) ?sdk.Manifest {
 }
 pub fn install(self: PluginManager, id: []const u8) anyerror!void {
     return self.vtable.install(self.ctx, id);
+}
+pub fn installFromUrl(self: PluginManager, id: []const u8, url: []const u8) anyerror!void {
+    const f = self.vtable.installFromUrl orelse return error.Unsupported;
+    return f(self.ctx, id, url);
 }
 pub fn update(self: PluginManager, id: []const u8, force: bool) anyerror!void {
     return self.vtable.update(self.ctx, id, force);

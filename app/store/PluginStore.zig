@@ -210,14 +210,19 @@ pub fn uninstalledCatalog(arena: std.mem.Allocator) []const CatalogOffer {
 
 /// Start a download+install for `id`. No-op when there is no compatible release, or on wasm.
 pub fn queueInstall(id: []const u8) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     const c = &(catalog orelse return);
     const snap = c.acquire();
     defer c.release();
     const s = snap orelse return;
     const rel = s.shard.releaseFor(id) orelse return;
-    if (rel.downloadFor(compat.hostKey()) == null) return;
+    const dl = rel.downloadFor(compat.hostKey()) orelse return;
     if (!releaseSdkSatisfied(rel)) return;
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        // No plugins directory in a browser: the page fetches and links the side module
+        // straight from its release URL, and the app registers it when it lands.
+        app.installFromUrl(id, dl.url) catch |err| reportError("could not load '{s}': {s}", .{ id, @errorName(err) });
+        return;
+    }
     startDownload(id, rel, .{ .is_update = false });
 }
 

@@ -33,13 +33,11 @@ pub fn build(b: *std.Build) !void {
         // in this repo — as build data, the way an app built on fizzy lists its own. By
         // directory while the plugin is a sibling checkout (see `Options.web_plugin_dirs`);
         // by URL-pinned dependency (`web_plugin_deps`) once it is published.
-        .web_plugin_dirs = &.{
-            .{ .dir = "../fizzyedit/atlas", .modules = &.{
-                .{ .name = "batch2d", .root = "src/batch2d/root.zig" },
-                .{ .name = "content_graph", .root = "src/index/content_graph.zig", .dvui = false },
-                .{ .name = "threads", .root = "src/threads.zig" },
-            } },
-        },
+        // Empty on purpose: web plugins load at runtime as side modules (`?plugin=<id>`, and
+        // the store). A checkout can still be bundled statically here while developing it —
+        // `.{ .dir = "../fizzyedit/atlas", .modules = &.{ .{ .name = "batch2d", .root =
+        // "src/batch2d/root.zig" }, … } }`.
+        .web_plugin_dirs = &.{},
     };
 
     // A consumer that bundles plugins of its own cannot say so through `b.dependency`
