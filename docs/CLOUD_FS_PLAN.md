@@ -143,9 +143,11 @@ Landed as zig-drive `pxvpqtnz`. 18 tests, `check-wasm` links.
   the host writes through the mount; the owner hears back only when the write lands (Save As
   adopts the path there). `Editor.docSaving` counts an in-flight mount write so a quit waits
   for it. An owner without `documentBytes` gets one toast rather than a silent no-op.
-- The disk keeps its own paths (`FileLoadJob`, `owner.saveDocument`) untouched: that is what
-  every owner written so far implements, and moving the disk onto the new hooks is a
-  per-owner change (text is ready; pixi is not) rather than a host one.
+- (since resolved) the host writes **every** document whose owner has `documentBytes`, disk
+  included — one save path per backend, the disk answering inline. `owner.saveDocument` is
+  the fallback for owners without the hooks and can only reach the disk. Disk opens keep
+  `FileLoadJob` (a worker thread), a performance path that ends in the same
+  `loadDocumentFromBytes`. `MountIo` became `DocumentIo`.
 - `core.paths` is mount-aware (`mountPrefixLen`, `normalize`, `normalizeJoin`,
   `isNormalizedAbsolute`): a `gdrive://` path is normalized after its prefix and never
   joined onto the cwd. argv dispatch hands a mount path straight to the file sink instead of

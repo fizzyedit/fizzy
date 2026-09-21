@@ -622,6 +622,26 @@ the assignment list read back.
 - **Contributions** — `contributeMenu`, `contributeKeybinds`.
 - **New document** — `requestNewDocumentDialog`.
 
+#### Where a document lives is not the owner's problem
+
+A path can be on the disk, inside a zip the user opened, or on a cloud drive a plugin mounted
+(`Host.mount`, §3.12) — and the tree, search, create/rename/delete and drag between them are
+the same code for all three. For *documents* the same is true once an owner implements the
+storage-agnostic pair:
+
+- `documentBytes(doc, allocator) → []u8` — the saved form. The host writes it wherever the
+  path's filesystem is, with a modified-time precondition so an edit made elsewhere is a
+  conflict rather than an overwrite.
+- `documentWritten(doc, path)` — the write landed; clear dirty state, and adopt `path` if it
+  is not the document's own (Save As).
+
+With both present, **the host does every save** — disk included — and `saveDocument` is never
+called. Without them, `saveDocument` (the owner writes the file itself) still works exactly as
+before, but only ever reaches the disk: such a document cannot be saved onto a mount, and the
+user is told so. Opening already goes through `loadDocumentFromBytes` for anything not on the
+disk, which every owner has for the browser picker. `text`, `archive` and `pixi` implement the
+pair; `image` is read-only.
+
 **Editing actions are deliberately not hooks.** Copy, paste, transform, delete-selection mean
 different things per editor, so they're `Command`s (§3.4), not part of this contract. A
 file-management plugin like `workbench` implements *none* of the document hooks; an editor plugin
@@ -1061,6 +1081,28 @@ on the chosen plugin's own `settings.zon` block, and can be changed any time und
   path driven by an explicit user action.
 
 ---
+
+### 3.12 Mounts, transports and secrets — a cloud drive as a folder
+
+A plugin that speaks to a storage service implements `core.vfs.Fs` (path-addressed, every op
+completing through a callback delivered from `pump` — see `core/vfs/Fs.zig` for the two
+decisions behind that) and registers it with `host.mount("scheme://account", fs)`. From then
+on every path under that prefix is a path like any other: the explorer draws it as a root, the
+files service creates and renames under it, search walks it, documents open and save on it,
+and a drag between it and the disk copies. `host.unmount(prefix)` takes it down; the host
+cancels its own in-flight reads and writes first.
+
+What the plugin owns is the account: getting a token and keeping it fresh. The SDK provides
+the plumbing so that stays small — `core.transport.Native` (`std.http.Client` on a thread) and
+`core.transport.Web` (the browser's `fetch`) are the two `http.Transport`s; on the web,
+`core.transport.WebOAuth` opens a provider's authorization URL in a popup and hands back the
+redirect's query/fragment; `Host.getSecret`/`setSecret` keep a refresh token out of
+`settings.zon` (a `0600` file today, the OS keychain behind the same call later); and
+`settings.Value` `.secret = true` masks a credential in the settings pane.
+
+`fizzyedit/zig-drive` (Google Drive) is the worked example; `plugins/archive` mounts a `.zip`
+through `core.vfs.Mem` in a few dozen lines. The design and its remaining edges are in
+`docs/CLOUD_FS_PLAN.md`.
 
 ## 4. Two plugins working together (`pixi` + `workbench`)
 

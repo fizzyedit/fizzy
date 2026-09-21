@@ -1,13 +1,16 @@
-//! Documents on a mounted filesystem: opened by reading through the mount and saved by writing
-//! through it, so an owner never has to know what a `gdrive://` path is.
+//! The host reads and writes documents, wherever they live: an owner serializes
+//! (`documentBytes`) and hears back (`documentWritten`); the file table's filesystem for the
+//! path — the disk, a zip, a drive — does the I/O. One save path for every backend, so an
+//! owner never knows what a `gdrive://` path is, and a `.pixi` on a drive saves the way it
+//! does on the disk.
 //!
-//! The disk keeps its own paths — `FileLoadJob` off the main thread, `owner.saveDocument` —
-//! because that is what every owner written so far implements, and a mount cannot use either:
-//! there is no file for `loadDocument` to open, and `saveDocument` writes the file itself.
-//! What a mount needs instead is the pair every owner *can* provide without touching storage:
-//! `loadDocumentFromBytes` (already there for the browser picker) and `documentBytes` +
-//! `documentWritten`. Both halves complete through the mount's `pump`, so a cloud open or save
-//! lands on a later frame while an in-memory mount lands inside the call.
+//! `owner.saveDocument` (the owner writes the file itself) remains the fallback for an owner
+//! that has not adopted the hooks; it can only ever reach the disk. Disk *opens* still go
+//! through `FileLoadJob` — a worker thread for large files — which is a performance path, not
+//! a second policy: the bytes end up in `loadDocumentFromBytes` either way.
+//!
+//! Completions arrive through the filesystem's `pump`: the disk's inline (so a local save is
+//! done when the call returns, as it always was), a mount's on the host's per-frame pump.
 const std = @import("std");
 const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
@@ -15,7 +18,7 @@ const core = @import("core");
 const fizzy = @import("../fizzy.zig");
 
 const Editor = fizzy.Editor;
-const MountIo = @This();
+const DocumentIo = @This();
 
 editor: *Editor,
 /// Opens in flight, keyed by canonical path (owned by the job). A second open of the same
@@ -32,11 +35,11 @@ known_mtime: std.AutoArrayHashMapUnmanaged(u64, i64) = .empty,
 /// chose to save again.
 force_next: std.AutoArrayHashMapUnmanaged(u64, void) = .empty,
 
-pub fn init(editor: *Editor) MountIo {
+pub fn init(editor: *Editor) DocumentIo {
     return .{ .editor = editor };
 }
 
-pub fn deinit(self: *MountIo) void {
+pub fn deinit(self: *DocumentIo) void {
     const files = &self.editor.app.file_table;
     for (self.loads.values()) |load| {
         files.resolve(load.path).fs.cancel(load.job);
@@ -53,23 +56,23 @@ pub fn deinit(self: *MountIo) void {
 }
 
 /// A document is gone; forget what was known about its file.
-pub fn documentClosed(self: *MountIo, doc_id: u64) void {
+pub fn documentClosed(self: *DocumentIo, doc_id: u64) void {
     _ = self.known_mtime.swapRemove(doc_id);
     _ = self.force_next.swapRemove(doc_id);
 }
 
 /// Whether `path` is one this file handles. Everything else is the disk's.
-pub fn owns(self: *MountIo, path: []const u8) bool {
+pub fn owns(self: *DocumentIo, path: []const u8) bool {
     return self.editor.app.file_table.isMounted(path);
 }
 
-pub fn saving(self: *const MountIo, doc_id: u64) bool {
+pub fn saving(self: *const DocumentIo, doc_id: u64) bool {
     return self.saves.contains(doc_id);
 }
 
 /// `prefix` is going away (`FileTable.Env.unmounting`): drop every open and save against it.
 /// A load just never lands; a save leaves its document dirty, which is the truth.
-pub fn unmounting(self: *MountIo, prefix: []const u8) void {
+pub fn unmounting(self: *DocumentIo, prefix: []const u8) void {
     const files = &self.editor.app.file_table;
     var i: usize = 0;
     while (i < self.loads.count()) {
@@ -104,7 +107,7 @@ fn onPrefix(path: []const u8, prefix: []const u8) bool {
 /// Read `path` through its mount and open it from the bytes. `path` is canonical already.
 /// Returns whether a read was started — false when one is already in flight for this path,
 /// which then becomes the one to focus.
-pub fn open(self: *MountIo, path: []const u8, grouping: u64) !bool {
+pub fn open(self: *DocumentIo, path: []const u8, grouping: u64) !bool {
     const editor = self.editor;
     if (self.loads.get(path)) |existing| {
         existing.focus = true;
@@ -129,13 +132,13 @@ pub fn open(self: *MountIo, path: []const u8, grouping: u64) !bool {
 }
 
 const Load = struct {
-    io: *MountIo,
+    io: *DocumentIo,
     path: []u8,
     grouping: u64,
     job: core.vfs.Job = .{ .id = 0 },
     focus: bool = true,
 
-    fn create(io: *MountIo, path: []const u8, grouping: u64) !*Load {
+    fn create(io: *DocumentIo, path: []const u8, grouping: u64) !*Load {
         const gpa = io.editor.app.gpa;
         const load = try gpa.create(Load);
         errdefer gpa.destroy(load);
@@ -189,7 +192,7 @@ const Load = struct {
 /// Serialize `doc` and write it through the mount at `path` — the document's own path, or a
 /// new one for Save As, which the owner adopts when the write lands. The owner is told only
 /// on success; a failed write leaves it dirty, which is the truth.
-pub fn save(self: *MountIo, doc: sdk.DocHandle, path: []const u8) !void {
+pub fn save(self: *DocumentIo, doc: sdk.DocHandle, path: []const u8) !void {
     const editor = self.editor;
     const gpa = editor.app.gpa;
     if (self.saves.contains(doc.id)) return error.SaveInProgress;
@@ -208,11 +211,17 @@ pub fn save(self: *MountIo, doc: sdk.DocHandle, path: []const u8) !void {
     errdefer _ = self.saves.swapRemove(doc.id);
 
     const target = editor.app.file_table.resolve(path);
+    // Our own write must not read as an outside change to the folder watcher.
+    if (target.mount == null) {
+        if (editor.document_watcher) |*w| w.markPendingBaseline(doc.id);
+    }
     job.job = try target.fs.writeFile(target.rel, job.bytes, .{ .if_unmodified_ms = job.if_unmodified_ms }, Save.onWritten, job);
+    // The disk answers inside the call, as every disk mutation does; a mount on the frame pump.
+    if (target.mount == null) target.fs.pump();
 }
 
 const Save = struct {
-    io: *MountIo,
+    io: *DocumentIo,
     doc_id: u64,
     path: []u8,
     bytes: []u8,
@@ -221,7 +230,7 @@ const Save = struct {
     created: bool = false,
     if_unmodified_ms: ?i64 = null,
 
-    fn create(io: *MountIo, doc_id: u64, path: []const u8, bytes: []u8) !*Save {
+    fn create(io: *DocumentIo, doc_id: u64, path: []const u8, bytes: []u8) !*Save {
         const gpa = io.editor.app.gpa;
         const save_job = try gpa.create(Save);
         errdefer gpa.destroy(save_job);
@@ -252,6 +261,7 @@ const Save = struct {
             job.destroy();
             return;
         };
+        if (target.mount == null) target.fs.pump();
     }
 
     fn onWritten(ctx: ?*anyopaque, result: core.vfs.Error!void) void {
@@ -291,6 +301,7 @@ const Save = struct {
                     keep = false;
                     return;
                 };
+                if (target.mount == null) target.fs.pump();
                 return;
             }
             dvui.log.err("Failed to save {s}: {t}", .{ job.path, err });
@@ -310,6 +321,9 @@ const Save = struct {
             return;
         };
         if (renamed) editor.documentPathChanged(doc);
+        if (!io.owns(job.path)) {
+            if (editor.document_watcher) |*w| w.noteSaved(job.doc_id);
+        }
         // What we just wrote is now the known state; the backend's own modified time is not
         // known until the next read, so a stat is asked for and the precondition waits on it.
         _ = io.known_mtime.swapRemove(job.doc_id);
@@ -317,6 +331,7 @@ const Save = struct {
         const probe = MtimeProbe.create(io, job.doc_id) catch null;
         if (probe) |p| {
             _ = target.fs.stat(target.rel, MtimeProbe.onStat, p) catch p.destroy();
+            if (target.mount == null) target.fs.pump();
         }
         editor.app.file_table.noteFileModified(job.path);
         editor.app.host.refresh();
@@ -326,10 +341,10 @@ const Save = struct {
 /// After a write: ask the backend when the file is now modified, so the next save's
 /// precondition is the write we made rather than the read before it.
 const MtimeProbe = struct {
-    io: *MountIo,
+    io: *DocumentIo,
     doc_id: u64,
 
-    fn create(io: *MountIo, doc_id: u64) !*MtimeProbe {
+    fn create(io: *DocumentIo, doc_id: u64) !*MtimeProbe {
         const p = try io.editor.app.gpa.create(MtimeProbe);
         p.* = .{ .io = io, .doc_id = doc_id };
         return p;

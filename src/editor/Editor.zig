@@ -64,7 +64,7 @@ const file_glyphs = @import("file_glyphs.zig");
 const SettingsWatcher = @import("app").watch.SettingsWatcher;
 const Constants = @import("Constants.zig");
 const DocumentWatcher = @import("DocumentWatcher.zig");
-const MountIo = @import("MountIo.zig");
+const DocumentIo = @import("DocumentIo.zig");
 const Watch = @import("app").watch;
 const FolderWatcher = Watch.FolderWatcher;
 
@@ -180,9 +180,10 @@ pending_composite_warmup: bool = false,
 /// `FileChangedOnDisk`. Null on wasm / unsupported OS / start failure — best-effort.
 document_watcher: ?DocumentWatcher = null,
 
-/// Documents on a mounted filesystem, opened and saved through the mount. `undefined` until
-/// `init` has a stable `*Editor` to hand it (it calls back into the editor on completion).
-mount_io: MountIo = undefined,
+/// The host's document reader/writer: every save whose owner can serialize, and every open
+/// on a mount. `undefined` until `init` has a stable `*Editor` to hand it (it calls back into
+/// the editor on completion).
+doc_io: DocumentIo = undefined,
 
 /// Timestamp of the most recent touch press anywhere in the app, or null if there
 /// hasn't been one. `Editor.draw` forces a per-frame refresh during the post-press
@@ -1546,7 +1547,7 @@ pub fn postInit(editor: *Editor) !void {
     // editor's final address. The table answers three questions it can't itself — where the
     // project is, whether the watcher is live, which paths are ignored — and in exchange holds
     // the caches every plugin that draws files then shares.
-    editor.mount_io = MountIo.init(editor);
+    editor.doc_io = DocumentIo.init(editor);
     editor.app.file_table.env = .{
         .ctx = editor,
         .root = fileTableRoot,
@@ -2017,7 +2018,7 @@ fn fileTableRefresh(ctx: ?*anyopaque) void {
     fizzyRefresh(ctx.?);
 }
 fn fileTableUnmounting(ctx: ?*anyopaque, prefix: []const u8) void {
-    fizzyCtx(ctx.?).mount_io.unmounting(prefix);
+    fizzyCtx(ctx.?).doc_io.unmounting(prefix);
 }
 fn fileTableIgnored(
     ctx: ?*anyopaque,
@@ -3923,8 +3924,8 @@ pub fn advanceSaveAllQuit(editor: *Editor) void {
 
         // Async-safe path: kick off, move to in-flight, drop from queue. A mounted document's
         // write is async by nature and `docSaving` below waits on it.
-        if (editor.mount_io.owns(doc.owner.documentPath(doc))) {
-            editor.saveThroughMount(doc) catch |err| {
+        if (editor.hostWrites(doc)) {
+            editor.saveThroughHost(doc) catch |err| {
                 dvui.log.err("Save all quit kickoff: {s}", .{@errorName(err)});
                 editor.app.abortSaveAllQuit();
                 return;
@@ -4099,7 +4100,7 @@ pub fn openFilePath(editor: *Editor, path_in: []const u8, grouping: u64) !bool {
 
     // A mounted path has no file for a worker to open: it is read through the mount and
     // opened from the bytes when they land — on any target, the browser included.
-    if (editor.mount_io.owns(path)) return editor.mount_io.open(path, grouping);
+    if (editor.doc_io.owns(path)) return editor.doc_io.open(path, grouping);
 
     // Resolve the owning plugin from the file-type registry before spawning. No owner
     // means no plugin claims this extension — reject here rather than spawning a worker
@@ -4575,8 +4576,8 @@ pub fn save(editor: *Editor) !void {
         doc.owner.requestSaveConfirmation(doc, .editor_save, false);
         return;
     }
-    if (editor.mount_io.owns(doc.owner.documentPath(doc))) {
-        try editor.saveThroughMount(doc);
+    if (editor.hostWrites(doc)) {
+        try editor.saveThroughHost(doc);
         return;
     }
     if (comptime builtin.target.cpu.arch == .wasm32) {
@@ -4588,11 +4589,20 @@ pub fn save(editor: *Editor) !void {
     if (editor.document_watcher) |*w| w.noteSaved(doc.id);
 }
 
-/// Save a document that lives on a mount: its owner serializes, the mount writes, and the
-/// owner hears back when the write lands. An owner without `documentBytes` cannot save there
+/// Whether the host writes this document (`DocumentIo`) rather than its owner: always on a
+/// mount, and on the disk whenever the owner can serialize. An owner without `documentBytes`
+/// writes its own files — and can only ever reach the disk.
+fn hostWrites(editor: *Editor, doc: sdk.DocHandle) bool {
+    if (editor.doc_io.owns(doc.owner.documentPath(doc))) return true;
+    if (comptime builtin.target.cpu.arch == .wasm32) return false; // the disk does not exist there
+    return doc.owner.canSaveThroughHost();
+}
+
+/// Save through the host: its owner serializes, the path's filesystem writes, and the owner
+/// hears back when the write lands. An owner without `documentBytes` cannot save to a mount
 /// at all, which is said once rather than failing silently.
-fn saveThroughMount(editor: *Editor, doc: sdk.DocHandle) !void {
-    editor.mount_io.save(doc, doc.owner.documentPath(doc)) catch |err| switch (err) {
+fn saveThroughHost(editor: *Editor, doc: sdk.DocHandle) !void {
+    editor.doc_io.save(doc, doc.owner.documentPath(doc)) catch |err| switch (err) {
         error.SaveInProgress => {},
         error.OwnerCannotSaveToMount => {
             dvui.log.err("{s} cannot be saved to a mounted drive by its editor", .{doc.owner.documentPath(doc)});
@@ -4615,7 +4625,7 @@ fn downloadDocument(editor: *Editor, doc: sdk.DocHandle, path: []const u8) !void
 
 /// Whether a save is in flight for `doc`, whichever side is doing the writing.
 pub fn docSaving(editor: *Editor, doc: sdk.DocHandle) bool {
-    return doc.owner.isDocumentSaving(doc) or editor.mount_io.saving(doc.id);
+    return doc.owner.isDocumentSaving(doc) or editor.doc_io.saving(doc.id);
 }
 
 /// Browser: pick download filename/extension before encoding (`processPendingSaveAs`).
@@ -4639,8 +4649,8 @@ pub fn saveAll(editor: *Editor) !void {
         if (editor.document_watcher) |*w| {
             if (w.hasDiskConflict(doc.id)) continue;
         }
-        if (editor.mount_io.owns(doc.owner.documentPath(doc))) {
-            editor.saveThroughMount(doc) catch |err| {
+        if (editor.hostWrites(doc)) {
+            editor.saveThroughHost(doc) catch |err| {
                 dvui.log.err("Save All: file {s} failed: {s}", .{ doc.owner.documentPath(doc), @errorName(err) });
             };
             continue;
@@ -4761,10 +4771,11 @@ pub fn processPendingSaveAs(editor: *Editor) void {
             return;
         }
     }
-    if (editor.mount_io.owns(path)) {
+    const host_writes_here = editor.doc_io.owns(path) or (builtin.target.cpu.arch != .wasm32 and doc.owner.canSaveThroughHost());
+    if (host_writes_here) {
         // The owner adopts the new path when the write lands (`documentWritten`), and
         // `documentPathChanged` runs there; nothing below applies until then.
-        editor.mount_io.save(doc, path) catch |err| switch (err) {
+        editor.doc_io.save(doc, path) catch |err| switch (err) {
             error.OwnerCannotSaveToMount => dvui.toast(@src(), .{ .message = "This editor cannot save to a mounted drive." }),
             else => dvui.log.err("Save As: {any}", .{err}),
         };
@@ -4880,7 +4891,7 @@ pub fn rawCloseFile(editor: *Editor, index: usize) !void {
     editor.workbench.documentClosed(doc);
 
     if (editor.document_watcher) |*w| w.untrack(doc.id);
-    editor.mount_io.documentClosed(doc.id);
+    editor.doc_io.documentClosed(doc.id);
     editor.unregisterDocSurface(doc.id);
     editor.app.closeDocumentResources(doc);
     editor.app.open_files.orderedRemoveAt(index);
@@ -4891,7 +4902,7 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
     editor.workbench.documentClosed(doc);
 
     if (editor.document_watcher) |*w| w.untrack(doc.id);
-    editor.mount_io.documentClosed(doc.id);
+    editor.doc_io.documentClosed(doc.id);
     editor.unregisterDocSurface(doc.id);
     editor.app.closeDocumentResources(doc);
     _ = editor.app.open_files.orderedRemove(id);
@@ -4955,7 +4966,7 @@ pub fn deinit(editor: *Editor) !void {
         }
         editor.loading_jobs.deinit(editor.app.gpa);
     }
-    editor.mount_io.deinit();
+    editor.doc_io.deinit();
 
     editor.workbench.clearFileTreeTabDragDropState();
 
