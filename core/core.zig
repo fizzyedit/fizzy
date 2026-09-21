@@ -78,6 +78,9 @@ pub const FileTable = @import("FileTable.zig");
 /// same interface. See `docs/CLOUD_FS_PLAN.md`.
 pub const vfs = @import("vfs/vfs.zig");
 pub const LocalFs = @import("LocalFs.zig");
+/// Long-running work as a stepped `Task`, run on a thread natively or from the frame on the
+/// web — one implementation for both. See `work.zig`.
+pub const work = @import("work.zig");
 /// `vfs.http.Transport` implementations: the browser's `fetch` on the web build, a
 /// `std.http.Client` per request on a thread everywhere else. A cloud plugin picks by target.
 pub const transport = struct {
