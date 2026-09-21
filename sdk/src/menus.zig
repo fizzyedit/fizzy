@@ -48,6 +48,19 @@ pub const MenuSectionContribution = struct {
     draw: *const fn (ctx: ?*anyopaque) anyerror!void,
 };
 
+/// A small thing drawn at the bottom of the rail, above the store and settings icons — an
+/// account disc, a sync badge, a status light. Fizzy provides the slot and the row; the plugin
+/// draws what goes in it (and any popup it opens), sized like the rail's own icons. Not a
+/// view: it selects nothing and has no pane. Removed with the plugin.
+pub const RailItemContribution = struct {
+    id: []const u8,
+    owner: ?*Plugin = null,
+    hidden: bool = false,
+    ctx: ?*anyopaque = null,
+    /// `size` is the rail icon size, so the item can match it.
+    draw: *const fn (ctx: ?*anyopaque, size: f32) anyerror!void,
+};
+
 /// A single, natively-representable menu leaf item — pure data (title + callback), unlike
 /// `MenuContribution`/`MenuSectionContribution`'s immediate-mode `draw` callbacks. The native
 /// macOS menu builder (`backend_native.zig`'s `rebuildDynamicNativeMenus`) walks these to

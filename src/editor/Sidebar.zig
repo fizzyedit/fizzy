@@ -89,6 +89,14 @@ pub fn draw(_: Sidebar, editor: *Editor, f: *Layout, keywords: []const []const u
         });
         defer bottom.deinit();
 
+        // Plugin-drawn items first (an account disc, a badge), then fizzy's own two.
+        for (editor.app.host.rail_items.items, 0..) |item, i| {
+            if (item.hidden) continue;
+            var slot = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .background = false, .min_size_content = .{ .h = 20 } });
+            defer slot.deinit();
+            item.draw(item.ctx, 20) catch |err| dvui.log.err("rail item '{s}' failed to draw: {t}", .{ item.id, err });
+        }
+
         for (f.matching(keywords), 0..) |surface, i| {
             if (!isPinned(surface.id)) continue;
             const a = try drawOption(editor, f, keywords, surface, i, 20);

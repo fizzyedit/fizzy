@@ -29,6 +29,7 @@ pub const keywords = @import("keywords.zig");
 pub const MenuContribution = @import("menus.zig").MenuContribution;
 pub const MenuSectionContribution = @import("menus.zig").MenuSectionContribution;
 pub const NativeMenuItem = @import("menus.zig").NativeMenuItem;
+pub const RailItemContribution = @import("menus.zig").RailItemContribution;
 pub const Command = @import("Command.zig");
 
 /// Per-plugin opaque settings blobs pending a write: plugin id -> serialized zon text, or `null`
@@ -229,6 +230,8 @@ settings_schemas: std.ArrayListUnmanaged(SettingsSchema) = .empty,
 menus: std.ArrayListUnmanaged(MenuContribution) = .empty,
 /// Nested items contributed into an open parent menu (e.g. View > Example).
 menu_sections: std.ArrayListUnmanaged(MenuSectionContribution) = .empty,
+/// Plugin-drawn items at the bottom of the rail (`RailItemContribution`).
+rail_items: std.ArrayListUnmanaged(RailItemContribution) = .empty,
 /// Pure-data menu leaf items the native (macOS NSMenu) menu builder consumes; see
 /// `NativeMenuItem`.
 native_menu_items: std.ArrayListUnmanaged(NativeMenuItem) = .empty,
@@ -263,6 +266,7 @@ pub fn deinit(self: *Host) void {
     self.surfaces.deinit(self.allocator);
     self.menus.deinit(self.allocator);
     self.menu_sections.deinit(self.allocator);
+    self.rail_items.deinit(self.allocator);
     self.native_menu_items.deinit(self.allocator);
     self.commands.deinit(self.allocator);
     self.language_support.deinit(self.allocator);
@@ -756,6 +760,7 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(Surface, &self.surfaces, plugin);
     removeOwned(MenuContribution, &self.menus, plugin);
     removeOwned(MenuSectionContribution, &self.menu_sections, plugin);
+    removeOwned(RailItemContribution, &self.rail_items, plugin);
     removeOwned(NativeMenuItem, &self.native_menu_items, plugin);
     removeOwned(Command, &self.commands, plugin);
     removeOwned(LanguageSupport, &self.language_support, plugin);
@@ -1189,6 +1194,11 @@ pub fn registerMenu(self: *Host, menu: MenuContribution) !void {
 
 pub fn registerMenuSection(self: *Host, section: MenuSectionContribution) !void {
     try self.menu_sections.append(self.allocator, section);
+}
+
+/// Put something small at the bottom of the rail — see `RailItemContribution`.
+pub fn registerRailItem(self: *Host, item: RailItemContribution) !void {
+    try self.rail_items.append(self.allocator, item);
 }
 
 /// Register a native-menu leaf item; see `NativeMenuItem`. No-op on platforms with
