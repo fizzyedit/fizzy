@@ -42,6 +42,7 @@ pub const Dialogs = @import("dialogs/Dialogs.zig");
 
 pub const Keybinds = @import("Keybinds.zig");
 const KeybindSettings = @import("KeybindSettings.zig");
+const Accounts = @import("Accounts.zig");
 pub const menu_model = @import("menu_model.zig");
 
 const workbench_mod = @import("workbench");
@@ -1840,12 +1841,12 @@ fn fizzyDrawMenuItem(ctx: *anyopaque, title: []const u8, command_id: ?[]const u8
         const c = editor.app.host.command(id) orelse break :blk null;
         break :blk c.icon;
     } else null;
-    var mi = dvui.menuItem(@src(), .{}, .{
-        .expand = .horizontal,
-        // `Wyhash.hash` always returns `u64`; `id_extra` is `usize`, which is 32-bit on
-        // wasm32 — truncate rather than relying on the width match that only holds natively.
-        .id_extra = @truncate(std.hash.Wyhash.hash(0, title)),
-    });
+    // A row in the account popover (`Accounts`) takes that popover's row look.
+    var row_opts: dvui.Options = if (Accounts.drawing_rows) fizzy.core.dialogs.popoverRowOptions() else .{ .expand = .horizontal };
+    // `Wyhash.hash` always returns `u64`; `id_extra` is `usize`, which is 32-bit on
+    // wasm32 — truncate rather than relying on the width match that only holds natively.
+    row_opts.id_extra = @truncate(std.hash.Wyhash.hash(0, title));
+    var mi = dvui.menuItem(@src(), .{}, row_opts);
     defer mi.deinit();
     const clicked = enabled and mi.activeRect() != null;
     // Same resolution fizzy's own menu rows use (`Menu.hotkeyFor`), so a plugin row and a

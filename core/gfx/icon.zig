@@ -16,6 +16,7 @@
 //! mesh. Icons with two colours, a gradient, or their own palette are baked as they are, and
 //! a gradient falls through to dvui's mesh path, which knows how to sample it.
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 
 /// `dvui.icon`, drawn through the texture cache. Same layout, same options.
@@ -46,6 +47,13 @@ pub fn draw(iw: *dvui.IconWidget) void {
 pub fn render(name: []const u8, tvg_bytes: []const u8, rs: dvui.RectScale, opts: dvui.RenderTextureOptions, icon_opts: dvui.IconRenderOptions) void {
     if (rs.s == 0 or rs.r.w < 1 or rs.r.h < 1) return;
     if (dvui.clipGet().intersect(rs.r).empty()) return;
+    if (builtin.target.cpu.arch == .wasm32) {
+        // The web backend draws a target-rendered icon soft and heavy (the ⌘ glyphs in the
+        // menus were the tell); the mesh path is crisp there, and the web build has no
+        // per-frame dylib cost to hide behind a texture. Native keeps the cache.
+        dvui.renderIcon(name, tvg_bytes, rs, opts, icon_opts) catch {};
+        return;
+    }
 
     // Gradients are dvui's to sample across the mesh; don't second-guess them.
     if (isGradient(icon_opts.fill_color) or isGradient(icon_opts.stroke_color)) {

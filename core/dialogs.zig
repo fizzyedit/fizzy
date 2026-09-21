@@ -125,13 +125,30 @@ pub fn popoverOptions() dvui.Options {
         .border = .all(0),
         .background = false,
         .corners = popover_corners,
-        .padding = .all(4),
+        .padding = .all(6),
         .box_shadow = .{
             .color = .black,
             .corners = popover_corners,
-            .fade = 4,
+            .fade = 8,
             .alpha = 0.25,
         },
+    };
+}
+
+/// A row inside a popover: the command palette's row look — no border, no fill at rest, a
+/// subtle `control.fill_hover` wash when hovered or focused, and room around the text.
+pub fn popoverRowOptions() dvui.Options {
+    const theme = dvui.themeGet();
+    return .{
+        .expand = .horizontal,
+        .border = .all(0),
+        .corners = .all(4),
+        .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
+        .margin = .{ .x = 2, .y = 1, .w = 2, .h = 1 },
+        .color_fill = .{ .color = theme.color(.control, .fill).opacity(0) },
+        .color_fill_hover = .{ .color = theme.color(.control, .fill_hover) },
+        .color_text = .{ .color = theme.color(.control, .text) },
+        .color_text_hover = .{ .color = theme.color(.window, .text) },
     };
 }
 

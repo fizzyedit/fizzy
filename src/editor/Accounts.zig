@@ -13,10 +13,18 @@ const Editor = fizzy.Editor;
 
 /// Whether the list is showing. One list per app, so one flag.
 var open: bool = false;
+/// True while the list's rows are being drawn, so `Host.drawMenuItem` (a provider's submenu
+/// rows) styles them as popover rows rather than menubar rows.
+pub var drawing_rows: bool = false;
 
-/// dvui closes the menu chain itself — a click elsewhere, focus lost, an item chosen — and
-/// tells the chain's root through this; doing our own outside-click test instead closed the
-/// list on the press that opened a submenu row, before its release could choose anything.
+/// The list's and its open submenu's rects as of last frame: a press anywhere else closes
+/// the list. Both, because a press on a submenu row lands outside the list — the first cut
+/// tested the list alone and closed on the very press that should have chosen the row.
+var list_rect: dvui.Rect.Physical = .{};
+var sub_rect: dvui.Rect.Physical = .{};
+
+/// dvui closes the menu chain itself when an item is chosen or focus moves to another
+/// window, and tells the chain's root through this.
 fn menuRootClose(_: *anyopaque, _: dvui.MenuWidget.CloseReason) void {
     open = false;
     dvui.refresh(null, @src(), null);
@@ -40,6 +48,14 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     });
     if (bw.clicked()) open = !open;
     if (!open) return;
+    // A press on anything else — the window, another rail icon — closes the list.
+    for (dvui.events()) |*e| {
+        if (e.evt != .mouse or e.evt.mouse.action != .press) continue;
+        const p = e.evt.mouse.p;
+        if (bw.data().borderRectScale().r.contains(p) or list_rect.contains(p) or sub_rect.contains(p)) continue;
+        open = false;
+        return;
+    }
     const from = bw.data().borderRectScale().r.toNatural();
     const prev_root = dvui.MenuWidget.Root.set(.{ .ptr = &open, .close = menuRootClose });
     defer _ = dvui.MenuWidget.Root.set(prev_root);
@@ -48,6 +64,13 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     var fw = dvui.floatingMenu(@src(), .{ .from = .{ .x = from.x + from.w, .y = from.y, .w = 0, .h = from.h }, .avoid = .horizontal }, fizzy.core.dialogs.popoverOptions());
     defer fw.deinit();
     fizzy.core.dialogs.frostPopover(fw);
+    list_rect = fw.data().borderRectScale().r;
+    sub_rect = .{};
+    drawing_rows = true;
+    defer drawing_rows = false;
+    // Thrown open from the rail with the store card's overshoot; the menu's width follows.
+    var slide = dvui.animate(@src(), .{ .kind = .horizontal, .duration = 250_000, .easing = dvui.easing.outBack }, .{ .expand = .horizontal });
+    defer slide.deinit();
 
     var rows: usize = 0;
     for (host.account_providers.items, 0..) |p, pi| {
@@ -61,6 +84,7 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
                 var sub = dvui.floatingMenu(@src(), .{ .from = r }, sub_opts);
                 defer sub.deinit();
                 fizzy.core.dialogs.frostPopover(sub);
+                sub_rect = sub.data().borderRectScale().r;
                 if (p.menu(a.id)) {
                     open = false;
                     fw.close();
@@ -73,10 +97,12 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     var offered: usize = 0;
     for (host.account_providers.items, 0..) |p, pi| {
         if (p.hidden or !p.canSignIn() or p.accounts(arena).len != 0) continue;
-        if (offered == 0 and rows > 0) _ = dvui.separator(@src(), .{ .expand = .horizontal });
+        if (offered == 0 and rows > 0) _ = dvui.separator(@src(), .{ .expand = .horizontal, .margin = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
         offered += 1;
         const label = std.fmt.allocPrint(arena, "Sign in to {s}…", .{p.name}) catch p.name;
-        if (dvui.menuItemLabel(@src(), label, .{}, .{ .expand = .horizontal, .id_extra = pi, .color_text = .{ .color = theme.color(.control, .text) } }) != null) {
+        var row_opts = fizzy.core.dialogs.popoverRowOptions();
+        row_opts.id_extra = pi;
+        if (dvui.menuItemLabel(@src(), label, .{}, row_opts) != null) {
             open = false;
             fw.close();
             p.signIn();
@@ -91,7 +117,9 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
 /// for the submenu. Returns the row's rect while its submenu should be open.
 fn accountRow(label: []const u8, avatar: ?dvui.ImageSource, extra: usize) ?dvui.Rect.Natural {
     const theme = dvui.themeGet();
-    var mi = dvui.menuItem(@src(), .{ .submenu = true }, .{ .expand = .horizontal, .id_extra = extra });
+    var row_opts = fizzy.core.dialogs.popoverRowOptions();
+    row_opts.id_extra = extra;
+    var mi = dvui.menuItem(@src(), .{ .submenu = true }, row_opts);
     const ret = mi.activeRect();
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .background = false, .padding = dvui.Rect.all(0), .margin = dvui.Rect.all(0) });
@@ -107,7 +135,7 @@ fn accountRow(label: []const u8, avatar: ?dvui.ImageSource, extra: usize) ?dvui.
         const drew = blk: {
             const src = avatar orelse break :blk false;
             const tex = src.getTexture() catch break :blk false;
-            dvui.renderTexture(tex, square, .{ .corners = .all(side / 2) }) catch break :blk false;
+            dvui.renderTexture(tex, square, .{ .corners = .all(disc / 2) }) catch break :blk false;
             break :blk true;
         };
         if (!drew) {
