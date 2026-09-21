@@ -120,7 +120,9 @@ pub fn drawRailDisc(editor: *Editor, size: f32) !void {
     if (which % 64 >= accounts.len) return;
     const a = accounts[which % 64];
     const at = anchor.toNatural();
-    var sub = Popover.init(@src(), .{ .rect = &sub_rect, .anchor = .{ .x = at.x + at.w + 8, .y = at.y - 7 }, .id_extra = 1 });
+    // Overlapping the list by a sliver, so the pointer crosses from the row into the submenu
+    // without passing over a gap that would read as "outside" and close it.
+    var sub = Popover.init(@src(), .{ .rect = &sub_rect, .anchor = .{ .x = at.x + at.w - 10, .y = at.y - 7 }, .id_extra = 1 });
     defer sub.deinit();
     sub_phys = sub.rect;
     if (p.menu(a.id)) open = false;
