@@ -196,7 +196,13 @@ fn drawOption(
         // here; Editor.zig invokes `peekClose` / `open` after `editor.explorer.paned` has
         // been recreated for this frame. Doing the call directly here would dereference
         // last frame's freed paned widget and crash on wasm.
-        const explorer_visible = editor.explorer.peek_open or !editor.explorer.closed;
+        // The region, not `explorer.closed`: on a narrow window the explorer is folded away by
+        // the layout without anyone having closed it, and a tap there means "show me", not
+        // "hide it again".
+        const explorer_visible = if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r|
+            !r.isClosed() and !r.isFolded()
+        else
+            !editor.explorer.closed;
         if (selected and explorer_visible) {
             ret = .close;
         } else {

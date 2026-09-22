@@ -120,12 +120,81 @@ pub fn isClosed(self: Region) bool {
 }
 
 pub fn close(self: Region) void {
+    // Deliberately before `Split.close`: shutting a region is also the user withdrawing the peek
+    // that kept it open on a narrow window (see `collapseTarget`).
+    dvui.dataSet(null, self.id, "_peek", false);
     Split.close(self.id);
 }
 
 pub fn open(self: Region) void {
+    // Opening is an explicit answer to the auto-collapse, and outlives it.
+    dvui.dataSet(null, self.id, "_peek", true);
     Split.open(self.id, self.default_extent);
 }
+
+/// Auto-collapse is a *default*, not a lock: a `collapsible` region folds itself away when the
+/// container runs out of room, unless the user has said otherwise since — by tapping its rail
+/// icon, or by dragging its split back out. That answer is the peek, and it lives under the
+/// region's id beside `_size`.
+///
+/// Without it, the collapse ran every frame and won every argument: on a phone-width window the
+/// explorer shut itself the instant it was opened, and a drag moved the split for exactly as
+/// long as the button was held. The peek is forgotten again when the region is shut, or when the
+/// window grows back past `collapse_below` — so making the window small again collapses it, as
+/// it should.
+fn collapseTarget(id: dvui.Id, chosen: f32, available: f32) f32 {
+    const narrow = available > 0 and available < InitOptions.collapse_below;
+    // Recorded for `isPeeking`, which the shape asks from outside the layout, where there is no
+    // container to measure.
+    dvui.dataSet(null, id, "_narrow", narrow);
+    var peek = dvui.dataGet(null, id, "_peek", bool) orelse false;
+
+    if (!narrow) {
+        // Room again: the next collapse starts from a clean slate.
+        if (peek) dvui.dataSet(null, id, "_peek", false);
+        return chosen;
+    }
+
+    // A drag that has pulled the region open is the same intent as tapping the icon, and has to
+    // latch: `_drag` is gone on release, and without the latch the region would slam shut the
+    // frame the button came up.
+    const dragging = dvui.dataGet(null, id, "_drag", bool) orelse false;
+    if (dragging and chosen > 0 and !peek) {
+        peek = true;
+        dvui.dataSet(null, id, "_peek", true);
+    }
+    // Shut — dragged closed, or closed from a button. Re-arm.
+    if (chosen <= 0 and peek) {
+        peek = false;
+        dvui.dataSet(null, id, "_peek", false);
+    }
+    return if (peek) chosen else 0;
+}
+
+/// Whether this region is folded away by the auto-collapse: the container is too narrow for it
+/// and the user has not asked for it since. Distinct from `isClosed`, which asks whether the
+/// user *shut* it — a folded region keeps the extent it was left at, so widening the window puts
+/// it back where it was, and `isClosed` is false the whole time it is invisible.
+///
+/// A rail button that toggles a region has to ask this one. Reading `isClosed` there makes the
+/// first tap on a phone-width window report "close" for something already off the screen.
+pub fn isFolded(self: Region) bool {
+    if (!(dvui.dataGet(null, self.id, "_narrow", bool) orelse false)) return false;
+    return !(dvui.dataGet(null, self.id, "_peek", bool) orelse false);
+}
+
+/// Whether this region is only open because the user asked for it on a container too narrow to
+/// hold it — the state a phone-width layout draws a "close this" button for, and the one where a
+/// shape may want to shut its other regions to make room.
+///
+/// False on a window with room for the region: there the answer is just "open", and nothing
+/// special is owed to the user.
+pub fn isPeeking(self: Region) bool {
+    if (!(dvui.dataGet(null, self.id, "_narrow", bool) orelse false)) return false;
+    if (!(dvui.dataGet(null, self.id, "_peek", bool) orelse false)) return false;
+    return !self.isClosed();
+}
+
 
 /// How a region draws its own contents.
 ///
@@ -356,8 +425,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
 
         var target = chosen;
         if (init_opts.collapsible) {
-            const available = if (parent) |p| p.extent(axis) else 0;
-            if (available > 0 and available < InitOptions.collapse_below) target = 0;
+            target = collapseTarget(id, chosen, if (parent) |p| p.extent(axis) else 0);
         }
 
         // Ease toward the target when it moved for a reason other than a drag — the collapse
@@ -869,8 +937,7 @@ fn initTree(
         const chosen = dvui.dataGet(null, id, "_size", f32) orelse default;
         var target = chosen;
         if (init_opts.collapsible) {
-            const available = if (parent) |p| p.extent(axis) else 0;
-            if (available > 0 and available < InitOptions.collapse_below) target = 0;
+            target = collapseTarget(id, chosen, if (parent) |p| p.extent(axis) else 0);
         }
         const extent = Split.eased(id, target);
         dvui.dataSet(null, id, "_size", chosen);

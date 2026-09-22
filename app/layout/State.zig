@@ -132,13 +132,6 @@ view_drag: ViewDrag = .{},
 /// attempt on every drag frame.
 dirty: bool = false,
 save_deadline_ns: i128 = 0,
-/// Collapsed-layout (phone / narrow web viewport) center focus: while true the bottom panel
-/// stays swung shut so the center region owns the whole viewport. Set by `revealCenter`, which
-/// callers use when a tap has just put something worth reading in the center (e.g. picking a
-/// plugin in the store). Deliberately *not* a `panel_ratio` write: the user's panel height
-/// survives, so dragging the handle back up — or widening the window out of the collapsed
-/// layout — restores the panel where they left it.
-panel_hidden_for_center: bool = false,
 /// Id of the center provider drawn last frame, so a swap can look the outgoing one up again by
 /// id (never cache the pointer: a plugin can unload between frames). Borrowed from the host's
 /// registry entry, which outlives a frame.

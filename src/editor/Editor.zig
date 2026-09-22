@@ -2707,18 +2707,20 @@ pub fn resetLayout(editor: *Editor) void {
 /// something worth reading in the center — e.g. selecting a plugin in the store, whose detail
 /// page renders as a center provider behind the peeked-open explorer.
 ///
-/// No-op unless the explorer paned is collapsed *and* peeked open — i.e. exactly the state that
-/// draws the floating collapse-explorer button (see `Explorer.drawCollapseButton`). On a
-/// desktop-width window both panes are visible at once, so there is nothing to reveal and the
-/// user's layout is left alone.
+/// No-op unless the explorer is *peeking* — open on a window too narrow to hold it beside the
+/// center, which is exactly the state that draws the floating collapse-explorer button (see
+/// `Explorer.drawCollapseButton`). On a desktop-width window both panes are visible at once, so
+/// there is nothing to reveal and the user's layout is left alone.
 ///
 /// Must be called from inside the frame's explorer/center subtree, where `explorer.paned`
 /// exists — see the `Sidebar` note about deferring paned pokes to `tick`.
 pub fn revealCenter(editor: *Editor) void {
     const sidebar = editor.regionFor(sdk.keywords.ide.sidebar) orelse return;
-    if (!sidebar.isClosed() or !editor.explorer.peek_open) return;
+    if (!sidebar.isPeeking()) return;
     editor.explorer.peekClose(editor);
-    editor.app.layout.panel_hidden_for_center = true;
+    // The panel goes too, for the same reason the explorer does: the center is what the tap
+    // asked to see, and on this window it can only have the whole of it.
+    if (editor.regionFor(sdk.keywords.ide.panel)) |panel| panel.close();
 }
 
 /// This frame's answer, sampled in `tick` — see `plugins_drawing`. Callers run after that

@@ -30,7 +30,6 @@ rect_screen: dvui.Rect.Physical = .{},
 open_branches: std.AutoHashMap(dvui.Id, void) = undefined,
 animations_ratio: f32 = 0.5,
 closed: bool = false,
-peek_open: bool = false,
 collapse_btn_anim_started: bool = false,
 
 pub fn init() Explorer {
@@ -54,8 +53,10 @@ pub fn open(explorer: *Explorer, editor: *fizzy.Editor) void {
     if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.open();
 }
 
+/// Shut the explorer from the floating button, or from a tap that put something in the center
+/// worth seeing. `Region.close` withdraws the peek, so the narrow layout goes back to collapsing
+/// it by itself.
 pub fn peekClose(explorer: *Explorer, editor: *fizzy.Editor) void {
-    explorer.peek_open = false;
     explorer.closed = true;
     explorer.collapse_btn_anim_started = false;
     if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| r.close();
@@ -150,9 +151,10 @@ pub fn draw(
     fizzy.core.draw.drawScrollEdgeShadows(null, vbox.data().contentRectScale(), &explorer.scroll_info, .{});
 
     // Peek-only floating collapse button. Drawn last so it overlays everything else in the
-    // explorer pane. Only appears while we're full-screen peeking on a collapsed paned.
+    // explorer pane. Only while the region is *peeking*: open on a window too narrow to hold it
+    // beside the center, which is the one state where there is no split to drag it shut by.
     if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar)) |r| {
-        if (explorer.peek_open and r.isClosed()) drawCollapseButton(explorer, editor);
+        if (r.isPeeking()) drawCollapseButton(explorer, editor) else explorer.collapse_btn_anim_started = false;
     }
 
     return .ok;
