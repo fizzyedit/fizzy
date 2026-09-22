@@ -140,14 +140,22 @@ pub fn surfaceShadow() dvui.Options.BoxShadow {
 
 /// The wash under the pointer, and under the palette's selected row — the same colour, so a
 /// keyboard selection and a hover are one idea.
+///
+/// Asked of the theme rather than stated here: dvui derives `fill_hover` from a style's fill
+/// (`Theme.adjustColorForState`, ±10% by `dark`) unless the theme names one, so a theme that
+/// wants a stronger hover says so once and every surface follows — this, the palette, the
+/// flyouts, and the rows a menu draws.
 pub fn rowHover() dvui.Color {
-    return dvui.themeGet().color(.control, .fill_hover);
+    return dvui.themeGet().color(row_style, .fill_hover);
 }
 
 /// A row being activated.
 pub fn rowPress() dvui.Color {
-    return dvui.themeGet().color(.control, .fill_press);
+    return dvui.themeGet().color(row_style, .fill_press);
 }
+
+/// The style a row inside a floating surface takes its colours from.
+pub const row_style: dvui.Theme.Style.Name = .control;
 
 /// The fill a dialog paints when there is no frost to composite with: the chrome at the
 /// dialog's opacity, lifted the same amount.

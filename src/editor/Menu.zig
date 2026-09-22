@@ -6,6 +6,7 @@ const Editor = fizzy.Editor;
 const settings = fizzy.settings;
 const builtin = @import("builtin");
 const model = @import("menu_model.zig");
+const widgets = fizzy.core.widgets;
 
 pub var mouse_distance: f32 = std.math.floatMax(f32);
 
@@ -19,7 +20,7 @@ pub fn draw(editor: *Editor) !dvui.App.Result {
     const bg_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .background = false, .color_fill = .{ .color = dvui.themeGet().color(.control, .fill) } });
     defer bg_box.deinit();
 
-    var m = dvui.menu(@src(), .horizontal, .{});
+    var m = widgets.menu(@src(), .horizontal, .{});
     defer m.deinit();
 
     // The menu's own palette, for as long as it draws. Two overrides, both about the same thing:
@@ -63,52 +64,30 @@ pub fn draw(editor: *Editor) !dvui.App.Result {
 const chrome = fizzy.core.dialogs;
 
 /// One menu dropdown, drawn like every other floating surface in fizzy: frosted, rounded,
-/// shadowed, no border.
+/// shadowed, no border — `core.dialogs`' description of a surface, the same one the command
+/// palette, the dialogs and the flyouts are built from.
 ///
-/// `dvui.floatingMenu` paints its own opaque chrome from the theme, which is what made these the
-/// one popup in the app that looked like a different program. The recipe here is the floating
-/// window's (`core.widgets.FloatingWindowWidget.drawFrost`): the shadow goes down first — passed
-/// as an option, so the embedded scroll area draws it during `init` — then the frost, whose tint
-/// *is* the fill, which is why `background` is off. Where frost is unavailable (blur turned off
-/// in settings, or a host drawing its own chrome) the tint is painted as a plain translucent
-/// fill instead, so the panel is never transparent.
-fn menuPopup(src: std.builtin.SourceLocation, from: dvui.Rect.Natural, id_extra: usize) *dvui.FloatingMenuWidget {
-    const fw = dvui.floatingMenu(src, .{ .from = from }, .{
+/// Through `core.widgets`' menu chain rather than dvui's: a frosted surface has to paint shadow,
+/// then blur, then its own translucent fill, and dvui's floating menu paints its background
+/// inside `init` where nothing outside can get in front of it. See
+/// `core/widgets/menu/FloatingMenu.zig`.
+fn menuPopup(src: std.builtin.SourceLocation, from: dvui.Rect.Natural, id_extra: usize) *widgets.FloatingMenuWidget {
+    return widgets.floatingMenu(src, .{ .from = from, .frost = frostPane() }, .{
         .id_extra = id_extra,
-        // The dialog fill, rounded and shadowed like every other floating surface. Painted by the
-        // widget rather than by hand here: a `Rect.fill` at this level draws square whatever
-        // corners it is handed, while the scroll area the menu is built on rounds correctly.
-        //
-        // What is missing next to a flyout is the *blur*. `BlurBackdrop.frostPane` has to be
-        // queued before the surface's own background is painted (see
-        // `FloatingWindowWidget.drawFrost`), and a floating menu paints that background inside
-        // `init`, where nothing from out here can get in front of it. Giving
-        // `dvui.FloatingMenuWidget` the `frost` option the window already has is the fix, and it
-        // belongs in dvui rather than in a workaround here.
-        // No fill of its own: the panel is painted below, *after* the frost, which is the order
-        // a frosted surface needs (`FloatingWindowWidget.drawFrost`). The shadow does come from
-        // here, because the scroll area draws it during `init` — before the frost, where a
-        // shadow belongs.
-        .background = false,
+        .background = true,
+        .color_fill = .{ .color = chrome.dialogFill() },
         .border = .all(0),
         .corners = chrome.surface_corners,
         .padding = chrome.surface_padding,
         .box_shadow = chrome.surfaceShadow(),
     });
+}
 
-    // `finalize` against the widget's own theme, then scale: a `CornerRect` from `all()` carries
-    // the theme's corner *kind* at a size of our choosing (`Corner.finalize`), and painting by
-    // hand skips the resolution `WidgetData.init` would have done — an unresolved corner draws
-    // square, whatever radius it names. Finalizing here keeps the panel cut the way the theme
-    // cuts everything else, rather than hardcoding a round corner over the top of it.
-    const brs = fw.data().borderRectScale();
-    const corners = chrome.surface_corners.finalize(fw.data().options.themeGet());
-    _ = chrome.frostPane(fw.data().id, brs.r, corners, brs.s);
-    brs.r.fill(corners.scale(brs.s, dvui.CornerRect.Physical), .{
-        .color = .{ .color = chrome.dialogFill() },
-        .fade = 0,
-    });
-    return fw;
+/// The blur behind a menu, as `core.dialogs` describes it for every floating surface. Null when
+/// the style has the blur off, which the panel then simply draws without.
+fn frostPane() ?fizzy.core.widgets.BlurBackdrop.Pane {
+    const f = chrome.dialogFrost() orelse return null;
+    return .{ .radius = f.radius, .refresh_ms = f.refresh_ms, .tint = f.tint, .mix = f.mix, .lift = f.lift };
 }
 
 /// A menu row, drawn the way the command palette draws its rows: `row_corners`, and `rowHover`
@@ -180,7 +159,7 @@ fn drawModelItem(
     editor: *Editor,
     item: model.Item,
     id_extra: usize,
-    fw: *dvui.FloatingMenuWidget,
+    fw: *widgets.FloatingMenuWidget,
 ) !void {
     switch (item) {
         .separator => _ = dvui.separator(@src(), .{ .expand = .horizontal, .id_extra = id_extra }),
@@ -293,8 +272,8 @@ fn drawRecentFolders(editor: *Editor, id_extra: usize) !void {
 /// `treeRowGlyph`-sized slot ahead of the label — reserved even when a particular row has no
 /// icon, so rows with and without one still line up in the same column rather than the label
 /// shifting left to fill the gap.
-pub fn menuItemWithHotkey(src: std.builtin.SourceLocation, label_str: []const u8, icon: ?[]const u8, hotkey: dvui.enums.Keybind, enabled: bool, init_opts: dvui.MenuItemWidget.InitOptions, opts: dvui.Options) ?dvui.Rect.Natural {
-    var mi = dvui.menuItem(src, init_opts, rowOptions(opts));
+pub fn menuItemWithHotkey(src: std.builtin.SourceLocation, label_str: []const u8, icon: ?[]const u8, hotkey: dvui.enums.Keybind, enabled: bool, init_opts: widgets.MenuItemWidget.InitOptions, opts: dvui.Options) ?dvui.Rect.Natural {
+    var mi = widgets.menuItem(src, init_opts, rowOptions(opts));
 
     var ret: ?dvui.Rect.Natural = null;
     if (enabled) {
@@ -317,8 +296,8 @@ pub fn menuItemWithHotkey(src: std.builtin.SourceLocation, label_str: []const u8
     return ret;
 }
 
-pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opts: dvui.MenuItemWidget.InitOptions, opts: dvui.Options) ?dvui.Rect.Natural {
-    var mi = dvui.menuItem(src, init_opts, rowOptions(opts));
+pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opts: widgets.MenuItemWidget.InitOptions, opts: dvui.Options) ?dvui.Rect.Natural {
+    var mi = widgets.menuItem(src, init_opts, rowOptions(opts));
 
     var ret: ?dvui.Rect.Natural = null;
     if (mi.activeRect()) |r| {
@@ -349,8 +328,8 @@ pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opt
     return ret;
 }
 
-pub fn menuItemWithChevron(src: std.builtin.SourceLocation, label_str: []const u8, init_opts: dvui.MenuItemWidget.InitOptions, opts: dvui.Options) ?dvui.Rect.Natural {
-    var mi = dvui.menuItem(src, init_opts, rowOptions(opts));
+pub fn menuItemWithChevron(src: std.builtin.SourceLocation, label_str: []const u8, init_opts: widgets.MenuItemWidget.InitOptions, opts: dvui.Options) ?dvui.Rect.Natural {
+    var mi = widgets.menuItem(src, init_opts, rowOptions(opts));
 
     var ret: ?dvui.Rect.Natural = null;
     if (mi.activeRect()) |r| {

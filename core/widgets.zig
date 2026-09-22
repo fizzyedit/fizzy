@@ -29,11 +29,39 @@ pub const TreeSelection = @import("widgets/TreeSelection.zig");
 /// Local copies of upstream dvui's `DockingWidget` (+ its `DockLayout` tree) and `BlurBackdrop`,
 /// taken at the current pin so the split-tree/blur work can be iterated here before anything is
 /// proposed upstream. Keep the diff against `dvui-dev/src/{widgets/DockingWidget.zig,
-/// widgets/DockingWidget/Layout.zig,BlurBackdrop.zig}` readable — that diff *is* the proposal.
+/// widgets/DockingWidget/Layout.zig,BlurBackdrop.zig}` readable.
 pub const DockingWidget = @import("widgets/DockingWidget.zig");
 pub const DockLayout = DockingWidget.Layout;
 pub const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
 pub const Popover = @import("widgets/Popover.zig");
+
+/// The menu chain, copied from dvui so a menu can be frosted and so its rows are the same rows
+/// the command palette and the flyouts draw — see `widgets/menu/FloatingMenu.zig`'s header for
+/// what differs and why all three had to come together.
+pub const MenuWidget = @import("widgets/menu/Menu.zig");
+pub const MenuItemWidget = @import("widgets/menu/MenuItem.zig");
+pub const FloatingMenuWidget = @import("widgets/menu/FloatingMenu.zig");
+
+/// `dvui.menu` / `dvui.menuItem` / `dvui.floatingMenu`, over the copies above.
+pub fn menu(src: std.builtin.SourceLocation, dir: dvui.enums.Direction, opts: dvui.Options) *MenuWidget {
+    var ret = dvui.widgetAlloc(MenuWidget);
+    ret.init(src, .{ .dir = dir }, opts);
+    return ret;
+}
+
+pub fn menuItem(src: std.builtin.SourceLocation, init_opts: MenuItemWidget.InitOptions, opts: dvui.Options) *MenuItemWidget {
+    var ret = dvui.widgetAlloc(MenuItemWidget);
+    ret.init(src, init_opts, opts);
+    ret.processEvents();
+    ret.drawBackground();
+    return ret;
+}
+
+pub fn floatingMenu(src: std.builtin.SourceLocation, init_opts: FloatingMenuWidget.InitOptions, opts: dvui.Options) *FloatingMenuWidget {
+    var ret = dvui.widgetAlloc(FloatingMenuWidget);
+    ret.init(src, init_opts, opts);
+    return ret;
+}
 /// Verb form of `DockingWidget`, same shape as `dvui.dockspace`.
 pub const dockspace = DockingWidget.dockspace;
 

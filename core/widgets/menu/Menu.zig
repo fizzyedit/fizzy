@@ -1,0 +1,326 @@
+const std = @import("std");
+const dvui = @import("dvui");
+const FloatingMenu = @import("FloatingMenu.zig");
+
+const Event = dvui.Event;
+const Options = dvui.Options;
+const Point = dvui.Point;
+const Rect = dvui.Rect;
+const RectScale = dvui.RectScale;
+const Size = dvui.Size;
+const Widget = dvui.Widget;
+const WidgetData = dvui.WidgetData;
+const BoxWidget = dvui.BoxWidget;
+const AccessKit = dvui.AccessKit;
+
+const enums = dvui.enums;
+
+const Menu = @This();
+
+/// This allows for other widgets to register as the root
+/// of some widget chain to be notified when, for example,
+/// the menu chain closes.
+///
+/// This is used by `dvui.ContextWidget`
+pub const Root = struct {
+    ptr: *anyopaque,
+    close: *const fn (ptr: *anyopaque, reason: CloseReason) void,
+
+    var current: ?Root = null;
+
+    pub fn set(root: ?Root) ?Root {
+        defer Root.current = root;
+        return Root.current;
+    }
+};
+
+pub const CloseReason = enum {
+    /// The user pressed some button that causes the menu to close
+    intentional,
+    /// The menu lost focus or similar and should close, but the
+    /// user didn't explicitly close the menu themselves.
+    unintentional,
+};
+
+var menu_current: ?*Menu = null;
+
+pub fn current() ?*Menu {
+    return menu_current;
+}
+
+fn menuSet(m: ?*Menu) ?*Menu {
+    const ret = menu_current;
+    menu_current = m;
+    return ret;
+}
+
+pub var defaults: Options = .{
+    .name = "Menu",
+    .role = .menu,
+    .style = .window,
+};
+
+pub const InitOptions = struct {
+    dir: enums.Direction,
+    parentSubwindowId: ?dvui.Id = null,
+    keyboard_nav: FloatingMenu.Style = .menu,
+};
+
+wd: WidgetData,
+
+init_opts: InitOptions,
+winId: dvui.Id,
+parentMenu: ?*Menu = null,
+last_focus: dvui.Id,
+/// SAFETY: Set in `install`
+group: dvui.FocusGroupWidget = undefined,
+/// SAFETY: Set in `install`
+box: BoxWidget = undefined,
+
+// whether submenus should be open
+submenus_activated: bool = false,
+
+// Includes menu/group itself, this is used to know if hovering the mouse over
+// a menuItem should focus it.  If there is a non-menItem widget in the menu,
+// then if that has focus we don't want to focus menuItems on mouse over.
+focused_menuItem: bool = false,
+focused_menuItem_this_frame: bool = false,
+
+submenu_menuItem_this_frame: bool = false,
+
+mouse_over: bool = false,
+
+// if we have a child popup menu, save it's rect for next frame
+// supports mouse skipping over menu items if towards the submenu
+child_popup_rect: ?Rect.Physical = null,
+
+// false means the last interaction we got was keyboard, so don't highlight the
+// entry that happens to be under the mouse
+mouse_mode: bool = false,
+
+/// It's expected to call this when `self` is `undefined`
+pub fn init(self: *Menu, src: std.builtin.SourceLocation, init_opts: InitOptions, opts: Options) void {
+    self.* = Menu{
+        .wd = WidgetData.init(src, .{}, defaults.override(opts)),
+        .init_opts = init_opts,
+        .winId = dvui.subwindowCurrentId(),
+        .last_focus = dvui.lastFocusedIdInFrame(),
+    };
+
+    if (dvui.dataGet(null, self.wd.id, "_sub_act", bool)) |a| {
+        self.submenus_activated = a;
+    }
+
+    self.focused_menuItem = dvui.dataGet(null, self.wd.id, "_has_focused_menuItem", bool) orelse false;
+
+    // keep this alive if it was set in MenuItem
+    _ = dvui.dataGet(null, self.wd.id, "_submenus_activating", void);
+
+    if (dvui.dataGet(null, self.wd.id, "_mouse_mode", bool)) |mouse_mode| self.mouse_mode = mouse_mode;
+
+    dvui.parentSet(self.widget());
+    self.parentMenu = menuSet(self);
+    self.data().register();
+    self.data().borderAndBackground(.{});
+
+    const evts = dvui.events();
+    for (evts) |*e| {
+        // exempt modifier keys from turning off mouse mode
+        if (e.evt == .key and e.evt.key.action == .down and !e.evt.key.code.isModifier()) {
+            self.mouse_mode = false;
+        } else if (e.evt == .mouse and e.evt.mouse.action != .position) {
+            self.mouse_mode = true;
+        }
+
+        if (!dvui.eventMatchSimple(e, self.data()))
+            continue;
+
+        self.processEvent(e);
+    }
+
+    switch (self.init_opts.keyboard_nav) {
+        .menu => self.group.init(@src(), .{ .nav_key_dir = self.init_opts.dir }, .{}),
+        .popup => {},
+    }
+
+    // a floating menu could have been opened by mouse, but then a key is
+    // pressed, so focus the group which will focus the first thing in the menu
+    if (self.floating() and dvui.focusedWidgetIdInCurrentSubwindow() == null) {
+        switch (self.init_opts.keyboard_nav) {
+            .menu => dvui.focusWidget(self.group.data().id, null, null),
+            .popup => dvui.focusWidget(self.data().id, null, null),
+        }
+    }
+
+    self.box.init(@src(), .{ .dir = self.init_opts.dir }, self.data().options.strip().override(.{ .expand = .both }));
+    self.box.drawBackground();
+    if (self.data().accesskit_node()) |ak_node| {
+        AccessKit.nodeAddAction(ak_node, AccessKit.Action.focus);
+        AccessKit.nodeAddAction(ak_node, AccessKit.Action.click);
+    }
+}
+
+pub fn close(self: *Menu) void {
+    dvui.refresh(null, @src(), self.data().id);
+    self.close_chain(.intentional);
+}
+
+pub fn close_chain(self: *Menu, reason: CloseReason) void {
+    dvui.dataRemove(null, self.data().id, "_submenus_activating");
+    self.submenus_activated = false;
+    // close all submenus in the chain
+    if (self.parentMenu) |pm| {
+        pm.close_chain(reason);
+    } else {
+        if (Root.current) |root| {
+            root.close(root.ptr, reason);
+        }
+        if (reason == .intentional) {
+            // when a popup is closed because the user chose to, the
+            // window that spawned it (which had focus previously)
+            // should become focused again
+            dvui.focusSubwindow(self.init_opts.parentSubwindowId orelse self.winId, null);
+        }
+    }
+}
+
+pub fn floating(_: *Menu) bool {
+    return FloatingMenu.currentGet() != null;
+}
+
+pub fn widget(self: *Menu) Widget {
+    return Widget.init(self, data, rectFor, screenRectScale, minSizeForChild);
+}
+
+pub fn data(self: *Menu) *WidgetData {
+    return self.wd.validate();
+}
+
+pub fn rectFor(self: *Menu, id: dvui.Id, min_size: Size, e: Options.Expand, g: Options.Gravity) Rect {
+    _ = id;
+    return dvui.placeIn(self.data().contentRect().justSize(), min_size, e, g);
+}
+
+pub fn screenRectScale(self: *Menu, rect: Rect) RectScale {
+    return self.data().contentRectScale().rectToRectScale(rect);
+}
+
+pub fn minSizeForChild(self: *Menu, s: Size) void {
+    self.data().minSizeMax(self.data().options.padSize(s));
+}
+
+pub fn processEvent(self: *Menu, e: *Event) void {
+    switch (e.evt) {
+        .mouse => |me| {
+            if (me.action == .position) {
+                if (dvui.mouseTotalMotion().nonZero()) {
+                    if (dvui.dataGet(null, self.data().id, "_child_popup", ?Rect.Physical) orelse null) |r| {
+                        const center = Point.Physical{ .x = r.x + r.w / 2, .y = r.y + r.h / 2 };
+                        const cw = dvui.currentWindow();
+                        const to_center = center.diff(cw.mouse_pt_prev);
+                        const movement = cw.mouse_pt.diff(cw.mouse_pt_prev);
+                        const dot_prod = movement.x * to_center.x + movement.y * to_center.y;
+                        const cos = dot_prod / (to_center.length() * movement.length());
+                        if (std.math.acos(cos) < std.math.pi / 3.0) {
+                            // there is an existing submenu and motion is
+                            // towards the popup, so eat this event to
+                            // prevent any menu items from focusing
+                            e.handle(@src(), self.data());
+                        }
+                    }
+                }
+
+                if (self.mouse_mode and !e.handled) {
+                    self.mouse_over = true;
+                }
+            }
+        },
+        else => {},
+    }
+}
+
+pub fn processEventsAfter(self: *Menu) void {
+    const focus_id = dvui.lastFocusedIdInFrameSince(self.last_focus);
+
+    const evts = dvui.events();
+    for (evts) |*e| {
+        if (!dvui.eventMatch(e, .{ .id = self.data().id, .focus_id = focus_id, .r = self.data().borderRectScale().r }))
+            continue;
+
+        switch (e.evt) {
+            .key => |ke| {
+                if (ke.action == .down or ke.action == .repeat) {
+                    switch (ke.code) {
+                        .escape => {
+                            e.handle(@src(), self.data());
+                            self.close();
+                        },
+                        .up, .down => {
+                            if (self.init_opts.keyboard_nav == .menu and self.init_opts.dir == .horizontal) {
+                                e.handle(@src(), self.data());
+                            }
+                            // otherwise let focus group handle it
+                        },
+                        .left => {
+                            if (self.init_opts.keyboard_nav == .menu and self.init_opts.dir == .vertical) {
+                                e.handle(@src(), self.data());
+                                if (self.parentMenu) |pm| {
+                                    e.handle(@src(), self.data());
+                                    pm.submenus_activated = false;
+                                    if (self.init_opts.parentSubwindowId) |sid| {
+                                        dvui.focusSubwindow(sid, null);
+                                    }
+                                }
+                            }
+                            // otherwise let focus group handle it
+                        },
+                        .right => {
+                            if (self.init_opts.keyboard_nav == .menu and self.init_opts.dir == .vertical) {
+                                e.handle(@src(), self.data());
+                            }
+                            // otherwise let focus group handle it
+                        },
+                        else => {},
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+pub fn deinit(self: *Menu) void {
+    self.processEventsAfter();
+
+    if (self.init_opts.keyboard_nav == .menu and self.group.data().id == dvui.focusedWidgetIdInCurrentSubwindow()) {
+        self.focused_menuItem_this_frame = true;
+    }
+
+    // This prevents the following:
+    // * click to open a menu
+    // * click outside the menu, it closes
+    // * hover back over a menu item (the menu should not reappear without clicking)
+    // Only do this if we have a submenu menuItem, otherwise we'll screw up
+    // suggestions, which never have a focused menuItem.
+    if (self.submenu_menuItem_this_frame and !self.focused_menuItem_this_frame) {
+        self.submenus_activated = false;
+    }
+
+    defer if (dvui.widgetIsAllocated(self)) dvui.widgetFree(self);
+    defer self.* = undefined;
+    self.box.deinit();
+    if (self.init_opts.keyboard_nav == .menu) self.group.deinit();
+    dvui.dataSet(null, self.data().id, "_mouse_mode", self.mouse_mode);
+    dvui.dataSet(null, self.data().id, "_sub_act", self.submenus_activated);
+    dvui.dataSet(null, self.data().id, "_has_focused_menuItem", self.focused_menuItem_this_frame);
+    // always overwrite with value from this frame to prevent saving stale value
+    dvui.dataSet(null, self.data().id, "_child_popup", self.child_popup_rect);
+    self.data().minSizeSetAndRefresh();
+    self.data().minSizeReportToParent();
+    _ = menuSet(self.parentMenu);
+    dvui.parentReset(self.data().id, self.data().parent);
+}
+
+test {
+    @import("std").testing.refAllDecls(@This());
+}

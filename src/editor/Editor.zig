@@ -388,6 +388,14 @@ pub fn init(
             .fill = .{ .r = 28, .g = 29, .b = 36, .a = 255 },
             .border = .{ .r = 34, .g = 35, .b = 42, .a = 255 },
             .text = .{ .r = 134, .g = 138, .b = 148, .a = 255 },
+            // Named rather than left to dvui's derivation, which lightens a style's fill by 10%
+            // (`Theme.adjustColorForState`). That is a fair default against the *window*, and too
+            // little on a floating surface: a menu, the palette and the flyouts all sit on the
+            // frosted chrome, which is lighter than the window to begin with, so a 10% nudge on a
+            // near-black fill disappeared under them. Every row in the app reads this one value
+            // (`core.dialogs.rowHover`), so it is the one place to tune the contrast.
+            .fill_hover = .{ .r = 62, .g = 64, .b = 78, .a = 255 },
+            .fill_press = .{ .r = 78, .g = 81, .b = 98, .a = 255 },
         };
 
         fizzy_dark.highlight = .{
@@ -459,6 +467,9 @@ pub fn init(
         };
 
         fizzy_light.control = dvui.Theme.builtin.adwaita_light.control;
+        // Same reasoning as the dark theme's, darkening instead of lightening.
+        fizzy_light.control.fill_hover = .{ .r = 208, .g = 208, .b = 214, .a = 255 };
+        fizzy_light.control.fill_press = .{ .r = 190, .g = 190, .b = 198, .a = 255 };
 
         fizzy_light.highlight = .{
             .fill = .{ .r = 170, .g = 130, .b = 140, .a = 255 },
@@ -2056,7 +2067,7 @@ fn fizzyDrawMenuItem(ctx: *anyopaque, title: []const u8, command_id: ?[]const u8
     // `Menu.rowOptions`, so a plugin's row in the menu bar is the same shape and the same pair of
     // fills as a fizzy row beside it — including the transparent rest fill that keeps the row the
     // pointer just left from sitting there as a dark block.
-    var mi = dvui.menuItem(@src(), .{}, Menu.rowOptions(.{
+    var mi = fizzy.core.widgets.menuItem(@src(), .{}, Menu.rowOptions(.{
         .expand = .horizontal,
         // `Wyhash.hash` always returns `u64`; `id_extra` is `usize`, which is 32-bit on
         // wasm32 — truncate rather than relying on the width match that only holds natively.
