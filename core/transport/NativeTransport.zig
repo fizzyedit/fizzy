@@ -328,19 +328,27 @@ const TestServer = struct {
             var req = http_server.receiveHead() catch return;
             ts.requests += 1;
             const m = @tagName(req.head.method);
-            @memcpy(ts.seen_method[0..m.len], m);
-            ts.seen_method_len = m.len;
+            ts.seen_method_len = @min(m.len, ts.seen_method.len);
+            @memcpy(ts.seen_method[0..ts.seen_method_len], m[0..ts.seen_method_len]);
             var it = req.iterateHeaders();
             while (it.next()) |h| {
                 if (std.ascii.eqlIgnoreCase(h.name, "authorization")) {
-                    @memcpy(ts.seen_auth[0..h.value.len], h.value);
-                    ts.seen_auth_len = h.value.len;
+                    ts.seen_auth_len = @min(h.value.len, ts.seen_auth.len);
+                    @memcpy(ts.seen_auth[0..ts.seen_auth_len], h.value[0..ts.seen_auth_len]);
                 }
             }
-            var body_buf: [256]u8 = undefined;
-            const body_reader = req.readerExpectNone(&body_buf);
-            const got = body_reader.readSliceShort(&ts.seen_body) catch 0;
-            ts.seen_body_len = got;
+            // Only where there *is* a body. For a method that cannot have one (the cancelled
+            // GET this test makes second), `readerExpectNone` hands back `Reader.ending` — a
+            // shared sentinel built by `@constCast` over a const global — and reading from it
+            // writes `seek` straight through that const pointer. Windows enforces the read-only
+            // page and the server thread dies with a segfault mid-test; macOS and Linux happen
+            // not to, which is why this only ever failed on one runner.
+            ts.seen_body_len = 0;
+            if (req.head.method.requestHasBody()) {
+                var body_buf: [256]u8 = undefined;
+                const body_reader = req.readerExpectNone(&body_buf);
+                ts.seen_body_len = body_reader.readSliceShort(&ts.seen_body) catch 0;
+            }
             req.respond("pong", .{ .status = .created, .keep_alive = false }) catch return;
         }
     }
