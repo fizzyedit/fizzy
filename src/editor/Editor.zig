@@ -3175,7 +3175,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // the same values; see `core.dialogs.Style`.
     {
         const fill: dvui.Color = dvui.themeGet().color(.content, .fill);
-        const chrome = if (editor.app.host.appliesNativeWindowOpacity() and !editor.app.host.isMaximized()) fill else fill;
+        const chrome = fill;
         fizzy.core.dialogs.publishStyle(.{
             .modal_dim = editor.app.settings.modal_dim,
             .opacity = editor.app.settings.dialog_opacity,

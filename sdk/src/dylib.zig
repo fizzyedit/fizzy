@@ -22,6 +22,7 @@ const settings_mod = @import("settings.zig");
 const Host = @import("Host.zig");
 const Plugin = @import("Plugin.zig");
 const DocHandle = @import("DocHandle.zig");
+const Surface = @import("Surface.zig");
 const EditorAPI = @import("EditorAPI.zig");
 const menus = @import("menus.zig");
 const Command = @import("Command.zig");
@@ -121,6 +122,16 @@ const sdk_boundary_types = .{
     language_mod.CompletionKind,
     language_mod.SignatureHelpResult,
     Host.FileRowFillColor,
+    // Everything `Host` keeps in an `ArrayListUnmanaged` and both sides read out of: the list's
+    // backing slice is a *data* pointer `hashType` never follows, so without an entry here a
+    // field added to one of these changes the real cross-plugin layout while the fingerprint
+    // says nothing moved. `Surface` is the one that matters most — a plugin registers them and
+    // another plugin reads them back through `Region.matching` — and the other three go the same
+    // way (`services`, `painters`, `file_kinds`). Same lesson as `CompletionItem` / `Setting`.
+    Surface,
+    Host.ServiceEntry,
+    Host.Painter,
+    Host.FileKind,
     // `SettingsSchema.fields` is a slice (a *data* pointer `hashType` deliberately never
     // follows — see the comment above `HoverResult` et al.), so `Setting` needs its own explicit
     // entry too, the same lesson `CompletionItem`/`CompletionKind` learned: without it, a

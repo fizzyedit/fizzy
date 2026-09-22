@@ -574,10 +574,11 @@
         for (let i = 0; i < pluginEntryPoints.length; i++) indices[i] = base + i;
         loadedPlugins.set(url, instance);
         host.exports.FizzyWebPluginReady(req, list, pluginEntryPoints.length);
-        // Remembered under the id the host asked for, never one guessed from the file name: a
-        // release asset, a CDN URL with a hash, or a local `atlas-v2.wasm` are all the same
-        // plugin, and the host forgets by id.
-        rememberPlugin(id, url);
+        // Deliberately not remembered here. Linking a module says nothing about whether this
+        // host will run it — the fingerprint, SDK version and declared id are checked after
+        // `FizzyWebPluginReady`, in `PluginLoader_web.loadAndRegister` — and a build remembered
+        // at this point would be re-fetched and re-refused on every later visit. The host calls
+        // `fizzy_web_plugin_remember` once the plugin has actually registered.
       }
 
       function hideUnplacedOverlays() {

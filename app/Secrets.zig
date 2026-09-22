@@ -47,21 +47,31 @@ pub fn get(self: *Secrets, key: []const u8) ?[]const u8 {
 }
 
 /// Store `value` under `key` and write the file. An empty value is the same as `remove`.
+///
+/// Once the map holds `v` it owns it, so nothing here may free it on a later failure: an
+/// `errdefer` that outlived the `put` left the map pointing at freed memory, and the next `get`
+/// handed that out. On the web it did so every single time — `save` always fails there (memory
+/// only, no file), so every `set` both stored the value and freed it.
 pub fn set(self: *Secrets, key: []const u8, value: []const u8) !void {
     if (value.len == 0) return self.remove(key);
     self.load();
     const v = try self.gpa.dupe(u8, value);
-    errdefer self.gpa.free(v);
-    if (self.values.getEntry(key)) |e| {
-        @memset(e.value_ptr.*, 0);
-        self.gpa.free(e.value_ptr.*);
-        e.value_ptr.* = v;
-    } else {
-        const k = try self.gpa.dupe(u8, key);
-        errdefer self.gpa.free(k);
-        try self.values.put(self.gpa, k, v);
+    {
+        errdefer self.gpa.free(v);
+        if (self.values.getEntry(key)) |e| {
+            @memset(e.value_ptr.*, 0);
+            self.gpa.free(e.value_ptr.*);
+            e.value_ptr.* = v;
+        } else {
+            const k = try self.gpa.dupe(u8, key);
+            errdefer self.gpa.free(k);
+            try self.values.put(self.gpa, k, v);
+        }
     }
-    try self.save();
+    self.save() catch |err| {
+        if (comptime builtin.target.cpu.arch == .wasm32) return;
+        return err;
+    };
 }
 
 pub fn remove(self: *Secrets, key: []const u8) !void {
