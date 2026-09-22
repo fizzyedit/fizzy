@@ -54,40 +54,26 @@ jobs:
       # offline against the populated global cache. Note `--fetch=all` is NOT
       # usable here: it walks lazy deps of deps that this build never reaches
       # (old-format hashes, freetype's savannah tarball), and fails on them.
+      #
+      # This covers the *eager* tree only. A `.lazy = true` dependency is fetched by the build
+      # step that first asks for it — `icons` is reached solely through `build/web.zig`'s
+      # `lazyDependency`, so it is fetched from inside `zig build`, where this loop cannot help.
+      # That is why the build steps below go through `scripts/ci-retry.sh`, which retries a
+      # command only when its output names a fetch failure.
       - name: Fetch dependencies (with retries)
         shell: bash
-        run: |
-          n=0
-          until [ "$n" -ge 5 ]; do
-            zig build --fetch && break
-            n=$((n+1))
-            echo "Fetch attempt $n failed, sleeping $((n*10))s before retry..."
-            sleep $((n*10))
-          done
-          if [ "$n" -ge 5 ]; then
-            echo "All fetch attempts failed"; exit 1
-          fi
+        run: bash scripts/ci-retry.sh zig build --fetch
       - name: Run tests
         shell: bash
-        run: zig build test --summary all
+        run: bash scripts/ci-retry.sh zig build test --summary all
 
       - name: Fetch wasm dependencies (with retries)
         shell: bash
-        run: |
-          n=0
-          until [ "$n" -ge 5 ]; do
-            zig build --fetch -Dtarget=wasm32-freestanding && break
-            n=$((n+1))
-            echo "Fetch attempt $n failed, sleeping $((n*10))s before retry..."
-            sleep $((n*10))
-          done
-          if [ "$n" -ge 5 ]; then
-            echo "All fetch attempts failed"; exit 1
-          fi
+        run: bash scripts/ci-retry.sh zig build --fetch -Dtarget=wasm32-freestanding
 
       - name: Compile web (wasm) build
         shell: bash
-        run: zig build check-web
+        run: bash scripts/ci-retry.sh zig build check-web
 
       # Fizzy consumed as a library by an outside package. This is the only check that can
       # catch a path resolving against the consumer's cwd instead of fizzy's build root — the
@@ -98,10 +84,12 @@ jobs:
         run: |
           for app in examples/hello-plugin examples/minimal-app examples/studio-app examples/endless-app; do
             echo "::group::$app"
-            (cd "$app" && zig build --summary all)
+            # Each example is its own package and fetches its own copy of the tree, so each one
+            # is another handful of chances to meet a closed connection.
+            (cd "$app" && bash "$GITHUB_WORKSPACE/scripts/ci-retry.sh" zig build --summary all)
             echo "::endgroup::"
           done
 
       - name: Verify SDK version / ABI fingerprint lock
         shell: bash
-        run: zig build test-sdk-version --summary all
+        run: bash scripts/ci-retry.sh zig build test-sdk-version --summary all
