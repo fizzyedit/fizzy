@@ -19,6 +19,7 @@ comptime {
 
 const wasm = struct {
     extern "fizzy" fn fizzy_web_oauth_open(url_ptr: [*]const u8, url_len: usize) void;
+    extern "fizzy" fn fizzy_web_oauth_open_page(html_ptr: [*]const u8, html_len: usize, hash_ptr: [*]const u8, hash_len: usize) void;
     /// Writes the callback URL into `buf`; returns the length it needs (may exceed `len`).
     extern "fizzy" fn fizzy_web_oauth_callback_url(buf: [*]u8, len: usize) usize;
 };
@@ -43,6 +44,16 @@ pub fn begin(allocator: std.mem.Allocator, url: []const u8, cb: DoneFn, ctx: ?*a
     if (pending != null) return error.Busy;
     pending = .{ .allocator = allocator, .cb = cb, .ctx = ctx };
     wasm.fizzy_web_oauth_open(url.ptr, url.len);
+}
+
+/// The same round trip through a page the caller carries (`html`, a whole document) rather
+/// than one served beside the app: the page opens from a same-origin blob URL with `hash` as
+/// its fragment, and posts `{ fizzyOAuth }` to the opener like `oauth-callback.html` does.
+/// How a plugin loaded at runtime brings its own picker — nothing of it needs serving.
+pub fn beginPage(allocator: std.mem.Allocator, html: []const u8, hash: []const u8, cb: DoneFn, ctx: ?*anyopaque) error{Busy}!void {
+    if (pending != null) return error.Busy;
+    pending = .{ .allocator = allocator, .cb = cb, .ctx = ctx };
+    wasm.fizzy_web_oauth_open_page(html.ptr, html.len, hash.ptr, hash.len);
 }
 
 pub fn cancel() void {

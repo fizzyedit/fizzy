@@ -168,6 +168,42 @@
       // the *callbacks* go to whichever instance made the call — a plugin exports its own
       // `FizzyWebRequestReady` and friends, with state of its own behind them — so this is a
       // factory over the instance to call back into.
+      function oauthPopup(inst, url, cleanup) {
+        const done = () => { if (cleanup) cleanup(); };
+        const fail = () => {
+          done();
+          inst.exports.FizzyWebOAuthFailed();
+          if (dvuiApp) dvuiApp.requestRender();
+        };
+        let settled = false;
+        const onMessage = (ev) => {
+          if (ev.origin !== location.origin || !ev.data || typeof ev.data.fizzyOAuth !== "string") return;
+          settled = true;
+          window.removeEventListener("message", onMessage);
+          done();
+          const bytes = utf8encode(ev.data.fizzyOAuth);
+          const ptr = inst.exports.FizzyWebOAuthAlloc(bytes.length);
+          if (!ptr) return fail();
+          new Uint8Array(wasmInstance.exports.memory.buffer, ptr, bytes.length).set(bytes);
+          inst.exports.FizzyWebOAuthResult(ptr, bytes.length);
+          if (dvuiApp) dvuiApp.requestRender();
+        };
+        window.addEventListener("message", onMessage);
+        const popup = window.open(url, "fizzy-oauth", "popup,width=520,height=680");
+        if (!popup) {
+          window.removeEventListener("message", onMessage);
+          return fail();
+        }
+        const watch = setInterval(() => {
+          if (settled) return clearInterval(watch);
+          if (popup.closed) {
+            clearInterval(watch);
+            window.removeEventListener("message", onMessage);
+            fail();
+          }
+        }, 500);
+      }
+
       const fizzyImports = (target) => ({
           fizzy_web_image_request(id, urlPtr, urlLen) {
             const inst = target();
@@ -270,40 +306,28 @@
           // A web OAuth round trip for whichever plugin asks (core/transport/WebOAuth.zig): open
           // the provider's URL in a popup and hand back what it redirected to
           // oauth-callback.html with. Provider-agnostic on purpose.
+          // The popup round trip: open `url`, wait for the page it ends on to post its
+          // location back (`oauth-callback.html`, or a page of the plugin's own that does the
+          // same), fail if the popup closes first. Bound to the instance that asked, whose
+          // `FizzyWebOAuth*` exports carry the answer.
           fizzy_web_oauth_open(urlPtr, urlLen) {
             const inst = target();
             if (!inst) return;
             const url = utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, urlPtr, urlLen));
-            const fail = () => {
-              inst.exports.FizzyWebOAuthFailed();
-              if (dvuiApp) dvuiApp.requestRender();
-            };
-            let settled = false;
-            const onMessage = (ev) => {
-              if (ev.origin !== location.origin || !ev.data || typeof ev.data.fizzyOAuth !== "string") return;
-              settled = true;
-              window.removeEventListener("message", onMessage);
-              const bytes = utf8encode(ev.data.fizzyOAuth);
-              const ptr = inst.exports.FizzyWebOAuthAlloc(bytes.length);
-              if (!ptr) return fail();
-              new Uint8Array(wasmInstance.exports.memory.buffer, ptr, bytes.length).set(bytes);
-              inst.exports.FizzyWebOAuthResult(ptr, bytes.length);
-              if (dvuiApp) dvuiApp.requestRender();
-            };
-            window.addEventListener("message", onMessage);
-            const popup = window.open(url, "fizzy-oauth", "popup,width=520,height=680");
-            if (!popup) {
-              window.removeEventListener("message", onMessage);
-              return fail();
-            }
-            const watch = setInterval(() => {
-              if (settled) return clearInterval(watch);
-              if (popup.closed) {
-                clearInterval(watch);
-                window.removeEventListener("message", onMessage);
-                fail();
-              }
-            }, 500);
+            oauthPopup(inst, url);
+          },
+          // The same round trip through a page the plugin *carries* rather than one served
+          // beside the app: `html` becomes a same-origin blob URL (so its `postMessage` to
+          // the opener passes the origin check), with `hash` as the fragment the page reads.
+          // How a plugin loaded at runtime brings its own picker.
+          fizzy_web_oauth_open_page(htmlPtr, htmlLen, hashPtr, hashLen) {
+            const inst = target();
+            if (!inst) return;
+            const mem = wasmInstance.exports.memory.buffer;
+            const html = utf8.decode(new Uint8Array(mem, htmlPtr, htmlLen));
+            const hash = utf8.decode(new Uint8Array(mem, hashPtr, hashLen));
+            const blobUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+            oauthPopup(inst, blobUrl + (hash.length ? "#" + hash : ""), () => URL.revokeObjectURL(blobUrl));
           },
           // Load a plugin built for the web (see `loadPlugin` below) and report back through
           // `FizzyWebPluginReady` / `FizzyWebPluginFailed` on the host.
