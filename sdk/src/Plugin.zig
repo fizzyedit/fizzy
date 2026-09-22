@@ -58,6 +58,19 @@ display_name: []const u8,
 /// close walk once the save settles.
 pub const SaveConfirmMode = enum { editor_save, save_and_close };
 
+/// One thing a plugin can create from the New File flow, when it can create more than one.
+/// The host shows these instead of the plugin itself — `title` is what the user reads, `id` is
+/// what comes back to `requestNewDocumentDialog` as its `kind`.
+pub const NewDocumentKind = struct {
+    /// Stable, plugin-local identifier, handed back on dispatch. Never shown.
+    id: []const u8,
+    /// What the user reads in the chooser ("Sprite", "Palette", "Daily note").
+    title: []const u8,
+    /// Optional TVG icon bytes (e.g. `icons.tvg.lucide.file_plus`), as `Command.icon` takes.
+    /// Absent falls back to the plugin's own store icon, so a kind never draws a placeholder.
+    icon: ?[]const u8 = null,
+};
+
 // Every field below is an optional fn pointer, so the type system requires *nothing*. But to
 // function as an **editor** (open / draw / save files) a plugin must implement the document
 // cluster — the load+staging hooks (`documentStackSize`/`documentStackAlign`/
@@ -165,11 +178,20 @@ pub const VTable = struct {
     documentDefaultSaveAsFilename: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]const u8 = null,
     saveDocumentAs: ?*const fn (state: *anyopaque, doc: DocHandle, path: []const u8, window: *dvui.Window) anyerror!void = null,
     resetDocumentSaveUIState: ?*const fn (state: *anyopaque, doc: DocHandle) void = null,
-    /// Open the owner's "new document" dialog. Not doc-scoped — the host dispatches to a plugin
-    /// that provides one (see `Host.requestNewDocument`). `parent_path` (when set) creates the
-    /// document on disk in that folder; `id_extra` disambiguates per-explorer-row launches.
-    /// TODO: with more than one editor plugin this becomes a typed "New > <kind>" chooser.
-    requestNewDocumentDialog: ?*const fn (state: *anyopaque, parent_path: ?[]const u8, id_extra: usize) void = null,
+    /// The distinct kinds of document this plugin can create, when it can create more than one
+    /// — a sprite and a palette, a note and a daily note. Absent (or empty) means the plugin
+    /// creates one kind and the New File flow names it by the plugin itself.
+    ///
+    /// The host expands these into the New File chooser: one entry per kind rather than one per
+    /// plugin, so the user picks *what to make*, not *who makes it*. The returned slice must
+    /// outlive the call (a comptime literal is the usual answer).
+    newDocumentKinds: ?*const fn (state: *anyopaque) []const NewDocumentKind = null,
+    /// Open the owner's "new document" flow. Not doc-scoped — the host dispatches to a plugin
+    /// that provides one (see `Host.requestNewDocument`). `kind` is the `NewDocumentKind.id` the
+    /// user chose, or null for the plugin's only/default kind — a plugin that declares no kinds
+    /// can ignore it. `parent_path` (when set) creates the document on disk in that folder;
+    /// `id_extra` disambiguates per-explorer-row launches.
+    requestNewDocumentDialog: ?*const fn (state: *anyopaque, kind: ?[]const u8, parent_path: ?[]const u8, id_extra: usize) void = null,
 
     // ---- render hooks (the plugin draws its own dvui UI into the host window) ----
     // Sidebar/explorer panes and bottom-panel tabs are NOT vtable hooks — plugins
@@ -600,8 +622,14 @@ pub fn settingsChanged(self: Plugin, blob: []const u8) void {
     if (self.vtable.settingsChanged) |f| f(self.state, blob);
 }
 
-pub fn requestNewDocumentDialog(self: Plugin, parent_path: ?[]const u8, id_extra: usize) void {
-    if (self.vtable.requestNewDocumentDialog) |f| f(self.state, parent_path, id_extra);
+pub fn requestNewDocumentDialog(self: Plugin, kind: ?[]const u8, parent_path: ?[]const u8, id_extra: usize) void {
+    if (self.vtable.requestNewDocumentDialog) |f| f(self.state, kind, parent_path, id_extra);
+}
+
+/// The kinds this plugin offers in the New File flow; empty when it declares none.
+pub fn newDocumentKinds(self: Plugin) []const NewDocumentKind {
+    const f = self.vtable.newDocumentKinds orelse return &.{};
+    return f(self.state);
 }
 
 pub fn beginFrame(self: Plugin) void {

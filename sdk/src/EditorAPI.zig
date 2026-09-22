@@ -95,18 +95,19 @@ pub const VTable = struct {
     ) void,
     /// The actively focused open document, or null when none.
     activeDoc: *const fn (ctx: *anyopaque) ?DocHandle,
-    /// Open document by ordered index (tab order), or null when out of range.
+    /// Open document by index in **open order** — the order documents were opened, which is the
+    /// only order the host knows. It is not tab order: tabs belong to whichever plugin lays
+    /// documents out (the workbench, say), and only that plugin can answer in its own order.
+    /// Null when out of range.
     docByIndex: *const fn (ctx: *anyopaque, index: usize) ?DocHandle,
     /// Open document by stable id, or null when not open.
     docById: *const fn (ctx: *anyopaque, id: u64) ?DocHandle,
-    /// Ordered index of document `id`, or null when not open.
+    /// Index of document `id` in open order (see `docByIndex`), or null when not open.
     docIndex: *const fn (ctx: *anyopaque, id: u64) ?usize,
-    /// Number of open documents.
+    /// Number of open documents — the range `docByIndex` accepts.
     openDocCount: *const fn (ctx: *anyopaque) usize,
     /// Focus the document at `index` (updates workspace tab selection).
     setActiveDocIndex: *const fn (ctx: *anyopaque, index: usize) void,
-    /// Swap the open documents at indices `a` and `b` (used by tab drag-reorder). Fizzy
-    /// owns the open-document collection; this is the only mutation of its order plugins do.
     /// Allocate the next fizzy document id (monotonic).
     allocDocId: *const fn (ctx: *anyopaque) u64,
 

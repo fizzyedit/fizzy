@@ -620,7 +620,11 @@ the assignment list read back.
   own recursive watch; see below).
 - **Save protocol** — `saveNeedsConfirmation(doc)` + `requestSaveConfirmation(doc, mode, …)`.
 - **Contributions** — `contributeMenu`, `contributeKeybinds`.
-- **New document** — `requestNewDocumentDialog`.
+- **New document** — `requestNewDocumentDialog(kind, parent_path, id_extra)`, plus
+  `newDocumentKinds` when the plugin creates more than one kind of thing. The host expands the
+  kinds into the New File chooser — one entry per kind, not per plugin, so the user picks what to
+  make rather than who makes it — and hands the chosen `NewDocumentKind.id` back as `kind`. A
+  plugin that declares no kinds is one entry and always receives `kind == null`.
 
 #### Where a document lives is not the owner's problem
 

@@ -1495,29 +1495,71 @@ fn offersNewDocument(plugin: *const Plugin) bool {
 /// a picker (`showNewDocumentChooser`) is shown first; the user's choice is then dispatched the
 /// same way a lone candidate would be.
 pub fn requestNewDocument(self: *Host, parent_path: ?[]const u8, id_extra: usize) void {
-    var candidate: ?*Plugin = null;
-    var candidate_count: usize = 0;
-    for (self.plugins.items) |plugin| {
-        if (offersNewDocument(plugin)) {
-            candidate_count += 1;
-            if (candidate == null) candidate = plugin;
-        }
+    var only: ?Candidate = null;
+    var count: usize = 0;
+    var it = self.newDocumentCandidates();
+    while (it.next()) |c| {
+        count += 1;
+        if (only == null) only = c;
     }
 
-    if (candidate_count >= 2) {
+    if (count >= 2) {
         showNewDocumentChooser(parent_path, id_extra);
         return;
     }
 
-    const only = candidate orelse return;
-    self.dispatchNewDocumentToPlugin(only, parent_path, id_extra);
+    const single = only orelse return;
+    self.dispatchNewDocumentToPlugin(single.plugin, single.kind, parent_path, id_extra);
 }
+
+/// One entry in the New File flow: a plugin, and which of its kinds this entry stands for.
+/// A plugin that declares no kinds contributes exactly one entry with `kind == null`.
+pub const Candidate = struct {
+    plugin: *Plugin,
+    kind: ?Plugin.NewDocumentKind = null,
+};
+
+/// Walks every plugin that offers a new document, expanded by kind — so a plugin offering a
+/// sprite and a palette is two entries, and the chooser asks what to make rather than who
+/// should make it. Ordered by plugin registration, then by the plugin's own kind order.
+pub fn newDocumentCandidates(self: *Host) CandidateIterator {
+    return .{ .host = self };
+}
+
+pub const CandidateIterator = struct {
+    host: *Host,
+    plugin_index: usize = 0,
+    kind_index: usize = 0,
+
+    pub fn next(self: *CandidateIterator) ?Candidate {
+        while (self.plugin_index < self.host.plugins.items.len) {
+            const plugin = self.host.plugins.items[self.plugin_index];
+            if (!offersNewDocument(plugin)) {
+                self.plugin_index += 1;
+                continue;
+            }
+            const kinds = plugin.newDocumentKinds();
+            if (kinds.len == 0) {
+                self.plugin_index += 1;
+                return .{ .plugin = plugin };
+            }
+            if (self.kind_index < kinds.len) {
+                const kind = kinds[self.kind_index];
+                self.kind_index += 1;
+                return .{ .plugin = plugin, .kind = kind };
+            }
+            self.plugin_index += 1;
+            self.kind_index = 0;
+        }
+        return null;
+    }
+};
 
 /// Hand the "new document" flow to a specific plugin: its own dialog if it has one, otherwise
 /// straight to an untitled in-memory document. `owner` must satisfy `offersNewDocument` (the
 /// only two callers — `requestNewDocument`'s single-candidate path and the chooser dialog's
 /// button handler — both filter on that already).
-fn dispatchNewDocumentToPlugin(self: *Host, owner: *Plugin, parent_path: ?[]const u8, id_extra: usize) void {
+fn dispatchNewDocumentToPlugin(self: *Host, owner: *Plugin, kind: ?Plugin.NewDocumentKind, parent_path: ?[]const u8, id_extra: usize) void {
     // Only claim the pending slot for a plugin that can actually take the document back: it
     // exists to disambiguate a later `host.createDocument(path, grid)`, and a utility plugin
     // never makes that call. Leaving a stale owner parked here would misroute the *next*
@@ -1525,7 +1567,7 @@ fn dispatchNewDocumentToPlugin(self: *Host, owner: *Plugin, parent_path: ?[]cons
     self.pending_new_document_owner = if (owner.vtable.createDocument != null) owner else null;
 
     if (owner.vtable.requestNewDocumentDialog) |f| {
-        f(owner.state, parent_path, id_extra);
+        f(owner.state, if (kind) |k| k.id else null, parent_path, id_extra);
         return;
     }
     self.createUntitledDocumentDirect(parent_path) catch |err| {
@@ -1574,27 +1616,40 @@ fn newDocumentChooserDisplay(id: dvui.Id) anyerror!bool {
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(12) });
     defer outer.deinit();
 
-    dvui.label(@src(), "Which plugin should create the file?", .{}, .{ .font = dvui.Font.theme(.body) });
+    var any_kind = false;
+    {
+        var probe = host.newDocumentCandidates();
+        while (probe.next()) |c| {
+            if (c.kind != null) {
+                any_kind = true;
+                break;
+            }
+        }
+    }
+    dvui.labelNoFmt(
+        @src(),
+        if (any_kind) "What would you like to create?" else "Which plugin should create the file?",
+        .{},
+        .{ .font = dvui.Font.theme(.body) },
+    );
     _ = dvui.spacer(@src(), .{ .min_size_content = .{ .w = 8, .h = 16 } });
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .gravity_x = 0.5 });
     defer row.deinit();
 
     var index: usize = 0;
-    for (host.plugins.items) |plugin| {
-        if (!offersNewDocument(plugin)) continue;
-        defer index += 1;
-
+    var it = host.newDocumentCandidates();
+    while (it.next()) |candidate| : (index += 1) {
         var cell = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = index, .margin = .all(6) });
         defer cell.deinit();
 
-        if (newDocumentChooserButton(host, plugin, index)) {
-            host.dispatchNewDocumentToPlugin(plugin, parent_path, id_extra);
+        if (newDocumentChooserButton(host, candidate, index)) {
+            host.dispatchNewDocumentToPlugin(candidate.plugin, candidate.kind, parent_path, id_extra);
             core.dialogs.closeFloatingDialogAnchored();
         }
 
         _ = dvui.spacer(@src(), .{ .id_extra = index, .min_size_content = .{ .w = 1, .h = 6 } });
-        dvui.labelNoFmt(@src(), plugin.display_name, .{}, .{
+        dvui.labelNoFmt(@src(), if (candidate.kind) |k| k.title else candidate.plugin.display_name, .{}, .{
             .id_extra = index,
             .gravity_x = 0.5,
             .font = dvui.Font.theme(.body),
@@ -1608,7 +1663,8 @@ fn newDocumentChooserDisplay(id: dvui.Id) anyerror!bool {
 /// aesthetic). Falls back to a large initial-letter monogram when the plugin has no registered
 /// store icon — the name itself is already shown in the caption label below the button, so
 /// repeating it inside the button too would just be the same text twice.
-fn newDocumentChooserButton(host: *Host, plugin: *Plugin, index: usize) bool {
+fn newDocumentChooserButton(host: *Host, candidate: Candidate, index: usize) bool {
+    const plugin = candidate.plugin;
     const theme = dvui.themeGet();
     const size: f32 = 64;
 
@@ -1635,7 +1691,18 @@ fn newDocumentChooserButton(host: *Host, plugin: *Plugin, index: usize) bool {
     bw.drawFocus();
     bw.drawBackground();
 
-    if (!host.drawPluginIcon(plugin.id)) {
+    const drew_kind_icon = if (candidate.kind) |k| blk: {
+        const bytes = k.icon orelse break :blk false;
+        core.icon.icon(@src(), k.id, bytes, .{}, .{
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+            .min_size_content = .{ .w = 32, .h = 32 },
+            .color_text = .{ .color = dvui.themeGet().color(.window, .text) },
+        });
+        break :blk true;
+    } else false;
+
+    if (!drew_kind_icon and !host.drawPluginIcon(plugin.id)) {
         const initial = [1]u8{if (plugin.display_name.len > 0) std.ascii.toUpper(plugin.display_name[0]) else '?'};
         dvui.labelNoFmt(@src(), &initial, .{}, .{
             .gravity_x = 0.5,
@@ -1973,4 +2040,45 @@ test "several providers can share one name, which is what a hook is" {
     // caller of a one-provider service expects.
     const first = host.getServiceTyped(Hook) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(@as(u32, 1), first.id);
+}
+
+test "new-document candidates expand a plugin's kinds, one entry each" {
+    const Fake = struct {
+        fn kinds(_: *anyopaque) []const Plugin.NewDocumentKind {
+            return &.{
+                .{ .id = "sprite", .title = "Sprite" },
+                .{ .id = "palette", .title = "Palette" },
+            };
+        }
+        fn dialog(_: *anyopaque, _: ?[]const u8, _: ?[]const u8, _: usize) void {}
+        fn create(_: *anyopaque, _: []const u8, _: EditorAPI.NewDocGrid, _: *anyopaque) anyerror!void {}
+    };
+
+    var host = Host.init(testing.allocator);
+    defer host.deinit();
+
+    // Offers two kinds through its own dialog.
+    const pixi_vt = Plugin.VTable{ .requestNewDocumentDialog = Fake.dialog, .newDocumentKinds = Fake.kinds };
+    // Creates documents but names no kinds: one entry, the plugin itself.
+    const text_vt = Plugin.VTable{ .createDocument = Fake.create };
+    // Neither creates nor offers a dialog: not in the flow at all.
+    const viewer_vt = Plugin.VTable{};
+    var pixi = Plugin{ .state = undefined, .vtable = &pixi_vt, .id = "pixi", .display_name = "Pixi" };
+    var text = Plugin{ .state = undefined, .vtable = &text_vt, .id = "text", .display_name = "Text" };
+    var viewer = Plugin{ .state = undefined, .vtable = &viewer_vt, .id = "image", .display_name = "Image" };
+    try host.registerPlugin(&pixi);
+    try host.registerPlugin(&text);
+    try host.registerPlugin(&viewer);
+
+    var it = host.newDocumentCandidates();
+    const first = it.next().?;
+    try testing.expectEqual(&pixi, first.plugin);
+    try testing.expectEqualStrings("sprite", first.kind.?.id);
+    const second = it.next().?;
+    try testing.expectEqual(&pixi, second.plugin);
+    try testing.expectEqualStrings("palette", second.kind.?.id);
+    const third = it.next().?;
+    try testing.expectEqual(&text, third.plugin);
+    try testing.expectEqual(@as(?Plugin.NewDocumentKind, null), third.kind);
+    try testing.expectEqual(@as(?Host.Candidate, null), it.next());
 }
