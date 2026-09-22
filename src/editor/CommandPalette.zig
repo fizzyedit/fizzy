@@ -493,14 +493,10 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
         // not theme text (which is light on dark themes and looked wrong).
         .color_text = .black,
         .color_fill = .{ .color = fizzy.core.dialogs.dialogFill() },
-        .corners = dvui.CornerRect.all(8),
-        .padding = dvui.Rect.all(6),
+        .corners = fizzy.core.dialogs.surface_corners,
+        .padding = fizzy.core.dialogs.surface_padding,
         .border = .all(0),
-        .box_shadow = .{
-            .fade = 8,
-            .corners = .all(8),
-            .alpha = 0.25,
-        },
+        .box_shadow = fizzy.core.dialogs.surfaceShadow(),
     });
     // `deinit` writes the live (animated) rect back into `fw_rect`, which is how the height
     // carries to the next frame. Only the axes we own are restored.
@@ -718,9 +714,9 @@ fn drawRow(
     const is_activated = if (self.activated) |a| a == i else false;
     const is_selected = i == self.selected;
     if (is_activated) {
-        row_r.fill(.all(4), .{ .color = .{ .color = theme.color(.control, .fill_press) } });
+        row_r.fill(.all(fizzy.core.dialogs.row_radius), .{ .color = .{ .color = fizzy.core.dialogs.rowPress() } });
     } else if (is_selected) {
-        row_r.fill(.all(4), .{ .color = .{ .color = theme.color(.control, .fill_hover) } });
+        row_r.fill(.all(fizzy.core.dialogs.row_radius), .{ .color = .{ .color = fizzy.core.dialogs.rowHover() } });
     }
 
     if (is_selected and self.scroll_to_selected) {

@@ -23,7 +23,9 @@ win: *FloatingWindowWidget,
 /// The window's rect this frame, physical. Where a press counts as inside.
 rect: dvui.Rect.Physical,
 
-pub const corners: dvui.CornerRect = .all(8);
+/// The shared surface radius (`core.dialogs`), re-exported because callers anchor submenus
+/// against it.
+pub const corners: dvui.CornerRect = dialogs.surface_corners;
 
 pub const InitOptions = struct {
     /// Persistent, caller-owned: the window animates its size through it across frames. Zero
@@ -54,14 +56,9 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: InitOptions) Popover {
         .color_text = .{ .color = theme.color(.control, .text) },
         .color_fill = .{ .color = dialogs.dialogFill() },
         .corners = corners,
-        .padding = .all(6),
+        .padding = dialogs.surface_padding,
         .border = .all(0),
-        .box_shadow = .{
-            .color = .black,
-            .fade = 8,
-            .corners = corners,
-            .alpha = 0.25,
-        },
+        .box_shadow = dialogs.surfaceShadow(),
     });
     // Not a window anyone drags: no drag area, so the pointer over it is not the move cursor.
     win.dragAreaSet(.{});

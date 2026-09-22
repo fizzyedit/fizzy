@@ -34,8 +34,7 @@ pub fn draw(editor: *Editor) !dvui.App.Result {
     const prev_highlight = dvui.themeGet().highlight;
     const prev_focus = dvui.themeGet().focus;
     var theme = dvui.themeGet();
-    const veil: dvui.Color = if (theme.dark) .white else .black;
-    const wash = veil.opacity(if (theme.dark) 0.16 else 0.12);
+    const wash = chrome.rowHover();
     theme.highlight.fill = wash;
     theme.focus = wash;
     dvui.themeSet(theme);
@@ -59,10 +58,9 @@ pub fn draw(editor: *Editor) !dvui.App.Result {
 
 // ---- chrome: a menu popup is the same surface as a flyout or a dialog ------------------------
 
-/// Corners every menu popup and row is cut with — `core.widgets.Popover.corners` for the panel,
-/// a slightly tighter radius for the rows inside it, exactly as the account flyout does.
-const popup_corners: dvui.CornerRect = fizzy.core.widgets.Popover.corners;
-const row_corners: dvui.CornerRect = .all(6);
+/// The one description of a floating surface and its rows (`core.dialogs`): the same fill,
+/// corners, padding, shadow and hover the command palette, the dialogs and the flyouts use.
+const chrome = fizzy.core.dialogs;
 
 /// One menu dropdown, drawn like every other floating surface in fizzy: frosted, rounded,
 /// shadowed, no border.
@@ -75,7 +73,7 @@ const row_corners: dvui.CornerRect = .all(6);
 /// in settings, or a host drawing its own chrome) the tint is painted as a plain translucent
 /// fill instead, so the panel is never transparent.
 fn menuPopup(src: std.builtin.SourceLocation, from: dvui.Rect.Natural, id_extra: usize) *dvui.FloatingMenuWidget {
-    return dvui.floatingMenu(src, .{ .from = from }, .{
+    const fw = dvui.floatingMenu(src, .{ .from = from }, .{
         .id_extra = id_extra,
         // The dialog fill, rounded and shadowed like every other floating surface. Painted by the
         // widget rather than by hand here: a `Rect.fill` at this level draws square whatever
@@ -87,46 +85,52 @@ fn menuPopup(src: std.builtin.SourceLocation, from: dvui.Rect.Natural, id_extra:
         // `init`, where nothing from out here can get in front of it. Giving
         // `dvui.FloatingMenuWidget` the `frost` option the window already has is the fix, and it
         // belongs in dvui rather than in a workaround here.
-        .background = true,
-        .color_fill = .{ .color = fizzy.core.dialogs.dialogFill() },
+        // No fill of its own: the panel is painted below, *after* the frost, which is the order
+        // a frosted surface needs (`FloatingWindowWidget.drawFrost`). The shadow does come from
+        // here, because the scroll area draws it during `init` — before the frost, where a
+        // shadow belongs.
+        .background = false,
         .border = .all(0),
-        .corners = popup_corners,
-        .padding = .all(6),
-        .box_shadow = .{
-            .color = .black,
-            .fade = 8,
-            .corners = popup_corners,
-            .alpha = 0.25,
-        },
+        .corners = chrome.surface_corners,
+        .padding = chrome.surface_padding,
+        .box_shadow = chrome.surfaceShadow(),
     });
+
+    // `finalize` against the widget's own theme, then scale: a `CornerRect` from `all()` carries
+    // the theme's corner *kind* at a size of our choosing (`Corner.finalize`), and painting by
+    // hand skips the resolution `WidgetData.init` would have done — an unresolved corner draws
+    // square, whatever radius it names. Finalizing here keeps the panel cut the way the theme
+    // cuts everything else, rather than hardcoding a round corner over the top of it.
+    const brs = fw.data().borderRectScale();
+    const corners = chrome.surface_corners.finalize(fw.data().options.themeGet());
+    _ = chrome.frostPane(fw.data().id, brs.r, corners, brs.s);
+    brs.r.fill(corners.scale(brs.s, dvui.CornerRect.Physical), .{
+        .color = .{ .color = chrome.dialogFill() },
+        .fade = 0,
+    });
+    return fw;
 }
 
-/// A menu row's own options: the shape, and the pair of fills a hover fades between.
+/// A menu row, drawn the way the command palette draws its rows: `row_corners`, and `rowHover`
+/// under the pointer.
 ///
-/// The fills are the point, twice over.
+/// The rest fill is that same hover colour at zero alpha, not a transparent background colour.
+/// dvui fades a row by lerping `color_fill` → `color_fill_hover` across all four channels, so
+/// starting from a different hue made the fade travel through it — a row darkening on the way
+/// in, and again on the way out after the pointer had left. From the hover colour itself, the
+/// fade is alpha alone.
 ///
-/// **Contrast.** The wash is a veil of the theme's own light or dark — white over a dark theme,
-/// black over a light one — rather than a colour from the palette. A palette fill is mixed for
-/// sitting on the *window*, and a menu panel is already lighter than the window (more so as the
-/// dialog opacity goes up), so `control.fill_hover` on top of it was almost invisible at opacity
-/// 1. A veil keeps the same contrast against whatever the panel happens to be.
-///
-/// **The fade.** dvui lerps `color_fill` → `color_fill_hover` across all four channels, so the
-/// rest fill is that same veil at zero alpha, not a transparent background colour: from a
-/// different hue, the fade travelled through it — visible as a row darkening on the way in, and
-/// again on the way out after the pointer had left.
+/// It also stops the row the pointer *last* crossed from sitting there filled: dvui paints a
+/// menu row when it is hovered **or focused**, and a menu leaves focus behind it.
 pub fn rowOptions(opts: dvui.Options) dvui.Options {
-    const theme = dvui.themeGet();
-    const veil: dvui.Color = if (theme.dark) .white else .black;
-    const wash = veil.opacity(if (theme.dark) 0.16 else 0.12);
+    const hover = chrome.rowHover();
     return opts.override(.{
-        .corners = row_corners,
-        .color_fill = .{ .color = wash.opacity(0) },
-        .color_fill_hover = .{ .color = wash },
+        .corners = chrome.row_corners,
+        .color_fill = .{ .color = hover.opacity(0) },
+        .color_fill_hover = .{ .color = hover },
         // The label does not change colour under the pointer: a row that both lights up and
-        // rewrites its text reads as two things happening (the same reason the account flyout's
-        // rows leave their text alone).
-        .color_text_hover = opts.color_text orelse .{ .color = theme.color(.window, .text) },
+        // rewrites its text reads as two things happening.
+        .color_text_hover = opts.color_text orelse .{ .color = dvui.themeGet().color(.window, .text) },
     });
 }
 
