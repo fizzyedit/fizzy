@@ -103,7 +103,6 @@ const wasm = struct {
     extern "fizzy" fn fizzy_web_plugin_load(req: u32, id_ptr: [*]const u8, id_len: usize, url_ptr: [*]const u8, url_len: usize) void;
     extern "fizzy" fn fizzy_web_plugin_forget(id_ptr: [*]const u8, id_len: usize) void;
     extern "fizzy" fn fizzy_web_plugin_remember(id_ptr: [*]const u8, id_len: usize, url_ptr: [*]const u8, url_len: usize) void;
-    extern "fizzy" fn fizzy_web_reload() void;
 };
 
 /// Drop `id` from the plugins the page brings back on the next visit (the page remembers
@@ -112,17 +111,11 @@ pub fn forget(id: []const u8) void {
     wasm.fizzy_web_plugin_forget(id.ptr, id.len);
 }
 
-/// Point `id` at `url` for the next visit, without linking anything now. This is what an update
-/// *is* here: a linked side module cannot be replaced in a running page (see this file's header),
-/// so the new version is what the page fetches the next time it starts.
+/// Point `id` at `url` for the next visit. Called once a module has *registered*, not when the
+/// page linked it: the page cannot tell whether this host will accept a build, and a remembered
+/// build that is refused would fail again on every visit.
 pub fn remember(id: []const u8, url: []const u8) void {
     wasm.fizzy_web_plugin_remember(id.ptr, id.len, url.ptr, url.len);
-}
-
-/// Reload the page, which is how a remembered update takes effect. The user asks for this — it
-/// throws away the session, so nothing calls it on its own.
-pub fn reload() void {
-    wasm.fizzy_web_reload();
 }
 
 /// What the page reports for a request, delivered on `pump`.

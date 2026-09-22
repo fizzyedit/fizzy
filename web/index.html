@@ -379,9 +379,6 @@
               utf8.decode(new Uint8Array(mem, urlPtr, urlLen)),
             );
           },
-          fizzy_web_reload() {
-            location.reload();
-          },
           fizzy_web_oauth_callback_url(bufPtr, bufLen) {
             const inst = target();
             if (!inst) return 0;

@@ -965,7 +965,11 @@ pub fn syncLoadedPluginRenderBridge(app: *App) void {
 
 /// Spin until none of `plugin`'s open documents report `isDocumentSaving`. Called from
 /// `unloadPlugin` on the GUI thread while the save-queue worker runs concurrently.
+///
+/// Nothing to wait for on the web, and nothing to wait *with*: there are no threads there, so a
+/// save either finished inline or is a frame-driven task this spin would deadlock against.
 pub fn waitForPluginSaves(app: *App, plugin: *sdk.Plugin) void {
+    if (comptime builtin.target.cpu.arch == .wasm32) return;
     while (app.pluginHasSavingDocs(plugin)) {
         std.Thread.yield() catch {};
     }

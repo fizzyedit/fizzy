@@ -1322,12 +1322,25 @@ pub fn loadUserPluginById(editor: *Editor, id: []const u8) !void {
     editor.app.clearFailedUserPlugin(id);
 }
 
+/// What the web load/update pair can fail with. Spelled out rather than inferred: the two call
+/// each other (a request for an id already running is an update), and inferred sets cannot.
+pub const WebLoadError = UnloadError || error{ OutOfMemory, NotUnloadable };
+
 /// Web: fetch and link a plugin built as a wasm side module from `url`, then register it
 /// exactly as `loadUserPluginById` would — on the frame the page reports it linked. `id` is
 /// what the plugin must declare. The URL is kept for the loaded-libs list.
-pub fn loadWebPlugin(editor: *Editor, id: []const u8, url: []const u8) !void {
+pub fn loadWebPlugin(editor: *Editor, id: []const u8, url: []const u8) WebLoadError!void {
     if (comptime builtin.target.cpu.arch != .wasm32) return error.NotUnloadable;
-    if (editor.app.host.pluginById(id) != null) return;
+    if (editor.app.host.pluginById(id) != null) {
+        // Already running. Asked for from somewhere else — a different build of the same id —
+        // that is an update, not a duplicate: hand the id to the new module (`updateWebPlugin`).
+        for (editor.app.loaded_plugin_libs.items) |loaded| {
+            if (!std.mem.eql(u8, loaded.plugin_id, id)) continue;
+            if (std.mem.eql(u8, loaded.path, url)) return; // the very same build
+            return editor.updateWebPlugin(id, url);
+        }
+        return;
+    }
     // Two requests for one id before the first lands (the page's remembered list and a
     // `?plugin=` of the same id, say) would register it twice; the second one waits for nothing.
     if (web_loads_in_flight.contains(id)) return;
@@ -1380,6 +1393,11 @@ const WebPluginRequest = struct {
             };
         }
         rebuildKeybinds(editor);
+        // Remembered here, not by the page when it linked the module: the page cannot know
+        // whether this host will accept the build (fingerprint, SDK version, declared id), and a
+        // remembered build that is refused would greet the user with the same failure every
+        // visit. What is remembered is what ran.
+        PluginLoader.remember(req.id, req.url);
         dvui.log.info("web plugin '{s}' loaded from {s}", .{ req.id, req.url });
         editor.app.host.refresh();
     }
@@ -1480,8 +1498,13 @@ fn cancelPluginLoadingJobs(editor: *Editor, plugin: *sdk.Plugin) void {
 /// Unload a runtime user plugin live: close its documents, tear down its contributions,
 /// deinit its state, then `dlclose`. With `force == false`, aborts with `DirtyDocuments`
 /// if any owned document is dirty (the caller decides whether to prompt/save first).
+/// On the web this unregisters the plugin without unmapping anything: a side module cannot leave
+/// the page's function table, so its code and data stay resident for the rest of the visit, inert.
+/// That is the whole difference — every other step (dirty documents, in-flight saves and loads,
+/// documents closed, contributions withdrawn, `deinit`) is the same, and `WebDynLib.close` is a
+/// no-op. Slices into the image stay readable afterwards, which is what makes the desktop's
+/// "persist before unload" hazard a non-issue here.
 pub fn unloadPlugin(editor: *Editor, id: []const u8, force: bool) UnloadError!void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return error.NotUnloadable;
     if (!editor.isUnloadablePlugin(id)) return error.NotUnloadable;
     const plugin = editor.app.host.pluginById(id) orelse return error.NotUnloadable;
 
@@ -1572,6 +1595,19 @@ pub fn setPluginEnabled(editor: *Editor, id: []const u8, enabled: bool, force: b
 /// The gap this leaves on purpose: an update that starts offering a *new* extension does not
 /// prompt. It falls through the normal resolution order (unique claimant, else the fallback
 /// editor), and Settings > File Types is where to override it.
+/// The web's update: link the new build alongside the old one and hand the id over. The page
+/// cannot unlink what it linked, so the previous module's code and data stay resident for the
+/// rest of the visit — a version's worth of memory per update, which is the price of not making
+/// the user reload. The new URL is remembered only once the new module has actually registered
+/// (`WebPluginRequest.arrived`), so a build this host refuses leaves the next visit pointed at
+/// the one that worked.
+pub fn updateWebPlugin(editor: *Editor, id: []const u8, url: []const u8) WebLoadError!void {
+    if (comptime builtin.target.cpu.arch != .wasm32) return error.NotUnloadable;
+    if (editor.app.host.pluginById(id) != null) try editor.unloadPlugin(id, true);
+    try editor.loadWebPlugin(id, url);
+    editor.rebuildExtensionOwnerCache();
+}
+
 pub fn updatePlugin(editor: *Editor, id: []const u8, force: bool) !void {
     if (isBundledPluginId(id)) return error.NotUnloadable;
     try editor.unloadPlugin(id, force);
@@ -1588,10 +1624,15 @@ pub fn updatePlugin(editor: *Editor, id: []const u8, force: bool) !void {
 /// handling on the unload.
 pub fn uninstallPlugin(editor: *Editor, id: []const u8, force: bool) !void {
     if (comptime builtin.target.cpu.arch == .wasm32) {
-        // A side module cannot leave the page; it stays until reload. What "uninstall" can do
-        // is forget it, so the next visit does not bring it back (see `loadWebPlugin`).
+        // The module itself stays in the page — nothing can unlink it — but the plugin goes now,
+        // and the page forgets it so the next visit does not bring it back.
         PluginLoader.forget(id);
-        return error.NotUnloadable;
+        editor.unloadPlugin(id, force) catch |err| switch (err) {
+            error.NotUnloadable => {}, // already gone
+            else => return err,
+        };
+        editor.rebuildExtensionOwnerCache();
+        return;
     }
     if (isBundledPluginId(id)) return error.NotUnloadable;
     if (editor.app.host.pluginById(id) != null) try editor.unloadPlugin(id, force);
@@ -5301,6 +5342,11 @@ const plugin_manager_vtable: PluginManager.VTable = .{
     .installFromUrl = struct {
         fn f(ctx: *anyopaque, id: []const u8, url: []const u8) anyerror!void {
             return pmSelf(ctx).loadWebPlugin(id, url);
+        }
+    }.f,
+    .updateFromUrl = struct {
+        fn f(ctx: *anyopaque, id: []const u8, url: []const u8) anyerror!void {
+            return pmSelf(ctx).updateWebPlugin(id, url);
         }
     }.f,
     .update = struct {

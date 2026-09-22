@@ -98,6 +98,9 @@ pub const VTable = struct {
     /// URL (there is no plugins directory to download into). Null for an app that does not
     /// load web plugins.
     installFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8) anyerror!void = null,
+    /// The web's update: link the build at `url` alongside the running one and hand the id over,
+    /// within the session. Null for an app that does not load web plugins.
+    updateFromUrl: ?*const fn (ctx: *anyopaque, id: []const u8, url: []const u8) anyerror!void = null,
     update: *const fn (ctx: *anyopaque, id: []const u8, force: bool) anyerror!void,
     uninstall: *const fn (ctx: *anyopaque, id: []const u8, force: bool) anyerror!void,
     setEnabled: *const fn (ctx: *anyopaque, id: []const u8, enabled: bool, force: bool) anyerror!void,
@@ -146,6 +149,10 @@ pub fn install(self: PluginManager, id: []const u8) anyerror!void {
 }
 pub fn installFromUrl(self: PluginManager, id: []const u8, url: []const u8) anyerror!void {
     const f = self.vtable.installFromUrl orelse return error.Unsupported;
+    return f(self.ctx, id, url);
+}
+pub fn updateFromUrl(self: PluginManager, id: []const u8, url: []const u8) anyerror!void {
+    const f = self.vtable.updateFromUrl orelse return error.Unsupported;
     return f(self.ctx, id, url);
 }
 pub fn update(self: PluginManager, id: []const u8, force: bool) anyerror!void {
