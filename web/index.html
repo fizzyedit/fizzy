@@ -331,11 +331,13 @@
           },
           // Load a plugin built for the web (see `loadPlugin` below) and report back through
           // `FizzyWebPluginReady` / `FizzyWebPluginFailed` on the host.
-          fizzy_web_plugin_load(req, urlPtr, urlLen) {
+          fizzy_web_plugin_load(req, idPtr, idLen, urlPtr, urlLen) {
             const inst = wasmInstance;
             if (!inst) return;
-            const url = utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, urlPtr, urlLen));
-            loadPlugin(req, url).then(() => {
+            const mem = wasmInstance.exports.memory.buffer;
+            const id = utf8.decode(new Uint8Array(mem, idPtr, idLen));
+            const url = utf8.decode(new Uint8Array(mem, urlPtr, urlLen));
+            loadPlugin(req, url, id).then(() => {
               if (dvuiApp) dvuiApp.requestRender();
             }).catch((err) => {
               console.error("fizzy: plugin load failed:", url, err);
@@ -366,6 +368,19 @@
           },
           fizzy_web_plugin_forget(idPtr, idLen) {
             forgetPlugin(utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, idPtr, idLen)));
+          },
+          // An update, on the web, is a change of which URL this page fetches next time: a side
+          // module already linked into the table cannot be replaced in a running page, so the
+          // new version is remembered now and linked on the next load.
+          fizzy_web_plugin_remember(idPtr, idLen, urlPtr, urlLen) {
+            const mem = wasmInstance.exports.memory.buffer;
+            rememberPlugin(
+              utf8.decode(new Uint8Array(mem, idPtr, idLen)),
+              utf8.decode(new Uint8Array(mem, urlPtr, urlLen)),
+            );
+          },
+          fizzy_web_reload() {
+            location.reload();
           },
           fizzy_web_oauth_callback_url(bufPtr, bufLen) {
             const inst = target();
@@ -515,7 +530,7 @@
         return needs;
       }
 
-      async function loadPlugin(req, url) {
+      async function loadPlugin(req, url, id) {
         const host = wasmInstance;
         const bytes = await (await fetch(url, { cache: "no-store" })).arrayBuffer();
         const module = await WebAssembly.compile(bytes);
@@ -562,10 +577,9 @@
         for (let i = 0; i < pluginEntryPoints.length; i++) indices[i] = base + i;
         loadedPlugins.set(url, instance);
         host.exports.FizzyWebPluginReady(req, list, pluginEntryPoints.length);
-        // The id is the segment before the file: `plugins/<id>/<id>.wasm`, or the store's
-        // `<id>-web-wasm32.wasm`; remembering by URL alone would do, but the host forgets by id.
-        const file = url.split("/").pop().split("?")[0];
-        const id = file.replace(/-web-wasm32\.wasm$/, "").replace(/\.wasm$/, "");
+        // Remembered under the id the host asked for, never one guessed from the file name: a
+        // release asset, a CDN URL with a hash, or a local `atlas-v2.wasm` are all the same
+        // plugin, and the host forgets by id.
         rememberPlugin(id, url);
       }
 

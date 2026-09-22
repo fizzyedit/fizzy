@@ -100,14 +100,29 @@ pub fn pluginExtension() []const u8 {
 // ---- the asynchronous half ------------------------------------------------------------------
 
 const wasm = struct {
-    extern "fizzy" fn fizzy_web_plugin_load(req: u32, url_ptr: [*]const u8, url_len: usize) void;
+    extern "fizzy" fn fizzy_web_plugin_load(req: u32, id_ptr: [*]const u8, id_len: usize, url_ptr: [*]const u8, url_len: usize) void;
     extern "fizzy" fn fizzy_web_plugin_forget(id_ptr: [*]const u8, id_len: usize) void;
+    extern "fizzy" fn fizzy_web_plugin_remember(id_ptr: [*]const u8, id_len: usize, url_ptr: [*]const u8, url_len: usize) void;
+    extern "fizzy" fn fizzy_web_reload() void;
 };
 
 /// Drop `id` from the plugins the page brings back on the next visit (the page remembers
 /// every plugin it linked, in `localStorage`, and requests them again at startup).
 pub fn forget(id: []const u8) void {
     wasm.fizzy_web_plugin_forget(id.ptr, id.len);
+}
+
+/// Point `id` at `url` for the next visit, without linking anything now. This is what an update
+/// *is* here: a linked side module cannot be replaced in a running page (see this file's header),
+/// so the new version is what the page fetches the next time it starts.
+pub fn remember(id: []const u8, url: []const u8) void {
+    wasm.fizzy_web_plugin_remember(id.ptr, id.len, url.ptr, url.len);
+}
+
+/// Reload the page, which is how a remembered update takes effect. The user asks for this — it
+/// throws away the session, so nothing calls it on its own.
+pub fn reload() void {
+    wasm.fizzy_web_reload();
 }
 
 /// What the page reports for a request, delivered on `pump`.
@@ -136,14 +151,16 @@ pub fn init(gpa: std.mem.Allocator) void {
     pending_gpa = gpa;
 }
 
-/// Ask the page to fetch and link `url`. `cb` is called from `pump` when it has, with the
-/// entry points or null.
-pub fn begin(gpa: std.mem.Allocator, url: []const u8, cb: ArrivedFn, ctx: ?*anyopaque) error{OutOfMemory}!u32 {
+/// Ask the page to fetch and link `url`. `cb` is called from `pump` when it has, with the entry
+/// points or null. `id` is the plugin this is meant to be: the page remembers a linked plugin
+/// under it, so that what comes back next visit is keyed by the plugin's real id rather than by
+/// whatever its file happens to be called.
+pub fn begin(gpa: std.mem.Allocator, id: []const u8, url: []const u8, cb: ArrivedFn, ctx: ?*anyopaque) error{OutOfMemory}!u32 {
     pending_gpa = gpa;
     const req = next_req;
     next_req += 1;
     try pending.append(gpa, .{ .req = req, .cb = cb, .ctx = ctx });
-    wasm.fizzy_web_plugin_load(req, url.ptr, url.len);
+    wasm.fizzy_web_plugin_load(req, id.ptr, id.len, url.ptr, url.len);
     return req;
 }
 

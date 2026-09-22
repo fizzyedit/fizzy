@@ -18,6 +18,9 @@ const store = @import("registry/store.zig");
 // probe* helpers, which compile everywhere. Only the `LoadedLib` list — which carries a
 // `DynLib` — has to come from the wasm stub, and that arrives through `PluginManager`.
 const PluginLoader = @import("PluginLoader.zig");
+/// The browser's loader, for the two things only it can do: point an id at a different URL for
+/// next time, and reload the page. Same selection as `app.store.Loader`.
+const WebLoader = if (builtin.target.cpu.arch == .wasm32) @import("PluginLoader_web.zig") else struct {};
 const PluginManager = @import("PluginManager.zig");
 /// Pretend two installed plugins have store updates waiting, so the update flow (the app's
 /// offer, or the silent path's logging) can be exercised without an actually out-of-date
@@ -51,6 +54,10 @@ pub const readme_center_id = "fizzy.store.readme";
 /// you stranded on a tab the new selection didn't ask for.
 const DetailTab = enum { details, changelog };
 var selected_detail_tab: DetailTab = .details;
+
+/// Web only: plugins whose newer build the page has been told to fetch next time, waiting for
+/// the reload that actually links it. Ids are `app.gpa`-owned.
+var pending_reload: std.StringArrayHashMapUnmanaged(void) = .empty;
 
 var catalog: ?store.Catalog = null;
 var registry_url_owned: ?[]u8 = null;
@@ -794,6 +801,8 @@ pub fn deinit() void {
         StoreIcon.deinit();
         if (catalog) |*c| c.deinit();
         catalog = null;
+        for (pending_reload.keys()) |k| app.gpa.free(k);
+        pending_reload.deinit(app.gpa);
         web_fetch.deinit();
         return;
     }
@@ -939,8 +948,36 @@ fn markPendingUpdateFailed(id: []const u8) void {
 
 /// Start the download for one offered update. Safe to call for a row already started (the job is
 /// simply replaced) and from inside the card list's own draw, since it touches no catalog state.
+/// The web's update: a side module already linked into the page's function table cannot be
+/// replaced under a running host, so "update" is a change of *which build the next visit
+/// fetches*. The page rewrites what it remembers for this id, the card says so, and the new
+/// version is linked on reload — which the user asks for, since it ends the session.
+fn applyWebUpdate(id: []const u8, url: []const u8) void {
+    WebLoader.remember(id, url);
+    const gop = pending_reload.getOrPut(app.gpa, id) catch return;
+    if (!gop.found_existing) {
+        gop.key_ptr.* = app.gpa.dupe(u8, id) catch {
+            _ = pending_reload.swapRemove(id);
+            return;
+        };
+    }
+    // The row has been dealt with as far as this session can deal with it.
+    dropPendingUpdate(id);
+    dvui.refresh(null, @src(), null);
+}
+
+/// True while `id` is waiting for a reload to pick up the build the page was pointed at.
+pub fn awaitingReload(id: []const u8) bool {
+    if (comptime builtin.target.cpu.arch != .wasm32) return false;
+    return pending_reload.contains(id);
+}
+
 pub fn applyPendingUpdate(id: []const u8) void {
     const row = pendingRowFor(id) orelse return;
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        applyWebUpdate(row.id, row.url);
+        return;
+    }
     // Whether this is an unload-and-reload or a fresh install is decided by what is *running*
     // now, not by what the row said when it was built — the plugin may have been enabled or
     // disabled while the window sat open.
@@ -956,6 +993,7 @@ pub fn applyPendingUpdate(id: []const u8) void {
 /// Update button to press. Reads live job state, so a download started from the store tab shows
 /// here too.
 pub fn updateStatus(id: []const u8) ?[]const u8 {
+    if (awaitingReload(id)) return "Reload to finish";
     if (jobs.get(id)) |job| return switch (@as(JobStatus, @enumFromInt(job.status.load(.acquire)))) {
         .downloading => "Updating\u{2026}",
         .downloaded => "Installing\u{2026}",
@@ -991,6 +1029,14 @@ fn drawUpdateCardControls(entry: StoreEntry) void {
     var ctl = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 1.0, .gravity_y = 0.5 });
     defer ctl.deinit();
 
+    if (comptime builtin.target.cpu.arch == .wasm32) {
+        // The update is already remembered; only a reload can link it (see `applyWebUpdate`).
+        if (awaitingReload(entry.id)) {
+            if (dvui.button(@src(), "Reload", .{}, .{ .gravity_y = 0.5, .font = body.larger(-1.0) }))
+                WebLoader.reload();
+            return;
+        }
+    }
     if (updateStatus(entry.id)) |status| {
         dvui.labelNoFmt(@src(), status, .{}, .{
             .gravity_y = 0.5,
@@ -2991,7 +3037,17 @@ fn drawCardControls(entry: StoreEntry) void {
         //     fingerprint, os-arch and SDK version can all load — even when it carries the same
         //     version number as the broken one already on disk.
         if (loaded) {
-            if (updateRelease(entry)) |rel| {
+            if (comptime builtin.target.cpu.arch == .wasm32) {
+                if (awaitingReload(entry.id)) {
+                    if (dvui.button(@src(), "Reload", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
+                        WebLoader.reload();
+                } else if (updateRelease(entry)) |rel| {
+                    if (rel.downloadFor(compat.hostKey())) |dl| {
+                        if (dvui.button(@src(), "Update", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
+                            applyWebUpdate(entry.id, dl.url);
+                    }
+                }
+            } else if (updateRelease(entry)) |rel| {
                 if (dvui.button(@src(), "Update", .{}, .{ .gravity_y = 0.5, .margin = .{ .x = 4 } }))
                     startDownload(entry.id, rel, .{ .is_update = true });
             }

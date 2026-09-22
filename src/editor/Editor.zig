@@ -1336,7 +1336,7 @@ pub fn loadWebPlugin(editor: *Editor, id: []const u8, url: []const u8) !void {
     const req = try gpa.create(WebPluginRequest);
     errdefer gpa.destroy(req);
     req.* = .{ .editor = editor, .id = try gpa.dupe(u8, id), .url = try gpa.dupe(u8, url) };
-    _ = try PluginLoader.begin(gpa, req.url, WebPluginRequest.arrived, req);
+    _ = try PluginLoader.begin(gpa, req.id, req.url, WebPluginRequest.arrived, req);
 }
 
 const WebPluginRequest = struct {
