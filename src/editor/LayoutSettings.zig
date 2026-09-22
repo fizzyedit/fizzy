@@ -37,6 +37,7 @@ pub fn score(query: *const fuzzy.Query) ?f64 {
         if (best == null or sc < best.?) best = sc;
     }
     for (editor.app.layout.regions.items) |r| {
+        if (r.kind_slot) continue; // not listed, so not searchable — see `draw`
         const sc = fuzzy.score(r.name, query, .{ .plain = true }) orelse continue;
         if (best == null or sc < best.?) best = sc;
     }
@@ -66,6 +67,13 @@ pub fn draw(query: *const fuzzy.Query) void {
     var any = false;
     for (regions, 0..) |r, i| {
         if (r.name.len == 0) continue;
+        // A plugin's own slot ("Pane 0", one per workbench document group) is not the app's
+        // furniture: what it holds is the plugin's to manage — tabs, drags, open and close —
+        // and it appears and disappears with the panes themselves. Offering it a row here put a
+        // name the user never chose beside Sidebar/Main/Panel, with a picker whose list is
+        // whatever documents happen to be open. Those regions are still reachable where they
+        // make sense: the pane's own corner button, and dropping a view onto it.
+        if (r.kind_slot) continue;
         if (filter_rows and !rowMatches(r.name, layout.matchingIn(&r), query)) continue;
         any = true;
         drawRow(editor, &layout, r, i);
