@@ -14,7 +14,12 @@ pub fn build(b: *std.Build) !void {
         .@"app-name" = @as([]const u8, "studioapp"),
         .@"app-display-name" = @as([]const u8, "Studio App"),
         .@"app-bundle-id" = @as([]const u8, "dev.fizzy.studioapp"),
-        .@"app-layout" = b.path("src/layout.zig"),
+        // `src/layout.zon` is the same arrangement as data — swap the line below for it to see
+        // the two side by side. A shape that needs a condition has to be the `.zig` one.
+        .@"app-layout" = b.path(if (b.option(bool, "zon-layout", "Use the data (.zon) shape instead of the function") orelse false)
+            "src/layout.zon"
+        else
+            "src/layout.zig"),
     });
 
     const exe = fizzy.artifact("studioapp");

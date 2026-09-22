@@ -1,0 +1,43 @@
+// The studio shape as data: the same canvas / strip / stack arrangement as `layout.zig`,
+// expressed as a tree of places instead of a sequence of calls. Build with
+// `-Dapp-layout=src/layout.zon` (see this package's build.zig) — fizzy generates the shim that
+// imports this file as an `app.layout.Shape` and walks it.
+//
+// Splits are implicit between siblings, which is where the hand-written shape puts them.
+// A shape that needs a *condition* — collapse below some width, a region that only exists while
+// a folder is open — cannot be written here; that is what `layout.zig` is for, and both drive
+// the same `Layout` API.
+.{
+    .dir = .horizontal,
+    .expand = .both,
+    .children = .{
+        .{
+            .dir = .vertical,
+            .expand = .both,
+            .children = .{
+                .{
+                    .name = "Canvas",
+                    .keywords = .{ "main", "center", "workspace" },
+                    .expand = .both,
+                },
+                .{
+                    .name = "Strip",
+                    .keywords = .{ "bottom", "panel", "output" },
+                    .expand = .horizontal,
+                    .extent = 150,
+                    .resize = true,
+                    .collapsible = true,
+                    .hide_when_empty = true,
+                },
+            },
+        },
+        .{
+            .name = "Stack",
+            .keywords = .{ "sidebar", "explorer" },
+            .expand = .vertical,
+            .extent = 300,
+            .resize = true,
+            .collapsible = true,
+        },
+    },
+}

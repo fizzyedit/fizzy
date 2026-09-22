@@ -269,11 +269,17 @@ pub fn addFizzyExecutableForTarget(
     app_module.addImport("bundled_plugins", bundled);
 
     if (app_layout) |path| {
+        // A `.zon` shape is data, not code, so it gets a generated shim that imports the file as
+        // a typed `layout.Shape` and walks it. Everything downstream — Editor's call, the
+        // module's imports, `has_app_layout` — is unchanged, because from here on the two kinds
+        // of shape are the same thing: a module exporting `layout(?*anyopaque, *Layout)`.
+        const is_zon = std.mem.endsWith(u8, path.getDisplayName(), ".zon");
         const app_layout_mod = b.createModule(.{
             .target = resolved_target,
             .optimize = optimize,
-            .root_source_file = path,
+            .root_source_file = if (is_zon) b.addWriteFiles().add("app_layout_spec.zig", spec_shim) else path,
         });
+        if (is_zon) app_layout_mod.addAnonymousImport("app_layout_spec", .{ .root_source_file = path });
         app_layout_mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
         app_layout_mod.addImport("app", app_module);
         app_layout_mod.addImport("core", core_module);
@@ -375,3 +381,20 @@ pub fn addFizzyExecutableForTarget(
         .image_dylib = image_dylib,
     };
 }
+
+/// The whole of a `.zon` shape's generated module: import the file as a `Shape` — which is where
+/// it is type-checked, at comptime, against the field names and enums `Shape` declares —
+/// and hand it to the same walk a hand-written shape's calls would have performed itself.
+const spec_shim =
+    \\//! Generated for `-Dapp-layout=<file>.zon`. See `app/layout/Shape.zig`.
+    \\const dvui = @import("dvui");
+    \\const layout_ns = @import("app").layout;
+    \\
+    \\pub const shape: layout_ns.Shape = @import("app_layout_spec");
+    \\
+    \\pub fn layout(_: ?*anyopaque, f: *layout_ns.Layout) !dvui.App.Result {
+    \\    try layout_ns.Shape.apply(shape, f);
+    \\    return .ok;
+    \\}
+    \\
+;

@@ -54,6 +54,9 @@ pub const layout = struct {
     pub const Layout = @import("layout/Layout.zig");
     pub const Region = @import("layout/Region.zig");
     pub const Seed = @import("layout/Seed.zig").Tree;
+    /// One place in a static shape written as data, for `-Dapp-layout=<file>.zon` — a tree of
+    /// them is the whole shape. See its own doc comment for what data can and cannot say.
+    pub const Shape = @import("layout/Shape.zig");
     pub const Tree = @import("layout/Tree.zig");
     /// What persists between frames: declared regions, their extents, the user's keyword
     /// overrides. The application owns one; a `Layout` is per-frame and borrows it.
