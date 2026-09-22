@@ -52,7 +52,12 @@ keybinds and menus work the same for a built-in and a third-party plugin.
 ## What ships alongside it
 
 **The web is a real target.** The same plugin source builds as a wasm side module that the
-fizzy web app fetches and links at runtime — same registration path as a desktop dylib.
+fizzy web app fetches and links at runtime, and registers through the same checks a desktop
+dylib passes: ABI fingerprint, SDK version, declared id. Two differences worth stating plainly.
+The page cannot verify the SHA-256 the registry publishes, so a web install trusts the URL the
+way a desktop install trusts a signed-off dylib; and nothing can unlink a module once linked, so
+an update links the new build beside the old one and hands the id over, leaving the previous
+code resident but owning nothing until the tab closes.
 
 **The store is the way plugins ship.** Author repo → release CI (six desktop targets plus
 best-effort web) → registry → in-app store. Compatibility is checked by a structural ABI

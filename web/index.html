@@ -366,6 +366,18 @@
             const key = "fizzy.file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
             try { localStorage.removeItem(key); } catch (_) {}
           },
+          // What the page remembers for an id, so the host can load it again after a disable
+          // without a round trip through the store. Same copy-into-buffer shape as the storage
+          // shims: returns the length needed, or `max` when there is nothing.
+          fizzy_web_plugin_remembered_url(idPtr, idLen, bufPtr, bufLen) {
+            const mem = wasmInstance.exports.memory.buffer;
+            const id = utf8.decode(new Uint8Array(mem, idPtr, idLen));
+            const url = rememberedPlugins()[id];
+            if (typeof url !== "string") return 0xffffffff;
+            const bytes = utf8encode(url);
+            if (bytes.length <= bufLen) new Uint8Array(wasmInstance.exports.memory.buffer, bufPtr, bytes.length).set(bytes);
+            return bytes.length;
+          },
           fizzy_web_plugin_forget(idPtr, idLen) {
             forgetPlugin(utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, idPtr, idLen)));
           },

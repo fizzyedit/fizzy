@@ -1341,6 +1341,13 @@ pub fn loadWebPlugin(editor: *Editor, id: []const u8, url: []const u8) WebLoadEr
         }
         return;
     }
+    return editor.beginWebPluginLoad(id, url, false);
+}
+
+/// The half of `loadWebPlugin` after the "is it already running" question, so an update can ask
+/// for a build of an id that *is* running. `replace` says the plugin under this id is to be
+/// handed over once the new module has passed every check (`WebPluginRequest.arrived`).
+fn beginWebPluginLoad(editor: *Editor, id: []const u8, url: []const u8, replace: bool) WebLoadError!void {
     // Two requests for one id before the first lands (the page's remembered list and a
     // `?plugin=` of the same id, say) would register it twice; the second one waits for nothing.
     if (web_loads_in_flight.contains(id)) return;
@@ -1348,7 +1355,7 @@ pub fn loadWebPlugin(editor: *Editor, id: []const u8, url: []const u8) WebLoadEr
     try web_loads_in_flight.put(gpa, try gpa.dupe(u8, id), {});
     const req = try gpa.create(WebPluginRequest);
     errdefer gpa.destroy(req);
-    req.* = .{ .editor = editor, .id = try gpa.dupe(u8, id), .url = try gpa.dupe(u8, url) };
+    req.* = .{ .editor = editor, .id = try gpa.dupe(u8, id), .url = try gpa.dupe(u8, url), .replace = replace };
     _ = try PluginLoader.begin(gpa, req.id, req.url, WebPluginRequest.arrived, req);
 }
 
@@ -1356,13 +1363,18 @@ const WebPluginRequest = struct {
     editor: *Editor,
     id: []u8,
     url: []u8,
+    /// This build is taking over from one that is already running: the old plugin is unloaded
+    /// only once the new module has passed every check, so a refused build costs nothing.
+    replace: bool = false,
 
     fn arrived(ctx: ?*anyopaque, arrival: PluginLoader.Arrival) void {
         const req: *WebPluginRequest = @ptrCast(@alignCast(ctx.?));
         const editor = req.editor;
         const gpa = editor.app.gpa;
+        var registered = false;
         defer {
             if (web_loads_in_flight.fetchRemove(req.id)) |kv| gpa.free(kv.key);
+            if (!registered) PluginStore.webLoadFailed(req.id);
             gpa.free(req.id);
             gpa.destroy(req);
             // `url` lives on as `LoadedLib.path` when the load succeeded.
@@ -1372,12 +1384,32 @@ const WebPluginRequest = struct {
             gpa.free(req.url);
             return;
         };
-        const loaded = PluginLoader.loadAndRegister(&editor.app.host, gpa, req.url, req.id, lib, .{
+
+        // Everything that can refuse this build happens here, while the plugin it may be
+        // replacing is still running and still owns its documents.
+        const ready = PluginLoader.prepare(req.url, req.id, lib) catch |err| {
+            dvui.log.err("web plugin '{s}' ({s}): refused: {s}", .{ req.id, req.url, @errorName(err) });
+            gpa.free(req.url);
+            return;
+        };
+
+        if (req.replace) {
+            // `force = false`: a plugin with unsaved documents keeps them, and the update stays
+            // on offer. The module just linked is wasted, which costs the page some memory and
+            // the user nothing.
+            editor.unloadPlugin(req.id, false) catch |err| {
+                dvui.log.err("web plugin '{s}': cannot take over: {s}", .{ req.id, @errorName(err) });
+                gpa.free(req.url);
+                return;
+            };
+        }
+
+        const loaded = ready.register(&editor.app.host, .{
             .gpa = &editor.app.gpa,
             .arg_b = @ptrCast(&editor.app.host),
             .arg_c = null,
         }) catch |err| {
-            dvui.log.err("web plugin '{s}' ({s}): load failed: {s}", .{ req.id, req.url, @errorName(err) });
+            dvui.log.err("web plugin '{s}' ({s}): register failed: {s}", .{ req.id, req.url, @errorName(err) });
             gpa.free(req.url);
             return;
         };
@@ -1385,6 +1417,7 @@ const WebPluginRequest = struct {
             dvui.log.err("web plugin '{s}': out of memory storing LoadedLib", .{req.id});
             return;
         };
+        registered = true;
         App.syncLoadedPluginDvuiContexts(&editor.app);
         App.syncLoadedPluginRenderBridge(&editor.app);
         for (editor.app.host.plugins.items) |p| {
@@ -1393,11 +1426,13 @@ const WebPluginRequest = struct {
             };
         }
         rebuildKeybinds(editor);
+        editor.rebuildExtensionOwnerCache();
         // Remembered here, not by the page when it linked the module: the page cannot know
         // whether this host will accept the build (fingerprint, SDK version, declared id), and a
         // remembered build that is refused would greet the user with the same failure every
         // visit. What is remembered is what ran.
         PluginLoader.remember(req.id, req.url);
+        PluginStore.webLoadSucceeded(req.id);
         dvui.log.info("web plugin '{s}' loaded from {s}", .{ req.id, req.url });
         editor.app.host.refresh();
     }
@@ -1409,6 +1444,15 @@ export fn FizzyWebPluginRequest(id_ptr: [*]const u8, id_len: usize, url_ptr: [*]
     if (comptime builtin.target.cpu.arch != .wasm32) return;
     const editor = web_editor orelse return;
     const id = id_ptr[0..id_len];
+    // The id reaches this from the page's query string, and with no URL it is interpolated
+    // straight into a path. Same rule the plugins-directory scan applies on the desktop.
+    if (!App.isValidPluginId(id)) {
+        dvui.log.warn("web plugin request: '{s}' is not a valid plugin id", .{id});
+        return;
+    }
+    // A plugin the user turned off stays off across reloads: the page remembers every plugin it
+    // ever linked, and without this the disable would last exactly one visit.
+    if (editor.app.isPluginDisabled(id)) return;
     var buf: [512]u8 = undefined;
     const url = if (url_len != 0) url_ptr[0..url_len] else std.fmt.bufPrint(&buf, "plugins/{s}/{s}.wasm", .{ id, id }) catch return;
     editor.loadWebPlugin(id, url) catch |err| dvui.log.err("web plugin '{s}': {s}", .{ id, @errorName(err) });
@@ -1571,7 +1615,18 @@ pub fn setPluginEnabled(editor: *Editor, id: []const u8, enabled: bool, force: b
     if (enabled) {
         editor.app.untrackDisabledPlugin(id);
         try editor.setPluginEnabledPersisted(id, true);
-        if (editor.app.host.pluginById(id) == null) try editor.loadUserPluginById(id);
+        if (editor.app.host.pluginById(id) == null) {
+            if (comptime builtin.target.cpu.arch == .wasm32) {
+                // No plugins directory to look in: what the page remembers for this id *is* the
+                // installed build. A plugin disabled and re-enabled in one session takes this
+                // path, as does one the user turns back on after a reload.
+                var buf: [1024]u8 = undefined;
+                const url = PluginLoader.rememberedUrl(id, &buf) orelse return error.NotUnloadable;
+                try editor.loadWebPlugin(id, url);
+            } else {
+                try editor.loadUserPluginById(id);
+            }
+        }
     } else {
         // Persist before unload: `id` may point at static memory inside the plugin image.
         try editor.app.trackDisabledPlugin(id);
@@ -1603,9 +1658,13 @@ pub fn setPluginEnabled(editor: *Editor, id: []const u8, enabled: bool, force: b
 /// the one that worked.
 pub fn updateWebPlugin(editor: *Editor, id: []const u8, url: []const u8) WebLoadError!void {
     if (comptime builtin.target.cpu.arch != .wasm32) return error.NotUnloadable;
-    if (editor.app.host.pluginById(id) != null) try editor.unloadPlugin(id, true);
-    try editor.loadWebPlugin(id, url);
-    editor.rebuildExtensionOwnerCache();
+    if (editor.app.host.pluginById(id)) |plugin| {
+        // Asked here, before anything is fetched, so the answer is a refusal the store can show
+        // beside an offer that is still standing — not a surprise after the running plugin is
+        // already gone. Asked again at the swap, where the documents are actually closed.
+        if (editor.app.pluginHasDirtyDocs(plugin)) return error.DirtyDocuments;
+    }
+    try editor.beginWebPluginLoad(id, url, true);
 }
 
 pub fn updatePlugin(editor: *Editor, id: []const u8, force: bool) !void {

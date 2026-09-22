@@ -103,7 +103,17 @@ const wasm = struct {
     extern "fizzy" fn fizzy_web_plugin_load(req: u32, id_ptr: [*]const u8, id_len: usize, url_ptr: [*]const u8, url_len: usize) void;
     extern "fizzy" fn fizzy_web_plugin_forget(id_ptr: [*]const u8, id_len: usize) void;
     extern "fizzy" fn fizzy_web_plugin_remember(id_ptr: [*]const u8, id_len: usize, url_ptr: [*]const u8, url_len: usize) void;
+    extern "fizzy" fn fizzy_web_plugin_remembered_url(id_ptr: [*]const u8, id_len: usize, buf: [*]u8, buf_len: usize) usize;
 };
+
+/// The URL the page has for `id`, copied into `buf`, or null when it remembers none or the URL
+/// is longer than `buf`. This is where a disabled plugin's build lives while it is not loaded:
+/// there is no plugins directory to look in, so enabling one again reads it back from here.
+pub fn rememberedUrl(id: []const u8, buf: []u8) ?[]const u8 {
+    const n = wasm.fizzy_web_plugin_remembered_url(id.ptr, id.len, buf.ptr, buf.len);
+    if (n == std.math.maxInt(u32) or n == 0 or n > buf.len) return null;
+    return buf[0..n];
+}
 
 /// Drop `id` from the plugins the page brings back on the next visit (the page remembers
 /// every plugin it linked, in `localStorage`, and requests them again at startup).
@@ -208,16 +218,47 @@ fn readVersionTriplet(get_fn: ?dylib_api.GetSdkVersionFn) std.SemanticVersion {
     return .{ .major = 0, .minor = 0, .patch = 0 };
 }
 
-/// Check and register a plugin the page has linked. `url` is kept as `LoadedLib.path`.
-pub fn loadAndRegister(
-    host: *Host,
-    allocator: std.mem.Allocator,
+/// A linked module that has passed every check and has not yet been registered. Split from
+/// `register` so an update can find out whether the new build is acceptable *before* the running
+/// one is torn down: everything that can reject a module (fingerprint, SDK version, declared id,
+/// missing entry points) happens in `prepare`, and only the call into the plugin happens after.
+pub const Prepared = struct {
+    lib: WebDynLib,
     url: []const u8,
-    expected_id: []const u8,
-    lib_in: WebDynLib,
-    pre: ?PreRegister,
-) LoadError!LoadedLib {
-    _ = allocator;
+    plugin_id: []const u8,
+    version_info: PluginVersionInfo,
+    set_globals: dylib_api.SetGlobalsFn,
+    set_ctx: dvui_context.SetContextFn,
+    set_bridge: sdk.render_bridge.SetRenderBridgeFn,
+    reg_fn: *const fn (?*Host) callconv(.c) u32,
+
+    /// Hand the module the host's globals and let it register. The only step that runs code the
+    /// page fetched, and the only one that cannot be undone by walking away.
+    pub fn register(self: Prepared, host: *Host, pre: ?PreRegister) LoadError!LoadedLib {
+        if (pre) |inject| {
+            self.set_globals(if (inject.gpa) |gpa| @ptrCast(gpa) else null, inject.arg_b, inject.arg_c);
+        }
+        const status: dylib_api.RegisterStatus = @enumFromInt(self.reg_fn(host));
+        switch (status) {
+            .ok => {},
+            .err_abi_mismatch => return error.AbiMismatch,
+            .err_sdk_version => return error.SdkVersionMismatch,
+            else => return error.RegisterRejected,
+        }
+        return .{
+            .lib = self.lib,
+            .path = self.url,
+            .plugin_id = self.plugin_id,
+            .version_info = self.version_info,
+            .set_globals = self.set_globals,
+            .set_dvui_context = self.set_ctx,
+            .set_render_bridge = self.set_bridge,
+        };
+    }
+};
+
+/// Everything that can refuse a module the page has linked. `url` is kept as `LoadedLib.path`.
+pub fn prepare(url: []const u8, expected_id: []const u8, lib_in: WebDynLib) LoadError!Prepared {
     var lib = lib_in;
     const abi_fp_fn = lib.lookup(dylib_api.GetAbiFingerprintFn, dylib_api.symbol_abi_fingerprint) orelse return error.LoadFailed;
     const plugin_fp = abi_fp_fn();
@@ -240,24 +281,9 @@ pub fn loadAndRegister(
         if (!std.mem.eql(u8, std.mem.span(id_fn()), expected_id)) return error.PluginIdMismatch;
     }
 
-    const set_globals = lib.lookup(dylib_api.SetGlobalsFn, dylib_api.symbol_set_globals) orelse return error.LoadFailed;
-    const reg_fn = lib.lookup(*const fn (?*Host) callconv(.c) u32, dylib_api.symbol_register) orelse return error.LoadFailed;
-    const set_ctx = lib.lookup(dvui_context.SetContextFn, dylib_api.symbol_set_dvui_context) orelse return error.LoadFailed;
-    const set_bridge = lib.lookup(sdk.render_bridge.SetRenderBridgeFn, dylib_api.symbol_set_render_bridge) orelse return error.LoadFailed;
-
-    if (pre) |inject| {
-        set_globals(if (inject.gpa) |gpa| @ptrCast(gpa) else null, inject.arg_b, inject.arg_c);
-    }
-    const status: dylib_api.RegisterStatus = @enumFromInt(reg_fn(host));
-    switch (status) {
-        .ok => {},
-        .err_abi_mismatch => return error.AbiMismatch,
-        .err_sdk_version => return error.SdkVersionMismatch,
-        else => return error.RegisterRejected,
-    }
     return .{
         .lib = lib,
-        .path = url,
+        .url = url,
         .plugin_id = expected_id,
         .version_info = .{
             .plugin_version = plugin_version,
@@ -265,8 +291,23 @@ pub fn loadAndRegister(
             .min_sdk_version = min_sdk,
             .declared_id = if (get_plugin_id) |f| std.mem.span(f()) else null,
         },
-        .set_globals = set_globals,
-        .set_dvui_context = set_ctx,
-        .set_render_bridge = set_bridge,
+        .set_globals = lib.lookup(dylib_api.SetGlobalsFn, dylib_api.symbol_set_globals) orelse return error.LoadFailed,
+        .set_ctx = lib.lookup(dvui_context.SetContextFn, dylib_api.symbol_set_dvui_context) orelse return error.LoadFailed,
+        .set_bridge = lib.lookup(sdk.render_bridge.SetRenderBridgeFn, dylib_api.symbol_set_render_bridge) orelse return error.LoadFailed,
+        .reg_fn = lib.lookup(*const fn (?*Host) callconv(.c) u32, dylib_api.symbol_register) orelse return error.LoadFailed,
     };
+}
+
+/// Check and register in one step — the desktop loader's shape, for a plain load.
+pub fn loadAndRegister(
+    host: *Host,
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    expected_id: []const u8,
+    lib_in: WebDynLib,
+    pre: ?PreRegister,
+) LoadError!LoadedLib {
+    _ = allocator;
+    const ready = try prepare(url, expected_id, lib_in);
+    return ready.register(host, pre);
 }

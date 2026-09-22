@@ -6,8 +6,11 @@
 //! parsed by the backend (`store.Catalog`); compatibility is matched on the host ABI
 //! fingerprint + arch.
 //!
-//! The web build is browse-only: the catalog and READMEs load through the browser's `fetch`,
-//! but there are no wasm plugin binaries, so every card reads "no compatible build".
+//! The web build installs too. The catalog and READMEs load through the browser's `fetch`, and a
+//! plugin published for `web-wasm32` is fetched and linked by the page rather than downloaded to
+//! a directory (`queueInstall` → `installFromUrl`, `applyWebUpdate` → `updateFromUrl`); a plugin
+//! with no web build is simply not offered there. Two things stay desktop-only: the SHA-256 the
+//! registry publishes, which the page does not check, and the download queue below.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -186,10 +189,11 @@ pub const CatalogOffer = struct {
     title: []const u8,
 };
 
-/// Catalog plugins that are not on disk and have a build this host can install. Arena-backed.
-/// Empty when the catalog has never loaded, or on wasm (browse-only).
+/// Catalog plugins that are not installed here and have a build this host can install.
+/// Arena-backed; empty when the catalog has never loaded. `presentLocally` and the host key do
+/// the filtering on both targets — in a browser "installed" means linked into this page, and a
+/// plugin with no `web-wasm32` download is simply not offered.
 pub fn uninstalledCatalog(arena: std.mem.Allocator) []const CatalogOffer {
-    if (comptime builtin.target.cpu.arch == .wasm32) return &.{};
     const c = &(catalog orelse return &.{});
     const snap = c.acquire();
     defer c.release();
@@ -220,13 +224,18 @@ pub fn queueInstall(id: []const u8) void {
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // No plugins directory in a browser: the page fetches and links the side module
         // straight from its release URL, and the app registers it when it lands.
-        app.installFromUrl(id, dl.url) catch |err| reportError("could not load '{s}': {s}", .{ id, @errorName(err) });
+        app.installFromUrl(id, dl.url) catch |err| {
+            reportError("could not load '{s}': {s}", .{ id, @errorName(err) });
+            return;
+        };
+        markWebInFlight(id);
         return;
     }
     startDownload(id, rel, .{ .is_update = false });
 }
 
 pub fn isInstalling(id: []const u8) bool {
+    if (web_in_flight.contains(id)) return true;
     const job = jobs.get(id) orelse return false;
     const status: JobStatus = @enumFromInt(job.status.load(.acquire));
     return status == .downloading or status == .downloaded;
@@ -794,6 +803,16 @@ pub fn deinit() void {
         StoreIcon.deinit();
         if (catalog) |*c| c.deinit();
         catalog = null;
+        for (web_in_flight.keys()) |k| app.gpa.free(k);
+        web_in_flight.deinit(app.gpa);
+        for (pending_actions.items) |action| switch (action) {
+            .set_enabled => |a| app.gpa.free(a.id),
+            .set_auto_update => |a| app.gpa.free(a.id),
+            .uninstall => |a| app.gpa.free(a.id),
+        };
+        pending_actions.deinit(app.gpa);
+        clearPendingUpdates();
+        pending_updates.deinit(app.gpa);
         web_fetch.deinit();
         return;
     }
@@ -939,16 +958,59 @@ fn markPendingUpdateFailed(id: []const u8) void {
 
 /// Start the download for one offered update. Safe to call for a row already started (the job is
 /// simply replaced) and from inside the card list's own draw, since it touches no catalog state.
-/// The web's update: the new build is linked alongside the running one and takes the id over,
-/// in this session. The page cannot unlink the old module, so it stays resident and inert until
-/// the tab closes — deliberately, because making the user reload to get a new version is worse
-/// than a version's worth of memory (see `Editor.updateWebPlugin`).
+/// Ids whose web load or update is in flight — the page is fetching and linking, and the host
+/// has not yet accepted or refused the module. `app.gpa`-owned; one entry per id.
+var web_in_flight: std.StringArrayHashMapUnmanaged(void) = .empty;
+
+fn markWebInFlight(id: []const u8) void {
+    const gop = web_in_flight.getOrPut(app.gpa, id) catch return;
+    if (!gop.found_existing) {
+        gop.key_ptr.* = app.gpa.dupe(u8, id) catch {
+            _ = web_in_flight.swapRemove(id);
+            return;
+        };
+    }
+}
+
+fn clearWebInFlight(id: []const u8) void {
+    if (web_in_flight.fetchSwapRemove(id)) |kv| app.gpa.free(kv.key);
+}
+
+/// The load or update for `id` registered. Called from the arrival path, which is the first
+/// moment anything here may treat the new build as the one that is running.
+pub fn webLoadSucceeded(id: []const u8) void {
+    clearWebInFlight(id);
+    dropPendingUpdate(id);
+    dvui.refresh(null, @src(), null);
+}
+
+/// It did not: the fetch failed, the module was refused, or the plugin it would have replaced
+/// has unsaved documents. The offer stays, wearing Retry — the running plugin was never torn
+/// down, so there is something to go back to.
+pub fn webLoadFailed(id: []const u8) void {
+    clearWebInFlight(id);
+    if (pendingRowFor(id)) |row| {
+        row.started = false;
+        row.failed = true;
+    }
+    dvui.refresh(null, @src(), null);
+}
+
+/// The web's update: the new build is fetched and checked while the running one keeps working,
+/// and only takes the id over once it has passed (`Editor.updateWebPlugin`). The old module
+/// stays linked in the page — nothing can unlink it — but it owns nothing after the swap.
 fn applyWebUpdate(id: []const u8, url: []const u8) void {
     app.updateFromUrl(id, url) catch |err| {
         reportError("could not update '{s}': {s}", .{ id, @errorName(err) });
+        if (pendingRowFor(id)) |row| row.failed = true;
         return;
     };
-    dropPendingUpdate(id);
+    // Not dropped here: the fetch has only *started*. `webLoadSucceeded` retires the row.
+    markWebInFlight(id);
+    if (pendingRowFor(id)) |row| {
+        row.started = true;
+        row.failed = false;
+    }
     dvui.refresh(null, @src(), null);
 }
 
@@ -973,6 +1035,7 @@ pub fn applyPendingUpdate(id: []const u8) void {
 /// Update button to press. Reads live job state, so a download started from the store tab shows
 /// here too.
 pub fn updateStatus(id: []const u8) ?[]const u8 {
+    if (web_in_flight.contains(id)) return "Updating\u{2026}";
     if (jobs.get(id)) |job| return switch (@as(JobStatus, @enumFromInt(job.status.load(.acquire)))) {
         .downloading => "Updating\u{2026}",
         .downloaded => "Installing\u{2026}",
@@ -1278,31 +1341,18 @@ pub fn tick() void {
         Readme.pump();
         StoreIcon.pump();
         syncReadmeCenter();
+        // Enable, Disable, Uninstall and the auto-update toggle all queue here and are applied
+        // nowhere else — without this the web store's buttons lit up and did nothing. The
+        // download queue below is the desktop's alone: on the web a plugin arrives through the
+        // page's loader instead (`applyWebUpdate`, `queueInstall`).
+        applyPendingActions();
         return;
     }
 
     syncReadmeCenter();
     autoUpdateTick();
 
-    // Anything applied below can add to, remove from, or change the load state of the plugins
-    // directory, so the next draw rescans it (see `disk_scan_dirty`).
-    if (pending_actions.items.len > 0) disk_scan_dirty = true;
-    for (pending_actions.items) |action| switch (action) {
-        .set_enabled => |a| {
-            applySetEnabled(a.id, a.enabled);
-            app.gpa.free(a.id);
-        },
-        .set_auto_update => |a| {
-            app.setAutoUpdate(a.id, a.on) catch |err|
-                reportError("could not change auto-update for '{s}': {s}", .{ a.id, @errorName(err) });
-            app.gpa.free(a.id);
-        },
-        .uninstall => |a| {
-            applyUninstall(a.id);
-            app.gpa.free(a.id);
-        },
-    };
-    pending_actions.clearRetainingCapacity();
+    applyPendingActions();
 
     var i: usize = 0;
     while (i < jobs.count()) {
@@ -3238,6 +3288,30 @@ fn queueUninstall(id: []const u8) void {
         app.gpa.free(dup);
         reportError("'{s}' could not be queued", .{id});
     };
+}
+
+/// Apply what the store's buttons queued. Both targets: the actions are the manager's, and the
+/// manager is what differs between them.
+fn applyPendingActions() void {
+    // Anything applied here can add to, remove from, or change the load state of the plugins
+    // directory, so the next draw rescans it (see `disk_scan_dirty`).
+    if (pending_actions.items.len > 0) disk_scan_dirty = true;
+    for (pending_actions.items) |action| switch (action) {
+        .set_enabled => |a| {
+            applySetEnabled(a.id, a.enabled);
+            app.gpa.free(a.id);
+        },
+        .set_auto_update => |a| {
+            app.setAutoUpdate(a.id, a.on) catch |err|
+                reportError("could not change auto-update for '{s}': {s}", .{ a.id, @errorName(err) });
+            app.gpa.free(a.id);
+        },
+        .uninstall => |a| {
+            applyUninstall(a.id);
+            app.gpa.free(a.id);
+        },
+    };
+    pending_actions.clearRetainingCapacity();
 }
 
 fn applySetEnabled(id: []const u8, enabled: bool) void {

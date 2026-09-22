@@ -26,6 +26,8 @@ Fizzy (Editor) ←── Host registries + EditorAPI ──→ Plugin (register(
 - **`text`** — generic text/code editor; fallback owner for any file extension nothing else claims.
 - **`image`** — read-only PNG/JPG/GIF/BMP/TGA viewer with zoom/pan (fallback when pixi is not installed).
 - **`markdown`** — `.md` preview utility plugin.
+- **`archive`** — opens a `.zip` as a mounted folder (the web's "open a vault" path, too).
+- **`drive`** — Google Drive as a mount; OAuth in the browser and on the desktop.
 - `shared` — build helpers used across plugins' `static/integration.zig` (not a plugin itself).
 
 **Pixi (pixel-art editor) lives outside this repo** as a third-party-style plugin ([`fizzyedit/pixi`](https://github.com/fizzyedit/pixi), `~/dev/fizzyedit/pixi`) — it ships and updates purely through the plugin store (`docs/PLUGINS.md` §6), with no special treatment in Fizzy itself. **Trust `ls plugins/` and `jj log` over any doc's plugin list.**

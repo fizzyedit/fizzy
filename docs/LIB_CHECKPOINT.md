@@ -1,8 +1,18 @@
 # fizzy-lib checkpoint
 
 Resume point for the "fizzy as a library" work. Written to be picked up cold by any agent or
-person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-16 at bookmark
-`fizzy-lib` (cleanup pass in progress; SDK at 0.2.0).
+person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-22 at bookmark
+`fizzy-lib` (SDK at 0.2.0, unreleased).
+
+Since the 2026-09-16 pass below, the bookmark has also gained: plugins loading at runtime in the
+browser as wasm side modules (`app/store/PluginLoader_web.zig`, `web/index.html`'s `loadPlugin`)
+with the store installing, updating, enabling and uninstalling them there; `core.work` (a stepped
+task run on a thread natively and from the frame on the web) and `core.fs` (one seam for the
+small config files, localStorage in a browser) — so `settings.zon`, `recents.zon`, `keybinds.zon`
+and `layout.zon` all persist on both; the account flyout and `core.widgets.Popover`; `archive`
+and `drive` beside the four bundled plugins named below; and `-Dapp-layout=<file>.zon`, a static
+shape as data (`app/layout/Shape.zig`). `docs/REVIEW_NAYSAYER_2026-09-22.md` is the standing
+review of that work — its open items are the ones its "Suggested order" still lists.
 
 ## Ground rules that are easy to get wrong
 
