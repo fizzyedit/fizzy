@@ -655,7 +655,7 @@ test "owner-scoped binding only fires when that owner is active" {
 }
 
 test {
-    _ = @import("Key.zig");
+    _ = @import("key.zig");
     _ = chord_mod;
     _ = zon;
 }
