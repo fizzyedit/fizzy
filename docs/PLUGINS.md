@@ -626,6 +626,16 @@ the assignment list read back.
   make rather than who makes it — and hands the chosen `NewDocumentKind.id` back as `kind`. A
   plugin that declares no kinds is one entry and always receives `kind == null`.
 
+#### An error crossing the boundary means "it failed", nothing more
+
+Zig numbers error values per compilation, so the integer that comes back from a `dlopen`'d
+plugin — or from `EditorAPI`, in the other direction — denotes a different error on the
+receiving side. `@errorName` on it prints an unrelated name and `err == error.Whatever` is
+meaningless. So: **whoever fails logs the reason on its own side**, and the caller treats the
+error only as "this did not work". Fizzy does that with everything a plugin returns, and a
+plugin should do the same with everything it gets back from the host. If a *reason* has to
+travel, send it as data (a service call, a status field), never as an error value.
+
 #### Where a document lives is not the owner's problem
 
 A path can be on the disk, inside a zip the user opened, or on a cloud drive a plugin mounted

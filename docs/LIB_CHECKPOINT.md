@@ -25,8 +25,13 @@ person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-16 at b
   optimising anything; the frame is measured, not guessed.
 - A Zig `error` **does not survive the dylib boundary with its name** (errors are integers
   numbered per compilation). Never `@errorName` an error returned from a plugin vtable; the
-  plugin logs the reason on its side. A shared SDK error enum would fix this (ABI change,
-  not started).
+  plugin logs the reason on its side. **Settled 2026-09-22:** this is the contract, written
+  into `Plugin.VTable`'s doc comment and `docs/PLUGINS.md`, and the host's five offending log
+  lines now say "see the plugin's own log" instead of printing another compilation's error
+  name. A shared status *enum* would let a reason travel, but that means converting ~250
+  `anyerror` sites across six repos and editing every plugin's source, for the ability to
+  distinguish failures nothing currently distinguishes — not worth it, in 0.2.0 or later. If a
+  reason must travel, send it as data.
 
 ## Shape of the repo now (the part that is done)
 
@@ -214,7 +219,8 @@ size and assignment under the app's name, and answers the app's picker.
 - **Still to eyeball**: drag a tab between panes; drop on the right half of the last pane to
   split; close every tab in a pane (pane should leave); quit and relaunch (session restore
   from `layout.zon`); a pane emptied through its corner-button picker and refilled.
-- Known leftover: `docByIndex` order in `EditorAPI` is registration order, not tab order.
+- Settled: `docByIndex` is *open* order, and says so — tab order belongs to whichever plugin
+  lays documents out, and the host cannot answer in it.
 
 ## Landed: endless handles (`examples/endless-app`, `-Dapp-layout=`)
 

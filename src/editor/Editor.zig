@@ -1273,8 +1273,11 @@ pub fn rebuildKeybinds(editor: *Editor) void {
     }
     Keybinds.register() catch |err| dvui.log.err("keybind rebuild (fizzy) failed: {s}", .{@errorName(err)});
     for (editor.app.host.plugins.items) |plugin| {
-        plugin.contributeKeybinds(window) catch |err|
-            dvui.log.err("keybind rebuild ('{s}') failed: {s}", .{ plugin.id, @errorName(err) });
+        // No `@errorName` on anything a plugin returned: error values are numbered per
+        // compilation, so the name this side would print is another compilation's error
+        // entirely (see `Plugin.VTable`'s doc comment). The plugin logs its own reason.
+        plugin.contributeKeybinds(window) catch
+            dvui.log.err("keybind rebuild ('{s}') failed — see the plugin's own log", .{plugin.id});
     }
     // Lift the finished bind map into the command keymap that `Keybinds.tick` dispatches from.
     Keybinds.buildKeymap(editor) catch |err|
@@ -1372,8 +1375,8 @@ const WebPluginRequest = struct {
         App.syncLoadedPluginDvuiContexts(&editor.app);
         App.syncLoadedPluginRenderBridge(&editor.app);
         for (editor.app.host.plugins.items) |p| {
-            if (std.mem.eql(u8, p.id, req.id)) p.initPlugin() catch |err| {
-                dvui.log.err("web plugin '{s}': initPlugin failed: {s}", .{ req.id, @errorName(err) });
+            if (std.mem.eql(u8, p.id, req.id)) p.initPlugin() catch {
+                dvui.log.err("web plugin '{s}': initPlugin failed — see the plugin's own log", .{req.id});
             };
         }
         rebuildKeybinds(editor);
@@ -3572,8 +3575,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // the keys are being captured, not invoked.
             if (!editor.command_palette.open and !KeybindSettings.isRecording()) {
                 for (editor.app.host.plugins.items) |plugin| {
-                    plugin.tickKeybinds() catch |err| {
-                        dvui.log.err("Plugin keybind tick failed: {s}", .{@errorName(err)});
+                    plugin.tickKeybinds() catch {
+                        dvui.log.err("plugin '{s}': keybind tick failed — see its own log", .{plugin.id});
                     };
                 }
             }
@@ -3582,8 +3585,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             };
 
             for (editor.app.host.plugins.items) |plugin| {
-                plugin.drawOverlay() catch |err| {
-                    dvui.log.err("Plugin overlay draw failed: {s}", .{@errorName(err)});
+                plugin.drawOverlay() catch {
+                    dvui.log.err("plugin '{s}': overlay draw failed — see its own log", .{plugin.id});
                 };
             }
 
@@ -4789,8 +4792,8 @@ pub fn saveAll(editor: *Editor) !void {
             continue;
         }
         if (editor.document_watcher) |*w| w.markPendingBaseline(doc.id);
-        doc.owner.saveDocument(doc) catch |err| {
-            dvui.log.err("Save All: file {s} failed: {s}", .{ doc.owner.documentPath(doc), @errorName(err) });
+        doc.owner.saveDocument(doc) catch {
+            dvui.log.err("Save All: file {s} failed — see {s}'s own log", .{ doc.owner.documentPath(doc), doc.owner.id });
             continue;
         };
         if (editor.document_watcher) |*w| w.noteSaved(doc.id);

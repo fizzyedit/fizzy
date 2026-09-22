@@ -68,6 +68,16 @@ Do this one first:
 3. Main area extends under the panel.
 4. `.blur_behind` on regions.
 
+### Deliberately not rushed in front of 0.2.0 (2026-09-22)
+
+`.blur_behind` is a field on a region declaration, so it moves the ABI fingerprint, which
+raised the question of whether it had to land before the SDK's first release. It does not.
+A new field with a default breaks no plugin's *source* — it costs a recompile and a patch
+bump, which 0.2.x supports by design (the store keys binaries by fingerprint, so an older
+build keeps matching its own SDK). Shipping the field ahead of steps 2 and 3 would instead
+put a switch in the public API that the framework does not yet honour, which is worse than
+adding it a version later. Sequence stands as written.
+
 **The dvui bump is the risk item, and it should land on its own.** `sdk/build.zig.zon` is the
 repo's only dvui pin and is deliberately absent from the root zon (CLAUDE.md explains why adding
 a second pin cannot work). Fizzy has also diverged `PanedWidget`, and the layered work diverges

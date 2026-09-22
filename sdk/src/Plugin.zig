@@ -82,6 +82,13 @@ pub const NewDocumentKind = struct {
 //   [requested]  — only fires after the plugin asks for it via a `host.*` call
 // A plugin that is *not* an editor (the workbench file tree) implements none of the document
 // hooks; it contributes panes + a center provider instead.
+//
+// **An `anyerror` here says *that* it failed, never *why*.** Zig numbers error values per
+// compilation, so the integer a plugin returns means something else in the host's own error set
+// — `@errorName` on it prints an unrelated name, and comparing it to `error.Something` is
+// meaningless. The contract both ways is therefore: whoever fails logs its own reason on its own
+// side, and the caller treats the error as a plain "it failed". The host does exactly that with
+// everything a plugin returns; a plugin should do the same with anything `EditorAPI` returns.
 pub const VTable = struct {
     /// Tear down `state`. Called when the plugin is unregistered / app shuts down.
     deinit: ?*const fn (state: *anyopaque) void = null,
