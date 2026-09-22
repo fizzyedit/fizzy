@@ -354,7 +354,7 @@ pub fn init(
         editor.app.settings = try Settings.load(app.allocator, settings_path, plugins_dir);
     }
 
-    if (comptime builtin.target.cpu.arch != .wasm32) {
+    {
         // What `layout.zon` remembers per region: its extent, and what the user put in it.
         const saved = fizzy.backend.loadRegions(app.allocator, editor.app.config_folder);
         defer fizzy.backend.freeRegions(app.allocator, saved);
@@ -3100,7 +3100,6 @@ fn saveSettingsRaw(editor: *Editor) !void {
 /// Debounced `window.zon` ratio autosave — same shape/guards as `saveSettingsGuarded`, but
 /// gated on `window_ratios_dirty` instead so a splitter drag never forces a settings.zon write.
 fn saveWindowRatiosGuarded(editor: *Editor) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     if (!editor.app.layout.dirty) return;
 
     const now = fizzy.core.perf.nanoTimestamp();
@@ -3118,7 +3117,6 @@ fn saveWindowRatiosGuarded(editor: *Editor) void {
 
 /// Flush to disk regardless of idle/drawing deferral — used during shutdown only.
 fn saveWindowRatiosRaw(editor: *Editor) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     editor.saveRegions();
     editor.app.layout.dirty = false;
 }
@@ -3723,7 +3721,6 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
 /// Write every region's extent and assignment to `layout.zon`, by name. One record per region
 /// whichever half it has, so a region emptied on purpose is written as an empty list.
 fn saveRegions(editor: *Editor) void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     const gpa = editor.app.gpa;
     var by_name: std.StringArrayHashMapUnmanaged(fizzy.backend.SavedRegion) = .empty;
     defer by_name.deinit(gpa);

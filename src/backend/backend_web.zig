@@ -7,6 +7,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const builtin = @import("builtin");
 const core = @import("core");
+const layout_file = @import("layout_file.zig");
 
 const WebFileIo = if (builtin.target.cpu.arch == .wasm32)
     @import("../editor/WebFileIo.zig")
@@ -69,32 +70,15 @@ pub fn showWindow(_: *dvui.Window) void {}
 /// Symmetric with the native API: no window geometry to persist on web.
 pub fn saveWindowGeometry(_: *dvui.Window) void {}
 
-/// Symmetric with the native API: no `layout.zon` to persist on web.
-pub const SavedRegion = struct {
-    name: []const u8,
-    extent: ?f32 = null,
-    surfaces: ?[]const []const u8 = null,
-    parent: ?[]const u8 = null,
-    from: ?[]const u8 = null,
-    shows: ?SavedShows = null,
-};
-
-pub const SavedShows = enum { one, many };
-
-pub fn saveRegions(_: []const u8, _: []const SavedRegion) void {}
-
-/// Symmetric with the native API: no `layout.zon` to read on web.
-pub fn loadRegions(_: std.mem.Allocator, _: []const u8) []SavedRegion {
-    return &.{};
-}
-
-pub fn freeRegions(_: std.mem.Allocator, _: []SavedRegion) void {}
-
-pub fn saveTree(_: []const u8, _: ?core.widgets.DockLayout.Snapshot) void {}
-
-pub fn loadTree(_: std.mem.Allocator, _: []const u8) ?core.widgets.DockLayout {
-    return null;
-}
+/// `layout.zon` lives in `localStorage` on the web, through `core.fs` — the same file code as
+/// the desktop (`layout_file.zig`).
+pub const SavedRegion = layout_file.SavedRegion;
+pub const SavedShows = layout_file.SavedShows;
+pub const saveRegions = layout_file.saveRegions;
+pub const loadRegions = layout_file.loadRegions;
+pub const freeRegions = layout_file.freeRegions;
+pub const saveTree = layout_file.saveTree;
+pub const loadTree = layout_file.loadTree;
 
 /// Symmetric with the native API: no AppKit pump on web.
 pub fn macosLaunchComplete() void {}
