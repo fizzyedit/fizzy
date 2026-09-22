@@ -18,6 +18,10 @@ person. **Read `CLAUDE.md` first**, then this file. Last updated 2026-09-16 at b
   pixi, brain, ghostty and zig are rebuilt against it (not migrated) — see the queue below.
 - No single-line wrapper functions; write the library call at the site. Prefer root-cause fixes
   over another patch to the same mechanism; use dvui's public API over touching its state.
+- **Tag a dvui commit before pinning it.** `sdk/build.zig.zon`'s pin resolves through
+  `/archive/<sha>.tar.gz`, which GitHub serves only while the commit is reachable, so every
+  pinned commit carries an immutable `fizzy-sdk-<version>` tag in the fork (`fizzy-sdk-0.2.0`
+  is the first). Rebase `fizzy-dev` as freely as ever; never move or delete those tags.
 - Gates after any change: `zig build`, `zig build test`, `zig build test-integration`,
   `zig build check-web`, `zig build test-sdk-version`. All green at this checkpoint.
 - Draw icons with `core.icon.icon` (cached texture), never `dvui.icon` (a mesh replayed every

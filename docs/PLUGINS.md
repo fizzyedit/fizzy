@@ -626,6 +626,18 @@ the assignment list read back.
   make rather than who makes it — and hands the chosen `NewDocumentKind.id` back as `kind`. A
   plugin that declares no kinds is one entry and always receives `kind == null`.
 
+#### Repinning dvui: tag the commit first
+
+`sdk/build.zig.zon` pins dvui by commit, and the SDK tarball carries that pin to every plugin
+that builds against a release. GitHub only serves `/archive/<sha>.tar.gz` while the commit is
+reachable from a ref, so a pinned commit that later falls out of `fizzy-dev`'s history — any
+rebase does that — takes every plugin build for that SDK version with it.
+
+So the order is: **tag, then pin.** Each pinned commit gets an immutable `fizzy-sdk-<version>`
+tag in `foxnne/dvui-dev` before `sdk/build.zig.zon` names it, and that tag is never moved or
+deleted. `fizzy-dev` stays an ordinary working branch and can be rebased onto upstream whenever
+it needs to be; the tags are what the published SDKs actually depend on.
+
 #### An error crossing the boundary means "it failed", nothing more
 
 Zig numbers error values per compilation, so the integer that comes back from a `dlopen`'d

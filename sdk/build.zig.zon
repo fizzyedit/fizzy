@@ -31,7 +31,12 @@
         // It lives here rather than there because this directory ships standalone as
         // `fizzy-sdk-v*.tar.gz` and cannot reach anything above its own root, while the app can
         // always reach down into it.
+        // Pinned by commit, kept alive by a tag. GitHub serves `/archive/<sha>.tar.gz` only while
+        // that commit is reachable from some ref, so every commit pinned here gets an immutable
+        // `fizzy-sdk-<version>` tag in the fork before the pin lands. `fizzy-dev` itself stays a
+        // working branch and can be rebased freely — the tag, never.
         .dvui = .{
+            // fizzy-sdk-0.2.0
             .url = "https://github.com/foxnne/dvui-dev/archive/d71a911e5fa3.tar.gz",
             .hash = "dvui-0.5.0-dev-AQFJmVn4AwGB_ma1_1H7J1OjyVeGaSfXAiNLoW7XgcVE",
             //.path = "../../dvui-dev",
