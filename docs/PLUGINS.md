@@ -1140,7 +1140,7 @@ command reports enabled. A submenu row on the account ("Open Drive Folder", "Sig
 drawn through `Host.drawMenuItem`, never dvui's menu widgets: a dylib's dvui has no open
 menu to put an item in.
 
-`fizzyedit/zig-drive` (Google Drive) is the worked example; `plugins/archive` mounts a `.zip`
+`fizzyedit/drive` (Google Drive) is the worked example; `plugins/archive` mounts a `.zip`
 through `core.vfs.Mem` in a few dozen lines. The design and its remaining edges are in
 `docs/CLOUD_FS_PLAN.md`.
 

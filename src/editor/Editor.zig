@@ -2053,12 +2053,15 @@ fn fizzyDrawMenuItem(ctx: *anyopaque, title: []const u8, command_id: ?[]const u8
         .{};
     // A row in the account flyout (`Accounts`) is a popover row, not a dvui menu item.
     if (Accounts.drawing_rows) return Accounts.drawMenuRow(title, icon, kb, enabled);
-    var mi = dvui.menuItem(@src(), .{}, .{
+    // `Menu.rowOptions`, so a plugin's row in the menu bar is the same shape and the same pair of
+    // fills as a fizzy row beside it — including the transparent rest fill that keeps the row the
+    // pointer just left from sitting there as a dark block.
+    var mi = dvui.menuItem(@src(), .{}, Menu.rowOptions(.{
         .expand = .horizontal,
         // `Wyhash.hash` always returns `u64`; `id_extra` is `usize`, which is 32-bit on
         // wasm32 — truncate rather than relying on the width match that only holds natively.
         .id_extra = @truncate(std.hash.Wyhash.hash(0, title)),
-    });
+    }));
     defer mi.deinit();
     const clicked = enabled and mi.activeRect() != null;
     const id_extra: usize = @truncate(std.hash.Wyhash.hash(0, title));

@@ -11,7 +11,7 @@ Two repos are involved:
   `http.Transport`, zip), the disk behind it (`LocalFs`), the mount table and routing
   (`FileTable`, `MountIo`), the two transports, a generic web OAuth popup, and the built-in
   `archive` plugin. Nothing in fizzy names Google.
-- **`fizzyedit/zig-drive`** (`~/dev/fizzyedit/zig-drive`) — the Google Drive plugin, an
+- **`fizzyedit/drive`** (`~/dev/fizzyedit/drive`) — the Google Drive plugin, an
   ordinary third-party plugin (pixi's shape): the Drive v3 client over `core.vfs`, OAuth, and
   the sign-in UI. Natively a store plugin; fizzy's web build links it in by directory
   (`web_plugin_dirs`) because a browser cannot load plugins at runtime.
@@ -21,11 +21,11 @@ Two repos are involved:
 1. **Path-addressed, not id-addressed.** Everything in fizzy is a path: `DocHandle` surface ids
    (`<owner>.doc:<path>`), `core.FileTable` listings keyed by directory, `sdk.services.files`,
    `openFilePath`, extension→owner routing, recents, watchers. An id-addressed `Fs` (what
-   zig-drive started as) forces a second code path into every one of those. So `Fs` speaks paths,
+   drive started as) forces a second code path into every one of those. So `Fs` speaks paths,
    and the Drive backend keeps the path→id map to itself. In fizzy a cloud path is
    self-identifying by scheme: `gdrive://<account>/Notes/todo.md`; the local disk is "the empty
    scheme". An `Fs` itself sees only the part after the mount, rooted at `/` — the host strips
-   `gdrive://<account>` — so zig-drive never learns fizzy's naming and `Mem` is reusable as-is.
+   `gdrive://<account>` — so drive never learns fizzy's naming and `Mem` is reusable as-is.
    Duplicate names inside one Drive folder (Drive allows them) resolve first-listed-wins.
 2. **Async, completion-based.** wasm32-freestanding is single-threaded and cannot block on
    `fetch`, so a synchronous `readFile() -> []u8` is unimplementable on the very target this
@@ -42,22 +42,22 @@ Two repos are involved:
    `changes.list` with a stored page token is the "watcher" and maps directly onto
    `FileTable.invalidateListing` / `noteFileModified`; a whole-tree snapshot is an optimisation
    layered on the same index later. Only file *bytes* hit the network per-file.
-4. **The `drive` plugin is out of tree** (`fizzyedit/zig-drive`), like every provider will be.
+4. **The `drive` plugin is out of tree** (`fizzyedit/drive`), like every provider will be.
    The web build, which cannot `dlopen`, links it in as app-level build data — the same
    mechanism an app built on fizzy uses to bundle its own plugins — and that is the only place
    fizzy's repo names it.
-5. **Tokens live in the host, never in zig-drive.** Native: desktop-client OAuth with PKCE, system
+5. **Tokens live in the host, never in drive.** Native: desktop-client OAuth with PKCE, system
    browser + `std.Io.net` loopback, refresh token persisted in `settings.zon`. Web: Google
    Identity Services token client in `index.html` (Google will not do a browser PKCE code
    exchange for a Web client without a secret) — 1-hour access tokens, silent re-request. Both
-   hand Zig a bearer string; zig-drive sees `Authorization: Bearer …` and nothing else.
+   hand Zig a bearer string; drive sees `Authorization: Bearer …` and nothing else.
 
 ## Roadblocks found up front
 
 | Roadblock | Status |
 |---|---|
-| `Fs` is id-addressed | Fix in zig-drive (step 1). |
-| `Fs` and `http.Transport` are synchronous | Fix in zig-drive (step 1). Unimplementable on wasm otherwise. |
+| `Fs` is id-addressed | Fix in drive (step 1). |
+| `Fs` and `http.Transport` are synchronous | Fix in drive (step 1). Unimplementable on wasm otherwise. |
 | `fizzy_web_fetch` is GET-only, no headers, no body | Generalize to `(method, url, headers, body)` in `web/index.html` + `app/store/web_fetch.zig` (step 4). |
 | Native HTTP / TLS | Already works: `std.http.Client` in `app/store/plugin_repo_asset.zig`. |
 | Native OAuth loopback | `std.Io.net.IpAddress.listen` + `std.http.Server` exist in 0.16; `dvui.openURL` opens the browser. |
@@ -72,9 +72,9 @@ Two repos are involved:
 Each step leaves both repos building and tested. Order is chosen so the first three are
 verifiable without a Google account.
 
-### 1. zig-drive: reshape `Fs` (path-addressed, async) — DONE
+### 1. drive: reshape `Fs` (path-addressed, async) — DONE
 
-Landed as zig-drive `pxvpqtnz`. 18 tests, `check-wasm` links.
+Landed as drive `pxvpqtnz`. 18 tests, `check-wasm` links.
 
 - `Fs` vtable over `/`-rooted, `/`-separated paths within the mount. Ops: `listDir`, `stat`,
   `readFile`, `writeFile`, `createFile`, `mkdir`, `rename` (covers move: a different parent in
@@ -113,7 +113,7 @@ Landed as zig-drive `pxvpqtnz`. 18 tests, `check-wasm` links.
 
 ### 2b. a zip archive as a mount (PhysicsFS-style) — DONE
 
-- zig-drive `zip.zig`: by-hand reader over bytes (`std.zip.Iterator` wants a `File.Reader`;
+- drive `zip.zig`: by-hand reader over bytes (`std.zip.Iterator` wants a `File.Reader`;
   the archive arrives as bytes on the web; std's own `EndRecord.findBuffer` does not compile)
   and a store-method writer; `Mem.generation` for dirty tracking.
 - `plugins/archive` (built-in, static in exe + web): owns `.zip` as a *document type*, so the
@@ -172,9 +172,9 @@ Landed as zig-drive `pxvpqtnz`. 18 tests, `check-wasm` links.
   auth header, body and status round-trip; cancel joins the worker and leaks nothing.
 - The web transport's first real exercise is the Drive plugin's first `files.list` (step 5).
 
-### 5. the Drive plugin (`fizzyedit/zig-drive`) — BUILT, first contact with Google made
+### 5. the Drive plugin (`fizzyedit/drive`) — BUILT, first contact with Google made
 
-- `fizzyedit/zig-drive/plugin.zig`: settings (desktop client id + secret, web client id, root folder id, and
+- `fizzyedit/drive/plugin.zig`: settings (desktop client id + secret, web client id, root folder id, and
   the refresh token / account Sign In writes back), commands `drive.sign_in` /
   `drive.sign_out`, a File-menu section (in-app + native), and a per-frame `beginFrame` that
   pumps the plugin's own requests, polls the loopback and refreshes the token two minutes
@@ -193,11 +193,11 @@ Landed as zig-drive `pxvpqtnz`. 18 tests, `check-wasm` links.
 - Not yet: the explorer's web empty state still says "Open Files", not "Connect Google
   Drive" (the File menu has it). Writes carry a `modifiedTime` precondition; a conflict is a toast and a dirty
   document, not a silent overwrite.
-- Publisher setup, step by step: `~/dev/fizzyedit/zig-drive/README.md`.
+- Publisher setup, step by step: `~/dev/fizzyedit/drive/README.md`.
 
 ### 6. Verification
 
-- `zig build test` in both repos; `zig build check-wasm` in zig-drive; `zig build check-web`,
+- `zig build test` in both repos; `zig build check-wasm` in drive; `zig build check-web`,
   `test`, `test-sdk-version` in fizzy after the vtable change.
 - Native end-to-end against a real Drive: sign in, explorer shows the granted folder, create /
   rename / move / delete / open / edit / save, confirm in drive.google.com.
