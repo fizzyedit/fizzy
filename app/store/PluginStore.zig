@@ -2498,6 +2498,9 @@ var flyout_id_buf: [96]u8 = undefined;
 var flyout_id_len: usize = 0;
 /// Last drawn flyout rect, so the mouse can leave the card *into* the flyout without it closing.
 var flyout_rect: dvui.Rect.Physical = .{};
+/// The popover's own rect, which it animates its size through across frames. Zeroed whenever the
+/// flyout moves to another card, so each one grows from its anchor rather than sliding over.
+var flyout_win_rect: dvui.Rect = .{};
 
 /// How far the flyout overlaps the card's right edge (natural px). Non-zero deliberately: a gap
 /// here is a dead strip the pointer crosses on the way over, and the flyout would close in it.
@@ -2515,11 +2518,13 @@ fn flyoutSet(id: []const u8) void {
     @memcpy(flyout_id_buf[0..id.len], id);
     flyout_id_len = id.len;
     flyout_rect = .{};
+    flyout_win_rect = .{};
 }
 
 fn flyoutClear() void {
     flyout_id_len = 0;
     flyout_rect = .{};
+    flyout_win_rect = .{};
 }
 
 /// The installed card's Enabled / Auto-update controls, as a small rounded panel butted against
@@ -2545,7 +2550,6 @@ fn drawHoverToggles(entry: StoreEntry, card_r: dvui.Rect.Physical, card_hovered:
     if (!showing) flyoutSet(entry.id);
     if (!flyoutIsFor(entry.id)) return; // id too long to track
 
-    const theme = dvui.themeGet();
     const scale = dvui.windowNaturalScale();
     // Anchor to the card's right edge *or* the visible edge of the list, whichever comes first.
     // A card is wider than a narrow sidebar (`card_min_w` + horizontal scroll), so its own right
@@ -2561,31 +2565,19 @@ fn drawHoverToggles(entry: StoreEntry, card_r: dvui.Rect.Physical, card_hovered:
         .y = std.math.clamp(card_r.y + card_r.h / 2, clip.y, clip.y + clip.h),
     };
 
-    var fw: dvui.FloatingWidget = undefined;
-    fw.init(@src(), .{
-        .from = anchor,
-        // The anchor is the panel's left edge, vertically centred on the card.
-        .from_gravity_x = 1.0,
-        .from_gravity_y = 0.5,
-    }, .{ .id_extra = hashId(entry.id) });
-    defer fw.deinit();
-
-    // Surfaced exactly like a dialog window (see `core/dvui.zig`'s `dialogWindow`): the same
-    // translucent content fill, the same 10px corners, the same centred black shadow, and no
-    // border. This *is* a small floating window over the app, so it should read as one rather
-    // than as a bordered popover of its own invention.
-    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .background = true,
-        .color_fill = .{ .color = theme.color(.content, .fill).opacity(0.85) },
-        .border = .all(0),
-        .corners = dvui.CornerRect.all(10),
-        .padding = .all(6),
-        .box_shadow = .{
-            .color = .black,
-            .alpha = 0.35,
-            .fade = 10,
-            .corners = dvui.CornerRect.all(10),
-        },
+    // The same frosted panel the account flyout and every dialog use (`core.widgets.Popover`):
+    // one definition of what a floating surface in fizzy looks like — the blur behind it, the
+    // fill, the corners, the shadow — rather than this one hand-rolling a translucent box that
+    // only resembled them.
+    //
+    // `Popover` anchors by its top-left, so the vertical centring comes from the height it had
+    // last frame; on the first frame there is none, which is also the frame it grows out of the
+    // anchor, so nothing jumps.
+    const natural = anchor.toNatural();
+    var panel = core.widgets.Popover.init(@src(), .{
+        .rect = &flyout_win_rect,
+        .anchor = .{ .x = natural.x, .y = natural.y - flyout_win_rect.h / 2 },
+        .id_extra = hashId(entry.id),
     });
     defer panel.deinit();
 
@@ -2605,7 +2597,7 @@ fn drawHoverToggles(entry: StoreEntry, card_r: dvui.Rect.Physical, card_hovered:
     }
 
     // Recorded *after* the contents so the rect matches what was actually laid out this frame.
-    flyout_rect = panel.data().borderRectScale().r;
+    flyout_rect = panel.rect;
 }
 
 /// The two per-plugin settings shared by the hover flyout and the detail page header: whether the
