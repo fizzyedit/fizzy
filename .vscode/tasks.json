@@ -10,14 +10,14 @@
             // not find 'UpdateMac'". Force restore to write to the real per-user
             // cache where the binaries land correctly.
             "NUGET_PACKAGES": "${env:HOME}/.nuget/packages",
-            "ZIG_SYSTEM_LINKER_HACK": "1",
-            "MTL_SHADER_VALIDATION": "1",
-            "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-            "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "1",
-            "MTL_DEBUG_LAYER": "1",
-            "METAL_DEVICE_WRAPPER_TYPE": "1",
-            "MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS": "1",
-            "MTL_DEBUG_LAYER_VALIDATE_UNRETAINED_RESOURCES": "0x4",
+            // "ZIG_SYSTEM_LINKER_HACK": "1",
+            // "MTL_SHADER_VALIDATION": "1",
+            // "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+            // "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "1",
+            // "MTL_DEBUG_LAYER": "1",
+            // "METAL_DEVICE_WRAPPER_TYPE": "1",
+            // "MTL_DEBUG_LAYER_VALIDATE_LOAD_ACTIONS": "1",
+            // "MTL_DEBUG_LAYER_VALIDATE_UNRETAINED_RESOURCES": "0x4",
         },
     },
     "tasks": [
