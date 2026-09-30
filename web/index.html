@@ -764,12 +764,311 @@
             // swallowed the event in the capture phase, drive the frame loop ourselves so
             // the canvas widget actually drains the accumulator we just wrote.
             dvuiApp.requestRender();
+          } else if (pinchSink) {
+            pinchSink(-ev.deltaY / 100);
           }
         }
       }, { capture: true, passive: false });
 
+      // ---- worker mode: the editor runs in `fizzy-worker.js` --------------------------------
+      //
+      // Chrome on Android throttles a page's own frames to 60 Hz on a 120 Hz screen unless input
+      // is driving them; a worker's frame loop is not. So the editor, dvui's `web.js` and all,
+      // runs in a worker drawing to this canvas through an `OffscreenCanvas`, and the page is
+      // what only a page can be: where input lands (sent on as dvui would have queued it), and
+      // where the worker's cursor, on-screen keyboard, links, downloads, file pickers,
+      // clipboard, full screen and OAuth popups happen.
+      function startWorker(wasmUrl) {
+        const canvas = dvuiCanvas;
+        const worker = new Worker("fizzy-worker.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256", { type: "module" });
+        const post = (msg, transfer) => worker.postMessage(msg, transfer || []);
+        const reply = (request, value, transfer) => post({ type: "reply", request, value }, transfer);
+
+        const size = () => ({ w: canvas.clientWidth, h: canvas.clientHeight, dpr: window.devicePixelRatio });
+        const media = (q) => window.matchMedia(q).matches;
+        const prefs = () => ({
+          dark: media("(prefers-color-scheme: dark)"),
+          light: media("(prefers-color-scheme: light)"),
+          reduce: media("(prefers-reduced-motion: reduce)"),
+        });
+        const storage = {};
+        try {
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith("fizzy.")) storage[key] = localStorage.getItem(key);
+          }
+        } catch (_) {}
+
+        // dvui's hidden input: where text arrives, and what raises the on-screen keyboard.
+        const hidden = document.createElement("input");
+        hidden.setAttribute("autocapitalize", "none");
+        Object.assign(hidden.style, { position: "absolute", left: 0, top: 0, padding: 0, border: 0, margin: 0, opacity: 0, zIndex: -1 });
+        document.body.prepend(hidden);
+        let textInputRect = [];
+        function oskCheck() {
+          if (textInputRect.length === 0) {
+            canvas.focus();
+            return;
+          }
+          const rect = canvas.getBoundingClientRect();
+          const left = window.scrollX + rect.left + textInputRect[0];
+          const top = window.scrollY + rect.top + textInputRect[1];
+          hidden.style.left = left + "px";
+          hidden.style.top = top + "px";
+          hidden.style.width = Math.max(0, Math.min(textInputRect[2], canvas.clientWidth - left)) + "px";
+          hidden.style.height = Math.max(0, Math.min(textInputRect[2], canvas.clientHeight - top)) + "px";
+          hidden.focus();
+        }
+
+        let boundKeys = new Set();
+        const offscreen = canvas.transferControlToOffscreen();
+        post({
+          type: "init",
+          canvas: offscreen,
+          wasmUrl: new URL(wasmUrl, document.baseURI).href,
+          webJsUrl: new URL("web.js?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256", document.baseURI).href,
+          size: size(),
+          prefs: prefs(),
+          storage,
+          search: location.search,
+          baseURI: document.baseURI,
+        }, [offscreen]);
+
+        new ResizeObserver(() => post({ type: "size", size: size() })).observe(canvas);
+        window.addEventListener("resize", () => post({ type: "size", size: size() }));
+        for (const q of ["(prefers-color-scheme: dark)", "(prefers-reduced-motion: reduce)"]) {
+          window.matchMedia(q).addEventListener("change", () => post({ type: "prefs", prefs: prefs() }));
+        }
+
+        worker.onerror = (err) => {
+          console.error(err);
+          showError(`Failed to load the editor (${err.message || "worker error"}).`);
+        };
+        worker.onmessage = (e) => {
+          const m = e.data;
+          switch (m.type) {
+            case "ready":
+              hideLoading();
+              break;
+            case "error":
+              console.error(m.message);
+              showError(`Failed to load the editor (${m.message}). Try a hard refresh, or use a recent Chrome, Firefox, or Safari.`);
+              break;
+            case "alert":
+              alert(m.msg);
+              break;
+            case "cursor":
+              canvas.style.cursor = m.name;
+              break;
+            case "textInput":
+              textInputRect = m.rect;
+              oskCheck();
+              break;
+            case "openUrl":
+              if (m.newWin) window.open(m.url);
+              else window.location.href = m.url;
+              break;
+            case "download": {
+              const url = URL.createObjectURL(new Blob([m.data], { type: "application/octet-stream" }));
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = m.name;
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+              break;
+            }
+            case "filePicker": {
+              const input = document.createElement("input");
+              input.type = "file";
+              input.accept = m.accept;
+              if (m.multiple) input.multiple = true;
+              input.oncancel = () => reply(m.request, []);
+              input.onchange = () => {
+                const files = Array.from(input.files || []);
+                Promise.all(files.map((f) => f.arrayBuffer())).then((datas) => {
+                  const out = files.map((f, i) => ({ name: f.name, size: f.size, data: datas[i] }));
+                  reply(m.request, out, datas);
+                });
+              };
+              input.click();
+              break;
+            }
+            case "clipboard":
+              if (navigator.clipboard) navigator.clipboard.writeText(m.text);
+              else {
+                hidden.value = m.text;
+                hidden.focus();
+                hidden.select();
+                document.execCommand("copy");
+                hidden.value = "";
+              }
+              break;
+            case "fullscreen":
+              if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+              else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch((err) => console.warn("fizzy: full screen refused:", err));
+              break;
+            case "oauth": {
+              let blobUrl = null;
+              let url = m.url;
+              if (m.html !== undefined) {
+                blobUrl = URL.createObjectURL(new Blob([m.html], { type: "text/html" }));
+                url = blobUrl + (m.hash ? "#" + m.hash : "");
+              }
+              let settled = false;
+              const finish = (value) => {
+                if (settled) return;
+                settled = true;
+                window.removeEventListener("message", onMessage);
+                if (blobUrl) URL.revokeObjectURL(blobUrl);
+                reply(m.request, value);
+              };
+              const onMessage = (ev) => {
+                if (ev.origin !== location.origin || !ev.data || typeof ev.data.fizzyOAuth !== "string") return;
+                finish({ text: ev.data.fizzyOAuth });
+              };
+              window.addEventListener("message", onMessage);
+              const popup = window.open(url, "fizzy-oauth", "popup,width=520,height=680");
+              if (!popup) {
+                finish(null);
+                break;
+              }
+              const watch = setInterval(() => {
+                if (settled) return clearInterval(watch);
+                if (popup.closed) {
+                  clearInterval(watch);
+                  finish(null);
+                }
+              }, 500);
+              break;
+            }
+            case "rasterize":
+              loadImagePixels(m.url).then((img) => {
+                reply(m.request, { data: img.data, width: img.width, height: img.height }, [img.data.buffer]);
+              }).catch(() => reply(m.request, null));
+              break;
+            case "storageSet":
+              try { localStorage.setItem(m.key, m.value); } catch (err) { console.warn("fizzy: could not store", m.key, err); }
+              break;
+            case "storageRemove":
+              try { localStorage.removeItem(m.key); } catch (_) {}
+              break;
+            case "persistStorage":
+              if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+              break;
+            case "boundKeys":
+              boundKeys = new Set(m.keys);
+              break;
+          }
+        };
+
+        // Input, as dvui's `web.js` would have queued it (its event codes, its wheel heuristics).
+        const mods = (ev) => (ev.metaKey << 3) | (ev.altKey << 2) | (ev.ctrlKey << 1) | (ev.shiftKey << 0);
+        const event = (a0, a1, a2, a3, a4) => post({ type: "event", a: [a0, a1, a2, a3, a4] });
+        canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
+        canvas.addEventListener("mousemove", (ev) => {
+          const rect = canvas.getBoundingClientRect();
+          post({ type: "mouse", x: (ev.clientX - rect.left) / (rect.right - rect.left), y: (ev.clientY - rect.top) / (rect.bottom - rect.top), mods: mods(ev) });
+        });
+        canvas.addEventListener("mousedown", (ev) => event(2, ev.button, mods(ev), 0, 0));
+        canvas.addEventListener("mouseup", (ev) => event(3, ev.button, mods(ev), 0, 0));
+
+        const scrollLowest = [99999, 99999];
+        let scrollLowestBatch = [99999, 99999];
+        let scrollLastMs = Date.now();
+        canvas.addEventListener("wheel", (ev) => {
+          ev.preventDefault();
+          if (Date.now() - scrollLastMs > 1000) scrollLowestBatch = [99999, 99999];
+          scrollLastMs = Date.now();
+          const touchpadAdj = 0.025;
+          const axis = (i, delta, shiftSizes) => {
+            if (delta === 0) return;
+            scrollLowest[i] = Math.min(Math.abs(delta), scrollLowest[i]);
+            scrollLowestBatch[i] = Math.min(Math.abs(delta), scrollLowestBatch[i]);
+            let ticks = -delta;
+            let trackpad = 0;
+            const low = scrollLowestBatch[i];
+            if (ev.deltaMode !== 0) {
+              ticks /= low;
+            } else if (low >= 100 || low === 16 || shiftSizes.includes(low) || low === 4.000244140625) {
+              ticks /= low;
+              if (low === 4.000244140625) ticks *= touchpadAdj;
+            } else {
+              trackpad = 1;
+              ticks = ticks / scrollLowest[i] * touchpadAdj;
+            }
+            event(4, i, trackpad, ticks, 0);
+          };
+          axis(0, ev.deltaX, [9, 40]);
+          axis(1, ev.deltaY, []);
+        }, { passive: false });
+
+        const keydown = (ev) => {
+          if (ev.key === "Tab") {
+            if (ev.ctrlKey) return;
+            ev.preventDefault();
+          }
+          if (boundKeys.has(ev.key + "|" + mods(ev))) ev.preventDefault();
+          post({ type: "key", kind: 5, key: ev.key, repeat: ev.repeat ? 1 : 0, mods: mods(ev) });
+        };
+        const keyup = (ev) => post({ type: "key", kind: 6, key: ev.key, repeat: 0, mods: mods(ev) });
+        canvas.addEventListener("keydown", keydown);
+        hidden.addEventListener("keydown", keydown);
+        canvas.addEventListener("keyup", keyup);
+        hidden.addEventListener("keyup", keyup);
+        hidden.addEventListener("beforeinput", (ev) => {
+          ev.preventDefault();
+          if (ev.data && !ev.isComposing) post({ type: "text", text: ev.data });
+        });
+        hidden.addEventListener("compositionend", (ev) => {
+          if (ev.data) post({ type: "text", text: ev.data });
+          ev.target.value = "";
+        });
+
+        const touches = [];
+        const touchIndex = (id) => {
+          let idx = touches.findIndex((t) => t[0] === id);
+          if (idx < 0) {
+            idx = touches.length;
+            touches.push([id, idx]);
+          }
+          return idx;
+        };
+        const touchEvents = (kind, ev, done) => {
+          ev.preventDefault();
+          const rect = canvas.getBoundingClientRect();
+          for (const touch of ev.changedTouches) {
+            const x = (touch.clientX - rect.left) / (rect.right - rect.left);
+            const y = (touch.clientY - rect.top) / (rect.bottom - rect.top);
+            const tidx = touchIndex(touch.identifier);
+            event(kind, touches[tidx][1], 0, x, y);
+            if (done) touches.splice(tidx, 1);
+          }
+        };
+        canvas.addEventListener("touchstart", (ev) => touchEvents(8, ev, false), { passive: false });
+        canvas.addEventListener("touchend", (ev) => {
+          touchEvents(9, ev, true);
+          oskCheck();
+        }, { passive: false });
+        canvas.addEventListener("touchmove", (ev) => touchEvents(10, ev, false), { passive: false });
+
+        pinchSink = (amount) => post({ type: "pinch", amount });
+      }
+
+      // Where a trackpad pinch goes in worker mode (the capture listener above).
+      var pinchSink = null;
+
+      const workerMode = new URLSearchParams(location.search).has("worker") &&
+        typeof OffscreenCanvas !== "undefined" && "transferControlToOffscreen" in HTMLCanvasElement.prototype;
+
       if (!hasWebGl()) {
         showError("This browser does not support WebGL, which fizzy needs to run.");
+      } else if (workerMode) {
+        const wasmUrl = "web.wasm?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
+        waitForLayout().then(() => startWorker(wasmUrl)).catch((err) => {
+          console.error(err);
+          showError(`Failed to load the editor (${err instanceof Error ? err.message : String(err)}).`);
+        });
       } else {
         const wasmUrl = "web.wasm?cache-buster=TEMPLATE_HASH_WITH_PADDING__ITS_64_BYTES_LONG_THE_SAME_AS_SHA256";
         waitForLayout()

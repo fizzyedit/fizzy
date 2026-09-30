@@ -260,6 +260,7 @@ pub fn addSteps(
     const cb_run = b.addRunArtifact(cb);
     cb_run.addFileArg(b.path("web/index.html"));
     cb_run.addFileArg(dvui_web_dep.path("src/backends/web.js"));
+    cb_run.addFileArg(b.path("web/fizzy-worker.js"));
     cb_run.addFileArg(web_exe.getEmittedBin());
     const index_html_with_hash = cb_run.captureStdOut(.{});
 
@@ -274,6 +275,12 @@ pub fn addSteps(
         dvui_web_dep.path("src/backends/web.js"),
         web_install_dir,
         "web.js",
+    ).step);
+    // Worker mode (`?worker=1`): the editor in a worker, drawing through an OffscreenCanvas.
+    web_step.dependOn(&b.addInstallFileWithDir(
+        b.path("web/fizzy-worker.js"),
+        web_install_dir,
+        "fizzy-worker.js",
     ).step);
     web_step.dependOn(&b.addInstallFileWithDir(
         dvui_web_dep.path("src/fonts/NotoSansKR-Regular.ttf"),
