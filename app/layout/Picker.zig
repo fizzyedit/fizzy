@@ -50,6 +50,9 @@ lifted: bool = false,
 const preview: dvui.Size = .{ .w = 150, .h = 100 };
 const columns: usize = 2;
 const list_height: f32 = 420;
+/// Points of the popup around its contents, top and bottom — its 8pt padding each side — with
+/// a little to spare so rounding never tips it into scrolling.
+const popup_chrome_h: f32 = 2 * 8 + 10;
 
 pub fn open(self: *Picker, gpa: std.mem.Allocator, region: []const u8, anchor: ?dvui.Point.Natural) void {
     self.close(gpa);
@@ -100,135 +103,147 @@ pub fn draw(self: *Picker, f: *Layout) void {
     };
     defer popup.deinit();
 
-    {
-        var chrome = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .padding = .{ .h = 6 },
-        });
-        defer chrome.deinit();
+    // The title, the controls and the filter stay put; only the views under them scroll. The
+    // popup scrolls whatever does not fit the window, so the list takes only the room left
+    // under this — measured as it last laid out — and the popup never has anything to scroll.
+    const filter_text, const head_h = head: {
+        var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+        defer box.deinit();
 
         {
-            var title = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-            defer title.deinit();
-            dvui.labelNoFmt(@src(), region.name, .{}, .{
-                .font = dvui.Font.theme(.heading),
-                .gravity_y = 0.5,
+            var chrome = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .expand = .horizontal,
+                .padding = .{ .h = 6 },
             });
-        }
+            defer chrome.deinit();
 
-        const created = isCreated(state, region.name);
-        // On the tree, any leaf with a sibling can go — a declared place's pin moves to the
-        // sibling. Off it, only a minted leaf can.
-        const removable = created or state.canRemove(region.name);
-        const assigned = state.assignment(region.name);
-        const showing = if (assigned) |ids| ids.len > 0 else f.selectedIn(&region) != null;
-
-        // Every control on one row: how many surfaces it shows on the left; what to do with
-        // the place on the right. Clear and Defaults keep their places, dimmed when they do
-        // not apply — each turns the other on as often as not (clearing leaves an assignment
-        // to go back from), and coming and going they shoved the row around under the pointer.
-        var controls = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .y = 4 },
-        });
-        defer controls.deinit();
-        if (modeButton(@src(), "Single", region.shows == .one, 1)) {
-            setShows(f, &region, .one);
-        }
-        if (modeButton(@src(), "Multiple", region.shows == .many, 2)) {
-            setShows(f, &region, .many);
-        }
-
-        var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 1.0, .gravity_y = 0.5 });
-        defer actions.deinit();
-        {
-            // Vertical / Horizontal name the divider: a vertical bar is side by
-            // side (the layout axis is horizontal). The old "split horizontally"
-            // label was that axis and read as the opposite split.
-            //
-            // On `core.widgets`' menu chain, not a `dvui.DropdownWidget`: this popup is a core
-            // floating menu, and dvui's dropdown opens its list on dvui's own chain, which this
-            // popup cannot see. The popup took the list taking focus for focus moving elsewhere,
-            // and closed — so Split shut the picker instead of offering the two choices.
-            const split = core.widgets.menuItem(@src(), .{ .submenu = true }, .{
-                .font = actionFont(),
-                .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-                .margin = .{ .w = 4 },
-                .gravity_y = 0.5,
-                .background = true,
-                .border = dvui.ButtonWidget.defaults.border,
-                .corners = dvui.ButtonWidget.defaults.corners,
-                .style = .control,
-            });
-            const split_from = split.activeRect();
             {
-                var label = dvui.box(@src(), .{ .dir = .horizontal }, .{});
-                defer label.deinit();
-                dvui.labelNoFmt(@src(), "Split", .{}, .{
-                    .font = actionFont(),
-                    .padding = .{},
-                    .margin = .{},
-                    .gravity_y = 0.5,
-                });
-                core.icon.icon(@src(), "split_choice", dvui.entypo.triangle_down, .{}, .{
-                    .padding = .{ .x = 4 },
+                var title = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+                defer title.deinit();
+                dvui.labelNoFmt(@src(), region.name, .{}, .{
+                    .font = dvui.Font.theme(.heading),
                     .gravity_y = 0.5,
                 });
             }
-            split.deinit();
-            if (split_from) |r| {
-                const choices = core.widgets.floatingMenu(@src(), .{
-                    .from = r,
-                    .avoid = .vertical,
-                    .frost = core.widgets.menuFrost(),
-                }, core.widgets.menuSurfaceOptions());
-                defer choices.deinit();
-                if (core.widgets.menuRow(@src(), "Vertical", .{}) != null) {
-                    choices.close();
-                    f.splitNamed(region.name, .horizontal);
-                    self.close(gpa);
-                    state.discardSnapshots(gpa);
-                    return;
-                }
-                if (core.widgets.menuRow(@src(), "Horizontal", .{ .id_extra = 1 }) != null) {
-                    choices.close();
-                    f.splitNamed(region.name, .vertical);
-                    self.close(gpa);
-                    state.discardSnapshots(gpa);
-                    return;
-                }
-            }
-        }
-        if (!created) {
-            if (actionButton(@src(), "Clear", showing, 2)) {
-                clearRegion(f, region.name);
-            }
-            if (actionButton(@src(), "Defaults", assigned != null, 4)) {
-                state.unassign(gpa, region.name);
-                state.markDirty();
-                dvui.refresh(null, @src(), null);
-            }
-        }
-        if (removable) {
-            if (actionButton(@src(), "Remove", true, 3)) {
-                removeRegion(f, &region);
-                self.close(gpa);
-                state.discardSnapshots(gpa);
-                return;
-            }
-        }
-    }
 
-    // The same filter box as the file tree's, the settings' and the store's. It matches what a
-    // card says and what it does not: the view's title, the plugin it comes from, its tags (the
-    // keywords it asks for) and the place showing it now.
-    const filter_text = core.widgets.filterRow(@src(), "Filter views...", .{ .margin = .{ .y = 2, .h = 4 } });
+            const created = isCreated(state, region.name);
+            // On the tree, any leaf with a sibling can go — a declared place's pin moves to the
+            // sibling. Off it, only a minted leaf can.
+            const removable = created or state.canRemove(region.name);
+            const assigned = state.assignment(region.name);
+            const showing = if (assigned) |ids| ids.len > 0 else f.selectedIn(&region) != null;
+
+            // Every control on one row: how many surfaces it shows on the left; what to do with
+            // the place on the right. Clear and Defaults keep their places, dimmed when they do
+            // not apply — each turns the other on as often as not (clearing leaves an assignment
+            // to go back from), and coming and going they shoved the row around under the pointer.
+            var controls = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .padding = .{ .y = 4 },
+            });
+            defer controls.deinit();
+            if (modeButton(@src(), "Single", region.shows == .one, 1)) {
+                setShows(f, &region, .one);
+            }
+            if (modeButton(@src(), "Multiple", region.shows == .many, 2)) {
+                setShows(f, &region, .many);
+            }
+
+            var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 1.0, .gravity_y = 0.5 });
+            defer actions.deinit();
+            {
+                // Vertical / Horizontal name the divider: a vertical bar is side by
+                // side (the layout axis is horizontal). The old "split horizontally"
+                // label was that axis and read as the opposite split.
+                //
+                // On `core.widgets`' menu chain, not a `dvui.DropdownWidget`: this popup is a core
+                // floating menu, and dvui's dropdown opens its list on dvui's own chain, which this
+                // popup cannot see. The popup took the list taking focus for focus moving elsewhere,
+                // and closed — so Split shut the picker instead of offering the two choices.
+                const split = core.widgets.menuItem(@src(), .{ .submenu = true }, .{
+                    .font = actionFont(),
+                    .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+                    .margin = .{ .w = 4 },
+                    .gravity_y = 0.5,
+                    .background = true,
+                    .border = dvui.ButtonWidget.defaults.border,
+                    .corners = dvui.ButtonWidget.defaults.corners,
+                    .style = .control,
+                });
+                const split_from = split.activeRect();
+                {
+                    var label = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+                    defer label.deinit();
+                    dvui.labelNoFmt(@src(), "Split", .{}, .{
+                        .font = actionFont(),
+                        .padding = .{},
+                        .margin = .{},
+                        .gravity_y = 0.5,
+                    });
+                    core.icon.icon(@src(), "split_choice", dvui.entypo.triangle_down, .{}, .{
+                        .padding = .{ .x = 4 },
+                        .gravity_y = 0.5,
+                    });
+                }
+                split.deinit();
+                if (split_from) |r| {
+                    const choices = core.widgets.floatingMenu(@src(), .{
+                        .from = r,
+                        .avoid = .vertical,
+                        .frost = core.widgets.menuFrost(),
+                    }, core.widgets.menuSurfaceOptions());
+                    defer choices.deinit();
+                    if (core.widgets.menuRow(@src(), "Vertical", .{}) != null) {
+                        choices.close();
+                        f.splitNamed(region.name, .horizontal);
+                        self.close(gpa);
+                        state.discardSnapshots(gpa);
+                        return;
+                    }
+                    if (core.widgets.menuRow(@src(), "Horizontal", .{ .id_extra = 1 }) != null) {
+                        choices.close();
+                        f.splitNamed(region.name, .vertical);
+                        self.close(gpa);
+                        state.discardSnapshots(gpa);
+                        return;
+                    }
+                }
+            }
+            if (!created) {
+                if (actionButton(@src(), "Clear", showing, 2)) {
+                    clearRegion(f, region.name);
+                }
+                if (actionButton(@src(), "Defaults", assigned != null, 4)) {
+                    state.unassign(gpa, region.name);
+                    state.markDirty();
+                    dvui.refresh(null, @src(), null);
+                }
+            }
+            if (removable) {
+                if (actionButton(@src(), "Remove", true, 3)) {
+                    removeRegion(f, &region);
+                    self.close(gpa);
+                    state.discardSnapshots(gpa);
+                    return;
+                }
+            }
+        }
+
+        // The same filter box as the file tree's, the settings' and the store's. It matches what a
+        // card says and what it does not: the view's title, the plugin it comes from, its tags (the
+        // keywords it asks for) and the place showing it now.
+        break :head .{
+            core.widgets.filterRow(@src(), "Filter views...", .{ .margin = .{ .y = 2, .h = 4 } }),
+            if (dvui.minSizeGet(box.data().id)) |m| m.h else 0,
+        };
+    };
     const query = core.fuzzy.Query.init(filter_text);
 
     const width = @as(f32, @floatFromInt(columns)) * (preview.w + 16) + 16;
+    const list_h = std.math.clamp(dvui.windowRect().h - head_h - popup_chrome_h, preview.h, list_height);
     var scroll = dvui.scrollArea(@src(), .{}, .{
-        .min_size_content = .{ .w = width, .h = list_height },
-        .max_size_content = .size(.{ .w = width, .h = list_height }),
+        .min_size_content = .{ .w = width, .h = list_h },
+        .max_size_content = .size(.{ .w = width, .h = list_h }),
         .background = false,
     });
     defer scroll.deinit();
