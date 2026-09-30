@@ -1528,21 +1528,21 @@ pub fn createFolderInteractive(parent: []const u8) void {
 pub fn extension(file: []const u8) Extension {
     const ext = std.fs.path.extension(file);
     if (std.mem.eql(u8, ext, "")) return .hidden;
-    if (std.mem.eql(u8, ext, ".fiz")) return .fizzy;
-    if (std.mem.eql(u8, ext, ".pixi")) return .fizzy;
-    if (std.mem.eql(u8, ext, ".atlas")) return .atlas;
-    if (std.mem.eql(u8, ext, ".png")) return .png;
-    if (std.mem.eql(u8, ext, ".gif")) return .gif;
-    if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg")) return .jpg;
-    if (std.mem.eql(u8, ext, ".pdf")) return .pdf;
-    if (std.mem.eql(u8, ext, ".psd")) return .psd;
-    if (std.mem.eql(u8, ext, ".aseprite")) return .aseprite;
-    if (std.mem.eql(u8, ext, ".pyxel")) return .pyxel;
-    if (std.mem.eql(u8, ext, ".json")) return .json;
-    if (std.mem.eql(u8, ext, ".zig")) return .zig;
-    if (std.mem.eql(u8, ext, ".zip")) return .zip;
-    if (std.mem.eql(u8, ext, ".7z")) return ._7z;
-    if (std.mem.eql(u8, ext, ".tar")) return .tar;
-    if (std.mem.eql(u8, ext, ".txt")) return .txt;
+    if (std.ascii.eqlIgnoreCase(ext, ".fiz")) return .fizzy;
+    if (std.ascii.eqlIgnoreCase(ext, ".pixi")) return .fizzy;
+    if (std.ascii.eqlIgnoreCase(ext, ".atlas")) return .atlas;
+    if (std.ascii.eqlIgnoreCase(ext, ".png")) return .png;
+    if (std.ascii.eqlIgnoreCase(ext, ".gif")) return .gif;
+    if (std.ascii.eqlIgnoreCase(ext, ".jpg") or std.ascii.eqlIgnoreCase(ext, ".jpeg")) return .jpg;
+    if (std.ascii.eqlIgnoreCase(ext, ".pdf")) return .pdf;
+    if (std.ascii.eqlIgnoreCase(ext, ".psd")) return .psd;
+    if (std.ascii.eqlIgnoreCase(ext, ".aseprite")) return .aseprite;
+    if (std.ascii.eqlIgnoreCase(ext, ".pyxel")) return .pyxel;
+    if (std.ascii.eqlIgnoreCase(ext, ".json")) return .json;
+    if (std.ascii.eqlIgnoreCase(ext, ".zig")) return .zig;
+    if (std.ascii.eqlIgnoreCase(ext, ".zip")) return .zip;
+    if (std.ascii.eqlIgnoreCase(ext, ".7z")) return ._7z;
+    if (std.ascii.eqlIgnoreCase(ext, ".tar")) return .tar;
+    if (std.ascii.eqlIgnoreCase(ext, ".txt")) return .txt;
     return .unsupported;
 }
