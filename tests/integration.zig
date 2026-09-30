@@ -3213,11 +3213,11 @@ test "a place closing for good is not still holding its padding and its sash" {
     const leaf = ViewDrag.placeBounds(&editor.app.layout, "Main/b1") orelse return error.TestExpectedEqual;
     const rest = ViewDrag.placeBounds(&editor.app.layout, "Main") orelse return error.TestExpectedEqual;
 
-    // Four points of card wearing what four points of card can carry of an 8pt
-    // inset — a quarter of it, so the card is 8pt tall. Kept whole, the inset
-    // alone would hold 16 of the 20pt this place is still taking.
-    const inset = PaddedCardFrame.card_inset * 2 * (left / (PaddedCardFrame.card_inset * 2));
-    try std.testing.expectApproxEqAbs((left + inset) * scale, leaf.h, 1);
+    // A place's extent is its whole reach, inset included, so four points from
+    // shut the card is four points tall: its 8pt inset has folded to what four
+    // points can carry. Kept whole, the inset alone would hold the place 16pt
+    // open.
+    try std.testing.expectApproxEqAbs(left * scale, leaf.h, 1);
     // And the sash has come down with it, rather than holding a full ten points
     // of gap open beside a place that is about to not be there — ten points
     // handed back in one frame at the end of an otherwise smooth close.
