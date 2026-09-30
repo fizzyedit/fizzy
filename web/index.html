@@ -1058,7 +1058,8 @@
       // Where a trackpad pinch goes in worker mode (the capture listener above).
       var pinchSink = null;
 
-      const workerMode = new URLSearchParams(location.search).has("worker") &&
+      // On wherever the browser can hand a canvas to a worker; `?worker=0` runs it on the page.
+      const workerMode = new URLSearchParams(location.search).get("worker") !== "0" &&
         typeof OffscreenCanvas !== "undefined" && "transferControlToOffscreen" in HTMLCanvasElement.prototype;
 
       if (!hasWebGl()) {
