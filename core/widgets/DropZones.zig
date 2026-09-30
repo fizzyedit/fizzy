@@ -309,7 +309,6 @@ fn blob(id: dvui.Id, discs: []const liquid_blob.Disc, k: f32, area: dvui.Rect.Ph
     if (job.count == 0) return;
     const bounds = area.insetAll(-liquid_glass.margin(.{ .lens = job.lens, .refraction = base.refraction }, scale));
     job.pane = scaled(base, g);
-    job.pane.radius = @round(job.pane.radius / blur_step) * blur_step;
     if (job.pane.radius < BlurBackdrop.min_blur) {
         job.count = 0;
         return;
@@ -320,6 +319,7 @@ fn blob(id: dvui.Id, discs: []const liquid_blob.Disc, k: f32, area: dvui.Rect.Ph
     backdrop.mode = .readback;
     backdrop.radius_px = job.pane.radius;
     backdrop.detail = job.pane.detail;
+    backdrop.share = true;
     // Read every frame, as the dialogs' glass is: what moves under the drop moves in it.
     backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, dvui.currentWindow().frame_time_ns, job.pane.radius });
     job.backdrop = backdrop;
@@ -500,8 +500,6 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
     // will show.
     const bounds = area.insetAll(-liquid_glass.margin(.{ .lens = job.lens, .refraction = base.refraction }, scale));
     job.pane = scaled(base, g);
-    // In steps, so a frost fading in is re-blurred a dozen times rather than every frame.
-    job.pane.radius = @round(job.pane.radius / blur_step) * blur_step;
     // Too little blur for the pyramid to make a pass: its picture would be an empty target, laid
     // down as a hole to the desktop (`BlurBackdrop.min_blur`). Glass barely there is none yet.
     if (job.pane.radius < BlurBackdrop.min_blur) {
@@ -514,6 +512,7 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
     backdrop.mode = .readback;
     backdrop.radius_px = job.pane.radius;
     backdrop.detail = job.pane.detail;
+    backdrop.share = true;
     // Read every frame, as the dialogs' glass is: what moves under the drop — a logo following
     // the pointer — moves in it at the frame rate, not in steps a few times a second.
     backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, job.now, job.pane.radius });
@@ -521,14 +520,12 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
     dvui.deferRender(job, LayerJob.draw);
 }
 
-/// The steps the glass's blur grows in, so a frost forming is re-blurred a dozen times, not every frame.
-const blur_step: f32 = 3;
-
-/// `base` at strength `g`: its blur, tint and lift all scaled together, so a weaker frost is the
-/// same glass, thinner.
+/// `base` at strength `g`: its tint and lift scaled together, so a weaker frost is the same
+/// glass, thinner. Its blur stays whole: the drop forms by growing from nothing, and at the
+/// dialogs' own radius every place's drop, coming or going, shares the frame's one capture
+/// (`BlurBackdrop.share`) — at a radius of its own each fading place took a capture of its own.
 fn scaled(base: BlurBackdrop.Pane, g: f32) BlurBackdrop.Pane {
     var pane = base;
-    pane.radius = base.radius * g;
     pane.mix = base.mix * g;
     pane.lift = base.lift * g;
     return pane;
