@@ -1064,8 +1064,12 @@
       // Where a trackpad pinch goes in worker mode (the capture listener above).
       var pinchSink = null;
 
-      // On wherever the browser can hand a canvas to a worker; `?worker=0` runs it on the page.
-      const workerMode = new URLSearchParams(location.search).get("worker") !== "0" &&
+      // The worker is for Chromium, whose page frames are held to 60 Hz on a phone unless input
+      // drives them; a worker's are not. Safari drives a worker's frames at about 60 Hz where its
+      // page's run at the display's 120, so everywhere else the page is the faster place.
+      // `navigator.userAgentData` is Chromium's alone. `?worker=1` / `?worker=0` override.
+      const workerParam = new URLSearchParams(location.search).get("worker");
+      const workerMode = (workerParam === "1" || (workerParam !== "0" && "userAgentData" in navigator)) &&
         typeof OffscreenCanvas !== "undefined" && "transferControlToOffscreen" in HTMLCanvasElement.prototype;
 
       if (!hasWebGl()) {
