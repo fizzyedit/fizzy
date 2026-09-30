@@ -282,6 +282,10 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
         dvui.refresh(null, @src(), id);
     } else if (!look.target) {
         forget(id);
+    } else {
+        // Settled: stop keeping time. A drag held still asks for no frames, and the release after
+        // it measured the whole pause as one step — past the entire leave, gone at once.
+        st.last_ns = 0;
     }
 }
 
@@ -303,12 +307,24 @@ const Shape = struct { part: f32, swell: f32 };
 
 /// How far the bubbles have parted and how big the drop is at `shown`: arriving on the app's
 /// motion (its swing, when playful), leaving on a plain ease with no swing.
+///
+/// Leaving, the two overlap: the drop starts to shrink while its bubbles are still gathering.
+/// One after the other, each eased to a stop, the join came to rest before the shrink began —
+/// a pause in the middle of what should read as one motion.
 fn phases(shown: f32, leaving: bool) Shape {
+    if (leaving) return .{
+        .part = smooth(std.math.clamp((shown - leave_gather_to) / (1 - leave_gather_to), 0, 1)),
+        .swell = smooth(std.math.clamp(shown / leave_shrink_from, 0, 1)),
+    };
     const form = std.math.clamp(shown / drop_phase, 0, 1);
     const split = std.math.clamp((shown - drop_phase) / (1 - drop_phase), 0, 1);
-    if (leaving) return .{ .part = smooth(split), .swell = smooth(form) };
     return .{ .part = motion.enterFull(split), .swell = motion.enterFull(form) };
 }
+
+/// Leaving, on `shown` from 1 down to 0: the bubbles gather until `leave_gather_to`, the drop
+/// shrinks from `leave_shrink_from` — the two overlapping between them.
+const leave_gather_to: f32 = 0.3;
+const leave_shrink_from: f32 = 0.65;
 
 fn smooth(t: f32) f32 {
     return t * t * (3 - 2 * t);

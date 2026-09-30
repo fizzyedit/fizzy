@@ -3240,7 +3240,8 @@ const DropFinishFrame = struct {
 // A drop leaves the way it came: its bubbles run back together and shrink
 // away. The release usually changes the place it was over — a split renames
 // it, a join closes it — and the drop looked it up again by name, found
-// nothing, and was forgotten mid-way: it vanished instead.
+// nothing, and was forgotten mid-way: it vanished instead. So did one released
+// after the drag was held still, which measured the pause as one step.
 test "a drop runs back together after the release, whatever happened to its place" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -3273,6 +3274,13 @@ test "a drop runs back together after the release, whatever happened to its plac
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = main_at.center() });
     try dvui.testing.settle(DropFinishFrame.frame);
     try std.testing.expect(DropZones.showing(DropFinishFrame.key));
+
+    // Held still for three seconds: a drag that does not move asks for no frames.
+    {
+        const cw = dvui.currentWindow();
+        _ = try cw.end(.{});
+        try cw.begin(cw.frame_time_ns + 3 * std.time.ns_per_s);
+    }
 
     // Released, and the place it was over is now called something else.
     editor.app.layout.view_drag.discard();
