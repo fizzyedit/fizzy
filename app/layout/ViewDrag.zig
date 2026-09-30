@@ -502,7 +502,6 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
             .hovered = if (aimed) DropZones.at(zones, dvui.currentWindow().mouse_pt) else null,
             .target = target,
             .center = center,
-            .pointer = if (aimed) dvui.currentWindow().mouse_pt else null,
         },
         .clip = whole,
     };
@@ -534,7 +533,6 @@ pub fn drawOverlay(l: *Layout) void {
         drops[n] = p;
         drops[n].look.target = false;
         drops[n].look.hovered = null;
-        drops[n].look.pointer = null;
         n += 1;
     }
     d.last_pending = drops;
