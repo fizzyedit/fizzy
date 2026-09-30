@@ -344,8 +344,10 @@ function requestUrlPlugins() {
     const inst = wasmInstance;
     if (!inst || !inst.exports.FizzyWebPluginRequest) return;
     const params = new URLSearchParams(env.search);
-    for (const [id, url] of Object.entries(rememberedPlugins())) requestPlugin(id, url);
-    for (const id of params.getAll("plugin")) requestPlugin(id, "");
+    // A `?plugin=` build stands in for a remembered one of the same id.
+    const devPlugins = params.getAll("plugin");
+    for (const [id, url] of Object.entries(rememberedPlugins())) if (!devPlugins.includes(id)) requestPlugin(id, url);
+    for (const id of devPlugins) requestPlugin(id, "");
     if (inst.exports.FizzyWebStartupPluginsRequested) inst.exports.FizzyWebStartupPluginsRequested();
     render();
     for (const url of params.getAll("open")) {
