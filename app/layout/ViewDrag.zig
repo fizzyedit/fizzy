@@ -160,7 +160,13 @@ pub fn chooserAt(state: *const Layout.State, p: dvui.Point.Physical) ?Offer {
 
 pub fn discard(self: *ViewDrag) void {
     if (self.texture) |tex| dvui.Texture.destroyLater(tex);
+    // The drops still showing outlive the drag: they run back together where they were drawn
+    // (`drawOverlay`), whatever the drop has just done to their places.
+    const finishing = self.last_pending;
+    const finishing_count = self.last_pending_count;
     self.* = .{};
+    self.last_pending = finishing;
+    self.last_pending_count = finishing_count;
 }
 
 pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
@@ -460,6 +466,10 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
     // place left mid-fade finishes going.
     // Over a chooser the drop is into its place, shown by the chooser (`Chooser`); the places'
     // own zones step back.
+    // With the drag over, a drop still going is `drawOverlay`'s to finish where it was: the place
+    // it was over may be renamed, moved or gone now, and looking it up again forgot the drop
+    // mid-way — it vanished instead of running back together.
+    if (!l.state.view_drag.active()) return;
     const over_chooser = chooserAt(l.state, dvui.currentWindow().mouse_pt) != null;
     const aimed = aimedAt(l, name) and !over_chooser;
     const target = aimed and isTarget(l, name);

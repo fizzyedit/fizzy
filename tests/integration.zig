@@ -3224,6 +3224,68 @@ test "a place closing for good is not still holding its padding and its sash" {
     try std.testing.expectApproxEqAbs(left * scale, leaf.y - (rest.y + rest.h), 1);
 }
 
+const DropFinishFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+    const key: dvui.Id = @enumFromInt(0xd7_0b_f1_4e);
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        fizzy.Editor.Layout.ViewDrag.drawZones(&layout, "Main", key);
+        layout.drawDragOverlay();
+        return .ok;
+    }
+};
+
+// A drop leaves the way it came: its bubbles run back together and shrink
+// away. The release usually changes the place it was over — a split renames
+// it, a join closes it — and the drop looked it up again by name, found
+// nothing, and was forgotten mid-way: it vanished instead.
+test "a drop runs back together after the release, whatever happened to its place" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+
+    const main_kw = fizzy.sdk.keywords.ide.main;
+    const panel_kw = fizzy.sdk.keywords.ide.panel;
+    const main_at: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 600, .h = 300 };
+    const panel_at: dvui.Rect.Physical = .{ .x = 0, .y = 300, .w = 600, .h = 100 };
+    editor.app.layout.registerRegion(editor.app.gpa, .{ .name = "Main", .keywords = main_kw, .bounds = main_at, .size = .{ .w = 600, .h = 300 } });
+    editor.app.layout.registerRegion(editor.app.gpa, .{ .name = "Panel", .keywords = panel_kw, .bounds = panel_at, .shows = .many });
+    editor.app.layout.publishRegions();
+
+    DropFinishFrame.editor = editor;
+    defer DropFinishFrame.editor = null;
+    const DropZones = fizzy.core.widgets.DropZones;
+    defer DropZones.forget(DropFinishFrame.key);
+
+    {
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        fizzy.Editor.Layout.ViewDrag.begin(&layout, "Panel", panel_at);
+    }
+    defer editor.app.layout.view_drag.discard();
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = main_at.center() });
+    try dvui.testing.settle(DropFinishFrame.frame);
+    try std.testing.expect(DropZones.showing(DropFinishFrame.key));
+
+    // Released, and the place it was over is now called something else.
+    editor.app.layout.view_drag.discard();
+    editor.app.layout.registerRegion(editor.app.gpa, .{ .name = "Main/b0", .keywords = main_kw, .bounds = main_at });
+    editor.app.layout.registerRegion(editor.app.gpa, .{ .name = "Panel", .keywords = panel_kw, .bounds = panel_at, .shows = .many });
+    editor.app.layout.publishRegions();
+
+    _ = try dvui.testing.step(DropFinishFrame.frame);
+    try std.testing.expect(DropZones.showing(DropFinishFrame.key));
+    try dvui.testing.settle(DropFinishFrame.frame);
+    try std.testing.expect(!DropZones.showing(DropFinishFrame.key));
+}
+
 // A drag must not change the map it is being read against. It does, twice
 // over: the preview draws the view it is about to land, and the panes *that*
 // declares register as places under the pointer; and the place being split
