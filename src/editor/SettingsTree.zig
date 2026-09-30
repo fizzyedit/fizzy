@@ -574,7 +574,7 @@ fn drawIdentityIcon(branch: *const Branch, style: RowStyle, color: dvui.Color) v
             .name = "icon.png",
             .interpolation = .nearest,
         } };
-        _ = dvui.image(@src(), .{ .source = logo, .shrink = .ratio }, core.widgets.treeRowIconOptions(.{}));
+        _ = dvui.image(@src(), .{ .source = core.image.cachedTexture(logo), .shrink = .ratio }, core.widgets.treeRowIconOptions(.{}));
         return;
     }
 

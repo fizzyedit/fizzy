@@ -169,7 +169,7 @@ pub fn draw(id: []const u8, size: f32) bool {
     }
     const source = entry.image orelse return false;
 
-    _ = dvui.image(@src(), .{ .source = source, .shrink = .ratio }, .{
+    _ = dvui.image(@src(), .{ .source = core.image.cachedTexture(source), .shrink = .ratio }, .{
         .gravity_x = 0.5,
         .gravity_y = 0.5,
         .min_size_content = .{ .w = size, .h = size },

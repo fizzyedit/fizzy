@@ -199,6 +199,25 @@ pub fn checkerboardTile(width: u32, height: u32, even: [4]u8, odd: [4]u8) ?dvui.
     }) catch null;
 }
 
+/// `source` as its cached texture, for an image file drawn every frame. `dvui.image` reads an
+/// `.imageFile`'s size from the file's header (`stbi_info`) when it lays it out and again when it
+/// looks its texture up — twice a frame per image; a `.texture` knows its size. The texture's
+/// cache key is worked out once per file (by its bytes) and only looked up after, which also
+/// keeps the texture in dvui's cache. Any other source is returned as it is.
+pub fn cachedTexture(source: dvui.ImageSource) dvui.ImageSource {
+    const file = switch (source) {
+        .imageFile => |f| f,
+        else => return source,
+    };
+    const id: dvui.Id = @enumFromInt(@as(u64, @intFromPtr(file.bytes.ptr)) ^ file.bytes.len);
+    if (dvui.dataGet(null, id, "_image_texture_key", u64)) |key| {
+        if (dvui.textureGetCached(key)) |tex| return .{ .texture = tex };
+    }
+    const tex = source.getTexture() catch return source;
+    dvui.dataSet(null, id, "_image_texture_key", source.hash());
+    return .{ .texture = tex };
+}
+
 pub fn size(source: dvui.ImageSource) dvui.Size {
     return dvui.imageSize(source) catch .{ .w = 0, .h = 0 };
 }

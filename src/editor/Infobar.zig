@@ -88,7 +88,7 @@ pub fn draw(_: Infobar, editor: *fizzy.Editor) !void {
             });
             defer logo_slot.deinit();
 
-            _ = dvui.image(@src(), .{ .source = logo, .shrink = .ratio }, .{
+            _ = dvui.image(@src(), .{ .source = fizzy.core.image.cachedTexture(logo), .shrink = .ratio }, .{
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,
                 .expand = .ratio,

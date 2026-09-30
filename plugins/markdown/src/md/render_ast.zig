@@ -4,6 +4,7 @@ const Io = std.Io;
 
 const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
+const core = @import("core");
 
 const ast = @import("ast.zig");
 const net_image = @import("net_image.zig");
@@ -1281,7 +1282,7 @@ fn renderImageUrl(raw_url: []const u8, alt: []const u8, want: RequestedSize, ctx
     // `.expand = .ratio` would grow the image back out to whatever rect the parent hands it,
     // ignoring the size computed above (this is what kept the pixi hero at full size despite its
     // `width="25%"`). The size *is* the answer here, so ask for exactly it.
-    _ = dvui.image(@src(), .{ .source = source, .shrink = .ratio }, .{
+    _ = dvui.image(@src(), .{ .source = core.image.cachedTexture(source), .shrink = .ratio }, .{
         .min_size_content = .{ .w = size.w, .h = size.h },
         .max_size_content = dvui.Options.MaxSize.size(.{ .w = size.w, .h = size.h }),
         .expand = .none,
