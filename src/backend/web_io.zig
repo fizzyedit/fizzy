@@ -1,15 +1,17 @@
 //! Minimal `std.Io` for the wasm web build: identical to `std.Io.failing` for
-//! every operation EXCEPT `now`, which returns a real monotonic time read from
-//! JavaScript via the DVUI `wasm_now` extern.
+//! every operation EXCEPT `now`, which reads the page's clocks — `Date.now()`
+//! for `.real`, `performance.now()` (DVUI's `wasm_now`) for the rest.
 //!
 //! Why this matters: DVUI uses `Clock.boot.now(dvui.io).nanoseconds` for any
 //! time-based heuristic that runs even when no real Io is plugged in
 //! (`mouseTypeIndicated` 1-second stale reset for trackpad vs wheel detection,
 //! animation timers, etc.). The stock `std.Io.failing.now` returns
 //! `Timestamp.zero` always — so on wasm those heuristics see time stuck at 0
-//! and never advance.
+//! and never advance. Plugins inherit it with the rest of dvui's globals, so it
+//! is also what a plugin's timers read: Drive's token expiry and change poll
+//! never moved on the web without it, and a saved expiry needs `.real`.
 //!
-//! Wiring: `App.zig` passes `wasm_io` as `dvui.App.config.options.io` on wasm.
+//! Wiring: `Entry.startOptions` passes `wasm_io` as `dvui.App.StartOptions.io` on wasm.
 //! DVUI's web backend installs it as `dvui.io`, and `Clock.boot.now(dvui.io)`
 //! now returns real milliseconds-since-page-load (converted to ns) instead of
 //! 0. FS / async / dialog calls still hit the failing handlers — which is
@@ -20,19 +22,20 @@ const builtin = @import("builtin");
 
 const wasm = struct {
     extern "dvui" fn wasm_now() f64;
+    extern "fizzy" fn fizzy_web_now_real_ms() f64;
 };
 
-fn now(_: ?*anyopaque, _: std.Io.Clock) std.Io.Timestamp {
-    // `wasm_now` returns `performance.now()` in milliseconds (monotonic
-    // milliseconds since page load). Promote to i96 nanoseconds via i64.
-    const ms = wasm.wasm_now();
+fn now(_: ?*anyopaque, clock: std.Io.Clock) std.Io.Timestamp {
+    // Both are milliseconds: `Date.now()` since the epoch, `performance.now()`
+    // (monotonic) since page load. Promote to i96 nanoseconds via i64.
+    const ms = if (clock == .real) wasm.fizzy_web_now_real_ms() else wasm.wasm_now();
     const ns: i64 = @intFromFloat(ms * std.time.ns_per_ms);
     return .{ .nanoseconds = ns };
 }
 
 /// Vtable: copy of `failing.vtable` with `.now` swapped out. Built at comptime
 /// so the override is statically resolved.
-const wasm_vtable: std.Io.Vtable = blk: {
+const wasm_vtable: std.Io.VTable = blk: {
     var v = std.Io.failing.vtable.*;
     v.now = now;
     break :blk v;

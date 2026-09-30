@@ -208,6 +208,9 @@ const fizzyImports = (target) => ({
     fizzy_web_toggle_fullscreen() {
         postMessage({ type: "fullscreen" });
     },
+    fizzy_web_now_real_ms() {
+        return Date.now();
+    },
     fizzy_web_storage_get(keyPtr, keyLen, bufPtr, bufLen) {
         const value = storageGet("fizzy.file:" + str(keyPtr, keyLen));
         if (value === null) return 0xffffffff;

@@ -300,6 +300,10 @@
               document.documentElement.requestFullscreen().catch((err) => console.warn("fizzy: full screen refused:", err));
             }
           },
+          // `Clock.real` for the app's `Io` (src/backend/web_io.zig).
+          fizzy_web_now_real_ms() {
+            return Date.now();
+          },
           // `core.fs` on the web: the app's own small files (settings.zon, recents.zon,
           // keybinds.zon) live in localStorage, keyed by the path the app would have used.
           fizzy_web_storage_get(keyPtr, keyLen, bufPtr, bufLen) {

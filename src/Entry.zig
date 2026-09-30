@@ -71,6 +71,8 @@ fn runningFromAppBundle(io: std.Io) bool {
 
 fn startOptions() dvui.App.StartOptions {
     var opts = start_options_base;
+    // dvui's own web default is `std.Io.failing`, whose clocks read 0.
+    if (comptime builtin.target.cpu.arch == .wasm32) opts.io = @import("backend/web_io.zig").wasm_io;
 
     // Create the dvui window with the *same* allocator the host hands to plugins
     // (`fizzy.entry().allocator`). Without this, dvui defaults the window to the runtime's

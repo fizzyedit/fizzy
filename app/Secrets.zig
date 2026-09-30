@@ -4,24 +4,29 @@
 //! The seam is the point: `get`/`set`/`remove` by key, with the backend chosen by the app.
 //! Today that is one backend, `secrets` in the config folder — one `key=base64` line per
 //! entry, created `0600`, read whole; the OS stores (Keychain, libsecret, DPAPI) slot in
-//! behind the same three calls without a plugin noticing. Not available on the web build, where a page has no private
-//! storage worth the name — a plugin there keeps a session token in memory and asks again.
+//! behind the same three calls without a plugin noticing. On the web the same file goes where
+//! `core.fs` puts the app's other files, the page's storage: private to this origin but not to
+//! the page's scripts, so what a web plugin keeps here should be short-lived — Drive keeps its
+//! hour's access token, never a refresh token.
 //!
 //! Keys are plugin-namespaced by convention (`drive.refresh_token`); values are opaque bytes.
 const std = @import("std");
 const builtin = @import("builtin");
+const core = @import("core");
+
+const is_wasm = builtin.target.cpu.arch == .wasm32;
 
 const Secrets = @This();
 
 gpa: std.mem.Allocator,
 io: std.Io,
-/// `<config>/secrets`; empty on the web.
+/// `<config>/secrets` — on the web, the page-storage key `core.fs` files it under.
 path: []const u8,
 values: std.StringArrayHashMapUnmanaged([]u8) = .empty,
 loaded: bool = false,
 
 pub fn init(gpa: std.mem.Allocator, io: std.Io, config_folder: []const u8) !Secrets {
-    const path = if (builtin.target.cpu.arch == .wasm32) "" else try std.fs.path.join(gpa, &.{ config_folder, "secrets" });
+    const path = try std.fs.path.join(gpa, &.{ config_folder, "secrets" });
     return .{ .gpa = gpa, .io = io, .path = path };
 }
 
@@ -40,7 +45,7 @@ fn clearValues(self: *Secrets) void {
     self.values.clearRetainingCapacity();
 }
 
-/// Borrowed until the next `set`/`remove` of that key. Null when unset (or on the web).
+/// Borrowed until the next `set`/`remove` of that key. Null when unset.
 pub fn get(self: *Secrets, key: []const u8) ?[]const u8 {
     self.load();
     return self.values.get(key);
@@ -50,8 +55,7 @@ pub fn get(self: *Secrets, key: []const u8) ?[]const u8 {
 ///
 /// Once the map holds `v` it owns it, so nothing here may free it on a later failure: an
 /// `errdefer` that outlived the `put` left the map pointing at freed memory, and the next `get`
-/// handed that out. On the web it did so every single time — `save` always fails there (memory
-/// only, no file), so every `set` both stored the value and freed it.
+/// handed that out — on the web, where `save` used to always fail, every single time.
 pub fn set(self: *Secrets, key: []const u8, value: []const u8) !void {
     if (value.len == 0) return self.remove(key);
     self.load();
@@ -68,10 +72,7 @@ pub fn set(self: *Secrets, key: []const u8, value: []const u8) !void {
             try self.values.put(self.gpa, k, v);
         }
     }
-    self.save() catch |err| {
-        if (comptime builtin.target.cpu.arch == .wasm32) return;
-        return err;
-    };
+    try self.save();
 }
 
 pub fn remove(self: *Secrets, key: []const u8) !void {
@@ -88,9 +89,11 @@ pub fn remove(self: *Secrets, key: []const u8) !void {
 fn load(self: *Secrets) void {
     if (self.loaded) return;
     self.loaded = true;
-    if (comptime builtin.target.cpu.arch == .wasm32) return;
     if (self.path.len == 0) return;
-    const raw = std.Io.Dir.cwd().readFileAlloc(self.io, self.path, self.gpa, .limited(1 << 20)) catch return;
+    const raw = (if (is_wasm)
+        core.fs.read(self.gpa, self.io, self.path)
+    else
+        std.Io.Dir.cwd().readFileAlloc(self.io, self.path, self.gpa, .limited(1 << 20))) catch return;
     defer self.gpa.free(raw);
     var lines = std.mem.splitScalar(u8, raw, '\n');
     while (lines.next()) |line| {
@@ -115,9 +118,9 @@ fn load(self: *Secrets) void {
 }
 
 fn save(self: *Secrets) !void {
-    if (comptime builtin.target.cpu.arch == .wasm32) return error.Unsupported;
     if (self.path.len == 0) return error.Unsupported;
     if (self.values.count() == 0) {
+        if (is_wasm) return core.fs.remove(self.io, self.path);
         std.Io.Dir.deleteFileAbsolute(self.io, self.path) catch |err| if (err != error.FileNotFound) return err;
         return;
     }
@@ -129,6 +132,7 @@ fn save(self: *Secrets) !void {
         _ = std.base64.standard.Encoder.encode(enc, v);
         try out.writer.print("{s}={s}\n", .{ k, enc });
     }
+    if (is_wasm) return core.fs.write(self.io, self.path, out.written());
     // Created `0600`, written whole, then moved into place: never a moment where the file
     // is world-readable or half-written.
     const tmp = try std.fmt.allocPrint(self.gpa, "{s}.tmp", .{self.path});
