@@ -156,6 +156,8 @@ const State = struct {
     shape: Shape = .{},
     turn_shown: f32 = 0,
     turn: Shape = .{},
+    /// 0…1 each: how far a bubble has reached out from where it rests toward its place.
+    out: [all.len]f32 = @splat(0),
     /// 0…1: how lit — the zone under the pointer.
     lit: [all.len]f32 = @splat(0),
     last_ns: i128 = 0,
@@ -175,6 +177,9 @@ pub const Look = struct {
     target: bool = true,
     /// The middle's icon.
     center: Center = .replace,
+    /// Where the pointer is. The bubbles rest run into the drop; each reaches out to its place as
+    /// the pointer nears it (`reachFor`). Null keeps them all at rest.
+    pointer: ?dvui.Point.Physical = null,
 };
 
 /// How much a lit zone's glass changes, as dvui changes a hovered fill (`Theme.adjustColorForState`,
@@ -210,6 +215,9 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
         const want_lit: f32 = if (look.target) (if (look.hovered) |h| (if (h.eql(z)) 1 else 0) else 0) else 0;
         st.lit[i] = approach(st.lit[i], want_lit, dt_ms, motion.durationMs(light_ms));
         if (st.lit[i] != want_lit) moving = true;
+        const want_out = reachFor(w, z, look);
+        st.out[i] = approach(st.out[i], want_out, dt_ms, motion.durationMs(reach_ms));
+        if (st.out[i] != want_out) moving = true;
     }
 
     const g = frost(st.shown);
@@ -237,7 +245,7 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
         var discs: [all.len]liquid_blob.Disc = undefined;
         var zones: [all.len]usize = undefined;
         var settles: [all.len]f32 = undefined;
-        const n = water(w, st.shape, order, st.shown, leaving, &st.lit, &discs, &zones, &settles);
+        const n = water(w, st.shape, order, st.shown, leaving, &st.lit, &st.out, &discs, &zones, &settles);
         const k = bridge * w.unit;
         if (apart(discs[0..n], k)) {
             // Parted — or down to the one drop — each bubble is a circle: the panes' own glass
@@ -371,6 +379,7 @@ fn water(
     shown: f32,
     leaving: bool,
     lit: *const [all.len]f32,
+    out: *const [all.len]f32,
     discs: *[all.len]liquid_blob.Disc,
     zones: *[all.len]usize,
     settles: *[all.len]f32,
@@ -400,8 +409,15 @@ fn water(
         const b = w.bubble(all[zi]);
         const r = b.r * bubbleSize(p);
         if (r < 0.5) continue;
+        // Out of the drop to where it rests — run into it by `rest_overlap` of its width — and
+        // from there as far toward its place as the pointer has drawn it.
+        const dx = b.c.x - mid.c.x;
+        const dy = b.c.y - mid.c.y;
+        const place = @sqrt(dx * dx + dy * dy);
+        const rest = @min(place, mid.r + b.r * (1 - 2 * rest_overlap));
+        const along = if (place > 0) p * (rest + (place - rest) * out[zi]) / place else 0;
         discs[n] = .{
-            .c = .{ .x = mid.c.x + (b.c.x - mid.c.x) * p, .y = mid.c.y + (b.c.y - mid.c.y) * p },
+            .c = .{ .x = mid.c.x + dx * along, .y = mid.c.y + dy * along },
             .r = r,
             .lit = lit[zi],
         };
@@ -423,6 +439,28 @@ fn smooth(t: f32) f32 {
 }
 
 const swell_by: f32 = 0.35;
+/// At rest a bubble runs this share of its width into the drop, joined to it; the pointer draws
+/// it out to its place (`reachFor`), and far enough out it pinches off.
+const rest_overlap: f32 = 0.1;
+/// How quickly a bubble reaches out or settles back, a time constant: most of the way in about
+/// three of these.
+const reach_ms: f32 = 70;
+/// How far from its place the pointer starts to draw a bubble out, in its radii past its rim.
+const reach_from: f32 = 1.2;
+
+/// How far bubble `z` reaches toward its place: all the way under the pointer, and from
+/// `reach_from` radii off its rim, more the nearer the pointer comes. The middle, and a drop the
+/// pointer has left, stay at rest.
+fn reachFor(w: Wheel, z: Zone, look: Look) f32 {
+    if (z == .center or !look.target) return 0;
+    if (look.hovered) |h| if (h.eql(z)) return 1;
+    const pt = look.pointer orelse return 0;
+    const b = w.bubble(z);
+    const dx = pt.x - b.c.x;
+    const dy = pt.y - b.c.y;
+    const past_rim = @sqrt(dx * dx + dy * dy) - b.r;
+    return smooth(std.math.clamp(1 - past_rim / (reach_from * @max(b.r, 0.001)), 0, 1));
+}
 /// How much of a bubble's area the drop takes on while it holds it: all of it would make the
 /// whole drop half again as wide as the wheel's middle.
 const absorb: f32 = 0.25;
