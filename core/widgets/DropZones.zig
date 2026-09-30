@@ -149,6 +149,15 @@ pub const light_ms: f32 = 55;
 const State = struct {
     /// 0…1, linear in time; shaped when read (`grow`, `frost`).
     shown: f32 = 0,
+    /// Which way `shown` is going, and what the drop looked like when it last turned round:
+    /// the gap between that and where the new way's curve starts, faded out over the new way,
+    /// so a drop that turns mid-way carries on from where it was rather than jumping.
+    leaving: bool = false,
+    part: f32 = 0,
+    swell: f32 = 0,
+    turn_shown: f32 = 0,
+    turn_part: f32 = 0,
+    turn_swell: f32 = 0,
     /// 0…1: how lit — the zone under the pointer.
     lit: [all.len]f32 = @splat(0),
     last_ns: i128 = 0,
@@ -210,10 +219,26 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
         // One drop, then its bubbles: during `drop_phase` of the way in a single bubble swells in
         // the middle; after it the bubbles part toward where they settle — past it and back at
         // the app's motion — while how far the field bridges them falls, so the necks between
-        // them thin and let go. Leaving, the same run backwards.
-        const form = std.math.clamp(st.shown / drop_phase, 0, 1);
-        const part = @max(0, motion.enterFull(std.math.clamp((st.shown - drop_phase) / (1 - drop_phase), 0, 1)));
-        const swell = @max(0, motion.enterFull(form));
+        // them thin and let go. Leaving, the same phases backwards but plainly eased: the arrival's
+        // swing run in reverse was a push outward before they gathered, and another swell before
+        // the drop shrank — two bounces in one join.
+        const leaving = want_shown < st.shown or (want_shown == st.shown and !look.target);
+        const shape = phases(st.shown, leaving);
+        if (leaving != st.leaving) {
+            st.leaving = leaving;
+            st.turn_shown = st.shown;
+            st.turn_part = st.part - shape.part;
+            st.turn_swell = st.swell - shape.swell;
+        }
+        // How much of the gap at the turn is left: all of it there, none at the end of the way.
+        const left = if (leaving)
+            (if (st.turn_shown > 0) std.math.clamp(st.shown / st.turn_shown, 0, 1) else 0)
+        else
+            (if (st.turn_shown < 1) std.math.clamp((1 - st.shown) / (1 - st.turn_shown), 0, 1) else 0);
+        const part = @max(0, shape.part + st.turn_part * left);
+        const swell = @max(0, shape.swell + st.turn_swell * left);
+        st.part = part;
+        st.swell = swell;
         var discs: [all.len]liquid_blob.Disc = undefined;
         var zones: [all.len]usize = undefined;
         var n: usize = 0;
@@ -273,6 +298,21 @@ fn apart(discs: []const liquid_blob.Disc, k: f32) bool {
 
 /// The share of the way in the drop spends as one bubble, before it splits.
 const drop_phase: f32 = 0.3;
+
+const Shape = struct { part: f32, swell: f32 };
+
+/// How far the bubbles have parted and how big the drop is at `shown`: arriving on the app's
+/// motion (its swing, when playful), leaving on a plain ease with no swing.
+fn phases(shown: f32, leaving: bool) Shape {
+    const form = std.math.clamp(shown / drop_phase, 0, 1);
+    const split = std.math.clamp((shown - drop_phase) / (1 - drop_phase), 0, 1);
+    if (leaving) return .{ .part = smooth(split), .swell = smooth(form) };
+    return .{ .part = motion.enterFull(split), .swell = motion.enterFull(form) };
+}
+
+fn smooth(t: f32) f32 {
+    return t * t * (3 - 2 * t);
+}
 /// Points: how far the field bridges the bubbles as they begin to part, and once they have —
 /// enough at the start that they leave as one drop, little enough at the end that settled
 /// bubbles a few points apart stand clear of each other.
