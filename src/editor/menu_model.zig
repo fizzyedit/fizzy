@@ -211,12 +211,17 @@ const view_items = [_]Item{
     .{ .command = .{ .id = "fizzy.toggleFullScreen", .title = .{ .static = "Toggle Full Screen" }, .sf_symbol = "arrow.up.left.and.arrow.down.right" } },
     .{ .plugin_section = "fizzy.menu.view" },
     .separator,
-    .{ .command = .{ .id = "fizzy.showDvuiDemo", .title = .{ .static = "Show DVUI Demo" } } },
+} ++ demo_items ++ [_]Item{
     // TEMPORARY: comparison toggle for the native-vs-dvui macOS menu bar — see
     // `Menu.debug_force_on_macos`. `visible` keeps it out of the Windows/Linux View menu, where
     // the dvui bar already always draws and the toggle would do nothing.
     .{ .command = .{ .id = "fizzy.debugToggleDvuiMenuOnMacOS", .title = .{ .dynamic = dvuiMenuDebugTitle }, .visible = isMacOSOnly } },
 };
+
+/// Debug builds only: see `Editor.dvui_demo`.
+const demo_items = if (Editor.dvui_demo) [_]Item{
+    .{ .command = .{ .id = "fizzy.showDvuiDemo", .title = .{ .static = "Show DVUI Demo" } } },
+} else [_]Item{};
 
 const help_items = [_]Item{
     // The About dialog hosts the update check and install controls, which is why this and the

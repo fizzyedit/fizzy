@@ -161,12 +161,16 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.commandPalette", .title = "Show All Commands", .bind = null, .run = cmdCommandPalette, .icon = icons.tvg.lucide.terminal },
     // Menu-bar-only actions. They had no command at all before Stage 1 — they existed solely as
     // `NativeMenuAction` switch arms — so they were unreachable from the palette and unbindable.
-    .{ .id = "fizzy.showDvuiDemo", .title = "Show DVUI Demo", .bind = null, .run = cmdShowDvuiDemo, .icon = icons.tvg.lucide.@"flask-conical" },
     .{ .id = "fizzy.debugToggleDvuiMenuOnMacOS", .title = "Show DVUI Menu (macOS)", .bind = null, .run = cmdToggleDvuiMenuOnMacOS },
     .{ .id = "fizzy.about", .title = "About Fizzy", .bind = null, .run = cmdAbout, .icon = icons.tvg.lucide.download },
     .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .icon = icons.tvg.lucide.bug },
     .{ .id = "fizzy.toggleProfiler", .title = "Toggle Profiler", .bind = null, .run = cmdToggleProfiler, .icon = icons.tvg.lucide.gauge },
-} ++ open_folder_commands;
+} ++ open_folder_commands ++ demo_commands;
+
+/// Debug builds only: see `Editor.dvui_demo`.
+const demo_commands = if (Editor.dvui_demo) [_]FizzyCommand{
+    .{ .id = "fizzy.showDvuiDemo", .title = "Show DVUI Demo", .bind = null, .run = cmdShowDvuiDemo, .icon = icons.tvg.lucide.@"flask-conical" },
+} else [_]FizzyCommand{};
 
 const is_web = builtin.target.cpu.arch == .wasm32;
 

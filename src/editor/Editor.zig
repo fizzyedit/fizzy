@@ -22,6 +22,11 @@ const plus_jakarta_sans_bold_italic_ttf = assets.files.fonts.@"PlusJakartaSans-B
 
 const build_opts = @import("build_opts");
 
+/// dvui's demo window (View › Show DVUI Demo), in Debug builds only. Calling it at all links the
+/// whole of it — every example, widgetpedia's raw images, the demos' own source for its code
+/// viewer — into a release, where no one opens it: on the web that is download size.
+pub const dvui_demo = builtin.mode == .Debug;
+
 const fizzy = @import("../fizzy.zig");
 const dvui = @import("dvui");
 const core = @import("core");
@@ -3905,7 +3910,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     hitch_draw.end();
 
     // look at demo() for examples of dvui widgets, shows in a floating window
-    dvui.Examples.demo(.full);
+    if (comptime dvui_demo) dvui.Examples.demo(.full);
 
     // The profiler window, when open ("Toggle Profiler").
     Profiler.draw();
