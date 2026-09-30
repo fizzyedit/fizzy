@@ -5662,12 +5662,12 @@ const plugin_manager_vtable: PluginManager.VTable = .{
         fn f(ctx: *anyopaque, id: []const u8, url: []const u8, sha256: []const u8) anyerror!void {
             const editor = pmSelf(ctx);
             // Installing is choosing it, as on the desktop (`installAndLoadPlugin`) — and, as
-            // there, the first time is when fizzy asks about its file types; read before the
-            // enabled flag below records that it has been asked.
-            const first_load = editor.app.isPluginUndecided(id);
+            // there, an install is an arrival, so fizzy asks about its file types once it has
+            // loaded. Not `isPluginUndecided`: that is a drop-in found on disk and never
+            // decided, which a plugin coming from the store never is, so the web never asked.
             editor.app.untrackDisabledPlugin(id);
             try editor.setPluginEnabledPersisted(id, true);
-            if (first_load) queueWebFileTypePrompt(editor.app.gpa, id);
+            queueWebFileTypePrompt(editor.app.gpa, id);
             return editor.loadWebPlugin(id, url, sha256);
         }
     }.f,
