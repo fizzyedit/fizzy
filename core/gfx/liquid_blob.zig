@@ -33,62 +33,55 @@ pub const Sample = struct {
     lit: f32,
 };
 
-/// The smooth union of `discs`, bridging over `k` physical pixels, at `p`: the nearest disc's
-/// distance, less a polynomial bridge `(k − δ)²/4k` for every other disc within `k` of it (δ how
-/// much further it is) — with two discs, exactly the polynomial smooth minimum.
+/// The smooth union of `discs`, bridging over `k` physical pixels, at `p`: a polynomial smooth
+/// minimum of the two nearest discs' distances.
 ///
-/// Every disc near enough, and none favoured, so the edge has no seam and no lean. Blending only
-/// the two nearest flipped which disc counted wherever three came close — at the neck between a
-/// drop and two of its bubbles — and the direction out of the edge (its fringe, rim light and
-/// refraction) jumped there, drawn as a stair; folding them all in one order was smooth but
-/// leaned toward the first. Polynomial, not the exponential soft minimum, which swells by
-/// `k·ln n` wherever they overlap.
+/// Only the two nearest, and polynomial: the union swells where discs overlap by at most `k/4`,
+/// however many overlap. The exponential soft minimum over them all swells by `k·ln n` — with the
+/// drop's six bubbles run together that was the size of a bubble, the edge ran past everything
+/// the mesh sampled, and the drop merging back filled its grid as a square.
 pub fn field(discs: []const Disc, k: f32, p: dvui.Point.Physical) Sample {
-    var ds: [max_discs]f32 = undefined;
-    var ns: [max_discs]dvui.Point.Physical = undefined;
-    const count = @min(discs.len, max_discs);
-    var near: usize = 0;
-    for (discs[0..count], 0..) |dc, i| {
+    var d1: f32 = std.math.floatMax(f32);
+    var d2: f32 = std.math.floatMax(f32);
+    var n1: dvui.Point.Physical = .{ .x = 0, .y = -1 };
+    var n2: dvui.Point.Physical = .{ .x = 0, .y = -1 };
+    var l1: f32 = 0;
+    var l2: f32 = 0;
+    for (discs) |dc| {
         const dx = p.x - dc.c.x;
         const dy = p.y - dc.c.y;
         const len = @sqrt(dx * dx + dy * dy);
-        ds[i] = len - dc.r;
-        ns[i] = if (len > 1e-4) .{ .x = dx / len, .y = dy / len } else .{ .x = 0, .y = -1 };
-        if (ds[i] < ds[near]) near = i;
+        const d = len - dc.r;
+        const n: dvui.Point.Physical = if (len > 1e-4) .{ .x = dx / len, .y = dy / len } else .{ .x = 0, .y = -1 };
+        if (d < d1) {
+            d2 = d1;
+            n2 = n1;
+            l2 = l1;
+            d1 = d;
+            n1 = n;
+            l1 = dc.lit;
+        } else if (d < d2) {
+            d2 = d;
+            n2 = n;
+            l2 = dc.lit;
+        }
     }
-    if (count == 0) return .{ .d = std.math.floatMax(f32), .out = .{ .x = 0, .y = -1 }, .lit = 0 };
-    var d = ds[near];
-    var gx = ns[near].x;
-    var gy = ns[near].y;
-    var lit = discs[near].lit;
-    for (0..count) |i| {
-        if (i == near) continue;
-        const delta = ds[i] - ds[near];
-        if (delta >= k) continue;
-        const reach = k - delta;
-        d -= reach * reach / (4 * k);
-        // The bridge's pull on the gradient and on what the discs are: (k − δ)/2k of the way
-        // from the nearest toward this one — a half each where the two are level.
-        const w = reach / (2 * k);
-        gx += w * (ns[i].x - ns[near].x);
-        gy += w * (ns[i].y - ns[near].y);
-        lit += w * (discs[i].lit - discs[near].lit);
-    }
+    if (discs.len < 2) return .{ .d = d1, .out = n1, .lit = l1 };
+    // h: how much the nearest has it, ½ where the two are level, 1 once the other is `k` further.
+    const h = std.math.clamp(0.5 + 0.5 * (d2 - d1) / k, 0, 1);
+    const gx = n1.x * h + n2.x * (1 - h);
+    const gy = n1.y * h + n2.y * (1 - h);
     const glen = @sqrt(gx * gx + gy * gy);
     return .{
-        .d = d,
-        .out = if (glen > 1e-5) .{ .x = gx / glen, .y = gy / glen } else ns[near],
-        .lit = std.math.clamp(lit, 0, 1),
+        .d = d2 + (d1 - d2) * h - k * h * (1 - h),
+        .out = if (glen > 1e-5) .{ .x = gx / glen, .y = gy / glen } else n1,
+        .lit = l1 * h + l2 * (1 - h),
     };
 }
 
-/// The most discs one union takes: the drop zones' six.
-pub const max_discs = 8;
-
-/// The most the union of `n` discs reaches past them, for `k`: `k/4` for each disc over the
-/// first, all on top of one another.
-fn swell(k: f32, n: usize) f32 {
-    return @as(f32, @floatFromInt(n -| 1)) * k / 4;
+/// The most the union reaches past its discs, for `k`: where two meet level, `k/4`.
+fn swell(k: f32) f32 {
+    return k / 4;
 }
 
 /// How the glass looks, as `liquid_glass.Look` plus what a pane's frost job composes over it.
@@ -111,11 +104,9 @@ pub const Look = struct {
     blend_over: ?*const fn (dvui.Texture, bool) void = null,
 };
 
-/// Points a grid cell is: fine enough that the edge between the fringe's samples reads as a
-/// curve, even round the tight bend of a neck — at 4 the neck between a drop and a bubble it was
-/// letting go of showed its straight pieces as stairs. The mesh is drawn only while bubbles are
-/// joined, a fraction of a second at a time.
-const cell_points: f32 = 2.5;
+/// Physical pixels a grid cell is, at display scale 1: fine enough that the edge between the
+/// fringe's samples reads as a curve.
+const cell_points: f32 = 4;
 
 const Vert = struct {
     p: dvui.Point.Physical,
@@ -220,11 +211,6 @@ const Mesh = struct {
 
 /// Mesh the union: marching squares over a grid covering the discs, the inside of each cell as
 /// a fan, and a one-pixel fringe out from every piece of the edge.
-///
-/// Fine only where the edge can be. The grid is coarse — `per_coarse` cells a side — and a coarse
-/// cell wholly inside is one quad, one wholly outside nothing; only one the edge might cross is
-/// marched at the fine size. Fine everywhere, the drop was tens of thousands of vertices a pass,
-/// several passes a frame, and a phone's frame rate went with it.
 fn build(arena: std.mem.Allocator, discs: []const Disc, k: f32, scale: f32) ?Mesh {
     var lo: dvui.Point.Physical = .{ .x = std.math.floatMax(f32), .y = std.math.floatMax(f32) };
     var hi: dvui.Point.Physical = .{ .x = -std.math.floatMax(f32), .y = -std.math.floatMax(f32) };
@@ -233,133 +219,88 @@ fn build(arena: std.mem.Allocator, discs: []const Disc, k: f32, scale: f32) ?Mes
         hi = .{ .x = @max(hi.x, dc.c.x + dc.r), .y = @max(hi.y, dc.c.y + dc.r) };
     }
     // The union reaches past the discs where it bridges them (`swell`); the grid covers that.
-    const pad = swell(k, discs.len) + 2 * scale;
+    const pad = swell(k) + 2 * scale;
     lo = .{ .x = lo.x - pad, .y = lo.y - pad };
     hi = .{ .x = hi.x + pad, .y = hi.y + pad };
     if (hi.x - lo.x < 1 or hi.y - lo.y < 1) return null;
 
-    const fine = cell_points * @max(scale, 0.5);
-    const coarse = fine * @as(f32, @floatFromInt(per_coarse));
-    const nx: usize = @min(200, @as(usize, @intFromFloat(@ceil((hi.x - lo.x) / coarse))) + 1);
-    const ny: usize = @min(200, @as(usize, @intFromFloat(@ceil((hi.y - lo.y) / coarse))) + 1);
+    const step = cell_points * @max(scale, 0.5);
+    const nx: usize = @min(400, @as(usize, @intFromFloat(@ceil((hi.x - lo.x) / step))) + 1);
+    const ny: usize = @min(400, @as(usize, @intFromFloat(@ceil((hi.y - lo.y) / step))) + 1);
     const grid = arena.alloc(Sample, nx * ny) catch return null;
     for (0..ny) |j| for (0..nx) |i| {
-        grid[j * nx + i] = field(discs, k, .{ .x = lo.x + @as(f32, @floatFromInt(i)) * coarse, .y = lo.y + @as(f32, @floatFromInt(j)) * coarse });
+        grid[j * nx + i] = field(discs, k, .{ .x = lo.x + @as(f32, @floatFromInt(i)) * step, .y = lo.y + @as(f32, @floatFromInt(j)) * step });
     };
 
-    // A coarse cell whose corners are all further than this from the edge has none of it: the
-    // field changes by at most `lipschitz` a pixel, so across the cell's diagonal by less.
-    const clear = coarse * std.math.sqrt2 * lipschitz;
     var mesh: Mesh = .{};
-    var local: [(per_coarse + 1) * (per_coarse + 1)]Sample = undefined;
-    for (0..ny - 1) |j| for (0..nx - 1) |i| {
-        const x0 = lo.x + @as(f32, @floatFromInt(i)) * coarse;
-        const y0 = lo.y + @as(f32, @floatFromInt(j)) * coarse;
-        const cs = [4]Sample{ grid[j * nx + i], grid[j * nx + i + 1], grid[(j + 1) * nx + i + 1], grid[(j + 1) * nx + i] };
-        var dmin: f32 = cs[0].d;
-        var dmax: f32 = cs[0].d;
-        for (cs[1..]) |c| {
-            dmin = @min(dmin, c.d);
-            dmax = @max(dmax, c.d);
-        }
-        if (dmin > clear) continue;
-        const corners = [4]dvui.Point.Physical{
-            .{ .x = x0, .y = y0 },
-            .{ .x = x0 + coarse, .y = y0 },
-            .{ .x = x0 + coarse, .y = y0 + coarse },
-            .{ .x = x0, .y = y0 + coarse },
-        };
-        if (dmax < -clear) {
-            if (!march(arena, &mesh, discs, k, scale, corners, cs)) return null;
-            continue;
-        }
-        // The edge may be in here: march it at the fine size.
-        const m = per_coarse + 1;
-        for (0..m) |b| for (0..m) |a| {
-            local[b * m + a] = field(discs, k, .{ .x = x0 + @as(f32, @floatFromInt(a)) * fine, .y = y0 + @as(f32, @floatFromInt(b)) * fine });
-        };
-        for (0..per_coarse) |b| for (0..per_coarse) |a| {
-            const fx = x0 + @as(f32, @floatFromInt(a)) * fine;
-            const fy = y0 + @as(f32, @floatFromInt(b)) * fine;
-            const fc = [4]dvui.Point.Physical{
-                .{ .x = fx, .y = fy },
-                .{ .x = fx + fine, .y = fy },
-                .{ .x = fx + fine, .y = fy + fine },
-                .{ .x = fx, .y = fy + fine },
-            };
-            const fs = [4]Sample{ local[b * m + a], local[b * m + a + 1], local[(b + 1) * m + a + 1], local[(b + 1) * m + a] };
-            if (!march(arena, &mesh, discs, k, scale, fc, fs)) return null;
-        };
-    };
-    return mesh;
-}
-
-/// Fine cells a coarse cell is split into, a side (`build`).
-const per_coarse = 4;
-/// The most the field changes over a pixel: 1 for one disc, a little more where the bridges
-/// between several pull the gradient past it.
-const lipschitz: f32 = 1.5;
-
-/// One cell of the marching squares: its inside as a fan, and a one-pixel fringe out from each
-/// piece of the edge crossing it. False when out of memory.
-fn march(arena: std.mem.Allocator, mesh: *Mesh, discs: []const Disc, k: f32, scale: f32, corners: [4]dvui.Point.Physical, cs: [4]Sample) bool {
-    const d = [4]f32{ cs[0].d, cs[1].d, cs[2].d, cs[3].d };
-    var inside: u8 = 0;
-    for (d) |v| {
-        if (v < 0) inside += 1;
-    }
-    if (inside == 0) return true;
     const aa = scale;
     var poly: [8]dvui.Point.Physical = undefined;
-    // The inside of the cell: its corners that are in, and where its sides cross the edge.
-    var n: usize = 0;
-    var samples: [8]Sample = undefined;
-    var cuts: [4]dvui.Point.Physical = undefined;
-    var ncut: usize = 0;
-    for (0..4) |c| {
-        const nxt = (c + 1) % 4;
-        if (d[c] < 0) {
-            poly[n] = corners[c];
-            // A corner's field is the grid's; only the edge's crossings need their own.
-            samples[n] = cs[c];
-            n += 1;
+    for (0..ny - 1) |j| for (0..nx - 1) |i| {
+        const x0 = lo.x + @as(f32, @floatFromInt(i)) * step;
+        const y0 = lo.y + @as(f32, @floatFromInt(j)) * step;
+        const corners = [4]dvui.Point.Physical{
+            .{ .x = x0, .y = y0 },
+            .{ .x = x0 + step, .y = y0 },
+            .{ .x = x0 + step, .y = y0 + step },
+            .{ .x = x0, .y = y0 + step },
+        };
+        const cs = [4]Sample{ grid[j * nx + i], grid[j * nx + i + 1], grid[(j + 1) * nx + i + 1], grid[(j + 1) * nx + i] };
+        const d = [4]f32{ cs[0].d, cs[1].d, cs[2].d, cs[3].d };
+        var inside: u8 = 0;
+        for (d) |v| {
+            if (v < 0) inside += 1;
         }
-        if ((d[c] < 0) != (d[nxt] < 0)) {
-            const t = d[c] / (d[c] - d[nxt]);
-            const p: dvui.Point.Physical = .{ .x = corners[c].x + (corners[nxt].x - corners[c].x) * t, .y = corners[c].y + (corners[nxt].y - corners[c].y) * t };
-            poly[n] = p;
-            samples[n] = field(discs, k, p);
-            n += 1;
-            if (ncut < 4) {
-                cuts[ncut] = p;
-                ncut += 1;
+        if (inside == 0) continue;
+        // The inside of the cell: its corners that are in, and where its sides cross the edge.
+        var n: usize = 0;
+        var samples: [8]Sample = undefined;
+        var cuts: [4]dvui.Point.Physical = undefined;
+        var ncut: usize = 0;
+        for (0..4) |c| {
+            const nxt = (c + 1) % 4;
+            if (d[c] < 0) {
+                poly[n] = corners[c];
+                // A corner's field is the grid's; only the edge's crossings need their own.
+                samples[n] = cs[c];
+                n += 1;
+            }
+            if ((d[c] < 0) != (d[nxt] < 0)) {
+                const t = d[c] / (d[c] - d[nxt]);
+                const p: dvui.Point.Physical = .{ .x = corners[c].x + (corners[nxt].x - corners[c].x) * t, .y = corners[c].y + (corners[nxt].y - corners[c].y) * t };
+                poly[n] = p;
+                samples[n] = field(discs, k, p);
+                n += 1;
+                if (ncut < 4) {
+                    cuts[ncut] = p;
+                    ncut += 1;
+                }
             }
         }
-    }
-    if (n < 3) return true;
-    const base: dvui.Vertex.Index = @intCast(mesh.verts.items.len);
-    for (poly[0..n], samples[0..n]) |p, smp| mesh.verts.append(arena, .{ .p = p, .s = smp, .a = 1 }) catch return false;
-    var t: usize = 1;
-    while (t + 1 < n) : (t += 1) {
-        mesh.inner.appendSlice(arena, &.{ base, base + @as(dvui.Vertex.Index, @intCast(t)), base + @as(dvui.Vertex.Index, @intCast(t + 1)) }) catch return false;
-    }
-    // The fringe: each piece of the edge in this cell, pushed out a pixel along the field.
-    var c: usize = 0;
-    while (c + 1 < ncut) : (c += 2) {
-        const a = cuts[c];
-        const b = cuts[c + 1];
-        const sa = field(discs, k, a);
-        const sb = field(discs, k, b);
-        const fb: dvui.Vertex.Index = @intCast(mesh.verts.items.len);
-        mesh.verts.appendSlice(arena, &.{
-            .{ .p = a, .s = sa, .a = 1 },
-            .{ .p = b, .s = sb, .a = 1 },
-            .{ .p = .{ .x = b.x + sb.out.x * aa, .y = b.y + sb.out.y * aa }, .s = sb, .a = 0 },
-            .{ .p = .{ .x = a.x + sa.out.x * aa, .y = a.y + sa.out.y * aa }, .s = sa, .a = 0 },
-        }) catch return false;
-        mesh.fringe.appendSlice(arena, &.{ fb, fb + 1, fb + 2, fb, fb + 2, fb + 3 }) catch return false;
-    }
-    return true;
+        if (n < 3) continue;
+        const base: dvui.Vertex.Index = @intCast(mesh.verts.items.len);
+        for (poly[0..n], samples[0..n]) |p, smp| mesh.verts.append(arena, .{ .p = p, .s = smp, .a = 1 }) catch return null;
+        var t: usize = 1;
+        while (t + 1 < n) : (t += 1) {
+            mesh.inner.appendSlice(arena, &.{ base, base + @as(dvui.Vertex.Index, @intCast(t)), base + @as(dvui.Vertex.Index, @intCast(t + 1)) }) catch return null;
+        }
+        // The fringe: each piece of the edge in this cell, pushed out a pixel along the field.
+        var c: usize = 0;
+        while (c + 1 < ncut) : (c += 2) {
+            const a = cuts[c];
+            const b = cuts[c + 1];
+            const sa = field(discs, k, a);
+            const sb = field(discs, k, b);
+            const fb: dvui.Vertex.Index = @intCast(mesh.verts.items.len);
+            mesh.verts.appendSlice(arena, &.{
+                .{ .p = a, .s = sa, .a = 1 },
+                .{ .p = b, .s = sb, .a = 1 },
+                .{ .p = .{ .x = b.x + sb.out.x * aa, .y = b.y + sb.out.y * aa }, .s = sb, .a = 0 },
+                .{ .p = .{ .x = a.x + sa.out.x * aa, .y = a.y + sa.out.y * aa }, .s = sa, .a = 0 },
+            }) catch return null;
+            mesh.fringe.appendSlice(arena, &.{ fb, fb + 1, fb + 2, fb, fb + 2, fb + 3 }) catch return null;
+        }
+    };
+    return mesh;
 }
 
 test "far apart the union is its discs; together it bridges them" {
@@ -373,9 +314,9 @@ test "far apart the union is its discs; together it bridges them" {
     try std.testing.expect(field(&close, 0.5, .{ .x = 11, .y = 0 }).d > 0);
 }
 
-test "many discs run together swell no more than k/4 apiece" {
+test "many discs run together swell no more than two" {
     var six: [6]Disc = undefined;
     for (&six) |*d| d.* = .{ .c = .{ .x = 0, .y = 0 }, .r = 10 };
-    // All on top of each other: the union's edge is at most (n − 1)·k/4 past theirs.
-    try std.testing.expect(field(&six, 8, .{ .x = 10 + swell(8, six.len) + 0.01, .y = 0 }).d > 0);
+    // All on top of each other: the union's edge is at most k/4 past theirs.
+    try std.testing.expect(field(&six, 8, .{ .x = 10 + swell(8) + 0.01, .y = 0 }).d > 0);
 }

@@ -140,8 +140,8 @@ fn inset(r: dvui.Rect.Physical, dx: f32, dy: f32) dvui.Rect.Physical {
 /// and splitting, watched as the place is arrived at. Out runs it backwards — the bubbles back
 /// together into one drop that shrinks away — quickly, but slowly enough to be seen doing it
 /// rather than popping.
-pub const appear_ms: f32 = 520;
-pub const vanish_ms: f32 = 480;
+pub const appear_ms: f32 = 420;
+pub const vanish_ms: f32 = 380;
 /// A time constant: how quickly a zone lights or dims under the pointer, most of the way in
 /// about three of these.
 pub const light_ms: f32 = 55;
@@ -153,9 +153,11 @@ const State = struct {
     /// the gap between that and where the new way's curve starts, faded out over the new way,
     /// so a drop that turns mid-way carries on from where it was rather than jumping.
     leaving: bool = false,
-    shape: Shape = .{},
+    part: f32 = 0,
+    swell: f32 = 0,
     turn_shown: f32 = 0,
-    turn: Shape = .{},
+    turn_part: f32 = 0,
+    turn_swell: f32 = 0,
     /// 0…1: how lit — the zone under the pointer.
     lit: [all.len]f32 = @splat(0),
     last_ns: i128 = 0,
@@ -214,36 +216,48 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
 
     const g = frost(st.shown);
     if (g > 0.01 and w.unit > 0) {
-        // Water: one drop, and its bubbles pinching off it one after another round the circle,
-        // each springing to its place as the drop wobbles at letting it go. Leaving, they come
-        // back the other way round, each drawn in faster and faster and poured into the drop,
-        // which swells by what it takes and ripples, then shrinks away (`phases`, `water`).
-        var order_buf: [all.len]usize = undefined;
-        const order = radialOrder(w, &order_buf);
+        // One drop, then its bubbles: during `drop_phase` of the way in a single bubble swells in
+        // the middle; after it the bubbles part toward where they settle — past it and back at
+        // the app's motion — while how far the field bridges them falls, so the necks between
+        // them thin and let go. Leaving, the same phases backwards but plainly eased: the arrival's
+        // swing run in reverse was a push outward before they gathered, and another swell before
+        // the drop shrank — two bounces in one join.
         const leaving = want_shown < st.shown or (want_shown == st.shown and !look.target);
-        const target = phases(st.shown, leaving, order);
+        const shape = phases(st.shown, leaving);
         if (leaving != st.leaving) {
             st.leaving = leaving;
             st.turn_shown = st.shown;
-            st.turn = st.shape.minus(target);
+            st.turn_part = st.part - shape.part;
+            st.turn_swell = st.swell - shape.swell;
         }
         // How much of the gap at the turn is left: all of it there, none at the end of the way.
         const left = if (leaving)
             (if (st.turn_shown > 0) std.math.clamp(st.shown / st.turn_shown, 0, 1) else 0)
         else
             (if (st.turn_shown < 1) std.math.clamp((1 - st.shown) / (1 - st.turn_shown), 0, 1) else 0);
-        st.shape = target.plus(st.turn, left);
-
+        const part = @max(0, shape.part + st.turn_part * left);
+        const swell = @max(0, shape.swell + st.turn_swell * left);
+        st.part = part;
+        st.swell = swell;
         var discs: [all.len]liquid_blob.Disc = undefined;
         var zones: [all.len]usize = undefined;
-        var settles: [all.len]f32 = undefined;
-        const n = water(w, st.shape, order, st.shown, leaving, &st.lit, &discs, &zones, &settles);
-        const k = bridge * w.unit;
+        var n: usize = 0;
+        for (all, 0..) |z, i| {
+            if (z == .remove and !w.remove) continue;
+            const b = w.bubble(z);
+            discs[n] = .{
+                .c = .{ .x = w.center.x + (b.c.x - w.center.x) * part, .y = w.center.y + (b.c.y - w.center.y) * part },
+                .r = b.r * swell,
+                .lit = st.lit[i],
+            };
+            zones[n] = i;
+            n += 1;
+        }
+        const k = (bridge_start + (bridge_end - bridge_start) * std.math.clamp(part, 0, 1)) * w.unit;
         if (apart(discs[0..n], k)) {
-            // Parted — or down to the one drop — each bubble is a circle: the panes' own glass
-            // (`liquid_glass`), a pane with corners of its whole radius — a fraction of the
-            // union's mesh to draw, and its rim light is the panes', fine along the edge where
-            // the union's grid is coarse.
+            // Parted, each bubble is a circle: the panes' own glass (`liquid_glass`), a pane
+            // with corners of its whole radius — a fraction of the union's mesh to draw, and its
+            // rim light is the panes', fine along the edge where the union's grid is coarse.
             var panes: [all.len]Pane = undefined;
             for (discs[0..n], 0..) |dc, i| panes[i] = .{
                 .r = .{ .x = dc.c.x - dc.r, .y = dc.c.y - dc.r, .w = 2 * dc.r, .h = 2 * dc.r },
@@ -254,14 +268,14 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
         } else {
             blob(id, discs[0..n], k, w.rect(), g, scale);
         }
-        // The icons, each once its bubble is nearly where it settles.
-        for (discs[0..n], zones[0..n], settles[0..n]) |dc, i, settle| {
-            if (settle <= 0.01) continue;
+        // The icons, once the bubbles have come apart enough to hold them.
+        const settle = std.math.clamp((part - 0.55) / 0.45, 0, 1);
+        if (settle > 0.01) for (discs[0..n], zones[0..n]) |dc, i| {
             const z = all[i];
             if (z == .center and look.center == .none) continue;
             const zr: dvui.Rect.Physical = .{ .x = dc.c.x - dc.r, .y = dc.c.y - dc.r, .w = 2 * dc.r, .h = 2 * dc.r };
             drawIcon(zr, iconFor(z, look.center), g * settle, st.lit[i], scale, dc.r * bubble_icon / scale, w.bubble(z).r * bubble_icon);
-        }
+        };
     }
 
     if (moving) {
@@ -275,166 +289,51 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
     }
 }
 
-/// Whether the field bridges none of `discs`: every pair at least `k` apart, where the smooth
-/// union's edge is exactly its circles' — so each is a circle of its own. One drop alone is too.
+/// Whether the field bridges none of `discs` any more: every pair further apart than the union
+/// reaches across (a few `k`), so each is a circle of its own.
 fn apart(discs: []const liquid_blob.Disc, k: f32) bool {
     for (discs, 0..) |a, i| for (discs[i + 1 ..]) |b| {
         const dx = a.c.x - b.c.x;
         const dy = a.c.y - b.c.y;
-        if (@sqrt(dx * dx + dy * dy) - a.r - b.r < k) return false;
+        if (@sqrt(dx * dx + dy * dy) - a.r - b.r < 4 * k) return false;
     };
     return true;
 }
 
-/// Where each part of the drop is in its motion, 0…1 (past 1 while a spring carries it on).
-const Shape = struct {
-    /// The drop forming in the middle.
-    form: f32 = 0,
-    /// Each bubble's way out of the drop, by its index in `all`: 0 inside it, 1 settled.
-    p: [all.len]f32 = @splat(0),
+/// The share of the way in the drop spends as one bubble, before it splits.
+const drop_phase: f32 = 0.3;
 
-    fn minus(a: Shape, b: Shape) Shape {
-        var r: Shape = .{ .form = a.form - b.form };
-        for (&r.p, a.p, b.p) |*x, pa, pb| x.* = pa - pb;
-        return r;
-    }
+const Shape = struct { part: f32, swell: f32 };
 
-    fn plus(a: Shape, b: Shape, f: f32) Shape {
-        var r: Shape = .{ .form = a.form + b.form * f };
-        for (&r.p, a.p, b.p) |*x, pa, pb| x.* = pa + pb * f;
-        return r;
-    }
-};
-
-/// The choreography on `shown` (0 gone … 1 settled, linear in time): the drop forms over the
-/// first `form_to`; from `split_from` its bubbles pinch off one after another round the circle,
-/// `stagger` apart, each over what is left. Leaving runs it backwards, the last out the first
-/// back.
-const form_to: f32 = 0.3;
-const split_from: f32 = 0.18;
-const stagger: f32 = 0.09;
-
-/// Each part's window on `shown`, eased the way water moves that way: arriving, the app's
-/// spring — a bubble let go flies to its place and settles past it and back; leaving, drawn in
-/// ever faster, the pull of surface tension, so it meets the drop at speed rather than easing
-/// to a stop against it.
-fn phases(shown: f32, leaving: bool, order: []const usize) Shape {
-    var s: Shape = .{ .form = ease(std.math.clamp(shown / form_to, 0, 1), leaving) };
-    for (order, 0..) |zi, j| s.p[zi] = ease(std.math.clamp((shown - windowStart(j)) / windowSpan(order.len), 0, 1), leaving);
-    return s;
-}
-
-fn ease(t: f32, leaving: bool) f32 {
-    // In terms of the way out, 1 − (1 − t)²: slow to leave its place, fastest into the drop.
-    return if (leaving) t * (2 - t) else motion.enterFull(t);
-}
-
-fn windowStart(j: usize) f32 {
-    return split_from + stagger * @as(f32, @floatFromInt(j));
-}
-
-fn windowSpan(n: usize) f32 {
-    return 1 - split_from - stagger * @as(f32, @floatFromInt(n -| 1));
-}
-
-/// The bubbles other than the middle, in order round it clockwise from the top.
-fn radialOrder(w: Wheel, buf: *[all.len]usize) []const usize {
-    var n: usize = 0;
-    for (all, 0..) |z, i| {
-        if (z == .center or (z == .remove and !w.remove)) continue;
-        buf[n] = i;
-        n += 1;
-    }
-    const Angle = struct {
-        fn of(wh: Wheel, i: usize) f32 {
-            const b = wh.bubble(all[i]);
-            // Screen y runs down, so this climbs clockwise from the top (−½π).
-            var a = std.math.atan2(b.c.y - wh.center.y, b.c.x - wh.center.x);
-            if (a < -std.math.pi / 2.0) a += 2 * std.math.pi;
-            return a;
-        }
-        fn less(wh: Wheel, a: usize, b: usize) bool {
-            return of(wh, a) < of(wh, b);
-        }
+/// How far the bubbles have parted and how big the drop is at `shown`: arriving on the app's
+/// motion (its swing, when playful), leaving on a plain ease with no swing.
+///
+/// Leaving, the two overlap: the drop starts to shrink while its bubbles are still gathering.
+/// One after the other, each eased to a stop, the join came to rest before the shrink began —
+/// a pause in the middle of what should read as one motion.
+fn phases(shown: f32, leaving: bool) Shape {
+    if (leaving) return .{
+        .part = smooth(std.math.clamp((shown - leave_gather_to) / (1 - leave_gather_to), 0, 1)),
+        .swell = smooth(std.math.clamp(shown / leave_shrink_from, 0, 1)),
     };
-    std.mem.sort(usize, buf[0..n], w, Angle.less);
-    return buf[0..n];
+    const form = std.math.clamp(shown / drop_phase, 0, 1);
+    const split = std.math.clamp((shown - drop_phase) / (1 - drop_phase), 0, 1);
+    return .{ .part = motion.enterFull(split), .swell = motion.enterFull(form) };
 }
 
-/// The drop at `shape`, as discs (the middle first), their zones' indices in `all`, and how far
-/// each has settled for its icon. Returns how many. A bubble fully poured into the drop has no
-/// size and is left out, so the drop alone is one circle.
-fn water(
-    w: Wheel,
-    shape: Shape,
-    order: []const usize,
-    shown: f32,
-    leaving: bool,
-    lit: *const [all.len]f32,
-    discs: *[all.len]liquid_blob.Disc,
-    zones: *[all.len]usize,
-    settles: *[all.len]f32,
-) usize {
-    const mid = w.bubble(.center);
-    // What the drop holds of its bubbles: a share of each one's area not yet out of it.
-    var held: f32 = 0;
-    var ripple: f32 = 0;
-    const span = windowSpan(order.len);
-    for (order, 0..) |zi, j| {
-        const size = bubbleSize(shape.p[zi]);
-        const r = w.bubble(all[zi]).r;
-        held += (1 - size * size) * r * r;
-        // The drop wobbles at each bubble it lets go of or takes in: a damped ripple from the
-        // moment it happens, on the same clock as the rest.
-        const since = if (leaving) (windowStart(j) - shown) / span else (shown - windowStart(j) - pinch_at * span) / span;
-        if (since > 0) ripple += ripple_amount * @exp(-since / ripple_decay) * @sin(2 * std.math.pi * since / ripple_period);
-    }
-    const form = @max(0, shape.form);
-    var n: usize = 0;
-    discs[n] = .{ .c = mid.c, .r = form * @sqrt(mid.r * mid.r + absorb * held) * (1 + ripple), .lit = lit[0] };
-    zones[n] = 0;
-    settles[n] = std.math.clamp((form - 0.55) / 0.45, 0, 1);
-    n += 1;
-    for (order) |zi| {
-        const p = @max(0, shape.p[zi]);
-        const b = w.bubble(all[zi]);
-        const r = b.r * bubbleSize(p);
-        if (r < 0.5) continue;
-        discs[n] = .{
-            .c = .{ .x = mid.c.x + (b.c.x - mid.c.x) * p, .y = mid.c.y + (b.c.y - mid.c.y) * p },
-            .r = r,
-            .lit = lit[zi],
-        };
-        zones[n] = zi;
-        settles[n] = std.math.clamp((p - 0.55) / 0.45, 0, 1);
-        n += 1;
-    }
-    return n;
-}
-
-/// A bubble's size `p` of the way out: it swells out of the drop over the first `swell_by` of its
-/// way — pinching off — and going back, pours into the drop over the last of it.
-fn bubbleSize(p: f32) f32 {
-    return smooth(std.math.clamp(p / swell_by, 0, 1));
-}
+/// Leaving, on `shown` from 1 down to 0: the bubbles gather until `leave_gather_to`, the drop
+/// shrinks from `leave_shrink_from` — the two overlapping between them.
+const leave_gather_to: f32 = 0.3;
+const leave_shrink_from: f32 = 0.65;
 
 fn smooth(t: f32) f32 {
     return t * t * (3 - 2 * t);
 }
-
-const swell_by: f32 = 0.35;
-/// How much of a bubble's area the drop takes on while it holds it: all of it would make the
-/// whole drop half again as wide as the wheel's middle.
-const absorb: f32 = 0.25;
-/// Arriving, where in a bubble's window it pinches off, for the drop's ripple.
-const pinch_at: f32 = 0.25;
-/// The ripple, as a share of the drop's radius, and its period and decay in bubble windows.
-const ripple_amount: f32 = 0.05;
-const ripple_period: f32 = 0.55;
-const ripple_decay: f32 = 0.3;
-/// Points: how far the field bridges the drop and its bubbles — the neck as one pinches off or
-/// pours in, gone once they are this far apart. Settled bubbles stand further apart than it.
-const bridge: f32 = 10;
+/// Points: how far the field bridges the bubbles as they begin to part, and once they have —
+/// enough at the start that they leave as one drop, little enough at the end that settled
+/// bubbles a few points apart stand clear of each other.
+const bridge_start: f32 = 16;
+const bridge_end: f32 = 1.5;
 
 /// The drop's glass: one read and blur of `area` (where it settles), the discs' union laid down
 /// on it (`liquid_blob`) with the dialogs' tint and lift, at strength `g`. With the blur off,
