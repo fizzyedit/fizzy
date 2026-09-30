@@ -33,55 +33,62 @@ pub const Sample = struct {
     lit: f32,
 };
 
-/// The smooth union of `discs`, bridging over `k` physical pixels, at `p`: a polynomial smooth
-/// minimum of the two nearest discs' distances.
+/// The smooth union of `discs`, bridging over `k` physical pixels, at `p`: the nearest disc's
+/// distance, less a polynomial bridge `(k − δ)²/4k` for every other disc within `k` of it (δ how
+/// much further it is) — with two discs, exactly the polynomial smooth minimum.
 ///
-/// Only the two nearest, and polynomial: the union swells where discs overlap by at most `k/4`,
-/// however many overlap. The exponential soft minimum over them all swells by `k·ln n` — with the
-/// drop's six bubbles run together that was the size of a bubble, the edge ran past everything
-/// the mesh sampled, and the drop merging back filled its grid as a square.
+/// Every disc near enough, and none favoured, so the edge has no seam and no lean. Blending only
+/// the two nearest flipped which disc counted wherever three came close — at the neck between a
+/// drop and two of its bubbles — and the direction out of the edge (its fringe, rim light and
+/// refraction) jumped there, drawn as a stair; folding them all in one order was smooth but
+/// leaned toward the first. Polynomial, not the exponential soft minimum, which swells by
+/// `k·ln n` wherever they overlap.
 pub fn field(discs: []const Disc, k: f32, p: dvui.Point.Physical) Sample {
-    var d1: f32 = std.math.floatMax(f32);
-    var d2: f32 = std.math.floatMax(f32);
-    var n1: dvui.Point.Physical = .{ .x = 0, .y = -1 };
-    var n2: dvui.Point.Physical = .{ .x = 0, .y = -1 };
-    var l1: f32 = 0;
-    var l2: f32 = 0;
-    for (discs) |dc| {
+    var ds: [max_discs]f32 = undefined;
+    var ns: [max_discs]dvui.Point.Physical = undefined;
+    const count = @min(discs.len, max_discs);
+    var near: usize = 0;
+    for (discs[0..count], 0..) |dc, i| {
         const dx = p.x - dc.c.x;
         const dy = p.y - dc.c.y;
         const len = @sqrt(dx * dx + dy * dy);
-        const d = len - dc.r;
-        const n: dvui.Point.Physical = if (len > 1e-4) .{ .x = dx / len, .y = dy / len } else .{ .x = 0, .y = -1 };
-        if (d < d1) {
-            d2 = d1;
-            n2 = n1;
-            l2 = l1;
-            d1 = d;
-            n1 = n;
-            l1 = dc.lit;
-        } else if (d < d2) {
-            d2 = d;
-            n2 = n;
-            l2 = dc.lit;
-        }
+        ds[i] = len - dc.r;
+        ns[i] = if (len > 1e-4) .{ .x = dx / len, .y = dy / len } else .{ .x = 0, .y = -1 };
+        if (ds[i] < ds[near]) near = i;
     }
-    if (discs.len < 2) return .{ .d = d1, .out = n1, .lit = l1 };
-    // h: how much the nearest has it, ½ where the two are level, 1 once the other is `k` further.
-    const h = std.math.clamp(0.5 + 0.5 * (d2 - d1) / k, 0, 1);
-    const gx = n1.x * h + n2.x * (1 - h);
-    const gy = n1.y * h + n2.y * (1 - h);
+    if (count == 0) return .{ .d = std.math.floatMax(f32), .out = .{ .x = 0, .y = -1 }, .lit = 0 };
+    var d = ds[near];
+    var gx = ns[near].x;
+    var gy = ns[near].y;
+    var lit = discs[near].lit;
+    for (0..count) |i| {
+        if (i == near) continue;
+        const delta = ds[i] - ds[near];
+        if (delta >= k) continue;
+        const reach = k - delta;
+        d -= reach * reach / (4 * k);
+        // The bridge's pull on the gradient and on what the discs are: (k − δ)/2k of the way
+        // from the nearest toward this one — a half each where the two are level.
+        const w = reach / (2 * k);
+        gx += w * (ns[i].x - ns[near].x);
+        gy += w * (ns[i].y - ns[near].y);
+        lit += w * (discs[i].lit - discs[near].lit);
+    }
     const glen = @sqrt(gx * gx + gy * gy);
     return .{
-        .d = d2 + (d1 - d2) * h - k * h * (1 - h),
-        .out = if (glen > 1e-5) .{ .x = gx / glen, .y = gy / glen } else n1,
-        .lit = l1 * h + l2 * (1 - h),
+        .d = d,
+        .out = if (glen > 1e-5) .{ .x = gx / glen, .y = gy / glen } else ns[near],
+        .lit = std.math.clamp(lit, 0, 1),
     };
 }
 
-/// The most the union reaches past its discs, for `k`: where two meet level, `k/4`.
-fn swell(k: f32) f32 {
-    return k / 4;
+/// The most discs one union takes: the drop zones' six.
+pub const max_discs = 8;
+
+/// The most the union of `n` discs reaches past them, for `k`: `k/4` for each disc over the
+/// first, all on top of one another.
+fn swell(k: f32, n: usize) f32 {
+    return @as(f32, @floatFromInt(n -| 1)) * k / 4;
 }
 
 /// How the glass looks, as `liquid_glass.Look` plus what a pane's frost job composes over it.
@@ -104,9 +111,11 @@ pub const Look = struct {
     blend_over: ?*const fn (dvui.Texture, bool) void = null,
 };
 
-/// Physical pixels a grid cell is, at display scale 1: fine enough that the edge between the
-/// fringe's samples reads as a curve.
-const cell_points: f32 = 4;
+/// Points a grid cell is: fine enough that the edge between the fringe's samples reads as a
+/// curve, even round the tight bend of a neck — at 4 the neck between a drop and a bubble it was
+/// letting go of showed its straight pieces as stairs. The mesh is drawn only while bubbles are
+/// joined, a fraction of a second at a time.
+const cell_points: f32 = 2.5;
 
 const Vert = struct {
     p: dvui.Point.Physical,
@@ -219,7 +228,7 @@ fn build(arena: std.mem.Allocator, discs: []const Disc, k: f32, scale: f32) ?Mes
         hi = .{ .x = @max(hi.x, dc.c.x + dc.r), .y = @max(hi.y, dc.c.y + dc.r) };
     }
     // The union reaches past the discs where it bridges them (`swell`); the grid covers that.
-    const pad = swell(k) + 2 * scale;
+    const pad = swell(k, discs.len) + 2 * scale;
     lo = .{ .x = lo.x - pad, .y = lo.y - pad };
     hi = .{ .x = hi.x + pad, .y = hi.y + pad };
     if (hi.x - lo.x < 1 or hi.y - lo.y < 1) return null;
@@ -314,9 +323,9 @@ test "far apart the union is its discs; together it bridges them" {
     try std.testing.expect(field(&close, 0.5, .{ .x = 11, .y = 0 }).d > 0);
 }
 
-test "many discs run together swell no more than two" {
+test "many discs run together swell no more than k/4 apiece" {
     var six: [6]Disc = undefined;
     for (&six) |*d| d.* = .{ .c = .{ .x = 0, .y = 0 }, .r = 10 };
-    // All on top of each other: the union's edge is at most k/4 past theirs.
-    try std.testing.expect(field(&six, 8, .{ .x = 10 + swell(8) + 0.01, .y = 0 }).d > 0);
+    // All on top of each other: the union's edge is at most (n − 1)·k/4 past theirs.
+    try std.testing.expect(field(&six, 8, .{ .x = 10 + swell(8, six.len) + 0.01, .y = 0 }).d > 0);
 }

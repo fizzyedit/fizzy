@@ -3666,6 +3666,27 @@ test "liquid blob: far apart it is its discs; close together it bridges them" {
     try std.testing.expect(LB.field(&close, 0.5, .{ .x = 11, .y = 0 }).d > 0);
 }
 
+test "liquid blob: a drop between two bubbles leans toward neither" {
+    const LB = fizzy.core.liquid_blob;
+    // A drop and two bubbles beside it, close enough that the field bridges all three. Midway
+    // between the bubbles the edge faces straight out: every disc near enough counts and none
+    // is favoured. Folding them in one order leaned toward the first; blending only the two
+    // nearest flipped which bubble counted across this line.
+    const three = [_]LB.Disc{
+        .{ .c = .{ .x = 0, .y = 0 }, .r = 20 },
+        .{ .c = .{ .x = 30, .y = -18 }, .r = 12 },
+        .{ .c = .{ .x = 30, .y = 18 }, .r = 12 },
+    };
+    const mirrored = [_]LB.Disc{ three[0], three[2], three[1] };
+    var x: f32 = 18;
+    while (x <= 24) : (x += 0.5) {
+        const s = LB.field(&three, 10, .{ .x = x, .y = 0 });
+        try std.testing.expectApproxEqAbs(@as(f32, 0), s.out.y, 0.001);
+        // And the order the discs come in changes nothing.
+        try std.testing.expectApproxEqAbs(s.d, LB.field(&mirrored, 10, .{ .x = x, .y = 0 }).d, 0.0001);
+    }
+}
+
 test "liquid glass: the rings of a pane run the way dvui's paths do" {
     const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
     var pts: [4 * 7 + 2 * (8 - 1) + 2 * (4 - 1)]dvui.Point.Physical = undefined;
