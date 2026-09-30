@@ -3979,7 +3979,7 @@ pub fn flushQueuedNativeMenuItems(editor: *Editor) void {
         if (idx >= editor.app.host.native_menu_items.items.len) continue;
         const item = &editor.app.host.native_menu_items.items[idx];
         item.run(item.ctx) catch |err| {
-            dvui.log.err("Native menu item '{s}' failed: {any}", .{ item.id, err });
+            dvui.log.err("Native menu item '{s}' failed: {s}", .{ item.id, sdk.Plugin.errorNameOf(item.owner, err) });
         };
     }
 }
@@ -5255,14 +5255,8 @@ pub fn processPendingSaveAs(editor: *Editor) void {
         };
         return;
     }
-    doc.owner.saveDocumentAs(doc, path, dvui.currentWindow()) catch |err| {
-        if (err == error.UnsupportedSaveExtension) {
-            dvui.log.err("Save As: choose extension .fiz, .png, .jpg, or .jpeg (got {s})", .{std.fs.path.extension(path)});
-        } else {
-            dvui.log.err("Save As: {any}", .{err});
-        }
-        return;
-    };
+    // The owner has already said why, in its own words.
+    doc.owner.saveDocumentAs(doc, path, dvui.currentWindow()) catch return;
     // The path and dirty flag both just changed, part-way through a frame that several
     // consumers have already drawn with the old values; this re-keys what the path names and
     // asks for the frame that shows the new one.
@@ -5735,5 +5729,6 @@ pub fn pluginManager(editor: *Editor) PluginManager {
 fn profiledSurfaceDraw(s: *sdk.Surface) anyerror!dvui.App.Result {
     const prof = fizzy.core.profile.begin(if (s.owner) |o| o.id else "fizzy", s.id);
     defer prof.end();
-    return s.draw(s.ctx);
+    const owner = s.owner orelse return s.draw(s.ctx);
+    return s.draw(s.ctx) catch |err| owner.failed(s.id, err);
 }

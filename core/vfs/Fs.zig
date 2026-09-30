@@ -43,6 +43,44 @@ pub const Error = error{
     OutOfMemory,
 };
 
+/// `Error!T` as it crosses between binaries — a plugin's filesystem answering fizzy, or fizzy's
+/// answering a plugin. Zig numbers errors per compilation, so an error value made on one side is
+/// a different error, or none, on the other; this carries it by its place in `Error` instead,
+/// which both sides compile from this file.
+pub fn Result(comptime T: type) type {
+    return struct {
+        /// 0 on success, else one past the error's index in `Error`.
+        code: u8,
+        value: T,
+
+        pub fn of(result: Error!T) @This() {
+            const value = result catch |err| return .{ .code = codeOf(err), .value = undefined };
+            return .{ .code = 0, .value = value };
+        }
+
+        pub fn get(self: @This()) Error!T {
+            if (self.code == 0) return self.value;
+            return errorOf(self.code);
+        }
+    };
+}
+
+const errors = @typeInfo(Error).error_set.?;
+
+fn codeOf(err: Error) u8 {
+    inline for (errors, 1..) |e, i| {
+        if (err == @field(Error, e.name)) return i;
+    }
+    unreachable;
+}
+
+fn errorOf(code: u8) Error {
+    inline for (errors, 1..) |e, i| {
+        if (code == i) return @field(Error, e.name);
+    }
+    return error.Io;
+}
+
 pub const Kind = enum { file, dir };
 
 /// One child of a listed directory. Names only; the caller joins them onto the directory path.
@@ -84,10 +122,10 @@ pub const Job = struct {
     id: u64,
 };
 
-pub const ListDirFn = *const fn (ctx: ?*anyopaque, result: Error![]Entry) void;
-pub const StatFn = *const fn (ctx: ?*anyopaque, result: Error!Stat) void;
-pub const ReadFn = *const fn (ctx: ?*anyopaque, result: Error!Read) void;
-pub const DoneFn = *const fn (ctx: ?*anyopaque, result: Error!void) void;
+pub const ListDirFn = *const fn (ctx: ?*anyopaque, result: Result([]Entry)) void;
+pub const StatFn = *const fn (ctx: ?*anyopaque, result: Result(Stat)) void;
+pub const ReadFn = *const fn (ctx: ?*anyopaque, result: Result(Read)) void;
+pub const DoneFn = *const fn (ctx: ?*anyopaque, result: Result(void)) void;
 
 /// Host-owned backend. Function pointers keep this wasm-safe (no std.http, no OS filesystem).
 ///
@@ -106,49 +144,100 @@ pub const Fs = struct {
     remote: bool = false,
 
     pub const VTable = struct {
-        listDir: *const fn (ptr: *anyopaque, allocator: Allocator, path: []const u8, cb: ListDirFn, ctx: ?*anyopaque) Error!Job,
-        stat: *const fn (ptr: *anyopaque, path: []const u8, cb: StatFn, ctx: ?*anyopaque) Error!Job,
-        readFile: *const fn (ptr: *anyopaque, allocator: Allocator, path: []const u8, cb: ReadFn, ctx: ?*anyopaque) Error!Job,
+        listDir: *const fn (ptr: *anyopaque, allocator: Allocator, path: []const u8, cb: ListDirFn, ctx: ?*anyopaque) Result(Job),
+        stat: *const fn (ptr: *anyopaque, path: []const u8, cb: StatFn, ctx: ?*anyopaque) Result(Job),
+        readFile: *const fn (ptr: *anyopaque, allocator: Allocator, path: []const u8, cb: ReadFn, ctx: ?*anyopaque) Result(Job),
         /// `bytes` must stay valid until the callback runs. Create-or-replace, like a disk.
-        writeFile: *const fn (ptr: *anyopaque, path: []const u8, bytes: []const u8, opts: WriteOptions, cb: DoneFn, ctx: ?*anyopaque) Error!Job,
+        writeFile: *const fn (ptr: *anyopaque, path: []const u8, bytes: []const u8, opts: WriteOptions, cb: DoneFn, ctx: ?*anyopaque) Result(Job),
         /// Create an empty file. Parents must exist.
-        createFile: *const fn (ptr: *anyopaque, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job,
+        createFile: *const fn (ptr: *anyopaque, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Result(Job),
         /// Create a directory. Parents must exist.
-        mkdir: *const fn (ptr: *anyopaque, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job,
+        mkdir: *const fn (ptr: *anyopaque, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Result(Job),
         /// Rename and/or move: `new_path` may differ from `path` in its final segment, its
         /// parent, or both. Directories move with their contents.
-        rename: *const fn (ptr: *anyopaque, path: []const u8, new_path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job,
+        rename: *const fn (ptr: *anyopaque, path: []const u8, new_path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Result(Job),
         /// Remove a file or an empty directory.
-        remove: *const fn (ptr: *anyopaque, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job,
+        remove: *const fn (ptr: *anyopaque, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Result(Job),
         /// Forget a job. Its callback will not run. Cancelling a completed or unknown job is a no-op.
         cancel: *const fn (ptr: *anyopaque, job: Job) void,
         /// Deliver every completion that has arrived since the last call, on this thread.
         pump: *const fn (ptr: *anyopaque) void,
+
+        /// A vtable from a backend's functions, written with the natural signatures — each op
+        /// returning `Error!Job` — rather than the `Result(Job)` that crosses. An op left out
+        /// is undefined, as it would be in a vtable written by hand.
+        pub fn of(comptime impl: anytype) VTable {
+            const I = @TypeOf(impl);
+            return .{
+                .listDir = if (!@hasField(I, "listDir")) undefined else struct {
+                    fn f(ptr: *anyopaque, allocator: Allocator, path: []const u8, cb: ListDirFn, ctx: ?*anyopaque) Result(Job) {
+                        return .of(impl.listDir(ptr, allocator, path, cb, ctx));
+                    }
+                }.f,
+                .stat = if (!@hasField(I, "stat")) undefined else struct {
+                    fn f(ptr: *anyopaque, path: []const u8, cb: StatFn, ctx: ?*anyopaque) Result(Job) {
+                        return .of(impl.stat(ptr, path, cb, ctx));
+                    }
+                }.f,
+                .readFile = if (!@hasField(I, "readFile")) undefined else struct {
+                    fn f(ptr: *anyopaque, allocator: Allocator, path: []const u8, cb: ReadFn, ctx: ?*anyopaque) Result(Job) {
+                        return .of(impl.readFile(ptr, allocator, path, cb, ctx));
+                    }
+                }.f,
+                .writeFile = if (!@hasField(I, "writeFile")) undefined else struct {
+                    fn f(ptr: *anyopaque, path: []const u8, bytes: []const u8, opts: WriteOptions, cb: DoneFn, ctx: ?*anyopaque) Result(Job) {
+                        return .of(impl.writeFile(ptr, path, bytes, opts, cb, ctx));
+                    }
+                }.f,
+                .createFile = if (!@hasField(I, "createFile")) undefined else struct {
+                    fn f(ptr: *anyopaque, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Result(Job) {
+                        return .of(impl.createFile(ptr, path, cb, ctx));
+                    }
+                }.f,
+                .mkdir = if (!@hasField(I, "mkdir")) undefined else struct {
+                    fn f(ptr: *anyopaque, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Result(Job) {
+                        return .of(impl.mkdir(ptr, path, cb, ctx));
+                    }
+                }.f,
+                .rename = if (!@hasField(I, "rename")) undefined else struct {
+                    fn f(ptr: *anyopaque, path: []const u8, new_path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Result(Job) {
+                        return .of(impl.rename(ptr, path, new_path, cb, ctx));
+                    }
+                }.f,
+                .remove = if (!@hasField(I, "remove")) undefined else struct {
+                    fn f(ptr: *anyopaque, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Result(Job) {
+                        return .of(impl.remove(ptr, path, cb, ctx));
+                    }
+                }.f,
+                .cancel = impl.cancel,
+                .pump = impl.pump,
+            };
+        }
     };
 
     pub fn listDir(self: Fs, allocator: Allocator, path: []const u8, cb: ListDirFn, ctx: ?*anyopaque) Error!Job {
-        return self.vtable.listDir(self.ptr, allocator, path, cb, ctx);
+        return self.vtable.listDir(self.ptr, allocator, path, cb, ctx).get();
     }
     pub fn stat(self: Fs, path: []const u8, cb: StatFn, ctx: ?*anyopaque) Error!Job {
-        return self.vtable.stat(self.ptr, path, cb, ctx);
+        return self.vtable.stat(self.ptr, path, cb, ctx).get();
     }
     pub fn readFile(self: Fs, allocator: Allocator, path: []const u8, cb: ReadFn, ctx: ?*anyopaque) Error!Job {
-        return self.vtable.readFile(self.ptr, allocator, path, cb, ctx);
+        return self.vtable.readFile(self.ptr, allocator, path, cb, ctx).get();
     }
     pub fn writeFile(self: Fs, path: []const u8, bytes: []const u8, opts: WriteOptions, cb: DoneFn, ctx: ?*anyopaque) Error!Job {
-        return self.vtable.writeFile(self.ptr, path, bytes, opts, cb, ctx);
+        return self.vtable.writeFile(self.ptr, path, bytes, opts, cb, ctx).get();
     }
     pub fn createFile(self: Fs, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job {
-        return self.vtable.createFile(self.ptr, path, cb, ctx);
+        return self.vtable.createFile(self.ptr, path, cb, ctx).get();
     }
     pub fn mkdir(self: Fs, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job {
-        return self.vtable.mkdir(self.ptr, path, cb, ctx);
+        return self.vtable.mkdir(self.ptr, path, cb, ctx).get();
     }
     pub fn rename(self: Fs, path: []const u8, new_path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job {
-        return self.vtable.rename(self.ptr, path, new_path, cb, ctx);
+        return self.vtable.rename(self.ptr, path, new_path, cb, ctx).get();
     }
     pub fn remove(self: Fs, path: []const u8, cb: DoneFn, ctx: ?*anyopaque) Error!Job {
-        return self.vtable.remove(self.ptr, path, cb, ctx);
+        return self.vtable.remove(self.ptr, path, cb, ctx).get();
     }
     pub fn cancel(self: Fs, job: Job) void {
         self.vtable.cancel(self.ptr, job);

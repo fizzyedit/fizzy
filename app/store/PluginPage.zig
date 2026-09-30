@@ -216,7 +216,7 @@ fn focus(host: *sdk.Host, doc: Document) !void {
 
 const pages_fs: core.vfs.Fs = .{ .ptr = undefined, .vtable = &fs_vtable };
 
-const fs_vtable: core.vfs.Fs.VTable = .{
+const fs_vtable: core.vfs.Fs.VTable = .of(.{
     .listDir = fsListDir,
     .stat = fsStat,
     .readFile = fsReadFile,
@@ -227,7 +227,7 @@ const fs_vtable: core.vfs.Fs.VTable = .{
     .remove = fsCreateOrRemove,
     .cancel = fsCancel,
     .pump = fsPump,
-};
+});
 
 /// Every answer is known on the spot, and still arrives from `pump`, as `Fs` promises: the
 /// open that asked has to have its bookkeeping in place — the loading tab the page lands in —

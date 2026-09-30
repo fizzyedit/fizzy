@@ -176,6 +176,11 @@ const sdk_boundary_types = .{
     core.FileTable.Entry,
     core.FileTable.Listing,
     core.FileTable.Env,
+    // A mount crosses as an `Fs` both ways — a plugin's (Drive) read by fizzy, fizzy's file
+    // table read by a plugin (atlas) — and its errors cross as `Result` codes, whose meaning is
+    // `Error`'s declaration. Listed so a change to either moves the fingerprint.
+    core.vfs.Fs,
+    core.vfs.Fs.VTable,
     VersionTriplet,
 };
 

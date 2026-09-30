@@ -10,6 +10,7 @@
 const FsFile = @import("Fs.zig");
 
 pub const Error = FsFile.Error;
+pub const Result = FsFile.Result;
 pub const Kind = FsFile.Kind;
 pub const Entry = FsFile.Entry;
 pub const Stat = FsFile.Stat;

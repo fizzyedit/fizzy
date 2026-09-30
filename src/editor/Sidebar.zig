@@ -92,7 +92,7 @@ pub fn draw(_: Sidebar, editor: *Editor, f: *Layout, keywords: []const []const u
             if (item.hidden) continue;
             var slot = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .background = false, .min_size_content = .{ .h = rail_icon } });
             defer slot.deinit();
-            item.draw(item.ctx, rail_icon) catch |err| dvui.log.err("rail item '{s}' failed to draw: {t}", .{ item.id, err });
+            item.draw(item.ctx, rail_icon) catch |err| dvui.log.err("rail item '{s}' failed to draw: {s}", .{ item.id, fizzy.sdk.Plugin.errorNameOf(item.owner, err) });
         }
 
         var pinned = Chooser.init(@src(), f, place, .{

@@ -65,6 +65,37 @@ display_name: []const u8,
 /// not share.
 internal: bool = false,
 
+/// Names an error this plugin returned. Zig numbers errors per compilation, so `@errorName` in
+/// the host on a dylib's error reads the host's table and prints an unrelated name. The default
+/// is evaluated in the binary that builds this struct — the plugin's own — so it reads the
+/// plugin's table. Leave it alone; call `errorName`.
+error_name: *const fn (code: ErrorInt) [:0]const u8 = &localErrorName,
+
+pub const ErrorInt = std.meta.Int(.unsigned, @bitSizeOf(anyerror));
+
+/// `@errorName` in whichever binary this is compiled into.
+pub fn localErrorName(code: ErrorInt) [:0]const u8 {
+    return @errorName(@errorFromInt(code));
+}
+
+/// The name of `err`, which this plugin returned.
+pub fn errorName(self: Plugin, err: anyerror) [:0]const u8 {
+    return self.error_name(@intFromError(err));
+}
+
+/// The name of `err`, returned by a contribution `owner` registered, or by fizzy itself when it
+/// has none.
+pub fn errorNameOf(owner: ?*const Plugin, err: anyerror) [:0]const u8 {
+    return if (owner) |o| o.errorName(err) else @errorName(err);
+}
+
+/// A call into this plugin failed: say why, by the plugin's own name for it, and hand the caller
+/// an error that means the same thing in the caller's binary.
+pub fn failed(self: Plugin, what: []const u8, err: anyerror) error{PluginFailed} {
+    std.log.err("{s}: {s} failed: {s}", .{ self.id, what, self.errorName(err) });
+    return error.PluginFailed;
+}
+
 /// Mode for an owner's pre-save confirmation (`requestSaveConfirmation`). `editor_save` is a
 /// plain in-place save; `save_and_close` is part of a close/quit flow and resumes fizzy
 /// close walk once the save settles.
@@ -95,12 +126,13 @@ pub const NewDocumentKind = struct {
 // A plugin that is *not* an editor (the workbench file tree) implements none of the document
 // hooks; it contributes panes + a center provider instead.
 //
-// **An `anyerror` here says *that* it failed, never *why*.** Zig numbers error values per
+// **An `anyerror` here never reaches the caller as itself.** Zig numbers error values per
 // compilation, so the integer a plugin returns means something else in the host's own error set
 // — `@errorName` on it prints an unrelated name, and comparing it to `error.Something` is
-// meaningless. The contract both ways is therefore: whoever fails logs its own reason on its own
-// side, and the caller treats the error as a plain "it failed". The host does exactly that with
-// everything a plugin returns; a plugin should do the same with anything `EditorAPI` returns.
+// meaningless. So the wrappers below never hand one on: they log it by the plugin's own name
+// (`error_name`) and return `error.PluginFailed`, and `EditorAPI`'s do the same the other way
+// with `error.HostFailed`. Anything else that calls a plugin's function pointer directly names
+// its error with `errorNameOf(owner, err)`, never `@errorName`.
 pub const VTable = struct {
     /// Tear down `state`. Called when the plugin is unregistered / app shuts down.
     deinit: ?*const fn (state: *anyopaque) void = null,
@@ -411,25 +443,25 @@ pub fn fileTypes(self: Plugin) []const []const u8 {
 pub fn contributeKeybinds(self: Plugin, win: *dvui.Window) !void {
     const prof = core.profile.begin(self.id, "contributeKeybinds");
     defer prof.end();
-    if (self.vtable.contributeKeybinds) |f| try f(self.state, win);
+    if (self.vtable.contributeKeybinds) |f| f(self.state, win) catch |err| return self.failed("contributeKeybinds", err);
 }
 
 pub fn tickKeybinds(self: Plugin) !void {
     const prof = core.profile.begin(self.id, "tickKeybinds");
     defer prof.end();
-    if (self.vtable.tickKeybinds) |f| try f(self.state);
+    if (self.vtable.tickKeybinds) |f| f(self.state) catch |err| return self.failed("tickKeybinds", err);
 }
 
 pub fn drawOverlay(self: Plugin) !void {
     const prof = core.profile.begin(self.id, "drawOverlay");
     defer prof.end();
-    if (self.vtable.drawOverlay) |f| try f(self.state);
+    if (self.vtable.drawOverlay) |f| f(self.state) catch |err| return self.failed("drawOverlay", err);
 }
 
 pub fn registerOpenDocument(self: Plugin, file: *anyopaque) !*anyopaque {
     const prof = core.profile.begin(self.id, "registerOpenDocument");
     defer prof.end();
-    return if (self.vtable.registerOpenDocument) |f| try f(self.state, file) else error.Unsupported;
+    return if (self.vtable.registerOpenDocument) |f| (f(self.state, file) catch |err| return self.failed("registerOpenDocument", err)) else error.Unsupported;
 }
 
 pub fn documentPtr(self: Plugin, id: u64) ?*anyopaque {
@@ -507,7 +539,7 @@ pub fn documentPath(self: Plugin, doc: DocHandle) []const u8 {
 pub fn setDocumentPath(self: Plugin, doc: DocHandle, path: []const u8) !void {
     const prof = core.profile.begin(self.id, "setDocumentPath");
     defer prof.end();
-    if (self.vtable.setDocumentPath) |f| try f(self.state, doc, path);
+    if (self.vtable.setDocumentPath) |f| f(self.state, doc, path) catch |err| return self.failed("setDocumentPath", err);
 }
 
 pub fn revealPosition(self: Plugin, doc: DocHandle, line: u32, character: u32) void {
@@ -549,7 +581,7 @@ pub fn saveNeedsConfirmation(self: Plugin, doc: DocHandle) bool {
 pub fn saveDocumentAsync(self: Plugin, doc: DocHandle) !void {
     const prof = core.profile.begin(self.id, "saveDocumentAsync");
     defer prof.end();
-    if (self.vtable.saveDocumentAsync) |f| try f(self.state, doc);
+    if (self.vtable.saveDocumentAsync) |f| f(self.state, doc) catch |err| return self.failed("saveDocumentAsync", err);
 }
 
 pub fn timeSinceSaveCompleteNs(self: Plugin, doc: DocHandle) ?i128 {
@@ -567,7 +599,7 @@ pub fn loadDocument(self: Plugin, path: []const u8, out_doc: *anyopaque) !bool {
     const prof = core.profile.begin(self.id, "loadDocument");
     defer prof.end();
     if (self.vtable.loadDocument) |f| {
-        try f(self.state, path, out_doc);
+        f(self.state, path, out_doc) catch |err| return self.failed("loadDocument", err);
         return true;
     }
     return false;
@@ -578,7 +610,7 @@ pub fn loadDocumentFromBytes(self: Plugin, path: []const u8, bytes: []const u8, 
     const prof = core.profile.begin(self.id, "loadDocumentFromBytes");
     defer prof.end();
     if (self.vtable.loadDocumentFromBytes) |f| {
-        try f(self.state, path, bytes, out_doc);
+        f(self.state, path, bytes, out_doc) catch |err| return self.failed("loadDocumentFromBytes", err);
         return true;
     }
     return false;
@@ -593,7 +625,7 @@ pub fn isDirty(self: Plugin, doc: DocHandle) bool {
 pub fn saveDocument(self: Plugin, doc: DocHandle) !void {
     const prof = core.profile.begin(self.id, "saveDocument");
     defer prof.end();
-    if (self.vtable.saveDocument) |f| try f(self.state, doc);
+    if (self.vtable.saveDocument) |f| f(self.state, doc) catch |err| return self.failed("saveDocument", err);
 }
 
 /// Null when the owner has no storage-agnostic save (`documentBytes`), in which case the host
@@ -602,13 +634,13 @@ pub fn documentBytes(self: Plugin, doc: DocHandle, allocator: std.mem.Allocator)
     const prof = core.profile.begin(self.id, "documentBytes");
     defer prof.end();
     const f = self.vtable.documentBytes orelse return null;
-    return try f(self.state, doc, allocator);
+    return f(self.state, doc, allocator) catch |err| self.failed("documentBytes", err);
 }
 
 pub fn documentWritten(self: Plugin, doc: DocHandle, path: []const u8) !void {
     const prof = core.profile.begin(self.id, "documentWritten");
     defer prof.end();
-    if (self.vtable.documentWritten) |f| try f(self.state, doc, path);
+    if (self.vtable.documentWritten) |f| f(self.state, doc, path) catch |err| return self.failed("documentWritten", err);
 }
 
 pub fn canSaveThroughHost(self: Plugin) bool {
@@ -621,7 +653,7 @@ pub fn reloadDocument(self: Plugin, doc: DocHandle) bool {
     defer prof.end();
     if (self.vtable.reloadDocument) |f| {
         f(self.state, doc) catch |err| {
-            std.log.err("reloadDocument failed: {s}", .{@errorName(err)});
+            std.log.err("{s}: reloadDocument failed: {s}", .{ self.id, self.errorName(err) });
             return false;
         };
         return true;
@@ -644,13 +676,13 @@ pub fn closeDocument(self: Plugin, doc: DocHandle) bool {
 pub fn undo(self: Plugin, doc: DocHandle) !void {
     const prof = core.profile.begin(self.id, "undo");
     defer prof.end();
-    if (self.vtable.undo) |f| try f(self.state, doc);
+    if (self.vtable.undo) |f| f(self.state, doc) catch |err| return self.failed("undo", err);
 }
 
 pub fn redo(self: Plugin, doc: DocHandle) !void {
     const prof = core.profile.begin(self.id, "redo");
     defer prof.end();
-    if (self.vtable.redo) |f| try f(self.state, doc);
+    if (self.vtable.redo) |f| f(self.state, doc) catch |err| return self.failed("redo", err);
 }
 
 pub fn canUndo(self: Plugin, doc: DocHandle) bool {
@@ -689,7 +721,7 @@ pub fn drawDocument(self: Plugin, doc: DocHandle) !bool {
     const prof = core.profile.begin(self.id, "drawDocument");
     defer prof.end();
     if (self.vtable.drawDocument) |f| {
-        try f(self.state, doc);
+        f(self.state, doc) catch |err| return self.failed("drawDocument", err);
         return true;
     }
     return false;
@@ -710,7 +742,7 @@ pub fn deinit(self: Plugin) void {
 pub fn initPlugin(self: Plugin) !void {
     const prof = core.profile.begin(self.id, "initPlugin");
     defer prof.end();
-    if (self.vtable.initPlugin) |f| try f(self.state);
+    if (self.vtable.initPlugin) |f| f(self.state) catch |err| return self.failed("initPlugin", err);
 }
 
 pub fn documentStackSize(self: Plugin) usize {
@@ -746,19 +778,19 @@ pub fn setDocumentGroupingOnBuffer(self: Plugin, doc: *anyopaque, grouping: u64)
 pub fn createDocument(self: Plugin, path: []const u8, grid: EditorAPI.NewDocGrid, out_doc: *anyopaque) !void {
     const prof = core.profile.begin(self.id, "createDocument");
     defer prof.end();
-    if (self.vtable.createDocument) |f| try f(self.state, path, grid, out_doc) else return error.Unsupported;
+    if (self.vtable.createDocument) |f| (f(self.state, path, grid, out_doc) catch |err| return self.failed("createDocument", err)) else return error.Unsupported;
 }
 
 pub fn documentDefaultSaveAsFilename(self: Plugin, doc: DocHandle, allocator: std.mem.Allocator) ![]const u8 {
     const prof = core.profile.begin(self.id, "documentDefaultSaveAsFilename");
     defer prof.end();
-    return if (self.vtable.documentDefaultSaveAsFilename) |f| try f(self.state, doc, allocator) else error.Unsupported;
+    return if (self.vtable.documentDefaultSaveAsFilename) |f| (f(self.state, doc, allocator) catch |err| return self.failed("documentDefaultSaveAsFilename", err)) else error.Unsupported;
 }
 
 pub fn saveDocumentAs(self: Plugin, doc: DocHandle, path: []const u8, window: *dvui.Window) !void {
     const prof = core.profile.begin(self.id, "saveDocumentAs");
     defer prof.end();
-    if (self.vtable.saveDocumentAs) |f| try f(self.state, doc, path, window) else return error.Unsupported;
+    if (self.vtable.saveDocumentAs) |f| (f(self.state, doc, path, window) catch |err| return self.failed("saveDocumentAs", err)) else return error.Unsupported;
 }
 
 pub fn resetDocumentSaveUIState(self: Plugin, doc: DocHandle) void {

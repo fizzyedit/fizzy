@@ -162,7 +162,8 @@ const Load = struct {
         gpa.destroy(load);
     }
 
-    fn onRead(ctx: ?*anyopaque, result: core.vfs.Error!core.vfs.Read) void {
+    fn onRead(ctx: ?*anyopaque, answer: core.vfs.Result(core.vfs.Read)) void {
+        const result = answer.get();
         const load: *Load = @ptrCast(@alignCast(ctx.?));
         const io = load.io;
         const editor = io.editor;
@@ -264,7 +265,8 @@ const Save = struct {
         gpa.destroy(job);
     }
 
-    fn onCreated(ctx: ?*anyopaque, result: core.vfs.Error!void) void {
+    fn onCreated(ctx: ?*anyopaque, answer: core.vfs.Result(void)) void {
+        const result = answer.get();
         const job: *Save = @ptrCast(@alignCast(ctx.?));
         const io = job.io;
         const editor = io.editor;
@@ -283,7 +285,8 @@ const Save = struct {
         if (target.mount == null) target.fs.pump();
     }
 
-    fn onWritten(ctx: ?*anyopaque, result: core.vfs.Error!void) void {
+    fn onWritten(ctx: ?*anyopaque, answer: core.vfs.Result(void)) void {
+        const result = answer.get();
         const job: *Save = @ptrCast(@alignCast(ctx.?));
         const io = job.io;
         const editor = io.editor;
@@ -371,7 +374,8 @@ const MtimeProbe = struct {
     fn destroy(p: *MtimeProbe) void {
         p.io.editor.app.gpa.destroy(p);
     }
-    fn onStat(ctx: ?*anyopaque, result: core.vfs.Error!core.vfs.Stat) void {
+    fn onStat(ctx: ?*anyopaque, answer: core.vfs.Result(core.vfs.Stat)) void {
+        const result = answer.get();
         const p: *MtimeProbe = @ptrCast(@alignCast(ctx.?));
         defer p.destroy();
         const st = result catch return;

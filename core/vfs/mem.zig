@@ -45,7 +45,7 @@ pub const Mem = struct {
         return .{ .ptr = self, .vtable = &vtable };
     }
 
-    const vtable: Fs.Fs.VTable = .{
+    const vtable: Fs.Fs.VTable = .of(.{
         .listDir = listDir,
         .stat = stat,
         .readFile = readFile,
@@ -56,7 +56,7 @@ pub const Mem = struct {
         .remove = remove,
         .cancel = cancel,
         .pump = pump,
-    };
+    });
 
     /// Test convenience: put a file in place synchronously, creating no parents.
     pub fn put(self: *Mem, path: []const u8, bytes: []const u8) Fs.Error!void {
@@ -246,7 +246,8 @@ const Sink = struct {
         self.* = .{ .allocator = self.allocator };
     }
 
-    fn onList(ctx: ?*anyopaque, result: Fs.Error![]Fs.Entry) void {
+    fn onList(ctx: ?*anyopaque, answer: Fs.Result([]Fs.Entry)) void {
+        const result = answer.get();
         const self: *Sink = @ptrCast(@alignCast(ctx.?));
         self.calls += 1;
         self.entries = result catch |err| {
@@ -254,7 +255,8 @@ const Sink = struct {
             return;
         };
     }
-    fn onStat(ctx: ?*anyopaque, result: Fs.Error!Fs.Stat) void {
+    fn onStat(ctx: ?*anyopaque, answer: Fs.Result(Fs.Stat)) void {
+        const result = answer.get();
         const self: *Sink = @ptrCast(@alignCast(ctx.?));
         self.calls += 1;
         self.stat = result catch |err| {
@@ -262,7 +264,8 @@ const Sink = struct {
             return;
         };
     }
-    fn onRead(ctx: ?*anyopaque, result: Fs.Error!Fs.Read) void {
+    fn onRead(ctx: ?*anyopaque, answer: Fs.Result(Fs.Read)) void {
+        const result = answer.get();
         const self: *Sink = @ptrCast(@alignCast(ctx.?));
         self.calls += 1;
         const r = result catch |err| {
@@ -272,7 +275,8 @@ const Sink = struct {
         self.bytes = r.bytes;
         self.modified_ms = r.modified_ms;
     }
-    fn onDone(ctx: ?*anyopaque, result: Fs.Error!void) void {
+    fn onDone(ctx: ?*anyopaque, answer: Fs.Result(void)) void {
+        const result = answer.get();
         const self: *Sink = @ptrCast(@alignCast(ctx.?));
         self.calls += 1;
         result catch |err| {
@@ -402,11 +406,11 @@ test "memory fs: cancelling a later job from inside a callback skips it" {
         fs: Fs.Fs,
         later: Fs.Job = .{ .id = 0 },
         later_calls: usize = 0,
-        fn first(ctx: ?*anyopaque, _: Fs.Error![]Fs.Entry) void {
+        fn first(ctx: ?*anyopaque, _: Fs.Result([]Fs.Entry)) void {
             const self: *@This() = @ptrCast(@alignCast(ctx.?));
             self.fs.cancel(self.later);
         }
-        fn second(ctx: ?*anyopaque, _: Fs.Error![]Fs.Entry) void {
+        fn second(ctx: ?*anyopaque, _: Fs.Result([]Fs.Entry)) void {
             const self: *@This() = @ptrCast(@alignCast(ctx.?));
             self.later_calls += 1;
         }

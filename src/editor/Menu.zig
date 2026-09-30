@@ -50,7 +50,7 @@ pub fn draw(editor: *Editor) !dvui.App.Result {
     for (editor.app.host.menus.items) |*menu| {
         if (menu.hidden) continue;
         menu.draw(menu.ctx) catch |err| {
-            dvui.log.err("Menu contribution failed: {any}", .{err});
+            dvui.log.err("Menu contribution failed: {s}", .{fizzy.sdk.Plugin.errorNameOf(menu.owner, err)});
         };
     }
 
@@ -281,7 +281,7 @@ pub fn drawMenuSections(parent_menu_id: []const u8) !void {
             drew_separator = true;
         }
         section.draw(section.ctx) catch |err| {
-            dvui.log.err("Menu section '{s}' failed: {any}", .{ section.id, err });
+            dvui.log.err("Menu section '{s}' failed: {s}", .{ section.id, fizzy.sdk.Plugin.errorNameOf(section.owner, err) });
         };
     }
 }

@@ -567,7 +567,7 @@ pub fn drawMenuSections(self: *Host, ctx: EditorAPI.MenuContext, after_rows: boo
         const prof = core.profile.begin(if (section.owner) |o| o.id else "fizzy", section.id);
         defer prof.end();
         section.draw(section.ctx) catch |err| {
-            dvui.log.err("menu section '{s}' failed: {t}", .{ section.id, err });
+            dvui.log.err("menu section '{s}' failed: {s}", .{ section.id, Plugin.errorNameOf(section.owner, err) });
         };
     }
 }
@@ -1347,7 +1347,7 @@ pub fn runCommand(self: *Host, id: []const u8) !void {
     const owner = c.owner orelse return;
     const prof = core.profile.begin(owner.id, c.id);
     defer prof.end();
-    try c.run(owner.state);
+    c.run(owner.state) catch |err| return owner.failed(c.id, err);
 }
 
 // ---- language support ------------------------------------------------------

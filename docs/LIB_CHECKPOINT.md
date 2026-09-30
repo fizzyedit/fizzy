@@ -45,7 +45,12 @@ review of that work — its open items are the ones its "Suggested order" still 
   name. A shared status *enum* would let a reason travel, but that means converting ~250
   `anyerror` sites across six repos and editing every plugin's source, for the ability to
   distinguish failures nothing currently distinguishes — not worth it, in 0.2.0 or later. If a
-  reason must travel, send it as data.
+  reason must travel, send it as data. **Amended 2026-09-30 (sdk 0.2.13):** plugins had not all
+  been logging, so a failure read as a wrong name or nothing at all (pixi's failed JPEG import
+  printed `BadString`). Still no shared enum: `Plugin.error_name` (a default field, so evaluated
+  in the plugin's own binary) lets the SDK wrappers log the real name and return
+  `error.PluginFailed` — no plugin source changes. `vfs.Fs` is the one place a reason is branched
+  on, so its errors now cross as `vfs.Result` codes. Details in `docs/PLUGINS.md`.
 
 ## Shape of the repo now (the part that is done)
 

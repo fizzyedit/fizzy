@@ -27,10 +27,10 @@ const Completion = union(enum) {
 
     fn deliver(self: Completion) void {
         switch (self) {
-            .list => |c| c.cb(c.ctx, c.result),
-            .stat => |c| c.cb(c.ctx, c.result),
-            .read => |c| c.cb(c.ctx, c.result),
-            .done => |c| c.cb(c.ctx, c.result),
+            .list => |c| c.cb(c.ctx, .of(c.result)),
+            .stat => |c| c.cb(c.ctx, .of(c.result)),
+            .read => |c| c.cb(c.ctx, .of(c.result)),
+            .done => |c| c.cb(c.ctx, .of(c.result)),
         }
     }
 };

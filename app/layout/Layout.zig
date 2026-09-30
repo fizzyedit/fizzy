@@ -1210,5 +1210,6 @@ pub fn tabbed(_: ?*anyopaque, f: *Layout, keywords: []const []const u8) !dvui.Ap
 fn surfaceDraw(s: *Surface) anyerror!dvui.App.Result {
     const prof = core.profile.begin(if (s.owner) |o| o.id else "fizzy", s.id);
     defer prof.end();
-    return s.draw(s.ctx);
+    const owner = s.owner orelse return s.draw(s.ctx);
+    return s.draw(s.ctx) catch |err| owner.failed(s.id, err);
 }

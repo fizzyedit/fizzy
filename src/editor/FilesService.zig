@@ -125,7 +125,8 @@ const Op = struct {
         gpa.destroy(op);
     }
 
-    fn onDone(ctx: ?*anyopaque, result: core.vfs.Error!void) void {
+    fn onDone(ctx: ?*anyopaque, answer: core.vfs.Result(void)) void {
+        const result = answer.get();
         const op: *Op = @ptrCast(@alignCast(ctx.?));
         defer op.destroy();
         result catch |err| {

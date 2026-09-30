@@ -77,10 +77,10 @@ const Completion = union(enum) {
 
     fn deliver(self: Completion) void {
         switch (self) {
-            .list => |c| c.cb(c.ctx, c.result),
-            .stat => |c| c.cb(c.ctx, c.result),
-            .read => |c| c.cb(c.ctx, c.result),
-            .done => |c| c.cb(c.ctx, c.result),
+            .list => |c| c.cb(c.ctx, .of(c.result)),
+            .stat => |c| c.cb(c.ctx, .of(c.result)),
+            .read => |c| c.cb(c.ctx, .of(c.result)),
+            .done => |c| c.cb(c.ctx, .of(c.result)),
         }
     }
 };
@@ -105,7 +105,7 @@ pub fn fs(self: *LocalFs) vfs.Fs {
     return .{ .ptr = self, .vtable = &vtable };
 }
 
-const vtable: vfs.Fs.VTable = if (no_disk) .{
+const vtable: vfs.Fs.VTable = if (no_disk) .of(.{
     .listDir = NoDisk.listDir,
     .stat = NoDisk.stat,
     .readFile = NoDisk.readFile,
@@ -116,7 +116,7 @@ const vtable: vfs.Fs.VTable = if (no_disk) .{
     .remove = NoDisk.done,
     .cancel = cancel,
     .pump = pump,
-} else .{
+}) else .of(.{
     .listDir = listDir,
     .stat = stat,
     .readFile = readFile,
@@ -127,7 +127,7 @@ const vtable: vfs.Fs.VTable = if (no_disk) .{
     .remove = remove,
     .cancel = cancel,
     .pump = pump,
-};
+});
 
 const NoDisk = struct {
     fn listDir(_: *anyopaque, _: std.mem.Allocator, _: []const u8, _: vfs.ListDirFn, _: ?*anyopaque) vfs.Error!vfs.Job {
@@ -339,7 +339,7 @@ fn pump(ptr: *anyopaque) void {
         if (job.cancelled) {
             if (result) |r| job.allocator.free(r.bytes) else |_| {}
         } else {
-            job.cb(job.ctx, result);
+            job.cb(job.ctx, .of(result));
         }
         self.gpa.free(job.path);
         self.gpa.destroy(job);
@@ -376,7 +376,8 @@ test "a read lands through pump" {
     defer local.deinit();
     const Sink = struct {
         got: ?[]u8 = null,
-        fn onRead(ctx: ?*anyopaque, result: vfs.Error!vfs.Read) void {
+        fn onRead(ctx: ?*anyopaque, answer: vfs.Result(vfs.Read)) void {
+            const result = answer.get();
             const self: *@This() = @ptrCast(@alignCast(ctx.?));
             self.got = (result catch return).bytes;
         }

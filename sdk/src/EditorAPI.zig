@@ -11,6 +11,7 @@ const dvui = @import("dvui");
 const DocHandle = @import("DocHandle.zig");
 const RegionSpec = @import("RegionSpec.zig");
 const Surface = @import("Surface.zig");
+const Plugin = @import("Plugin.zig");
 
 const EditorAPI = @This();
 
@@ -107,6 +108,16 @@ pub const PanZoomScheme = enum { mouse, trackpad };
 
 ctx: *anyopaque,
 vtable: *const VTable,
+/// Names an error fizzy returned, by fizzy's own table — see `Plugin.error_name`, which this
+/// mirrors in the other direction. The default is evaluated where fizzy builds this struct.
+error_name: *const fn (code: Plugin.ErrorInt) [:0]const u8 = &Plugin.localErrorName,
+
+/// A call into fizzy failed: say why, by fizzy's name for it, and hand the plugin an error that
+/// means the same thing in its own binary.
+fn failed(self: EditorAPI, call: []const u8, err: anyerror) error{HostFailed} {
+    std.log.err("fizzy: {s} failed: {s}", .{ call, self.error_name(@intFromError(err)) });
+    return error.HostFailed;
+}
 
 pub const VTable = struct {
     /// Fizzy's per-frame arena allocator (reset every frame; do not free).
@@ -418,7 +429,7 @@ pub fn getSecret(self: EditorAPI, key: []const u8) ?[]const u8 {
 }
 
 pub fn setSecret(self: EditorAPI, key: []const u8, value: []const u8) anyerror!void {
-    return self.vtable.setSecret(self.ctx, key, value);
+    return self.vtable.setSecret(self.ctx, key, value) catch |err| self.failed("setSecret", err);
 }
 
 pub fn dialogWindow(self: EditorAPI) dvui.Dialog.DisplayFn {
@@ -504,7 +515,7 @@ pub fn docFromPath(self: EditorAPI, path: []const u8) ?DocHandle {
 }
 
 pub fn openFile(self: EditorAPI, opts: OpenOptions) !bool {
-    return self.vtable.openFile(self.ctx, opts);
+    return self.vtable.openFile(self.ctx, opts) catch |err| self.failed("openFile", err);
 }
 
 pub fn documentIsPreview(self: EditorAPI, doc_id: u64) bool {
@@ -520,11 +531,11 @@ pub fn isRemotePath(self: EditorAPI, path: []const u8) bool {
 }
 
 pub fn openOrFocusFileAtGrouping(self: EditorAPI, path: []const u8, grouping: u64) !?usize {
-    return self.vtable.openOrFocusFileAtGrouping(self.ctx, path, grouping);
+    return self.vtable.openOrFocusFileAtGrouping(self.ctx, path, grouping) catch |err| self.failed("openOrFocusFileAtGrouping", err);
 }
 
 pub fn revealPosition(self: EditorAPI, path: []const u8, line: u32, character: u32, open_side: bool) !bool {
-    return self.vtable.revealPosition(self.ctx, path, line, character, open_side);
+    return self.vtable.revealPosition(self.ctx, path, line, character, open_side) catch |err| self.failed("revealPosition", err);
 }
 
 pub fn beginRegion(self: EditorAPI, spec: RegionSpec) ?RegionSpec.Token {
@@ -532,7 +543,7 @@ pub fn beginRegion(self: EditorAPI, spec: RegionSpec) ?RegionSpec.Token {
 }
 
 pub fn drawRegionContents(self: EditorAPI, token: RegionSpec.Token) !dvui.App.Result {
-    return self.vtable.drawRegionContents(self.ctx, token);
+    return self.vtable.drawRegionContents(self.ctx, token) catch |err| self.failed("drawRegionContents", err);
 }
 
 pub fn endRegion(self: EditorAPI, token: RegionSpec.Token) void {
@@ -564,7 +575,7 @@ pub fn regionSelect(self: EditorAPI, token: RegionSpec.Token, id: []const u8) vo
 }
 
 pub fn assignSurfaces(self: EditorAPI, region: []const u8, ids: ?[]const []const u8) !void {
-    return self.vtable.assignSurfaces(self.ctx, region, ids);
+    return self.vtable.assignSurfaces(self.ctx, region, ids) catch |err| self.failed("assignSurfaces", err);
 }
 
 pub fn assignedSurfaces(self: EditorAPI, region: []const u8) ?[]const []const u8 {
@@ -584,11 +595,11 @@ pub fn drawFileKindGlyph(self: EditorAPI, kind: []const u8, color: dvui.Color) b
 }
 
 pub fn closeDocById(self: EditorAPI, id: u64) !void {
-    return self.vtable.closeDocById(self.ctx, id);
+    return self.vtable.closeDocById(self.ctx, id) catch |err| self.failed("closeDocById", err);
 }
 
 pub fn setProjectFolder(self: EditorAPI, path: []const u8) !void {
-    return self.vtable.setProjectFolder(self.ctx, path);
+    return self.vtable.setProjectFolder(self.ctx, path) catch |err| self.failed("setProjectFolder", err);
 }
 
 pub fn closeProjectFolder(self: EditorAPI) void {
@@ -604,7 +615,7 @@ pub fn recentFolderAt(self: EditorAPI, index: usize) ?[]const u8 {
 }
 
 pub fn openInFileBrowser(self: EditorAPI, path: []const u8) !void {
-    return self.vtable.openInFileBrowser(self.ctx, path);
+    return self.vtable.openInFileBrowser(self.ctx, path) catch |err| self.failed("openInFileBrowser", err);
 }
 
 pub fn isPathIgnored(
@@ -630,7 +641,7 @@ pub fn setExplorerBranchOpen(self: EditorAPI, branch_id: dvui.Id, open: bool) vo
 }
 
 pub fn drawWorkspaces(self: EditorAPI, index: usize) !dvui.App.Result {
-    return self.vtable.drawWorkspaces(self.ctx, index);
+    return self.vtable.drawWorkspaces(self.ctx, index) catch |err| self.failed("drawWorkspaces", err);
 }
 
 pub fn showOpenFolderDialog(self: EditorAPI, cb: OpenPathsCallback, default_folder: ?[]const u8) void {
@@ -648,7 +659,7 @@ pub fn showOpenFileDialog(
 }
 
 pub fn save(self: EditorAPI) !void {
-    return self.vtable.save(self.ctx);
+    return self.vtable.save(self.ctx) catch |err| self.failed("save", err);
 }
 
 pub fn requestPrepareFrame(self: EditorAPI) void {
@@ -660,15 +671,15 @@ pub fn refresh(self: EditorAPI) void {
 }
 
 pub fn allocUntitledPath(self: EditorAPI) ![]u8 {
-    return self.vtable.allocUntitledPath(self.ctx);
+    return self.vtable.allocUntitledPath(self.ctx) catch |err| self.failed("allocUntitledPath", err);
 }
 
 pub fn createDocument(self: EditorAPI, path: []const u8, grid: NewDocGrid) !DocHandle {
-    return self.vtable.createDocument(self.ctx, path, grid);
+    return self.vtable.createDocument(self.ctx, path, grid) catch |err| self.failed("createDocument", err);
 }
 
 pub fn setExplorerNewFilePath(self: EditorAPI, path: []const u8) !void {
-    return self.vtable.setExplorerNewFilePath(self.ctx, path);
+    return self.vtable.setExplorerNewFilePath(self.ctx, path) catch |err| self.failed("setExplorerNewFilePath", err);
 }
 
 pub fn requestSaveAs(self: EditorAPI) void {
@@ -688,11 +699,11 @@ pub fn setPendingCloseDocId(self: EditorAPI, id: u64) void {
 }
 
 pub fn queueCloseAfterSave(self: EditorAPI, id: u64) !void {
-    return self.vtable.queueCloseAfterSave(self.ctx, id);
+    return self.vtable.queueCloseAfterSave(self.ctx, id) catch |err| self.failed("queueCloseAfterSave", err);
 }
 
 pub fn trackQuitSaveInFlight(self: EditorAPI, id: u64) !void {
-    return self.vtable.trackQuitSaveInFlight(self.ctx, id);
+    return self.vtable.trackQuitSaveInFlight(self.ctx, id) catch |err| self.failed("trackQuitSaveInFlight", err);
 }
 
 pub fn resumeSaveAllQuit(self: EditorAPI) void {

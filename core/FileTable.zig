@@ -451,7 +451,8 @@ const ListJob = struct {
         job.table.gpa.destroy(job);
     }
 
-    fn onListed(ctx: ?*anyopaque, result: vfs.Error![]vfs.Entry) void {
+    fn onListed(ctx: ?*anyopaque, answer: vfs.Result([]vfs.Entry)) void {
+        const result = answer.get();
         const job: *ListJob = @ptrCast(@alignCast(ctx.?));
         const table = job.table;
         defer job.destroy();
@@ -722,7 +723,8 @@ const IndexJob = struct {
         }
     }
 
-    fn onListed(ctx: ?*anyopaque, result: vfs.Error![]vfs.Entry) void {
+    fn onListed(ctx: ?*anyopaque, answer: vfs.Result([]vfs.Entry)) void {
+        const result = answer.get();
         const req: *DirReq = @ptrCast(@alignCast(ctx.?));
         const job = req.job;
         const table = job.table;
@@ -927,7 +929,7 @@ const MoveJob = struct {
 
     fn finish(job: *MoveJob, result: vfs.Error!void) void {
         job.table.invalidateAll();
-        job.cb(job.ctx, result);
+        job.cb(job.ctx, .of(result));
         job.table.env.refresh(job.table.env.ctx);
         job.destroy();
     }
@@ -984,7 +986,8 @@ const MoveJob = struct {
     }
 
     /// A directory's listing: create it at the destination, queue its children.
-    fn onListed(ctx: ?*anyopaque, result: vfs.Error![]vfs.Entry) void {
+    fn onListed(ctx: ?*anyopaque, answer: vfs.Result([]vfs.Entry)) void {
+        const result = answer.get();
         const job: *MoveJob = @ptrCast(@alignCast(ctx.?));
         const table = job.table;
         const entries = result catch |err| return job.finish(err);
@@ -1010,7 +1013,8 @@ const MoveJob = struct {
     }
 
     /// A file's bytes: write them at the destination.
-    fn onRead(ctx: ?*anyopaque, result: vfs.Error!vfs.Read) void {
+    fn onRead(ctx: ?*anyopaque, answer: vfs.Result(vfs.Read)) void {
+        const result = answer.get();
         const job: *MoveJob = @ptrCast(@alignCast(ctx.?));
         const table = job.table;
         const read = result catch |err| return job.finish(err);
@@ -1021,7 +1025,8 @@ const MoveJob = struct {
         if (dst.mount == null) dst.fs.pump();
     }
 
-    fn onWritten(ctx: ?*anyopaque, result: vfs.Error!void) void {
+    fn onWritten(ctx: ?*anyopaque, answer: vfs.Result(void)) void {
+        const result = answer.get();
         const job: *MoveJob = @ptrCast(@alignCast(ctx.?));
         const gpa = job.table.gpa;
         if (job.bytes) |b| gpa.free(b);
@@ -1033,7 +1038,8 @@ const MoveJob = struct {
     }
 
     /// A mkdir or a removal landed.
-    fn onStep(ctx: ?*anyopaque, result: vfs.Error!void) void {
+    fn onStep(ctx: ?*anyopaque, answer: vfs.Result(void)) void {
+        const result = answer.get();
         const job: *MoveJob = @ptrCast(@alignCast(ctx.?));
         result catch |err| return job.finish(err);
         job.next();
@@ -1056,11 +1062,11 @@ const Mutation = struct {
         m.table.gpa.destroy(m);
     }
 
-    fn onDone(ctx: ?*anyopaque, result: vfs.Error!void) void {
+    fn onDone(ctx: ?*anyopaque, answer: vfs.Result(void)) void {
         const m: *Mutation = @ptrCast(@alignCast(ctx.?));
         defer m.destroy();
         m.table.invalidateAll();
-        m.cb(m.ctx, result);
+        m.cb(m.ctx, answer);
         m.table.env.refresh(m.table.env.ctx);
     }
 };
@@ -1303,7 +1309,8 @@ test "noteFileModified re-reads a parent only for a name it has not seen" {
 const DoneSink = struct {
     calls: usize = 0,
     err: ?vfs.Error = null,
-    fn onDone(ctx: ?*anyopaque, result: vfs.Error!void) void {
+    fn onDone(ctx: ?*anyopaque, answer: vfs.Result(void)) void {
+        const result = answer.get();
         const self: *DoneSink = @ptrCast(@alignCast(ctx.?));
         self.calls += 1;
         result catch |err| {
@@ -1514,18 +1521,14 @@ test "a mount that answers later is pending, then installed" {
         fn unsupportedDone(_: *anyopaque, _: []const u8, _: vfs.DoneFn, _: ?*anyopaque) vfs.Error!vfs.Job {
             return error.Unsupported;
         }
-        const vt: vfs.Fs.VTable = .{
+        const vt: vfs.Fs.VTable = .of(.{
             .listDir = gatedList,
-            .stat = undefined,
-            .readFile = undefined,
-            .writeFile = undefined,
             .createFile = unsupportedDone,
             .mkdir = unsupportedDone,
-            .rename = undefined,
             .remove = unsupportedDone,
             .cancel = gatedCancel,
             .pump = gatedPump,
-        };
+        });
     };
     var mem = try vfs.Mem.init(t.allocator);
     defer mem.deinit();
@@ -1619,18 +1622,11 @@ test "search over a mount that answers later fills in across frames" {
             const self: *@This() = @ptrCast(@alignCast(ptr));
             self.inner.cancel(job);
         }
-        const vt: vfs.Fs.VTable = .{
+        const vt: vfs.Fs.VTable = .of(.{
             .listDir = listSlow,
-            .stat = undefined,
-            .readFile = undefined,
-            .writeFile = undefined,
-            .createFile = undefined,
-            .mkdir = undefined,
-            .rename = undefined,
-            .remove = undefined,
             .cancel = cancelSlow,
             .pump = pumpSlow,
-        };
+        });
     };
     var mem = try vfs.Mem.init(t.allocator);
     defer mem.deinit();

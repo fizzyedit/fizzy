@@ -669,10 +669,22 @@ it needs to be; the tags are what the published SDKs actually depend on.
 Zig numbers error values per compilation, so the integer that comes back from a `dlopen`'d
 plugin — or from `EditorAPI`, in the other direction — denotes a different error on the
 receiving side. `@errorName` on it prints an unrelated name and `err == error.Whatever` is
-meaningless. So: **whoever fails logs the reason on its own side**, and the caller treats the
-error only as "this did not work". Fizzy does that with everything a plugin returns, and a
-plugin should do the same with everything it gets back from the host. If a *reason* has to
-travel, send it as data (a service call, a status field), never as an error value.
+meaningless. So none reaches the caller as itself:
+
+- `Plugin`'s wrappers log a failed hook by the plugin's own name for the error
+  (`pixi: loadDocumentFromBytes failed: OutOfMemory`) and return `error.PluginFailed`;
+  `EditorAPI`'s do the same the other way and return `error.HostFailed`. The name comes from
+  `Plugin.error_name`, whose default is evaluated in the binary that builds the `Plugin` — the
+  plugin's — so a plugin gets this without writing anything.
+- Anything that calls a plugin's function pointer directly (a command, a surface, a menu) names
+  its error with `Plugin.errorNameOf(owner, err)`, never `@errorName`.
+- A mount's errors do carry their meaning, because the file table branches on them
+  (`NotFound`, `Conflict`): `vfs.Fs` passes them as `vfs.Result` codes, an error's place in
+  `vfs.Error`. A backend writes ordinary `Error!Job` functions and builds its vtable with
+  `Fs.VTable.of(.{ … })`; a callback takes a `vfs.Result(T)` and calls `.get()`.
+
+If any other *reason* has to travel, send it as data (a service call, a status field), never as
+an error value.
 
 #### Where a document lives is not the owner's problem
 
