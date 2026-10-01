@@ -395,6 +395,8 @@ export fn fizzy_macos_origin_nudged(cap_x: f64, cap_y: f64, cur_x: f64, cur_y: f
 /// top of it — before the window is shown. No-op on non-macOS (Windows chrome is
 /// applied separately in AppInit).
 pub fn restoreWindowState(win: *dvui.Window) void {
+    captured_sdl_window = win.backend.impl.window;
+    if (comptime builtin.os.tag == .windows) restoreWin32Placement(win);
     if (comptime builtin.os.tag == .macos) {
         const back = win.backend.impl;
         const window = back.window;
@@ -427,6 +429,7 @@ pub fn restoreWindowState(win: *dvui.Window) void {
 /// Persist the current windowed NSWindow.frame. Call at shutdown (AppDeinit) so
 /// the next launch restores the exact frame. No-op on non-macOS.
 pub fn saveWindowGeometry(win: *dvui.Window) void {
+    if (comptime builtin.os.tag == .windows) return saveWin32Placement(win);
     if (comptime builtin.os.tag != .macos) return;
     const back = win.backend.impl;
     const dir = (back.init_opts_save orelse return).pref_path orelse return;
@@ -437,11 +440,69 @@ pub fn saveWindowGeometry(win: *dvui.Window) void {
     writeSavedFrame(dir, out4[0], out4[1], out4[2], out4[3]);
 }
 
+// Windows: the window's placement — its normal (restored) rect in workspace coordinates and
+// whether it is maximized — the way Windows itself remembers windows. Frame-based, as macOS's is:
+// fizzy's client area is the whole window (`WM_NCCALCSIZE`), which dvui's content-rect
+// persistence cannot represent.
+const WINDOWPLACEMENT = if (builtin.os.tag == .windows) win32.ui.windows_and_messaging.WINDOWPLACEMENT else void;
+
+fn saveWin32Placement(win: *dvui.Window) void {
+    if (comptime builtin.os.tag != .windows) return;
+    const dir = (win.backend.impl.init_opts_save orelse return).pref_path orelse return;
+    const hwnd: win32.foundation.HWND = @ptrCast(getWin32Hwnd(win) orelse return);
+    var wp = std.mem.zeroes(WINDOWPLACEMENT);
+    wp.length = @sizeOf(WINDOWPLACEMENT);
+    if (win32.ui.windows_and_messaging.GetWindowPlacement(hwnd, &wp) == 0) return;
+    const r = wp.rcNormalPosition;
+    if (r.right - r.left < 1 or r.bottom - r.top < 1) return;
+    const gpa = std.heap.page_allocator;
+    var f = loadWindowFile(gpa, dir);
+    defer std.zon.parse.free(gpa, f);
+    f.x = @floatFromInt(r.left);
+    f.y = @floatFromInt(r.top);
+    f.w = @floatFromInt(r.right - r.left);
+    f.h = @floatFromInt(r.bottom - r.top);
+    f.maximized = @as(u32, @bitCast(wp.showCmd)) == @as(u32, @bitCast(win32.ui.windows_and_messaging.SW_SHOWMAXIMIZED)) or
+        wp.flags.RESTORETOMAXIMIZED != 0;
+    writeWindowFile(dir, f);
+}
+
+fn restoreWin32Placement(win: *dvui.Window) void {
+    if (comptime builtin.os.tag != .windows) return;
+    const dir = (win.backend.impl.init_opts_save orelse return).pref_path orelse return;
+    const hwnd: win32.foundation.HWND = @ptrCast(getWin32Hwnd(win) orelse return);
+    const f = loadSavedFrame(dir) orelse return;
+    defer std.zon.parse.free(std.heap.page_allocator, f);
+    var rect: win32.foundation.RECT = .{
+        .left = @intFromFloat(f.x),
+        .top = @intFromFloat(f.y),
+        .right = @intFromFloat(f.x + f.w),
+        .bottom = @intFromFloat(f.y + f.h),
+    };
+    // Only onto a monitor that is still there.
+    if (win32.graphics.gdi.MonitorFromRect(&rect, win32.graphics.gdi.MONITOR_DEFAULTTONULL) == null) return;
+    var wp = std.mem.zeroes(WINDOWPLACEMENT);
+    wp.length = @sizeOf(WINDOWPLACEMENT);
+    // The window is still hidden: placed hidden, it shows where it was left when `showWindow`
+    // reveals it, maximized if it was (`restore_maximized`).
+    wp.showCmd = win32.ui.windows_and_messaging.SW_HIDE;
+    wp.rcNormalPosition = rect;
+    _ = win32.ui.windows_and_messaging.SetWindowPlacement(hwnd, &wp);
+    restore_maximized = f.maximized;
+}
+
+/// Show the window maximized when it is revealed: it was left that way (Windows).
+var restore_maximized = false;
+
 /// Reveal the window after chrome + geometry are settled (it is created hidden).
 /// Safe to call on any platform; no-op where there is no SDL window.
 pub fn showWindow(win: *dvui.Window) void {
     if (comptime builtin.os.tag != .macos and builtin.os.tag != .windows and builtin.os.tag != .linux) return;
     _ = sdl3.SDL_ShowWindow(win.backend.impl.window);
+    if (restore_maximized) {
+        restore_maximized = false;
+        _ = sdl3.SDL_MaximizeWindow(win.backend.impl.window);
+    }
 }
 
 /// Called at the end of AppInit: allows the monitor's pump timer to start
@@ -1187,6 +1248,13 @@ pub fn isMaximized(win: *dvui.Window) bool {
     return flags & sdl3.SDL_WINDOW_FULLSCREEN != 0;
 }
 
+/// The window's chrome: full-size content under a transparent, title-less titlebar and a
+/// fullscreen Space on macOS; on Windows the DWM Acrylic backdrop over a client area that is the
+/// whole window. Cheap to call every frame — it reads what is set and changes only what SDL has put
+/// back (SDL re-applies its own style on maximize, restore and full screen: on Windows that
+/// returns `WS_SYSMENU` and its caption buttons, and the backdrop's frame with it). Applying it all
+/// unconditionally every frame was a `SetWindowPos(SWP_FRAMECHANGED)` — a `WM_NCCALCSIZE` — a
+/// library load and a class-brush write each frame on Windows, and two style-mask writes on macOS.
 pub fn setWindowStyle(win: *dvui.Window) void {
     if (builtin.os.tag == .macos) {
         const raw_ptr = sdl3.SDL_GetPointerProperty(
@@ -1201,24 +1269,60 @@ pub fn setWindowStyle(win: *dvui.Window) void {
             if (fizzy_macos_window_in_fullscreen_space(raw_ptr) == 0) {
                 // Allow content view to extend under the titlebar so vibrancy covers it.
                 const style_mask = window.msgSend(c_ulong, "styleMask", .{});
-                window.msgSend(void, "setStyleMask:", .{style_mask | NSWindowStyleMaskFullSizeContentView});
+                if (style_mask & NSWindowStyleMaskFullSizeContentView == 0) {
+                    window.msgSend(void, "setStyleMask:", .{style_mask | NSWindowStyleMaskFullSizeContentView});
+                }
             }
             // This sets the titlebar to transparent so our effect view shows through.
-            window.msgSend(void, "setTitlebarAppearsTransparent:", .{true});
+            if (!window.msgSend(bool, "titlebarAppearsTransparent", .{})) {
+                window.msgSend(void, "setTitlebarAppearsTransparent:", .{true});
+            }
             // Hide the title text in the titlebar (matches Windows, where we
             // draw our own chrome). `NSWindowTitleHidden` = 1. The window still
             // has a programmatic title (used by the Window menu / Dock) — only
             // the rendered titlebar string is hidden.
-            window.msgSend(void, "setTitleVisibility:", .{@as(c_long, 1)});
+            if (window.msgSend(c_long, "titleVisibility", .{}) != 1) {
+                window.msgSend(void, "setTitleVisibility:", .{@as(c_long, 1)});
+            }
             // Green button enters a native fullscreen Space (menu bar hidden).
             const NSWindowCollectionBehaviorFullScreenPrimary: c_ulong = 1 << 7;
             const behavior = window.msgSend(c_ulong, "collectionBehavior", .{});
-            window.msgSend(void, "setCollectionBehavior:", .{behavior | NSWindowCollectionBehaviorFullScreenPrimary});
-            fizzy_macos_window_prefer_fullscreen_space(raw_ptr);
+            if (behavior & NSWindowCollectionBehaviorFullScreenPrimary == 0) {
+                window.msgSend(void, "setCollectionBehavior:", .{behavior | NSWindowCollectionBehaviorFullScreenPrimary});
+            }
         }
     } else if (builtin.os.tag == .windows) {
         const hwnd = getWin32Hwnd(win) orelse return;
         const hwnd_h = @as(win32.foundation.HWND, @ptrCast(hwnd));
+        const WS_SYSMENU: isize = 0x00080000;
+        const cur_style = win32.ui.windows_and_messaging.GetWindowLongPtrW(hwnd_h, win32.ui.windows_and_messaging.GWL_STYLE);
+        const zoomed = win32.ui.windows_and_messaging.IsZoomed(hwnd_h) != 0;
+        const first = win32_styled_hwnd != hwnd;
+        // Nothing SDL changes back: nothing to do.
+        if (!first and cur_style & WS_SYSMENU == 0 and zoomed == win32_styled_zoomed) return;
+        win32_styled_hwnd = hwnd;
+        win32_styled_zoomed = zoomed;
+
+        if (first) {
+            // Once per window: the subclass that keeps the frame extended (re-applied in
+            // WM_ACTIVATE, as DWM requires for the backdrop to show) and draws the custom
+            // non-client area, the undocumented accent blur, and the black class brush.
+            _ = win32.ui.shell.SetWindowSubclass(hwnd_h, win32MicaSubclassProc, win32_mica_subclass_id, 0);
+
+            // Optional: undocumented accent API for extra acrylic blur (Start menu / taskbar use this). May improve frosted look.
+            applyWin32AcrylicAccent(hwnd_h);
+
+            // Per MSDN: for backdrop to render, the client area background must be transparent or a black brush.
+            // BLACK_BRUSH (4) lets DWM draw the backdrop material; a null brush can leave the area undefined.
+            const black_brush = win32.graphics.gdi.GetStockObject(win32.graphics.gdi.GET_STOCK_OBJECT_FLAGS.BLACK_BRUSH);
+            _ = win32.ui.windows_and_messaging.SetClassLongPtrW(
+                hwnd_h,
+                win32.ui.windows_and_messaging.GCLP_HBRBACKGROUND,
+                @as(isize, @bitCast(@intFromPtr(black_brush))),
+            );
+            // Do not set WS_EX_LAYERED here: a layered main window is a common cause of broken mouse input on
+            // native modal dialogs (SDL_ShowOpenFileDialog / tinyfd) when that window is the dialog owner.
+        }
 
         // Windows 11: Apply Acrylic (frosted glass) backdrop so title bar and extended frame show blur. Requires Build 22621+.
         // DWMSBT_TRANSIENTWINDOW = Acrylic is more visible than Mica; use MAINWINDOW for subtler Mica.
@@ -1230,35 +1334,17 @@ pub fn setWindowStyle(win: *dvui.Window) void {
             @sizeOf(u32),
         );
 
-        // Subclass so we can re-apply frame extension in WM_ACTIVATE (required by DWM for backdrop to show).
-        _ = win32.ui.shell.SetWindowSubclass(hwnd_h, win32MicaSubclassProc, win32_mica_subclass_id, 0);
-
         // Hide the OS-drawn caption buttons (min/max/close) so they don't show through our custom-drawn ones.
         // Returning 0 from WM_NCCALCSIZE removes the non-client area, but on Win11 DWM still composites the
         // system caption buttons whenever WS_SYSMENU is present. Strip just WS_SYSMENU — the min/max box
         // styles only render buttons when WS_SYSMENU is also set, but they're still required for Aero Snap
         // (drag-to-top maximize, drag-to-edge half-snap), so we keep them.
-        const WS_SYSMENU: isize = 0x00080000;
-        const cur_style = win32.ui.windows_and_messaging.GetWindowLongPtrW(hwnd_h, win32.ui.windows_and_messaging.GWL_STYLE);
-        _ = win32.ui.windows_and_messaging.SetWindowLongPtrW(hwnd_h, win32.ui.windows_and_messaging.GWL_STYLE, cur_style & ~WS_SYSMENU);
+        if (cur_style & WS_SYSMENU != 0) {
+            _ = win32.ui.windows_and_messaging.SetWindowLongPtrW(hwnd_h, win32.ui.windows_and_messaging.GWL_STYLE, cur_style & ~WS_SYSMENU);
+        }
 
         // Extend the DWM frame (Acrylic) into the entire client area so the backdrop material shows there.
         _ = win32.graphics.dwm.DwmExtendFrameIntoClientArea(hwnd_h, &win32_mica_margins);
-
-        // Optional: undocumented accent API for extra acrylic blur (Start menu / taskbar use this). May improve frosted look.
-        applyWin32AcrylicAccent(hwnd_h);
-
-        // Per MSDN: for backdrop to render, the client area background must be transparent or a black brush.
-        // BLACK_BRUSH (4) lets DWM draw the backdrop material; a null brush can leave the area undefined.
-        const black_brush = win32.graphics.gdi.GetStockObject(win32.graphics.gdi.GET_STOCK_OBJECT_FLAGS.BLACK_BRUSH);
-        _ = win32.ui.windows_and_messaging.SetClassLongPtrW(
-            hwnd_h,
-            win32.ui.windows_and_messaging.GCLP_HBRBACKGROUND,
-            @as(isize, @bitCast(@intFromPtr(black_brush))),
-        );
-
-        // Do not set WS_EX_LAYERED here: a layered main window is a common cause of broken mouse input on
-        // native modal dialogs (SDL_ShowOpenFileDialog / tinyfd) when that window is the dialog owner.
 
         // Force WM_NCCALCSIZE so the client area extends over the title bar immediately (not only after maximize).
         const SWP_NOMOVE: u32 = 0x0002;
@@ -1268,6 +1354,11 @@ pub fn setWindowStyle(win: *dvui.Window) void {
         _ = win32.ui.windows_and_messaging.SetWindowPos(hwnd_h, null, 0, 0, 0, 0, swp_flags);
     }
 }
+
+/// The window whose one-time Windows chrome is in place (`setWindowStyle`), and whether it was
+/// maximized when its chrome was last applied: a maximize or restore re-applies the frame.
+var win32_styled_hwnd: ?*anyopaque = null;
+var win32_styled_zoomed: bool = false;
 
 pub fn setTitlebarColor(win: *dvui.Window, color: dvui.Color) void {
     if (builtin.os.tag == .macos) {
@@ -1606,10 +1697,9 @@ pub fn setupMacOSMenuBar() void {
 
     // App-menu cleanup:
     //   1. Retitle and re-target the auto-generated "About …" item from SDL's default about-panel to AboutFizzy.
-    //   2. Substring-replace any remaining "DVUI App Example" in submenu titles ("Hide …", "Quit …", etc.).
-    //      SDL stamped those titles using its own app metadata before our `setSdlAppMetadata` had a chance to run,
-    //      and the labels are baked into the NSMenuItems — setting metadata later doesn't retroactively rename them.
-    //   3. We do NOT add a Window submenu here — SDL/AppKit already inserts a top-level Window menu, and nesting one
+    //   (The Hide / Quit titles are already this app's: its metadata is set before SDL builds the menu,
+    //   from the start options — `Entry.startOptions`.)
+    //   2. We do NOT add a Window submenu here — SDL/AppKit already inserts a top-level Window menu, and nesting one
     //      inside the app menu produced a visible duplicate.
     const app_menu_item = main_menu.msgSend(objc.Object, "itemAtIndex:", .{@as(c_ulong, 0)});
     const app_submenu = app_menu_item.msgSend(objc.Object, "submenu", .{});
@@ -1624,25 +1714,6 @@ pub fn setupMacOSMenuBar() void {
             }
         }
 
-        // Patch every remaining "DVUI App Example" → this app's display name in app-menu item
-        // titles (Hide, Quit, Services). The name is the *app's*, not fizzy's — an app built on
-        // fizzy must not offer to quit fizzy.
-        // `stringByReplacingOccurrencesOfString:withString:` is a no-op when the substring
-        // isn't present, so it's safe to apply unconditionally over the whole menu.
-        const search_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"DVUI App Example".ptr});
-        const replacement_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{AppInfo.display_name_z.ptr});
-        const item_count = app_submenu.msgSend(c_long, "numberOfItems", .{});
-        var idx: c_long = 0;
-        while (idx < item_count) : (idx += 1) {
-            const item = app_submenu.msgSend(objc.Object, "itemAtIndex:", .{idx});
-            if (item.value == 0) continue;
-            const cur_title = item.msgSend(objc.Object, "title", .{});
-            if (cur_title.value == 0) continue;
-            const new_title = cur_title.msgSend(objc.Object, "stringByReplacingOccurrencesOfString:withString:", .{ search_str.value, replacement_str.value });
-            if (new_title.value != 0) {
-                item.msgSend(void, "setTitle:", .{new_title.value});
-            }
-        }
     }
 
     macos_menu_bar_set_up = true;
@@ -1792,17 +1863,45 @@ fn GenericOpenDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, _: 
 // (e.g. stashing `dvui.currentWindow()` on a `FileLoadJob`), which panics if invoked directly
 // from here. So we only capture the result here and hand it off; the actual callback runs from
 // `pollPendingDialogResult`, called once per frame from inside fizzy's own frame tick.
+//
+// On Windows and Linux SDL runs the callback on a thread of its own, so the queue is behind a
+// lock, and nothing of the app's runs from here — where the user ended up is remembered
+// (`DialogDirs.remember`) when the result is drained, on the app's thread.
 const PendingDialogResult = struct {
     callback: *const fn (?[][:0]const u8) void,
     files: ?[][:0]const u8,
+    mode: DialogMode = .open,
 };
 var pending_dialog_results: std.ArrayListUnmanaged(PendingDialogResult) = .empty;
+/// A spinlock: held for a list append or remove, between a dialog's thread and the frame.
+var pending_dialog_lock: std.atomic.Mutex = .unlocked;
+
+fn lockDialogResults() void {
+    while (!pending_dialog_lock.tryLock()) std.atomic.spinLoopHint();
+}
+
+fn queueDialogResult(r: PendingDialogResult) !void {
+    lockDialogResults();
+    defer pending_dialog_lock.unlock();
+    try pending_dialog_results.append(alloc(), r);
+}
 
 /// Drain one queued dialog result per call. Call once per frame from inside
 /// `Window.begin`/`end` (e.g. `Editor.tick`) so callbacks are free to touch dvui state.
 pub fn pollPendingDialogResult() ?PendingDialogResult {
-    if (pending_dialog_results.items.len == 0) return null;
-    return pending_dialog_results.orderedRemove(0);
+    const r = blk: {
+        lockDialogResults();
+        defer pending_dialog_lock.unlock();
+        if (pending_dialog_results.items.len == 0) return null;
+        break :blk pending_dialog_results.orderedRemove(0);
+    };
+    // Tell the app where the user ended up, so the next dialog starts there.
+    if (r.files) |files| if (files.len > 0) {
+        if (std.fs.path.dirname(files[0])) |dir| {
+            if (dialog_dirs) |d| d.remember(d.ctx, r.mode, dir);
+        }
+    };
+    return r;
 }
 
 /// Queuing a dialog result is not enough to get it processed: this runs from the Cocoa/Win32
@@ -1825,7 +1924,7 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: D
     while (files[path_count] != null) : (path_count += 1) {}
 
     if (path_count == 0) {
-        pending_dialog_results.append(alloc(), .{ .callback = callback, .files = null }) catch {
+        queueDialogResult(.{ .callback = callback, .files = null, .mode = mode }) catch {
             dvui.log.err("Failed to queue dialog result", .{});
             return;
         };
@@ -1850,13 +1949,7 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: D
         allocated += 1;
     }
 
-    { // Tell the app where the user ended up, so the next dialog starts there.
-        if (std.fs.path.dirname(zig_files[0])) |dir| {
-            if (dialog_dirs) |d| d.remember(d.ctx, mode, dir);
-        }
-    }
-
-    pending_dialog_results.append(alloc(), .{ .callback = callback, .files = zig_files }) catch {
+    queueDialogResult(.{ .callback = callback, .files = zig_files, .mode = mode }) catch {
         dvui.log.err("Failed to queue dialog result", .{});
         for (zig_files) |f| alloc().free(f);
         alloc().free(zig_files);
@@ -1881,6 +1974,14 @@ fn GenericDialogCallback(cb: ?*anyopaque, files: [*c]const [*c]const u8, mode: D
 // touching `dvui.currentWindow()` (TLS-only, frame-only).
 var captured_sdl_window: ?*sdl3.SDL_Window = null;
 
+/// The app's window: the one captured at startup (`restoreWindowState`, or file-open handling),
+/// or — called inside a frame before either — the frame's own.
+fn mainWindow() ?*sdl3.SDL_Window {
+    if (captured_sdl_window) |w| return w;
+    const cw = dvui.current_window orelse return null;
+    return cw.backend.impl.window;
+}
+
 /// Bring the window forward and make the app active, for a flow that had to leave it: signing
 /// into a cloud provider, or picking a folder, both of which happen in the system browser and
 /// leave fizzy behind whatever the user was sent to. Google (and every other provider worth
@@ -1894,7 +1995,7 @@ var captured_sdl_window: ?*sdl3.SDL_Window = null;
 /// Enter or leave full screen. On macOS that is the green button's own Space transition, which
 /// the window monitor (`FizzyWindowMonitor.m`) already follows; elsewhere SDL's.
 pub fn toggleFullscreen() void {
-    const w = captured_sdl_window orelse return;
+    const w = mainWindow() orelse return;
     if (builtin.os.tag == .macos) {
         const ns = cocoaWindowOf(w) orelse return;
         objc.Object.fromId(ns).msgSend(void, "toggleFullScreen:", .{@as(?*anyopaque, null)});
@@ -1905,7 +2006,7 @@ pub fn toggleFullscreen() void {
 }
 
 pub fn raiseWindow() void {
-    if (captured_sdl_window) |w| _ = sdl3.SDL_RaiseWindow(w);
+    if (mainWindow()) |w| _ = sdl3.SDL_RaiseWindow(w);
     if (builtin.os.tag == .macos) activateApp();
 }
 

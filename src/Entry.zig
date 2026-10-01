@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const build_opts = @import("build_opts");
+/// The app's version for SDL's app metadata, which takes a C string.
+const app_version_z = std.fmt.comptimePrint("{s}", .{build_opts.app_version});
 
 const assets = @import("assets");
 
@@ -100,10 +102,14 @@ fn startOptions() dvui.App.StartOptions {
         // settle geometry before the window is shown — no unstyled flash. AppInit
         // calls `fizzy.backend.showWindow` once everything is in place.
         opts.hidden = true;
-        // fizzy owns geometry for its custom (frame == content) window — dvui's
-        // content-based persistence can't represent it (see backend.restoreWindowState
-        // / saveWindowGeometry). Disable dvui's so the two don't fight.
-        opts.persist_window_geometry = false;
+        // fizzy owns geometry for its custom (frame == content) window on macOS and Windows —
+        // dvui's content-based persistence can't represent it (see backend.restoreWindowState
+        // / saveWindowGeometry). On Linux the window manager draws an ordinary frame, which dvui's
+        // persistence handles; elsewhere it is off so the two don't fight.
+        opts.persist_window_geometry = builtin.os.tag == .linux;
+        // The app's own name, version and id, before SDL starts: the macOS app menu is built
+        // from them (About / Hide / Quit <name>), where the backend's defaults are an example's.
+        fizzy.backend.setSdlAppMetadata(AppInfo.display_name_z, app_version_z, AppInfo.bundle_id_z);
     }
     return opts;
 }
@@ -322,13 +328,6 @@ pub fn AppInit(win: *dvui.Window) !void {
     // SDL already queued (macOS routes "Open With" through Apple Events
     // before our AppInit runs).
     fizzy.backend.installFileOpenEventHandling(win);
-
-    // Override DVUI's default SDL metadata ("DVUI Entry Example") so the macOS
-    // app menu reads "About fizzy" / "Hide fizzy" / "Quit fizzy" and process
-    // listings show the real product name + version. `build_opts.app_version`
-    // is a non-sentinel slice, so allocate a null-terminated copy for SDL.
-    const version_z = std.fmt.allocPrintSentinel(allocator, "{s}", .{build_opts.app_version}, 0) catch "0.0.0";
-    fizzy.backend.setSdlAppMetadata(AppInfo.display_name_z, version_z, AppInfo.bundle_id_z);
 
     fizzy.backend.setupMacOSMenuBar();
 
