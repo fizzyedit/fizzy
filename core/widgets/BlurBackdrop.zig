@@ -77,18 +77,6 @@ mode: Mode = .replay,
 /// under it. Off, the pyramid serves every radius (the cheap default — dialogs, menus, the
 /// palette).
 stable: bool = false,
-/// Fizzy addition: take the frame's shared capture (`shared`) instead of one of its own, when
-/// the frame already has one at this radius — for glass re-read every frame on one layer that
-/// never overlaps itself: every place's drop (`DropZones`). One capture then serves all of them,
-/// however many places are showing one: each capture is a dozen render-target switches and a
-/// break in the frame, which a phone's GPU pays for far more than for the blur itself. Not for
-/// glass over other glass (a card over the drop, a tooltip over a dialog): the shared picture is
-/// taken before the glass under it was drawn. Not for a frost kept across frames
-/// (`Pane.witness`): the shared picture is rewritten every frame.
-share: bool = false,
-/// Fizzy addition: the backdrop `small` was borrowed from this frame (`share`), for its unblurred
-/// copy (`sharpTexture`). Null when the capture was this backdrop's own.
-lent: ?*const BlurBackdrop = null,
 /// Fizzy addition: how much definition the frost keeps, 0…1. On the way back up the pyramid,
 /// each doubling mixes in the downsample level of its size by this much — a blur with a
 /// sharper core and the same soft reach, so shapes behind read through the frost instead of
@@ -236,13 +224,6 @@ pub fn deinit(self: *BlurBackdrop) void {
 fn deinitFromTarget(self: *BlurBackdrop) bool {
     const cw = dvui.currentWindow();
     const bound = cw.render_target.texture orelse return false;
-    self.lent = null;
-    if (self.share) if (sharedCapture(self, bound)) |s| {
-        self.small = s.small;
-        self.covered = s.covered;
-        self.lent = s;
-        return true;
-    };
     const src = dvui.Texture.fromTargetTemp(bound) catch return false;
     var r = self.rect;
     if (r.empty()) return true;
@@ -370,84 +351,6 @@ fn releaseLevels(self: *BlurBackdrop) void {
         slot.* = null;
     }
     self.small = null;
-}
-
-/// The frame's shared capture (`share`): copied and blurred once, then lent to every sharing
-/// backdrop at the same radius and detail drawn on the same target this frame. It covers what
-/// last frame's sharing backdrops asked for, and the first ask of this one: a capture costs what
-/// it reads, so the whole window read for a drop in one place cost more than the captures it saved.
-const Shared = struct {
-    backdrop: BlurBackdrop = .{ .mode = .readback },
-    frame: i128 = 0,
-    target: ?*anyopaque = null,
-    /// What sharing backdrops asked to cover, last frame and so far this frame.
-    asked_last: ?Rect.Physical = null,
-    asked: ?Rect.Physical = null,
-    /// The capture's size, which only grows while glass is in use: a new size is a new set of
-    /// targets, a stall on a phone, so it follows the panes about at the size they have needed.
-    size: Size.Physical = .{},
-};
-var shared: Shared = .{};
-
-/// Physical pixels the shared capture's rect snaps out to, so it keeps its size (and its targets)
-/// while the panes in it move about.
-const shared_snap: f32 = 64;
-
-/// The frame's shared capture for `self`, taken now if this is the frame's first ask. Null when
-/// the window is off the bound target (a `Picture` capture) or the blur makes no pass.
-fn sharedCapture(self: *const BlurBackdrop, bound: Texture.Target) ?*const BlurBackdrop {
-    const cw = dvui.currentWindow();
-    const win = dvui.windowRectPixels();
-    // Only onto the frame itself: a target the size of the window, at no offset.
-    if (cw.render_target.offset.x != 0 or cw.render_target.offset.y != 0) return null;
-    if (@as(f32, @floatFromInt(bound.width)) != win.w or @as(f32, @floatFromInt(bound.height)) != win.h) return null;
-    const s = &shared.backdrop;
-    const now = cw.frame_time_ns;
-    if (shared.frame != now) {
-        // Unused for a second, the glass is gone: start again from what the next asks need.
-        if (now - shared.frame > std.time.ns_per_s) shared.size = .{};
-        shared.asked_last = shared.asked;
-        shared.asked = null;
-    }
-    shared.asked = if (shared.asked) |a| a.unionWith(self.rect) else self.rect;
-    const same = shared.frame == now and shared.target == bound.ptr and
-        s.radius_px == self.radius_px and s.detail == self.detail;
-    const r = self.rect.intersect(win);
-    if (!same) {
-        captureShared(if (shared.asked_last) |a| a.unionWith(r) else r, win);
-        s.radius_px = self.radius_px;
-        s.detail = self.detail;
-        shared.frame = now;
-        shared.target = bound.ptr;
-        if (!s.deinitFromTarget()) s.small = null;
-    } else if (!contains(s.covered, r)) {
-        // A pane new this frame, outside what the capture covers: take it again, wider.
-        captureShared(s.covered.unionWith(r), win);
-        if (!s.deinitFromTarget()) s.small = null;
-    }
-    if (s.small == null or !contains(s.covered, r)) return null;
-    return s;
-}
-
-/// Aim the shared capture at `want`, snapped out to `shared_snap` and at least the size it has
-/// grown to, inside `win`.
-fn captureShared(want: Rect.Physical, win: Rect.Physical) void {
-    const x = @floor(want.x / shared_snap) * shared_snap;
-    const y = @floor(want.y / shared_snap) * shared_snap;
-    const w = @ceil((want.x + want.w - x) / shared_snap) * shared_snap;
-    const h = @ceil((want.y + want.h - y) / shared_snap) * shared_snap;
-    shared.size = .{ .w = @min(win.w, @max(shared.size.w, w)), .h = @min(win.h, @max(shared.size.h, h)) };
-    shared.backdrop.rect = .{
-        .x = std.math.clamp(x, win.x, win.x + win.w - shared.size.w),
-        .y = std.math.clamp(y, win.y, win.y + win.h - shared.size.h),
-        .w = shared.size.w,
-        .h = shared.size.h,
-    };
-}
-
-fn contains(outer: Rect.Physical, inner: Rect.Physical) bool {
-    return inner.x >= outer.x and inner.y >= outer.y and
-        inner.x + inner.w <= outer.x + outer.w and inner.y + inner.h <= outer.y + outer.h;
 }
 
 /// Fizzy addition: the `.readback` capture. Reads `rect` back from the current target as it
@@ -976,7 +879,7 @@ pub fn drawRounded(self: *BlurBackdrop, corners: dvui.CornerRect, scale: f32) vo
 }
 
 /// Fizzy addition: where `rect` lies in `small`, which pictures `coverage` — the pane's margin
-/// for its edge, or the whole window when the capture is shared.
+/// for its edge.
 fn rectUv(self: *const BlurBackdrop) dvui.Rect {
     const c = self.coverage();
     return .{ .x = (self.rect.x - c.x) / c.w, .y = (self.rect.y - c.y) / c.h, .w = self.rect.w / c.w, .h = self.rect.h / c.h };
@@ -1187,7 +1090,7 @@ pub fn blendOver(tex: Texture, over: bool) void {
 /// back instead of copying it on the GPU, or the blur has no pyramid. Good until the next capture.
 pub fn sharpTexture(self: *const BlurBackdrop) ?Texture {
     if (self.stable or self.mode != .readback) return null;
-    const t = (self.lent orelse self).levels[0] orelse return null;
+    const t = self.levels[0] orelse return null;
     return Texture.fromTargetTemp(t) catch null;
 }
 

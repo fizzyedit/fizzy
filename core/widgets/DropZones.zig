@@ -375,7 +375,6 @@ fn blob(id: dvui.Id, discs: []const liquid_blob.Disc, k: f32, area: dvui.Rect.Ph
     backdrop.mode = .readback;
     backdrop.radius_px = job.pane.radius;
     backdrop.detail = job.pane.detail;
-    backdrop.share = true;
     // Read every frame, as the dialogs' glass is: what moves under the drop moves in it.
     backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, dvui.currentWindow().frame_time_ns, job.pane.radius });
     job.backdrop = backdrop;
@@ -568,7 +567,6 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
     backdrop.mode = .readback;
     backdrop.radius_px = job.pane.radius;
     backdrop.detail = job.pane.detail;
-    backdrop.share = true;
     // Read every frame, as the dialogs' glass is: what moves under the drop — a logo following
     // the pointer — moves in it at the frame rate, not in steps a few times a second.
     backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, job.now, job.pane.radius });
@@ -577,9 +575,7 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
 }
 
 /// `base` at strength `g`: its tint and lift scaled together, so a weaker frost is the same
-/// glass, thinner. Its blur stays whole: the drop forms by growing from nothing, and at the
-/// dialogs' own radius every place's drop, coming or going, shares the frame's one capture
-/// (`BlurBackdrop.share`) — at a radius of its own each fading place took a capture of its own.
+/// glass, thinner. Its blur stays whole: the drop forms by growing from nothing.
 fn scaled(base: BlurBackdrop.Pane, g: f32) BlurBackdrop.Pane {
     var pane = base;
     pane.mix = base.mix * g;
