@@ -90,7 +90,7 @@ core/      the shared floor both an app and a plugin dylib draw with — widgets
 sdk/       the plugin contract: `sdk/src/**` is the SDK itself, the files beside it are its
            build surface (this directory ships standalone as `fizzy-sdk-v*.tar.gz`)
 app/       the framework an application switches on — layout, store, update, watch, window,
-           single_instance; never compiled into a dylib
+           single_instance, automation (demos); never compiled into a dylib
 plugins/   the bundled plugins, in the exact shape a third-party plugin has
 examples/  apps built on fizzy (minimal, studio, endless), each owning its own layout shape
 src/       fizzy the application — `Entry`, `editor/`, `backend/`
@@ -161,5 +161,8 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
 - **Resuming the library/framework work (bookmark `fizzy-lib`)** → [`docs/LIB_CHECKPOINT.md`](docs/LIB_CHECKPOINT.md):
   ground rules, what is done, the verification workflow, and the agreed next steps.
 
+- Demos that play the real app (tapes, the player, rewind, writing a demo, the anchors widgets
+  publish) → [`docs/AUTOMATION.md`](docs/AUTOMATION.md). Code in `app/automation/`, fizzy's stage
+  and bundled demos in `src/editor/Demo.zig` + `src/editor/demos/`.
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
 - Living reshape plan (identity `plugin.zig.zon`, comptime `settings.Schema`, ZON user config, no sidecars) → [`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)
