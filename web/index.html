@@ -115,7 +115,15 @@
       // the browser's storage for it, so a test build beside the real one (fizzyed.it/testapp/
       // beside /app/) is built with a name of its own (`zig build web -Dweb-storage=…`) and never
       // reads or overwrites the real one's settings, layout or plugins. Stamped by the build.
-      const storageName = "__FIZZY_WEB_STORAGE__";
+      const buildStorageName = "__FIZZY_WEB_STORAGE__";
+      // `?storage=<name>`: a copy of the app embedded in a page (fizzyed.it's examples) files
+      // its settings, layout, files and installed plugins under a name of its own, beside the
+      // build's, so it never reads or overwrites the real app's — and two embeds on one page
+      // never each other's. One build, any number of embeds. Names as `-Dweb-storage` takes them.
+      const storageName = (() => {
+        const own = new URLSearchParams(location.search).get("storage");
+        return own && /^[a-z0-9_-]{1,64}$/.test(own) ? buildStorageName + "~" + own : buildStorageName;
+      })();
       const loadingEl = document.getElementById("loading");
       const errorPanel = document.getElementById("error-panel");
       const errorMessage = document.getElementById("error-message");
@@ -443,7 +451,9 @@
       // and an update is a new URL — `rememberPlugin` drops the old entry, `forgetPlugin` the
       // uninstalled one. A dev build served beside the app (`?plugin=`) is rebuilt at the same
       // URL, so it is never kept.
-      const pluginCacheName = storageName + "-plugins-v1";
+      // Under the build's name, not the embed's: a store URL names one release, so its bytes
+      // serve every embed alike, and a plugin installed in one is not downloaded again for the next.
+      const pluginCacheName = buildStorageName + "-plugins-v1";
       const pluginCacheAvailable = typeof caches !== "undefined";
       // Verified bytes of builds that have linked but not yet registered, by URL: the host
       // remembers a build only once it has registered (see the end of `loadPlugin`), and only
@@ -843,6 +853,7 @@
           prefs: prefs(),
           storage,
           storageName,
+          buildStorageName,
           search: location.search,
           baseURI: document.baseURI,
         }, [offscreen]);

@@ -22,8 +22,11 @@ const env = {
     size: { w: 1, h: 1, dpr: 1 },
     prefs: { dark: false, light: false, reduce: false },
     storage: {},
-    // The page's `storageName`: what this build files its storage under.
+    // The page's `storageName`: what this copy of the app files its storage under — the build's
+    // name, or that and an embed's own (`?storage=`).
     storageName: "fizzy",
+    // The build's own name, which plugin bytes are kept under whatever the embed's is.
+    buildStorageName: "fizzy",
     search: "",
     baseURI: "",
 };
@@ -290,7 +293,7 @@ function forgetPlugin(id) {
     storageSet(rememberedKey(), JSON.stringify(all));
 }
 
-const pluginCacheName = () => env.storageName + "-plugins-v1";
+const pluginCacheName = () => env.buildStorageName + "-plugins-v1";
 const pluginCacheAvailable = typeof caches !== "undefined";
 const unkeptPluginBytes = new Map();
 function keepablePluginUrl(url) {
@@ -518,7 +521,7 @@ function postBoundKeys() {
 
 // ---- start -------------------------------------------------------------------------------
 async function start(init) {
-    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, search: init.search, baseURI: init.baseURI });
+    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, buildStorageName: init.buildStorageName || init.storageName, search: init.search, baseURI: init.baseURI });
     adoptCanvas(init.canvas);
     warmRememberedPlugins();
 
