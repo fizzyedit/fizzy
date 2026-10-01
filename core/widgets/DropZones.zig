@@ -28,7 +28,6 @@ const icons = @import("icons");
 const icon_tex = @import("../gfx/icon.zig");
 const motion = @import("../motion.zig");
 const liquid_glass = @import("../gfx/liquid_glass.zig");
-const liquid_blob = @import("../gfx/liquid_blob.zig");
 
 pub const Side = enum { left, right, top, bottom };
 
@@ -163,15 +162,6 @@ pub const light_ms: f32 = 55;
 const State = struct {
     /// 0…1, linear in time; shaped when read (`grow`, `frost`).
     shown: f32 = 0,
-    /// Which way `shown` is going, and what the drop looked like when it last turned round:
-    /// the gap between that and where the new way's curve starts, faded out over the new way,
-    /// so a drop that turns mid-way carries on from where it was rather than jumping.
-    leaving: bool = false,
-    part: f32 = 0,
-    swell: f32 = 0,
-    turn_shown: f32 = 0,
-    turn_part: f32 = 0,
-    turn_swell: f32 = 0,
     /// 0…1: how lit — the zone under the pointer.
     lit: [all.len]f32 = @splat(0),
     last_ns: i128 = 0,
@@ -230,66 +220,31 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
 
     const g = frost(st.shown);
     if (g > 0.01 and w.unit > 0) {
-        // One drop, then its bubbles: during `drop_phase` of the way in a single bubble swells in
-        // the middle; after it the bubbles part toward where they settle — past it and back at
-        // the app's motion — while how far the field bridges them falls, so the necks between
-        // them thin and let go. Leaving, the same phases backwards but plainly eased: the arrival's
-        // swing run in reverse was a push outward before they gathered, and another swell before
-        // the drop shrank — two bounces in one join.
-        const leaving = want_shown < st.shown or (want_shown == st.shown and !look.target);
-        const shape = phases(st.shown, leaving);
-        if (leaving != st.leaving) {
-            st.leaving = leaving;
-            st.turn_shown = st.shown;
-            st.turn_part = st.part - shape.part;
-            st.turn_swell = st.swell - shape.swell;
-        }
-        // How much of the gap at the turn is left: all of it there, none at the end of the way.
-        const left = if (leaving)
-            (if (st.turn_shown > 0) std.math.clamp(st.shown / st.turn_shown, 0, 1) else 0)
-        else
-            (if (st.turn_shown < 1) std.math.clamp((1 - st.shown) / (1 - st.turn_shown), 0, 1) else 0);
-        const part = @max(0, shape.part + st.turn_part * left);
-        const swell = @max(0, shape.swell + st.turn_swell * left);
-        st.part = part;
-        st.swell = swell;
-        var discs: [all.len]liquid_blob.Disc = undefined;
+        // Each bubble is a glass orb of its own, where it settles, formed the way a menu's frost
+        // forms: nothing moves; its blur comes in from sharp, its edge springs in (`glass`), and
+        // its icon comes into focus with it (`drawIcon`). Nothing joins, so there is nothing to
+        // mesh, and an orb forming is the same glass as one formed.
+        var panes: [all.len]Pane = undefined;
         var zones: [all.len]usize = undefined;
         var n: usize = 0;
         for (all, 0..) |z, i| {
             if (z == .remove and !w.remove) continue;
             const b = w.bubble(z);
-            discs[n] = .{
-                .c = .{ .x = w.center.x + (b.c.x - w.center.x) * part, .y = w.center.y + (b.c.y - w.center.y) * part },
-                .r = b.r * swell,
+            const r = b.r;
+            panes[n] = .{
+                .r = .{ .x = b.c.x - r, .y = b.c.y - r, .w = 2 * r, .h = 2 * r },
                 .lit = st.lit[i],
+                .radii = liquid_glass.uniform(r),
             };
             zones[n] = i;
             n += 1;
         }
-        const k = (bridge_start + (bridge_end - bridge_start) * std.math.clamp(part, 0, 1)) * w.unit;
-        if (apart(discs[0..n], k)) {
-            // Parted, each bubble is a circle: the panes' own glass (`liquid_glass`), a pane
-            // with corners of its whole radius — a fraction of the union's mesh to draw, and its
-            // rim light is the panes', fine along the edge where the union's grid is coarse.
-            var panes: [all.len]Pane = undefined;
-            for (discs[0..n], 0..) |dc, i| panes[i] = .{
-                .r = .{ .x = dc.c.x - dc.r, .y = dc.c.y - dc.r, .w = 2 * dc.r, .h = 2 * dc.r },
-                .lit = dc.lit,
-                .radii = liquid_glass.uniform(dc.r),
-            };
-            glass(id, panes[0..n], w.rect(), g, scale);
-        } else {
-            blob(id, discs[0..n], k, w.rect(), g, scale);
-        }
-        // The icons, once the bubbles have come apart enough to hold them.
-        const settle = std.math.clamp((part - 0.55) / 0.45, 0, 1);
-        if (settle > 0.01) for (discs[0..n], zones[0..n]) |dc, i| {
+        glass(id, panes[0..n], w.rect(), g, scale);
+        for (panes[0..n], zones[0..n]) |pane, i| {
             const z = all[i];
             if (z == .center and look.center == .none) continue;
-            const zr: dvui.Rect.Physical = .{ .x = dc.c.x - dc.r, .y = dc.c.y - dc.r, .w = 2 * dc.r, .h = 2 * dc.r };
-            drawIcon(zr, iconFor(z, look.center), g * settle, st.lit[i], scale, dc.r * bubble_icon / scale, w.bubble(z).r * bubble_icon);
-        };
+            drawIcon(pane.r, iconFor(z, look.center), g, st.lit[i], scale, pane.r.w / 2 * bubble_icon / scale, w.bubble(z).r * bubble_icon, g);
+        }
     }
 
     if (moving) {
@@ -302,136 +257,6 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
         st.last_ns = 0;
     }
 }
-
-/// Whether the field bridges none of `discs` any more: every pair further apart than the union
-/// reaches across (a few `k`), so each is a circle of its own.
-fn apart(discs: []const liquid_blob.Disc, k: f32) bool {
-    for (discs, 0..) |a, i| for (discs[i + 1 ..]) |b| {
-        const dx = a.c.x - b.c.x;
-        const dy = a.c.y - b.c.y;
-        if (@sqrt(dx * dx + dy * dy) - a.r - b.r < 4 * k) return false;
-    };
-    return true;
-}
-
-/// The share of the way in the drop spends as one bubble, before it splits.
-const drop_phase: f32 = 0.3;
-
-const Shape = struct { part: f32, swell: f32 };
-
-/// How far the bubbles have parted and how big the drop is at `shown`: arriving on the app's
-/// motion (its swing, when playful), leaving on a plain ease with no swing.
-///
-/// Leaving, the two overlap: the drop starts to shrink while its bubbles are still gathering.
-/// One after the other, each eased to a stop, the join came to rest before the shrink began —
-/// a pause in the middle of what should read as one motion.
-fn phases(shown: f32, leaving: bool) Shape {
-    if (leaving) return .{
-        .part = smooth(std.math.clamp((shown - leave_gather_to) / (1 - leave_gather_to), 0, 1)),
-        .swell = smooth(std.math.clamp(shown / leave_shrink_from, 0, 1)),
-    };
-    const form = std.math.clamp(shown / drop_phase, 0, 1);
-    const split = std.math.clamp((shown - drop_phase) / (1 - drop_phase), 0, 1);
-    return .{ .part = motion.enterFull(split), .swell = motion.enterFull(form) };
-}
-
-/// Leaving, on `shown` from 1 down to 0: the bubbles gather until `leave_gather_to`, the drop
-/// shrinks from `leave_shrink_from` — the two overlapping between them.
-const leave_gather_to: f32 = 0.3;
-const leave_shrink_from: f32 = 0.65;
-
-fn smooth(t: f32) f32 {
-    return t * t * (3 - 2 * t);
-}
-/// Points: how far the field bridges the bubbles as they begin to part, and once they have —
-/// enough at the start that they leave as one drop, little enough at the end that settled
-/// bubbles a few points apart stand clear of each other.
-const bridge_start: f32 = 16;
-const bridge_end: f32 = 1.5;
-
-/// The drop's glass: one read and blur of `area` (where it settles), the discs' union laid down
-/// on it (`liquid_blob`) with the dialogs' tint and lift, at strength `g`. With the blur off,
-/// the dialogs' fill disc by disc.
-fn blob(id: dvui.Id, discs: []const liquid_blob.Disc, k: f32, area: dvui.Rect.Physical, g: f32, scale: f32) void {
-    const base = widgets.menuFrost() orelse {
-        const fill = dialogs.dialogFill();
-        for (discs) |dc| {
-            const r: dvui.Rect.Physical = .{ .x = dc.c.x - dc.r, .y = dc.c.y - dc.r, .w = 2 * dc.r, .h = 2 * dc.r };
-            if (r.w < 1) continue;
-            const c = fill.lerp(litToward(), lit_lift * dc.lit);
-            r.fill(.round(dc.r), .{ .color = .{ .color = c.opacity(@as(f32, @floatFromInt(c.a)) / 255 * g) }, .fade = 1.0 });
-        }
-        return;
-    };
-    const job = dvui.dataGetPtrDefault(null, id, "_drop_blob_job", BlobJob, .{});
-    job.* = .{
-        .backdrop = job.backdrop,
-        .scale = scale,
-        .strength = g,
-        .k = k,
-        .lens = motion.liquid() * liquid_glass.blurRamp(base.radius),
-    };
-    for (discs) |dc| {
-        if (dc.r < 0.5) continue;
-        job.discs[job.count] = dc;
-        job.count += 1;
-    }
-    if (job.count == 0) return;
-    const bounds = area.insetAll(-liquid_glass.margin(.{ .lens = job.lens, .refraction = base.refraction }, scale));
-    job.pane = scaled(base, g);
-    if (job.pane.radius < BlurBackdrop.min_blur) {
-        job.count = 0;
-        return;
-    }
-    job.bounds = bounds;
-    const backdrop = dvui.dataGetPtrDefault(null, id, "_drop_zones_frost", BlurBackdrop, .{});
-    dvui.dataSetDeinitFunction(null, id, "_drop_zones_frost", &BlurBackdrop.releaseTexture);
-    backdrop.mode = .readback;
-    backdrop.radius_px = job.pane.radius;
-    backdrop.detail = job.pane.detail;
-    // Read every frame while live, as the dialogs' glass is: what moves under the drop moves in it
-    // (`live`). Otherwise read again only as the drop's area or blur changes.
-    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, if (live()) dvui.currentWindow().frame_time_ns else 0, job.pane.radius });
-    job.backdrop = backdrop;
-    dvui.deferRender(job, BlobJob.draw);
-}
-
-/// The drop's layer, drawn at replay once everything under it is on the frame (`blob`).
-const BlobJob = struct {
-    backdrop: ?*BlurBackdrop = null,
-    pane: BlurBackdrop.Pane = .{},
-    bounds: dvui.Rect.Physical = .{},
-    scale: f32 = 1,
-    strength: f32 = 1,
-    lens: f32 = 1,
-    k: f32 = 1,
-    discs: [all.len]liquid_blob.Disc = undefined,
-    count: usize = 0,
-
-    fn draw(ctx: ?*anyopaque) void {
-        const self: *BlobJob = @ptrCast(@alignCast(ctx orelse return));
-        const backdrop = self.backdrop orelse return;
-        // At full alpha, as every frost draws: a frost at partial alpha is a hole.
-        const prev_alpha = dvui.currentWindow().alpha;
-        dvui.alphaSet(1);
-        defer dvui.alphaSet(prev_alpha);
-        backdrop.deinit();
-        const tex = backdrop.small orelse return;
-        const mix = std.math.clamp(self.pane.mix, 0, 1);
-        liquid_blob.draw(tex, backdrop.coverage(), self.discs[0..self.count], self.k, self.scale, .{
-            .lens = self.lens,
-            .refraction = self.pane.refraction,
-            .frost = if (self.pane.tint != null) dvui.Color.white.opacity(1 - mix) else .white,
-            .tint = self.pane.tint,
-            .mix = mix,
-            .lift = self.pane.lift,
-            .lit_amount = lit_lift,
-            .lit_toward = litToward(),
-            .strength = self.strength,
-            .blend_over = &BlurBackdrop.blendOver,
-        });
-    }
-};
 
 /// How `drawSingle` lays its pane down.
 pub const Single = struct {
@@ -472,7 +297,7 @@ pub fn drawSingle(id: dvui.Id, rect: ?dvui.Rect.Physical, scale: f32, opts: Sing
             .radii = liquid_glass.uniform(radius),
         };
         glass(id, &.{pane}, st.rect, g, scale);
-        if (opts.icon) |icon| drawIcon(pane.r, iconFor(.center, icon), g, 1, scale, icon_size, icon_size * scale);
+        if (opts.icon) |icon| drawIcon(pane.r, iconFor(.center, icon), g, 1, scale, icon_size, icon_size * scale, g);
     }
     if (moving) {
         dvui.refresh(null, @src(), id);
@@ -556,8 +381,9 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
         .scale = scale,
         .now = dvui.currentWindow().frame_time_ns,
         .strength = g,
-        // The edge comes in with the blur, so a barely-frosted pane has barely an edge.
-        .lens = motion.liquid() * liquid_glass.blurRamp(base.radius),
+        // The edge comes in with the blur, so a barely-frosted pane has barely an edge — past its
+        // shape and back as it arrives when motion is playful, as a menu's does.
+        .lens = motion.liquid() * liquid_glass.blurRamp(base.radius) * @max(0, motion.enterFull(g)),
     };
     for (panes) |pane| {
         if (pane.r.w < 1 or pane.r.h < 1) continue;
@@ -590,10 +416,11 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
     dvui.deferRender(job, LayerJob.draw);
 }
 
-/// `base` at strength `g`: its tint and lift scaled together, so a weaker frost is the same
-/// glass, thinner. Its blur stays whole: the drop forms by growing from nothing.
+/// `base` at strength `g`: its blur from sharp, and its tint and lift scaled with it, so glass
+/// forming is the same glass, thinner — as a menu's frost forms (`BlurBackdrop.frostPane`).
 fn scaled(base: BlurBackdrop.Pane, g: f32) BlurBackdrop.Pane {
     var pane = base;
+    pane.radius = base.radius * g;
     pane.mix = base.mix * g;
     pane.lift = base.lift * g;
     return pane;
@@ -659,10 +486,11 @@ const LayerJob = struct {
 /// so a glyph's crossing strokes never show.
 /// `rest` is the icon's side in physical pixels once its bubble has settled: it is rasterized at
 /// that and stretched as its bubble swells and shrinks (`icon.renderRaster`).
-fn drawIcon(zr: dvui.Rect.Physical, glyph: Glyph, g: f32, lit: f32, scale: f32, size: f32, rest: f32) void {
+/// `focus`, 0…1: how sharp — from a blur, as the glass under it forms, to crisp at 1.
+fn drawIcon(zr: dvui.Rect.Physical, glyph: Glyph, g: f32, lit: f32, scale: f32, size: f32, rest: f32, focus: f32) void {
     const side = size * scale;
     if (zr.w < side * 1.5 or zr.h < side * 1.5) return;
-    const arrive = std.math.clamp((g - 0.45) / 0.55, 0, 1);
+    const arrive = std.math.clamp(g / 0.7, 0, 1);
     if (arrive <= 0.01) return;
     const theme = dvui.themeGet();
     const ink = theme.color(.window, .text);
@@ -673,11 +501,18 @@ fn drawIcon(zr: dvui.Rect.Physical, glyph: Glyph, g: f32, lit: f32, scale: f32, 
     const glass_c = dialogs.dialogFill().opacity(1);
     const color = glass_c.lerp(ink, arrive);
     const at_r: dvui.Rect.Physical = .{ .x = zr.x + (zr.w - side) / 2, .y = zr.y + (zr.h - side) / 2, .w = side, .h = side };
-    icon_tex.renderRaster(glyph.name, glyph.tvg, .{ .r = at_r, .s = scale }, .{ .w = @round(rest), .h = @round(rest) }, .{}, .{
-        .stroke_color = .{ .color = color },
-        .fill_color = .transparent,
-    });
+    const icon_opts: dvui.IconRenderOptions = .{ .stroke_color = .{ .color = color }, .fill_color = .transparent };
+    const sharp = std.math.clamp(focus, 0, 1);
+    if (sharp >= 0.999) {
+        icon_tex.renderRaster(glyph.name, glyph.tvg, .{ .r = at_r, .s = scale }, .{ .w = @round(rest), .h = @round(rest) }, .{}, icon_opts);
+    } else {
+        // From an eighth of its size, stretched — a blur — up to whole as it comes sharp.
+        icon_tex.renderSoft(glyph.name, glyph.tvg, .{ .r = at_r, .s = scale }, rest * (focus_from + (1 - focus_from) * sharp * sharp), .{}, icon_opts);
+    }
 }
+
+/// How small an icon is rasterized at its blurriest, as a share of its size.
+const focus_from: f32 = 0.125;
 
 const Glyph = struct { name: []const u8, tvg: []const u8 };
 

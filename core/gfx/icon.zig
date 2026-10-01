@@ -68,6 +68,23 @@ pub fn renderRaster(name: []const u8, tvg_bytes: []const u8, rs: dvui.RectScale,
         dvui.renderIcon(name, tvg_bytes, rs, opts, icon_opts) catch {};
         return;
     }
+    renderTextured(name, tvg_bytes, rs, raster orelse rs.r.size(), opts, icon_opts);
+}
+
+/// The icon soft: rasterized at `raster_px` (its height in pixels) and drawn stretched to `rs`
+/// with smooth filtering, so the smaller the raster the more blurred — on every target, the web
+/// included, where `renderRaster` draws the crisp mesh. For an icon coming into focus as the
+/// glass it sits on forms. Sizes are kept to a few steps, so one coming sharp is rasterized a
+/// handful of times rather than every frame.
+pub fn renderSoft(name: []const u8, tvg_bytes: []const u8, rs: dvui.RectScale, raster_px: f32, opts: dvui.RenderTextureOptions, icon_opts: dvui.IconRenderOptions) void {
+    if (rs.s == 0 or rs.r.w < 1 or rs.r.h < 1) return;
+    if (dvui.clipGet().intersect(rs.r).empty()) return;
+    const px = @max(2, @exp2(@round(@log2(@max(raster_px, 2)) * 2) / 2));
+    renderTextured(name, tvg_bytes, rs, .{ .w = px * rs.r.w / rs.r.h, .h = px }, opts, icon_opts);
+}
+
+/// The icon from its cached texture at `size` pixels, drawn to `rs`.
+fn renderTextured(name: []const u8, tvg_bytes: []const u8, rs: dvui.RectScale, size: dvui.Size.Physical, opts: dvui.RenderTextureOptions, icon_opts: dvui.IconRenderOptions) void {
 
     // One flat colour is drawn white and tinted on the quad, so the texture is shared by every
     // colour the icon is ever drawn in: fill and stroke the same, or one of them clear (a line
@@ -89,7 +106,6 @@ pub fn renderRaster(name: []const u8, tvg_bytes: []const u8, rs: dvui.RectScale,
     }
 
     // The texture is the icon at the size it is drawn (or rests at), in pixels.
-    const size = raster orelse rs.r.size();
     const h: u32 = @intFromFloat(@ceil(size.h));
     const w: u32 = @intFromFloat(@ceil(size.w));
     if (w == 0 or h == 0) return;
