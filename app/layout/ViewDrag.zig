@@ -158,16 +158,28 @@ pub fn offerChooser(l: *Layout, name: []const u8, bounds: dvui.Rect.Physical, in
     d.offer_count += 1;
 }
 
-/// The chooser under `p`, if one offered itself this frame or the last.
+/// The chooser under `p` that could take what is carried, if one offered itself this frame or
+/// the last. A strip whose place cannot take it — a document pane's tabs under a view that is no
+/// document — is no chooser for this drag: read as one, it hid every place's zones and turned the
+/// card into a tab over a strip it could never go into, so a split document area, a strip on every
+/// pane, was a maze to aim a view across. The strip of the place the view came out of always is.
 pub fn chooserAt(state: *const Layout.State, p: dvui.Point.Physical) ?Offer {
     const d = &state.view_drag;
     if (!d.active()) return null;
     const now = dvui.currentWindow().frame_time_ns;
     if (d.offer_frame == now) {
-        for (d.offers[0..d.offer_count]) |o| if (o.bounds.contains(p)) return o;
+        for (d.offers[0..d.offer_count]) |o| if (o.bounds.contains(p) and takes(d, o)) return o;
     }
-    for (d.last_offers[0..d.last_offer_count]) |o| if (o.bounds.contains(p)) return o;
+    for (d.last_offers[0..d.last_offer_count]) |o| if (o.bounds.contains(p) and takes(d, o)) return o;
     return null;
+}
+
+/// Whether offer `o`'s place could take what drag `d` carries: one of the places mapped at lift
+/// (`mapTargets`), or the place it came out of.
+fn takes(d: *const ViewDrag, o: Offer) bool {
+    if (std.mem.eql(u8, o.name, d.name)) return true;
+    for (d.targets[0..d.target_count]) |t| if (std.mem.eql(u8, t.name, o.name)) return true;
+    return false;
 }
 
 pub fn discard(self: *ViewDrag) void {

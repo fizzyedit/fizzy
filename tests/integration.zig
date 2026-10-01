@@ -2719,6 +2719,24 @@ test "split: the trash is offered out of a place of several, not out of a lone d
     try std.testing.expect(VD.removable(&layout2));
 }
 
+test "drag: a strip whose place cannot take the view is not a chooser for it" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    const VD = fizzy.Editor.Layout.ViewDrag;
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    defer editor.app.layout.view_drag.discard();
+    VD.begin(&layout, "Center", .{ .w = 100, .h = 100 });
+    const strip: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 30 };
+    // A strip of a place the drag mapped no target for (a document pane, say) is passed over...
+    VD.offerChooser(&layout, "Pane 9", strip, true);
+    try std.testing.expect(VD.chooserAt(&editor.app.layout, .{ .x = 10, .y = 10 }) == null);
+    // ...and the place the view came out of always reads as one.
+    VD.offerChooser(&layout, "Center", strip, false);
+    const o = VD.chooserAt(&editor.app.layout, .{ .x = 10, .y = 10 }) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("Center", o.name);
+}
+
 test "split: trashing the last view of the half that was split merges the other half into it" {
     var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
     defer case.deinit();
