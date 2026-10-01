@@ -2114,6 +2114,136 @@ const EmptyPanelFrame = struct {
     }
 };
 
+/// Main above a keyword-matched Panel showing several, as fizzy's own shape has them.
+const ManyPanelFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
+        return .ok;
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        {
+            var content = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            defer content.deinit();
+            {
+                var main = try layout.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main }, .{ .expand = .both });
+                defer main.deinit();
+            }
+            layout.split(@src(), .{});
+            {
+                var panel = try layout.region(@src(), .{
+                    .name = "Panel",
+                    .keywords = fizzy.sdk.keywords.ide.panel,
+                    .shows = .many,
+                    .resize = true,
+                    .hide_when_empty = true,
+                }, .{ .min_size_content = .{ .h = 220 }, .expand = .horizontal });
+                defer panel.deinit();
+            }
+        }
+        e.app.layout.publishRegions();
+        return .ok;
+    }
+};
+
+const ManyPanelCase = struct {
+    ctx: shim.Ctx,
+
+    fn init() !ManyPanelCase {
+        var ctx = try shim.init(std.testing.allocator);
+        errdefer ctx.deinit(std.testing.allocator);
+        const editor = ctx.editor;
+        editor.app.gpa = std.testing.allocator;
+        try editor.app.host.registerSurface(.{ .id = "test.main", .title = "Main", .keywords = fizzy.sdk.keywords.ide.main, .draw = ManyPanelFrame.draw });
+        try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = fizzy.sdk.keywords.ide.panel, .draw = ManyPanelFrame.draw });
+        ManyPanelFrame.editor = editor;
+        try dvui.testing.settle(ManyPanelFrame.frame);
+        return .{ .ctx = ctx };
+    }
+
+    fn deinit(self: *ManyPanelCase) void {
+        const editor = self.ctx.editor;
+        editor.app.layout.regions.deinit(editor.app.gpa);
+        editor.app.layout.regions_building.deinit(editor.app.gpa);
+        editor.app.layout.deinitExtents(editor.app.gpa);
+        editor.app.layout.deinitAssignments(editor.app.gpa);
+        editor.app.layout.deinitQualified(editor.app.gpa);
+        ManyPanelFrame.editor = null;
+        self.ctx.deinit(std.testing.allocator);
+    }
+
+    fn place(self: *ManyPanelCase, source: []const u8, dest: []const u8, kind: fizzy.Editor.Layout.Drop.Kind) !void {
+        const editor = self.ctx.editor;
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        fizzy.Editor.Layout.ViewDrag.place(&layout, source, dest, kind);
+        try dvui.testing.settle(ManyPanelFrame.frame);
+        try dvui.testing.settle(ManyPanelFrame.frame);
+    }
+
+    /// The ids place `name` draws, whether its keywords or a list chose them.
+    fn shows(self: *ManyPanelCase, name: []const u8) []const []const u8 {
+        const editor = self.ctx.editor;
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        for (editor.app.layout.regions.items) |*r| if (std.mem.eql(u8, r.name, name)) {
+            const items = layout.matchingIn(r);
+            const out = dvui.currentWindow().arena().alloc([]const u8, items.len) catch return &.{};
+            for (items, 0..) |s, i| out[i] = s.id;
+            return out;
+        };
+        return &.{};
+    }
+
+    fn placeNamed(self: *ManyPanelCase, not: []const []const u8) ?[]const u8 {
+        for (self.ctx.editor.app.layout.regions.items) |r| {
+            for (not) |n| {
+                if (std.mem.eql(u8, r.name, n)) break;
+            } else if (r.name.len > 0) return r.name;
+        }
+        return null;
+    }
+};
+
+test "trash: the last view of a place its keywords fill goes, and the place is empty" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    try std.testing.expectEqual(@as(usize, 1), case.shows("Panel").len);
+    try case.place("Panel", "Panel", .remove);
+    // Out of the panel: it shows nothing now, its keywords notwithstanding.
+    try std.testing.expectEqual(@as(usize, 0), case.shows("Panel").len);
+    const main = case.shows("Main");
+    try std.testing.expectEqual(@as(usize, 1), main.len);
+    try std.testing.expectEqualStrings("test.main", main[0]);
+}
+
+test "split: the last view of a place its keywords fill, carried to another place's edge, goes with it" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    try case.place("Panel", "Main", .{ .split = .right });
+    const main = case.shows("Main");
+    try std.testing.expectEqual(@as(usize, 1), main.len);
+    try std.testing.expectEqualStrings("test.main", main[0]);
+    const half = case.placeNamed(&.{ "Main", "Panel" }) orelse return error.TestExpectedEqual;
+    const there = case.shows(half);
+    try std.testing.expectEqual(@as(usize, 1), there.len);
+    try std.testing.expectEqualStrings("test.output", there[0]);
+    try std.testing.expectEqual(@as(usize, 0), case.shows("Panel").len);
+}
+
+test "split: the last view of a place its keywords fill, split onto its own place, stays and an empty half opens" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    try case.place("Panel", "Panel", .{ .split = .right });
+    const panel = case.shows("Panel");
+    try std.testing.expectEqual(@as(usize, 1), panel.len);
+    try std.testing.expectEqualStrings("test.output", panel[0]);
+    const half = case.placeNamed(&.{ "Main", "Panel" }) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 0), case.shows(half).len);
+    try std.testing.expect(case.ctx.editor.app.layout.isMinted(half));
+}
+
 test "a split before a region that hides itself is not drawn, and nothing draws twice" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);

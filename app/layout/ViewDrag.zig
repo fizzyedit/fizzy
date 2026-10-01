@@ -1134,6 +1134,10 @@ fn remove(l: *Layout, source: []const u8) void {
         dvui.refresh(null, @src(), null);
         return;
     };
+    // A place its keywords fill gives a view up only to a place that claims it (`takeOut`), and
+    // the trash claims nothing: the place's list is written down without it, or it stays.
+    if (l.state.assignment(source) == null)
+        l.state.assign(l.gpa, source, idsWithout(l.arena, holding(l, source), moved)) catch {};
     takeOut(l, source, moved, null);
     shutIfEmptied(l, source);
     l.state.markDirty();
@@ -1319,10 +1323,11 @@ fn selectNamed(l: *Layout, name: []const u8, id: []const u8) void {
 ///
 /// Shut rather than deleted, so it slides closed on the curve it opened on;
 /// `Region.persistExtent` drops the leaf once the animation has finished.
+///
+/// Empty is what the place holds, not whether it has a list written down: a place its keywords
+/// fill has none, and read as empty it merged the half a split of it had just opened.
 fn shutIfEmptied(l: *Layout, name: []const u8) void {
-    if (l.state.assignment(name)) |ids| {
-        if (ids.len > 0) return;
-    }
+    if (holding(l, name).len > 0) return;
     _ = closeEmptied(l, name);
 }
 
