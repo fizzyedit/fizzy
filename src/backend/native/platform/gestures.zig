@@ -1,48 +1,42 @@
-//! Trackpad gestures SDL does not deliver — on macOS, the pinch (magnify) — gathered as they
-//! arrive and drained once a frame by whatever zooms.
+//! Trackpad and touch gestures, gathered as SDL reports them and drained once a frame by whatever
+//! zooms: the pinch (SDL's `SDL_EVENT_PINCH_*`, from a macOS trackpad, iOS, and Linux under
+//! Wayland or X11; Windows reports a precision touchpad's pinch as ctrl+wheel instead).
+//!
+//! SDL hands these to the backend's event loop, which no backend does anything with yet — dvui's
+//! gesture event is still to come (david-vanderson/dvui#1000) — so they are watched for here
+//! (`SDL_AddEventWatch`), under whichever backend the app runs. When dvui routes gestures to the
+//! widget under them, a widget can take them from there instead and this drain goes.
 const std = @import("std");
-const builtin = @import("builtin");
+const c = @import("backend").c;
 
-// AppKit's local monitor for magnify events (installed by `installTrackpadGestureMonitor`,
-// `objc/FizzyTrackpadGesture.m`) calls back here for each magnification delta. We accumulate
-// a single multiplicative ratio that the canvas widget drains and applies per frame.
-//
-// Storage is the bit pattern of an f64 (initial = 1.0) in an atomic u64. NSEvent local
-// monitors run on the AppKit event-pump thread (main, for SDL), and we drain on the same
-// main thread inside the frame, so the RMW below is single-threaded in practice — the
-// atomic is a guardrail against a future change moving the producer side.
+// One multiplicative ratio — every pinch update's scale multiplied in — that the canvas drains
+// and applies once a frame. Stored as an f64's bits in an atomic u64: the watch runs on the
+// thread that pumps SDL's events (the main one) and the frame drains on the same thread, so the
+// update is single-threaded in practice; the atomic guards against that ever changing.
 var pending_pinch_ratio_bits: std.atomic.Value(u64) = .init(@bitCast(@as(f64, 1.0)));
+var installed = false;
 
-/// Called from `objc/FizzyTrackpadGesture.m` for every magnify event. `delta` is the relative
-/// magnification reported by AppKit for that single event (small per-event values that
-/// compound multiplicatively across the gesture).
-export fn FizzyTrackpadMagnification(delta: f64) void {
-    if (delta == 0.0) return;
+fn pinchWatch(_: ?*anyopaque, event: ?*c.SDL_Event) callconv(.c) bool {
+    const e = event orelse return true;
+    if (e.type != c.SDL_EVENT_PINCH_UPDATE) return true;
+    const scale: f64 = e.pinch.scale;
+    if (scale <= 0 or scale == 1) return true;
     const current: f64 = @bitCast(pending_pinch_ratio_bits.load(.acquire));
-    const next = current * (1.0 + delta);
-    pending_pinch_ratio_bits.store(@bitCast(next), .release);
+    pending_pinch_ratio_bits.store(@bitCast(current * scale), .release);
+    // A watch's return is ignored; the event goes on to the backend either way.
+    return true;
 }
 
-// Conditional declaration so non-macOS native targets (which don't compile the .m source) don't
-// pull in an unresolved external symbol at link time.
-const fizzy_install_trackpad_gesture_monitor = if (builtin.os.tag == .macos) struct {
-    extern fn FizzyInstallTrackpadGestureMonitor() void;
-    fn install() void {
-        FizzyInstallTrackpadGestureMonitor();
-    }
-}.install else struct {
-    fn install() void {}
-}.install;
-
-/// Install a process-wide AppKit local monitor for trackpad pinch events. Safe to call multiple
-/// times — the monitor is one-shot. No-op on non-macOS targets.
+/// Start watching for pinches. Safe to call more than once.
 pub fn installTrackpadGestureMonitor() void {
-    fizzy_install_trackpad_gesture_monitor();
+    if (installed) return;
+    installed = true;
+    _ = c.SDL_AddEventWatch(pinchWatch, null);
 }
 
-/// Drain the accumulated trackpad pinch zoom ratio (>1.0 = zoom in, <1.0 = zoom out). Multiply
-/// canvas scale by this and adjust the focal point to match. Returns 1.0 if no pinch input has
-/// arrived since the last call.
+/// Drain the accumulated pinch zoom ratio (>1.0 = zoom in, <1.0 = zoom out). Multiply a canvas'
+/// scale by this and adjust the focal point to match. 1.0 when no pinch has arrived since the
+/// last call.
 pub fn takeTrackpadPinchRatio() f32 {
     const one_bits: u64 = @bitCast(@as(f64, 1.0));
     const prev_bits = pending_pinch_ratio_bits.swap(one_bits, .acq_rel);

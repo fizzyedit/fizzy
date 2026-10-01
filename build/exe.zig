@@ -485,7 +485,6 @@ pub fn addFizzyExecutableForTarget(
         }
         exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyVisualEffectView.m") });
         exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyMenuTarget.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyTrackpadGesture.m") });
         exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyWindowMonitor.m") });
         // The native backend's AppKit helpers, compiled here with fizzy's other Objective-C
         // (the root module is where the SDK's headers are found on a native build); the

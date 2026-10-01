@@ -331,9 +331,8 @@ pub fn AppInit(win: *dvui.Window) !void {
 
     fizzy.backend.setupMacOSMenuBar();
 
-    // macOS trackpad pinch-zoom. NSEventTypeMagnify is not delivered through SDL3, so we install
-    // an AppKit local event monitor to forward magnification deltas into the canvas widget.
-    // No-op on Windows/Linux/web.
+    // Trackpad pinch-zoom: SDL's pinch events (macOS, iOS, Linux under Wayland or X11), gathered
+    // for the canvas widget to drain each frame (`platform.gestures`).
     fizzy.backend.installTrackpadGestureMonitor();
 
     // macOS window chrome was already applied in restoreWindowState (called
