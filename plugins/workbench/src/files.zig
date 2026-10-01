@@ -574,6 +574,7 @@ pub fn editableLabel(id_extra: usize, label: []const u8, color: dvui.Color, kind
         defer row.deinit();
         filterLabel(id_extra, label, color, font, padding, query);
         runtime.workbench().drawBranchDecorations(full_path, id_extra);
+        runtime.host().drawFileRowDecorations(full_path, id_extra);
     } else {
         filterLabel(id_extra, label, color, font, padding, query);
     }

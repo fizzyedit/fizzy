@@ -56,6 +56,19 @@ pub const FileRowFillColor = struct {
     color: *const fn (ctx: ?*anyopaque, color_index: usize) ?dvui.Color,
 };
 
+/// Something drawn at the end of a file-tree row for the file at `path` — a status dot, a badge.
+/// Called once per visible file row, inside the row, after its label.
+///
+/// The host's, not the workbench service's `BranchDecorator`, because it is owned: a plugin
+/// unloaded at runtime has its decorators dropped by `unregisterPlugin` before its image goes,
+/// where a `BranchDecorator` registered from a dylib would be called after it had gone.
+pub const FileRowDecorator = struct {
+    /// Contributing plugin (null = fizzy built-in). Scopes teardown in `unregisterPlugin`.
+    owner: ?*Plugin = null,
+    ctx: ?*anyopaque = null,
+    draw: *const fn (ctx: ?*anyopaque, path: []const u8, id_extra: usize) void,
+};
+
 /// A registered inter-plugin service plus the plugin that owns it, so a runtime
 /// unload can remove the owner's services. `owner` is null for fizzy-registered
 /// services with no single plugin owner.
@@ -209,6 +222,7 @@ plugins_dir: ?[]const u8 = null,
 
 /// File-tree row fill tints (workbench asks the Host; editor plugins register).
 file_row_fill_colors: std.ArrayListUnmanaged(FileRowFillColor) = .empty,
+file_row_decorators: std.ArrayListUnmanaged(FileRowDecorator) = .empty,
 
 /// File-tree row icon drawers (workbench asks the Host; plugins register for their file types).
 painters: std.ArrayListUnmanaged(Painter) = .empty,
@@ -284,6 +298,7 @@ pub fn deinit(self: *Host) void {
     self.commands.deinit(self.allocator);
     self.language_support.deinit(self.allocator);
     self.file_row_fill_colors.deinit(self.allocator);
+    self.file_row_decorators.deinit(self.allocator);
     self.painters.deinit(self.allocator);
     self.file_kinds.deinit(self.allocator);
 
@@ -853,6 +868,7 @@ pub fn unregisterPlugin(self: *Host, plugin: *Plugin) void {
     removeOwned(Command, &self.commands, plugin);
     removeOwned(LanguageSupport, &self.language_support, plugin);
     removeOwned(FileRowFillColor, &self.file_row_fill_colors, plugin);
+    removeOwned(FileRowDecorator, &self.file_row_decorators, plugin);
     removeOwned(Painter, &self.painters, plugin);
     removeOwned(FileKind, &self.file_kinds, plugin);
     removeOwnedSettingsSchemas(&self.settings_schemas, plugin);
@@ -993,6 +1009,16 @@ pub fn pluginWithCreateDocument(self: *Host) ?*Plugin {
 
 pub fn registerFileRowFillColor(self: *Host, resolver: FileRowFillColor) !void {
     try self.file_row_fill_colors.append(self.allocator, resolver);
+}
+
+pub fn registerFileRowDecorator(self: *Host, decorator: FileRowDecorator) !void {
+    try self.file_row_decorators.append(self.allocator, decorator);
+}
+
+/// Every registered decorator's mark for the file row at `path`. Called by whatever draws a file
+/// tree, inside the row.
+pub fn drawFileRowDecorations(self: *Host, path: []const u8, id_extra: usize) void {
+    for (self.file_row_decorators.items) |decorator| decorator.draw(decorator.ctx, path, id_extra);
 }
 
 /// First non-null tint from registered resolvers, or null for the workbench theme default.
@@ -1939,6 +1965,9 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
             return false;
         }
     }.f;
+    const noDecoration = struct {
+        fn f(_: ?*anyopaque, _: []const u8, _: usize) void {}
+    }.f;
 
     var host = Host.init(testing.allocator);
     defer host.deinit();
@@ -1960,6 +1989,7 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try host.registerNativeMenuItem(.{ .id = "victim.native", .parent_menu_id = "fizzy.menu.view", .owner = &plugin, .title = "V", .run = noopDraw });
     try host.registerCommand(.{ .id = "victim.cmd", .owner = &plugin, .title = "V", .run = noopRun });
     try host.registerFileRowFillColor(.{ .owner = &plugin, .color = noColor });
+    try host.registerFileRowDecorator(.{ .owner = &plugin, .draw = noDecoration });
     try host.registerPainter(.{ .owner = &plugin, .draw = noPaint });
     const empty_access: settings.Access = .{
         .getBool = struct {
@@ -2054,6 +2084,7 @@ test "unregisterPlugin removes a plugin's contributions, service, and resets act
     try testing.expectEqual(@as(usize, 0), host.native_menu_items.items.len);
     try testing.expectEqual(@as(usize, 0), host.commands.items.len);
     try testing.expectEqual(@as(usize, 0), host.file_row_fill_colors.items.len);
+    try testing.expectEqual(@as(usize, 0), host.file_row_decorators.items.len);
     try testing.expectEqual(@as(usize, 0), host.painters.items.len);
     try testing.expectEqual(@as(usize, 0), host.settings_schemas.items.len);
     try testing.expect(host.getService("victim.svc") == null);
