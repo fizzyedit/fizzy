@@ -1,6 +1,7 @@
 //! One opened archive: its contents unpacked into a `Mem` and mounted at `zip://<name>`, and
-//! the tab that stands for the mount. There is nothing to draw but the mount's name and what
-//! can be done with it — the files themselves are in the explorer, like any other folder.
+//! the tab that stands for the mount. The tab lists what is inside and which of it has changed
+//! since the archive was opened or last saved; the files are opened and edited from there or from
+//! the explorer, like any other folder.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -19,6 +20,20 @@ mem: *core.vfs.Mem,
 /// `mem.generation` when the archive was last read or written, so dirty is "changed since".
 clean_generation: u64,
 mounted: bool = false,
+/// Each file's content hash when the archive was last read or written, by path inside it: what
+/// "changed" means file by file. `Mem` keeps one counter for the whole tree.
+clean_hashes: std.StringArrayHashMapUnmanaged(u64) = .empty,
+/// The tab's list, rebuilt only when `mem.generation` moves.
+listing: std.ArrayList(Entry) = .empty,
+listing_generation: u64 = std.math.maxInt(u64),
+
+pub const Status = enum { unchanged, modified, added, deleted };
+
+pub const Entry = struct {
+    /// Path inside the archive, `/docs/a.md`. Owned by the listing.
+    path: []u8,
+    status: Status,
+};
 
 pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
     const gpa = sdk.allocator();
@@ -35,13 +50,15 @@ pub fn fromBytes(path: []const u8, bytes: []const u8) !Document {
     errdefer mem.deinit();
     try core.vfs.zip.unpackInto(mem, bytes);
 
-    return .{
+    var doc: Document = .{
         .id = sdk.host().allocDocId(),
         .path = path_copy,
         .prefix = prefix,
         .mem = mem,
         .clean_generation = mem.generation,
     };
+    try doc.snapshotClean();
+    return doc;
 }
 
 /// `zip://<stem>`, or `zip://<stem> (2)`, … when that prefix is already mounted: two archives
@@ -100,10 +117,69 @@ pub fn pack(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
 
 pub fn markClean(self: *Document) void {
     self.clean_generation = self.mem.generation;
+    self.snapshotClean() catch |err| dvui.log.err("archive: could not record {s} as saved: {t}", .{ self.prefix, err });
+}
+
+/// Records every file as it stands now as the clean state the listing compares against.
+fn snapshotClean(self: *Document) !void {
+    const gpa = sdk.allocator();
+    for (self.clean_hashes.keys()) |k| gpa.free(k);
+    self.clean_hashes.clearRetainingCapacity();
+    for (self.mem.nodes.keys(), self.mem.nodes.values()) |path, node| {
+        if (node.kind != .file) continue;
+        const key = try gpa.dupe(u8, path);
+        errdefer gpa.free(key);
+        try self.clean_hashes.put(gpa, key, std.hash.XxHash3.hash(0, node.bytes));
+    }
+    self.listing_generation = std.math.maxInt(u64);
+}
+
+/// Every file inside, and every file saved that has since gone, sorted by path, each with how it
+/// differs from the clean state.
+pub fn entries(self: *Document) []const Entry {
+    if (self.listing_generation == self.mem.generation) return self.listing.items;
+    self.rebuildListing() catch |err| {
+        dvui.log.err("archive: could not list {s}: {t}", .{ self.prefix, err });
+        return self.listing.items;
+    };
+    self.listing_generation = self.mem.generation;
+    return self.listing.items;
+}
+
+fn rebuildListing(self: *Document) !void {
+    const gpa = sdk.allocator();
+    self.freeListing();
+    for (self.mem.nodes.keys(), self.mem.nodes.values()) |path, node| {
+        if (node.kind != .file) continue;
+        const status: Status = if (self.clean_hashes.get(path)) |h|
+            (if (h == std.hash.XxHash3.hash(0, node.bytes)) .unchanged else .modified)
+        else
+            .added;
+        try self.listing.append(gpa, .{ .path = try gpa.dupe(u8, path), .status = status });
+    }
+    for (self.clean_hashes.keys()) |path| {
+        if (self.mem.nodes.contains(path)) continue;
+        try self.listing.append(gpa, .{ .path = try gpa.dupe(u8, path), .status = .deleted });
+    }
+    std.mem.sort(Entry, self.listing.items, {}, struct {
+        fn lessThan(_: void, a: Entry, b: Entry) bool {
+            return std.mem.lessThan(u8, a.path, b.path);
+        }
+    }.lessThan);
+}
+
+fn freeListing(self: *Document) void {
+    const gpa = sdk.allocator();
+    for (self.listing.items) |e| gpa.free(e.path);
+    self.listing.clearRetainingCapacity();
 }
 
 pub fn deinit(self: *Document) void {
     const gpa = sdk.allocator();
+    self.freeListing();
+    self.listing.deinit(gpa);
+    for (self.clean_hashes.keys()) |k| gpa.free(k);
+    self.clean_hashes.deinit(gpa);
     self.unmount();
     self.mem.deinit();
     gpa.destroy(self.mem);
