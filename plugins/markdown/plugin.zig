@@ -88,7 +88,8 @@ fn deinit(state: *anyopaque) void {
 }
 
 fn supportsPreview(_: *anyopaque, ext: []const u8) bool {
-    return std.ascii.eqlIgnoreCase(ext, ".md") or std.ascii.eqlIgnoreCase(ext, ".markdown");
+    return std.ascii.eqlIgnoreCase(ext, ".md") or std.ascii.eqlIgnoreCase(ext, ".markdown") or
+        std.ascii.eqlIgnoreCase(ext, ".smd");
 }
 
 /// Remember the reveal against this pane's own preview state. The pane may never have been
@@ -102,11 +103,12 @@ fn previewReveal(state: *anyopaque, ext: []const u8, path: []const u8, line: u32
 }
 
 fn previewPane(state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, id_extra: u64, gpa: std.mem.Allocator) !void {
-    _ = ext;
     const st: *State = @ptrCast(@alignCast(state));
+    // A Zine site's SuperMD previews as the markdown it reads as; see `src/md/supermd.zig`.
+    const source = if (std.ascii.eqlIgnoreCase(ext, ".smd")) st.superMdAsMarkdown(gpa, id_extra, bytes) else bytes;
     const gop = st.previews.getOrPut(gpa, id_extra) catch return error.OutOfMemory;
     if (!gop.found_existing) gop.value_ptr.* = .{};
-    md.drawPreviewForDocument(gop.value_ptr, path, bytes, gpa, .{
+    md.drawPreviewForDocument(gop.value_ptr, path, source, gpa, .{
         .io = dvui.io,
         .id_extra = id_extra,
         // Transparent, same as the store's README pane: the document tab already paints the

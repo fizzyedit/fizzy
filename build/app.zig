@@ -580,6 +580,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // knows about languages: the grammar itself comes from whichever plugin claims that
         // extension. std-only, so the table is testable without a Window.
         .{ "fizzy-md-code-language-tests", "plugins/markdown/src/md/code_language.zig" },
+        // Zine's SuperMD rewritten into the markdown it reads as, line for line. std-only, so
+        // the rewrite is testable without a Window.
+        .{ "fizzy-md-supermd-tests", "plugins/markdown/src/md/supermd.zig" },
         // Content-swap reveal phase machine. std-only by design (see reveal.zig) — the dvui
         // half is the thin wrapper in core/dvui.zig.
         .{ "fizzy-reveal-tests", "core/reveal.zig" },
