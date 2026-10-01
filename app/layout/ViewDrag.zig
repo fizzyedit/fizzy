@@ -205,10 +205,34 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
     const d = &l.state.view_drag;
     if (shot.card) {
         d.takePicture(pic);
-        if (d.texture) |tex| core.anim.blit(tex, null, d.texture_rect, 0, 1);
+        if (d.texture) |tex| {
+            core.anim.blit(tex, null, d.texture_rect, 0, 1);
+            d.texture = backed(tex, d.texture_rect);
+        }
         return;
     }
     pic.stop();
+}
+
+/// The card's photograph, laid over the content fill once, at lift: a document paints no
+/// background of its own (the pane behind it does), and on bare glass its photograph was text
+/// floating in the frost. One opaque picture is what lets the card be drawn see-through: the fill
+/// and the photograph drawn each at `photo_opacity`, one over the other, let a twenty-fifth of
+/// what is under the card through rather than a fifth. `tex` itself is what the place shows
+/// this frame; it is handed back unchanged where there is nothing to draw the backing into.
+fn backed(tex: dvui.Texture, r: dvui.Rect.Physical) dvui.Texture {
+    var pic = dvui.Picture.start(r) orelse return tex;
+    // Some backends leave a fresh target uninitialised (`Layout.drawCaptured`).
+    pic.texture.clear();
+    const prev_clip = dvui.clipGet();
+    dvui.clipSet(pic.r);
+    pic.r.fill(.{}, .{ .color = .{ .color = dvui.themeGet().color(.content, .fill) }, .fade = 0 });
+    dvui.renderTexture(tex, .{ .r = pic.r, .s = 1 }, .{}) catch {};
+    dvui.clipSet(prev_clip);
+    pic.stop();
+    const out = dvui.textureFromTarget(pic.texture) catch return tex;
+    dvui.Texture.destroyLater(tex);
+    return out;
 }
 
 /// Begin carrying the view out of `name`. The place keeps drawing it throughout.
@@ -655,13 +679,11 @@ pub fn drawFloat(l: *Layout) void {
     }
 
     if (if (show_photo) d.texture else null) |tex| {
-        // The photograph, inset in the glass, its corners following the card's.
-        // Over the content fill: a document paints no background of its own (the pane behind it
-        // does), and on bare glass its photograph was text floating in the frost.
+        // The photograph (backed by the content fill, `backed`), inset in the glass, its corners
+        // following the card's: at `photo_opacity`, so the glass — and what is under the card,
+        // through it — shows as the card moves.
         const inner = core.corners.round(@max(0, core.corners.scaled(core.corners.card) - card_padding));
-        const crs = fw.data().contentRectScale();
-        crs.r.fill(inner.scale(crs.s, dvui.CornerRect.Physical), .{ .color = .{ .color = dvui.themeGet().color(.content, .fill) }, .fade = 1 });
-        dvui.renderTexture(tex, crs, .{ .corners = inner }) catch {};
+        dvui.renderTexture(tex, fw.data().contentRectScale(), .{ .corners = inner, .colormod = dvui.Color.white.opacity(photo_opacity) }) catch {};
     } else {
         drawTabFace(l, d.*, title);
     }
@@ -672,6 +694,8 @@ pub fn drawFloat(l: *Layout) void {
 
 /// Points between the card's glass and what it carries.
 const card_padding: f32 = 6;
+/// How opaque the card's photograph is over its glass.
+const photo_opacity: f32 = 0.8;
 
 /// Points: the tab face on a card with no photograph — a file icon, the title and, when there
 /// are unsaved changes, the dirty dot — and the gaps between them.
