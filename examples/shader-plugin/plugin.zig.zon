@@ -1,0 +1,7 @@
+.{
+    .id = "shader",
+    .name = "Shader",
+    .version = "0.1.0",
+    .min_sdk_version = "",
+    .description = "A surface drawn by a shader of the plugin's own: liquid metaballs that follow the pointer.",
+}

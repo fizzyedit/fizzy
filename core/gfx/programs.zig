@@ -1,10 +1,36 @@
-//! Custom GPU programs: a fragment shader of the app's own, drawn where dvui would draw triangles.
+//! Custom GPU programs: a fragment shader of your own, drawn where dvui would draw triangles —
+//! for UI effects, and for games that use fizzy as their shell and dvui as their UI.
 //!
 //! dvui draws everything with one fixed shader — a texture times a colour. Some pictures cannot be
 //! made from that however many passes it takes: glass whose shapes run together (`LiquidField`)
-//! needs a distance worked out at every pixel, and a game drawn under the UI needs its own
-//! shaders. A backend that can compile programs says so here, and draws are sent through one by
-//! bracketing ordinary `dvui.renderTriangles` calls with `begin` and `end`.
+//! needs a distance worked out at every pixel, and a game needs its own shaders. A backend that
+//! can compile programs says so here; anything else draws through one with `draw`/`drawRect`.
+//!
+//! **Using one** (any widget, any plugin):
+//!
+//! ```zig
+//! var plasma: core.programs.Program = .fromGlsl(@embedFile("plasma.glsl"), .{ .uniform_vec4s = 1 });
+//!
+//! fn draw(rect: dvui.Rect.Physical) void {
+//!     const t: f32 = @floatCast(@as(f64, @floatFromInt(dvui.frameTimeNS())) / 1e9);
+//!     if (!core.programs.drawRect(&plasma, rect, .{ .uniforms = &.{.{ t, rect.w, rect.h, 0 }} })) {
+//!         rect.fill(.{}, .{ .color = .{ .color = .black } }); // no programs here: a fallback
+//!     }
+//!     dvui.refresh(null, @src(), null); // animating: keep frames coming
+//! }
+//! ```
+//!
+//! `drawRect` lays a quad over `rect` whose uv runs 0…1 across it; `draw` takes your own
+//! triangles. Either goes where the frame is when it is made — in a floating window it is queued
+//! with that window's other drawing and replays in its place — and returns false, drawing
+//! nothing, where there are no programs (dvui's own backends, an old WebGL without high-precision
+//! fragment shaders) or yours is still compiling: draw something else.
+//!
+//! **Cost.** A program draw is a draw: a switch of program, its uniforms set from the frame's
+//! data, and your triangles in the frame's one vertex stream — no buffer of its own, nothing read
+//! back. Do the work per pixel, not per vertex: a quad and a loop in the shader is the cheap way
+//! to draw many shapes (`LiquidField` draws a drop and its bubbles as one quad). Keep uniforms
+//! few (they are vec4s, at most `Hooks.max_uniform_vec4s`) and programs few per frame.
 //!
 //! **Where it comes from.** The backend is the app's (`src/backend/WebBackend.zig` on the web): it
 //! declares `program_api`, and the host publishes it each frame (`publishHost`) into the shared
@@ -144,6 +170,19 @@ pub const Program = struct {
     id: u32 = 0,
     state: enum { unasked, asked, failed } = .unasked,
 
+    pub const Shape = struct {
+        /// Length of its `uData`, in vec4s.
+        uniform_vec4s: u32 = 0,
+        /// Extra textures it reads (`uTex1`, `uTex2`).
+        textures: u32 = 0,
+    };
+
+    /// A program from GLSL ES source (see the file comment), for the web; a native backend takes
+    /// `Source.msl`/`spirv`/`dxil`, set beside it.
+    pub fn fromGlsl(comptime glsl: []const u8, shape: Shape) Program {
+        return .{ .source = .{ .glsl = glsl.ptr, .glsl_len = glsl.len, .textures = shape.textures, .uniform_vec4s = shape.uniform_vec4s } };
+    }
+
     /// The program's id, ready to draw with — compiling it the first time — or null while it
     /// compiles, where it failed, or where there are no programs.
     pub fn ready(self: *Program, h: Hooks) ?u32 {
@@ -180,3 +219,88 @@ pub fn handle(tex: ?dvui.Texture) ?*anyopaque {
     const t = tex orelse return null;
     return @ptrCast(t.ptr);
 }
+
+// ── Drawing ─────────────────────────────────────────────────────────────────────────────────────
+
+/// What a draw through a program reads besides its triangles.
+pub const DrawOptions = struct {
+    /// Its `uData`: as many vec4s as it declared, at most.
+    uniforms: []const [4]f32 = &.{},
+    /// What it reads at units 1 and 2 (`uTex1`, `uTex2`).
+    textures: []const ?dvui.Texture = &.{},
+    blend: Blend = .over,
+};
+
+/// Draw `triangles` through `program`, `tex` at unit 0 (`uSampler`), in order with everything
+/// drawn around it. False, having drawn nothing, where there are no programs or `program` is not
+/// ready yet: draw a fallback.
+pub fn draw(program: *Program, triangles: dvui.Triangles, tex: ?dvui.Texture, opts: DrawOptions) bool {
+    const h = hooks() orelse return false;
+    const id = program.ready(h) orelse return false;
+    if (opts.uniforms.len > h.max_uniform_vec4s or opts.textures.len > 2) return false;
+    const arena = dvui.currentWindow().arena();
+    const job = arena.create(Job) catch return false;
+    job.* = .{
+        .program = id,
+        // Its own copy: replayed later, and `renderTriangles` moves positions in place.
+        .triangles = triangles.dupe(arena) catch return false,
+        .tex = tex,
+        .uniforms = arena.dupe([4]f32, opts.uniforms) catch return false,
+        .blend = opts.blend,
+    };
+    for (opts.textures, 0..) |t, i| job.textures[i] = handle(t);
+    job.n_textures = @intCast(opts.textures.len);
+    // Where the frame is being recorded for later (a floating window's commands), this queues
+    // it among them; where it is drawn as it goes, it draws now.
+    dvui.deferRender(job, Job.run);
+    return true;
+}
+
+/// How `drawRect` lays its quad down.
+pub const RectOptions = struct {
+    uniforms: []const [4]f32 = &.{},
+    textures: []const ?dvui.Texture = &.{},
+    blend: Blend = .over,
+    /// What the quad carries at unit 0.
+    tex: ?dvui.Texture = null,
+    /// The uv across the quad, top left to bottom right.
+    uv: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 },
+    /// Every corner's colour (`vColor`), premultiplied by the program's own reading.
+    color: dvui.Color = .white,
+};
+
+/// `draw` a quad over `rect` (physical pixels, window coordinates): its uv running across it per
+/// `opts.uv`, every vertex `opts.color`.
+pub fn drawRect(program: *Program, rect: dvui.Rect.Physical, opts: RectOptions) bool {
+    const arena = dvui.currentWindow().arena();
+    var b = dvui.Triangles.Builder.init(arena, 4, 6) catch return false;
+    defer b.deinit(arena);
+    const col = dvui.Color.PMA.fromColor(opts.color);
+    const u = opts.uv;
+    b.appendVertex(.{ .pos = rect.topLeft(), .col = col, .uv = .{ u.x, u.y } });
+    b.appendVertex(.{ .pos = rect.topRight(), .col = col, .uv = .{ u.x + u.w, u.y } });
+    b.appendVertex(.{ .pos = rect.bottomRight(), .col = col, .uv = .{ u.x + u.w, u.y + u.h } });
+    b.appendVertex(.{ .pos = rect.bottomLeft(), .col = col, .uv = .{ u.x, u.y + u.h } });
+    b.appendTriangles(&.{ 0, 1, 2, 0, 2, 3 });
+    return draw(program, b.build_unowned(), opts.tex, .{ .uniforms = opts.uniforms, .textures = opts.textures, .blend = opts.blend });
+}
+
+/// A `draw` waiting for its place in the frame.
+const Job = struct {
+    program: u32,
+    triangles: dvui.Triangles,
+    tex: ?dvui.Texture,
+    uniforms: []const [4]f32,
+    textures: [2]?*anyopaque = .{ null, null },
+    n_textures: u32 = 0,
+    blend: Blend,
+
+    fn run(ctx: ?*anyopaque) void {
+        const self: *Job = @ptrCast(@alignCast(ctx orelse return));
+        const h = hooks() orelse return;
+        if (!h.begin(self.program, &self.textures, self.n_textures, self.uniforms.ptr, @intCast(self.uniforms.len))) return;
+        defer h.end();
+        h.blend(@intFromEnum(self.blend));
+        dvui.renderTriangles(self.triangles, self.tex) catch {};
+    }
+};

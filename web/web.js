@@ -273,7 +273,7 @@ export class Dvui {
             this.cur = p;
         }
         if (p === this.stock) return true;
-        if (data !== null && p.loc.data !== null) gl.uniform4fv(p.loc.data, data);
+        if (data !== null && data.length > 0 && p.loc.data !== null) gl.uniform4fv(p.loc.data, data);
         const units = [tex1, tex2];
         for (let u = 0; u < 2; u += 1) {
             if (units[u] === 0) continue;
