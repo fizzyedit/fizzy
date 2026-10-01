@@ -1004,10 +1004,13 @@ pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, sca
     const lens_full = motion.liquid() * liquid_glass.blurRamp(pane.radius) * liquid_glass.sizeRamp(rect, scale);
     const lens = lens_full * edge;
     const margin = liquid_glass.margin(.{ .lens = lens_full, .refraction = pane.refraction }, scale);
-    // Rounded up to a size bucket (`bucketed`): a pane that changes size — a menu sliding open, a
-    // dragged view shrinking into its card — keeps one capture size, and so one set of targets,
-    // for many frames, where an exact capture was a new pyramid every frame it moved.
-    const captured = bucketed(rect.insetAll(-margin));
+    // A size it keeps while it can (`captureSize`): a pane that changes size — a menu sliding
+    // open, a dragged view shrinking into its card — keeps one capture size, and so one set of
+    // targets, for many frames, where an exact capture was a new pyramid every frame it moved.
+    const need = rect.insetAll(-margin);
+    const cap = dvui.dataGetPtrDefault(null, id, "_frost_cap", dvui.Size, .{});
+    cap.* = captureSize(cap.*, .{ .w = need.w, .h = need.h });
+    const captured: Rect.Physical = .{ .x = need.x, .y = need.y, .w = cap.w, .h = cap.h };
     // `init` takes a rect in *window* coordinates.
     const nat = dvui.windowRectScale().rectFromPhysical(captured);
     // A witness that changes with the geometry and, coarsely, with time.
@@ -1035,16 +1038,28 @@ pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, sca
     dvui.deferRender(job, FrostJob.draw);
 }
 
-/// `r` grown right and down to the next size bucket: whole pixels up to 64, then quarter-octave
-/// steps — never more than a fifth bigger than asked.
-fn bucketed(r: Rect.Physical) Rect.Physical {
-    const Bucket = struct {
-        fn of(v: f32) f32 {
-            if (v <= 64) return @ceil(v);
-            return @ceil(@exp2(@ceil(@log2(v) * 4) / 4));
+/// The capture size for a pane needing `need`, given what it captured last (`prev`, zero at
+/// first). Kept while `need` fits in it and fills more than half of it each way, so a pane
+/// shrinking keeps its targets until it has halved — a view shrinking into its card crossed a
+/// quarter-octave bucket every frame or two, a new pyramid each time. Otherwise `need` rounded
+/// up to a bucket (`bucket`), with a quarter more room ahead of a pane that is growing.
+fn captureSize(prev: dvui.Size, need: dvui.Size) dvui.Size {
+    const Fits = struct {
+        fn of(p: f32, n: f32) bool {
+            return n <= p and n * 2 > p;
         }
     };
-    return .{ .x = r.x, .y = r.y, .w = Bucket.of(r.w), .h = Bucket.of(r.h) };
+    if (Fits.of(prev.w, need.w) and Fits.of(prev.h, need.h)) return prev;
+    const growing = prev.w > 0 and (need.w > prev.w or need.h > prev.h);
+    const room: f32 = if (growing) 1.25 else 1;
+    return .{ .w = bucket(need.w * room), .h = bucket(need.h * room) };
+}
+
+/// `v` rounded up to a size bucket: whole pixels up to 64, then quarter-octave steps — never more
+/// than a fifth bigger than asked.
+fn bucket(v: f32) f32 {
+    if (v <= 64) return @ceil(v);
+    return @ceil(@exp2(@ceil(@log2(v) * 4) / 4));
 }
 
 /// How formed a pane is by itself: from nothing when it first came up to whole over `form_ms`,
