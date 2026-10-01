@@ -149,11 +149,10 @@ fn inset(r: dvui.Rect.Physical, dx: f32, dy: f32) dvui.Rect.Physical {
     return .{ .x = r.x + dx, .y = r.y + dy, .w = @max(0, r.w - 2 * dx), .h = @max(0, r.h - 2 * dy) };
 }
 
-/// How long the drop takes to come in and to go, in milliseconds. In carries the drop forming
-/// and splitting, watched as the place is arrived at. Out runs it backwards — the bubbles back
-/// together into one drop that shrinks away — quickly, but slowly enough to be seen doing it
-/// rather than popping.
-pub const appear_ms: f32 = 420;
+/// How long the drop takes to come in and to go, in milliseconds: the orbs growing into their
+/// glass one after another, watched as the place is arrived at, and going the same way backwards —
+/// quickly, but slowly enough to be seen doing it rather than popping.
+pub const appear_ms: f32 = 380;
 pub const vanish_ms: f32 = 380;
 /// A time constant: how quickly a zone lights or dims under the pointer, most of the way in
 /// about three of these.
@@ -220,30 +219,37 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
 
     const g = frost(st.shown);
     if (g > 0.01 and w.unit > 0) {
-        // Each bubble is a glass orb of its own, where it settles, formed the way a menu's frost
-        // forms: nothing moves; its blur comes in from sharp, its edge springs in (`glass`), and
-        // its icon comes into focus with it (`drawIcon`). Nothing joins, so there is nothing to
-        // mesh, and an orb forming is the same glass as one formed.
+        // Each bubble is a glass orb of its own, where it settles: nothing moves. Each grows from
+        // nothing to its size — past it and back when motion is playful (`grow`) — the middle
+        // first, then the others one after another round the circle; leaving is the same played
+        // backwards. Its refracting edge springs in with its size, its blur comes in from sharp
+        // (`frost`), and its icon comes into focus with it. Separate panes over one capture of the
+        // area they settle in: sizing them changes no capture, so it costs nothing, and nothing
+        // joins, so there is no union to mesh.
+        var order_buf: [all.len]usize = undefined;
+        const order = growOrder(w, &order_buf);
         var panes: [all.len]Pane = undefined;
         var zones: [all.len]usize = undefined;
+        var times: [all.len]f32 = undefined;
         var n: usize = 0;
-        for (all, 0..) |z, i| {
-            if (z == .remove and !w.remove) continue;
-            const b = w.bubble(z);
-            const r = b.r;
-            panes[n] = .{
-                .r = .{ .x = b.c.x - r, .y = b.c.y - r, .w = 2 * r, .h = 2 * r },
-                .lit = st.lit[i],
-                .radii = liquid_glass.uniform(r),
-            };
-            zones[n] = i;
+        for (order, 0..) |zi, j| {
+            const t = orbTime(st.shown, j, order.len);
+            const k = grow(t);
+            const b = w.bubble(all[zi]);
+            const r = b.r * k;
+            if (r < 0.5) continue;
+            panes[n] = .{ .r = .{ .x = b.c.x - r, .y = b.c.y - r, .w = 2 * r, .h = 2 * r }, .lit = st.lit[zi], .radii = liquid_glass.uniform(r), .lens = k };
+            zones[n] = zi;
+            times[n] = t;
             n += 1;
         }
-        glass(id, panes[0..n], w.rect(), g, scale);
-        for (panes[0..n], zones[0..n]) |pane, i| {
+        // As far as a bubble swings past its size, too.
+        glass(id, panes[0..n], w.rect().insetAll(-side_r * motion.overshoot_max * w.unit), g, scale);
+        for (panes[0..n], zones[0..n], times[0..n]) |pane, i, t| {
             const z = all[i];
             if (z == .center and look.center == .none) continue;
-            drawIcon(pane.r, iconFor(z, look.center), g, st.lit[i], scale, pane.r.w / 2 * bubble_icon / scale, w.bubble(z).r * bubble_icon, g);
+            const f = frost(t);
+            drawIcon(pane.r, iconFor(z, look.center), f, st.lit[i], scale, pane.r.w / 2 * bubble_icon / scale, w.bubble(z).r * bubble_icon, f);
         }
     }
 
@@ -256,6 +262,42 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
         // it measured the whole pause as one step — past the entire leave, gone at once.
         st.last_ns = 0;
     }
+}
+
+/// Orb `j` of `n` (in `growOrder`)'s own time at `shown`, 0 gone … 1 settled: each over a window
+/// of its own, `stagger` after the one before, so they grow one after another and, leaving, go
+/// the other way round.
+fn orbTime(shown: f32, j: usize, n: usize) f32 {
+    const span = 1 - stagger * @as(f32, @floatFromInt(n -| 1));
+    return std.math.clamp((shown - stagger * @as(f32, @floatFromInt(j))) / span, 0, 1);
+}
+
+/// How far behind the one before each orb starts, as a share of `shown`.
+const stagger: f32 = 0.06;
+
+/// The bubbles in the order they grow: the middle, then the others round it clockwise from the top.
+fn growOrder(w: Wheel, buf: *[all.len]usize) []const usize {
+    buf[0] = 0; // `.center`
+    var n: usize = 1;
+    for (all, 0..) |z, i| {
+        if (z == .center or (z == .remove and !w.remove)) continue;
+        buf[n] = i;
+        n += 1;
+    }
+    const Angle = struct {
+        fn of(wh: Wheel, i: usize) f32 {
+            const b = wh.bubble(all[i]);
+            // Screen y runs down, so this climbs clockwise from the top (−½π).
+            var a = std.math.atan2(b.c.y - wh.center.y, b.c.x - wh.center.x);
+            if (a < -std.math.pi / 2.0) a += 2 * std.math.pi;
+            return a;
+        }
+        fn less(wh: Wheel, a: usize, b: usize) bool {
+            return of(wh, a) < of(wh, b);
+        }
+    };
+    std.mem.sort(usize, buf[1..n], w, Angle.less);
+    return buf[0..n];
 }
 
 /// How `drawSingle` lays its pane down.
@@ -295,6 +337,9 @@ pub fn drawSingle(id: dvui.Id, rect: ?dvui.Rect.Physical, scale: f32, opts: Sing
             .r = scaleAbout(st.rect, k, k),
             .lit = 1,
             .radii = liquid_glass.uniform(radius),
+            // The edge comes in with the blur, so a barely-frosted pane has barely an edge — past
+            // its shape and back as it arrives when motion is playful, as a menu's does.
+            .lens = grow(g),
         };
         glass(id, &.{pane}, st.rect, g, scale);
         if (opts.icon) |icon| drawIcon(pane.r, iconFor(.center, icon), g, 1, scale, icon_size, icon_size * scale, g);
@@ -308,7 +353,7 @@ pub fn drawSingle(id: dvui.Id, rect: ?dvui.Rect.Physical, scale: f32, opts: Sing
 
 // ── Coming and going ────────────────────────────────────────────────────────────────────────────
 
-/// How big a zone is at progress `t`: arriving, at the app's motion level (`motion.enter`) — a
+/// How big a zone is at progress `t`, and how much of its edge it has: arriving, at the app's motion level (`motion.enter`) — a
 /// slight bounce at minimal, a soft spring at playful, plain at the low end. Read backwards on the
 /// way out, the same curve swells a touch and then goes.
 fn grow(t: f32) f32 {
@@ -317,11 +362,13 @@ fn grow(t: f32) f32 {
     return @max(0, motion.enterFull(t));
 }
 
-/// How much frost a zone has at progress `t`: ahead of its size, so the glass is glass before it
-/// has finished arriving.
+/// How much frost a zone has at progress `t`: linear, whole by `frost_by` of the way — ahead
+/// of its size, so the glass is glass before it has finished arriving, but slowly enough to be
+/// seen forming.
 fn frost(t: f32) f32 {
-    return motion.fade(t);
+    return std.math.clamp(t / frost_by, 0, 1);
 }
+const frost_by: f32 = 0.6;
 
 /// The app's surface rounding in physical pixels. Finalized, as a widget's options would be: an
 /// unresolved corner draws square whatever radius it names.
@@ -376,14 +423,15 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
         return;
     };
     const job = dvui.dataGetPtrDefault(null, id, "_drop_zones_job", LayerJob, .{});
+    const lens_full = motion.liquid() * liquid_glass.blurRamp(base.radius);
     job.* = .{
         .backdrop = job.backdrop,
         .scale = scale,
         .now = dvui.currentWindow().frame_time_ns,
         .strength = g,
-        // The edge comes in with the blur, so a barely-frosted pane has barely an edge — past its
-        // shape and back as it arrives when motion is playful, as a menu's does.
-        .lens = motion.liquid() * liquid_glass.blurRamp(base.radius) * @max(0, motion.enterFull(g)),
+        // How much of it each pane has is the pane's own (`Pane.lens`): a drop's orbs each form
+        // their edge on their own way out.
+        .lens = lens_full,
     };
     for (panes) |pane| {
         if (pane.r.w < 1 or pane.r.h < 1) continue;
@@ -393,12 +441,13 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
     if (job.count == 0) return;
     // The layer covers the place the panes settle in, and as far beyond as their edges reach for
     // what lies past them (`liquid_glass.margin`): what it reads back and blurs is what the glass
-    // will show.
-    const bounds = area.insetAll(-liquid_glass.margin(.{ .lens = job.lens, .refraction = base.refraction }, scale));
+    // will show. As far as the whole edge reaches at its swing, however much of it has formed — a
+    // capture that grew with it was a new size, and new targets, every frame.
+    const bounds = area.insetAll(-liquid_glass.margin(.{ .lens = lens_full * (1 + motion.overshoot_max), .refraction = base.refraction }, scale));
     job.pane = scaled(base, g);
     // Too little blur for the pyramid to make a pass: its picture would be an empty target, laid
     // down as a hole to the desktop (`BlurBackdrop.min_blur`). Glass barely there is none yet.
-    if (job.pane.radius < BlurBackdrop.min_blur) {
+    if (job.pane.radius < BlurBackdrop.min_blur or g < 0.02) {
         job.count = 0;
         return;
     }
@@ -408,19 +457,19 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
     backdrop.mode = .readback;
     backdrop.radius_px = job.pane.radius;
     backdrop.detail = job.pane.detail;
+    backdrop.form = g;
     // Read every frame while live, as the dialogs' glass is: what moves under the drop — a logo
     // following the pointer — moves in it at the frame rate (`live`). Otherwise read again only as
-    // the drop's area or blur changes.
-    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, if (live()) job.now else 0, job.pane.radius });
+    // the drop's area or how formed it is changes.
+    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, if (live()) job.now else 0, job.pane.radius, @round(g * 256) });
     job.backdrop = backdrop;
     dvui.deferRender(job, LayerJob.draw);
 }
 
-/// `base` at strength `g`: its blur from sharp, and its tint and lift scaled with it, so glass
-/// forming is the same glass, thinner — as a menu's frost forms (`BlurBackdrop.frostPane`).
+/// `base` at strength `g`: its tint and lift scaled with it, so glass forming is the same glass,
+/// thinner. Its blur forms by `BlurBackdrop.form`, at the full radius.
 fn scaled(base: BlurBackdrop.Pane, g: f32) BlurBackdrop.Pane {
     var pane = base;
-    pane.radius = base.radius * g;
     pane.mix = base.mix * g;
     pane.lift = base.lift * g;
     return pane;
