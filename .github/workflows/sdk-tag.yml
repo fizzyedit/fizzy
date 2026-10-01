@@ -172,9 +172,14 @@ jobs:
             gh release upload "$tag" "$asset" --clobber
             gh release edit "$tag" --notes-file "$notes_file"
           else
+            # Never GitHub's "latest": that is the app's newest `v*` release, and
+            # `releases/latest/download/fizzy_<os>_<arch>…` (fizzyed.it's download buttons)
+            # resolves against it. An SDK release carries only the tarball, so as "latest" it
+            # turned every app download into a 404.
             gh release create "$tag" "$asset" \
               --title "Fizzy SDK $version" \
-              --notes-file "$notes_file"
+              --notes-file "$notes_file" \
+              --latest=false
           fi
 
           echo "Published $asset on $tag"

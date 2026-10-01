@@ -342,7 +342,9 @@ fi
 
 if [[ "${FIZZY_RELEASE_PUBLISH:-0}" == "1" ]]; then
     echo "==> Publishing release $tag"
-    gh release edit "$tag" --draft=false
+    # Explicitly the repo's "latest": `releases/latest/download/…` links (fizzyed.it's download
+    # buttons) resolve against it, and SDK releases (`sdk-v*`) must never take it.
+    gh release edit "$tag" --draft=false --latest
 fi
 
 release_url="$(gh release view "$tag" --json url -q .url)"
