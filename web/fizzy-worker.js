@@ -365,6 +365,16 @@ function requestUrlPlugins() {
             new Uint8Array(mem(), namePtr, name.length).set(name);
             new Uint8Array(mem(), bytesPtr, bytes.length).set(bytes);
             wasmInstance.exports.FizzyWebOpenBytes(namePtr, name.length, bytesPtr, bytes.length);
+            // `&show=<path>`: then open that file from inside the folder just opened.
+            const show = params.get("show");
+            if (show && wasmInstance.exports.FizzyWebShowInRoot) {
+                const showBytes = utf8encode(show);
+                const showPtr = wasmInstance.exports.FizzyWebPluginAlloc(showBytes.length, 1);
+                if (showPtr) {
+                    new Uint8Array(mem(), showPtr, showBytes.length).set(showBytes);
+                    wasmInstance.exports.FizzyWebShowInRoot(showPtr, showBytes.length);
+                }
+            }
             render();
         }).catch((err) => console.error("fizzy: could not open", url, err));
     }

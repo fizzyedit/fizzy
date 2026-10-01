@@ -532,6 +532,16 @@
             new Uint8Array(inst2.exports.memory.buffer, namePtr, name.length).set(name);
             new Uint8Array(inst2.exports.memory.buffer, bytesPtr, bytes.length).set(bytes);
             inst2.exports.FizzyWebOpenBytes(namePtr, name.length, bytesPtr, bytes.length);
+            // `&show=<path>`: then open that file from inside the folder just opened.
+            const show = new URLSearchParams(location.search).get("show");
+            if (show && inst2.exports.FizzyWebShowInRoot) {
+              const showBytes = utf8encode(show);
+              const showPtr = inst2.exports.FizzyWebPluginAlloc(showBytes.length, 1);
+              if (showPtr) {
+                new Uint8Array(inst2.exports.memory.buffer, showPtr, showBytes.length).set(showBytes);
+                inst2.exports.FizzyWebShowInRoot(showPtr, showBytes.length);
+              }
+            }
             if (dvuiApp) dvuiApp.requestRender();
           }).catch((err) => console.error("fizzy: could not open", url, err));
         }

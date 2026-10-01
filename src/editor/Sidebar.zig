@@ -129,14 +129,6 @@ pub fn draw(_: Sidebar, editor: *Editor, f: *Layout, keywords: []const []const u
         dvui.dataSet(null, vbox.data().id, "_rail_under", @max(0, last_bottom - footer_top));
     }
 
-    // A newly opened root asked to be seen (`Editor.reveal_files`): pick Files, as a tap on its
-    // rail icon would, and open the explorer over the auto-collapse.
-    if (editor.reveal_files) {
-        editor.reveal_files = false;
-        editor.app.host.setSelectionFor(keywords, Editor.workbench_files_view);
-        ret = .open;
-    }
-
     return ret;
 }
 

@@ -60,6 +60,13 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
         defer side.deinit();
     }
 
+    // `?show=` asked for one file and the room for it (`Editor.show_only_document`).
+    if (editor.show_only_document) {
+        editor.show_only_document = false;
+        editor.explorer.peekClose(editor);
+        if (f.state.regionFor(bottom)) |panel| panel.close();
+    }
+
     switch (rail_action) {
         .open => {
             editor.explorer.open(editor);

@@ -186,10 +186,11 @@ pending_native_menu_item_indices_len: u8 = 0,
 /// When set, next `tick` runs `warmupDrawingComposites` on the active file (after open or drawing-tool select).
 pending_composite_warmup: bool = false,
 
-/// When set, the next frame shows the explorer on its Files view — open, even on a window narrow
-/// enough to fold it away. Set when the page opens a fetched archive as the root (`?open=` a zip,
-/// as fizzyed.it's embeds do): its files are what the page came to show.
-reveal_files: bool = false,
+/// When set, the next frame closes the explorer and the bottom panel, as their own close buttons
+/// would. Set by the page's `?show=`: an embed that opens on one file is about that file, and the
+/// tree and the panel only take room from it. Done in the frame (`layout.zig`), not from the
+/// page's call, which comes between frames.
+show_only_document: bool = false,
 
 /// Watches each open on-disk document for external edits. Clean docs reload via
 /// `Plugin.reloadDocument`; dirty docs set a conflict flag and `save` shows
@@ -1571,19 +1572,31 @@ export fn FizzyWebOpenBytes(name_ptr: [*]const u8, name_len: usize, bytes_ptr: [
     const bytes = bytes_ptr[0..bytes_len];
     defer editor.app.gpa.free(bytes);
     const path = editor.app.gpa.dupe(u8, name_ptr[0..name_len]) catch return;
-    // A zip opens as the root folder (its plugin sets it while the document registers). If the
-    // root changed, show it: the explorer is folded away on a narrow page, an embed's usual size.
-    const folder_before: ?[]u8 = if (editor.app.folder) |f| editor.app.gpa.dupe(u8, f) catch null else null;
-    defer if (folder_before) |f| editor.app.gpa.free(f);
     if (editor.openFileFromBytes(path, bytes, 0)) |doc_id| {
         if (editor.app.open_files.getIndex(doc_id)) |idx| {
             editor.workbench.setActiveDocIndex(idx);
             editor.pending_composite_warmup = true;
         }
-        if (editor.app.folder) |now| {
-            if (folder_before == null or !std.mem.eql(u8, now, folder_before.?)) editor.reveal_files = true;
-        }
     } else |err| dvui.log.err("web: could not open {s}: {s}", .{ name_ptr[0..name_len], @errorName(err) });
+    editor.app.host.refresh();
+}
+
+/// The page shows a file inside the folder it just opened (`?open=<zip>&show=<path>` — the
+/// homepage embed opens the site's own `index.smd`): opened from the root, like a click in the
+/// explorer, so it is the tab in view, with the explorer and the panel closed to give it the room.
+export fn FizzyWebShowInRoot(path_ptr: [*]const u8, path_len: usize) void {
+    if (comptime builtin.target.cpu.arch != .wasm32) return;
+    const editor = web_editor orelse return;
+    const root = editor.app.folder orelse return;
+    const relative = std.mem.trimStart(u8, path_ptr[0..path_len], "/");
+    if (relative.len == 0) return;
+    const full = std.fmt.allocPrint(editor.app.gpa, "{s}/{s}", .{ std.mem.trimEnd(u8, root, "/"), relative }) catch return;
+    defer editor.app.gpa.free(full);
+    _ = editor.openFile(.{ .path = full }) catch |err| {
+        dvui.log.err("web: could not show {s}: {s}", .{ full, @errorName(err) });
+        return;
+    };
+    editor.show_only_document = true;
     editor.app.host.refresh();
 }
 
