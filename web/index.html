@@ -827,9 +827,20 @@
         Object.assign(hidden.style, { position: "absolute", left: 0, top: 0, padding: 0, border: 0, margin: 0, opacity: 0, zIndex: -1 });
         document.body.prepend(hidden);
         let textInputRect = [];
+        // Focus never scrolls the page; and a copy embedded in another page (fizzyed.it's
+        // examples, in an iframe) takes none until it is clicked, tapped or tabbed into.
+        // Focusing anything inside an iframe scrolls the page holding it to show it, so an
+        // embed below the fold that grabbed focus as it started pulled the visitor down to it.
+        let engaged = window.parent === window;
+        const engage = () => { engaged = true; };
+        canvas.addEventListener("pointerdown", engage, { capture: true });
+        window.addEventListener("focus", engage);
+        function focusQuietly(el) {
+          if (engaged) el.focus({ preventScroll: true });
+        }
         function oskCheck() {
           if (textInputRect.length === 0) {
-            canvas.focus();
+            focusQuietly(canvas);
             return;
           }
           const rect = canvas.getBoundingClientRect();
@@ -839,7 +850,7 @@
           hidden.style.top = top + "px";
           hidden.style.width = Math.max(0, Math.min(textInputRect[2], canvas.clientWidth - left)) + "px";
           hidden.style.height = Math.max(0, Math.min(textInputRect[2], canvas.clientHeight - top)) + "px";
-          hidden.focus();
+          focusQuietly(hidden);
         }
 
         let boundKeys = new Set();
@@ -922,7 +933,7 @@
               if (navigator.clipboard) navigator.clipboard.writeText(m.text);
               else {
                 hidden.value = m.text;
-                hidden.focus();
+                hidden.focus({ preventScroll: true });
                 hidden.select();
                 document.execCommand("copy");
                 hidden.value = "";
