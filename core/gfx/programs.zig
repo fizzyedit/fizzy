@@ -56,6 +56,8 @@
 const std = @import("std");
 const dvui = @import("dvui");
 
+const log = std.log.scoped(.programs);
+
 /// Bumped whenever `Hooks` changes shape, so an image built against another layout finds none.
 pub const abi_version: u32 = 1;
 
@@ -169,6 +171,7 @@ pub const Program = struct {
     source: Source,
     id: u32 = 0,
     state: enum { unasked, asked, failed } = .unasked,
+    logged: bool = false,
 
     pub const Shape = struct {
         /// Length of its `uData`, in vec4s.
@@ -177,11 +180,45 @@ pub const Program = struct {
         textures: u32 = 0,
     };
 
-    /// A program from GLSL ES source (see the file comment), for the web; a native backend takes
-    /// `Source.msl`/`spirv`/`dxil`, set beside it.
+    /// A program from GLSL ES source (see the file comment): the web's. A native backend takes
+    /// the same program as Metal, SPIR-V or DXIL (`from`).
     pub fn fromGlsl(comptime glsl: []const u8, shape: Shape) Program {
-        return .{ .source = .{ .glsl = glsl.ptr, .glsl_len = glsl.len, .textures = shape.textures, .uniform_vec4s = shape.uniform_vec4s } };
+        return from(.{ .glsl = glsl }, shape);
     }
+
+    /// The one program in each form a backend might compile: GLSL ES for the web (against the
+    /// prelude), and for the native backend Metal source (entry point `main0`), SPIR-V or DXIL —
+    /// each backend takes the form it can and draws nothing where it has none. Native programs
+    /// take the default vertex shader's colour and uv, the draw's own texture at 0 and the extra
+    /// ones at 1 and 2, and the uniforms as `constant float4 *data [[buffer(0)]]` (see
+    /// `src/backend/native/shaders/program_example.fragment.hlsl`).
+    pub fn from(comptime sources: Sources, shape: Shape) Program {
+        var src: Source = .{ .textures = shape.textures, .uniform_vec4s = shape.uniform_vec4s };
+        if (sources.glsl) |t| {
+            src.glsl = t.ptr;
+            src.glsl_len = t.len;
+        }
+        if (sources.msl) |t| {
+            src.msl = t.ptr;
+            src.msl_len = t.len;
+        }
+        if (sources.spirv) |t| {
+            src.spirv = t.ptr;
+            src.spirv_len = t.len;
+        }
+        if (sources.dxil) |t| {
+            src.dxil = t.ptr;
+            src.dxil_len = t.len;
+        }
+        return .{ .source = src };
+    }
+
+    pub const Sources = struct {
+        glsl: ?[]const u8 = null,
+        msl: ?[]const u8 = null,
+        spirv: ?[]const u8 = null,
+        dxil: ?[]const u8 = null,
+    };
 
     /// The program's id, ready to draw with — compiling it the first time — or null while it
     /// compiles, where it failed, or where there are no programs.
@@ -200,7 +237,13 @@ pub const Program = struct {
             .asked => {},
         }
         return switch (@as(Status, @enumFromInt(h.status(self.id)))) {
-            .ready => self.id,
+            .ready => blk: {
+                if (!self.logged) {
+                    self.logged = true;
+                    log.info("program {d} ready", .{self.id});
+                }
+                break :blk self.id;
+            },
             .compiling => blk: {
                 // Keep frames coming until it is there.
                 dvui.refresh(null, @src(), null);
@@ -208,6 +251,7 @@ pub const Program = struct {
             },
             .failed => blk: {
                 self.state = .failed;
+                log.warn("program {d} failed to build; drawing without it", .{self.id});
                 break :blk null;
             },
         };

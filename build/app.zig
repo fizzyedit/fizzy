@@ -85,6 +85,8 @@ pub const Config = struct {
     workbench_opts: *std.Build.Step.Options,
     msvcup_before_compile: *std.Build.Step.Run,
     accesskit: dvui.AccesskitOptions,
+    /// What the native executable draws with (`-Dnative-backend`, `build/exe.zig`).
+    native_backend: @import("exe.zig").NativeBackend,
     test_filters: []const []const u8,
     macos_sign_app_identity: ?[]const u8,
     macos_sign_install_identity: ?[]const u8,
@@ -261,6 +263,12 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
     msvcup_setup_step.dependOn(&msvcup_before_compile.step);
 
     const accesskit = b.option(dvui.AccesskitOptions, "accesskit", "Enable accesskit") orelse .off;
+    const fizzy_exe = @import("exe.zig");
+    const native_backend = b.option(
+        fizzy_exe.NativeBackend,
+        "native-backend",
+        "Native renderer: fizzy (fizzy's own SDL_GPU backend, custom programs) or sdl3 (dvui's SDL_Renderer backend). Default: fizzy on macOS and Linux, sdl3 on Windows",
+    ) orelse fizzy_exe.defaultNativeBackend(target);
 
     const test_filters = b.option(
         []const []const u8,
@@ -295,6 +303,7 @@ pub fn readConfig(b: *std.Build, target: std.Build.ResolvedTarget, opts: Options
         .workbench_opts = workbench_opts,
         .msvcup_before_compile = msvcup_before_compile,
         .accesskit = accesskit,
+        .native_backend = native_backend,
         .test_filters = test_filters,
         .macos_sign_app_identity = macos_sign_app_identity,
         .macos_sign_install_identity = macos_sign_install_identity,
@@ -345,6 +354,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     const workbench_opts = cfg.workbench_opts;
     const msvcup_before_compile = cfg.msvcup_before_compile;
     const accesskit = cfg.accesskit;
+    const native_backend = cfg.native_backend;
     const test_filters = cfg.test_filters;
     const macos_sign_app_identity = cfg.macos_sign_app_identity;
     const macos_sign_install_identity = cfg.macos_sign_install_identity;
@@ -364,7 +374,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
     web.addSteps(b, optimize, build_opts, workbench_opts, assets_module, opts.app_plugins, opts.web_plugin_deps, opts.web_plugin_dirs);
 
-    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins);
+    const main_fizzy = try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, build_opts, workbench_opts, assets_module, macos_sdl_paths, velopack_enabled, app_name, app_layout_path, opts.app_plugins);
     const exe = main_fizzy.exe;
 
     const package_fizzy: FizzyExecutable = package_blk: {
@@ -386,7 +396,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         pack_opts.addOption(bool, "static_text", static_text);
         pack_opts.addOption(bool, "static_image", static_image);
         pack_opts.addOption(bool, "has_app_layout", app_layout_path != null);
-        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name, app_layout_path, opts.app_plugins);
+        break :package_blk try fizzy_exe.addFizzyExecutableForTarget(b, vz, target, optimize, accesskit, native_backend, pack_opts, workbench_opts, assets_module, macos_sdl_paths, true, app_name, app_layout_path, opts.app_plugins);
     };
     const exe_for_package = package_fizzy.exe;
 

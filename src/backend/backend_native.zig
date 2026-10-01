@@ -245,6 +245,20 @@ var macos_live_resize_saved_vsync: ?c_int = null;
 export fn fizzy_macos_window_live_resize_vsync(active: c_int) void {
     if (comptime builtin.os.tag != .macos) return;
     const window = macos_monitor_window orelse return;
+    // Fizzy's own backend sets its swapchain's present mode; dvui's SDL_Renderer one its renderer's.
+    const Backend = @import("backend");
+    if (comptime @hasDecl(Backend, "setWindowVSync")) {
+        if (active != 0) {
+            if (macos_live_resize_saved_vsync != null) return;
+            const vsync = Backend.windowVSync(window) orelse return;
+            macos_live_resize_saved_vsync = @intFromBool(vsync);
+            _ = Backend.setWindowVSync(window, false);
+        } else if (macos_live_resize_saved_vsync) |vsync| {
+            macos_live_resize_saved_vsync = null;
+            _ = Backend.setWindowVSync(window, vsync != 0);
+        }
+        return;
+    }
     const renderer = sdl3.SDL_GetRenderer(window) orelse return;
     if (active != 0) {
         if (macos_live_resize_saved_vsync != null) return;

@@ -203,13 +203,10 @@ const rim_line_width: f32 = 0.8;
 
 // ── Drawing ─────────────────────────────────────────────────────────────────────────────────────
 
-var program: programs.Program = .{ .source = .{
-    .glsl = source_glsl.ptr,
-    .glsl_len = source_glsl.len,
-    .textures = 1,
-    .uniform_vec4s = uniform_vec4s,
-} };
-const source_glsl = @embedFile("shaders/liquid_glass.glsl");
+var program: programs.Program = .from(.{
+    .glsl = @embedFile("shaders/liquid_glass.glsl"),
+    .msl = @embedFile("shaders/liquid_glass.metal"),
+}, .{ .textures = 1, .uniform_vec4s = uniform_vec4s });
 
 /// Whether glass is drawn through the program at all — the app's switch (Settings → Debugging →
 /// Glass renderer), published each frame, so the meshes can be compared against it.
