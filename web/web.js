@@ -183,11 +183,90 @@ export class Dvui {
     preciseTargets = false;
     preciseChecked = false;
     newTextureId = 1;
+    /// GL state as last set, so a draw sends only what changed. Every GL call is a trip to the
+    /// GPU process in some browsers (Firefox), and a draw sent the whole state each time —
+    /// program, layout, texture, blend, matrix, scissor — some 25 calls where 3 or 4 change.
+    /// `undefined` is unknown, and sends it.
+    gls = {};
+    /// One framebuffer per render-target texture, attached once (texture id -> framebuffer):
+    /// re-attaching a texture to the one shared framebuffer on every switch made the driver
+    /// check the framebuffer again each time.
+    targetFramebuffers = new Map();
+    /// The matrix uniform's storage, filled in place.
+    matrix = new Float32Array(16);
 
     /** @returns {[WebGLTexture, number, number] | null} */
     // The modifier bits dvui reads (web_mod_code_to_dvui), from any keyboard or mouse event.
     modCode(ev) {
         return (ev.metaKey << 3) + (ev.altKey << 2) + (ev.ctrlKey << 1) + (ev.shiftKey << 0);
+    }
+
+    // The cached setters (`gls`): each sends its state only when it differs from what is set.
+    bindTex(texture) {
+        if (this.gls.tex === texture) return;
+        this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+        this.gls.tex = texture;
+    }
+    bindFb(framebuffer) {
+        if (this.gls.fb === framebuffer) return;
+        this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, framebuffer);
+        this.gls.fb = framebuffer;
+    }
+    setScissor(x, y, w, h) {
+        const g = this.gls;
+        if (g.sx === x && g.sy === y && g.sw === w && g.sh === h) return;
+        this.gl.scissor(x, y, w, h);
+        g.sx = x; g.sy = y; g.sw = w; g.sh = h;
+    }
+    setViewport(w, h) {
+        if (this.gls.vw === w && this.gls.vh === h) return;
+        this.gl.viewport(0, 0, w, h);
+        this.gls.vw = w; this.gls.vh = h;
+    }
+    /// 0 source-over, 1 add, 2 copy (`wasm_textureBlend`).
+    setBlend(mode) {
+        if (this.gls.blend === mode) return;
+        if (mode === 2) {
+            this.gl.disable(this.gl.BLEND);
+        } else {
+            if (this.gls.blend === 2 || this.gls.blend === undefined) this.gl.enable(this.gl.BLEND);
+            if (mode === 1) this.gl.blendFunc(this.gl.ONE, this.gl.ONE);
+            else this.gl.blendFunc(this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
+        }
+        this.gls.blend = mode;
+    }
+    setUseTex(on) {
+        if (this.gls.useTex === on) return;
+        this.gl.uniform1i(this.programInfo.uniformLocations.useTex, on);
+        this.gls.useTex = on;
+    }
+    /// The projection for the current render target: its size, and flipped for the screen.
+    setMatrix() {
+        const w = this.renderTargetSize[0], h = this.renderTargetSize[1], fb = this.using_fb;
+        if (this.gls.mw === w && this.gls.mh === h && this.gls.mfb === fb) return;
+        const m = this.matrix;
+        m.fill(0);
+        m[0] = 2.0 / w;
+        m[5] = (fb ? 2.0 : -2.0) / h;
+        m[10] = 1.0;
+        m[12] = -1.0;
+        m[13] = fb ? -1.0 : 1.0;
+        m[15] = 1.0;
+        this.gl.uniformMatrix4fv(this.programInfo.uniformLocations.matrix, false, m);
+        this.gls.mw = w; this.gls.mh = h; this.gls.mfb = fb;
+    }
+    /// The vertex layout, which only changes if the vertex type does.
+    setLayout(sizeof_vertex, offset_pos, offset_col, offset_uv) {
+        const g = this.gls;
+        if (g.ls === sizeof_vertex && g.lp === offset_pos && g.lc === offset_col && g.lu === offset_uv) return;
+        const a = this.programInfo.attribLocations;
+        this.gl.vertexAttribPointer(a.vertexPosition, 2, this.gl.FLOAT, false, sizeof_vertex, offset_pos);
+        this.gl.enableVertexAttribArray(a.vertexPosition);
+        this.gl.vertexAttribPointer(a.vertexColor, 4, this.gl.UNSIGNED_BYTE, false, sizeof_vertex, offset_col);
+        this.gl.enableVertexAttribArray(a.vertexColor);
+        this.gl.vertexAttribPointer(a.textureCoord, 2, this.gl.FLOAT, false, sizeof_vertex, offset_uv);
+        this.gl.enableVertexAttribArray(a.textureCoord);
+        g.ls = sizeof_vertex; g.lp = offset_pos; g.lc = offset_col; g.lu = offset_uv;
     }
 
     createTarget(width, height, interp, wrap_u, wrap_v, precise) {
@@ -197,7 +276,7 @@ export class Dvui {
         this.newTextureId += 1;
         this.textures.set(id, [texture, width, height]);
 
-        this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+        this.bindTex(texture);
 
         this.gl.texImage2D(
             this.gl.TEXTURE_2D,
@@ -245,7 +324,7 @@ export class Dvui {
             this.gl.texParameteri( this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
         }
 
-        this.gl.bindTexture(this.gl.TEXTURE_2D, null);
+        this.bindTex(null);
 
         if (precise && !this.preciseChecked) {
             // The extension says half-float attachments are renderable; make sure this context
@@ -542,7 +621,7 @@ export class Dvui {
                 this.newTextureId += 1;
                 this.textures.set(id, [texture, width, height]);
 
-                this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+                this.bindTex(texture);
 
                 this.gl.texImage2D(
                     this.gl.TEXTURE_2D,
@@ -594,7 +673,7 @@ export class Dvui {
                     this.gl.texParameteri( this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
                 }
 
-                this.gl.bindTexture(this.gl.TEXTURE_2D, null);
+                this.bindTex(null);
 
                 return id;
             },
@@ -604,13 +683,13 @@ export class Dvui {
                 const entry = this.textures.get(id);
                 if (!entry) return 0;
                 const [texture, width, height] = entry;
-                this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+                this.bindTex(texture);
                 this.gl.texSubImage2D(
                     this.gl.TEXTURE_2D, 0, 0, 0, width, height,
                     this.gl.RGBA, this.gl.UNSIGNED_BYTE,
                     this.bytesFromPointer(pixels, width * height * 4),
                 );
-                this.gl.bindTexture(this.gl.TEXTURE_2D, null);
+                this.bindTex(null);
                 return 1;
             },
             // Replace the x,y,w,h rect of a texture made by wasm_textureCreate. `pixels` is the
@@ -622,7 +701,7 @@ export class Dvui {
                 const [texture, width, height] = entry;
                 if (w === 0 || h === 0) return 1;
                 const full = this.bytesFromPointer(pixels, width * height * 4);
-                this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+                this.bindTex(texture);
                 if (this.webgl2) {
                     // Read the rect in place out of the full buffer.
                     this.gl.pixelStorei(this.gl.UNPACK_ROW_LENGTH, width);
@@ -647,7 +726,7 @@ export class Dvui {
                         this.gl.RGBA, this.gl.UNSIGNED_BYTE, rect,
                     );
                 }
-                this.gl.bindTexture(this.gl.TEXTURE_2D, null);
+                this.bindTex(null);
                 return 1;
             },
             wasm_textureCreateTarget: (width, height, interp, wrap_u, wrap_v) => {
@@ -684,17 +763,13 @@ export class Dvui {
                     );
                     return;
                 }
-                const texture = entry[0];
-
-                this.gl.bindFramebuffer(
-                    this.gl.FRAMEBUFFER,
-                    this.frame_buffer,
-                );
+                const prev = this.gls.fb;
+                this.bindFb(this.frame_buffer);
                 this.gl.framebufferTexture2D(
                     this.gl.FRAMEBUFFER,
                     this.gl.COLOR_ATTACHMENT0,
                     this.gl.TEXTURE_2D,
-                    texture,
+                    entry[0],
                     0,
                 );
 
@@ -710,72 +785,33 @@ export class Dvui {
                     0,
                 );
 
-                this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
+                this.bindFb(prev);
             },
             wasm_renderTarget: (id) => {
                 //console.log("renderTarget " + id);
-                this.renderTargetId = id;
-                if (id === 0) {
+                const rt = id === 0 ? null : this.textureEntry(id);
+                if (id !== 0 && rt === null) console.warn(`wasm_renderTarget: missing texture id ${id}`);
+                if (rt === null) {
+                    this.renderTargetId = 0;
                     this.using_fb = false;
-                    this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
-                    this.renderTargetSize = [
-                        this.gl.drawingBufferWidth,
-                        this.gl.drawingBufferHeight,
-                    ];
-                    this.gl.viewport(
-                        0,
-                        0,
-                        this.renderTargetSize[0],
-                        this.renderTargetSize[1],
-                    );
-                    this.gl.scissor(
-                        0,
-                        0,
-                        this.renderTargetSize[0],
-                        this.renderTargetSize[1],
-                    );
+                    this.bindFb(null);
+                    this.renderTargetSize = [this.gl.drawingBufferWidth, this.gl.drawingBufferHeight];
                 } else {
+                    this.renderTargetId = id;
                     this.using_fb = true;
-                    this.gl.bindFramebuffer(
-                        this.gl.FRAMEBUFFER,
-                        this.frame_buffer,
-                    );
-
-                    const rt = this.textureEntry(id);
-                    if (rt === null) {
-                        console.warn(
-                            `wasm_renderTarget: missing texture id ${id}`,
-                        );
-                        this.renderTargetId = 0;
-                        this.using_fb = false;
-                        this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null);
-                        this.renderTargetSize = [
-                            this.gl.drawingBufferWidth,
-                            this.gl.drawingBufferHeight,
-                        ];
+                    let fb = this.targetFramebuffers.get(id);
+                    if (fb === undefined) {
+                        fb = this.gl.createFramebuffer();
+                        this.bindFb(fb);
+                        this.gl.framebufferTexture2D(this.gl.FRAMEBUFFER, this.gl.COLOR_ATTACHMENT0, this.gl.TEXTURE_2D, rt[0], 0);
+                        this.targetFramebuffers.set(id, fb);
                     } else {
-                        this.gl.framebufferTexture2D(
-                            this.gl.FRAMEBUFFER,
-                            this.gl.COLOR_ATTACHMENT0,
-                            this.gl.TEXTURE_2D,
-                            rt[0],
-                            0,
-                        );
-                        this.renderTargetSize = [rt[1], rt[2]];
+                        this.bindFb(fb);
                     }
-                    this.gl.viewport(
-                        0,
-                        0,
-                        this.renderTargetSize[0],
-                        this.renderTargetSize[1],
-                    );
-                    this.gl.scissor(
-                        0,
-                        0,
-                        this.renderTargetSize[0],
-                        this.renderTargetSize[1],
-                    );
+                    this.renderTargetSize = [rt[1], rt[2]];
                 }
+                this.setViewport(this.renderTargetSize[0], this.renderTargetSize[1]);
+                this.setScissor(0, 0, this.renderTargetSize[0], this.renderTargetSize[1]);
             },
             wasm_textureDestroy: (id) => {
                 //console.log("deleting texture " + id);
@@ -783,10 +819,21 @@ export class Dvui {
                 if (entry === null) return;
                 this.textures.delete(id);
                 this.textureBlends.delete(id);
+                const fb = this.targetFramebuffers.get(id);
+                if (fb !== undefined) {
+                    if (this.gls.fb === fb) this.bindFb(null);
+                    this.gl.deleteFramebuffer(fb);
+                    this.targetFramebuffers.delete(id);
+                }
+                if (this.gls.tex === entry[0]) this.bindTex(null);
                 this.gl.deleteTexture(entry[0]);
             },
-            wasm_renderGeometry: (
-                textureId,
+            // A flush's worth of draws (`WebBackend.flushBatch`): the stream's geometry, uploaded
+            // once, and its steps in order — each `cmd_count` entry eight i32s: texture, clip,
+            // x, y, w, h, and the range of the stream's indices it draws. Clip's bit 0 says the
+            // draw is clipped and the bits above it are the texture's blend (0 source-over,
+            // 1 add, 2 copy); -1 is a switch of render target to `texture`, -2 a clear of it.
+            wasm_renderStream: (
                 index_ptr,
                 index_len,
                 vertex_ptr,
@@ -795,183 +842,46 @@ export class Dvui {
                 offset_pos,
                 offset_col,
                 offset_uv,
-                clip,
-                x,
-                y,
-                w,
-                h,
+                cmd_ptr,
+                cmd_count,
             ) => {
-                //console.log("drawClippedTriangles " + textureId + " sizeof " + sizeof_vertex + " pos " + offset_pos + " col " + offset_col + " uv " + offset_uv);
+                const indices = new Uint16Array(this.instance.exports.memory.buffer, index_ptr, index_len / 2);
+                this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, indices, this.gl.DYNAMIC_DRAW);
+                this.gl.bufferData(this.gl.ARRAY_BUFFER, this.bytesFromPointer(vertex_ptr, vertex_len), this.gl.DYNAMIC_DRAW);
+                this.setLayout(sizeof_vertex, offset_pos, offset_col, offset_uv);
 
-                //let old_scissor;
-                if (clip === 1) {
-                    // just calling getParameter here is quite slow (5-10 ms per frame according to chrome)
-                    //old_scissor = gl.getParameter(gl.SCISSOR_BOX);
-                    this.gl.scissor(x, y, w, h);
-                }
-
-                this.gl.bindBuffer(
-                    this.gl.ELEMENT_ARRAY_BUFFER,
-                    this.indexBuffer,
-                );
-                const indices = new Uint16Array(
-                    this.instance.exports.memory.buffer,
-                    index_ptr,
-                    index_len / 2,
-                );
-                this.gl.bufferData(
-                    this.gl.ELEMENT_ARRAY_BUFFER,
-                    indices,
-                    this.gl.DYNAMIC_DRAW,
-                );
-
-                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
-                const vertexes = this.bytesFromPointer(vertex_ptr, vertex_len)
-                this.gl.bufferData(
-                    this.gl.ARRAY_BUFFER,
-                    vertexes,
-                    this.gl.DYNAMIC_DRAW,
-                );
-
-                let matrix = new Float32Array(16);
-                matrix[0] = 2.0 / this.renderTargetSize[0];
-                matrix[1] = 0.0;
-                matrix[2] = 0.0;
-                matrix[3] = 0.0;
-                matrix[4] = 0.0;
-                if (this.using_fb) {
-                    matrix[5] = 2.0 / this.renderTargetSize[1];
-                } else {
-                    matrix[5] = -2.0 / this.renderTargetSize[1];
-                }
-                matrix[6] = 0.0;
-                matrix[7] = 0.0;
-                matrix[8] = 0.0;
-                matrix[9] = 0.0;
-                matrix[10] = 1.0;
-                matrix[11] = 0.0;
-                matrix[12] = -1.0;
-                if (this.using_fb) {
-                    matrix[13] = -1.0;
-                } else {
-                    matrix[13] = 1.0;
-                }
-                matrix[14] = 0.0;
-                matrix[15] = 1.0;
-
-                // vertex
-                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
-                this.gl.vertexAttribPointer(
-                    this.programInfo.attribLocations.vertexPosition,
-                    2, // num components
-                    this.gl.FLOAT,
-                    false, // don't normalize
-                    sizeof_vertex, // stride
-                    offset_pos, // offset
-                );
-                this.gl.enableVertexAttribArray(
-                    this.programInfo.attribLocations.vertexPosition,
-                );
-
-                // color
-                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
-                this.gl.vertexAttribPointer(
-                    this.programInfo.attribLocations.vertexColor,
-                    4, // num components
-                    this.gl.UNSIGNED_BYTE,
-                    false, // don't normalize
-                    sizeof_vertex, // stride
-                    offset_col, // offset
-                );
-                this.gl.enableVertexAttribArray(
-                    this.programInfo.attribLocations.vertexColor,
-                );
-
-                // texture
-                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
-                this.gl.vertexAttribPointer(
-                    this.programInfo.attribLocations.textureCoord,
-                    2, // num components
-                    this.gl.FLOAT,
-                    false, // don't normalize
-                    sizeof_vertex, // stride
-                    offset_uv, // offset
-                );
-                this.gl.enableVertexAttribArray(
-                    this.programInfo.attribLocations.textureCoord,
-                );
-
-                // Tell WebGL to use our program when drawing
-                this.gl.useProgram(this.shaderProgram);
-
-                // Set the shader uniforms
-                this.gl.uniformMatrix4fv(
-                    this.programInfo.uniformLocations.matrix,
-                    false,
-                    matrix,
-                );
-
-                if (textureId != 0) {
-                    const tex = this.textureEntry(textureId);
+                const cmds = new Int32Array(this.instance.exports.memory.buffer, cmd_ptr, cmd_count * 8);
+                for (let i = 0; i < cmd_count; i += 1) {
+                    const c = i * 8;
+                    const textureId = cmds[c];
+                    const kind = cmds[c + 1];
+                    if (kind === -1) {
+                        // A switch of render target (0 the screen).
+                        this.imports.wasm_renderTarget(textureId);
+                        continue;
+                    }
+                    if (kind === -2) {
+                        // A clear of a target, wherever drawing is going.
+                        this.imports.wasm_textureClearTarget(textureId);
+                        continue;
+                    }
+                    this.setMatrix();
+                    if ((kind & 1) === 1) {
+                        this.setScissor(cmds[c + 2], cmds[c + 3], cmds[c + 4], cmds[c + 5]);
+                    } else {
+                        this.setScissor(0, 0, this.renderTargetSize[0], this.renderTargetSize[1]);
+                    }
+                    const tex = textureId != 0 ? this.textureEntry(textureId) : null;
+                    if (textureId != 0 && tex === null) console.warn(`wasm_renderStream: missing texture id ${textureId}`);
                     if (tex !== null) {
-                        this.gl.activeTexture(this.gl.TEXTURE0);
-                        this.gl.bindTexture(this.gl.TEXTURE_2D, tex[0]);
-                        this.gl.uniform1i(
-                            this.programInfo.uniformLocations.useTex,
-                            1,
-                        );
+                        this.bindTex(tex[0]);
+                        this.setUseTex(1);
                     } else {
-                        console.warn(
-                            `wasm_renderGeometry: missing texture id ${textureId}`,
-                        );
-                        this.gl.bindTexture(this.gl.TEXTURE_2D, null);
-                        this.gl.uniform1i(
-                            this.programInfo.uniformLocations.useTex,
-                            0,
-                        );
+                        this.setUseTex(0);
                     }
-                } else {
-                    this.gl.bindTexture(this.gl.TEXTURE_2D, null);
-                    this.gl.uniform1i(
-                        this.programInfo.uniformLocations.useTex,
-                        0,
-                    );
-                }
-
-                // The texture's blend (wasm_textureBlend), or source-over.
-                const blend = textureId != 0 ? (this.textureBlends.get(textureId) ?? 0) : 0;
-                if (blend === 2) {
-                    this.gl.disable(this.gl.BLEND);
-                } else {
-                    this.gl.enable(this.gl.BLEND);
-                    if (blend === 1) {
-                        this.gl.blendFunc(this.gl.ONE, this.gl.ONE);
-                    } else {
-                        this.gl.blendFunc(this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
-                    }
-                }
-
-                this.gl.uniform1i(
-                    this.programInfo.uniformLocations.uSampler,
-                    0,
-                );
-
-                //console.log("drawElements " + textureId);
-                this.gl.drawElements(
-                    this.gl.TRIANGLES,
-                    indices.length,
-                    this.gl.UNSIGNED_SHORT,
-                    0,
-                );
-
-                if (clip === 1) {
-                    //gl.scissor(old_scissor[0], old_scissor[1], old_scissor[2], old_scissor[3]);
-                    this.gl.scissor(
-                        0,
-                        0,
-                        this.renderTargetSize[0],
-                        this.renderTargetSize[1],
-                    );
+                    // The texture's blend as it was when drawn (bits above the clip's).
+                    this.setBlend(tex !== null ? kind >> 1 : 0);
+                    this.gl.drawElements(this.gl.TRIANGLES, cmds[c + 7], this.gl.UNSIGNED_SHORT, cmds[c + 6] * 2);
                 }
             },
             wasm_cursor: (name_ptr, name_len) => {
@@ -1263,10 +1173,18 @@ export class Dvui {
         this.indexBuffer = this.gl.createBuffer();
         this.vertexBuffer = this.gl.createBuffer();
 
-        this.gl.enable(this.gl.BLEND);
-        this.gl.blendFunc(this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
+        // Bound for good: there is one program, one pair of buffers and one sampler, so a draw
+        // sends only its data and whatever else changed (`gls`).
+        this.gl.useProgram(this.shaderProgram);
+        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, this.indexBuffer);
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
+        this.gl.activeTexture(this.gl.TEXTURE0);
+        this.gl.uniform1i(this.programInfo.uniformLocations.uSampler, 0);
+
+        this.gls = {};
+        this.setBlend(0);
         this.gl.enable(this.gl.SCISSOR_TEST);
-        this.gl.scissor(
+        this.setScissor(
             0,
             0,
             this.gl.canvas.clientWidth,
@@ -1344,24 +1262,14 @@ export class Dvui {
         const h = this.gl.canvas.clientHeight;
         const scale = window.devicePixelRatio;
         //console.log("wxh " + w + "x" + h + " scale " + scale);
-        this.gl.canvas.width = Math.round(w * scale);
-        this.gl.canvas.height = Math.round(h * scale);
-        this.renderTargetSize = [
-            this.gl.drawingBufferWidth,
-            this.gl.drawingBufferHeight,
-        ];
-        this.gl.viewport(
-            0,
-            0,
-            this.gl.drawingBufferWidth,
-            this.gl.drawingBufferHeight,
-        );
-        this.gl.scissor(
-            0,
-            0,
-            this.gl.drawingBufferWidth,
-            this.gl.drawingBufferHeight,
-        );
+        // Only when it changed: setting either one, even to what it already is, makes a new
+        // drawing buffer.
+        const cw = Math.round(w * scale);
+        const ch = Math.round(h * scale);
+        if (this.gl.canvas.width !== cw) this.gl.canvas.width = cw;
+        if (this.gl.canvas.height !== ch) this.gl.canvas.height = ch;
+        // Every frame starts on the screen; the backend's stream counts on it.
+        this.imports.wasm_renderTarget(0);
 
         this.gl.clearColor(0.0, 0.0, 0.0, 1.0); // Clear to black, fully opaque
         this.gl.clear(this.gl.COLOR_BUFFER_BIT);

@@ -17,13 +17,50 @@ var arena: std.mem.Allocator = undefined;
 var touchPoints: [10]?dvui.Point = @splat(null);
 var have_event = false;
 
-/// Consecutive draws with the same texture and clip, sent to webgl as one draw call
+/// Every draw since the last flush: one stream of vertices and indices, uploaded once, and the
+/// draws into it. Consecutive draws with the same texture and clip are one draw. Uploading each
+/// draw's geometry on its own was two `bufferData` a draw, and in Firefox that call costs a
+/// hundred times any other — most of a frame's GL time, and most of a drag's.
 var batch: struct {
-    texture: ?dvui.Texture = null,
-    clipr: ?dvui.Rect.Physical = null,
     vtx: std.ArrayList(dvui.Vertex) = .empty,
     idx: std.ArrayList(dvui.Vertex.Index) = .empty,
+    cmds: std.ArrayList(Command) = .empty,
+    /// The last command's texture and clip, to tell whether a draw extends it.
+    texture: ?dvui.Texture = null,
+    clipr: ?dvui.Rect.Physical = null,
 } = .{};
+
+/// One step of the stream, as `web.js`'s `wasm_renderStream` reads it: eight i32s. A draw, or —
+/// by `clip` — a switch of render target or a clear of one, so a frame's blur passes go in the
+/// same stream as everything else: a switch used to flush, and a drag's passes made it some
+/// fifty uploads a frame.
+const Command = extern struct {
+    /// The draw's texture; for a switch the target to draw into (0 the screen), for a clear the
+    /// target to clear.
+    texture: i32,
+    /// A draw: bit 0 clipped to x, y, w, h, the bits above it the texture's blend
+    /// (`dvui.Backend.TextureBlend`). Otherwise `switch_target` or `clear_target`.
+    clip: i32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    /// Into the stream's indices.
+    index_start: i32,
+    index_count: i32,
+
+    const switch_target: i32 = -1;
+    const clear_target: i32 = -2;
+};
+
+/// Each texture's blend, where it is not `.over` (`textureBlend`), stamped on the draws of it as
+/// they are recorded: the blur passes set a texture's blend around each draw of it, and when
+/// `web.js` kept it that had to flush the stream twice a pass.
+var blends: std.AutoHashMapUnmanaged(usize, dvui.Backend.TextureBlend) = .empty;
+
+/// Whether draws go into a target rather than the screen, as the stream will have it by then:
+/// what `web.js` holds is only where the last flush left it.
+var target_is_fb = false;
 
 cursor_last: dvui.enums.Cursor = .wait,
 force_new_window: bool = true,
@@ -63,7 +100,7 @@ pub const wasm = if (!builtin.is_test) struct {
     pub extern "dvui" fn wasm_textureRead(texture: u32, pixels_out: [*]u8, width: u32, height: u32) void;
     pub extern "dvui" fn wasm_renderTarget(u32) void;
     pub extern "dvui" fn wasm_textureDestroy(u32) void;
-    pub extern "dvui" fn wasm_renderGeometry(texture: u32, index_ptr: [*]const u8, index_len: usize, vertex_ptr: [*]const u8, vertex_len: usize, sizeof_vertex: u8, offset_pos: u8, offset_col: u8, offset_uv: u8, clip: u8, x: i32, y: i32, w: i32, h: i32) void;
+    pub extern "dvui" fn wasm_renderStream(index_ptr: [*]const u8, index_len: usize, vertex_ptr: [*]const u8, vertex_len: usize, sizeof_vertex: u8, offset_pos: u8, offset_col: u8, offset_uv: u8, cmd_ptr: [*]const u8, cmd_count: usize) void;
 
     pub extern "dvui" fn wasm_cursor(name: [*]const u8, name_len: usize) void;
     pub extern "dvui" fn wasm_text_input(x: f32, y: f32, w: f32, h: f32) void;
@@ -134,7 +171,7 @@ pub const wasm = if (!builtin.is_test) struct {
     pub fn wasm_textureRead(_: u32, _: [*]u8, _: u32, _: u32) void {}
     pub fn wasm_renderTarget(_: u32) void {}
     pub fn wasm_textureDestroy(_: u32) void {}
-    pub fn wasm_renderGeometry(_: u32, _: [*]const u8, _: usize, _: [*]const u8, _: usize, _: u8, _: u8, _: u8, _: u8, _: u8, _: i32, _: i32, _: i32, _: i32) void {}
+    pub fn wasm_renderStream(_: [*]const u8, _: usize, _: [*]const u8, _: usize, _: u8, _: u8, _: u8, _: u8, _: [*]const u8, _: usize) void {}
 
     pub fn wasm_cursor(_: [*]const u8, _: usize) void {}
     pub fn wasm_text_input(_: f32, _: f32, _: f32, _: f32) void {}
@@ -593,6 +630,8 @@ pub fn sleep(_: *WebBackend, ns: u64) void {
 pub fn begin(_: *WebBackend, arena_in: std.mem.Allocator) !void {
     arena = arena_in;
     batch = .{};
+    // `web.js` starts every frame on the screen.
+    target_is_fb = false;
 }
 
 pub fn end(_: *WebBackend) !void {
@@ -613,10 +652,15 @@ pub fn contentScale(_: *WebBackend) f32 {
 }
 
 pub fn drawClippedTriangles(_: *WebBackend, texture: ?dvui.Texture, vtx: []const dvui.Vertex, idx: []const dvui.Vertex.Index, maybe_clipr: ?dvui.Rect.Physical) !void {
+    if (batch.vtx.items.len + vtx.len > std.math.maxInt(dvui.Vertex.Index)) flushBatch();
+
     const same_texture = if (batch.texture) |bt| (if (texture) |t| bt.ptr == t.ptr else false) else texture == null;
     const same_clip = std.meta.eql(batch.clipr, maybe_clipr);
-    if (!same_texture or !same_clip or batch.vtx.items.len + vtx.len > std.math.maxInt(dvui.Vertex.Index)) {
-        flushBatch();
+    const next = command(texture, maybe_clipr, @intCast(batch.idx.items.len));
+    const last: ?Command = if (batch.cmds.items.len > 0) batch.cmds.items[batch.cmds.items.len - 1] else null;
+    const extends = if (last) |l| l.clip >= 0 and l.clip == next.clip and same_texture and same_clip else false;
+    if (!extends) {
+        try batch.cmds.append(arena, next);
         batch.texture = texture;
         batch.clipr = maybe_clipr;
     }
@@ -625,47 +669,69 @@ pub fn drawClippedTriangles(_: *WebBackend, texture: ?dvui.Texture, vtx: []const
     try batch.vtx.appendSlice(arena, vtx);
     try batch.idx.ensureUnusedCapacity(arena, idx.len);
     for (idx) |i| batch.idx.appendAssumeCapacity(base + i);
+    batch.cmds.items[batch.cmds.items.len - 1].index_count += @intCast(idx.len);
 }
 
-/// Draw the batched triangles, before anything that changes what they would draw into or with
+/// A draw of `texture` clipped to `maybe_clipr`, its indices from `index_start`. The clip in
+/// the bound target's pixels, y from the bottom on the screen.
+fn command(texture: ?dvui.Texture, maybe_clipr: ?dvui.Rect.Physical, index_start: i32) Command {
+    var c: Command = .{
+        .texture = if (texture) |t| @intCast(@intFromPtr(t.ptr)) else 0,
+        .clip = 0,
+        .x = std.math.maxInt(i32),
+        .y = std.math.maxInt(i32),
+        .w = std.math.maxInt(i32),
+        .h = std.math.maxInt(i32),
+        .index_start = index_start,
+        .index_count = 0,
+    };
+    if (texture) |t| {
+        const blend = blends.get(@intFromPtr(t.ptr)) orelse .over;
+        c.clip = @as(i32, @intFromEnum(blend)) << 1;
+    }
+    if (maybe_clipr) |clipr| {
+        c.clip |= 1;
+        c.x = @trunc(clipr.x);
+        c.w = @trunc(clipr.w);
+        c.h = @trunc(clipr.h);
+        if (!target_is_fb) {
+            // y needs to be converted to 0 at bottom first
+            const ry: f32 = wasm.wasm_pixel_height() - clipr.y - clipr.h;
+            c.y = @trunc(ry);
+        } else {
+            c.y = @trunc(clipr.y);
+        }
+    }
+    return c;
+}
+
+/// A switch or clear (`Command.clip`) of `texture` (0 the screen), in order with the draws.
+fn marker(step: i32, texture: i32) !void {
+    try batch.cmds.append(arena, .{ .texture = texture, .clip = step, .x = 0, .y = 0, .w = 0, .h = 0, .index_start = 0, .index_count = 0 });
+}
+
+/// Whether anything waiting in the stream uses texture `id` — draws from it, draws into it, or
+/// clears it — so a change to it must wait until that has drawn.
+fn pendingUses(id: i32) bool {
+    for (batch.cmds.items) |c| if (c.texture == id) return true;
+    return false;
+}
+
+/// Upload the stream and draw it, before anything that changes what it would draw into or with.
 fn flushBatch() void {
-    if (batch.idx.items.len == 0) return;
     defer {
         batch.vtx.clearRetainingCapacity();
         batch.idx.clearRetainingCapacity();
+        batch.cmds.clearRetainingCapacity();
+        batch.texture = null;
+        batch.clipr = null;
     }
+    if (batch.idx.items.len == 0) return;
 
-    const texture = batch.texture;
-    const maybe_clipr = batch.clipr;
-    const vtx = batch.vtx.items;
-    const idx = batch.idx.items;
-
-    var x: i32 = std.math.maxInt(i32);
-    var w: i32 = std.math.maxInt(i32);
-    var y: i32 = std.math.maxInt(i32);
-    var h: i32 = std.math.maxInt(i32);
-
-    if (maybe_clipr) |clipr| {
-        x = @trunc(clipr.x);
-        w = @trunc(clipr.w);
-        h = @trunc(clipr.h);
-
-        if (wasm.wasm_frame_buffer() == 0) {
-            // y needs to be converted to 0 at bottom first
-            const ry: f32 = wasm.wasm_pixel_height() - clipr.y - clipr.h;
-            y = @trunc(ry);
-        } else {
-            y = @trunc(clipr.y);
-        }
-    }
-
-    //log.debug("drawClippedTriangles pixels {} clipr {?} clip {d} {d} {d} {d}", .{ dvui.windowRectPixels(), maybe_clipr, x, y, w, h });
-
-    const index_slice = std.mem.sliceAsBytes(idx);
-    const vertex_slice = std.mem.sliceAsBytes(vtx);
-
-    wasm.wasm_renderGeometry(
-        if (texture) |t| @intCast(@intFromPtr(t.ptr)) else 0,
+    const index_slice = std.mem.sliceAsBytes(batch.idx.items);
+    const vertex_slice = std.mem.sliceAsBytes(batch.vtx.items);
+    const cmd_slice = std.mem.sliceAsBytes(batch.cmds.items);
+    wasm.wasm_renderStream(
         index_slice.ptr,
         index_slice.len,
         vertex_slice.ptr,
@@ -674,11 +740,8 @@ fn flushBatch() void {
         @offsetOf(dvui.Vertex, "pos"),
         @offsetOf(dvui.Vertex, "col"),
         @offsetOf(dvui.Vertex, "uv"),
-        if (maybe_clipr == null) 0 else 1,
-        x,
-        y,
-        w,
-        h,
+        cmd_slice.ptr,
+        batch.cmds.items.len,
     );
 }
 
@@ -716,7 +779,7 @@ pub fn textureCreate(_: *WebBackend, pixels: [*]const u8, options: dvui.Texture.
 
 /// See `dvui.Backend.textureUpdate`. `texSubImage2D` over the whole texture.
 pub fn textureUpdate(_: *WebBackend, texture: dvui.Texture, pixels: [*]const u8) !void {
-    flushBatch();
+    if (pendingUses(@intCast(@intFromPtr(texture.ptr)))) flushBatch();
     if (wasm.wasm_textureUpdate(@intCast(@intFromPtr(texture.ptr)), pixels) == 0) return dvui.Backend.TextureError.TextureUpdate;
 }
 
@@ -724,7 +787,7 @@ pub fn textureUpdate(_: *WebBackend, texture: dvui.Texture, pixels: [*]const u8)
 /// rect is uploaded (WebGL2 reads it in place through the unpack row length and skips; WebGL1
 /// copies the rect's rows out first).
 pub fn textureUpdateSubRect(_: *WebBackend, texture: dvui.Texture, pixels: [*]const u8, x: u32, y: u32, w: u32, h: u32) !void {
-    flushBatch();
+    if (pendingUses(@intCast(@intFromPtr(texture.ptr)))) flushBatch();
     if (wasm.wasm_textureUpdateSubRect(@intCast(@intFromPtr(texture.ptr)), pixels, x, y, w, h) == 0) return dvui.Backend.TextureError.TextureUpdate;
 }
 
@@ -735,8 +798,12 @@ pub const support_precise_targets = true;
 
 /// See `dvui.Backend.textureBlend`.
 pub fn textureBlend(_: *WebBackend, texture: dvui.Texture, blend: dvui.Backend.TextureBlend) !void {
-    flushBatch();
-    if (wasm.wasm_textureBlend(@intCast(@intFromPtr(texture.ptr)), @intFromEnum(blend)) == 0) return dvui.Backend.TextureError.NotImplemented;
+    // Recorded with each draw of it from here on (`blends`); nothing waiting changes.
+    if (blend == .over) {
+        _ = blends.remove(@intFromPtr(texture.ptr));
+    } else {
+        blends.put(gpa, @intFromPtr(texture.ptr), blend) catch return dvui.Backend.TextureError.NotImplemented;
+    }
 }
 
 pub fn textureCreateTarget(_: *WebBackend, options: dvui.Texture.CreateOptions) !dvui.TextureTarget {
@@ -776,8 +843,11 @@ pub fn textureCreateTarget(_: *WebBackend, options: dvui.Texture.CreateOptions) 
 }
 
 pub fn textureClearTarget(_: *WebBackend, tex: dvui.TextureTarget) void {
-    flushBatch();
-    wasm.wasm_textureClearTarget(@intCast(@intFromPtr(tex.ptr)));
+    const id: i32 = @intCast(@intFromPtr(tex.ptr));
+    marker(Command.clear_target, id) catch {
+        flushBatch();
+        wasm.wasm_textureClearTarget(@intCast(id));
+    };
 }
 
 pub fn textureFromTarget(_: *WebBackend, texture: dvui.TextureTarget) !dvui.Texture {
@@ -789,12 +859,8 @@ pub fn textureFromTargetTemp(_: *WebBackend, texture: dvui.TextureTarget) !dvui.
 }
 
 pub fn renderTarget(_: *WebBackend, texture: ?dvui.TextureTarget) !void {
-    flushBatch();
-    if (texture) |tex| {
-        wasm.wasm_renderTarget(@intCast(@intFromPtr(tex.ptr)));
-    } else {
-        wasm.wasm_renderTarget(0);
-    }
+    try marker(Command.switch_target, if (texture) |tex| @intCast(@intFromPtr(tex.ptr)) else 0);
+    target_is_fb = texture != null;
 }
 
 pub fn textureReadTarget(_: *WebBackend, texture: dvui.TextureTarget, pixels_out: [*]u8) !void {
@@ -803,12 +869,14 @@ pub fn textureReadTarget(_: *WebBackend, texture: dvui.TextureTarget, pixels_out
 }
 
 pub fn textureDestroy(_: *WebBackend, texture: dvui.Texture) void {
-    flushBatch();
+    if (pendingUses(@intCast(@intFromPtr(texture.ptr)))) flushBatch();
+    _ = blends.remove(@intFromPtr(texture.ptr));
     wasm.wasm_textureDestroy(@intCast(@intFromPtr(texture.ptr)));
 }
 
 pub fn textureDestroyTarget(_: *WebBackend, texture: dvui.Texture.Target) void {
-    flushBatch();
+    if (pendingUses(@intCast(@intFromPtr(texture.ptr)))) flushBatch();
+    _ = blends.remove(@intFromPtr(texture.ptr));
     wasm.wasm_textureDestroy(@intCast(@intFromPtr(texture.ptr)));
 }
 
