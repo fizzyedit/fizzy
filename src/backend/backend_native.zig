@@ -1,14 +1,15 @@
-// These are functions specific to the backend, which is currently SDL3
+//! Fizzy's own use of its window: the platform pieces any app gets (`src/backend/native/platform`
+//! — dialogs, files from the OS, gestures, chrome, geometry, the window monitor, the menu bar) with
+//! fizzy's policy over them — where dialogs start, where geometry is kept (`layout.zon`), how high
+//! the titlebar strip is, what its menus hold and when their items are enabled. The web build has
+//! the same surface in `backend_web.zig`.
 const fizzy = @import("../fizzy.zig");
 
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const core = @import("core");
 const layout_file = @import("layout_file.zig");
 const sdl3 = @import("backend").c;
-const objc = @import("objc");
-const win32 = @import("win32");
 const singleton = @import("app").single_instance;
 const Constants = @import("../editor/Constants.zig");
 const KeybindSettings = @import("../editor/KeybindSettings.zig");
@@ -65,7 +66,6 @@ pub const loadRegions = layout_file.loadRegions;
 pub const freeRegions = layout_file.freeRegions;
 pub const saveTree = layout_file.saveTree;
 pub const loadTree = layout_file.loadTree;
-const SavedFrame = layout_file.SavedFrame;
 const loadWindowFile = layout_file.loadWindowFile;
 const writeWindowFile = layout_file.writeWindowFile;
 
@@ -140,196 +140,191 @@ pub fn titlebarStripHeight(win: *dvui.Window) f32 {
     });
 }
 
-// NSEventModifierFlag for menu key equivalents (right-justified grey hotkey in menu)
-const NSEventModifierFlagCommand: c_ulong = 1 << 20;
-const NSEventModifierFlagShift: c_ulong = 1 << 17;
-const NSEventModifierFlagOption: c_ulong = 1 << 18;
-const NSEventModifierFlagControl: c_ulong = 1 << 19;
+// ---- The native menu bar: fizzy's menus (`menu_model`) on the platform's (`platform.menu`) ----
 
-/// Re-export of SDL3's filter struct under a fizzy-owned name. Editor call sites
-/// type their filter literals with this so the same code compiles on web (where
-/// `backend_web.zig` defines its own `DialogFileFilter` with the same layout).
+pub const modifier_command = platform.menu.modifier_command;
+pub const modifier_shift = platform.menu.modifier_shift;
+pub const modifier_option = platform.menu.modifier_option;
+pub const modifier_control = platform.menu.modifier_control;
 
-// macOS native menu bar (top bar): action ids match FizzyMenuTarget.m
-
-/// Every fixed menu-bar item, by the action it performs, kept so a rebind can push the new
-/// chord onto the item. Without this the `NSMenu` key equivalent stays whatever it was built
-/// with: `Keybinds.tick` deliberately skips these commands on macOS (the native menu already
-/// ran them), so after rebinding, the new chord had nothing dispatching it and the old one kept
-/// working. See `setNativeMenuShortcut`.
-var native_menu_items: [menu_model.flat_commands.len]?objc.Object = @splat(null);
-
-/// Point a menu item at a different chord. `key` is the key-equivalent character (lowercase,
-/// as AppKit expects — the shift modifier is carried in the mask, not the case); passing null
-/// clears the shortcut, which is the right outcome for a chord AppKit can't express.
-pub fn setNativeMenuShortcut(tag: usize, key: ?[]const u8, modifier_mask: c_ulong) void {
-    if (comptime builtin.os.tag != .macos) return;
-    if (tag >= native_menu_items.len) return;
-    applyKeyEquivalent(native_menu_items[tag] orelse return, key, modifier_mask);
-}
-
-/// `setNativeMenuShortcut` for a plugin-contributed item, keyed by its index in
-/// `Host.native_menu_items` — the same index `rebuildDynamicNativeMenus` stamps as the item's
-/// tag. Silently does nothing when that item isn't currently in the bar (hidden, or its plugin
-/// unloaded), which is the same shape as a stale tag above.
-pub fn setDynamicNativeMenuShortcut(index: usize, key: ?[]const u8, modifier_mask: c_ulong) void {
-    if (comptime builtin.os.tag != .macos) return;
-    for (dynamic_leaf_items.items) |entry| {
-        if (entry.index != index) continue;
-        applyKeyEquivalent(entry.item, key, modifier_mask);
-        return;
-    }
-}
-
-fn applyKeyEquivalent(item: objc.Object, key: ?[]const u8, modifier_mask: c_ulong) void {
-    const NSString = objc.getClass("NSString") orelse return;
-
-    var buf: [8]u8 = undefined;
-    const text: [:0]const u8 = blk: {
-        const k = key orelse break :blk "";
-        if (k.len >= buf.len) break :blk "";
-        @memcpy(buf[0..k.len], k);
-        buf[k.len] = 0;
-        break :blk buf[0..k.len :0];
-    };
-
-    const str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{text.ptr});
-    item.msgSend(void, "setKeyEquivalent:", .{str.value});
-    item.msgSend(void, "setKeyEquivalentModifierMask:", .{if (key == null) @as(c_ulong, 0) else modifier_mask});
-}
-
-pub const modifier_command: c_ulong = NSEventModifierFlagCommand;
-pub const modifier_shift: c_ulong = NSEventModifierFlagShift;
-pub const modifier_option: c_ulong = NSEventModifierFlagOption;
-pub const modifier_control: c_ulong = NSEventModifierFlagControl;
-
-// Queue a single pending native action id.
-// This may be written from an AppKit callback thread, so use an atomic.
-var pending_native_menu_action_id: std.atomic.Value(c_int) = .init(-1);
-/// Whether the pending action fired as a key equivalent (see `NativeMenuAction.from_key`).
-var pending_native_menu_action_from_key: std.atomic.Value(bool) = .init(false);
-
-/// Called from FizzyMenuTarget.m when user picks a native menu item. Runs on main thread.
-export fn FizzyNativeMenuAction(id: c_int, from_key: bool) void {
-    pending_native_menu_action_from_key.store(from_key, .release);
-    pending_native_menu_action_id.store(id, .release);
-}
-
-/// A native menu item the user activated. `from_key` means a ⌘-key equivalent, not a click:
-/// AppKit runs the menu action *and* passes the keystroke on to SDL, so the key event is still
-/// on its way to whatever widget has focus — a command that would otherwise synthesize one
-/// (paste into a text field) must not.
+/// A native menu item the user activated: its index among `menu_model`'s commands. `from_key`
+/// means a ⌘-key equivalent, not a click: AppKit runs the menu action *and* passes the keystroke
+/// on to SDL, so the key event is still on its way to whatever widget has focus — a command that
+/// would otherwise synthesize one (paste into a text field) must not.
 pub const NativeMenuAction = struct {
     index: usize,
     from_key: bool,
 };
 
-// Queue a single pending generic (plugin `NativeMenuItem`) action tag. Same threading note
-// as `pending_native_menu_action_id` above.
-var pending_generic_native_menu_action_tag: std.atomic.Value(c_int) = .init(-1);
+/// `menu_model.menu_bar` as the platform's menus: the same tree `Menu.zig` draws. Each command's
+/// tag is its depth-first index among command items, which resolves back to a command id.
+/// Recent Folders is a list the app fills as recents change; open actions and plugin sections
+/// are the in-app bar's (natively a plugin's items come in as extras, `rebuildDynamicNativeMenus`).
+const native_menus: []const platform.menu.Menu = blk: {
+    @setEvalBranchQuota(20_000);
+    var menus: [menu_model.menu_bar.len]platform.menu.Menu = undefined;
+    var tag: u32 = 0;
+    for (&menu_model.menu_bar, 0..) |*sub, i| {
+        var entries: [sub.items.len]platform.menu.Entry = undefined;
+        var n: usize = 0;
+        for (sub.items) |item| switch (item) {
+            .separator => {
+                entries[n] = .separator;
+                n += 1;
+            },
+            .command => |cmd| {
+                entries[n] = .{ .command = .{ .title = cmd.title.resolveStatic(), .tag = tag, .symbol = cmd.sf_symbol } };
+                n += 1;
+                tag += 1;
+            },
+            .recent_folders => {
+                entries[n] = .{ .list = .{ .title = "Recent Folders" } };
+                n += 1;
+            },
+            .open_actions, .plugin_section, .submenu => {},
+        };
+        const done = entries[0..n].*;
+        menus[i] = .{
+            .id = sub.id,
+            .aliases = sub.aliases,
+            .title = sub.title,
+            .entries = &done,
+            .help = std.mem.eql(u8, sub.id, "fizzy.menu.help"),
+        };
+    }
+    const done = menus;
+    break :blk &done;
+};
 
-/// Called from FizzyMenuTarget.m's `genericMenuAction:` (shared by every plugin-contributed
-/// native menu item) with the clicked `NSMenuItem`'s `tag` — an index into
-/// `host.native_menu_items`, assigned by `rebuildDynamicNativeMenus`. Runs on main thread.
-export fn FizzyNativeMenuGenericAction(tag: c_int) void {
-    pending_generic_native_menu_action_tag.store(tag, .release);
+/// Build the macOS menu bar from `menu_model`. Once; safe to call again.
+pub fn setupMacOSMenuBar() void {
+    if (builtin.os.tag != .macos) return;
+    platform.menu.install(native_menus, .{
+        .enabled = menuEnabled,
+        .title = menuTitle,
+        .input_blocked = menuInputBlocked,
+    }, AppInfo.about_title_z);
+    // Plugin items already registered (built-in static plugins register in `postInit`, before
+    // this), the recents, and the chords: the items are built with none, and the keymap may
+    // have stamped them before they existed.
+    rebuildDynamicNativeMenus();
+    rebuildNativeRecentFolders();
+    fizzy.Editor.Keybinds.syncNativeMenuShortcuts(fizzy.editor());
 }
 
-/// Called from `FizzyMenuTarget.m`'s `validateMenuItem:` (an `NSMenuItemValidation` hook
-/// AppKit calls synchronously, on the main thread, whenever a menu is about to show — this
-/// is the *only* way to grey out a native `NSMenu` item, unlike the in-app DVUI menu bar
-/// (`Menu.zig`), which recomputes "enabled" on every draw) with the clicked item's `tag`,
-/// set to the matching `NativeMenuAction` by `addNativeMenuItem`/`setupMacOSMenuBar`.
-///
-/// Mirrors the exact greying conditions `Menu.zig` already computes for the DVUI menu bar.
-/// Every function this touches (`Editor.activeDoc`, `Plugin.isDirty`/`canUndo`/`canRedo`,
-/// `Editor.activeDocHasCommand`/`activeDocCommandEnabled`, `Editor.open_files`) is plain
-/// `Host`/`Editor` state — none of it touches `dvui.currentWindow()` — so it's safe to call
-/// from outside `Window.begin`/`end`, unlike e.g. the save/open dialog callbacks (see
-/// `pollPendingDialogResult`).
-/// True while the app must not act on key presses at all. AppKit matches an `NSMenu` key
-/// equivalent and fires its action before the key ever reaches SDL, so the only way to stop
-/// `cmd+o` from opening a folder picker while the settings pane is capturing a chord is to
-/// report the menu items disabled — AppKit will not perform a disabled item's key equivalent.
-export fn FizzyNativeMenuInputBlocked() callconv(.c) bool {
+/// True while keys must not act at all: capturing a chord in the Keyboard Shortcuts settings.
+fn menuInputBlocked(_: ?*anyopaque) bool {
     return KeybindSettings.isRecording();
 }
 
-export fn FizzyNativeMenuActionEnabled(tag: c_int) callconv(.c) bool {
+/// Whether a menu item can be chosen now — the same greying the in-app bar (`Menu.zig`) does.
+/// Everything it reads is plain `Host`/`Editor` state, safe outside a frame.
+fn menuEnabled(_: ?*anyopaque, ref: platform.menu.Ref) bool {
     if (KeybindSettings.isRecording()) return false;
-    if (tag < 0) return true;
-    const item = menu_model.byTag(@intCast(tag)) orelse return true;
-    // Copy/Paste stay enabled here even when the active document can't do them: a disabled
-    // NSMenuItem does not perform its key equivalent, and on macOS that is the only way the
-    // chord reaches the app at all, including the focused widgets that handle it themselves.
-    if (item.native_always_enabled) return true;
-    // `visible` items that aren't visible are shown greyed rather than removed — rebuilding the
-    // retained NSMenu on every state change isn't worth it for the same information.
-    if (item.visible) |f| {
-        if (!f(fizzy.editor())) return false;
+    switch (ref.section) {
+        .bar => {
+            const item = menu_model.byTag(ref.tag) orelse return true;
+            // Copy/Paste stay enabled even when the active document can't do them: a disabled
+            // NSMenuItem does not perform its key equivalent, and on macOS that is the only way
+            // the chord reaches the app at all, including focused widgets that handle it.
+            if (item.native_always_enabled) return true;
+            // A `visible` item that isn't is shown greyed rather than removed: rebuilding the
+            // retained NSMenu on every state change isn't worth it for the same information.
+            if (item.visible) |f| if (!f(fizzy.editor())) return false;
+            const enabled = item.enabled orelse return true;
+            return enabled(fizzy.editor());
+        },
+        // A plugin's item is its command's, on both bars; no command is always enabled.
+        .extra => {
+            const items = fizzy.editor().app.host.native_menu_items.items;
+            if (ref.tag >= items.len) return true;
+            const cmd = items[ref.tag].command orelse return true;
+            return fizzy.editor().app.host.commandEnabled(cmd);
+        },
+        .list => return true,
     }
-    const enabled = item.enabled orelse return true;
-    return enabled(fizzy.editor());
 }
 
-/// Same idea as `FizzyNativeMenuActionEnabled` above, but for a plugin-contributed
-/// `NativeMenuItem` (`tag` indexes `host.native_menu_items`, like `FizzyNativeMenuGenericAction`
-/// resolves). These have no `visible`/`enabled` fields of their own: an item names its `Command`
-/// via `NativeMenuItem.command` so the enabled state is the command's, on both menu bars
-/// (`Editor.fizzyDrawMenuItem` greys the in-app row the same way). No `command` means "always
-/// enabled", same as a dvui row with no `command_id`.
-export fn FizzyNativeMenuGenericActionEnabled(tag: c_int) callconv(.c) bool {
-    if (KeybindSettings.isRecording()) return false;
-    if (tag < 0) return true;
-    const items = fizzy.editor().app.host.native_menu_items.items;
-    if (tag >= items.len) return true;
-    const cmd = items[@intCast(tag)].command orelse return true;
-    return fizzy.editor().app.host.commandEnabled(cmd);
-}
-
-/// Current label for a model item, so state-dependent titles ("Show Explorer" / "Hide
-/// Explorer") track the app. AppKit menus are retained state; validation runs just before a
-/// menu displays, which is when this is called.
-export fn FizzyNativeMenuItemTitle(tag: c_int) callconv(.c) ?[*:0]const u8 {
-    if (tag < 0) return null;
-    const item = menu_model.byTag(@intCast(tag)) orelse return null;
+/// A model item's label now, for one that follows the app ("Show Explorer" / "Hide Explorer").
+fn menuTitle(_: ?*anyopaque, ref: platform.menu.Ref) ?[*:0]const u8 {
+    if (ref.section != .bar) return null;
+    const item = menu_model.byTag(ref.tag) orelse return null;
     return switch (item.title) {
-        .static => null, // already correct; nothing to rewrite
+        .static => null,
         .dynamic => |f| f(fizzy.editor()).ptr,
     };
 }
 
-/// The app menu's "About <app>", which AppKit creates rather than the model.
-export fn FizzyNativeMenuAboutAction() callconv(.c) void {
-    pending_native_menu_about.store(true, .release);
+/// Rebuild every plugin-contributed native menu and item from the host's registry: on every
+/// plugin load, unload and hide-toggle. Each item's tag is its index in `host.native_menu_items`.
+pub fn rebuildDynamicNativeMenus() void {
+    if (builtin.os.tag != .macos) return;
+    const host = &fizzy.editor().app.host;
+    var menus: std.ArrayListUnmanaged(platform.menu.ExtraMenu) = .empty;
+    defer menus.deinit(alloc());
+    var items: std.ArrayListUnmanaged(platform.menu.ExtraItem) = .empty;
+    defer items.deinit(alloc());
+    for (host.menus.items) |mc| {
+        if (mc.hidden) continue;
+        menus.append(alloc(), .{ .id = mc.id, .title = mc.title }) catch {};
+    }
+    for (host.native_menu_items.items, 0..) |ni, i| {
+        if (ni.hidden) continue;
+        items.append(alloc(), .{ .menu_id = ni.parent_menu_id, .title = ni.title, .symbol = ni.sf_symbol, .tag = @intCast(i) }) catch {};
+    }
+    platform.menu.setExtras(menus.items, items.items);
+    // The items are built with no key equivalent; this is what puts the keymap's chords on them.
+    fizzy.Editor.Keybinds.syncNativeMenuShortcuts(fizzy.editor());
 }
-var pending_native_menu_about: std.atomic.Value(bool) = .init(false);
 
-/// A Recent Folders click. The index is into `editor.app.recents.folders`, newest last.
-export fn FizzyNativeRecentFolderAction(index: c_int) callconv(.c) void {
-    if (index < 0) return;
-    pending_native_recent_folder.store(index, .release);
+/// How many folders the Recent Folders list was last filled with: a choice's position in it,
+/// newest first, back to an index into the recents.
+var native_recent_count: usize = 0;
+
+/// Fill the Recent Folders submenu from the recents, newest first. AppKit menus are retained
+/// state, so this has to run whenever the list changes.
+pub fn rebuildNativeRecentFolders() void {
+    if (comptime builtin.os.tag != .macos) return;
+    const folders = fizzy.editor().app.recents.folders.items;
+    const titles = alloc().alloc([]const u8, folders.len) catch return;
+    defer alloc().free(titles);
+    for (folders, 0..) |f, i| titles[folders.len - 1 - i] = f;
+    native_recent_count = folders.len;
+    platform.menu.setList(0, titles);
 }
-var pending_native_recent_folder: std.atomic.Value(c_int) = .init(-1);
 
-/// Returns and clears a pending Recent Folders selection.
+/// Returns and clears a pending Recent Folders choice, as an index into the recents.
 pub fn pollPendingRecentFolder() ?usize {
-    const i = pending_native_recent_folder.swap(-1, .acq_rel);
-    if (i < 0) return null;
-    return @intCast(i);
-}
-
-/// `FizzyGetSelector` from `FizzyMenuTarget.m` — turns a selector name into a SEL without
-/// linking the Objective-C runtime here directly.
-extern fn FizzyGetSelector(name: [*:0]const u8) ?*anyopaque;
-
-fn fizzy_get_selector(name: [*:0]const u8) ?*anyopaque {
-    return FizzyGetSelector(name);
+    const a = platform.menu.pollActivation(.list) orelse return null;
+    if (a.ref.tag >= native_recent_count) return null;
+    return native_recent_count - 1 - a.ref.tag;
 }
 
 /// Returns and clears a pending app-menu About click.
-pub fn pollPendingAbout() bool {
-    return pending_native_menu_about.swap(false, .acq_rel);
+pub const pollPendingAbout = platform.menu.pollAbout;
+
+/// Returns and clears a pending native menu action (macOS menu bar). Call once per frame.
+pub fn pollPendingNativeMenuAction() ?NativeMenuAction {
+    const a = platform.menu.pollActivation(.bar) orelse return null;
+    if (a.ref.tag >= menu_model.flat_commands.len) return null;
+    return .{ .index = a.ref.tag, .from_key = a.from_key };
+}
+
+/// Returns and clears a pending plugin menu item, as its index in `host.native_menu_items`.
+pub fn pollPendingGenericNativeMenuAction() ?usize {
+    const a = platform.menu.pollActivation(.extra) orelse return null;
+    return a.ref.tag;
+}
+
+/// Point a menu item at a different chord (`key` lowercase, as AppKit expects; null clears it,
+/// right for a chord AppKit can't express).
+pub fn setNativeMenuShortcut(tag: usize, key: ?[]const u8, modifier_mask: c_ulong) void {
+    platform.menu.setKeyEquivalent(.{ .section = .bar, .tag = @intCast(tag) }, key, modifier_mask);
+}
+
+/// `setNativeMenuShortcut` for a plugin's item, keyed by its index in `host.native_menu_items`.
+pub fn setDynamicNativeMenuShortcut(index: usize, key: ?[]const u8, modifier_mask: c_ulong) void {
+    platform.menu.setKeyEquivalent(.{ .section = .extra, .tag = @intCast(index) }, key, modifier_mask);
 }
 
 /// Override the SDL app metadata DVUI sets to its example defaults. On macOS this
@@ -338,396 +333,5 @@ pub fn pollPendingAbout() bool {
 /// references the right product name.
 pub fn setSdlAppMetadata(name: [*:0]const u8, version: [*:0]const u8, identifier: [*:0]const u8) void {
     _ = sdl3.SDL_SetAppMetadata(name, version, identifier);
-}
-
-var macos_menu_bar_set_up: bool = false;
-
-// ---- plugin-contributed native menus (macOS) -------------------------------------------
-// `setupMacOSMenuBar` builds the fixed App/File/Edit/View/Help menus below and stashes
-// handles to them (plus the shared target + Help's insertion point) here, so
-// `rebuildDynamicNativeMenus` can append plugin `NativeMenuItem`s into them, and create
-// whole new top-level menus for plugin-owned `MenuContribution`s, without rebuilding the
-// fixed menus. Called once at startup (from the end of `setupMacOSMenuBar`) and again on
-// every plugin load/unload/hide-toggle (see `Editor.zig`).
-var native_main_menu: ?objc.Object = null;
-var native_menu_target: ?objc.Object = null;
-var native_help_item: ?objc.Object = null;
-var native_file_menu: ?objc.Object = null;
-var native_edit_menu: ?objc.Object = null;
-var native_view_menu: ?objc.Object = null;
-var native_help_menu: ?objc.Object = null;
-/// Top-level NSMenus, indexed like `menu_model.menu_bar`.
-var native_submenus: [menu_model.menu_bar.len]?objc.Object = @splat(null);
-/// The Recent Folders submenu and the item carrying it, rebuilt as the recents list changes.
-var native_recent_folders_menu: ?objc.Object = null;
-var native_recent_folders_item: ?objc.Object = null;
-
-const DynamicTopLevelMenu = struct { item: objc.Object, menu: objc.Object };
-/// `index` is the item's position in `Host.native_menu_items` — its `NSMenuItem` tag, and the
-/// handle `setDynamicNativeMenuShortcut` restamps a rebound chord through.
-const DynamicLeafItem = struct { parent_menu: objc.Object, item: objc.Object, index: usize };
-
-/// Plugin-created top-level menus (main-menu items) from the previous rebuild, torn down
-/// at the start of the next one.
-var dynamic_top_level_menus: std.ArrayListUnmanaged(DynamicTopLevelMenu) = .empty;
-/// Plugin leaf items injected into any menu (built-in or plugin-owned) from the previous
-/// rebuild, torn down at the start of the next one.
-var dynamic_leaf_items: std.ArrayListUnmanaged(DynamicLeafItem) = .empty;
-
-fn isBuiltinNativeMenuId(id: []const u8) bool {
-    return menu_model.submenuFor(id) != null;
-}
-
-fn resolveBuiltinNativeMenu(id: []const u8) ?objc.Object {
-    for (menu_model.menu_bar, 0..) |sub, i| {
-        if (menu_model.menuMatches(sub, id)) return native_submenus[i];
-    }
-    return null;
-}
-
-/// Rebuild every plugin-contributed native menu item from the current `fizzy.editor().app.host`
-/// registry state. Tears down the previous dynamic set first, so this is safe (and cheap
-/// enough) to call on every plugin load/unload/hide-toggle — a full rebuild avoids diffing
-/// against arbitrary prior state, at the cost of some churn AppKit already expects from
-/// `NSMenu` mutation.
-pub fn rebuildDynamicNativeMenus() void {
-    if (builtin.os.tag != .macos) return;
-    if (!macos_menu_bar_set_up) return;
-    const main_menu = native_main_menu orelse return;
-    const target = native_menu_target orelse return;
-
-    // Teardown: remove everything the previous rebuild added.
-    for (dynamic_leaf_items.items) |entry| {
-        entry.parent_menu.msgSend(void, "removeItem:", .{entry.item.value});
-    }
-    dynamic_leaf_items.clearRetainingCapacity();
-    for (dynamic_top_level_menus.items) |entry| {
-        main_menu.msgSend(void, "removeItem:", .{entry.item.value});
-    }
-    dynamic_top_level_menus.clearRetainingCapacity();
-
-    const host = &fizzy.editor().app.host;
-
-    const NSMenu = objc.getClass("NSMenu") orelse return;
-    const NSMenuItem = objc.getClass("NSMenuItem") orelse return;
-    const NSString = objc.getClass("NSString") orelse return;
-    const NSImage = objc.getClass("NSImage") orelse return;
-    const empty = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"".ptr});
-    const generic_sel = fizzy_get_selector("genericMenuAction:") orelse return;
-
-    // Pass 1: create a native top-level menu for every visible, titled, plugin-owned
-    // `MenuContribution` that has at least one visible `NativeMenuItem` targeting it.
-    // Menus with no native leaf items (in-app-bar-only, or untitled) are skipped.
-    var created: std.StringHashMapUnmanaged(objc.Object) = .empty;
-    defer created.deinit(alloc());
-
-    for (host.menus.items) |mc| {
-        if (mc.hidden or mc.title.len == 0) continue;
-        if (isBuiltinNativeMenuId(mc.id)) continue;
-        const has_items = blk: {
-            for (host.native_menu_items.items) |ni| {
-                if (!ni.hidden and std.mem.eql(u8, ni.parent_menu_id, mc.id)) break :blk true;
-            }
-            break :blk false;
-        };
-        if (!has_items) continue;
-
-        const title_z = alloc().dupeZ(u8, mc.title) catch continue;
-        defer alloc().free(title_z);
-        const title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{title_z.ptr});
-
-        const menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{title_str.value});
-        if (menu.value == 0) continue;
-        const item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
-            title_str.value,
-            @as(usize, 0),
-            empty.value,
-        });
-        if (item.value == 0) continue;
-        item.msgSend(void, "setSubmenu:", .{menu.value});
-
-        // Insert right before Help so ordering stays (…, View, <plugin menus…>, Help).
-        if (native_help_item) |help_item| {
-            const idx = main_menu.msgSend(c_long, "indexOfItem:", .{help_item.value});
-            if (idx >= 0) {
-                main_menu.msgSend(void, "insertItem:atIndex:", .{ item.value, @as(c_ulong, @intCast(idx)) });
-            } else {
-                main_menu.msgSend(void, "addItem:", .{item.value});
-            }
-        } else {
-            main_menu.msgSend(void, "addItem:", .{item.value});
-        }
-
-        dynamic_top_level_menus.append(alloc(), .{ .item = item, .menu = menu }) catch {};
-        created.put(alloc(), mc.id, menu) catch {};
-    }
-
-    // Pass 2: append every visible `NativeMenuItem` into its resolved parent menu (either a
-    // built-in one, or one just created above). Items whose parent can't be resolved (e.g.
-    // targeting an untitled/hidden `MenuContribution`) are skipped.
-    for (host.native_menu_items.items, 0..) |ni, idx| {
-        if (ni.hidden) continue;
-        const parent_menu: objc.Object = resolveBuiltinNativeMenu(ni.parent_menu_id) orelse
-            (created.get(ni.parent_menu_id) orelse continue);
-
-        const title_z = alloc().dupeZ(u8, ni.title) catch continue;
-        defer alloc().free(title_z);
-        const title_str = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{title_z.ptr});
-
-        const item = parent_menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-            title_str.value,
-            @intFromPtr(generic_sel),
-            empty.value,
-        });
-        if (item.value == 0) continue;
-        item.msgSend(void, "setTarget:", .{target.value});
-        // Tag with the item's index in `host.native_menu_items`, resolved back on click
-        // in `Editor.zig`'s `flushQueuedNativeMenuItems`.
-        item.msgSend(void, "setTag:", .{@as(c_long, @intCast(idx))});
-        if (ni.sf_symbol) |sym| {
-            if (alloc().dupeZ(u8, sym)) |sym_z| {
-                defer alloc().free(sym_z);
-                setMenuItemImage(item, NSImage, NSString, sym_z.ptr, title_z.ptr);
-            } else |_| {}
-        }
-
-        dynamic_leaf_items.append(alloc(), .{
-            .parent_menu = parent_menu,
-            .item = item,
-            .index = idx,
-        }) catch {};
-    }
-
-    // The items above are built with no key equivalent; their chords come from the keymap, and
-    // this is what puts them there. Both callers of this function (startup, and every plugin
-    // load/unload/hide-toggle) reach it *after* the keymap is rebuilt, so nothing else would —
-    // the fixed bar hits the same ordering hazard, which is why `setupMacOSMenuBar` ends with
-    // the same call.
-    fizzy.Editor.Keybinds.syncNativeMenuShortcuts(fizzy.editor());
-}
-
-/// Inserts a "File" menu into the macOS app menu bar (between Apple and Window). Safe to call multiple times; runs once.
-pub fn setupMacOSMenuBar() void {
-    if (builtin.os.tag != .macos) return;
-    if (macos_menu_bar_set_up) return;
-    const NSApplication = objc.getClass("NSApplication") orelse return;
-    const ns_app = NSApplication.msgSend(objc.Object, "sharedApplication", .{});
-    if (ns_app.value == 0) return;
-    const main_menu = ns_app.msgSend(objc.Object, "mainMenu", .{});
-    if (main_menu.value == 0) return;
-    native_main_menu = main_menu;
-
-    const NSString = objc.getClass("NSString") orelse return;
-    const NSMenu = objc.getClass("NSMenu") orelse return;
-    const NSMenuItem = objc.getClass("NSMenuItem") orelse return;
-    const FizzyMenuTargetClass = objc.getClass("FizzyMenuTarget") orelse return;
-    const target = FizzyMenuTargetClass.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "init", .{});
-    if (target.value == 0) return;
-    native_menu_target = target;
-
-    const empty = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"".ptr});
-    const NSImage = objc.getClass("NSImage") orelse return;
-    const action_sel = fizzy_get_selector("menuAction:") orelse return;
-
-    // Build every top-level menu from `menu_model`, the same tree `Menu.zig` draws. Each item's
-    // tag is its depth-first index among command items, which is all the C boundary needs: one
-    // integer that resolves back to a command id. The fourteen hand-written Objective-C
-    // forwarding methods and the `NativeMenuAction` enum they switched on existed only to carry
-    // that integer, and are gone.
-    var tag: c_long = 0;
-    inline for (&menu_model.menu_bar, 0..) |*sub, sub_index| {
-        const sub_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{sub.title.ptr});
-        const menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{sub_title.value});
-        if (menu.value != 0) {
-            native_submenus[sub_index] = menu;
-
-            inline for (sub.items) |item| {
-                switch (item) {
-                    .separator => menu.msgSend(void, "addItem:", .{NSMenuItem.msgSend(objc.Object, "separatorItem", .{}).value}),
-
-                    .command => |c| {
-                        const item_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{c.title.resolveStatic().ptr});
-                        const mi = menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-                            item_title.value,
-                            @intFromPtr(action_sel),
-                            empty.value,
-                        });
-                        if (mi.value != 0) {
-                            mi.msgSend(void, "setTarget:", .{target.value});
-                            mi.msgSend(void, "setTag:", .{tag});
-                            if (c.sf_symbol) |sym| setMenuItemImage(mi, NSImage, NSString, sym, c.title.resolveStatic());
-                            native_menu_items[@intCast(tag)] = mi;
-                        }
-                        tag += 1;
-                    },
-
-                    // Populated later: recents aren't loaded when the bar is built, and plugin
-                    // sections arrive as plugins register. Both get a placeholder submenu here
-                    // so their position in the menu is fixed by the model rather than by
-                    // whatever order the rebuilds happen to run in.
-                    .recent_folders => {
-                        const rf_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"Recent Folders".ptr});
-                        const rf_item = menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-                            rf_title.value,
-                            @as(usize, 0),
-                            empty.value,
-                        });
-                        if (rf_item.value != 0) {
-                            const rf_menu = NSMenu.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:", .{rf_title.value});
-                            if (rf_menu.value != 0) {
-                                rf_item.msgSend(void, "setSubmenu:", .{rf_menu.value});
-                                native_recent_folders_menu = rf_menu;
-                                native_recent_folders_item = rf_item;
-                            }
-                        }
-                    },
-
-                    // Natively an open action is the plugin's own `NativeMenuItem`, appended
-                    // to File with the rest of its native items; the fixed slot is the in-app
-                    // bar's.
-                    .open_actions, .plugin_section, .submenu => {},
-                }
-            }
-
-            const bar_item = NSMenuItem.msgSend(objc.Object, "alloc", .{}).msgSend(objc.Object, "initWithTitle:action:keyEquivalent:", .{
-                sub_title.value,
-                @as(usize, 0),
-                empty.value,
-            });
-            if (bar_item.value != 0) {
-                bar_item.msgSend(void, "setSubmenu:", .{menu.value});
-                if (comptime std.mem.eql(u8, sub.id, "fizzy.menu.help")) {
-                    // Help goes last so the conventional order (App, File, Edit, View, …,
-                    // Window, Help) survives, and AppKit wires in its search field.
-                    main_menu.msgSend(void, "addItem:", .{bar_item.value});
-                    ns_app.msgSend(void, "setHelpMenu:", .{menu.value});
-                    native_help_item = bar_item;
-                } else {
-                    main_menu.msgSend(void, "insertItem:atIndex:", .{ bar_item.value, @as(c_ulong, sub_index + 1) });
-                }
-            }
-        }
-    }
-
-    // App-menu cleanup:
-    //   1. Retitle and re-target the auto-generated "About …" item from SDL's default about-panel to AboutFizzy.
-    //   (The Hide / Quit titles are already this app's: its metadata is set before SDL builds the menu,
-    //   from the start options — `Entry.startOptions`.)
-    //   2. We do NOT add a Window submenu here — SDL/AppKit already inserts a top-level Window menu, and nesting one
-    //      inside the app menu produced a visible duplicate.
-    const app_menu_item = main_menu.msgSend(objc.Object, "itemAtIndex:", .{@as(c_ulong, 0)});
-    const app_submenu = app_menu_item.msgSend(objc.Object, "submenu", .{});
-    if (app_submenu.value != 0) {
-        if (fizzy_get_selector("about:")) |about_sel| {
-            const about_item = app_submenu.msgSend(objc.Object, "itemAtIndex:", .{@as(c_ulong, 0)});
-            if (about_item.value != 0) {
-                const about_title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{AppInfo.about_title_z.ptr});
-                about_item.msgSend(void, "setTitle:", .{about_title.value});
-                about_item.msgSend(void, "setAction:", .{about_sel});
-                about_item.msgSend(void, "setTarget:", .{target.value});
-            }
-        }
-
-    }
-
-    macos_menu_bar_set_up = true;
-
-    // Add any plugin-contributed native menus/items already registered by this point
-    // (built-in static plugins register in `postInit`, which runs before this function).
-    rebuildDynamicNativeMenus();
-    rebuildNativeRecentFolders();
-
-    // Items are built with no key equivalent; the chords come from the keymap. `buildKeymap`
-    // also stamps them, but the two run in either order depending on startup path — this ran
-    // first at boot, so every File/Edit shortcut was stamped onto items that did not exist yet
-    // and never restamped. The menus showed no chords, and because `nativeMenuOwnsChord` still
-    // told `dispatch` the native menu owned them, nothing handled those keys at all.
-    fizzy.Editor.Keybinds.syncNativeMenuShortcuts(fizzy.editor());
-}
-
-/// Fill the Recent Folders submenu from the current recents list.
-///
-/// AppKit menus are retained state, so unlike the dvui menu — which just re-reads the list every
-/// frame — this has to be rebuilt whenever the list changes. Recent Folders had no macOS
-/// representation at all before the model; it existed only in the dvui bar.
-pub fn rebuildNativeRecentFolders() void {
-    if (comptime builtin.os.tag != .macos) return;
-    const menu = native_recent_folders_menu orelse return;
-    const target = native_menu_target orelse return;
-    const NSString = objc.getClass("NSString") orelse return;
-    const sel = fizzy_get_selector("recentFolderAction:") orelse return;
-
-    menu.msgSend(void, "removeAllItems", .{});
-
-    const empty = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{"".ptr});
-    const folders = fizzy.editor().app.recents.folders.items;
-
-    // Newest first, matching the dvui menu's reverse walk.
-    var i: usize = folders.len;
-    while (i > 0) : (i -= 1) {
-        const folder = folders[i - 1];
-        // `stringWithUTF8String:` needs a sentinel; recents are plain slices.
-        var buf: [1024]u8 = undefined;
-        if (folder.len >= buf.len) continue;
-        @memcpy(buf[0..folder.len], folder);
-        buf[folder.len] = 0;
-
-        const title = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{@as([*:0]const u8, @ptrCast(&buf))});
-        const item = menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-            title.value,
-            @intFromPtr(sel),
-            empty.value,
-        });
-        if (item.value != 0) {
-            item.msgSend(void, "setTarget:", .{target.value});
-            item.msgSend(void, "setTag:", .{@as(c_long, @intCast(i - 1))});
-        }
-    }
-
-    if (native_recent_folders_item) |it| {
-        it.msgSend(void, "setHidden:", .{folders.len == 0});
-    }
-}
-
-/// Sets an SF Symbol image on a menu item (macOS 11+). No-op if the image cannot be created.
-fn setMenuItemImage(menu_item: objc.Object, NSImageClass: objc.Class, NSStringClass: objc.Class, symbol_name: [*:0]const u8, accessibility_desc: [*:0]const u8) void {
-    const name_str = NSStringClass.msgSend(objc.Object, "stringWithUTF8String:", .{symbol_name});
-    const desc_str = NSStringClass.msgSend(objc.Object, "stringWithUTF8String:", .{accessibility_desc});
-    const img = NSImageClass.msgSend(objc.Object, "imageWithSystemSymbolName:accessibilityDescription:", .{
-        name_str.value,
-        desc_str.value,
-    });
-    if (img.value != 0) {
-        img.msgSend(void, "setTemplate:", .{true});
-        menu_item.msgSend(void, "setImage:", .{img.value});
-    }
-}
-
-fn addNativeMenuItemWithTarget(menu: objc.Object, _: objc.Class, NSStringClass: objc.Class, target: ?objc.Object, title: [*:0]const u8, action: *const anyopaque, key_equiv_value: usize, modifier_mask: c_ulong, empty_str: usize) void {
-    const title_obj = NSStringClass.msgSend(objc.Object, "stringWithUTF8String:", .{title});
-    const item = menu.msgSend(objc.Object, "addItemWithTitle:action:keyEquivalent:", .{
-        title_obj.value,
-        @intFromPtr(action),
-        if (key_equiv_value != 0) key_equiv_value else empty_str,
-    });
-    if (item.value != 0) {
-        if (target) |t| item.msgSend(void, "setTarget:", .{t.value});
-        if (modifier_mask != 0) item.msgSend(void, "setKeyEquivalentModifierMask:", .{modifier_mask});
-    }
-}
-
-/// Returns and clears a pending native menu action (macOS menu bar). Call once per frame; on non-macOS always returns null.
-pub fn pollPendingNativeMenuAction() ?NativeMenuAction {
-    const id = pending_native_menu_action_id.swap(-1, .acq_rel);
-    if (id < 0 or id >= menu_model.flat_commands.len) return null;
-    return .{ .index = @intCast(id), .from_key = pending_native_menu_action_from_key.load(.acquire) };
-}
-
-/// Returns and clears a pending generic native menu item tag (plugin `NativeMenuItem`s).
-/// Call once per frame; on non-macOS always returns null.
-pub fn pollPendingGenericNativeMenuAction() ?usize {
-    const tag = pending_generic_native_menu_action_tag.swap(-1, .acq_rel);
-    if (tag < 0) return null;
-    return @intCast(tag);
 }
 

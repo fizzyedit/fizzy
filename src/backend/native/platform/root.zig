@@ -13,3 +13,4 @@ pub const win32_titlebar = @import("win32_titlebar.zig");
 pub const geometry = @import("geometry.zig");
 pub const macos_monitor = @import("macos_monitor.zig");
 pub const window_layout = @import("window_layout.zig");
+pub const menu = @import("menu.zig");
