@@ -957,6 +957,10 @@ pub const Pane = struct {
     /// of — where a re-read every frame is a blur's worth of work for a picture that has not
     /// changed.
     witness: ?u64 = null,
+    /// Clear glass: what is behind it unblurred — bent at its edge, tinted and lit as frost is —
+    /// for the blur turned off where the glass program draws (`LiquidField`), so liquid glass is
+    /// still glass. Its capture runs at `min_blur`, for the picture before the blur.
+    clear: bool = false,
 };
 
 /// Physical pixels: the least blur a frost is drawn with (`frostPane`).
@@ -1014,7 +1018,9 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     // The glass's edge shows what lies just beyond it (`liquid_glass`), so the capture reaches
     // that far past the pane; flat glass needs none. As far as the whole edge reaches, however
     // much of it has formed: a capture growing with it was a new size, and new targets, a frame.
-    const lens_full = motion.liquid() * liquid_glass.blurRamp(pane.radius) * liquid_glass.sizeRamp(rect, scale);
+    // Clear glass has the whole edge: it is thick glass that happens not to be frosted.
+    const ramp = if (pane.clear) 1 else liquid_glass.blurRamp(pane.radius);
+    const lens_full = motion.liquid() * ramp * liquid_glass.sizeRamp(rect, scale);
     const lens = lens_full * edge;
     const margin = liquid_glass.margin(.{ .lens = lens_full, .refraction = pane.refraction }, scale);
     // A size it keeps while it can (`captureSize`): a pane that changes size — a menu sliding
@@ -1048,6 +1054,7 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
         .lens = lens,
         .refraction = pane.refraction,
         .field = field,
+        .clear = pane.clear,
     };
     dvui.deferRender(job, FrostJob.draw);
 }
@@ -1104,6 +1111,8 @@ const FrostJob = struct {
     /// Shapes run together, drawn by the glass program, instead of the one rounded rect
     /// (`fieldPane`).
     field: ?LiquidField = null,
+    /// Clear glass (`Pane.clear`): the picture before the blur.
+    clear: bool = false,
 
     fn draw(ctx: ?*anyopaque) void {
         const self: *FrostJob = @ptrCast(@alignCast(ctx orelse return));
@@ -1129,7 +1138,10 @@ const FrostJob = struct {
             f.lift = self.lift;
             f.refraction = self.refraction;
             // Each shape's edge as far as the pane's has formed (and the motion level allows).
-            for (f.shapes[0..f.len]) |*sh| sh.lens *= self.lens;
+            for (f.shapes[0..f.len]) |*sh| {
+                sh.lens *= self.lens;
+                if (self.clear) sh.blur = 0;
+            }
             const sharp = self.backdrop.sharpTexture();
             const distinct = if (sharp) |t| t.ptr != tex.ptr else false;
             _ = f.draw(tex, self.backdrop.coverage(), if (distinct) sharp else null);
@@ -1166,6 +1178,7 @@ const FrostJob = struct {
             .rect = self.rect,
             .radii = .{ c.tl.radius() * s, c.tr.radius() * s, c.br.radius() * s, c.bl.radius() * s },
             .lens = self.lens,
+            .blur = if (self.clear) 0 else 1,
         });
         const sharp = self.backdrop.sharpTexture();
         const distinct = if (sharp) |t| t.ptr != tex.ptr else false;

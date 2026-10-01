@@ -66,7 +66,7 @@ drop_shapes: [2]core.LiquidField.Shape = undefined,
 drop_n: usize = 0,
 /// The head's corner radius this frame (physical), for the photograph inside it.
 drop_radius: f32 = 0,
-/// Carried by a finger: the drop rides above it, where the finger does not cover it.
+/// Carried by a finger: the drop rides up and left of it, where the finger does not cover it.
 drop_touch: bool = false,
 
 /// The places this drag can land on, and where they were, frozen at lift.
@@ -641,11 +641,12 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
         .mouse => |me| d.drop_touch = me.button.touch(),
         else => {},
     };
-    // Off the pointer, so the bubble under it stays in view — below and right of a mouse, above a
-    // finger, which would cover anything under it — and drawn toward the bubble it is aimed at,
-    // far enough that the two run together.
+    // Off the pointer, so the bubble under it stays in view — below and right of a mouse; up and
+    // left of a finger, the finger at the drop's bottom-right corner, where the hand holding it
+    // covers none of it — and drawn toward the bubble it is aimed at, far enough that the two
+    // run together.
     var target: dvui.Point.Physical = if (d.drop_touch)
-        .{ .x = mouse.x, .y = mouse.y - 1.35 * R }
+        .{ .x = mouse.x - R, .y = mouse.y - R }
     else
         .{ .x = mouse.x + 0.55 * R, .y = mouse.y + 0.55 * R };
     for (drops) |p| {

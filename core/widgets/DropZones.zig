@@ -447,7 +447,7 @@ fn glassCarrying(id: dvui.Id, panes: []const Pane, area_in: dvui.Rect.Physical, 
         area.w = cap.w;
         area.h = cap.h;
     }
-    const base = widgets.menuFrost() orelse {
+    const base = widgets.liquidFrost() orelse {
         const fill = dialogs.dialogFill();
         for (panes) |pane| {
             if (pane.r.w < 1 or pane.r.h < 1) continue;
@@ -457,7 +457,7 @@ fn glassCarrying(id: dvui.Id, panes: []const Pane, area_in: dvui.Rect.Physical, 
         return false;
     };
     const job = dvui.dataGetPtrDefault(null, id, "_drop_zones_job", LayerJob, .{});
-    const lens_full = motion.liquid() * liquid_glass.blurRamp(base.radius);
+    const lens_full = motion.liquid() * (if (base.clear) 1 else liquid_glass.blurRamp(base.radius));
     job.* = .{
         .backdrop = job.backdrop,
         .scale = scale,
@@ -600,11 +600,13 @@ fn drawFieldImpl(self: *const LayerJob, tex: dvui.Texture, backdrop: *BlurBackdr
             // Lit, lighter in a dark theme, as dvui takes a hovered fill.
             .light = if (dark) hover else 0,
             .round = true,
+            .blur = if (self.pane.clear) 0 else 1,
         });
     }
     for (self.carried[0..self.carried_n]) |c| {
         var sh = c;
         sh.lens *= self.lens;
+        if (self.pane.clear) sh.blur = 0;
         field.add(sh);
     }
     const sharp = backdrop.sharpTexture();

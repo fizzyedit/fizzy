@@ -259,6 +259,15 @@ pub fn menuFrost() ?BlurBackdrop.Pane {
     return .{ .radius = f.radius, .refresh_ms = f.refresh_ms, .tint = f.tint, .mix = f.mix, .lift = f.lift, .detail = f.detail, .refraction = f.refraction };
 }
 
+/// The glass liquid shapes are made of (`LiquidField`): `menuFrost`, or — the blur off, and the
+/// glass program there to draw it — clear glass of the same tint and edge
+/// (`BlurBackdrop.Pane.clear`), so shapes that run together still do. Null where neither is.
+pub fn liquidFrost() ?BlurBackdrop.Pane {
+    if (menuFrost()) |p| return p;
+    if (!LiquidField.ready()) return null;
+    return dialogs.clearFrost();
+}
+
 /// A menu popup's surface: `core.dialogs`' fill, corners, padding and shadow, no border — the
 /// menu bar's dropdowns, context menus and the rest wear the same one.
 pub fn menuSurfaceOptions() dvui.Options {
