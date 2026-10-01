@@ -45,6 +45,11 @@ pub const MenuWidget = @import("widgets/menu/Menu.zig");
 pub const MenuItemWidget = @import("widgets/menu/MenuItem.zig");
 pub const FloatingMenuWidget = @import("widgets/menu/FloatingMenu.zig");
 pub const PopupWidget = @import("widgets/menu/Popup.zig");
+
+/// Points: the one size of a round button — a floating toggle, a place's corner grid, anything
+/// round that is tapped or clicked. Big enough to hit with a finger, small enough not to crowd
+/// what it sits over, so one size serves touch and mouse alike.
+pub const round_button_size: f32 = 32;
 /// A dropdown whose list is the menus' frosted surface — use this, not `dvui.DropdownWidget`.
 pub const DropdownWidget = @import("widgets/Dropdown.zig");
 
