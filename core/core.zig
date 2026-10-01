@@ -54,6 +54,7 @@ pub const liquid_glass = @import("gfx/liquid_glass.zig");
 pub const liquid_blob = @import("gfx/liquid_blob.zig");
 pub const LiquidField = @import("gfx/LiquidField.zig");
 pub const programs = @import("gfx/programs.zig");
+pub const Spring = @import("Spring.zig");
 /// The dialog framework, its window chrome, and the toasts and spinners that share it.
 pub const dialogs = @import("dialogs.zig");
 /// Drawing helpers with no widget of their own: highlighted labels, menu rows, edge shadows.

@@ -181,6 +181,10 @@ pub const Look = struct {
     target: bool = true,
     /// The middle's icon.
     center: Center = .replace,
+    /// Glass carried over the drop — the dragged view's drop — run together with its bubbles
+    /// where the glass program draws them (`LiquidField`), so the carried drop reaching a
+    /// bubble bridges into it. Whether they were taken is `draw`'s answer.
+    carried: []const LiquidField.Shape = &.{},
 };
 
 /// How much a lit zone's glass changes, as dvui changes a hovered fill (`Theme.adjustColorForState`,
@@ -199,7 +203,7 @@ const icon_size: f32 = 18;
 ///
 /// Call every frame the pointer is over the place, and after while `showing`, after what the
 /// drop covers has drawn. Gone, a place forgets its drop, so the next arrival comes in anew.
-pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
+pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
     const st = dvui.dataGetPtrDefault(null, id, "_drop_zones", State, .{});
     const now = dvui.currentWindow().frame_time_ns;
     // Where it was is kept until it has gone (`forget`), however long between frames: a drag
@@ -219,6 +223,7 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
     }
 
     const g = frost(st.shown);
+    var took = false;
     if (g > 0.01 and w.unit > 0) {
         // Each bubble is a glass orb of its own, where it settles: nothing moves. Each grows from
         // nothing to its size — past it and back when motion is playful (`grow`) — the middle
@@ -249,7 +254,7 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
             n += 1;
         }
         // As far as a bubble swings past its place and its size, too.
-        glass(id, panes[0..n], w.rect().insetAll(-extent * motion.overshoot_max * w.unit), g, scale, merge * w.unit);
+        took = glassCarrying(id, panes[0..n], w.rect().insetAll(-extent * motion.overshoot_max * w.unit), g, scale, merge * w.unit, look.carried);
         for (panes[0..n], zones[0..n], times[0..n]) |pane, i, t| {
             const z = all[i];
             if (z == .center and look.center == .none) continue;
@@ -267,6 +272,7 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
         // it measured the whole pause as one step — past the entire leave, gone at once.
         st.last_ns = 0;
     }
+    return took;
 }
 
 /// Orb `j` of `n` (in `growOrder`)'s own time at `shown`, 0 gone … 1 settled: each over a window
@@ -423,6 +429,24 @@ const Pane = struct {
 /// app under one stays put), so it is read again a few times a second, and when the blur has
 /// grown a step. Reading and blurring a place every frame was most of what the glass cost.
 fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, scale: f32, merge_px: f32) void {
+    _ = glassCarrying(id, panes, area, g, scale, merge_px, &.{});
+}
+
+/// `glass`, with `carried` shapes run in with the panes where the glass program draws them:
+/// whether it took them.
+fn glassCarrying(id: dvui.Id, panes: []const Pane, area_in: dvui.Rect.Physical, g: f32, scale: f32, merge_px: f32, carried_in: []const LiquidField.Shape) bool {
+    const carried = if (LiquidField.ready()) carried_in[0..@min(carried_in.len, max_carried)] else carried_in[0..0];
+    // What is read covers the carried glass too, at a size kept while it fits (as a moving pane's
+    // is, `BlurBackdrop.captureSize`), so a drop dragged about the place does not make new
+    // targets every frame.
+    var area = area_in;
+    if (carried.len > 0) {
+        for (carried) |c| area = area.unionWith(c.rect.outsetAll(merge_px));
+        const cap = dvui.dataGetPtrDefault(null, id, "_drop_zones_cap", dvui.Size, .{});
+        cap.* = BlurBackdrop.captureSize(cap.*, .{ .w = area.w, .h = area.h });
+        area.w = cap.w;
+        area.h = cap.h;
+    }
     const base = widgets.menuFrost() orelse {
         const fill = dialogs.dialogFill();
         for (panes) |pane| {
@@ -430,7 +454,7 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
             const c = fill.lerp(litToward(), lit_lift * pane.lit);
             pane.r.fill(cornersOf(pane.radii, 1).scale(1, dvui.CornerRect.Physical), .{ .color = .{ .color = c.opacity(@as(f32, @floatFromInt(c.a)) / 255 * g) }, .fade = 1.0 });
         }
-        return;
+        return false;
     };
     const job = dvui.dataGetPtrDefault(null, id, "_drop_zones_job", LayerJob, .{});
     const lens_full = motion.liquid() * liquid_glass.blurRamp(base.radius);
@@ -449,7 +473,9 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
         job.panes[job.count] = pane;
         job.count += 1;
     }
-    if (job.count == 0) return;
+    for (carried, 0..) |c, i| job.carried[i] = c;
+    job.carried_n = carried.len;
+    if (job.count == 0 and carried.len == 0) return false;
     // The layer covers the place the panes settle in, and as far beyond as their edges reach for
     // what lies past them (`liquid_glass.margin`): what it reads back and blurs is what the glass
     // will show. As far as the whole edge reaches at its swing, however much of it has formed — a
@@ -460,7 +486,8 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
     // down as a hole to the desktop (`BlurBackdrop.min_blur`). Glass barely there is none yet.
     if (job.pane.radius < BlurBackdrop.min_blur or g < 0.02) {
         job.count = 0;
-        return;
+        job.carried_n = 0;
+        return false;
     }
     job.bounds = bounds;
     const backdrop = dvui.dataGetPtrDefault(null, id, "_drop_zones_frost", BlurBackdrop, .{});
@@ -475,7 +502,11 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
     backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, if (live()) job.now else 0, job.pane.radius, @round(g * 256) });
     job.backdrop = backdrop;
     dvui.deferRender(job, LayerJob.draw);
+    return carried.len > 0;
 }
+
+/// The most carried shapes a drop runs in with its bubbles.
+const max_carried = 4;
 
 /// `base` at strength `g`: its tint and lift scaled with it, so glass forming is the same glass,
 /// thinner. Its blur forms by `BlurBackdrop.form`, at the full radius.
@@ -502,6 +533,8 @@ const LayerJob = struct {
     /// them (`LiquidField`).
     merge_px: f32 = 0,
     panes: [all.len]Pane = undefined,
+    carried: [max_carried]LiquidField.Shape = undefined,
+    carried_n: usize = 0,
     count: usize = 0,
 
     fn draw(ctx: ?*anyopaque) void {
@@ -568,6 +601,11 @@ fn drawFieldImpl(self: *const LayerJob, tex: dvui.Texture, backdrop: *BlurBackdr
             .light = if (dark) hover else 0,
             .round = true,
         });
+    }
+    for (self.carried[0..self.carried_n]) |c| {
+        var sh = c;
+        sh.lens *= self.lens;
+        field.add(sh);
     }
     const sharp = backdrop.sharpTexture();
     const distinct = if (sharp) |t| t.ptr != tex.ptr else false;

@@ -176,6 +176,24 @@ pub fn carriedGlass(id: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
     glassShadow(r, corners, scale, surfaceShadow(), 1);
 }
 
+/// `carriedGlass` for glass whose shapes run together (`LiquidField`) — the dragged view as a
+/// drop — frosted at the dialog style. False when the style has the blur off, or the glass program
+/// is not there to draw it: carry a card instead.
+pub fn carriedField(id: dvui.Id, field: widgets.LiquidField, scale: f32) bool {
+    if (!widgets.LiquidField.ready()) return false;
+    const f = dialogFrost() orelse return false;
+    widgets.BlurBackdrop.fieldPane(id, field, scale, .{
+        .radius = f.radius,
+        .refresh_ms = f.refresh_ms,
+        .tint = f.tint,
+        .mix = f.mix,
+        .lift = f.lift,
+        .detail = f.detail,
+        .refraction = f.refraction,
+    });
+    return true;
+}
+
 /// Where a carried thing would go in among others — a tab strip's open slot: a rounded fill in
 /// the highlight colour, a little inside `r` (physical, at `scale`).
 pub fn dropSlot(r: dvui.Rect.Physical, scale: f32) void {

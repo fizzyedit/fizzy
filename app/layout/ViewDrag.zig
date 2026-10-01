@@ -56,6 +56,18 @@ card_from: dvui.Size.Physical = .{},
 card_start_ns: i128 = 0,
 /// The card is a tab this frame: the pointer is over a chooser.
 card_tab: bool = false,
+/// The view carried as a drop of glass (`dropShapes`), where the glass program draws: its head
+/// following the pointer and its tail the head, each on a spring, so it stretches as it is
+/// dragged and swings when it stops. This frame's shapes, head then tail.
+drop_head: core.Spring = .{},
+drop_tail: core.Spring = .{},
+drop_ns: i128 = 0,
+drop_shapes: [2]core.LiquidField.Shape = undefined,
+drop_n: usize = 0,
+/// The head's corner radius this frame (physical), for the photograph inside it.
+drop_radius: f32 = 0,
+/// Carried by a finger: the drop rides above it, where the finger does not cover it.
+drop_touch: bool = false,
 
 /// The places this drag can land on, and where they were, frozen at lift.
 targets: [max_targets]Target = undefined,
@@ -238,6 +250,11 @@ fn backed(tex: dvui.Texture, r: dvui.Rect.Physical) dvui.Texture {
 /// Begin carrying the view out of `name`. The place keeps drawing it throughout.
 pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical) void {
     var d = &l.state.view_drag;
+    d.drop_head = .{};
+    d.drop_tail = .{};
+    d.drop_ns = 0;
+    d.drop_n = 0;
+    d.drop_touch = false;
     d.name = l.state.internName(l.gpa, name);
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
@@ -255,6 +272,11 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical) void {
 /// the caller hands over (`State.stealSnapshot`) and the drag destroys.
 pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture: ?dvui.Texture) void {
     var d = &l.state.view_drag;
+    d.drop_head = .{};
+    d.drop_tail = .{};
+    d.drop_ns = 0;
+    d.drop_n = 0;
+    d.drop_touch = false;
     const s = l.host.surfaceById(id) orelse return;
     d.name = loose_source;
     d.from = from.size();
@@ -572,12 +594,143 @@ pub fn drawOverlay(l: *Layout) void {
     // order they first appeared, and raising one breaks the drag's hold on the pointer.)
     const scale = dvui.currentWindow().natural_scale;
     const prev_clip = dvui.clipGet();
+    const mouse = dvui.currentWindow().mouse_pt;
+    // The view as a drop, run together with the drop it is over: reaching a bubble, it bridges
+    // into it — which bubble a release takes, said by the glass itself.
+    const carried = if (d.active()) dropShapes(l, drops[0..n]) else d.drop_shapes[0..0];
+    var taken = false;
     for (drops[0..n]) |p| {
-        dvui.clipSet(p.clip);
-        DropZones.draw(p.key, p.wheel, scale, p.look);
+        var look = p.look;
+        const over = p.look.target and p.clip.contains(mouse);
+        if (!taken and over) look.carried = carried;
+        // Carrying the view, the drop is not held to its place: the carried drop reaches past it.
+        dvui.clipSet(if (look.carried.len > 0) prev_clip else p.clip);
+        if (DropZones.draw(p.key, p.wheel, scale, look) and look.carried.len > 0) taken = true;
     }
     dvui.clipSet(prev_clip);
-    if (d.active()) drawFloat(l);
+    if (d.active()) drawFloat(l, taken);
+}
+
+/// Points: the radius of the view carried as a drop — the drop zones' middle bubble's, so what is
+/// carried reads as big as where it goes, and is still seen beside a finger — and its tail's share
+/// of it.
+const drop_r: f32 = 52;
+const drop_tail_share: f32 = 0.62;
+/// How far toward the bubble it is aimed at the drop is drawn, so the two run together.
+const drop_pull: f32 = 0.45;
+
+/// The view carried as a drop this frame — its head and tail, stepped on their springs — or none
+/// where it is carried as a card (`drawFloat`): no glass program, no photograph, or over a list.
+fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.Shape {
+    const d = &l.state.view_drag;
+    d.drop_n = 0;
+    const cw = dvui.currentWindow();
+    const mouse = cw.mouse_pt;
+    if (!core.LiquidField.ready() or d.texture == null or chooserAt(l.state, mouse) != null) {
+        d.drop_ns = 0;
+        d.drop_head = .{};
+        d.drop_tail = .{};
+        return d.drop_shapes[0..0];
+    }
+    const now = cw.frame_time_ns;
+    const scale = cw.natural_scale;
+    const dt: f32 = if (d.drop_ns == 0) 0 else @as(f32, @floatFromInt(now - d.drop_ns)) / std.time.ns_per_s;
+    d.drop_ns = now;
+    const R = drop_r * scale;
+    for (dvui.events()) |e| switch (e.evt) {
+        .mouse => |me| d.drop_touch = me.button.touch(),
+        else => {},
+    };
+    // Off the pointer, so the bubble under it stays in view — below and right of a mouse, above a
+    // finger, which would cover anything under it — and drawn toward the bubble it is aimed at,
+    // far enough that the two run together.
+    var target: dvui.Point.Physical = if (d.drop_touch)
+        .{ .x = mouse.x, .y = mouse.y - 1.35 * R }
+    else
+        .{ .x = mouse.x + 0.55 * R, .y = mouse.y + 0.55 * R };
+    for (drops) |p| {
+        if (!p.look.target or !p.clip.contains(mouse)) continue;
+        const z = p.look.hovered orelse continue;
+        const b = p.wheel.bubble(z);
+        target = .{ .x = target.x + (b.c.x - target.x) * drop_pull, .y = target.y + (b.c.y - target.y) * drop_pull };
+    }
+    var moving = d.drop_head.step(target, dt, .{ .hz = 9, .playful_damping = 0.55 });
+    moving = d.drop_tail.step(d.drop_head.pos, dt, .{ .hz = 4.5, .playful_damping = 0.4 }) or moving;
+    // The tail stays on the drop: pulled out a little way, not off it.
+    const tx = d.drop_tail.pos.x - d.drop_head.pos.x;
+    const ty = d.drop_tail.pos.y - d.drop_head.pos.y;
+    const reach = 1.1 * R;
+    const len = @sqrt(tx * tx + ty * ty);
+    if (len > reach) {
+        d.drop_tail.pos = .{ .x = d.drop_head.pos.x + tx / len * reach, .y = d.drop_head.pos.y + ty / len * reach };
+    }
+    if (moving) dvui.refresh(null, @src(), null);
+
+    // From the view as it was lifted to the drop, on the card's own curve: the photograph's
+    // rounded rect closing into a circle round the head.
+    const t = cardProgress(d.*, now);
+    const off = dvui.dragOffset();
+    const inset = 8 * scale;
+    const from_tl: dvui.Point.Physical = .{
+        .x = mouse.x + std.math.clamp(off.x, -@max(0, d.card_from.w - inset), 0),
+        .y = mouse.y + std.math.clamp(off.y, -@max(0, d.card_from.h - inset), 0),
+    };
+    const from: dvui.Rect.Physical = dvui.Rect.Physical.fromPoint(from_tl).toSize(d.card_from);
+    const to: dvui.Rect.Physical = .{ .x = d.drop_head.pos.x - R, .y = d.drop_head.pos.y - R, .w = 2 * R, .h = 2 * R };
+    const lerp = std.math.lerp;
+    const head: dvui.Rect.Physical = .{ .x = lerp(from.x, to.x, t), .y = lerp(from.y, to.y, t), .w = @max(1, lerp(from.w, to.w, t)), .h = @max(1, lerp(from.h, to.h, t)) };
+    const card_radius = core.corners.scaled(core.corners.card) * scale;
+    d.drop_radius = lerp(card_radius, R, std.math.clamp(t, 0, 1));
+    d.drop_shapes[0] = .{ .rect = head, .radii = @splat(d.drop_radius), .round = true };
+    d.drop_n = 1;
+    const tr = R * drop_tail_share * std.math.clamp(t, 0, 1);
+    if (tr > 1) {
+        d.drop_shapes[1] = core.LiquidField.Shape.circle(d.drop_tail.pos, tr);
+        d.drop_n = 2;
+    }
+    return d.drop_shapes[0..d.drop_n];
+}
+
+/// How far the card has come from what was grabbed into what it is carried as: `motion.enter`
+/// over the dialogs' 300ms as written.
+fn cardProgress(d: ViewDrag, now: i128) f32 {
+    const dur: f64 = core.motion.durationMs(300) * @as(f64, std.time.ns_per_ms);
+    const elapsed: f64 = @floatFromInt(now - d.card_start_ns);
+    return if (dur <= 0) 1 else core.motion.enter(@floatCast(std.math.clamp(elapsed / dur, 0, 1)));
+}
+
+/// The view carried as a drop: its glass — run in with the drop it is over when that took it
+/// (`taken`), its own otherwise — and its photograph inside the head, cropped to fill it.
+fn drawDrop(l: *Layout, taken: bool) void {
+    const d = &l.state.view_drag;
+    const scale = dvui.currentWindow().natural_scale;
+    if (!taken) {
+        var field: core.LiquidField = .{ .merge_px = drop_r * 0.9 * scale };
+        for (d.drop_shapes[0..d.drop_n]) |sh| field.add(sh);
+        _ = core.dialogs.carriedField(dvui.Id.update(.zero, "view_drag_drop"), field, scale);
+    }
+    const tex = d.texture orelse return;
+    const head = d.drop_shapes[0].rect;
+    const pad = card_padding * scale * 0.5;
+    const r = head.insetAll(pad);
+    if (r.w < 2 or r.h < 2) return;
+    // Cover: the photograph's middle, as much of it as keeps its proportions in the head.
+    const pw = d.texture_rect.w;
+    const ph = d.texture_rect.h;
+    var uv: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
+    if (pw > 0 and ph > 0) {
+        const a_img = pw / ph;
+        const a_box = r.w / r.h;
+        if (a_img > a_box) {
+            uv.w = a_box / a_img;
+            uv.x = (1 - uv.w) / 2;
+        } else {
+            uv.h = a_img / a_box;
+            uv.y = (1 - uv.h) / 2;
+        }
+    }
+    const radius = @max(0, d.drop_radius - pad) / scale;
+    dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo_opacity), .uv = uv }) catch {};
 }
 
 /// Whether dropping the view lifted from `source` in the middle of `dest` joins them: the two
@@ -609,10 +762,16 @@ pub fn zonesShowing(l: *Layout, name: []const u8, key: dvui.Id) bool {
 /// The card under the pointer. Always visible while dragging: it is the only
 /// thing that says what is being carried, and hiding it over a drop target
 /// left the gesture looking cancelled.
-pub fn drawFloat(l: *Layout) void {
+pub fn drawFloat(l: *Layout, taken: bool) void {
     tick(l);
     const d = &l.state.view_drag;
     if (!d.active()) return;
+    if (d.drop_n > 0) {
+        drawDrop(l, taken);
+        // Frames while it is still turning from what was grabbed into the drop.
+        if (cardProgress(d.*, dvui.currentWindow().frame_time_ns) < 1) dvui.refresh(null, @src(), null);
+        return;
+    }
     const mouse = dvui.currentWindow().mouse_pt;
     const now = dvui.currentWindow().frame_time_ns;
     // Over a chooser — a tab strip, a rail — the view is going into a list, and the card is a

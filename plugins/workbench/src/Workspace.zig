@@ -830,10 +830,10 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
     // for a dragged view; left, or when the drag ends, they fade out.
     const mouse = dvui.currentWindow().mouse_pt;
     if (!dragging or !bounds.contains(mouse)) {
-        if (DZ.showing(data.id)) DZ.draw(data.id, zones, rs.s, .{ .target = false, .center = .add });
+        if (DZ.showing(data.id)) _ = DZ.draw(data.id, zones, rs.s, .{ .target = false, .center = .add });
         if (!dragging) return;
     } else {
-        DZ.draw(data.id, zones, rs.s, .{ .hovered = self.zoneAt(zones, mouse), .center = .add });
+        _ = DZ.draw(data.id, zones, rs.s, .{ .hovered = self.zoneAt(zones, mouse), .center = .add });
     }
     const path = wb.tab_drag_from_tree_path.?;
 

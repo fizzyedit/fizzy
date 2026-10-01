@@ -979,6 +979,18 @@ pub const form_ms: f32 = 525;
 /// the frost replaces what it covers, so a shadow drawn first survives only outside), then this,
 /// then the contents. The caller paints no fill of its own — the tint is the fill.
 pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: f32, pane: Pane) void {
+    queuePane(id, rect, corners, scale, pane, null);
+}
+
+/// Fizzy addition: `field`'s shapes as one pane of glass, run together where they are close
+/// (`LiquidField`): frosted like `frostPane`, its blur, tint and lift per `pane` and its shapes'
+/// own edges. Only where the glass program is (`LiquidField.ready`); otherwise draw panes.
+pub fn fieldPane(id: dvui.Id, field: LiquidField, scale: f32, pane: Pane) void {
+    if (field.len == 0) return;
+    queuePane(id, field.bounds(), .{}, scale, pane, field);
+}
+
+fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: f32, pane: Pane, field: ?LiquidField) void {
     const job = dvui.dataGetPtrDefault(null, id, "_frost_job", FrostJob, .{});
     const backdrop = dvui.dataGetPtrDefault(null, id, "_frost", BlurBackdrop, .{});
     dvui.dataSetDeinitFunction(null, id, "_frost", &releaseTexture);
@@ -1035,6 +1047,7 @@ pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, sca
         // The edge comes in with the blur, so a barely-frosted pane has barely an edge.
         .lens = lens,
         .refraction = pane.refraction,
+        .field = field,
     };
     dvui.deferRender(job, FrostJob.draw);
 }
@@ -1044,7 +1057,7 @@ pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, sca
 /// shrinking keeps its targets until it has halved — a view shrinking into its card crossed a
 /// quarter-octave bucket every frame or two, a new pyramid each time. Otherwise `need` rounded
 /// up to a bucket (`bucket`), with a quarter more room ahead of a pane that is growing.
-fn captureSize(prev: dvui.Size, need: dvui.Size) dvui.Size {
+pub fn captureSize(prev: dvui.Size, need: dvui.Size) dvui.Size {
     const Fits = struct {
         fn of(p: f32, n: f32) bool {
             return n <= p and n * 2 > p;
@@ -1088,6 +1101,9 @@ const FrostJob = struct {
     lens: f32 = 0,
     /// How far the bevel refracts (`Pane.refraction`).
     refraction: f32 = 1,
+    /// Shapes run together, drawn by the glass program, instead of the one rounded rect
+    /// (`fieldPane`).
+    field: ?LiquidField = null,
 
     fn draw(ctx: ?*anyopaque) void {
         const self: *FrostJob = @ptrCast(@alignCast(ctx orelse return));
@@ -1104,6 +1120,21 @@ const FrostJob = struct {
         // The capture, now that everything below this pane is on the target.
         self.backdrop.deinit();
         // Through the glass program where there is one: the same pane in one pass a pixel.
+        if (self.field) |field| {
+            const tex = self.backdrop.small orelse return;
+            var f = field;
+            f.scale = self.scale;
+            f.tint = self.tint;
+            f.mix = self.mix;
+            f.lift = self.lift;
+            f.refraction = self.refraction;
+            // Each shape's edge as far as the pane's has formed (and the motion level allows).
+            for (f.shapes[0..f.len]) |*sh| sh.lens *= self.lens;
+            const sharp = self.backdrop.sharpTexture();
+            const distinct = if (sharp) |t| t.ptr != tex.ptr else false;
+            _ = f.draw(tex, self.backdrop.coverage(), if (distinct) sharp else null);
+            return;
+        }
         if (self.drawField()) return;
         const weight: f32 = if (self.tint != null) 1 - self.mix else 1;
         self.drawFrost(weight);
