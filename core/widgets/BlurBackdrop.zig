@@ -943,10 +943,10 @@ pub const Pane = struct {
     /// How far the pane's bevelled edge refracts what it shows, 0 (none) to 2
     /// (`liquid_glass.Look.refraction`).
     refraction: f32 = 1,
-    /// How formed the glass is, 0 (not there yet: the scene behind it, sharp and unbent) to 1.
-    /// Its blur, tint, lift and edge all come in with it — the blur from sharp, the edge's
-    /// refraction squeezing in from none — so glass *forms* over what is behind rather than
-    /// fading in over it. Null forms it by itself as the pane first appears (`form_ms`, at the
+    /// How formed the glass is, 0 (not there yet) to 1. Its edge comes in with it — the
+    /// refraction squeezing in from none, swelling past its depth and settling — while the frost,
+    /// tint and lift are whole from the first frame it is drawn, so the pane stands off from what
+    /// is behind it at once. Null forms it by itself as the pane first appears (`form_ms`, at the
     /// app's motion); a caller that knows better — a window closing, a tooltip on its own fade —
     /// passes its own.
     form: ?f32 = null,
@@ -1009,11 +1009,15 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     // empty target — which a frost, replacing what it covers, lays down as a hole: the desktop
     // showed through. Glass that is barely there is the scene behind it, so draw none.
     if (radius < min_blur or form < 0.02) return;
-    const edge = @max(0, motion.enterFull(form));
+    // Only the edge forms: it swells past its depth and settles as the glass arrives
+    // (`motion.swell`). The frost, tint and lift are whole from the first frame, so a window is
+    // set off from what is under it as soon as it is there — glass that came in clear began
+    // with no contrast — and, whole, the blur is not read again for every step of forming.
+    const edge = @max(0, motion.swell(form));
     backdrop.mode = .readback;
     backdrop.radius_px = radius;
     backdrop.detail = pane.detail;
-    backdrop.form = form;
+    backdrop.form = 1;
 
     // The glass's edge shows what lies just beyond it (`liquid_glass`), so the capture reaches
     // that far past the pane; flat glass needs none. As far as the whole edge reaches, however
@@ -1022,7 +1026,7 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     const ramp = if (pane.clear) 1 else liquid_glass.blurRamp(pane.radius);
     const lens_full = motion.liquid() * ramp * liquid_glass.sizeRamp(rect, scale);
     const lens = lens_full * edge;
-    const margin = liquid_glass.margin(.{ .lens = lens_full, .refraction = pane.refraction }, scale);
+    const margin = liquid_glass.margin(.{ .lens = lens_full * (1 + motion.overshoot_max * motion.swell_gain), .refraction = pane.refraction }, scale);
     // A size it keeps while it can (`captureSize`): a pane that changes size — a menu sliding
     // open, a dragged view shrinking into its card — keeps one capture size, and so one set of
     // targets, for many frames, where an exact capture was a new pyramid every frame it moved.
@@ -1040,7 +1044,7 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     else
         @divTrunc(now, @as(i128, pane.refresh_ms) * std.time.ns_per_ms);
     // How formed too, so a pane forming blurs again every frame it changes, whatever its refresh.
-    backdrop.init(nat, .{ captured, tick, @round(radius), @round(form * 256) });
+    backdrop.init(nat, .{ captured, tick, @round(radius) });
 
     job.* = .{
         .backdrop = backdrop,
@@ -1048,8 +1052,8 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
         .scale = scale,
         .rect = rect,
         .tint = pane.tint,
-        .mix = std.math.clamp(pane.mix * form, 0, 1),
-        .lift = std.math.clamp(pane.lift * form, 0, 1),
+        .mix = std.math.clamp(pane.mix, 0, 1),
+        .lift = std.math.clamp(pane.lift, 0, 1),
         // The edge comes in with the blur, so a barely-frosted pane has barely an edge.
         .lens = lens,
         .refraction = pane.refraction,

@@ -481,7 +481,9 @@ fn glassCarrying(id: dvui.Id, panes: []const Pane, area_in: dvui.Rect.Physical, 
     // will show. As far as the whole edge reaches at its swing, however much of it has formed — a
     // capture that grew with it was a new size, and new targets, every frame.
     const bounds = area.insetAll(-liquid_glass.margin(.{ .lens = lens_full * (1 + motion.overshoot_max), .refraction = base.refraction }, scale));
-    job.pane = scaled(base, g);
+    // Whole from the first frame, as every pane's frost is (`BlurBackdrop.Pane.form`): the
+    // bubbles come in by their size and their edge, never as glass that has not frosted yet.
+    job.pane = base;
     // Too little blur for the pyramid to make a pass: its picture would be an empty target, laid
     // down as a hole to the desktop (`BlurBackdrop.min_blur`). Glass barely there is none yet.
     if (job.pane.radius < BlurBackdrop.min_blur or g < 0.02) {
@@ -495,11 +497,11 @@ fn glassCarrying(id: dvui.Id, panes: []const Pane, area_in: dvui.Rect.Physical, 
     backdrop.mode = .readback;
     backdrop.radius_px = job.pane.radius;
     backdrop.detail = job.pane.detail;
-    backdrop.form = g;
+    backdrop.form = 1;
     // Read every frame while live, as the dialogs' glass is: what moves under the drop — a logo
     // following the pointer — moves in it at the frame rate (`live`). Otherwise read again only as
-    // the drop's area or how formed it is changes.
-    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, if (live()) job.now else 0, job.pane.radius, @round(g * 256) });
+    // the drop's area changes.
+    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, if (live()) job.now else 0, job.pane.radius });
     job.backdrop = backdrop;
     dvui.deferRender(job, LayerJob.draw);
     return carried.len > 0;
@@ -507,15 +509,6 @@ fn glassCarrying(id: dvui.Id, panes: []const Pane, area_in: dvui.Rect.Physical, 
 
 /// The most carried shapes a drop runs in with its bubbles.
 const max_carried = 4;
-
-/// `base` at strength `g`: its tint and lift scaled with it, so glass forming is the same glass,
-/// thinner. Its blur forms by `BlurBackdrop.form`, at the full radius.
-fn scaled(base: BlurBackdrop.Pane, g: f32) BlurBackdrop.Pane {
-    var pane = base;
-    pane.mix = base.mix * g;
-    pane.lift = base.lift * g;
-    return pane;
-}
 
 /// The shared layer, drawn at replay once everything under the panes is on the frame: read and
 /// blur `bounds` once, then lay each pane's bent slice of it down with the dialogs' tint and

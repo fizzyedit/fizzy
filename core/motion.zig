@@ -162,6 +162,15 @@ pub fn enterFull(t: f32) f32 {
     return enterAt(lv, clamp01(t) * (arrival + (1 - arrival) * playfulness(lv)));
 }
 
+/// Glass's depth as it forms (`enterFull`), its swing past full `swell_gain` times as broad: a
+/// window's refracting edge bulges as the glass arrives and settles back, the way a drop does.
+/// At minimal and below it is `enterFull`, with no swing.
+pub fn swell(t: f32) f32 {
+    const e = enterFull(t);
+    return if (e > 1) 1 + (e - 1) * swell_gain else e;
+}
+pub const swell_gain: f32 = 2.5;
+
 /// How far toward playful level `lv` is, 0 up to minimal to 1 at playful.
 fn playfulness(lv: f32) f32 {
     return std.math.clamp((lv - 0.5) * 2, 0, 1);
