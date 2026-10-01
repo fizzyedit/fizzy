@@ -22,6 +22,8 @@ const env = {
     size: { w: 1, h: 1, dpr: 1 },
     prefs: { dark: false, light: false, reduce: false },
     storage: {},
+    // The page's `storageName`: what this build files its storage under.
+    storageName: "fizzy",
     search: "",
     baseURI: "",
 };
@@ -60,7 +62,7 @@ const functionTable = new WebAssembly.Table({ initial: 4096, element: "anyfunc" 
 // ---- storage: the page's, as a snapshot -------------------------------------------------------
 //
 // A worker has no `localStorage`, and the app reads its settings synchronously. The page sends
-// its `fizzy.*` entries at startup; writes land here at once and go back to the page to keep.
+// the entries filed under its `storageName` at startup; writes land here at once and go back to the page to keep.
 function storageGet(key) {
     return Object.prototype.hasOwnProperty.call(env.storage, key) ? env.storage[key] : null;
 }
@@ -212,17 +214,17 @@ const fizzyImports = (target) => ({
         return Date.now();
     },
     fizzy_web_storage_get(keyPtr, keyLen, bufPtr, bufLen) {
-        const value = storageGet("fizzy.file:" + str(keyPtr, keyLen));
+        const value = storageGet(env.storageName + ".file:" + str(keyPtr, keyLen));
         if (value === null) return 0xffffffff;
         const bytes = utf8encode(value);
         if (bytes.length <= bufLen) new Uint8Array(mem(), bufPtr, bytes.length).set(bytes);
         return bytes.length;
     },
     fizzy_web_storage_set(keyPtr, keyLen, valPtr, valLen) {
-        storageSet("fizzy.file:" + str(keyPtr, keyLen), str(valPtr, valLen));
+        storageSet(env.storageName + ".file:" + str(keyPtr, keyLen), str(valPtr, valLen));
     },
     fizzy_web_storage_remove(keyPtr, keyLen) {
-        storageRemove("fizzy.file:" + str(keyPtr, keyLen));
+        storageRemove(env.storageName + ".file:" + str(keyPtr, keyLen));
     },
     fizzy_web_plugin_fingerprint(fpPtr, fpLen) {
         pluginFingerprint = str(fpPtr, fpLen);
@@ -270,25 +272,25 @@ const fizzyImports = (target) => ({
 });
 
 // ---- plugins at runtime (was `index.html`'s loader; see there for the why) --------------------
-const rememberedKey = "fizzy.web_plugins";
+const rememberedKey = () => env.storageName + ".web_plugins";
 function rememberedPlugins() {
-    try { return JSON.parse(storageGet(rememberedKey) || "{}"); } catch (_) { return {}; }
+    try { return JSON.parse(storageGet(rememberedKey()) || "{}"); } catch (_) { return {}; }
 }
 function rememberPlugin(id, url) {
     const all = rememberedPlugins();
     if (all[id] && all[id] !== url) dropPluginBytes(all[id]);
     all[id] = url;
-    storageSet(rememberedKey, JSON.stringify(all));
+    storageSet(rememberedKey(), JSON.stringify(all));
     keepPluginBytes(url);
 }
 function forgetPlugin(id) {
     const all = rememberedPlugins();
     if (all[id]) dropPluginBytes(all[id]);
     delete all[id];
-    storageSet(rememberedKey, JSON.stringify(all));
+    storageSet(rememberedKey(), JSON.stringify(all));
 }
 
-const pluginCacheName = "fizzy-plugins-v1";
+const pluginCacheName = () => env.storageName + "-plugins-v1";
 const pluginCacheAvailable = typeof caches !== "undefined";
 const unkeptPluginBytes = new Map();
 function keepablePluginUrl(url) {
@@ -303,7 +305,7 @@ function keepablePluginUrl(url) {
 async function cachedPluginBytes(url) {
     if (!keepablePluginUrl(url)) return null;
     try {
-        const hit = await (await caches.open(pluginCacheName)).match(url);
+        const hit = await (await caches.open(pluginCacheName())).match(url);
         return hit ? await hit.arrayBuffer() : null;
     } catch (_) {
         return null;
@@ -313,14 +315,14 @@ function keepPluginBytes(url) {
     const bytes = unkeptPluginBytes.get(url);
     unkeptPluginBytes.delete(url);
     if (!bytes || !keepablePluginUrl(url)) return;
-    caches.open(pluginCacheName)
+    caches.open(pluginCacheName())
         .then((c) => c.put(url, new Response(bytes, { headers: { "content-type": "application/wasm" } })))
         .catch((err) => console.warn("fizzy: could not keep plugin", url, err));
     postMessage({ type: "persistStorage" });
 }
 function dropPluginBytes(url) {
     if (!keepablePluginUrl(url)) return;
-    caches.open(pluginCacheName).then((c) => c.delete(url)).catch(() => {});
+    caches.open(pluginCacheName()).then((c) => c.delete(url)).catch(() => {});
 }
 const warmPluginBytes = new Map();
 function warmRememberedPlugins() {
@@ -516,7 +518,7 @@ function postBoundKeys() {
 
 // ---- start -------------------------------------------------------------------------------
 async function start(init) {
-    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, search: init.search, baseURI: init.baseURI });
+    Object.assign(env, { size: init.size, prefs: init.prefs, storage: init.storage, storageName: init.storageName, search: init.search, baseURI: init.baseURI });
     adoptCanvas(init.canvas);
     warmRememberedPlugins();
 

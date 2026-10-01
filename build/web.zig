@@ -258,7 +258,7 @@ pub fn addSteps(
         }),
     });
     const cb_run = b.addRunArtifact(cb);
-    cb_run.addFileArg(b.path("web/index.html"));
+    cb_run.addFileArg(stampStorage(b));
     cb_run.addFileArg(dvui_web_dep.path("src/backends/web.js"));
     cb_run.addFileArg(b.path("web/fizzy-worker.js"));
     cb_run.addFileArg(web_exe.getEmittedBin());
@@ -337,6 +337,24 @@ pub fn addSteps(
 /// A plugin package's `"plugin"` module as this web build's own: the same root file and the
 /// plugin's own imports (manifest options, its dependencies), with `dvui`/`core`/`fizzy_sdk`
 /// swapped for the web build's. A module cannot import two frameworks, so it must be a copy.
+/// `web/index.html` with the name the page files what it keeps in the browser under stamped in
+/// (`storageName` there): `-Dweb-storage`, or "fizzy". Every copy of the app on one site shares
+/// the browser's storage for it, so a test build served beside the real one — fizzyed.it/testapp/
+/// beside /app/ — is built with a name of its own and keeps out of the real one's settings.
+fn stampStorage(b: *std.Build) std.Build.LazyPath {
+    const name = b.option([]const u8, "web-storage", "What the web app files its browser storage under (default \"fizzy\"); give a test build served beside the real one a name of its own") orelse "fizzy";
+    for (name) |c| switch (c) {
+        'a'...'z', '0'...'9', '-', '_' => {},
+        else => std.debug.panic("-Dweb-storage={s}: only a-z, 0-9, '-' and '_'", .{name}),
+    };
+    const token = "__FIZZY_WEB_STORAGE__";
+    const html = b.build_root.handle.readFileAlloc(b.graph.io, "web/index.html", b.allocator, .unlimited) catch |err|
+        std.debug.panic("web/index.html: {t}", .{err});
+    if (std.mem.indexOf(u8, html, token) == null) std.debug.panic("web/index.html: no {s} to stamp", .{token});
+    const stamped = std.mem.replaceOwned(u8, b.allocator, html, token, name) catch @panic("OOM");
+    return b.addWriteFiles().add("index.html", stamped);
+}
+
 fn rehome(
     b: *std.Build,
     web_target: std.Build.ResolvedTarget,
