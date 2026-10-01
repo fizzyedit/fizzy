@@ -312,6 +312,16 @@ pub const groups = [_]Group{
                 .draw = drawDropGlassLive,
                 .inline_control = true,
             },
+            .{
+                .label = "Glass shader",
+                .key = "glass_shader",
+                .description = "Glass is drawn by a shader, a pixel at a time, where the backend " ++
+                    "has one: shapes run together and part like drops. Off, it is drawn as meshes, " ++
+                    "as before — to compare the two.",
+                .keywords = "glass shader sdf liquid frost blur performance",
+                .draw = drawGlassShader,
+                .inline_control = true,
+            },
         },
     },
 };
@@ -669,6 +679,19 @@ fn drawPluginUpdateMode() void {
 fn drawDropGlassLive() void {
     const editor = fizzy.editor();
     if (dvui.checkbox(@src(), &editor.app.settings.drop_glass_live, null, .{
+        .expand = .none,
+        .gravity_y = 0.5,
+        .margin = .{ .x = 4, .w = 4 },
+        .padding = .{ .x = 2, .w = 4, .y = 2, .h = 2 },
+    })) {
+        editor.markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+}
+
+fn drawGlassShader() void {
+    const editor = fizzy.editor();
+    if (dvui.checkbox(@src(), &editor.app.settings.glass_shader, null, .{
         .expand = .none,
         .gravity_y = 0.5,
         .margin = .{ .x = 4, .w = 4 },

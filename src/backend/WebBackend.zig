@@ -25,6 +25,9 @@ var batch: struct {
     vtx: std.ArrayList(dvui.Vertex) = .empty,
     idx: std.ArrayList(dvui.Vertex.Index) = .empty,
     cmds: std.ArrayList(Command) = .empty,
+    /// The uniforms of the programs the stream switches to (`program_api.begin`), as vec4s.
+    /// Sent with the stream and set with `uniform4fv` — not uploaded as a buffer.
+    uniforms: std.ArrayList([4]f32) = .empty,
     /// The last command's texture and clip, to tell whether a draw extends it.
     texture: ?dvui.Texture = null,
     clipr: ?dvui.Rect.Physical = null,
@@ -51,12 +54,28 @@ const Command = extern struct {
 
     const switch_target: i32 = -1;
     const clear_target: i32 = -2;
+    /// A switch of program: `texture` the program (0 dvui's own), `x` and `y` the offset and
+    /// count of its uniforms in the stream's, `w` and `h` the textures it reads at units 1 and 2.
+    const use_program: i32 = -3;
 };
 
 /// Each texture's blend, where it is not `.over` (`textureBlend`), stamped on the draws of it as
 /// they are recorded: the blur passes set a texture's blend around each draw of it, and when
 /// `web.js` kept it that had to flush the stream twice a pass.
 var blends: std.AutoHashMapUnmanaged(usize, dvui.Backend.TextureBlend) = .empty;
+
+/// The program the draws go through (`program_api`), so a flush between its `begin` and `end`
+/// can start the next stream in it again: each stream starts in dvui's own.
+var program: ?struct {
+    id: i32,
+    uniforms: [program_api.uniform_cap][4]f32,
+    n: u32,
+    tex1: i32,
+    tex2: i32,
+} = null;
+/// The blend the draws are stamped with while a program asks for one (`program_api.blend`),
+/// over their texture's own. 3 is `punch` (`core.gfx.programs.Blend`).
+var blend_override: ?u2 = null;
 
 /// Whether draws go into a target rather than the screen, as the stream will have it by then:
 /// what `web.js` holds is only where the last flush left it.
@@ -100,7 +119,10 @@ pub const wasm = if (!builtin.is_test) struct {
     pub extern "dvui" fn wasm_textureRead(texture: u32, pixels_out: [*]u8, width: u32, height: u32) void;
     pub extern "dvui" fn wasm_renderTarget(u32) void;
     pub extern "dvui" fn wasm_textureDestroy(u32) void;
-    pub extern "dvui" fn wasm_renderStream(index_ptr: [*]const u8, index_len: usize, vertex_ptr: [*]const u8, vertex_len: usize, sizeof_vertex: u8, offset_pos: u8, offset_col: u8, offset_uv: u8, cmd_ptr: [*]const u8, cmd_count: usize) void;
+    pub extern "dvui" fn wasm_renderStream(index_ptr: [*]const u8, index_len: usize, vertex_ptr: [*]const u8, vertex_len: usize, sizeof_vertex: u8, offset_pos: u8, offset_col: u8, offset_uv: u8, cmd_ptr: [*]const u8, cmd_count: usize, uniform_ptr: [*]const u8, uniform_floats: usize) void;
+    pub extern "dvui" fn wasm_programCreate(glsl: [*]const u8, len: usize, textures: u32, uniform_vec4s: u32) u32;
+    pub extern "dvui" fn wasm_programStatus(id: u32) u8;
+    pub extern "dvui" fn wasm_programMaxVec4() u32;
 
     pub extern "dvui" fn wasm_cursor(name: [*]const u8, name_len: usize) void;
     pub extern "dvui" fn wasm_text_input(x: f32, y: f32, w: f32, h: f32) void;
@@ -171,7 +193,16 @@ pub const wasm = if (!builtin.is_test) struct {
     pub fn wasm_textureRead(_: u32, _: [*]u8, _: u32, _: u32) void {}
     pub fn wasm_renderTarget(_: u32) void {}
     pub fn wasm_textureDestroy(_: u32) void {}
-    pub fn wasm_renderStream(_: [*]const u8, _: usize, _: [*]const u8, _: usize, _: u8, _: u8, _: u8, _: u8, _: [*]const u8, _: usize) void {}
+    pub fn wasm_renderStream(_: [*]const u8, _: usize, _: [*]const u8, _: usize, _: u8, _: u8, _: u8, _: u8, _: [*]const u8, _: usize, _: [*]const u8, _: usize) void {}
+    pub fn wasm_programCreate(_: [*]const u8, _: usize, _: u32, _: u32) u32 {
+        return 1;
+    }
+    pub fn wasm_programStatus(_: u32) u8 {
+        return 2;
+    }
+    pub fn wasm_programMaxVec4() u32 {
+        return 64;
+    }
 
     pub fn wasm_cursor(_: [*]const u8, _: usize) void {}
     pub fn wasm_text_input(_: f32, _: f32, _: f32, _: f32) void {}
@@ -630,8 +661,10 @@ pub fn sleep(_: *WebBackend, ns: u64) void {
 pub fn begin(_: *WebBackend, arena_in: std.mem.Allocator) !void {
     arena = arena_in;
     batch = .{};
-    // `web.js` starts every frame on the screen.
+    // `web.js` starts every frame on the screen, in dvui's own program.
     target_is_fb = false;
+    program = null;
+    blend_override = null;
 }
 
 pub fn end(_: *WebBackend) !void {
@@ -685,7 +718,9 @@ fn command(texture: ?dvui.Texture, maybe_clipr: ?dvui.Rect.Physical, index_start
         .index_start = index_start,
         .index_count = 0,
     };
-    if (texture) |t| {
+    if (blend_override) |b| {
+        c.clip = @as(i32, b) << 1;
+    } else if (texture) |t| {
         const blend = blends.get(@intFromPtr(t.ptr)) orelse .over;
         c.clip = @as(i32, @intFromEnum(blend)) << 1;
     }
@@ -713,7 +748,11 @@ fn marker(step: i32, texture: i32) !void {
 /// Whether anything waiting in the stream uses texture `id` — draws from it, draws into it, or
 /// clears it — so a change to it must wait until that has drawn.
 fn pendingUses(id: i32) bool {
-    for (batch.cmds.items) |c| if (c.texture == id) return true;
+    for (batch.cmds.items) |c| {
+        if (c.clip == Command.use_program) {
+            if (c.w == id or c.h == id) return true;
+        } else if (c.texture == id) return true;
+    }
     return false;
 }
 
@@ -723,14 +762,19 @@ fn flushBatch() void {
         batch.vtx.clearRetainingCapacity();
         batch.idx.clearRetainingCapacity();
         batch.cmds.clearRetainingCapacity();
+        batch.uniforms.clearRetainingCapacity();
         batch.texture = null;
         batch.clipr = null;
+        // A stream starts in dvui's own program: one cut in the middle of a program's draws
+        // starts again in it.
+        if (program != null) programMarker() catch {};
     }
     if (batch.idx.items.len == 0) return;
 
     const index_slice = std.mem.sliceAsBytes(batch.idx.items);
     const vertex_slice = std.mem.sliceAsBytes(batch.vtx.items);
     const cmd_slice = std.mem.sliceAsBytes(batch.cmds.items);
+    const uniform_slice = std.mem.sliceAsBytes(batch.uniforms.items);
     wasm.wasm_renderStream(
         index_slice.ptr,
         index_slice.len,
@@ -742,8 +786,72 @@ fn flushBatch() void {
         @offsetOf(dvui.Vertex, "uv"),
         cmd_slice.ptr,
         batch.cmds.items.len,
+        uniform_slice.ptr,
+        batch.uniforms.items.len * 4,
     );
 }
+
+/// The switch into the current program (`program`), its uniforms appended to the stream's.
+fn programMarker() !void {
+    const p = &(program orelse return);
+    const at: i32 = @intCast(batch.uniforms.items.len);
+    try batch.uniforms.appendSlice(arena, p.uniforms[0..p.n]);
+    try batch.cmds.append(arena, .{ .texture = p.id, .clip = Command.use_program, .x = at, .y = @intCast(p.n), .w = p.tex1, .h = p.tex2, .index_start = 0, .index_count = 0 });
+}
+
+/// Custom programs (`core.gfx.programs`): compiled by `web.js`, switched to in the stream.
+pub const program_api = struct {
+    /// The most uniforms a program here may take: what the stream keeps for a program cut by a
+    /// flush, and under what WebGL1's guaranteed fragment uniforms leave once dvui's are set.
+    pub const uniform_cap = 64;
+
+    pub fn max_uniform_vec4s() u32 {
+        return @min(uniform_cap, wasm.wasm_programMaxVec4());
+    }
+
+    pub fn create(glsl: [*]const u8, len: usize, textures: u32, uniform_vec4s: u32) u32 {
+        if (uniform_vec4s > uniform_cap or textures > 2) return 0;
+        return wasm.wasm_programCreate(glsl, len, textures, uniform_vec4s);
+    }
+
+    pub fn status(id: u32) callconv(.c) u8 {
+        return wasm.wasm_programStatus(id);
+    }
+
+    pub fn begin(id: u32, textures: [*]const ?*anyopaque, n_textures: u32, uniforms: [*]const [4]f32, n_uniforms: u32) callconv(.c) bool {
+        if (n_uniforms > uniform_cap or n_textures > 2) return false;
+        if (wasm.wasm_programStatus(id) != 2) return false;
+        const tex = struct {
+            fn of(t: ?*anyopaque) i32 {
+                return if (t) |p| @intCast(@intFromPtr(p)) else 0;
+            }
+        };
+        program = .{
+            .id = @intCast(id),
+            .uniforms = undefined,
+            .n = n_uniforms,
+            .tex1 = if (n_textures > 0) tex.of(textures[0]) else 0,
+            .tex2 = if (n_textures > 1) tex.of(textures[1]) else 0,
+        };
+        @memcpy(program.?.uniforms[0..n_uniforms], uniforms[0..n_uniforms]);
+        programMarker() catch {
+            program = null;
+            return false;
+        };
+        return true;
+    }
+
+    pub fn blend(mode: u8) callconv(.c) void {
+        blend_override = @intCast(mode & 3);
+    }
+
+    pub fn end() callconv(.c) void {
+        blend_override = null;
+        if (program == null) return;
+        program = null;
+        batch.cmds.append(arena, .{ .texture = 0, .clip = Command.use_program, .x = 0, .y = 0, .w = 0, .h = 0, .index_start = 0, .index_count = 0 }) catch {};
+    }
+};
 
 pub fn textureCreate(_: *WebBackend, pixels: [*]const u8, options: dvui.Texture.CreateOptions) !dvui.Texture {
     if (options.format != .rgba_32) {

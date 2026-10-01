@@ -3666,6 +3666,66 @@ test "liquid blob: far apart it is its discs; close together it bridges them" {
     try std.testing.expect(LB.field(&close, 0.5, .{ .x = 11, .y = 0 }).d > 0);
 }
 
+test "liquid field: a rounded box's outline is its rect with its own corner per corner" {
+    const LF = fizzy.core.LiquidField;
+    var f: LF = .{};
+    // 100 x 60, a 20 radius at the top left and none elsewhere.
+    f.add(.{ .rect = .{ .x = 0, .y = 0, .w = 100, .h = 60 }, .radii = .{ 20, 0, 0, 0 } });
+    try std.testing.expectApproxEqAbs(@as(f32, -30), f.sample(.{ .x = 50, .y = 30 }).d, 0.01);
+    // On a straight side, and just outside it.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), f.sample(.{ .x = 50, .y = 0 }).d, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), f.sample(.{ .x = 50, .y = 60 }).coverage, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), f.sample(.{ .x = 50, .y = 60.5 }).coverage, 0.01);
+    // The square corners are square; the round one cuts its corner off.
+    try std.testing.expect(f.sample(.{ .x = 99.5, .y = 59.5 }).d < 0);
+    try std.testing.expect(f.sample(.{ .x = 1, .y = 1 }).d > 0);
+    const at45: f32 = 20.0 - 20.0 / std.math.sqrt2;
+    try std.testing.expectApproxEqAbs(@as(f32, 0), f.sample(.{ .x = at45, .y = at45 }).d, 0.01);
+    try std.testing.expect(f.hit(.{ .x = 50, .y = 30 }) and !f.hit(.{ .x = 2, .y = 2 }));
+}
+
+test "liquid field: shapes bridge within the merge width, swell no more than a quarter of it, and part beyond" {
+    const LF = fizzy.core.LiquidField;
+    var f: LF = .{ .merge_px = 16 };
+    f.add(LF.Shape.circle(.{ .x = 0, .y = 0 }, 20));
+    f.add(LF.Shape.circle(.{ .x = 46, .y = 0 }, 20));
+    // A 6px gap, under half the merge width: bridged across the middle (the smooth minimum
+    // deepens by at most k/4 there, so a gap closes below k/2).
+    try std.testing.expect(f.sample(.{ .x = 23, .y = 0 }).d < 0);
+    // Part them past the merge width: two drops again, the gap clear.
+    f.shapes[1] = LF.Shape.circle(.{ .x = 60, .y = 0 }, 20);
+    try std.testing.expect(f.sample(.{ .x = 30, .y = 0 }).d > 0);
+    try std.testing.expectApproxEqAbs(@as(f32, -20), f.sample(.{ .x = 0, .y = 0 }).d, 0.01);
+    // Many piled on one spot swell the outline by at most k/4.
+    var pile: LF = .{ .merge_px = 16 };
+    for (0..6) |_| pile.add(LF.Shape.circle(.{ .x = 0, .y = 0 }, 20));
+    try std.testing.expect(pile.sample(.{ .x = 20 + 16.0 / 4.0 + 0.01, .y = 0 }).d > 0);
+    // Across a bridge the materials blend: a lit drop's light runs into the neck.
+    var lit: LF = .{ .merge_px = 16 };
+    var a = LF.Shape.circle(.{ .x = 0, .y = 0 }, 20);
+    a.light = 1;
+    lit.add(a);
+    lit.add(LF.Shape.circle(.{ .x = 46, .y = 0 }, 20));
+    const mid = lit.sample(.{ .x = 23, .y = 0 }).light;
+    try std.testing.expect(mid > 0 and mid < 1);
+}
+
+test "liquid field: groups are the shapes that touch, each drawn as its own quad" {
+    const LF = fizzy.core.LiquidField;
+    var f: LF = .{ .merge_px = 10 };
+    f.add(LF.Shape.circle(.{ .x = 0, .y = 0 }, 10));
+    f.add(LF.Shape.circle(.{ .x = 300, .y = 0 }, 10));
+    f.add(LF.Shape.circle(.{ .x = 22, .y = 0 }, 10));
+    const g = f.clusters();
+    try std.testing.expectEqual(@as(usize, 2), g.count);
+    try std.testing.expectEqual(@as(u8, 2), g.size[0]);
+    try std.testing.expectEqual(@as(u8, 1), g.size[1]);
+    // The uniforms are the shader's `uData`: its header, then three vec4s a shape.
+    try std.testing.expectEqual(@as(usize, (7 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
+    const u = f.pack(.{ .x = 0, .y = 0, .w = 400, .h = 100 }, false, g.order[0..f.len]);
+    try std.testing.expectEqual(@as(f32, 22), u.shapes[1][0][0]);
+}
+
 test "liquid glass: the rings of a pane run the way dvui's paths do" {
     const r: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
     var pts: [4 * 7 + 2 * (8 - 1) + 2 * (4 - 1)]dvui.Point.Physical = undefined;

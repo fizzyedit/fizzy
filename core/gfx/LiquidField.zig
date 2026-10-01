@@ -1,0 +1,399 @@
+//! One layer of liquid glass: rounded boxes that run together where they come close, drawn as
+//! frosted, refracting glass in one pass at every pixel (`shaders/liquid_glass.glsl`).
+//!
+//! **What it is.** Each shape is a rounded box — a circle is a square rounded all the way, a
+//! capsule a rect rounded across its short side. Their outlines are joined by a smooth minimum
+//! (iq's quadratic, `merge_px` wide): far apart they are separate pieces of glass, within
+//! `merge_px` of each other a bridge grows between them, and as they part it thins to a neck and
+//! lets go — a drop splitting, or two running together. Only the two nearest shapes at a point
+//! are joined, so however many crowd together the outline swells by at most `merge_px / 4`.
+//!
+//! **What it costs.** Nothing on the CPU worth the name: a quad per group of shapes that touch
+//! (`clusters`) and some floats a frame. The meshed union this replaces (`liquid_blob`) built
+//! tens of thousands of vertices a frame for the same picture.
+//!
+//! **What it looks like.** Today's panes, exactly, when there is one shape: the frost mixed with
+//! the tint, the rim refracting what is just beyond the edge and clearer than the face, the lift
+//! and the line of light round the border (`liquid_glass`, whose numbers it takes). What differs
+//! between shapes — how blurred, how bent, how lit — blends across a bridge by each shape's share
+//! of it, so the light on one bubble runs into the neck rather than stopping at a seam.
+//!
+//! **Drawing.** Inside a layer's `dvui.deferRender` job, after its capture: `draw` with the
+//! frost and what it covers. False where the backend has no programs (`core.gfx.programs`) or the
+//! program is not ready yet, and the caller draws its meshes instead, without the joins.
+//!
+//! Layers do not join each other: a dialog over a drop is two layers, the dialog's capture taken
+//! with the drop already on the frame.
+const std = @import("std");
+const dvui = @import("dvui");
+const programs = @import("programs.zig");
+const liquid_glass = @import("liquid_glass.zig");
+
+const LiquidField = @This();
+
+pub const max_shapes = 16;
+
+/// Uniform vec4s before the shapes (`Uniforms`), and per shape.
+const header_vec4s = 7;
+const shape_vec4s = 3;
+
+/// A piece of glass. Physical pixels, window coordinates.
+pub const Shape = struct {
+    rect: dvui.Rect.Physical,
+    /// Corner radii: top-left, top-right, bottom-right, bottom-left. Clamped to half the
+    /// shorter side, so `@splat(big)` is a circle or a capsule.
+    radii: [4]f32 = @splat(0),
+    /// 0 (the scene behind, sharp) to 1 (the frost): how far its blur has come in.
+    blur: f32 = 1,
+    /// 0…1 (past 1 while it overshoots): how much its edge bends, clears and lights.
+    lens: f32 = 1,
+    /// White added over it, 0…1 — lit, the bubble under the pointer.
+    light: f32 = 0,
+    /// The edge bends along the outline's own normal — round for a circle, as a drop is — rather
+    /// than a pane's soft field of its four sides (`liquid_glass.fieldAt`), which never folds at a
+    /// rect's corner but is square on a circle.
+    round: bool = false,
+
+    pub fn circle(c: dvui.Point.Physical, r: f32) Shape {
+        return .{ .rect = .{ .x = c.x - r, .y = c.y - r, .w = 2 * r, .h = 2 * r }, .radii = @splat(r), .round = true };
+    }
+};
+
+shapes: [max_shapes]Shape = undefined,
+len: usize = 0,
+/// Physical pixels: how far apart two shapes still bridge. 0 never joins.
+merge_px: f32 = 0,
+scale: f32 = 1,
+/// The pane's colour, mixed with the frost: `(1 − mix) · frost + mix · tint`, as `BlurBackdrop.Pane`.
+tint: ?dvui.Color = null,
+mix: f32 = 0,
+/// White over the whole of it after the mix, where it has a tint.
+lift: f32 = 0,
+/// The user's dialog refraction, 0 (none) to 2 (`liquid_glass.Look.refraction`).
+refraction: f32 = 1,
+
+pub fn add(self: *LiquidField, shape: Shape) void {
+    if (self.len >= max_shapes) return;
+    self.shapes[self.len] = shape;
+    self.len += 1;
+}
+
+/// What the shapes cover, with room for their bridges' swell.
+pub fn bounds(self: *const LiquidField) dvui.Rect.Physical {
+    var r: dvui.Rect.Physical = .{};
+    for (self.shapes[0..self.len], 0..) |s, i| r = if (i == 0) s.rect else r.unionWith(s.rect);
+    return r.outsetAll(self.merge_px * 0.25 + 1);
+}
+
+// ── Groups ──────────────────────────────────────────────────────────────────────────────────────
+
+/// The shapes in groups that touch — any two within `merge_px` are in one — each drawn as its own
+/// quad, so glass with room between its pieces shades only where they are.
+pub const Clusters = struct {
+    /// Shape indices, a group's together.
+    order: [max_shapes]u8 = undefined,
+    /// Each group's first in `order` and how many; `count` of them.
+    first: [max_shapes]u8 = undefined,
+    size: [max_shapes]u8 = undefined,
+    count: usize = 0,
+};
+
+pub fn clusters(self: *const LiquidField) Clusters {
+    var parent: [max_shapes]u8 = undefined;
+    for (0..self.len) |i| parent[i] = @intCast(i);
+    const find = struct {
+        fn f(p: *[max_shapes]u8, i: u8) u8 {
+            var x = i;
+            while (p[x] != x) x = p[x];
+            return x;
+        }
+    }.f;
+    const reach = self.merge_px * 0.5;
+    for (0..self.len) |i| for (i + 1..self.len) |j| {
+        const a = self.shapes[i].rect.outsetAll(reach);
+        const b = self.shapes[j].rect.outsetAll(reach);
+        if (a.intersect(b).empty()) continue;
+        const ri = find(&parent, @intCast(i));
+        const rj = find(&parent, @intCast(j));
+        if (ri != rj) parent[rj] = ri;
+    };
+    var out: Clusters = .{};
+    var n: u8 = 0;
+    for (0..self.len) |root| {
+        if (find(&parent, @intCast(root)) != root) continue;
+        out.first[out.count] = n;
+        var size: u8 = 0;
+        for (0..self.len) |i| {
+            if (find(&parent, @intCast(i)) != root) continue;
+            out.order[n] = @intCast(i);
+            n += 1;
+            size += 1;
+        }
+        out.size[out.count] = size;
+        out.count += 1;
+    }
+    return out;
+}
+
+// ── Uniforms ────────────────────────────────────────────────────────────────────────────────────
+
+pub const uniform_vec4s = header_vec4s + shape_vec4s * max_shapes;
+
+/// What the program reads, `uData` in `shaders/liquid_glass.glsl`.
+pub const Uniforms = extern struct {
+    /// Where the frost starts, and 1 / its size: physical pixels to its uv.
+    frost_map: [4]f32,
+    /// Merge width, the soft field's softness, the refraction's depth, the light's depth.
+    depths: [4]f32,
+    /// How far the rim reaches out, how clear it is, the rim line's width, how much light.
+    rim: [4]f32,
+    /// Premultiplied.
+    tint: [4]f32,
+    /// Mix, lift, has a tint, has the sharp picture.
+    face: [4]f32,
+    /// Dither amplitude.
+    dither: [4]f32,
+    reserved: [4]f32 = @splat(0),
+    shapes: [max_shapes][shape_vec4s][4]f32,
+
+    pub fn vec4s(self: *const Uniforms) [*]const [4]f32 {
+        return @ptrCast(self);
+    }
+};
+
+comptime {
+    std.debug.assert(@sizeOf(Uniforms) == uniform_vec4s * 16);
+}
+
+fn look(self: *const LiquidField) liquid_glass.Look {
+    return .{ .refraction = self.refraction };
+}
+
+/// The uniforms for drawing over `frost`, a picture of `covered`, the shapes in `order`.
+pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bool, order: []const u8) Uniforms {
+    const s = self.scale;
+    const tint: [4]f32 = if (self.tint) |t| blk: {
+        const a = @as(f32, @floatFromInt(t.a)) / 255;
+        break :blk .{ @as(f32, @floatFromInt(t.r)) / 255 * a, @as(f32, @floatFromInt(t.g)) / 255 * a, @as(f32, @floatFromInt(t.b)) / 255 * a, a };
+    } else @splat(0);
+    var u: Uniforms = .{
+        .frost_map = .{ covered.x, covered.y, 1 / @max(covered.w, 1), 1 / @max(covered.h, 1) },
+        .depths = .{ self.merge_px, liquid_glass.softness * s, liquid_glass.depthPx(self.look(), s), liquid_glass.falloff * s },
+        .rim = .{ liquid_glass.refraction * s * self.refraction, liquid_glass.clarity * @min(1, self.refraction), rim_line_width * s, @min(1, self.refraction) },
+        .tint = tint,
+        .face = .{ std.math.clamp(self.mix, 0, 1), std.math.clamp(self.lift, 0, 1), if (self.tint != null) 1 else 0, if (has_sharp) 1 else 0 },
+        .dither = .{ 1.0 / 255.0, 0, 0, 0 },
+        .shapes = undefined,
+    };
+    @memset(std.mem.asBytes(&u.shapes), 0);
+    for (order, 0..) |i, slot| {
+        const sh = self.shapes[i];
+        const r = sh.rect;
+        u.shapes[slot] = .{
+            .{ r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2 },
+            sh.radii,
+            .{ sh.blur, sh.lens, sh.light, if (sh.round) 1 else 0 },
+        };
+    }
+    return u;
+}
+
+/// `liquid_glass`'s rim line width, in points.
+const rim_line_width: f32 = 0.8;
+
+// ── Drawing ─────────────────────────────────────────────────────────────────────────────────────
+
+var program: programs.Program = .{ .source = .{
+    .glsl = source_glsl.ptr,
+    .glsl_len = source_glsl.len,
+    .textures = 1,
+    .uniform_vec4s = uniform_vec4s,
+} };
+const source_glsl = @embedFile("shaders/liquid_glass.glsl");
+
+/// Whether glass is drawn through the program at all — the app's switch (Settings → Debugging →
+/// Glass renderer), published each frame, so the meshes can be compared against it.
+pub fn publishEnabled(on: bool) void {
+    if (dvui.current_window == null) return;
+    dvui.dataSet(null, enabled_id, "_liquid_field", on);
+}
+
+fn enabled() bool {
+    return dvui.dataGet(null, enabled_id, "_liquid_field", bool) orelse true;
+}
+
+const enabled_id: dvui.Id = @enumFromInt(0x6c69_7166);
+
+/// Whether `draw` would draw now: programs here, switched on, compiled.
+pub fn ready() bool {
+    if (!enabled()) return false;
+    const h = programs.hooks() orelse return false;
+    return program.ready(h) != null;
+}
+
+/// Draw the shapes: `frost` a picture of `covered` (the blurred capture), `sharp` the same before
+/// the blur where there is one. Each group of shapes is a quad drawn twice — punching its
+/// coverage out of what is there, then adding the glass — which writes
+/// `glass · coverage + what was there · (1 − coverage)`, colour and alpha: glass replaces what it
+/// covers, as a frost does, with an anti-aliased edge. False, having drawn nothing, where there
+/// is no program to draw with.
+pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Physical, sharp: ?dvui.Texture) bool {
+    if (self.len == 0) return true;
+    if (!enabled()) return false;
+    const h = programs.hooks() orelse return false;
+    const id = program.ready(h) orelse return false;
+    const groups = self.clusters();
+    const u = self.pack(covered, sharp != null, groups.order[0..self.len]);
+    const textures = [_]?*anyopaque{programs.handle(sharp)};
+    if (!h.begin(id, &textures, textures.len, u.vec4s(), uniform_vec4s)) return false;
+    defer h.end();
+    for ([_]programs.Blend{ .punch, .add }) |pass| {
+        h.blend(@intFromEnum(pass));
+        self.quads(groups, pass == .add, frost);
+    }
+    return true;
+}
+
+/// One quad per group, its vertex colour telling the program which pass and which shapes.
+fn quads(self: *const LiquidField, groups: Clusters, glass: bool, frost: dvui.Texture) void {
+    const arena = dvui.currentWindow().arena();
+    var b = dvui.Triangles.Builder.init(arena, 4 * groups.count, 6 * groups.count) catch return;
+    defer b.deinit(arena);
+    for (0..groups.count) |g| {
+        const first = groups.first[g];
+        const n = groups.size[g];
+        var r = self.shapes[groups.order[first]].rect;
+        for (groups.order[first..][0..n]) |i| r = r.unionWith(self.shapes[i].rect);
+        r = r.outsetAll(self.merge_px * 0.25 + 1);
+        const col: dvui.Color.PMA = .{ .r = if (glass) 255 else 0, .g = first, .b = n, .a = 255 };
+        const base: dvui.Vertex.Index = @intCast(4 * g);
+        for ([_]dvui.Point.Physical{ r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft() }) |p| {
+            // The uv is the point itself, in the window's pixels: where the program works out the
+            // shapes. `renderTriangles` moves the position by the target's offset, never the uv.
+            b.appendVertex(.{ .pos = p, .col = col, .uv = .{ p.x, p.y } });
+        }
+        b.appendTriangles(&.{ base, base + 1, base + 2, base, base + 2, base + 3 });
+    }
+    const tris = b.build_unowned();
+    dvui.renderTriangles(tris, frost) catch {};
+}
+
+// ── The same on the CPU ─────────────────────────────────────────────────────────────────────────
+
+/// The field at a point, as the program sees it: the joined outline's signed distance (negative
+/// inside), its coverage, which way is out for the refraction, and how steep the glass is there.
+pub const Sample = struct {
+    d: f32,
+    coverage: f32,
+    out: dvui.Point.Physical,
+    steep: f32,
+    /// The blended material: blur, lens, light.
+    blur: f32,
+    lens: f32,
+    light: f32,
+};
+
+/// `shaders/liquid_glass.glsl`'s field, line for line, over every shape: for hit tests and tests.
+pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
+    const big = std.math.floatMax(f32);
+    var d1: f32 = big;
+    var d2: f32 = big;
+    var m1: [3]f32 = @splat(0);
+    var m2: [3]f32 = @splat(0);
+    var f1: f32 = big;
+    var f2: f32 = big;
+    var o1: [2]f32 = @splat(0);
+    var o2: [2]f32 = @splat(0);
+    const soft_k = liquid_glass.softness * self.scale;
+    for (self.shapes[0..self.len]) |sh| {
+        const c: [2]f32 = .{ sh.rect.x + sh.rect.w / 2, sh.rect.y + sh.rect.h / 2 };
+        const half: [2]f32 = .{ sh.rect.w / 2, sh.rect.h / 2 };
+        var g: [2]f32 = undefined;
+        const lim = @min(half[0], half[1]);
+        const radii: [4]f32 = .{ @min(sh.radii[0], lim), @min(sh.radii[1], lim), @min(sh.radii[2], lim), @min(sh.radii[3], lim) };
+        const d = roundBox(.{ p.x - c[0], p.y - c[1] }, half, radii, &g);
+        const mat: [3]f32 = .{ sh.blur, sh.lens, sh.light };
+        if (d < d1) {
+            d2 = d1;
+            m2 = m1;
+            d1 = d;
+            m1 = mat;
+        } else if (d < d2) {
+            d2 = d;
+            m2 = mat;
+        }
+        var o: [2]f32 = g;
+        const f = if (sh.round) d else softBox(.{ p.x, p.y }, c, half, soft_k, &o);
+        if (f < f1) {
+            f2 = f1;
+            o2 = o1;
+            f1 = f;
+            o1 = o;
+        } else if (f < f2) {
+            f2 = f;
+            o2 = o;
+        }
+    }
+    const k = @max(self.merge_px, 0.0001);
+    var wm: f32 = 0;
+    var wf: f32 = 0;
+    const d = smin(d1, d2, k, &wm);
+    const f = smin(f1, f2, k, &wf);
+    const soft = @max(0, -f);
+    return .{
+        .d = d,
+        .coverage = std.math.clamp(0.5 - d, 0, 1),
+        .out = .{ .x = std.math.lerp(o1[0], o2[0], wf), .y = std.math.lerp(o1[1], o2[1], wf) },
+        .steep = @exp(-soft / liquid_glass.depthPx(self.look(), self.scale)),
+        .blur = std.math.lerp(m1[0], m2[0], wm),
+        .lens = std.math.lerp(m1[1], m2[1], wm),
+        .light = std.math.lerp(m1[2], m2[2], wm),
+    };
+}
+
+/// Whether `p` is on the glass.
+pub fn hit(self: *const LiquidField, p: dvui.Point.Physical) bool {
+    return self.len > 0 and self.sample(p).d <= 0;
+}
+
+/// Signed distance to a box of half-size `b` at the origin with corner radii `r` (tl, tr, br, bl;
+/// y down), and which way is out, into `g`.
+pub fn roundBox(p: [2]f32, b: [2]f32, r: [4]f32, g: *[2]f32) f32 {
+    const rr = if (p[0] > 0) (if (p[1] > 0) r[2] else r[1]) else (if (p[1] > 0) r[3] else r[0]);
+    const q: [2]f32 = .{ @abs(p[0]) - b[0] + rr, @abs(p[1]) - b[1] + rr };
+    const sx: f32 = if (p[0] < 0) -1 else 1;
+    const sy: f32 = if (p[1] < 0) -1 else 1;
+    if (q[0] > 0 and q[1] > 0) {
+        const len = @sqrt(q[0] * q[0] + q[1] * q[1]);
+        g.* = .{ q[0] / len * sx, q[1] / len * sy };
+    } else if (q[0] > q[1]) {
+        g.* = .{ sx, 0 };
+    } else {
+        g.* = .{ 0, sy };
+    }
+    const outside = @sqrt(@max(q[0], 0) * @max(q[0], 0) + @max(q[1], 0) * @max(q[1], 0));
+    return @min(@max(q[0], q[1]), 0) + outside - rr;
+}
+
+/// `liquid_glass.fieldAt`'s soft minimum of a box's four sides, signed (negative inside), and its
+/// way out into `o`.
+pub fn softBox(p: [2]f32, c: [2]f32, half: [2]f32, k: f32, o: *[2]f32) f32 {
+    const d = [4]f32{ p[0] - c[0] + half[0], c[0] + half[0] - p[0], p[1] - c[1] + half[1], c[1] + half[1] - p[1] };
+    const m = @min(@min(d[0], d[1]), @min(d[2], d[3]));
+    var w: [4]f32 = undefined;
+    var sum: f32 = 0;
+    for (d, 0..) |di, i| {
+        w[i] = @exp((m - di) / k);
+        sum += w[i];
+    }
+    o.* = .{ (w[1] - w[0]) / sum, (w[3] - w[2]) / sum };
+    return k * @log(sum) - m;
+}
+
+/// iq's quadratic smooth minimum of `a` and `b` over `k`, and how much of `b` is in it, into `m`.
+pub fn smin(a: f32, b: f32, k: f32, m: *f32) f32 {
+    const h = @max(k - @abs(a - b), 0) / k;
+    m.* = h * h * 0.5;
+    if (b < a) m.* = 1 - m.*;
+    return @min(a, b) - h * h * k * 0.25;
+}

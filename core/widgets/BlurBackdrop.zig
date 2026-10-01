@@ -32,6 +32,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const motion = @import("../motion.zig");
 const liquid_glass = @import("../gfx/liquid_glass.zig");
+const LiquidField = @import("../gfx/LiquidField.zig");
 
 const Rect = dvui.Rect;
 const Size = dvui.Size;
@@ -1102,6 +1103,8 @@ const FrostJob = struct {
         defer dvui.alphaSet(prev_alpha);
         // The capture, now that everything below this pane is on the target.
         self.backdrop.deinit();
+        // Through the glass program where there is one: the same pane in one pass a pixel.
+        if (self.drawField()) return;
         const weight: f32 = if (self.tint != null) 1 - self.mix else 1;
         self.drawFrost(weight);
         if (self.tint) |tint| addTint(self.rect, self.corners, self.scale, tint, self.mix);
@@ -1112,6 +1115,30 @@ const FrostJob = struct {
         } else if (lift > 0) {
             addTint(self.rect, self.corners, self.scale, .white, lift);
         }
+    }
+
+    /// The pane as a one-shape `LiquidField`, drawn by the glass program. False where there is
+    /// none, and the meshes draw it.
+    fn drawField(self: *const FrostJob) bool {
+        const tex = self.backdrop.small orelse return false;
+        if (!LiquidField.ready()) return false;
+        const c = self.finalCorners();
+        const s = self.scale;
+        var field: LiquidField = .{
+            .scale = s,
+            .tint = self.tint,
+            .mix = self.mix,
+            .lift = self.lift,
+            .refraction = self.refraction,
+        };
+        field.add(.{
+            .rect = self.rect,
+            .radii = .{ c.tl.radius() * s, c.tr.radius() * s, c.br.radius() * s, c.bl.radius() * s },
+            .lens = self.lens,
+        });
+        const sharp = self.backdrop.sharpTexture();
+        const distinct = if (sharp) |t| t.ptr != tex.ptr else false;
+        return field.draw(tex, self.backdrop.coverage(), if (distinct) sharp else null);
     }
 
     /// The frost at `weight` of itself: through a bevelled edge when the motion level asks for

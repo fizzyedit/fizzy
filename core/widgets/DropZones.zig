@@ -28,6 +28,7 @@ const icons = @import("icons");
 const icon_tex = @import("../gfx/icon.zig");
 const motion = @import("../motion.zig");
 const liquid_glass = @import("../gfx/liquid_glass.zig");
+const LiquidField = @import("../gfx/LiquidField.zig");
 
 pub const Side = enum { left, right, top, bottom };
 
@@ -238,13 +239,17 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) void {
             const b = w.bubble(all[zi]);
             const r = b.r * k;
             if (r < 0.5) continue;
-            panes[n] = .{ .r = .{ .x = b.c.x - r, .y = b.c.y - r, .w = 2 * r, .h = 2 * r }, .lit = st.lit[zi], .radii = liquid_glass.uniform(r), .lens = k };
+            // Out of the middle to where it settles, on the same curve as its size: each bubble
+            // is born inside the drop and pinches off it on its way out (`merge`), past its place
+            // and back when motion is playful; leaving, it is drawn back in and poured into it.
+            const c: dvui.Point.Physical = .{ .x = w.center.x + (b.c.x - w.center.x) * k, .y = w.center.y + (b.c.y - w.center.y) * k };
+            panes[n] = .{ .r = .{ .x = c.x - r, .y = c.y - r, .w = 2 * r, .h = 2 * r }, .lit = st.lit[zi], .radii = liquid_glass.uniform(r), .lens = k };
             zones[n] = zi;
             times[n] = t;
             n += 1;
         }
-        // As far as a bubble swings past its size, too.
-        glass(id, panes[0..n], w.rect().insetAll(-side_r * motion.overshoot_max * w.unit), g, scale);
+        // As far as a bubble swings past its place and its size, too.
+        glass(id, panes[0..n], w.rect().insetAll(-extent * motion.overshoot_max * w.unit), g, scale, merge * w.unit);
         for (panes[0..n], zones[0..n], times[0..n]) |pane, i, t| {
             const z = all[i];
             if (z == .center and look.center == .none) continue;
@@ -271,6 +276,11 @@ fn orbTime(shown: f32, j: usize, n: usize) f32 {
     const span = 1 - stagger * @as(f32, @floatFromInt(n -| 1));
     return std.math.clamp((shown - stagger * @as(f32, @floatFromInt(j))) / span, 0, 1);
 }
+
+/// Points: how far apart two bubbles still run together (`LiquidField.merge_px`) — about half a
+/// side bubble across, so one leaving the drop draws a neck out of it that thins and lets go well
+/// before it settles.
+const merge: f32 = 24;
 
 /// How far behind the one before each orb starts, as a share of `shown`.
 const stagger: f32 = 0.06;
@@ -341,7 +351,7 @@ pub fn drawSingle(id: dvui.Id, rect: ?dvui.Rect.Physical, scale: f32, opts: Sing
             // its shape and back as it arrives when motion is playful, as a menu's does.
             .lens = grow(g),
         };
-        glass(id, &.{pane}, st.rect, g, scale);
+        glass(id, &.{pane}, st.rect, g, scale, 0);
         if (opts.icon) |icon| drawIcon(pane.r, iconFor(.center, icon), g, 1, scale, icon_size, icon_size * scale, g);
     }
     if (moving) {
@@ -412,7 +422,7 @@ const Pane = struct {
 /// growing in does not move what is read; what is under it does not change during a drag (the
 /// app under one stays put), so it is read again a few times a second, and when the blur has
 /// grown a step. Reading and blurring a place every frame was most of what the glass cost.
-fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, scale: f32) void {
+fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, scale: f32, merge_px: f32) void {
     const base = widgets.menuFrost() orelse {
         const fill = dialogs.dialogFill();
         for (panes) |pane| {
@@ -429,6 +439,7 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
         .scale = scale,
         .now = dvui.currentWindow().frame_time_ns,
         .strength = g,
+        .merge_px = merge_px,
         // How much of it each pane has is the pane's own (`Pane.lens`): a drop's orbs each form
         // their edge on their own way out.
         .lens = lens_full,
@@ -487,6 +498,9 @@ const LayerJob = struct {
     strength: f32 = 1,
     /// 0…1: the rim's lens and its light (`motion.liquid`).
     lens: f32 = 1,
+    /// Physical pixels: how far apart panes still run together, where the glass program draws
+    /// them (`LiquidField`).
+    merge_px: f32 = 0,
     panes: [all.len]Pane = undefined,
     count: usize = 0,
 
@@ -505,6 +519,7 @@ const LayerJob = struct {
         // As `frostPane` composes it: the frost at `1 - mix` of itself, then the tint and the
         // lift added over it.
         const frost_mod: dvui.Color = if (self.pane.tint != null) dvui.Color.white.opacity(1 - mix) else .white;
+        if (drawFieldImpl(self, tex, backdrop)) return;
         const light = BlurBackdrop.additiveLight();
         for (self.panes[0..self.count]) |pane| {
             liquid_glass.drawPane(tex, backdrop.coverage(), pane.r, pane.radii, self.scale, frost_mod, .{
@@ -529,6 +544,35 @@ const LayerJob = struct {
         }
     }
 };
+
+/// The panes as one `LiquidField`, run together where they are close: a drop and the bubbles
+/// leaving it. False where there is no glass program, and the panes are drawn one by one.
+fn drawFieldImpl(self: *const LayerJob, tex: dvui.Texture, backdrop: *BlurBackdrop) bool {
+    if (!LiquidField.ready()) return false;
+    const dark = dvui.themeGet().dark;
+    var field: LiquidField = .{
+        .merge_px = self.merge_px,
+        .scale = self.scale,
+        .tint = self.pane.tint,
+        .mix = self.pane.mix,
+        .lift = self.pane.lift,
+        .refraction = self.pane.refraction,
+    };
+    for (self.panes[0..self.count]) |pane| {
+        const hover = lit_lift * pane.lit * self.strength;
+        field.add(.{
+            .rect = pane.r,
+            .radii = .{ pane.radii[0], pane.radii[3], pane.radii[2], pane.radii[1] },
+            .lens = self.lens * pane.lens * (1 + 0.6 * pane.lit),
+            // Lit, lighter in a dark theme, as dvui takes a hovered fill.
+            .light = if (dark) hover else 0,
+            .round = true,
+        });
+    }
+    const sharp = backdrop.sharpTexture();
+    const distinct = if (sharp) |t| t.ptr != tex.ptr else false;
+    return field.draw(tex, backdrop.coverage(), if (distinct) sharp else null);
+}
 
 /// A zone's icon, over its glass (queued after it, so drawn after it). Faint until lit, and in
 /// only once the glass is mostly there; blended toward the glass rather than made translucent,
