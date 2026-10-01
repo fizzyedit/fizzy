@@ -2699,6 +2699,26 @@ test "split: only a half of a split the user made can go" {
     try std.testing.expect(!state.userSplitPart("Center"));
 }
 
+test "split: the trash is offered out of a place of several, not out of a lone default place" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    const VD = fizzy.Editor.Layout.ViewDrag;
+    // Joined back, Center is the shape's one place again, showing one view.
+    try case.place("Center", "Center", .remove);
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    defer editor.app.layout.view_drag.discard();
+    VD.begin(&layout, "Center", .{ .w = 100, .h = 100 });
+    try std.testing.expect(!VD.removable(&layout));
+    editor.app.layout.view_drag.discard();
+    // Showing several, the trash takes just the view carried.
+    editor.app.layout.setShows(editor.app.gpa, "Center", .many);
+    try dvui.testing.settle(EndlessFrame.frame);
+    var layout2 = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    VD.begin(&layout2, "Center", .{ .w = 100, .h = 100 });
+    try std.testing.expect(VD.removable(&layout2));
+}
+
 test "split: trashing the last view of the half that was split merges the other half into it" {
     var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
     defer case.deinit();

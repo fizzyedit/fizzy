@@ -373,14 +373,18 @@ fn dropCenter(mouse: dvui.Point.Physical, r: f32, touch: bool) dvui.Point.Physic
     return if (touch) .{ .x = mouse.x - r, .y = mouse.y - r } else .{ .x = mouse.x + 0.55 * r, .y = mouse.y + 0.55 * r };
 }
 
-/// Whether the drop offers the trash: when what is carried comes out of one half of a split the
-/// user made (`State.userSplitPart`) — the trash takes it out, and the half, emptied, closes into
-/// the other. A place the shape declared and never split offers none: there is nothing to merge
-/// it into. A view carried out of the picker is in no place to leave.
+/// Whether the drop offers the trash: everywhere but where it would wipe out a place the shape
+/// declared. Out of one half of a split the user made (`State.userSplitPart`) the trash takes what
+/// is carried, and the half, emptied, closes into the other; out of a place that shows several
+/// (the sidebar, the bottom panel) it takes just that view, back to the picker. A place the shape
+/// declared to show one, never split, offers none — the trash would only leave it empty. A view
+/// carried out of the picker is in no place to leave.
 pub fn removable(l: *Layout) bool {
     const d = l.state.view_drag;
     if (!d.active() or d.loose()) return false;
-    return l.state.userSplitPart(d.name);
+    if (l.state.userSplitPart(d.name)) return true;
+    const r = regionNamed(l.state, d.name) orelse return false;
+    return r.shows == .many;
 }
 
 /// The part of place `name` a carried view's zones cover: the place less its own chooser — a tab
