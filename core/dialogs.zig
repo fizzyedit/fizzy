@@ -141,6 +141,7 @@ pub fn frostPane(id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect
         .mix = f.mix,
         .lift = f.lift,
         .detail = f.detail,
+        .refraction = f.refraction,
     });
     return true;
 }
@@ -362,6 +363,7 @@ fn tooltipGlass(wd: *dvui.WidgetData, r: dvui.Rect.Physical, scale: f32, t: f32,
         .mix = f.mix,
         .lift = f.lift,
         .detail = f.detail,
+        .refraction = f.refraction,
         .form = t,
     });
 }
