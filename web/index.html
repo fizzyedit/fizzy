@@ -110,6 +110,12 @@
       </div>
     </div>
     <script type="module">
+      // The name this build files what it keeps in the browser under: its own files, the plugins
+      // it remembers and their cached bytes. Every copy of the app served from one site shares
+      // the browser's storage for it, so a test build beside the real one (fizzyed.it/testapp/
+      // beside /app/) is built with a name of its own (`zig build web -Dweb-storage=…`) and never
+      // reads or overwrites the real one's settings, layout or plugins. Stamped by the build.
+      const storageName = "__FIZZY_WEB_STORAGE__";
       const loadingEl = document.getElementById("loading");
       const errorPanel = document.getElementById("error-panel");
       const errorMessage = document.getElementById("error-message");
@@ -307,7 +313,7 @@
           // `core.fs` on the web: the app's own small files (settings.zon, recents.zon,
           // keybinds.zon) live in localStorage, keyed by the path the app would have used.
           fizzy_web_storage_get(keyPtr, keyLen, bufPtr, bufLen) {
-            const key = "fizzy.file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
+            const key = storageName + ".file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
             let value = null;
             try { value = localStorage.getItem(key); } catch (_) {}
             if (value === null) return 0xffffffff;
@@ -317,12 +323,12 @@
           },
           fizzy_web_storage_set(keyPtr, keyLen, valPtr, valLen) {
             const mem = wasmInstance.exports.memory.buffer;
-            const key = "fizzy.file:" + utf8.decode(new Uint8Array(mem, keyPtr, keyLen));
+            const key = storageName + ".file:" + utf8.decode(new Uint8Array(mem, keyPtr, keyLen));
             const value = utf8.decode(new Uint8Array(mem, valPtr, valLen));
             try { localStorage.setItem(key, value); } catch (err) { console.warn("fizzy: could not store", key, err); }
           },
           fizzy_web_storage_remove(keyPtr, keyLen) {
-            const key = "fizzy.file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
+            const key = storageName + ".file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
             try { localStorage.removeItem(key); } catch (_) {}
           },
           // What the page remembers for an id, so the host can load it again after a disable
@@ -404,7 +410,7 @@
       // developer's way in until the store serves web builds.
       // Plugins the store installed on an earlier visit, by id → URL. The page's memory, since
       // the app has no settings file here; forgotten on uninstall.
-      const rememberedKey = "fizzy.web_plugins";
+      const rememberedKey = storageName + ".web_plugins";
       function rememberedPlugins() {
         try { return JSON.parse(localStorage.getItem(rememberedKey) || "{}"); } catch (_) { return {}; }
       }
@@ -437,7 +443,7 @@
       // and an update is a new URL — `rememberPlugin` drops the old entry, `forgetPlugin` the
       // uninstalled one. A dev build served beside the app (`?plugin=`) is rebuilt at the same
       // URL, so it is never kept.
-      const pluginCacheName = "fizzy-plugins-v1";
+      const pluginCacheName = storageName + "-plugins-v1";
       const pluginCacheAvailable = typeof caches !== "undefined";
       // Verified bytes of builds that have linked but not yet registered, by URL: the host
       // remembers a build only once it has registered (see the end of `loadPlugin`), and only
@@ -801,7 +807,7 @@
         try {
           for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
-            if (key && key.startsWith("fizzy.")) storage[key] = localStorage.getItem(key);
+            if (key && key.startsWith(storageName + ".")) storage[key] = localStorage.getItem(key);
           }
         } catch (_) {}
 
@@ -836,6 +842,7 @@
           size: size(),
           prefs: prefs(),
           storage,
+          storageName,
           search: location.search,
           baseURI: document.baseURI,
         }, [offscreen]);

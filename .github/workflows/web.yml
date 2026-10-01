@@ -1,0 +1,136 @@
+# The web app for fizzyed.it, built here and handed to fizzyedit/website to publish.
+#
+# Pushed to main, it is the real app, fizzyed.it/app/. Built for a pull request — or run by hand
+# on any branch but main — it is a test copy, fizzyed.it/testapp/, filing its browser storage under
+# a name of its own (`-Dweb-storage`) so it never reads or overwrites the real app's settings,
+# layout or plugins. Each build goes to a release in fizzyedit/website — `web-main` or
+# `web-preview`, its zip replaced every time — and the website is asked to redeploy, taking the
+# latest of each. There is one test copy: the last build for any pull request is the one served.
+#
+# A pull request from a fork builds nothing. The test copy is served from fizzyed.it itself, so
+# a fork's code must not be published there unreviewed (and a fork's run gets no secrets anyway).
+#
+# A release published here asks for a redeploy too, without a build: the site links releases.
+#
+# Needs the secret WEBSITE_DISPATCH_TOKEN: a fine-grained token with Contents read/write on
+# fizzyedit/website, for the release upload and the dispatch.
+
+name: Web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Everything the web app is built from, not just fizzy's own source: `app/`, `core/`,
+      # `sdk/` and the bundled `plugins/` all compile into it, and a change confined to one of
+      # them used to leave fizzyed.it/app serving the previous build with no sign anything was
+      # missing.
+      - "src/**"
+      - "app/**"
+      - "core/**"
+      - "sdk/**"
+      - "plugins/**"
+      - "build/**"
+      - "build.zig"
+      - "build.zig.zon"
+      - "web/**"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "app/**"
+      - "core/**"
+      - "sdk/**"
+      - "plugins/**"
+      - "build/**"
+      - "build.zig"
+      - "build.zig.zon"
+      - "web/**"
+      - ".github/workflows/web.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: web-${{ (github.event_name == 'pull_request' || github.ref != 'refs/heads/main') && 'preview' || 'main' }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: "0.16.0"
+  WEBSITE: fizzyedit/website
+  # `main` for the real app, `preview` for the test copy.
+  CHANNEL: ${{ (github.event_name == 'pull_request' || github.ref != 'refs/heads/main') && 'preview' || 'main' }}
+
+jobs:
+  build:
+    if: >-
+      github.event_name != 'release' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          cache-key: ${{ hashFiles('**/build.zig.zon') }}
+      # As in ci.yml: leave setup-zig's cache dirs alone, pre-fetch in a retry loop, and retry
+      # the build itself only on a fetch failure (a lazy dependency is fetched by the build).
+      - name: Pre-create Zig cache tmp/
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Fetch dependencies (with retries)
+        run: bash scripts/ci-retry.sh zig build --fetch
+
+      # ReleaseSmall, and the class matters more than the size. Fizzy folds an optimize *safety
+      # class* into its plugin ABI fingerprint — Debug/ReleaseSafe are "safe", ReleaseFast and
+      # ReleaseSmall are "fast" — and the plugin store publishes "fast" builds only. Built
+      # ReleaseSafe, the app asks the registry for a shard nobody publishes under, so every
+      # plugin in a healthy store reads "No store build" and nothing can be installed.
+      - name: Build web app
+        run: |
+          storage=fizzy
+          if [ "$CHANNEL" = preview ]; then storage=fizzy-testapp; fi
+          bash scripts/ci-retry.sh zig build web -Doptimize=ReleaseSmall -Dweb-storage="$storage"
+
+      # What was built, beside it: fizzyed.it/testapp/build.json says which commit is up.
+      - name: Note the build
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          printf '{"channel":"%s","ref":"%s","sha":"%s","pr":"%s","run":"%s/%s/actions/runs/%s"}\n' \
+            "$CHANNEL" "$REF" "$SHA" "$PR" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > zig-out/web/build.json
+          cat zig-out/web/build.json
+          (cd zig-out/web && zip -qr "$GITHUB_WORKSPACE/web.zip" .)
+
+      - name: Hand the build to the website
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          tag="web-$CHANNEL"
+          if [ -n "$PR" ]; then
+            notes="Test build of $GITHUB_REPOSITORY#$PR ($REF @ $SHA), served at https://fizzyed.it/testapp/"
+          elif [ "$CHANNEL" = preview ]; then
+            notes="Test build of $REF @ $SHA, served at https://fizzyed.it/testapp/"
+          else
+            notes="The app at https://fizzyed.it/app/, built from $GITHUB_REPOSITORY@$SHA"
+          fi
+          if ! gh release view "$tag" --repo "$WEBSITE" > /dev/null 2>&1; then
+            gh release create "$tag" --repo "$WEBSITE" --prerelease --title "$tag" --notes "$notes"
+          fi
+          gh release upload "$tag" web.zip --clobber --repo "$WEBSITE"
+          gh release edit "$tag" --repo "$WEBSITE" --notes "$notes"
+          gh api "repos/$WEBSITE/dispatches" -f event_type=fizzy-updated
+
+  # A published release changes what the site links, not the app.
+  redeploy:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask fizzyedit/website to redeploy
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+        run: gh api "repos/$WEBSITE/dispatches" -f event_type=fizzy-updated
