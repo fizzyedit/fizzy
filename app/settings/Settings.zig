@@ -91,11 +91,6 @@ motion: f32 = 1,
 /// 0.5 as written. Never stops motion — that is `motion` at 0.
 motion_speed: f32 = core.motion.default_speed,
 
-/// Whether the glass over a drag — the drop zones — reads what is under it again every frame
-/// (`core.widgets.DropZones.publishLive`). Off, a drop blurs what is under it as it forms and keeps
-/// that while it sits still. On for now; a switch to measure what the per-frame read costs.
-drop_glass_live: bool = true,
-
 /// Whether glass is drawn by the glass program (`core.LiquidField`) where the backend has one —
 /// shapes that run together, in one pass a pixel — rather than by its meshes. On; a switch to
 /// compare the two.

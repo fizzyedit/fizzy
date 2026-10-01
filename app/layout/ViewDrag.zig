@@ -656,16 +656,27 @@ pub fn drawOverlay(l: *Layout) void {
     // into it — which bubble a release takes, said by the glass itself.
     const carried = if (d.active()) dropShapes(l, drops[0..n]) else d.drop_shapes[0..0];
     var taken = false;
-    for (drops[0..n]) |p| {
+    var clips: [max_offers]dvui.Rect.Physical = undefined;
+    for (drops[0..n], 0..) |p, i| {
         var look = p.look;
         const over = p.look.target and p.clip.contains(mouse);
         if (!taken and over) look.carried = carried;
+        // The icons go over the carried view, which is laid on the drop after it: the bubble it
+        // is about to be dropped in says what it does through it.
+        if (d.active()) look.icons = .later;
         // Carrying the view, the drop is not held to its place: the carried drop reaches past it.
-        dvui.clipSet(if (look.carried.len > 0) prev_clip else p.clip);
+        clips[i] = if (look.carried.len > 0) prev_clip else p.clip;
+        dvui.clipSet(clips[i]);
         if (DropZones.draw(p.key, p.wheel, scale, look) and look.carried.len > 0) taken = true;
     }
     dvui.clipSet(prev_clip);
-    if (d.active()) drawFloat(l, taken);
+    if (!d.active()) return;
+    drawFloat(l, taken);
+    for (drops[0..n], clips[0..n]) |p, clip| {
+        dvui.clipSet(clip);
+        DropZones.drawIcons(p.key, scale);
+    }
+    dvui.clipSet(prev_clip);
 }
 
 /// Points: the radius of the view carried as a drop — the drop zones' middle bubble's, so what is

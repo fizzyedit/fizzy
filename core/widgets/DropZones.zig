@@ -108,20 +108,6 @@ pub const fit: f32 = 0.45;
 /// aimed at a bubble's rim is aimed at the bubble.
 const reach: f32 = 1.25;
 
-/// Whether drops read what is under them again every frame, published by the app each frame
-/// (its `drop_glass_live` setting). Off, a drop blurs what is under it as it forms and keeps that
-/// while it sits still: no read and blur a frame, and on the web no offscreen frame for it.
-pub fn publishLive(on: bool) void {
-    if (dvui.current_window == null) return;
-    dvui.dataSet(null, live_id, "_drop_glass_live", on);
-}
-
-fn live() bool {
-    return dvui.dataGet(null, live_id, "_drop_glass_live", bool) orelse true;
-}
-
-const live_id: dvui.Id = @enumFromInt(0xd70b_9a55);
-
 /// Where the drop sits over `bounds`: in its middle. `remove` offers the trash.
 pub fn wheel(bounds: dvui.Rect.Physical, scale: f32, remove: bool) Wheel {
     const room = @min(bounds.w, bounds.h) * fit / extent;
@@ -187,7 +173,14 @@ const State = struct {
     /// 0…1: how lit — the zone under the pointer.
     lit: [all.len]f32 = @splat(0),
     last_ns: i128 = 0,
+    /// The icons `draw` laid out and left for `drawIcons` (`Look.icons = .later`), and the frame.
+    icons: [all.len]IconAt = undefined,
+    icon_n: usize = 0,
+    icon_frame: i128 = 0,
 };
+
+/// An icon as `draw` laid it out: `drawIcon`'s arguments.
+const IconAt = struct { r: dvui.Rect.Physical, glyph: Glyph, g: f32, lit: f32, size: f32, rest: f32, focus: f32 };
 
 /// What dropping in the middle does, for its icon: trade places with the one view a place shows,
 /// add to the several it shows, join it with the place beside it into one — or nothing, the
@@ -207,6 +200,10 @@ pub const Look = struct {
     /// where the glass program draws them (`LiquidField`), so the carried drop reaching a
     /// bubble bridges into it. Whether they were taken is `draw`'s answer.
     carried: []const LiquidField.Shape = &.{},
+    /// When the icons are drawn: with the glass, or `.later` by the caller (`drawIcons`), over
+    /// whatever it lays on the drop after it — the carried view's picture, which would otherwise
+    /// cover the very bubble it is about to be dropped in.
+    icons: enum { now, later } = .now,
 };
 
 /// How much a lit zone's glass changes, as dvui changes a hovered fill (`Theme.adjustColorForState`,
@@ -277,12 +274,18 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
         }
         // As far as a bubble swings past its place and its size, too.
         took = glassCarrying(id, panes[0..n], w.rect().insetAll(-extent * motion.overshoot_max * w.unit), g, scale, merge * w.unit, look.carried);
+        st.icon_n = 0;
+        st.icon_frame = now;
         for (panes[0..n], zones[0..n], times[0..n]) |pane, i, t| {
             const z = all[i];
             if (z == .center and look.center == .none) continue;
             const f = frost(t);
-            drawIcon(pane.r, iconFor(z, look.center), f, st.lit[i], scale, pane.r.w / 2 * bubble_icon / scale, w.bubble(z).r * bubble_icon, f);
+            st.icons[st.icon_n] = .{ .r = pane.r, .glyph = iconFor(z, look.center), .g = f, .lit = st.lit[i], .size = pane.r.w / 2 * bubble_icon / scale, .rest = w.bubble(z).r * bubble_icon, .focus = f };
+            st.icon_n += 1;
         }
+        if (look.icons == .now) drawIcons(id, scale);
+    } else {
+        st.icon_n = 0;
     }
 
     if (moving) {
@@ -295,6 +298,14 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
         st.last_ns = 0;
     }
     return took;
+}
+
+/// The icons this frame's `draw` of `id` laid out, over everything drawn since — for a caller that
+/// passed `Look.icons = .later` and has laid the carried view over the drop.
+pub fn drawIcons(id: dvui.Id, scale: f32) void {
+    const st = dvui.dataGetPtr(null, id, "_drop_zones", State) orelse return;
+    if (st.icon_frame != dvui.currentWindow().frame_time_ns) return;
+    for (st.icons[0..st.icon_n]) |ic| drawIcon(ic.r, ic.glyph, ic.g, ic.lit, scale, ic.size, ic.rest, ic.focus);
 }
 
 /// Orb `j` of `n` (in `growOrder`)'s own time at `shown`, 0 gone … 1 settled: each over a window
@@ -520,10 +531,9 @@ fn glassCarrying(id: dvui.Id, panes: []const Pane, area_in: dvui.Rect.Physical, 
     backdrop.radius_px = job.pane.radius;
     backdrop.detail = job.pane.detail;
     backdrop.form = 1;
-    // Read every frame while live, as the dialogs' glass is: what moves under the drop — a logo
-    // following the pointer — moves in it at the frame rate (`live`). Otherwise read again only as
-    // the drop's area changes.
-    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, if (live()) job.now else 0, job.pane.radius });
+    // Read every frame, as the dialogs' glass is: what moves under the drop — a logo following the
+    // pointer — moves in it at the frame rate.
+    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, job.now, job.pane.radius });
     job.backdrop = backdrop;
     dvui.deferRender(job, LayerJob.draw);
     return carried.len > 0;
@@ -629,25 +639,37 @@ fn drawFieldImpl(self: *const LayerJob, tex: dvui.Texture, backdrop: *BlurBackdr
     return field.draw(tex, backdrop.coverage(), if (distinct) sharp else null);
 }
 
-/// A zone's icon, over its glass (queued after it, so drawn after it). Faint until lit, and in
-/// only once the glass is mostly there; blended toward the glass rather than made translucent,
+/// A zone's icon, over its glass (queued after it, so drawn after it). Dimmed until lit — the
+/// bubble a release would take stands out in full ink, a little larger, the others recede; the
+/// trash lights red, as a close button does — and
+/// in only once the glass is mostly there; blended toward the glass rather than made translucent,
 /// so a glyph's crossing strokes never show.
 /// `rest` is the icon's side in physical pixels once its bubble has settled: it is rasterized at
 /// that and stretched as its bubble swells and shrinks (`icon.renderRaster`).
 /// `focus`, 0…1: how sharp — from a blur, as the glass under it forms, to crisp at 1.
-fn drawIcon(zr: dvui.Rect.Physical, glyph: Glyph, g: f32, lit: f32, scale: f32, size: f32, rest: f32, focus: f32) void {
-    const side = size * scale;
-    if (zr.w < side * 1.5 or zr.h < side * 1.5) return;
+fn drawIcon(zr: dvui.Rect.Physical, glyph: Glyph, g: f32, lit: f32, scale: f32, size: f32, rest_side: f32, focus: f32) void {
+    if (zr.w < size * scale * 1.5 or zr.h < size * scale * 1.5) return;
     const arrive = std.math.clamp(g / 0.7, 0, 1);
     if (arrive <= 0.01) return;
+    const on = std.math.clamp(lit, 0, 1);
+    const grown = 1 + (lit_icon_grow - 1) * on;
+    const side = size * scale * grown;
+    // Rasterized at its lit size, so the one a release takes is crisp; the others draw it smaller.
+    const rest = rest_side * lit_icon_grow;
     const theme = dvui.themeGet();
     const ink = theme.color(.window, .text);
-    // Full ink whether lit or not: every bubble is a live option, and a glyph mixed toward the
-    // dialog fill read as see-through over frost that is not that colour — the lit glass says
-    // which one a release takes. Mixed in only as the bubble arrives.
-    _ = lit;
-    const glass_c = dialogs.dialogFill().opacity(1);
-    const color = glass_c.lerp(ink, arrive);
+    // Opaque at both ends, so the mix is: the dialog fill is translucent (`opacity` scales alpha,
+    // it does not set it), and a translucent glyph doubles where its strokes cross.
+    var glass_c = dialogs.dialogFill();
+    glass_c.a = 255;
+    var ink_c = ink;
+    ink_c.a = 255;
+    var color = glass_c.lerp(ink_c, arrive * (dim_icon + (1 - dim_icon) * on));
+    if (glyph.danger) {
+        var err_c = theme.color(.err, .fill);
+        err_c.a = 255;
+        color = color.lerp(err_c, arrive * on);
+    }
     const at_r: dvui.Rect.Physical = .{ .x = zr.x + (zr.w - side) / 2, .y = zr.y + (zr.h - side) / 2, .w = side, .h = side };
     const icon_opts: dvui.IconRenderOptions = .{ .stroke_color = .{ .color = color }, .fill_color = .transparent };
     const sharp = std.math.clamp(focus, 0, 1);
@@ -659,10 +681,21 @@ fn drawIcon(zr: dvui.Rect.Physical, glyph: Glyph, g: f32, lit: f32, scale: f32, 
     }
 }
 
+/// How much of the ink an icon has while its bubble is not the one a release takes — mixed toward
+/// the glass, so it still reads over frost and over the carried view's picture alike.
+const dim_icon: f32 = 0.45;
+/// How much larger the icon of the bubble a release takes is drawn.
+const lit_icon_grow: f32 = 1.15;
+
 /// How small an icon is rasterized at its blurriest, as a share of its size.
 const focus_from: f32 = 0.125;
 
-const Glyph = struct { name: []const u8, tvg: []const u8 };
+const Glyph = struct {
+    name: []const u8,
+    tvg: []const u8,
+    /// Lit in the theme's error colour, as a close button is: the trash.
+    danger: bool = false,
+};
 
 /// What each zone's icon shows: a pane opening on that side, or the middle's trade, add or join.
 fn iconFor(z: Zone, center: Center) Glyph {
@@ -678,7 +711,7 @@ fn iconFor(z: Zone, center: Center) Glyph {
             .top => .{ .name = "drop_zone_top", .tvg = icons.tvg.lucide.@"panel-top" },
             .bottom => .{ .name = "drop_zone_bottom", .tvg = icons.tvg.lucide.@"panel-bottom" },
         },
-        .remove => .{ .name = "drop_zone_remove", .tvg = icons.tvg.lucide.@"trash-2" },
+        .remove => .{ .name = "drop_zone_remove", .tvg = icons.tvg.lucide.@"trash-2", .danger = true },
     };
 }
 

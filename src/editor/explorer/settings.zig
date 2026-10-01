@@ -303,21 +303,9 @@ pub const groups = [_]Group{
                 .draw = drawFps,
             },
             .{
-                .label = "Live drop glass",
-                .key = "drop_glass_live",
-                .description = "Drop zones re-read and re-blur what is under them every frame. " ++
-                    "Off, each blurs what is under it once as it forms — cheaper on a phone, " ++
-                    "but anything moving under the glass looks still until it forms again.",
-                .keywords = "fps performance blur frost glass drop zones drag",
-                .draw = drawDropGlassLive,
-                .inline_control = true,
-            },
-            .{
                 .label = "Glass shader",
                 .key = "glass_shader",
-                .description = "Glass is drawn by a shader, a pixel at a time, where the backend " ++
-                    "has one: shapes run together and part like drops. Off, it is drawn as meshes, " ++
-                    "as before — to compare the two.",
+                .description = "Glass: Shader instead of mesh",
                 .keywords = "glass shader sdf liquid frost blur performance",
                 .draw = drawGlassShader,
                 .inline_control = true,
@@ -675,19 +663,6 @@ fn drawPluginUpdateMode() void {
 }
 
 // ---- Debugging --------------------------------------------------------------------------
-
-fn drawDropGlassLive() void {
-    const editor = fizzy.editor();
-    if (dvui.checkbox(@src(), &editor.app.settings.drop_glass_live, null, .{
-        .expand = .none,
-        .gravity_y = 0.5,
-        .margin = .{ .x = 4, .w = 4 },
-        .padding = .{ .x = 2, .w = 4, .y = 2, .h = 2 },
-    })) {
-        editor.markSettingsDirty();
-        dvui.refresh(null, @src(), null);
-    }
-}
 
 fn drawGlassShader() void {
     const editor = fizzy.editor();
