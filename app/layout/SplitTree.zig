@@ -245,6 +245,27 @@ pub const Forest = struct {
         }
     }
 
+    /// The other half of the split `name` is one half of, when that half is a single place;
+    /// null when `name` is no split's half or its other half is split again.
+    pub fn siblingLeaf(self: *const Forest, name: []const u8) ?[]const u8 {
+        var it = self.roots.valueIterator();
+        while (it.next()) |n| {
+            if (siblingIn(n.*, name)) |hit| return hit;
+        }
+        return null;
+    }
+
+    fn siblingIn(node: *Node, name: []const u8) ?[]const u8 {
+        switch (node.kind) {
+            .leaf => return null,
+            .branch => |br| {
+                if (leafName(br.a.*)) |a| if (std.mem.eql(u8, a, name)) return leafName(br.b.*);
+                if (leafName(br.b.*)) |b| if (std.mem.eql(u8, b, name)) return leafName(br.a.*);
+                return siblingIn(br.a, name) orelse siblingIn(br.b, name);
+            },
+        }
+    }
+
     /// A leaf minted by a split, not a shape-declared root. The picker can Remove these.
     pub fn canForget(self: *const Forest, name: []const u8) bool {
         return self.root(name) == null and self.findLeaf(name) != null;

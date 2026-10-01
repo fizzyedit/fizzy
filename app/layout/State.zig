@@ -353,6 +353,35 @@ pub fn isMinted(self: *const State, name: []const u8) bool {
     return self.splits.canForget(name);
 }
 
+/// The other half of the split place `name` is one half of, when that half is a single place:
+/// the place it would merge with. Null when `name` is no split's half, or its other half is
+/// split again.
+pub fn siblingLeaf(self: *const State, name: []const u8) ?[]const u8 {
+    if (self.dock) |*d| {
+        const idx = d.findPanel(name) orelse return null;
+        const parent = d.findParent(idx) orelse return null;
+        const split = switch (d.nodes.items[parent.idx]) {
+            .split => |sp| sp,
+            else => return null,
+        };
+        const other = if (parent.side == .first) split.second else split.first;
+        return switch (d.nodes.items[other]) {
+            .leaf => |lf| if (lf.tabs.items.len > 0) lf.tabs.items[0] else null,
+            else => null,
+        };
+    }
+    return self.splits.siblingLeaf(name);
+}
+
+/// Whether `name` is one half of a split the user made — minted by it, or the place that was
+/// split, with the minted half beside it. Such a place can go: emptied it closes, and the trash
+/// takes it (`ViewDrag`). A place the shape declared, never split, cannot.
+pub fn userSplitPart(self: *const State, name: []const u8) bool {
+    if (self.isMinted(name)) return true;
+    const sibling = self.siblingLeaf(name) orelse return false;
+    return self.isMinted(sibling);
+}
+
 /// The two halves of one split — the pair a drop in the middle of one joins — as the place
 /// that stays and the one that closes; null for any other pair. The live dock tree when there is
 /// one: its two leaves under one split, a declared (pinned) leaf always the one kept and two

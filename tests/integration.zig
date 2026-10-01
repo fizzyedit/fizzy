@@ -2632,6 +2632,131 @@ test "a split's last view dropped on the other half's middle joins the two into 
     try std.testing.expect(!editor.app.layout.isMinted(made_name));
 }
 
+/// The endless example's Center split right into `Center` and its minted half, holding
+/// `center` and `half` (empty lists for an empty place). For the merge rules below.
+const SplitCase = struct {
+    ctx: shim.Ctx,
+    half: []u8,
+
+    fn init(center: []const []const u8, half: []const []const u8) !SplitCase {
+        var ctx = try shim.init(std.testing.allocator);
+        errdefer ctx.deinit(std.testing.allocator);
+        const editor = ctx.editor;
+        editor.app.gpa = std.testing.allocator;
+        EndlessFrame.editor = editor;
+        const draw = struct {
+            fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+                return .ok;
+            }
+        }.f;
+        try editor.app.host.registerSurface(.{ .id = "test.view", .title = "View", .keywords = fizzy.sdk.keywords.ide.main, .draw = draw });
+        try editor.app.host.registerSurface(.{ .id = "test.other", .title = "Other", .keywords = fizzy.sdk.keywords.ide.main, .draw = draw });
+        try dvui.testing.settle(EndlessFrame.frame);
+        try editor.app.layout.assign(editor.app.gpa, "Center", center);
+        const made = blk: {
+            var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+            break :blk layout.splitOn("Center", .right) orelse return error.TestExpectedEqual;
+        };
+        const name = try std.testing.allocator.dupe(u8, made);
+        try editor.app.layout.assign(editor.app.gpa, name, half);
+        try dvui.testing.settle(EndlessFrame.frame);
+        return .{ .ctx = ctx, .half = name };
+    }
+
+    fn deinit(self: *SplitCase) void {
+        const editor = self.ctx.editor;
+        editor.app.layout.regions.deinit(editor.app.gpa);
+        editor.app.layout.regions_building.deinit(editor.app.gpa);
+        editor.app.layout.deinitExtents(editor.app.gpa);
+        editor.app.layout.deinitAssignments(editor.app.gpa);
+        editor.app.layout.deinitQualified(editor.app.gpa);
+        EndlessFrame.editor = null;
+        std.testing.allocator.free(self.half);
+        self.ctx.deinit(std.testing.allocator);
+    }
+
+    fn place(self: *SplitCase, source: []const u8, dest: []const u8, kind: fizzy.Editor.Layout.Drop.Kind) !void {
+        const editor = self.ctx.editor;
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        fizzy.Editor.Layout.ViewDrag.place(&layout, source, dest, kind);
+        try dvui.testing.settle(EndlessFrame.frame);
+        try dvui.testing.settle(EndlessFrame.frame);
+    }
+
+    fn holds(self: *SplitCase, name: []const u8) []const []const u8 {
+        return self.ctx.editor.app.layout.assignment(name) orelse &.{};
+    }
+};
+
+test "split: only a half of a split the user made can go" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    const state = &case.ctx.editor.app.layout;
+    try std.testing.expect(state.userSplitPart("Center"));
+    try std.testing.expect(state.userSplitPart(case.half));
+    // Joined again, the one place left is the shape's own, and stays.
+    try case.place("Center", "Center", .remove);
+    try std.testing.expect(!state.userSplitPart("Center"));
+}
+
+test "split: trashing the last view of the half that was split merges the other half into it" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    try case.place("Center", "Center", .remove);
+    // One place again, the shape's, holding what the other half held.
+    try std.testing.expect(!case.ctx.editor.app.layout.isMinted(case.half));
+    try std.testing.expectEqual(@as(usize, 1), case.holds("Center").len);
+    try std.testing.expectEqualStrings("test.other", case.holds("Center")[0]);
+}
+
+test "split: trashing the last view of the minted half closes it" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    try case.place(case.half, case.half, .remove);
+    try std.testing.expect(!case.ctx.editor.app.layout.isMinted(case.half));
+    try std.testing.expectEqualStrings("test.view", case.holds("Center")[0]);
+}
+
+test "split: an empty half dropped in a place's middle goes, merging into the other" {
+    // The minted half, empty, onto the one with a view.
+    {
+        var case = try SplitCase.init(&.{"test.view"}, &.{});
+        defer case.deinit();
+        try case.place(case.half, "Center", .swap);
+        try std.testing.expect(!case.ctx.editor.app.layout.isMinted(case.half));
+        try std.testing.expectEqualStrings("test.view", case.holds("Center")[0]);
+    }
+    // The half that was split, empty, onto the minted one: one place, holding its view.
+    {
+        var case = try SplitCase.init(&.{}, &.{"test.other"});
+        defer case.deinit();
+        try case.place("Center", case.half, .swap);
+        try std.testing.expect(!case.ctx.editor.app.layout.isMinted(case.half));
+        try std.testing.expectEqualStrings("test.other", case.holds("Center")[0]);
+    }
+    // Two empty halves: one consumes the other, one empty place left.
+    {
+        var case = try SplitCase.init(&.{}, &.{});
+        defer case.deinit();
+        try case.place(case.half, "Center", .swap);
+        try std.testing.expect(!case.ctx.editor.app.layout.isMinted(case.half));
+        try std.testing.expectEqual(@as(usize, 0), case.holds("Center").len);
+    }
+}
+
+test "split: an empty half dropped on a place's edge moves there" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{});
+    defer case.deinit();
+    try case.place(case.half, "Center", .{ .split = .left });
+    const state = &case.ctx.editor.app.layout;
+    // Gone from the right, opened on the left: still one empty half beside Center.
+    try std.testing.expect(!state.isMinted(case.half));
+    const moved = state.siblingLeaf("Center") orelse return error.TestExpectedEqual;
+    try std.testing.expect(state.isMinted(moved));
+    try std.testing.expectEqual(@as(usize, 0), case.holds(moved).len);
+    try std.testing.expectEqualStrings("test.view", case.holds("Center")[0]);
+}
+
 test "a view-drag from a multi place moves only the visible surface" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);

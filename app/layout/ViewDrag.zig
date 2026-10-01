@@ -373,14 +373,14 @@ fn dropCenter(mouse: dvui.Point.Physical, r: f32, touch: bool) dvui.Point.Physic
     return if (touch) .{ .x = mouse.x - r, .y = mouse.y - r } else .{ .x = mouse.x + 0.55 * r, .y = mouse.y + 0.55 * r };
 }
 
-/// Whether the drop offers the trash for what is carried: a document (it closes), or a view
-/// lifted out of a place (it leaves it). A view carried out of the picker is in no place to
-/// leave.
+/// Whether the drop offers the trash: when what is carried comes out of one half of a split the
+/// user made (`State.userSplitPart`) — the trash takes it out, and the half, emptied, closes into
+/// the other. A place the shape declared and never split offers none: there is nothing to merge
+/// it into. A view carried out of the picker is in no place to leave.
 pub fn removable(l: *Layout) bool {
     const d = l.state.view_drag;
-    if (!d.active() or d.moved_id.len == 0) return false;
-    if (sdk.document.pathOfSurfaceId(d.moved_id)) |path| if (l.host.docFromPath(path) != null) return true;
-    return !d.loose();
+    if (!d.active() or d.loose()) return false;
+    return l.state.userSplitPart(d.name);
 }
 
 /// The part of place `name` a carried view's zones cover: the place less its own chooser — a tab
@@ -1030,6 +1030,8 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     // opened empty on the far side — a tab dragged to the top of its own strip's place moved the
     // tabs left behind to the bottom, as though another view had been carried.
     const same = std.mem.eql(u8, source, dest);
+    // An empty place carried: it is the place that moves, not a view (`placeEmpty`).
+    if (!std.mem.eql(u8, source, loose_source) and movedFrom(l, source) == null) return placeEmpty(l, source, dest, kind);
     const stays = same and (kind != .split or holding(l, source).len <= 1);
     const plan = Drop.plan(kind, stays, joins(l, source, dest)) orelse return;
     // The trash is about what is carried, not where it was let go.
@@ -1080,6 +1082,28 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
         },
     }
     shutIfEmptied(l, source);
+    l.state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
+/// An empty place carried somewhere — the place itself is what moves, there being nothing in it.
+/// The trash or another place's middle: it goes, closing into the half beside it (an empty place
+/// dropped on an empty one leaves one empty place). Another place's edge: it goes from where it
+/// was and opens there instead, an empty half of that place. Onto itself, nothing. Only a half of
+/// a split the user made can go (`State.userSplitPart`); a place the shape declared stays.
+fn placeEmpty(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) void {
+    if (std.mem.eql(u8, source, dest) and kind != .remove) return;
+    if (!l.state.userSplitPart(source)) return;
+    switch (kind) {
+        .remove, .swap => _ = closeEmptied(l, source),
+        .split => |side| {
+            // Close it first: closing the half that was split merges its other half into it, and
+            // if that other half is where it is going, it is now there under the source's name.
+            const merged = closeEmptied(l, source);
+            const target = if (merged) |m| (if (std.mem.eql(u8, m.gone, dest)) m.into else dest) else dest;
+            _ = Region.splitOn(l, target, side);
+        },
+    }
     l.state.markDirty();
     dvui.refresh(null, @src(), null);
 }
@@ -1280,10 +1304,41 @@ fn selectNamed(l: *Layout, name: []const u8, id: []const u8) void {
 /// Shut rather than deleted, so it slides closed on the curve it opened on;
 /// `Region.persistExtent` drops the leaf once the animation has finished.
 fn shutIfEmptied(l: *Layout, name: []const u8) void {
-    if (!l.state.isMinted(name)) return;
     if (l.state.assignment(name)) |ids| {
         if (ids.len > 0) return;
     }
+    _ = closeEmptied(l, name);
+}
+
+/// A merge of two halves of a split: `gone` closed, its views now in `into`.
+const Merged = struct { gone: []const u8, into: []const u8 };
+
+/// Close the emptied place `name`, one half of a split the user made, into the other half. A
+/// minted half closes outright (`closeMinted`). The half that was split keeps its name — it is
+/// the shape's place — so it takes the other half's views and that half closes instead: the same
+/// one place either way, under the name the shape knows. Returns that merge, when it was one.
+/// A place no user split made, or whose other half is split again, stays as it is.
+fn closeEmptied(l: *Layout, name: []const u8) ?Merged {
+    if (l.state.isMinted(name)) {
+        closeMinted(l, name);
+        return null;
+    }
+    const sibling_raw = l.state.siblingLeaf(name) orelse return null;
+    if (!l.state.isMinted(sibling_raw)) return null;
+    const sibling = ownId(l.arena, sibling_raw) orelse return null;
+    const into = ownId(l.arena, name) orelse return null;
+    const views = shownIn(l, sibling);
+    if (views.len > 1) l.state.setShows(l.gpa, into, .many);
+    l.state.assign(l.gpa, into, views) catch {};
+    if (views.len > 0) selectNamed(l, into, views[0]);
+    l.state.assign(l.gpa, sibling, &.{}) catch {};
+    closeMinted(l, sibling);
+    return .{ .gone = sibling, .into = into };
+}
+
+/// Close a minted place, whatever it holds — sliding its split shut where it was drawn.
+fn closeMinted(l: *Layout, name: []const u8) void {
+    if (!l.state.isMinted(name)) return;
     // A seed's dock tree closes its own leaves, easing the split shut over it.
     if (l.state.dock) |*dock| {
         if (dock.findPanel(name)) |idx| dock.closeLeaf(idx);
