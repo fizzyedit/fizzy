@@ -146,6 +146,28 @@ pub fn at(w: Wheel, p: dvui.Point.Physical) ?Zone {
     return best;
 }
 
+/// The zone a drop of radius `r` centred on `c` reads as — a carried drop of glass, aimed by
+/// where it is rather than by the finger beside it: of the bubbles it touches, the one it is most
+/// into (nearest for their sizes together), and nothing touching none. A point (`r` 0) reads as
+/// `at`.
+pub fn atDisc(w: Wheel, c: dvui.Point.Physical, r: f32) ?Zone {
+    if (r <= 0) return at(w, c);
+    var best: ?Zone = null;
+    var best_d: f32 = 1;
+    for (all) |z| {
+        if (z == .remove and !w.remove) continue;
+        const b = w.bubble(z);
+        const dx = c.x - b.c.x;
+        const dy = c.y - b.c.y;
+        const d = @sqrt(dx * dx + dy * dy) / @max(b.r + r, 0.001);
+        if (d < best_d) {
+            best = z;
+            best_d = d;
+        }
+    }
+    return best;
+}
+
 fn inset(r: dvui.Rect.Physical, dx: f32, dy: f32) dvui.Rect.Physical {
     return .{ .x = r.x + dx, .y = r.y + dy, .w = @max(0, r.w - 2 * dx), .h = @max(0, r.h - 2 * dy) };
 }

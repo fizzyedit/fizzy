@@ -3637,6 +3637,24 @@ test "drop: the middle, each side and the trash are their bubbles; off them, not
     try std.testing.expect(DZ.at(plain, plain.bubble(.remove).c) == null);
 }
 
+test "drop: a carried drop chooses the bubble it is into, wherever the finger is" {
+    const w = DZ.wheel(.{ .x = 0, .y = 0, .w = 800, .h = 600 }, 1, true);
+    const r: f32 = 52;
+    // A drop riding up and left of a finger, its middle just past the left bubble's rim: the
+    // finger is off every bubble, the drop is into the left one.
+    const left = w.bubble(.{ .edge = .left });
+    const c: dvui.Point.Physical = .{ .x = left.c.x - left.r - r * 0.5, .y = left.c.y };
+    const finger: dvui.Point.Physical = .{ .x = c.x + r, .y = c.y + r };
+    try std.testing.expect(DZ.at(w, finger) == null);
+    try std.testing.expect(DZ.atDisc(w, c, r).?.eql(.{ .edge = .left }));
+    // Touching none of them, it chooses none.
+    try std.testing.expect(DZ.atDisc(w, .{ .x = 20, .y = 20 }, r) == null);
+    // Over the middle, the middle: the nearest for their sizes, not the first it touches.
+    try std.testing.expect(DZ.atDisc(w, .{ .x = 410, .y = 300 }, r).?.eql(.center));
+    // A point reads as it always has.
+    try std.testing.expect(DZ.atDisc(w, .{ .x = 400, .y = 300 }, 0).?.eql(.center));
+}
+
 test "drop: settled bubbles stand clear of each other" {
     const w = DZ.wheel(.{ .x = 0, .y = 0, .w = 800, .h = 600 }, 1, true);
     for (DZ.all, 0..) |a, i| for (DZ.all[i + 1 ..]) |b| {

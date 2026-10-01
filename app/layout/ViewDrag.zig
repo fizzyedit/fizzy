@@ -336,9 +336,41 @@ fn frozen(state: *const Layout.State, name: []const u8) ?Target {
 }
 
 /// What a release at `mouse` over `dest` does: its drop's reading, null off the drop.
-fn kindAt(l: *Layout, dest: []const u8, mouse: dvui.Point.Physical, scale: f32) ?Drop.Kind {
+fn kindAt(l: *Layout, dest: []const u8, a: Aim, scale: f32) ?Drop.Kind {
     const dest_b = interiorBounds(l.state, dest) orelse return null;
-    return Drop.kindAt(dest_b, mouse, scale, removable(l));
+    return Drop.kindAtDisc(dest_b, a.p, a.r, scale, removable(l));
+}
+
+/// What the carried view aims with: the middle and radius of the drop it is carried as — the
+/// drop is what is aimed, and it rides off the pointer (up and left of a finger) so it can be
+/// seen, so it is its overlap with a bubble that chooses, not where the finger is — or the
+/// pointer itself, for a card or a tab.
+pub const Aim = struct { p: dvui.Point.Physical, r: f32 = 0 };
+
+pub fn aim(l: *Layout) Aim {
+    return aimFor(l, dvui.currentWindow().mouse_pt);
+}
+
+/// `aim` for the pointer at `mouse` — a release's own point.
+pub fn aimFor(l: *Layout, mouse: dvui.Point.Physical) Aim {
+    const d = &l.state.view_drag;
+    const cw = dvui.currentWindow();
+    if (!d.active() or !carriedAsDrop(l, mouse)) return .{ .p = mouse };
+    const R = drop_r * cw.natural_scale;
+    return .{ .p = dropCenter(mouse, R, d.drop_touch), .r = R };
+}
+
+/// Whether the view is carried as a drop of glass at `mouse`: where the glass program draws, with
+/// a photograph to show, and not over a list (where it is a tab).
+fn carriedAsDrop(l: *Layout, mouse: dvui.Point.Physical) bool {
+    const d = &l.state.view_drag;
+    return core.LiquidField.ready() and d.texture != null and chooserAt(l.state, mouse) == null;
+}
+
+/// Where a drop of radius `r` rides for the pointer at `mouse`: below and right of a mouse; up
+/// and left of a finger, the finger at its bottom-right corner, where the hand covers none of it.
+fn dropCenter(mouse: dvui.Point.Physical, r: f32, touch: bool) dvui.Point.Physical {
+    return if (touch) .{ .x = mouse.x - r, .y = mouse.y - r } else .{ .x = mouse.x + 0.55 * r, .y = mouse.y + 0.55 * r };
 }
 
 /// Whether the drop offers the trash for what is carried: a document (it closes), or a view
@@ -386,6 +418,12 @@ pub fn interiorBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.P
 /// `source`. The smallest place containing the pointer wins, so a document
 /// pane beats the main area it sits in.
 pub fn targetAt(l: *Layout, mouse: dvui.Point.Physical, source: []const u8) ?[]const u8 {
+    return targetAtAim(l, .{ .p = mouse }, source);
+}
+
+/// `targetAt` for what the view aims with (`aim`).
+pub fn targetAtAim(l: *Layout, a: Aim, source: []const u8) ?[]const u8 {
+    const mouse = a.p;
     const state = l.state;
     // Over a chooser, its place — as one of its views, never a split — or nowhere, over the
     // app's own strip of the place the view came out of.
@@ -395,7 +433,7 @@ pub fn targetAt(l: *Layout, mouse: dvui.Point.Physical, source: []const u8) ?[]c
     // and its own edges become unreachable.
     if (interiorBounds(state, source)) |bounds| {
         if (bounds.contains(mouse)) {
-            if (Drop.kindAt(bounds, mouse, dvui.currentWindow().natural_scale, removable(l))) |k| switch (k) {
+            if (Drop.kindAtDisc(bounds, mouse, a.r, dvui.currentWindow().natural_scale, removable(l))) |k| switch (k) {
                 .split, .remove => return source,
                 .swap => {},
             };
@@ -498,7 +536,7 @@ pub fn tick(l: *Layout) void {
 fn aimedAt(l: *Layout, name: []const u8) bool {
     const d = l.state.view_drag;
     if (!d.active() or name.len == 0) return false;
-    const target = targetAt(l, dvui.currentWindow().mouse_pt, d.name) orelse return false;
+    const target = targetAtAim(l, aim(l), d.name) orelse return false;
     return std.mem.eql(u8, target, name);
 }
 
@@ -545,7 +583,10 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
         .key = key,
         .wheel = zones,
         .look = .{
-            .hovered = if (aimed) DropZones.at(zones, dvui.currentWindow().mouse_pt) else null,
+            .hovered = if (aimed) blk: {
+                const a = aim(l);
+                break :blk DropZones.atDisc(zones, a.p, a.r);
+            } else null,
             .target = target,
             .center = center,
         },
@@ -626,7 +667,7 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     d.drop_n = 0;
     const cw = dvui.currentWindow();
     const mouse = cw.mouse_pt;
-    if (!core.LiquidField.ready() or d.texture == null or chooserAt(l.state, mouse) != null) {
+    if (!carriedAsDrop(l, mouse)) {
         d.drop_ns = 0;
         d.drop_head = .{};
         d.drop_tail = .{};
@@ -637,18 +678,20 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     const dt: f32 = if (d.drop_ns == 0) 0 else @as(f32, @floatFromInt(now - d.drop_ns)) / std.time.ns_per_s;
     d.drop_ns = now;
     const R = drop_r * scale;
+    // Which is carrying it, from what moves it: a finger's presses and moves are touch, a mouse's
+    // are not. Not from the position event dvui adds every frame, which is neither.
     for (dvui.events()) |e| switch (e.evt) {
-        .mouse => |me| d.drop_touch = me.button.touch(),
+        .mouse => |me| switch (me.action) {
+            .press, .motion => d.drop_touch = me.button.touch(),
+            else => {},
+        },
         else => {},
     };
     // Off the pointer, so the bubble under it stays in view — below and right of a mouse; up and
     // left of a finger, the finger at the drop's bottom-right corner, where the hand holding it
     // covers none of it — and drawn toward the bubble it is aimed at, far enough that the two
     // run together.
-    var target: dvui.Point.Physical = if (d.drop_touch)
-        .{ .x = mouse.x - R, .y = mouse.y - R }
-    else
-        .{ .x = mouse.x + 0.55 * R, .y = mouse.y + 0.55 * R };
+    var target = dropCenter(mouse, R, d.drop_touch);
     for (drops) |p| {
         if (!p.look.target or !p.clip.contains(mouse)) continue;
         const z = p.look.hovered orelse continue;
@@ -950,11 +993,14 @@ pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
         place(l, source, o.name, .swap);
         return;
     }
-    const dest = targetAt(l, mouse, source) orelse return;
+    // Where the carried view aims — the drop's middle where it is carried as one — not where the
+    // pointer is, so the release lands where the glass showed it would.
+    const a = aimFor(l, mouse);
+    const dest = targetAtAim(l, a, source) orelse return;
     if (placeBounds(l.state, dest) == null) return;
     const scale = dvui.currentWindow().natural_scale;
     // Off the wheel, no drop: every drop is one the wheel lit first.
-    place(l, source, dest, kindAt(l, dest, mouse, scale) orelse return);
+    place(l, source, dest, kindAt(l, dest, a, scale) orelse return);
 }
 
 /// A release over a plugin region's own chooser: straight to the plugin's `on_drop`, as into the
