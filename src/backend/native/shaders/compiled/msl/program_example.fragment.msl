@@ -1,0 +1,32 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+// `program_example.fragment.hlsl` in Metal, to the interface shadercross gives it: the entry
+// point is `main0`, the inputs are the default vertex shader's `[[user(locnN)]]` outputs,
+// textures and samplers are numbered from the draw's own (0), and the uniforms are buffer 0.
+
+struct main0_in
+{
+    float4 color [[user(locn0)]];
+    float2 uv [[user(locn1)]];
+};
+
+struct main0_out
+{
+    float4 color [[color(0)]];
+};
+
+fragment main0_out main0(
+    main0_in in [[stage_in]],
+    texture2d<float> Texture0 [[texture(0)]], sampler Sampler0 [[sampler(0)]],
+    texture2d<float> Texture1 [[texture(1)]], sampler Sampler1 [[sampler(1)]],
+    constant float4 *data [[buffer(0)]])
+{
+    main0_out out = {};
+    float4 base = Texture0.sample(Sampler0, in.uv) * in.color * data[0];
+    float4 extra = Texture1.sample(Sampler1, in.uv * data[1].x);
+    out.color = mix(base, extra, data[1].y);
+    return out;
+}

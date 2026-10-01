@@ -68,12 +68,145 @@ pub const FizzyExecutable = struct {
     image_dylib: ?*std.Build.Step.Compile = null,
 };
 
+/// What the native executable draws with.
+pub const NativeBackend = enum {
+    /// Fizzy's own backend (`src/backend/native/`): SDL3 for the window and events, an
+    /// SDL_GPU renderer of its own, custom fragment programs.
+    fizzy,
+    /// dvui's SDL3 backend: SDL_Renderer, fixed shaders.
+    sdl3,
+};
+
+/// SDL_GPU's D3D12 swapchain does not composite fizzy's transparent window, so Windows stays
+/// on dvui's backend for now.
+pub fn defaultNativeBackend(target: std.Build.ResolvedTarget) NativeBackend {
+    return if (target.result.os.tag == .windows) .sdl3 else .fizzy;
+}
+
+/// dvui as the executable links it, and the backend under it.
+const NativeDvui = struct {
+    dep: *std.Build.Dependency,
+    dvui: *std.Build.Module,
+    backend: *std.Build.Module,
+};
+
+/// The `backend` module wired into each dvui built for fizzy's own backend. One per dvui
+/// module, however many executables use it: dvui imports it by name, and a second module over
+/// the same file in one compilation is an error.
+var fizzy_backend_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+
+/// dvui in its `custom` mode with fizzy's backend linked under it — as `build/web.zig` does for
+/// the web. Every option is the one dvui's own `sdl3` mode sets, so dvui's shape, and with it
+/// the plugin ABI fingerprint, is the same either way.
+fn fizzyNativeDvui(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    accesskit: dvui.AccesskitOptions,
+    macos_sdl_paths: ?MacosSdlPaths,
+) NativeDvui {
+    const dep = sdk.dvuiDependency(b, .{
+        .target = target,
+        .optimize = optimize,
+        .backend = .custom,
+        .accesskit = accesskit,
+        .libc = true,
+        .freetype = true,
+        .@"tiny-file-dialogs" = true,
+        .@"stb-image" = true,
+        .@"tree-sitter" = true,
+    });
+    const dvui_mod = dep.module("dvui");
+    if (fizzy_backend_modules.get(dvui_mod)) |backend| return .{ .dep = dep, .dvui = dvui_mod, .backend = backend };
+
+    // SDL3 itself, from dvui's own (lazy) dependency, built as dvui's `sdl3` mode builds it.
+    const cross_win_msvc = target.result.os.tag == .windows and target.result.abi == .msvc and
+        b.graph.host.result.os.tag != .windows;
+    const sdl_dep = if (macos_sdl_paths) |p|
+        dep.builder.lazyDependency("sdl3", .{
+            .target = target,
+            .optimize = optimize,
+            .system_include_path = p.include,
+            .system_framework_path = p.framework,
+            .library_path = p.lib,
+        })
+    else if (cross_win_msvc)
+        dep.builder.lazyDependency("sdl3", .{
+            .target = target,
+            .optimize = optimize,
+            .build_config_h_overrides = @as([]const []const u8, &.{ "-UHAVE_GAMEINPUT_H", "-USDL_JOYSTICK_GAMEINPUT" }),
+        })
+    else
+        dep.builder.lazyDependency("sdl3", .{ .target = target, .optimize = optimize });
+
+    const sdl_translate_c = b.addTranslateC(.{
+        .root_source_file = dep.path("src/backends/sdl3-c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    if (sdl_dep) |sdl| sdl_translate_c.addIncludePath(sdl.artifact("SDL3").getEmittedIncludeTree());
+
+    const backend = b.createModule(.{
+        .root_source_file = b.path("src/backend/native/SDLBackend.zig"),
+        .target = target,
+        .optimize = optimize,
+        .sanitize_c = .full,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "sdl3-c", .module = sdl_translate_c.createModule() },
+            .{ .name = "dvui", .module = dvui_mod },
+        },
+    });
+    if (sdl_dep) |sdl| backend.linkLibrary(sdl.artifact("SDL3"));
+    dvui_mod.addImport("backend", backend);
+    fizzy_backend_modules.put(b.allocator, dvui_mod, backend) catch @panic("OOM");
+    return .{ .dep = dep, .dvui = dvui_mod, .backend = backend };
+}
+
+/// The `platform` module (`src/backend/native/platform`) for each backend module: one per
+/// backend, as the backend itself is, since fizzy's backend imports it by name too.
+var platform_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+
+/// Window and platform pieces for apps on either SDL3 backend: dvui and the backend's SDL, plus
+/// zig-objc on macOS and zigwin32 on Windows. Fizzy's own backend imports it as well, so an app on
+/// that backend reaches it as `backend.platform`.
+fn platformModule(
+    b: *std.Build,
+    native: NativeDvui,
+    native_backend: NativeBackend,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Module {
+    if (platform_modules.get(native.backend)) |m| return m;
+    const m = b.createModule(.{
+        .root_source_file = b.path("src/backend/native/platform/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    m.addImport("dvui", native.dvui);
+    m.addImport("backend", native.backend);
+    switch (target.result.os.tag) {
+        .macos => if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |dep| {
+            m.addImport("objc", dep.module("objc"));
+        },
+        .windows => if (b.lazyDependency("zigwin32", .{})) |dep| {
+            m.addImport("win32", dep.module("win32"));
+        },
+        else => {},
+    }
+    if (native_backend == .fizzy) native.backend.addImport("platform", m);
+    platform_modules.put(b.allocator, native.backend, m) catch @panic("OOM");
+    return m;
+}
+
 pub fn addFizzyExecutableForTarget(
     b: *std.Build,
     vz: velopack.Dep,
     resolved_target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     accesskit: dvui.AccesskitOptions,
+    native_backend: NativeBackend,
     build_opts: *std.Build.Step.Options,
     workbench_opts: *std.Build.Step.Options,
     assets_module: *std.Build.Module,
@@ -92,18 +225,26 @@ pub fn addFizzyExecutableForTarget(
     /// `bundled_plugins` module under its plugin id.
     app_plugins: []const sdk.BundledPlugin,
 ) !FizzyExecutable {
-    const dvui_dep = if (macos_sdl_paths) |p|
-        sdk.dvuiDependency(b, .{
-            .target = resolved_target,
-            .optimize = optimize,
-            .backend = .sdl3,
-            .accesskit = accesskit,
-            .system_include_path = p.include,
-            .system_framework_path = p.framework,
-            .library_path = p.lib,
-        })
-    else
-        sdk.dvuiDependency(b, .{ .target = resolved_target, .optimize = optimize, .backend = .sdl3, .accesskit = accesskit });
+    const native: NativeDvui = switch (native_backend) {
+        .fizzy => fizzyNativeDvui(b, resolved_target, optimize, accesskit, macos_sdl_paths),
+        .sdl3 => blk: {
+            const dep = if (macos_sdl_paths) |p|
+                sdk.dvuiDependency(b, .{
+                    .target = resolved_target,
+                    .optimize = optimize,
+                    .backend = .sdl3,
+                    .accesskit = accesskit,
+                    .system_include_path = p.include,
+                    .system_framework_path = p.framework,
+                    .library_path = p.lib,
+                })
+            else
+                sdk.dvuiDependency(b, .{ .target = resolved_target, .optimize = optimize, .backend = .sdl3, .accesskit = accesskit });
+            break :blk .{ .dep = dep, .dvui = dep.module("dvui_sdl3"), .backend = dep.module("sdl3") };
+        },
+    };
+    const dvui_dep = native.dep;
+    const dvui_mod = native.dvui;
 
     const dvui_proxy_dep = sdk.dvuiDependency(b, .{
         .target = resolved_target,
@@ -112,7 +253,7 @@ pub fn addFizzyExecutableForTarget(
         .accesskit = .off,
     });
     const dvui_proxy_mod = dvui_proxy_dep.module("dvui_proxy");
-    const proxy_bridge_host_mod = sdk.addProxyBridgeModule(b, resolved_target, optimize, dvui_dep, dvui_dep.module("dvui_sdl3"));
+    const proxy_bridge_host_mod = sdk.addProxyBridgeModule(b, resolved_target, optimize, dvui_dep, dvui_mod);
     const proxy_bridge_plugin_mod = dvui_proxy_dep.module("proxy_bridge");
 
     const exe = b.addExecutable(.{
@@ -146,8 +287,9 @@ pub fn addFizzyExecutableForTarget(
         }
     }
 
-    exe.root_module.addImport("dvui", dvui_dep.module("dvui_sdl3"));
-    exe.root_module.addImport("backend", dvui_dep.module("sdl3"));
+    exe.root_module.addImport("dvui", dvui_mod);
+    exe.root_module.addImport("backend", native.backend);
+    exe.root_module.addImport("platform", platformModule(b, native, native_backend, resolved_target, optimize));
 
     // Shared `core` module (gfx/math/fs/generated atlas/platform/paths/dvui hub +
     // generic widgets). Import set is shared with the plugin SDK path — see sdk/core_module.zig.
@@ -156,7 +298,7 @@ pub fn addFizzyExecutableForTarget(
         .optimize = optimize,
         .root_source_file = b.path("core/core.zig"),
     });
-    const icons_module = core_mod.addImports(b, core_module, dvui_dep.module("dvui_sdl3"), resolved_target, optimize);
+    const icons_module = core_mod.addImports(b, core_module, dvui_mod, resolved_target, optimize);
     exe.root_module.addImport("core", core_module);
     if (icons_module) |icons| exe.root_module.addImport("icons", icons);
 
@@ -179,34 +321,34 @@ pub fn addFizzyExecutableForTarget(
         exe.root_module.addImport("nightwatch", dep.module("nightwatch"));
     }
 
-    const sdk_module = sdk.wireSdkModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), proxy_bridge_host_mod, core_module, exe.root_module);
+    const sdk_module = sdk.wireSdkModule(b, resolved_target, optimize, dvui_mod, proxy_bridge_host_mod, core_module, exe.root_module);
     const sdk_proxy_module = sdk.wireSdkModule(b, resolved_target, optimize, dvui_proxy_mod, proxy_bridge_plugin_mod, core_proxy_module, null);
     const workbench_module = workbench_plugin.addStaticModule(b, resolved_target, optimize, .{
-        .dvui = dvui_dep.module("dvui_sdl3"),
+        .dvui = dvui_mod,
         .core = core_module,
         .sdk = sdk_module,
         .icons = icons_module,
-        .backend = dvui_dep.module("sdl3"),
+        .backend = native.backend,
     }, workbench_opts, exe.root_module);
     const text_module = text_plugin.addStaticModule(b, resolved_target, optimize, .{
-        .dvui = dvui_dep.module("dvui_sdl3"),
+        .dvui = dvui_mod,
         .core = core_module,
         .sdk = sdk_module,
         .icons = icons_module,
     }, exe.root_module);
     const image_module = image_plugin.addStaticModule(b, resolved_target, optimize, .{
-        .dvui = dvui_dep.module("dvui_sdl3"),
+        .dvui = dvui_mod,
         .core = core_module,
         .sdk = sdk_module,
     }, exe.root_module);
     const archive_module = archive_plugin.addStaticModule(b, resolved_target, optimize, .{
-        .dvui = dvui_dep.module("dvui_sdl3"),
+        .dvui = dvui_mod,
         .core = core_module,
         .sdk = sdk_module,
     }, exe.root_module);
     const markdown_module: ?*std.Build.Module = if (resolved_target.result.cpu.arch != .wasm32)
         markdown_plugin.addStaticModule(b, resolved_target, optimize, .{
-            .dvui = dvui_dep.module("dvui_sdl3"),
+            .dvui = dvui_mod,
             .core = core_module,
             .sdk = sdk_module,
         }, exe.root_module)
@@ -247,7 +389,7 @@ pub fn addFizzyExecutableForTarget(
             if (std.mem.eql(u8, name, "dvui") or std.mem.eql(u8, name, "core") or std.mem.eql(u8, name, "fizzy_sdk") or std.mem.eql(u8, name, "icons")) continue;
             m.addImport(name, kv.value_ptr.*);
         }
-        m.addImport("dvui", dvui_dep.module("dvui_sdl3"));
+        m.addImport("dvui", dvui_mod);
         m.addImport("core", core_module);
         m.addImport("fizzy_sdk", sdk_module);
         if (icons_module) |icons| m.addImport("icons", icons);
@@ -265,7 +407,7 @@ pub fn addFizzyExecutableForTarget(
 
     // The `app` framework module: the plugin store and what it needs. Fizzy is its first
     // consumer, not its owner — see `app/root.zig`.
-    const app_module = sdk.wireAppModule(b, resolved_target, optimize, dvui_dep.module("dvui_sdl3"), core_module, sdk_module, icons_module, markdown_module, if (nightwatch_dep) |dep| dep.module("nightwatch") else null, build_opts, singleton_app_dep.module("singleton_app"), exe.root_module);
+    const app_module = sdk.wireAppModule(b, resolved_target, optimize, dvui_mod, core_module, sdk_module, icons_module, markdown_module, if (nightwatch_dep) |dep| dep.module("nightwatch") else null, build_opts, singleton_app_dep.module("singleton_app"), exe.root_module);
     app_module.addImport("bundled_plugins", bundled);
 
     if (app_layout) |path| {
@@ -280,7 +422,7 @@ pub fn addFizzyExecutableForTarget(
             .root_source_file = if (is_zon) b.addWriteFiles().add("app_layout_spec.zig", spec_shim) else path,
         });
         if (is_zon) app_layout_mod.addAnonymousImport("app_layout_spec", .{ .root_source_file = path });
-        app_layout_mod.addImport("dvui", dvui_dep.module("dvui_sdl3"));
+        app_layout_mod.addImport("dvui", dvui_mod);
         app_layout_mod.addImport("app", app_module);
         app_layout_mod.addImport("core", core_module);
         app_layout_mod.addImport("fizzy_sdk", sdk_module);
@@ -341,10 +483,15 @@ pub fn addFizzyExecutableForTarget(
         })) |dep| {
             exe.root_module.addImport("objc", dep.module("objc"));
         }
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyVisualEffectView.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyMenuTarget.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyTrackpadGesture.m") });
-        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/objc/FizzyWindowMonitor.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/visual_effect_view.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/menu_target.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/window_monitor.m") });
+        // The native backend's AppKit helpers, compiled here with fizzy's other Objective-C
+        // (the root module is where the SDK's headers are found on a native build); the
+        // backend module calls them by name.
+        if (native_backend == .fizzy) {
+            exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/macos_monitor.m") });
+        }
     } else if (resolved_target.result.os.tag == .windows) {
         if (b.lazyDependency("zigwin32", .{})) |dep| {
             exe.root_module.addImport("win32", dep.module("win32"));

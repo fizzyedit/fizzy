@@ -13,6 +13,7 @@ ship these as selectable presets — they show things fizzy itself does not do.
 | `studio-app` | canvas, explorer on the right, short bottom strip | `studioapp`, "Studio App" |
 | `endless-app` | Center is the workspace; split from the corner menu | `endlessapp`, "Endless App" |
 | `hello-plugin` | not an app: the smallest third-party-shaped plugin, one sidebar surface | id `hello` |
+| `shader-plugin` | not an app: a plugin drawing with its own GPU program (`core.programs`) — liquid metaballs that follow the pointer | id `shader` |
 
 All three apps load the identical `workbench` / `text` / `image` / `markdown` plugins,
 **unchanged**; `minimal-app` additionally bundles `hello-plugin` from its own `build.zig.zon`.

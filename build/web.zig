@@ -30,13 +30,34 @@ pub fn addSteps(
         }),
     });
 
+    // The web backend is fizzy's own (`src/backend/WebBackend.zig` + `web/web.js`), started as a
+    // copy of dvui's: dvui is built in its `custom` mode and our backend linked to it, as dvui's
+    // build does for its own (`linkBackend`). Every option is the one dvui's `web` mode sets, so
+    // dvui's shape — and with it the plugin fingerprint — is exactly what it was.
     const dvui_web_dep = sdk.dvuiDependency(b, .{
         .target = web_target,
         .optimize = optimize,
-        .backend = .web,
+        .backend = .custom,
+        .@"vertex-index" = .u16,
+        .libc = false,
         .freetype = false,
+        .@"tiny-file-dialogs" = false,
+        .@"stb-image" = true,
+        .@"tree-sitter" = false,
     });
-    const dvui_web_proxy_bridge = sdk.addProxyBridgeModule(b, web_target, optimize, dvui_web_dep, dvui_web_dep.module("dvui_web"));
+    const dvui_web = dvui_web_dep.module("dvui");
+    dvui_web.single_threaded = true;
+    const web_backend = b.createModule(.{
+        .root_source_file = b.path("src/backend/WebBackend.zig"),
+        .target = web_target,
+        .optimize = optimize,
+        .single_threaded = true,
+    });
+    // What the page calls into (`web/web.js`): dvui's web exports.
+    web_backend.export_symbol_names = &.{ "dvui_init", "dvui_deinit", "dvui_update", "add_event", "arena_u8", "gpa_u8", "gpa_free", "new_font" };
+    web_backend.addImport("dvui", dvui_web);
+    dvui_web.addImport("backend", web_backend);
+    const dvui_web_proxy_bridge = sdk.addProxyBridgeModule(b, web_target, optimize, dvui_web_dep, dvui_web);
 
     const web_exe = b.addExecutable(.{
         .name = "web",
@@ -50,8 +71,8 @@ pub fn addSteps(
         }),
     });
     web_exe.entry = .disabled;
-    web_exe.root_module.addImport("dvui", dvui_web_dep.module("dvui_web"));
-    web_exe.root_module.addImport("web-backend", dvui_web_dep.module("web"));
+    web_exe.root_module.addImport("dvui", dvui_web);
+    web_exe.root_module.addImport("web-backend", web_backend);
 
     // Extra wasm exports beyond dvui's own (`dvui_init`/`dvui_update`/etc.). The wasm
     // linker only emits symbols listed here, so `export fn` in Zig isn't enough on its
@@ -135,10 +156,10 @@ pub fn addSteps(
         .link_libc = false,
         .single_threaded = true,
     });
-    const icons_web = core_mod.addImports(b, core_module_web, dvui_web_dep.module("dvui_web"), web_target, optimize);
+    const icons_web = core_mod.addImports(b, core_module_web, dvui_web, web_target, optimize);
     web_exe.root_module.addImport("core", core_module_web);
     if (icons_web) |icons| web_exe.root_module.addImport("icons", icons);
-    const sdk_module_web = sdk.wireSdkModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), dvui_web_proxy_bridge, core_module_web, web_exe.root_module);
+    const sdk_module_web = sdk.wireSdkModule(b, web_target, optimize, dvui_web, dvui_web_proxy_bridge, core_module_web, web_exe.root_module);
 
     // Three editor files have `const sdl3 = @import("backend").c;` at file
     // scope. After refactoring all `sdl3.SDL_DialogFileFilter` references
@@ -147,30 +168,30 @@ pub fn addSteps(
     // So no `backend` module is wired in for the web build.
 
     const workbench_module_web = workbench_plugin.addStaticModule(b, web_target, optimize, .{
-        .dvui = dvui_web_dep.module("dvui_web"),
+        .dvui = dvui_web,
         .core = core_module_web,
         .sdk = sdk_module_web,
         .icons = icons_web,
         .backend = null,
     }, workbench_opts, web_exe.root_module);
     const text_module_web = text_plugin.addStaticModule(b, web_target, optimize, .{
-        .dvui = dvui_web_dep.module("dvui_web"),
+        .dvui = dvui_web,
         .core = core_module_web,
         .sdk = sdk_module_web,
         .icons = icons_web,
     }, web_exe.root_module);
     const image_module_web = image_plugin.addStaticModule(b, web_target, optimize, .{
-        .dvui = dvui_web_dep.module("dvui_web"),
+        .dvui = dvui_web,
         .core = core_module_web,
         .sdk = sdk_module_web,
     }, web_exe.root_module);
     const archive_module_web = archive_plugin.addStaticModule(b, web_target, optimize, .{
-        .dvui = dvui_web_dep.module("dvui_web"),
+        .dvui = dvui_web,
         .core = core_module_web,
         .sdk = sdk_module_web,
     }, web_exe.root_module);
     const markdown_module_web = markdown_plugin.addStaticModule(b, web_target, optimize, .{
-        .dvui = dvui_web_dep.module("dvui_web"),
+        .dvui = dvui_web,
         .core = core_module_web,
         .sdk = sdk_module_web,
     }, web_exe.root_module);
@@ -188,11 +209,11 @@ pub fn addSteps(
     // with this build's framework modules and the plugin's own imports kept.
     for (app_plugins) |p| {
         const src_mod = p.module orelse continue;
-        bundled_list.append(b.allocator, .{ .name = p.name, .module = rehome(b, web_target, optimize, src_mod, dvui_web_dep.module("dvui_web"), core_module_web, sdk_module_web, icons_web) }) catch @panic("OOM");
+        bundled_list.append(b.allocator, .{ .name = p.name, .module = rehome(b, web_target, optimize, src_mod, dvui_web, core_module_web, sdk_module_web, icons_web) }) catch @panic("OOM");
     }
     for (web_plugin_deps) |dep_name| {
         const dep = b.lazyDependency(dep_name, .{ .target = web_target, .optimize = optimize }) orelse continue;
-        bundled_list.append(b.allocator, .{ .name = dep_name, .module = rehome(b, web_target, optimize, dep.module("plugin"), dvui_web_dep.module("dvui_web"), core_module_web, sdk_module_web, icons_web) }) catch @panic("OOM");
+        bundled_list.append(b.allocator, .{ .name = dep_name, .module = rehome(b, web_target, optimize, dep.module("plugin"), dvui_web, core_module_web, sdk_module_web, icons_web) }) catch @panic("OOM");
     }
     // A plugin may ship pages of its own beside the app (its `web/` directory → `plugins/<id>/`):
     // the far end of a popup round trip that is the plugin's, not fizzy's — a provider's
@@ -215,7 +236,7 @@ pub fn addSteps(
         });
         m.addAnonymousImport("plugin_zon", .{ .root_source_file = b.path(zon_path) });
         m.addOptions(helpers.plugin_options_import, helpers.pluginOptionsFor(b, zon_path));
-        m.addImport("dvui", dvui_web_dep.module("dvui_web"));
+        m.addImport("dvui", dvui_web);
         m.addImport("core", core_module_web);
         m.addImport("fizzy_sdk", sdk_module_web);
         if (icons_web) |icons| m.addImport("icons", icons);
@@ -227,7 +248,7 @@ pub fn addSteps(
                 .link_libc = false,
                 .single_threaded = true,
             });
-            if (extra.dvui) em.addImport("dvui", dvui_web_dep.module("dvui_web"));
+            if (extra.dvui) em.addImport("dvui", dvui_web);
             if (extra.core) em.addImport("core", core_module_web);
             m.addImport(extra.name, em);
         }
@@ -239,7 +260,7 @@ pub fn addSteps(
 
     // The `app` framework module (the plugin store). Wired exactly as the native build wires
     // it — one helper, so the two cannot drift.
-    const app_module_web = sdk.wireAppModule(b, web_target, optimize, dvui_web_dep.module("dvui_web"), core_module_web, sdk_module_web, icons_web, markdown_module_web, null, build_opts, null, web_exe.root_module);
+    const app_module_web = sdk.wireAppModule(b, web_target, optimize, dvui_web, core_module_web, sdk_module_web, icons_web, markdown_module_web, null, build_opts, null, web_exe.root_module);
     app_module_web.addImport("bundled_plugins", bundled_web);
 
     const web_install_dir: std.Build.InstallDir = .{ .custom = "web" };
@@ -259,7 +280,7 @@ pub fn addSteps(
     });
     const cb_run = b.addRunArtifact(cb);
     cb_run.addFileArg(stampStorage(b));
-    cb_run.addFileArg(dvui_web_dep.path("src/backends/web.js"));
+    cb_run.addFileArg(b.path("web/web.js"));
     cb_run.addFileArg(b.path("web/fizzy-worker.js"));
     cb_run.addFileArg(web_exe.getEmittedBin());
     const index_html_with_hash = cb_run.captureStdOut(.{});
@@ -272,7 +293,7 @@ pub fn addSteps(
         "index.html",
     ).step);
     web_step.dependOn(&b.addInstallFileWithDir(
-        dvui_web_dep.path("src/backends/web.js"),
+        b.path("web/web.js"),
         web_install_dir,
         "web.js",
     ).step);

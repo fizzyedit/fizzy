@@ -56,6 +56,18 @@ card_from: dvui.Size.Physical = .{},
 card_start_ns: i128 = 0,
 /// The card is a tab this frame: the pointer is over a chooser.
 card_tab: bool = false,
+/// The view carried as a drop of glass (`dropShapes`), where the glass program draws: its head
+/// following the pointer and its tail the head, each on a spring, so it stretches as it is
+/// dragged and swings when it stops. This frame's shapes, head then tail.
+drop_head: core.Spring = .{},
+drop_tail: core.Spring = .{},
+drop_ns: i128 = 0,
+drop_shapes: [2]core.LiquidField.Shape = undefined,
+drop_n: usize = 0,
+/// The head's corner radius this frame (physical), for the photograph inside it.
+drop_radius: f32 = 0,
+/// Carried by a finger: the drop rides up and left of it, where the finger does not cover it.
+drop_touch: bool = false,
 
 /// The places this drag can land on, and where they were, frozen at lift.
 targets: [max_targets]Target = undefined,
@@ -146,16 +158,28 @@ pub fn offerChooser(l: *Layout, name: []const u8, bounds: dvui.Rect.Physical, in
     d.offer_count += 1;
 }
 
-/// The chooser under `p`, if one offered itself this frame or the last.
+/// The chooser under `p` that could take what is carried, if one offered itself this frame or
+/// the last. A strip whose place cannot take it — a document pane's tabs under a view that is no
+/// document — is no chooser for this drag: read as one, it hid every place's zones and turned the
+/// card into a tab over a strip it could never go into, so a split document area, a strip on every
+/// pane, was a maze to aim a view across. The strip of the place the view came out of always is.
 pub fn chooserAt(state: *const Layout.State, p: dvui.Point.Physical) ?Offer {
     const d = &state.view_drag;
     if (!d.active()) return null;
     const now = dvui.currentWindow().frame_time_ns;
     if (d.offer_frame == now) {
-        for (d.offers[0..d.offer_count]) |o| if (o.bounds.contains(p)) return o;
+        for (d.offers[0..d.offer_count]) |o| if (o.bounds.contains(p) and takes(d, o)) return o;
     }
-    for (d.last_offers[0..d.last_offer_count]) |o| if (o.bounds.contains(p)) return o;
+    for (d.last_offers[0..d.last_offer_count]) |o| if (o.bounds.contains(p) and takes(d, o)) return o;
     return null;
+}
+
+/// Whether offer `o`'s place could take what drag `d` carries: one of the places mapped at lift
+/// (`mapTargets`), or the place it came out of.
+fn takes(d: *const ViewDrag, o: Offer) bool {
+    if (std.mem.eql(u8, o.name, d.name)) return true;
+    for (d.targets[0..d.target_count]) |t| if (std.mem.eql(u8, t.name, o.name)) return true;
+    return false;
 }
 
 pub fn discard(self: *ViewDrag) void {
@@ -205,15 +229,44 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
     const d = &l.state.view_drag;
     if (shot.card) {
         d.takePicture(pic);
-        if (d.texture) |tex| core.anim.blit(tex, null, d.texture_rect, 0, 1);
+        if (d.texture) |tex| {
+            core.anim.blit(tex, null, d.texture_rect, 0, 1);
+            d.texture = backed(tex, d.texture_rect);
+        }
         return;
     }
     pic.stop();
 }
 
+/// The card's photograph, laid over the content fill once, at lift: a document paints no
+/// background of its own (the pane behind it does), and on bare glass its photograph was text
+/// floating in the frost. One opaque picture is what lets the card be drawn see-through: the fill
+/// and the photograph drawn each at `photo_opacity`, one over the other, let a twenty-fifth of
+/// what is under the card through rather than a fifth. `tex` itself is what the place shows
+/// this frame; it is handed back unchanged where there is nothing to draw the backing into.
+fn backed(tex: dvui.Texture, r: dvui.Rect.Physical) dvui.Texture {
+    var pic = dvui.Picture.start(r) orelse return tex;
+    // Some backends leave a fresh target uninitialised (`Layout.drawCaptured`).
+    pic.texture.clear();
+    const prev_clip = dvui.clipGet();
+    dvui.clipSet(pic.r);
+    pic.r.fill(.{}, .{ .color = .{ .color = dvui.themeGet().color(.content, .fill) }, .fade = 0 });
+    dvui.renderTexture(tex, .{ .r = pic.r, .s = 1 }, .{}) catch {};
+    dvui.clipSet(prev_clip);
+    pic.stop();
+    const out = dvui.textureFromTarget(pic.texture) catch return tex;
+    dvui.Texture.destroyLater(tex);
+    return out;
+}
+
 /// Begin carrying the view out of `name`. The place keeps drawing it throughout.
 pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical) void {
     var d = &l.state.view_drag;
+    d.drop_head = .{};
+    d.drop_tail = .{};
+    d.drop_ns = 0;
+    d.drop_n = 0;
+    d.drop_touch = false;
     d.name = l.state.internName(l.gpa, name);
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
@@ -231,6 +284,11 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical) void {
 /// the caller hands over (`State.stealSnapshot`) and the drag destroys.
 pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture: ?dvui.Texture) void {
     var d = &l.state.view_drag;
+    d.drop_head = .{};
+    d.drop_tail = .{};
+    d.drop_ns = 0;
+    d.drop_n = 0;
+    d.drop_touch = false;
     const s = l.host.surfaceById(id) orelse return;
     d.name = loose_source;
     d.from = from.size();
@@ -290,19 +348,55 @@ fn frozen(state: *const Layout.State, name: []const u8) ?Target {
 }
 
 /// What a release at `mouse` over `dest` does: its drop's reading, null off the drop.
-fn kindAt(l: *Layout, dest: []const u8, mouse: dvui.Point.Physical, scale: f32) ?Drop.Kind {
+fn kindAt(l: *Layout, dest: []const u8, a: Aim, scale: f32) ?Drop.Kind {
     const dest_b = interiorBounds(l.state, dest) orelse return null;
-    return Drop.kindAt(dest_b, mouse, scale, removable(l));
+    return Drop.kindAtDisc(dest_b, a.p, a.r, scale, removable(l));
 }
 
-/// Whether the drop offers the trash for what is carried: a document (it closes), or a view
-/// lifted out of a place (it leaves it). A view carried out of the picker is in no place to
-/// leave.
+/// What the carried view aims with: the middle and radius of the drop it is carried as — the
+/// drop is what is aimed, and it rides off the pointer (up and left of a finger) so it can be
+/// seen, so it is its overlap with a bubble that chooses, not where the finger is — or the
+/// pointer itself, for a card or a tab.
+pub const Aim = struct { p: dvui.Point.Physical, r: f32 = 0 };
+
+pub fn aim(l: *Layout) Aim {
+    return aimFor(l, dvui.currentWindow().mouse_pt);
+}
+
+/// `aim` for the pointer at `mouse` — a release's own point.
+pub fn aimFor(l: *Layout, mouse: dvui.Point.Physical) Aim {
+    const d = &l.state.view_drag;
+    const cw = dvui.currentWindow();
+    if (!d.active() or !carriedAsDrop(l, mouse)) return .{ .p = mouse };
+    const R = drop_r * cw.natural_scale;
+    return .{ .p = dropCenter(mouse, R, d.drop_touch), .r = R };
+}
+
+/// Whether the view is carried as a drop of glass at `mouse`: where the glass program draws, with
+/// a photograph to show, and not over a list (where it is a tab).
+fn carriedAsDrop(l: *Layout, mouse: dvui.Point.Physical) bool {
+    const d = &l.state.view_drag;
+    return core.LiquidField.ready() and d.texture != null and chooserAt(l.state, mouse) == null;
+}
+
+/// Where a drop of radius `r` rides for the pointer at `mouse`: below and right of a mouse; up
+/// and left of a finger, the finger at its bottom-right corner, where the hand covers none of it.
+fn dropCenter(mouse: dvui.Point.Physical, r: f32, touch: bool) dvui.Point.Physical {
+    return if (touch) .{ .x = mouse.x - r, .y = mouse.y - r } else .{ .x = mouse.x + 0.55 * r, .y = mouse.y + 0.55 * r };
+}
+
+/// Whether the drop offers the trash: everywhere but where it would wipe out a place the shape
+/// declared. Out of one half of a split the user made (`State.userSplitPart`) the trash takes what
+/// is carried, and the half, emptied, closes into the other; out of a place that shows several
+/// (the sidebar, the bottom panel) it takes just that view, back to the picker. A place the shape
+/// declared to show one, never split, offers none — the trash would only leave it empty. A view
+/// carried out of the picker is in no place to leave.
 pub fn removable(l: *Layout) bool {
     const d = l.state.view_drag;
-    if (!d.active() or d.moved_id.len == 0) return false;
-    if (sdk.document.pathOfSurfaceId(d.moved_id)) |path| if (l.host.docFromPath(path) != null) return true;
-    return !d.loose();
+    if (!d.active() or d.loose()) return false;
+    if (l.state.userSplitPart(d.name)) return true;
+    const r = regionNamed(l.state, d.name) orelse return false;
+    return r.shows == .many;
 }
 
 /// The part of place `name` a carried view's zones cover: the place less its own chooser — a tab
@@ -340,6 +434,12 @@ pub fn interiorBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.P
 /// `source`. The smallest place containing the pointer wins, so a document
 /// pane beats the main area it sits in.
 pub fn targetAt(l: *Layout, mouse: dvui.Point.Physical, source: []const u8) ?[]const u8 {
+    return targetAtAim(l, .{ .p = mouse }, source);
+}
+
+/// `targetAt` for what the view aims with (`aim`).
+pub fn targetAtAim(l: *Layout, a: Aim, source: []const u8) ?[]const u8 {
+    const mouse = a.p;
     const state = l.state;
     // Over a chooser, its place — as one of its views, never a split — or nowhere, over the
     // app's own strip of the place the view came out of.
@@ -349,7 +449,7 @@ pub fn targetAt(l: *Layout, mouse: dvui.Point.Physical, source: []const u8) ?[]c
     // and its own edges become unreachable.
     if (interiorBounds(state, source)) |bounds| {
         if (bounds.contains(mouse)) {
-            if (Drop.kindAt(bounds, mouse, dvui.currentWindow().natural_scale, removable(l))) |k| switch (k) {
+            if (Drop.kindAtDisc(bounds, mouse, a.r, dvui.currentWindow().natural_scale, removable(l))) |k| switch (k) {
                 .split, .remove => return source,
                 .swap => {},
             };
@@ -452,7 +552,7 @@ pub fn tick(l: *Layout) void {
 fn aimedAt(l: *Layout, name: []const u8) bool {
     const d = l.state.view_drag;
     if (!d.active() or name.len == 0) return false;
-    const target = targetAt(l, dvui.currentWindow().mouse_pt, d.name) orelse return false;
+    const target = targetAtAim(l, aim(l), d.name) orelse return false;
     return std.mem.eql(u8, target, name);
 }
 
@@ -499,7 +599,10 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
         .key = key,
         .wheel = zones,
         .look = .{
-            .hovered = if (aimed) DropZones.at(zones, dvui.currentWindow().mouse_pt) else null,
+            .hovered = if (aimed) blk: {
+                const a = aim(l);
+                break :blk DropZones.atDisc(zones, a.p, a.r);
+            } else null,
             .target = target,
             .center = center,
         },
@@ -548,12 +651,157 @@ pub fn drawOverlay(l: *Layout) void {
     // order they first appeared, and raising one breaks the drag's hold on the pointer.)
     const scale = dvui.currentWindow().natural_scale;
     const prev_clip = dvui.clipGet();
-    for (drops[0..n]) |p| {
-        dvui.clipSet(p.clip);
-        DropZones.draw(p.key, p.wheel, scale, p.look);
+    const mouse = dvui.currentWindow().mouse_pt;
+    // The view as a drop, run together with the drop it is over: reaching a bubble, it bridges
+    // into it — which bubble a release takes, said by the glass itself.
+    const carried = if (d.active()) dropShapes(l, drops[0..n]) else d.drop_shapes[0..0];
+    var taken = false;
+    var clips: [max_offers]dvui.Rect.Physical = undefined;
+    for (drops[0..n], 0..) |p, i| {
+        var look = p.look;
+        const over = p.look.target and p.clip.contains(mouse);
+        if (!taken and over) look.carried = carried;
+        // The icons go over the carried view, which is laid on the drop after it: the bubble it
+        // is about to be dropped in says what it does through it.
+        if (d.active()) look.icons = .later;
+        // Carrying the view, the drop is not held to its place: the carried drop reaches past it.
+        clips[i] = if (look.carried.len > 0) prev_clip else p.clip;
+        dvui.clipSet(clips[i]);
+        if (DropZones.draw(p.key, p.wheel, scale, look) and look.carried.len > 0) taken = true;
     }
     dvui.clipSet(prev_clip);
-    if (d.active()) drawFloat(l);
+    if (!d.active()) return;
+    drawFloat(l, taken);
+    for (drops[0..n], clips[0..n]) |p, clip| {
+        dvui.clipSet(clip);
+        DropZones.drawIcons(p.key, scale);
+    }
+    dvui.clipSet(prev_clip);
+}
+
+/// Points: the radius of the view carried as a drop — the drop zones' middle bubble's, so what is
+/// carried reads as big as where it goes, and is still seen beside a finger — and its tail's share
+/// of it.
+const drop_r: f32 = 52;
+const drop_tail_share: f32 = 0.62;
+/// How far toward the bubble it is aimed at the drop is drawn, so the two run together.
+const drop_pull: f32 = 0.45;
+
+/// The view carried as a drop this frame — its head and tail, stepped on their springs — or none
+/// where it is carried as a card (`drawFloat`): no glass program, no photograph, or over a list.
+fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.Shape {
+    const d = &l.state.view_drag;
+    d.drop_n = 0;
+    const cw = dvui.currentWindow();
+    const mouse = cw.mouse_pt;
+    if (!carriedAsDrop(l, mouse)) {
+        d.drop_ns = 0;
+        d.drop_head = .{};
+        d.drop_tail = .{};
+        return d.drop_shapes[0..0];
+    }
+    const now = cw.frame_time_ns;
+    const scale = cw.natural_scale;
+    const dt: f32 = if (d.drop_ns == 0) 0 else @as(f32, @floatFromInt(now - d.drop_ns)) / std.time.ns_per_s;
+    d.drop_ns = now;
+    const R = drop_r * scale;
+    // Which is carrying it, from what moves it: a finger's presses and moves are touch, a mouse's
+    // are not. Not from the position event dvui adds every frame, which is neither.
+    for (dvui.events()) |e| switch (e.evt) {
+        .mouse => |me| switch (me.action) {
+            .press, .motion => d.drop_touch = me.button.touch(),
+            else => {},
+        },
+        else => {},
+    };
+    // Off the pointer, so the bubble under it stays in view — below and right of a mouse; up and
+    // left of a finger, the finger at the drop's bottom-right corner, where the hand holding it
+    // covers none of it — and drawn toward the bubble it is aimed at, far enough that the two
+    // run together.
+    var target = dropCenter(mouse, R, d.drop_touch);
+    for (drops) |p| {
+        if (!p.look.target or !p.clip.contains(mouse)) continue;
+        const z = p.look.hovered orelse continue;
+        const b = p.wheel.bubble(z);
+        target = .{ .x = target.x + (b.c.x - target.x) * drop_pull, .y = target.y + (b.c.y - target.y) * drop_pull };
+    }
+    var moving = d.drop_head.step(target, dt, .{ .hz = 9, .playful_damping = 0.55 });
+    moving = d.drop_tail.step(d.drop_head.pos, dt, .{ .hz = 4.5, .playful_damping = 0.4 }) or moving;
+    // The tail stays on the drop: pulled out a little way, not off it.
+    const tx = d.drop_tail.pos.x - d.drop_head.pos.x;
+    const ty = d.drop_tail.pos.y - d.drop_head.pos.y;
+    const reach = 1.1 * R;
+    const len = @sqrt(tx * tx + ty * ty);
+    if (len > reach) {
+        d.drop_tail.pos = .{ .x = d.drop_head.pos.x + tx / len * reach, .y = d.drop_head.pos.y + ty / len * reach };
+    }
+    if (moving) dvui.refresh(null, @src(), null);
+
+    // From the view as it was lifted to the drop, on the card's own curve: the photograph's
+    // rounded rect closing into a circle round the head.
+    const t = cardProgress(d.*, now);
+    const off = dvui.dragOffset();
+    const inset = 8 * scale;
+    const from_tl: dvui.Point.Physical = .{
+        .x = mouse.x + std.math.clamp(off.x, -@max(0, d.card_from.w - inset), 0),
+        .y = mouse.y + std.math.clamp(off.y, -@max(0, d.card_from.h - inset), 0),
+    };
+    const from: dvui.Rect.Physical = dvui.Rect.Physical.fromPoint(from_tl).toSize(d.card_from);
+    const to: dvui.Rect.Physical = .{ .x = d.drop_head.pos.x - R, .y = d.drop_head.pos.y - R, .w = 2 * R, .h = 2 * R };
+    const lerp = std.math.lerp;
+    const head: dvui.Rect.Physical = .{ .x = lerp(from.x, to.x, t), .y = lerp(from.y, to.y, t), .w = @max(1, lerp(from.w, to.w, t)), .h = @max(1, lerp(from.h, to.h, t)) };
+    const card_radius = core.corners.scaled(core.corners.card) * scale;
+    d.drop_radius = lerp(card_radius, R, std.math.clamp(t, 0, 1));
+    d.drop_shapes[0] = .{ .rect = head, .radii = @splat(d.drop_radius), .round = true };
+    d.drop_n = 1;
+    const tr = R * drop_tail_share * std.math.clamp(t, 0, 1);
+    if (tr > 1) {
+        d.drop_shapes[1] = core.LiquidField.Shape.circle(d.drop_tail.pos, tr);
+        d.drop_n = 2;
+    }
+    return d.drop_shapes[0..d.drop_n];
+}
+
+/// How far the card has come from what was grabbed into what it is carried as: `motion.enter`
+/// over the dialogs' 300ms as written.
+fn cardProgress(d: ViewDrag, now: i128) f32 {
+    const dur: f64 = core.motion.durationMs(300) * @as(f64, std.time.ns_per_ms);
+    const elapsed: f64 = @floatFromInt(now - d.card_start_ns);
+    return if (dur <= 0) 1 else core.motion.enter(@floatCast(std.math.clamp(elapsed / dur, 0, 1)));
+}
+
+/// The view carried as a drop: its glass — run in with the drop it is over when that took it
+/// (`taken`), its own otherwise — and its photograph inside the head, cropped to fill it.
+fn drawDrop(l: *Layout, taken: bool) void {
+    const d = &l.state.view_drag;
+    const scale = dvui.currentWindow().natural_scale;
+    if (!taken) {
+        var field: core.LiquidField = .{ .merge_px = drop_r * 0.9 * scale };
+        for (d.drop_shapes[0..d.drop_n]) |sh| field.add(sh);
+        _ = core.dialogs.carriedField(dvui.Id.update(.zero, "view_drag_drop"), field, scale);
+    }
+    const tex = d.texture orelse return;
+    const head = d.drop_shapes[0].rect;
+    const pad = card_padding * scale * 0.5;
+    const r = head.insetAll(pad);
+    if (r.w < 2 or r.h < 2) return;
+    // Cover: the photograph's middle, as much of it as keeps its proportions in the head.
+    const pw = d.texture_rect.w;
+    const ph = d.texture_rect.h;
+    var uv: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
+    if (pw > 0 and ph > 0) {
+        const a_img = pw / ph;
+        const a_box = r.w / r.h;
+        if (a_img > a_box) {
+            uv.w = a_box / a_img;
+            uv.x = (1 - uv.w) / 2;
+        } else {
+            uv.h = a_img / a_box;
+            uv.y = (1 - uv.h) / 2;
+        }
+    }
+    const radius = @max(0, d.drop_radius - pad) / scale;
+    dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo_opacity), .uv = uv }) catch {};
 }
 
 /// Whether dropping the view lifted from `source` in the middle of `dest` joins them: the two
@@ -585,10 +833,16 @@ pub fn zonesShowing(l: *Layout, name: []const u8, key: dvui.Id) bool {
 /// The card under the pointer. Always visible while dragging: it is the only
 /// thing that says what is being carried, and hiding it over a drop target
 /// left the gesture looking cancelled.
-pub fn drawFloat(l: *Layout) void {
+pub fn drawFloat(l: *Layout, taken: bool) void {
     tick(l);
     const d = &l.state.view_drag;
     if (!d.active()) return;
+    if (d.drop_n > 0) {
+        drawDrop(l, taken);
+        // Frames while it is still turning from what was grabbed into the drop.
+        if (cardProgress(d.*, dvui.currentWindow().frame_time_ns) < 1) dvui.refresh(null, @src(), null);
+        return;
+    }
     const mouse = dvui.currentWindow().mouse_pt;
     const now = dvui.currentWindow().frame_time_ns;
     // Over a chooser — a tab strip, a rail — the view is going into a list, and the card is a
@@ -655,13 +909,11 @@ pub fn drawFloat(l: *Layout) void {
     }
 
     if (if (show_photo) d.texture else null) |tex| {
-        // The photograph, inset in the glass, its corners following the card's.
-        // Over the content fill: a document paints no background of its own (the pane behind it
-        // does), and on bare glass its photograph was text floating in the frost.
+        // The photograph (backed by the content fill, `backed`), inset in the glass, its corners
+        // following the card's: at `photo_opacity`, so the glass — and what is under the card,
+        // through it — shows as the card moves.
         const inner = core.corners.round(@max(0, core.corners.scaled(core.corners.card) - card_padding));
-        const crs = fw.data().contentRectScale();
-        crs.r.fill(inner.scale(crs.s, dvui.CornerRect.Physical), .{ .color = .{ .color = dvui.themeGet().color(.content, .fill) }, .fade = 1 });
-        dvui.renderTexture(tex, crs, .{ .corners = inner }) catch {};
+        dvui.renderTexture(tex, fw.data().contentRectScale(), .{ .corners = inner, .colormod = dvui.Color.white.opacity(photo_opacity) }) catch {};
     } else {
         drawTabFace(l, d.*, title);
     }
@@ -672,6 +924,8 @@ pub fn drawFloat(l: *Layout) void {
 
 /// Points between the card's glass and what it carries.
 const card_padding: f32 = 6;
+/// How opaque the card's photograph is over its glass.
+const photo_opacity: f32 = 0.8;
 
 /// Points: the tab face on a card with no photograph — a file icon, the title and, when there
 /// are unsaved changes, the dirty dot — and the gaps between them.
@@ -766,11 +1020,14 @@ pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
         place(l, source, o.name, .swap);
         return;
     }
-    const dest = targetAt(l, mouse, source) orelse return;
+    // Where the carried view aims — the drop's middle where it is carried as one — not where the
+    // pointer is, so the release lands where the glass showed it would.
+    const a = aimFor(l, mouse);
+    const dest = targetAtAim(l, a, source) orelse return;
     if (placeBounds(l.state, dest) == null) return;
     const scale = dvui.currentWindow().natural_scale;
     // Off the wheel, no drop: every drop is one the wheel lit first.
-    place(l, source, dest, kindAt(l, dest, mouse, scale) orelse return);
+    place(l, source, dest, kindAt(l, dest, a, scale) orelse return);
 }
 
 /// A release over a plugin region's own chooser: straight to the plugin's `on_drop`, as into the
@@ -800,6 +1057,8 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     // opened empty on the far side — a tab dragged to the top of its own strip's place moved the
     // tabs left behind to the bottom, as though another view had been carried.
     const same = std.mem.eql(u8, source, dest);
+    // An empty place carried: it is the place that moves, not a view (`placeEmpty`).
+    if (!std.mem.eql(u8, source, loose_source) and movedFrom(l, source) == null) return placeEmpty(l, source, dest, kind);
     const stays = same and (kind != .split or holding(l, source).len <= 1);
     const plan = Drop.plan(kind, stays, joins(l, source, dest)) orelse return;
     // The trash is about what is carried, not where it was let go.
@@ -854,6 +1113,28 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     dvui.refresh(null, @src(), null);
 }
 
+/// An empty place carried somewhere — the place itself is what moves, there being nothing in it.
+/// The trash or another place's middle: it goes, closing into the half beside it (an empty place
+/// dropped on an empty one leaves one empty place). Another place's edge: it goes from where it
+/// was and opens there instead, an empty half of that place. Onto itself, nothing. Only a half of
+/// a split the user made can go (`State.userSplitPart`); a place the shape declared stays.
+fn placeEmpty(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) void {
+    if (std.mem.eql(u8, source, dest) and kind != .remove) return;
+    if (!l.state.userSplitPart(source)) return;
+    switch (kind) {
+        .remove, .swap => _ = closeEmptied(l, source),
+        .split => |side| {
+            // Close it first: closing the half that was split merges its other half into it, and
+            // if that other half is where it is going, it is now there under the source's name.
+            const merged = closeEmptied(l, source);
+            const target = if (merged) |m| (if (std.mem.eql(u8, m.gone, dest)) m.into else dest) else dest;
+            _ = Region.splitOn(l, target, side);
+        },
+    }
+    l.state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
 /// What the trash does with the view carried out of `source`: a document closes — the ordinary
 /// close, which asks about unsaved changes — and any other view leaves its place, back to the
 /// picker it can be placed from again.
@@ -864,6 +1145,10 @@ fn remove(l: *Layout, source: []const u8) void {
         dvui.refresh(null, @src(), null);
         return;
     };
+    // A place its keywords fill gives a view up only to a place that claims it (`takeOut`), and
+    // the trash claims nothing: the place's list is written down without it, or it stays.
+    if (l.state.assignment(source) == null)
+        l.state.assign(l.gpa, source, idsWithout(l.arena, holding(l, source), moved)) catch {};
     takeOut(l, source, moved, null);
     shutIfEmptied(l, source);
     l.state.markDirty();
@@ -1049,11 +1334,43 @@ fn selectNamed(l: *Layout, name: []const u8, id: []const u8) void {
 ///
 /// Shut rather than deleted, so it slides closed on the curve it opened on;
 /// `Region.persistExtent` drops the leaf once the animation has finished.
+///
+/// Empty is what the place holds, not whether it has a list written down: a place its keywords
+/// fill has none, and read as empty it merged the half a split of it had just opened.
 fn shutIfEmptied(l: *Layout, name: []const u8) void {
-    if (!l.state.isMinted(name)) return;
-    if (l.state.assignment(name)) |ids| {
-        if (ids.len > 0) return;
+    if (holding(l, name).len > 0) return;
+    _ = closeEmptied(l, name);
+}
+
+/// A merge of two halves of a split: `gone` closed, its views now in `into`.
+const Merged = struct { gone: []const u8, into: []const u8 };
+
+/// Close the emptied place `name`, one half of a split the user made, into the other half. A
+/// minted half closes outright (`closeMinted`). The half that was split keeps its name — it is
+/// the shape's place — so it takes the other half's views and that half closes instead: the same
+/// one place either way, under the name the shape knows. Returns that merge, when it was one.
+/// A place no user split made, or whose other half is split again, stays as it is.
+fn closeEmptied(l: *Layout, name: []const u8) ?Merged {
+    if (l.state.isMinted(name)) {
+        closeMinted(l, name);
+        return null;
     }
+    const sibling_raw = l.state.siblingLeaf(name) orelse return null;
+    if (!l.state.isMinted(sibling_raw)) return null;
+    const sibling = ownId(l.arena, sibling_raw) orelse return null;
+    const into = ownId(l.arena, name) orelse return null;
+    const views = shownIn(l, sibling);
+    if (views.len > 1) l.state.setShows(l.gpa, into, .many);
+    l.state.assign(l.gpa, into, views) catch {};
+    if (views.len > 0) selectNamed(l, into, views[0]);
+    l.state.assign(l.gpa, sibling, &.{}) catch {};
+    closeMinted(l, sibling);
+    return .{ .gone = sibling, .into = into };
+}
+
+/// Close a minted place, whatever it holds — sliding its split shut where it was drawn.
+fn closeMinted(l: *Layout, name: []const u8) void {
+    if (!l.state.isMinted(name)) return;
     // A seed's dock tree closes its own leaves, easing the split shut over it.
     if (l.state.dock) |*dock| {
         if (dock.findPanel(name)) |idx| dock.closeLeaf(idx);

@@ -186,6 +186,11 @@ pending_native_menu_item_indices_len: u8 = 0,
 /// When set, next `tick` runs `warmupDrawingComposites` on the active file (after open or drawing-tool select).
 pending_composite_warmup: bool = false,
 
+/// When set, the next frame shows the explorer on its Files view — open, even on a window narrow
+/// enough to fold it away. Set when the page opens a fetched archive as the root (`?open=` a zip,
+/// as fizzyed.it's embeds do): its files are what the page came to show.
+reveal_files: bool = false,
+
 /// Watches each open on-disk document for external edits. Clean docs reload via
 /// `Plugin.reloadDocument`; dirty docs set a conflict flag and `save` shows
 /// `FileChangedOnDisk`. Null on wasm / unsupported OS / start failure — best-effort.
@@ -1566,10 +1571,17 @@ export fn FizzyWebOpenBytes(name_ptr: [*]const u8, name_len: usize, bytes_ptr: [
     const bytes = bytes_ptr[0..bytes_len];
     defer editor.app.gpa.free(bytes);
     const path = editor.app.gpa.dupe(u8, name_ptr[0..name_len]) catch return;
+    // A zip opens as the root folder (its plugin sets it while the document registers). If the
+    // root changed, show it: the explorer is folded away on a narrow page, an embed's usual size.
+    const folder_before: ?[]u8 = if (editor.app.folder) |f| editor.app.gpa.dupe(u8, f) catch null else null;
+    defer if (folder_before) |f| editor.app.gpa.free(f);
     if (editor.openFileFromBytes(path, bytes, 0)) |doc_id| {
         if (editor.app.open_files.getIndex(doc_id)) |idx| {
             editor.workbench.setActiveDocIndex(idx);
             editor.pending_composite_warmup = true;
+        }
+        if (editor.app.folder) |now| {
+            if (folder_before == null or !std.mem.eql(u8, now, folder_before.?)) editor.reveal_files = true;
         }
     } else |err| dvui.log.err("web: could not open {s}: {s}", .{ name_ptr[0..name_len], @errorName(err) });
     editor.app.host.refresh();
@@ -3449,6 +3461,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
     fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion());
+    fizzy.core.programs.publishHost();
+    fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
         PluginLoader.pump();

@@ -113,7 +113,9 @@ const WindowsImpl = struct {
     const app_name = AppInfo.current.display_name;
     // All sub-keys passed through `setStringValueRaw` are relative to
     // `HKCU\Software\Classes\…`; the prefix is added once inside that helper.
-    const application_key = "Applications\\" ++ AppInfo.current.name ++ ".exe";
+    /// The executable as the shell knows it — this app's, not fizzy's.
+    const exe_name = AppInfo.current.name ++ ".exe";
+    const application_key = "Applications\\" ++ exe_name;
     const open_with_progid = AppInfo.current.display_name ++ ".Document";
     const open_with_friendly = AppInfo.current.display_name ++ " Document";
 
@@ -176,7 +178,7 @@ const WindowsImpl = struct {
             removeExtensionDefaultIfOurs(classes_key, a.ext, a.progid);
         }
 
-        _ = registry.RegDeleteTreeW(classes_key, utf16Z("Applications\\fizzy.exe"));
+        _ = registry.RegDeleteTreeW(classes_key, utf16Z(application_key));
         _ = registry.RegDeleteTreeW(classes_key, utf16Z(open_with_progid));
 
         for (open_with_only_extensions) |ext| {
@@ -184,7 +186,7 @@ const WindowsImpl = struct {
             const sub = std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithProgids", .{ext}) catch continue;
             deleteValueIfPresent(classes_key, sub, open_with_progid);
             const sub2 = std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithList", .{ext}) catch continue;
-            deleteValueIfPresent(classes_key, sub2, "fizzy.exe");
+            deleteValueIfPresent(classes_key, sub2, exe_name);
         }
 
         notifyAssocChanged();
@@ -227,7 +229,7 @@ const WindowsImpl = struct {
         const owp = try std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithProgids", .{ext});
         try setStringValue(owp, progid, "");
         const owl = try std.fmt.bufPrint(&sub_buf, "{s}\\OpenWithList", .{ext});
-        try setStringValue(owl, "fizzy.exe", "");
+        try setStringValue(owl, exe_name, "");
     }
 
     fn setStringDefault(sub_key: []const u8, value: []const u8) !void {

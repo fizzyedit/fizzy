@@ -91,10 +91,6 @@ pub const update = struct {
     pub const update_notify = @import("update/update_notify.zig");
 };
 
-pub const window = struct {
-    pub const layout = @import("window/window_layout.zig");
-};
-
 /// One application per machine, and a second launch handing its argv to the first.
 ///
 /// The lock, the socket and the argv plumbing are the same for every app; what "open this path"

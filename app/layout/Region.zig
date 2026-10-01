@@ -610,9 +610,9 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
 
 /// How close the pointer must be to a region's top-right corner, in points, before the button
 /// shows. Far enough that a glance toward the corner finds it; near enough that it never
-/// appears while the user is working in the middle of the region.
-const corner_reach: f32 = 56;
-const corner_button_size: f32 = 22;
+/// appears while the user is working in the middle of the region: the button and a margin round it.
+const corner_reach: f32 = core.widgets.round_button_size + 28;
+const corner_button_size: f32 = core.widgets.round_button_size;
 
 /// The small button in a region's top-right corner that opens the picker for it. This is the
 /// piece that makes placement *visual*: a user looks at the place in the window they want to
@@ -688,8 +688,10 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
             .w = corner_button_size,
             .h = corner_button_size,
         },
-        .padding = dvui.Rect.all(1),
-        .corners = core.corners.all(core.corners.row),
+        // Entypo's grid draws its squares well inside its own box, so the glyph is given nearly
+        // all of the button.
+        .padding = dvui.Rect.all(2),
+        .corners = dvui.CornerRect.all(corner_button_size / 2),
         .background = true,
         .color_fill = .{ .color = theme.color(.control, .fill).opacity(@max(alpha, 0.35)) },
         .border = dvui.Rect.all(1),

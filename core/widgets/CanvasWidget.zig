@@ -757,11 +757,11 @@ pub fn updateTouchGesture(self: *CanvasWidget) void {
         dvui.refresh(null, @src(), self.scroll_container.data().id);
     }
 
-    // macOS trackpad pinch-zoom. The native backend accumulates per-event magnification
-    // deltas from an AppKit local monitor; we drain them once per frame and apply the same
+    // Trackpad pinch-zoom. The native backend gathers SDL's pinch events (macOS, iOS, Linux
+    // under Wayland or X11) into one ratio; we drain it once per frame and apply the same
     // scale-around-point math used by wheel/touch zoom. Focal point is the cursor position
     // (macOS does not move the cursor during a trackpad gesture, so it represents intent).
-    // No-op on Windows/Linux/web (`takeTrackpadPinchRatio` returns 1.0 there).
+    // 1.0 on Windows (its touchpads pinch as ctrl+wheel) and where nothing is gathered.
     const trackpad_ratio = core.takeTrackpadPinchRatio();
     if (trackpad_ratio != 1.0) {
         const cursor_phys = dvui.currentWindow().mouse_pt;

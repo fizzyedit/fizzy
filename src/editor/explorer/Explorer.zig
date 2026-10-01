@@ -169,7 +169,7 @@ pub fn draw(
 fn drawCollapseButton(explorer: *Explorer, editor: *fizzy.Editor) void {
     // Styled to match the floating Edit pill (see `Workspace.drawEditPill`): circular
     // background, same content.fill / content.text color pair, same drop shadow.
-    const button_size: f32 = 48;
+    const button_size: f32 = fizzy.core.widgets.round_button_size;
     const btn_radius: f32 = button_size / 2;
     const margin: f32 = 8;
     const wr = dvui.windowRect();

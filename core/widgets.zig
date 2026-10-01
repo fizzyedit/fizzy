@@ -35,6 +35,7 @@ pub const TreeSelection = @import("widgets/TreeSelection.zig");
 pub const DockingWidget = @import("widgets/DockingWidget.zig");
 pub const DockLayout = DockingWidget.Layout;
 pub const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
+pub const LiquidField = @import("gfx/LiquidField.zig");
 pub const Popover = @import("widgets/Popover.zig");
 pub const ContextWidget = @import("widgets/ContextWidget.zig");
 
@@ -45,6 +46,11 @@ pub const MenuWidget = @import("widgets/menu/Menu.zig");
 pub const MenuItemWidget = @import("widgets/menu/MenuItem.zig");
 pub const FloatingMenuWidget = @import("widgets/menu/FloatingMenu.zig");
 pub const PopupWidget = @import("widgets/menu/Popup.zig");
+
+/// Points: the one size of a round button — a floating toggle, a place's corner grid, anything
+/// round that is tapped or clicked. Big enough to hit with a finger, small enough not to crowd
+/// what it sits over, so one size serves touch and mouse alike.
+pub const round_button_size: f32 = 32;
 /// A dropdown whose list is the menus' frosted surface — use this, not `dvui.DropdownWidget`.
 pub const DropdownWidget = @import("widgets/Dropdown.zig");
 
@@ -251,6 +257,15 @@ pub fn contextMenu(src: std.builtin.SourceLocation, at: dvui.Point.Natural, opts
 pub fn menuFrost() ?BlurBackdrop.Pane {
     const f = dialogs.dialogFrost() orelse return null;
     return .{ .radius = f.radius, .refresh_ms = f.refresh_ms, .tint = f.tint, .mix = f.mix, .lift = f.lift, .detail = f.detail, .refraction = f.refraction };
+}
+
+/// The glass liquid shapes are made of (`LiquidField`): `menuFrost`, or — the blur off, and the
+/// glass program there to draw it — clear glass of the same tint and edge
+/// (`BlurBackdrop.Pane.clear`), so shapes that run together still do. Null where neither is.
+pub fn liquidFrost() ?BlurBackdrop.Pane {
+    if (menuFrost()) |p| return p;
+    if (!LiquidField.ready()) return null;
+    return dialogs.clearFrost();
 }
 
 /// A menu popup's surface: `core.dialogs`' fill, corners, padding and shadow, no border — the

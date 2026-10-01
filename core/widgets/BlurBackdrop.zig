@@ -32,6 +32,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const motion = @import("../motion.zig");
 const liquid_glass = @import("../gfx/liquid_glass.zig");
+const LiquidField = @import("../gfx/LiquidField.zig");
 
 const Rect = dvui.Rect;
 const Size = dvui.Size;
@@ -83,6 +84,13 @@ stable: bool = false,
 /// washing out. 0 is the plain dual-Kawase blur. Never the unblurred source: at most it
 /// softens toward the first halving, so there is no sharp double image.
 detail: f32 = 0,
+/// Fizzy addition: how formed the frost is, 0 (the scene, sharp) to 1 (the full blur). The
+/// pyramid is always built for `radius_px`, so its levels keep their sizes and are reused; on the
+/// way back up, the doubling at the blur forming has reached takes that downsample level in place
+/// of the coarser blur above it (`runKawase`). Growing the radius instead gave every level a new
+/// size each frame — new targets every frame a menu, a dialog or a drop was forming. The fine
+/// blur (`stable`) does not form; give it a smaller radius.
+form: f32 = 1,
 
 pub const Mode = enum { replay, readback };
 
@@ -552,6 +560,16 @@ fn runKawase(self: *BlurBackdrop, source: Texture, restore_target: bool, first: 
 
     const detail = std.math.clamp(self.detail, 0, 0.9);
 
+    // Forming (`form`): octaves are counted down from the source. The blur has reached `reach`
+    // of the pyramid's `full`; a doubling that ends at or above it is the downsample level of its
+    // size outright, and the one that crosses it mixes that level in by how far past it the
+    // blur is — so the blur grows smoothly from the source up through the levels as `form` does.
+    const src_wf: f32 = @floatFromInt(source.width);
+    const full = @log2(src_wf / @as(f32, @floatFromInt(@max(1, cur.width))));
+    const forming = self.form < 0.999;
+    const reach = std.math.clamp(self.form, 0, 1) * full;
+    var octave_prev = full;
+
     // Upsample back to full size with progressive doubling + a wide
     // multi-tap kernel each step (real "dual Kawase" blur), instead of one
     // big bilinear stretch, which would just show the downsampled blocks.
@@ -560,6 +578,17 @@ fn runKawase(self: *BlurBackdrop, source: Texture, restore_target: bool, first: 
     while (cur.width < final_w or cur.height < final_h) {
         const next_w = @min(final_w, cur.width * 2);
         const next_h = @min(final_h, cur.height * 2);
+        const octave_now = @log2(src_wf / @as(f32, @floatFromInt(next_w)));
+        defer octave_prev = octave_now;
+        // How much of this doubling is the level of its size rather than the blur above it.
+        const take: f32 = if (forming) std.math.clamp((octave_prev - reach) / @max(octave_prev - octave_now, 0.0001), 0, 1) else 0;
+        const level_tex: ?Texture = if (take <= 0.001) null else if (octave_now < 0.5) source else nearest: {
+            var best: ?Texture = null;
+            for (downs[0..n_downs]) |d| {
+                if (best == null or @abs(@as(f32, @floatFromInt(d.width)) - @as(f32, @floatFromInt(next_w))) < @abs(@as(f32, @floatFromInt(best.?.width)) - @as(f32, @floatFromInt(next_w)))) best = d;
+            }
+            break :nearest best;
+        };
         const step_target = self.level(slot, next_w, next_h) orelse break;
         const prev = dvui.renderTarget(.{ .texture = step_target, .offset = .{} });
         if (!switched) {
@@ -572,7 +601,13 @@ fn runKawase(self: *BlurBackdrop, source: Texture, restore_target: bool, first: 
         defer dvui.clipSet(prev_clip);
 
         const dest_r: dvui.Rect.Physical = .{ .w = @floatFromInt(next_w), .h = @floatFromInt(next_h) };
-        {
+        if (level_tex != null and take >= 0.999) {
+            // Wholly the level: the blur has not reached this far yet.
+            const lvl = level_tex.?;
+            const lvl_copy = tapsBegin(lvl, step_target);
+            defer tapsEnd(lvl, lvl_copy);
+            dvui.renderTexture(lvl, .{ .r = dest_r }, .{}) catch {};
+        } else {
             // 8-tap "dual filter" upsample kernel: 4 cardinal taps (weight 1)
             // plus 4 diagonal taps (weight 2), offset in units of the smaller
             // *source* texture's texel size. Composited with the same running-
@@ -629,7 +664,9 @@ fn runKawase(self: *BlurBackdrop, source: Texture, restore_target: bool, first: 
             const skip_tot: f32 = if (d_tot > 0.001) 12 * d_tot / (1 - d_tot) else 0;
             const w_fine: f32 = if (d_tot > 0.001) skip_tot * d_fine / d_tot else 0;
             const w_coarse: f32 = if (d_tot > 0.001) skip_tot * d_coarse / d_tot else 0;
-            const total: f32 = 12 + skip_tot;
+            // Forming: the level of this size, as `take` of the result.
+            const w_level: f32 = if (level_tex != null) (12 + skip_tot) * take / (1 - take) else 0;
+            const total: f32 = 12 + skip_tot + w_level;
 
             const add = tapsBegin(cur, step_target);
             defer tapsEnd(cur, add);
@@ -646,9 +683,10 @@ fn runKawase(self: *BlurBackdrop, source: Texture, restore_target: bool, first: 
                 }) catch {};
                 if (add and i == 0) _ = tapsBlend(cur, .add);
             }
-            const extras = [2]struct { tex: ?Texture, w: f32 }{
+            const extras = [3]struct { tex: ?Texture, w: f32 }{
                 .{ .tex = finer, .w = w_fine },
                 .{ .tex = coarser, .w = w_coarse },
+                .{ .tex = level_tex, .w = w_level },
             };
             for (extras) |e| {
                 const d = e.tex orelse continue;
@@ -905,10 +943,10 @@ pub const Pane = struct {
     /// How far the pane's bevelled edge refracts what it shows, 0 (none) to 2
     /// (`liquid_glass.Look.refraction`).
     refraction: f32 = 1,
-    /// How formed the glass is, 0 (not there yet: the scene behind it, sharp and unbent) to 1.
-    /// Its blur, tint, lift and edge all come in with it — the blur from sharp, the edge's
-    /// refraction squeezing in from none — so glass *forms* over what is behind rather than
-    /// fading in over it. Null forms it by itself as the pane first appears (`form_ms`, at the
+    /// How formed the glass is, 0 (not there yet) to 1. Its edge comes in with it — the
+    /// refraction squeezing in from none, swelling past its depth and settling — while the frost,
+    /// tint and lift are whole from the first frame it is drawn, so the pane stands off from what
+    /// is behind it at once. Null forms it by itself as the pane first appears (`form_ms`, at the
     /// app's motion); a caller that knows better — a window closing, a tooltip on its own fade —
     /// passes its own.
     form: ?f32 = null,
@@ -919,13 +957,17 @@ pub const Pane = struct {
     /// of — where a re-read every frame is a blur's worth of work for a picture that has not
     /// changed.
     witness: ?u64 = null,
+    /// Clear glass: what is behind it unblurred — bent at its edge, tinted and lit as frost is —
+    /// for the blur turned off where the glass program draws (`LiquidField`), so liquid glass is
+    /// still glass. Its capture runs at `min_blur`, for the picture before the blur.
+    clear: bool = false,
 };
 
 /// Physical pixels: the least blur a frost is drawn with (`frostPane`).
 pub const min_blur: f32 = 3;
 
 /// How long a pane takes to form by itself, as written (`core.motion.durationMs`).
-pub const form_ms: f32 = 350;
+pub const form_ms: f32 = 525;
 
 /// Fizzy addition: a frosted pane — what is under `rect`, blurred, composed with a tint and a
 /// lift per `pane`, drawn with `corners`. Keyed by `id`, so the blur texture lives and dies with
@@ -941,6 +983,18 @@ pub const form_ms: f32 = 350;
 /// the frost replaces what it covers, so a shadow drawn first survives only outside), then this,
 /// then the contents. The caller paints no fill of its own — the tint is the fill.
 pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: f32, pane: Pane) void {
+    queuePane(id, rect, corners, scale, pane, null);
+}
+
+/// Fizzy addition: `field`'s shapes as one pane of glass, run together where they are close
+/// (`LiquidField`): frosted like `frostPane`, its blur, tint and lift per `pane` and its shapes'
+/// own edges. Only where the glass program is (`LiquidField.ready`); otherwise draw panes.
+pub fn fieldPane(id: dvui.Id, field: LiquidField, scale: f32, pane: Pane) void {
+    if (field.len == 0) return;
+    queuePane(id, field.bounds(), .{}, scale, pane, field);
+}
+
+fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: f32, pane: Pane, field: ?LiquidField) void {
     const job = dvui.dataGetPtrDefault(null, id, "_frost_job", FrostJob, .{});
     const backdrop = dvui.dataGetPtrDefault(null, id, "_frost", BlurBackdrop, .{});
     dvui.dataSetDeinitFunction(null, id, "_frost", &releaseTexture);
@@ -948,25 +1002,38 @@ pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, sca
     // How formed it is: the caller's, or its own from when it first came up. Per id, so it
     // lives exactly as long as the pane is drawn and a pane that comes back forms anew.
     const form = std.math.clamp(pane.form orelse selfForm(id, now), 0, 1);
-    // The blur comes in from sharp; the edge squeezes in on the arrival curve, past its final
-    // shape and back when motion is playful.
-    const radius = pane.radius * form;
+    // The blur comes in from sharp (`form`, at the full radius — see `BlurBackdrop.form`); the
+    // edge squeezes in on the arrival curve, past its final shape and back when motion is playful.
+    const radius = pane.radius;
     // Under a few pixels of blur the pyramid makes no pass, and the picture it hands back is an
     // empty target — which a frost, replacing what it covers, lays down as a hole: the desktop
-    // showed through a pane forming or unforming, tinted whatever was behind the window. Glass
-    // that is barely there is the scene behind it, so draw none; its tint and lift are as good as
-    // nothing by the time there is blur enough to show.
-    if (radius < min_blur) return;
-    const edge = @max(0, motion.enterFull(form));
+    // showed through. Glass that is barely there is the scene behind it, so draw none.
+    if (radius < min_blur or form < 0.02) return;
+    // Only the edge forms: it swells past its depth and settles as the glass arrives
+    // (`motion.swell`). The frost, tint and lift are whole from the first frame, so a window is
+    // set off from what is under it as soon as it is there — glass that came in clear began
+    // with no contrast — and, whole, the blur is not read again for every step of forming.
+    const edge = @max(0, motion.swell(form));
     backdrop.mode = .readback;
     backdrop.radius_px = radius;
     backdrop.detail = pane.detail;
+    backdrop.form = 1;
 
     // The glass's edge shows what lies just beyond it (`liquid_glass`), so the capture reaches
-    // that far past the pane; flat glass needs none.
-    const lens = motion.liquid() * liquid_glass.blurRamp(pane.radius) * liquid_glass.sizeRamp(rect, scale) * edge;
-    const margin = liquid_glass.margin(.{ .lens = lens, .refraction = pane.refraction }, scale);
-    const captured = rect.insetAll(-margin);
+    // that far past the pane; flat glass needs none. As far as the whole edge reaches, however
+    // much of it has formed: a capture growing with it was a new size, and new targets, a frame.
+    // Clear glass has the whole edge: it is thick glass that happens not to be frosted.
+    const ramp = if (pane.clear) 1 else liquid_glass.blurRamp(pane.radius);
+    const lens_full = motion.liquid() * ramp * liquid_glass.sizeRamp(rect, scale);
+    const lens = lens_full * edge;
+    const margin = liquid_glass.margin(.{ .lens = lens_full * (1 + motion.overshoot_max * motion.swell_gain), .refraction = pane.refraction }, scale);
+    // A size it keeps while it can (`captureSize`): a pane that changes size — a menu sliding
+    // open, a dragged view shrinking into its card — keeps one capture size, and so one set of
+    // targets, for many frames, where an exact capture was a new pyramid every frame it moved.
+    const need = rect.insetAll(-margin);
+    const cap = dvui.dataGetPtrDefault(null, id, "_frost_cap", dvui.Size, .{});
+    cap.* = captureSize(cap.*, .{ .w = need.w, .h = need.h });
+    const captured: Rect.Physical = .{ .x = need.x, .y = need.y, .w = cap.w, .h = cap.h };
     // `init` takes a rect in *window* coordinates.
     const nat = dvui.windowRectScale().rectFromPhysical(captured);
     // A witness that changes with the geometry and, coarsely, with time.
@@ -976,8 +1043,7 @@ pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, sca
         now
     else
         @divTrunc(now, @as(i128, pane.refresh_ms) * std.time.ns_per_ms);
-    // The blur's radius too, so a pane forming — its blur growing from sharp — reads again every
-    // frame it changes, whatever its refresh.
+    // How formed too, so a pane forming blurs again every frame it changes, whatever its refresh.
     backdrop.init(nat, .{ captured, tick, @round(radius) });
 
     job.* = .{
@@ -986,13 +1052,39 @@ pub fn frostPane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, sca
         .scale = scale,
         .rect = rect,
         .tint = pane.tint,
-        .mix = std.math.clamp(pane.mix * form, 0, 1),
-        .lift = std.math.clamp(pane.lift * form, 0, 1),
+        .mix = std.math.clamp(pane.mix, 0, 1),
+        .lift = std.math.clamp(pane.lift, 0, 1),
         // The edge comes in with the blur, so a barely-frosted pane has barely an edge.
         .lens = lens,
         .refraction = pane.refraction,
+        .field = field,
+        .clear = pane.clear,
     };
     dvui.deferRender(job, FrostJob.draw);
+}
+
+/// The capture size for a pane needing `need`, given what it captured last (`prev`, zero at
+/// first). Kept while `need` fits in it and fills more than half of it each way, so a pane
+/// shrinking keeps its targets until it has halved — a view shrinking into its card crossed a
+/// quarter-octave bucket every frame or two, a new pyramid each time. Otherwise `need` rounded
+/// up to a bucket (`bucket`), with a quarter more room ahead of a pane that is growing.
+pub fn captureSize(prev: dvui.Size, need: dvui.Size) dvui.Size {
+    const Fits = struct {
+        fn of(p: f32, n: f32) bool {
+            return n <= p and n * 2 > p;
+        }
+    };
+    if (Fits.of(prev.w, need.w) and Fits.of(prev.h, need.h)) return prev;
+    const growing = prev.w > 0 and (need.w > prev.w or need.h > prev.h);
+    const room: f32 = if (growing) 1.25 else 1;
+    return .{ .w = bucket(need.w * room), .h = bucket(need.h * room) };
+}
+
+/// `v` rounded up to a size bucket: whole pixels up to 64, then quarter-octave steps — never more
+/// than a fifth bigger than asked.
+fn bucket(v: f32) f32 {
+    if (v <= 64) return @ceil(v);
+    return @ceil(@exp2(@ceil(@log2(v) * 4) / 4));
 }
 
 /// How formed a pane is by itself: from nothing when it first came up to whole over `form_ms`,
@@ -1020,6 +1112,11 @@ const FrostJob = struct {
     lens: f32 = 0,
     /// How far the bevel refracts (`Pane.refraction`).
     refraction: f32 = 1,
+    /// Shapes run together, drawn by the glass program, instead of the one rounded rect
+    /// (`fieldPane`).
+    field: ?LiquidField = null,
+    /// Clear glass (`Pane.clear`): the picture before the blur.
+    clear: bool = false,
 
     fn draw(ctx: ?*anyopaque) void {
         const self: *FrostJob = @ptrCast(@alignCast(ctx orelse return));
@@ -1035,6 +1132,26 @@ const FrostJob = struct {
         defer dvui.alphaSet(prev_alpha);
         // The capture, now that everything below this pane is on the target.
         self.backdrop.deinit();
+        // Through the glass program where there is one: the same pane in one pass a pixel.
+        if (self.field) |field| {
+            const tex = self.backdrop.small orelse return;
+            var f = field;
+            f.scale = self.scale;
+            f.tint = self.tint;
+            f.mix = self.mix;
+            f.lift = self.lift;
+            f.refraction = self.refraction;
+            // Each shape's edge as far as the pane's has formed (and the motion level allows).
+            for (f.shapes[0..f.len]) |*sh| {
+                sh.lens *= self.lens;
+                if (self.clear) sh.blur = 0;
+            }
+            const sharp = self.backdrop.sharpTexture();
+            const distinct = if (sharp) |t| t.ptr != tex.ptr else false;
+            _ = f.draw(tex, self.backdrop.coverage(), if (distinct) sharp else null);
+            return;
+        }
+        if (self.drawField()) return;
         const weight: f32 = if (self.tint != null) 1 - self.mix else 1;
         self.drawFrost(weight);
         if (self.tint) |tint| addTint(self.rect, self.corners, self.scale, tint, self.mix);
@@ -1047,13 +1164,38 @@ const FrostJob = struct {
         }
     }
 
+    /// The pane as a one-shape `LiquidField`, drawn by the glass program. False where there is
+    /// none, and the meshes draw it.
+    fn drawField(self: *const FrostJob) bool {
+        const tex = self.backdrop.small orelse return false;
+        if (!LiquidField.ready()) return false;
+        const c = self.finalCorners();
+        const s = self.scale;
+        var field: LiquidField = .{
+            .scale = s,
+            .tint = self.tint,
+            .mix = self.mix,
+            .lift = self.lift,
+            .refraction = self.refraction,
+        };
+        field.add(.{
+            .rect = self.rect,
+            .radii = .{ c.tl.radius() * s, c.tr.radius() * s, c.br.radius() * s, c.bl.radius() * s },
+            .lens = self.lens,
+            .blur = if (self.clear) 0 else 1,
+        });
+        const sharp = self.backdrop.sharpTexture();
+        const distinct = if (sharp) |t| t.ptr != tex.ptr else false;
+        return field.draw(tex, self.backdrop.coverage(), if (distinct) sharp else null);
+    }
+
     /// The frost at `weight` of itself: through a bevelled edge when the motion level asks for
     /// it (`liquid_glass`), a flat rect when it does not.
     fn drawFrost(self: *const FrostJob, weight: f32) void {
         const look: liquid_glass.Look = .{ .lens = self.lens, .refraction = self.refraction, .sharp = self.backdrop.sharpTexture(), .blend_over = &blendOver };
         const tex = self.backdrop.small orelse return;
         if (!liquid_glass.bends(look)) {
-            self.backdrop.drawRoundedScaled(self.corners, self.scale, weight);
+            self.backdrop.drawAt(self.rect, self.corners, self.scale, weight);
             return;
         }
         liquid_glass.drawPane(tex, self.backdrop.coverage(), self.rect, self.radii(), self.scale, dvui.Color.white.opacity(weight), look);
@@ -1096,6 +1238,15 @@ pub fn sharpTexture(self: *const BlurBackdrop) ?Texture {
 
 /// Fizzy addition: `drawRounded` at `weight` of itself — the frost half of a frost/tint mix.
 /// The texture's copy blend writes exactly `weight * frost`, alpha included.
+/// Fizzy addition: `rect` of the frost — any part of what it pictures, not only the rect it was
+/// asked for (`frostPane` captures a size bucket around its pane) — at `weight`.
+pub fn drawAt(self: *BlurBackdrop, rect: Rect.Physical, corners: dvui.CornerRect, scale: f32, weight: f32) void {
+    const tex = self.small orelse return;
+    const c = self.coverage();
+    const uv: dvui.Rect = .{ .x = (rect.x - c.x) / c.w, .y = (rect.y - c.y) / c.h, .w = rect.w / c.w, .h = rect.h / c.h };
+    dvui.renderTexture(tex, .{ .r = rect, .s = scale }, .{ .corners = corners, .colormod = dvui.Color.white.opacity(weight), .uv = uv }) catch {};
+}
+
 pub fn drawRoundedScaled(self: *BlurBackdrop, corners: dvui.CornerRect, scale: f32, weight: f32) void {
     const tex = self.small orelse return;
     dvui.renderTexture(tex, .{ .r = self.rect, .s = scale }, .{ .corners = corners, .colormod = dvui.Color.white.opacity(weight), .uv = self.rectUv() }) catch {};

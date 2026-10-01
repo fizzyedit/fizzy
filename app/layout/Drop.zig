@@ -64,8 +64,14 @@ pub const Plan = union(enum) {
 /// its ring a split on that side, the trash (offered with `remove`) a removal, and off the drop
 /// nothing — null.
 pub fn kindAt(bounds: dvui.Rect.Physical, mouse: dvui.Point.Physical, scale: f32, remove: bool) ?Kind {
+    return kindAtDisc(bounds, mouse, 0, scale, remove);
+}
+
+/// `kindAt` for a carried drop of radius `r` (physical) centred on `c`: the bubble it overlaps
+/// (`DropZones.atDisc`). `r` 0 is a point.
+pub fn kindAtDisc(bounds: dvui.Rect.Physical, c: dvui.Point.Physical, r: f32, scale: f32, remove: bool) ?Kind {
     if (bounds.w <= 0 or bounds.h <= 0) return null;
-    const zone = DropZones.at(DropZones.wheel(bounds, scale, remove), mouse) orelse return null;
+    const zone = DropZones.atDisc(DropZones.wheel(bounds, scale, remove), c, r) orelse return null;
     return switch (zone) {
         .center => .swap,
         .remove => .remove,

@@ -302,6 +302,14 @@ pub const groups = [_]Group{
                 .keywords = "fps performance diagnostics",
                 .draw = drawFps,
             },
+            .{
+                .label = "Glass shader",
+                .key = "glass_shader",
+                .description = "Glass: Shader instead of mesh",
+                .keywords = "glass shader sdf liquid frost blur performance",
+                .draw = drawGlassShader,
+                .inline_control = true,
+            },
         },
     },
 };
@@ -655,6 +663,19 @@ fn drawPluginUpdateMode() void {
 }
 
 // ---- Debugging --------------------------------------------------------------------------
+
+fn drawGlassShader() void {
+    const editor = fizzy.editor();
+    if (dvui.checkbox(@src(), &editor.app.settings.glass_shader, null, .{
+        .expand = .none,
+        .gravity_y = 0.5,
+        .margin = .{ .x = 4, .w = 4 },
+        .padding = .{ .x = 2, .w = 4, .y = 2, .h = 2 },
+    })) {
+        editor.markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+}
 
 fn drawFps() void {
     // `perf_logging` / `debug_simulate_update_available` live in Constants.zig (build-time flags,

@@ -2114,6 +2114,136 @@ const EmptyPanelFrame = struct {
     }
 };
 
+/// Main above a keyword-matched Panel showing several, as fizzy's own shape has them.
+const ManyPanelFrame = struct {
+    var editor: ?*fizzy.Editor = null;
+
+    fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
+        return .ok;
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        const e = editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        {
+            var content = try layout.region(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+            defer content.deinit();
+            {
+                var main = try layout.region(@src(), .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main }, .{ .expand = .both });
+                defer main.deinit();
+            }
+            layout.split(@src(), .{});
+            {
+                var panel = try layout.region(@src(), .{
+                    .name = "Panel",
+                    .keywords = fizzy.sdk.keywords.ide.panel,
+                    .shows = .many,
+                    .resize = true,
+                    .hide_when_empty = true,
+                }, .{ .min_size_content = .{ .h = 220 }, .expand = .horizontal });
+                defer panel.deinit();
+            }
+        }
+        e.app.layout.publishRegions();
+        return .ok;
+    }
+};
+
+const ManyPanelCase = struct {
+    ctx: shim.Ctx,
+
+    fn init() !ManyPanelCase {
+        var ctx = try shim.init(std.testing.allocator);
+        errdefer ctx.deinit(std.testing.allocator);
+        const editor = ctx.editor;
+        editor.app.gpa = std.testing.allocator;
+        try editor.app.host.registerSurface(.{ .id = "test.main", .title = "Main", .keywords = fizzy.sdk.keywords.ide.main, .draw = ManyPanelFrame.draw });
+        try editor.app.host.registerSurface(.{ .id = "test.output", .title = "Output", .keywords = fizzy.sdk.keywords.ide.panel, .draw = ManyPanelFrame.draw });
+        ManyPanelFrame.editor = editor;
+        try dvui.testing.settle(ManyPanelFrame.frame);
+        return .{ .ctx = ctx };
+    }
+
+    fn deinit(self: *ManyPanelCase) void {
+        const editor = self.ctx.editor;
+        editor.app.layout.regions.deinit(editor.app.gpa);
+        editor.app.layout.regions_building.deinit(editor.app.gpa);
+        editor.app.layout.deinitExtents(editor.app.gpa);
+        editor.app.layout.deinitAssignments(editor.app.gpa);
+        editor.app.layout.deinitQualified(editor.app.gpa);
+        ManyPanelFrame.editor = null;
+        self.ctx.deinit(std.testing.allocator);
+    }
+
+    fn place(self: *ManyPanelCase, source: []const u8, dest: []const u8, kind: fizzy.Editor.Layout.Drop.Kind) !void {
+        const editor = self.ctx.editor;
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        fizzy.Editor.Layout.ViewDrag.place(&layout, source, dest, kind);
+        try dvui.testing.settle(ManyPanelFrame.frame);
+        try dvui.testing.settle(ManyPanelFrame.frame);
+    }
+
+    /// The ids place `name` draws, whether its keywords or a list chose them.
+    fn shows(self: *ManyPanelCase, name: []const u8) []const []const u8 {
+        const editor = self.ctx.editor;
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        for (editor.app.layout.regions.items) |*r| if (std.mem.eql(u8, r.name, name)) {
+            const items = layout.matchingIn(r);
+            const out = dvui.currentWindow().arena().alloc([]const u8, items.len) catch return &.{};
+            for (items, 0..) |s, i| out[i] = s.id;
+            return out;
+        };
+        return &.{};
+    }
+
+    fn placeNamed(self: *ManyPanelCase, not: []const []const u8) ?[]const u8 {
+        for (self.ctx.editor.app.layout.regions.items) |r| {
+            for (not) |n| {
+                if (std.mem.eql(u8, r.name, n)) break;
+            } else if (r.name.len > 0) return r.name;
+        }
+        return null;
+    }
+};
+
+test "trash: the last view of a place its keywords fill goes, and the place is empty" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    try std.testing.expectEqual(@as(usize, 1), case.shows("Panel").len);
+    try case.place("Panel", "Panel", .remove);
+    // Out of the panel: it shows nothing now, its keywords notwithstanding.
+    try std.testing.expectEqual(@as(usize, 0), case.shows("Panel").len);
+    const main = case.shows("Main");
+    try std.testing.expectEqual(@as(usize, 1), main.len);
+    try std.testing.expectEqualStrings("test.main", main[0]);
+}
+
+test "split: the last view of a place its keywords fill, carried to another place's edge, goes with it" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    try case.place("Panel", "Main", .{ .split = .right });
+    const main = case.shows("Main");
+    try std.testing.expectEqual(@as(usize, 1), main.len);
+    try std.testing.expectEqualStrings("test.main", main[0]);
+    const half = case.placeNamed(&.{ "Main", "Panel" }) orelse return error.TestExpectedEqual;
+    const there = case.shows(half);
+    try std.testing.expectEqual(@as(usize, 1), there.len);
+    try std.testing.expectEqualStrings("test.output", there[0]);
+    try std.testing.expectEqual(@as(usize, 0), case.shows("Panel").len);
+}
+
+test "split: the last view of a place its keywords fill, split onto its own place, stays and an empty half opens" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    try case.place("Panel", "Panel", .{ .split = .right });
+    const panel = case.shows("Panel");
+    try std.testing.expectEqual(@as(usize, 1), panel.len);
+    try std.testing.expectEqualStrings("test.output", panel[0]);
+    const half = case.placeNamed(&.{ "Main", "Panel" }) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 0), case.shows(half).len);
+    try std.testing.expect(case.ctx.editor.app.layout.isMinted(half));
+}
+
 test "a split before a region that hides itself is not drawn, and nothing draws twice" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -2630,6 +2760,169 @@ test "a split's last view dropped on the other half's middle joins the two into 
     try std.testing.expectEqual(fizzy.Editor.Layout.Region.Shows.many, editor.app.layout.showsOf("Center", .one));
     // The half the split made is gone.
     try std.testing.expect(!editor.app.layout.isMinted(made_name));
+}
+
+/// The endless example's Center split right into `Center` and its minted half, holding
+/// `center` and `half` (empty lists for an empty place). For the merge rules below.
+const SplitCase = struct {
+    ctx: shim.Ctx,
+    half: []u8,
+
+    fn init(center: []const []const u8, half: []const []const u8) !SplitCase {
+        var ctx = try shim.init(std.testing.allocator);
+        errdefer ctx.deinit(std.testing.allocator);
+        const editor = ctx.editor;
+        editor.app.gpa = std.testing.allocator;
+        EndlessFrame.editor = editor;
+        const draw = struct {
+            fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+                return .ok;
+            }
+        }.f;
+        try editor.app.host.registerSurface(.{ .id = "test.view", .title = "View", .keywords = fizzy.sdk.keywords.ide.main, .draw = draw });
+        try editor.app.host.registerSurface(.{ .id = "test.other", .title = "Other", .keywords = fizzy.sdk.keywords.ide.main, .draw = draw });
+        try dvui.testing.settle(EndlessFrame.frame);
+        try editor.app.layout.assign(editor.app.gpa, "Center", center);
+        const made = blk: {
+            var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+            break :blk layout.splitOn("Center", .right) orelse return error.TestExpectedEqual;
+        };
+        const name = try std.testing.allocator.dupe(u8, made);
+        try editor.app.layout.assign(editor.app.gpa, name, half);
+        try dvui.testing.settle(EndlessFrame.frame);
+        return .{ .ctx = ctx, .half = name };
+    }
+
+    fn deinit(self: *SplitCase) void {
+        const editor = self.ctx.editor;
+        editor.app.layout.regions.deinit(editor.app.gpa);
+        editor.app.layout.regions_building.deinit(editor.app.gpa);
+        editor.app.layout.deinitExtents(editor.app.gpa);
+        editor.app.layout.deinitAssignments(editor.app.gpa);
+        editor.app.layout.deinitQualified(editor.app.gpa);
+        EndlessFrame.editor = null;
+        std.testing.allocator.free(self.half);
+        self.ctx.deinit(std.testing.allocator);
+    }
+
+    fn place(self: *SplitCase, source: []const u8, dest: []const u8, kind: fizzy.Editor.Layout.Drop.Kind) !void {
+        const editor = self.ctx.editor;
+        var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+        fizzy.Editor.Layout.ViewDrag.place(&layout, source, dest, kind);
+        try dvui.testing.settle(EndlessFrame.frame);
+        try dvui.testing.settle(EndlessFrame.frame);
+    }
+
+    fn holds(self: *SplitCase, name: []const u8) []const []const u8 {
+        return self.ctx.editor.app.layout.assignment(name) orelse &.{};
+    }
+};
+
+test "split: only a half of a split the user made can go" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    const state = &case.ctx.editor.app.layout;
+    try std.testing.expect(state.userSplitPart("Center"));
+    try std.testing.expect(state.userSplitPart(case.half));
+    // Joined again, the one place left is the shape's own, and stays.
+    try case.place("Center", "Center", .remove);
+    try std.testing.expect(!state.userSplitPart("Center"));
+}
+
+test "split: the trash is offered out of a place of several, not out of a lone default place" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    const VD = fizzy.Editor.Layout.ViewDrag;
+    // Joined back, Center is the shape's one place again, showing one view.
+    try case.place("Center", "Center", .remove);
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    defer editor.app.layout.view_drag.discard();
+    VD.begin(&layout, "Center", .{ .w = 100, .h = 100 });
+    try std.testing.expect(!VD.removable(&layout));
+    editor.app.layout.view_drag.discard();
+    // Showing several, the trash takes just the view carried.
+    editor.app.layout.setShows(editor.app.gpa, "Center", .many);
+    try dvui.testing.settle(EndlessFrame.frame);
+    var layout2 = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    VD.begin(&layout2, "Center", .{ .w = 100, .h = 100 });
+    try std.testing.expect(VD.removable(&layout2));
+}
+
+test "drag: a strip whose place cannot take the view is not a chooser for it" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    const VD = fizzy.Editor.Layout.ViewDrag;
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    defer editor.app.layout.view_drag.discard();
+    VD.begin(&layout, "Center", .{ .w = 100, .h = 100 });
+    const strip: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 30 };
+    // A strip of a place the drag mapped no target for (a document pane, say) is passed over...
+    VD.offerChooser(&layout, "Pane 9", strip, true);
+    try std.testing.expect(VD.chooserAt(&editor.app.layout, .{ .x = 10, .y = 10 }) == null);
+    // ...and the place the view came out of always reads as one.
+    VD.offerChooser(&layout, "Center", strip, false);
+    const o = VD.chooserAt(&editor.app.layout, .{ .x = 10, .y = 10 }) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("Center", o.name);
+}
+
+test "split: trashing the last view of the half that was split merges the other half into it" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    try case.place("Center", "Center", .remove);
+    // One place again, the shape's, holding what the other half held.
+    try std.testing.expect(!case.ctx.editor.app.layout.isMinted(case.half));
+    try std.testing.expectEqual(@as(usize, 1), case.holds("Center").len);
+    try std.testing.expectEqualStrings("test.other", case.holds("Center")[0]);
+}
+
+test "split: trashing the last view of the minted half closes it" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{"test.other"});
+    defer case.deinit();
+    try case.place(case.half, case.half, .remove);
+    try std.testing.expect(!case.ctx.editor.app.layout.isMinted(case.half));
+    try std.testing.expectEqualStrings("test.view", case.holds("Center")[0]);
+}
+
+test "split: an empty half dropped in a place's middle goes, merging into the other" {
+    // The minted half, empty, onto the one with a view.
+    {
+        var case = try SplitCase.init(&.{"test.view"}, &.{});
+        defer case.deinit();
+        try case.place(case.half, "Center", .swap);
+        try std.testing.expect(!case.ctx.editor.app.layout.isMinted(case.half));
+        try std.testing.expectEqualStrings("test.view", case.holds("Center")[0]);
+    }
+    // The half that was split, empty, onto the minted one: one place, holding its view.
+    {
+        var case = try SplitCase.init(&.{}, &.{"test.other"});
+        defer case.deinit();
+        try case.place("Center", case.half, .swap);
+        try std.testing.expect(!case.ctx.editor.app.layout.isMinted(case.half));
+        try std.testing.expectEqualStrings("test.other", case.holds("Center")[0]);
+    }
+    // Two empty halves: one consumes the other, one empty place left.
+    {
+        var case = try SplitCase.init(&.{}, &.{});
+        defer case.deinit();
+        try case.place(case.half, "Center", .swap);
+        try std.testing.expect(!case.ctx.editor.app.layout.isMinted(case.half));
+        try std.testing.expectEqual(@as(usize, 0), case.holds("Center").len);
+    }
+}
+
+test "split: an empty half dropped on a place's edge moves there" {
+    var case = try SplitCase.init(&.{"test.view"}, &.{});
+    defer case.deinit();
+    try case.place(case.half, "Center", .{ .split = .left });
+    const state = &case.ctx.editor.app.layout;
+    // Gone from the right, opened on the left: still one empty half beside Center.
+    try std.testing.expect(!state.isMinted(case.half));
+    const moved = state.siblingLeaf("Center") orelse return error.TestExpectedEqual;
+    try std.testing.expect(state.isMinted(moved));
+    try std.testing.expectEqual(@as(usize, 0), case.holds(moved).len);
+    try std.testing.expectEqualStrings("test.view", case.holds("Center")[0]);
 }
 
 test "a view-drag from a multi place moves only the visible surface" {
@@ -3637,6 +3930,24 @@ test "drop: the middle, each side and the trash are their bubbles; off them, not
     try std.testing.expect(DZ.at(plain, plain.bubble(.remove).c) == null);
 }
 
+test "drop: a carried drop chooses the bubble it is into, wherever the finger is" {
+    const w = DZ.wheel(.{ .x = 0, .y = 0, .w = 800, .h = 600 }, 1, true);
+    const r: f32 = 52;
+    // A drop riding up and left of a finger, its middle just past the left bubble's rim: the
+    // finger is off every bubble, the drop is into the left one.
+    const left = w.bubble(.{ .edge = .left });
+    const c: dvui.Point.Physical = .{ .x = left.c.x - left.r - r * 0.5, .y = left.c.y };
+    const finger: dvui.Point.Physical = .{ .x = c.x + r, .y = c.y + r };
+    try std.testing.expect(DZ.at(w, finger) == null);
+    try std.testing.expect(DZ.atDisc(w, c, r).?.eql(.{ .edge = .left }));
+    // Touching none of them, it chooses none.
+    try std.testing.expect(DZ.atDisc(w, .{ .x = 20, .y = 20 }, r) == null);
+    // Over the middle, the middle: the nearest for their sizes, not the first it touches.
+    try std.testing.expect(DZ.atDisc(w, .{ .x = 410, .y = 300 }, r).?.eql(.center));
+    // A point reads as it always has.
+    try std.testing.expect(DZ.atDisc(w, .{ .x = 400, .y = 300 }, 0).?.eql(.center));
+}
+
 test "drop: settled bubbles stand clear of each other" {
     const w = DZ.wheel(.{ .x = 0, .y = 0, .w = 800, .h = 600 }, 1, true);
     for (DZ.all, 0..) |a, i| for (DZ.all[i + 1 ..]) |b| {
@@ -3664,6 +3975,66 @@ test "liquid blob: far apart it is its discs; close together it bridges them" {
     const close = [_]LB.Disc{ .{ .c = .{ .x = 0, .y = 0 }, .r = 10 }, .{ .c = .{ .x = 22, .y = 0 }, .r = 10 } };
     try std.testing.expect(LB.field(&close, 8, .{ .x = 11, .y = 0 }).d < 0);
     try std.testing.expect(LB.field(&close, 0.5, .{ .x = 11, .y = 0 }).d > 0);
+}
+
+test "liquid field: a rounded box's outline is its rect with its own corner per corner" {
+    const LF = fizzy.core.LiquidField;
+    var f: LF = .{};
+    // 100 x 60, a 20 radius at the top left and none elsewhere.
+    f.add(.{ .rect = .{ .x = 0, .y = 0, .w = 100, .h = 60 }, .radii = .{ 20, 0, 0, 0 } });
+    try std.testing.expectApproxEqAbs(@as(f32, -30), f.sample(.{ .x = 50, .y = 30 }).d, 0.01);
+    // On a straight side, and just outside it.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), f.sample(.{ .x = 50, .y = 0 }).d, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), f.sample(.{ .x = 50, .y = 60 }).coverage, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), f.sample(.{ .x = 50, .y = 60.5 }).coverage, 0.01);
+    // The square corners are square; the round one cuts its corner off.
+    try std.testing.expect(f.sample(.{ .x = 99.5, .y = 59.5 }).d < 0);
+    try std.testing.expect(f.sample(.{ .x = 1, .y = 1 }).d > 0);
+    const at45: f32 = 20.0 - 20.0 / std.math.sqrt2;
+    try std.testing.expectApproxEqAbs(@as(f32, 0), f.sample(.{ .x = at45, .y = at45 }).d, 0.01);
+    try std.testing.expect(f.hit(.{ .x = 50, .y = 30 }) and !f.hit(.{ .x = 2, .y = 2 }));
+}
+
+test "liquid field: shapes bridge within the merge width, swell no more than a quarter of it, and part beyond" {
+    const LF = fizzy.core.LiquidField;
+    var f: LF = .{ .merge_px = 16 };
+    f.add(LF.Shape.circle(.{ .x = 0, .y = 0 }, 20));
+    f.add(LF.Shape.circle(.{ .x = 46, .y = 0 }, 20));
+    // A 6px gap, under half the merge width: bridged across the middle (the smooth minimum
+    // deepens by at most k/4 there, so a gap closes below k/2).
+    try std.testing.expect(f.sample(.{ .x = 23, .y = 0 }).d < 0);
+    // Part them past the merge width: two drops again, the gap clear.
+    f.shapes[1] = LF.Shape.circle(.{ .x = 60, .y = 0 }, 20);
+    try std.testing.expect(f.sample(.{ .x = 30, .y = 0 }).d > 0);
+    try std.testing.expectApproxEqAbs(@as(f32, -20), f.sample(.{ .x = 0, .y = 0 }).d, 0.01);
+    // Many piled on one spot swell the outline by at most k/4.
+    var pile: LF = .{ .merge_px = 16 };
+    for (0..6) |_| pile.add(LF.Shape.circle(.{ .x = 0, .y = 0 }, 20));
+    try std.testing.expect(pile.sample(.{ .x = 20 + 16.0 / 4.0 + 0.01, .y = 0 }).d > 0);
+    // Across a bridge the materials blend: a lit drop's light runs into the neck.
+    var lit: LF = .{ .merge_px = 16 };
+    var a = LF.Shape.circle(.{ .x = 0, .y = 0 }, 20);
+    a.light = 1;
+    lit.add(a);
+    lit.add(LF.Shape.circle(.{ .x = 46, .y = 0 }, 20));
+    const mid = lit.sample(.{ .x = 23, .y = 0 }).light;
+    try std.testing.expect(mid > 0 and mid < 1);
+}
+
+test "liquid field: groups are the shapes that touch, each drawn as its own quad" {
+    const LF = fizzy.core.LiquidField;
+    var f: LF = .{ .merge_px = 10 };
+    f.add(LF.Shape.circle(.{ .x = 0, .y = 0 }, 10));
+    f.add(LF.Shape.circle(.{ .x = 300, .y = 0 }, 10));
+    f.add(LF.Shape.circle(.{ .x = 22, .y = 0 }, 10));
+    const g = f.clusters();
+    try std.testing.expectEqual(@as(usize, 2), g.count);
+    try std.testing.expectEqual(@as(u8, 2), g.size[0]);
+    try std.testing.expectEqual(@as(u8, 1), g.size[1]);
+    // The uniforms are the shader's `uData`: its header, then three vec4s a shape.
+    try std.testing.expectEqual(@as(usize, (7 + 3 * LF.max_shapes) * 16), @sizeOf(LF.Uniforms));
+    const u = f.pack(.{ .x = 0, .y = 0, .w = 400, .h = 100 }, false, g.order[0..f.len]);
+    try std.testing.expectEqual(@as(f32, 22), u.shapes[1][0][0]);
 }
 
 test "liquid glass: the rings of a pane run the way dvui's paths do" {

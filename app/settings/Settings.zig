@@ -91,6 +91,11 @@ motion: f32 = 1,
 /// 0.5 as written. Never stops motion — that is `motion` at 0.
 motion_speed: f32 = core.motion.default_speed,
 
+/// Whether glass is drawn by the glass program (`core.LiquidField`) where the backend has one —
+/// shapes that run together, in one pass a pixel — rather than by its meshes. On; a switch to
+/// compare the two.
+glass_shader: bool = true,
+
 /// Canvas zoom/pan control scheme shared by the image viewer, pixi, and any other
 /// `CanvasWidget` consumer. `auto` picks mouse vs trackpad from `dvui.mouseType()`.
 input_scheme: InputScheme = .auto,

@@ -55,6 +55,8 @@ pub const SavedFrame = struct {
     y: f64 = 0,
     w: f64 = 0,
     h: f64 = 0,
+    /// Left maximized (Windows, where `x`…`h` are the restored rect it maximizes from).
+    maximized: bool = false,
     regions: []const SavedRegion = &.{},
     /// Live seed-tree arrangement (`DockLayout.snapshot`). Absent in files written before
     /// the seed form, and while a shape still declares regions by call order.

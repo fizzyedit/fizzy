@@ -1247,10 +1247,70 @@ dvui.animation(id, "open", .{ .start_val = 0, .end_val = 1, .end_time = motion.d
 | `motion.duration(us)` / `durationMs(ms)` | a duration at this level: zero when off |
 | `motion.off()` | jump straight to the end — for motion stepped by hand |
 | `motion.liquid()` | 0…1: how much frosted glass's bevel refracts and catches light (`core.liquid_glass`) |
+| `core.Spring` | motion that follows a target moving every frame (the pointer): springy at playful, no overshoot at minimal, instant when off |
 
 The curves are plain `fn (f32) f32`, so they go wherever a `dvui.easing` function went. Frosted
 panes drawn through `BlurBackdrop.frostPane` (dialogs, menus, popovers) and the drop zones already
 follow the setting.
+
+### 3.14 Custom shaders — `core.programs`
+
+A plugin can draw with a GPU program of its own — a UI effect, a game's world under the UI. The
+backend compiles it; `core.programs` sends draws through it. The worked example is
+[`examples/shader-plugin`](../examples/shader-plugin): one surface of liquid metaballs that follow
+the pointer, about sixty lines of Zig and a shader.
+
+```zig
+const core = @import("core");
+
+var plasma: core.programs.Program = .fromGlsl(@embedFile("plasma.glsl"), .{ .uniform_vec4s = 1 });
+
+fn drawEffect(rect: dvui.Rect.Physical) void {
+    const t: f32 = @floatCast(@as(f64, @floatFromInt(dvui.frameTimeNS())) / 1e9);
+    if (!core.programs.drawRect(&plasma, rect, .{ .uniforms = &.{.{ t, rect.w, rect.h, 0 }} })) {
+        // No programs here (or still compiling): draw something else.
+    }
+    dvui.refresh(null, @src(), null); // it animates by itself
+}
+```
+
+**The shader** is a fragment shader in GLSL ES without a `#version` line, written against a
+prelude the backend adds, so one source builds for WebGL2 and WebGL1:
+
+| Name | What |
+|---|---|
+| `VARYING vec4 vColor` | the vertex colour, 0…1, premultiplied (`RectOptions.color`) |
+| `VARYING vec2 vTextureCoord` | the uv — `drawRect` runs it 0…1 across the rect (`RectOptions.uv`) |
+| `uniform sampler2D uSampler` | unit 0: the draw's own texture (`RectOptions.tex`) |
+| `uniform sampler2D uTex1`, `uTex2` | units 1 and 2 (`RectOptions.textures`) |
+| `uniform vec4 uData[MAX_VEC4]` | your uniforms, as many vec4s as you declared |
+| `TEX(s, uv)` | sample a texture |
+| `FRAG_COLOR` | the output, premultiplied |
+
+Output is blended by `RectOptions.blend`: `.over` (premultiplied, dvui's own), `.add`, `.copy`,
+or `.punch` — `dst · (1 − a)`, which followed by an `.add` of the same coverage replaces what is
+there with an anti-aliased edge (how `core.LiquidField` lays glass down).
+
+**Where it draws.** In order with everything around it: in a floating window it is queued with
+the window's drawing and replays in its place. To draw over what is already on the frame — glass,
+a distortion — capture it first (`core.widgets.BlurBackdrop`) and pass it as a texture, from a
+`dvui.deferRender` job so the capture sees everything under you.
+
+**When there are none.** `draw`/`drawRect` return false, drawing nothing, where the backend has
+no programs — dvui's own backends, a WebGL without high-precision fragment shaders, a native
+build before fizzy's SDL_GPU backend — or the program is still compiling (they compile in the
+background where the browser can, `KHR_parallel_shader_compile`). Always have a fallback.
+
+**Cost.** A program draw is a switch of program and its uniforms, set from the frame's own data,
+with your triangles in the frame's one vertex stream: no buffer of its own and nothing read back.
+Work per pixel rather than per vertex — one quad and a loop in the shader is the cheap way to
+draw many shapes. On a phone's Firefox, `core.LiquidField`'s drop zones (six bubbles and the
+carried view run together, frosted, refracting) cost a frame about 3 ms of CPU at 120 fps.
+
+**Glass of your own.** `core.LiquidField` is the liquid glass the app's surfaces are made of:
+rounded boxes (a circle, a capsule, a pane) that run together within `merge_px` and part like
+drops. Frost one with `core.widgets.BlurBackdrop.fieldPane`, or draw it over a capture of your own
+with `LiquidField.draw`.
 
 ## 4. Two plugins working together (`pixi` + `workbench`)
 

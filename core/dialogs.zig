@@ -141,6 +141,7 @@ pub fn frostPane(id: dvui.Id, rect: dvui.Rect.Physical, corners: dvui.CornerRect
         .mix = f.mix,
         .lift = f.lift,
         .detail = f.detail,
+        .refraction = f.refraction,
     });
     return true;
 }
@@ -174,6 +175,30 @@ pub fn carriedGlass(id: dvui.Id, r: dvui.Rect.Physical, scale: f32) void {
         r.fill(corners.scale(scale, dvui.CornerRect.Physical), .{ .color = .{ .color = dialogFill() }, .fade = 1 });
     }
     glassShadow(r, corners, scale, surfaceShadow(), 1);
+}
+
+/// `carriedGlass` for glass whose shapes run together (`LiquidField`) — the dragged view as a
+/// drop — frosted at the dialog style. False when the style has the blur off, or the glass program
+/// is not there to draw it: carry a card instead.
+pub fn carriedField(id: dvui.Id, field: widgets.LiquidField, scale: f32) bool {
+    const pane = widgets.liquidFrost() orelse return false;
+    widgets.BlurBackdrop.fieldPane(id, field, scale, pane);
+    return true;
+}
+
+/// Clear glass at the dialog style (`BlurBackdrop.Pane.clear`): its tint, lift and edge over what
+/// is behind, unblurred — glass for the blur off.
+pub fn clearFrost() widgets.BlurBackdrop.Pane {
+    const s = style();
+    return .{
+        .radius = widgets.BlurBackdrop.min_blur,
+        .refresh_ms = 0,
+        .tint = s.chromeColor(),
+        .mix = std.math.clamp(s.opacity, 0, 1),
+        .lift = std.math.clamp(s.lift, 0, 1) * lift_max,
+        .refraction = refraction(),
+        .clear = true,
+    };
 }
 
 /// Where a carried thing would go in among others — a tab strip's open slot: a rounded fill in
@@ -338,6 +363,7 @@ fn tooltipGlass(wd: *dvui.WidgetData, r: dvui.Rect.Physical, scale: f32, t: f32,
         .mix = f.mix,
         .lift = f.lift,
         .detail = f.detail,
+        .refraction = f.refraction,
         .form = t,
     });
 }
