@@ -16,6 +16,10 @@ const dvui = @import("dvui");
 
 const GpuRenderer = @import("GpuRenderer.zig");
 
+/// What an app gets from its window beyond drawing into it: native dialogs, files the OS hands
+/// over, trackpad gestures, the window's chrome and state (`src/backend/native/platform`).
+pub const platform = @import("platform");
+
 /// SDL3 only. Kept as a constant so the event code below stays a verbatim copy of dvui's
 /// `sdl.zig` (its `if (sdl3)` branches are the ones compiled).
 const sdl3 = true;

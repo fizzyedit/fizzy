@@ -163,6 +163,43 @@ fn fizzyNativeDvui(
     return .{ .dep = dep, .dvui = dvui_mod, .backend = backend };
 }
 
+/// The `platform` module (`src/backend/native/platform`) for each backend module: one per
+/// backend, as the backend itself is, since fizzy's backend imports it by name too.
+var platform_modules: std.AutoHashMapUnmanaged(*std.Build.Module, *std.Build.Module) = .empty;
+
+/// Window and platform pieces for apps on either SDL3 backend: dvui and the backend's SDL, plus
+/// zig-objc on macOS and zigwin32 on Windows. Fizzy's own backend imports it as well, so an app on
+/// that backend reaches it as `backend.platform`.
+fn platformModule(
+    b: *std.Build,
+    native: NativeDvui,
+    native_backend: NativeBackend,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Module {
+    if (platform_modules.get(native.backend)) |m| return m;
+    const m = b.createModule(.{
+        .root_source_file = b.path("src/backend/native/platform/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    m.addImport("dvui", native.dvui);
+    m.addImport("backend", native.backend);
+    switch (target.result.os.tag) {
+        .macos => if (b.lazyDependency("zig_objc", .{ .target = target, .optimize = optimize })) |dep| {
+            m.addImport("objc", dep.module("objc"));
+        },
+        .windows => if (b.lazyDependency("zigwin32", .{})) |dep| {
+            m.addImport("win32", dep.module("win32"));
+        },
+        else => {},
+    }
+    if (native_backend == .fizzy) native.backend.addImport("platform", m);
+    platform_modules.put(b.allocator, native.backend, m) catch @panic("OOM");
+    return m;
+}
+
 pub fn addFizzyExecutableForTarget(
     b: *std.Build,
     vz: velopack.Dep,
@@ -252,6 +289,7 @@ pub fn addFizzyExecutableForTarget(
 
     exe.root_module.addImport("dvui", dvui_mod);
     exe.root_module.addImport("backend", native.backend);
+    exe.root_module.addImport("platform", platformModule(b, native, native_backend, resolved_target, optimize));
 
     // Shared `core` module (gfx/math/fs/generated atlas/platform/paths/dvui hub +
     // generic widgets). Import set is shared with the plugin SDK path — see sdk/core_module.zig.
