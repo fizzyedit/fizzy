@@ -10,7 +10,6 @@ const sdl3 = @import("backend").c;
 const objc = @import("objc");
 const win32 = @import("win32");
 const singleton = @import("app").single_instance;
-const window_layout = @import("app").window.layout;
 const Constants = @import("../editor/Constants.zig");
 const KeybindSettings = @import("../editor/KeybindSettings.zig");
 const menu_model = @import("../editor/menu_model.zig");
@@ -59,220 +58,6 @@ pub fn installFileOpenEventHandling(win: *dvui.Window) void {
 }
 
 // AppKit geometry types for NSView frame/bounds (same layout as Foundation).
-const NSPoint = extern struct { x: f64, y: f64 };
-const NSSize = extern struct { width: f64, height: f64 };
-const NSRect = extern struct { origin: NSPoint, size: NSSize };
-
-// NSWindowStyleMaskFullSizeContentView = 1 << 15 — content view extends under titlebar so vibrancy can cover it.
-const NSWindowStyleMaskFullSizeContentView: c_ulong = 1 << 15;
-const ns_visual_effect_material: c_long = 15;
-
-// macOS window/Space monitor (objc/FizzyWindowMonitor.m). Tracks fullscreen
-// Space transitions, keeps chrome/layout state, and pumps frames during
-// AppKit window animations. Only referenced from macOS-gated code paths.
-extern fn fizzy_macos_window_titlebar_inset(cocoa_window: ?*anyopaque) f64;
-extern fn fizzy_macos_window_is_zoomed(cocoa_window: ?*anyopaque) c_int;
-extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_int;
-extern fn fizzy_macos_window_saved_titlebar_inset() f64;
-extern fn fizzy_macos_window_prefer_fullscreen_space(cocoa_window: ?*anyopaque) void;
-extern fn fizzy_macos_window_chrome_hidden(cocoa_window: ?*anyopaque) c_int;
-extern fn fizzy_macos_window_titlebar_strip_collapsed(cocoa_window: ?*anyopaque) c_int;
-extern fn fizzy_macos_window_resize_pump_active() c_int;
-extern fn fizzy_macos_window_unzoom_animating(cocoa_window: ?*anyopaque) c_int;
-extern fn fizzy_macos_window_space_transition_active() c_int;
-extern fn fizzy_macos_window_space_entering() c_int;
-extern fn fizzy_macos_window_space_has_target() c_int;
-extern fn fizzy_macos_window_pixel_size(cocoa_window: ?*anyopaque, out_w: *c_int, out_h: *c_int) void;
-extern fn fizzy_macos_window_point_size(cocoa_window: ?*anyopaque, out_w: *c_int, out_h: *c_int) void;
-// Frame-based geometry persistence for fizzy's custom (frame == content) window.
-extern fn fizzy_macos_window_current_windowed_frame(cocoa_window: ?*anyopaque, out4: [*]f64) void;
-extern fn fizzy_macos_window_set_frame(cocoa_window: ?*anyopaque, x: f64, y: f64, w: f64, h: f64) void;
-extern fn fizzy_macos_copy_screen_frames(out: [*]f64, max: c_int) c_int;
-extern fn fizzy_macos_window_sync_content_views(cocoa_window: ?*anyopaque) void;
-extern fn fizzy_macos_window_install_resize_observer(cocoa_window: ?*anyopaque) void;
-
-// SDL internals (linked but not in public headers) — the same hooks SDL uses
-// for macOS live resize while the window frame is animating.
-extern fn SDL_SendWindowEvent(window: *sdl3.SDL_Window, windowevent: c_uint, data1: c_int, data2: c_int) bool;
-extern fn SDL_OnWindowLiveResizeUpdate(window: *sdl3.SDL_Window) void;
-
-/// SDL window the monitor pump drives; set once in `restoreWindowState`.
-var macos_monitor_window: ?*sdl3.SDL_Window = null;
-/// Gates the pump's frame rendering until AppInit has finished, so the NSTimer
-/// can't drive a dvui frame before the app is fully initialized.
-var macos_pump_ready = false;
-/// Last sizes pushed into SDL during an AppKit resize animation.
-var macos_last_sync_point: [2]c_int = .{ 0, 0 };
-var macos_last_sync_pixel: [2]c_int = .{ 0, 0 };
-/// SDL_OnWindowLiveResizeUpdate can call back into appIterate — never invoke it
-/// while already inside a frame or live-resize update.
-var macos_in_live_resize: bool = false;
-
-fn cocoaWindowOf(window: *sdl3.SDL_Window) ?*anyopaque {
-    return sdl3.SDL_GetPointerProperty(
-        sdl3.SDL_GetWindowProperties(window),
-        sdl3.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
-        null,
-    );
-}
-
-fn macosTransitionSyncActive() bool {
-    return fizzy_macos_window_space_transition_active() != 0 or
-        fizzy_macos_window_unzoom_animating(null) != 0;
-}
-
-fn macosSpaceSyncAllowed() bool {
-    return macosTransitionSyncActive() or fizzy_macos_window_space_has_target() != 0;
-}
-
-fn macosSyncContentViews(window: *sdl3.SDL_Window) void {
-    if (cocoaWindowOf(window)) |cocoa| fizzy_macos_window_sync_content_views(cocoa);
-}
-
-/// Push AppKit's live sizes into SDL — SDL doesn't emit resize events during
-/// Space animations, and dvui's SDL backend pairs its reported sizes to the
-/// drawable, so this is what keeps layout sizes fresh mid-morph.
-fn macosSyncRendererSize(window: *sdl3.SDL_Window, force: bool) void {
-    const cocoa = cocoaWindowOf(window) orelse return;
-    var pw: c_int = 0;
-    var ph: c_int = 0;
-    var aw: c_int = 0;
-    var ah: c_int = 0;
-    fizzy_macos_window_point_size(cocoa, &pw, &ph);
-    fizzy_macos_window_pixel_size(cocoa, &aw, &ah);
-    if (aw < 1 or ah < 1) return;
-
-    if (force or pw > 0 and ph > 0 and (pw != macos_last_sync_point[0] or ph != macos_last_sync_point[1])) {
-        macos_last_sync_point = .{ pw, ph };
-        _ = SDL_SendWindowEvent(window, sdl3.SDL_EVENT_WINDOW_RESIZED, pw, ph);
-    }
-    if (force or aw != macos_last_sync_pixel[0] or ah != macos_last_sync_pixel[1]) {
-        macos_last_sync_pixel = .{ aw, ah };
-        _ = SDL_SendWindowEvent(window, sdl3.SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED, aw, ah);
-    }
-}
-
-/// Push AppKit sizes into SDL. Does not call SDL_OnWindowLiveResizeUpdate — safe
-/// from notification callbacks and from inside appIterate.
-fn macosSyncSizes(window: *sdl3.SDL_Window) void {
-    if (!macosSpaceSyncAllowed()) return;
-    macosSyncContentViews(window);
-    macosSyncRendererSize(window, false);
-}
-
-fn macosLiveResizeUpdate(window: *sdl3.SDL_Window) void {
-    if (macos_in_live_resize) return;
-    macos_in_live_resize = true;
-    defer macos_in_live_resize = false;
-    SDL_OnWindowLiveResizeUpdate(window);
-}
-
-/// Wake the SDL event loop from an AppKit notification. Sync sizes first so
-/// the next appIterate begin() sees transition-correct dimensions.
-export fn fizzy_macos_window_resize_cb() void {
-    if (comptime builtin.os.tag == .macos) {
-        if (macos_pump_ready) {
-            if (macos_monitor_window) |window| macosSyncSizes(window);
-        }
-    }
-    var ue = std.mem.zeroes(sdl3.SDL_Event);
-    ue.type = sdl3.SDL_EVENT_USER;
-    _ = sdl3.SDL_PushEvent(&ue);
-}
-
-/// Called from the monitor's 60Hz NSTimer during window animations — same
-/// approach SDL itself uses for live resize. Runs outside appIterate, so
-/// SDL_OnWindowLiveResizeUpdate is safe here.
-export fn fizzy_macos_window_pump_frame() void {
-    if (comptime builtin.os.tag == .macos) {
-        if (!macos_pump_ready) return;
-        const window = macos_monitor_window orelse return;
-        macosSyncSizes(window);
-        macosLiveResizeUpdate(window);
-    }
-}
-
-/// Sync AppKit → SDL before `Window.begin` during Space / zoom animations only.
-/// Registered on the SDL backend from `restoreWindowState`.
-fn macosAppPreBeginSync(back: *@import("backend").SDLBackend) void {
-    if (comptime builtin.os.tag != .macos) return;
-    if (!macos_pump_ready) return;
-    // Sync AppKit's live sizes into SDL during Space/zoom animations so dvui lays
-    // out at transition-correct dimensions. Geometry persistence is owned by fizzy
-    // (window.zon) and disabled in dvui, so there is nothing to toggle here.
-    if (!macosTransitionSyncActive()) return;
-    macosSyncContentViews(back.window);
-    macosSyncRendererSize(back.window, true);
-}
-
-/// Saved vsync setting while a manual live resize has it switched off.
-var macos_live_resize_saved_vsync: ?c_int = null;
-
-/// Frames during a manual live resize are paced by SDL's 60Hz timer inside AppKit's
-/// resize-tracking loop; a vsync-blocking present there only delays the tracker's next
-/// mouse event, so quick drags fall behind the pointer. Off for the drag, restored after.
-export fn fizzy_macos_window_live_resize_vsync(active: c_int) void {
-    if (comptime builtin.os.tag != .macos) return;
-    const window = macos_monitor_window orelse return;
-    // Fizzy's own backend sets its swapchain's present mode; dvui's SDL_Renderer one its renderer's.
-    const Backend = @import("backend");
-    if (comptime @hasDecl(Backend, "setWindowVSync")) {
-        if (active != 0) {
-            if (macos_live_resize_saved_vsync != null) return;
-            const vsync = Backend.windowVSync(window) orelse return;
-            macos_live_resize_saved_vsync = @intFromBool(vsync);
-            _ = Backend.setWindowVSync(window, false);
-        } else if (macos_live_resize_saved_vsync) |vsync| {
-            macos_live_resize_saved_vsync = null;
-            _ = Backend.setWindowVSync(window, vsync != 0);
-        }
-        return;
-    }
-    const renderer = sdl3.SDL_GetRenderer(window) orelse return;
-    if (active != 0) {
-        if (macos_live_resize_saved_vsync != null) return;
-        var vsync: c_int = 0;
-        if (!sdl3.SDL_GetRenderVSync(renderer, &vsync)) return;
-        macos_live_resize_saved_vsync = vsync;
-        _ = sdl3.SDL_SetRenderVSync(renderer, 0);
-    } else if (macos_live_resize_saved_vsync) |vsync| {
-        macos_live_resize_saved_vsync = null;
-        _ = sdl3.SDL_SetRenderVSync(renderer, vsync);
-    }
-}
-
-export fn fizzy_macos_window_reset_sync_cache() void {
-    macos_last_sync_point = .{ 0, 0 };
-    macos_last_sync_pixel = .{ 0, 0 };
-}
-
-/// Reconcile SDL's cached sizes and Metal drawable with live AppKit bounds.
-/// Called at didEnter/didExit so steady state never keeps transition sizes.
-export fn fizzy_macos_window_commit_steady_state() void {
-    if (comptime builtin.os.tag != .macos) return;
-    if (!macos_pump_ready) return;
-    const window = macos_monitor_window orelse return;
-    macos_last_sync_point = .{ 0, 0 };
-    macos_last_sync_pixel = .{ 0, 0 };
-    macosSyncContentViews(window);
-    macosSyncRendererSize(window, true);
-    macosLiveResizeUpdate(window);
-}
-
-export fn fizzy_macos_window_request_clear_frames(frames: c_int) void {
-    // dvui's SDL backend clears the window on every begin
-    // (clear_window_on_begin), so no extra clearing is needed.
-    _ = frames;
-}
-
-// Frame-based geometry persistence. fizzy's window is a frame == content window (full-size
-// content view), which dvui's content-based `WindowGeometry` can't represent — so fizzy persists
-// the actual NSWindow.frame (AppKit bottom-left points) itself, macOS-only, in `layout.zon`
-// beside the regions. dvui's own persistence is disabled (persist_window_geometry = false in
-// App.startOptions).
-/// `layout.zon` — what a shape's regions and window frame were left as. The file code lives in
-/// `layout_file.zig` over `core.fs`, so the web backend shares it; the macOS geometry save
-/// below is the one native-only writer.
 pub const SavedRegion = layout_file.SavedRegion;
 pub const SavedShows = layout_file.SavedShows;
 pub const saveRegions = layout_file.saveRegions;
@@ -284,196 +69,75 @@ const SavedFrame = layout_file.SavedFrame;
 const loadWindowFile = layout_file.loadWindowFile;
 const writeWindowFile = layout_file.writeWindowFile;
 
-/// The saved NSWindow frame, or null if there's none yet / it's degenerate (w/h < 1) — same
-/// contract `loadSavedFrame` had before the rename. macOS-only caller (`restoreWindowState`).
-fn loadSavedFrame(dir: []const u8) ?SavedFrame {
-    const gpa = std.heap.page_allocator;
-    const f = loadWindowFile(gpa, dir);
-    if (f.w < 1 or f.h < 1) {
-        std.zon.parse.free(gpa, f);
-        return null;
-    }
-    return f;
-}
-
-/// Read-modify-write: preserves whatever ratios are already on disk, overrides only the frame
-/// geometry. macOS-only caller (`saveWindowGeometry`).
-fn writeSavedFrame(dir: []const u8, x: f64, y: f64, w: f64, h: f64) void {
-    const gpa = std.heap.page_allocator;
-    var f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
-    f.x = x;
-    f.y = y;
-    f.w = w;
-    f.h = h;
-    writeWindowFile(dir, f);
-}
-
-/// True if the saved frame's title strip lands on a connected display (guards
-/// against restoring onto a monitor that was unplugged). macOS only.
-fn frameValidOnScreens(frame: window_layout.Rect) bool {
-    var raw: [8 * 4]f64 = undefined;
-    const n = fizzy_macos_copy_screen_frames(&raw, 8);
-    if (n <= 0) return false;
-    var screens: [8]window_layout.Rect = undefined;
-    var i: usize = 0;
-    const count: usize = @intCast(n);
-    while (i < count) : (i += 1) {
-        screens[i] = .{ .x = raw[i * 4 + 0], .y = raw[i * 4 + 1], .w = raw[i * 4 + 2], .h = raw[i * 4 + 3] };
-    }
-    return window_layout.frameTitleReachable(frame, screens[0..count]);
-}
-
-/// C-ABI for `FizzyWindowMonitor.m`'s `-constrainFrameRect:toScreen:` override.
-/// Returns 1 when AppKit's `constrained` result is just the menu-bar nudge of a
-/// top-anchored full-size-content window (which the monitor then undoes). Rects
-/// are AppKit screen coords (NSRect order); `visible_top` is NSMaxY(visibleFrame).
-/// Single source of truth shared with the unit tests in window_layout.zig.
-export fn fizzy_macos_constrain_is_menu_bar_nudge(
-    rx: f64,
-    ry: f64,
-    rw: f64,
-    rh: f64,
-    cx: f64,
-    cy: f64,
-    cw: f64,
-    ch: f64,
-    visible_top: f64,
-) c_int {
-    const is_nudge = window_layout.constrainResultIsMenuBarNudge(
-        .{ .x = rx, .y = ry, .w = rw, .h = rh },
-        .{ .x = cx, .y = cy, .w = cw, .h = ch },
-        visible_top,
-        40.0,
-        0.5,
-    );
-    return if (is_nudge) 1 else 0;
-}
-
-/// C-ABI for the post-exit origin re-assert: returns 1 when the current origin is
-/// AppKit's small exit nudge of the captured pre-fullscreen origin (so it should
-/// be re-asserted), 0 when already correct or moved too far to be the nudge.
-export fn fizzy_macos_origin_nudged(cap_x: f64, cap_y: f64, cur_x: f64, cur_y: f64) c_int {
-    return if (window_layout.originNudged(cap_x, cap_y, cur_x, cur_y, 64.0)) 1 else 0;
-}
-
-/// Applies the macOS window chrome, restores the saved window frame, installs the
-/// Space monitor, and registers the per-frame AppKit→SDL sync hook. Called from
-/// `AppInit` (dvui's `initFn`) while the window is still hidden, so the
-/// full-size-content-view style mask is in place — and the frame is restored on
-/// top of it — before the window is shown. No-op on non-macOS (Windows chrome is
-/// applied separately in AppInit).
-pub fn restoreWindowState(win: *dvui.Window) void {
-    platform.window.attach(win);
-    if (comptime builtin.os.tag == .windows) restoreWin32Placement(win);
-    if (comptime builtin.os.tag == .macos) {
-        const back = win.backend.impl;
-        const window = back.window;
-        const cocoa = cocoaWindowOf(window) orelse return;
-
-        // Establish frame == content first; then assert our saved frame on top of
-        // it, so the style mask's frame-resizing side effect can't corrupt it.
-        setWindowStyle(win);
-
-        if (back.init_opts_save) |opts| {
-            if (opts.pref_path) |dir| {
-                if (loadSavedFrame(dir)) |f| {
-                    const r: window_layout.Rect = .{ .x = f.x, .y = f.y, .w = f.w, .h = f.h };
-                    if (frameValidOnScreens(r)) {
-                        fizzy_macos_window_set_frame(cocoa, f.x, f.y, f.w, f.h);
-                    }
-                }
-            }
-        }
-
-        // dvui no longer manages geometry (persist_window_geometry = false); fizzy
-        // owns it via window.zon.
-        macos_monitor_window = window;
-        // `begin_hook` is now a per-backend field (dvui moved it off the module).
-        back.begin_hook = macosAppPreBeginSync;
-        fizzy_macos_window_install_resize_observer(cocoa);
-    }
-}
-
-/// Persist the current windowed NSWindow.frame. Call at shutdown (AppDeinit) so
-/// the next launch restores the exact frame. No-op on non-macOS.
-pub fn saveWindowGeometry(win: *dvui.Window) void {
-    if (comptime builtin.os.tag == .windows) return saveWin32Placement(win);
-    if (comptime builtin.os.tag != .macos) return;
-    const back = win.backend.impl;
-    const dir = (back.init_opts_save orelse return).pref_path orelse return;
-    const cocoa = cocoaWindowOf(back.window) orelse return;
-    var out4: [4]f64 = .{0} ** 4;
-    fizzy_macos_window_current_windowed_frame(cocoa, &out4);
-    if (out4[2] < 1 or out4[3] < 1) return;
-    writeSavedFrame(dir, out4[0], out4[1], out4[2], out4[3]);
-}
-
-// Windows: the window's placement — its normal (restored) rect in workspace coordinates and
-// whether it is maximized — the way Windows itself remembers windows. Frame-based, as macOS's is:
-// fizzy's client area is the whole window (`WM_NCCALCSIZE`), which dvui's content-rect
-// persistence cannot represent.
-const WINDOWPLACEMENT = if (builtin.os.tag == .windows) win32.ui.windows_and_messaging.WINDOWPLACEMENT else void;
-
-fn saveWin32Placement(win: *dvui.Window) void {
-    if (comptime builtin.os.tag != .windows) return;
-    const dir = (win.backend.impl.init_opts_save orelse return).pref_path orelse return;
-    const hwnd: win32.foundation.HWND = @ptrCast(getWin32Hwnd(win) orelse return);
-    var wp = std.mem.zeroes(WINDOWPLACEMENT);
-    wp.length = @sizeOf(WINDOWPLACEMENT);
-    if (win32.ui.windows_and_messaging.GetWindowPlacement(hwnd, &wp) == 0) return;
-    const r = wp.rcNormalPosition;
-    if (r.right - r.left < 1 or r.bottom - r.top < 1) return;
-    const gpa = std.heap.page_allocator;
-    var f = loadWindowFile(gpa, dir);
-    defer std.zon.parse.free(gpa, f);
-    f.x = @floatFromInt(r.left);
-    f.y = @floatFromInt(r.top);
-    f.w = @floatFromInt(r.right - r.left);
-    f.h = @floatFromInt(r.bottom - r.top);
-    f.maximized = @as(u32, @bitCast(wp.showCmd)) == @as(u32, @bitCast(win32.ui.windows_and_messaging.SW_SHOWMAXIMIZED)) or
-        wp.flags.RESTORETOMAXIMIZED != 0;
-    writeWindowFile(dir, f);
-}
-
-fn restoreWin32Placement(win: *dvui.Window) void {
-    if (comptime builtin.os.tag != .windows) return;
-    const dir = (win.backend.impl.init_opts_save orelse return).pref_path orelse return;
-    const hwnd: win32.foundation.HWND = @ptrCast(getWin32Hwnd(win) orelse return);
-    const f = loadSavedFrame(dir) orelse return;
-    defer std.zon.parse.free(std.heap.page_allocator, f);
-    var rect: win32.foundation.RECT = .{
-        .left = @intFromFloat(f.x),
-        .top = @intFromFloat(f.y),
-        .right = @intFromFloat(f.x + f.w),
-        .bottom = @intFromFloat(f.y + f.h),
-    };
-    // Only onto a monitor that is still there.
-    if (win32.graphics.gdi.MonitorFromRect(&rect, win32.graphics.gdi.MONITOR_DEFAULTTONULL) == null) return;
-    var wp = std.mem.zeroes(WINDOWPLACEMENT);
-    wp.length = @sizeOf(WINDOWPLACEMENT);
-    // The window is still hidden: placed hidden, it shows where it was left when `showWindow`
-    // reveals it, maximized if it was (`restore_maximized`).
-    wp.showCmd = win32.ui.windows_and_messaging.SW_HIDE;
-    wp.rcNormalPosition = rect;
-    _ = win32.ui.windows_and_messaging.SetWindowPlacement(hwnd, &wp);
-    restore_maximized = f.maximized;
-}
-
-/// Show the window maximized when it is revealed: it was left that way (Windows).
-var restore_maximized = false;
-
 /// Reveal the window after chrome + geometry are settled (it is created hidden): maximized when it
 /// was left that way (Windows).
 pub fn showWindow(win: *dvui.Window) void {
-    platform.window.show(win, restore_maximized);
-    restore_maximized = false;
+    platform.window.show(win, platform.geometry.restoredMaximized());
 }
 
-/// Called at the end of AppInit: allows the monitor's pump timer to start
-/// driving dvui frames during window animations.
-pub fn macosLaunchComplete() void {
-    macos_pump_ready = true;
+/// Style the window (macOS: frame == content first), put it back where it was left
+/// (`platform.geometry`, kept in fizzy's `layout.zon`), and follow it through Spaces, zooms and
+/// live resizes (`platform.macos_monitor`). Called from `AppInit` while the window is still hidden:
+/// the frame is restored on top of the chrome, so the chrome's own resizing cannot move it.
+pub fn restoreWindowState(win: *dvui.Window) void {
+    platform.window.attach(win);
+    if (comptime builtin.os.tag == .macos) setWindowStyle(win);
+    if (win.backend.impl.init_opts_save) |opts| if (opts.pref_path) |dir| {
+        layout_store_dir = dir;
+        platform.geometry.setStore(.{ .load = layoutStoreLoad, .save = layoutStoreSave });
+    };
+    platform.geometry.restore(win);
+    platform.macos_monitor.install(win);
+}
+
+/// Keep where the window is for the next launch. Call at shutdown (AppDeinit).
+pub fn saveWindowGeometry(win: *dvui.Window) void {
+    platform.geometry.save(win);
+}
+
+/// Called at the end of AppInit: the monitor may drive frames through window animations now.
+pub const macosLaunchComplete = platform.macos_monitor.launchComplete;
+
+/// Fizzy keeps the window's geometry in `layout.zon`, beside its regions — one file for where the
+/// window and everything in it were left, and the file it has always kept the frame in.
+var layout_store_dir: []const u8 = "";
+
+fn layoutStoreLoad(_: ?*anyopaque) ?platform.geometry.Geometry {
+    const gpa = std.heap.page_allocator;
+    const f = loadWindowFile(gpa, layout_store_dir);
+    defer std.zon.parse.free(gpa, f);
+    if (f.w < 1 or f.h < 1) return null;
+    return .{ .x = f.x, .y = f.y, .w = f.w, .h = f.h, .state = if (f.maximized) .maximized else .normal };
+}
+
+fn layoutStoreSave(_: ?*anyopaque, g: platform.geometry.Geometry) void {
+    // Read-modify-write: the regions and tree on disk stay as they are.
+    const gpa = std.heap.page_allocator;
+    var f = loadWindowFile(gpa, layout_store_dir);
+    defer std.zon.parse.free(gpa, f);
+    f.x = g.x;
+    f.y = g.y;
+    f.w = g.w;
+    f.h = g.h;
+    f.maximized = g.state == .maximized;
+    writeWindowFile(layout_store_dir, f);
+}
+
+/// Height of the top strip that keeps editor content clear of the traffic lights: collapsed in a
+/// fullscreen Space, back early as the window leaves one so the traffic lights never overlap a
+/// pane mid-transition; a zoom without a Space keeps the full strip. Fizzy's titlebar heights
+/// over the window's state (`platform.macos_monitor.titlebarState`).
+pub fn titlebarStripHeight(win: *dvui.Window) f32 {
+    if (builtin.os.tag != .macos) return Constants.titlebar_height;
+    const t = platform.macos_monitor.titlebarState(win);
+    return platform.window_layout.chooseTitlebarStrip(.{
+        .collapsed = t.collapsed,
+        .restoring_chrome = t.restoring_chrome,
+        .live_inset = t.live_inset,
+        .saved_inset = t.saved_inset,
+        .titlebar_height = Constants.titlebar_height,
+        .titlebar_top_buffer = Constants.titlebar_top_buffer,
+    });
 }
 
 // NSEventModifierFlag for menu key equivalents (right-justified grey hotkey in menu)
@@ -666,33 +330,6 @@ fn fizzy_get_selector(name: [*:0]const u8) ?*anyopaque {
 /// Returns and clears a pending app-menu About click.
 pub fn pollPendingAbout() bool {
     return pending_native_menu_about.swap(false, .acq_rel);
-}
-
-/// Height of the top strip that keeps editor content clear of the traffic lights.
-/// Collapsed during fullscreen Space; expanded early when exiting so
-/// traffic lights don't overlap left-anchored panes mid-transition.
-/// Zoom/maximize without a Space keeps the full strip.
-pub fn titlebarStripHeight(win: *dvui.Window) f32 {
-    if (builtin.os.tag != .macos) return Constants.titlebar_height;
-    const raw_ptr = sdl3.SDL_GetPointerProperty(
-        sdl3.SDL_GetWindowProperties(win.backend.impl.window),
-        sdl3.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER,
-        null,
-    );
-    const collapsed = raw_ptr != null and fizzy_macos_window_titlebar_strip_collapsed(raw_ptr) != 0;
-    const inset = if (raw_ptr != null) fizzy_macos_window_titlebar_inset(raw_ptr) else 0;
-    const saved = fizzy_macos_window_saved_titlebar_inset();
-    const restoring_chrome = raw_ptr != null and (fizzy_macos_window_unzoom_animating(null) != 0 or
-        (fizzy_macos_window_space_transition_active() != 0 and
-            fizzy_macos_window_space_entering() == 0));
-    return window_layout.chooseTitlebarStrip(.{
-        .collapsed = collapsed,
-        .restoring_chrome = restoring_chrome,
-        .live_inset = if (inset > 0) @floatCast(inset) else 0,
-        .saved_inset = if (saved > 0) @floatCast(saved) else 0,
-        .titlebar_height = Constants.titlebar_height,
-        .titlebar_top_buffer = Constants.titlebar_top_buffer,
-    });
 }
 
 /// Override the SDL app metadata DVUI sets to its example defaults. On macOS this

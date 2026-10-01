@@ -102,11 +102,11 @@ fn startOptions() dvui.App.StartOptions {
         // settle geometry before the window is shown — no unstyled flash. AppInit
         // calls `fizzy.backend.showWindow` once everything is in place.
         opts.hidden = true;
-        // fizzy owns geometry for its custom (frame == content) window on macOS and Windows —
-        // dvui's content-based persistence can't represent it (see backend.restoreWindowState
-        // / saveWindowGeometry). On Linux the window manager draws an ordinary frame, which dvui's
-        // persistence handles; elsewhere it is off so the two don't fight.
-        opts.persist_window_geometry = builtin.os.tag == .linux;
+        // The window's geometry is kept by frame, not by content rect (`platform.geometry`), and in
+        // `layout.zon` beside the layout — fizzy's chrome changes how the two relate after the
+        // window is made, which dvui's content-rect persistence cannot follow. Off, so the two don't
+        // fight.
+        opts.persist_window_geometry = false;
         // The app's own name, version and id, before SDL starts: the macOS app menu is built
         // from them (About / Hide / Quit <name>), where the backend's defaults are an example's.
         fizzy.backend.setSdlAppMetadata(AppInfo.display_name_z, app_version_z, AppInfo.bundle_id_z);

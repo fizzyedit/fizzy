@@ -1,10 +1,6 @@
-//! Pure window-layout decisions extracted from the macOS windowing code
-//! (`backend_native.zig` + `objc/FizzyWindowMonitor.m`), so the "+/- titlebar
-//! height" math is testable without a window. std-only — its own `b.addTest`
-//! root in `build/app.zig`, and called from `backend_native.zig` (which keeps
-//! the AppKit/SDL plumbing). Fizzy/native-windowing infra (not pixel-art), so it
-//! lives at `src/backend/window_layout.zig` beside `backend_native.zig` rather
-//! than under `internal/`.
+//! Pure window-layout decisions from the macOS windowing code (`macos_monitor.zig` +
+//! `macos/window_monitor.m`, `geometry.zig`), so the "+/- titlebar height" math is testable
+//! without a window. std-only — its own `b.addTest` root in `build/app.zig`.
 
 const std = @import("std");
 

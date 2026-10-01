@@ -10,3 +10,6 @@ pub const open_events = @import("open_events.zig");
 pub const gestures = @import("gestures.zig");
 pub const window = @import("window.zig");
 pub const win32_titlebar = @import("win32_titlebar.zig");
+pub const geometry = @import("geometry.zig");
+pub const macos_monitor = @import("macos_monitor.zig");
+pub const window_layout = @import("window_layout.zig");
