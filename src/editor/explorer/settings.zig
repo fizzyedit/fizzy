@@ -302,6 +302,16 @@ pub const groups = [_]Group{
                 .keywords = "fps performance diagnostics",
                 .draw = drawFps,
             },
+            .{
+                .label = "Live drop glass",
+                .key = "drop_glass_live",
+                .description = "Drop zones re-read and re-blur what is under them every frame. " ++
+                    "Off, each blurs what is under it once as it forms — cheaper on a phone, " ++
+                    "but anything moving under the glass looks still until it forms again.",
+                .keywords = "fps performance blur frost glass drop zones drag",
+                .draw = drawDropGlassLive,
+                .inline_control = true,
+            },
         },
     },
 };
@@ -655,6 +665,19 @@ fn drawPluginUpdateMode() void {
 }
 
 // ---- Debugging --------------------------------------------------------------------------
+
+fn drawDropGlassLive() void {
+    const editor = fizzy.editor();
+    if (dvui.checkbox(@src(), &editor.app.settings.drop_glass_live, null, .{
+        .expand = .none,
+        .gravity_y = 0.5,
+        .margin = .{ .x = 4, .w = 4 },
+        .padding = .{ .x = 2, .w = 4, .y = 2, .h = 2 },
+    })) {
+        editor.markSettingsDirty();
+        dvui.refresh(null, @src(), null);
+    }
+}
 
 fn drawFps() void {
     // `perf_logging` / `debug_simulate_update_available` live in Constants.zig (build-time flags,

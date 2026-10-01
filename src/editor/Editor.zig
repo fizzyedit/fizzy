@@ -3449,6 +3449,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
     fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion());
+    fizzy.core.widgets.DropZones.publishLive(editor.app.settings.drop_glass_live);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
         PluginLoader.pump();

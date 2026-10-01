@@ -108,6 +108,20 @@ pub const fit: f32 = 0.45;
 /// aimed at a bubble's rim is aimed at the bubble.
 const reach: f32 = 1.25;
 
+/// Whether drops read what is under them again every frame, published by the app each frame
+/// (its `drop_glass_live` setting). Off, a drop blurs what is under it as it forms and keeps that
+/// while it sits still: no read and blur a frame, and on the web no offscreen frame for it.
+pub fn publishLive(on: bool) void {
+    if (dvui.current_window == null) return;
+    dvui.dataSet(null, live_id, "_drop_glass_live", on);
+}
+
+fn live() bool {
+    return dvui.dataGet(null, live_id, "_drop_glass_live", bool) orelse true;
+}
+
+const live_id: dvui.Id = @enumFromInt(0xd70b_9a55);
+
 /// Where the drop sits over `bounds`: in its middle. `remove` offers the trash.
 pub fn wheel(bounds: dvui.Rect.Physical, scale: f32, remove: bool) Wheel {
     const room = @min(bounds.w, bounds.h) * fit / extent;
@@ -375,8 +389,9 @@ fn blob(id: dvui.Id, discs: []const liquid_blob.Disc, k: f32, area: dvui.Rect.Ph
     backdrop.mode = .readback;
     backdrop.radius_px = job.pane.radius;
     backdrop.detail = job.pane.detail;
-    // Read every frame, as the dialogs' glass is: what moves under the drop moves in it.
-    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, dvui.currentWindow().frame_time_ns, job.pane.radius });
+    // Read every frame while live, as the dialogs' glass is: what moves under the drop moves in it
+    // (`live`). Otherwise read again only as the drop's area or blur changes.
+    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, if (live()) dvui.currentWindow().frame_time_ns else 0, job.pane.radius });
     job.backdrop = backdrop;
     dvui.deferRender(job, BlobJob.draw);
 }
@@ -567,9 +582,10 @@ fn glass(id: dvui.Id, panes: []const Pane, area: dvui.Rect.Physical, g: f32, sca
     backdrop.mode = .readback;
     backdrop.radius_px = job.pane.radius;
     backdrop.detail = job.pane.detail;
-    // Read every frame, as the dialogs' glass is: what moves under the drop — a logo following
-    // the pointer — moves in it at the frame rate, not in steps a few times a second.
-    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, job.now, job.pane.radius });
+    // Read every frame while live, as the dialogs' glass is: what moves under the drop — a logo
+    // following the pointer — moves in it at the frame rate (`live`). Otherwise read again only as
+    // the drop's area or blur changes.
+    backdrop.init(dvui.windowRectScale().rectFromPhysical(bounds), .{ bounds, if (live()) job.now else 0, job.pane.radius });
     job.backdrop = backdrop;
     dvui.deferRender(job, LayerJob.draw);
 }

@@ -91,6 +91,11 @@ motion: f32 = 1,
 /// 0.5 as written. Never stops motion — that is `motion` at 0.
 motion_speed: f32 = core.motion.default_speed,
 
+/// Whether the glass over a drag — the drop zones — reads what is under it again every frame
+/// (`core.widgets.DropZones.publishLive`). Off, a drop blurs what is under it as it forms and keeps
+/// that while it sits still. On for now; a switch to measure what the per-frame read costs.
+drop_glass_live: bool = true,
+
 /// Canvas zoom/pan control scheme shared by the image viewer, pixi, and any other
 /// `CanvasWidget` consumer. `auto` picks mouse vs trackpad from `dvui.mouseType()`.
 input_scheme: InputScheme = .auto,
