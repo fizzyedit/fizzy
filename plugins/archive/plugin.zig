@@ -1,6 +1,6 @@
 //! The archive plugin: a `.zip` opens as a mounted folder. The tab that opens is the mount's
-//! handle — its name, the files inside with which of them changed, and a way to take the archive
-//! back —
+//! handle — its name, how much of it changed, and a way to take the archive back (saving a file
+//! inside writes it into the mount; saving the tab writes the archive) —
 //! while the files inside are browsed, opened, edited, created and deleted in the explorer
 //! exactly like a folder on disk, because to the host they are one (`Host.mount`).
 //!
@@ -71,6 +71,39 @@ pub fn register(host: *sdk.Host) !void {
 
     try host.registerPlugin(&plugin);
     try host.registerFileKind(.{ .owner = &plugin, .kind = fileKind });
+    // Owned, so it goes with this plugin's image if the plugin is unloaded at runtime.
+    try host.registerFileRowDecorator(.{ .owner = &plugin, .ctx = st, .draw = drawChangedMark });
+}
+
+/// In the file tree: a dot on each file inside an open archive that differs from the archive as
+/// last read or saved — saved into the mount, not yet into the `.zip`. A file still open with
+/// unsaved edits has the explorer's own dot instead; showing both would say the same file is in
+/// two states at once.
+fn drawChangedMark(ctx: ?*anyopaque, path: []const u8, id_extra: usize) void {
+    const st: *State = @ptrCast(@alignCast(ctx orelse return));
+    for (st.docs.values()) |*doc| {
+        if (!doc.mounted) continue;
+        if (!std.mem.startsWith(u8, path, doc.prefix)) continue;
+        const inner = path[doc.prefix.len..];
+        if (inner.len == 0 or inner[0] != '/') continue;
+        for (doc.entries()) |entry| {
+            if (!std.mem.eql(u8, entry.path, inner)) continue;
+            if (entry.status == .unchanged or entry.status == .deleted) return;
+            if (sdk.host().docFromPath(path)) |open_doc| {
+                if (open_doc.owner.isDirty(open_doc)) return;
+            }
+            core.icon.icon(@src(), "archive_changed", dvui.entypo.dot_single, .{
+                .fill_color = .{ .color = dvui.themeGet().color(.highlight, .fill) },
+            }, .{
+                .gravity_x = 1.0,
+                .gravity_y = 0.5,
+                .min_size_content = .{ .w = 12, .h = 12 },
+                .id_extra = id_extra,
+            });
+            return;
+        }
+        return;
+    }
 }
 
 pub fn pluginPtr() *sdk.Plugin {
@@ -174,84 +207,34 @@ fn documentDefaultSaveAsFilename(_: *anyopaque, handle: DocHandle, allocator: st
 
 fn drawDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
     const doc = docFrom(handle) orelse return;
-    const theme = dvui.themeGet();
-    const arena = sdk.host().arena();
-
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
-    defer scroll.deinit();
-    var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(24), .background = false });
+    var box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(24), .background = false });
     defer box.deinit();
 
-    const list = doc.entries();
-    var changed: usize = 0;
     var files: usize = 0;
-    for (list) |e| {
+    var changed: usize = 0;
+    for (doc.entries()) |e| {
         if (e.status != .deleted) files += 1;
         if (e.status != .unchanged) changed += 1;
     }
 
+    const arena = sdk.host().arena();
     dvui.labelNoFmt(@src(), std.fs.path.basename(doc.path), .{}, .{ .font = dvui.Font.theme(.title) });
     const summary = if (changed == 0)
-        std.fmt.allocPrint(arena, "{s} — {d} file{s}, unchanged.", .{ doc.prefix, files, if (files == 1) "" else "s" }) catch ""
+        std.fmt.allocPrint(arena, "Open as {s} — {d} file{s}, unchanged since it was {s}.", .{
+            doc.prefix, files, if (files == 1) "" else "s", if (doc.saved_once) "saved" else "opened",
+        }) catch ""
     else
-        std.fmt.allocPrint(arena, "{s} — {d} file{s}, {d} changed. Save this tab to write the archive back{s}.", .{
-            doc.prefix,                                                               files,
-            if (files == 1) "" else "s",                                               changed,
-            if (builtin.target.cpu.arch == .wasm32) " as a download" else "",
+        std.fmt.allocPrint(arena, "Open as {s} — {d} file{s}, {d} changed since it was {s}.", .{
+            doc.prefix, files, if (files == 1) "" else "s", changed, if (doc.saved_once) "saved" else "opened",
         }) catch "";
-    dvui.labelNoFmt(@src(), summary, .{}, .{
-        .color_text = .{ .color = theme.color(.control, .text) },
-        .margin = .{ .y = 2, .h = 12 },
+    dvui.labelNoFmt(@src(), summary, .{}, .{});
+    dvui.labelNoFmt(@src(), if (changed == 0)
+        "Its files are in the explorer. Saving one writes it into the archive's folder; saving this tab writes the archive."
+    else
+        "Changed files are marked in the explorer. Save this tab to write them into the archive" ++
+            (if (builtin.target.cpu.arch == .wasm32) " as a download." else "."), .{}, .{
+        .color_text = .{ .color = dvui.themeGet().color(.control, .text) },
     });
-
-    for (list, 0..) |entry, i| {
-        if (fileRow(entry, i, theme) and entry.status != .deleted) {
-            const full = std.fmt.allocPrint(arena, "{s}{s}", .{ doc.prefix, entry.path }) catch continue;
-            _ = sdk.host().openFile(.{ .path = full }) catch |err| dvui.log.err("archive: could not open {s}: {t}", .{ full, err });
-        }
-    }
-}
-
-/// One file in the archive: its path, and a mark when it differs from the archive as last read
-/// or written — the dot a dirty tab shows for a change, a word for a file added or gone.
-/// Returns whether it was clicked.
-fn fileRow(entry: Document.Entry, index: usize, theme: dvui.Theme) bool {
-    var bw: dvui.ButtonWidget = undefined;
-    bw.init(@src(), .{}, .{
-        .id_extra = index,
-        .expand = .horizontal,
-        .margin = .{ .y = 1, .h = 1 },
-        .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-        .corners = .all(6),
-    });
-    defer bw.deinit();
-    bw.processEvents();
-    bw.drawBackground();
-
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
-    defer row.deinit();
-
-    const gone = entry.status == .deleted;
-    const text = if (gone) theme.color(.control, .text).opacity(0.5) else theme.color(.content, .text);
-    // The path inside the archive, without its leading slash.
-    const shown = if (entry.path.len > 1 and entry.path[0] == '/') entry.path[1..] else entry.path;
-    dvui.labelNoFmt(@src(), shown, .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = text } });
-
-    switch (entry.status) {
-        .unchanged => {},
-        .modified => core.icon.icon(@src(), "archive_dirty", dvui.entypo.dot_single, .{ .fill_color = .{ .color = theme.color(.highlight, .fill) } }, .{
-            .gravity_y = 0.5,
-            .min_size_content = .{ .w = 14, .h = 14 },
-            .margin = .{ .x = 4 },
-        }),
-        .added, .deleted => dvui.labelNoFmt(@src(), if (gone) "deleted" else "new", .{}, .{
-            .gravity_y = 0.5,
-            .margin = .{ .x = 8 },
-            .font = dvui.Font.theme(.body).larger(-2),
-            .color_text = .{ .color = if (gone) theme.color(.err, .fill) else theme.color(.highlight, .fill) },
-        }),
-    }
-    return bw.clicked();
 }
 
 fn infobarEntries(_: *anyopaque, active_doc: ?DocHandle) []const sdk.infobar.Entry {

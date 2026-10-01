@@ -1,7 +1,6 @@
 //! One opened archive: its contents unpacked into a `Mem` and mounted at `zip://<name>`, and
-//! the tab that stands for the mount. The tab lists what is inside and which of it has changed
-//! since the archive was opened or last saved; the files are opened and edited from there or from
-//! the explorer, like any other folder.
+//! the tab that stands for the mount. The files themselves are in the explorer, like any other
+//! folder, each marked there when it differs from the archive as last read or saved.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -20,6 +19,8 @@ mem: *core.vfs.Mem,
 /// `mem.generation` when the archive was last read or written, so dirty is "changed since".
 clean_generation: u64,
 mounted: bool = false,
+/// Whether the archive has been written since it was read: what "changed since" counts from.
+saved_once: bool = false,
 /// Each file's content hash when the archive was last read or written, by path inside it: what
 /// "changed" means file by file. `Mem` keeps one counter for the whole tree.
 clean_hashes: std.StringArrayHashMapUnmanaged(u64) = .empty,
@@ -117,6 +118,7 @@ pub fn pack(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
 
 pub fn markClean(self: *Document) void {
     self.clean_generation = self.mem.generation;
+    self.saved_once = true;
     self.snapshotClean() catch |err| dvui.log.err("archive: could not record {s} as saved: {t}", .{ self.prefix, err });
 }
 
