@@ -850,6 +850,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // The framework itself, for what is tested against a bare window rather than through fizzy
     // (demo automation's player).
     integration_module.addImport("app", app_module_test);
+    // The hand-written sample tape `docs/AUTOMATION.md` points at, so it cannot rot.
+    integration_module.addAnonymousImport("demo_sample_tape", .{ .root_source_file = b.path("docs/demos/hello.zon") });
 
     const integration_tests = b.addTest(.{
         .name = "fizzy-integration-tests",

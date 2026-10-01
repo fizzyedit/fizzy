@@ -1,0 +1,41 @@
+// A demo tape written by hand: the format `app.automation.Tape` reads (`Tape.parse`) and writes
+// (`Tape.write`), and what a recorder will produce. Play it on the web with
+// `?demo=<url of this file>`; see docs/AUTOMATION.md for every field.
+//
+// Times are demo milliseconds. Each op names what it aims at by anchor (a `dvui.tag`), never by
+// pixel, so the tape plays at any window size.
+.{
+    .name = "hello",
+    .title = "Hello from a tape",
+    .keyframes = .{
+        .{
+            .root = "demo://hello",
+            .files = .{
+                .{ .path = "hello.md", .text = "# Hello\n\nThis file came from a tape.\n" },
+            },
+            .open = .{"hello.md"},
+            .settings = .{
+                .{ .owner = "markdown", .key = "default_md_view", .value = ".split" },
+            },
+        },
+    },
+    .chapters = .{
+        .{ .at = 0, .title = "Hello" },
+        .{ .at = 4200, .title = "Typing" },
+    },
+    .captions = .{
+        .{ .at = 300, .ms = 3600, .title = "Hello from a tape", .text = "Nothing here is compiled in: this demo is a ZON file the page fetched.", .place = .middle },
+        .{ .at = 4200, .ms = 4000, .text = "Every keystroke is a real one — the preview follows along." },
+    },
+    .ops = .{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } },
+        .{ .at = 0, .do = .{ .wait = .{ .until = .{ .shown = "text.editor:demo://hello/hello.md" } } } },
+        .{ .at = 3000, .ms = 700, .do = .{ .move = .{ .tag = "text.editor:demo://hello/hello.md", .x = 0.85, .y = 0.94 } } },
+        .{ .at = 3800, .do = .{ .press = .left } },
+        .{ .at = 3890, .do = .{ .release = .left } },
+        .{ .at = 4200, .ms = 2600, .do = .{ .type = "\n- written by a tape\n- played by fizzy\n" } },
+        .{ .at = 7400, .do = .{ .key = "mod+a" } },
+        .{ .at = 8200, .do = .{ .key = "right" } },
+    },
+}

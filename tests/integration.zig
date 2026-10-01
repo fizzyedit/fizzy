@@ -4349,3 +4349,37 @@ test "demo: real pointer motion does not move the tape's pointer while it plays"
     try std.testing.expectEqual(p.x, dvui.currentWindow().mouse_pt.x);
     try std.testing.expectEqual(p.y, dvui.currentWindow().mouse_pt.y);
 }
+
+test "demo: every bundled demo builds into a valid tape" {
+    for (fizzy.Editor.Demo.catalog.entries) |e| {
+        var s: automation.Script = .init(std.testing.allocator, e.name, e.title);
+        e.build(&s) catch |err| {
+            s.deinit();
+            return err;
+        };
+        var owned = try s.finish();
+        defer owned.deinit();
+        try std.testing.expect(owned.tape.duration() > 5000);
+        try std.testing.expect(owned.tape.chapters.len > 0);
+        // Its files mount under its own name — `demo://<name>`, what the web's `?demo=` says.
+        try std.testing.expect(std.mem.endsWith(u8, owned.tape.keyframes[0].root, e.name));
+    }
+}
+
+test "demo: the hand-written sample tape parses and round-trips" {
+    const source = @embedFile("demo_sample_tape");
+    var owned = try automation.Tape.parse(std.testing.allocator, source);
+    defer owned.deinit();
+    try std.testing.expectEqualStrings("hello", owned.tape.name);
+    try std.testing.expectEqualStrings(".split", owned.tape.keyframes[0].settings[0].value);
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try owned.tape.write(&out.writer);
+    const again = try std.testing.allocator.dupeZ(u8, out.written());
+    defer std.testing.allocator.free(again);
+    var back = try automation.Tape.parse(std.testing.allocator, again);
+    defer back.deinit();
+    try std.testing.expectEqual(owned.tape.ops.len, back.tape.ops.len);
+    try std.testing.expectEqual(owned.tape.duration(), back.tape.duration());
+}

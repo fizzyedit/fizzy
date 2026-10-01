@@ -222,13 +222,24 @@ fn drawPreviewTogglePill(doc: *Document, id_extra: u64) void {
 
 fn drawPreviewPillButton(doc: *Document, label: []const u8, mode: Document.PreviewMode, id_extra: u64) void {
     const active = doc.preview_mode == mode;
-    if (dvui.button(@src(), label, .{}, .{
+    // `dvui.button` spelled out, so a demo can find the button: `text.preview.split:<path>`.
+    const opts: dvui.Options = .{
         .background = active,
         .style = if (active) .highlight else .control,
         .font = pillFont(),
         .padding = .{ .x = 6, .y = 1, .w = 6, .h = 1 },
         .id_extra = @intCast(id_extra),
-    })) {
+    };
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(@src(), .{}, opts);
+    core.anchor.mark(bw.data(), "text.preview.{t}:{s}", .{ mode, doc.path });
+    bw.processEvents();
+    bw.drawBackground();
+    const clicked = bw.clicked();
+    dvui.labelNoFmt(@src(), label, .{ .align_x = 0.5, .align_y = 0.5 }, opts.strip().override(bw.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
+    bw.drawFocus();
+    bw.deinit();
+    if (clicked) {
         // Each button names a mode outright — the old pair toggled *and* selected, so the same
         // click meant different things depending on the state you couldn't see.
         doc.preview_mode = mode;
@@ -320,6 +331,7 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         .color_text = .{ .color = dvui.themeGet().color(.content, .text) },
         .id_extra = @intCast(id_extra + 1),
     }));
+    core.anchor.mark(te.data(), "text.editor:{s}", .{doc.path});
     // Not deferred: `pending_scroll_line` below needs to run *after* `te.deinit()` (which is
     // what actually commits `te.scroll.si.virtual_size` for this frame — see that block's
     // comment), so it's called explicitly near the bottom of this function instead.

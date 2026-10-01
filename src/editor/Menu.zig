@@ -175,6 +175,7 @@ fn drawModelItem(
                 .keybind = hotkey,
                 .enabled = enabled,
                 .id_extra = id_extra,
+                .command = c.id,
             }) != null) {
                 run(c.id);
                 fw.close();
@@ -225,6 +226,7 @@ fn drawRecentFolders(editor: *Editor, id_extra: usize) !void {
 
 pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opts: widgets.MenuItemWidget.InitOptions, opts: dvui.Options) ?dvui.Rect.Natural {
     var mi = widgets.menuItem(src, init_opts, rowOptions(opts));
+    fizzy.core.anchor.mark(mi.data(), "fizzy.menu:{s}", .{label_str});
 
     var ret: ?dvui.Rect.Natural = null;
     if (mi.activeRect()) |r| {

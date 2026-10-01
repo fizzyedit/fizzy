@@ -107,6 +107,8 @@ pub fn addSteps(
         "FizzyWebStartupPluginsRequested",
         "FizzyWebOpenBytes",
         "FizzyWebShowInRoot",
+        // `?demo=`: a bundled demo by name, or a fetched tape (`Editor.Demo`).
+        "FizzyWebPlayDemo",
         "__stack_pointer",
         "dvui_c_alloc",
         "dvui_c_free",

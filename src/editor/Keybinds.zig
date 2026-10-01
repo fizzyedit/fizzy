@@ -165,7 +165,49 @@ const fizzy_commands = [_]FizzyCommand{
     .{ .id = "fizzy.about", .title = "About Fizzy", .bind = null, .run = cmdAbout, .icon = icons.tvg.lucide.download },
     .{ .id = "fizzy.reportBug", .title = "Report a Bug", .bind = null, .run = cmdReportBug, .icon = icons.tvg.lucide.bug },
     .{ .id = "fizzy.toggleProfiler", .title = "Toggle Profiler", .bind = null, .run = cmdToggleProfiler, .icon = icons.tvg.lucide.gauge },
-} ++ open_folder_commands ++ demo_commands;
+} ++ open_folder_commands ++ demo_commands ++ automation_commands;
+
+/// Demo automation (`Editor.Demo`): one command per bundled demo, and the transport for whichever
+/// is loaded — so the palette plays, pauses and stops a demo, and a key can be bound to each.
+const automation_commands = [_]FizzyCommand{
+    .{ .id = "fizzy.demo.playPause", .title = "Demo: Play / Pause", .bind = null, .run = cmdDemoPlayPause, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-play" },
+    .{ .id = "fizzy.demo.restart", .title = "Demo: Restart", .bind = null, .run = cmdDemoRestart, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"rotate-ccw" },
+    .{ .id = "fizzy.demo.stop", .title = "Demo: Stop", .bind = null, .run = cmdDemoStop, .isEnabled = demoLoaded, .icon = icons.tvg.lucide.@"circle-stop" },
+} ++ demoCatalogCommands();
+
+fn demoCatalogCommands() [Editor.Demo.catalog.entries.len]FizzyCommand {
+    var out: [Editor.Demo.catalog.entries.len]FizzyCommand = undefined;
+    for (Editor.Demo.catalog.entries, &out) |d, *c| c.* = .{
+        .id = "fizzy.demo." ++ d.name,
+        .title = "Demo: " ++ d.title,
+        .bind = null,
+        .run = struct {
+            fn run(state: *anyopaque) anyerror!void {
+                try editorFromState(state).demo.play(d.name);
+            }
+        }.run,
+        .icon = icons.tvg.lucide.@"circle-play",
+    };
+    return out;
+}
+
+fn demoLoaded(state: *anyopaque) bool {
+    return editorFromState(state).demo.active();
+}
+
+fn cmdDemoPlayPause(state: *anyopaque) anyerror!void {
+    editorFromState(state).demo.player.toggle();
+}
+
+fn cmdDemoRestart(state: *anyopaque) anyerror!void {
+    const player = &editorFromState(state).demo.player;
+    player.seek(0);
+    player.play();
+}
+
+fn cmdDemoStop(state: *anyopaque) anyerror!void {
+    editorFromState(state).demo.player.unload();
+}
 
 /// Debug builds only: see `Editor.dvui_demo`.
 const demo_commands = if (Editor.dvui_demo) [_]FizzyCommand{
@@ -184,6 +226,7 @@ const open_folder_commands = if (is_web) [_]FizzyCommand{} else [_]FizzyCommand{
 // commands the same key. Comptime because the table is comptime — a test would be strictly
 // weaker than just refusing to compile.
 comptime {
+    @setEvalBranchQuota(4000);
     for (fizzy_commands, 0..) |a, i| {
         for (fizzy_commands[i + 1 ..]) |b| {
             if (std.mem.eql(u8, a.id, b.id)) {
