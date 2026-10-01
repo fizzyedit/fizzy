@@ -605,6 +605,10 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
+        // Demo automation's std-only core: the tape format, the sequencer that replays it
+        // deterministically, and the script builder. The dvui half (`automation/Player.zig`) is
+        // covered by `tests/integration.zig`.
+        .{ "fizzy-automation-tests", "app/automation_tests.zig" },
     }) |entry| {
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = entry[0],
