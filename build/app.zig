@@ -847,6 +847,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .root_source_file = dvui_testing_dep.path("src/Examples/tree_sitter_zig_queries.scm"),
     });
     integration_module.addImport("fizzy_sdk", sdk_module_test);
+    // The framework itself, for what is tested against a bare window rather than through fizzy
+    // (demo automation's player).
+    integration_module.addImport("app", app_module_test);
 
     const integration_tests = b.addTest(.{
         .name = "fizzy-integration-tests",

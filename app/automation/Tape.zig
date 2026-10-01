@@ -64,7 +64,7 @@ pub const Action = union(enum) {
     press: Button,
     /// A pointer button comes up where the pointer is.
     release: Button,
-    /// Wheel ticks at the pointer: positive scrolls up (`y`) or left (`x`).
+    /// Wheel ticks at the pointer: positive scrolls up (`y`) or right (`x`), as dvui counts them.
     scroll: Scroll,
     /// Press and release a key chord in the keymap's spelling: `"enter"`, `"mod+s"`,
     /// `"mod+k mod+c"`. Delivered as key events, to whatever has focus.
