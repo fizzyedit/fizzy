@@ -115,6 +115,16 @@ pending_scroll_line: ?u32 = null,
 /// preview, `.preview` never draws the editor. Dropped unconsumed at the end of a frame that
 /// drew no preview, so turning one on later doesn't replay a jump from minutes ago.
 pending_preview_line: ?u32 = null,
+/// The preview following the caret — `LanguageSupport.previewFollow`: the caret's line and how
+/// far down the editor's view it sits (0 top, 1 bottom). Set by `TextEditor.drawEditor` when the
+/// caret moves to another line or the text changes while the preview shares the pane, consumed by
+/// `TextEditor.drawPreviewPane` in the same frame, and dropped like `pending_preview_line` when
+/// nothing draws a preview.
+pending_preview_follow: ?struct { line: u32, at: f32 } = null,
+/// The caret byte the preview last followed, so an unmoved caret asks nothing of it — the preview
+/// is the reader's to scroll until the caret moves again. Null until the first follow, so the
+/// preview starts where the caret is.
+followed_caret: ?usize = null,
 
 /// Owned completion candidates for the current completion list, if any — each `.label`/`.text`
 /// is a copy (`sdk.language.CompletionItem` fields from `sdk.host().completionFor(...)` are

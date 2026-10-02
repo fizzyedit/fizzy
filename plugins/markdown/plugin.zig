@@ -53,6 +53,7 @@ const language_vtable: sdk.LanguageSupport.VTable = .{
     .supportsPreview = supportsPreview,
     .previewPane = previewPane,
     .previewReveal = previewReveal,
+    .previewFollow = previewFollow,
 };
 
 var markdown_api: sdk.services.markdown.Api = .{
@@ -100,6 +101,14 @@ fn previewReveal(state: *anyopaque, ext: []const u8, path: []const u8, line: u32
     _ = path;
     const st: *State = @ptrCast(@alignCast(state));
     st.previewFor(sdk.allocator(), id_extra).revealLine(line);
+}
+
+/// Follow the caret in the source beside this pane's preview — same bookkeeping as a reveal.
+fn previewFollow(state: *anyopaque, ext: []const u8, path: []const u8, line: u32, at: f32, id_extra: u64) void {
+    _ = ext;
+    _ = path;
+    const st: *State = @ptrCast(@alignCast(state));
+    st.previewFor(sdk.allocator(), id_extra).followLine(line, at);
 }
 
 fn previewPane(state: *anyopaque, ext: []const u8, path: []const u8, bytes: []const u8, id_extra: u64, gpa: std.mem.Allocator) !void {

@@ -2184,6 +2184,11 @@ pub fn anchorResolve(rs: *const RenderState, a: Anchor, column_width: f32, origi
     return rs.blocks.resolveAnchor(a, currentMetrics(), column_width, origin_y, max_scroll);
 }
 
+/// An anchor putting source `line` `at_px` below the viewport top — see `Table.anchorForLineAt`.
+pub fn anchorForLineAt(rs: *const RenderState, line: u32, at_px: f32, column_width: f32) ?Anchor {
+    return rs.blocks.anchorForLineAt(line, at_px, currentMetrics(), column_width);
+}
+
 /// Turn the settled scroll offset back into an anchor, after the scroll area has committed.
 pub fn anchorCapture(rs: *const RenderState, viewport_y: f32, column_width: f32, origin_y: f32, max_scroll: f32) ?Anchor {
     return rs.blocks.captureAnchor(viewport_y, currentMetrics(), column_width, origin_y, max_scroll);

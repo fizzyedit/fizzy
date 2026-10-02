@@ -149,6 +149,9 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
         // No preview on screen to consume it. Drop it rather than let it sit until the user
         // opens the preview and gets yanked to a heading they clicked on ages ago.
         doc.pending_preview_line = null;
+        doc.pending_preview_follow = null;
+        // And follow from scratch when it opens: it starts where the caret is.
+        doc.followed_caret = null;
     }
 
     return changed;
@@ -176,13 +179,20 @@ fn drawPreviewPane(
 ) !void {
     const hook = provider.vtable.previewPane orelse return;
     const owner = provider.owner orelse return;
-    // Before the draw, so the provider can apply it on this very frame rather than the next.
+    // Before the draw, so the provider can apply it on this very frame rather than the next. A
+    // reveal (a heading clicked, a definition jumped to) is where the reader asked to go, so it
+    // wins over following the caret that the same jump moved.
     if (doc.pending_preview_line) |line| {
         if (provider.vtable.previewReveal) |reveal| {
             reveal(owner.state, ext, doc.path, line, id_extra);
         }
         doc.pending_preview_line = null;
+    } else if (doc.pending_preview_follow) |f| {
+        if (provider.vtable.previewFollow) |follow| {
+            follow(owner.state, ext, doc.path, f.line, f.at, id_extra);
+        }
     }
+    doc.pending_preview_follow = null;
     try hook(owner.state, ext, doc.path, doc.text.items, id_extra, gpa);
 }
 
@@ -388,6 +398,7 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
 
     doc.sel_start = te.textLayout.selection.start;
     doc.sel_end = te.textLayout.selection.end;
+    const caret = te.textLayout.selection.cursor;
     // Read before `te.deinit()` below, same as the selection: fizzy's Copy/Paste routing
     // asks the owner whether the verb is enabled, and this is the owner's answer to "is focus
     // mine?" (see `Document.editor_focused`).
@@ -454,6 +465,20 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
 
     if (scroll_reappeared or had_pending_scroll_line) dvui.refresh(null, @src(), scroll_widget_id);
     doc.scroll_y = scroll_si.viewport.y;
+
+    // The preview beside the source follows the caret: when it moves to another place or the
+    // text changes, the preview is asked to keep the caret's line as far down its view as the
+    // caret is down this one (`LanguageSupport.previewFollow`). Asked after this frame's own
+    // scroll has settled — the editor keeping the caret in view moves where it sits — and only
+    // on a change, so between moves the preview scrolls freely. The line is counted only then,
+    // too: it is a walk over the text.
+    if (doc.preview_mode == .split and (text_changed or doc.followed_caret != caret)) {
+        doc.followed_caret = caret;
+        const line = doc.lineCharacterForByteOffset(caret).line;
+        const y = editor_pad_y + @as(f32, @floatFromInt(line)) * line_height - scroll_si.viewport.y;
+        const view_h = scroll_si.viewport.h;
+        doc.pending_preview_follow = .{ .line = line, .at = if (view_h > 0) std.math.clamp(y / view_h, 0, 1) else 0 };
+    }
 
     return text_changed;
 }

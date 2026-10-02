@@ -66,6 +66,14 @@ pub const LanguageSupport = struct {
         /// still moves. Nothing guarantees the pane has ever been drawn for this `id_extra` yet,
         /// so treat it as "remember this and apply it when you next draw".
         previewReveal: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, line: u32, id_extra: u64) void = null,
+        /// Keep 0-based source `line` at `at` of the preview's height — 0 its top, 1 its bottom —
+        /// which is where the caret sits in the source view beside it, so the preview follows the
+        /// caret as it moves and as text is typed. Called just before `previewPane`, on the frames
+        /// the caret moved to another line or the text changed while source and preview share the
+        /// pane; never alongside a `previewReveal`, which wins. Like a reveal it is one-shot: the
+        /// preview scrolls freely between calls, and only the next move of the caret brings it
+        /// back. A provider that cannot map a line to its own layout leaves this null.
+        previewFollow: ?*const fn (state: *anyopaque, ext: []const u8, path: []const u8, line: u32, at: f32, id_extra: u64) void = null,
         /// Non-blocking: called when the text editor opens (or reloads) a document. Intended
         /// for language-server warmup — spawn the server and send `textDocument/didOpen` so
         /// analysis can start before the first hover/completion, rather than paying cold-start

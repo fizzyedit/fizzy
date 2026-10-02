@@ -537,6 +537,25 @@ pub const Table = struct {
         return best;
     }
 
+    /// An anchor that puts source `line` `at_px` below the viewport top — the preview following
+    /// the caret, which sits that far down the source view.
+    ///
+    /// The line lands inside its block by how far through the block's source lines it is: a
+    /// caret halfway down a long paragraph is halfway down the paragraph's height, not on its
+    /// first line, so typing down through one moves the preview a little at a time rather than
+    /// holding still and then jumping a block. A line past the block's last (the blank lines
+    /// before the next) is its bottom. Null before any block has a line.
+    pub fn anchorForLineAt(self: *const Table, line: u32, at_px: f32, m: Metrics, column_width: f32) ?Anchor {
+        const idx = self.blockForLine(line) orelse return null;
+        const e = self.extents.items[idx];
+        const h = self.heightAt(idx, m, column_width);
+        const into: f32 = if (e.lines > 0)
+            std.math.clamp(@as(f32, @floatFromInt(line - e.start_line)) / @as(f32, @floatFromInt(e.lines)), 0, 1)
+        else
+            0;
+        return .{ .hash = e.hash, .line = e.start_line, .offset_px = into * h - at_px };
+    }
+
     /// Where an anchor points, as a scroll offset against the *current* heights.
     ///
     /// Clamped to `max_scroll` by the caller's reckoning rather than by a stale internal total —
@@ -1438,4 +1457,29 @@ test "clear resets the width so the next layout re-invalidates" {
     try testing.expect(!t.invalidateForWidth(600));
     t.clear();
     try testing.expect(t.invalidateForWidth(600));
+}
+
+test "anchorForLineAt places a line inside its block, at the asked height" {
+    const gpa = testing.allocator;
+    var t: Table = .{};
+    defer t.deinit(gpa);
+    t.appendExtent(gpa, .{ .lines = 1, .bytes = 10, .start_line = 0, .kind = .heading, .hash = 11 });
+    t.appendExtent(gpa, .{ .lines = 4, .bytes = 200, .start_line = 2, .kind = .paragraph, .hash = 22 });
+    const m = tm;
+    const w: f32 = 400;
+    const h1 = t.heightAt(1, m, w);
+
+    // The paragraph's first line, 100px down the view: the block's top 100px down.
+    const a = t.anchorForLineAt(2, 100, m, w).?;
+    try testing.expectEqual(@as(u64, 22), a.hash);
+    try testing.expectEqual(@as(u32, 2), a.line);
+    try testing.expectApproxEqAbs(@as(f32, -100), a.offset_px, 0.001);
+
+    // Its third line is half way through its four: half its height further in.
+    const b = t.anchorForLineAt(4, 100, m, w).?;
+    try testing.expectApproxEqAbs(h1 * 0.5 - 100, b.offset_px, 0.001);
+
+    // A blank line after it counts as its bottom, not past it.
+    const c = t.anchorForLineAt(9, 0, m, w).?;
+    try testing.expectApproxEqAbs(h1, c.offset_px, 0.001);
 }

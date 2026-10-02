@@ -33,6 +33,10 @@ pub const Preview = struct {
     /// The offset `applyAnchor` last wrote. Anything else finding a different one there means the
     /// position was set from outside the frame loop — see `applyAnchor`.
     anchor_applied_y: ?f32 = null,
+    /// The caret in the source beside the preview, to follow: its line, and how far down the
+    /// source view it sits (0 top, 1 bottom). Set by `followLine`, turned into the anchor by
+    /// `applyAnchor` once there is a layout to place it in, then dropped.
+    follow: ?struct { line: u32, at: f32 } = null,
     /// The last viewport height the scroll area actually had. dvui sizes a widget from what its
     /// children reported the frame before, so a window *height* change (a vertical resize drag)
     /// can hand the scroll area a zero-height rect for a frame while the layout re-settles — and a
@@ -86,6 +90,13 @@ pub const Preview = struct {
         self.anchor_applied_y = null;
     }
 
+    /// Keep 0-based source `line` at `at` of the view's height (0 top, 1 bottom): where the caret
+    /// sits in the source view beside it. Lands with the next frame's anchor, as a reveal does,
+    /// and is just as authoritative; the reader scrolls freely again until the next call.
+    pub fn followLine(self: *Preview, line: u32, at: f32) void {
+        self.follow = .{ .line = line, .at = std.math.clamp(at, 0, 1) };
+    }
+
     /// The column width the heights were last laid out at, and the scroll room they imply.
     ///
     /// Both come from the *previous* frame, which is the point: the anchor has to be turned into
@@ -105,6 +116,17 @@ pub const Preview = struct {
 
     fn applyAnchor(self: *Preview, opts: PreviewOptions) void {
         const geo = self.anchorGeometry(opts) orelse return;
+
+        // Following the caret: the line it is on, as far down this view as the caret is down the
+        // source's. Set as the anchor and marked authoritative, the way a reveal is, so the
+        // adopt-check below does not take the reader's last scroll position over it.
+        if (self.follow) |f| {
+            self.follow = null;
+            if (render_ast.anchorForLineAt(&self.rs, f.line, f.at * @max(self.scroll.viewport.h, self.last_viewport_h), geo.column_w)) |a| {
+                self.anchor = a;
+                self.anchor_applied_y = null;
+            }
+        }
 
         // Did anything move the scroll position *between* frames? `scrollToOffset` from a
         // command, dvui scrolling a focused widget into view, a caller restoring a saved
