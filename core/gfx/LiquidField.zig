@@ -153,7 +153,9 @@ pub const Uniforms = extern struct {
     face: [4]f32,
     /// Dither amplitude.
     dither: [4]f32,
-    reserved: [4]f32 = @splat(0),
+    /// 1 where the window is opaque behind its content (`publishOpaqueWindow`): the glass is
+    /// then opaque, whatever the alpha of the picture it covers.
+    backdrop: [4]f32 = @splat(0),
     shapes: [max_shapes][shape_vec4s][4]f32,
 
     pub fn vec4s(self: *const Uniforms) [*]const [4]f32 {
@@ -195,6 +197,7 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
         .tint = tint,
         .face = .{ std.math.clamp(self.mix, 0, 1), std.math.clamp(self.lift, 0, 1), if (self.tint != null) 1 else 0, if (has_sharp) 1 else 0 },
         .dither = .{ 1.0 / 255.0, 0, 0, 0 },
+        .backdrop = .{ if (opaqueWindow()) 1 else 0, 0, 0, 0 },
         .shapes = undefined,
     };
     @memset(std.mem.asBytes(&u.shapes), 0);
@@ -242,6 +245,21 @@ fn enabled() bool {
 }
 
 const enabled_id: dvui.Id = @enumFromInt(0x6c69_7166);
+
+/// Whether the window is opaque behind its content — no desktop material shows through it (Linux,
+/// the web) — published each frame by the app. The glass is as see-through as what it covers
+/// where the window is translucent over the desktop's material (macOS's vibrancy, Windows'
+/// Acrylic); where it is opaque, the alpha in its picture is only the window's shape — its
+/// rounded corners, the margin its shadow is drawn in — and glass near those edges, blurring that
+/// alpha in, let whatever is behind the window through. Opaque, the glass is opaque.
+pub fn publishOpaqueWindow(on: bool) void {
+    if (dvui.current_window == null) return;
+    dvui.dataSet(null, enabled_id, "_liquid_opaque_window", on);
+}
+
+fn opaqueWindow() bool {
+    return dvui.dataGet(null, enabled_id, "_liquid_opaque_window", bool) orelse false;
+}
 
 /// Whether `draw` would draw now: programs here, switched on, compiled.
 pub fn ready() bool {

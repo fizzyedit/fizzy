@@ -121,12 +121,24 @@ float4 main(PSInput input) : SV_Target0
     float2 uv = clamp((p + outv * (g2.x * lens * steepR) - g0.xy) * g0.zw, 0.0, 1.0);
     float4 frost = Frost.SampleLevel(FrostSampler, uv, 0.0);
     float4 sharp = g4.w > 0.5 ? Sharp.SampleLevel(SharpSampler, uv, 0.0) : frost;
+    // Worked out over an opaque picture of what the glass covers, then made exactly as
+    // see-through as that is (`under`): over a translucent window (vibrancy, Acrylic) the
+    // desktop's material shows through the glass as much as through the window round it. Laid
+    // over the translucent picture as it was, the rim — where the clear glass lies over the
+    // frost — came out more opaque than the face, and the material lit the face and not the rim.
+    // Opaque where the window is (`LiquidField.publishOpaqueWindow`): its alpha is only its shape.
+    float under = uData[6].x > 0.5 ? 1.0 : frost.a;
+    frost = float4(frost.rgb / max(frost.a, 1e-4), 1.0);
+    sharp = float4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
     float mixv = g4.z > 0.5 ? g4.x * b : 0.0;
     float4 c = lerp(sharp, frost, b) * (1.0 - mixv);
     float a = clamp(g2.y * lens * steepR * steepR * (1.0 - mixv), 0.0, 1.0);
     c = sharp * a + c * (1.0 - sharp.a * a);
     c += g3 * mixv;
+    // A translucent tint lies over the frost, not over what is behind the window: the glass is
+    // opaque here, and `under` alone says how much of the desktop's material shows through it.
+    c += frost * (1.0 - c.a);
     float facing = dot(outv, float2(-0.70710678, -0.70710678));
     float toward = max(facing, 0.0);
     float away = max(-facing, 0.0);
@@ -137,5 +149,5 @@ float4 main(PSInput input) : SV_Target0
     c += (float4)clamp(lift + lens * g2.w * lit, 0.0, 1.0);
     c = clamp(c, 0.0, 1.0);
     c.rgb += (noise(p) - 0.5) * g5.x * c.a;
-    return clamp(c, 0.0, 1.0) * cov;
+    return clamp(c, 0.0, 1.0) * (under * cov);
 }

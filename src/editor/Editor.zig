@@ -3512,6 +3512,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion() or editor.demo.fast);
     fizzy.core.programs.publishHost();
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
+    // Translucent over the desktop's material on macOS and Windows; opaque elsewhere, where the
+    // window's alpha is only its shape (`LiquidField.publishOpaqueWindow`).
+    fizzy.core.LiquidField.publishOpaqueWindow(builtin.os.tag != .macos and builtin.os.tag != .windows);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
         PluginLoader.pump();
