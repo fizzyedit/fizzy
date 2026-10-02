@@ -63,6 +63,27 @@ only a seek that takes longer than 150 ms says "Catching up…". `zig build benc
 (ReleaseFast, the text editor's widget over a 400-line file): a frame costs about 0.9 ms, so
 replaying a three-minute recording — 281 frames — takes 31 displayed frames where it took 281.
 
+**Snapshots make the way back short.** While the tape drives, at calm moments — nothing gliding
+or typing, nothing held, the app idle — the player asks the stage for the app's model: once a
+scene has settled after its keyframe, at every chapter, and every 3 s of demo time. A seek back
+goes to the nearest one before the moment and replays only from there, the app put back in place
+rather than cut to its keyframe and reloaded. Fizzy's snapshot holds the demo's files as saved,
+each open document's state from its owner (`captureDocumentState`: contents, caret, scroll),
+which is active, the explorer and its open folders, every plugin's settings, and focus; restoring
+one closes what was opened since and puts the rest back where it sits. It is restored only into
+the scene it came from with its documents still open — otherwise the player tries the snapshot
+before it, and a seek forward simply carries on — and taken only while nothing is loading and the
+palette is shut. **The scrubber seeks as it is dragged**, not only when let go: with a snapshot
+every few seconds, each move replays a second or two of demo and lands in the frame it was made.
+`zig build bench-replay` (ReleaseFast): 32 random seeks across a three-minute recording land in
+2.5 ms on average and 5.3 ms at worst from snapshots, against 76 ms and 225 ms from the keyframe.
+
+**A demo that does not replay exactly is caught.** Each snapshot keeps a fingerprint of the
+model (`Stage.fingerprint`: documents' `documentFingerprint`, which is active, the explorer, the
+files); a replay that reaches the same moment again compares, and a mismatch is logged ("did not
+reach what playing did") and counted (`Player.mismatches`) — an unawaited load or an unnamed
+target, found rather than carried.
+
 **The app's clock follows the demo while it catches up.** Each silent run begins at the demo
 moment of the next thing the tape does (`Sequencer.nextAt`), so a press and its release are as
 far apart, and timers and debounces fire, as they did live. That leaves the app's clock ahead of
@@ -279,8 +300,9 @@ pub fn appFrame() !dvui.App.Result {
 
 `backendClock` finds a `clock_ahead_ns: i128` on the backend, which its `nanoTime` adds to the
 wall (fizzy's SDL and web backends have one); a backend without it still seeks silently, only
-with timers waiting for the wall. `src/editor/Demo.zig` and `src/Entry.zig` are the worked
-example.
+with timers waiting for the wall. Snapshots are four more, optional, `Stage` hooks — `capture`,
+`restore`, `release`, `fingerprint` — over whatever the app's model is; without them seeks go back
+to keyframes. `src/editor/Demo.zig` and `src/Entry.zig` are the worked example.
 
 ## Tests
 
@@ -292,13 +314,19 @@ example.
   lands exactly where live play did.
 - `zig build bench-tape` — saving and loading, ZON against binary (prints timings).
 - `zig build bench-replay` — a seek across recordings of a minute to ten, silent against shown a
-  frame at a time (prints timings).
+  frame at a time; and scrubbing — random seeks — from snapshots against from the keyframe
+  (prints timings).
 - `zig build test-integration` — `demo:` tests in `tests/integration.zig`: the player against a
   headless window with a tagged button and the text plugin's editor (plays as a person's input,
   rewinds to exactly the live state, a seek lands in the frame that asked for it with the app's
-  clock following the demo, a person's click pauses it and is undone on resume, real motion
-  cannot move the tape's pointer), every bundled demo builds, and `docs/demos/hello.zon` parses
-  and round-trips.
+  clock following the demo, a seek back restores the nearest snapshot instead of the keyframe and
+  the moments after it match the first pass, the scrubber follows as it is dragged, a replay that
+  differs is caught, a person's click pauses it and is undone on resume, real motion cannot move
+  the tape's pointer), every bundled demo builds, and `docs/demos/hello.zon` parses and
+  round-trips.
+- `zig build test` — `fizzy-text-doc-state-tests` (`plugins/text/src/doc_state.zig`): a text
+  document's snapshot state round-trips, a backwards selection with it, and damaged state is
+  refused.
 
 ## Next
 

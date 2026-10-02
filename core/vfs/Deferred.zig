@@ -75,6 +75,11 @@ pub fn cancel(self: *Deferred, job: Fs.Job) void {
     if (self.completions.remove(job.id)) |completion| completion.discard();
 }
 
+/// Whether answers are waiting for `pump`.
+pub fn pending(self: *const Deferred) bool {
+    return self.completions.items.items.len > 0;
+}
+
 pub fn pump(self: *Deferred) void {
     self.completions.drain({}, struct {
         fn f(_: void, c: Completion) void {

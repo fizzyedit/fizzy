@@ -6,6 +6,13 @@
 //! what was open, mounts the files and opens them. The same goes for the user's own session: the
 //! stage sets it aside when a demo loads and gives it back when the demo is unloaded, so playing
 //! a demo inside someone's working copy of the app never costs them their open documents.
+//!
+//! **Snapshots** are the app's model at a moment, taken while a demo plays so a seek can go
+//! back to the nearest one instead of to the keyframe (`Player`). What one holds is the app's
+//! business — the player keeps it as an opaque pointer — and so is whether it can put one back
+//! where it is now: one that cannot says so, and the seek cuts to the keyframe as before. They
+//! live in memory for one session; nothing about them is ever written down. All four hooks are
+//! optional: an app without them seeks from keyframes.
 const Stage = @This();
 
 const Tape = @import("tape").Tape;
@@ -34,6 +41,21 @@ pub const VTable = struct {
     /// Replaying fast (a seek): turn animation off so every replayed frame lands where it is
     /// going, and back on after.
     fastForward: *const fn (ctx: *anyopaque, on: bool) void,
+
+    /// The app's model now, as something `restore` can put back — or null when this is not a
+    /// moment to keep (work in flight, a popup open, a document whose owner cannot say what it
+    /// holds). Owned by the stage until `release`.
+    capture: ?*const fn (ctx: *anyopaque) ?*anyopaque = null,
+    /// Put the app back to `snap`, in place — the documents' contents, carets and scroll, what
+    /// is open, the explorer — and run whatever frames that takes on its own. False when it
+    /// cannot from where the app is now (another scene's files, a document it would have to
+    /// load): the player cuts to the keyframe instead.
+    restore: ?*const fn (ctx: *anyopaque, snap: *anyopaque) bool = null,
+    release: ?*const fn (ctx: *anyopaque, snap: *anyopaque) void = null,
+    /// A hash of the model now — what a snapshot taken now would hold, less anything that may
+    /// differ between passes (scroll, layout caches). A replay that reaches a snapshot's moment
+    /// compares, so a demo that does not replay exactly is caught (`Player.mismatches`).
+    fingerprint: ?*const fn (ctx: *anyopaque) u64 = null,
 };
 
 pub fn begin(self: Stage, tape: *const Tape) void {
@@ -59,4 +81,22 @@ pub fn commandTitle(self: Stage, id: []const u8) ?[]const u8 {
 }
 pub fn fastForward(self: Stage, on: bool) void {
     self.vtable.fastForward(self.ctx, on);
+}
+pub fn snapshots(self: Stage) bool {
+    return self.vtable.capture != null and self.vtable.restore != null and self.vtable.release != null;
+}
+pub fn capture(self: Stage) ?*anyopaque {
+    const f = self.vtable.capture orelse return null;
+    return f(self.ctx);
+}
+pub fn restore(self: Stage, snap: *anyopaque) bool {
+    const f = self.vtable.restore orelse return false;
+    return f(self.ctx, snap);
+}
+pub fn release(self: Stage, snap: *anyopaque) void {
+    if (self.vtable.release) |f| f(self.ctx, snap);
+}
+pub fn fingerprint(self: Stage) ?u64 {
+    const f = self.vtable.fingerprint orelse return null;
+    return f(self.ctx);
 }

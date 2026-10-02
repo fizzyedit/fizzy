@@ -570,6 +570,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // deliberately dvui-free (see textcore.zig), so it tests as pure logic from the
         // app build. One root covers every file below it — they're relative imports.
         .{ "fizzy-textcore-tests", "plugins/text/src/textcore/textcore.zig" },
+        // A text document's state as bytes, for a demo's snapshot. std-only (see doc_state.zig).
+        .{ "fizzy-text-doc-state-tests", "plugins/text/src/doc_state.zig" },
         // Keybinding parse/resolve core. Deliberately dvui-free (see keymap.zig) — dvui's
         // keybind map can't express chords and is keyed by bind name, not command.
         .{ "fizzy-keymap-tests", "app/keymap/Keymap.zig" },

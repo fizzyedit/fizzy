@@ -64,6 +64,9 @@ const vtable: sdk.Plugin.VTable = .{
     .infobarEntries = infobarEntries,
     .closeDocument = closeDocument,
     .reloadDocument = reloadDocument,
+    .captureDocumentState = captureDocumentState,
+    .restoreDocumentState = restoreDocumentState,
+    .documentFingerprint = documentFingerprint,
     .isDirty = isDirty,
     .saveDocument = saveDocument,
     .documentBytes = documentBytes,
@@ -320,6 +323,18 @@ fn reloadDocument(_: *anyopaque, handle: DocHandle) anyerror!void {
     const doc = docFrom(handle) orelse return error.DocumentNotFound;
     try doc.reloadFromDisk();
     sdk.host().documentOpenedFor(std.fs.path.extension(doc.path), doc.path, doc.text.items);
+}
+fn captureDocumentState(_: *anyopaque, handle: DocHandle, allocator: std.mem.Allocator) anyerror![]u8 {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    return doc.captureState(allocator);
+}
+fn restoreDocumentState(_: *anyopaque, handle: DocHandle, bytes: []const u8) anyerror!void {
+    const doc = docFrom(handle) orelse return error.DocumentNotFound;
+    try doc.restoreState(bytes);
+}
+fn documentFingerprint(_: *anyopaque, handle: DocHandle) u64 {
+    const doc = docFrom(handle) orelse return 0;
+    return doc.fingerprint();
 }
 fn isDirty(_: *anyopaque, handle: DocHandle) bool {
     return (docFrom(handle) orelse return false).isDirty();

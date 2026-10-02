@@ -7,6 +7,7 @@ const dvui = @import("dvui");
 const sdk = @import("fizzy_sdk");
 const perf = @import("core").perf;
 const tc = @import("textcore/textcore.zig");
+const doc_state = @import("doc_state.zig");
 const TextEntryWidget = @import("widgets/TextEntryWidget.zig");
 
 const is_wasm = builtin.target.cpu.arch == .wasm32;
@@ -75,6 +76,10 @@ serialized_op_id: u64 = 0,
 /// widget instance — have somewhere durable to read "what's currently selected" from.
 sel_start: usize = 0,
 sel_end: usize = 0,
+/// Which end of the selection the caret is at (`sel_start` or `sel_end`), mirrored from the
+/// widget like them — a selection made backwards has its caret at the start, and a demo's
+/// snapshot (`captureState`) has to put it back there.
+sel_cursor: usize = 0,
 /// Whether this document's `TextEntryWidget` held dvui keyboard focus as of the last draw,
 /// mirrored alongside the selection above. Fizzy routes a clipboard verb to the active
 /// document only while the document's owner reports that verb enabled, which is how it tells
@@ -98,6 +103,9 @@ pending_sel: ?tc.Range = null,
 /// reading. `Document` is fizzy-owned and outlives dvui's per-frame GC, so this is the durable
 /// copy; the field is written every frame regardless (cheap), not just on the restore frame.
 scroll_y: f32 = 0,
+/// A scroll offset the next draw puts the editor at, once — a demo's snapshot coming back
+/// (`restoreState`), where the widget is drawn and `scroll_y` alone would wait for it to go.
+pending_scroll_y: ?f32 = null,
 /// 0-based source line the next `TextEditor.draw` should scroll into view, set by
 /// `revealPosition` (goto-definition) alongside `pending_cursor` and consumed once. A
 /// separate field, not derived from `pending_cursor`, because the editor scrolls to it
@@ -429,6 +437,62 @@ pub fn reloadFromDisk(self: *Document) !void {
     self.clearCompletionItems();
     self.completion_anchor = null;
     self.completion_selected = 0;
+}
+
+/// The document as it is now, for a demo's snapshot (`sdk.Plugin.captureDocumentState`): its
+/// contents, selection with the caret's end, scroll, preview, and whether it is dirty
+/// (`doc_state`).
+pub fn captureState(self: *const Document, allocator: std.mem.Allocator) ![]u8 {
+    return doc_state.encode(allocator, .{
+        .text = self.text.items,
+        .anchor = if (self.sel_cursor == self.sel_start) self.sel_end else self.sel_start,
+        .head = self.sel_cursor,
+        .dirty = self.isDirty(),
+        .preview_mode = @intFromEnum(self.preview_mode),
+        .scroll_y = self.scroll_y,
+        .split = self.preview_split_ratio_user,
+    });
+}
+
+/// What decides what typing does next: the contents, the caret and its selection, dirty or not,
+/// and how the preview shares the pane — not the scroll (`sdk.Plugin.documentFingerprint`).
+pub fn fingerprint(self: *const Document) u64 {
+    var h = std.hash.Wyhash.init(0x7e47_f1);
+    h.update(self.text.items);
+    const anchor = if (self.sel_cursor == self.sel_start) self.sel_end else self.sel_start;
+    h.update(std.mem.asBytes(&[_]u64{ anchor, self.sel_cursor, @intFromBool(self.isDirty()), @intFromEnum(self.preview_mode) }));
+    return h.final();
+}
+
+/// Put the document back as `captureState` found it, in place — the buffer replaced as a reload
+/// replaces it (`reloadFromDisk`), so the next draw lays it out afresh. Undo history starts over.
+pub fn restoreState(self: *Document, bytes: []const u8) !void {
+    const st = try doc_state.decode(bytes);
+    const mode = std.enums.fromInt(PreviewMode, st.preview_mode) orelse return error.BadState;
+
+    const gpa = sdk.allocator();
+    self.text.clearRetainingCapacity();
+    try self.text.appendSlice(gpa, st.text);
+    self.history.deinit(gpa);
+    self.history = .{};
+    // Clean is a history at its saved id; dirty is anything else.
+    self.clean_op_id = if (st.dirty) std.math.maxInt(u64) else self.history.topOpId();
+    self.refreshLineCount();
+    const sel: tc.Range = .init(st.anchor, st.head);
+    self.sel_start = sel.start();
+    self.sel_end = sel.end();
+    self.sel_cursor = sel.head;
+    // Non-null: the next draw drops the widget's laid-out copy of the old buffer.
+    self.pending_sel = sel;
+    self.scroll_y = st.scroll_y;
+    self.pending_scroll_y = st.scroll_y;
+    self.preview_mode = mode;
+    self.preview_split_ratio_user = st.split;
+    self.followed_caret = null;
+    self.clearCompletionItems();
+    self.completion_anchor = null;
+    self.completion_selected = 0;
+    self.notifyContentChanged();
 }
 
 /// Retarget the document at `new_path` and write it there (Save As). Once this succeeds the
