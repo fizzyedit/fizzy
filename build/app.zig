@@ -943,6 +943,35 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         bench_step.dependOn(&run_bench.step);
     }
 
+    // `zig build bench-replay` — what a demo seek costs: the player replaying a recording-shaped
+    // tape over the text editor's widget, silently (`Player.frames`) and a displayed frame at a
+    // time as it used to. Same rules and harness as `bench-text`.
+    {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_replay.zig"),
+        });
+        bench_module.addImport("dvui", dvui_testing_dep.module("dvui_testing"));
+        bench_module.addImport("text", text_module_test);
+        bench_module.addImport("app", app_module_test);
+        bench_module.addAnonymousImport("sample", .{ .root_source_file = b.path("src/Entry.zig") });
+
+        const bench_replay = b.addTest(.{ .name = "fizzy-bench-replay", .root_module = bench_module });
+        bench_replay.root_module.link_libcpp = !target_is_windows_msvc;
+        if (target.result.os.tag == .windows) {
+            bench_replay.root_module.linkSystemLibrary("comctl32", .{});
+        }
+        if (velopack_enabled) {
+            try velopack.linkVelopack(b, vz, bench_replay, .{ .target = target, .optimize = optimize });
+        }
+
+        const bench_step = b.step("bench-replay", "Benchmark a demo seek, silent against shown frame by frame (prints timings)");
+        const run_bench = b.addRunArtifact(bench_replay);
+        run_bench.has_side_effects = true;
+        bench_step.dependOn(&run_bench.step);
+    }
+
     // `zig build bench-tape` — saving and loading a tape, ZON against the binary form, at the
     // sizes of a demo, a recording and a long session. Same rules as `bench-text`; std-only, so
     // it needs no window and builds in seconds.

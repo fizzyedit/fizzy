@@ -16,6 +16,7 @@ const auto_update = @import("app").update.auto_update;
 const file_assoc = @import("backend/file_assoc.zig");
 const update_notify = @import("app").update.update_notify;
 const singleton = @import("app").single_instance;
+const automation = @import("app").automation;
 const paths = fizzy.core.paths;
 const Constants = @import("editor/Constants.zig");
 const AppInfo = @import("app").AppInfo;
@@ -375,6 +376,14 @@ pub fn AppFrame() !dvui.App.Result {
     fizzy.core.profile.hostFrameBegin();
     defer fizzy.core.profile.hostFrameEnd();
     singleton.drainPending();
+    // Once, or — while a demo is seeking — again and again unseen until it lands (`frames`).
+    const player = &fizzy.editor().demo.player;
+    const win = fizzy.entry().window;
+    return player.frames(win, frameOnce, automation.Player.backendClock(win));
+}
+
+/// One run of the app's frame.
+fn frameOnce() !dvui.App.Result {
     // The whole frame draws into a texture — see `core.FrameTarget` for why.
     {
         const prof = fizzy.core.profile.begin("fizzy", "frame target: begin");

@@ -82,6 +82,9 @@ var blend_override: ?u2 = null;
 var target_is_fb = false;
 
 cursor_last: dvui.enums.Cursor = .wait,
+/// Added to the page's clock by `nanoTime`: how far a demo's silent frames have moved the app's
+/// clock on (`app.automation.Player.frames`). Only grows.
+clock_ahead_ns: i128 = 0,
 force_new_window: bool = true,
 
 const EventTemp = struct {
@@ -650,8 +653,8 @@ pub fn backend(self: *WebBackend) dvui.Backend {
     return dvui.Backend.init(self);
 }
 
-pub fn nanoTime(_: *WebBackend) i128 {
-    return @as(i128, @trunc(wasm.wasm_now())) * 1_000_000;
+pub fn nanoTime(self: *WebBackend) i128 {
+    return @as(i128, @trunc(wasm.wasm_now())) * 1_000_000 + self.clock_ahead_ns;
 }
 
 pub fn sleep(_: *WebBackend, ns: u64) void {

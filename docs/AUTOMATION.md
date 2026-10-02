@@ -52,8 +52,26 @@ these files, these open, this layout, these settings — and every other op is a
 is there: glide the pointer onto a target, press, release, scroll, a key chord, typed text, a
 command, a wait. Any moment of a demo is "the last keyframe, plus the ops since", which is the
 whole of how a demo rewinds: cut to the keyframe, then replay the ops to the moment with animation
-off. A replay costs a frame per op rather than per millisecond, so seeking back a minute takes
-about a second and shows as a quick replay.
+off. A replay costs a frame per op rather than per millisecond, and those frames are never shown.
+
+**Seeking is silent.** The app runs its frame through `Player.frames`, which, while a seek is
+catching up, runs the frame again and again inside one displayed frame — each run laid out,
+drawn into the frame's texture and dropped, never presented — until the seek lands or a budget of
+8 ms of wall time is spent; the displayed frame shows the last run. A seek within a scene lands in
+the frame it was asked in; one across a long recording spreads over a few displayed frames, and
+only a seek that takes longer than 150 ms says "Catching up…". `zig build bench-replay`
+(ReleaseFast, the text editor's widget over a 400-line file): a frame costs about 0.9 ms, so
+replaying a three-minute recording — 281 frames — takes 31 displayed frames where it took 281.
+
+**The app's clock follows the demo while it catches up.** Each silent run begins at the demo
+moment of the next thing the tape does (`Sequencer.nextAt`), so a press and its release are as
+far apart, and timers and debounces fire, as they did live. That leaves the app's clock ahead of
+the wall; fizzy's backends add the difference to their clock (`clock_ahead_ns`), so dvui's stays
+monotonic, and the transport bar, which answers the viewer, runs on the wall (`Player.wallNs`).
+
+**A glide replayed in one frame still passes along its path**, a point per 16 ms of demo time as
+live play would draw, so whatever it crosses sees the pointer pass: a text field it leaves
+forgets its click count, rather than reading the next click on it as a double-click.
 
 **Demo time is not wall time.** A `wait` holds the clock until the app catches up (a file still
 loading, a pane still opening); every targeted action waits for its target first. A slow machine
@@ -249,22 +267,38 @@ compare (`zig build bench-tape -Doptimize=ReleaseFast`; recording-shaped tapes, 
 
 `app.automation` is framework: an app fills in a `Stage` (`begin`, `end`, `keyframe`, `idle`,
 `command`, `chordFor`, `commandTitle`, `fastForward`), calls `player.frame()` first thing in its
-frame — before anything reads `dvui.events()` — and `automation.overlay.draw(&player)` last.
-`src/editor/Demo.zig` is the worked example.
+frame — before anything reads `dvui.events()` — and `automation.overlay.draw(&player)` last, and
+runs the frame itself through the player, from inside its `dvui.App` frame function:
+
+```zig
+pub fn appFrame() !dvui.App.Result {
+    const win = dvui.currentWindow();
+    return player.frames(win, frameOnce, automation.Player.backendClock(win));
+}
+```
+
+`backendClock` finds a `clock_ahead_ns: i128` on the backend, which its `nanoTime` adds to the
+wall (fizzy's SDL and web backends have one); a backend without it still seeks silently, only
+with timers waiting for the wall. `src/editor/Demo.zig` and `src/Entry.zig` are the worked
+example.
 
 ## Tests
 
 - `zig build test` — `fizzy-tape-tests` (`sdk/tape/root.zig`): the tape format and its ZON
   round-trip; the binary form (field-for-field round-trip, conversion both ways, every
   truncation and thousands of random bit flips refused cleanly); the script's pacing; and the
-  sequencer's rules — waits and timeouts, a frame per op, keystroke-at-a-time typing, and that
-  rewinding to a keyframe and replaying lands exactly where live play did.
+  sequencer's rules — waits and timeouts, a frame per op, keystroke-at-a-time typing, a glide
+  replayed in one frame passing along its path, and that rewinding to a keyframe and replaying
+  lands exactly where live play did.
 - `zig build bench-tape` — saving and loading, ZON against binary (prints timings).
+- `zig build bench-replay` — a seek across recordings of a minute to ten, silent against shown a
+  frame at a time (prints timings).
 - `zig build test-integration` — `demo:` tests in `tests/integration.zig`: the player against a
   headless window with a tagged button and the text plugin's editor (plays as a person's input,
-  rewinds to exactly the live state, a person's click pauses it and is undone on resume, real
-  motion cannot move the tape's pointer), every bundled demo builds, and `docs/demos/hello.zon`
-  parses and round-trips.
+  rewinds to exactly the live state, a seek lands in the frame that asked for it with the app's
+  clock following the demo, a person's click pauses it and is undone on resume, real motion
+  cannot move the tape's pointer), every bundled demo builds, and `docs/demos/hello.zon` parses
+  and round-trips.
 
 ## Next
 

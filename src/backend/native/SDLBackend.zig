@@ -74,6 +74,9 @@ sdl_quit: bool = true,
 /// nothing worth keeping); this decides only whether a frame that draws nothing to the window
 /// still presents a cleared one.
 clear_window_on_begin: bool = false,
+/// Added to the wall clock by `nanoTime`: how far a demo's silent frames have moved the app's
+/// clock on (`app.automation.Player.frames`). Only grows.
+clock_ahead_ns: i128 = 0,
 /// Last known window rect while not maximized/fullscreen/minimized, tracked
 /// from move/resize events
 window_geometry: WindowGeometry = .{},
@@ -750,7 +753,7 @@ pub fn backend(self: *SDLBackend) dvui.Backend {
 
 pub fn nanoTime(self: *SDLBackend) i128 {
     const ret = std.Io.Clock.awake.now(self.io);
-    return ret.nanoseconds;
+    return ret.nanoseconds + self.clock_ahead_ns;
 }
 
 pub fn sleep(self: *SDLBackend, ns: u64) void {

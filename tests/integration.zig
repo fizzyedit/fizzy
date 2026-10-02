@@ -4115,7 +4115,7 @@ test "motion: every level arrives on time, and passes through without a kink" {
 // editor, tagged the way an app tags what a demo aims at. What is under test is the dvui half —
 // that tape input arrives as events every widget handles as a person's, that a rewind replays to
 // exactly the state live play reached, and that a person's input pauses the demo and is undone
-// when it resumes. The sequencing rules themselves are unit-tested in `app/automation/`.
+// when it resumes. The sequencing rules themselves are unit-tested in `sdk/tape/`.
 
 const automation = @import("app").automation;
 
@@ -4177,8 +4177,19 @@ var demo_clicks: usize = 0;
 var demo_commands: usize = 0;
 var demo_stage: DemoStage = .{};
 var demo_player: automation.Player = undefined;
+/// What the harness hands `Player.frames` as the backend's clock: the testing backend has none of
+/// its own, and its next frame's time comes from the last one's (`dvui.testing.step`) anyway.
+var demo_clock: i128 = 0;
+var demo_clock_on: bool = true;
 
+/// The app's frame function, as an app runs it: through the player, which repeats it unseen
+/// while a seek catches up.
 fn demoFrame() !dvui.App.Result {
+    return demo_player.frames(dvui.currentWindow(), demoRun, if (demo_clock_on) &demo_clock else null);
+}
+
+/// One run of the frame.
+fn demoRun() !dvui.App.Result {
     demo_player.frame();
     {
         var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
@@ -4221,6 +4232,10 @@ fn demoCtx() !dvui.testing {
     demo_commands = 0;
     demo_stage = .{};
     demo_player = .init(demo_stage.stage());
+    // No wall-time budget: a seek lands in the step that asked for it, whatever the machine.
+    demo_player.budget_ns = std.math.maxInt(i64);
+    demo_clock = 0;
+    demo_clock_on = true;
     // Lay the widgets out once, so the first glide has somewhere to go.
     try dvui.testing.settle(demoFrame);
     return t;
@@ -4296,6 +4311,52 @@ test "demo: rewinding replays to exactly what live play reached, and forward aga
     try stepDemoUntil(.paused, 200);
     try std.testing.expectEqualStrings("> ", demo_text.items[0..2]);
     try std.testing.expect(demo_player.seq.now <= @as(f64, @floatFromInt(more)));
+}
+
+test "demo: a seek lands in the frame that asked for it, the app's clock following the demo" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    const more: f64 = @floatFromInt(demo_player.tape().?.chapters[2].at);
+
+    // Without the backend's clock a silent frame steps a microsecond: the step's own 100 ms.
+    demo_clock_on = false;
+    var before = dvui.currentWindow().frame_time_ns;
+    demo_player.seek(more - 10);
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(automation.Player.State.paused, demo_player.state);
+    try std.testing.expectEqualStrings("> hello", demo_text.items);
+    try std.testing.expectEqual(@as(u32, 1), demo_player.seek_stats.shown);
+    try std.testing.expect(demo_player.seek_stats.silent > 3);
+    try std.testing.expect(dvui.currentWindow().frame_time_ns - before < 101 * std.time.ns_per_ms);
+
+    // With it, each silent frame begins as much later as the demo time the one before covered:
+    // seconds of demo in one step.
+    demo_clock_on = true;
+    demo_player.seek(@floatFromInt(demo_player.duration()));
+    try stepDemoUntil(.paused, 200);
+    before = dvui.currentWindow().frame_time_ns;
+    demo_player.seek(more - 10);
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(automation.Player.State.paused, demo_player.state);
+    try std.testing.expectEqualStrings("> hello", demo_text.items);
+    try std.testing.expect(dvui.currentWindow().frame_time_ns - before > 1100 * std.time.ns_per_ms);
+    // The player's own chrome stays on the wall.
+    try std.testing.expect(demo_player.ahead_ns > 0);
+    try std.testing.expectEqual(demo_player.ahead_ns, demo_clock);
+
+    // No budget at all is the replay shown a frame at a time.
+    demo_player.budget_ns = 0;
+    demo_player.seek(@floatFromInt(demo_player.duration()));
+    try stepDemoUntil(.paused, 200);
+    try std.testing.expectEqualStrings("> hello world", demo_text.items);
+    demo_player.seek(more - 10);
+    try stepDemoUntil(.paused, 200);
+    try std.testing.expectEqualStrings("> hello", demo_text.items);
+    try std.testing.expectEqual(@as(u32, 0), demo_player.seek_stats.silent);
+    try std.testing.expect(demo_player.seek_stats.shown > 3);
 }
 
 test "demo: a person's click pauses it, and resuming undoes what they did first" {

@@ -12,9 +12,11 @@ into it.
 - The `tape` library (`sdk/tape/`, std-only): a `Tape` (keyframes, input ops aimed at anchors,
   captions, chapters; ZON and binary), the `Sequencer`, the `Script` builder. In
   `app/automation/`: a dvui `Player` and an overlay; in fizzy, its `Stage`.
-- **Seeking is a visible replay.** A seek cuts to the last authored keyframe and replays every op
-  since, one frame each, drawn. A minute back is about a second of the app twitching through it;
-  scrubbing is a seek on release, not a live follow.
+- **Seeking replays silently, within a budget** (milestone 2). A seek cuts to the last authored
+  keyframe and replays every op since, a frame each, unseen, up to 8 ms of them per displayed
+  frame. Within a scene it lands in the frame it was asked in; across minutes of recording it
+  takes a few dozen frames, the intermediate states briefly showing. Scrubbing is still a seek on
+  release, not a live follow.
 - **Keyframes are authored only, and heavy.** Cutting to one closes every document, remounts the
   files, resets the layout and reopens — async loads and all.
 - **No recorder**, and everything a tape aims at has to be marked by hand (`core.anchor.mark`).
@@ -102,10 +104,10 @@ is a pixel of the art whatever the zoom or pan (a pixi stroke).
 
 The heart of it. Three pieces, then three behaviours built from them.
 
-- **Silent frames.** An app frame run without presenting: `Window.begin` → the app's frame →
-  `Window.end`, with the backend's draw calls going nowhere and no swap. Needs one hook in the app
-  loop (fizzy: the SDL and web backends' frame functions); offered upstream to dvui as a window
-  option.
+- **Silent frames** (built, milestone 2). An app frame run without presenting: `Window.end`
+  without the present, `Window.begin` again, the app's frame — inside the displayed frame, by
+  `Player.frames` wrapping the app's frame function. Its draws land in the frame's texture and are
+  dropped; nothing is swapped. Offered upstream to dvui as a window option once proven.
 - **Snapshots at runtime.** On the first pass through a demo the player takes a snapshot at every
   chapter and every few seconds of demo time (`Stage.capture`), keeping them in memory. Restoring
   one (`Stage.restore`) applies it in place — replace a document's text, set its selection,
@@ -142,7 +144,7 @@ Measured by a `zig build bench-replay` step on fizzy's tour, Debug and ReleaseFa
 | What | Target |
 |---|---|
 | Recording overhead | < 0.05 ms a frame |
-| Silent frame (fizzy, a document open) | < 2 ms |
+| Silent frame (fizzy, a document open) | < 2 ms — measured ~0.9 ms CPU (`bench-replay`: the text editor over a 400-line file, ReleaseFast) |
 | Restore a snapshot, settled | < 5 ms for a demo-sized model |
 | Scrub to any point of a two-minute demo | in the same frame for moves within a snapshot's span; < 100 ms worst |
 | Load a 10-minute recording (binary) | < 1 ms — measured 0.3 ms (10k ops, ReleaseFast) |
@@ -164,6 +166,15 @@ Each lands on its own and leaves the demos working.
    Done: `sdk/tape/`, `tape.binary`, `zig build bench-tape`; key chords are the app's text,
    checked by a `Tape.Check` it supplies, so the library needs no keymap.
 2. **Virtual clock and silent frames** in fizzy's loop; seeking catches up silently within a budget.
+   Done: `Player.frames` runs the app's frame again inside a displayed frame while a seek catches
+   up, each run ended unseen; silent runs begin at the demo moment of what they apply
+   (`Sequencer.nextAt`) and the backend's clock is moved on to match (`clock_ahead_ns`); a glide
+   replayed in one frame passes along its path; `zig build bench-replay`. Two things turned out
+   differently from the sketch above: a silent frame *does* draw — into the frame's texture,
+   dropped unpresented — because icons and glass render into cached textures a frame without
+   draws would leave blank (on a GPU the draws are queued, not waited on, so the cost is the
+   CPU's layout, ~0.9 ms); and it lives in the player, wrapping the app's frame function, rather
+   than in each backend's loop, so it serves the SDL, callback and web paths alike.
 3. **Snapshots** (`Stage.capture`/`restore`) and the determinism hash; scrubbing follows the knob.
 4. **Transitions:** visible fast-forward for chapter jumps, the crossfade back.
 5. **The recorder**, with accessible-name anchors; Record / Stop in fizzy, saving ZON or binary.
@@ -184,5 +195,5 @@ Each lands on its own and leaves the demos working.
   which the stage resolves on the first frame the anchor is drawn. In-memory seek snapshots, which
   live only for one session of one build, may carry the focused widget id: they restore exactly
   and cost nothing to keep right.
-- **Silent frames as a fizzy-side wrapper first** — no draw, no swap, in fizzy's own frame
-  functions — offered to dvui as a `Window` option once it has proved itself.
+- **Silent frames as a fizzy-side wrapper first** — no swap, wrapping the app's frame function
+  (`Player.frames`) — offered to dvui as a `Window` option once it has proved itself.
