@@ -83,6 +83,38 @@ Read against Zed's version, two things in it were wrong:
 Nothing in it needs a newer macOS: `presentsWithTransaction` is 10.11+, `inLiveResize` 10.6. SDL
 has no equivalent upstream (checked `main` on 2026-10-02).
 
+## What the second version showed, and what to try next
+
+Built from `claude/quirky-rubin-tpb2zd` (Debug), linking the patches through the test pins: no more
+ghosted second copy, smaller jitter, and resizing feels more responsive, but it is still not smooth.
+No copy that holds still suggests every frame now lands with its own size; what is left, in the
+order to rule things out:
+
+1. **Frame time.** Each step now waits for a whole fizzy frame, so the window moves exactly as
+   often as fizzy draws; at Debug speed that can be tens of milliseconds, a resize in coarse steps.
+   Try `-Doptimize=ReleaseFast` first.
+2. **Layout that takes more than one frame to settle.** dvui sizes widgets from the previous
+   frame's min sizes, so anything placed from them (right-aligned, centred, wrapped text) can lag a
+   step, and fizzy animates some layout itself. In sync, that lag is shown as it is drawn: jitter
+   in everything not anchored top-left. The tell is dvui asking for another frame at once after a
+   live-resize frame (`waitTime` 0). A fix would run frames inside the step until layout settles,
+   presenting only the last.
+3. **A size still committed apart from its frame.** With perfect sync `contentsGravity` changes
+   nothing; if switching it during the drag (`kCAGravityTopLeft` instead of `kCAGravityResize` in
+   `sync_metal_layers`) changes what the jitter looks like, some step still commits its size
+   without its frame.
+
+Planned, not built — a per-frame trace in `appIterate` while `inLiveResize()`, behind an env var
+(`FIZZY_LIVE_RESIZE_TRACE`): where the frame came from (the layer's `presentsWithTransaction` at
+frame start is on only inside SDL's display-pass frame), time since the last frame, the frame's
+own duration, the NSWindow frame, the Metal layer's bounds and `drawableSize`, dvui's
+`windowRectPixels`/natural scale, and `waitTime`; and `FIZZY_LIVE_RESIZE_GRAVITY` to set the
+gravity for the drag. One drag's trace answers all three questions above.
+
+To iterate on the SDL patches locally without pushing: in a checkout of sdl_zig's
+`claude/macos-live-resize`, `.sdl = .{ .path = "../SDL" }` (fizzyedit/SDL's branch of the same
+name); in fizzy's root `build.zig.zon`, `.sdl = .{ .path = "../sdl_zig" }`.
+
 ## The patches
 
 | | What | Files |
