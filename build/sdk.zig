@@ -110,6 +110,13 @@ pub fn wireAppModule(
     if (nightwatch_module) |nw| app_module.addImport("nightwatch", nw);
     app_module.addImport("build_opts", buildOptsModule(build_opts));
     if (singleton_module) |sm| app_module.addImport("singleton_app", sm);
+    // Demo automation's std-only core (`sdk/tape/`), the same module third-party plugins get from
+    // the SDK package (`plugin_sdk.exportModules`).
+    app_module.addImport("tape", b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("sdk/tape/root.zig"),
+    }));
     if (consumer) |c| c.addImport("app", app_module);
     return app_module;
 }

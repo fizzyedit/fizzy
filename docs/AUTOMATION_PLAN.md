@@ -9,14 +9,14 @@ into it.
 
 ## What there is, and what it costs
 
-- `app/automation/` today: a `Tape` (keyframes, input ops aimed at anchors, captions, chapters;
-  ZON), a std-only `Sequencer`, a `Script` builder, a dvui `Player`, fizzy's `Stage`, an overlay.
+- The `tape` library (`sdk/tape/`, std-only): a `Tape` (keyframes, input ops aimed at anchors,
+  captions, chapters; ZON and binary), the `Sequencer`, the `Script` builder. In
+  `app/automation/`: a dvui `Player` and an overlay; in fizzy, its `Stage`.
 - **Seeking is a visible replay.** A seek cuts to the last authored keyframe and replays every op
   since, one frame each, drawn. A minute back is about a second of the app twitching through it;
   scrubbing is a seek on release, not a live follow.
 - **Keyframes are authored only, and heavy.** Cutting to one closes every document, remounts the
   files, resets the layout and reopens — async loads and all.
-- **ZON only.** Fine to author; slow and allocation-heavy for long recordings.
 - **No recorder**, and everything a tape aims at has to be marked by hand (`core.anchor.mark`).
 
 ## Principles
@@ -29,8 +29,8 @@ into it.
    declarative shape as a keyframe — taken through the app's `Stage`. dvui's widget store is never
    saved: after a restore it is rebuilt by running frames until dvui stops asking for more
    (`refresh` → no extra frames needed). Immediate mode guarantees it converges; that is the
-   point of it. The one piece of dvui state worth carrying is **focus** (a widget id), because it
-   routes keys.
+   point of it. The one piece of dvui state worth carrying is **focus**, because it routes keys —
+   by name in anything saved, by widget id only in memory (see Decisions).
 3. **Time is an input.** dvui already takes the frame's time from the app (`Window.begin(time_ns)`).
    During playback the player supplies it — demo time — so animations, caret blink and timers are
    deterministic, and run fast when playback does.
@@ -85,10 +85,18 @@ is a pixel of the art whatever the zoom or pan (a pixi stroke).
 ## Serialization
 
 - **ZON** stays the authoring and interchange format, exactly as now.
-- **Binary** (`.tape`) for anything long: a header, a string table (anchors, text), and the ops as
-  struct-of-arrays with varint time deltas. Loading is a bounds-checked view over the bytes — no
-  parse, no allocation — and writing is append-only, so a recorder streams straight to it.
-- Both are lossless, and convert both ways (a `tape` CLI step, and `zig build demos` for the site).
+- **Binary** (`.tape`, `tape.binary`) for anything long — built in milestone 1: a header, a string
+  table holding each distinct string once (anchors repeat constantly), then fixed-size records
+  that index into it. Fixed records rather than varint-packed columns: reading stays one pass
+  with nothing to decode, and the form is already 4.5× smaller than ZON. Loading checks every
+  offset, index and enum and builds the `Tape` in one arena, so the sequencer and player never
+  know which form a tape came from. Measured (`zig build bench-tape`, ReleaseFast): ten minutes
+  of recording (10k ops) loads in 0.3 ms against ZON's 17 ms, and encodes in 0.7 ms.
+- If recordings outgrow that, the records are already fixed-size and aligned, so a zero-copy
+  view over the bytes is a reader change, not a format change. The recorder keeps its records in
+  memory as it goes and encodes on Stop.
+- Both are lossless and convert both ways (`Tape.load` takes either; a `tape` CLI step, and
+  `zig build demos` for the site, to come).
 
 ## Seeking, scrubbing and chapters
 
@@ -137,7 +145,7 @@ Measured by a `zig build bench-replay` step on fizzy's tour, Debug and ReleaseFa
 | Silent frame (fizzy, a document open) | < 2 ms |
 | Restore a snapshot, settled | < 5 ms for a demo-sized model |
 | Scrub to any point of a two-minute demo | in the same frame for moves within a snapshot's span; < 100 ms worst |
-| Load a 10-minute recording (binary) | < 1 ms |
+| Load a 10-minute recording (binary) | < 1 ms — measured 0.3 ms (10k ops, ReleaseFast) |
 | Anchors published while a demo runs | < 0.1 ms a frame |
 
 ## What it asks of dvui and fizzy
@@ -153,6 +161,8 @@ Measured by a `zig build bench-replay` step on fizzy's tour, Debug and ReleaseFa
 Each lands on its own and leaves the demos working.
 
 1. **Split `tape` out**, std-only, into `sdk/`; add the binary codec and the benchmark step.
+   Done: `sdk/tape/`, `tape.binary`, `zig build bench-tape`; key chords are the app's text,
+   checked by a `Tape.Check` it supplies, so the library needs no keymap.
 2. **Virtual clock and silent frames** in fizzy's loop; seeking catches up silently within a budget.
 3. **Snapshots** (`Stage.capture`/`restore`) and the determinism hash; scrubbing follows the knob.
 4. **Transitions:** visible fast-forward for chapter jumps, the crossfade back.
@@ -160,10 +170,19 @@ Each lands on its own and leaves the demos working.
 6. **Plugin demos** (`registerDemo`, chapters with `requires`) and the first pixi demo.
 7. **Standalone packages** for any dvui app, with a minimal example app.
 
-## Open questions
+## Decisions
 
-- **Binary as well as ZON**, or ZON only with a faster loader? (The plan says both.)
-- **How far to go on accessible names** — default for recording, or only behind explicit anchors?
-- **Focus in snapshots** — carry the focused widget's id (same build, same session), or require a
-  tape to re-establish focus after every keyframe?
-- **Silent frames upstream** in dvui, or a fizzy-side wrapper first?
+- **Binary as well as ZON.** ZON to author and read; binary for recordings and anything long. Both
+  lossless, either loads through `Tape.load`.
+- **Accessible names name click targets** a recorder can't find an explicit anchor for: an
+  anchor first, then `role:label` from dvui's AccessKit data, then (flagged) a widget id or the
+  window. Chapters and captions are written by people and need no such naming.
+- **Focus: never a widget id in anything saved.** Widget ids hash the call site and parent chain,
+  so a saved one goes stale with any change to the app or its layout. A tape re-establishes focus
+  the way a person does — its ops click or tab into the editor after a keyframe — and a keyframe
+  that needs focus as it opens names it by anchor (`focus = "text.editor:demo://tour/main.zig"`),
+  which the stage resolves on the first frame the anchor is drawn. In-memory seek snapshots, which
+  live only for one session of one build, may carry the focused widget id: they restore exactly
+  and cost nothing to keep right.
+- **Silent frames as a fizzy-side wrapper first** — no draw, no swap, in fizzy's own frame
+  functions — offered to dvui as a `Window` option once it has proved itself.

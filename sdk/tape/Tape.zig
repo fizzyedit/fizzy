@@ -14,20 +14,21 @@
 //! a `wait` holds it still until the app catches up (a file still loading, a pane still opening),
 //! so a slow machine plays the same demo slower rather than a different demo.
 //!
-//! Ops name what they act on by `dvui.tag` (`Target.tag`) rather than by pixel, so a demo authored
-//! in one window size plays in any other — the web embed's included. Keys are chord strings in the
-//! keymap's own spelling (`"mod+shift+p"`, `"enter"`), so `mod` is ⌘ on a Mac and Ctrl elsewhere.
+//! Ops name what they act on by anchor (`Target.tag`) rather than by pixel, so a demo authored in
+//! one window size plays in any other — the web embed's included. Keys are chords as text in the
+//! app's own spelling (fizzy's: `"mod+shift+p"`, `"enter"`); what a spelling means, and whether
+//! one is right, is the app's to say (`Check`), so the format carries no keymap of its own.
 //!
 //! Everything here is plain data with no pointers into anything but its own strings, so a tape
 //! round-trips through ZON (`parse`, `write`): the same thing a script builds (`Script`) is what
 //! a recorder would write and what a web page can fetch and play.
 //!
-//! std-only on purpose (the keymap's chord parser is std-only too), so the format and the
-//! sequencing over it are unit-tested in `zig build test` without a window.
+//! std-only on purpose, so the format and the sequencing over it are unit-tested without a window,
+//! and any dvui app — or a plugin writing a demo of itself — can take them.
 const Tape = @This();
 
 const std = @import("std");
-const chord = @import("../keymap/chord.zig");
+const binary = @import("binary.zig");
 
 /// Short, stable id: `tour`. Names the keyframes' mount (`demo://tour`) and the web's `?demo=`.
 name: []const u8,
@@ -358,9 +359,15 @@ pub const Error = error{
     ChaptersOutOfOrder,
 };
 
+/// What only the app can say about a tape: whether a key chord is spelled right, in its spelling.
+/// Left out, the format's own rules are checked and the rest is the app's at play time.
+pub const Check = struct {
+    key: ?*const fn (chord: []const u8) bool = null,
+};
+
 /// Check what `Sequencer` relies on, once, at load — a tape that fails here would misplay rather
 /// than crash, which is worse to debug.
-pub fn validate(self: Tape) Error!void {
+pub fn validate(self: Tape, check: Check) Error!void {
     if (self.ops.len == 0 or self.ops[0].at != 0 or self.ops[0].do != .keyframe) return error.NoKeyframeAtStart;
     var prev: u32 = 0;
     for (self.ops) |op| {
@@ -368,7 +375,9 @@ pub fn validate(self: Tape) Error!void {
         prev = op.at;
         switch (op.do) {
             .keyframe => |i| if (i >= self.keyframes.len) return error.BadKeyframeIndex,
-            .key => |k| _ = chord.parseKeys(k, .other) catch return error.BadChord,
+            .key => |k| if (check.key) |ok| {
+                if (!ok(k)) return error.BadChord;
+            },
             else => {},
         }
     }
@@ -391,12 +400,21 @@ pub const Owned = struct {
     }
 };
 
+/// Read a tape in either form: binary (`binary.read`) when it starts with the binary magic, ZON
+/// (`parse`) otherwise.
+pub fn load(gpa: std.mem.Allocator, bytes: []const u8, check: Check) !Owned {
+    if (binary.sniff(bytes)) return binary.read(gpa, bytes, check);
+    const source = try gpa.dupeZ(u8, bytes);
+    defer gpa.free(source);
+    return parse(gpa, source, check);
+}
+
 /// Read a tape from ZON source — the format `write` produces.
-pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8) !Owned {
+pub fn parse(gpa: std.mem.Allocator, source: [:0]const u8, check: Check) !Owned {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     errdefer arena.deinit();
     const tape = try std.zon.parse.fromSliceAlloc(Tape, arena.allocator(), source, null, .{});
-    try tape.validate();
+    try tape.validate(check);
     return .{ .arena = arena, .tape = tape };
 }
 
@@ -431,7 +449,7 @@ fn sample() Tape {
 
 test "a seek replays from the last keyframe at or before it" {
     const tape = sample();
-    try tape.validate();
+    try tape.validate(.{});
     try testing.expectEqual(@as(usize, 0), tape.keyframeBefore(0));
     try testing.expectEqual(@as(usize, 0), tape.keyframeBefore(999));
     try testing.expectEqual(@as(usize, 4), tape.keyframeBefore(1000));
@@ -527,20 +545,31 @@ test "a caption is a callout when it narrates the pointer, else it stacks at hom
     try testing.expect(!tape.besideAction(.{ .at = 500, .ms = 1000, .text = "", .place = .middle }));
 }
 
-test "a tape must open on a keyframe, in order, with chords that parse" {
+test "a tape must open on a keyframe, in order, with chords the app can spell" {
     const bad_start = [_]Op{.{ .at = 0, .do = .{ .press = .left } }};
-    try testing.expectError(error.NoKeyframeAtStart, (Tape{ .name = "x", .ops = &bad_start }).validate());
+    try testing.expectError(error.NoKeyframeAtStart, (Tape{ .name = "x", .ops = &bad_start }).validate(.{}));
 
     const kf = [_]Keyframe{.{ .root = "demo://x" }};
     const backwards = [_]Op{ .{ .at = 0, .do = .{ .keyframe = 0 } }, .{ .at = 50, .do = .{ .key = "a" } }, .{ .at = 10, .do = .{ .key = "b" } } };
-    try testing.expectError(error.OpsOutOfOrder, (Tape{ .name = "x", .ops = &backwards, .keyframes = &kf }).validate());
+    try testing.expectError(error.OpsOutOfOrder, (Tape{ .name = "x", .ops = &backwards, .keyframes = &kf }).validate(.{}));
 
+    // Whether a chord is spelled right is the app's to say; unasked, it is not checked here.
     const bad_chord = [_]Op{ .{ .at = 0, .do = .{ .keyframe = 0 } }, .{ .at = 1, .do = .{ .key = "mod+nosuchkey" } } };
-    try testing.expectError(error.BadChord, (Tape{ .name = "x", .ops = &bad_chord, .keyframes = &kf }).validate());
+    const chords = Tape{ .name = "x", .ops = &bad_chord, .keyframes = &kf };
+    try chords.validate(.{});
+    try testing.expectError(error.BadChord, chords.validate(test_check));
 
     const bad_index = [_]Op{.{ .at = 0, .do = .{ .keyframe = 3 } }};
-    try testing.expectError(error.BadKeyframeIndex, (Tape{ .name = "x", .ops = &bad_index, .keyframes = &kf }).validate());
+    try testing.expectError(error.BadKeyframeIndex, (Tape{ .name = "x", .ops = &bad_index, .keyframes = &kf }).validate(.{}));
 }
+
+/// A spelling for tests: any chord whose last key is a single letter.
+pub const test_check: Check = .{ .key = struct {
+    fn ok(c: []const u8) bool {
+        const last = std.mem.lastIndexOfScalar(u8, c, '+') orelse return c.len == 1;
+        return c.len - last - 1 == 1;
+    }
+}.ok };
 
 test "a tape round-trips through ZON" {
     const tape = sample();
@@ -550,7 +579,7 @@ test "a tape round-trips through ZON" {
     const text = try testing.allocator.dupeZ(u8, out.written());
     defer testing.allocator.free(text);
 
-    var back = try parse(testing.allocator, text);
+    var back = try parse(testing.allocator, text, .{});
     defer back.deinit();
     try testing.expectEqualStrings("t", back.tape.name);
     try testing.expectEqual(tape.ops.len, back.tape.ops.len);
@@ -573,7 +602,7 @@ test "a hand-written tape parses with every default left out" {
         \\        .{ .at = 400, .do = .{ .key = "mod+shift+p" } },
         \\    },
         \\}
-    );
+    , .{});
     defer owned.deinit();
     try testing.expectEqual(@as(usize, 4), owned.tape.ops.len);
     try testing.expectEqual(@as(f32, 0.5), owned.tape.ops[1].do.move.x);

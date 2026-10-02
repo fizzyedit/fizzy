@@ -17,7 +17,7 @@
 //! will not start over unsaved changes.
 //!
 //! Demos start from the command palette ("Demo: …"), the Help menu, `FIZZY_DEMO=<name>` natively,
-//! or `?demo=<name>` / `?demo=<url of a .zon tape>` on the web — see `docs/AUTOMATION.md`.
+//! or `?demo=<name>` / `?demo=<url of a .zon or .tape>` on the web — see `docs/AUTOMATION.md`.
 const Demo = @This();
 
 const std = @import("std");
@@ -60,13 +60,13 @@ const SavedSettings = struct {
 const Pending = union(enum) {
     /// A bundled demo, by name.
     name: []u8,
-    /// A tape's ZON source.
-    zon: [:0]u8,
+    /// A tape, in either of its forms.
+    tape: []u8,
 
     fn free(self: Pending, gpa: std.mem.Allocator) void {
         switch (self) {
             .name => |n| gpa.free(n),
-            .zon => |z| gpa.free(z),
+            .tape => |t| gpa.free(t),
         }
     }
 };
@@ -107,14 +107,15 @@ pub fn play(self: *Demo, name: []const u8) !void {
     if (!self.mayStart()) return;
     var script: automation.Script = .init(self.editor.app.gpa, entry.name, entry.title);
     errdefer script.deinit();
+    script.check = automation.Player.check;
     try entry.build(&script);
     self.player.load(try script.finish(), .{});
 }
 
-/// Play a tape from ZON source — a fetched `.zon`, or a recording.
-pub fn playZon(self: *Demo, source: [:0]const u8) !void {
+/// Play a tape — a fetched `.zon` or `.tape`, or a recording. Either form; the bytes say which.
+pub fn playTape(self: *Demo, bytes: []const u8) !void {
     if (!self.mayStart()) return;
-    const owned = automation.Tape.parse(self.editor.app.gpa, source) catch |err| {
+    const owned = automation.Tape.load(self.editor.app.gpa, bytes, automation.Player.check) catch |err| {
         dvui.log.err("demo: could not read the tape: {t}", .{err});
         return err;
     };
@@ -127,10 +128,10 @@ pub fn playSoon(self: *Demo, name: []const u8) void {
     self.queue(.{ .name = gpa.dupe(u8, name) catch return });
 }
 
-/// Start a tape from ZON source on the next frame — for callers outside one.
-pub fn playZonSoon(self: *Demo, source: []const u8) void {
+/// Start a tape on the next frame — for callers outside one.
+pub fn playTapeSoon(self: *Demo, bytes: []const u8) void {
     const gpa = self.editor.app.gpa;
-    self.queue(.{ .zon = gpa.dupeZ(u8, source) catch return });
+    self.queue(.{ .tape = gpa.dupe(u8, bytes) catch return });
 }
 
 /// The caller is outside a frame, so it wakes the loop itself (`Host.refresh`).
@@ -158,7 +159,7 @@ pub fn frame(self: *Demo) void {
         defer p.free(self.editor.app.gpa);
         switch (p) {
             .name => |name| self.play(name) catch {},
-            .zon => |source| self.playZon(source) catch {},
+            .tape => |bytes| self.playTape(bytes) catch {},
         }
     }
     if (self.arrange) |layout| {

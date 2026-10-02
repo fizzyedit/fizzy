@@ -629,6 +629,13 @@ pub fn exportModules(
         .root_source_file = b.path("sdk_version.zig"),
     }));
 
+    // Demos and recordings as data (`tape/`): std-only, so a plugin can write a demo of itself.
+    _ = b.addModule("tape", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("tape/root.zig"),
+    });
+
     b.modules.put(b.graph.arena, b.dupe("dvui"), dvui_proxy_mod) catch @panic("OOM");
     b.modules.put(b.graph.arena, b.dupe("proxy_bridge"), proxy_bridge_mod) catch @panic("OOM");
 }

@@ -4353,6 +4353,7 @@ test "demo: real pointer motion does not move the tape's pointer while it plays"
 test "demo: every bundled demo builds into a valid tape" {
     for (fizzy.Editor.Demo.catalog.entries) |e| {
         var s: automation.Script = .init(std.testing.allocator, e.name, e.title);
+        s.check = automation.Player.check;
         e.build(&s) catch |err| {
             s.deinit();
             return err;
@@ -4363,12 +4364,19 @@ test "demo: every bundled demo builds into a valid tape" {
         try std.testing.expect(owned.tape.chapters.len > 0);
         // Its files mount under its own name — `demo://<name>`, what the web's `?demo=` says.
         try std.testing.expect(std.mem.endsWith(u8, owned.tape.keyframes[0].root, e.name));
+
+        // And it travels as a `.tape` (what a site hosts) unchanged.
+        const bytes = try automation.binary.encode(std.testing.allocator, owned.tape);
+        defer std.testing.allocator.free(bytes);
+        var back = try automation.Tape.load(std.testing.allocator, bytes, automation.Player.check);
+        defer back.deinit();
+        try std.testing.expectEqualDeep(owned.tape, back.tape);
     }
 }
 
 test "demo: the hand-written sample tape parses and round-trips" {
     const source = @embedFile("demo_sample_tape");
-    var owned = try automation.Tape.parse(std.testing.allocator, source);
+    var owned = try automation.Tape.parse(std.testing.allocator, source, automation.Player.check);
     defer owned.deinit();
     try std.testing.expectEqualStrings("hello", owned.tape.name);
     try std.testing.expectEqualStrings(".split", owned.tape.keyframes[0].settings[0].value);
@@ -4378,8 +4386,17 @@ test "demo: the hand-written sample tape parses and round-trips" {
     try owned.tape.write(&out.writer);
     const again = try std.testing.allocator.dupeZ(u8, out.written());
     defer std.testing.allocator.free(again);
-    var back = try automation.Tape.parse(std.testing.allocator, again);
+    var back = try automation.Tape.parse(std.testing.allocator, again, automation.Player.check);
     defer back.deinit();
     try std.testing.expectEqual(owned.tape.ops.len, back.tape.ops.len);
     try std.testing.expectEqual(owned.tape.duration(), back.tape.duration());
+
+    // `Tape.load` takes the source as it is and the binary form alike.
+    var loaded = try automation.Tape.load(std.testing.allocator, source, automation.Player.check);
+    defer loaded.deinit();
+    const bytes = try automation.binary.encode(std.testing.allocator, owned.tape);
+    defer std.testing.allocator.free(bytes);
+    var from_binary = try automation.Tape.load(std.testing.allocator, bytes, automation.Player.check);
+    defer from_binary.deinit();
+    try std.testing.expectEqualDeep(loaded.tape, from_binary.tape);
 }

@@ -20,7 +20,6 @@ const Script = @This();
 const std = @import("std");
 const Tape = @import("Tape.zig");
 const Sequencer = @import("Sequencer.zig");
-const chord = @import("../keymap/chord.zig");
 
 /// Owns every string and list the finished tape points into.
 arena: std.heap.ArenaAllocator,
@@ -38,6 +37,9 @@ root: []const u8 = "",
 /// Where the demo's popups gather when they are about no one thing (`Tape.home`), by anchor: an
 /// app's documents, say, so they sit over the work rather than at the window's foot.
 home: []const u8 = "",
+/// What the app says about a tape (`Tape.Check`): its spelling of key chords, checked as each is
+/// written and again when the tape is finished.
+check: Tape.Check = .{},
 
 /// How a person moves, by default. Every call can override its own.
 pub const Pace = struct {
@@ -75,7 +77,7 @@ pub fn finish(self: *Script) !Tape.Owned {
         .home = try a.dupe(u8, self.home),
     };
     handOver(&tape, self.captions.items);
-    try tape.validate();
+    try tape.validate(self.check);
     return .{ .arena = self.arena, .tape = tape };
 }
 
@@ -285,10 +287,12 @@ pub fn typeText(self: *Script, text: []const u8, opts: TypeOptions) !void {
     self.t += ms + self.pace.beat_ms;
 }
 
-/// Press a chord: `"enter"`, `"escape"`, `"mod+a"`. Checked here, so a typo fails the build of
-/// the tape rather than silently pressing nothing.
+/// Press a chord: `"enter"`, `"escape"`, `"mod+a"`. Checked here against the app's spelling
+/// (`check`), so a typo fails the build of the tape rather than silently pressing nothing.
 pub fn key(self: *Script, keys: []const u8) !void {
-    _ = try chord.parseKeys(keys, .other);
+    if (self.check.key) |ok| {
+        if (!ok(keys)) return error.BadChord;
+    }
     try self.push(.{ .at = self.t, .do = .{ .key = try self.dupe(keys) } });
     self.t += self.pace.beat_ms;
 }
@@ -375,6 +379,8 @@ test "captions at home stack; one before a callout ends as the callout begins" {
 test "a mistyped chord is caught when the script is written" {
     var s: Script = .init(testing.allocator, "t", "");
     defer s.deinit();
+    s.check = Tape.test_check;
     try s.keyframe(.{ .root = "demo://t" });
-    try testing.expectError(error.UnknownKey, s.key("mod+nope"));
+    try s.key("mod+s");
+    try testing.expectError(error.BadChord, s.key("mod+nope"));
 }
