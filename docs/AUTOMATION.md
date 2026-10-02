@@ -86,6 +86,7 @@ user's motion settings, timed in demo time.
 | `workbench.file:<abs path>` | an explorer row (a file or a folder) |
 | `workbench.tab:<abs path>` | a document's tab |
 | `text.editor:<abs path>` | a text document's editor |
+| `text.end:<abs path>` | where typing at the end of a text document begins, just after its last character |
 | `text.preview.raw:<abs path>`, `.split:`, `.preview:` | the markdown Raw / Split / Preview pill |
 | `fizzy.palette` | the command palette's text field |
 | `fizzy.rail:<view id>` | a sidebar rail icon (`fizzy.rail:workbench.files` is the explorer's; `catalog.files_icon`) |
@@ -122,7 +123,7 @@ pub fn build(s: *Script) !void {
     try s.click(.{ .tag = try catalog.file(s, "src") }, .{});            // waits for the row
     try s.click(.{ .tag = try catalog.file(s, "src/main.zig") }, .{});
     try s.click(.{ .tag = catalog.files_icon }, .{});                    // and away again
-    try s.click(.{ .tag = try catalog.editor(s, "src/main.zig"), .x = 0.85, .y = 0.92 }, .{});
+    try s.click(.{ .tag = try catalog.end(s, "src/main.zig") }, .{});   // where typing goes on
     try s.typeText("\npub fn greet() void {\nreturn;", .{});
     try s.command("fizzy.commandPalette");                               // pill shows its chord
     try s.waitFor(catalog.palette, .{});
@@ -135,6 +136,9 @@ pub fn build(s: *Script) !void {
 glide, a hover before the press, a beat after each action, 12 characters a second). `pause`,
 `caption(.., .{ .hold = true })` and every option's `ms` adjust it. A caption shows for as long as
 it takes to read (`Script.readingMs`) unless given `ms`, and the next caption takes over from it.
+A caption sits over the view it is about — `.on`, an anchor, defaulting to `s.caption_on`
+(fizzy's demos: `catalog.documents`, the documents' place) — a quarter, half or three quarters of
+the way down it by `.place`, so on a large window it is beside the action rather than at the foot.
 
 A keyframe starts with the explorer put away (`.layout = .focused`), so the editor has the room;
 a demo opens it from the rail when it is about to use it and puts it away after —
@@ -145,8 +149,8 @@ Things that bite:
 - **The editor pairs brackets and quotes.** Type code the way a person would — `{` then Enter
   gives you the closing `}` on its own line, so don't type it again. A run of backticks or quotes
   pairs badly; leave code fences out of typed text or put them in the keyframe's file.
-- **Click below the last line to append**: `.x = 0.85, .y = 0.92` of an editor that is not full
-  lands the caret at the end of the file.
+- **Click where the typing goes**: `catalog.end(s, "src/main.zig")` (`text.end:`) is just after
+  the file's last character, so the pointer goes where the words will appear.
 - **Use commands for shortcuts** (`s.command("fizzy.toggleExplorer")`) rather than `s.key` with
   a chord: a command runs whatever the user has bound it to (and on macOS the native menu owns
   most chords), and the pill still shows the chord.
@@ -171,12 +175,12 @@ builds is what `Tape.write` emits, what `Tape.parse` reads, and what a recorder 
         .settings = .{ .{ .owner = "markdown", .key = "default_md_view", .value = ".split" } },
     } },
     .chapters = .{ .{ .at = 0, .title = "Hello" } },
-    .captions = .{ .{ .at = 300, .ms = 5200, .title = "Hi", .text = "…", .place = .middle } },
+    .captions = .{ .{ .at = 300, .ms = 5200, .title = "Hi", .text = "…", .place = .middle, .on = "region:Main" } },
     .ops = .{                        // ordered by .at; the first is a keyframe at 0
         .{ .at = 0, .do = .{ .keyframe = 0 } },
         .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } },
         .{ .at = 0, .do = .{ .wait = .{ .until = .{ .shown = "text.editor:demo://hello/hello.md" }, .timeout = 10000 } } },
-        .{ .at = 4400, .ms = 900, .do = .{ .move = .{ .tag = "text.editor:demo://hello/hello.md", .x = 0.85, .y = 0.94 } } },
+        .{ .at = 4400, .ms = 900, .do = .{ .move = .{ .tag = "text.end:demo://hello/hello.md" } } },
         .{ .at = 5460, .do = .{ .press = .left } },     // .left | .right | .middle
         .{ .at = 5570, .do = .{ .release = .left } },
         .{ .at = 6000, .ms = 3600, .do = .{ .type = "\n- written by a tape\n" } },

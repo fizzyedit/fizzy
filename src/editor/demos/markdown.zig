@@ -17,11 +17,12 @@ pub fn build(s: *Script) !void {
         .open = &.{"NOTES.md"},
         .settings = &.{.{ .owner = "markdown", .key = "default_md_view", .value = ".split" }},
     });
+    s.caption_on = catalog.documents;
 
     try s.chapter("Write");
     try s.caption("The raw text on the left, the page on the right — redrawn on every keystroke.", .{});
     try s.waitFor(try catalog.editor(s, "NOTES.md"), .{});
-    try s.click(.{ .tag = try catalog.editor(s, "NOTES.md"), .x = 0.85, .y = 0.94 }, .{});
+    try s.click(.{ .tag = try catalog.end(s, "NOTES.md") }, .{});
     try s.typeText("\nFizzy can now **play demos** of itself: real input, driven by a tape.\n\n", .{ .cps = 18 });
     s.pause(800);
 

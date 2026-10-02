@@ -393,6 +393,7 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         font,
         line_height,
     );
+    markEnd(doc, &te, font, line_height);
 
     const editor_rs = row.data().borderRectScale();
     const scroll_rs = te.scroll.data().contentRectScale();
@@ -1843,6 +1844,25 @@ fn lineNumberColumnWidth(line_count: usize, font: dvui.Font) f32 {
     var buf: [16]u8 = undefined;
     const sample = std.fmt.bufPrint(&buf, "{d}", .{line_count}) catch "9999";
     return line_number_pad_left + font.textSize(sample).w + text_gap_after_numbers;
+}
+
+/// Where typing at the end of the document begins — just after the last line's text, a
+/// character wide and a line tall — as `text.end:<path>`: where a demo clicks to write on, so the
+/// pointer goes where the words will appear rather than to an empty corner of a tall pane.
+fn markEnd(doc: *const Document, te: *TextEntryWidget, font: dvui.Font, line_height: f32) void {
+    if (!core.anchor.wanted()) return;
+    const text = doc.text.items;
+    const tail = if (std.mem.lastIndexOfScalar(u8, text, '\n')) |i| text[i + 1 ..] else text;
+    const rs = te.scroll.data().contentRectScale();
+    const vp = te.scroll.si.viewport;
+    const line: f32 = @floatFromInt(doc.line_count -| 1);
+    const r: dvui.Rect.Physical = .{
+        .x = rs.r.x + (font.textSize(tail).w - vp.x) * rs.s,
+        .y = rs.r.y + (editor_pad_y + line * line_height - vp.y) * rs.s,
+        .w = font.textSize("M").w * rs.s,
+        .h = line_height * rs.s,
+    };
+    core.anchor.markRect(te.data().id, r, rs.r.contains(r.center()), "text.end:{s}", .{doc.path});
 }
 
 fn drawLineNumbers(

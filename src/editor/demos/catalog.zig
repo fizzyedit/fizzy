@@ -41,10 +41,19 @@ pub fn editor(s: *Script, rel: []const u8) ![]const u8 {
     return s.print("text.editor:{s}/{s}", .{ s.root, rel });
 }
 
+/// Where typing at the end of `rel` begins, in its editor: just after its last line's text.
+pub fn end(s: *Script, rel: []const u8) ![]const u8 {
+    return s.print("text.end:{s}/{s}", .{ s.root, rel });
+}
+
 /// The tab for `rel`.
 pub fn tab(s: *Script, rel: []const u8) ![]const u8 {
     return s.print("workbench.tab:{s}/{s}", .{ s.root, rel });
 }
+
+/// The documents' place: where the work is, and so where a caption about it sits
+/// (`Script.caption_on`).
+pub const documents = "region:Main";
 
 /// The command palette's text field.
 pub const palette = "fizzy.palette";

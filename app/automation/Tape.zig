@@ -122,7 +122,11 @@ pub const Caption = struct {
     /// A heading over `text`. Optional.
     title: []const u8 = "",
     text: []const u8,
+    /// How far down the view it sits: a quarter, half or three quarters of the way.
     place: Place = .bottom,
+    /// The view it is about, by anchor — what it sits over, so it is near the action however
+    /// large the window. Empty: the window.
+    on: []const u8 = "",
 
     pub const Place = enum { top, middle, bottom };
 
@@ -295,7 +299,7 @@ fn sample() Tape {
             .{ .at = 1200, .ms = 300, .do = .{ .type = "abc" } },
         };
         const chapters = [_]Chapter{ .{ .at = 0, .title = "one" }, .{ .at = 1000, .title = "two" } };
-        const captions = [_]Caption{.{ .at = 200, .ms = 2000, .text = "hi" }};
+        const captions = [_]Caption{.{ .at = 200, .ms = 2000, .text = "hi", .on = "pane" }};
     };
     return .{ .name = "t", .ops = &S.ops, .keyframes = &S.keyframes, .chapters = &S.chapters, .captions = &S.captions };
 }

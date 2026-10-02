@@ -258,6 +258,7 @@ pub fn frame(self: *Player) void {
     if (self.owned == null) return;
     self.takeRealInput();
     if (self.owned == null) return; // the bar's close button
+    self.claimCursor();
 
     // Clamped: the first frame after a pause can report however long the app slept.
     const wall_ms: f64 = @min(dvui.secondsSinceLastFrame() * 1000, 100);
@@ -361,6 +362,26 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
     }
     e.handle(@src(), wd);
     return true;
+}
+
+/// The real pointer's cursor, asked for before any widget can (dvui keeps a frame's first request):
+/// a hand over the bar's controls and an arrow over the rest of it, rather than whatever lies under
+/// the bar (a split's resize arrows); an arrow while the tape owns the pointer, rather than
+/// whatever the tape's pointer is over.
+fn claimCursor(self: *Player) void {
+    const tr = &self.transport;
+    if (tr.scrub != null) return dvui.cursorSet(.hand);
+    if (tr.pointer) |p| {
+        if (tr.bar) |bar| {
+            if (bar.contains(p)) {
+                for ([_]dvui.Rect.Physical{ tr.play, tr.prev, tr.next, tr.track, tr.close }) |r| {
+                    if (r.contains(p)) return dvui.cursorSet(.hand);
+                }
+                return dvui.cursorSet(.arrow);
+            }
+        }
+    }
+    if (self.state == .playing or self.state == .seeking) dvui.cursorSet(.arrow);
 }
 
 /// Put dvui's pointer back where the tape has it, if anything real moved it.

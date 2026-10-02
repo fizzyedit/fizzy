@@ -35,6 +35,9 @@ t: u32 = 0,
 pace: Pace = .{},
 /// The latest keyframe's root, for building the names of things under it.
 root: []const u8 = "",
+/// The view captions are about unless they say otherwise (`CaptionOptions.on`), by anchor: an
+/// app's documents, say, so its captions sit over the work rather than at the window's foot.
+caption_on: []const u8 = "",
 
 /// How a person moves, by default. Every call can override its own.
 pub const Pace = struct {
@@ -116,6 +119,8 @@ pub const CaptionOptions = struct {
     /// How long it shows. Null: long enough to read.
     ms: ?u32 = null,
     place: Tape.Caption.Place = .bottom,
+    /// The view it is about, by anchor. Null: `caption_on`.
+    on: ?[]const u8 = null,
     /// Hold the next action until the caption is done, rather than acting under it.
     hold: bool = false,
 };
@@ -135,6 +140,7 @@ pub fn caption(self: *Script, text: []const u8, opts: CaptionOptions) !void {
         .title = try self.dupe(opts.title),
         .text = try self.dupe(text),
         .place = opts.place,
+        .on = try self.dupe(opts.on orelse self.caption_on),
     });
     if (opts.hold) self.t += ms;
 }

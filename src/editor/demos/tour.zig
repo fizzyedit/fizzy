@@ -47,6 +47,7 @@ pub fn build(s: *Script) !void {
             .{ .owner = "markdown", .key = "default_md_view", .value = ".split" },
         },
     });
+    s.caption_on = catalog.documents;
 
     try s.chapter("Welcome");
     try s.caption("This is fizzy itself, driving its own controls. Click, scroll or press a key at any time to take over; press play to carry on.", .{
@@ -70,8 +71,8 @@ pub fn build(s: *Script) !void {
 
     try s.chapter("Editing");
     try s.caption("Typing is typing: brackets close themselves, and Enter keeps the indent.", .{});
-    // Below the last line, at the right: the caret lands at the end of the file.
-    try s.click(.{ .tag = try catalog.editor(s, "src/main.zig"), .x = 0.85, .y = 0.92 }, .{});
+    // Where the new lines will go: the end of the file.
+    try s.click(.{ .tag = try catalog.end(s, "src/main.zig") }, .{});
     try s.typeText("\npub fn greet(name: []const u8) void {\nstd.debug.print(\"hi, {s}\\n\", .{name});", .{});
     s.pause(1400);
 
@@ -94,7 +95,7 @@ pub fn build(s: *Script) !void {
     try s.caption("Markdown opens beside its preview, which follows every keystroke.", .{});
     try catalog.openFile(s, "README.md");
     s.pause(500);
-    try s.click(.{ .tag = try catalog.editor(s, "README.md"), .x = 0.85, .y = 0.94 }, .{});
+    try s.click(.{ .tag = try catalog.end(s, "README.md") }, .{});
     try s.typeText("\n## Your turn\n\nPress **play** to watch again, or click anywhere and make it yours.\n", .{ .cps = 18 });
     s.pause(2400);
 

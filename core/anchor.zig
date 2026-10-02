@@ -33,9 +33,15 @@ pub fn wanted() bool {
 /// Tag `wd` with the name `fmt` formats to, when anchors are wanted. The first widget to claim a
 /// name in a frame keeps it: the same document shown in two panes is one name, the first pane.
 pub fn mark(wd: *const dvui.WidgetData, comptime fmt: []const u8, args: anytype) void {
+    markRect(wd.id, wd.borderRectScale().r, wd.visible(), fmt, args);
+}
+
+/// `mark` for a place in a widget rather than the whole of it: `r` (physical), in the widget `id`
+/// — where in a document typing at its end begins, say, which is where a demo clicks to type.
+pub fn markRect(id: dvui.Id, r: dvui.Rect.Physical, visible: bool, comptime fmt: []const u8, args: anytype) void {
     if (!wanted()) return;
     var buf: [512]u8 = undefined;
     const name = std.fmt.bufPrint(&buf, fmt, args) catch return;
     if (dvui.currentWindow().tags.containsUsed(name) orelse false) return;
-    dvui.tag(name, .{ .id = wd.id, .rect = wd.borderRectScale().r, .visible = wd.visible() });
+    dvui.tag(name, .{ .id = id, .rect = r, .visible = visible });
 }

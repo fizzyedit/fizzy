@@ -20,6 +20,7 @@ const Player = @import("Player.zig");
 const Tape = @import("Tape.zig");
 const Sequencer = @import("Sequencer.zig");
 const chord = @import("../keymap/chord.zig");
+const icons = @import("icons");
 const motion = core.motion;
 
 /// How long a key or command stays in the keystroke pill.
@@ -184,35 +185,49 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
 
 // ---- captions ------------------------------------------------------------------------------
 
-/// `below`: how many bottom slots the cards under a bottom caption take (`slot_h` each).
+/// The caption showing, over the view it is about (`Caption.on`; the window when it names none or
+/// that is not drawn): a quarter, half or three quarters of the way down it (`Caption.place`),
+/// across its middle — near what it is talking about, however large the window. Kept whole on the
+/// window and above the cards along the bottom (`below` slots of them, `slot_h` each).
 fn drawCaption(player: *Player, tape: *const Tape, win: dvui.Rect, below: f32) void {
     const now = player.now();
     const c = tape.captionAt(now) orelse return;
     const shown = Reveal.between(now, @floatFromInt(c.at), @floatFromInt(c.at + c.ms));
 
-    const w = @min(620, win.w - 32);
-    const from: dvui.Point = switch (c.place) {
-        .top => .{ .x = win.w / 2, .y = 28 },
-        .middle => .{ .x = win.w / 2, .y = win.h / 2 },
-        .bottom => .{ .x = win.w / 2, .y = win.h - 24 - below * slot_h },
+    const view: dvui.Rect = blk: {
+        if (c.on.len > 0) {
+            if (dvui.tagGet(c.on)) |td| {
+                if (td.visible) break :blk dvui.windowRectScale().rectFromPhysical(td.rect);
+            }
+        }
+        break :blk win;
     };
-    const gravity_y: f32 = switch (c.place) {
-        .top => 1,
+    const down: f32 = switch (c.place) {
+        .top => 0.25,
         .middle => 0.5,
-        .bottom => 0,
+        .bottom => 0.75,
     };
-    const fw = layer(@src(), .{ .max_size_content = .{ .w = w, .h = win.h } }, .{
-        .from = dvui.windowRectScale().pointToPhysical(from),
+    const w = @min(620, win.w - 32);
+    // Its size as last drawn, to keep the whole of it clear.
+    const src = @src();
+    const h = if (dvui.minSizeGet(dvui.parentGet().extendId(src, 0))) |ms| ms.h else 0;
+    const floor = win.h - 24 - below * slot_h;
+    const center: dvui.Point = .{
+        .x = std.math.clamp(view.x + view.w / 2, win.x + 16 + w / 2, win.x + win.w - 16 - w / 2),
+        .y = @min(@max(view.y + view.h * down, win.y + 16 + h / 2), floor - h / 2),
+    };
+    const fw = layer(src, .{ .max_size_content = .{ .w = w, .h = win.h } }, .{
+        .from = dvui.windowRectScale().pointToPhysical(center),
         .from_gravity_x = 0.5,
-        .from_gravity_y = gravity_y,
+        .from_gravity_y = 0.5,
     });
     defer fw.deinit();
     var card = dvui.box(@src(), .{ .dir = .vertical }, cardOptions(.{ .x = 18, .y = 12, .w = 18, .h = 14 }).override(.{
         .max_size_content = .{ .w = w - 36, .h = win.h },
     }));
     defer card.deinit();
-    // It opens out of the edge it hangs from, as a menu slides out of its bar.
-    glass(card.data(), .{ .x = 0.5, .y = 1 - gravity_y }, shown);
+    // It opens about its middle, as a dialog does.
+    glass(card.data(), .{ .x = 0.5, .y = 0.5 }, shown);
     const prev_alpha = dvui.alpha(shown.alpha);
     defer dvui.alphaSet(prev_alpha);
     if (c.title.len > 0) {
@@ -323,10 +338,10 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     tr.bar = if (tr.wanted or shown.alpha > 0.05) bar.data().rectScale().r else null;
 
     const ink = theme().color(.content, .text);
-    tr.prev = glyphButton(@src(), .prev, ink.opacity(0.75), 26);
+    tr.prev = glyphButton(@src(), .prev, ink.opacity(0.75), 26, tr.pointer);
     const playing = player.state == .playing or (player.state == .seeking and player.after_seek == .play);
-    tr.play = glyphButton(@src(), if (playing) .pause else if (player.state == .ended) .replay else .play, ink, 32);
-    tr.next = glyphButton(@src(), .next, ink.opacity(0.75), 26);
+    tr.play = glyphButton(@src(), if (playing) .pause else if (player.state == .ended) .replay else .play, ink, 32, tr.pointer);
+    tr.next = glyphButton(@src(), .next, ink.opacity(0.75), 26, tr.pointer);
 
     const now = player.now();
     const total: f64 = @floatFromInt(tape.duration());
@@ -360,7 +375,7 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
         paintTrack(r, tape, now, total, ink, track_wd.rectScale().s);
     }
 
-    tr.close = glyphButton(@src(), .close, ink.opacity(0.6), 24);
+    tr.close = glyphButton(@src(), .close, ink.opacity(0.6), 24, tr.pointer);
     return shown.room();
 }
 
@@ -418,66 +433,33 @@ fn paintTrack(r: dvui.Rect.Physical, tape: *const Tape, now: f64, total: f64, in
 
 const Glyph = enum { play, pause, replay, prev, next, close };
 
-/// A square for a glyph, painted with paths so the bar needs no icon set. Returns its rect.
-fn glyphButton(src: std.builtin.SourceLocation, glyph: Glyph, color: dvui.Color, size: f32) dvui.Rect.Physical {
-    const wd = dvui.spacer(src, .{ .min_size_content = .{ .w = size, .h = size }, .gravity_y = 0.5 });
-    const rs = wd.rectScale();
-    const r = rs.r;
-    const s = rs.s;
-    const cx = r.x + r.w / 2;
-    const cy = r.y + r.h / 2;
-    const u = @min(r.w, r.h) / 2; // half the square
-    const c: dvui.Path.FillConvexOptions = .{ .color = .{ .color = color }, .fade = 1 };
-    const lifo = dvui.currentWindow().lifo();
-    switch (glyph) {
-        .play, .replay => {
-            var p: dvui.Path.Builder = .init(lifo);
-            defer p.deinit();
-            const k = u * 0.55;
-            p.addPoint(.{ .x = cx - k * 0.7, .y = cy - k });
-            p.addPoint(.{ .x = cx + k, .y = cy });
-            p.addPoint(.{ .x = cx - k * 0.7, .y = cy + k });
-            p.build().fillConvex(c);
-            if (glyph == .replay) {
-                var ring: dvui.Path.Builder = .init(lifo);
-                defer ring.deinit();
-                ring.addArc(.{ .x = cx, .y = cy }, u * 0.9, std.math.pi * 1.75, std.math.pi * 0.15, false);
-                ring.build().stroke(.{ .thickness = 1.5 * s, .color = .{ .color = color } });
-            }
-        },
-        .pause => {
-            const bw = u * 0.28;
-            const bh = u * 1.1;
-            const left: dvui.Rect.Physical = .{ .x = cx - bw * 1.6, .y = cy - bh / 2, .w = bw, .h = bh };
-            var right = left;
-            right.x = cx + bw * 0.6;
-            left.fill(.all(bw / 3), .{ .color = .{ .color = color } });
-            right.fill(.all(bw / 3), .{ .color = .{ .color = color } });
-        },
-        .prev, .next => {
-            const dir: f32 = if (glyph == .next) 1 else -1;
-            const k = u * 0.45;
-            var p: dvui.Path.Builder = .init(lifo);
-            defer p.deinit();
-            p.addPoint(.{ .x = cx - dir * k * 0.6, .y = cy - k });
-            p.addPoint(.{ .x = cx + dir * k * 0.6, .y = cy });
-            p.addPoint(.{ .x = cx - dir * k * 0.6, .y = cy + k });
-            p.build().fillConvex(c);
-            const stop: dvui.Rect.Physical = .{ .x = cx + dir * k * 0.6 - (if (dir < 0) 2 * s else 0), .y = cy - k, .w = 2 * s, .h = 2 * k };
-            stop.fill(.all(s), .{ .color = .{ .color = color } });
-        },
-        .close => {
-            const k = u * 0.38;
-            inline for (.{ 1, -1 }) |d| {
-                var p: dvui.Path.Builder = .init(lifo);
-                defer p.deinit();
-                p.addPoint(.{ .x = cx - k, .y = cy - d * k });
-                p.addPoint(.{ .x = cx + k, .y = cy + d * k });
-                p.build().stroke(.{ .thickness = 1.6 * s, .color = .{ .color = color }, .endcap_style = .square });
-            }
-        },
+/// A square for one of the bar's controls, drawn with the app's icon set and washed like a row
+/// under the real pointer (`pointer`, physical). Returns its rect.
+fn glyphButton(src: std.builtin.SourceLocation, glyph: Glyph, color: dvui.Color, size: f32, pointer: ?dvui.Point.Physical) dvui.Rect.Physical {
+    const name: []const u8, const tvg: []const u8 = switch (glyph) {
+        .play => .{ "demo_play", icons.tvg.lucide.play },
+        .pause => .{ "demo_pause", icons.tvg.lucide.pause },
+        .replay => .{ "demo_replay", icons.tvg.lucide.@"rotate-ccw" },
+        .prev => .{ "demo_prev", icons.tvg.lucide.@"skip-back" },
+        .next => .{ "demo_next", icons.tvg.lucide.@"skip-forward" },
+        .close => .{ "demo_close", icons.tvg.lucide.x },
+    };
+    var box = dvui.box(src, .{}, .{ .min_size_content = .{ .w = size, .h = size }, .gravity_y = 0.5 });
+    defer box.deinit();
+    const rs = box.data().rectScale();
+    if (pointer) |p| {
+        if (rs.r.contains(p)) rs.r.fill(core.dialogs.rowCorners().scale(rs.s, dvui.CornerRect.Physical), .{ .color = .{ .color = core.dialogs.rowHover() } });
     }
-    return r;
+    core.icon.icon(@src(), name, tvg, .{
+        .stroke_color = .{ .color = color },
+        .fill_color = .{ .color = color },
+    }, .{
+        .gravity_x = 0.5,
+        .gravity_y = 0.5,
+        // The icon a little inside its square, as a toolbar's are.
+        .min_size_content = .{ .w = size * 0.6, .h = size * 0.6 },
+    });
+    return rs.r;
 }
 
 // ---- seeking -------------------------------------------------------------------------------
