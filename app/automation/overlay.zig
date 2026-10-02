@@ -232,9 +232,18 @@ fn drawCaption(player: *Player, tape: *const Tape, win: dvui.Rect, below: f32) v
     glass(card.data(), .{ .x = 0.5, .y = 0.5 }, shown);
     const prev_alpha = dvui.alpha(shown.alpha);
     defer dvui.alphaSet(prev_alpha);
+    const heading = dvui.Font.theme(.heading);
+    const body = dvui.Font.theme(.body);
+    // The card fits its words: as wide as its longest line wants, up to the measure, past which
+    // the text wraps and the card holds the measure. (A hair over the measured width, so the
+    // layout never wraps a line that only just fits.)
+    const fit = @min(w - 36, @ceil(@max(
+        body.textSize(c.text).w,
+        if (c.title.len > 0) heading.textSize(c.title).w else 0,
+    )) + 1);
     if (c.title.len > 0) {
         dvui.labelNoFmt(@src(), c.title, .{}, .{
-            .font = dvui.Font.theme(.heading),
+            .font = heading,
             .color_text = .{ .color = theme().color(.content, .text) },
             .padding = .{ .h = 4 },
             .margin = .{},
@@ -244,8 +253,9 @@ fn drawCaption(player: *Player, tape: *const Tape, win: dvui.Rect, below: f32) v
         .background = false,
         .padding = .{},
         .margin = .{},
+        .font = body,
         .color_text = .{ .color = theme().color(.content, .text).opacity(0.86) },
-        .min_size_content = .{ .w = @min(w - 36, 420), .h = 1 },
+        .min_size_content = .{ .w = fit, .h = 1 },
     });
     tl.addText(c.text, .{});
     tl.deinit();
