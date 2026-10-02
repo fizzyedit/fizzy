@@ -45,6 +45,14 @@ void fizzy_native_disable_titlebar_separator(void *nswindow) {
     }
 }
 
+/* Whether AppKit is resizing the window under the user's pointer. Its tracking loop is then
+ * running, and SDL runs frames from inside it: from its live-resize timer, and with
+ * `SDL_VIDEO_MAC_SYNC_LIVE_RESIZE` from each resize step. */
+int fizzy_native_in_live_resize(void *nswindow) {
+    if (!nswindow) return 0;
+    return ((__bridge NSWindow *)nswindow).inLiveResize ? 1 : 0;
+}
+
 /* The CAMetalLayer SDL_GPU presents into: the layer of the Metal view SDL adds under the
  * window's content view when the window is claimed. SDL keeps no public handle to it. */
 static CAMetalLayer *find_metal_layer(NSView *view) {
