@@ -76,8 +76,19 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    (`8455e58`). AppKit never calls `updateLayer` for a view whose layer is a `CAMetalLayer` it
    makes itself, so 4 as first written never drew in a step. Squash into 4 at the next rebase.
 
-Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4.16-3` → `8455e58`,
-what sdl_zig pins now.
+6. **Wayland: frame insets, for a shadow the application draws round its own decorations**
+   (`2d6efde`). `SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_{LEFT,TOP,RIGHT,BOTTOM}_NUMBER` give the
+   margins of a window's surface outside its frame. While an xdg-shell toplevel floats the size
+   the compositor configures is the frame's and the surface grows by the insets round it, the
+   window geometry (`xdg_surface.set_window_geometry`) is the frame, the input region is the frame
+   and a band of up to 8 units round it, the min/max sizes are the frame's, and popups anchor to
+   the parent's frame; maximized, tiled or fullscreen the insets are zero. The insets in effect
+   are published as `SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_*_NUMBER`. libdecor windows are
+   untouched. Fizzy draws its Linux window's shadow in them (`linux_titlebar.zig`). Upstream:
+   worth proposing; a public API would want a setter as well.
+
+Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4.16-3` → `8455e58`;
+`fizzy-3.4.16-4` → `2d6efde`, what sdl_zig pins now.
 
 ## fizzyedit/sdl_zig
 
@@ -95,9 +106,11 @@ what sdl_zig pins now.
    Squash into 1 at the next rebase.
 4. **Build fizzyedit/SDL `fizzy-3.4.16-3`** (`48468b7`): the pin moves to SDL's macOS live-resize
    patches (3–5). Squash into 1 at the next rebase.
+5. **Build fizzyedit/SDL `fizzy-3.4.16-4`** (`58abe38`): the pin moves to SDL's Wayland frame
+   insets (6). Squash into 1 at the next rebase.
 
 Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`;
-`fizzy-1.0.3+3.4.16-3` → `48468b7`, the commit fizzy pins now.
+`fizzy-1.0.3+3.4.16-3` → `48468b7`; `fizzy-1.0.3+3.4.16-4` → `58abe38`, the commit fizzy pins now.
 
 ## Bumping
 
@@ -125,7 +138,11 @@ change is likeliest to move. Patch 3 touches `METAL_Submit`'s present loop and t
 `METAL_RenderPresent`; 4 and 5 the window listener's live-resize notifications and the end of the
 Metal view (`SDL_cocoawindow.{h,m}`, `SDL_cocoametalview.m`, one hint in `SDL_hints.h`). For those,
 `clang -fsyntax-only -fobjc-arc` on the `.m` files with the macOS SDK is enough to push, and the
-real check is a drag on a Mac: `scripts/live-resize/run.sh` (`docs/MACOS_LIVE_RESIZE.md`). After resolving, compile the file for Windows before pushing; it
+real check is a drag on a Mac: `scripts/live-resize/run.sh` (`docs/MACOS_LIVE_RESIZE.md`). Patch 6
+touches `SDL_waylandwindow.c`'s toplevel configure, `ConfigureWindowGeometry`, the min/max sizes
+and the popup anchoring, beside two new fields in `SDL_waylandwindow.h`; its check is a Linux
+build of fizzy and, on a GNOME desktop, a floating window whose shadow passes clicks through and
+whose frame maximizes to the work area. After resolving, compile the file for Windows before pushing; it
 needs no build of the rest of SDL:
 `zig cc -target x86_64-windows-gnu -Iinclude -Iinclude/build_config -Isrc -Isrc/video/khronos -c src/gpu/d3d12/SDL_gpu_d3d12.c -o /tmp/d3d12.o`.
 CI's Windows cross-build (`ci.yml`) then builds it into fizzy.

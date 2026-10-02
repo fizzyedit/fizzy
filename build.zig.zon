@@ -30,8 +30,8 @@
         // `fizzy` branch, building fizzyedit/SDL's `fizzy-3.4` — see docs/DEPENDENCIES.md. Plugins
         // draw through dvui's proxy backend and never link SDL.
         .sdl = .{
-            .url = "https://github.com/fizzyedit/sdl_zig/archive/48468b764d69718d322f1d39f883f840b9f1a0b5.tar.gz",
-            .hash = "sdl-1.0.3+3.4.16-i4QD0c0KqgAgpiQuut3ZH9Mh3j46R7hH6RTpzJGqEeVQ",
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/58abe388d4200b0f66701c0701acc6d1910bc55f.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0c0KqgB_riMOO7mEHunTksg6ofuVCDPkOoYd3A4I",
             .lazy = true,
         },
         .icons = .{
