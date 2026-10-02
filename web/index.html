@@ -569,21 +569,22 @@
             if (dvuiApp) dvuiApp.requestRender();
           }).catch((err) => console.error("fizzy: could not open", url, err));
         }
-        // `?demo=tour` plays a bundled demo; `?demo=<url>.zon` fetches a tape and plays that.
+        // `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`, the binary form) fetches a
+        // tape and plays that.
         for (const demo of new URLSearchParams(location.search).getAll("demo")) playDemo(demo);
       }
 
       function playDemo(demo) {
-        const send = (bytes, isZon) => {
+        const send = (bytes, isTape) => {
           const exports = wasmInstance.exports;
           if (!exports.FizzyWebPlayDemo) return;
           const ptr = exports.FizzyWebPluginAlloc(bytes.length, 1);
           if (!ptr) return;
           new Uint8Array(exports.memory.buffer, ptr, bytes.length).set(bytes);
-          exports.FizzyWebPlayDemo(ptr, bytes.length, isZon);
+          exports.FizzyWebPlayDemo(ptr, bytes.length, isTape);
           if (dvuiApp) dvuiApp.requestRender();
         };
-        if (!/\.zon(\?|$)/.test(demo)) return send(utf8encode(demo), false);
+        if (!/\.(zon|tape)(\?|$)/.test(demo)) return send(utf8encode(demo), false);
         fetch(demo, { cache: "no-store" })
           .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
           .then((buf) => send(new Uint8Array(buf), true))

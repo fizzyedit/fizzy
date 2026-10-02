@@ -89,10 +89,10 @@ Each covered file is its own test artifact root in `build/app.zig`
   in the unit layer even though it sits under `sdk/src/`).
 - [`core/fuzzy.zig`](../core/fuzzy.zig) —
   `fizzy-fuzzy-tests` — fuzzy matcher wrapper over `zf` (needs a `zf` import).
-- [`app/automation_tests.zig`](../app/automation_tests.zig) —
-  `fizzy-automation-tests` — demo automation's std-only core: the tape format and its ZON
-  round-trip, the script builder's pacing, and the sequencer's replay rules (see
-  [`docs/AUTOMATION.md`](../docs/AUTOMATION.md)).
+- [`sdk/tape/root.zig`](../sdk/tape/root.zig) —
+  `fizzy-tape-tests` — the `tape` library, demo automation's std-only core: the tape format,
+  its ZON round-trip and binary form, the script builder's pacing, and the sequencer's replay
+  rules (see [`docs/AUTOMATION.md`](../docs/AUTOMATION.md)).
 
 ### Integration / SDK tests (headless)
 

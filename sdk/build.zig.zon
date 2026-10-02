@@ -16,6 +16,7 @@
         "manifest_identity.zig",
         "paths.zig",
         "src",
+        "tape",
     },
     .dependencies = .{
         .icons = .{

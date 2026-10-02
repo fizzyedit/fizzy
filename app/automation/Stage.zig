@@ -8,7 +8,7 @@
 //! a demo inside someone's working copy of the app never costs them their open documents.
 const Stage = @This();
 
-const Tape = @import("Tape.zig");
+const Tape = @import("tape").Tape;
 const chord = @import("../keymap/chord.zig");
 
 ctx: *anyopaque,

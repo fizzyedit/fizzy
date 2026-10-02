@@ -5,7 +5,7 @@ viewer can pause, take over, rewind and resume. The same demo plays in the deskt
 browser, at any window size, so a demo can be embedded in a web page and play live there.
 
 ```
- Script (high level)  ──builds──▶  Tape (data, ZON)  ◀──writes──  a recorder (future)
+ Script (high level)  ──builds──▶  Tape (data: ZON or binary)  ◀──writes──  a recorder (future)
                                        │
                                   Sequencer          std-only: what happens, when, a frame at a time
                                        │ Sink
@@ -14,9 +14,11 @@ browser, at any window size, so a demo can be embedded in a web page and play li
                                   Editor.Demo        fizzy: what a keyframe *is*; the user's session
 ```
 
-Everything above the `Stage` line lives in `app/automation/` and knows nothing about fizzy; an
-app built on fizzy gets it by filling in a `Stage`. `src/editor/Demo.zig` is fizzy's stage and
-`src/editor/demos/` its bundled demos.
+Everything above the `Stage` line knows nothing about fizzy. `Tape`, `Sequencer` and `Script` are
+the `tape` library (`sdk/tape/`): std-only, no window, shipped with the SDK so a plugin can
+author a demo too. The `Player` and its overlay are host framework (`app/automation/`); an app
+built on fizzy gets them by filling in a `Stage`. `src/editor/Demo.zig` is fizzy's stage and
+`src/editor/demos/` its bundled demos. Where this is going: `docs/AUTOMATION_PLAN.md`.
 
 ## Playing one
 
@@ -25,7 +27,7 @@ app built on fizzy gets it by filling in a `Stage`. `src/editor/Demo.zig` is fiz
 | Command palette | **Demo: A Tour of Fizzy**, **Demo: Markdown, Previewed as You Type**; **Demo: Play / Pause**, **Demo: Restart**, **Demo: Stop** |
 | Menu | Help › Take the Tour |
 | Desktop | `FIZZY_DEMO=tour fizzy` plays from launch (how a screen recording is made) |
-| Web | `?demo=tour` plays a bundled demo; `?demo=<url>.zon` fetches a tape and plays it. Add `&storage=<name>` to an embed so it keeps its own settings and layout |
+| Web | `?demo=tour` plays a bundled demo; `?demo=<url>.zon` (or `.tape`) fetches a tape and plays it. Add `&storage=<name>` to an embed so it keeps its own settings and layout |
 
 While a demo plays:
 
@@ -176,9 +178,10 @@ Things that bite:
 
 ## The tape format
 
-A tape is plain data (`app/automation/Tape.zig`) and round-trips through ZON — what a script
-builds is what `Tape.write` emits, what `Tape.parse` reads, and what a recorder will produce.
-`docs/demos/hello.zon` is a complete hand-written one.
+A tape is plain data (`sdk/tape/Tape.zig`) with two forms that hold exactly the same thing: ZON
+to read and write by hand, and a binary form for anything long (below). What a script builds is
+what `Tape.write` emits and `Tape.parse` reads. `docs/demos/hello.zon` is a complete hand-written
+one.
 
 ```zig
 .{
@@ -220,6 +223,28 @@ builds is what `Tape.write` emits, what `Tape.parse` reads, and what a recorder 
 | `command: "id"` | Run a command, as its menu row or shortcut would. |
 | `wait: .{ .until, .timeout }` | Hold demo time until `.idle`, `.shown = "tag"` or `.gone = "tag"`; give up after `timeout` ms of wall time. |
 
+Key chords are the app's spelling: the `tape` library carries them as text, and a `Tape.Check`
+the app passes to `parse`, `load` and `Script` says which it accepts (fizzy's is
+`automation.Player.check`, the keymap's parser).
+
+### The binary form (`.tape`)
+
+`tape.binary` writes and reads the same `Tape` as a few flat tables: a 60-byte header (`FZTP`,
+a version, the counts), a string table that holds each distinct string once (anchors repeat
+constantly), then fixed-size records — ops, keyframes and their files, captions, chapters —
+that point into it by index. Reading is one bounds-checked pass that builds the `Tape` in a
+single arena, with every offset, index and enum checked: a damaged or truncated file is an
+error, never a crash. It is lossless both ways, so a tape converts freely between the forms.
+
+`Tape.load(gpa, bytes, check)` takes either form and tells them apart by the magic. How they
+compare (`zig build bench-tape -Doptimize=ReleaseFast`; recording-shaped tapes, best of seven):
+
+| Ops | ZON size | ZON load | Binary size | Binary load |
+|---:|---:|---:|---:|---:|
+| 200 (a scripted demo) | 31 KB | 0.34 ms | 8 KB | 0.012 ms |
+| 10,000 (about ten minutes recorded) | 1.5 MB | 17 ms | 353 KB | 0.29 ms |
+| 100,000 | 15 MB | 179 ms | 3.4 MB | 3.9 ms |
+
 ## For apps built on fizzy
 
 `app.automation` is framework: an app fills in a `Stage` (`begin`, `end`, `keyframe`, `idle`,
@@ -229,10 +254,12 @@ frame — before anything reads `dvui.events()` — and `automation.overlay.draw
 
 ## Tests
 
-- `zig build test` — `fizzy-automation-tests` (`app/automation_tests.zig`): the tape format and
-  its ZON round-trip, the script's pacing, and the sequencer's rules — waits and timeouts, a frame
-  per op, keystroke-at-a-time typing, and that rewinding to a keyframe and replaying lands exactly
-  where live play did.
+- `zig build test` — `fizzy-tape-tests` (`sdk/tape/root.zig`): the tape format and its ZON
+  round-trip; the binary form (field-for-field round-trip, conversion both ways, every
+  truncation and thousands of random bit flips refused cleanly); the script's pacing; and the
+  sequencer's rules — waits and timeouts, a frame per op, keystroke-at-a-time typing, and that
+  rewinding to a keyframe and replaying lands exactly where live play did.
+- `zig build bench-tape` — saving and loading, ZON against binary (prints timings).
 - `zig build test-integration` — `demo:` tests in `tests/integration.zig`: the player against a
   headless window with a tagged button and the text plugin's editor (plays as a person's input,
   rewinds to exactly the live state, a person's click pauses it and is undone on resume, real
@@ -243,7 +270,7 @@ frame — before anything reads `dvui.events()` — and `automation.overlay.draw
 
 - **Recording.** The format is ready for it: a recorder captures real dvui events between
   keyframes, maps each pointer event to the anchor under it (`dvui.tagGet` over the frame's tags)
-  so the recording is size-independent, and writes the tape with `Tape.write`.
+  so the recording is size-independent, and writes the tape in its binary form.
 - **Quick open over mounts** — the palette's index should come from `core.FileTable`, which
   already lists mounts; then a demo can show it.
-- **A `demos` build step** that writes every bundled demo as ZON, for a site to host.
+- **A `demos` build step** that writes every bundled demo as a tape, for a site to host.

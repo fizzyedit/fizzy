@@ -605,10 +605,10 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
-        // Demo automation's std-only core: the tape format, the sequencer that replays it
-        // deterministically, and the script builder. The dvui half (`automation/Player.zig`) is
-        // covered by `tests/integration.zig`.
-        .{ "fizzy-automation-tests", "app/automation_tests.zig" },
+        // Demo automation's std-only core (`sdk/tape/`): the tape format and its codecs, the
+        // sequencer that replays it deterministically, and the script builder. The dvui half
+        // (`app/automation/Player.zig`) is covered by `tests/integration.zig`.
+        .{ "fizzy-tape-tests", "sdk/tape/root.zig" },
     }) |entry| {
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = entry[0],
@@ -939,6 +939,28 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
 
         const bench_step = b.step("bench-markdown", "Benchmark the markdown preview's per-frame draw cost (prints timings)");
         const run_bench = b.addRunArtifact(bench_markdown);
+        run_bench.has_side_effects = true;
+        bench_step.dependOn(&run_bench.step);
+    }
+
+    // `zig build bench-tape` — saving and loading a tape, ZON against the binary form, at the
+    // sizes of a demo, a recording and a long session. Same rules as `bench-text`; std-only, so
+    // it needs no window and builds in seconds.
+    {
+        const bench_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("tests/bench/bench_tape.zig"),
+        });
+        bench_module.addImport("tape", b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .root_source_file = b.path("sdk/tape/root.zig"),
+        }));
+        const bench_tape = b.addTest(.{ .name = "fizzy-bench-tape", .root_module = bench_module });
+
+        const bench_step = b.step("bench-tape", "Benchmark saving and loading demo tapes, ZON against binary (prints timings)");
+        const run_bench = b.addRunArtifact(bench_tape);
         run_bench.has_side_effects = true;
         bench_step.dependOn(&run_bench.step);
     }

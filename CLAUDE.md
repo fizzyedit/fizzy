@@ -88,7 +88,8 @@ core/      the shared floor both an app and a plugin dylib draw with — widgets
            DockingWidget, Tabs, Tree, Canvas), anim, dialogs, draw, icon, image, fs, paths,
            math, fuzzy, lsp
 sdk/       the plugin contract: `sdk/src/**` is the SDK itself, the files beside it are its
-           build surface (this directory ships standalone as `fizzy-sdk-v*.tar.gz`)
+           build surface (this directory ships standalone as `fizzy-sdk-v*.tar.gz`);
+           `sdk/tape/` is the std-only demo-tape library shipped with it
 app/       the framework an application switches on — layout, store, update, watch, window,
            single_instance, automation (demos); never compiled into a dylib
 plugins/   the bundled plugins, in the exact shape a third-party plugin has
@@ -162,7 +163,10 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
   ground rules, what is done, the verification workflow, and the agreed next steps.
 
 - Demos that play the real app (tapes, the player, rewind, writing a demo, the anchors widgets
-  publish) → [`docs/AUTOMATION.md`](docs/AUTOMATION.md). Code in `app/automation/`, fizzy's stage
-  and bundled demos in `src/editor/Demo.zig` + `src/editor/demos/`.
+  publish) → [`docs/AUTOMATION.md`](docs/AUTOMATION.md); where it is going (recording, seeking,
+  libraries) → [`docs/AUTOMATION_PLAN.md`](docs/AUTOMATION_PLAN.md). The tape, sequencer and
+  script are the `tape` library in `sdk/tape/` (std-only); the player and overlay in
+  `app/automation/`; fizzy's stage and bundled demos in `src/editor/Demo.zig` +
+  `src/editor/demos/`.
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
 - Living reshape plan (identity `plugin.zig.zon`, comptime `settings.Schema`, ZON user config, no sidecars) → [`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)

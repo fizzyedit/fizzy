@@ -96,9 +96,10 @@ pub const update = struct {
 /// that replays it, `Script` the high-level way to write one, `Player` + `overlay` the dvui half
 /// (input injection, the pointer and captions a viewer sees), `Stage` what the app fills in.
 pub const automation = struct {
-    pub const Tape = @import("automation/Tape.zig");
-    pub const Sequencer = @import("automation/Sequencer.zig");
-    pub const Script = @import("automation/Script.zig");
+    pub const Tape = @import("tape").Tape;
+    pub const Sequencer = @import("tape").Sequencer;
+    pub const Script = @import("tape").Script;
+    pub const binary = @import("tape").binary;
     pub const Stage = @import("automation/Stage.zig");
     pub const Player = @import("automation/Player.zig");
     pub const overlay = @import("automation/overlay.zig");

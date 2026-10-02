@@ -24,8 +24,8 @@ const Player = @This();
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
-const Tape = @import("Tape.zig");
-const Sequencer = @import("Sequencer.zig");
+const Tape = @import("tape").Tape;
+const Sequencer = @import("tape").Sequencer;
 const Stage = @import("Stage.zig");
 const chord = @import("../keymap/chord.zig");
 const dvui_adapter = @import("../keymap/dvui_adapter.zig");
@@ -140,7 +140,7 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
     self.unload();
     self.owned = owned;
     const t = &self.owned.?.tape;
-    self.seq = .init(t, if (core.platform.isMacOS()) .mac else .other);
+    self.seq = .init(t);
     const win = dvui.windowRectPixels();
     self.seq.pointer = .{ .x = win.x + win.w / 2, .y = win.y + win.h / 2 };
     self.diverged = false;
@@ -477,7 +477,28 @@ fn dvuiMod(m: chord.Mods) dvui.enums.Mod {
     return @enumFromInt(bits);
 }
 
-fn key(_: *anyopaque, c: chord.Chord) void {
+/// The tape's spelling of a chord is the keymap's (`check`): `mod` is ⌘ on a Mac and Ctrl
+/// elsewhere, and a two-stroke chord is pressed a stroke at a time.
+fn key(_: *anyopaque, spelled: []const u8) void {
+    // `check` passed it at load; a tape that skipped that loses the key.
+    const stroke = chord.parseKeys(spelled, platform()) catch return;
+    pressChord(stroke.first);
+    if (stroke.second) |second| pressChord(second);
+}
+
+fn platform() chord.Platform {
+    return if (core.platform.isMacOS()) .mac else .other;
+}
+
+/// What the player checks a tape against (`Tape.Check`): its key chords in the keymap's spelling.
+pub const check: Tape.Check = .{ .key = struct {
+    fn ok(spelled: []const u8) bool {
+        _ = chord.parseKeys(spelled, .other) catch return false;
+        return true;
+    }
+}.ok };
+
+fn pressChord(c: chord.Chord) void {
     const cw = dvui.currentWindow();
     const code = dvui_adapter.toDvuiKey(c.key);
     const mod = dvuiMod(c.mods);

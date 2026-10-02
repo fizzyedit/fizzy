@@ -1591,14 +1591,14 @@ export fn FizzyWebShowInRoot(path_ptr: [*]const u8, path_len: usize) void {
     editor.app.host.refresh();
 }
 
-/// The page plays a demo: `?demo=tour` names a bundled one, `?demo=<url>.zon` is a tape it
-/// fetched (`app.automation.Tape`'s ZON form). Either way it starts on the next frame.
-export fn FizzyWebPlayDemo(ptr: [*]u8, len: usize, is_zon: bool) void {
+/// The page plays a demo: `?demo=tour` names a bundled one, `?demo=<url>.zon` or `.tape` is a
+/// tape it fetched (`tape.Tape`, ZON or binary). Either way it starts on the next frame.
+export fn FizzyWebPlayDemo(ptr: [*]u8, len: usize, is_tape: bool) void {
     if (comptime builtin.target.cpu.arch != .wasm32) return;
     const editor = web_editor orelse return;
     const bytes = ptr[0..len];
     defer editor.app.gpa.free(bytes);
-    if (is_zon) editor.demo.playZonSoon(bytes) else editor.demo.playSoon(bytes);
+    if (is_tape) editor.demo.playTapeSoon(bytes) else editor.demo.playSoon(bytes);
     editor.app.host.refresh();
 }
 

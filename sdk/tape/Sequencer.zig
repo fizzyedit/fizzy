@@ -24,11 +24,8 @@ const Sequencer = @This();
 
 const std = @import("std");
 const Tape = @import("Tape.zig");
-const chord = @import("../keymap/chord.zig");
 
 tape: *const Tape,
-/// Which physical modifier a tape's `mod+` means.
-platform: chord.Platform,
 /// Demo time, in ms.
 now: f64 = 0,
 /// The next op to start, as an index into `tape.ops`.
@@ -70,8 +67,9 @@ pub const Sink = struct {
         moveTo: *const fn (ctx: *anyopaque, pt: Point) void,
         button: *const fn (ctx: *anyopaque, button: Tape.Button, down: bool) void,
         scroll: *const fn (ctx: *anyopaque, by: Tape.Scroll) void,
-        /// One chord pressed and released.
-        key: *const fn (ctx: *anyopaque, c: chord.Chord) void,
+        /// A key chord pressed and released, as the tape spells it (`"mod+s"`, `"mod+k mod+c"`; a
+        /// typed newline or tab as `"enter"` or `"tab"`). The app turns its spelling into keys.
+        key: *const fn (ctx: *anyopaque, chord: []const u8) void,
         /// Text typed; never contains `\n` or `\t` (those arrive as `key`).
         text: *const fn (ctx: *anyopaque, bytes: []const u8) void,
         command: *const fn (ctx: *anyopaque, id: []const u8) void,
@@ -82,8 +80,8 @@ pub const Sink = struct {
     };
 };
 
-pub fn init(tape: *const Tape, platform: chord.Platform) Sequencer {
-    return .{ .tape = tape, .platform = platform };
+pub fn init(tape: *const Tape) Sequencer {
+    return .{ .tape = tape };
 }
 
 /// Every op has been applied and nothing is in flight.
@@ -178,10 +176,7 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
             },
             .key => |k| {
                 self.cursor += 1;
-                // `Tape.validate` parsed it already; a tape that skipped validation loses the key.
-                const stroke = chord.parseKeys(k, self.platform) catch return .yielded;
-                sink.vtable.key(sink.ctx, stroke.first);
-                if (stroke.second) |second| sink.vtable.key(sink.ctx, second);
+                sink.vtable.key(sink.ctx, k);
                 return .yielded;
             },
             .command => |id| {
@@ -251,8 +246,8 @@ fn deliver(self: *Sequencer, bytes: []const u8, sink: Sink) void {
     while (i < bytes.len) {
         const n = @min(std.unicode.utf8ByteSequenceLength(bytes[i]) catch 1, bytes.len - i);
         switch (bytes[i]) {
-            '\n' => sink.vtable.key(sink.ctx, .{ .key = .enter }),
-            '\t' => sink.vtable.key(sink.ctx, .{ .key = .tab }),
+            '\n' => sink.vtable.key(sink.ctx, "enter"),
+            '\t' => sink.vtable.key(sink.ctx, "tab"),
             else => sink.vtable.text(sink.ctx, bytes[i..][0..n]),
         }
         i += n;
@@ -390,8 +385,8 @@ const Log = struct {
     fn scroll(ctx: *anyopaque, s: Tape.Scroll) void {
         from(ctx).print("scroll {d}", .{s.y});
     }
-    fn key(ctx: *anyopaque, c: chord.Chord) void {
-        from(ctx).print("key {s}{t}", .{ if (c.mods.ctrl) "ctrl+" else "", c.key });
+    fn key(ctx: *anyopaque, c: []const u8) void {
+        from(ctx).print("key {s}", .{c});
     }
     fn text(ctx: *anyopaque, bytes: []const u8) void {
         from(ctx).print("text {s}", .{bytes});
@@ -436,7 +431,7 @@ test "a click lands a frame after the glide that brought the pointer to it" {
     defer log.deinit();
     try log.tags.put(testing.allocator, "ok", .{ .x = 100, .y = 0 });
 
-    var seq: Sequencer = .init(&tape, .other);
+    var seq: Sequencer = .init(&tape);
     // One huge frame: everything is due, but each op still gets a frame of its own.
     try testing.expectEqual(Progress.yielded, seq.advance(1000, 16, log.sink()));
     try testing.expectEqualStrings("keyframe demo://a\n", log.out.items);
@@ -463,7 +458,7 @@ test "a glide moves a little every frame and ends on its target" {
     const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
     var log: Log = .{};
     defer log.deinit();
-    var seq: Sequencer = .init(&tape, .other);
+    var seq: Sequencer = .init(&tape);
     playTo(&seq, 200, 25, log.sink());
     var moves: usize = 0;
     var lines = std.mem.tokenizeScalar(u8, log.out.items, '\n');
@@ -482,7 +477,7 @@ test "typing spreads keystrokes over the span, and Enter is a key" {
     const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
     var log: Log = .{};
     defer log.deinit();
-    var seq: Sequencer = .init(&tape, .other);
+    var seq: Sequencer = .init(&tape);
     playTo(&seq, 1000, 50, log.sink());
     var typed: std.ArrayList(u8) = .empty;
     defer typed.deinit(testing.allocator);
@@ -528,7 +523,7 @@ test "a wait holds demo time until it holds, then carries on in the same frame" 
     const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
     var log: Log = .{ .idle = false };
     defer log.deinit();
-    var seq: Sequencer = .init(&tape, .other);
+    var seq: Sequencer = .init(&tape);
     _ = seq.advance(100, 16, log.sink());
     try testing.expectEqual(Progress.holding, seq.advance(100, 16, log.sink()));
     try testing.expectEqual(Progress.holding, seq.advance(100, 16, log.sink()));
@@ -547,13 +542,13 @@ test "a wait that never holds gives up after its timeout, in wall time" {
     const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
     var log: Log = .{};
     defer log.deinit();
-    var seq: Sequencer = .init(&tape, .other);
+    var seq: Sequencer = .init(&tape);
     _ = seq.advance(0, 16, log.sink());
     var frames: usize = 0;
     while (seq.advance(0, 30, log.sink()) == .holding) frames += 1;
     // Entering the wait, then 30, 60 and 90 ms held; at 120 it gives up and the key lands.
     try testing.expectEqual(@as(usize, 4), frames);
-    try testing.expectEqualStrings("keyframe demo://a\ntimeout\nkey ctrl+s\n", log.out.items);
+    try testing.expectEqualStrings("keyframe demo://a\ntimeout\nkey mod+s\n", log.out.items);
 }
 
 test "rewinding to a keyframe and replaying fast lands where live play did" {
@@ -567,12 +562,12 @@ test "rewinding to a keyframe and replaying fast lands where live play did" {
         .{ .at = 1300, .ms = 400, .do = .{ .type = "world" } },
     };
     const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
-    try tape.validate();
+    try tape.validate(.{});
 
     var live: Log = .{};
     defer live.deinit();
     try live.tags.put(testing.allocator, "field", .{ .x = 50, .y = 60 });
-    var seq: Sequencer = .init(&tape, .other);
+    var seq: Sequencer = .init(&tape);
     playTo(&seq, 1100, 16, live.sink());
 
     // Rewind from past the second keyframe back into the first scene, then replay fast.
@@ -611,7 +606,7 @@ test "a seek into the middle of a span leaves it part done, to finish live" {
     const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
     var log: Log = .{};
     defer log.deinit();
-    var seq: Sequencer = .init(&tape, .other);
+    var seq: Sequencer = .init(&tape);
     while (seq.advance(500, 16, log.sink()) != .reached) {}
     try testing.expect(seq.typing != null);
     const sent = seq.typing.?.sent;
