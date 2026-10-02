@@ -93,3 +93,24 @@ jobs:
       - name: Verify SDK version / ABI fingerprint lock
         shell: bash
         run: bash scripts/ci-retry.sh zig build test-sdk-version --summary all
+
+  # Fizzy's own backend on Windows, which nothing else builds: Windows still defaults to dvui's
+  # backend (`build/exe.zig`'s `defaultNativeBackend`) and the consumer apps above skip Windows.
+  # Cross-compiled from Linux for the GNU ABI, which needs no MSVC SDK (release.yml's msvc
+  # builds do). It shows the app compiles and links, not that it runs.
+  windows-fizzy-backend:
+    name: Windows build (fizzy backend, cross-compiled)
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          cache-key: ${{ hashFiles('**/build.zig.zon') }}
+      - name: Pre-create Zig cache tmp/
+        run: mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp" "$ZIG_LOCAL_CACHE_DIR/tmp"
+      - name: Fetch dependencies (with retries)
+        run: bash scripts/ci-retry.sh zig build --fetch
+      - name: Build for x86_64-windows-gnu with -Dnative-backend=fizzy
+        run: bash scripts/ci-retry.sh zig build -Dtarget=x86_64-windows-gnu -Dnative-backend=fizzy -Dno-emit --summary all

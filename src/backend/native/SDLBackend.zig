@@ -202,12 +202,9 @@ fn createWindowRenderer(options: InitOptions, share_device_of: ?*GpuRenderer) !s
 
     const hidden_flag = if (hidden) c.SDL_WINDOW_HIDDEN else 0;
     const fullscreen_flag = if (options.fullscreen) c.SDL_WINDOW_FULLSCREEN else 0;
-    // SDL_GPU composites a transparent window's alpha with Metal and Vulkan (fizzyedit/SDL leaves
-    // the claim to each driver); its D3D12 swapchain does not yet, so on Windows the window is
-    // made opaque rather than not drawn at all.
-    const transparent = options.transparent and builtin.os.tag != .windows;
-    if (options.transparent and !transparent) log.warn("transparent windows are not supported on Windows with this backend yet; the window is opaque", .{});
-    const transparent_flag = if (transparent) c.SDL_WINDOW_TRANSPARENT else 0;
+    // SDL_GPU composites a transparent window's alpha with Metal, Vulkan, and D3D12 through
+    // DirectComposition (fizzyedit/SDL; see `GpuRenderer.create` for which driver Windows takes).
+    const transparent_flag = if (options.transparent) c.SDL_WINDOW_TRANSPARENT else 0;
     const window: *c.SDL_Window = blk: {
         // Window properties let us apply restored geometry at creation time,
         // so the window appears directly at its previous position/size.

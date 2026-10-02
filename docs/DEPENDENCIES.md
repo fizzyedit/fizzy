@@ -44,12 +44,17 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    used to clear the flag in SDL's private window struct for the claim) and on Linux.
    Upstream: not yet proposed.
 
-Planned: **D3D12: a DirectComposition swapchain for a transparent window**
-(`CreateSwapChainForComposition`, `DXGI_ALPHA_MODE_PREMULTIPLIED`, on an `IDCompositionVisual`
-for the HWND), which removes the D3D12 refusal and lets Windows use fizzy's backend with its
-Acrylic backdrop.
+2. **GPU: D3D12 presents a transparent window through DirectComposition** (`3d6e802`). A
+   transparent window's swapchain is made with `CreateSwapChainForComposition` (premultiplied
+   alpha, stretch scaling, sequential flip, an explicit size) and shown as the content of a
+   DirectComposition visual on a topmost target for the HWND, so DWM composites its alpha over
+   the desktop or the Acrylic backdrop fizzy asks for (`win32_titlebar.zig`). `dcomp.dll` is loaded
+   with the first transparent window; `dcomp.h` is C++-only, so the three interfaces it calls are
+   declared by vtable slot. Resizes pass the window's pixel size; it never tears. Xbox and DXVK
+   still refuse. Compiled for x86, x64 and arm64 Windows; **not yet run on Windows 11**.
+   Upstream: worth proposing once it has been.
 
-Tags: `fizzy-3.4.16-1` → `a4b021c`.
+Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`, what sdl_zig pins now.
 
 ## fizzyedit/sdl_zig
 
@@ -63,7 +68,11 @@ Tags: `fizzy-3.4.16-1` → `a4b021c`.
    `-Dtarget=*-macos` (the other half of a universal build, `build/common.zig`'s
    `macosSdlPathsForExplicitTarget`) could not find Cocoa. Upstream: worth proposing.
 
-Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`, the commit fizzy pins.
+3. **Build fizzyedit/SDL `fizzy-3.4.16-2`** (`5950760`): the pin moves to SDL's second patch.
+   Squash into 1 at the next rebase.
+
+Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`, the commit fizzy
+pins now.
 
 ## Bumping
 
@@ -82,6 +91,15 @@ Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`, the commit fizzy pins.
    then build macOS, Linux and Windows.
 
 **A fizzy-only SDL change:** the same, with only step 1's new change instead of a rebase.
+
+**Where a rebase conflicts.** Patch 1 touches one check in `SDL_ClaimWindowForGPUDevice`. Patch 2
+lives mostly in two functions of its own (`D3D12_INTERNAL_SetCompositionContent`,
+`D3D12_INTERNAL_ReleaseComposition`) and otherwise touches the D3D12 swapchain's create, resize,
+present and release paths in `src/gpu/d3d12/SDL_gpu_d3d12.c` — the code an upstream D3D12
+change is likeliest to move. After resolving, compile the file for Windows before pushing; it
+needs no build of the rest of SDL:
+`zig cc -target x86_64-windows-gnu -Iinclude -Iinclude/build_config -Isrc -Isrc/video/khronos -c src/gpu/d3d12/SDL_gpu_d3d12.c -o /tmp/d3d12.o`.
+CI's Windows cross-build (`ci.yml`) then builds it into fizzy.
 
 For local work on either fork, point the pin at a checkout with `.path = "../sdl_zig"` (and the
 wrapper's `.sdl` at `../SDL`), as `sdk/build.zig.zon` does for `../dvui-dev`.

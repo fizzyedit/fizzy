@@ -77,8 +77,9 @@ pub const NativeBackend = enum {
     sdl3,
 };
 
-/// SDL_GPU's D3D12 swapchain does not composite fizzy's transparent window, so Windows stays
-/// on dvui's backend for now.
+/// Windows stays on dvui's backend until fizzy's has been seen there: its D3D12 swapchain now
+/// composites the transparent window through DirectComposition (fizzyedit/SDL), which nothing has
+/// shown on a Windows 11 desktop yet. `-Dnative-backend=fizzy` builds it.
 pub fn defaultNativeBackend(target: std.Build.ResolvedTarget) NativeBackend {
     return if (target.result.os.tag == .windows) .sdl3 else .fizzy;
 }

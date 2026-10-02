@@ -211,16 +211,25 @@ pub fn primary() ?*GpuRenderer {
     return null;
 }
 
+/// A device for `window`'s renderer, with the validation layers (where the driver has them) in Debug
+/// builds. On Windows a transparent window asks for D3D12: SDL tries Vulkan first, and a Vulkan
+/// swapchain there is opaque, where D3D12's is composited with its alpha (DirectComposition). Without
+/// D3D12 the window takes whatever SDL picks, and is opaque.
+fn createDevice(window: *c.SDL_Window) ?*c.SDL_GPUDevice {
+    const formats = c.SDL_GPU_SHADERFORMAT_SPIRV | c.SDL_GPU_SHADERFORMAT_DXIL | c.SDL_GPU_SHADERFORMAT_MSL;
+    const debug = builtin.mode == .Debug;
+    if (builtin.os.tag == .windows and c.SDL_GetWindowFlags(window) & c.SDL_WINDOW_TRANSPARENT != 0) {
+        if (c.SDL_CreateGPUDevice(formats, debug, "direct3d12")) |device| return device;
+        log.warn("no D3D12 device ({s}); the transparent window will be opaque", .{c.SDL_GetError()});
+    }
+    return c.SDL_CreateGPUDevice(formats, debug, null);
+}
+
 pub fn create(gpa: std.mem.Allocator, window: *c.SDL_Window, options: Options) !*GpuRenderer {
     const self = try gpa.create(GpuRenderer);
     errdefer gpa.destroy(self);
 
-    const device: *c.SDL_GPUDevice = if (options.share_device_of) |other| other.device else c.SDL_CreateGPUDevice(
-        c.SDL_GPU_SHADERFORMAT_SPIRV | c.SDL_GPU_SHADERFORMAT_DXIL | c.SDL_GPU_SHADERFORMAT_MSL,
-        // The validation layers, where the driver has them: Debug builds only.
-        builtin.mode == .Debug,
-        null,
-    ) orelse {
+    const device: *c.SDL_GPUDevice = if (options.share_device_of) |other| other.device else createDevice(window) orelse {
         log.err("SDL_CreateGPUDevice failed: {s}", .{c.SDL_GetError()});
         return error.GpuDevice;
     };
@@ -229,7 +238,8 @@ pub fn create(gpa: std.mem.Allocator, window: *c.SDL_Window, options: Options) !
     if (c.SDL_GetGPUDeviceDriver(device)) |name| log.info("GPU driver: {s}", .{name});
 
     // A transparent window is claimed as one where the driver composites the swapchain's alpha
-    // (Metal, Vulkan): fizzyedit/SDL leaves that to each driver (docs/DEPENDENCIES.md).
+    // (Metal, Vulkan, D3D12 through DirectComposition): fizzyedit/SDL leaves that to each driver
+    // (docs/DEPENDENCIES.md).
     if (!c.SDL_ClaimWindowForGPUDevice(device, window)) {
         log.err("SDL_ClaimWindowForGPUDevice failed: {s}", .{c.SDL_GetError()});
         return error.GpuClaimWindow;
