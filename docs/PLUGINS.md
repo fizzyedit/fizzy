@@ -634,6 +634,18 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   makes "open to the side" work), `documentPath`, `setDocumentPath`, `revealPosition`,
   dirty/save indicators. These keep `DocHandle` opaque so the plugin drawing tabs never sees a
   plugin-specific type.
+- **Demo snapshots** (optional) — `captureDocumentState(doc, allocator) → []u8`,
+  `restoreDocumentState(doc, bytes)` and `documentFingerprint(doc) → u64`. A demo seeking back
+  puts the app back to a snapshot it took while playing rather than replaying from the keyframe
+  (`docs/AUTOMATION.md`); these are a document's part in it. Capture returns whatever puts the
+  document back exactly — contents, caret and selection, scroll, dirty or clean — as bytes only
+  the owner reads; they live in memory for one session of one build and are never written, so
+  the format is the owner's to change freely. Restore puts them back in place (same document,
+  same pane; undo history may be dropped). The fingerprint hashes what decides what happens next
+  — contents and caret, not scroll — with no side effects; the demo compares it when a replay
+  reaches a moment it snapshotted. An owner without them still plays in demos; a moment with its
+  document open just is not snapshotted, and seeks through it replay from the keyframe. `text`
+  implements all three.
 - **Rendering** — `drawDocument(doc)` (the document's content, called through the document's
   surface wherever a region accepting `document` shows it), `infobarEntries(active_doc)` (icon
   + text chips Fizzy draws in the infobar; plugins do not draw into the bar).

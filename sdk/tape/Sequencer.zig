@@ -107,6 +107,24 @@ pub fn nextAt(self: Sequencer) f64 {
     return @max(t, self.now);
 }
 
+/// Between ops: no glide or typing in flight and no wait holding — a moment the app's model can
+/// be taken as a whole (`Player`'s snapshots).
+pub fn calm(self: Sequencer) bool {
+    return self.glide == null and self.typing == null and !self.holding;
+}
+
+/// Put the sequencer back at a moment it was `calm` at: `cursor` the next op, `now` the demo
+/// time, the pointer where it was. The app is put back to that moment by its stage.
+pub fn restoreTo(self: *Sequencer, cursor: usize, now: f64, pointer: Point) void {
+    self.cursor = cursor;
+    self.now = now;
+    self.pointer = pointer;
+    self.glide = null;
+    self.typing = null;
+    self.holding = false;
+    self.held_ms = 0;
+}
+
 /// Every op has been applied and nothing is in flight.
 pub fn done(self: Sequencer) bool {
     return self.cursor >= self.tape.ops.len and self.glide == null and self.typing == null and !self.holding;

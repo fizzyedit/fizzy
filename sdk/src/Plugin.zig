@@ -187,6 +187,21 @@ pub const VTable = struct {
     /// clean open file changes externally. Absent = fizzy skips auto-reload for this
     /// owner (dirty conflict detection on save still works via content hashing).
     reloadDocument: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
+    /// `doc` as it is right now — its contents, caret and selection, scroll, whatever else the
+    /// owner needs to put it back exactly — as bytes only the owner reads, owned by the caller
+    /// and allocated with `allocator`. A demo's seek snapshot (`app.automation`): held in memory
+    /// for one session of one build and never written anywhere, so the format is the owner's
+    /// and may change freely. Absent = a demo cannot snapshot a moment with this document open,
+    /// and seeks back through it replay from the keyframe instead.
+    captureDocumentState: ?*const fn (state: *anyopaque, doc: DocHandle, allocator: std.mem.Allocator) anyerror![]u8 = null,
+    /// Put `doc` back to what `captureDocumentState` returned for it, in place: the same
+    /// document in the same pane, its contents, caret and scroll as they were, dirty or clean
+    /// as it was. Undo history may be dropped. `bytes` is only valid for the call.
+    restoreDocumentState: ?*const fn (state: *anyopaque, doc: DocHandle, bytes: []const u8) anyerror!void = null,
+    /// A hash of what in `doc` decides what happens next — its contents and caret, not its
+    /// scroll — with no side effects. A demo compares it when a replay reaches a moment it
+    /// snapshotted before, to catch a tape that does not replay exactly.
+    documentFingerprint: ?*const fn (state: *anyopaque, doc: DocHandle) u64 = null,
     isDirty: ?*const fn (state: *anyopaque, doc: DocHandle) bool = null,
     undo: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
     redo: ?*const fn (state: *anyopaque, doc: DocHandle) anyerror!void = null,
@@ -659,6 +674,36 @@ pub fn reloadDocument(self: Plugin, doc: DocHandle) bool {
         return true;
     }
     return false;
+}
+
+/// `doc`'s state for a demo's snapshot (`captureDocumentState`). Null when the owner has no
+/// hook or it failed — the moment is then not snapshotted.
+pub fn captureDocumentState(self: Plugin, doc: DocHandle, allocator: std.mem.Allocator) ?[]u8 {
+    const prof = core.profile.begin(self.id, "captureDocumentState");
+    defer prof.end();
+    const f = self.vtable.captureDocumentState orelse return null;
+    return f(self.state, doc, allocator) catch |err| {
+        std.log.err("{s}: captureDocumentState failed: {s}", .{ self.id, self.errorName(err) });
+        return null;
+    };
+}
+
+/// Put `doc` back as `captureDocumentState` found it. Returns whether it was.
+pub fn restoreDocumentState(self: Plugin, doc: DocHandle, bytes: []const u8) bool {
+    const prof = core.profile.begin(self.id, "restoreDocumentState");
+    defer prof.end();
+    const f = self.vtable.restoreDocumentState orelse return false;
+    f(self.state, doc, bytes) catch |err| {
+        std.log.err("{s}: restoreDocumentState failed: {s}", .{ self.id, self.errorName(err) });
+        return false;
+    };
+    return true;
+}
+
+/// `doc`'s `documentFingerprint`, or null when the owner has none.
+pub fn documentFingerprint(self: Plugin, doc: DocHandle) ?u64 {
+    const f = self.vtable.documentFingerprint orelse return null;
+    return f(self.state, doc);
 }
 
 /// Tear down an open document. Returns whether the plugin handled it, so fizzy

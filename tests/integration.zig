@@ -4124,6 +4124,12 @@ const DemoStage = struct {
     commands: usize = 0,
     fast: bool = false,
     begun: bool = false,
+    /// Off, the player seeks from keyframes alone.
+    snapshots: bool = true,
+    restores: usize = 0,
+
+    /// The whole of this app's model.
+    const Snap = struct { text: []u8, clicks: usize, commands: usize };
 
     fn stage(self: *DemoStage) automation.Stage {
         return .{ .ctx = self, .vtable = &.{
@@ -4135,6 +4141,10 @@ const DemoStage = struct {
             .chordFor = chordFor,
             .commandTitle = commandTitle,
             .fastForward = fastForward,
+            .capture = capture,
+            .restore = restore,
+            .release = release,
+            .fingerprint = fingerprint,
         } };
     }
     fn from(ctx: *anyopaque) *DemoStage {
@@ -4169,6 +4179,39 @@ const DemoStage = struct {
     }
     fn fastForward(ctx: *anyopaque, on: bool) void {
         from(ctx).fast = on;
+    }
+    fn capture(ctx: *anyopaque) ?*anyopaque {
+        if (!from(ctx).snapshots) return null;
+        const snap = std.testing.allocator.create(Snap) catch return null;
+        snap.* = .{
+            .text = std.testing.allocator.dupe(u8, demo_text.items) catch {
+                std.testing.allocator.destroy(snap);
+                return null;
+            },
+            .clicks = demo_clicks,
+            .commands = demo_commands,
+        };
+        return snap;
+    }
+    fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
+        const snap: *Snap = @ptrCast(@alignCast(raw));
+        from(ctx).restores += 1;
+        demo_text.clearRetainingCapacity();
+        demo_text.appendSlice(std.testing.allocator, snap.text) catch unreachable;
+        demo_clicks = snap.clicks;
+        demo_commands = snap.commands;
+        return true;
+    }
+    fn release(_: *anyopaque, raw: *anyopaque) void {
+        const snap: *Snap = @ptrCast(@alignCast(raw));
+        std.testing.allocator.free(snap.text);
+        std.testing.allocator.destroy(snap);
+    }
+    fn fingerprint(_: *anyopaque) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(demo_text.items);
+        h.update(std.mem.asBytes(&[_]usize{ demo_clicks, demo_commands }));
+        return h.final();
     }
 };
 
@@ -4231,7 +4274,7 @@ fn demoCtx() !dvui.testing {
     demo_clicks = 0;
     demo_commands = 0;
     demo_stage = .{};
-    demo_player = .init(demo_stage.stage());
+    demo_player = .init(std.testing.allocator, demo_stage.stage());
     // No wall-time budget: a seek lands in the step that asked for it, whatever the machine.
     demo_player.budget_ns = std.math.maxInt(i64);
     demo_clock = 0;
@@ -4281,6 +4324,8 @@ test "demo: a tape plays into real widgets as a person's input" {
 test "demo: rewinding replays to exactly what live play reached, and forward again" {
     var t = try demoCtx();
     defer deinitDemo(&t);
+    // The keyframe path: no snapshots to come back to.
+    demo_stage.snapshots = false;
 
     demo_player.load(try demoTape(), .{});
     try stepDemoUntil(.ended, 400);
@@ -4316,6 +4361,8 @@ test "demo: rewinding replays to exactly what live play reached, and forward aga
 test "demo: a seek lands in the frame that asked for it, the app's clock following the demo" {
     var t = try demoCtx();
     defer deinitDemo(&t);
+    // Every seek replays from the keyframe, so there is demo time to cover.
+    demo_stage.snapshots = false;
 
     demo_player.load(try demoTape(), .{});
     try stepDemoUntil(.ended, 400);
@@ -4357,6 +4404,77 @@ test "demo: a seek lands in the frame that asked for it, the app's clock followi
     try std.testing.expectEqualStrings("> hello", demo_text.items);
     try std.testing.expectEqual(@as(u32, 0), demo_player.seek_stats.silent);
     try std.testing.expect(demo_player.seek_stats.shown > 3);
+}
+
+test "demo: a seek back goes to the nearest snapshot, not the keyframe, and lands exactly" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    // Taken as it played: once the scene settled, at each chapter, every few seconds.
+    try std.testing.expect(demo_player.snapshots.items.len >= 3);
+    const more: f64 = @floatFromInt(demo_player.tape().?.chapters[2].at);
+
+    demo_player.seek(more - 10);
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(automation.Player.State.paused, demo_player.state);
+    try std.testing.expectEqualStrings("> hello", demo_text.items);
+    try std.testing.expectEqual(@as(usize, 1), demo_clicks);
+    try std.testing.expectEqual(@as(usize, 0), demo_commands);
+    // Put back in place, the keyframe never cut to again.
+    try std.testing.expectEqual(@as(usize, 1), demo_stage.keyframes);
+    try std.testing.expectEqual(@as(usize, 1), demo_stage.restores);
+    try std.testing.expect(demo_player.seek_stats.restored != null);
+
+    // On to the end: the moments snapshotted on the first pass, reached again, are the same.
+    demo_player.seek(@floatFromInt(demo_player.duration()));
+    try stepDemoUntil(.paused, 200);
+    try std.testing.expectEqualStrings("> hello world", demo_text.items);
+    try std.testing.expectEqual(@as(u32, 0), demo_player.mismatches);
+}
+
+test "demo: the scrubber seeks as it is dragged" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    const tape = demo_player.tape().?;
+    const typing: f64 = @floatFromInt(tape.chapters[1].at);
+    const more: f64 = @floatFromInt(tape.chapters[2].at);
+
+    // Held and moved back: the app follows the knob while it is held.
+    demo_player.transport.scrub = typing - 10;
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqualStrings("> ", demo_text.items);
+    try std.testing.expectEqual(@as(usize, 1), demo_clicks);
+    demo_player.transport.scrub = more - 10;
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqualStrings("> hello", demo_text.items);
+    demo_player.transport.scrub = typing - 10;
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqualStrings("> ", demo_text.items);
+    try std.testing.expectEqual(@as(usize, 1), demo_stage.keyframes);
+    try std.testing.expectEqual(@as(u32, 0), demo_player.mismatches);
+}
+
+test "demo: a replay that does not reach what playing did is caught" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    const more: f64 = @floatFromInt(demo_player.tape().?.chapters[2].at);
+    demo_player.seek(more - 10);
+    _ = try dvui.testing.step(demoFrame);
+    // Something the tape does not do, as an unawaited load or an unnamed target would — then on,
+    // through the moments the first pass snapshotted. (A seek forward would jump to the next
+    // snapshot instead, putting the model right without replaying it.)
+    try demo_text.appendSlice(std.testing.allocator, "!");
+    demo_player.play();
+    try stepDemoUntil(.ended, 400);
+    try std.testing.expect(demo_player.mismatches > 0);
 }
 
 test "demo: a person's click pauses it, and resuming undoes what they did first" {

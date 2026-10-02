@@ -12,13 +12,14 @@ into it.
 - The `tape` library (`sdk/tape/`, std-only): a `Tape` (keyframes, input ops aimed at anchors,
   captions, chapters; ZON and binary), the `Sequencer`, the `Script` builder. In
   `app/automation/`: a dvui `Player` and an overlay; in fizzy, its `Stage`.
-- **Seeking replays silently, within a budget** (milestone 2). A seek cuts to the last authored
-  keyframe and replays every op since, a frame each, unseen, up to 8 ms of them per displayed
-  frame. Within a scene it lands in the frame it was asked in; across minutes of recording it
-  takes a few dozen frames, the intermediate states briefly showing. Scrubbing is still a seek on
-  release, not a live follow.
-- **Keyframes are authored only, and heavy.** Cutting to one closes every document, remounts the
-  files, resets the layout and reopens — async loads and all.
+- **Seeking replays silently, within a budget** (milestone 2), **from runtime snapshots**
+  (milestone 3). A seek goes back to the nearest snapshot the player took while playing — a cut
+  to the authored keyframe only when none will do — and replays the ops since, a frame each,
+  unseen, up to 8 ms of them per displayed frame. A seek lands in the frame it was asked in, and
+  the scrubber follows as it is dragged.
+- **Keyframes are authored, and heavy** — cutting to one closes every document, remounts the files,
+  resets the layout and reopens, async loads and all — so a seek cuts to one only when it crosses
+  into another scene, or no snapshot of this one can be restored from where the app is.
 - **No recorder**, and everything a tape aims at has to be marked by hand (`core.anchor.mark`).
 
 ## Principles
@@ -108,7 +109,7 @@ The heart of it. Three pieces, then three behaviours built from them.
   without the present, `Window.begin` again, the app's frame — inside the displayed frame, by
   `Player.frames` wrapping the app's frame function. Its draws land in the frame's texture and are
   dropped; nothing is swapped. Offered upstream to dvui as a window option once proven.
-- **Snapshots at runtime.** On the first pass through a demo the player takes a snapshot at every
+- **Snapshots at runtime** (built, milestone 3). On the first pass through a demo the player takes a snapshot at every
   chapter and every few seconds of demo time (`Stage.capture`), keeping them in memory. Restoring
   one (`Stage.restore`) applies it in place — replace a document's text, set its selection,
   reopen only what differs — never a close-everything-and-reload. Then a few silent frames to
@@ -146,7 +147,7 @@ Measured by a `zig build bench-replay` step on fizzy's tour, Debug and ReleaseFa
 | Recording overhead | < 0.05 ms a frame |
 | Silent frame (fizzy, a document open) | < 2 ms — measured ~0.9 ms CPU (`bench-replay`: the text editor over a 400-line file, ReleaseFast) |
 | Restore a snapshot, settled | < 5 ms for a demo-sized model |
-| Scrub to any point of a two-minute demo | in the same frame for moves within a snapshot's span; < 100 ms worst |
+| Scrub to any point of a two-minute demo | in the same frame for moves within a snapshot's span; < 100 ms worst — measured 2.5 ms mean, 5.3 ms worst (three-minute recording) |
 | Load a 10-minute recording (binary) | < 1 ms — measured 0.3 ms (10k ops, ReleaseFast) |
 | Anchors published while a demo runs | < 0.1 ms a frame |
 
@@ -176,6 +177,16 @@ Each lands on its own and leaves the demos working.
    CPU's layout, ~0.9 ms); and it lives in the player, wrapping the app's frame function, rather
    than in each backend's loop, so it serves the SDL, callback and web paths alike.
 3. **Snapshots** (`Stage.capture`/`restore`) and the determinism hash; scrubbing follows the knob.
+   Done: the player takes snapshots at calm moments (a scene settled, each chapter, every 3 s),
+   seeks back through the nearest it can restore, and checks each moment's fingerprint again
+   when a replay reaches it; the scrubber seeks as it is dragged. Fizzy's are in place — the
+   demo's files, each document's state from its owner through three new optional SDK hooks
+   (`captureDocumentState`, `restoreDocumentState`, `documentFingerprint`; `text` implements
+   them), the explorer, settings, focus — and refuse a scene they did not come from. Measured
+   (`bench-replay`, ReleaseFast): a random seek across a three-minute recording lands in 2.5 ms
+   on average and 5.3 ms at worst, against 76 ms and 225 ms from the keyframe. Not yet: a heavy
+   restore across scenes (it cuts to the keyframe), and snapshots of transient UI (the palette
+   open, a menu) — moments with one are not taken.
 4. **Transitions:** visible fast-forward for chapter jumps, the crossfade back.
 5. **The recorder**, with accessible-name anchors; Record / Stop in fizzy, saving ZON or binary.
 6. **Plugin demos** (`registerDemo`, chapters with `requires`) and the first pixi demo.

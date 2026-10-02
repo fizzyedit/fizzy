@@ -413,6 +413,7 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
     doc.sel_start = te.textLayout.selection.start;
     doc.sel_end = te.textLayout.selection.end;
     const caret = te.textLayout.selection.cursor;
+    doc.sel_cursor = caret;
     // Read before `te.deinit()` below, same as the selection: fizzy's Copy/Paste routing
     // asks the owner whether the verb is enabled, and this is the owner's answer to "is focus
     // mine?" (see `Document.editor_focused`).
@@ -457,6 +458,13 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         // the user last left it before `pending_scroll_line` below gets a chance to override
         // it with a specific goto-definition target.
         scroll_si.scrollToOffset(.vertical, doc.scroll_y);
+    }
+
+    if (doc.pending_scroll_y) |y| {
+        // A demo's snapshot coming back (`Document.restoreState`): where it was, exactly.
+        scroll_si.scrollToOffset(.vertical, y);
+        doc.pending_scroll_y = null;
+        dvui.refresh(null, @src(), scroll_widget_id);
     }
 
     const had_pending_scroll_line = doc.pending_scroll_line != null;

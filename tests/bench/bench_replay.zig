@@ -11,6 +11,10 @@
 //!     (`Player.budget_ns`, 8 ms) the same work is spread over `total / budget` displayed frames.
 //!   * **shown**: no budget, as the player did before — a displayed frame per replay frame.
 //!
+//! Those seeks go back to the keyframe. A second table scrubs: seeks to random moments of a
+//! recording played through once, with the player's snapshots and without — how far a scrub has
+//! to replay, and so how long it takes to land.
+//!
 //! Prints rather than asserts, like `bench-text`; the testing backend does no GPU work, so this is
 //! the CPU side of a frame. Compare runs at the same `-Doptimize`.
 const std = @import("std");
@@ -31,6 +35,10 @@ var text: std.ArrayListUnmanaged(u8) = .empty;
 var player: automation.Player = undefined;
 var clock: i128 = 0;
 var presses: usize = 0;
+/// Whether the stage keeps snapshots (`Stage.capture`).
+var snapshots_on = false;
+
+const Snap = struct { text: []u8, presses: usize };
 
 const Stage = struct {
     fn stage() automation.Stage {
@@ -43,6 +51,10 @@ const Stage = struct {
             .chordFor = chordFor,
             .commandTitle = commandTitle,
             .fastForward = fastForward,
+            .capture = capture,
+            .restore = restore,
+            .release = release,
+            .fingerprint = fingerprint,
         } };
     }
     fn begin(_: *anyopaque, _: *const automation.Tape) void {}
@@ -63,6 +75,30 @@ const Stage = struct {
         return null;
     }
     fn fastForward(_: *anyopaque, _: bool) void {}
+    fn capture(_: *anyopaque) ?*anyopaque {
+        if (!snapshots_on) return null;
+        const snap = std.testing.allocator.create(Snap) catch return null;
+        snap.* = .{ .text = std.testing.allocator.dupe(u8, text.items) catch unreachable, .presses = presses };
+        return snap;
+    }
+    fn restore(_: *anyopaque, raw: *anyopaque) bool {
+        const snap: *Snap = @ptrCast(@alignCast(raw));
+        text.clearRetainingCapacity();
+        text.appendSlice(std.testing.allocator, snap.text) catch unreachable;
+        presses = snap.presses;
+        return true;
+    }
+    fn release(_: *anyopaque, raw: *anyopaque) void {
+        const snap: *Snap = @ptrCast(@alignCast(raw));
+        std.testing.allocator.free(snap.text);
+        std.testing.allocator.destroy(snap);
+    }
+    fn fingerprint(_: *anyopaque) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(text.items);
+        h.update(std.mem.asBytes(&presses));
+        return h.final();
+    }
 };
 
 fn frame() !dvui.App.Result {
@@ -121,8 +157,11 @@ fn ms(ns: i96) f64 {
 test "bench replay: a seek, silent and shown" {
     var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 1280, .h = 800 } });
     defer t.deinit();
-    defer text.deinit(std.testing.allocator);
-    player = .init(Stage.stage());
+    defer {
+        text.deinit(std.testing.allocator);
+        text = .empty;
+    }
+    player = .init(std.testing.allocator, Stage.stage());
     defer player.deinit();
     try dvui.testing.settle(frame);
 
@@ -173,4 +212,70 @@ test "bench replay: a seek, silent and shown" {
     }
     std.debug.print("  frames: replay frames the seek needed; silent: their cost, ms, in one displayed frame;\n", .{});
     std.debug.print("  at 8 ms: displayed frames at fizzy's budget; shown, was: displayed frames without one.\n", .{});
+}
+
+/// Seeks to `targets`, landing each; the mean and worst wall time, ms, and the mean replay frames.
+fn scrub(targets: []const f64) !struct { mean: f64, worst: f64, frames: f64 } {
+    var total: f64 = 0;
+    var worst: f64 = 0;
+    var frames: f64 = 0;
+    for (targets) |t| {
+        player.seek(t);
+        const t0 = nowNs();
+        while (player.state == .seeking) _ = try dvui.testing.step(frame);
+        const took = ms(nowNs() - t0);
+        total += took;
+        worst = @max(worst, took);
+        frames += @floatFromInt(player.seek_stats.silent + 1);
+    }
+    const n: f64 = @floatFromInt(targets.len);
+    return .{ .mean = total / n, .worst = worst, .frames = frames / n };
+}
+
+test "bench replay: scrubbing, from snapshots and from the keyframe" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 1280, .h = 800 } });
+    defer t.deinit();
+    defer {
+        text.deinit(std.testing.allocator);
+        text = .empty;
+    }
+    player = .init(std.testing.allocator, Stage.stage());
+    defer player.deinit();
+    defer snapshots_on = false;
+    try dvui.testing.settle(frame);
+
+    std.debug.print("\n== scrubbing a recording: 32 seeks to random moments — {s} ==\n", .{@tagName(@import("builtin").mode)});
+    std.debug.print("{s:>7} {s:>8} {s:>6} | {s:>14} {s:>9} {s:>7} | {s:>14} {s:>9} {s:>7}\n", .{
+        "cycles", "demo s", "snaps", "snapshots: ms", "worst ms", "frames", "keyframe: ms", "worst ms", "frames",
+    });
+    for ([_]usize{ 40, 120 }) |cycles| {
+        var prng: std.Random.DefaultPrng = .init(0x5c7b);
+        var targets: [32]f64 = undefined;
+
+        // Played through once, silently, taking snapshots as it goes.
+        snapshots_on = true;
+        player.load(try recording(cycles), .{});
+        player.budget_ns = std.math.maxInt(i64);
+        const duration: f64 = @floatFromInt(player.duration());
+        for (&targets) |*x| x.* = prng.random().float(f64) * duration;
+        player.seek(duration);
+        while (player.state == .seeking) _ = try dvui.testing.step(frame);
+        const snaps = player.snapshots.items.len;
+        const with = try scrub(&targets);
+        if (player.mismatches != 0) return error.TestUnexpectedResult;
+        player.unload();
+
+        snapshots_on = false;
+        player.load(try recording(cycles), .{});
+        player.budget_ns = std.math.maxInt(i64);
+        player.seek(duration);
+        while (player.state == .seeking) _ = try dvui.testing.step(frame);
+        const without = try scrub(&targets);
+        player.unload();
+
+        std.debug.print("{d:>7} {d:>8.0} {d:>6} | {d:>14.2} {d:>9.2} {d:>7.1} | {d:>14.2} {d:>9.2} {d:>7.1}\n", .{
+            cycles, duration / 1000, snaps, with.mean, with.worst, with.frames, without.mean, without.worst, without.frames,
+        });
+    }
+    std.debug.print("  ms: wall time to land a seek, all of it silent; frames: replay frames it took.\n", .{});
 }

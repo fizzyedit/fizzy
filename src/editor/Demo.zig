@@ -16,6 +16,14 @@
 //! demo's documents, reloads the layout from `layout.zon` and reopens what the user had. A demo
 //! will not start over unsaved changes.
 //!
+//! **Snapshots** (`automation.Stage.capture`) hold what a scene changes as it plays: the mounted
+//! files as saved, each open document's state from its owner (`captureDocumentState` — contents,
+//! caret, scroll), which is active, the explorer open or shut and its open folders, every plugin's
+//! settings, and keyboard focus. Restoring one puts them back in place — documents opened since
+//! are closed, the rest restored where they sit — so a seek back within a scene costs no reload.
+//! One is taken only while nothing is loading and the palette is shut, and restored only into the
+//! scene it came from with its documents still open; otherwise the seek cuts to the keyframe.
+//!
 //! Demos start from the command palette ("Demo: …"), the Help menu, `FIZZY_DEMO=<name>` natively,
 //! or `?demo=<name>` / `?demo=<url of a .zon or .tape>` on the web — see `docs/AUTOMATION.md`.
 const Demo = @This();
@@ -78,11 +86,11 @@ const Saved = struct {
 };
 
 /// Inert until `attach`: nothing loaded, so nothing in `tick` acts on it.
-pub const detached: Demo = .{ .editor = undefined, .player = .{ .stage = undefined } };
+pub const detached: Demo = .{ .editor = undefined, .player = .{ .gpa = undefined, .stage = undefined } };
 
 /// Point the player at this stage. `self` must not move afterwards (it is the stage's context).
 pub fn attach(self: *Demo, editor: *Editor) void {
-    self.* = .{ .editor = editor, .player = .init(.{ .ctx = self, .vtable = &stage_vtable }) };
+    self.* = .{ .editor = editor, .player = .init(editor.app.gpa, .{ .ctx = self, .vtable = &stage_vtable }) };
 }
 
 pub fn deinit(self: *Demo) void {
@@ -193,6 +201,10 @@ const stage_vtable: automation.Stage.VTable = .{
     .chordFor = chordFor,
     .commandTitle = commandTitle,
     .fastForward = fastForward,
+    .capture = capture,
+    .restore = restore,
+    .release = release,
+    .fingerprint = fingerprint,
 };
 
 fn from(ctx: *anyopaque) *Demo {
@@ -450,10 +462,14 @@ fn closeAllDocuments(self: *Demo) void {
 }
 
 fn idle(ctx: *anyopaque) bool {
-    const editor = from(ctx).editor;
+    const self = from(ctx);
+    const editor = self.editor;
     return editor.loading_jobs.count() == 0 and
         editor.openings.entries.count() == 0 and
-        editor.doc_io.loads.count() == 0;
+        editor.doc_io.loads.count() == 0 and
+        // The demo's files answer from `pump`: a folder listed and not yet delivered is the
+        // explorer still filling in.
+        !(if (self.mem) |mem| mem.busy() else false);
 }
 
 fn command(ctx: *anyopaque, id: []const u8) void {
@@ -473,4 +489,228 @@ fn commandTitle(ctx: *anyopaque, id: []const u8) ?[]const u8 {
 
 fn fastForward(ctx: *anyopaque, on: bool) void {
     from(ctx).fast = on;
+}
+
+// ---- snapshots ---------------------------------------------------------------------------------
+
+/// A moment of a scene, for a seek to come back to (see the file comment). Everything in `arena`.
+const Snapshot = struct {
+    arena: std.heap.ArenaAllocator,
+    /// The scene's folder: a snapshot is restored only into the scene it came from.
+    root: []const u8,
+    /// The mounted files as they were saved, in the order `Mem` holds them (parents first).
+    nodes: []const Node,
+    /// Open documents, in the order they were opened, and which was active.
+    docs: []const Doc,
+    active: ?usize,
+    explorer_closed: bool,
+    branches: []const dvui.Id,
+    settings: []const SavedSettings,
+    focus: dvui.Id,
+    focus_subwindow: dvui.Id,
+
+    const Node = struct { path: []const u8, kind: @FieldType(core.vfs.Mem.Node, "kind"), bytes: []const u8 };
+    const Doc = struct { path: []const u8, grouping: u64, state: []const u8 };
+};
+
+fn capture(ctx: *anyopaque) ?*anyopaque {
+    const self = from(ctx);
+    const editor = self.editor;
+    const gpa = editor.app.gpa;
+    if (!idle(ctx) or editor.command_palette.open) return null;
+    const root = self.mount orelse return null;
+    const mem = self.mem orelse return null;
+
+    const snap = gpa.create(Snapshot) catch return null;
+    snap.* = .{
+        .arena = .init(gpa),
+        .root = undefined,
+        .nodes = &.{},
+        .docs = &.{},
+        .active = null,
+        .explorer_closed = editor.explorer.closed,
+        .branches = &.{},
+        .settings = &.{},
+        .focus = dvui.focusedWidgetId() orelse .zero,
+        .focus_subwindow = dvui.focusedSubwindowId(),
+    };
+    const ok = fill(self, snap, root, mem) catch false;
+    if (!ok) {
+        release(ctx, snap);
+        return null;
+    }
+    return snap;
+}
+
+/// Everything but the flags `capture` set. False when a document's owner cannot say what it holds.
+fn fill(self: *Demo, snap: *Snapshot, root: []const u8, mem: *core.vfs.Mem) !bool {
+    const editor = self.editor;
+    const a = snap.arena.allocator();
+    snap.root = try a.dupe(u8, root);
+
+    const nodes = try a.alloc(Snapshot.Node, mem.nodes.count());
+    for (mem.nodes.keys(), mem.nodes.values(), nodes) |path, node, *out| {
+        out.* = .{ .path = try a.dupe(u8, path), .kind = node.kind, .bytes = try a.dupe(u8, node.bytes) };
+    }
+    snap.nodes = nodes;
+
+    const active_id = if (editor.activeDoc()) |d| d.id else null;
+    var docs: std.ArrayList(Snapshot.Doc) = .empty;
+    for (editor.app.open_files.values()) |doc| {
+        const state = doc.owner.captureDocumentState(doc, a) orelse return false;
+        if (active_id == doc.id) snap.active = docs.items.len;
+        try docs.append(a, .{
+            .path = try a.dupe(u8, doc.owner.documentPath(doc)),
+            .grouping = doc.owner.documentGrouping(doc),
+            .state = state,
+        });
+    }
+    snap.docs = docs.items;
+
+    const branches = try a.alloc(dvui.Id, editor.explorer.open_branches.count());
+    var it = editor.explorer.open_branches.keyIterator();
+    var i: usize = 0;
+    while (it.next()) |id| : (i += 1) branches[i] = id.*;
+    snap.branches = branches;
+
+    var settings: std.ArrayList(SavedSettings) = .empty;
+    for (editor.app.host.settings_schemas.items) |*schema| {
+        const blob = try settingsBlob(a, editor.app.arena.allocator(), schema);
+        try settings.append(a, .{ .owner = try a.dupe(u8, schema.owner.id), .blob = blob });
+    }
+    snap.settings = settings.items;
+    return true;
+}
+
+/// Put fizzy back to `snap` where it stands (see the file comment). False — having changed
+/// nothing — when it is another scene's, or a document it held is no longer open as it was.
+fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
+    const self = from(ctx);
+    const editor = self.editor;
+    const snap: *Snapshot = @ptrCast(@alignCast(raw));
+    const root = self.mount orelse return false;
+    const mem = self.mem orelse return false;
+    if (!std.mem.eql(u8, root, snap.root)) return false;
+    // Every document it held still open, in its pane.
+    for (snap.docs) |d| {
+        const doc = openDoc(editor, d.path) orelse return false;
+        if (doc.owner.documentGrouping(doc) != d.grouping) return false;
+    }
+
+    // What has started since — loads, documents opened after it — goes.
+    editor.command_palette.finishClose();
+    editor.cancelAllLoadingJobs();
+    while (editor.doc_io.loads.count() > 0) editor.doc_io.cancel(editor.doc_io.loads.keys()[0]);
+    while (editor.openings.entries.count() > 0) editor.openings.drop(editor, editor.openings.entries.keys()[0]);
+    var i = editor.app.open_files.count();
+    while (i > 0) {
+        i -= 1;
+        const doc = editor.app.open_files.values()[i];
+        const path = doc.owner.documentPath(doc);
+        const kept = for (snap.docs) |d| {
+            if (std.mem.eql(u8, d.path, path)) break true;
+        } else false;
+        if (!kept) editor.rawCloseFileID(editor.app.open_files.keys()[i]) catch {};
+    }
+
+    restoreFiles(mem, snap.nodes) catch |err| {
+        dvui.log.err("demo: could not put the files back: {t}", .{err});
+    };
+    for (snap.docs) |d| {
+        const doc = openDoc(editor, d.path) orelse continue;
+        if (!doc.owner.restoreDocumentState(doc, d.state)) dvui.log.warn("demo: could not put {s} back", .{d.path});
+    }
+    if (snap.active) |a| {
+        if (openIndex(editor, snap.docs[a].path)) |index| editor.workbench.setActiveDocIndex(index);
+    }
+
+    if (snap.explorer_closed != editor.explorer.closed) {
+        if (snap.explorer_closed) editor.explorer.close(editor) else editor.explorer.open(editor);
+    }
+    editor.explorer.open_branches.clearRetainingCapacity();
+    for (snap.branches) |id| editor.explorer.open_branches.put(id, {}) catch {};
+
+    for (snap.settings) |saved| {
+        const schema = schemaFor(&editor.app.host, saved.owner) orelse continue;
+        const now = settingsBlob(editor.app.gpa, editor.app.arena.allocator(), schema) catch continue;
+        defer editor.app.gpa.free(now);
+        if (!std.mem.eql(u8, now, saved.blob)) schema.access.applyBlob(schema.value, schema.owner, saved.blob);
+    }
+
+    if (snap.focus != .zero) dvui.focusWidget(snap.focus, snap.focus_subwindow, null);
+    dvui.refresh(null, @src(), null);
+    return true;
+}
+
+fn release(ctx: *anyopaque, raw: *anyopaque) void {
+    const snap: *Snapshot = @ptrCast(@alignCast(raw));
+    snap.arena.deinit();
+    from(ctx).editor.app.gpa.destroy(snap);
+}
+
+/// The model a snapshot holds, less what may differ between passes — scroll, focus, and which
+/// folders the explorer shows open, whose root opens on its own when its listing lands:
+/// documents' fingerprints from their owners, which is active, the explorer shut or not, and the
+/// files as saved.
+fn fingerprint(ctx: *anyopaque) u64 {
+    const self = from(ctx);
+    const editor = self.editor;
+    var h = std.hash.Wyhash.init(0xde40);
+    for (editor.app.open_files.values()) |doc| {
+        h.update(doc.owner.documentPath(doc));
+        const print: u64 = doc.owner.documentFingerprint(doc) orelse 0;
+        h.update(std.mem.asBytes(&print));
+    }
+    if (editor.activeDoc()) |d| h.update(d.owner.documentPath(d));
+    h.update(std.mem.asBytes(&editor.explorer.closed));
+    if (self.mem) |mem| {
+        for (mem.nodes.keys(), mem.nodes.values()) |path, node| {
+            h.update(path);
+            h.update(node.bytes);
+        }
+    }
+    return h.final();
+}
+
+fn openDoc(editor: *Editor, path: []const u8) ?sdk.DocHandle {
+    const i = openIndex(editor, path) orelse return null;
+    return editor.app.open_files.values()[i];
+}
+
+fn openIndex(editor: *Editor, path: []const u8) ?usize {
+    for (editor.app.open_files.values(), 0..) |doc, i| {
+        if (std.mem.eql(u8, doc.owner.documentPath(doc), path)) return i;
+    }
+    return null;
+}
+
+/// Make `mem` hold exactly `nodes`: in place when only bytes differ (the usual case — a save),
+/// rebuilt when files came or went.
+fn restoreFiles(mem: *core.vfs.Mem, nodes: []const Snapshot.Node) !void {
+    const same_set = mem.nodes.count() == nodes.len and for (nodes) |n| {
+        if (!mem.nodes.contains(n.path)) break false;
+    } else true;
+    if (same_set) {
+        for (nodes) |n| {
+            const node = mem.nodes.getPtr(n.path).?;
+            if (std.mem.eql(u8, node.bytes, n.bytes)) continue;
+            const copy = try mem.allocator.dupe(u8, n.bytes);
+            if (node.bytes.len != 0) mem.allocator.free(node.bytes);
+            node.bytes = copy;
+            mem.generation += 1;
+        }
+        return;
+    }
+    for (mem.nodes.keys(), mem.nodes.values()) |path, node| {
+        mem.allocator.free(path);
+        if (node.bytes.len != 0) mem.allocator.free(node.bytes);
+    }
+    mem.nodes.clearRetainingCapacity();
+    for (nodes) |n| {
+        const key = try mem.allocator.dupe(u8, n.path);
+        errdefer mem.allocator.free(key);
+        const copy = try mem.allocator.dupe(u8, n.bytes);
+        try mem.nodes.put(mem.allocator, key, .{ .kind = n.kind, .bytes = copy });
+    }
+    mem.generation += 1;
 }

@@ -18,6 +18,17 @@
 //! arrives or a budget of wall time (`budget_ns`) is spent. A seek across a demo-sized tape lands
 //! in the frame it was asked for; a longer one carries on in the next.
 //!
+//! **Snapshots** make the way back short. While the tape drives, at calm moments — nothing in
+//! flight, nothing held, the app idle — the player asks the stage for the app's model
+//! (`Stage.capture`): once a scene has settled after its keyframe, at every chapter, and every
+//! `snapshot_every_ms` of demo time. A seek back goes to the nearest one before the moment and
+//! replays only from there, the app put back in place (`Stage.restore`) rather than cut to its
+//! keyframe and reloaded; a stage that cannot restore from where it is says so and the seek
+//! cuts to the keyframe as before. Each keeps a fingerprint of the model, and a replay that
+//! reaches its moment again compares (`mismatches`): a tape that does not replay exactly is
+//! caught, not carried. The scrubber seeks as it is dragged, not only when let go, and with a
+//! snapshot every few seconds a move lands in the frame it was made.
+//!
 //! **The app's clock** follows the demo while it catches up: each silent frame begins at the
 //! demo moment of the next thing the tape does (`Sequencer.nextAt`), counted from where the
 //! displayed frame left off, so a press and its release are as far apart, and timers and
@@ -44,6 +55,7 @@ const dvui_adapter = @import("../keymap/dvui_adapter.zig");
 const log = std.log.scoped(.automation);
 
 stage: Stage,
+gpa: std.mem.Allocator,
 /// The loaded demo, owned. Null when nothing is loaded.
 owned: ?Tape.Owned = null,
 seq: Sequencer = undefined,
@@ -70,6 +82,26 @@ shown_wall_ns: i128 = 0,
 /// The seek in flight, or the last one: how long it took to land, for logs, tests and the
 /// benchmark.
 seek_stats: SeekStats = .{},
+/// Snapshots taken while the demo played, in tape order: where a seek back goes instead of the
+/// keyframe (see the file comment). Freed when the demo unloads.
+snapshots: std.ArrayListUnmanaged(Snapshot) = .empty,
+/// Demo time between snapshots, at most.
+snapshot_every_ms: f64 = 3000,
+/// The snapshot a seek is going back to, put back at the start of the next frame — a seek can
+/// be asked for mid-frame (a command), and the app is put back before anything draws.
+restore_pending: ?usize = null,
+/// The pending seek is forward on the tape's own state: should no snapshot restore, it carries on
+/// from here rather than going back to the keyframe.
+restore_forward: bool = false,
+/// The op a snapshot's fingerprint was last compared at, so a moment is checked once a pass.
+checked_cursor: ?usize = null,
+/// Replays that did not reach the model a snapshot holds (`Stage.fingerprint`): the tape does
+/// not replay exactly. Logged as they happen; tests read it.
+mismatches: u32 = 0,
+/// Whether letting go of the scrubber plays or stays paused: as it was when it was taken.
+scrub_after: After = .pause,
+/// The demo time the scrubber last sought to while held.
+scrubbed_to: ?f64 = null,
 /// Buttons the tape is holding down — released before a rewind or a pause, so a drag cut short
 /// does not leave a widget holding the mouse.
 held: std.EnumSet(Tape.Button) = .initEmpty(),
@@ -90,7 +122,22 @@ pub const State = enum {
 
 pub const After = enum { play, pause };
 
+pub const Snapshot = struct {
+    /// The sequencer's place, calm (`Sequencer.calm`): the next op, the demo time, the pointer.
+    cursor: usize,
+    at: f64,
+    pointer: Sequencer.Point,
+    /// The keyframe op its scene began with (`Tape.keyframeBefore`).
+    scene: usize,
+    /// The stage's (`Stage.capture`).
+    state: *anyopaque,
+    /// `Stage.fingerprint` when it was taken.
+    print: ?u64,
+};
+
 pub const SeekStats = struct {
+    /// The snapshot the seek went back to, or null for a keyframe or none.
+    restored: ?usize = null,
     /// Displayed frames from the seek to its arrival, the one it was asked in included.
     shown: u32 = 0,
     /// Frames run unseen in that time.
@@ -116,7 +163,8 @@ pub const Transport = struct {
     next: dvui.Rect.Physical = .{},
     track: dvui.Rect.Physical = .{},
     close: dvui.Rect.Physical = .{},
-    /// The demo time the scrubber is held at while a viewer drags it. The seek happens on release.
+    /// The demo time the scrubber is held at while a viewer drags it; the player seeks there as
+    /// it moves (`frame`), and once more when it is let go.
     scrub: ?f64 = null,
     /// The real pointer, physical, as last seen.
     pointer: ?dvui.Point.Physical = null,
@@ -137,8 +185,8 @@ pub const Transport = struct {
     }
 };
 
-pub fn init(stage: Stage) Player {
-    return .{ .stage = stage };
+pub fn init(gpa: std.mem.Allocator, stage: Stage) Player {
+    return .{ .gpa = gpa, .stage = stage };
 }
 
 pub fn deinit(self: *Player) void {
@@ -190,6 +238,7 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
     self.seq.pointer = .{ .x = win.x + win.w / 2, .y = win.y + win.h / 2 };
     self.diverged = false;
     self.transport = .{};
+    self.mismatches = 0;
     self.stage.begin(t);
     self.seekTo(0, if (opts.autoplay) .play else .pause);
 }
@@ -199,6 +248,7 @@ pub fn unload(self: *Player) void {
     if (self.owned == null) return;
     self.releaseHeld();
     if (self.state == .seeking) self.stage.fastForward(false);
+    self.dropSnapshots();
     self.stage.end();
     self.owned.?.deinit();
     self.owned = null;
@@ -272,12 +322,17 @@ fn seekTo(self: *Player, t_in: f64, after: After) void {
     const t = std.math.clamp(t_in, 0, @as(f64, @floatFromInt(t_ptr.duration())));
     const kf = t_ptr.keyframeBefore(t);
     // Forward on the tape's own state can simply carry on — unless a keyframe lies ahead, when
-    // cutting to it beats replaying everything up to it. Anything else rewinds.
-    if (self.diverged or t < self.seq.now or kf >= self.seq.cursor) {
-        self.releaseHeld();
-        self.seq.rewind(kf);
-        self.last_press = null;
-        self.diverged = false;
+    // cutting to it beats replaying everything up to it. Anything else goes back.
+    const forward = !self.diverged and t >= self.seq.now and kf < self.seq.cursor;
+    self.restore_pending = null;
+    // Back to the nearest snapshot before the moment, in its scene — or, forward, to one further
+    // on than here. Put back at the start of the next frame (`restore_pending`).
+    const snap = self.nearestSnapshot(t, kf);
+    if (snap != null and (!forward or self.snapshots.items[snap.?].at > self.seq.now)) {
+        self.restore_pending = snap;
+        self.restore_forward = forward;
+    } else if (!forward) {
+        self.rewind(kf);
     }
     self.seek_from = self.seq.now;
     self.seek_target = t;
@@ -292,13 +347,147 @@ fn arrive(self: *Player) void {
     self.stage.fastForward(false);
     const st = &self.seek_stats;
     st.wall_ns = @max(1, self.wallClock(dvui.currentWindow()) - st.started_ns);
-    log.debug("seek to {d:.0} ms landed in {d} shown + {d} silent frames, {d:.1} ms", .{
-        self.seek_target, st.shown, st.silent, @as(f64, @floatFromInt(st.wall_ns)) / std.time.ns_per_ms,
+    // Asked for and landed within one run of a displayed frame (`frames` counts the frames a
+    // seek is still in flight at): that frame is shown.
+    st.shown = @max(st.shown, 1);
+    log.debug("seek to {d:.0} ms from {s} {d} landed in {d} shown + {d} silent frames, {d:.1} ms", .{
+        self.seek_target,
+        if (st.restored != null) "snapshot" else "the tape at",
+        if (st.restored) |i| @as(f64, @floatFromInt(i)) else self.seek_from,
+        st.shown,
+        st.silent,
+        @as(f64, @floatFromInt(st.wall_ns)) / std.time.ns_per_ms,
     });
     self.state = switch (self.after_seek) {
         .play => .playing,
         .pause => .paused,
     };
+}
+
+/// Back to the keyframe op `kf`, to replay from there.
+fn rewind(self: *Player, kf: usize) void {
+    self.releaseHeld();
+    self.seq.rewind(kf);
+    self.last_press = null;
+    self.diverged = false;
+    self.checked_cursor = null;
+}
+
+/// Put the app back to snapshot `i` and the sequencer to its moment. False when the stage cannot
+/// from where the app is now.
+fn restoreSnapshot(self: *Player, i: usize) bool {
+    const s = self.snapshots.items[i];
+    self.releaseHeld();
+    if (!self.stage.restore(s.state)) return false;
+    self.seq.restoreTo(s.cursor, s.at, s.pointer);
+    self.last_press = null;
+    self.diverged = false;
+    // The moment is checked again: a restore is a replay too.
+    self.checked_cursor = null;
+    self.seek_from = s.at;
+    self.seek_stats.restored = i;
+    return true;
+}
+
+/// Put the app back to the latest snapshot from `first` down, in its scene, that the stage can
+/// restore where the app is now — one taken before a document was opened, when that document
+/// has since been closed again, say. None: a forward seek carries on from where the tape is, any
+/// other goes back to the keyframe.
+fn goBack(self: *Player, first: usize) void {
+    const scene = self.snapshots.items[first].scene;
+    var i = first + 1;
+    while (i > 0) {
+        i -= 1;
+        const s = self.snapshots.items[i];
+        if (s.scene != scene) break;
+        // Forward, a snapshot no further on than the tape already is gains nothing.
+        if (self.restore_forward and s.at <= self.seq.now) break;
+        if (self.restoreSnapshot(i)) return;
+    }
+    if (!self.restore_forward) {
+        self.rewind(self.tape().?.keyframeBefore(self.seek_target));
+        self.seek_from = self.seq.now;
+    }
+}
+
+/// The latest snapshot at or before demo time `t` in the scene of keyframe op `kf`.
+fn nearestSnapshot(self: *const Player, t: f64, kf: usize) ?usize {
+    var i = self.snapshots.items.len;
+    while (i > 0) {
+        i -= 1;
+        const s = self.snapshots.items[i];
+        if (s.at <= t and s.scene == kf) return i;
+    }
+    return null;
+}
+
+/// At a calm moment while the tape drives, take a snapshot if one is due — or, where one was
+/// taken on an earlier pass, check the replay reached the same model.
+fn keepSnapshot(self: *Player) void {
+    if (!self.stage.snapshots()) return;
+    const t = self.tape() orelse return;
+    if (self.seq.cursor == 0 or !self.seq.calm() or self.held.count() > 0) return;
+    if (!self.stage.idle()) return;
+    const cursor = self.seq.cursor;
+    var at: usize = self.snapshots.items.len;
+    for (self.snapshots.items, 0..) |s, i| {
+        if (s.cursor == cursor) {
+            if (self.checked_cursor != cursor) {
+                self.checked_cursor = cursor;
+                self.verify(s);
+            }
+            return;
+        }
+        if (s.cursor > cursor) {
+            at = i;
+            break;
+        }
+    }
+    const scene = t.keyframeBefore(self.seq.now);
+    if (!self.snapshotDue(t, scene, at)) return;
+    const state = self.stage.capture() orelse return;
+    self.snapshots.insert(self.gpa, at, .{
+        .cursor = cursor,
+        .at = self.seq.now,
+        .pointer = self.seq.pointer,
+        .scene = scene,
+        .state = state,
+        .print = self.stage.fingerprint(),
+    }) catch {
+        self.stage.release(state);
+        return;
+    };
+    self.checked_cursor = cursor;
+}
+
+/// Whether a snapshot is due now, the one before it in the list at `before - 1`: the first of
+/// its scene, a chapter begun since the last, or `snapshot_every_ms` gone by.
+fn snapshotDue(self: *const Player, t: *const Tape, scene: usize, before: usize) bool {
+    if (before == 0) return true;
+    const last = self.snapshots.items[before - 1];
+    if (last.scene != scene) return true;
+    if (self.seq.now - last.at >= self.snapshot_every_ms) return true;
+    for (t.chapters) |c| {
+        const at: f64 = @floatFromInt(c.at);
+        if (at > last.at and at <= self.seq.now) return true;
+    }
+    return false;
+}
+
+fn verify(self: *Player, s: Snapshot) void {
+    const want = s.print orelse return;
+    const got = self.stage.fingerprint() orelse return;
+    if (got == want) return;
+    self.mismatches += 1;
+    const name = if (self.tape()) |t| t.name else "?";
+    log.warn("demo '{s}': replaying to {d:.0} ms did not reach what playing did — the tape does not replay exactly", .{ name, s.at });
+}
+
+fn dropSnapshots(self: *Player) void {
+    for (self.snapshots.items) |s| self.stage.release(s.state);
+    self.snapshots.clearAndFree(self.gpa);
+    self.restore_pending = null;
+    self.checked_cursor = null;
 }
 
 /// Once a frame, before anything reads `dvui.events()`: let the transport and the interrupt rule
@@ -310,6 +499,19 @@ pub fn frame(self: *Player) void {
     self.takeRealInput();
     if (self.owned == null) return; // the bar's close button
     self.claimCursor();
+
+    // The scrubber held and moved: there, now, rather than when it is let go.
+    if (self.transport.scrub) |t| {
+        if (self.scrubbed_to == null or @abs(t - self.scrubbed_to.?) >= 1) {
+            self.scrubbed_to = t;
+            self.seekTo(t, .pause);
+        }
+    }
+    if (self.restore_pending) |i| {
+        self.restore_pending = null;
+        if (self.state == .seeking) self.goBack(i);
+    }
+    if (self.state == .playing or self.state == .seeking) self.keepSnapshot();
 
     // Clamped: the first frame after a pause can report however long the app slept. A catch-up
     // run's step is demo time, and no wall time passed for a wait to count.
@@ -464,7 +666,8 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
             .release => {
                 const to = tr.scrub.?;
                 tr.scrub = null;
-                self.seek(to);
+                self.scrubbed_to = null;
+                self.seekTo(to, self.scrub_after);
             },
             else => {},
         }
@@ -479,6 +682,8 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
             self.toggle();
         } else if (tr.track.contains(me.p)) {
             tr.scrub = tr.timeAt(me.p.x, self.duration());
+            self.scrub_after = if (self.state == .playing or (self.state == .seeking and self.after_seek == .play)) .play else .pause;
+            self.scrubbed_to = null;
         } else if (tr.prev.contains(me.p)) {
             self.stepChapter(-1);
         } else if (tr.next.contains(me.p)) {

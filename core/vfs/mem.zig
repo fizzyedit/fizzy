@@ -41,6 +41,11 @@ pub const Mem = struct {
         self.answers.deinit();
     }
 
+    /// Answers are still on their way to whoever asked (they arrive from `pump`).
+    pub fn busy(self: *const Mem) bool {
+        return self.answers.pending();
+    }
+
     pub fn fs(self: *Mem) Fs.Fs {
         return .{ .ptr = self, .vtable = &vtable };
     }
