@@ -169,6 +169,15 @@ fn look(self: *const LiquidField) liquid_glass.Look {
     return .{ .refraction = self.refraction };
 }
 
+/// The scale the rim is drawn at (`liquid_glass.rimScale`), fitted to the smallest shape: the
+/// program's rim is one for the whole field, and on a smaller shape a rim sized for a bigger one
+/// would be all rim. Every shape is glass whatever its size (`liquid_glass.fit`).
+fn rimScale(self: *const LiquidField, depth_px: f32) f32 {
+    var f: f32 = 1;
+    for (self.shapes[0..self.len]) |sh| f = @min(f, liquid_glass.fit(sh.rect, depth_px));
+    return self.scale * f;
+}
+
 /// The uniforms for drawing over `frost`, a picture of `covered`, the shapes in `order`.
 pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bool, order: []const u8) Uniforms {
     const s = self.scale;
@@ -176,10 +185,13 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
         const a = @as(f32, @floatFromInt(t.a)) / 255;
         break :blk .{ @as(f32, @floatFromInt(t.r)) / 255 * a, @as(f32, @floatFromInt(t.g)) / 255 * a, @as(f32, @floatFromInt(t.b)) / 255 * a, a };
     } else @splat(0);
+    // The curve, its reach and its corners at the fitted scale; the rim line at the field's.
+    const rim = self.rimScale(liquid_glass.depthPx(self.look(), s));
+    const glow = self.rimScale(liquid_glass.falloff * s);
     var u: Uniforms = .{
         .frost_map = .{ covered.x, covered.y, 1 / @max(covered.w, 1), 1 / @max(covered.h, 1) },
-        .depths = .{ self.merge_px, liquid_glass.softness * s, liquid_glass.depthPx(self.look(), s), liquid_glass.falloff * s },
-        .rim = .{ liquid_glass.refraction * s * self.refraction, liquid_glass.clarity * @min(1, self.refraction), rim_line_width * s, @min(1, self.refraction) },
+        .depths = .{ self.merge_px, liquid_glass.softness * rim, liquid_glass.depthPx(self.look(), rim), liquid_glass.falloff * glow },
+        .rim = .{ liquid_glass.refraction * rim * self.refraction, liquid_glass.clarity * @min(1, self.refraction), rim_line_width * s, @min(1, self.refraction) },
         .tint = tint,
         .face = .{ std.math.clamp(self.mix, 0, 1), std.math.clamp(self.lift, 0, 1), if (self.tint != null) 1 else 0, if (has_sharp) 1 else 0 },
         .dither = .{ 1.0 / 255.0, 0, 0, 0 },
@@ -301,7 +313,8 @@ pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
     var f2: f32 = big;
     var o1: [2]f32 = @splat(0);
     var o2: [2]f32 = @splat(0);
-    const soft_k = liquid_glass.softness * self.scale;
+    const rim = self.rimScale(liquid_glass.depthPx(self.look(), self.scale));
+    const soft_k = liquid_glass.softness * rim;
     for (self.shapes[0..self.len]) |sh| {
         const c: [2]f32 = .{ sh.rect.x + sh.rect.w / 2, sh.rect.y + sh.rect.h / 2 };
         const half: [2]f32 = .{ sh.rect.w / 2, sh.rect.h / 2 };
@@ -341,7 +354,7 @@ pub fn sample(self: *const LiquidField, p: dvui.Point.Physical) Sample {
         .d = d,
         .coverage = std.math.clamp(0.5 - d, 0, 1),
         .out = .{ .x = std.math.lerp(o1[0], o2[0], wf), .y = std.math.lerp(o1[1], o2[1], wf) },
-        .steep = @exp(-soft / liquid_glass.depthPx(self.look(), self.scale)),
+        .steep = @exp(-soft / liquid_glass.depthPx(self.look(), rim)),
         .blur = std.math.lerp(m1[0], m2[0], wm),
         .lens = std.math.lerp(m1[1], m2[1], wm),
         .light = std.math.lerp(m1[2], m2[2], wm),
