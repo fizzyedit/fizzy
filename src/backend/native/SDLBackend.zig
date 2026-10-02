@@ -205,12 +205,9 @@ fn createWindowRenderer(options: InitOptions, share_device_of: ?*GpuRenderer) !s
 
     const hidden_flag = if (hidden) c.SDL_WINDOW_HIDDEN else 0;
     const fullscreen_flag = if (options.fullscreen) c.SDL_WINDOW_FULLSCREEN else 0;
-    // SDL_GPU claims a transparent window only on macOS, where Metal composites it (see
-    // `GpuRenderer.liftTransparentFlag`); elsewhere the window is made opaque rather than not
-    // drawn at all.
-    const transparent = options.transparent and builtin.os.tag == .macos;
-    if (options.transparent and !transparent) log.warn("transparent windows need macOS with this backend; the window is opaque", .{});
-    const transparent_flag = if (transparent) c.SDL_WINDOW_TRANSPARENT else 0;
+    // SDL_GPU composites a transparent window's alpha with Metal, Vulkan, and D3D12 through
+    // DirectComposition (fizzyedit/SDL; see `GpuRenderer.create` for which driver Windows takes).
+    const transparent_flag = if (options.transparent) c.SDL_WINDOW_TRANSPARENT else 0;
     const window: *c.SDL_Window = blk: {
         // Window properties let us apply restored geometry at creation time,
         // so the window appears directly at its previous position/size.

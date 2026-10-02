@@ -66,7 +66,8 @@ pub fn zigOutSubdirForTarget(b: *std.Build, rt: std.Build.ResolvedTarget) []cons
     return buf;
 }
 
-/// SDL (via dvui → lazy `sdl3`) requires SDK layout when `-Dtarget=*-macos` is not "native".
+/// SDL (fizzy's own `sdl` for its backend, dvui's lazy `sdl3` for dvui's) requires SDK layout when
+/// `-Dtarget=*-macos` is not "native".
 pub const MacosSdlPaths = struct {
     include: std.Build.LazyPath,
     framework: std.Build.LazyPath,
