@@ -26,6 +26,14 @@
             .hash = "win32-25.0.28-preview-mX5pFWMt5QPTVIGh3r2-OpPunpcCCjApyRbA6Zn6WALH",
             .lazy = true,
         },
+        // App-only: SDL for fizzy's own native backend (`src/backend/native`). fizzyedit/sdl_zig's
+        // `fizzy` branch, building fizzyedit/SDL's `fizzy-3.4` — see docs/DEPENDENCIES.md. Plugins
+        // draw through dvui's proxy backend and never link SDL.
+        .sdl = .{
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/60114a1b8cb0c89c51c650030c24c377ede0885f.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0c0KqgDBgYczNCwmbCEyQtUgoxNCG7ttzJ9y06BE",
+            .lazy = true,
+        },
         .icons = .{
             .url = "https://github.com/fizzyedit/icons/archive/41e7d2162b121e3798438a7da25ff4648b204dc7.tar.gz",
             .hash = "icons-0.1.0-iJxA-Z0TNABnFm_tPfx46ZnvojHweT6xON9ay91XZ4Xo",

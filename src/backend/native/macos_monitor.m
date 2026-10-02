@@ -67,14 +67,12 @@ static CAMetalLayer *metal_layer_of(void *nswindow) {
  * (`SwapchainCompositionToColorSpace`, on claim and on every
  * `SDL_SetGPUSwapchainParameters`); the renderer leaves it nil. A tagged layer is
  * colour-matched by the compositor, which shifts every colour against what the old backend
- * showed, so it goes back to nil. And a transparent window's layer must not be opaque: SDL
- * made the Metal view while the window was claimed as an opaque one (`GpuRenderer`'s
- * `liftTransparentFlag`). Call after claiming and after each swapchain-parameter change. */
-void fizzy_native_metal_layer_prepare(void *nswindow, int transparent) {
+ * showed, so it goes back to nil. Call after claiming and after each swapchain-parameter
+ * change. (A transparent window's layer is already not opaque: SDL makes the Metal view so.) */
+void fizzy_native_metal_layer_prepare(void *nswindow) {
     CAMetalLayer *layer = metal_layer_of(nswindow);
     if (!layer) return;
     layer.colorspace = nil;
-    if (transparent) layer.opaque = NO;
 }
 
 /* The swapchain layer's drawable size, which is what SDL's Metal renderer reports as its

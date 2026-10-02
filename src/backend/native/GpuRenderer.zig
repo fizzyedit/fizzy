@@ -228,16 +228,11 @@ pub fn create(gpa: std.mem.Allocator, window: *c.SDL_Window, options: Options) !
     errdefer if (owns_device) c.SDL_DestroyGPUDevice(device);
     if (c.SDL_GetGPUDeviceDriver(device)) |name| log.info("GPU driver: {s}", .{name});
 
-    const transparent = c.SDL_GetWindowFlags(window) & c.SDL_WINDOW_TRANSPARENT != 0;
-    {
-        const lifted = if (transparent) liftTransparentFlag(window) else null;
-        defer if (lifted) |flags| {
-            flags.* |= c.SDL_WINDOW_TRANSPARENT;
-        };
-        if (!c.SDL_ClaimWindowForGPUDevice(device, window)) {
-            log.err("SDL_ClaimWindowForGPUDevice failed: {s}", .{c.SDL_GetError()});
-            return error.GpuClaimWindow;
-        }
+    // A transparent window is claimed as one where the driver composites the swapchain's alpha
+    // (Metal, Vulkan): fizzyedit/SDL leaves that to each driver (docs/DEPENDENCIES.md).
+    if (!c.SDL_ClaimWindowForGPUDevice(device, window)) {
+        log.err("SDL_ClaimWindowForGPUDevice failed: {s}", .{c.SDL_GetError()});
+        return error.GpuClaimWindow;
     }
     errdefer c.SDL_ReleaseWindowFromGPUDevice(device, window);
     prepareLayer(window);
@@ -345,65 +340,14 @@ pub fn destroy(self: *GpuRenderer) void {
 }
 
 /// The swapchain's CAMetalLayer as SDL's Metal renderer, the old backend, kept it: untagged
-/// (SDL_GPU tags it sRGB, on claim and on every swapchain-parameter change) and, for a
-/// transparent window, not opaque (the Metal view was made while `liftTransparentFlag` had the
-/// window look opaque). See `macos_monitor.m`.
+/// (SDL_GPU tags it sRGB, on claim and on every swapchain-parameter change). See
+/// `macos_monitor.m`.
 fn prepareLayer(window: *c.SDL_Window) void {
     if (builtin.os.tag != .macos) return;
     const nswindow = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return;
-    const transparent = c.SDL_GetWindowFlags(window) & c.SDL_WINDOW_TRANSPARENT != 0;
-    fizzy_native_metal_layer_prepare(nswindow, @intFromBool(transparent));
+    fizzy_native_metal_layer_prepare(nswindow);
 }
-extern "c" fn fizzy_native_metal_layer_prepare(nswindow: *anyopaque, transparent: c_int) void;
-
-/// The head of SDL's own `struct SDL_Window` (`src/video/SDL_sysvideo.h`), as far as `flags`.
-const SdlWindowHead = extern struct {
-    id: c.SDL_WindowID,
-    title: ?[*:0]u8,
-    icon: ?*anyopaque,
-    x: c_int,
-    y: c_int,
-    w: c_int,
-    h: c_int,
-    min_w: c_int,
-    min_h: c_int,
-    max_w: c_int,
-    max_h: c_int,
-    min_aspect: f32,
-    max_aspect: f32,
-    last_pixel_w: c_int,
-    last_pixel_h: c_int,
-    flags: c.SDL_WindowFlags,
-    pending_flags: c.SDL_WindowFlags,
-};
-
-/// `SDL_ClaimWindowForGPUDevice` refuses any window created `SDL_WINDOW_TRANSPARENT`: the
-/// D3D12 and Vulkan swapchains SDL makes do not composite with alpha. Metal's does — a CAMetalLayer
-/// that is not opaque is composited by its alpha — and fizzy's window is transparent for its
-/// vibrancy. So on macOS the flag is lifted for the claim alone, by clearing it in SDL's own
-/// window record, and put back after (the caller); everything else SDL does for a transparent
-/// window (a clear window background, a clear content view) stays as it was. The record is
-/// matched against SDL's public getters before it is written; where it does not match (another
-/// SDL), nothing is written and the claim fails as it would have.
-fn liftTransparentFlag(window: *c.SDL_Window) ?*c.SDL_WindowFlags {
-    if (builtin.os.tag != .macos) return null;
-    const head: *SdlWindowHead = @ptrCast(@alignCast(window));
-    var w: c_int = 0;
-    var h: c_int = 0;
-    _ = c.SDL_GetWindowSize(window, &w, &h);
-    const title: ?[*:0]const u8 = c.SDL_GetWindowTitle(window);
-    if (head.id != c.SDL_GetWindowID(window) or
-        @intFromPtr(head.title) != @intFromPtr(title) or
-        head.w != w or head.h != h or
-        (head.flags | head.pending_flags) != c.SDL_GetWindowFlags(window) or
-        head.flags & c.SDL_WINDOW_TRANSPARENT == 0)
-    {
-        log.err("SDL_Window does not have the layout this SDL was expected to; the transparent window cannot be claimed", .{});
-        return null;
-    }
-    head.flags &= ~@as(c.SDL_WindowFlags, c.SDL_WINDOW_TRANSPARENT);
-    return &head.flags;
-}
+extern "c" fn fizzy_native_metal_layer_prepare(nswindow: *anyopaque) void;
 
 /// Present with or without waiting for the display, from now on.
 pub fn setVSync(self: *GpuRenderer, on: bool) void {

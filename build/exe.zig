@@ -119,28 +119,21 @@ fn fizzyNativeDvui(
     const dvui_mod = dep.module("dvui");
     if (fizzy_backend_modules.get(dvui_mod)) |backend| return .{ .dep = dep, .dvui = dvui_mod, .backend = backend };
 
-    // SDL3 itself, from dvui's own (lazy) dependency, built as dvui's `sdl3` mode builds it.
-    const cross_win_msvc = target.result.os.tag == .windows and target.result.abi == .msvc and
-        b.graph.host.result.os.tag != .windows;
+    // SDL3 from fizzy's own pin, not dvui's: the backend is fizzy's, and so are the SDL patches it
+    // needs (docs/DEPENDENCIES.md). The wrapper already builds without GameInput.
     const sdl_dep = if (macos_sdl_paths) |p|
-        dep.builder.lazyDependency("sdl3", .{
+        b.lazyDependency("sdl", .{
             .target = target,
             .optimize = optimize,
-            .system_include_path = p.include,
-            .system_framework_path = p.framework,
+            .include_path = p.include,
+            .framework_path = p.framework,
             .library_path = p.lib,
         })
-    else if (cross_win_msvc)
-        dep.builder.lazyDependency("sdl3", .{
-            .target = target,
-            .optimize = optimize,
-            .build_config_h_overrides = @as([]const []const u8, &.{ "-UHAVE_GAMEINPUT_H", "-USDL_JOYSTICK_GAMEINPUT" }),
-        })
     else
-        dep.builder.lazyDependency("sdl3", .{ .target = target, .optimize = optimize });
+        b.lazyDependency("sdl", .{ .target = target, .optimize = optimize });
 
     const sdl_translate_c = b.addTranslateC(.{
-        .root_source_file = dep.path("src/backends/sdl3-c.h"),
+        .root_source_file = b.path("src/backend/native/sdl3-c.h"),
         .target = target,
         .optimize = optimize,
     });
