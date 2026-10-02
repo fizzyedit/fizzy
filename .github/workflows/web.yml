@@ -10,6 +10,9 @@
 # A pull request from a fork builds nothing. The test copy is served from fizzyed.it itself, so
 # a fork's code must not be published there unreviewed (and a fork's run gets no secrets anyway).
 #
+# Nor does a draft pull request: it can run CI (ci.yml) without taking the one test copy from
+# whichever pull request has it. Marked ready for review, it builds and is served like any other.
+#
 # A release published here asks for a redeploy too, without a build: the site links releases.
 #
 # Needs the secret WEBSITE_DISPATCH_TOKEN: a fine-grained token with Contents read/write on
@@ -36,6 +39,8 @@ on:
       - "web/**"
       - ".github/workflows/web.yml"
   pull_request:
+    # The default three, and `ready_for_review` for a draft's first build.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "src/**"
       - "app/**"
@@ -51,10 +56,6 @@ on:
     types: [published]
   workflow_dispatch:
 
-concurrency:
-  group: web-${{ (github.event_name == 'pull_request' || github.ref != 'refs/heads/main') && 'preview' || 'main' }}
-  cancel-in-progress: true
-
 env:
   ZIG_VERSION: "0.16.0"
   WEBSITE: fizzyedit/website
@@ -65,7 +66,13 @@ jobs:
   build:
     if: >-
       github.event_name != 'release' &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      (github.event_name != 'pull_request' ||
+        (github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft))
+    # On the job, not the workflow: a run whose build is skipped (a draft's) must not cancel the
+    # test copy another pull request is building.
+    concurrency:
+      group: web-${{ (github.event_name == 'pull_request' || github.ref != 'refs/heads/main') && 'preview' || 'main' }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
