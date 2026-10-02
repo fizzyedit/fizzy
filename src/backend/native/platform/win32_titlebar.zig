@@ -9,34 +9,16 @@ const dvui = @import("dvui");
 const c = @import("backend").c;
 const win32 = @import("win32");
 
-const DWMWA_SYSTEM_BACKDROP_TYPE: c_ulong = 20;
-const DWMWA_SYSTEM_BACKDROP_TYPE_DEFAULT: c_ulong = 0;
-const DWMWA_SYSTEM_BACKDROP_TYPE_ACRYLIC: c_ulong = 1;
-const DWMWA_SYSTEM_BACKDROP_TYPE_NONE: c_ulong = 2;
-const DWMWA_SYSTEM_BACKDROP_TYPE_TRANSPARENT: c_ulong = 3;
-const DWMWA_SYSTEM_BACKDROP_TYPE_BLUR_BEHIND: c_ulong = 4;
-const DWMWA_SYSTEM_BACKDROP_TYPE_ACRYLIC_LIGHT: c_ulong = 5;
-const DWMWA_SYSTEM_BACKDROP_TYPE_ACRYLIC_DARK: c_ulong = 6;
-
 // Windows 11 (Build 22621+): System backdrop and extended frame for title bar drawing.
 const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38; // Windows 11 SDK
 const DWMSBT_MAINWINDOW: u32 = 2; // Mica
 const DWMSBT_TRANSIENTWINDOW: u32 = 3; // Acrylic (frosted glass) — more visible blur than Mica
-
-// Undocumented user32 API for acrylic blur (used by Start menu, taskbar). Loaded at runtime.
-const WCA_ACCENT_POLICY: u32 = 19;
-const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
-const WINCOMPATTR_DATA = struct {
-    attrib: u32,
-    pv_data: *const anyopaque,
-    cb_data: usize,
-};
-const ACCENT_POLICY = struct {
-    accent_state: u32,
-    accent_flags: u32,
-    gradient_color: u32, // ABGR
-    animation_id: u32,
-};
+/// Which of the backdrop's two tints DWM draws, and the frame's: the app's theme, not the system's.
+const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+/// Windows 11 rounds a framed window's corners by default; asked for, so a frame the app draws
+/// itself does not depend on that default.
+const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+const DWMWCP_ROUND: u32 = 2;
 
 /// Apply the chrome to `win` (see `window.setStyle`): idempotent, cheap to call every frame.
 pub fn applyChrome(win: *dvui.Window) void {
@@ -55,11 +37,15 @@ pub fn applyChrome(win: *dvui.Window) void {
         if (first) {
             // Once per window: the subclass that keeps the frame extended (re-applied in
             // WM_ACTIVATE, as DWM requires for the backdrop to show) and draws the custom
-            // non-client area, the undocumented accent blur, and the black class brush.
+            // non-client area, rounded corners, and the black class brush.
             _ = win32.ui.shell.SetWindowSubclass(hwnd_h, win32MicaSubclassProc, win32_mica_subclass_id, 0);
 
-            // Optional: undocumented accent API for extra acrylic blur (Start menu / taskbar use this). May improve frosted look.
-            applyWin32AcrylicAccent(hwnd_h);
+            _ = win32.graphics.dwm.DwmSetWindowAttribute(
+                hwnd_h,
+                @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE)),
+                &DWMWCP_ROUND,
+                @sizeOf(u32),
+            );
 
             // Per MSDN: for backdrop to render, the client area background must be transparent or a black brush.
             // BLACK_BRUSH (4) lets DWM draw the backdrop material; a null brush can leave the area undefined.
@@ -101,6 +87,20 @@ pub fn applyChrome(win: *dvui.Window) void {
         const SWP_FRAMECHANGED: u32 = 0x0020;
         const swp_flags = @as(win32.ui.windows_and_messaging.SET_WINDOW_POS_FLAGS, @bitCast(SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED));
         _ = win32.ui.windows_and_messaging.SetWindowPos(hwnd_h, null, 0, 0, 0, 0, swp_flags);
+}
+
+/// The backdrop's tint follows the app's theme: DWM draws Acrylic's dark or light variant by this
+/// window attribute, which otherwise follows the system's light or dark mode.
+pub fn setDarkMode(win: *dvui.Window, dark: bool) void {
+    if (builtin.os.tag != .windows) return;
+    const hwnd = getWin32Hwnd(win) orelse return;
+    const value: u32 = @intFromBool(dark);
+    _ = win32.graphics.dwm.DwmSetWindowAttribute(
+        @as(win32.foundation.HWND, @ptrCast(hwnd)),
+        @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE)),
+        &value,
+        @sizeOf(u32),
+    );
 }
 
 /// No caption or border tint: the app draws its own title bar in the client area.
@@ -283,27 +283,6 @@ const win32_mica_margins = win32.ui.controls.MARGINS{
 };
 
 const win32_mica_subclass_id: usize = 0x50584931; // "PXI1"
-
-/// Applies the undocumented SetWindowCompositionAttribute accent policy for acrylic blur (frosted glass).
-/// Safe to call; no-ops if user32 or the API is unavailable.
-fn applyWin32AcrylicAccent(hwnd: win32.foundation.HWND) void {
-    const user32 = win32.system.library_loader.LoadLibraryA("user32.dll") orelse return;
-    defer _ = win32.system.library_loader.FreeLibrary(user32);
-    const proc = win32.system.library_loader.GetProcAddress(user32, "SetWindowCompositionAttribute") orelse return;
-    const SetWindowCompositionAttribute: *const fn (win32.foundation.HWND, *const WINCOMPATTR_DATA) callconv(.winapi) i32 = @ptrCast(proc);
-    var policy = ACCENT_POLICY{
-        .accent_state = ACCENT_ENABLE_ACRYLICBLURBEHIND,
-        .accent_flags = 0,
-        .gradient_color = 0xE6_00_00_00, // ABGR: dark tint so blur is visible
-        .animation_id = 0,
-    };
-    var data = WINCOMPATTR_DATA{
-        .attrib = WCA_ACCENT_POLICY,
-        .pv_data = @ptrCast(&policy),
-        .cb_data = @sizeOf(ACCENT_POLICY),
-    };
-    _ = SetWindowCompositionAttribute(hwnd, &data);
-}
 
 // Extend client area into title bar: return 0 from WM_NCCALCSIZE when wParam TRUE (MSDN).
 const WM_NCCALCSIZE: u32 = 0x0083;

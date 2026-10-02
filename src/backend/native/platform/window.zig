@@ -192,6 +192,8 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
     } else if (builtin.os.tag == .windows) {
         setStyle(win);
         win32_titlebar.clearCaptionColors(win);
+        // As macOS's NSAppearance above: the backdrop matches the dvui theme.
+        win32_titlebar.setDarkMode(win, dvui.themeGet().dark);
     }
 }
 
