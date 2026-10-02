@@ -109,9 +109,22 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
             doc.preview_split_ratio_user = if (total > 0) 1 - dragged / total else 0.5;
         }
         Document.rememberPreviewMode(doc.preview_mode, doc.preview_split_ratio_user);
+        // Where the hand put it, as the share the ease below picks up from when the drag ends —
+        // else the divider jumped back to where it was before the drag and slid out again.
+        const held = if (total > 0) std.math.clamp(dragged / total, 0, 1) else 0;
+        dvui.dataSet(null, split, "_shown_share", held);
+        if (dvui.animationGet(split, "_ease_share") != null)
+            dvui.animation(split, "_ease_share", .{ .start_val = held, .end_val = held, .end_time = 1 });
         break :blk dragged;
     } else blk: {
-        const eased = Split.eased(split, previewExtent(doc.preview_mode, doc.preview_split_ratio_user, total));
+        // Eased as a share of the width, not as points: a mode change slides the divider, but the
+        // pane widening or narrowing — the explorer sliding out beside it — carries the divider
+        // along in the same frame. Eased in points, every frame of a resize moved the target and
+        // started a new ease toward it, so the divider trailed the resize and then slid home in
+        // an animation of its own once the resize was over.
+        const share = Split.easedKey(split, previewShare(doc.preview_mode, doc.preview_split_ratio_user), "_ease_share", "_shown_share");
+        const eased = @min(share * total, @max(0, total - Split.handle_size));
+        dvui.dataSet(null, split, "_shown", eased);
         // The split's stored extent is what a press reads to start the drag from, so it has to
         // agree with what is on screen even when the mode — not a drag — put it there. Without
         // this, pressing the handle without moving read a `_size` nothing had ever written: the
@@ -141,16 +154,16 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
     return changed;
 }
 
-/// How wide the preview side is when the mode settles there, in points.
+/// How much of the width the preview side takes when the mode settles there.
 ///
-/// `.preview` stops one split short of the full width rather than at it, so the handle stays on
-/// screen and the user can always drag the raw side back out — a divider you can push off the
-/// edge is one you cannot get back.
-fn previewExtent(mode: Document.PreviewMode, user_ratio: f32, total: f32) f32 {
+/// `.preview` is the whole of it, which the caller stops one split short of the full width so the
+/// handle stays on screen and the user can always drag the raw side back out — a divider you can
+/// push off the edge is one you cannot get back.
+fn previewShare(mode: Document.PreviewMode, user_ratio: f32) f32 {
     return switch (mode) {
         .raw => 0,
-        .split => @max(0, (1 - user_ratio) * total),
-        .preview => @max(0, total - Split.handle_size),
+        .split => std.math.clamp(1 - user_ratio, 0, 1),
+        .preview => 1,
     };
 }
 

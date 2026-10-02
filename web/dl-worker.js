@@ -80,11 +80,7 @@ export default {
       return problem(403, "not a published download for " + fingerprint);
     }
 
-    const upstream = await fetch(parsed.toString(), {
-      redirect: "follow",
-      // Immutable and often a few MB; let Cloudflare keep it.
-      cf: { cacheEverything: true, cacheTtl: 86400 },
-    });
+    const upstream = await download(parsed.toString());
     if (!upstream.ok) return problem(upstream.status, "upstream said " + upstream.status);
 
     const headers = new Headers();
@@ -96,6 +92,25 @@ export default {
     return new Response(request.method === "HEAD" ? null : upstream.body, { status: 200, headers });
   },
 };
+
+/**
+ * A published download, from Cloudflare's cache when it holds the file.
+ *
+ * Only a success is kept. `cacheTtl` alone kept *whatever* came back for a day, so one bad answer
+ * pinned a release as undownloadable — zig 0.2.28's wasm was served a cached non-ok response in
+ * 13ms while every other build went through. A redirect is not kept either: GitHub's points at a
+ * signed URL that expires within the hour. A failure is asked of the origin again, past the
+ * cache, before it is reported.
+ */
+async function download(target) {
+  const cached = await fetch(target, {
+    redirect: "follow",
+    // Immutable and often a few MB; let Cloudflare keep it.
+    cf: { cacheEverything: true, cacheTtlByStatus: { "200-299": 86400, "300-599": -1 } },
+  });
+  if (cached.ok) return cached;
+  return fetch(target, { redirect: "follow", cache: "no-store" });
+}
 
 /** `/img/<encoded url>`: an image, with the CORS header its host did not send. */
 async function image(request, url) {
@@ -183,6 +198,9 @@ function preflight() {
 }
 
 function problem(status, message) {
+  // An upstream status is passed straight through, and `new Response` throws outside 200–599 —
+  // which surfaced as Cloudflare's bare "error code: 1101" in place of this message.
+  if (!(status >= 200 && status <= 599)) status = 502;
   return new Response(message + "\n", {
     status,
     headers: { "access-control-allow-origin": "*", "content-type": "text/plain; charset=utf-8" },

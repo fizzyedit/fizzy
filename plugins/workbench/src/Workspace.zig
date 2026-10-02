@@ -263,9 +263,13 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
             gap_drawn = true;
         };
 
+        // Keyed by the tab, not its index: dvui remembers each widget's size under its id, and
+        // keyed by index, the frame after a reorder laid every tab out at the width of the one
+        // that used to stand there — the tabs, and the active tab's line, snapped into place.
+        const tab_key: usize = @truncate(std.hash.Wyhash.hash(0, surface.id));
         var reorderable = reorder.reorderable(@src(), .{ .draw_target = false }, .{
             .expand = .vertical,
-            .id_extra = i,
+            .id_extra = tab_key,
             .padding = dvui.Rect.all(0),
             .margin = dvui.Rect.all(0),
             .border = .all(0),
@@ -291,7 +295,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
             .border = dvui.Rect.all(0),
             .color_fill = .{ .color = if (is_selected) .transparent else dvui.themeGet().color(.window, .fill).opacity(runtime.host().contentOpacity()) },
             .background = true,
-            .id_extra = i,
+            .id_extra = tab_key,
             .padding = .{ .x = 2, .y = 2, .w = 2, .h = 0 },
             .margin = dvui.Rect.all(0),
         });
