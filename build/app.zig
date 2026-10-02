@@ -551,6 +551,8 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .{ "fizzy-easing-tests", "core/math/easing.zig" },
         .{ "fizzy-layout-anchor-tests", "core/math/layout_anchor.zig" },
         .{ "fizzy-window-layout-tests", "src/backend/native/platform/window_layout.zig" },
+        // The hit test Windows' WM_NCHITTEST and Linux's SDL hit test both answer from.
+        .{ "fizzy-titlebar-tests", "src/backend/native/platform/titlebar.zig" },
         .{ "fizzy-plugin-store-tests", "app/store/registry/store.zig" },
         .{ "fizzy-paths-tests", "core/paths.zig" },
         // The credential store behind `Host.secrets`: a 0600 file, keyed, round-tripped.

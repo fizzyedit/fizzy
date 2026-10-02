@@ -13,6 +13,10 @@ pub const titlebar_height: f32 = 26.0;
 /// Empty strip below the top window edge (non-macOS), above the main title row (in-window menu, etc.).
 pub const titlebar_top_buffer: f32 = 10.0;
 
+/// The window's corner radius on Linux, where fizzy draws the window's shape itself (it is
+/// undecorated and transparent): GNOME's own.
+pub const linux_window_radius: f32 = 12.0;
+
 pub const initial_window_size: [2]f32 = .{ 1200, 800 };
 
 pub const min_window_size: [2]f32 = .{ 640, 480 };

@@ -44,12 +44,17 @@ pub const setTitlebarColor = platform.window.setBackground;
 pub const raiseWindow = platform.window.raise;
 pub const toggleFullscreen = platform.window.toggleFullscreen;
 
-pub const TitleBarButton = platform.win32_titlebar.TitleBarButton;
-pub const resetTitleBarHints = platform.win32_titlebar.resetTitleBarHints;
-pub const setTitleBarStrip = platform.win32_titlebar.setTitleBarStrip;
-pub const pushTitleBarInteractiveRect = platform.win32_titlebar.pushTitleBarInteractiveRect;
-pub const setTitleBarCaptionButtonRect = platform.win32_titlebar.setTitleBarCaptionButtonRect;
-pub const getHoveredTitleBarButton = platform.win32_titlebar.getHoveredTitleBarButton;
+pub const TitleBarButton = platform.titlebar.TitleBarButton;
+pub const resetTitleBarHints = platform.titlebar.resetTitleBarHints;
+pub const setTitleBarStrip = platform.titlebar.setTitleBarStrip;
+pub fn pushTitleBarInteractiveRect(r: dvui.Rect.Physical) void {
+    platform.titlebar.pushTitleBarInteractiveRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = r.h });
+}
+pub fn setTitleBarCaptionButtonRect(button: TitleBarButton, r: dvui.Rect.Physical) void {
+    platform.titlebar.setTitleBarCaptionButtonRect(button, .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h });
+}
+pub const getHoveredTitleBarButton = platform.titlebar.getHoveredTitleBarButton;
+pub const performTitleBarButton = platform.window.performTitleBarButton;
 const getWin32Hwnd = platform.win32_titlebar.getWin32Hwnd;
 
 /// Files the OS asks fizzy to open while it runs go to the single-instance queue, which opens

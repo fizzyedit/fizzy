@@ -3721,6 +3721,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             else => {},
         }
 
+        // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is
+        // this fill's — rounded while windowed, as the desktop rounds its own, with a hairline
+        // where the desktop would have drawn an edge. Square when maximized or full screen.
+        const linux_windowed = builtin.os.tag == .linux and !fizzy.backend.isMaximized(dvui.currentWindow());
         var overall_box = dvui.box(
             @src(),
             .{ .dir = .vertical },
@@ -3728,6 +3732,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 .expand = .both,
                 .background = true,
                 .color_fill = .{ .color = window_color },
+                .corners = if (linux_windowed) .round(Constants.linux_window_radius) else null,
+                .border = if (linux_windowed) .all(1) else null,
+                .color_border = if (linux_windowed) .{ .color = dvui.themeGet().color(.control, .border).opacity(0.6) } else null,
             },
         );
         defer overall_box.deinit();
@@ -3751,11 +3758,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // Title bar handling:
         //  - macOS (not maximized): render an empty horizontal strip so AppKit's traffic lights have visual
         //    breathing room at the top-left. AppKit handles dragging natively.
-        //  - Windows: the main UI (sidebar, menu) starts below `titlebar_top_buffer`. A floating overlay
-        //    at the top-right corner (y=0) hosts the min/max/close buttons; a drag rect is pushed across the top so
-        //    empty space (gaps between widgets) drags the window. Menu items and sidebar buttons push
-        //    themselves as interactive rects so clicks on them still reach DVUI.
-        if (builtin.os.tag == .windows) {
+        //  - Windows and Linux: the main UI (sidebar, menu) starts below `titlebar_top_buffer`. A floating
+        //    overlay at the top-right corner (y=0) hosts the min/max/close buttons; a drag rect is pushed
+        //    across the top so empty space (gaps between widgets) drags the window. Menu items and sidebar
+        //    buttons push themselves as interactive rects so clicks on them still reach DVUI.
+        if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
             fizzy.backend.resetTitleBarHints();
 
             const window_rect_natural = dvui.windowRect();
@@ -3787,11 +3794,13 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             }
         }
 
-        // Windows-only top-right overlay: minimize / maximize / close. Lives in a FloatingWidget
-        // (a subwindow) so it doesn't take any space in the vertical overall_box layout — the main
-        // UI below fills the entire window. Caption-button rects are pushed to the backend so
-        // WM_NCHITTEST returns HTMINBUTTON/HTMAXBUTTON/HTCLOSE for them (snap-layouts + click).
-        if (builtin.os.tag == .windows) {
+        // Top-right overlay on Windows and Linux: minimize / maximize / close. Lives in a
+        // FloatingWidget (a subwindow) so it doesn't take any space in the vertical overall_box
+        // layout — the main UI below fills the entire window. Caption-button rects are pushed to
+        // the backend: on Windows WM_NCHITTEST returns HTMINBUTTON/HTMAXBUTTON/HTCLOSE for them
+        // (snap-layouts + the OS's click); on Linux the hit test leaves them to the app, which
+        // hovers and clicks them here.
+        if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
             const button_w: f32 = 46;
             const button_h = Constants.titlebar_height;
             const overlay_w: f32 = button_w * 3;
@@ -3806,7 +3815,18 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
             defer row.deinit();
 
-            const hovered = fizzy.backend.getHoveredTitleBarButton();
+            // Windows reports the hovered button from WM_NCMOUSEMOVE; on Linux the pointer is the
+            // app's, and the buttons sit at known places along the right edge.
+            const hovered = fizzy.backend.getHoveredTitleBarButton() orelse if (builtin.os.tag == .linux) blk: {
+                const m = dvui.currentWindow().mouse_pt.toNatural();
+                const left = win_rect.w - overlay_w;
+                if (m.y < 0 or m.y >= button_h or m.x < left or m.x >= win_rect.w) break :blk null;
+                break :blk switch (@as(u32, @intFromFloat((m.x - left) / button_w))) {
+                    0 => fizzy.backend.TitleBarButton.minimize,
+                    1 => .maximize,
+                    else => .close,
+                };
+            } else null;
             const stroke = dvui.themeGet().color(.control, .text);
             const hover_fill = dvui.themeGet().color(.control, .fill_hover).lighten(if (dvui.themeGet().dark) 3 else -3);
             const close_hover_fill = dvui.Color{ .r = 232, .g = 17, .b = 35, .a = 255 };
@@ -3823,6 +3843,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 });
                 defer b.deinit();
                 fizzy.backend.setTitleBarCaptionButtonRect(.minimize, b.data().rectScale().r);
+                if (builtin.os.tag == .linux and dvui.clicked(b.data(), .{ .hover_cursor = null })) fizzy.backend.performTitleBarButton(dvui.currentWindow(), .minimize);
                 core.icon.icon(@src(), "win_min", icons.tvg.feather.minus, .{ .stroke_color = .{ .color = stroke } }, .{
                     .expand = .ratio,
                     .padding = .all(7),
@@ -3841,6 +3862,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 });
                 defer b.deinit();
                 fizzy.backend.setTitleBarCaptionButtonRect(.maximize, b.data().rectScale().r);
+                if (builtin.os.tag == .linux and dvui.clicked(b.data(), .{ .hover_cursor = null })) fizzy.backend.performTitleBarButton(dvui.currentWindow(), .maximize);
                 core.icon.icon(@src(), "win_max", icons.tvg.lucide.square, .{ .stroke_color = .{ .color = stroke } }, .{
                     .expand = .ratio,
                     .padding = .all(9),
@@ -3856,9 +3878,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                     .expand = .vertical,
                     .background = is_hover,
                     .color_fill = .{ .color = close_hover_fill.opacity(0.5) },
+                    // In the window's corner: rounded with it on Linux (`overall_box`).
+                    .corners = if (linux_windowed) .{ .tr = .round(Constants.linux_window_radius) } else null,
                 });
                 defer b.deinit();
                 fizzy.backend.setTitleBarCaptionButtonRect(.close, b.data().rectScale().r);
+                if (builtin.os.tag == .linux and dvui.clicked(b.data(), .{ .hover_cursor = null })) fizzy.backend.performTitleBarButton(dvui.currentWindow(), .close);
                 core.icon.icon(@src(), "win_close", icons.tvg.heroicons.outline.@"x-mark", .{
                     .stroke_color = .{ .color = if (is_hover) close_hover_stroke else stroke },
                 }, .{

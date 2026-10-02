@@ -1,13 +1,15 @@
 //! Windows chrome: the DWM Acrylic backdrop behind a client area that is the whole window, and
 //! the app drawing its own title bar in it — the app says each frame where the drag strip, its
-//! interactive widgets and its caption buttons are (`resetTitleBarHints` and the rest), and the
-//! window's subclass hit-tests them (`WM_NCHITTEST`), so the OS drags, snaps and resizes as it
-//! would with its own frame. Everything here is a no-op off Windows.
+//! interactive widgets and its caption buttons are (`titlebar`), and the window's subclass answers
+//! `WM_NCHITTEST` from them, so the OS drags, snaps and resizes as it would with its own frame.
+//! Everything here is a no-op off Windows.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const c = @import("backend").c;
 const win32 = @import("win32");
+const titlebar = @import("titlebar.zig");
+const TitleBarButton = titlebar.TitleBarButton;
 
 // Windows 11 (Build 22621+): System backdrop and extended frame for title bar drawing.
 const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38; // Windows 11 SDK
@@ -121,104 +123,8 @@ pub fn clearCaptionColors(win: *dvui.Window) void {
 var win32_styled_hwnd: ?*anyopaque = null;
 var win32_styled_zoomed: bool = false;
 
-// Window button for custom-drawn caption (Windows 11-style: app draws the buttons, backend hit-tests them).
-pub const TitleBarButton = enum { minimize, maximize, close };
-
-// Title bar hint state describes which on-screen rectangles in the app's custom title bar should be
-// treated as caption buttons (snap-layouts + syscommand), interactive DVUI widgets (HTCLIENT — DVUI gets
-// the event), or part of the top drag strip (HTCAPTION). Hit-test priority within the title bar:
-//   1. caption buttons (min/max/close) — right-anchored, recomputed live against current client width
-//   2. interactive_rects → HTCLIENT (DVUI menu items, in-titlebar buttons, etc.) — left-anchored
-//   3. top drag strip (client_y < top_strip_height_pixels) → HTCAPTION — full current client width
-//   4. anything else → HTCLIENT
-// Cached rects can go stale during a resize because Windows delivers WM_NCHITTEST continuously and the
-// modal sizing loop blocks our SDL/DVUI frame from rendering. Deriving the drag strip's width from
-// `GetClientRect` and right-anchoring the caption buttons makes the hit-test correct even when the
-// last drawn frame is from before the resize.
-//
-// Rects are in physical pixel coordinates relative to the window client origin — i.e. dvui.Rect.Physical
-// from a widget's rectScale(). Because we return 0 from WM_NCCALCSIZE, client origin == window origin.
-//
-// Build the hints each frame with this push-based API:
-//   resetTitleBarHints();                                    // once at frame start
-//   setTitleBarStrip(strip_height_pixels, client_pixel_w);   // top drag strip + width caption buttons anchor to
-//   pushTitleBarInteractiveRect(menu_item_rect);             // from anywhere during draw
-//   setTitleBarCaptionButtonRect(.close, rect);
-const max_interactive_rects = 32;
-
-const CaptionRect = struct {
-    rect: dvui.Rect.Physical,
-    // Client pixel width captured at push time, used to right-anchor on resize.
-    captured_client_width: i32,
-};
-
-var titlebar_state: struct {
-    // Height (px) of the top drag strip. The strip always spans the full current client width;
-    // its width is read live from GetClientRect at hit-test time, not cached.
-    top_strip_height_pixels: f32 = 0,
-    // Client width (px) the editor saw when it pushed this frame's caption button rects.
-    // Caption buttons live at the right edge; on hit-test we shift them by the width delta.
-    frame_client_pixel_width: i32 = 0,
-    interactive_rects: [max_interactive_rects]dvui.Rect.Physical = undefined,
-    interactive_count: usize = 0,
-    minimize_rect: ?CaptionRect = null,
-    maximize_rect: ?CaptionRect = null,
-    close_rect: ?CaptionRect = null,
-    hovered: ?TitleBarButton = null,
-    hover_tracking: bool = false,
-} = .{};
-
-/// Clears all per-frame title bar hints. Call at the start of each frame before any widgets push their rects.
-pub fn resetTitleBarHints() void {
-    if (builtin.os.tag != .windows) return;
-    titlebar_state.top_strip_height_pixels = 0;
-    titlebar_state.frame_client_pixel_width = 0;
-    titlebar_state.interactive_count = 0;
-    titlebar_state.minimize_rect = null;
-    titlebar_state.maximize_rect = null;
-    titlebar_state.close_rect = null;
-}
-
-/// Sets the top drag strip's height (px) and records the current client pixel width so right-anchored
-/// caption buttons stay correct if the window resizes before the next frame.
-pub fn setTitleBarStrip(strip_height_pixels: f32, client_pixel_width: i32) void {
-    if (builtin.os.tag != .windows) return;
-    titlebar_state.top_strip_height_pixels = strip_height_pixels;
-    titlebar_state.frame_client_pixel_width = client_pixel_width;
-}
-
-/// Registers a rect that DVUI should receive clicks for (HTCLIENT). Use for any interactive widget
-/// drawn inside the title bar so it overrides the surrounding drag region. Silently drops past limit.
-pub fn pushTitleBarInteractiveRect(rect: dvui.Rect.Physical) void {
-    if (builtin.os.tag != .windows) return;
-    if (titlebar_state.interactive_count >= max_interactive_rects) return;
-    titlebar_state.interactive_rects[titlebar_state.interactive_count] = rect;
-    titlebar_state.interactive_count += 1;
-}
-
-/// Registers the rect of one of our app-drawn caption buttons. The backend's WM_NCHITTEST returns the
-/// matching HT code so Win11 snap-layouts appear over the maximize button and clicks invoke the action.
-/// The rect is stored alongside the client width recorded by `setTitleBarStrip`; the hit-test shifts it
-/// by `(current_client_width - captured_client_width)` so right-anchored buttons follow window resizes.
-pub fn setTitleBarCaptionButtonRect(button: TitleBarButton, rect: dvui.Rect.Physical) void {
-    if (builtin.os.tag != .windows) return;
-    const captured: CaptionRect = .{
-        .rect = rect,
-        .captured_client_width = titlebar_state.frame_client_pixel_width,
-    };
-    switch (button) {
-        .minimize => titlebar_state.minimize_rect = captured,
-        .maximize => titlebar_state.maximize_rect = captured,
-        .close => titlebar_state.close_rect = captured,
-    }
-}
-
-/// Returns which caption button (if any) the cursor is currently hovered over, based on WM_NCMOUSEMOVE
-/// tracking in the subclass proc. Use this to animate hover art on your custom-drawn buttons. Windows only.
-pub fn getHoveredTitleBarButton() ?TitleBarButton {
-    if (builtin.os.tag != .windows) return null;
-    return titlebar_state.hovered;
-}
+/// One-shot WM_NCMOUSELEAVE tracking is armed (`armNcMouseLeaveTracking`).
+var hover_tracking: bool = false;
 
 // Performs the window button action (minimize, maximize/restore, close). The subclass calls this directly
 // on WM_NCLBUTTONDOWN for our registered button rects. Public so callers without a mouse path (e.g. a
@@ -239,30 +145,6 @@ fn performWindowButtonHwnd(hwnd_h: win32.foundation.HWND, button: TitleBarButton
         },
         .close => _ = win32.ui.windows_and_messaging.PostMessageW(hwnd_h, WM_CLOSE, 0, 0),
     }
-}
-
-fn rectContainsI32(rect: dvui.Rect.Physical, x: i32, y: i32) bool {
-    const fx = @as(f32, @floatFromInt(x));
-    const fy = @as(f32, @floatFromInt(y));
-    return fx >= rect.x and fy >= rect.y and fx < rect.x + rect.w and fy < rect.y + rect.h;
-}
-
-fn captionRectContains(maybe: ?CaptionRect, current_client_width: i32, x: i32, y: i32) bool {
-    const cap = maybe orelse return false;
-    // Shift the cached rect right by however much the client area has grown (or left if shrunk),
-    // so the button stays anchored to the right edge regardless of resize.
-    const delta_f = @as(f32, @floatFromInt(current_client_width - cap.captured_client_width));
-    const fx = @as(f32, @floatFromInt(x));
-    const fy = @as(f32, @floatFromInt(y));
-    const r_x = cap.rect.x + delta_f;
-    return fx >= r_x and fy >= cap.rect.y and fx < r_x + cap.rect.w and fy < cap.rect.y + cap.rect.h;
-}
-
-fn hitTestCaptionButton(client_x: i32, client_y: i32, current_client_width: i32) ?TitleBarButton {
-    if (captionRectContains(titlebar_state.close_rect, current_client_width, client_x, client_y)) return .close;
-    if (captionRectContains(titlebar_state.maximize_rect, current_client_width, client_x, client_y)) return .maximize;
-    if (captionRectContains(titlebar_state.minimize_rect, current_client_width, client_x, client_y)) return .minimize;
-    return null;
 }
 
 pub fn getWin32Hwnd(win: *dvui.Window) ?*anyopaque {
@@ -310,16 +192,13 @@ fn requestRepaint(hWnd: ?win32.foundation.HWND) void {
 }
 
 fn setHoveredButton(hWnd: ?win32.foundation.HWND, new_hover: ?TitleBarButton) void {
-    if (titlebar_state.hovered != new_hover) {
-        titlebar_state.hovered = new_hover;
-        requestRepaint(hWnd);
-    }
+    if (titlebar.setHovered(new_hover)) requestRepaint(hWnd);
 }
 
 /// Ask Windows to deliver WM_NCMOUSELEAVE once the cursor exits the non-client area. Must be re-armed
 /// on each WM_NCMOUSEMOVE after a leave, since TrackMouseEvent is one-shot.
 fn armNcMouseLeaveTracking(hWnd: ?win32.foundation.HWND) void {
-    if (titlebar_state.hover_tracking) return;
+    if (hover_tracking) return;
     var tme = win32.ui.input.keyboard_and_mouse.TRACKMOUSEEVENT{
         .cbSize = @sizeOf(win32.ui.input.keyboard_and_mouse.TRACKMOUSEEVENT),
         .dwFlags = .{ .LEAVE = 1, .NONCLIENT = 1 },
@@ -327,7 +206,7 @@ fn armNcMouseLeaveTracking(hWnd: ?win32.foundation.HWND) void {
         .dwHoverTime = 0,
     };
     if (win32.ui.input.keyboard_and_mouse.TrackMouseEvent(&tme) != 0) {
-        titlebar_state.hover_tracking = true;
+        hover_tracking = true;
     }
 }
 
@@ -388,50 +267,33 @@ fn win32MicaSubclassProc(
         const width = rect.right - rect.left;
         const height = rect.bottom - rect.top;
 
-        // 1) Resize edges/corners (skip when maximized — no resize then).
-        if (win32.ui.windows_and_messaging.IsZoomed(hWnd) == 0) {
-            const frame_w = @max(win32.ui.windows_and_messaging.GetSystemMetrics(@as(win32.ui.windows_and_messaging.SYSTEM_METRICS_INDEX, @enumFromInt(SM_CXSIZEFRAME))), 4);
-            const frame_h = @max(win32.ui.windows_and_messaging.GetSystemMetrics(@as(win32.ui.windows_and_messaging.SYSTEM_METRICS_INDEX, @enumFromInt(SM_CYSIZEFRAME))), 4);
-            if (client_x < frame_w) {
-                if (client_y < frame_h) return @as(win32.foundation.LRESULT, @intCast(HTTOPLEFT));
-                if (client_y >= height - frame_h) return @as(win32.foundation.LRESULT, @intCast(HTBOTTOMLEFT));
-                return @as(win32.foundation.LRESULT, @intCast(HTLEFT));
-            }
-            if (client_x >= width - frame_w) {
-                if (client_y < frame_h) return @as(win32.foundation.LRESULT, @intCast(HTTOPRIGHT));
-                if (client_y >= height - frame_h) return @as(win32.foundation.LRESULT, @intCast(HTBOTTOMRIGHT));
-                return @as(win32.foundation.LRESULT, @intCast(HTRIGHT));
-            }
-            if (client_y >= height - frame_h) return @as(win32.foundation.LRESULT, @intCast(HTBOTTOM));
-            if (client_y < frame_h) return @as(win32.foundation.LRESULT, @intCast(HTTOP));
-        }
-
-        // 2) App-registered caption buttons. Returning these HT codes is also what makes the Win11
-        //    snap-layouts flyout appear on the maximize button. Right-anchored against `width` so a
-        //    resize between frames still hits the correct button.
-        if (hitTestCaptionButton(client_x, client_y, width)) |btn| return switch (btn) {
-            .close => @as(win32.foundation.LRESULT, @intCast(HTCLOSE)),
-            .maximize => @as(win32.foundation.LRESULT, @intCast(HTMAXBUTTON)),
-            .minimize => @as(win32.foundation.LRESULT, @intCast(HTMINBUTTON)),
+        // Resize edges/corners only while not maximized.
+        const frame: titlebar.Frame = if (win32.ui.windows_and_messaging.IsZoomed(hWnd) != 0) .{} else .{
+            .w = @max(win32.ui.windows_and_messaging.GetSystemMetrics(@as(win32.ui.windows_and_messaging.SYSTEM_METRICS_INDEX, @enumFromInt(SM_CXSIZEFRAME))), 4),
+            .h = @max(win32.ui.windows_and_messaging.GetSystemMetrics(@as(win32.ui.windows_and_messaging.SYSTEM_METRICS_INDEX, @enumFromInt(SM_CYSIZEFRAME))), 4),
         };
-
-        // 3) App-registered interactive widget rects (DVUI menus / buttons inside the title bar).
-        //    Checked before the drag strip so a widget overlapping it still gets the click. These are
-        //    left-anchored, so the cached rect is correct even if the window resized.
-        for (titlebar_state.interactive_rects[0..titlebar_state.interactive_count]) |r| {
-            if (rectContainsI32(r, client_x, client_y)) return @as(win32.foundation.LRESULT, @intCast(1)); // HTCLIENT
-        }
-
-        // 4) Top drag strip — spans the entire current client width, so resizing the window between
-        //    frames never leaves dead zones at the right.
-        if (titlebar_state.top_strip_height_pixels > 0 and
-            @as(f32, @floatFromInt(client_y)) < titlebar_state.top_strip_height_pixels)
-        {
-            return @as(win32.foundation.LRESULT, @intCast(HTCAPTION));
-        }
-
-        // 5) Otherwise let DVUI handle it.
-        return @as(win32.foundation.LRESULT, @intCast(1)); // HTCLIENT
+        // The caption-button codes are also what make the Win11 snap-layouts flyout appear on
+        // the maximize button.
+        const ht: i32 = switch (titlebar.hitTest(client_x, client_y, width, height, frame)) {
+            .client => 1, // HTCLIENT
+            .caption => HTCAPTION,
+            .button => |b| switch (b) {
+                .close => HTCLOSE,
+                .maximize => HTMAXBUTTON,
+                .minimize => HTMINBUTTON,
+            },
+            .resize => |e| switch (e) {
+                .top_left => HTTOPLEFT,
+                .top => HTTOP,
+                .top_right => HTTOPRIGHT,
+                .right => HTRIGHT,
+                .bottom_right => HTBOTTOMRIGHT,
+                .bottom => HTBOTTOM,
+                .bottom_left => HTBOTTOMLEFT,
+                .left => HTLEFT,
+            },
+        };
+        return @as(win32.foundation.LRESULT, @intCast(ht));
     }
 
     // Hover tracking for custom-drawn caption buttons. Windows sends WM_NCMOUSEMOVE with wParam = HT code
@@ -447,7 +309,7 @@ fn win32MicaSubclassProc(
         setHoveredButton(hWnd, hover);
     }
     if (uMsg == WM_NCMOUSELEAVE) {
-        titlebar_state.hover_tracking = false;
+        hover_tracking = false;
         setHoveredButton(hWnd, null);
     }
 

@@ -5,7 +5,9 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const c = @import("backend").c;
 const objc = @import("objc");
+const titlebar = @import("titlebar.zig");
 const win32_titlebar = @import("win32_titlebar.zig");
+const linux_titlebar = @import("linux_titlebar.zig");
 
 const NSPoint = extern struct { x: f64, y: f64 };
 const NSSize = extern struct { width: f64, height: f64 };
@@ -98,7 +100,7 @@ pub fn isFullscreenChromeHidden(win: *dvui.Window) bool {
 
 /// The window's chrome: full-size content under a transparent, title-less titlebar and a
 /// fullscreen Space on macOS; on Windows the DWM Acrylic backdrop over a client area that is the
-/// whole window. Cheap to call every frame — it reads what is set and changes only what SDL has put
+/// whole window; on Linux no decorations, the app's title bar hit-tested (`linux_titlebar`). Cheap to call every frame — it reads what is set and changes only what SDL has put
 /// back (SDL re-applies its own style on maximize, restore and full screen: on Windows that
 /// returns `WS_SYSMENU` and its caption buttons, and the backdrop's frame with it). Applying it all
 /// unconditionally every frame was a `SetWindowPos(SWP_FRAMECHANGED)` — a `WM_NCCALCSIZE` — a
@@ -141,6 +143,28 @@ pub fn setStyle(win: *dvui.Window) void {
         }
     } else if (builtin.os.tag == .windows) {
         win32_titlebar.applyChrome(win);
+    } else if (builtin.os.tag == .linux) {
+        linux_titlebar.applyChrome(win);
+    }
+}
+
+/// What a caption button the app drew does, where the app takes its click (Linux — Windows
+/// clicks them itself through `WM_NCHITTEST`): minimize, maximize or restore, and close as the
+/// window manager's close would, so the app's own close handling (unsaved work) runs.
+pub fn performTitleBarButton(win: *dvui.Window, button: titlebar.TitleBarButton) void {
+    const window = win.backend.impl.window;
+    switch (button) {
+        .minimize => _ = c.SDL_MinimizeWindow(window),
+        .maximize => _ = if (c.SDL_GetWindowFlags(window) & c.SDL_WINDOW_MAXIMIZED != 0)
+            c.SDL_RestoreWindow(window)
+        else
+            c.SDL_MaximizeWindow(window),
+        .close => {
+            var e = std.mem.zeroes(c.SDL_Event);
+            e.window.type = c.SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+            e.window.windowID = c.SDL_GetWindowID(window);
+            _ = c.SDL_PushEvent(&e);
+        },
     }
 }
 

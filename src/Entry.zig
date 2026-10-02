@@ -56,7 +56,9 @@ const start_options_base: dvui.App.StartOptions = .{
     .min_size = .{ .w = Constants.min_window_size[0], .h = Constants.min_window_size[1] },
     .title = AppInfo.display_name_z,
     .icon = icon,
-    .transparent = if (builtin.os.tag == .macos or builtin.os.tag == .windows) true else false,
+    // Linux too, for the rounded corners outside the window's fill (`Editor`): Vulkan composites
+    // the swapchain's alpha on Wayland. Its fill stays opaque — nothing blurs behind it there.
+    .transparent = if (builtin.os.tag == .macos or builtin.os.tag == .windows or builtin.os.tag == .linux) true else false,
     // macOS: Cancel-leading dialog/footer order; other platforms: OK-leading (matches dialog header close vs icon).
     .window_init_options = .{
         .button_order = if (builtin.os.tag.isDarwin()) .cancel_ok else .ok_cancel,
