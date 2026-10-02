@@ -473,10 +473,20 @@ extern "c" fn fizzy_native_monitor_install() void;
 extern "c" fn fizzy_native_monitor_last_scroll_precise() c_int;
 extern "c" fn fizzy_native_disable_titlebar_separator(nswindow: *anyopaque) void;
 extern "c" fn fizzy_native_metal_drawable_size(nswindow: *anyopaque, out_w: *c_int, out_h: *c_int) c_int;
+extern "c" fn fizzy_native_in_live_resize(nswindow: *anyopaque) c_int;
 
 fn cocoaWindow(window: *c.SDL_Window) ?*anyopaque {
     if (builtin.os.tag != .macos) return null;
     return c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
+}
+
+/// Whether AppKit's live-resize tracking loop is running for this window, which a frame is then
+/// run from inside (`appIterate`).
+fn inLiveResize(self: *SDLBackend) bool {
+    if (builtin.os.tag == .macos) {
+        if (cocoaWindow(self.window)) |nswindow| return fizzy_native_in_live_resize(nswindow) != 0;
+    }
+    return false;
 }
 
 const SDL_ERROR = bool;
@@ -1956,9 +1966,12 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     // During a callback we don't want to call SDL_WaitEvent or
     // SDL_WaitEventTimeout.  Otherwise all event handling gets screwed up and
     // either never recovers or recovers after many seconds.
+    // A frame inside a macOS live resize is always one: SDL's timer runs it from
+    // AppKit's tracking loop while the pointer rests, with no resize event to
+    // say so, and a wait there takes the tracking loop's own mouse events.
     // NOTE: on iOS, SDL_WaitEventTimeout stalls in UITrackingRunLoopMode during a
     // touch, so we throttle via ios_next_frame_ns above instead of waiting here.
-    if (appState.no_wait or appState.have_resize or builtin.target.os.tag == .ios) {
+    if (appState.no_wait or appState.have_resize or appState.back.inLiveResize() or builtin.target.os.tag == .ios) {
         appState.have_resize = false;
         if (builtin.target.os.tag == .ios) {
             appState.ios_next_frame_ns = appState.win.backend.nanoTime() + @as(i128, wait_event_micros) * 1000;
