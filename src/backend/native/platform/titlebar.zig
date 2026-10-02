@@ -29,6 +29,10 @@ const builtin = @import("builtin");
 
 /// Whether the app draws its own title bar on this platform.
 pub const active = builtin.os.tag == .windows or builtin.os.tag == .linux;
+/// Whether the OS asks these hints where a press goes: where the app draws its own title bar,
+/// and on macOS, where AppKit moves the window from any press in its transparent titlebar's
+/// region unless the view there says otherwise (`interactiveAt`).
+pub const hit_tested = active or builtin.os.tag == .macos;
 
 /// A caption button the app draws (Windows 11-style: the app draws them, the backend hit-tests them).
 pub const TitleBarButton = enum { minimize, maximize, close };
@@ -163,6 +167,19 @@ pub fn hitTest(x: i32, y: i32, width: i32, height: i32, frame: Frame) Hit {
     return .client;
 }
 
+/// Whether the point is the app's to click by its own say — one of its interactive rects or a
+/// caption button — wherever it is in the window. macOS asks this alone: AppKit knows its own
+/// titlebar's region and only asks whether the app claims the press.
+pub fn interactiveAt(x: i32, y: i32) bool {
+    for (state.interactive_rects[0..state.interactive_count]) |r| {
+        if (rectContains(r, x, y)) return true;
+    }
+    for ([_]?CaptionRect{ state.minimize_rect, state.maximize_rect, state.close_rect }) |cap| {
+        if (cap) |cr| if (rectContains(cr.rect, x, y)) return true;
+    }
+    return false;
+}
+
 fn rectContains(rect: Rect, x: i32, y: i32) bool {
     const fx = @as(f32, @floatFromInt(x));
     const fy = @as(f32, @floatFromInt(y));
@@ -195,4 +212,16 @@ test "hitTest: edges first, then buttons, widgets, strip" {
     try std.testing.expectEqual(Hit.client, hitTest(500, 60, 1000, 800, frame));
     // Maximized: no resize edges, the strip reaches the top.
     try std.testing.expectEqual(Hit.caption, hitTest(500, 2, 1000, 800, .{}));
+}
+
+test "interactiveAt: the app's rects, anywhere in the window" {
+    resetTitleBarHints();
+    defer resetTitleBarHints();
+    setTitleBarStrip(40, 1000);
+    // A dialog dragged up over the strip, reaching below it.
+    pushTitleBarInteractiveRect(.{ .x = 300, .y = 10, .w = 400, .h = 300 });
+    try std.testing.expect(interactiveAt(310, 20));
+    try std.testing.expect(interactiveAt(310, 200));
+    try std.testing.expect(!interactiveAt(100, 20));
+    try std.testing.expectEqual(Hit.client, hitTest(310, 20, 1000, 800, .{}));
 }

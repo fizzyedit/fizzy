@@ -21,6 +21,12 @@ const ns_visual_effect_material: c_long = 15;
 extern fn fizzy_macos_window_is_zoomed(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_chrome_hidden(cocoa_window: ?*anyopaque) c_int;
+extern fn fizzy_macos_titlebar_hit_test_install(cocoa_window: ?*anyopaque, interactive_at: *const fn (f64, f64) callconv(.c) bool) void;
+
+/// For AppKit's titlebar region: whether a press at this pixel is the app's (`titlebar.interactiveAt`).
+fn titlebarInteractiveAt(x: f64, y: f64) callconv(.c) bool {
+    return titlebar.interactiveAt(@intFromFloat(x), @intFromFloat(y));
+}
 
 /// The app's windows, captured once at startup (`attach`): what is reached from outside a frame —
 /// an OS event, a dialog finishing — where `dvui.currentWindow()` is not.
@@ -134,6 +140,9 @@ pub fn setStyle(win: *dvui.Window) void {
             if (window.msgSend(c_long, "titleVisibility", .{}) != 1) {
                 window.msgSend(void, "setTitleVisibility:", .{@as(c_long, 1)});
             }
+            // Presses over what the app draws in the titlebar's region (a dialog, a menu) are
+            // the app's, not AppKit's to move the window with.
+            fizzy_macos_titlebar_hit_test_install(raw_ptr, titlebarInteractiveAt);
             // Green button enters a native fullscreen Space (menu bar hidden).
             const NSWindowCollectionBehaviorFullScreenPrimary: c_ulong = 1 << 7;
             const behavior = window.msgSend(c_ulong, "collectionBehavior", .{});

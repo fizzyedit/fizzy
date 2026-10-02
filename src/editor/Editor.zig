@@ -3782,6 +3782,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // Collapse while zoomed/fullscreen (chrome overlays on hover); grow with
             // AppKit safe-area inset when restoring to a normal window.
             const title_strip_h = fizzy.backend.titlebarStripHeight(dvui.currentWindow());
+            // AppKit moves the window from its titlebar's region; what fizzy draws there and
+            // claims (`registerFloatingTitleBarRects`) is excluded from that.
+            fizzy.backend.resetTitleBarHints();
+            fizzy.backend.setTitleBarStrip(title_strip_h * dvui.windowNaturalScale(), @intFromFloat(dvui.windowRect().w * dvui.windowNaturalScale()));
             if (title_strip_h > 0) {
                 var titlebar_box = dvui.box(
                     @src(),
@@ -3905,6 +3909,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             update_notify.drawAbove(infobar_y_physical, 4.0);
         }
     }
+    registerFloatingTitleBarRects();
     hitch_draw.end();
 
     // look at demo() for examples of dvui widgets, shows in a floating window
@@ -4003,6 +4008,20 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
     run catch |err| {
         dvui.log.err("native menu command '{s}' failed: {s}", .{ id, @errorName(err) });
     };
+}
+
+/// Floating windows — open menus, dropdowns, dialogs, tooltips, the palette — are the app's to
+/// click wherever they reach into the title bar's region: registered as interactive, so the
+/// strip's drag (Windows, Linux) or AppKit's titlebar (macOS) never takes them. All of them, not
+/// only those over fizzy's strip: AppKit's region is its own height. Each where it stands on the
+/// stack: those drawn later this frame (dialogs land at the frame's end) are still last frame's,
+/// which is the frame the OS's hit test answers for; one closed since goes with the stack.
+fn registerFloatingTitleBarRects() void {
+    if (!fizzy.backend.titlebar_hit_tested) return;
+    // The first is the window itself.
+    for (dvui.currentWindow().subwindows.stack.items[1..]) |sub| {
+        fizzy.backend.pushTitleBarInteractiveRect(sub.rect_pixels);
+    }
 }
 
 pub fn setTitlebarColor(editor: *Editor) void {

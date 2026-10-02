@@ -44,6 +44,11 @@ pub const setTitlebarColor = platform.window.setBackground;
 pub const raiseWindow = platform.window.raise;
 pub const toggleFullscreen = platform.window.toggleFullscreen;
 
+/// Whether fizzy draws its own title bar here (Windows, Linux): widgets in its strip register
+/// as interactive so the strip's drag does not take their clicks.
+pub const custom_titlebar = platform.titlebar.active;
+/// Whether the OS asks fizzy's title-bar hints where a press goes (`custom_titlebar`, and macOS).
+pub const titlebar_hit_tested = platform.titlebar.hit_tested;
 pub const TitleBarButton = platform.titlebar.TitleBarButton;
 pub const resetTitleBarHints = platform.titlebar.resetTitleBarHints;
 pub const setTitleBarStrip = platform.titlebar.setTitleBarStrip;
