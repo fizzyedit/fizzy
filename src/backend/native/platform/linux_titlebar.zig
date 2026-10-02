@@ -6,12 +6,62 @@
 //! caption buttons are the app's to click (`window.performTitleBarButton`): the hit test leaves
 //! them to it. Everything here is a no-op off Linux.
 //!
+//! The app opts in before its window is made (`useClientDecorations`): no libdecor, a
+//! borderless window, and a margin round the frame where the app draws the drop shadow a desktop
+//! would have — fizzyedit/SDL's frame insets, which tell a Wayland compositor the frame is the
+//! window (it places, snaps and tiles that) and let the rest of the shadow pass clicks through.
+//!
 //! Not yet: a double click on the strip does not maximize. The press that starts a move never
 //! reaches the app (SDL hands it to the compositor and stops), so it would have to be SDL's.
 const builtin = @import("builtin");
 const dvui = @import("dvui");
-const c = @import("backend").c;
+const backend = @import("backend");
+const c = backend.c;
 const titlebar = @import("titlebar.zig");
+
+/// The margins round the frame for its shadow, in window coordinates (points).
+pub const Insets = struct { left: f32 = 0, top: f32 = 0, right: f32 = 0, bottom: f32 = 0 };
+
+var requested_insets: Insets = .{};
+
+/// Before the window is made (before `initWindow`): the app draws its window's decorations — the
+/// title bar and, in `insets` round the frame, its drop shadow. SDL loads no libdecor (on a
+/// desktop without server-side decorations, GNOME, the window then has none of its own) and
+/// makes the window borderless with those frame insets. Where SDL keeps no margin (X11)
+/// `frameInsets` reads zero and nothing draws there.
+pub fn useClientDecorations(insets: Insets) void {
+    if (builtin.os.tag != .linux) return;
+    // Only fizzy's own backend makes the window through a creation hook, against an SDL with
+    // frame insets; dvui's keeps the desktop's decorations.
+    if (comptime @hasDecl(backend, "window_create_hook") and @hasDecl(c, "SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_LEFT_NUMBER")) {
+        requested_insets = insets;
+        _ = c.SDL_SetHint(c.SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "0");
+        backend.window_create_hook = addCreateProps;
+    }
+}
+
+fn addCreateProps(props: c.SDL_PropertiesID) void {
+    _ = c.SDL_SetBooleanProperty(props, c.SDL_PROP_WINDOW_CREATE_BORDERLESS_BOOLEAN, true);
+    _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_LEFT_NUMBER, @intFromFloat(@round(requested_insets.left)));
+    _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_TOP_NUMBER, @intFromFloat(@round(requested_insets.top)));
+    _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_RIGHT_NUMBER, @intFromFloat(@round(requested_insets.right)));
+    _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_WAYLAND_FRAME_INSET_BOTTOM_NUMBER, @intFromFloat(@round(requested_insets.bottom)));
+}
+
+/// The frame's margins in effect now, in window coordinates: those asked for while the window
+/// floats on Wayland; zero maximized, tiled or full screen, or where SDL keeps none.
+pub fn frameInsets(window: *c.SDL_Window) Insets {
+    if (comptime builtin.os.tag == .linux and @hasDecl(c, "SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER")) {
+        const props = c.SDL_GetWindowProperties(window);
+        return .{
+            .left = @floatFromInt(c.SDL_GetNumberProperty(props, c.SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_LEFT_NUMBER, 0)),
+            .top = @floatFromInt(c.SDL_GetNumberProperty(props, c.SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_TOP_NUMBER, 0)),
+            .right = @floatFromInt(c.SDL_GetNumberProperty(props, c.SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_RIGHT_NUMBER, 0)),
+            .bottom = @floatFromInt(c.SDL_GetNumberProperty(props, c.SDL_PROP_WINDOW_WAYLAND_FRAME_INSET_BOTTOM_NUMBER, 0)),
+        };
+    }
+    return .{};
+}
 
 /// The window whose chrome is in place.
 var styled_window: ?*c.SDL_Window = null;
@@ -44,7 +94,18 @@ fn hitTest(window: ?*c.SDL_Window, area: [*c]const c.SDL_Point, _: ?*anyopaque) 
     const f: i32 = if (sized) @intFromFloat(@round(resize_frame_points * density)) else 0;
     const x: i32 = @intFromFloat(@as(f32, @floatFromInt(area.*.x)) * density);
     const y: i32 = @intFromFloat(@as(f32, @floatFromInt(area.*.y)) * density);
-    return switch (titlebar.hitTest(x, y, width, height, .{ .w = f, .h = f })) {
+    // The frame sits inside its shadow's margin; its edges resize from either side of the line.
+    const in = frameInsets(w);
+    const px = struct {
+        fn px(v: f32, d: f32) i32 {
+            return @intFromFloat(@round(v * d));
+        }
+    }.px;
+    return switch (titlebar.hitTest(x, y, width, height, .{
+        .w = f,
+        .h = f,
+        .insets = .{ .left = px(in.left, density), .top = px(in.top, density), .right = px(in.right, density), .bottom = px(in.bottom, density) },
+    })) {
         .client, .button => c.SDL_HITTEST_NORMAL,
         .caption => c.SDL_HITTEST_DRAGGABLE,
         .resize => |e| switch (e) {

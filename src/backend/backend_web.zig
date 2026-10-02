@@ -56,6 +56,10 @@ pub fn setTitleBarCaptionButtonRect(_: TitleBarButton, _: dvui.Rect.Physical) vo
 
 pub fn performTitleBarButton(_: *dvui.Window, _: TitleBarButton) void {}
 
+pub fn frameInsets(_: *dvui.Window) dvui.Rect {
+    return .{};
+}
+
 pub fn getHoveredTitleBarButton() ?TitleBarButton {
     return null;
 }

@@ -60,6 +60,18 @@ pub fn setTitleBarCaptionButtonRect(button: TitleBarButton, r: dvui.Rect.Physica
 }
 pub const getHoveredTitleBarButton = platform.titlebar.getHoveredTitleBarButton;
 pub const performTitleBarButton = platform.window.performTitleBarButton;
+
+/// Linux: before the window is made, the app draws its own decorations and a drop shadow in
+/// `insets` round the frame (`platform.linux_titlebar.useClientDecorations`). A no-op elsewhere.
+pub const useClientDecorations = platform.linux_titlebar.useClientDecorations;
+pub const ClientDecorationInsets = platform.linux_titlebar.Insets;
+
+/// The margin round the window's frame for its shadow, in effect now (natural units: x left,
+/// y top, w right, h bottom); zero but on Linux while the window floats.
+pub fn frameInsets(win: *dvui.Window) dvui.Rect {
+    const in = platform.linux_titlebar.frameInsets(win.backend.impl.window);
+    return .{ .x = in.left, .y = in.top, .w = in.right, .h = in.bottom };
+}
 const getWin32Hwnd = platform.win32_titlebar.getWin32Hwnd;
 
 /// Files the OS asks fizzy to open while it runs go to the single-instance queue, which opens

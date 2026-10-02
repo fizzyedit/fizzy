@@ -113,6 +113,12 @@ fn startOptions() dvui.App.StartOptions {
         // The app's own name, version and id, before SDL starts: the macOS app menu is built
         // from them (About / Hide / Quit <name>), where the backend's defaults are an example's.
         fizzy.backend.setSdlAppMetadata(AppInfo.display_name_z, app_version_z, AppInfo.bundle_id_z);
+        // Linux: fizzy draws its own title bar and the window's shadow (`linux_titlebar`), which
+        // SDL has to know before the window is made.
+        if (comptime builtin.os.tag == .linux) {
+            const in = Constants.linux_window_shadow_insets;
+            fizzy.backend.useClientDecorations(.{ .left = in.left, .top = in.top, .right = in.right, .bottom = in.bottom });
+        }
     }
     return opts;
 }

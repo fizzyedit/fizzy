@@ -19,26 +19,26 @@ const Button = fizzy.backend.TitleBarButton;
 pub const Style = enum { windows, gnome };
 pub const style: Style = if (builtin.os.tag == .linux) .gnome else .windows;
 
-/// Draws the buttons. `corner_radius`: the window's own where fizzy rounds it (Linux, windowed) —
-/// a cell in the corner follows it.
-pub fn draw(corner_radius: ?f32) void {
+/// Draws the buttons in the top-right corner of `frame`, the window's frame within it (inside the
+/// margin for its shadow on Linux). `corner_radius`: the window's own where fizzy rounds it
+/// (Linux, windowed) — a cell in the corner follows it.
+pub fn draw(frame: dvui.Rect, corner_radius: ?f32) void {
     switch (style) {
-        .windows => drawWindows(corner_radius),
-        .gnome => drawGnome(),
+        .windows => drawWindows(frame, corner_radius),
+        .gnome => drawGnome(frame),
     }
 }
 
 /// Windows 11: three 46-point cells flush with the top-right corner, a hover fill across the
 /// cell, red under the close. 10-point glyphs, one pixel thick at 100%.
-fn drawWindows(corner_radius: ?f32) void {
+fn drawWindows(frame: dvui.Rect, corner_radius: ?f32) void {
     const cell_w: f32 = 46;
     const cell_h = Constants.titlebar_height;
-    const win_rect = dvui.windowRect();
     const theme = dvui.themeGet();
 
     var fw: dvui.FloatingWidget = undefined;
     fw.init(@src(), .{ .mouse_events = true }, .{
-        .rect = .{ .x = win_rect.w - cell_w * 3, .y = 0, .w = cell_w * 3, .h = cell_h },
+        .rect = .{ .x = frame.x + frame.w - cell_w * 3, .y = frame.y, .w = cell_w * 3, .h = cell_h },
     });
     defer fw.deinit();
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
@@ -69,12 +69,11 @@ fn drawWindows(corner_radius: ?f32) void {
 
 /// GNOME (Adwaita): 24-point round buttons, a faint disc of the text colour under each that
 /// deepens on hover and press, centred in the title strip.
-fn drawGnome() void {
+fn drawGnome(frame: dvui.Rect) void {
     const d: f32 = 24;
     const gap: f32 = 8;
     const right: f32 = 10;
     const w = d * 3 + gap * 2;
-    const win_rect = dvui.windowRect();
     const theme = dvui.themeGet();
     const text = theme.color(.control, .text);
     // Centred in the whole title strip, top buffer and all, as GNOME centres them in its header bar.
@@ -82,7 +81,7 @@ fn drawGnome() void {
 
     var fw: dvui.FloatingWidget = undefined;
     fw.init(@src(), .{ .mouse_events = true }, .{
-        .rect = .{ .x = win_rect.w - right - w, .y = y, .w = w, .h = d },
+        .rect = .{ .x = frame.x + frame.w - right - w, .y = frame.y + y, .w = w, .h = d },
     });
     defer fw.deinit();
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });

@@ -3727,7 +3727,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is
         // this fill's — rounded while windowed, as the desktop rounds its own, with a hairline
         // where the desktop would have drawn an edge. Square when maximized or full screen.
+        // And on Wayland the window's shadow is fizzy's too, drawn in a margin round the frame
+        // that the compositor knows is not the window (`frameInsets`, zero when maximized, tiled
+        // or full screen).
         const linux_windowed = builtin.os.tag == .linux and !fizzy.backend.isMaximized(dvui.currentWindow());
+        const insets = fizzy.backend.frameInsets(dvui.currentWindow());
+        const shadowed = insets.x > 0 or insets.y > 0 or insets.w > 0 or insets.h > 0;
         var overall_box = dvui.box(
             @src(),
             .{ .dir = .vertical },
@@ -3735,9 +3740,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 .expand = .both,
                 .background = true,
                 .color_fill = .{ .color = window_color },
+                .margin = insets,
                 .corners = if (linux_windowed) .round(Constants.linux_window_radius) else null,
                 .border = if (linux_windowed) .all(1) else null,
                 .color_border = if (linux_windowed) .{ .color = dvui.themeGet().color(.control, .border).opacity(0.6) } else null,
+                // Deeper than a dialog's: a window over the desktop, its light from above.
+                .box_shadow = if (shadowed) .{ .color = .black, .fade = 14, .offset = .{ .x = 0, .y = 3 }, .alpha = 0.45, .corners = .round(Constants.linux_window_radius) } else null,
             },
         );
         defer overall_box.deinit();
@@ -3775,7 +3783,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // and the client width as it stood this frame so right-anchored caption buttons survive
             // a one-frame staleness window after a resize.
             fizzy.backend.setTitleBarStrip(
-                title_strip_h * scale,
+                (insets.y + title_strip_h) * scale,
                 @intFromFloat(window_rect_natural.w * scale),
             );
         } else if (builtin.os.tag == .macos) {
@@ -3805,7 +3813,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // desktop's style (`caption_buttons`). Floating, so it takes no space in overall_box's
         // layout — the main UI below fills the entire window.
         if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
-            caption_buttons.draw(if (linux_windowed) Constants.linux_window_radius else null);
+            const win_rect = dvui.windowRect();
+            const frame: dvui.Rect = .{ .x = insets.x, .y = insets.y, .w = win_rect.w - insets.x - insets.w, .h = win_rect.h - insets.y - insets.h };
+            caption_buttons.draw(frame, if (linux_windowed) Constants.linux_window_radius else null);
         }
 
         editor.pollPendingReveals();

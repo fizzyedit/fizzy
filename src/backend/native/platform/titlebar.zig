@@ -132,18 +132,25 @@ pub fn setHovered(button: ?TitleBarButton) bool {
     return true;
 }
 
-/// The resize frame's thickness in pixels; zero for no resize edges (maximized, full screen).
-pub const Frame = struct { w: i32 = 0, h: i32 = 0 };
+/// Where the window's frame is and how it resizes, in pixels: `w`/`h`, how far in from its edges a
+/// press resizes (zero for no resize edges: maximized, full screen); `insets`, how far the frame
+/// sits inside the surface (Linux, where the app draws its own shadow round it — a press out in
+/// that margin, where the compositor still sends one, resizes from the nearest edge).
+pub const Frame = struct {
+    w: i32 = 0,
+    h: i32 = 0,
+    insets: struct { left: i32 = 0, top: i32 = 0, right: i32 = 0, bottom: i32 = 0 } = .{},
+};
 
 /// What the point (`x`, `y`) — physical pixels from the window's top-left — is, in a window
 /// `width` × `height` pixels.
 pub fn hitTest(x: i32, y: i32, width: i32, height: i32, frame: Frame) Hit {
-    // 1) Resize edges/corners.
+    // 1) Resize edges/corners, measured from the frame's edges.
     if (frame.w > 0 and frame.h > 0) {
-        const top = y < frame.h;
-        const bottom = y >= height - frame.h;
-        if (x < frame.w) return .{ .resize = if (top) .top_left else if (bottom) .bottom_left else .left };
-        if (x >= width - frame.w) return .{ .resize = if (top) .top_right else if (bottom) .bottom_right else .right };
+        const top = y < frame.insets.top + frame.h;
+        const bottom = y >= height - frame.insets.bottom - frame.h;
+        if (x < frame.insets.left + frame.w) return .{ .resize = if (top) .top_left else if (bottom) .bottom_left else .left };
+        if (x >= width - frame.insets.right - frame.w) return .{ .resize = if (top) .top_right else if (bottom) .bottom_right else .right };
         if (bottom) return .{ .resize = .bottom };
         if (top) return .{ .resize = .top };
     }
@@ -212,6 +219,19 @@ test "hitTest: edges first, then buttons, widgets, strip" {
     try std.testing.expectEqual(Hit.client, hitTest(500, 60, 1000, 800, frame));
     // Maximized: no resize edges, the strip reaches the top.
     try std.testing.expectEqual(Hit.caption, hitTest(500, 2, 1000, 800, .{}));
+}
+
+test "hitTest: a frame inside its shadow's margin resizes from its own edges" {
+    resetTitleBarHints();
+    defer resetTitleBarHints();
+    // A 1000x800 surface, the frame 24 in on each side, its strip 24 down to 64.
+    setTitleBarStrip(64, 1000);
+    const frame: Frame = .{ .w = 6, .h = 6, .insets = .{ .left = 24, .top = 24, .right = 24, .bottom = 24 } };
+    try std.testing.expectEqual(Hit{ .resize = .left }, hitTest(20, 400, 1000, 800, frame)); // out in the margin
+    try std.testing.expectEqual(Hit{ .resize = .left }, hitTest(27, 400, 1000, 800, frame)); // just inside
+    try std.testing.expectEqual(Hit.client, hitTest(40, 400, 1000, 800, frame));
+    try std.testing.expectEqual(Hit{ .resize = .bottom_right }, hitTest(975, 775, 1000, 800, frame));
+    try std.testing.expectEqual(Hit.caption, hitTest(500, 40, 1000, 800, frame));
 }
 
 test "interactiveAt: the app's rects, anywhere in the window" {
