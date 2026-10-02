@@ -888,6 +888,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                 defer branch.deinit();
 
                 row_y = branch.data().borderRectScale().r.y;
+                core.anchor.mark(branch.button.data(), "workbench.file:{s}", .{abs_path});
 
                 if (newFilePath()) |path| {
                     if (std.mem.eql(u8, path, abs_path)) {

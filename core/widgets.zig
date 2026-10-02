@@ -21,6 +21,7 @@ const icons = @import("icons");
 const platform = @import("platform.zig");
 const dialogs = @import("dialogs.zig");
 const draw = @import("draw.zig");
+const anchor = @import("anchor.zig");
 const icon_tex = @import("gfx/icon.zig");
 
 pub const CanvasWidget = @import("widgets/CanvasWidget.zig");
@@ -133,6 +134,9 @@ pub const MenuRowOptions = struct {
     enabled: bool = true,
     submenu: bool = false,
     id_extra: usize = 0,
+    /// The command the row runs, if it names one: the row is then a demo's to point at, as
+    /// `fizzy.command:<id>` (`core.anchor`).
+    command: ?[]const u8 = null,
 };
 
 /// One menu row, the same everywhere: an icon column, the label straight after it, and the
@@ -144,6 +148,7 @@ pub const MenuRowOptions = struct {
 pub fn menuRow(src: std.builtin.SourceLocation, label: []const u8, opts: MenuRowOptions) ?dvui.Rect.Natural {
     var mi = menuItem(src, .{ .submenu = opts.submenu }, menuRowOptions(.{ .expand = .horizontal, .id_extra = opts.id_extra }));
     const ret: ?dvui.Rect.Natural = if (opts.enabled) mi.activeRect() else null;
+    if (opts.command) |id| anchor.mark(mi.data(), "fizzy.command:{s}", .{id});
 
     // Closed before `mi`: it is `mi`'s child, and dvui's widget stack is strictly LIFO.
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .id_extra = opts.id_extra });

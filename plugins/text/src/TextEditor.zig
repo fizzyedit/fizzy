@@ -143,6 +143,7 @@ pub fn draw(doc: *Document, id_extra: u64, gpa: std.mem.Allocator) !bool {
             .id_extra = @intCast(id_extra + 0x1200),
         });
         Split.recordEdges(split, pane.data(), .horizontal);
+        core.anchor.mark(pane.data(), "text.preview:{s}", .{doc.path});
         try drawPreviewPane(doc, preview.?, ext, id_extra + 0x2000, gpa);
         pane.deinit();
     } else {
@@ -222,13 +223,24 @@ fn drawPreviewTogglePill(doc: *Document, id_extra: u64) void {
 
 fn drawPreviewPillButton(doc: *Document, label: []const u8, mode: Document.PreviewMode, id_extra: u64) void {
     const active = doc.preview_mode == mode;
-    if (dvui.button(@src(), label, .{}, .{
+    // `dvui.button` spelled out, so a demo can find the button: `text.preview.split:<path>`.
+    const opts: dvui.Options = .{
         .background = active,
         .style = if (active) .highlight else .control,
         .font = pillFont(),
         .padding = .{ .x = 6, .y = 1, .w = 6, .h = 1 },
         .id_extra = @intCast(id_extra),
-    })) {
+    };
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(@src(), .{}, opts);
+    core.anchor.mark(bw.data(), "text.preview.{t}:{s}", .{ mode, doc.path });
+    bw.processEvents();
+    bw.drawBackground();
+    const clicked = bw.clicked();
+    dvui.labelNoFmt(@src(), label, .{ .align_x = 0.5, .align_y = 0.5 }, opts.strip().override(bw.style()).override(.{ .gravity_x = 0.5, .gravity_y = 0.5 }));
+    bw.drawFocus();
+    bw.deinit();
+    if (clicked) {
         // Each button names a mode outright — the old pair toggled *and* selected, so the same
         // click meant different things depending on the state you couldn't see.
         doc.preview_mode = mode;
@@ -320,6 +332,7 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         .color_text = .{ .color = dvui.themeGet().color(.content, .text) },
         .id_extra = @intCast(id_extra + 1),
     }));
+    core.anchor.mark(te.data(), "text.editor:{s}", .{doc.path});
     // Not deferred: `pending_scroll_line` below needs to run *after* `te.deinit()` (which is
     // what actually commits `te.scroll.si.virtual_size` for this frame — see that block's
     // comment), so it's called explicitly near the bottom of this function instead.
@@ -381,6 +394,7 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
         font,
         line_height,
     );
+    markText(doc, &te, font, line_height);
 
     const editor_rs = row.data().borderRectScale();
     const scroll_rs = te.scroll.data().contentRectScale();
@@ -1831,6 +1845,46 @@ fn lineNumberColumnWidth(line_count: usize, font: dvui.Font) f32 {
     var buf: [16]u8 = undefined;
     const sample = std.fmt.bufPrint(&buf, "{d}", .{line_count}) catch "9999";
     return line_number_pad_left + font.textSize(sample).w + text_gap_after_numbers;
+}
+
+/// Two places in the document's text, for a demo:
+///
+///   * `text.end:<path>` — where typing at the end of the document begins, just after the last
+///     line's text, a character wide and a line tall: where a demo clicks to write on, so the
+///     pointer goes where the words will appear rather than to an empty corner of a tall pane.
+///   * `text.body:<path>` — what of the text is in view, out to its longest line: what a demo's
+///     caption keeps clear of while the text is being written.
+fn markText(doc: *const Document, te: *TextEntryWidget, font: dvui.Font, line_height: f32) void {
+    if (!core.anchor.wanted()) return;
+    const text = doc.text.items;
+    const rs = te.scroll.data().contentRectScale();
+    const vp = te.scroll.si.viewport;
+    const left = rs.r.x - vp.x * rs.s;
+    const top = rs.r.y + (editor_pad_y - vp.y) * rs.s;
+
+    const tail = if (std.mem.lastIndexOfScalar(u8, text, '\n')) |i| text[i + 1 ..] else text;
+    const last: f32 = @floatFromInt(doc.line_count -| 1);
+    const end: dvui.Rect.Physical = .{
+        .x = left + font.textSize(tail).w * rs.s,
+        .y = top + last * line_height * rs.s,
+        .w = font.textSize("M").w * rs.s,
+        .h = line_height * rs.s,
+    };
+    core.anchor.markRect(te.data().id, end, rs.r.contains(end.center()), "text.end:{s}", .{doc.path});
+
+    // Measured only for a document a demo could be writing: a long file's widest line is no
+    // matter to anyone, and measuring every line of it every frame would be.
+    if (text.len > 64 * 1024) return;
+    var widest: f32 = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| widest = @max(widest, font.textSize(line).w);
+    const body = (dvui.Rect.Physical{
+        .x = left,
+        .y = top,
+        .w = widest * rs.s,
+        .h = @as(f32, @floatFromInt(doc.line_count)) * line_height * rs.s,
+    }).intersect(rs.r);
+    core.anchor.markRect(te.data().id, body, !body.empty(), "text.body:{s}", .{doc.path});
 }
 
 fn drawLineNumbers(

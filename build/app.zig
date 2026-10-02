@@ -605,6 +605,10 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
+        // Demo automation's std-only core: the tape format, the sequencer that replays it
+        // deterministically, and the script builder. The dvui half (`automation/Player.zig`) is
+        // covered by `tests/integration.zig`.
+        .{ "fizzy-automation-tests", "app/automation_tests.zig" },
     }) |entry| {
         try unit_test_artifacts.append(b.allocator, b.addTest(.{
             .name = entry[0],
@@ -843,6 +847,11 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .root_source_file = dvui_testing_dep.path("src/Examples/tree_sitter_zig_queries.scm"),
     });
     integration_module.addImport("fizzy_sdk", sdk_module_test);
+    // The framework itself, for what is tested against a bare window rather than through fizzy
+    // (demo automation's player).
+    integration_module.addImport("app", app_module_test);
+    // The hand-written sample tape `docs/AUTOMATION.md` points at, so it cannot rot.
+    integration_module.addAnonymousImport("demo_sample_tape", .{ .root_source_file = b.path("docs/demos/hello.zon") });
 
     const integration_tests = b.addTest(.{
         .name = "fizzy-integration-tests",

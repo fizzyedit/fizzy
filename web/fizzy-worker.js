@@ -378,6 +378,25 @@ function requestUrlPlugins() {
             render();
         }).catch((err) => console.error("fizzy: could not open", url, err));
     }
+    // `?demo=tour` plays a bundled demo; `?demo=<url>.zon` fetches a tape and plays that.
+    for (const demo of params.getAll("demo")) playDemo(demo, env.baseURI);
+}
+
+function playDemo(demo, base) {
+    const send = (bytes, isZon) => {
+        const exports = wasmInstance.exports;
+        if (!exports.FizzyWebPlayDemo) return;
+        const ptr = exports.FizzyWebPluginAlloc(bytes.length, 1);
+        if (!ptr) return;
+        new Uint8Array(mem(), ptr, bytes.length).set(bytes);
+        exports.FizzyWebPlayDemo(ptr, bytes.length, isZon);
+        render();
+    };
+    if (!/\.zon(\?|$)/.test(demo)) return send(utf8encode(demo), false);
+    fetch(new URL(demo, base), { cache: "no-store" })
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status)))
+        .then((buf) => send(new Uint8Array(buf), true))
+        .catch((err) => console.error("fizzy: could not fetch demo", demo, err));
 }
 
 const pluginEntryPoints = [

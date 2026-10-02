@@ -198,6 +198,7 @@ fn drawIcon(editor: *Editor, c: *Chooser, view: *Layout.Surface, index: usize) f
 
     var it = c.item(@src(), view, .{ .tooltip = true, .tooltip_detail = detail });
     defer it.deinit();
+    core.anchor.mark(it.data(), "fizzy.rail:{s}", .{view.id});
     const cell = it.data().borderRectScale().r;
 
     // Register the icon as interactive in the title bar so clicks reach DVUI even when it

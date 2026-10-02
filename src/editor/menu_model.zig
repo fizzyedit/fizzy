@@ -228,6 +228,8 @@ const help_items = [_]Item{
     // macOS app menu's "About fizzy" are the same command.
     .{ .command = .{ .id = "fizzy.about", .title = .{ .static = "Check for Updates…" } } },
     .separator,
+    // A demo of fizzy played by fizzy itself (`Editor.Demo`); the rest are in the palette.
+    .{ .command = .{ .id = "fizzy.demo.tour", .title = .{ .static = "Take the Tour" }, .sf_symbol = "play.circle" } },
     .{ .command = .{ .id = "fizzy.reportBug", .title = .{ .static = "Report Bug…" }, .sf_symbol = "ant.fill" } },
 };
 

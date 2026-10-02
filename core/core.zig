@@ -61,6 +61,9 @@ pub const dialogs = @import("dialogs.zig");
 pub const draw = @import("draw.zig");
 /// How a keybind is drawn: glyphs and keycaps, in each platform's modifier order.
 pub const keycaps = @import("keycaps.zig");
+/// Names for what a demo points at — `dvui.tag` with a name built from data (a file's row, its
+/// editor), free unless a demo is loaded.
+pub const anchor = @import("anchor.zig");
 
 /// Generic momentum/fling helper (pan, scrub, cover-flow).
 pub const Fling = @import("Fling.zig");

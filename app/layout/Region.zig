@@ -545,6 +545,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
     if (init_opts.name.len > 0) {
         const cr = box.data().contentRect();
         self.state.setPlaceMetrics(init_opts.name, .{ .w = cr.w, .h = cr.h }, box.data().borderRectScale().r);
+        core.anchor.mark(box.data(), "region:{s}", .{init_opts.name});
     }
     self.containers[self.depth] = .{
         .dir = init_opts.dir,

@@ -176,7 +176,8 @@ fn animatingGeometry(self: *const CommandPalette, win: *fizzy.core.widgets.Float
     return dvui.animationGet(win.data().id, "_auto_height") != null;
 }
 
-fn finishClose(self: *CommandPalette) void {
+/// Closed, at once — the end of the outro, or a demo's keyframe putting the app in a known state.
+pub fn finishClose(self: *CommandPalette) void {
     self.open = false;
     self.closing = false;
     self.anim = 0;
@@ -603,6 +604,7 @@ pub fn draw(self: *CommandPalette, editor: *Editor) void {
             .color_text = .{ .color = text_color },
             .id_extra = 1,
         });
+        core.anchor.mark(entry.data(), "fizzy.palette", .{});
         // FloatingWindow focuses its subwindow on first frame (size 0); claim the entry for a
         // few frames after that so typing works without a click.
         if (self.just_opened or self.focus_frames > 0) {
@@ -727,6 +729,10 @@ fn drawRow(
     });
     defer rb.deinit();
     if (i == 0) self.row_pitch = rb.data().rect.h;
+    switch (row) {
+        .files => |abs| core.anchor.mark(rb.data(), "fizzy.palette.row:{s}", .{abs}),
+        .commands => |c| core.anchor.mark(rb.data(), "fizzy.palette.row:{s}", .{c.id}),
+    }
 
     const row_r = rb.data().borderRectScale().r;
     const mouse_pt = dvui.currentWindow().mouse_pt;

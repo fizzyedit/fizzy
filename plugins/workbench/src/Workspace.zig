@@ -300,6 +300,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
             .margin = dvui.Rect.all(0),
         });
         defer hbox.deinit();
+        if (sdk.document.pathOfSurfaceId(surface.id)) |path| core.anchor.mark(hbox.data(), "workbench.tab:{s}", .{path});
 
         const tab_hovered = core.widgets.hovered(hbox.data());
 

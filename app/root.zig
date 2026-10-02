@@ -91,6 +91,19 @@ pub const update = struct {
     pub const update_notify = @import("update/update_notify.zig");
 };
 
+/// Demos that drive the real app — a tape of timed input played into dvui, which a viewer can
+/// pause, take over, rewind and resume. `Tape` is the format, `Sequencer` the deterministic engine
+/// that replays it, `Script` the high-level way to write one, `Player` + `overlay` the dvui half
+/// (input injection, the pointer and captions a viewer sees), `Stage` what the app fills in.
+pub const automation = struct {
+    pub const Tape = @import("automation/Tape.zig");
+    pub const Sequencer = @import("automation/Sequencer.zig");
+    pub const Script = @import("automation/Script.zig");
+    pub const Stage = @import("automation/Stage.zig");
+    pub const Player = @import("automation/Player.zig");
+    pub const overlay = @import("automation/overlay.zig");
+};
+
 /// One application per machine, and a second launch handing its argv to the first.
 ///
 /// The lock, the socket and the argv plumbing are the same for every app; what "open this path"

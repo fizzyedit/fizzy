@@ -90,6 +90,8 @@ pub const FileLoadJob = workbench_mod.FileLoadJob;
 
 pub const sdk = fizzy.sdk;
 pub const Profiler = @import("Profiler.zig");
+/// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
+pub const Demo = @import("Demo.zig");
 pub const Host = sdk.Host;
 
 /// Workbench: the file-management home — file tree, open/load flow, and the
@@ -113,6 +115,10 @@ keybind_profile: Keybinds.Profile = .vscode,
 
 /// VSCode-style Quick Open / command palette overlay.
 command_palette: @import("CommandPalette.zig") = .{},
+
+/// The demo player and fizzy's stage for it. Attached in `postInit`, at the Editor's final
+/// address (the stage's context is this field).
+demo: Demo = .detached,
 
 explorer: *Explorer,
 
@@ -374,24 +380,7 @@ pub fn init(
         editor.app.settings = try Settings.load(app.allocator, settings_path, plugins_dir);
     }
 
-    {
-        // What `layout.zon` remembers per region: its extent, and what the user put in it.
-        const saved = fizzy.backend.loadRegions(app.allocator, editor.app.config_folder);
-        defer fizzy.backend.freeRegions(app.allocator, saved);
-        for (saved) |r| {
-            if (r.extent) |e| _ = editor.app.layout.setExtent(app.allocator, r.name, e);
-            if (r.surfaces) |ids| editor.app.layout.assign(app.allocator, r.name, ids) catch continue;
-            if (r.order) |ids| editor.app.layout.setOrder(app.allocator, r.name, ids) catch {};
-            if (r.shows) |s| editor.app.layout.setShows(app.allocator, r.name, switch (s) {
-                .one => .one,
-                .many => .many,
-            });
-        }
-        loadRuntimeSplits(&editor.app.layout, app.allocator, saved);
-        if (fizzy.backend.loadTree(app.allocator, editor.app.config_folder)) |d| {
-            editor.app.layout.pending_dock = d;
-        }
-    }
+    editor.loadSavedLayout();
 
     // Save-queue worker is owned by the pixel-art plugin (`initPlugin` in `postInit`).
 
@@ -1602,6 +1591,17 @@ export fn FizzyWebShowInRoot(path_ptr: [*]const u8, path_len: usize) void {
     editor.app.host.refresh();
 }
 
+/// The page plays a demo: `?demo=tour` names a bundled one, `?demo=<url>.zon` is a tape it
+/// fetched (`app.automation.Tape`'s ZON form). Either way it starts on the next frame.
+export fn FizzyWebPlayDemo(ptr: [*]u8, len: usize, is_zon: bool) void {
+    if (comptime builtin.target.cpu.arch != .wasm32) return;
+    const editor = web_editor orelse return;
+    const bytes = ptr[0..len];
+    defer editor.app.gpa.free(bytes);
+    if (is_zon) editor.demo.playZonSoon(bytes) else editor.demo.playSoon(bytes);
+    editor.app.host.refresh();
+}
+
 /// The one editor, for the page's calls. Set by `postInit` on the web.
 var web_editor: ?*Editor = null;
 /// Plugin ids the page is fetching for us right now.
@@ -1888,6 +1888,15 @@ pub fn postInit(editor: *Editor) !void {
         } else |_| {}
     }
     sdk.installRuntime(&editor.app.gpa, &editor.app.host, null);
+
+    editor.demo.attach(editor);
+    // `FIZZY_DEMO=tour` plays a bundled demo from launch — how a screen recording is made.
+    if (comptime builtin.target.cpu.arch != .wasm32) {
+        if (std.process.Environ.getAlloc(fizzy.core.platform.processEnviron(), editor.app.gpa, "FIZZY_DEMO")) |name| {
+            defer editor.app.gpa.free(name);
+            editor.demo.playSoon(name);
+        } else |_| {}
+    }
 
     // Fizzy commands must be registered against the Editor's *final* address — `init` returns
     // an Editor by value, so a pointer taken there would dangle the moment it's moved.
@@ -2229,6 +2238,7 @@ fn fizzyDrawMenuItem(ctx: *anyopaque, title: []const u8, command_id: ?[]const u8
         .keybind = kb,
         .enabled = enabled,
         .id_extra = @truncate(std.hash.Wyhash.hash(0, title)),
+        .command = command_id,
     }) != null;
 }
 
@@ -3398,6 +3408,8 @@ pub fn reconcileDiscoveredPlugins(editor: *Editor) void {
 /// Debounced autosave (defers while a canvas stroke is active).
 fn saveSettingsGuarded(editor: *Editor) !void {
     if (!editor.app.settings_dirty) return;
+    // A demo's changes are not the user's; `Demo.end` puts theirs back.
+    if (editor.demo.active()) return;
 
     const now = fizzy.core.perf.nanoTimestamp();
     if (now < editor.app.settings_save_deadline_ns) {
@@ -3428,6 +3440,8 @@ fn saveSettingsRaw(editor: *Editor) !void {
 /// gated on `window_ratios_dirty` instead so a splitter drag never forces a settings.zon write.
 fn saveWindowRatiosGuarded(editor: *Editor) void {
     if (!editor.app.layout.dirty) return;
+    // A demo rearranges the window as it likes; `Demo.end` reloads the user's from disk.
+    if (editor.demo.active()) return;
 
     const now = fizzy.core.perf.nanoTimestamp();
     if (now < editor.app.layout.save_deadline_ns) {
@@ -3448,10 +3462,25 @@ fn saveWindowRatiosRaw(editor: *Editor) void {
     editor.app.layout.dirty = false;
 }
 
+/// Write a pending layout change now rather than after its debounce — before a demo takes the
+/// window over, so what is on disk is the user's.
+pub fn flushLayout(editor: *Editor) void {
+    if (editor.app.layout.dirty) saveWindowRatiosRaw(editor);
+}
+
+/// Write pending settings now rather than after their debounce. See `flushLayout`.
+pub fn flushSettings(editor: *Editor) void {
+    if (!editor.app.settings_dirty) return;
+    saveSettingsRaw(editor) catch |err| dvui.log.err("Failed to save settings ({s})", .{@errorName(err)});
+}
+
 const handle_size = 10;
 const handle_dist = 60;
 
 pub fn tick(editor: *Editor) !dvui.App.Result {
+    // First, before anything reads `dvui.events()`: a playing demo adds its input after the
+    // real input, and takes the real input it owns (see `app.automation.Player.frame`).
+    editor.demo.frame();
     // Finger or mouse: how far a tap may drift, here and (through the context sync) in every
     // plugin — see `sdk.dvui_context.syncTouchInput`.
     sdk.dvui_context.syncTouchInput();
@@ -3475,7 +3504,8 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).
-    fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion());
+    // A demo replaying to a seek wants every frame to land where it is going: no motion.
+    fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion() or editor.demo.fast);
     fizzy.core.programs.publishHost();
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
     if (comptime builtin.target.cpu.arch == .wasm32) {
@@ -3950,6 +3980,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     // out and removes itself when the timer expires.
     editor.drawSaveToasts();
 
+    // Over everything the frame drew: a demo's pointer, keystrokes, captions and transport bar.
+    @import("app").automation.overlay.draw(&editor.demo.player);
+
     // Every widget has drawn by now, so this is the frame's final answer about who holds
     // keyboard focus. Read next frame by the clipboard commands.
     editor.text_input_focused = dvui.currentWindow().textInputRequested() != null;
@@ -4110,6 +4143,27 @@ fn saveRegions(editor: *Editor) void {
     } else if (editor.app.layout.tree_cleared) {
         fizzy.backend.saveTree(editor.app.config_folder, null);
         editor.app.layout.tree_cleared = false;
+    }
+}
+
+/// Apply what `layout.zon` remembers per region — its extent, and what the user put in it — on
+/// top of the layout as it stands. At launch, and when a demo gives the window back.
+pub fn loadSavedLayout(editor: *Editor) void {
+    const gpa = editor.app.gpa;
+    const saved = fizzy.backend.loadRegions(gpa, editor.app.config_folder);
+    defer fizzy.backend.freeRegions(gpa, saved);
+    for (saved) |r| {
+        if (r.extent) |e| _ = editor.app.layout.setExtent(gpa, r.name, e);
+        if (r.surfaces) |ids| editor.app.layout.assign(gpa, r.name, ids) catch continue;
+        if (r.order) |ids| editor.app.layout.setOrder(gpa, r.name, ids) catch {};
+        if (r.shows) |s| editor.app.layout.setShows(gpa, r.name, switch (s) {
+            .one => .one,
+            .many => .many,
+        });
+    }
+    loadRuntimeSplits(&editor.app.layout, gpa, saved);
+    if (fizzy.backend.loadTree(gpa, editor.app.config_folder)) |d| {
+        editor.app.layout.pending_dock = d;
     }
 }
 
@@ -4502,15 +4556,18 @@ pub fn setProjectFolder(editor: *Editor, path_in: []const u8) !void {
     }
     editor.app.folder = try editor.app.gpa.dupe(u8, path);
     editor.command_palette.invalidate();
-    try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path));
-    // Written now, not only at quit: a browser tab is closed, never quit, so the web keeps
-    // recents only if they are stored as they change. Cheap enough to do everywhere.
-    if (std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) |recents_path| {
-        defer editor.app.gpa.free(recents_path);
-        editor.app.recents.save(editor.app.gpa, recents_path) catch |err| dvui.log.warn("recents: not saved: {s}", .{@errorName(err)});
-    } else |_| {}
-    // The dvui menu re-reads recents every frame; the macOS submenu is retained state.
-    fizzy.backend.rebuildNativeRecentFolders();
+    // A demo's folder is not one the user opened, and is gone when the demo is.
+    if (!editor.demo.active()) {
+        try editor.app.recents.appendFolder(try editor.app.gpa.dupe(u8, path));
+        // Written now, not only at quit: a browser tab is closed, never quit, so the web keeps
+        // recents only if they are stored as they change. Cheap enough to do everywhere.
+        if (std.fs.path.join(editor.app.gpa, &.{ editor.app.config_folder, "recents.zon" })) |recents_path| {
+            defer editor.app.gpa.free(recents_path);
+            editor.app.recents.save(editor.app.gpa, recents_path) catch |err| dvui.log.warn("recents: not saved: {s}", .{@errorName(err)});
+        } else |_| {}
+        // The dvui menu re-reads recents every frame; the macOS submenu is retained state.
+        fizzy.backend.rebuildNativeRecentFolders();
+    }
     if (editor.app.host.selectedSurface(sdk.keywords.ide.sidebar)) |s| {
         editor.app.host.setSelectionFor(sdk.keywords.ide.sidebar, s.id);
     }
@@ -5452,6 +5509,10 @@ pub fn rawCloseFileID(editor: *Editor, id: u64) !void {
 }
 
 pub fn deinit(editor: *Editor) !void {
+    // A demo playing at quit leaves the user's layout and settings as `Demo.begin` flushed them:
+    // nothing it changed is written below.
+    const demo_was_active = editor.demo.active();
+    editor.demo.deinit();
     // Owned outright rather than cached by dvui, so it has to be released explicitly.
     editor.app.layout.center_transition.discard();
     editor.app.layout.center_prev_id = null;
@@ -5529,8 +5590,10 @@ pub fn deinit(editor: *Editor) !void {
     };
     editor.app.recents.deinit(editor.app.gpa);
 
-    try saveSettingsRaw(editor);
-    saveWindowRatiosRaw(editor);
+    if (!demo_was_active) {
+        try saveSettingsRaw(editor);
+        saveWindowRatiosRaw(editor);
+    }
     // Only after the flush above, which writes the assignments out.
     editor.app.layout.deinitAssignments(editor.app.gpa);
     editor.app.layout.deinitExtents(editor.app.gpa);

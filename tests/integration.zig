@@ -4108,3 +4108,278 @@ test "motion: every level arrives on time, and passes through without a kink" {
         }
     }
 }
+
+// -- demo automation ---------------------------------------------------------------------------
+//
+// The player against real widgets in a real (headless) window: a button and the text plugin's
+// editor, tagged the way an app tags what a demo aims at. What is under test is the dvui half —
+// that tape input arrives as events every widget handles as a person's, that a rewind replays to
+// exactly the state live play reached, and that a person's input pauses the demo and is undone
+// when it resumes. The sequencing rules themselves are unit-tested in `app/automation/`.
+
+const automation = @import("app").automation;
+
+const DemoStage = struct {
+    keyframes: usize = 0,
+    commands: usize = 0,
+    fast: bool = false,
+    begun: bool = false,
+
+    fn stage(self: *DemoStage) automation.Stage {
+        return .{ .ctx = self, .vtable = &.{
+            .begin = begin,
+            .end = end,
+            .keyframe = keyframe,
+            .idle = idle,
+            .command = command,
+            .chordFor = chordFor,
+            .commandTitle = commandTitle,
+            .fastForward = fastForward,
+        } };
+    }
+    fn from(ctx: *anyopaque) *DemoStage {
+        return @ptrCast(@alignCast(ctx));
+    }
+    fn begin(ctx: *anyopaque, _: *const automation.Tape) void {
+        from(ctx).begun = true;
+    }
+    fn end(ctx: *anyopaque) void {
+        from(ctx).begun = false;
+    }
+    /// The whole of this app's state is the field's text and the button's count.
+    fn keyframe(ctx: *anyopaque, kf: *const automation.Tape.Keyframe) void {
+        from(ctx).keyframes += 1;
+        demo_text.clearRetainingCapacity();
+        if (kf.files.len > 0) demo_text.appendSlice(std.testing.allocator, kf.files[0].text) catch unreachable;
+        demo_clicks = 0;
+        demo_commands = 0;
+    }
+    fn idle(_: *anyopaque) bool {
+        return true;
+    }
+    fn command(ctx: *anyopaque, id: []const u8) void {
+        if (std.mem.eql(u8, id, "demo.ping")) demo_commands += 1;
+        from(ctx).commands += 1;
+    }
+    fn chordFor(_: *anyopaque, _: []const u8) ?@import("app").keymap.chord.Stroke {
+        return null;
+    }
+    fn commandTitle(_: *anyopaque, _: []const u8) ?[]const u8 {
+        return "Ping";
+    }
+    fn fastForward(ctx: *anyopaque, on: bool) void {
+        from(ctx).fast = on;
+    }
+};
+
+var demo_text: std.ArrayListUnmanaged(u8) = .empty;
+var demo_clicks: usize = 0;
+var demo_commands: usize = 0;
+var demo_stage: DemoStage = .{};
+var demo_player: automation.Player = undefined;
+
+fn demoFrame() !dvui.App.Result {
+    demo_player.frame();
+    {
+        var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+        defer col.deinit();
+        if (dvui.button(@src(), "Count", .{}, .{ .tag = "demo.count" })) demo_clicks += 1;
+        var te: TextEntryWidget = undefined;
+        te.init(@src(), .{
+            .multiline = true,
+            .text = .{ .array_list = .{ .backing = &demo_text, .allocator = std.testing.allocator, .limit = 4096 } },
+        }, .{ .expand = .both, .tag = "demo.field" });
+        te.processEvents();
+        te.draw();
+        te.deinit();
+    }
+    automation.overlay.draw(&demo_player);
+    return .ok;
+}
+
+/// Seed, count once, click into the field, type two words with a chapter between, ping.
+fn demoTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "test", "Test");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://test", .files = &.{.{ .path = "field", .text = "> " }} });
+    try s.chapter("Count");
+    try s.click(.{ .tag = "demo.count" }, .{});
+    try s.chapter("Type");
+    try s.click(.{ .tag = "demo.field", .x = 0.9, .y = 0.5 }, .{});
+    try s.typeText("hello", .{ .cps = 20 });
+    try s.chapter("More");
+    try s.typeText(" world", .{ .cps = 20 });
+    try s.command("demo.ping");
+    return s.finish();
+}
+
+fn demoCtx() !dvui.testing {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 800, .h = 600 } });
+    errdefer t.deinit();
+    demo_text = .empty;
+    demo_clicks = 0;
+    demo_commands = 0;
+    demo_stage = .{};
+    demo_player = .init(demo_stage.stage());
+    // Lay the widgets out once, so the first glide has somewhere to go.
+    try dvui.testing.settle(demoFrame);
+    return t;
+}
+
+fn deinitDemo(t: *dvui.testing) void {
+    demo_player.deinit();
+    t.deinit();
+    demo_text.deinit(std.testing.allocator);
+    demo_text = .empty;
+}
+
+/// Frames until the player is in `state`, or fail after `max`.
+fn stepDemoUntil(state: automation.Player.State, max: usize) !void {
+    for (0..max) |_| {
+        if (demo_player.state == state) return;
+        _ = try dvui.testing.step(demoFrame);
+    }
+    if (demo_player.state != state) {
+        std.debug.print("player is {t} at {d:.0}ms, wanted {t}\n", .{ demo_player.state, demo_player.seq.now, state });
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "demo: a tape plays into real widgets as a person's input" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    try std.testing.expect(demo_stage.begun);
+    try stepDemoUntil(.ended, 400);
+
+    try std.testing.expectEqual(@as(usize, 1), demo_clicks);
+    try std.testing.expectEqualStrings("> hello world", demo_text.items);
+    try std.testing.expectEqual(@as(usize, 1), demo_commands);
+    try std.testing.expectEqual(@as(usize, 1), demo_stage.keyframes);
+    try std.testing.expect(!demo_stage.fast);
+
+    demo_player.unload();
+    try std.testing.expect(!demo_stage.begun);
+}
+
+test "demo: rewinding replays to exactly what live play reached, and forward again" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    const tape = demo_player.tape().?;
+    const more = tape.chapters[2].at;
+
+    // Back to just before the second word: the keyframe again, then a fast replay.
+    demo_player.seek(@floatFromInt(more - 10));
+    try std.testing.expectEqual(automation.Player.State.seeking, demo_player.state);
+    try std.testing.expect(demo_stage.fast);
+    try stepDemoUntil(.paused, 200);
+    try std.testing.expect(!demo_stage.fast);
+    try std.testing.expectEqual(@as(usize, 2), demo_stage.keyframes);
+    try std.testing.expectEqualStrings("> hello", demo_text.items);
+    try std.testing.expectEqual(@as(usize, 1), demo_clicks);
+    try std.testing.expectEqual(@as(usize, 0), demo_commands);
+
+    // Forward from there needs no rewind: it carries on from the tape's own state.
+    demo_player.seek(@floatFromInt(tape.duration()));
+    try stepDemoUntil(.paused, 200);
+    try std.testing.expectEqual(@as(usize, 2), demo_stage.keyframes);
+    try std.testing.expectEqualStrings("> hello world", demo_text.items);
+    try std.testing.expectEqual(@as(usize, 1), demo_commands);
+
+    // A chapter jump backwards is a seek like any other.
+    demo_player.stepChapter(-1);
+    demo_player.stepChapter(-1);
+    try stepDemoUntil(.paused, 200);
+    try std.testing.expectEqualStrings("> ", demo_text.items[0..2]);
+    try std.testing.expect(demo_player.seq.now <= @as(f64, @floatFromInt(more)));
+}
+
+test "demo: a person's click pauses it, and resuming undoes what they did first" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    // Into the typing of the first word.
+    const typing_at = demo_player.tape().?.chapters[1].at + 1500;
+    for (0..400) |_| {
+        if (demo_player.seq.now >= @as(f64, @floatFromInt(typing_at))) break;
+        _ = try dvui.testing.step(demoFrame);
+    }
+    try std.testing.expectEqual(automation.Player.State.playing, demo_player.state);
+    const paused_at = demo_player.seq.now;
+
+    // Real input between frames, the way a backend adds it: a click on the button.
+    const button_rect = dvui.tagGet("demo.count").?.rect;
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = button_rect.center() });
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    _ = try dvui.testing.step(demoFrame);
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(automation.Player.State.paused, demo_player.state);
+    try std.testing.expect(demo_player.diverged);
+    // The click went on to do what the person meant.
+    try std.testing.expectEqual(@as(usize, 2), demo_clicks);
+    try std.testing.expect(demo_player.seq.now <= paused_at + 200);
+
+    // Resume: the replay puts the tape's own state back before carrying on.
+    demo_player.play();
+    try std.testing.expectEqual(automation.Player.State.seeking, demo_player.state);
+    try stepDemoUntil(.playing, 200);
+    try std.testing.expectEqual(@as(usize, 1), demo_clicks);
+    try std.testing.expect(!demo_player.diverged);
+    try stepDemoUntil(.ended, 400);
+    try std.testing.expectEqualStrings("> hello world", demo_text.items);
+}
+
+test "demo: real pointer motion does not move the tape's pointer while it plays" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    for (0..12) |_| _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(automation.Player.State.playing, demo_player.state);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = 3, .y = 3 } });
+    _ = try dvui.testing.step(demoFrame);
+    try std.testing.expectEqual(automation.Player.State.playing, demo_player.state);
+    const p = demo_player.seq.pointer;
+    try std.testing.expectEqual(p.x, dvui.currentWindow().mouse_pt.x);
+    try std.testing.expectEqual(p.y, dvui.currentWindow().mouse_pt.y);
+}
+
+test "demo: every bundled demo builds into a valid tape" {
+    for (fizzy.Editor.Demo.catalog.entries) |e| {
+        var s: automation.Script = .init(std.testing.allocator, e.name, e.title);
+        e.build(&s) catch |err| {
+            s.deinit();
+            return err;
+        };
+        var owned = try s.finish();
+        defer owned.deinit();
+        try std.testing.expect(owned.tape.duration() > 5000);
+        try std.testing.expect(owned.tape.chapters.len > 0);
+        // Its files mount under its own name — `demo://<name>`, what the web's `?demo=` says.
+        try std.testing.expect(std.mem.endsWith(u8, owned.tape.keyframes[0].root, e.name));
+    }
+}
+
+test "demo: the hand-written sample tape parses and round-trips" {
+    const source = @embedFile("demo_sample_tape");
+    var owned = try automation.Tape.parse(std.testing.allocator, source);
+    defer owned.deinit();
+    try std.testing.expectEqualStrings("hello", owned.tape.name);
+    try std.testing.expectEqualStrings(".split", owned.tape.keyframes[0].settings[0].value);
+
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try owned.tape.write(&out.writer);
+    const again = try std.testing.allocator.dupeZ(u8, out.written());
+    defer std.testing.allocator.free(again);
+    var back = try automation.Tape.parse(std.testing.allocator, again);
+    defer back.deinit();
+    try std.testing.expectEqual(owned.tape.ops.len, back.tape.ops.len);
+    try std.testing.expectEqual(owned.tape.duration(), back.tape.duration());
+}
