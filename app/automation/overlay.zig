@@ -176,6 +176,8 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
             .detail = f.detail,
             .refraction = f.refraction,
             .form = r.form,
+            // A card, however few lines it holds: the whole of the glass's edge.
+            .whole_edge = true,
         });
     } else {
         const pc = c.scale(s, dvui.CornerRect.Physical);
