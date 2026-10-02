@@ -7,12 +7,23 @@
 //!
 //! An app calls `frame` once at the very start of its frame, before anything reads
 //! `dvui.events()` (it also tells widgets whether to publish their anchors, `core.anchor`), and
-//! `overlay.draw` at the end, after everything else has drawn. Between frames
-//! it drives the transport: `load`, `play`, `pause`, `seek`, `unload`.
+//! `overlay.draw` at the end, after everything else has drawn; and it runs its whole frame
+//! function through `frames`, which is what makes a seek silent. Between frames it drives the
+//! transport: `load`, `play`, `pause`, `seek`, `unload`.
 //!
-//! **Rewind** is `Tape.keyframeBefore` + `Sequencer.rewind` + replaying to the moment with the
-//! stage told to skip animation (`Stage.fastForward`): a frame per op, not per millisecond, so a
-//! seek costs a second or so of frames and shows as a quick replay rather than a blank.
+//! **Seeking** is `Tape.keyframeBefore` + `Sequencer.rewind` + replaying to the moment with the
+//! stage told to skip animation (`Stage.fastForward`). The replay costs a frame per op the app
+//! has to see land (a click, a key, a keyframe), and those frames are *silent*: `frames` runs the
+//! app's frame again and again inside one displayed frame, ending each unseen, until the seek
+//! arrives or a budget of wall time (`budget_ns`) is spent. A seek across a demo-sized tape lands
+//! in the frame it was asked for; a longer one carries on in the next.
+//!
+//! **The app's clock** follows the demo while it catches up: each silent frame begins at the
+//! demo moment of the next thing the tape does (`Sequencer.nextAt`), counted from where the
+//! displayed frame left off, so a press and its release are as far apart, and timers and
+//! debounces fire, as they did live. That puts the app's clock ahead of the wall, by `ahead_ns`,
+//! and the backend's clock is moved on by as much (`frames`' `clock`) so dvui's stays monotonic
+//! and continuous after. The player's own chrome (the transport bar) runs on the wall (`wallNs`).
 //!
 //! **Interruption**: while playing, a real click, tap, scroll or key pauses the demo — a pointer
 //! event goes on to do what the person meant, the first key is only taken as "stop". Real pointer
@@ -30,6 +41,8 @@ const Stage = @import("Stage.zig");
 const chord = @import("../keymap/chord.zig");
 const dvui_adapter = @import("../keymap/dvui_adapter.zig");
 
+const log = std.log.scoped(.automation);
+
 stage: Stage,
 /// The loaded demo, owned. Null when nothing is loaded.
 owned: ?Tape.Owned = null,
@@ -44,6 +57,19 @@ seek_from: f64 = 0,
 rate: f32 = 1,
 /// Real input reached the app since the tape last put it in a known state.
 diverged: bool = false,
+/// Wall time one displayed frame may spend on silent frames while a seek catches up (`frames`).
+budget_ns: i128 = 8 * std.time.ns_per_ms,
+/// How far the app's clock is ahead of the wall: the demo time silent frames covered that the
+/// wall did not (see the file comment). Never goes down: dvui's clock may not run backwards.
+ahead_ns: i128 = 0,
+/// The frame running now is one of `frames`' catch-up runs (after the first): its clock step is
+/// demo time, not the wall's.
+catching_up: bool = false,
+/// The displayed frame's wall time, which `wallNs` keeps to through its catch-up runs.
+shown_wall_ns: i128 = 0,
+/// The seek in flight, or the last one: how long it took to land, for logs, tests and the
+/// benchmark.
+seek_stats: SeekStats = .{},
 /// Buttons the tape is holding down — released before a rewind or a pause, so a drag cut short
 /// does not leave a widget holding the mouse.
 held: std.EnumSet(Tape.Button) = .initEmpty(),
@@ -64,6 +90,17 @@ pub const State = enum {
 
 pub const After = enum { play, pause };
 
+pub const SeekStats = struct {
+    /// Displayed frames from the seek to its arrival, the one it was asked in included.
+    shown: u32 = 0,
+    /// Frames run unseen in that time.
+    silent: u32 = 0,
+    /// Wall time from the seek to its arrival, ns. Zero while it is in flight.
+    wall_ns: i128 = 0,
+    /// Wall time when it was asked for (`wallClock`).
+    started_ns: i128 = 0,
+};
+
 pub const Press = struct {
     at: f64,
     pt: Sequencer.Point,
@@ -83,10 +120,10 @@ pub const Transport = struct {
     scrub: ?f64 = null,
     /// The real pointer, physical, as last seen.
     pointer: ?dvui.Point.Physical = null,
-    /// When the real pointer last moved over the app (ns, frame time): the bar shows for a while
+    /// When the real pointer last moved over the app (ns, `wallNs`): the bar shows for a while
     /// after, then gets out of the demo's way.
     stirred_ns: ?i128 = null,
-    /// The bar opening (`wanted`) or closing, since `since_ns` (frame time), and how open it was
+    /// The bar opening (`wanted`) or closing, since `since_ns` (`wallNs`), and how open it was
     /// last frame — kept by the overlay, which opens and closes it as a floating surface does.
     wanted: bool = false,
     since_ns: ?i128 = null,
@@ -110,6 +147,14 @@ pub fn deinit(self: *Player) void {
 
 pub fn tape(self: *const Player) ?*const Tape {
     return if (self.owned) |*o| &o.tape else null;
+}
+
+/// The frame's time on the wall (`dvui.frameTimeNS` less what silent frames skipped; in a
+/// catch-up run, the displayed frame's): for what answers the viewer rather than the demo — the
+/// transport bar's linger and its opening.
+pub fn wallNs(self: *const Player) i128 {
+    if (self.catching_up) return self.shown_wall_ns;
+    return dvui.frameTimeNS() - self.ahead_ns;
 }
 
 /// The demo time to show: the scrubber's while it is held, else the sequencer's.
@@ -237,6 +282,7 @@ fn seekTo(self: *Player, t_in: f64, after: After) void {
     self.seek_from = self.seq.now;
     self.seek_target = t;
     self.after_seek = after;
+    self.seek_stats = .{ .started_ns = self.wallClock(dvui.currentWindow()) };
     if (self.state != .seeking) self.stage.fastForward(true);
     self.state = .seeking;
     dvui.refresh(null, @src(), null);
@@ -244,6 +290,11 @@ fn seekTo(self: *Player, t_in: f64, after: After) void {
 
 fn arrive(self: *Player) void {
     self.stage.fastForward(false);
+    const st = &self.seek_stats;
+    st.wall_ns = @max(1, self.wallClock(dvui.currentWindow()) - st.started_ns);
+    log.debug("seek to {d:.0} ms landed in {d} shown + {d} silent frames, {d:.1} ms", .{
+        self.seek_target, st.shown, st.silent, @as(f64, @floatFromInt(st.wall_ns)) / std.time.ns_per_ms,
+    });
     self.state = switch (self.after_seek) {
         .play => .playing,
         .pause => .paused,
@@ -260,8 +311,9 @@ pub fn frame(self: *Player) void {
     if (self.owned == null) return; // the bar's close button
     self.claimCursor();
 
-    // Clamped: the first frame after a pause can report however long the app slept.
-    const wall_ms: f64 = @min(dvui.secondsSinceLastFrame() * 1000, 100);
+    // Clamped: the first frame after a pause can report however long the app slept. A catch-up
+    // run's step is demo time, and no wall time passed for a wait to count.
+    const wall_ms: f64 = if (self.catching_up) 0 else @min(dvui.secondsSinceLastFrame() * 1000, 100);
     switch (self.state) {
         .playing => {
             self.holdPointer();
@@ -275,6 +327,83 @@ pub fn frame(self: *Player) void {
         .paused, .ended, .idle => return,
     }
     dvui.refresh(null, @src(), null);
+}
+
+/// Run the app's frame function, `frame_fn`, as the player needs it: once, as it is — and while
+/// a seek is catching up, again and again inside the same displayed frame, each run but the
+/// last ended unseen (`Window.end` without presenting) and the next begun, until the seek
+/// arrives or `budget_ns` of wall time is spent. Only the last run is shown.
+/// The app calls this from inside its frame function, in place of the frame itself: dvui has
+/// begun the frame and will end and present it, as ever.
+///
+/// Each silent run begins at the demo moment of what it is about to do (see the file comment).
+/// `clock` is the backend's clock offset, which its `nanoTime` adds to the wall (fizzy's
+/// backends have one, `clock_ahead_ns`; `backendClock` finds it): it is moved on by however far
+/// the runs took the app's clock past the wall — and, a seek still in flight, to the moment it
+/// goes on from — so the next frame carries on from there. Without one a silent run steps the
+/// clock the least dvui accepts, a microsecond, and timers wait for the wall.
+pub fn frames(self: *Player, win: *dvui.Window, frame_fn: *const fn () anyerror!dvui.App.Result, clock: ?*i128) anyerror!dvui.App.Result {
+    // Counted before the run, which may land the seek, and after it, which may have asked for one.
+    const was_seeking = self.state == .seeking;
+    if (was_seeking) self.seek_stats.shown += 1;
+    var res = try frame_fn();
+    if (self.state != .seeking) return res;
+    if (!was_seeking) self.seek_stats.shown += 1;
+    const start = win.backend.nanoTime();
+    defer self.catching_up = false;
+    // Demo time onto the app's clock, from where the displayed frame left them.
+    const base_ns = win.frame_time_ns;
+    const base_ms = self.seq.now;
+    self.shown_wall_ns = self.wallNs();
+    // A wait holding the seek up is the app catching up too — files loading, a document opening
+    // — and the app does that a frame at a time, so it runs on through waits: only the budget
+    // stops it. (Waits time out on the wall, which only displayed frames count.)
+    while (res == .ok and self.state == .seeking) {
+        if (win.backend.nanoTime() - start >= self.budget_ns) break;
+        const soonest = win.frame_time_ns + std.time.ns_per_us;
+        const at_ns = if (clock == null) soonest else @max(soonest, base_ns + msToNs(self.nextMoment() - base_ms));
+        _ = try win.end(.{ .manage_backend = false });
+        try win.begin(at_ns);
+        self.catching_up = true;
+        self.seek_stats.silent += 1;
+        res = try frame_fn();
+    }
+    if (clock) |c| {
+        var next_ns = win.frame_time_ns;
+        if (self.state == .seeking) next_ns = @max(next_ns, base_ns + msToNs(self.nextMoment() - base_ms));
+        const lead = next_ns - win.backend.nanoTime();
+        if (lead > 0) {
+            self.ahead_ns += lead;
+            c.* = self.ahead_ns;
+        }
+    }
+    return res;
+}
+
+/// Wall time since the seek in flight was asked for, ns. Only valid while seeking.
+pub fn seekingNs(self: *const Player) i128 {
+    return self.wallClock(dvui.currentWindow()) - self.seek_stats.started_ns;
+}
+
+/// The demo moment a catch-up goes on from: the next thing the tape does, or the seek's end.
+fn nextMoment(self: *const Player) f64 {
+    return @min(self.seek_target, self.seq.nextAt());
+}
+
+fn msToNs(ms: f64) i128 {
+    return @intFromFloat(@max(0, ms) * std.time.ns_per_ms);
+}
+
+/// The backend's clock less what `frames` moved it on by: the wall, for timing the player itself.
+fn wallClock(self: *const Player, win: *dvui.Window) i128 {
+    return win.backend.nanoTime() - self.ahead_ns;
+}
+
+/// The backend's clock offset, if it has one (`frames`): a `clock_ahead_ns` its `nanoTime` adds.
+pub fn backendClock(win: *dvui.Window) ?*i128 {
+    const impl = win.backend.impl;
+    if (@hasField(@TypeOf(impl.*), "clock_ahead_ns")) return &impl.clock_ahead_ns;
+    return null;
 }
 
 /// Real events, before any widget sees them: the bar's, then the interrupt rule.
@@ -327,7 +456,7 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
         tr.pointer = me.p;
         // Stirring near the bottom of the window brings the bar back while playing.
         const win = dvui.windowRectPixels();
-        if (me.p.y > win.y + win.h * 0.7) tr.stirred_ns = dvui.frameTimeNS();
+        if (me.p.y > win.y + win.h * 0.7) tr.stirred_ns = self.wallNs();
     }
     if (tr.scrub != null) {
         switch (me.action) {
@@ -344,7 +473,7 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
     }
     const bar = tr.bar orelse return false;
     if (!bar.contains(me.p)) return false;
-    tr.stirred_ns = dvui.frameTimeNS();
+    tr.stirred_ns = self.wallNs();
     if (me.action == .press and me.button.pointer()) {
         if (tr.play.contains(me.p)) {
             self.toggle();

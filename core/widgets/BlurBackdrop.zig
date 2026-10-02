@@ -961,10 +961,6 @@ pub const Pane = struct {
     /// for the blur turned off where the glass program draws (`LiquidField`), so liquid glass is
     /// still glass. Its capture runs at `min_blur`, for the picture before the blur.
     clear: bool = false,
-    /// The whole of the edge, however small the pane. Small panes otherwise have less of it, and
-    /// tooltip-sized ones none (`liquid_glass.sizeRamp`): a pane there only to be read beside
-    /// something frosts it. One that is a card in its own right — a demo's caption — is glass.
-    whole_edge: bool = false,
 };
 
 /// Physical pixels: the least blur a frost is drawn with (`frostPane`).
@@ -1028,7 +1024,8 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     // much of it has formed: a capture growing with it was a new size, and new targets, a frame.
     // Clear glass has the whole edge: it is thick glass that happens not to be frosted.
     const ramp = if (pane.clear) 1 else liquid_glass.blurRamp(pane.radius);
-    const lens_full = motion.liquid() * ramp * (if (pane.whole_edge) 1 else liquid_glass.sizeRamp(rect, scale));
+    // The whole edge on every pane, whatever its size: the rim fits the pane (`liquid_glass.fit`).
+    const lens_full = motion.liquid() * ramp;
     const lens = lens_full * edge;
     const margin = liquid_glass.margin(.{ .lens = lens_full * (1 + motion.overshoot_max * motion.swell_gain), .refraction = pane.refraction }, scale);
     // A size it keeps while it can (`captureSize`): a pane that changes size — a menu sliding

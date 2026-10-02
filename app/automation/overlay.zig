@@ -31,6 +31,8 @@ const pointer_fade_ms: f32 = 140;
 const slot_h: f32 = 56;
 /// How long the bar stays after the real pointer last stirred, while playing.
 const bar_linger_ns: i128 = 2500 * std.time.ns_per_ms;
+/// How long a seek runs before the overlay says it is catching up.
+const seeking_shown_after_ns: i128 = 150 * std.time.ns_per_ms;
 
 /// Draw the overlay for `player`. Call once a frame, after everything else in the frame has drawn.
 pub fn draw(player: *Player) void {
@@ -41,7 +43,8 @@ pub fn draw(player: *Player) void {
     // bar opens and back down as it closes.
     const bar = drawTransport(player, tape, win);
     drawCaptions(player, tape, win, win.h - 24 - bar * slot_h);
-    if (player.state == .seeking) drawSeeking(player, win);
+    // Only a seek long enough to notice says so: most land in a frame or a few.
+    if (player.state == .seeking and player.seekingNs() > seeking_shown_after_ns) drawSeeking(player, win);
     if (player.driving()) {
         const fw = layer(@src(), .{ .rect = win, .name = "DemoPointer" }, .{});
         defer fw.deinit();
@@ -175,8 +178,6 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
             .detail = f.detail,
             .refraction = f.refraction,
             .form = r.form,
-            // A card, however few lines it holds: the whole of the glass's edge.
-            .whole_edge = true,
         });
     } else {
         const pc = c.scale(s, dvui.CornerRect.Physical);
@@ -582,8 +583,9 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     const tr = &player.transport;
     // Playing, the bar gets out of the demo's way unless someone reaches for it. (A playing
     // player asks for every frame, so the linger runs out without a timer of its own.)
-    const since_stirred: i128 = if (tr.stirred_ns) |ns| dvui.frameTimeNS() - ns else std.math.maxInt(i64);
-    const p = barProgress(tr, player.state != .playing or tr.scrub != null or since_stirred < bar_linger_ns);
+    const wall_ns = player.wallNs();
+    const since_stirred: i128 = if (tr.stirred_ns) |ns| wall_ns - ns else std.math.maxInt(i64);
+    const p = barProgress(tr, wall_ns, player.state != .playing or tr.scrub != null or since_stirred < bar_linger_ns);
 
     const full_w = @min(640, win.w - 24);
     const center: dvui.Point = .{ .x = win.x + win.w / 2, .y = win.y + win.h - 12 - bar_h / 2 };
@@ -765,10 +767,10 @@ fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect,
 
 /// The bar opening when `want` turns true and closing when it turns false — 0 shut to 1 open,
 /// linear in time over `bar_open_ms` and `bar_close_ms` at the user's speed, the curves being
-/// `barGeometry`'s — kept on `tr` from frame to frame. Wall time: it answers the viewer's pointer,
-/// not the demo. Turned round part way, it carries on from as open as it is.
-fn barProgress(tr: *Player.Transport, want: bool) f32 {
-    const now_ns = dvui.frameTimeNS();
+/// `barGeometry`'s — kept on `tr` from frame to frame. Wall time (`now_ns`, `Player.wallNs`): it
+/// answers the viewer's pointer, not the demo. Turned round part way, it carries on from as open
+/// as it is.
+fn barProgress(tr: *Player.Transport, now_ns: i128, want: bool) f32 {
     const open_ms: f64 = motion.durationMs(bar_open_ms);
     const close_ms: f64 = motion.durationMs(bar_close_ms);
     if (tr.since_ns == null or want != tr.wanted) {

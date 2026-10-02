@@ -20,6 +20,12 @@
 //!
 //! How much of it is the caller's (`Look`): the app scales it by `core.motion.liquid` and the
 //! user's dialog refraction, so the glass is flat when motion is off.
+//!
+//! **Every pane is glass, whatever its size.** The rim's geometry — how deep its curve runs, how
+//! far out it reaches, how softly its corners turn — is sized for a dialog. A pane too small to
+//! hold it (a tooltip, a pill, a bar's bubble) gets the same rim scaled down to fit (`fit`): a
+//! small drop of glass, as refracting, as clear at the edge and as lit as a big one, rather than
+//! one that is all rim — or, as it once was, plain frost with the edge taken away.
 const std = @import("std");
 const dvui = @import("dvui");
 
@@ -55,7 +61,6 @@ pub fn margin(look: Look, scale: f32) f32 {
 /// How much of the unblurred picture the rim shows at its very edge, 0…1: glass is clearer
 /// where it is thin and steep, frosted across its face.
 pub const clarity: f32 = 0.75;
-
 
 /// A pane's corner radii in physical pixels, in the order its rings run: top-left, bottom-left,
 /// bottom-right, top-right. Per corner, so a pane can be square where it meets another and
@@ -107,17 +112,23 @@ pub fn blurRamp(radius: f32) f32 {
 }
 pub const full_at_blur: f32 = 20;
 
-/// How much of the glass's edge a pane `r` is big enough for: none on something tooltip-sized,
-/// all of it once its shorter side is `full_at_size` points. The edge reaches some forty points
-/// in; on a pane smaller than that there is no face for it to be the edge of — a tooltip was
-/// all rim, washed with the edge's light and clear copy, where it should simply frost what is
-/// behind it.
-pub fn sizeRamp(r: dvui.Rect.Physical, scale: f32) f32 {
-    const side = @min(r.w, r.h) / @max(scale, 0.01);
-    return std.math.clamp((side - no_edge_below) / (full_at_size - no_edge_below), 0, 1);
+/// How much of the rim's geometry a pane `r` has room for, its curve `depth_px` deep (`depthPx`):
+/// all of it once its shorter half is `room` depths across — the curve has flattened into the
+/// face by then — and on anything smaller that fraction, by which the curve, its reach and its
+/// corners all shrink together (`rimScale`). Its strength is untouched: a tooltip refracts, clears
+/// and catches the light at its edge as a dialog does, over a rim its own size.
+pub fn fit(r: dvui.Rect.Physical, depth_px: f32) f32 {
+    if (depth_px <= 0) return 1;
+    return std.math.clamp(@min(r.w, r.h) / 2 / (room * depth_px), 0, 1);
 }
-pub const no_edge_below: f32 = 40;
-pub const full_at_size: f32 = 110;
+/// Depths of the curve a pane's shorter half needs before its rim is drawn whole.
+pub const room: f32 = 3;
+
+/// The scale to draw a pane's rim at — `scale`, less what `fit` takes off for a pane too small
+/// for the whole of it. Lines (the rim's light, the anti-aliased edge) keep `scale`.
+pub fn rimScale(r: dvui.Rect.Physical, scale: f32, depth_px: f32) f32 {
+    return scale * fit(r, depth_px);
+}
 
 /// Whether `look` bends anything at all — when it does not, a flat textured rect is the same
 /// picture for a fraction of the work.
@@ -220,7 +231,9 @@ pub fn fieldAt(p: dvui.Point.Physical, r: dvui.Rect.Physical, scale: f32, depth_
 pub fn drawPane(tex: dvui.Texture, tex_bounds: dvui.Rect.Physical, r: dvui.Rect.Physical, radii: Radii, scale: f32, mod: dvui.Color, look: Look) void {
     const half = @min(r.w, r.h) / 2;
     if (half < 1 or tex_bounds.w < 1 or tex_bounds.h < 1) return;
-    const depth = depthPx(look, scale);
+    // The rim, fitted to the pane (`fit`).
+    const rim = rimScale(r, scale, depthPx(look, scale));
+    const depth = depthPx(look, rim);
     var insets_buf: [ring_count + 1]f32 = undefined;
     const insets = ringInsets(&insets_buf, depth, half * 0.9);
     const arc_steps = arcSteps(radii);
@@ -229,7 +242,7 @@ pub fn drawPane(tex: dvui.Texture, tex_bounds: dvui.Rect.Physical, r: dvui.Rect.
     const col = dvui.Color.PMA.fromColor(mod);
     const clear = dvui.Color.PMA.fromColor(.transparent);
     const pts = arena.alloc(dvui.Point.Physical, per_ring) catch return;
-    const reach_px = refraction * scale * look.lens * look.refraction;
+    const reach_px = refraction * rim * look.lens * look.refraction;
 
     // The face: the rings through the curve, from half a pixel inside the outline, and a fan
     // over the flat middle — in the texture's own blend.
@@ -243,10 +256,10 @@ pub fn drawPane(tex: dvui.Texture, tex_bounds: dvui.Rect.Physical, r: dvui.Rect.
         defer b.deinit(arena);
         for (insets) |d| {
             ringPoints(pts, null, r, radii, d, arc_steps, 1, 1);
-            for (pts) |p| b.appendVertex(.{ .pos = p, .col = col, .uv = seen(p, r, scale, depth, reach_px, tex_bounds) });
+            for (pts) |p| b.appendVertex(.{ .pos = p, .col = col, .uv = seen(p, r, rim, depth, reach_px, tex_bounds) });
         }
         const c = r.center();
-        b.appendVertex(.{ .pos = c, .col = col, .uv = seen(c, r, scale, depth, reach_px, tex_bounds) });
+        b.appendVertex(.{ .pos = c, .col = col, .uv = seen(c, r, rim, depth, reach_px, tex_bounds) });
         appendRingStrips(&b, per_ring, rings);
         appendFan(&b, per_ring, rings - 1, vtx_count - 1);
         const tris = b.build_unowned();
@@ -265,9 +278,9 @@ pub fn drawPane(tex: dvui.Texture, tex_bounds: dvui.Rect.Physical, r: dvui.Rect.
             var b = dvui.Triangles.Builder.init(arena, per_ring * 2, per_ring * 6) catch return;
             defer b.deinit(arena);
             ringPoints(pts, null, r, radii, -aa_out, arc_steps, 1, 1);
-            for (pts) |p| b.appendVertex(.{ .pos = p, .col = clear, .uv = seen(p, r, scale, depth, reach_px, tex_bounds) });
+            for (pts) |p| b.appendVertex(.{ .pos = p, .col = clear, .uv = seen(p, r, rim, depth, reach_px, tex_bounds) });
             ringPoints(pts, null, r, radii, aa_in, arc_steps, 1, 1);
-            for (pts) |p| b.appendVertex(.{ .pos = p, .col = col, .uv = seen(p, r, scale, depth, reach_px, tex_bounds) });
+            for (pts) |p| b.appendVertex(.{ .pos = p, .col = col, .uv = seen(p, r, rim, depth, reach_px, tex_bounds) });
             appendRingStrips(&b, per_ring, 2);
             const tris = b.build_unowned();
             keepMesh(key ^ 2, tris);
@@ -275,14 +288,14 @@ pub fn drawPane(tex: dvui.Texture, tex_bounds: dvui.Rect.Physical, r: dvui.Rect.
         }
     }
 
-    if (look.sharp) |sharp| drawClear(sharp, tex_bounds, r, radii, scale, mod, look, insets, key ^ 3);
+    if (look.sharp) |sharp| drawClear(sharp, tex_bounds, r, radii, rim, mod, look, insets, key ^ 3);
 }
 
 /// The rim's clearer glass: the unblurred picture over the frost, bent the same way, as much of
 /// it as `clarity` times the drop's steepness — sharpest at the very edge, gone where the face
 /// is flat. Drawn at the frost's weight (`mod`), so it takes the pane's tint and lift afterwards
-/// like the frost does.
-fn drawClear(sharp: dvui.Texture, tex_bounds: dvui.Rect.Physical, r: dvui.Rect.Physical, radii: Radii, scale: f32, mod: dvui.Color, look: Look, insets: []const f32, key: u64) void {
+/// like the frost does. `rim` is the pane's rim scale (`rimScale`).
+fn drawClear(sharp: dvui.Texture, tex_bounds: dvui.Rect.Physical, r: dvui.Rect.Physical, radii: Radii, rim: f32, mod: dvui.Color, look: Look, insets: []const f32, key: u64) void {
     if (cachedMesh(key)) |tris| {
         dvui.renderTriangles(tris, sharp) catch {};
         return;
@@ -295,7 +308,7 @@ fn drawClear(sharp: dvui.Texture, tex_bounds: dvui.Rect.Physical, r: dvui.Rect.P
     const arena = dvui.currentWindow().arena();
     // Only as far in as the clear glass shows: it fades with the steepness squared, so past about
     // two falloffs there is nothing of it left to draw.
-    const depth = depthPx(look, scale);
+    const depth = depthPx(look, rim);
     const reach_in = depth * 2.2;
     var rings: usize = 0;
     while (rings < insets.len and (rings < 2 or insets[rings - 1] <= reach_in)) rings += 1;
@@ -304,16 +317,16 @@ fn drawClear(sharp: dvui.Texture, tex_bounds: dvui.Rect.Physical, r: dvui.Rect.P
     defer b.deinit(arena);
     const pts = arena.alloc(dvui.Point.Physical, per_ring) catch return;
     const clear = dvui.Color.PMA.fromColor(.transparent);
-    const reach_px = refraction * scale * look.lens * look.refraction;
+    const reach_px = refraction * rim * look.lens * look.refraction;
     ringPoints(pts, null, r, radii, -aa_out, arc_steps, 1, 1);
-    for (pts) |p| b.appendVertex(.{ .pos = p, .col = clear, .uv = seen(p, r, scale, depth, reach_px, tex_bounds) });
+    for (pts) |p| b.appendVertex(.{ .pos = p, .col = clear, .uv = seen(p, r, rim, depth, reach_px, tex_bounds) });
     for (used) |d| {
         ringPoints(pts, null, r, radii, d, arc_steps, 1, 1);
         for (pts) |p| {
-            const steep = fieldAt(p, r, scale, depth).steep;
+            const steep = fieldAt(p, r, rim, depth).steep;
             // Squared, so the clear glass hugs the edge and the face stays frosted.
             const col = dvui.Color.PMA.fromColor(dvui.Color.white.opacity(amount * steep * steep));
-            b.appendVertex(.{ .pos = p, .col = col, .uv = seen(p, r, scale, depth, reach_px, tex_bounds) });
+            b.appendVertex(.{ .pos = p, .col = col, .uv = seen(p, r, rim, depth, reach_px, tex_bounds) });
         }
     }
     appendRingStrips(&b, per_ring, rings + 1);
@@ -350,9 +363,11 @@ pub fn drawLift(light: Light, r: dvui.Rect.Physical, radii: Radii, scale: f32, l
         dvui.renderTriangles(tris, light.tex) catch {};
         return;
     }
-    // The rim line needs rings of its own, a fraction of a point apart, before the curve's.
+    // The rim line needs rings of its own, a fraction of a point apart, before the curve's. The
+    // line is a line at any size; the glow across the curve fits the pane (`fit`).
     var curve_buf: [ring_count + 1]f32 = undefined;
-    const depth = falloff * scale;
+    const rim = rimScale(r, scale, falloff * scale);
+    const depth = falloff * rim;
     const curve = ringInsets(&curve_buf, depth, half * 0.9);
     var insets_buf: [ring_count + 6]f32 = undefined;
     var n_insets: usize = 0;
@@ -389,7 +404,7 @@ pub fn drawLift(light: Light, r: dvui.Rect.Physical, radii: Radii, scale: f32, l
         ringPoints(pts, null, r, radii, d, arc_steps, 1, 1);
         const line = @exp(-d / (line_width * scale));
         for (pts) |p| {
-            const f = fieldAt(p, r, scale, depth);
+            const f = fieldAt(p, r, rim, depth);
             const facing = f.out.x * lx + f.out.y * ly;
             const toward = @max(0, facing);
             const away = @max(0, -facing);
@@ -425,11 +440,11 @@ fn numbersKey(tag: u64, numbers: []const f32) u64 {
 
 fn paneKey(r: dvui.Rect.Physical, radii: Radii, scale: f32, mod: dvui.Color, look: Look, tb: dvui.Rect.Physical) u64 {
     return numbersKey(0x91a55, &.{
-        r.x,                           r.y,                           r.w,                           r.h,
-        radii[0],                      radii[1],                      radii[2],                      radii[3],
-        scale,                         @floatFromInt(mod.r),          @floatFromInt(mod.g),          @floatFromInt(mod.b),
-        @floatFromInt(mod.a),          look.lens,                     look.refraction,               tb.x,
-        tb.y,                          tb.w,                          tb.h,
+        r.x,                  r.y,                  r.w,                  r.h,
+        radii[0],             radii[1],             radii[2],             radii[3],
+        scale,                @floatFromInt(mod.r), @floatFromInt(mod.g), @floatFromInt(mod.b),
+        @floatFromInt(mod.a), look.lens,            look.refraction,      tb.x,
+        tb.y,                 tb.w,                 tb.h,
     }) & ~@as(u64, 3);
 }
 

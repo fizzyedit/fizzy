@@ -17,6 +17,10 @@
 //!   * **Seeking is the same call with a far target.** Spans (glides, typing) are functions of
 //!     time, so asked for a time past their end they finish at once; everything else lands a frame
 //!     per op as above. A rewind is `rewind` to a keyframe and `advance` to the moment.
+//!   * **Finishing at once is not skipping.** A glide covered in one call still passes along its
+//!     path a point per `path_step_ms`, the frames live play would have drawn, so whatever it
+//!     crosses sees the pointer pass — a text field it leaves forgets its click count, as it did
+//!     live — and typing still arrives a keystroke at a time.
 //!   * **Waits hold time still.** A `wait` that does not hold yet stops the clock at the wait until
 //!     it does (or its timeout passes, in wall time), so the ops after it land on an app that has
 //!     caught up — at any speed, on any machine.
@@ -48,7 +52,13 @@ const Glide = struct {
     from: Point,
     /// Where the target was last seen, for a frame it is not drawn (scrolled away, mid-cut).
     to: ?Point = null,
+    /// Demo time the pointer was last put down along the path.
+    at: f64,
 };
+
+/// Demo time between the points of a glide that one call covers more of than a frame (a replay,
+/// a hitch): live play's frame.
+pub const path_step_ms: f64 = 16;
 
 const Typing = struct {
     op: usize,
@@ -82,6 +92,19 @@ pub const Sink = struct {
 
 pub fn init(tape: *const Tape) Sequencer {
     return .{ .tape = tape };
+}
+
+/// The demo time of the next thing the tape does: the end of a glide or typing in flight, or the
+/// next op's start — whichever comes first. Never before `now`. A replay that runs frames faster
+/// than demo time begins each at this moment, so the app's clock reads in every frame what it
+/// read when that frame's input landed live (`Player.frames`).
+pub fn nextAt(self: Sequencer) f64 {
+    const ops = self.tape.ops;
+    var t: f64 = if (self.cursor < ops.len) @floatFromInt(ops[self.cursor].at) else std.math.inf(f64);
+    if (self.holding) t = self.now;
+    if (self.glide) |g| t = @min(t, @as(f64, @floatFromInt(ops[g.op].end())));
+    if (self.typing) |ty| t = @min(t, @as(f64, @floatFromInt(ops[ty.op].end())));
+    return @max(t, self.now);
 }
 
 /// Every op has been applied and nothing is in flight.
@@ -147,7 +170,7 @@ pub fn advance(self: *Sequencer, until: f64, wall_ms: f64, sink: Sink) Progress 
                 self.cursor += 1;
             },
             .move => {
-                self.glide = .{ .op = self.cursor, .from = self.pointer };
+                self.glide = .{ .op = self.cursor, .from = self.pointer, .at = self.now };
                 self.cursor += 1;
             },
             .type => {
@@ -197,6 +220,16 @@ fn advanceSpans(self: *Sequencer, to: f64, sink: Sink) ?Progress {
         if (sink.vtable.locate(sink.ctx, op.do.move)) |pt| g.to = pt;
         // A target never seen leaves the pointer where it is rather than flying to the corner.
         const dest = g.to orelse g.from;
+        // The frames live play would have drawn between, each a point along the way.
+        const end: f64 = @min(to, @as(f64, @floatFromInt(op.end())));
+        var t = g.at + path_step_ms;
+        while (t < end) : (t += path_step_ms) {
+            const pt = glidePoint(g.from, dest, fraction(op, t));
+            if (pt.x == self.pointer.x and pt.y == self.pointer.y) continue;
+            self.pointer = pt;
+            sink.vtable.moveTo(sink.ctx, pt);
+        }
+        g.at = @max(g.at, to);
         self.pointer = glidePoint(g.from, dest, f);
         sink.vtable.moveTo(sink.ctx, self.pointer);
         if (f >= 1) {
@@ -411,6 +444,25 @@ const Log = struct {
 
 const test_keyframes = [_]Tape.Keyframe{ .{ .root = "demo://a" }, .{ .root = "demo://b" } };
 
+/// `out` with each run of `move` lines cut to its last: what landed where, without the path.
+fn landings(out: []const u8) ![]u8 {
+    var kept: std.ArrayList(u8) = .empty;
+    errdefer kept.deinit(testing.allocator);
+    var lines = std.mem.tokenizeScalar(u8, out, '\n');
+    var pending: ?[]const u8 = null;
+    while (lines.next()) |l| {
+        if (std.mem.startsWith(u8, l, "move ")) {
+            pending = l;
+            continue;
+        }
+        if (pending) |m| try kept.print(testing.allocator, "{s}\n", .{m});
+        pending = null;
+        try kept.print(testing.allocator, "{s}\n", .{l});
+    }
+    if (pending) |m| try kept.print(testing.allocator, "{s}\n", .{m});
+    return kept.toOwnedSlice(testing.allocator);
+}
+
 /// Run frames of `frame_ms` until `t` is reached, the way a player plays live.
 fn playTo(seq: *Sequencer, t: f64, frame_ms: f64, sink: Sink) void {
     var guard: usize = 0;
@@ -440,14 +492,48 @@ test "a click lands a frame after the glide that brought the pointer to it" {
     try testing.expectEqual(Progress.yielded, seq.advance(1000, 16, log.sink()));
     try testing.expectEqual(Progress.yielded, seq.advance(1000, 16, log.sink()));
     try testing.expectEqual(Progress.reached, seq.advance(1000, 16, log.sink()));
+    const landed = try landings(log.out.items);
+    defer testing.allocator.free(landed);
     try testing.expectEqualStrings(
         \\keyframe demo://a
         \\move 100,0
         \\press left
         \\release left
         \\
-    , log.out.items);
+    , landed);
     try testing.expect(seq.done());
+}
+
+test "a glide covered in one call still passes along its path, a frame's worth at a time" {
+    const ops = [_]Tape.Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 0, .ms = 160, .do = .{ .move = .{ .x = 1, .y = 0 } } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &test_keyframes };
+    var log: Log = .{};
+    defer log.deinit();
+    var seq: Sequencer = .init(&tape);
+    while (seq.advance(1000, 16, log.sink()) != .reached) {}
+
+    // The points live play at 60 fps would have delivered, in order, ending on the target.
+    var xs: std.ArrayList(f32) = .empty;
+    defer xs.deinit(testing.allocator);
+    var lines = std.mem.tokenizeScalar(u8, log.out.items, '\n');
+    while (lines.next()) |l| {
+        if (!std.mem.startsWith(u8, l, "move ")) continue;
+        const comma = std.mem.indexOfScalar(u8, l, ',').?;
+        try xs.append(testing.allocator, try std.fmt.parseFloat(f32, l[5..comma]));
+    }
+    try testing.expectEqual(@as(usize, 10), xs.items.len);
+    for (xs.items[1..], xs.items[0 .. xs.items.len - 1]) |x, before| try testing.expect(x > before);
+    try testing.expectEqual(@as(f32, 1000), xs.items[xs.items.len - 1]);
+
+    // A glide that goes nowhere passes nowhere: one landing, not a run of the same point.
+    var still: Log = .{};
+    defer still.deinit();
+    seq.rewind(0);
+    while (seq.advance(1000, 16, still.sink()) != .reached) {}
+    try testing.expectEqualStrings("keyframe demo://a\nmove 1000,0\n", still.out.items);
 }
 
 test "a glide moves a little every frame and ends on its target" {
@@ -581,6 +667,8 @@ test "rewinding to a keyframe and replaying fast lands where live play did" {
 
     // Same effects: a keyframe, the pointer on the field, a click, the whole word typed — a
     // keystroke at a time even though it all lands in one frame.
+    const landed = try landings(replay.out.items);
+    defer testing.allocator.free(landed);
     try testing.expectEqualStrings(
         \\keyframe demo://a
         \\move 50,60
@@ -592,7 +680,7 @@ test "rewinding to a keyframe and replaying fast lands where live play did" {
         \\text l
         \\text o
         \\
-    , replay.out.items);
+    , landed);
     try testing.expectEqual(@as(usize, 5), frames);
     try testing.expectEqual(@as(f64, 1100), seq.now);
     try testing.expectEqual(@as(f32, 50), seq.pointer.x);
