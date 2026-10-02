@@ -72,7 +72,8 @@ every replay types the same bytes on the same frames.
 which costs nothing unless a demo is loaded (`Player.frame` publishes whether anchors are wanted
 each frame). dvui keeps tags on the shared window, so a plugin dylib's anchors are visible to the app.
 
-**The overlay is a function of time.** The synthetic pointer and its click ripple, the keystroke
+**The overlay is a function of time.** The synthetic pointer and its click ripple (the pointer
+goes away while the tape types, as a desktop's does, and comes back when it moves), the keystroke
 pill (the key or command just pressed, with its chord from the user's own keymap), captions and
 chapters are all read from the tape at the current moment, so a seek shows exactly what live play
 did. Its cards are the app's floating surface — frosted at the dialog style (blur, opacity, lift,

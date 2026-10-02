@@ -523,6 +523,13 @@ fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
     }
 }
 
+/// How much of the tape's pointer shows at the current moment (`Tape.pointerShown`): away while
+/// the tape types, back when it moves.
+pub fn pointerShown(self: *const Player, fade_ms: f64) f32 {
+    const t = self.tape() orelse return 1;
+    return t.pointerShown(self.seq.cursor, self.seq.now, fade_ms);
+}
+
 /// What the keystroke display shows at the current moment (`recentKeys`).
 pub const Keys = struct {
     /// The latest key or command applied.

@@ -25,6 +25,8 @@ const motion = core.motion;
 
 /// How long a key or command stays in the keystroke pill.
 const keys_ms: f64 = 2200;
+/// How long the tape's pointer takes to fade away when it starts typing, and back when it moves.
+const pointer_fade_ms: f32 = 140;
 /// The height of a slot along the bottom: the bar's, the keystroke pill's.
 const slot_h: f32 = 56;
 /// How long the bar stays after the real pointer last stirred, while playing.
@@ -514,6 +516,12 @@ fn drawPointer(player: *Player) void {
             });
         }
     }
+
+    // Out of the way of the words while the tape types, as a desktop's pointer is.
+    const shown = player.pointerShown(motion.durationMs(pointer_fade_ms));
+    if (shown <= 0) return;
+    const prev_alpha = dvui.alpha(shown);
+    defer dvui.alphaSet(prev_alpha);
 
     const pressed = player.held.count() > 0;
     const k: f32 = if (pressed) 0.88 else 1;

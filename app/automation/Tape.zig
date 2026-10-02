@@ -223,6 +223,48 @@ pub fn captionAt(self: Tape, t: f64) ?Caption {
     return found;
 }
 
+/// How much of the tape's pointer shows at `t`, 0…1, with the first `applied` ops applied: it
+/// goes the way a desktop's pointer does while someone types — away when the keyboard is used (a
+/// `type`, `key` or `command`), back when the pointer next moves, presses or scrolls — fading
+/// over `fade_ms` each way. Read from the ops and the time, so a seek shows what live play did.
+pub fn pointerShown(self: Tape, applied: usize, t: f64, fade_ms: f64) f32 {
+    const Kind = enum { pointer, keyboard };
+    const fade = struct {
+        fn in(now: f64, at: f64, ms: f64) f32 {
+            return if (ms <= 0) 1 else @floatCast(std.math.clamp((now - at) / ms, 0, 1));
+        }
+    }.in;
+    // Back from the latest op applied: the first keyboard op since the latest pointer op, if any.
+    var typed_at: ?f64 = null;
+    var i = @min(applied, self.ops.len);
+    var moved_at: ?f64 = null;
+    while (i > 0) {
+        i -= 1;
+        const op = self.ops[i];
+        const kind: Kind = switch (op.do) {
+            .type, .key, .command => .keyboard,
+            .move, .press, .release, .scroll => .pointer,
+            // A keyframe is a fresh start, the pointer showing.
+            .keyframe => break,
+            .wait => continue,
+        };
+        const at: f64 = @floatFromInt(op.at);
+        if (moved_at) |m| {
+            // The op before the latest pointer op: it came back from typing, or it never left.
+            return if (kind == .keyboard) fade(t, m, fade_ms) else 1;
+        }
+        switch (kind) {
+            .keyboard => typed_at = at,
+            .pointer => {
+                if (typed_at) |k| return 1 - fade(t, k, fade_ms);
+                moved_at = at;
+            },
+        }
+    }
+    if (typed_at) |k| return 1 - fade(t, k, fade_ms);
+    return 1;
+}
+
 pub const Error = error{
     /// A tape starts with a keyframe at 0, or a seek to the start has nothing to reset to.
     NoKeyframeAtStart,
@@ -321,6 +363,30 @@ test "presentation tracks are read by time" {
     try testing.expect(tape.captionAt(100) == null);
     try testing.expectEqualStrings("hi", tape.captionAt(300).?.text);
     try testing.expect(tape.captionAt(2200) == null);
+}
+
+test "the pointer goes while the keyboard is used, and comes back when it moves" {
+    const ops = [_]Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .ms = 400, .do = .{ .move = .{ .tag = "field" } } },
+        .{ .at = 500, .do = .{ .press = .left } },
+        .{ .at = 600, .do = .{ .release = .left } },
+        .{ .at = 1000, .ms = 500, .do = .{ .type = "hello" } },
+        .{ .at = 1800, .do = .{ .key = "enter" } },
+        .{ .at = 3000, .ms = 400, .do = .{ .move = .{ .tag = "button" } } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &.{.{ .root = "demo://t" }} };
+    // Before anything is typed it shows.
+    try testing.expectEqual(@as(f32, 1), tape.pointerShown(4, 900, 200));
+    // Typing: going, then gone — and a key after it does not bring it back.
+    try testing.expectEqual(@as(f32, 0.5), tape.pointerShown(5, 1100, 200));
+    try testing.expectEqual(@as(f32, 0), tape.pointerShown(5, 1400, 200));
+    try testing.expectEqual(@as(f32, 0), tape.pointerShown(6, 1810, 200));
+    // Moving again: back.
+    try testing.expectEqual(@as(f32, 0.5), tape.pointerShown(7, 3100, 200));
+    try testing.expectEqual(@as(f32, 1), tape.pointerShown(7, 3300, 200));
+    // Motion off: at once.
+    try testing.expectEqual(@as(f32, 0), tape.pointerShown(5, 1000, 0));
 }
 
 test "a tape must open on a keyframe, in order, with chords that parse" {
