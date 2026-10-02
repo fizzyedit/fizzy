@@ -30,8 +30,11 @@
         // `fizzy` branch, building fizzyedit/SDL's `fizzy-3.4` — see docs/DEPENDENCIES.md. Plugins
         // draw through dvui's proxy backend and never link SDL.
         .sdl = .{
-            .url = "https://github.com/fizzyedit/sdl_zig/archive/59507608a851b7572806cdb58aeb3e72d66ec2a7.tar.gz",
-            .hash = "sdl-1.0.3+3.4.16-i4QD0c0KqgAXRn9Dq0DjlO5mOp_YR22rsIa97FWQrz49",
+            // Testing the macOS live-resize patches: sdl_zig's `claude/macos-live-resize`, building
+            // fizzyedit/SDL's branch of the same name (docs/MACOS_LIVE_RESIZE.md). Back to a tag of
+            // `fizzy` once they are tagged onto `fizzy-3.4`.
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/dfdb5bd7308a884a2c0c9fda5fe08bed7fe09fe1.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0RkLqgBZXY2HenaBePWquQB0GBr9KtJVt-UOUvj-",
             .lazy = true,
         },
         .icons = .{
