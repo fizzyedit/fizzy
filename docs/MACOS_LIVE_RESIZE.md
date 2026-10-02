@@ -1,12 +1,15 @@
 # macOS: a live resize that never stretches
 
 **Status.** Two SDL patches, written against `fizzyedit/SDL`'s `fizzy-3.4` (SDL 3.4.16 plus the two
-Windows patches), are in [`docs/patches/sdl/`](patches/sdl/) waiting to move into that fork. Fizzy's
-side is in the tree already and does nothing until SDL carries them. The first two versions were run
-on a Mac and were not enough; measured on one (see "What a measured drag showed"), the second never
-drew a single frame in a step, because the Metal view drew from `-updateLayer`, which AppKit never
-calls for it. The third, which draws from the layer delegate's `-displayLayer:` instead, showed no
-stretched frame in any drag measured.
+Windows patches), are in [`docs/patches/sdl/`](patches/sdl/) waiting to be tagged onto that fork's
+`fizzy-3.4`. Until then fizzy's `.sdl` pin builds them from the fork's test branch: fizzyedit/sdl_zig
+`claude/macos-live-resize` (`89bb457`), building fizzyedit/SDL `claude/macos-live-resize`
+(`8455e58`), where the third version's fix is a commit of its own on top of the two (the patch
+files fold it into `0004`). Fizzy's side does nothing on an SDL without them. The first two
+versions were run on a Mac and were not enough; measured on one (see "What a measured drag
+showed"), the second never drew a single frame in a step, because the Metal view drew from
+`-updateLayer`, which AppKit never calls for it. The third, which draws from the layer delegate's
+`-displayLayer:` instead, showed no stretched frame in any drag measured.
 
 ## The symptom, and where it comes from
 

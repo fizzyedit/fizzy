@@ -33,8 +33,8 @@
             // Testing the macOS live-resize patches: sdl_zig's `claude/macos-live-resize`, building
             // fizzyedit/SDL's branch of the same name (docs/MACOS_LIVE_RESIZE.md). Back to a tag of
             // `fizzy` once they are tagged onto `fizzy-3.4`.
-            .url = "https://github.com/fizzyedit/sdl_zig/archive/dfdb5bd7308a884a2c0c9fda5fe08bed7fe09fe1.tar.gz",
-            .hash = "sdl-1.0.3+3.4.16-i4QD0RkLqgBZXY2HenaBePWquQB0GBr9KtJVt-UOUvj-",
+            .url = "https://github.com/fizzyedit/sdl_zig/archive/89bb45774a40a888ff5b613201b0c80df5a681a5.tar.gz",
+            .hash = "sdl-1.0.3+3.4.16-i4QD0RkLqgBM16kEv8XdpjbJyeTVlPldJpw2fUTzb2N5",
             .lazy = true,
         },
         .icons = .{
