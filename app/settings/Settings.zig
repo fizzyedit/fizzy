@@ -75,8 +75,8 @@ dialog_detail: f32 = 0,
 
 /// How round the app's corners are, 0 (square) to 1 (twice as round); 0.5 is as designed.
 /// Published each frame through `core.corners`, which every radius scales by, and applied to the
-/// theme's own corner.
-corner_roundness: f32 = if (builtin.os.tag == .macos) 1.0 else core.corners.default_roundness,
+/// theme's own corner. All the way round by default, on every platform.
+corner_roundness: f32 = 1.0,
 
 /// How far the bevelled edge of frosted glass — dialogs, menus, the palette, drop zones —
 /// refracts what is behind it, 0 (none) to 1; 0.5 is as designed, the default all the way up.
