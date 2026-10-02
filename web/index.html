@@ -124,6 +124,31 @@
         const own = new URLSearchParams(location.search).get("storage");
         return own && /^[a-z0-9_-]{1,64}$/.test(own) ? buildStorageName + "~" + own : buildStorageName;
       })();
+      // `?persist=0`: nothing this copy changes outlives the page. Its settings, layout, files
+      // and installed plugins live in memory only, start from defaults on every load, and are
+      // gone when the page goes — for an embed that should stay as the page set it up (fizzyed.it's
+      // homepage). Otherwise the browser's `localStorage`, under `storageName`.
+      const persists = new URLSearchParams(location.search).get("persist") !== "0";
+      const memoryStore = () => {
+        const m = new Map();
+        return {
+          getItem: (k) => (m.has(k) ? m.get(k) : null),
+          setItem: (k, v) => { m.set(k, String(v)); },
+          removeItem: (k) => { m.delete(k); },
+          key: (i) => [...m.keys()][i] ?? null,
+          get length() { return m.size; },
+        };
+      };
+      const store = (() => {
+        if (!persists) return memoryStore();
+        // A browser with its site data blocked throws on the bare name.
+        try { return window.localStorage; } catch (_) { return memoryStore(); }
+      })();
+      // Ask, once a thing worth keeping is kept, for storage the browser will not clear under
+      // pressure; refused is fine, and a copy that keeps nothing never asks.
+      const askToPersist = () => {
+        if (persists && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+      };
       const loadingEl = document.getElementById("loading");
       const errorPanel = document.getElementById("error-panel");
       const errorMessage = document.getElementById("error-message");
@@ -323,7 +348,7 @@
           fizzy_web_storage_get(keyPtr, keyLen, bufPtr, bufLen) {
             const key = storageName + ".file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
             let value = null;
-            try { value = localStorage.getItem(key); } catch (_) {}
+            try { value = store.getItem(key); } catch (_) {}
             if (value === null) return 0xffffffff;
             const bytes = utf8encode(value);
             if (bytes.length <= bufLen) new Uint8Array(wasmInstance.exports.memory.buffer, bufPtr, bytes.length).set(bytes);
@@ -333,11 +358,11 @@
             const mem = wasmInstance.exports.memory.buffer;
             const key = storageName + ".file:" + utf8.decode(new Uint8Array(mem, keyPtr, keyLen));
             const value = utf8.decode(new Uint8Array(mem, valPtr, valLen));
-            try { localStorage.setItem(key, value); } catch (err) { console.warn("fizzy: could not store", key, err); }
+            try { store.setItem(key, value); } catch (err) { console.warn("fizzy: could not store", key, err); }
           },
           fizzy_web_storage_remove(keyPtr, keyLen) {
             const key = storageName + ".file:" + utf8.decode(new Uint8Array(wasmInstance.exports.memory.buffer, keyPtr, keyLen));
-            try { localStorage.removeItem(key); } catch (_) {}
+            try { store.removeItem(key); } catch (_) {}
           },
           // What the page remembers for an id, so the host can load it again after a disable
           // without a round trip through the store. Same copy-into-buffer shape as the storage
@@ -420,7 +445,7 @@
       // the app has no settings file here; forgotten on uninstall.
       const rememberedKey = storageName + ".web_plugins";
       function rememberedPlugins() {
-        try { return JSON.parse(localStorage.getItem(rememberedKey) || "{}"); } catch (_) { return {}; }
+        try { return JSON.parse(store.getItem(rememberedKey) || "{}"); } catch (_) { return {}; }
       }
       function rememberPlugin(id, url) {
         try {
@@ -428,7 +453,7 @@
           // An update names a new build: the old one's bytes are no longer anybody's.
           if (all[id] && all[id] !== url) dropPluginBytes(all[id]);
           all[id] = url;
-          localStorage.setItem(rememberedKey, JSON.stringify(all));
+          store.setItem(rememberedKey, JSON.stringify(all));
         } catch (_) {}
         keepPluginBytes(url);
       }
@@ -437,7 +462,7 @@
           const all = rememberedPlugins();
           if (all[id]) dropPluginBytes(all[id]);
           delete all[id];
-          localStorage.setItem(rememberedKey, JSON.stringify(all));
+          store.setItem(rememberedKey, JSON.stringify(all));
         } catch (_) {}
       }
 
@@ -484,8 +509,7 @@
         caches.open(pluginCacheName)
           .then((c) => c.put(url, new Response(bytes, { headers: { "content-type": "application/wasm" } })))
           .catch((err) => console.warn("fizzy: could not keep plugin", url, err));
-        // Ask once for storage the browser will not clear under pressure; refused is fine.
-        if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+        askToPersist();
       }
       function dropPluginBytes(url) {
         if (!keepablePluginUrl(url)) return;
@@ -825,9 +849,9 @@
         });
         const storage = {};
         try {
-          for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && key.startsWith(storageName + ".")) storage[key] = localStorage.getItem(key);
+          for (let i = 0; i < store.length; i++) {
+            const key = store.key(i);
+            if (key && key.startsWith(storageName + ".")) storage[key] = store.getItem(key);
           }
         } catch (_) {}
 
@@ -993,13 +1017,13 @@
               }).catch(() => reply(m.request, null));
               break;
             case "storageSet":
-              try { localStorage.setItem(m.key, m.value); } catch (err) { console.warn("fizzy: could not store", m.key, err); }
+              try { store.setItem(m.key, m.value); } catch (err) { console.warn("fizzy: could not store", m.key, err); }
               break;
             case "storageRemove":
-              try { localStorage.removeItem(m.key); } catch (_) {}
+              try { store.removeItem(m.key); } catch (_) {}
               break;
             case "persistStorage":
-              if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+              askToPersist();
               break;
             case "boundKeys":
               boundKeys = new Set(m.keys);
