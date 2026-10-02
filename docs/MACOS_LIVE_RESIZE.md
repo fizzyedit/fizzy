@@ -1,15 +1,12 @@
 # macOS: a live resize that never stretches
 
-**Status.** Two SDL patches, written against `fizzyedit/SDL`'s `fizzy-3.4` (SDL 3.4.16 plus the two
-Windows patches), are in [`docs/patches/sdl/`](patches/sdl/) waiting to be tagged onto that fork's
-`fizzy-3.4`. Until then fizzy's `.sdl` pin builds them from the fork's test branch: fizzyedit/sdl_zig
-`claude/macos-live-resize` (`89bb457`), building fizzyedit/SDL `claude/macos-live-resize`
-(`8455e58`), where the third version's fix is a commit of its own on top of the two (the patch
-files fold it into `0004`). Fizzy's side does nothing on an SDL without them. The first two
-versions were run on a Mac and were not enough; measured on one (see "What a measured drag
-showed"), the second never drew a single frame in a step, because the Metal view drew from
-`-updateLayer`, which AppKit never calls for it. The third, which draws from the layer delegate's
-`-displayLayer:` instead, showed no stretched frame in any drag measured.
+**Status.** Landed. fizzyedit/SDL `fizzy-3.4` carries the patches (patches 3–5 in
+[`docs/DEPENDENCIES.md`](DEPENDENCIES.md), tag `fizzy-3.4.16-3`), fizzyedit/sdl_zig `fizzy` builds
+it (tag `fizzy-1.0.3+3.4.16-3`), and fizzy's `.sdl` pins that. Fizzy's side does nothing on an SDL
+without them. The first two versions were run on a Mac and were not enough; measured on one (see
+"What a measured drag showed"), the second never drew a single frame in a step, because the Metal
+view drew from `-updateLayer`, which AppKit never calls for it. The third, which draws from the
+layer delegate's `-displayLayer:` instead, showed no stretched frame in any drag measured.
 
 ## The symptom, and where it comes from
 
@@ -133,18 +130,17 @@ resize steps a second:
 
 | | What | Files |
 |---|---|---|
-| [`0003`](patches/sdl/0003-Metal-present-with-the-Core-Animation-transaction-wh.patch) | Metal: present with the Core Animation transaction when the layer asks for it. The GPU driver (`METAL_Submit`) and the renderer (`METAL_RenderPresent`) commit, wait until scheduled and present on the calling thread when `layer.presentsWithTransaction`; exactly as before otherwise. SDL never sets the property in this patch. | `src/gpu/metal/SDL_gpu_metal.m`, `src/render/metal/SDL_render_metal.m` |
-| [`0004`](patches/sdl/0004-Cocoa-draw-each-step-of-a-live-resize-in-the-transac.patch) | Cocoa: `SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE` (default off). For the length of a live resize the window listener gives the Metal view the redraw policy `DuringViewResize`; the view's `displayLayer:` (its layer's delegate method: AppKit never calls `updateLayer` for it) brings SDL's sizes up to the window (`windowDidResize:` again, a no-op when it has run) and runs the app's frame with the layer presenting with the transaction for that frame alone. The timer only asks the view for a display while the pointer rests; if AppKit does not display the view for four ticks it draws as before and logs `Live resize: the Metal view is not being displayed` once. A frame is never started from inside one already running. | `include/SDL3/SDL_hints.h`, `src/video/cocoa/SDL_cocoawindow.{h,m}`, `src/video/cocoa/SDL_cocoametalview.m` |
+| 3 ([`5882e2b`](https://github.com/fizzyedit/SDL/commit/5882e2b)) | Metal: present with the Core Animation transaction when the layer asks for it. The GPU driver (`METAL_Submit`) and the renderer (`METAL_RenderPresent`) commit, wait until scheduled and present on the calling thread when `layer.presentsWithTransaction`; exactly as before otherwise. SDL never sets the property in this patch. | `src/gpu/metal/SDL_gpu_metal.m`, `src/render/metal/SDL_render_metal.m` |
+| 4 + 5 ([`80bdc7d`](https://github.com/fizzyedit/SDL/commit/80bdc7d), [`8455e58`](https://github.com/fizzyedit/SDL/commit/8455e58)) | Cocoa: `SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE` (default off). For the length of a live resize the window listener gives the Metal view the redraw policy `DuringViewResize`; the view's `displayLayer:` (its layer's delegate method: AppKit never calls `updateLayer` for it) brings SDL's sizes up to the window (`windowDidResize:` again, a no-op when it has run) and runs the app's frame with the layer presenting with the transaction for that frame alone. The timer only asks the view for a display while the pointer rests; if AppKit does not display the view for four ticks it draws as before and logs `Live resize: the Metal view is not being displayed` once. A frame is never started from inside one already running. | `include/SDL3/SDL_hints.h`, `src/video/cocoa/SDL_cocoawindow.{h,m}`, `src/video/cocoa/SDL_cocoametalview.m` |
 
-`0004` needs `0003`: without it the layer would ask for transaction presents that SDL's presenters
-ignore. The hint is off by default, as it would have to be upstream: it requires the app to present
+4 needs 3: without it the layer would ask for transaction presents that SDL's presenters ignore.
+5 is the fix to 4 (`displayLayer:`, not `updateLayer`), to be squashed into it at the next rebase. The hint is off by default, as it would have to be upstream: it requires the app to present
 on the main thread through SDL's Metal paths, and a Vulkan (MoltenVK) app, presenting from its own
 thread, must leave it off.
 
-Both apply cleanly to `fizzy-3.4` (`git apply --check` on `3d6e802`). They do not apply to the SDL
-dvui pins (a 3.4.4 dev fork with a different `METAL_Submit`), which only `-Dnative-backend=sdl3`
-uses; and upstream `main` has moved the lines `0003` touches, so an upstream PR is a small rebase.
-The new Objective-C has been checked for syntax under ARC against stub headers, nothing more.
+They are not in the SDL that dvui pins (a 3.4.4 dev fork with a different `METAL_Submit`), which
+only `-Dnative-backend=sdl3` uses; and upstream `main` has moved the lines 3 touches, so an
+upstream PR is a small rebase.
 
 ## Fizzy's side (in the tree)
 
@@ -168,23 +164,12 @@ The new Objective-C has been checked for syntax under ARC against stub headers, 
   vsync-blocking present; a present in the step waits only for the GPU to schedule it, and Zed
   runs its resize with display sync on. On an SDL without the patches, vsync goes off as before.
 
-## Landing it
+## Where it lives
 
-Once the `fizzyedit/SDL` pin (`claude/lucid-maxwell-z5owlo`, `docs/DEPENDENCIES.md` there) is on
-`main`:
-
-1. In `fizzyedit/SDL`: the two patches become two changes on `fizzy-3.4`, each described by its
-   patch's message (`git am` in the colocated checkout does both; or `patch -p1` and
-   `jj describe` per change). Move `fizzy-3.4` to the new tip, push, tag `fizzy-3.4.16-3`.
-2. In `fizzyedit/sdl_zig`: point `.sdl` at the tag's commit, tag `fizzy-1.0.3+3.4.16-3`.
-3. In fizzy: `zig fetch --save=sdl` the new sdl_zig archive; record both patches in
-   `docs/DEPENDENCIES.md` (patches 3 and 4, their files, upstream status), and delete
-   `docs/patches/sdl/` and this file's "Status" paragraph.
-
-Conflict surface on a later SDL rebase: `METAL_Submit`'s present loop and `METAL_RenderPresent`'s
-tail (`0003`), and the listener's live-resize notifications and the Metal view's end (`0004`). After resolving,
-`clang -fsyntax-only -fobjc-arc` on the four `.m` files with the macOS SDK is enough to push; the
-real check is a drag on a Mac.
+The SDL patches are fizzyedit/SDL `fizzy-3.4`'s 3–5, built by fizzyedit/sdl_zig `fizzy`; how to
+carry them through an SDL rebase, and where they conflict, is in [`docs/DEPENDENCIES.md`](DEPENDENCIES.md).
+After resolving, `clang -fsyntax-only -fobjc-arc` on the `.m` files with the macOS SDK is enough
+to push; the real check is a drag on a Mac (below).
 
 ## Measuring it
 
@@ -207,7 +192,7 @@ goes on (a gap in the steps, not a stall); keep `amp` within the screen. On a ru
 steps, the press missed the edge: run it again.
 
 To iterate on the SDL patches locally without pushing: clone fizzyedit/SDL and fizzyedit/sdl_zig
-beside fizzy (`../SDL`, `../sdl_zig`) on `claude/macos-live-resize`; in sdl_zig's `build.zig.zon`,
+beside fizzy (`../SDL`, `../sdl_zig`) on `fizzy-3.4` and `fizzy`; in sdl_zig's `build.zig.zon`,
 `.sdl = .{ .path = "../SDL" }`; in fizzy's root `build.zig.zon`, `.sdl = .{ .path = "../sdl_zig" }`.
 A rebuild picks up an SDL edit.
 
