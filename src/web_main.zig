@@ -49,6 +49,16 @@ pub const main = dvui.App.main;
 pub const panic = dvui.App.panic;
 pub const std_options: std.Options = fizzy.Entry.std_options;
 
+/// `std.heap.page_allocator`, for everything in this module that asks for it — the app's own
+/// allocator (`Entry.appAllocator`), and so every plugin's — is the backend's wasm allocator,
+/// which fixes a resize that otherwise grows memory for as long as the app is used
+/// (`WebBackend.wasm_allocator`). std reads `root.os` for this and for path limits, nothing else.
+pub const os = struct {
+    pub const heap = struct {
+        pub const page_allocator: std.mem.Allocator = dvui.backend.wasm_allocator;
+    };
+};
+
 // ---- libm for plugins ---------------------------------------------------------------------
 //
 // A plugin built as a wasm side module has no compiler-rt of its own, and its optimized build
