@@ -1,6 +1,7 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#include <stdbool.h>
 
 /* macOS window/Space monitor for fizzy's SDL3 window (chrome hidden, content
  * wrapped in an NSVisualEffectView — stock SDL windows don't need any of this).
@@ -20,6 +21,7 @@ extern void fizzy_macos_window_reset_sync_cache(void);
 extern void fizzy_macos_window_request_clear_frames(int frames);
 extern void fizzy_macos_window_commit_steady_state(void);
 extern void fizzy_macos_window_live_resize_vsync(int active);
+extern bool SDL_GetHintBoolean(const char *name, bool default_value);
 /* Pure window-frame decisions live in window_layout.zig (unit-tested); see
  * backend/backend_native.zig for the C-ABI wrappers. */
 extern int fizzy_macos_constrain_is_menu_bar_nudge(double rx, double ry, double rw, double rh,
@@ -47,6 +49,17 @@ static NSRect g_exit_window_frame = {{0, 0}, {0, 0}};
 static BOOL g_exit_window_frame_valid = NO;
 static double g_windowed_titlebar_inset = 0;
 
+
+/* Whether SDL draws this window's live resize itself, each step from AppKit's display of it and
+ * presented with that step's transaction: fizzyedit/SDL's live-resize patches, asked for with
+ * `SDL_VIDEO_MAC_SYNC_LIVE_RESIZE` (`macos_monitor.zig`, `docs/MACOS_LIVE_RESIZE.md`). Its
+ * window listener, the window's delegate, answers `drawsLiveResizeInView:` only with them. Such a
+ * frame's present waits for nothing but the GPU to schedule it, so vsync is left as it is. */
+static BOOL sdl_draws_live_resize(NSWindow *window) {
+    if (!SDL_GetHintBoolean("SDL_VIDEO_MAC_SYNC_LIVE_RESIZE", false)) return NO;
+    id delegate = window.delegate;
+    return delegate != nil && [delegate respondsToSelector:@selector(drawsLiveResizeInView:)];
+}
 
 static BOOL live_resize_active(void) {
     return g_space_transition || g_unzoom_animating || g_pump_frames > 0;
@@ -626,7 +639,7 @@ void fizzy_macos_window_install_resize_observer(void *nswindow) {
             }
             if ([name isEqualToString:NSWindowWillStartLiveResizeNotification]) {
                 g_manual_live_resize = YES;
-                fizzy_macos_window_live_resize_vsync(1);
+                if (!sdl_draws_live_resize(w)) fizzy_macos_window_live_resize_vsync(1);
             } else if ([name isEqualToString:NSWindowDidEndLiveResizeNotification]) {
                 fizzy_macos_window_sync_content_views(nswindow);
                 g_manual_live_resize = NO;
