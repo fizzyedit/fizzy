@@ -18,13 +18,16 @@ transaction that commits it, the way Zed's GPUI does:
 - For the length of the resize the window's Metal view has the redraw
   policy NSViewLayerContentsRedrawDuringViewResize, so AppKit displays it
   at every step, inside the step's transaction.
-- Its updateLayer runs the app's frame there (SDL_OnWindowLiveResizeUpdate:
+- Its displayLayer: runs the app's frame there (SDL_OnWindowLiveResizeUpdate:
   SDL_AppIterate with the main callbacks, an EXPOSED event otherwise), after
   bringing SDL's sizes and the drawable up to the window, with the layer set
   to present with the transaction for that frame alone (needs the previous
   patch for SDL's Metal presenters to honour it). One frame per display,
   presented in the commit that shows it, and its drawable handed back with
-  that commit.
+  that commit. The layer's delegate method, not updateLayer: AppKit marks
+  the view as needing display at every step but never calls updateLayer for
+  a view whose layer is a CAMetalLayer, and NSView does not implement
+  displayLayer:, so without it nothing is drawn in the step at all.
 - The timer no longer draws: while the pointer rests it asks the view for a
   display, so its frames take the same path. Should AppKit not display the
   view for a few ticks, the timer draws as before and logs it once.
@@ -36,13 +39,12 @@ paths.
 Upstream: worth proposing once it has been run on a range of Macs.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01PyYHpYveekjQt7TFPTsMfG
 ---
  include/SDL3/SDL_hints.h             | 32 +++++++++++
- src/video/cocoa/SDL_cocoametalview.m | 21 +++++++
+ src/video/cocoa/SDL_cocoametalview.m | 26 +++++++++
  src/video/cocoa/SDL_cocoawindow.h    |  8 +++
  src/video/cocoa/SDL_cocoawindow.m    | 82 +++++++++++++++++++++++++++-
- 4 files changed, 142 insertions(+), 1 deletion(-)
+ 4 files changed, 147 insertions(+), 1 deletion(-)
 
 diff --git a/include/SDL3/SDL_hints.h b/include/SDL3/SDL_hints.h
 index a38abf0..a9f2755 100644
@@ -88,10 +90,10 @@ index a38abf0..a9f2755 100644
   * A variable indicating whether the metal layer drawable size should be
   * updated for the SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED event on macOS.
 diff --git a/src/video/cocoa/SDL_cocoametalview.m b/src/video/cocoa/SDL_cocoametalview.m
-index 71ab9f6..2da0b24 100644
+index 71ab9f6..dd7cbd5 100644
 --- a/src/video/cocoa/SDL_cocoametalview.m
 +++ b/src/video/cocoa/SDL_cocoametalview.m
-@@ -132,6 +132,27 @@ static bool SDLCALL SDL_MetalViewEventWatch(void *userdata, SDL_Event *event)
+@@ -132,6 +132,32 @@ static bool SDLCALL SDL_MetalViewEventWatch(void *userdata, SDL_Event *event)
      return nil;
  }
  
@@ -100,20 +102,25 @@ index 71ab9f6..2da0b24 100644
 + * redraw policy for the length of the resize), and the frame is drawn here:
 + * inside the transaction that commits the step's new size. The layer presents
 + * with that transaction for this frame alone, so the frame and the size are
-+ * shown together, and the drawable is handed back with the commit. */
-+- (void)updateLayer
++ * shown together, and the drawable is handed back with the commit.
++ *
++ * This is the layer's delegate method, not -updateLayer: AppKit marks this
++ * view as needing display at every step but never calls -updateLayer for it;
++ * its CAMetalLayer is displayed only through the delegate's -displayLayer:,
++ * which NSView does not implement (seen on macOS 26). Outside a live resize
++ * there is nothing to draw here: the layer's contents are the drawables the
++ * app presents. */
++- (void)displayLayer:(CALayer *)layer
 +{
 +    SDL_Window *window = SDL_GetWindowFromID(self.sdlWindowID);
 +    SDL_CocoaWindowData *data = window ? (__bridge SDL_CocoaWindowData *)window->internal : nil;
 +    if (data != nil && [data.listener drawsLiveResizeInView:self]) {
-+        CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
++        CAMetalLayer *metalLayer = (CAMetalLayer *)layer;
 +        const BOOL presentsWithTransaction = metalLayer.presentsWithTransaction;
 +        metalLayer.presentsWithTransaction = YES;
 +        [data.listener drawLiveResizeFrame];
 +        metalLayer.presentsWithTransaction = presentsWithTransaction;
-+        return;
 +    }
-+    [super updateLayer];
 +}
 +
  @end
@@ -146,7 +153,7 @@ index b2695be..41b186a 100644
  - (void)windowDidResize:(NSNotification *)aNotification;
  - (void)windowDidMiniaturize:(NSNotification *)aNotification;
 diff --git a/src/video/cocoa/SDL_cocoawindow.m b/src/video/cocoa/SDL_cocoawindow.m
-index 51eda93..07de52f 100644
+index 51eda93..6b2074c 100644
 --- a/src/video/cocoa/SDL_cocoawindow.m
 +++ b/src/video/cocoa/SDL_cocoawindow.m
 @@ -1142,11 +1142,50 @@ static NSCursor *Cocoa_GetDesiredCursor(void)
@@ -157,7 +164,7 @@ index 51eda93..07de52f 100644
 +
 +    /* With SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE the Metal view draws the
 +     * resize: AppKit displays it at every step (the redraw policy below), from
-+     * inside the step's Core Animation transaction, and its updateLayer runs
++     * inside the step's Core Animation transaction, and its displayLayer: runs
 +     * the frame there (drawLiveResizeFrame). */
 +    liveResizeView = nil;
 +    if (SDL_GetHintBoolean(SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE, false)) {
@@ -232,7 +239,7 @@ index 51eda93..07de52f 100644
 +    return liveResizeTimer != nil && view != nil && liveResizeView == view;
 +}
 +
-+/* A live-resize frame, from the Metal view's updateLayer while AppKit displays
++/* A live-resize frame, from the Metal view's displayLayer: while AppKit displays
 + * a resize step: inside the transaction that commits the step's new size, with
 + * the view's layer presenting with that transaction. */
 +- (void)drawLiveResizeFrame

@@ -2,9 +2,11 @@
 
 **Status.** Two SDL patches, written against `fizzyedit/SDL`'s `fizzy-3.4` (SDL 3.4.16 plus the two
 Windows patches), are in [`docs/patches/sdl/`](patches/sdl/) waiting to move into that fork. Fizzy's
-side is in the tree already and does nothing until SDL carries them. The first version was run on a
-Mac and was not enough (see "What the first version showed"); the second, described here, follows
-Zed's GPUI and has not been run yet.
+side is in the tree already and does nothing until SDL carries them. The first two versions were run
+on a Mac and were not enough; measured on one (see "What a measured drag showed"), the second never
+drew a single frame in a step, because the Metal view drew from `-updateLayer`, which AppKit never
+calls for it. The third, which draws from the layer delegate's `-displayLayer:` instead, showed no
+stretched frame in any drag measured.
 
 ## The symptom, and where it comes from
 
@@ -83,44 +85,53 @@ Read against Zed's version, two things in it were wrong:
 Nothing in it needs a newer macOS: `presentsWithTransaction` is 10.11+, `inLiveResize` 10.6. SDL
 has no equivalent upstream (checked `main` on 2026-10-02).
 
-## What the second version showed, and what to try next
+## What the second version showed
 
 Built from `claude/quirky-rubin-tpb2zd` (Debug), linking the patches through the test pins: no more
-ghosted second copy, smaller jitter, and resizing feels more responsive, but it is still not smooth.
-No copy that holds still suggests every frame now lands with its own size; what is left, in the
-order to rule things out:
+ghosted second copy, smaller jitter, and resizing felt more responsive, but it was still not smooth.
+That was read as every frame now landing with its own size and something else left over (frame
+time, layout settling over several frames, a size committed apart from its frame). Measured, it was
+none of the first two: no frame was drawn in a step at all.
 
-1. **Frame time.** Each step now waits for a whole fizzy frame, so the window moves exactly as
-   often as fizzy draws; at Debug speed that can be tens of milliseconds, a resize in coarse steps.
-   Try `-Doptimize=ReleaseFast` first.
-2. **Layout that takes more than one frame to settle.** dvui sizes widgets from the previous
-   frame's min sizes, so anything placed from them (right-aligned, centred, wrapped text) can lag a
-   step, and fizzy animates some layout itself. In sync, that lag is shown as it is drawn: jitter
-   in everything not anchored top-left. The tell is dvui asking for another frame at once after a
-   live-resize frame (`waitTime` 0). A fix would run frames inside the step until layout settles,
-   presenting only the last.
-3. **A size still committed apart from its frame.** With perfect sync `contentsGravity` changes
-   nothing; if switching it during the drag (`kCAGravityTopLeft` instead of `kCAGravityResize` in
-   `sync_metal_layers`) changes what the jitter looks like, some step still commits its size
-   without its frame.
+## What a measured drag showed
 
-Planned, not built — a per-frame trace in `appIterate` while `inLiveResize()`, behind an env var
-(`FIZZY_LIVE_RESIZE_TRACE`): where the frame came from (the layer's `presentsWithTransaction` at
-frame start is on only inside SDL's display-pass frame), time since the last frame, the frame's
-own duration, the NSWindow frame, the Metal layer's bounds and `drawableSize`, dvui's
-`windowRectPixels`/natural scale, and `waitTime`; and `FIZZY_LIVE_RESIZE_GRAVITY` to set the
-gravity for the drag. One drag's trace answers all three questions above.
+`FIZZY_LIVE_RESIZE_TRACE` and `scripts/live-resize/` (see "Measuring it") drag a window edge with
+real mouse events and record the screen at 120 fps, and say for every screen update which frame it
+showed and whether that frame was drawn for the size the window showed it at. Run locally on a
+MacBook Pro (M5 Pro, 120 Hz ProMotion, macOS 26.5), right edge, 250 pt back and forth, about 110
+resize steps a second:
 
-To iterate on the SDL patches locally without pushing: in a checkout of sdl_zig's
-`claude/macos-live-resize`, `.sdl = .{ .path = "../SDL" }` (fizzyedit/SDL's branch of the same
-name); in fizzy's root `build.zig.zon`, `.sdl = .{ .path = "../sdl_zig" }`.
+| | frames shown stretched during the drag |
+|---|---|
+| the timer, as before (`SDL_VIDEO_MAC_SYNC_LIVE_RESIZE=0`) | 51–86%, up to 18 px off (32 px with a large document in Debug) |
+| the second version (the test pins' SDL) | 52–61%, up to 34 px off: every frame came from the timer |
+| the third version | **0%** — every edge and the corner, ReleaseFast and Debug, empty and with a large markdown document open |
+
+- **The second version never drew in a step.** AppKit marked the Metal view as needing display at
+  every step — the redraw policy works — and never displayed it: `-updateLayer` was not called once
+  in a drag. NSView does not implement `-displayLayer:` (`instancesRespondToSelector:` is NO), and a
+  view whose layer is a `CAMetalLayer` it makes itself is displayed only through its delegate's
+  `-displayLayer:`. So the timer fell back after four ticks (SDL logged "Live resize: the Metal view
+  is not being displayed"), and every frame was drawn as before, now with vsync on; that is what
+  felt better. The third version moves the frame to `-displayLayer:` (Zed's view implements the same
+  method for the same reason), and the trace's `src=display` on every frame shows it running.
+- **Frame time** is not what was left: a ReleaseFast frame takes 2–3 ms in a step (the in-step
+  present waits until the command buffer is scheduled), Debug 4–5 ms. A heavy frame (a large
+  markdown document in Debug, ~15 ms) slows the window down to about 54 steps a second, never out
+  of sync.
+- **Layout settling** is not either: dvui asks for no follow-up frame after a live-resize frame
+  (`wait` is the maximum), and right-anchored UI keeps its distance from the window's edge from
+  frame to frame in the recordings.
+- **Driving it:** posting mouse events into the app's own queue does start AppKit's tracking loop,
+  but AppKit also reads the real cursor during it, so the window follows neither. The recorder posts
+  HID events instead, which needs Accessibility for the app running it.
 
 ## The patches
 
 | | What | Files |
 |---|---|---|
 | [`0003`](patches/sdl/0003-Metal-present-with-the-Core-Animation-transaction-wh.patch) | Metal: present with the Core Animation transaction when the layer asks for it. The GPU driver (`METAL_Submit`) and the renderer (`METAL_RenderPresent`) commit, wait until scheduled and present on the calling thread when `layer.presentsWithTransaction`; exactly as before otherwise. SDL never sets the property in this patch. | `src/gpu/metal/SDL_gpu_metal.m`, `src/render/metal/SDL_render_metal.m` |
-| [`0004`](patches/sdl/0004-Cocoa-draw-each-step-of-a-live-resize-in-the-transac.patch) | Cocoa: `SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE` (default off). For the length of a live resize the window listener gives the Metal view the redraw policy `DuringViewResize`; the view's `updateLayer` brings SDL's sizes up to the window (`windowDidResize:` again, a no-op when it has run) and runs the app's frame with the layer presenting with the transaction for that frame alone. The timer only asks the view for a display while the pointer rests; if AppKit does not display the view for four ticks it draws as before and logs `Live resize: the Metal view is not being displayed` once. A frame is never started from inside one already running. | `include/SDL3/SDL_hints.h`, `src/video/cocoa/SDL_cocoawindow.{h,m}`, `src/video/cocoa/SDL_cocoametalview.m` |
+| [`0004`](patches/sdl/0004-Cocoa-draw-each-step-of-a-live-resize-in-the-transac.patch) | Cocoa: `SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE` (default off). For the length of a live resize the window listener gives the Metal view the redraw policy `DuringViewResize`; the view's `displayLayer:` (its layer's delegate method: AppKit never calls `updateLayer` for it) brings SDL's sizes up to the window (`windowDidResize:` again, a no-op when it has run) and runs the app's frame with the layer presenting with the transaction for that frame alone. The timer only asks the view for a display while the pointer rests; if AppKit does not display the view for four ticks it draws as before and logs `Live resize: the Metal view is not being displayed` once. A frame is never started from inside one already running. | `include/SDL3/SDL_hints.h`, `src/video/cocoa/SDL_cocoawindow.{h,m}`, `src/video/cocoa/SDL_cocoametalview.m` |
 
 `0004` needs `0003`: without it the layer would ask for transaction presents that SDL's presenters
 ignore. The hint is off by default, as it would have to be upstream: it requires the app to present
@@ -142,6 +153,12 @@ The new Objective-C has been checked for syntax under ARC against stub headers, 
   events (the stall the comment above that check describes). Before this change it could happen
   whenever the pointer paused mid-drag; with the patches every frame drawn while the pointer rests
   is such a frame.
+- `FIZZY_LIVE_RESIZE_TRACE=1` (`SDLBackend.live_resize_trace`, `platform/macos/live_resize_trace.m`):
+  a line on stderr per resize step and per frame inside the tracking loop — where the frame came
+  from (`src=display`, drawn from AppKit's display of the view and presented with its transaction,
+  or `src=timer`), its time and duration, the window, layer and drawable sizes, and dvui's `wait` —
+  on `CACurrentMediaTime`'s clock, and an overlay on every frame: a barcode of the frame's number and
+  size, and bars on its edges. Off, it costs a getenv once.
 - Vsync is no longer turned off for the drag when SDL draws it (`sdl_draws_live_resize` in
   `window_monitor.m`: the hint is on and the window's delegate, SDL's listener, answers
   `drawsLiveResizeInView:`, which only the patched SDL does). Turning it off was for the timer's
@@ -166,7 +183,32 @@ tail (`0003`), and the listener's live-resize notifications and the Metal view's
 `clang -fsyntax-only -fobjc-arc` on the four `.m` files with the macOS SDK is enough to push; the
 real check is a drag on a Mac.
 
-## Checking it on a Mac
+## Measuring it
+
+`scripts/live-resize/run.sh <fizzy> <out-dir> <edge> [amp] [period] [cycles] [-- VAR=value ...]`
+runs a fizzy beside yours (its own HOME and lock), drags `edge` (`r`, `l`, `t`, `b`, `tr`) back and
+forth with real mouse events while recording the screen around the window at 120 fps, quits it, and
+prints what `analyze.py` makes of the trace and the recording: steps and frames a second, where the
+frames came from and how long they took, and how many screen updates during the drag showed a frame
+drawn for another size than the window's (stretched). A/B without rebuilding:
+
+```sh
+scripts/live-resize/run.sh zig-out/arm64-macos/fizzy /tmp/lr-new r
+scripts/live-resize/run.sh zig-out/arm64-macos/fizzy /tmp/lr-old r -- SDL_VIDEO_MAC_SYNC_LIVE_RESIZE=0
+```
+
+The app running it needs Accessibility (for the mouse events) and Screen Recording; the pointer
+moves during the drag. `FIZZY_ARGS` passes files to open. `record.swift`'s `png-dir` argument keeps
+the captured frames too. A window that ends against the menu bar stops resizing while the pointer
+goes on (a gap in the steps, not a stall); keep `amp` within the screen. On a run that reports no
+steps, the press missed the edge: run it again.
+
+To iterate on the SDL patches locally without pushing: clone fizzyedit/SDL and fizzyedit/sdl_zig
+beside fizzy (`../SDL`, `../sdl_zig`) on `claude/macos-live-resize`; in sdl_zig's `build.zig.zon`,
+`.sdl = .{ .path = "../SDL" }`; in fizzy's root `build.zig.zon`, `.sdl = .{ .path = "../sdl_zig" }`.
+A rebuild picks up an SDL edit.
+
+## Checking it on a Mac by hand
 
 - Drag every edge and corner, slowly and fast, with a trackpad and with a mouse, on a 60 Hz display
   and on ProMotion. Expect no stretched frame at all; the window may follow the pointer a little
@@ -174,10 +216,8 @@ real check is a drag on a Mac.
 - A/B without rebuilding: SDL reads hints from the environment ahead of `SDL_SetHint`, so
   `SDL_VIDEO_MAC_SYNC_LIVE_RESIZE=0` gives the old behaviour (vsync off for the drag included).
 - Watch the log for `Live resize: the Metal view is not being displayed`: it means AppKit never
-  displayed the view during the drag, so none of this ran and the frames came from the timer.
-- Horizontal and vertical drags separately, and the left and top edges as well as the right and
-  bottom: the first version told them apart, and which edges still jitter (if any) says whether it
-  is the window's width or its origin that matters.
+  displayed the view during the drag, so none of this ran and the frames came from the timer. (It
+  is what the second version logged on every drag.)
 - To see single frames, record the screen at 60 fps (QuickTime) and step through the drag.
 - A heavy frame (liquid glass up, a large markdown preview) is the stress case: the resize gets
   slower, never torn. If it gets too slow, the answer is a cheaper frame during a live resize, not
