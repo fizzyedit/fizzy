@@ -191,6 +191,9 @@ pending_composite_warmup: bool = false,
 /// tree and the panel only take room from it. Done in the frame (`layout.zig`), not from the
 /// page's call, which comes between frames.
 show_only_document: bool = false,
+/// A file inside the root the page asked to show (`FizzyWebShowInRoot`), full path, owned:
+/// opened from the first frame whose layout has published its places (`processPendingShow`).
+pending_show: ?[]u8 = null,
 
 /// Watches each open on-disk document for external edits. Clean docs reload via
 /// `Plugin.reloadDocument`; dirty docs set a conflict flag and `save` shows
@@ -1591,12 +1594,11 @@ export fn FizzyWebShowInRoot(path_ptr: [*]const u8, path_len: usize) void {
     const relative = std.mem.trimStart(u8, path_ptr[0..path_len], "/");
     if (relative.len == 0) return;
     const full = std.fmt.allocPrint(editor.app.gpa, "{s}/{s}", .{ std.mem.trimEnd(u8, root, "/"), relative }) catch return;
-    defer editor.app.gpa.free(full);
-    _ = editor.openFile(.{ .path = full }) catch |err| {
-        dvui.log.err("web: could not show {s}: {s}", .{ full, @errorName(err) });
-        return;
-    };
-    editor.show_only_document = true;
+    // Not opened here: the page can call before the app has drawn a frame (a tab opened in the
+    // background, a phone slow to its first frame), when there are no places yet to open it in
+    // or to close round it. The first frame that has them does it (`processPendingShow`).
+    if (editor.pending_show) |old_path| editor.app.gpa.free(old_path);
+    editor.pending_show = full;
     editor.app.host.refresh();
 }
 
@@ -3846,6 +3848,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             editor.flushQueuedNativeMenuActions();
             editor.flushQueuedNativeMenuItems();
             editor.processPendingSaveAs();
+            editor.processPendingShow();
 
             var layout: Layout = .init(&editor.app.host, &editor.app.layout, editor.app.gpa, editor.app.arena.allocator());
             // Published for the duration of the shape, so a plugin drawing inside a region can
@@ -5242,6 +5245,24 @@ pub fn saveAsDialogCallback(paths: ?[][:0]const u8) void {
         dvui.log.err("Save As: out of memory queuing path", .{});
         return;
     };
+}
+
+/// The page's `?show=` (`FizzyWebShowInRoot`), once the layout has published its places: open the
+/// file as a click in the explorer would, and close the explorer and the panel round it
+/// (`show_only_document`). Before that there is nowhere to open it and nothing to close.
+pub fn processPendingShow(editor: *Editor) void {
+    const path = editor.pending_show orelse return;
+    if (editor.regionFor(fizzy.sdk.keywords.ide.sidebar) == null) {
+        editor.app.host.refresh();
+        return;
+    }
+    editor.pending_show = null;
+    defer editor.app.gpa.free(path);
+    _ = editor.openFile(.{ .path = path }) catch |err| {
+        dvui.log.err("web: could not show {s}: {s}", .{ path, @errorName(err) });
+        return;
+    };
+    editor.show_only_document = true;
 }
 
 pub fn processPendingSaveAs(editor: *Editor) void {
