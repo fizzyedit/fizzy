@@ -86,6 +86,12 @@ fn dupe(self: *Script, bytes: []const u8) ![]const u8 {
     return self.arena.allocator().dupe(u8, bytes);
 }
 
+fn dupeAll(self: *Script, list: []const []const u8) ![]const []const u8 {
+    const out = try self.arena.allocator().alloc([]const u8, list.len);
+    for (list, out) |item, *o| o.* = try self.dupe(item);
+    return out;
+}
+
 fn push(self: *Script, op: Tape.Op) !void {
     try self.ops.append(self.arena.allocator(), op);
 }
@@ -121,6 +127,10 @@ pub const CaptionOptions = struct {
     place: Tape.Caption.Place = .bottom,
     /// The view it is about, by anchor. Null: `caption_on`.
     on: ?[]const u8 = null,
+    /// What it sits beside, by anchor. Empty: what the pointer is aimed at while it shows.
+    near: []const u8 = "",
+    /// What else it must not cover, by anchor: what the viewer is meant to be watching.
+    clear: []const []const u8 = &.{},
     /// Hold the next action until the caption is done, rather than acting under it.
     hold: bool = false,
 };
@@ -141,6 +151,8 @@ pub fn caption(self: *Script, text: []const u8, opts: CaptionOptions) !void {
         .text = try self.dupe(text),
         .place = opts.place,
         .on = try self.dupe(opts.on orelse self.caption_on),
+        .near = try self.dupe(opts.near),
+        .clear = try self.dupeAll(opts.clear),
     });
     if (opts.hold) self.t += ms;
 }

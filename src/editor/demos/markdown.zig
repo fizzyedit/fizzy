@@ -20,19 +20,19 @@ pub fn build(s: *Script) !void {
     s.caption_on = catalog.documents;
 
     try s.chapter("Write");
-    try s.caption("The raw text on the left, the page on the right — redrawn on every keystroke.", .{});
+    try s.caption("The raw text on the left, the page on the right — redrawn on every keystroke.", try catalog.aboutWriting(s, "NOTES.md"));
     try s.waitFor(try catalog.editor(s, "NOTES.md"), .{});
     try s.click(.{ .tag = try catalog.end(s, "NOTES.md") }, .{});
     try s.typeText("\nFizzy can now **play demos** of itself: real input, driven by a tape.\n\n", .{ .cps = 18 });
     s.pause(800);
 
     try s.chapter("Lists");
-    try s.caption("A list is only dashes in the text; the preview draws the bullets.", .{});
+    try s.caption("A list is only dashes in the text; the preview draws the bullets.", try catalog.aboutWriting(s, "NOTES.md"));
     try s.typeText("- pause by clicking anywhere\n- rewind and play forward\n- resume where you left off\n\n", .{ .cps = 18 });
     s.pause(800);
 
     try s.chapter("Tables");
-    try s.caption("Tables line up the moment the separator row is there.", .{});
+    try s.caption("Tables line up the moment the separator row is there.", try catalog.aboutWriting(s, "NOTES.md"));
     // Typed as a person would, so nothing here may be a character the editor pairs (brackets,
     // quotes, backticks): it would close the pair the way it does for them.
     try s.typeText("| You do | The demo does |\n|---|---|\n| click | pauses |\n| press play | catches up and carries on |\n", .{ .cps = 20 });

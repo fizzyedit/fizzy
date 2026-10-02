@@ -88,6 +88,8 @@ user's motion settings, timed in demo time.
 | `workbench.tab:<abs path>` | a document's tab |
 | `text.editor:<abs path>` | a text document's editor |
 | `text.end:<abs path>` | where typing at the end of a text document begins, just after its last character |
+| `text.body:<abs path>` | what of a text document's text is in view, out to its longest line |
+| `text.preview:<abs path>` | a text document's preview pane, while it shows |
 | `text.preview.raw:<abs path>`, `.split:`, `.preview:` | the markdown Raw / Split / Preview pill |
 | `fizzy.palette` | the command palette's text field |
 | `fizzy.rail:<view id>` | a sidebar rail icon (`fizzy.rail:workbench.files` is the explorer's; `catalog.files_icon`) |
@@ -137,9 +139,17 @@ pub fn build(s: *Script) !void {
 glide, a hover before the press, a beat after each action, 12 characters a second). `pause`,
 `caption(.., .{ .hold = true })` and every option's `ms` adjust it. A caption shows for as long as
 it takes to read (`Script.readingMs`) unless given `ms`, and the next caption takes over from it.
-A caption sits over the view it is about — `.on`, an anchor, defaulting to `s.caption_on`
-(fizzy's demos: `catalog.documents`, the documents' place) — a quarter, half or three quarters of
-the way down it by `.place`, so on a large window it is beside the action rather than at the foot.
+A caption that narrates what the pointer does is a **callout beside the action**, where the viewer
+is looking: next to what the pointer is aimed at while it shows (or `.near`, an anchor), to its
+right, below, left or above — the first that covers none of it, the pointer, the other things the
+pointer goes to in the caption's time, or what `.clear` names (what the viewer is meant to be
+watching). It glides along as the pointer moves on. So write one caption per action rather than
+one over several. For typing, `catalog.aboutWriting(s, "README.md")` puts the callout beside where
+the words go, clear of them and of the preview.
+
+A caption with no pointer action in its time sits over the view it is about — `.on`, an anchor,
+defaulting to `s.caption_on` (fizzy's demos: `catalog.documents`, the documents' place) — a
+quarter, half or three quarters of the way down it by `.place`.
 
 A keyframe starts with the explorer put away (`.layout = .focused`), so the editor has the room;
 a demo opens it from the rail when it is about to use it and puts it away after —

@@ -125,8 +125,17 @@ pub const Caption = struct {
     /// How far down the view it sits: a quarter, half or three quarters of the way.
     place: Place = .bottom,
     /// The view it is about, by anchor — what it sits over, so it is near the action however
-    /// large the window. Empty: the window.
+    /// large the window. Empty: the window. Where it goes when there is nothing to sit beside
+    /// (`near`).
     on: []const u8 = "",
+    /// What it sits beside, by anchor: the thing the action it narrates is done to, where the
+    /// viewer is looking. Empty: whatever the tape's pointer is aimed at while it shows
+    /// (`aimedAt`); with no pointer action in its time either, it sits over `on`.
+    near: []const u8 = "",
+    /// What it must not cover, by anchor, besides what it sits beside, the pointer and what the
+    /// pointer is aimed at in its time: whatever else the viewer is meant to be watching — the
+    /// text being typed, a preview redrawing as it is.
+    clear: []const []const u8 = &.{},
 
     pub const Place = enum { top, middle, bottom };
 
@@ -221,6 +230,26 @@ pub fn captionAt(self: Tape, t: f64) ?Caption {
         if (c.shownAt(t) and (found == null or c.at >= found.?.at)) found = c;
     }
     return found;
+}
+
+/// Where the tape's pointer is aimed while `c` shows, with the first `applied` ops applied: the
+/// target of the latest move in its time, or before there is one, of the first move to come in
+/// its time. Null when the pointer does not move in its time.
+pub fn aimedAt(self: Tape, c: Caption, applied: usize) ?Target {
+    const start = c.at;
+    const stop = c.at + c.ms;
+    var latest: ?Target = null;
+    for (self.ops, 0..) |op, i| {
+        if (op.at < start) continue;
+        if (op.at >= stop) break;
+        const target = switch (op.do) {
+            .move => |m| m,
+            else => continue,
+        };
+        if (i >= applied) return latest orelse target;
+        latest = target;
+    }
+    return latest;
 }
 
 /// How much of the tape's pointer shows at `t`, 0…1, with the first `applied` ops applied: it
@@ -341,7 +370,7 @@ fn sample() Tape {
             .{ .at = 1200, .ms = 300, .do = .{ .type = "abc" } },
         };
         const chapters = [_]Chapter{ .{ .at = 0, .title = "one" }, .{ .at = 1000, .title = "two" } };
-        const captions = [_]Caption{.{ .at = 200, .ms = 2000, .text = "hi", .on = "pane" }};
+        const captions = [_]Caption{.{ .at = 200, .ms = 2000, .text = "hi", .on = "pane", .near = "button", .clear = &.{"field"} }};
     };
     return .{ .name = "t", .ops = &S.ops, .keyframes = &S.keyframes, .chapters = &S.chapters, .captions = &S.captions };
 }
@@ -387,6 +416,27 @@ test "the pointer goes while the keyboard is used, and comes back when it moves"
     try testing.expectEqual(@as(f32, 1), tape.pointerShown(7, 3300, 200));
     // Motion off: at once.
     try testing.expectEqual(@as(f32, 0), tape.pointerShown(5, 1000, 0));
+}
+
+test "a caption is beside what the pointer is aimed at in its time" {
+    const ops = [_]Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .ms = 400, .do = .{ .move = .{ .tag = "before" } } },
+        .{ .at = 1000, .ms = 400, .do = .{ .move = .{ .tag = "rail" } } },
+        .{ .at = 1500, .do = .{ .press = .left } },
+        .{ .at = 2000, .ms = 400, .do = .{ .move = .{ .tag = "row" } } },
+        .{ .at = 5000, .ms = 400, .do = .{ .move = .{ .tag = "after" } } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &.{.{ .root = "demo://t" }} };
+    const c: Caption = .{ .at = 800, .ms = 3000, .text = "" };
+    // Before its first move: where the pointer is going.
+    try testing.expectEqualStrings("rail", tape.aimedAt(c, 2).?.tag);
+    // Then wherever it went last, and never past its own time.
+    try testing.expectEqualStrings("rail", tape.aimedAt(c, 4).?.tag);
+    try testing.expectEqualStrings("row", tape.aimedAt(c, 5).?.tag);
+    try testing.expectEqualStrings("row", tape.aimedAt(c, 6).?.tag);
+    // No move in its time: nothing to sit beside.
+    try testing.expect(tape.aimedAt(.{ .at = 2500, .ms = 1000, .text = "" }, 5) == null);
 }
 
 test "a tape must open on a keyframe, in order, with chords that parse" {

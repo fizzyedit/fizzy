@@ -46,6 +46,23 @@ pub fn end(s: *Script, rel: []const u8) ![]const u8 {
     return s.print("text.end:{s}/{s}", .{ s.root, rel });
 }
 
+/// What of `rel`'s text is in view, out to its longest line.
+pub fn body(s: *Script, rel: []const u8) ![]const u8 {
+    return s.print("text.body:{s}/{s}", .{ s.root, rel });
+}
+
+/// The preview beside `rel`'s text, when it has one.
+pub fn preview(s: *Script, rel: []const u8) ![]const u8 {
+    return s.print("text.preview:{s}/{s}", .{ s.root, rel });
+}
+
+/// A caption about writing in `rel`: beside where the words go, keeping clear of them and of the
+/// preview redrawing them.
+pub fn aboutWriting(s: *Script, rel: []const u8) !Script.CaptionOptions {
+    const clear = try s.arena.allocator().dupe([]const u8, &.{ try body(s, rel), try preview(s, rel) });
+    return .{ .near = try end(s, rel), .clear = clear };
+}
+
 /// The tab for `rel`.
 pub fn tab(s: *Script, rel: []const u8) ![]const u8 {
     return s.print("workbench.tab:{s}/{s}", .{ s.root, rel });

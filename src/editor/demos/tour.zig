@@ -57,20 +57,26 @@ pub fn build(s: *Script) !void {
         .hold = true,
     });
 
+    // From here, each caption is a callout beside what the pointer does while it shows.
     try s.chapter("The explorer");
-    try s.caption("The project folder is in the explorer, a click away on the rail. Folders open with a click, and files open in tabs.", .{});
-    s.pause(1500);
+    try s.caption("The project folder is in the explorer, a click away on the rail.", .{});
+    s.pause(1600);
     try s.click(.{ .tag = catalog.files_icon }, .{});
+    try s.caption("Folders open with a click\u{2026}", .{});
+    s.pause(900);
     try s.click(.{ .tag = try catalog.file(s, "src") }, .{});
+    try s.caption("\u{2026}and files open in tabs.", .{});
+    s.pause(900);
     try s.click(.{ .tag = try catalog.file(s, "src/main.zig") }, .{});
     try s.waitFor(try catalog.editor(s, "src/main.zig"), .{});
-    s.pause(800);
+    s.pause(1200);
     try s.caption("Put the explorer away again, and the editor has the room.", .{});
+    s.pause(900);
     try s.click(.{ .tag = catalog.files_icon }, .{});
-    s.pause(2400);
+    s.pause(2000);
 
     try s.chapter("Editing");
-    try s.caption("Typing is typing: brackets close themselves, and Enter keeps the indent.", .{});
+    try s.caption("Typing is typing: brackets close themselves, and Enter keeps the indent.", try catalog.aboutWriting(s, "src/main.zig"));
     // Where the new lines will go: the end of the file.
     try s.click(.{ .tag = try catalog.end(s, "src/main.zig") }, .{});
     try s.typeText("\npub fn greet(name: []const u8) void {\nstd.debug.print(\"hi, {s}\\n\", .{name});", .{});
@@ -92,9 +98,11 @@ pub fn build(s: *Script) !void {
     s.pause(2000);
 
     try s.chapter("Markdown");
-    try s.caption("Markdown opens beside its preview, which follows every keystroke.", .{});
+    try s.caption("Markdown opens beside its preview\u{2026}", .{});
+    s.pause(600);
     try catalog.openFile(s, "README.md");
-    s.pause(500);
+    s.pause(800);
+    try s.caption("\u{2026}which follows every keystroke.", try catalog.aboutWriting(s, "README.md"));
     try s.click(.{ .tag = try catalog.end(s, "README.md") }, .{});
     try s.typeText("\n## Your turn\n\nPress **play** to watch again, or click anywhere and make it yours.\n", .{ .cps = 18 });
     s.pause(2400);

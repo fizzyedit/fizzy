@@ -25,7 +25,14 @@
     },
     .captions = .{
         .{ .at = 300, .ms = 5200, .title = "Hello from a tape", .text = "Nothing here is compiled in: this demo is a ZON file the page fetched.", .place = .middle, .on = "region:Main" },
-        .{ .at = 6000, .ms = 5400, .text = "Every keystroke is a real one — the preview follows along.", .on = "region:Main" },
+        .{
+            .at = 6000,
+            .ms = 5400,
+            .text = "Every keystroke is a real one — the preview follows along.",
+            // A callout beside where the words go, clear of them and of the preview.
+            .near = "text.end:demo://hello/hello.md",
+            .clear = .{ "text.body:demo://hello/hello.md", "text.preview:demo://hello/hello.md" },
+        },
     },
     .ops = .{
         .{ .at = 0, .do = .{ .keyframe = 0 } },

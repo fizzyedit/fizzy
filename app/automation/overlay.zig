@@ -89,13 +89,14 @@ fn cardOptions(pad: dvui.Rect) dvui.Options {
     };
 }
 
-/// A floating surface's opening time (`motion.open_us`), in ms at the user's speed.
+/// How long a card takes to open: a little quicker than a menu (`motion.open_us`), since a demo's
+/// cards come and go all the while — in ms at the user's speed.
 fn openMs() f64 {
-    return motion.durationMs(@as(f32, @floatFromInt(motion.open_us)) / 1000);
+    return motion.durationMs(@as(f32, @floatFromInt(motion.open_us)) / 1000 * 0.7);
 }
-/// Its closing time — a window's close flight (`FloatingWindowWidget`) — likewise.
+/// How long one takes to close, likewise: brisker than a window's close flight.
 fn closeMs() f64 {
-    return motion.durationMs(400);
+    return motion.durationMs(260);
 }
 
 /// How far open a card is: its glass formed (`form`, 0…1) and grown out of its origin (`grow`,
@@ -187,49 +188,35 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
 
 // ---- captions ------------------------------------------------------------------------------
 
-/// The caption showing, over the view it is about (`Caption.on`; the window when it names none or
-/// that is not drawn): a quarter, half or three quarters of the way down it (`Caption.place`),
-/// across its middle — near what it is talking about, however large the window. Kept whole on the
-/// window and above the cards along the bottom (`below` slots of them, `slot_h` each).
+/// The caption showing. One that narrates what the pointer does is a callout beside it, where
+/// the viewer is looking (`callout`); any other sits over the view it is about (`overView`).
+/// Either way it keeps whole on the window and above the cards along the bottom (`below` slots
+/// of them, `slot_h` each), and glides rather than jumps when what it sits beside moves.
 fn drawCaption(player: *Player, tape: *const Tape, win: dvui.Rect, below: f32) void {
     const now = player.now();
     const c = tape.captionAt(now) orelse return;
     const shown = Reveal.between(now, @floatFromInt(c.at), @floatFromInt(c.at + c.ms));
 
-    const view: dvui.Rect = blk: {
-        if (c.on.len > 0) {
-            if (dvui.tagGet(c.on)) |td| {
-                if (td.visible) break :blk dvui.windowRectScale().rectFromPhysical(td.rect);
-            }
-        }
-        break :blk win;
-    };
-    const down: f32 = switch (c.place) {
-        .top => 0.25,
-        .middle => 0.5,
-        .bottom => 0.75,
-    };
-    const w = @min(620, win.w - 32);
     // Its size as last drawn, to keep the whole of it clear.
     const src = @src();
-    const h = if (dvui.minSizeGet(dvui.parentGet().extendId(src, 0))) |ms| ms.h else 0;
+    const size: dvui.Size = dvui.minSizeGet(dvui.parentGet().extendId(src, 0)) orelse .{};
     const floor = win.h - 24 - below * slot_h;
-    const center: dvui.Point = .{
-        .x = std.math.clamp(view.x + view.w / 2, win.x + 16 + w / 2, win.x + win.w - 16 - w / 2),
-        .y = @min(@max(view.y + view.h * down, win.y + 16 + h / 2), floor - h / 2),
-    };
+    const beside = callout(player, tape, c, win, size, floor);
+    const spot = beside orelse overView(c, win, size, floor);
+    // A callout reads at a narrower measure than a card over a whole view.
+    const w = @min(@as(f32, if (beside != null) 440 else 620), win.w - 32);
     const fw = layer(src, .{ .max_size_content = .{ .w = w, .h = win.h } }, .{
-        .from = dvui.windowRectScale().pointToPhysical(center),
-        .from_gravity_x = 0.5,
-        .from_gravity_y = 0.5,
+        .from = dvui.windowRectScale().pointToPhysical(glide(c, spot.at, size.w == 0)),
+        .from_gravity_x = 1,
+        .from_gravity_y = 1,
     });
     defer fw.deinit();
     var card = dvui.box(@src(), .{ .dir = .vertical }, cardOptions(.{ .x = 18, .y = 12, .w = 18, .h = 14 }).override(.{
         .max_size_content = .{ .w = w - 36, .h = win.h },
     }));
     defer card.deinit();
-    // It opens about its middle, as a dialog does.
-    glass(card.data(), .{ .x = 0.5, .y = 0.5 }, shown);
+    // It opens out of the side nearest what it is beside, as a popover does from its anchor.
+    glass(card.data(), spot.origin, shown);
     const prev_alpha = dvui.alpha(shown.alpha);
     defer dvui.alphaSet(prev_alpha);
     const heading = dvui.Font.theme(.heading);
@@ -259,6 +246,155 @@ fn drawCaption(player: *Player, tape: *const Tape, win: dvui.Rect, below: f32) v
     });
     tl.addText(c.text, .{});
     tl.deinit();
+}
+
+/// Where a caption goes: its top-left (natural), and the point in it (fractions) it opens from.
+const Spot = struct {
+    at: dvui.Point,
+    origin: dvui.Point = .{ .x = 0.5, .y = 0.5 },
+};
+
+/// The space between a callout and what it is beside.
+const callout_gap: f32 = 14;
+
+/// A caption that narrates what the pointer does, beside what it is done to (`Caption.near`, else
+/// `Tape.aimedAt`): to its right, or below, left or above it — the first of those that covers none
+/// of it, the pointer, what the pointer is aimed at in the caption's time or what the caption says
+/// to keep clear (`Caption.clear`), on the window and above `floor`; failing all four, the one
+/// that covers least. Null when there is nothing to sit beside.
+fn callout(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect, size: dvui.Size, floor: f32) ?Spot {
+    const near = nearRect(player, tape, c, win) orelse return null;
+
+    var keep_buf: [24]dvui.Rect = undefined;
+    var keep: std.ArrayList(dvui.Rect) = .initBuffer(&keep_buf);
+    keep.appendAssumeCapacity(near);
+    if (player.pointerShown(0) > 0) {
+        const p = dvui.windowRectScale().pointFromPhysical(.{ .x = player.seq.pointer.x, .y = player.seq.pointer.y });
+        keep.appendAssumeCapacity(.{ .x = p.x - 4, .y = p.y - 4, .w = 22, .h = 28 });
+    }
+    for (c.clear) |tag| {
+        if (keep.items.len == keep.capacity) break;
+        if (tagRect(tag)) |r| keep.appendAssumeCapacity(r);
+    }
+    for (tape.ops) |op| {
+        if (op.at < c.at) continue;
+        if (op.at >= c.at + c.ms or keep.items.len == keep.capacity) break;
+        if (op.do != .move) continue;
+        // The things it acts on, not the pane it acts in: covering an editor is unavoidable.
+        if (tagRect(op.do.move.tag)) |r| if (small(r, win)) keep.appendAssumeCapacity(r);
+    }
+
+    const cy = near.y + near.h / 2;
+    const cx = near.x + near.w / 2;
+    // Below or above, its words line up with what it is beside.
+    const lined = near.x - 18;
+    const tries = [_]Spot{
+        .{ .at = .{ .x = near.x + near.w + callout_gap, .y = cy - size.h / 2 } },
+        .{ .at = .{ .x = lined, .y = near.y + near.h + callout_gap } },
+        .{ .at = .{ .x = near.x - callout_gap - size.w, .y = cy - size.h / 2 } },
+        .{ .at = .{ .x = lined, .y = near.y - callout_gap - size.h } },
+    };
+    var best: Spot = undefined;
+    var best_covered: f32 = std.math.inf(f32);
+    for (tries, 0..) |t, i| {
+        const at: dvui.Point = .{
+            .x = std.math.clamp(t.at.x, win.x + 16, @max(win.x + 16, win.x + win.w - 16 - size.w)),
+            .y = std.math.clamp(t.at.y, win.y + 16, @max(win.y + 16, floor - size.h)),
+        };
+        const card: dvui.Rect = .{ .x = at.x, .y = at.y, .w = size.w, .h = size.h };
+        var covered: f32 = 0;
+        for (keep.items) |k| {
+            const o = card.intersect(k);
+            covered += @max(0, o.w) * @max(0, o.h);
+        }
+        // It opens out of the side facing what it is beside.
+        const along_x = if (size.w > 0) std.math.clamp((cx - at.x) / size.w, 0, 1) else 0.5;
+        const along_y = if (size.h > 0) std.math.clamp((cy - at.y) / size.h, 0, 1) else 0.5;
+        const spot: Spot = .{ .at = at, .origin = switch (i) {
+            0 => .{ .x = 0, .y = along_y },
+            1 => .{ .x = along_x, .y = 0 },
+            2 => .{ .x = 1, .y = along_y },
+            else => .{ .x = along_x, .y = 1 },
+        } };
+        if (covered <= 0) return spot;
+        if (covered < best_covered) {
+            best = spot;
+            best_covered = covered;
+        }
+    }
+    return best;
+}
+
+/// What a caption sits beside, natural: what it names (`Caption.near`), else what the pointer is
+/// aimed at in its time — the point it goes to, when that is a whole pane, and the pointer itself
+/// while that is still to be drawn (a row in a pane that is opening), so it is beside the action
+/// all along rather than waiting somewhere else for it.
+fn nearRect(player: *Player, tape: *const Tape, c: Tape.Caption, win: dvui.Rect) ?dvui.Rect {
+    if (c.near.len > 0) {
+        if (tagRect(c.near)) |r| return r;
+    }
+    const aim = tape.aimedAt(c, player.seq.cursor) orelse return null;
+    const r = (if (aim.tag.len > 0) tagRect(aim.tag) else null) orelse return pointRect(player.seq.pointer);
+    if (small(r, win)) return r;
+    return pointRect(Player.targetPoint(aim) orelse player.seq.pointer);
+}
+
+/// A point (physical) as a small rect around it, natural.
+fn pointRect(p: Sequencer.Point) dvui.Rect {
+    const n = dvui.windowRectScale().pointFromPhysical(.{ .x = p.x, .y = p.y });
+    return .{ .x = n.x - 12, .y = n.y - 12, .w = 24, .h = 24 };
+}
+
+/// A caption over the view it is about (`Caption.on`; the window when it names none or that is
+/// not drawn): a quarter, half or three quarters of the way down it (`Caption.place`), across
+/// its middle — near what it is talking about, however large the window.
+fn overView(c: Tape.Caption, win: dvui.Rect, size: dvui.Size, floor: f32) Spot {
+    const view = (if (c.on.len > 0) tagRect(c.on) else null) orelse win;
+    const down: f32 = switch (c.place) {
+        .top => 0.25,
+        .middle => 0.5,
+        .bottom => 0.75,
+    };
+    return .{ .at = .{
+        .x = std.math.clamp(view.x + view.w / 2 - size.w / 2, win.x + 16, @max(win.x + 16, win.x + win.w - 16 - size.w)),
+        .y = std.math.clamp(view.y + view.h * down - size.h / 2, win.y + 16, @max(win.y + 16, floor - size.h)),
+    } };
+}
+
+/// A tag's rect, natural, when it is drawn and visible.
+fn tagRect(tag: []const u8) ?dvui.Rect {
+    const td = dvui.tagGet(tag) orelse return null;
+    if (!td.visible) return null;
+    return dvui.windowRectScale().rectFromPhysical(td.rect);
+}
+
+/// A thing rather than a place: under two fifths of the window each way.
+fn small(r: dvui.Rect, win: dvui.Rect) bool {
+    return r.w <= win.w * 0.4 and r.h <= win.h * 0.4;
+}
+
+/// How quickly a caption follows what it is beside: the time constant of its glide, as written.
+const glide_ms: f32 = 110;
+
+/// Where caption `c` is this frame, eased toward `to`, so it follows the action rather than
+/// jumping with it. A caption that has just come up (or whose size is not known yet, its first
+/// frame) starts where it belongs; with motion off it is always there.
+fn glide(c: Tape.Caption, to: dvui.Point, snap: bool) dvui.Point {
+    const id = dvui.currentWindow().data().id;
+    const same = if (dvui.dataGet(null, id, "_demo_caption_at", u32)) |at| at == c.at else false;
+    dvui.dataSet(null, id, "_demo_caption_at", c.at);
+    const from = (if (same and !snap) dvui.dataGet(null, id, "_demo_caption_pos", dvui.Point) else null) orelse to;
+    const tau = motion.durationMs(glide_ms);
+    const k: f32 = if (tau <= 0) 1 else 1 - @exp(-dvui.secondsSinceLastFrame() * 1000 / tau);
+    var at: dvui.Point = .{ .x = from.x + (to.x - from.x) * k, .y = from.y + (to.y - from.y) * k };
+    if (@abs(to.x - at.x) < 0.5 and @abs(to.y - at.y) < 0.5) {
+        at = to;
+    } else {
+        // Still on its way: a paused player asks for no frames of its own.
+        dvui.refresh(null, @src(), null);
+    }
+    dvui.dataSet(null, id, "_demo_caption_pos", at);
+    return at;
 }
 
 // ---- keystrokes ----------------------------------------------------------------------------
