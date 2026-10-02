@@ -4,7 +4,9 @@
 //! follows those animations by their notifications, pushes AppKit's live sizes into SDL as they
 //! change, and pumps frames from a timer while they run, so the app redraws through them; it also
 //! undoes AppKit's nudge of a full-size-content window under the menu bar, and turns vsync off for
-//! a live resize so the window keeps up with the pointer.
+//! a live resize so the window keeps up with the pointer. On an SDL with fizzy's live-resize
+//! patches (`docs/MACOS_LIVE_RESIZE.md`), `install` also has SDL draw each step of a live resize
+//! in the screen update that shows it.
 //!
 //! An app installs it once its window is styled (`install`) and lets its frames through once it
 //! is ready to draw them (`launchComplete`). It relies on two of SDL's own functions that are not
@@ -155,9 +157,10 @@ fn macosAppPreBeginSync(back: *Backend.SDLBackend) void {
 /// Saved vsync setting while a manual live resize has it switched off.
 var macos_live_resize_saved_vsync: ?c_int = null;
 
-/// Frames during a manual live resize are paced by SDL's 60Hz timer inside AppKit's
-/// resize-tracking loop; a vsync-blocking present there only delays the tracker's next
-/// mouse event, so quick drags fall behind the pointer. Off for the drag, restored after.
+/// Frames during a manual live resize run inside AppKit's resize-tracking loop (one per resize
+/// step with `SDL_VIDEO_MAC_SYNC_LIVE_RESIZE`, else SDL's 60Hz timer); a vsync-blocking present
+/// there only delays the tracker's next mouse event, so quick drags fall behind the pointer.
+/// Off for the drag, restored after.
 export fn fizzy_macos_window_live_resize_vsync(active: c_int) void {
     if (comptime builtin.os.tag != .macos) return;
     const window = macos_monitor_window orelse return;
@@ -254,6 +257,11 @@ pub fn install(win: *dvui.Window) void {
     macos_monitor_window = back.window;
     back.begin_hook = macosAppPreBeginSync;
     fizzy_macos_window_install_resize_observer(cocoa);
+    // Draw each step of a live resize from inside it, presented with the Core Animation
+    // transaction that resizes the window, so the new size and the frame drawn for it reach the
+    // screen together (fizzyedit/SDL's live-resize patches, `docs/MACOS_LIVE_RESIZE.md`). By name,
+    // not SDL's #define, so this builds against an SDL without them, which ignores it.
+    _ = c.SDL_SetHint("SDL_VIDEO_MAC_SYNC_LIVE_RESIZE", "1");
 }
 
 /// Called at the end of AppInit: allows the monitor's pump timer to start
