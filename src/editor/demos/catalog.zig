@@ -48,3 +48,17 @@ pub fn tab(s: *Script, rel: []const u8) ![]const u8 {
 
 /// The command palette's text field.
 pub const palette = "fizzy.palette";
+
+/// The rail's Files icon. A click opens the explorer when it is put away, and puts it away when it
+/// is open — on a narrow window, where the explorer is folded rather than closed, too.
+pub const files_icon = "fizzy.rail:" ++ @import("workbench").view_files;
+
+/// Open `rel` the way a person who keeps the explorer put away would: open the explorer from the
+/// rail, click the file, and put the explorer away again so the editor has the room. A demo's
+/// keyframe starts with the explorer put away (`Keyframe.Layout.focused`).
+pub fn openFile(s: *Script, rel: []const u8) !void {
+    try s.click(.{ .tag = files_icon }, .{});
+    try s.click(.{ .tag = try file(s, rel) }, .{});
+    try s.waitFor(try editor(s, rel), .{});
+    try s.click(.{ .tag = files_icon }, .{});
+}

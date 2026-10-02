@@ -5,6 +5,10 @@
 //! whichever the tape has at `now`, the keystroke pill the last key op within a second of it —
 //! so a seek shows exactly what live play showed at that moment, and there is nothing to rewind.
 //!
+//! The cards are the app's floating surface — a menu's, a tooltip's: frosted at the dialog style
+//! (blur, opacity, lift, detail, refraction), cut with its corners, shadowed with its ring, and
+//! opening and closing on its curves (`Reveal`). With the blur off, the plain dialog fill.
+//!
 //! Each part is a subwindow that takes no input (events fall through to the app; the bar is
 //! hit-tested by `Player.frame` from the rects recorded here), raised above every other subwindow
 //! each frame in drawing order, the pointer last — it has to be drawn over the menu it opened and
@@ -16,22 +20,25 @@ const Player = @import("Player.zig");
 const Tape = @import("Tape.zig");
 const Sequencer = @import("Sequencer.zig");
 const chord = @import("../keymap/chord.zig");
+const motion = core.motion;
 
 /// How long a key or command stays in the keystroke pill.
-const keys_ms: f64 = 1400;
-/// How long the bar stays after the real pointer last stirred, while playing, and how long of
-/// that it spends fading.
+const keys_ms: f64 = 2200;
+/// The height of a slot along the bottom: the bar's, the keystroke pill's.
+const slot_h: f32 = 56;
+/// How long the bar stays after the real pointer last stirred, while playing.
 const bar_linger_ns: i128 = 2500 * std.time.ns_per_ms;
-const bar_fade_ns: f64 = 400 * std.time.ns_per_ms;
 
 /// Draw the overlay for `player`. Call once a frame, after everything else in the frame has drawn.
 pub fn draw(player: *Player) void {
     const tape = player.tape() orelse return;
     const win: dvui.Rect = .cast(dvui.windowRect());
 
-    const bar_shown = drawTransport(player, tape, win);
-    const keys_shown = drawKeys(player, win, bar_shown);
-    drawCaption(player, tape, win, bar_shown, keys_shown);
+    // Each card along the bottom takes a slot above the one below it, as much of it as the card
+    // is open, so what sits above slides up as it opens and back down as it closes.
+    const bar = drawTransport(player, tape, win);
+    const keys = drawKeys(player, win, bar);
+    drawCaption(player, tape, win, bar + keys);
     if (player.state == .seeking) drawSeeking(player, win);
     if (player.driving()) {
         const fw = layer(@src(), .{ .rect = win, .name = "DemoPointer" }, .{});
@@ -58,45 +65,136 @@ fn theme() dvui.Theme {
     return dvui.themeGet();
 }
 
-/// A floating card's look: the app's content fill, rounded, lifted off the app by a soft shadow.
-fn cardOptions(radius: f32) dvui.Options {
+// ---- the glass -----------------------------------------------------------------------------
+
+/// A card's corners: a floating surface's (`dialogs.surfaceCorners`), resolved against the theme
+/// up front — the frost is handed them directly, and unresolved it would draw them square.
+fn corners() dvui.CornerRect {
+    const t = theme();
+    return core.dialogs.surfaceCorners().finalize(&t);
+}
+
+/// A card's own options: the space it takes and nothing it paints — `glass` lays the surface
+/// down under what it holds, kept clear of its corners however round they are.
+fn cardOptions(pad: dvui.Rect) dvui.Options {
+    const inset = core.dialogs.cornerInset(corners().tl.radius());
     return .{
-        .background = true,
-        .corners = dvui.CornerRect.all(radius),
-        .color_fill = .{ .color = theme().color(.content, .fill).opacity(0.94) },
-        .border = dvui.Rect.all(1),
-        .color_border = .{ .color = theme().color(.content, .text).opacity(0.12) },
-        .box_shadow = .{
-            .color = .black,
-            .offset = .{ .x = 0, .y = 3 },
-            .fade = 12,
-            .alpha = 0.28,
-            .corners = dvui.CornerRect.all(radius),
-        },
+        .background = false,
+        .border = .all(0),
+        .corners = corners(),
+        .padding = .{ .x = @max(pad.x, inset), .y = @max(pad.y, inset), .w = @max(pad.w, inset), .h = @max(pad.h, inset) },
     };
 }
 
-/// 0 → 1 over `fade` ms after `start`, and back to 0 over the `fade` ms before `stop`.
-fn fadeWindow(t: f64, start: f64, stop: f64, fade: f64) f32 {
-    const in = std.math.clamp((t - start) / fade, 0, 1);
-    const out = std.math.clamp((stop - t) / fade, 0, 1);
-    return @floatCast(@min(in, out));
+/// A floating surface's opening time (`motion.open_us`), in ms at the user's speed.
+fn openMs() f64 {
+    return motion.durationMs(@as(f32, @floatFromInt(motion.open_us)) / 1000);
+}
+/// Its closing time — a window's close flight (`FloatingWindowWidget`) — likewise.
+fn closeMs() f64 {
+    return motion.durationMs(400);
+}
+
+/// How far open a card is: its glass formed (`form`, 0…1) and grown out of its origin (`grow`,
+/// past 1 while it overshoots), and the alpha of what it holds.
+const Reveal = struct {
+    form: f32 = 1,
+    grow: f32 = 1,
+    alpha: f32 = 1,
+
+    const shut: Reveal = .{ .form = 0, .grow = 0, .alpha = 0 };
+
+    /// How much of its place a card this open takes up, 0…1, for what is stacked on it.
+    fn room(self: Reveal) f32 {
+        return std.math.clamp(self.grow, 0, 1);
+    }
+
+    /// `u` (0…1) of the way through opening, as a tooltip or a menu opens: the glass forming and
+    /// what it holds fading in together (`motion.fade`) while it grows into place (`motion.enter`).
+    fn opening(u: f32) Reveal {
+        const f = motion.fade(u);
+        return .{ .form = f, .grow = motion.enter(u), .alpha = f };
+    }
+
+    /// `w` (0…1) of the way through closing, as a window closes: drawn back into its origin on
+    /// the leaving curve (`motion.exit`), the glass unforming with it, what it holds opaque for
+    /// the first half of the way and gone as it arrives.
+    fn closing(w: f32) Reveal {
+        const travelled = motion.exit(w);
+        const gone = std.math.clamp(travelled, 0, 1);
+        const late = std.math.clamp((gone - 0.55) / 0.45, 0, 1);
+        return .{ .form = 1 - gone, .grow = 1 - travelled, .alpha = 1 - late * late };
+    }
+
+    /// A card shown from `start` to `stop` (demo ms), at `t`: open by `start` + the opening time,
+    /// closed by `stop`. A function of demo time, so a seek lands on the same frame of it.
+    fn between(t: f64, start: f64, stop: f64) Reveal {
+        if (t >= stop) return shut;
+        const close = closeMs();
+        if (t > stop - close) return closing(@floatCast((t - (stop - close)) / close));
+        const open = openMs();
+        if (open <= 0) return .{};
+        return opening(@floatCast(std.math.clamp((t - start) / open, 0, 1)));
+    }
+};
+
+/// The surface under a card — `wd` a box that paints nothing of its own (`cardOptions`) — `r` of
+/// the way open, grown out of `origin` (a point in it, as fractions): the frost at the dialog
+/// style and the shadow ring round it, or with the blur off the dialog fill over its shadow.
+/// What the card draws after this is cut to the glass as it grows.
+///
+/// Before the alpha for its contents is set: glass forms rather than fades (`r.form`) — a frost
+/// replaces what it covers, and at partial alpha would punch a hole.
+fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
+    const brs = wd.borderRectScale();
+    const full = brs.r;
+    const s = brs.s;
+    const k = @max(0, r.grow);
+    const o: dvui.Point.Physical = .{ .x = full.x + full.w * origin.x, .y = full.y + full.h * origin.y };
+    const rect: dvui.Rect.Physical = .{
+        .x = o.x + (full.x - o.x) * k,
+        .y = o.y + (full.y - o.y) * k,
+        .w = full.w * k,
+        .h = full.h * k,
+    };
+    const c = corners();
+    const bs = core.dialogs.surfaceShadow();
+    if (core.dialogs.dialogFrost()) |f| {
+        // The ring after the frost, so the glass does not blur it in (`dialogs.glassShadow`).
+        defer core.dialogs.glassShadow(rect, c, s, bs, r.alpha);
+        // Under a couple of pixels of blur there is nothing to see yet.
+        if (f.radius * r.form >= 2) core.widgets.BlurBackdrop.frostPane(wd.id, rect, c, s, .{
+            .radius = f.radius,
+            .refresh_ms = f.refresh_ms,
+            .tint = f.tint,
+            .mix = f.mix,
+            .lift = f.lift,
+            .detail = f.detail,
+            .refraction = f.refraction,
+            .form = r.form,
+        });
+    } else {
+        const pc = c.scale(s, dvui.CornerRect.Physical);
+        const shadow = rect.insetAll(s * bs.shrink).offsetPoint(bs.offset.scale(s, dvui.Point.Physical));
+        shadow.fill(pc, .{ .color = .{ .color = bs.color.opacity(bs.alpha * r.alpha) }, .fade = s * bs.fade });
+        rect.fill(pc, .{ .color = .{ .color = core.dialogs.dialogFill().opacity(r.alpha) } });
+    }
+    dvui.clipSet(dvui.clipGet().intersect(rect));
 }
 
 // ---- captions ------------------------------------------------------------------------------
 
-fn drawCaption(player: *Player, tape: *const Tape, win: dvui.Rect, bar_shown: bool, keys_shown: bool) void {
+/// `below`: how many bottom slots the cards under a bottom caption take (`slot_h` each).
+fn drawCaption(player: *Player, tape: *const Tape, win: dvui.Rect, below: f32) void {
     const now = player.now();
     const c = tape.captionAt(now) orelse return;
-    const a = fadeWindow(now, @floatFromInt(c.at), @floatFromInt(c.at + c.ms), 220);
-    const prev_alpha = dvui.alpha(a);
-    defer dvui.alphaSet(prev_alpha);
+    const shown = Reveal.between(now, @floatFromInt(c.at), @floatFromInt(c.at + c.ms));
 
     const w = @min(620, win.w - 32);
     const from: dvui.Point = switch (c.place) {
         .top => .{ .x = win.w / 2, .y = 28 },
         .middle => .{ .x = win.w / 2, .y = win.h / 2 },
-        .bottom => .{ .x = win.w / 2, .y = win.h - 24 - @as(f32, if (bar_shown) 56 else 0) - @as(f32, if (keys_shown) 56 else 0) },
+        .bottom => .{ .x = win.w / 2, .y = win.h - 24 - below * slot_h },
     };
     const gravity_y: f32 = switch (c.place) {
         .top => 1,
@@ -109,11 +207,14 @@ fn drawCaption(player: *Player, tape: *const Tape, win: dvui.Rect, bar_shown: bo
         .from_gravity_y = gravity_y,
     });
     defer fw.deinit();
-    var card = dvui.box(@src(), .{ .dir = .vertical }, cardOptions(14).override(.{
-        .padding = .{ .x = 18, .y = 12, .w = 18, .h = 14 },
+    var card = dvui.box(@src(), .{ .dir = .vertical }, cardOptions(.{ .x = 18, .y = 12, .w = 18, .h = 14 }).override(.{
         .max_size_content = .{ .w = w - 36, .h = win.h },
     }));
     defer card.deinit();
+    // It opens out of the edge it hangs from, as a menu slides out of its bar.
+    glass(card.data(), .{ .x = 0.5, .y = 1 - gravity_y }, shown);
+    const prev_alpha = dvui.alpha(shown.alpha);
+    defer dvui.alphaSet(prev_alpha);
     if (c.title.len > 0) {
         dvui.labelNoFmt(@src(), c.title, .{}, .{
             .font = dvui.Font.theme(.heading),
@@ -147,32 +248,33 @@ fn keycapsStroke(s: chord.Stroke) core.keycaps.Stroke {
     return .{ .first = one(s.first), .second = if (s.second) |c| one(c) else null };
 }
 
-/// The pill naming the key or command just pressed. Returns whether it drew.
-fn drawKeys(player: *Player, win: dvui.Rect, bar_shown: bool) bool {
-    if (player.state == .seeking) return false;
-    const op = player.recentKeys(keys_ms) orelse return false;
+/// The pill naming the key or command just pressed, above `below` slots. Returns how much of its
+/// slot it takes (`Reveal.room`).
+fn drawKeys(player: *Player, win: dvui.Rect, below: f32) f32 {
+    if (player.state == .seeking) return 0;
+    const keys = player.recentKeys(keys_ms) orelse return 0;
+    const op = keys.op;
     const platform: chord.Platform = if (core.platform.isMacOS()) .mac else .other;
     const stroke: ?chord.Stroke, const title: ?[]const u8 = switch (op.do) {
         .key => |k| .{ chord.parseKeys(k, platform) catch null, null },
         .command => |id| .{ player.stage.chordFor(id), player.stage.commandTitle(id) },
         else => unreachable,
     };
-    if (stroke == null and title == null) return false;
+    if (stroke == null and title == null) return 0;
 
-    const at: f64 = @floatFromInt(op.at);
-    const prev_alpha = dvui.alpha(fadeWindow(player.seq.now, at, at + keys_ms, 160));
-    defer dvui.alphaSet(prev_alpha);
+    const shown = Reveal.between(player.seq.now, keys.since, @as(f64, @floatFromInt(op.at)) + keys_ms);
 
     const fw = layer(@src(), .{}, .{
-        .from = dvui.windowRectScale().pointToPhysical(.{ .x = win.w / 2, .y = win.h - 24 - @as(f32, if (bar_shown) 56 else 0) }),
+        .from = dvui.windowRectScale().pointToPhysical(.{ .x = win.w / 2, .y = win.h - 24 - below * slot_h }),
         .from_gravity_x = 0.5,
         .from_gravity_y = 0,
     });
     defer fw.deinit();
-    var pill = dvui.box(@src(), .{ .dir = .horizontal }, cardOptions(1000).override(.{
-        .padding = .{ .x = 14, .y = 7, .w = 14, .h = 7 },
-    }));
+    var pill = dvui.box(@src(), .{ .dir = .horizontal }, cardOptions(.{ .x = 14, .y = 7, .w = 14, .h = 7 }));
     defer pill.deinit();
+    glass(pill.data(), .{ .x = 0.5, .y = 1 }, shown);
+    const prev_alpha = dvui.alpha(shown.alpha);
+    defer dvui.alphaSet(prev_alpha);
     if (stroke) |s| {
         core.keycaps.draw(@src(), keycapsStroke(s), .{
             .style = .caps,
@@ -188,39 +290,37 @@ fn drawKeys(player: *Player, win: dvui.Rect, bar_shown: bool) bool {
             .color_text = .{ .color = theme().color(.content, .text) },
         });
     }
-    return true;
+    return shown.room();
 }
 
 // ---- the transport bar ---------------------------------------------------------------------
 
-/// The bar: chapter back, play/pause, chapter forward, time, the scrubber, close. Returns whether
-/// it drew. Records its parts' rects on `player.transport` for `Player.frame` to hit-test.
-fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) bool {
+/// The bar: chapter back, play/pause, chapter forward, time, the scrubber, close. Returns how much
+/// of its slot it takes (`Reveal.room`). Records its parts' rects on `player.transport` for
+/// `Player.frame` to hit-test.
+fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     const tr = &player.transport;
-    // Playing, the bar fades out of the demo's way unless someone reaches for it; it is still
-    // laid out while hidden, so it comes back at its size rather than settling into it. (A playing
+    // Playing, the bar closes out of the demo's way unless someone reaches for it; it is still
+    // laid out while closed, so it opens at its size rather than settling into it. (A playing
     // player asks for every frame, so the linger runs out without a timer of its own.)
     const since_stirred: i128 = if (tr.stirred_ns) |ns| dvui.frameTimeNS() - ns else std.math.maxInt(i64);
-    const shown: f32 = if (player.state != .playing or tr.scrub != null) 1 else @floatCast(std.math.clamp(
-        @as(f64, @floatFromInt(bar_linger_ns - since_stirred)) / @as(f64, bar_fade_ns),
-        0,
-        1,
-    ));
-    const prev_alpha = dvui.alpha(shown);
-    defer dvui.alphaSet(prev_alpha);
+    const shown = barReveal(tr, player.state != .playing or tr.scrub != null or since_stirred < bar_linger_ns);
 
     const w = @min(640, win.w - 24);
     const h: f32 = 44;
     const rect: dvui.Rect = .{ .x = (win.w - w) / 2, .y = win.h - h - 12, .w = w, .h = h };
     const fw = layer(@src(), .{ .rect = rect, .name = "DemoTransport" }, .{});
     defer fw.deinit();
-    var bar = dvui.box(@src(), .{ .dir = .horizontal }, cardOptions(1000).override(.{
+    var bar = dvui.box(@src(), .{ .dir = .horizontal }, cardOptions(.{ .x = 10, .y = 6, .w = 12, .h = 6 }).override(.{
         .expand = .both,
-        .padding = .{ .x = 10, .y = 6, .w = 12, .h = 6 },
     }));
     defer bar.deinit();
-    // Only a bar that can be seen takes clicks.
-    tr.bar = if (shown > 0.05) bar.data().rectScale().r else null;
+    glass(bar.data(), .{ .x = 0.5, .y = 1 }, shown);
+    const prev_alpha = dvui.alpha(shown.alpha);
+    defer dvui.alphaSet(prev_alpha);
+    // Only a bar that can be seen, or is coming, takes clicks: one reached for opens on this
+    // frame's stir, and the press that follows it at once is the bar's, not the app's.
+    tr.bar = if (tr.wanted or shown.alpha > 0.05) bar.data().rectScale().r else null;
 
     const ink = theme().color(.content, .text);
     tr.prev = glyphButton(@src(), .prev, ink.opacity(0.75), 26);
@@ -261,7 +361,30 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) bool {
     }
 
     tr.close = glyphButton(@src(), .close, ink.opacity(0.6), 24);
-    return shown > 0;
+    return shown.room();
+}
+
+/// The bar opening when `want` turns true and closing when it turns false, on a floating
+/// surface's clocks, kept on `tr` from frame to frame. Wall time: it answers the viewer's
+/// pointer, not the demo.
+fn barReveal(tr: *Player.Transport, want: bool) Reveal {
+    const now_ns = dvui.frameTimeNS();
+    if (tr.since_ns == null or want != tr.wanted) {
+        // Turned round part way: carry on from as open as it is — along each curve's straight
+        // stretch, to the arrival — rather than from shut or from open.
+        const was: f64 = if (tr.since_ns == null) 0 else tr.openness;
+        const back_ms: f64 = motion.arrival * if (want) was * openMs() else (1 - was) * closeMs();
+        tr.wanted = want;
+        tr.since_ns = now_ns - @as(i128, @intFromFloat(back_ms * std.time.ns_per_ms));
+    }
+    const span = if (want) openMs() else closeMs();
+    const ms = @as(f64, @floatFromInt(now_ns - tr.since_ns.?)) / std.time.ns_per_ms;
+    const u: f32 = if (span <= 0) 1 else @floatCast(std.math.clamp(ms / span, 0, 1));
+    const r = if (want) Reveal.opening(u) else Reveal.closing(u);
+    tr.openness = r.form;
+    // A paused player asks for no frames of its own.
+    if (u < 1) dvui.refresh(null, @src(), null);
+    return r;
 }
 
 fn minutes(ms: f64) u32 {
@@ -369,10 +492,10 @@ fn drawSeeking(player: *Player, win: dvui.Rect) void {
         .from_gravity_y = 1,
     });
     defer fw.deinit();
-    var pill = dvui.box(@src(), .{ .dir = .vertical }, cardOptions(12).override(.{
-        .padding = .{ .x = 14, .y = 7, .w = 14, .h = 9 },
-    }));
+    var pill = dvui.box(@src(), .{ .dir = .vertical }, cardOptions(.{ .x = 14, .y = 7, .w = 14, .h = 9 }));
     defer pill.deinit();
+    // A seek runs with motion off, so there is no opening to play.
+    glass(pill.data(), .{ .x = 0.5, .y = 0 }, .{});
     dvui.labelNoFmt(@src(), "Catching up\u{2026}", .{}, .{ .color_text = .{ .color = theme().color(.content, .text) } });
     const wd = dvui.spacer(@src(), .{ .expand = .horizontal, .min_size_content = .{ .w = 120, .h = 3 } });
     const r = wd.rectScale().r;
@@ -386,7 +509,7 @@ fn drawSeeking(player: *Player, win: dvui.Rect) void {
 
 /// The classic arrow, tip at the origin, in natural pixels.
 const arrow = [_][2]f32{
-    .{ 0, 0 },     .{ 0, 17 },     .{ 4.2, 13.2 }, .{ 7.2, 19.8 },
+    .{ 0, 0 },     .{ 0, 17 },     .{ 4.2, 13.2 },  .{ 7.2, 19.8 },
     .{ 10, 18.6 }, .{ 7.1, 12.2 }, .{ 12.6, 12.2 },
 };
 

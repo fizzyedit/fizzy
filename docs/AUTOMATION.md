@@ -75,7 +75,9 @@ each frame). dvui keeps tags on the shared window, so a plugin dylib's anchors a
 **The overlay is a function of time.** The synthetic pointer and its click ripple, the keystroke
 pill (the key or command just pressed, with its chord from the user's own keymap), captions and
 chapters are all read from the tape at the current moment, so a seek shows exactly what live play
-did.
+did. Its cards are the app's floating surface — frosted at the dialog style (blur, opacity, lift,
+detail, refraction), with its corners and shadow — and open and close on a menu's curves at the
+user's motion settings, timed in demo time.
 
 ## Anchors fizzy publishes
 
@@ -86,6 +88,7 @@ did.
 | `text.editor:<abs path>` | a text document's editor |
 | `text.preview.raw:<abs path>`, `.split:`, `.preview:` | the markdown Raw / Split / Preview pill |
 | `fizzy.palette` | the command palette's text field |
+| `fizzy.rail:<view id>` | a sidebar rail icon (`fizzy.rail:workbench.files` is the explorer's; `catalog.files_icon`) |
 | `fizzy.palette.row:<command id or abs path>` | a palette row |
 | `fizzy.menu:<title>` | a menu-bar menu (the in-app bar; macOS uses the native one) |
 | `fizzy.command:<command id>` | a menu row that runs a command |
@@ -115,8 +118,10 @@ pub fn build(s: *Script) !void {
     });
     try s.chapter("Editing");
     try s.caption("Brackets close themselves.", .{});
+    try s.click(.{ .tag = catalog.files_icon }, .{});                    // the explorer, from the rail
     try s.click(.{ .tag = try catalog.file(s, "src") }, .{});            // waits for the row
     try s.click(.{ .tag = try catalog.file(s, "src/main.zig") }, .{});
+    try s.click(.{ .tag = catalog.files_icon }, .{});                    // and away again
     try s.click(.{ .tag = try catalog.editor(s, "src/main.zig"), .x = 0.85, .y = 0.92 }, .{});
     try s.typeText("\npub fn greet() void {\nreturn;", .{});
     try s.command("fizzy.commandPalette");                               // pill shows its chord
@@ -126,9 +131,14 @@ pub fn build(s: *Script) !void {
 }
 ```
 
-`Script` keeps a pen (`s.t`) and moves it at a person's pace (`Script.Pace`: a 600 ms glide, a
-hover before the press, a beat after each action, 16 characters a second). `pause`, `caption(..,
-.{ .hold = true })` and every option's `ms` adjust it.
+`Script` keeps a pen (`s.t`) and moves it at an unhurried person's pace (`Script.Pace`: an 800 ms
+glide, a hover before the press, a beat after each action, 12 characters a second). `pause`,
+`caption(.., .{ .hold = true })` and every option's `ms` adjust it. A caption shows for as long as
+it takes to read (`Script.readingMs`) unless given `ms`, and the next caption takes over from it.
+
+A keyframe starts with the explorer put away (`.layout = .focused`), so the editor has the room;
+a demo opens it from the rail when it is about to use it and puts it away after —
+`catalog.openFile(s, "README.md")` does all three.
 
 Things that bite:
 
@@ -157,22 +167,22 @@ builds is what `Tape.write` emits, what `Tape.parse` reads, and what a recorder 
         .root = "demo://hello",
         .files = .{ .{ .path = "hello.md", .text = "# Hello\n" } },
         .open = .{"hello.md"},       // the last one is active
-        .layout = .focused,          // .keep | .reset | .focused (default; fizzy: no bottom panel)
+        .layout = .focused,          // .keep | .reset | .focused (default; fizzy: no panel, explorer away)
         .settings = .{ .{ .owner = "markdown", .key = "default_md_view", .value = ".split" } },
     } },
     .chapters = .{ .{ .at = 0, .title = "Hello" } },
-    .captions = .{ .{ .at = 300, .ms = 3600, .title = "Hi", .text = "…", .place = .middle } },
+    .captions = .{ .{ .at = 300, .ms = 5200, .title = "Hi", .text = "…", .place = .middle } },
     .ops = .{                        // ordered by .at; the first is a keyframe at 0
         .{ .at = 0, .do = .{ .keyframe = 0 } },
         .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } },
         .{ .at = 0, .do = .{ .wait = .{ .until = .{ .shown = "text.editor:demo://hello/hello.md" }, .timeout = 10000 } } },
-        .{ .at = 3000, .ms = 700, .do = .{ .move = .{ .tag = "text.editor:demo://hello/hello.md", .x = 0.85, .y = 0.94 } } },
-        .{ .at = 3800, .do = .{ .press = .left } },     // .left | .right | .middle
-        .{ .at = 3890, .do = .{ .release = .left } },
-        .{ .at = 4200, .ms = 2600, .do = .{ .type = "\n- written by a tape\n" } },
-        .{ .at = 7400, .do = .{ .key = "mod+a" } },     // the keymap's spelling; mod is ⌘ or Ctrl
-        .{ .at = 8000, .do = .{ .command = "fizzy.toggleExplorer" } },
-        .{ .at = 8500, .do = .{ .scroll = .{ .y = -3 } } },
+        .{ .at = 4400, .ms = 900, .do = .{ .move = .{ .tag = "text.editor:demo://hello/hello.md", .x = 0.85, .y = 0.94 } } },
+        .{ .at = 5460, .do = .{ .press = .left } },     // .left | .right | .middle
+        .{ .at = 5570, .do = .{ .release = .left } },
+        .{ .at = 6000, .ms = 3600, .do = .{ .type = "\n- written by a tape\n" } },
+        .{ .at = 10400, .do = .{ .key = "mod+a" } },    // the keymap's spelling; mod is ⌘ or Ctrl
+        .{ .at = 11000, .do = .{ .command = "fizzy.toggleExplorer" } },
+        .{ .at = 11500, .do = .{ .scroll = .{ .y = -3 } } },
     },
 }
 ```

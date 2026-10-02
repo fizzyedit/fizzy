@@ -86,6 +86,11 @@ pub const Transport = struct {
     /// When the real pointer last moved over the app (ns, frame time): the bar shows for a while
     /// after, then gets out of the demo's way.
     stirred_ns: ?i128 = null,
+    /// The bar opening (`wanted`) or closing, since `since_ns` (frame time), and how open it was
+    /// last frame — kept by the overlay, which opens and closes it as a floating surface does.
+    wanted: bool = false,
+    since_ns: ?i128 = null,
+    openness: f32 = 0,
 
     /// The demo time under physical x on the track.
     pub fn timeAt(self: Transport, x: f32, total_ms: u32) f64 {
@@ -497,21 +502,37 @@ fn timedOut(ctx: *anyopaque, until: Tape.Until) void {
     }
 }
 
+/// What the keystroke display shows at the current moment (`recentKeys`).
+pub const Keys = struct {
+    /// The latest key or command applied.
+    op: Tape.Op,
+    /// When the display came up for it: the first of a run of keys each pressed while the one
+    /// before was still showing, so a run keeps one display open rather than reopening it per key.
+    since: f64,
+};
+
 /// The key or command the keystroke display shows at the current moment: the latest one applied
 /// in the last `window_ms`. Derived from the tape and the time, so a seek shows the right one.
-pub fn recentKeys(self: *const Player, window_ms: f64) ?Tape.Op {
+pub fn recentKeys(self: *const Player, window_ms: f64) ?Keys {
     const t = self.tape() orelse return null;
     const at = self.seq.now;
+    var shown: ?Keys = null;
     var i = @min(self.seq.cursor, t.ops.len);
     while (i > 0) {
         i -= 1;
         const op = t.ops[i];
-        if (@as(f64, @floatFromInt(op.at)) < at - window_ms) return null;
+        const op_at: f64 = @floatFromInt(op.at);
+        // Past the latest key's window, or past the gap before the run's first.
+        if (op_at < (if (shown) |k| k.since else at) - window_ms) break;
         switch (op.do) {
-            .key, .command => return op,
-            .keyframe => return null,
+            .key, .command => if (shown) |*k| {
+                k.since = op_at;
+            } else {
+                shown = .{ .op = op, .since = op_at };
+            },
+            .keyframe => break,
             else => {},
         }
     }
-    return null;
+    return shown;
 }

@@ -157,7 +157,8 @@ pub const Keyframe = struct {
         /// The app's default.
         reset,
         /// The app's default with only what the work needs showing, so the eye goes to the
-        /// demo rather than the chrome (fizzy: no bottom panel).
+        /// demo rather than the chrome (fizzy: the documents — no bottom panel, the explorer put
+        /// away until the demo opens it).
         focused,
     };
 };

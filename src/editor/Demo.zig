@@ -3,8 +3,12 @@
 //! The player delivers a tape's input; this decides what fizzy's state *is* to a demo. A keyframe
 //! closes every document without saving, mounts the keyframe's files in memory at its root
 //! (`demo://<name>`, a `core.vfs.Mem`, so nothing touches disk and every replay starts from the
-//! same bytes), makes that the project folder with the explorer showing, resets the layout, and
+//! same bytes), makes that the project folder on the explorer's Files view, resets the layout, and
 //! opens the files the keyframe names. Seeking back is that, then a replay.
+//!
+//! A `focused` keyframe (the default) leaves only the documents showing — no bottom panel, the
+//! explorer put away — and a demo opens the explorer from the rail when it is about to use it and
+//! puts it away after (`catalog.openFile`), as a person short of room would.
 //!
 //! A demo plays inside the user's own copy of fizzy, so it must not cost them anything: `begin`
 //! sets their session aside (project folder, open documents) and flushes any pending layout and
@@ -159,13 +163,19 @@ pub fn frame(self: *Demo) void {
     }
     if (self.arrange) |layout| {
         self.arrange = null;
-        // The explorer open on its Files view, even on a window narrow enough to fold it away —
-        // the demo's folder is what it came to show, and its rows are what it clicks.
-        self.editor.explorer.open(self.editor);
-        if (layout == .focused) {
-            if (self.editor.regionFor(sdk.keywords.ide.panel)) |panel| {
-                if (!panel.isClosed()) panel.close();
-            }
+        switch (layout) {
+            .keep => {},
+            // The app's default: the explorer open on the demo's folder, even on a window narrow
+            // enough to fold it away.
+            .reset => self.editor.explorer.open(self.editor),
+            // The documents and nothing else: the room is the editor's until the demo asks for
+            // the explorer from the rail.
+            .focused => {
+                self.editor.explorer.close(self.editor);
+                if (self.editor.regionFor(sdk.keywords.ide.panel)) |panel| {
+                    if (!panel.isClosed()) panel.close();
+                }
+            },
         }
     }
     self.player.frame();

@@ -39,15 +39,15 @@ root: []const u8 = "",
 /// How a person moves, by default. Every call can override its own.
 pub const Pace = struct {
     /// The pointer crossing to a target.
-    move_ms: u32 = 600,
+    move_ms: u32 = 800,
     /// Hovering on the target before pressing — long enough for hover feedback to show.
-    hover_ms: u32 = 120,
+    hover_ms: u32 = 160,
     /// Between press and release.
-    click_ms: u32 = 90,
+    click_ms: u32 = 110,
     /// After an action, before the next: the viewer sees what happened.
-    beat_ms: u32 = 450,
+    beat_ms: u32 = 650,
     /// Typing speed, characters a second.
-    cps: f32 = 16,
+    cps: f32 = 12,
 };
 
 pub fn init(gpa: std.mem.Allocator, name: []const u8, title: []const u8) Script {
@@ -123,6 +123,12 @@ pub const CaptionOptions = struct {
 /// Words over the app, starting now.
 pub fn caption(self: *Script, text: []const u8, opts: CaptionOptions) !void {
     const ms = opts.ms orelse readingMs(opts.title.len + text.len);
+    // A caption takes over from the one before: that one is cut to end here, so it closes as this
+    // one opens rather than vanishing under it.
+    if (self.captions.items.len > 0) {
+        const last = &self.captions.items[self.captions.items.len - 1];
+        if (last.at + last.ms > self.t) last.ms = self.t - last.at;
+    }
     try self.captions.append(self.arena.allocator(), .{
         .at = self.t,
         .ms = ms,
@@ -133,9 +139,10 @@ pub fn caption(self: *Script, text: []const u8, opts: CaptionOptions) !void {
     if (opts.hold) self.t += ms;
 }
 
-/// About a reading pace with time to look at the app as well, never shorter than a glance.
-fn readingMs(chars: usize) u32 {
-    return std.math.clamp(@as(u32, @intCast(chars)) * 55 + 1200, 2200, 9000);
+/// Long enough to read at an unhurried pace and still look at the app, never shorter than a
+/// glance: about fourteen characters a second, after a couple of seconds to find it.
+pub fn readingMs(chars: usize) u32 {
+    return std.math.clamp(@as(u32, @intCast(chars)) * 70 + 1800, 3200, 12_000);
 }
 
 /// Nothing for a while.
@@ -281,14 +288,15 @@ test "a script paces a person's actions and waits for what it aims at" {
     const move = tape.ops[3];
     const press = tape.ops[4];
     const release = tape.ops[5];
-    try testing.expectEqual(@as(u32, 600), move.ms);
-    try testing.expectEqual(move.end() + 120, press.at);
+    const pace: Pace = .{};
+    try testing.expectEqual(pace.move_ms, move.ms);
+    try testing.expectEqual(move.end() + pace.hover_ms, press.at);
     try testing.expect(release.at > press.at);
 
     const typed = tape.ops[6];
     try testing.expectEqual(@as(u32, 500), typed.ms);
     try testing.expect(typed.at > release.at);
-    try testing.expectEqual(typed.end() + 450, tape.ops[7].at);
+    try testing.expectEqual(typed.end() + pace.beat_ms, tape.ops[7].at);
     try testing.expectEqualStrings("mod+s", tape.ops[7].do.key);
 }
 
@@ -301,9 +309,24 @@ test "a caption can hold the next action until it has been read" {
     try s.command("x.z");
     var owned = try s.finish();
     defer owned.deinit();
+    const beat = (Pace{}).beat_ms;
     try testing.expectEqual(@as(u32, 3000), owned.tape.ops[2].at);
-    try testing.expectEqual(@as(u32, 3450), owned.tape.ops[3].at);
-    try testing.expectEqual(@as(u32, 6450), owned.tape.duration());
+    try testing.expectEqual(3000 + beat, owned.tape.ops[3].at);
+    try testing.expectEqual(3000 + beat + 3000, owned.tape.duration());
+}
+
+test "a caption takes over from the one before" {
+    var s: Script = .init(testing.allocator, "t", "");
+    try s.keyframe(.{ .root = "demo://t" });
+    try s.caption("First.", .{ .ms = 5000 });
+    s.pause(2000);
+    try s.caption("Second.", .{ .ms = 5000 });
+    var owned = try s.finish();
+    defer owned.deinit();
+    const c = owned.tape.captions;
+    try testing.expectEqual(c[1].at, c[0].at + c[0].ms);
+    try testing.expectEqual(@as(u32, 2000), c[0].ms);
+    try testing.expectEqualStrings("Second.", owned.tape.captionAt(2500).?.text);
 }
 
 test "a mistyped chord is caught when the script is written" {
