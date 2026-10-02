@@ -47,7 +47,7 @@ pub fn build(s: *Script) !void {
             .{ .owner = "markdown", .key = "default_md_view", .value = ".split" },
         },
     });
-    s.caption_on = catalog.documents;
+    s.home = catalog.documents;
 
     try s.chapter("Welcome");
     try s.caption("This is fizzy itself, driving its own controls. Click, scroll or press a key at any time to take over; press play to carry on.", .{

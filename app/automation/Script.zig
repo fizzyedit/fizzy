@@ -35,9 +35,9 @@ t: u32 = 0,
 pace: Pace = .{},
 /// The latest keyframe's root, for building the names of things under it.
 root: []const u8 = "",
-/// The view captions are about unless they say otherwise (`CaptionOptions.on`), by anchor: an
-/// app's documents, say, so its captions sit over the work rather than at the window's foot.
-caption_on: []const u8 = "",
+/// Where the demo's popups gather when they are about no one thing (`Tape.home`), by anchor: an
+/// app's documents, say, so they sit over the work rather than at the window's foot.
+home: []const u8 = "",
 
 /// How a person moves, by default. Every call can override its own.
 pub const Pace = struct {
@@ -65,16 +65,44 @@ pub fn deinit(self: *Script) void {
 /// The finished tape, validated. The script is spent: its memory now belongs to the result.
 pub fn finish(self: *Script) !Tape.Owned {
     const a = self.arena.allocator();
-    const tape: Tape = .{
+    var tape: Tape = .{
         .name = try a.dupe(u8, self.name),
         .title = try a.dupe(u8, self.title),
         .ops = self.ops.items,
         .captions = self.captions.items,
         .chapters = self.chapters.items,
         .keyframes = self.keyframes.items,
+        .home = try a.dupe(u8, self.home),
     };
+    handOver(&tape, self.captions.items);
     try tape.validate();
     return .{ .arena = self.arena, .tape = tape };
+}
+
+/// Where captions end because another has begun. Popups at home stack, so a caption there lasts
+/// its own time while those after it push it up. Any other begins alone: a callout or a title
+/// card ends every caption still showing, and a caption at home ends a callout — each closes as
+/// the next opens, rather than lingering beside an action that has moved on or competing with
+/// the words that have taken over. Which a caption is goes by what happens up to the next one
+/// (`Tape.besideAction` over that span), settled before any is cut short.
+fn handOver(tape: *const Tape, captions: []Tape.Caption) void {
+    const Stacks = struct {
+        fn at(t: *const Tape, caps: []const Tape.Caption, i: usize) bool {
+            const c = caps[i];
+            const until = if (i + 1 < caps.len) caps[i + 1].at else std.math.maxInt(u32);
+            return c.place == .stack and c.near.len == 0 and !t.movesBetween(c.at, until);
+        }
+    };
+    if (captions.len < 2) return;
+    for (1..captions.len) |j| {
+        const begins = captions[j].at;
+        const j_stacks = Stacks.at(tape, captions, j);
+        for (captions[0..j], 0..) |*c, i| {
+            if (c.at + c.ms <= begins) continue;
+            if (j_stacks and Stacks.at(tape, captions, i)) continue;
+            c.ms = begins - c.at;
+        }
+    }
 }
 
 /// Format a string that lives as long as the tape — a tag name built from `root`, say.
@@ -124,9 +152,7 @@ pub const CaptionOptions = struct {
     title: []const u8 = "",
     /// How long it shows. Null: long enough to read.
     ms: ?u32 = null,
-    place: Tape.Caption.Place = .bottom,
-    /// The view it is about, by anchor. Null: `caption_on`.
-    on: ?[]const u8 = null,
+    place: Tape.Caption.Place = .stack,
     /// What it sits beside, by anchor. Empty: what the pointer is aimed at while it shows.
     near: []const u8 = "",
     /// What else it must not cover, by anchor: what the viewer is meant to be watching.
@@ -138,19 +164,12 @@ pub const CaptionOptions = struct {
 /// Words over the app, starting now.
 pub fn caption(self: *Script, text: []const u8, opts: CaptionOptions) !void {
     const ms = opts.ms orelse readingMs(opts.title.len + text.len);
-    // A caption takes over from the one before: that one is cut to end here, so it closes as this
-    // one opens rather than vanishing under it.
-    if (self.captions.items.len > 0) {
-        const last = &self.captions.items[self.captions.items.len - 1];
-        if (last.at + last.ms > self.t) last.ms = self.t - last.at;
-    }
     try self.captions.append(self.arena.allocator(), .{
         .at = self.t,
         .ms = ms,
         .title = try self.dupe(opts.title),
         .text = try self.dupe(text),
         .place = opts.place,
-        .on = try self.dupe(opts.on orelse self.caption_on),
         .near = try self.dupe(opts.near),
         .clear = try self.dupeAll(opts.clear),
     });
@@ -333,18 +352,24 @@ test "a caption can hold the next action until it has been read" {
     try testing.expectEqual(3000 + beat + 3000, owned.tape.duration());
 }
 
-test "a caption takes over from the one before" {
+test "captions at home stack; one before a callout ends as the callout begins" {
     var s: Script = .init(testing.allocator, "t", "");
     try s.keyframe(.{ .root = "demo://t" });
     try s.caption("First.", .{ .ms = 5000 });
     s.pause(2000);
     try s.caption("Second.", .{ .ms = 5000 });
+    s.pause(1000);
+    try s.caption("Third, beside a click.", .{ .ms = 5000 });
+    try s.click(.{ .tag = "button" }, .{});
     var owned = try s.finish();
     defer owned.deinit();
     const c = owned.tape.captions;
-    try testing.expectEqual(c[1].at, c[0].at + c[0].ms);
-    try testing.expectEqual(@as(u32, 2000), c[0].ms);
-    try testing.expectEqualStrings("Second.", owned.tape.captionAt(2500).?.text);
+    // Neither of the first two narrates the pointer: the second stacks with the first, which goes
+    // on showing.
+    try testing.expect(c[0].shownAt(2500) and c[1].shownAt(2500));
+    // The third is a callout: both end where it begins.
+    try testing.expectEqual(c[2].at, c[0].at + c[0].ms);
+    try testing.expectEqual(c[2].at, c[1].at + c[1].ms);
 }
 
 test "a mistyped chord is caught when the script is written" {

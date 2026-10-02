@@ -68,8 +68,8 @@ pub fn tab(s: *Script, rel: []const u8) ![]const u8 {
     return s.print("workbench.tab:{s}/{s}", .{ s.root, rel });
 }
 
-/// The documents' place: where the work is, and so where a caption about it sits
-/// (`Script.caption_on`).
+/// The documents' place: where the work is, and so where a demo's popups gather when they are
+/// about no one thing (`Script.home`).
 pub const documents = "region:Main";
 
 /// The command palette's text field.

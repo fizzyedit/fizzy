@@ -41,6 +41,10 @@ captions: []const Caption = &.{},
 chapters: []const Chapter = &.{},
 /// The states `keyframe` ops cut to, by index.
 keyframes: []const Keyframe = &.{},
+/// Where the demo's popups gather when they are about no one thing — the keys it presses, and
+/// captions with no pointer action to sit beside: an anchor (an app's documents, say). They stack
+/// there, the newest lowest, the older pushed up until each fades. Empty: the window.
+home: []const u8 = "",
 
 pub const Op = struct {
     /// When it starts, in ms of demo time.
@@ -122,22 +126,23 @@ pub const Caption = struct {
     /// A heading over `text`. Optional.
     title: []const u8 = "",
     text: []const u8,
-    /// How far down the view it sits: a quarter, half or three quarters of the way.
-    place: Place = .bottom,
-    /// The view it is about, by anchor — what it sits over, so it is near the action however
-    /// large the window. Empty: the window. Where it goes when there is nothing to sit beside
-    /// (`near`).
-    on: []const u8 = "",
+    place: Place = .stack,
     /// What it sits beside, by anchor: the thing the action it narrates is done to, where the
     /// viewer is looking. Empty: whatever the tape's pointer is aimed at while it shows
-    /// (`aimedAt`); with no pointer action in its time either, it sits over `on`.
+    /// (`aimedAt`).
     near: []const u8 = "",
     /// What it must not cover, by anchor, besides what it sits beside, the pointer and what the
     /// pointer is aimed at in its time: whatever else the viewer is meant to be watching — the
     /// text being typed, a preview redrawing as it is.
     clear: []const []const u8 = &.{},
 
-    pub const Place = enum { top, middle, bottom };
+    pub const Place = enum {
+        /// Beside the action when it narrates one (`Tape.besideAction`); otherwise stacked with
+        /// the demo's other popups at its `home`.
+        stack,
+        /// A title card in the middle of the home view, for a demo's opening and its close.
+        middle,
+    };
 
     pub fn shownAt(self: Caption, t: f64) bool {
         return t >= @as(f64, @floatFromInt(self.at)) and t < @as(f64, @floatFromInt(self.at + self.ms));
@@ -232,6 +237,52 @@ pub fn captionAt(self: Tape, t: f64) ?Caption {
     return found;
 }
 
+/// Whether `c` is a callout beside what the pointer does — it names something to sit beside, or
+/// the pointer moves while it shows — rather than a title card or one of the popups at `home`.
+pub fn besideAction(self: Tape, c: Caption) bool {
+    if (c.place == .middle) return false;
+    if (c.near.len > 0) return true;
+    return self.movesBetween(c.at, c.at + c.ms);
+}
+
+/// Whether the pointer moves in `[start, stop)` of demo time.
+pub fn movesBetween(self: Tape, start: u32, stop: u32) bool {
+    for (self.ops) |op| {
+        if (op.at < start) continue;
+        if (op.at >= stop) break;
+        if (op.do == .move) return true;
+    }
+    return false;
+}
+
+/// The keys and commands the demo shows having pressed at `t`, with the first `applied` ops
+/// applied: each one applied in the last `window_ms`, oldest first, as indices into `ops`, as
+/// many as fit in `out`. Since the last keyframe only — a cut is a fresh start.
+pub fn keysAt(self: Tape, applied: usize, t: f64, window_ms: f64, out: []usize) []usize {
+    var first = @min(applied, self.ops.len);
+    while (first > 0) {
+        const op = self.ops[first - 1];
+        if (op.do == .keyframe or @as(f64, @floatFromInt(op.at)) <= t - window_ms) break;
+        first -= 1;
+    }
+    var n: usize = 0;
+    for (self.ops[first..@min(applied, self.ops.len)], first..) |op, i| {
+        switch (op.do) {
+            .key, .command => {},
+            else => continue,
+        }
+        // Keep the newest: drop the oldest when there are more than fit.
+        if (n == out.len) {
+            if (n == 0) break;
+            std.mem.copyForwards(usize, out[0 .. n - 1], out[1..n]);
+            n -= 1;
+        }
+        out[n] = i;
+        n += 1;
+    }
+    return out[0..n];
+}
+
 /// Where the tape's pointer is aimed while `c` shows, with the first `applied` ops applied: the
 /// target of the latest move in its time, or before there is one, of the first move to come in
 /// its time. Null when the pointer does not move in its time.
@@ -252,10 +303,12 @@ pub fn aimedAt(self: Tape, c: Caption, applied: usize) ?Target {
     return latest;
 }
 
-/// How much of the tape's pointer shows at `t`, 0…1, with the first `applied` ops applied: it
-/// goes the way a desktop's pointer does while someone types — away when the keyboard is used (a
-/// `type`, `key` or `command`), back when the pointer next moves, presses or scrolls — fading
-/// over `fade_ms` each way. Read from the ops and the time, so a seek shows what live play did.
+/// How much of the tape's pointer shows at `t`, 0…1, with the first `applied` ops applied: none
+/// until the pointer is first used after a keyframe — a demo opens on the app, not on a pointer
+/// parked in the middle of it — and then it goes the way a desktop's pointer does while someone
+/// types: away when the keyboard is used (a `type`, `key` or `command`), back when the pointer
+/// next moves, presses or scrolls. It fades over `fade_ms` each way. Read from the ops and the
+/// time, so a seek shows what live play did.
 pub fn pointerShown(self: Tape, applied: usize, t: f64, fade_ms: f64) f32 {
     const Kind = enum { pointer, keyboard };
     const fade = struct {
@@ -273,7 +326,7 @@ pub fn pointerShown(self: Tape, applied: usize, t: f64, fade_ms: f64) f32 {
         const kind: Kind = switch (op.do) {
             .type, .key, .command => .keyboard,
             .move, .press, .release, .scroll => .pointer,
-            // A keyframe is a fresh start, the pointer showing.
+            // A keyframe is a fresh start.
             .keyframe => break,
             .wait => continue,
         };
@@ -290,8 +343,9 @@ pub fn pointerShown(self: Tape, applied: usize, t: f64, fade_ms: f64) f32 {
             },
         }
     }
-    if (typed_at) |k| return 1 - fade(t, k, fade_ms);
-    return 1;
+    // Back to the cut: the pointer's first use since comes in; before it, there is none.
+    if (moved_at) |m| return fade(t, m, fade_ms);
+    return 0;
 }
 
 pub const Error = error{
@@ -370,9 +424,9 @@ fn sample() Tape {
             .{ .at = 1200, .ms = 300, .do = .{ .type = "abc" } },
         };
         const chapters = [_]Chapter{ .{ .at = 0, .title = "one" }, .{ .at = 1000, .title = "two" } };
-        const captions = [_]Caption{.{ .at = 200, .ms = 2000, .text = "hi", .on = "pane", .near = "button", .clear = &.{"field"} }};
+        const captions = [_]Caption{.{ .at = 200, .ms = 2000, .text = "hi", .near = "button", .clear = &.{"field"} }};
     };
-    return .{ .name = "t", .ops = &S.ops, .keyframes = &S.keyframes, .chapters = &S.chapters, .captions = &S.captions };
+    return .{ .name = "t", .ops = &S.ops, .keyframes = &S.keyframes, .chapters = &S.chapters, .captions = &S.captions, .home = "pane" };
 }
 
 test "a seek replays from the last keyframe at or before it" {
@@ -405,7 +459,9 @@ test "the pointer goes while the keyboard is used, and comes back when it moves"
         .{ .at = 3000, .ms = 400, .do = .{ .move = .{ .tag = "button" } } },
     };
     const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &.{.{ .root = "demo://t" }} };
-    // Before anything is typed it shows.
+    // None at the cut; it comes in with its first move, and shows from there.
+    try testing.expectEqual(@as(f32, 0), tape.pointerShown(1, 50, 200));
+    try testing.expectEqual(@as(f32, 0.5), tape.pointerShown(2, 200, 200));
     try testing.expectEqual(@as(f32, 1), tape.pointerShown(4, 900, 200));
     // Typing: going, then gone — and a key after it does not bring it back.
     try testing.expectEqual(@as(f32, 0.5), tape.pointerShown(5, 1100, 200));
@@ -437,6 +493,38 @@ test "a caption is beside what the pointer is aimed at in its time" {
     try testing.expectEqualStrings("row", tape.aimedAt(c, 6).?.tag);
     // No move in its time: nothing to sit beside.
     try testing.expect(tape.aimedAt(.{ .at = 2500, .ms = 1000, .text = "" }, 5) == null);
+}
+
+test "the keys shown are those pressed lately, since the cut, oldest first" {
+    const ops = [_]Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 100, .do = .{ .key = "enter" } },
+        .{ .at = 1000, .do = .{ .command = "a.b" } },
+        .{ .at = 1500, .ms = 300, .do = .{ .type = "x" } },
+        .{ .at = 2000, .do = .{ .key = "escape" } },
+        .{ .at = 3000, .do = .{ .keyframe = 0 } },
+        .{ .at = 3100, .do = .{ .key = "tab" } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &.{.{ .root = "demo://t" }} };
+    var buf: [4]usize = undefined;
+    try testing.expectEqualSlices(usize, &.{ 2, 4 }, tape.keysAt(5, 2100, 1500, &buf));
+    try testing.expectEqualSlices(usize, &.{ 1, 2, 4 }, tape.keysAt(5, 2100, 2500, &buf));
+    // Only as many as fit, the newest kept.
+    try testing.expectEqualSlices(usize, &.{4}, tape.keysAt(5, 2100, 2500, buf[0..1]));
+    // A keyframe ends what came before it.
+    try testing.expectEqualSlices(usize, &.{6}, tape.keysAt(7, 3200, 5000, &buf));
+}
+
+test "a caption is a callout when it narrates the pointer, else it stacks at home" {
+    const ops = [_]Op{
+        .{ .at = 0, .do = .{ .keyframe = 0 } },
+        .{ .at = 1000, .ms = 400, .do = .{ .move = .{ .tag = "row" } } },
+    };
+    const tape: Tape = .{ .name = "t", .ops = &ops, .keyframes = &.{.{ .root = "demo://t" }} };
+    try testing.expect(tape.besideAction(.{ .at = 500, .ms = 1000, .text = "" }));
+    try testing.expect(!tape.besideAction(.{ .at = 1500, .ms = 1000, .text = "" }));
+    try testing.expect(tape.besideAction(.{ .at = 1500, .ms = 1000, .text = "", .near = "pane" }));
+    try testing.expect(!tape.besideAction(.{ .at = 500, .ms = 1000, .text = "", .place = .middle }));
 }
 
 test "a tape must open on a keyframe, in order, with chords that parse" {

@@ -17,7 +17,7 @@ pub fn build(s: *Script) !void {
         .open = &.{"NOTES.md"},
         .settings = &.{.{ .owner = "markdown", .key = "default_md_view", .value = ".split" }},
     });
-    s.caption_on = catalog.documents;
+    s.home = catalog.documents;
 
     try s.chapter("Write");
     try s.caption("The raw text on the left, the page on the right — redrawn on every keystroke.", try catalog.aboutWriting(s, "NOTES.md"));

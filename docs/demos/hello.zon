@@ -19,12 +19,14 @@
             },
         },
     },
+    // Where its popups gather when they are about no one thing: the documents' region.
+    .home = "region:Main",
     .chapters = .{
         .{ .at = 0, .title = "Hello" },
         .{ .at = 6000, .title = "Typing" },
     },
     .captions = .{
-        .{ .at = 300, .ms = 5200, .title = "Hello from a tape", .text = "Nothing here is compiled in: this demo is a ZON file the page fetched.", .place = .middle, .on = "region:Main" },
+        .{ .at = 300, .ms = 5200, .title = "Hello from a tape", .text = "Nothing here is compiled in: this demo is a ZON file the page fetched.", .place = .middle },
         .{
             .at = 6000,
             .ms = 5400,

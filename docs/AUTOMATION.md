@@ -72,11 +72,11 @@ every replay types the same bytes on the same frames.
 which costs nothing unless a demo is loaded (`Player.frame` publishes whether anchors are wanted
 each frame). dvui keeps tags on the shared window, so a plugin dylib's anchors are visible to the app.
 
-**The overlay is a function of time.** The synthetic pointer and its click ripple (the pointer
-goes away while the tape types, as a desktop's does, and comes back when it moves), the keystroke
-pill (the key or command just pressed, with its chord from the user's own keymap), captions and
-chapters are all read from the tape at the current moment, so a seek shows exactly what live play
-did. Its cards are the app's floating surface — frosted at the dialog style (blur, opacity, lift,
+**The overlay is a function of time.** The synthetic pointer and its click ripple (none until the
+tape first uses it after a keyframe; it goes away while the tape types, as a desktop's does, and
+comes back when it moves), the keys pressed (each with its chord from the user's own keymap),
+captions and chapters are all read from the tape at the current moment, so a seek shows exactly
+what live play did. Its cards are the app's floating surface — frosted at the dialog style (blur, opacity, lift,
 detail, refraction), with its corners and shadow — and open and close on a menu's curves at the
 user's motion settings, timed in demo time.
 
@@ -138,7 +138,8 @@ pub fn build(s: *Script) !void {
 `Script` keeps a pen (`s.t`) and moves it at an unhurried person's pace (`Script.Pace`: an 800 ms
 glide, a hover before the press, a beat after each action, 12 characters a second). `pause`,
 `caption(.., .{ .hold = true })` and every option's `ms` adjust it. A caption shows for as long as
-it takes to read (`Script.readingMs`) unless given `ms`, and the next caption takes over from it.
+it takes to read (`Script.readingMs`) unless given `ms`.
+
 A caption that narrates what the pointer does is a **callout beside the action**, where the viewer
 is looking: next to what the pointer is aimed at while it shows (or `.near`, an anchor), to its
 right, below, left or above — the first that covers none of it, the pointer, the other things the
@@ -147,9 +148,14 @@ watching). It glides along as the pointer moves on. So write one caption per act
 one over several. For typing, `catalog.aboutWriting(s, "README.md")` puts the callout beside where
 the words go, clear of them and of the preview.
 
-A caption with no pointer action in its time sits over the view it is about — `.on`, an anchor,
-defaulting to `s.caption_on` (fizzy's demos: `catalog.documents`, the documents' place) — a
-quarter, half or three quarters of the way down it by `.place`.
+Everything else gathers at the demo's **home** — `s.home`, an anchor (fizzy's demos:
+`catalog.documents`, the documents' place): captions with no pointer action in their time, and
+the keys and commands the demo presses. They **stack** there, near the foot of it, the newest
+lowest and the older pushed up, each fading on its own time. `.place = .middle` makes a caption a
+title card in the middle of the home view instead, for a demo's opening and close.
+
+Captions at home stack with one another; any other caption begins alone — a callout or a title
+card ends the captions still showing, so they close as it opens rather than competing with it.
 
 A keyframe starts with the explorer put away (`.layout = .focused`), so the editor has the room;
 a demo opens it from the rail when it is about to use it and puts it away after —
@@ -186,7 +192,8 @@ builds is what `Tape.write` emits, what `Tape.parse` reads, and what a recorder 
         .settings = .{ .{ .owner = "markdown", .key = "default_md_view", .value = ".split" } },
     } },
     .chapters = .{ .{ .at = 0, .title = "Hello" } },
-    .captions = .{ .{ .at = 300, .ms = 5200, .title = "Hi", .text = "…", .place = .middle, .on = "region:Main" } },
+    .home = "region:Main",           // where popups about no one thing gather; empty: the window
+    .captions = .{ .{ .at = 300, .ms = 5200, .title = "Hi", .text = "…", .place = .middle } },
     .ops = .{                        // ordered by .at; the first is a keyframe at 0
         .{ .at = 0, .do = .{ .keyframe = 0 } },
         .{ .at = 0, .do = .{ .wait = .{ .until = .idle } } },

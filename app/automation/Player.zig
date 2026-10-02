@@ -529,38 +529,3 @@ pub fn pointerShown(self: *const Player, fade_ms: f64) f32 {
     const t = self.tape() orelse return 1;
     return t.pointerShown(self.seq.cursor, self.seq.now, fade_ms);
 }
-
-/// What the keystroke display shows at the current moment (`recentKeys`).
-pub const Keys = struct {
-    /// The latest key or command applied.
-    op: Tape.Op,
-    /// When the display came up for it: the first of a run of keys each pressed while the one
-    /// before was still showing, so a run keeps one display open rather than reopening it per key.
-    since: f64,
-};
-
-/// The key or command the keystroke display shows at the current moment: the latest one applied
-/// in the last `window_ms`. Derived from the tape and the time, so a seek shows the right one.
-pub fn recentKeys(self: *const Player, window_ms: f64) ?Keys {
-    const t = self.tape() orelse return null;
-    const at = self.seq.now;
-    var shown: ?Keys = null;
-    var i = @min(self.seq.cursor, t.ops.len);
-    while (i > 0) {
-        i -= 1;
-        const op = t.ops[i];
-        const op_at: f64 = @floatFromInt(op.at);
-        // Past the latest key's window, or past the gap before the run's first.
-        if (op_at < (if (shown) |k| k.since else at) - window_ms) break;
-        switch (op.do) {
-            .key, .command => if (shown) |*k| {
-                k.since = op_at;
-            } else {
-                shown = .{ .op = op, .since = op_at };
-            },
-            .keyframe => break,
-            else => {},
-        }
-    }
-    return shown;
-}

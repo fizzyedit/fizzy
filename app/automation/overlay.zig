@@ -23,11 +23,11 @@ const chord = @import("../keymap/chord.zig");
 const icons = @import("icons");
 const motion = core.motion;
 
-/// How long a key or command stays in the keystroke pill.
+/// How long a key or command stays among the popups at home.
 const keys_ms: f64 = 2200;
 /// How long the tape's pointer takes to fade away when it starts typing, and back when it moves.
 const pointer_fade_ms: f32 = 140;
-/// The height of a slot along the bottom: the bar's, the keystroke pill's.
+/// The height the transport bar takes along the bottom.
 const slot_h: f32 = 56;
 /// How long the bar stays after the real pointer last stirred, while playing.
 const bar_linger_ns: i128 = 2500 * std.time.ns_per_ms;
@@ -37,11 +37,10 @@ pub fn draw(player: *Player) void {
     const tape = player.tape() orelse return;
     const win: dvui.Rect = .cast(dvui.windowRect());
 
-    // Each card along the bottom takes a slot above the one below it, as much of it as the card
-    // is open, so what sits above slides up as it opens and back down as it closes.
+    // Everything else keeps above the bar, as much as the bar is open, so it slides up as the
+    // bar opens and back down as it closes.
     const bar = drawTransport(player, tape, win);
-    const keys = drawKeys(player, win, bar);
-    drawCaption(player, tape, win, bar + keys);
+    drawCaptions(player, tape, win, win.h - 24 - bar * slot_h);
     if (player.state == .seeking) drawSeeking(player, win);
     if (player.driving()) {
         const fw = layer(@src(), .{ .rect = win, .name = "DemoPointer" }, .{});
@@ -188,37 +187,160 @@ fn glass(wd: *dvui.WidgetData, origin: dvui.Point, r: Reveal) void {
     dvui.clipSet(dvui.clipGet().intersect(rect));
 }
 
-// ---- captions ------------------------------------------------------------------------------
+// ---- captions and keys ---------------------------------------------------------------------
 
-/// The caption showing. One that narrates what the pointer does is a callout beside it, where
-/// the viewer is looking (`callout`); any other sits over the view it is about (`overView`).
-/// Either way it keeps whole on the window and above the cards along the bottom (`below` slots
-/// of them, `slot_h` each), and glides rather than jumps when what it sits beside moves.
-fn drawCaption(player: *Player, tape: *const Tape, win: dvui.Rect, below: f32) void {
+/// How long a key or command stays among the popups at home.
+const keys_ms_u32: u32 = @intFromFloat(keys_ms);
+/// How far down the home view the foot of its stack of popups is.
+const home_down: f32 = 0.78;
+/// The space between popups in the stack.
+const stack_gap: f32 = 14;
+
+/// The demo's words and keys at the current moment, each where it belongs: a title card in the
+/// middle of the home view (`Caption.Place.middle`); a callout beside the action for a caption
+/// that narrates the pointer (`Tape.besideAction`); and everything else — captions about no one
+/// thing, and the keys just pressed — stacked together at home (`drawStack`). All kept whole on
+/// the window, above `floor`.
+fn drawCaptions(player: *Player, tape: *const Tape, win: dvui.Rect, floor: f32) void {
     const now = player.now();
-    const c = tape.captionAt(now) orelse return;
-    const shown = Reveal.between(now, @floatFromInt(c.at), @floatFromInt(c.at + c.ms));
+    var stack_buf: [16]Stacked = undefined;
+    var stack: std.ArrayList(Stacked) = .initBuffer(&stack_buf);
+    for (tape.captions, 0..) |c, i| {
+        if (!c.shownAt(now)) continue;
+        const shown = Reveal.between(now, @floatFromInt(c.at), @floatFromInt(c.at + c.ms));
+        if (c.place == .middle) {
+            drawTitle(tape, c, i, shown, win);
+        } else if (tape.besideAction(c)) {
+            drawCallout(player, tape, c, i, shown, win, floor);
+        } else if (stack.items.len < stack.capacity) {
+            stack.appendAssumeCapacity(.{ .what = .{ .caption = i }, .start = c.at, .shown = shown });
+        }
+    }
+    // Not while a seek replays them: a key there is gone before it could be read.
+    if (player.state != .seeking) {
+        var keys_buf: [6]usize = undefined;
+        for (tape.keysAt(player.seq.cursor, player.seq.now, keys_ms, &keys_buf)) |i| {
+            if (stack.items.len == stack.capacity) break;
+            const op = tape.ops[i];
+            if (keysLabel(player, op) == null) continue;
+            const at: f64 = @floatFromInt(op.at);
+            stack.appendAssumeCapacity(.{
+                .what = .{ .keys = i },
+                .start = op.at,
+                .shown = Reveal.between(player.seq.now, at, at + keys_ms),
+            });
+        }
+    }
+    drawStack(player, tape, stack.items, win, floor);
+}
 
+/// One of the popups stacked at home.
+const Stacked = struct {
+    what: union(enum) {
+        /// Index into `Tape.captions`.
+        caption: usize,
+        /// Index into `Tape.ops`: a `key` or a `command`.
+        keys: usize,
+    },
+    start: u32,
+    shown: Reveal,
+
+    /// Stable from frame to frame while it shows, so each keeps its own widget and size.
+    fn key(self: Stacked) usize {
+        return switch (self.what) {
+            .caption => |i| i + 1,
+            .keys => |i| i + 1 + (1 << 20),
+        };
+    }
+
+    fn before(_: void, a: Stacked, b: Stacked) bool {
+        return a.start < b.start;
+    }
+};
+
+/// The popups at home, stacked up from its foot: the newest lowest, each older one above those
+/// after it — as far above as they are open, so the stack pushes up as one opens below and
+/// settles back as one below it closes.
+fn drawStack(player: *Player, tape: *const Tape, items: []Stacked, win: dvui.Rect, floor: f32) void {
+    std.sort.insertion(Stacked, items, {}, Stacked.before);
+    const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
+    const base = @min(home.y + home.h * home_down, floor);
+    const w = @min(520, win.w - 32);
+    const cx = std.math.clamp(home.x + home.w / 2, win.x + 16 + w / 2, @max(win.x + 16 + w / 2, win.x + win.w - 16 - w / 2));
+    const src = @src();
+    var above: f32 = 0;
+    var i = items.len;
+    while (i > 0) {
+        i -= 1;
+        const item = items[i];
+        const k = item.key();
+        const h = if (dvui.minSizeGet(dvui.parentGet().extendId(src, k))) |ms| ms.h else 0;
+        const fw = layer(src, .{ .id_extra = k, .max_size_content = .{ .w = w, .h = win.h } }, .{
+            .from = dvui.windowRectScale().pointToPhysical(.{ .x = cx, .y = base - above }),
+            .from_gravity_x = 0.5,
+            .from_gravity_y = 0,
+        });
+        defer fw.deinit();
+        // Each opens up out of its foot, where it joins the stack.
+        switch (item.what) {
+            .caption => |ci| captionCard(tape.captions[ci], item.shown, .{ .x = 0.5, .y = 1 }, w),
+            .keys => |oi| keysCard(player, tape.ops[oi], item.shown),
+        }
+        above += (h + stack_gap) * item.shown.room();
+    }
+}
+
+/// A title card: in the middle of the home view, opening about its middle as a dialog does. Each
+/// caption (`index`) its own widget, so none is placed by the size of the one before it.
+fn drawTitle(tape: *const Tape, c: Tape.Caption, index: usize, shown: Reveal, win: dvui.Rect) void {
+    const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
+    const w = @min(620, win.w - 32);
+    const fw = layer(@src(), .{ .id_extra = index + 1, .max_size_content = .{ .w = w, .h = win.h } }, .{
+        .from = dvui.windowRectScale().pointToPhysical(.{ .x = home.x + home.w / 2, .y = home.y + home.h / 2 }),
+        .from_gravity_x = 0.5,
+        .from_gravity_y = 0.5,
+    });
+    defer fw.deinit();
+    captionCard(c, shown, .{ .x = 0.5, .y = 0.5 }, w);
+}
+
+/// A caption that narrates what the pointer does: a callout beside it, where the viewer is
+/// looking (`callout`), gliding rather than jumping as what it is beside moves — or, while there
+/// is nothing drawn yet to sit beside, at the foot of the home view. Each caption (`index`) its
+/// own widget, so none is placed by the size of the one before it.
+fn drawCallout(player: *Player, tape: *const Tape, c: Tape.Caption, index: usize, shown: Reveal, win: dvui.Rect, floor: f32) void {
     // Its size as last drawn, to keep the whole of it clear.
     const src = @src();
-    const size: dvui.Size = dvui.minSizeGet(dvui.parentGet().extendId(src, 0)) orelse .{};
-    const floor = win.h - 24 - below * slot_h;
-    const beside = callout(player, tape, c, win, size, floor);
-    const spot = beside orelse overView(c, win, size, floor);
+    const size: dvui.Size = dvui.minSizeGet(dvui.parentGet().extendId(src, index + 1)) orelse .{};
+    const spot = callout(player, tape, c, win, size, floor) orelse blk: {
+        const home = (if (tape.home.len > 0) tagRect(tape.home) else null) orelse win;
+        break :blk Spot{ .at = .{
+            .x = home.x + home.w / 2 - size.w / 2,
+            .y = @min(home.y + home.h * home_down, floor) - size.h,
+        } };
+    };
     // A callout reads at a narrower measure than a card over a whole view.
-    const w = @min(@as(f32, if (beside != null) 440 else 620), win.w - 32);
-    const fw = layer(src, .{ .max_size_content = .{ .w = w, .h = win.h } }, .{
-        .from = dvui.windowRectScale().pointToPhysical(glide(c, spot.at, size.w == 0)),
+    const w = @min(440, win.w - 32);
+    // Where it belongs while it opens — it is placed by its size, which it only has once drawn —
+    // and gliding after.
+    const fw = layer(src, .{ .id_extra = index + 1, .max_size_content = .{ .w = w, .h = win.h } }, .{
+        .from = dvui.windowRectScale().pointToPhysical(glide(c, spot.at, size.w == 0 or shown.alpha < 1)),
         .from_gravity_x = 1,
         .from_gravity_y = 1,
     });
     defer fw.deinit();
+    // It opens out of the side nearest what it is beside, as a popover does from its anchor.
+    captionCard(c, shown, spot.origin, w);
+}
+
+/// A caption's card in the floating widget just made, at measure `w`: its glass `shown` of the
+/// way open out of `origin`, then its title and words.
+fn captionCard(c: Tape.Caption, shown: Reveal, origin: dvui.Point, w: f32) void {
     var card = dvui.box(@src(), .{ .dir = .vertical }, cardOptions(.{ .x = 18, .y = 12, .w = 18, .h = 14 }).override(.{
-        .max_size_content = .{ .w = w - 36, .h = win.h },
+        .max_size_content = .{ .w = w - 36, .h = dvui.max_float_safe },
     }));
     defer card.deinit();
-    // It opens out of the side nearest what it is beside, as a popover does from its anchor.
-    glass(card.data(), spot.origin, shown);
+    glass(card.data(), origin, shown);
     const prev_alpha = dvui.alpha(shown.alpha);
     defer dvui.alphaSet(prev_alpha);
     const heading = dvui.Font.theme(.heading);
@@ -347,22 +469,6 @@ fn pointRect(p: Sequencer.Point) dvui.Rect {
     return .{ .x = n.x - 12, .y = n.y - 12, .w = 24, .h = 24 };
 }
 
-/// A caption over the view it is about (`Caption.on`; the window when it names none or that is
-/// not drawn): a quarter, half or three quarters of the way down it (`Caption.place`), across
-/// its middle — near what it is talking about, however large the window.
-fn overView(c: Tape.Caption, win: dvui.Rect, size: dvui.Size, floor: f32) Spot {
-    const view = (if (c.on.len > 0) tagRect(c.on) else null) orelse win;
-    const down: f32 = switch (c.place) {
-        .top => 0.25,
-        .middle => 0.5,
-        .bottom => 0.75,
-    };
-    return .{ .at = .{
-        .x = std.math.clamp(view.x + view.w / 2 - size.w / 2, win.x + 16, @max(win.x + 16, win.x + win.w - 16 - size.w)),
-        .y = std.math.clamp(view.y + view.h * down - size.h / 2, win.y + 16, @max(win.y + 16, floor - size.h)),
-    } };
-}
-
 /// A tag's rect, natural, when it is drawn and visible.
 fn tagRect(tag: []const u8) ?dvui.Rect {
     const td = dvui.tagGet(tag) orelse return null;
@@ -379,8 +485,8 @@ fn small(r: dvui.Rect, win: dvui.Rect) bool {
 const glide_ms: f32 = 110;
 
 /// Where caption `c` is this frame, eased toward `to`, so it follows the action rather than
-/// jumping with it. A caption that has just come up (or whose size is not known yet, its first
-/// frame) starts where it belongs; with motion off it is always there.
+/// jumping with it. A caption that has just come up, or is told to `snap`, is where it belongs;
+/// with motion off it always is.
 fn glide(c: Tape.Caption, to: dvui.Point, snap: bool) dvui.Point {
     const id = dvui.currentWindow().data().id;
     const same = if (dvui.dataGet(null, id, "_demo_caption_at", u32)) |at| at == c.at else false;
@@ -413,143 +519,272 @@ fn keycapsStroke(s: chord.Stroke) core.keycaps.Stroke {
     return .{ .first = one(s.first), .second = if (s.second) |c| one(c) else null };
 }
 
-/// The pill naming the key or command just pressed, above `below` slots. Returns how much of its
-/// slot it takes (`Reveal.room`).
-fn drawKeys(player: *Player, win: dvui.Rect, below: f32) f32 {
-    if (player.state == .seeking) return 0;
-    const keys = player.recentKeys(keys_ms) orelse return 0;
-    const op = keys.op;
+/// What a key or command op shows: its chord (from the user's keymap, for a command) and, for a
+/// command, what a person would call it. Null when there is neither.
+fn keysLabel(player: *Player, op: Tape.Op) ?struct { stroke: ?chord.Stroke, title: ?[]const u8 } {
     const platform: chord.Platform = if (core.platform.isMacOS()) .mac else .other;
     const stroke: ?chord.Stroke, const title: ?[]const u8 = switch (op.do) {
         .key => |k| .{ chord.parseKeys(k, platform) catch null, null },
         .command => |id| .{ player.stage.chordFor(id), player.stage.commandTitle(id) },
-        else => unreachable,
+        else => return null,
     };
-    if (stroke == null and title == null) return 0;
+    if (stroke == null and title == null) return null;
+    return .{ .stroke = stroke, .title = title };
+}
 
-    const shown = Reveal.between(player.seq.now, keys.since, @as(f64, @floatFromInt(op.at)) + keys_ms);
-
-    const fw = layer(@src(), .{}, .{
-        .from = dvui.windowRectScale().pointToPhysical(.{ .x = win.w / 2, .y = win.h - 24 - below * slot_h }),
-        .from_gravity_x = 0.5,
-        .from_gravity_y = 0,
-    });
-    defer fw.deinit();
+/// A pill naming a key or command just pressed, in the floating widget just made, `shown` of the
+/// way open out of its foot.
+fn keysCard(player: *Player, op: Tape.Op, shown: Reveal) void {
+    const label = keysLabel(player, op) orelse return;
     var pill = dvui.box(@src(), .{ .dir = .horizontal }, cardOptions(.{ .x = 14, .y = 7, .w = 14, .h = 7 }));
     defer pill.deinit();
     glass(pill.data(), .{ .x = 0.5, .y = 1 }, shown);
     const prev_alpha = dvui.alpha(shown.alpha);
     defer dvui.alphaSet(prev_alpha);
-    if (stroke) |s| {
+    if (label.stroke) |s| {
         core.keycaps.draw(@src(), keycapsStroke(s), .{
             .style = .caps,
             .color = theme().color(.content, .text),
-            .mac = platform == .mac,
+            .mac = core.platform.isMacOS(),
             .gravity_x = 0,
         });
     }
-    if (title) |t| {
+    if (label.title) |t| {
         dvui.labelNoFmt(@src(), t, .{}, .{
             .gravity_y = 0.5,
-            .padding = .{ .x = if (stroke != null) 10 else 0 },
+            .padding = .{ .x = if (label.stroke != null) 10 else 0 },
             .color_text = .{ .color = theme().color(.content, .text) },
         });
     }
-    return shown.room();
 }
 
 // ---- the transport bar ---------------------------------------------------------------------
 
-/// The bar: chapter back, play/pause, chapter forward, time, the scrubber, close. Returns how much
-/// of its slot it takes (`Reveal.room`). Records its parts' rects on `player.transport` for
-/// `Player.frame` to hit-test.
+/// The bar's pieces, left to right: round buttons for chapter back, play/pause and chapter
+/// forward, the scrubber's capsule, and a round close — separate bubbles of one liquid glass.
+const Piece = enum { prev, play, next, track, close };
+/// Each piece's diameter, points; the track's width is what the bar leaves it.
+const piece_d = [_]f32{ 36, 44, 36, 44, 32 };
+const bar_h: f32 = 44;
+/// The space between the bubbles, open.
+const bar_gap: f32 = 12;
+/// Points: how near two bubbles come before their glass runs together (`LiquidField.merge_px`).
+const bar_merge: f32 = 16;
+/// How long the bar takes to open and to close, as written (`motion.durationMs`).
+const bar_open_ms: f32 = 620;
+const bar_close_ms: f32 = 420;
+
+/// The bar: chapter back, play/pause, chapter forward, the time and the scrubber, close. Opening,
+/// it grows out of its middle as a single bar of glass and pinches apart into its bubbles; closing
+/// is that run back (`barGeometry`). Returns how much of its slot it takes. Records its parts'
+/// rects on `player.transport` for `Player.frame` to hit-test.
 fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     const tr = &player.transport;
-    // Playing, the bar closes out of the demo's way unless someone reaches for it; it is still
-    // laid out while closed, so it opens at its size rather than settling into it. (A playing
+    // Playing, the bar gets out of the demo's way unless someone reaches for it. (A playing
     // player asks for every frame, so the linger runs out without a timer of its own.)
     const since_stirred: i128 = if (tr.stirred_ns) |ns| dvui.frameTimeNS() - ns else std.math.maxInt(i64);
-    const shown = barReveal(tr, player.state != .playing or tr.scrub != null or since_stirred < bar_linger_ns);
+    const p = barProgress(tr, player.state != .playing or tr.scrub != null or since_stirred < bar_linger_ns);
 
-    const w = @min(640, win.w - 24);
-    const h: f32 = 44;
-    const rect: dvui.Rect = .{ .x = (win.w - w) / 2, .y = win.h - h - 12, .w = w, .h = h };
-    const fw = layer(@src(), .{ .rect = rect, .name = "DemoTransport" }, .{});
-    defer fw.deinit();
-    var bar = dvui.box(@src(), .{ .dir = .horizontal }, cardOptions(.{ .x = 10, .y = 6, .w = 12, .h = 6 }).override(.{
-        .expand = .both,
-    }));
-    defer bar.deinit();
-    glass(bar.data(), .{ .x = 0.5, .y = 1 }, shown);
-    const prev_alpha = dvui.alpha(shown.alpha);
-    defer dvui.alphaSet(prev_alpha);
+    const full_w = @min(640, win.w - 24);
+    const center: dvui.Point = .{ .x = win.x + win.w / 2, .y = win.y + win.h - 12 - bar_h / 2 };
+    const whole: dvui.Rect = .{ .x = center.x - full_w / 2, .y = center.y - bar_h / 2, .w = full_w, .h = bar_h };
     // Only a bar that can be seen, or is coming, takes clicks: one reached for opens on this
     // frame's stir, and the press that follows it at once is the bar's, not the app's.
-    tr.bar = if (tr.wanted or shown.alpha > 0.05) bar.data().rectScale().r else null;
+    const wrs = dvui.windowRectScale();
+    tr.bar = if (tr.wanted or p > 0.05) wrs.rectToPhysical(whole) else null;
+    if (p <= 0.001) {
+        tr.prev = .{};
+        tr.play = .{};
+        tr.next = .{};
+        tr.track = .{};
+        tr.close = .{};
+        return 0;
+    }
 
+    var pieces: [5]dvui.Rect = undefined;
+    const apart = barGeometry(center, full_w, p, &pieces);
+    // The layer covers the bar and as far round it as its shadow and its glass's bridges reach.
+    const bounds = whole.outsetAll(24);
+    const fw = layer(@src(), .{ .rect = bounds, .name = "DemoTransport" }, .{});
+    defer fw.deinit();
+    const s = wrs.s;
+
+    var phys: [5]dvui.Rect.Physical = undefined;
+    for (pieces, &phys) |r, *out| out.* = wrs.rectToPhysical(r);
+    tr.prev = phys[@intFromEnum(Piece.prev)];
+    tr.play = phys[@intFromEnum(Piece.play)];
+    tr.next = phys[@intFromEnum(Piece.next)];
+    tr.close = phys[@intFromEnum(Piece.close)];
+    const hovered: ?Piece = if (tr.pointer) |pt| for (phys, 0..) |r, i| {
+        if (i != @intFromEnum(Piece.track) and r.contains(pt)) break @enumFromInt(i);
+    } else null else null;
+
+    barGlass(fw.data().id, &phys, s, hovered, apart);
+
+    // What the bubbles hold comes in as they part, and goes as they run back together.
+    const prev_alpha = dvui.alpha(std.math.clamp((p - 0.55) / 0.45, 0, 1));
+    defer dvui.alphaSet(prev_alpha);
     const ink = theme().color(.content, .text);
-    tr.prev = glyphButton(@src(), .prev, ink.opacity(0.75), 26, tr.pointer);
     const playing = player.state == .playing or (player.state == .seeking and player.after_seek == .play);
-    tr.play = glyphButton(@src(), if (playing) .pause else if (player.state == .ended) .replay else .play, ink, 32, tr.pointer);
-    tr.next = glyphButton(@src(), .next, ink.opacity(0.75), 26, tr.pointer);
-
-    const now = player.now();
-    const total: f64 = @floatFromInt(tape.duration());
-    {
-        var buf: [48]u8 = undefined;
-        const label = std.fmt.bufPrint(&buf, "{d}:{d:0>2} / {d}:{d:0>2}", .{
-            minutes(now), seconds(now), minutes(total), seconds(total),
-        }) catch "";
-        dvui.labelNoFmt(@src(), label, .{}, .{
-            .gravity_y = 0.5,
-            .padding = .{ .x = 8, .w = 10 },
-            .font = dvui.Font.theme(.mono),
-            .color_text = .{ .color = ink.opacity(0.8) },
-        });
-    }
-
-    // The scrubber fills what is left, with the chapter's name above the line.
-    {
-        var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .gravity_y = 0.5 });
-        defer col.deinit();
-        const chapter = if (tape.chapterAt(now)) |i| tape.chapters[i].title else tape.title;
-        dvui.labelNoFmt(@src(), chapter, .{}, .{
-            .font = dvui.Font.theme(.body).larger(-2),
-            .color_text = .{ .color = ink.opacity(0.65) },
-            .padding = .{},
-            .margin = .{},
-        });
-        const track_wd = dvui.spacer(@src(), .{ .expand = .horizontal, .min_size_content = .{ .w = 40, .h = 12 } });
-        const r = track_wd.rectScale().r;
-        tr.track = r;
-        paintTrack(r, tape, now, total, ink, track_wd.rectScale().s);
-    }
-
-    tr.close = glyphButton(@src(), .close, ink.opacity(0.6), 24, tr.pointer);
-    return shown.room();
+    const play_glyph: Glyph = if (playing) .pause else if (player.state == .ended) .replay else .play;
+    barIcon(bounds, pieces[@intFromEnum(Piece.prev)], .prev, ink.opacity(0.8));
+    barIcon(bounds, pieces[@intFromEnum(Piece.play)], play_glyph, ink);
+    barIcon(bounds, pieces[@intFromEnum(Piece.next)], .next, ink.opacity(0.8));
+    barIcon(bounds, pieces[@intFromEnum(Piece.close)], .close, ink.opacity(0.65));
+    tr.track = barTrack(player, tape, bounds, pieces[@intFromEnum(Piece.track)], ink);
+    return std.math.clamp(p * 1.6, 0, 1);
 }
 
-/// The bar opening when `want` turns true and closing when it turns false, on a floating
-/// surface's clocks, kept on `tr` from frame to frame. Wall time: it answers the viewer's
-/// pointer, not the demo.
-fn barReveal(tr: *Player.Transport, want: bool) Reveal {
+/// The bar's pieces `p` of the way open (0 shut, 1 open), window-natural, into `out`; returns how
+/// far apart they have come, 0 (one bar) to 1 (bubbles). First a single bar grows out of the
+/// middle — its pieces abutting, so their glass runs together into one — rising to its height as
+/// it widens; then the pieces draw apart, the bridges between them thinning to necks and letting
+/// go, until each is a bubble of its own. Run backwards it closes.
+fn barGeometry(center: dvui.Point, full_w: f32, p: f32, out: *[5]dvui.Rect) f32 {
+    // The growing, on the arrival curve: past its width and back, when motion is playful.
+    const grow = @max(0, motion.enter(std.math.clamp(p / 0.6, 0, 1)));
+    // The parting overlaps the end of the growing, so the bar never sits still between them.
+    const apart = std.math.clamp(motion.settle(std.math.clamp((p - 0.38) / 0.62, 0, 1)), 0, 1.2);
+    var widths = piece_d;
+    var round_w: f32 = 0;
+    for (piece_d, 0..) |d, i| {
+        if (i != @intFromEnum(Piece.track)) round_w += d;
+    }
+    widths[@intFromEnum(Piece.track)] = @max(80, full_w - round_w - 4 * bar_gap);
+    const gap = bar_gap * apart;
+    var total: f32 = 4 * gap;
+    for (widths) |w| total += w;
+    const lift = 0.55 + 0.45 * @min(grow, 1.1);
+    var x = center.x - total * grow / 2;
+    for (widths, 0..) |w, i| {
+        const h = piece_d[i] * lift;
+        out[i] = .{ .x = x, .y = center.y - h / 2, .w = w * grow, .h = h };
+        x += (w + gap) * grow;
+    }
+    return std.math.clamp(apart, 0, 1);
+}
+
+/// The bar's glass: its pieces as one liquid glass (`LiquidField`), running together where they
+/// are close, the hovered one lit; where the glass program is not there to draw it, or the blur is
+/// off, each piece frosted (or filled) on its own. Their shadows come in as they part — a ring
+/// round each piece would lie dark across the bridges while they are one.
+fn barGlass(id: dvui.Id, pieces: []const dvui.Rect.Physical, s: f32, hovered: ?Piece, apart: f32) void {
+    const bs = core.dialogs.surfaceShadow();
+    defer for (pieces) |r| {
+        if (r.w < 1 or r.h < 1) continue;
+        core.dialogs.glassShadow(r, .round(r.h / 2 / s), s, bs, apart);
+    };
+    if (core.widgets.LiquidField.ready()) {
+        var field: core.widgets.LiquidField = .{ .merge_px = bar_merge * s, .scale = s };
+        for (pieces, 0..) |r, i| {
+            if (r.w < 1 or r.h < 1) continue;
+            field.add(.{
+                .rect = r,
+                .radii = @splat(r.h),
+                .round = i != @intFromEnum(Piece.track),
+                .light = if (hovered != null and @intFromEnum(hovered.?) == i) 0.14 else 0,
+            });
+        }
+        if (core.dialogs.carriedFieldWhole(id, field, s)) return;
+    }
+    for (pieces, 0..) |r, i| {
+        if (r.w < 1 or r.h < 1) continue;
+        const round: dvui.CornerRect = .round(r.h / 2 / s);
+        if (!core.dialogs.frostPane(id.update(@tagName(@as(Piece, @enumFromInt(i)))), r, round, s)) {
+            r.fill(round.scale(s, dvui.CornerRect.Physical), .{ .color = .{ .color = core.dialogs.dialogFill() } });
+        }
+        if (hovered != null and @intFromEnum(hovered.?) == i) {
+            r.fill(round.scale(s, dvui.CornerRect.Physical), .{ .color = .{ .color = core.dialogs.rowHover() } });
+        }
+    }
+}
+
+/// A bar button's icon, in the middle of its bubble `r` (window-natural; `bounds` the layer's).
+fn barIcon(bounds: dvui.Rect, r: dvui.Rect, glyph: Glyph, color: dvui.Color) void {
+    const name: []const u8, const tvg: []const u8 = switch (glyph) {
+        .play => .{ "demo_play", icons.tvg.lucide.play },
+        .pause => .{ "demo_pause", icons.tvg.lucide.pause },
+        .replay => .{ "demo_replay", icons.tvg.lucide.@"rotate-ccw" },
+        .prev => .{ "demo_prev", icons.tvg.lucide.@"skip-back" },
+        .next => .{ "demo_next", icons.tvg.lucide.@"skip-forward" },
+        .close => .{ "demo_close", icons.tvg.lucide.x },
+    };
+    const d = @min(r.w, r.h) * 0.42;
+    if (d < 2) return;
+    core.icon.icon(@src(), name, tvg, .{
+        .stroke_color = .{ .color = color },
+        .fill_color = .{ .color = color },
+    }, .{
+        .id_extra = @intFromEnum(glyph),
+        .rect = .{ .x = r.x + (r.w - d) / 2 - bounds.x, .y = r.y + (r.h - d) / 2 - bounds.y, .w = d, .h = d },
+    });
+}
+
+/// The scrubber's capsule `r` (window-natural; `bounds` the layer's): the time, then the chapter's
+/// name over the line with its ticks and knob. Returns where the line takes presses, physical.
+fn barTrack(player: *Player, tape: *const Tape, bounds: dvui.Rect, r: dvui.Rect, ink: dvui.Color) dvui.Rect.Physical {
+    const wrs = dvui.windowRectScale();
+    const prev_clip = dvui.clip(wrs.rectToPhysical(r));
+    defer dvui.clipSet(prev_clip);
+    const pad = r.h / 2 - 4;
+    const now = player.now();
+    const total: f64 = @floatFromInt(tape.duration());
+    const mono = dvui.Font.theme(.mono);
+    var buf: [48]u8 = undefined;
+    const time = std.fmt.bufPrint(&buf, "{d}:{d:0>2} / {d}:{d:0>2}", .{
+        minutes(now), seconds(now), minutes(total), seconds(total),
+    }) catch "";
+    const time_w = mono.textSize(time).w;
+    const line_h = mono.lineHeight();
+    dvui.labelNoFmt(@src(), time, .{}, .{
+        .rect = .{ .x = r.x + pad - bounds.x, .y = r.y + (r.h - line_h) / 2 - bounds.y, .w = time_w + 2, .h = line_h },
+        .padding = .{},
+        .margin = .{},
+        .font = mono,
+        .color_text = .{ .color = ink.opacity(0.8) },
+    });
+
+    const x0 = r.x + pad + time_w + 14;
+    const x1 = r.x + r.w - pad;
+    const small_font = dvui.Font.theme(.body).larger(-2);
+    const chapter = if (tape.chapterAt(now)) |i| tape.chapters[i].title else tape.title;
+    const ch = small_font.lineHeight();
+    if (x1 - x0 > 8) {
+        dvui.labelNoFmt(@src(), chapter, .{}, .{
+            .rect = .{ .x = x0 - bounds.x, .y = r.y + 5 - bounds.y, .w = x1 - x0, .h = ch },
+            .padding = .{},
+            .margin = .{},
+            .font = small_font,
+            .color_text = .{ .color = ink.opacity(0.65) },
+        });
+    }
+    const line = wrs.rectToPhysical(.{ .x = x0, .y = r.y + r.h - 18, .w = @max(0, x1 - x0), .h = 12 });
+    if (line.w > 1) paintTrack(line, tape, now, total, ink, wrs.s);
+    return line;
+}
+
+/// The bar opening when `want` turns true and closing when it turns false — 0 shut to 1 open,
+/// linear in time over `bar_open_ms` and `bar_close_ms` at the user's speed, the curves being
+/// `barGeometry`'s — kept on `tr` from frame to frame. Wall time: it answers the viewer's pointer,
+/// not the demo. Turned round part way, it carries on from as open as it is.
+fn barProgress(tr: *Player.Transport, want: bool) f32 {
     const now_ns = dvui.frameTimeNS();
+    const open_ms: f64 = motion.durationMs(bar_open_ms);
+    const close_ms: f64 = motion.durationMs(bar_close_ms);
     if (tr.since_ns == null or want != tr.wanted) {
-        // Turned round part way: carry on from as open as it is — along each curve's straight
-        // stretch, to the arrival — rather than from shut or from open.
         const was: f64 = if (tr.since_ns == null) 0 else tr.openness;
-        const back_ms: f64 = motion.arrival * if (want) was * openMs() else (1 - was) * closeMs();
+        const back_ms: f64 = if (want) was * open_ms else (1 - was) * close_ms;
         tr.wanted = want;
         tr.since_ns = now_ns - @as(i128, @intFromFloat(back_ms * std.time.ns_per_ms));
     }
-    const span = if (want) openMs() else closeMs();
     const ms = @as(f64, @floatFromInt(now_ns - tr.since_ns.?)) / std.time.ns_per_ms;
+    const span = if (want) open_ms else close_ms;
     const u: f32 = if (span <= 0) 1 else @floatCast(std.math.clamp(ms / span, 0, 1));
-    const r = if (want) Reveal.opening(u) else Reveal.closing(u);
-    tr.openness = r.form;
+    const p = if (want) u else 1 - u;
+    tr.openness = p;
     // A paused player asks for no frames of its own.
     if (u < 1) dvui.refresh(null, @src(), null);
-    return r;
+    return p;
 }
 
 fn minutes(ms: f64) u32 {
@@ -582,35 +817,6 @@ fn paintTrack(r: dvui.Rect.Physical, tape: *const Tape, now: f64, total: f64, in
 }
 
 const Glyph = enum { play, pause, replay, prev, next, close };
-
-/// A square for one of the bar's controls, drawn with the app's icon set and washed like a row
-/// under the real pointer (`pointer`, physical). Returns its rect.
-fn glyphButton(src: std.builtin.SourceLocation, glyph: Glyph, color: dvui.Color, size: f32, pointer: ?dvui.Point.Physical) dvui.Rect.Physical {
-    const name: []const u8, const tvg: []const u8 = switch (glyph) {
-        .play => .{ "demo_play", icons.tvg.lucide.play },
-        .pause => .{ "demo_pause", icons.tvg.lucide.pause },
-        .replay => .{ "demo_replay", icons.tvg.lucide.@"rotate-ccw" },
-        .prev => .{ "demo_prev", icons.tvg.lucide.@"skip-back" },
-        .next => .{ "demo_next", icons.tvg.lucide.@"skip-forward" },
-        .close => .{ "demo_close", icons.tvg.lucide.x },
-    };
-    var box = dvui.box(src, .{}, .{ .min_size_content = .{ .w = size, .h = size }, .gravity_y = 0.5 });
-    defer box.deinit();
-    const rs = box.data().rectScale();
-    if (pointer) |p| {
-        if (rs.r.contains(p)) rs.r.fill(core.dialogs.rowCorners().scale(rs.s, dvui.CornerRect.Physical), .{ .color = .{ .color = core.dialogs.rowHover() } });
-    }
-    core.icon.icon(@src(), name, tvg, .{
-        .stroke_color = .{ .color = color },
-        .fill_color = .{ .color = color },
-    }, .{
-        .gravity_x = 0.5,
-        .gravity_y = 0.5,
-        // The icon a little inside its square, as a toolbar's are.
-        .min_size_content = .{ .w = size * 0.6, .h = size * 0.6 },
-    });
-    return rs.r;
-}
 
 // ---- seeking -------------------------------------------------------------------------------
 
