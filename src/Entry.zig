@@ -373,13 +373,20 @@ pub fn AppDeinit(_: *dvui.Window) void {
 pub fn AppFrame() !dvui.App.Result {
     fizzy.core.hitch.frameBegin();
     defer fizzy.core.hitch.frameEnd();
-    fizzy.core.profile.hostFrameBegin();
+    fizzy.core.profile.hostFrameBegin(lastSubmitNs());
     defer fizzy.core.profile.hostFrameEnd();
     singleton.drainPending();
     // Once, or — while a demo is seeking — again and again unseen until it lands (`frames`).
     const player = &fizzy.editor().demo.player;
     const win = fizzy.entry().window;
     return player.frames(win, frameOnce, automation.Player.backendClock(win));
+}
+
+/// How long the backend took to end the last frame after the app's part of it — its draws
+/// handed to the GPU — where the backend measures that (the web's does, `WebBackend`).
+fn lastSubmitNs() ?u64 {
+    if (comptime @hasDecl(dvui.backend, "last_submit_ns")) return dvui.backend.last_submit_ns;
+    return null;
 }
 
 /// One run of the app's frame.

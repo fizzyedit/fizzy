@@ -7,6 +7,12 @@
 //!   costliest first. Where to look for the slow plugin, and its slow part.
 //! - **Call tree** — the scopes as they nest: a fizzy phase, the surfaces drawn in it, the hooks
 //!   they call, the sections a plugin marks inside a hook.
+//!
+//! Above them, the frame: its interval, fizzy's work in it, the backend's submit after it (the
+//! frame handed to the GPU, where the backend measures it — the web's does), and the pointer
+//! moves that came in. The app draws a frame only when something asks for one, so while a
+//! pointer drives it the frame rate follows the input; "Continuous" asks for every frame, so the
+//! rate shows what drawing can do with the input taken out of it.
 const std = @import("std");
 const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
@@ -22,6 +28,8 @@ var narrow = false;
 /// stays where the finger lifted, and read as a hover it froze the profiler for good.
 var touch_pointer = false;
 var touch_down = false;
+/// Ask for every frame while the window is open, instead of only the ones something wants.
+var continuous = false;
 
 /// The palette's "Toggle Profiler".
 pub fn toggle() void {
@@ -72,6 +80,17 @@ pub fn draw() void {
     var body = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .all(8) });
     defer body.deinit();
 
+    if (continuous) dvui.refresh(null, @src(), null);
+    // Pointer moves this frame, mouse or touch: where the frame rate comes from while one
+    // drives it.
+    {
+        var moves: u32 = 0;
+        for (dvui.events()) |*e| {
+            if (e.evt == .mouse and e.evt.mouse.action == .motion) moves += 1;
+        }
+        p.countInput(moves);
+    }
+
     const s = p.stats;
     const mono = dvui.Font.theme(.mono);
     const dim = dvui.themeGet().color(.control, .text).opacity(0.6);
@@ -80,11 +99,15 @@ pub fn draw() void {
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
-        dvui.label(@src(), "{d:.0} fps   frame {d:.2} ms   work {d:.2} ms   worst {d:.2} ms   {d} frames", .{
+        var submit_buf: [32]u8 = undefined;
+        const submit = if (s.submit_ns) |ns| std.fmt.bufPrint(&submit_buf, "   submit {d:.2} ms", .{ms(ns)}) catch "" else "";
+        dvui.label(@src(), "{d:.0} fps   frame {d:.2} ms   work {d:.2} ms{s}   worst {d:.2} ms   input {d:.0}/s   {d} frames", .{
             s.fps,
             ms(s.interval_ns),
             ms(s.work_ns),
+            submit,
             ms(@floatFromInt(s.worst_work_ns)),
+            s.inputs_per_s,
             s.frames,
         }, .{ .font = mono, .gravity_y = 0.5 });
     }
@@ -92,6 +115,7 @@ pub fn draw() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = 4, .h = 6 } });
         defer row.deinit();
         if (dvui.button(@src(), if (p.paused) "Resume" else "Pause", .{}, .{})) p.paused = !p.paused;
+        if (dvui.button(@src(), if (continuous) "On input" else "Continuous", .{}, .{})) continuous = !continuous;
         if (dvui.button(@src(), "Reset", .{}, .{})) p.reset();
         if (dvui.button(@src(), if (view == .by_plugin) "Call tree" else "By plugin", .{}, .{})) {
             view = if (view == .by_plugin) .tree else .by_plugin;
@@ -135,8 +159,9 @@ pub fn draw() void {
     drawGrid(rows.items, work, mono, dim);
 }
 
-/// The last `profile.history_len` frames' work as bars, newest at the right, with the 120 and
-/// 60 fps lines. Returns how many frames back the pointer is over (0 the newest), if it is.
+/// The last `profile.history_len` frames' work as bars, newest at the right, each with its
+/// submit on top in a fainter colour, and the 120 and 60 fps lines. Returns how many frames back
+/// the pointer is over (0 the newest), if it is.
 fn drawGraph(p: *profile.Profiler, font: dvui.Font, dim: dvui.Color) ?usize {
     var box = dvui.box(@src(), .{}, .{ .expand = .horizontal, .min_size_content = .{ .w = 200, .h = 90 }, .margin = .{ .h = 6 } });
     defer box.deinit();
@@ -148,7 +173,7 @@ fn drawGraph(p: *profile.Profiler, font: dvui.Font, dim: dvui.Color) ?usize {
     var top_ns: f64 = 1000.0 / 60.0 * std.time.ns_per_ms * 1.25;
     var ago: usize = 0;
     while (ago < n) : (ago += 1) {
-        if (p.historyFrame(ago)) |f| top_ns = @max(top_ns, @as(f64, @floatFromInt(f.work_ns)) * 1.1);
+        if (p.historyFrame(ago)) |f| top_ns = @max(top_ns, @as(f64, @floatFromInt(@as(u64, f.work_ns) + f.submit_ns)) * 1.1);
     }
     const bar_w = r.w / @as(f32, @floatFromInt(profile.history_len));
     const scale: f32 = @floatCast(r.h / top_ns);
@@ -184,20 +209,24 @@ fn drawGraph(p: *profile.Profiler, font: dvui.Font, dim: dvui.Color) ?usize {
     // (each its own path, triangulation and draw call), so the graph stays out of the numbers
     // it shows.
     const lifo = dvui.currentWindow().lifo();
-    const quads = n + 2;
+    const quads = 2 * n + 2;
     if (dvui.Triangles.Builder.init(lifo, quads * 4, quads * 6)) |builder| {
         var b = builder;
         defer b.deinit(lifo);
         const bar_col = dvui.Color.PMA.fromColor(dvui.themeGet().color(.highlight, .fill).opacity(0.8));
+        const submit_col = dvui.Color.PMA.fromColor(dvui.themeGet().color(.highlight, .fill).opacity(0.35));
         const hover_col = dvui.Color.PMA.fromColor(dvui.themeGet().color(.window, .text));
         const line_col = dvui.Color.PMA.fromColor(dim.opacity(0.5));
         ago = 0;
         while (ago < n) : (ago += 1) {
             const f = p.historyFrame(ago) orelse break;
             const hgt = @min(r.h, @as(f32, @floatFromInt(f.work_ns)) * scale);
+            const submit_hgt = @min(r.h - hgt, @as(f32, @floatFromInt(f.submit_ns)) * scale);
             const x = r.x + r.w - @as(f32, @floatFromInt(ago + 1)) * bar_w;
+            const w = @max(1, bar_w - rs.s);
             const is_hovered = hovered != null and hovered.? == ago;
-            addQuad(&b, .{ .x = x, .y = r.y + r.h - hgt, .w = @max(1, bar_w - rs.s), .h = hgt }, if (is_hovered) hover_col else bar_col);
+            addQuad(&b, .{ .x = x, .y = r.y + r.h - hgt, .w = w, .h = hgt }, if (is_hovered) hover_col else bar_col);
+            if (submit_hgt > 0) addQuad(&b, .{ .x = x, .y = r.y + r.h - hgt - submit_hgt, .w = w, .h = submit_hgt }, submit_col);
         }
         inline for (.{ 120.0, 60.0 }) |fps| {
             const y = r.y + r.h - @as(f32, @floatCast(1000.0 / fps * std.time.ns_per_ms)) * scale;
@@ -206,10 +235,10 @@ fn drawGraph(p: *profile.Profiler, font: dvui.Font, dim: dvui.Color) ?usize {
         if (b.indices.items.len > 0) dvui.renderTriangles(b.build_unowned(), null) catch {};
     } else |_| {}
     {
-        var label_buf: [96]u8 = undefined;
+        var label_buf: [128]u8 = undefined;
         const text = if (hovered) |h| blk: {
             const f = p.historyFrame(h).?;
-            break :blk std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms — the table shows this frame", .{ h, ms(@floatFromInt(f.work_ns)) }) catch "";
+            break :blk std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms + submit {d:.2} ms — the table shows this frame", .{ h, ms(@floatFromInt(f.work_ns)), ms(@floatFromInt(f.submit_ns)) }) catch "";
         } else std.fmt.bufPrint(&label_buf, "last {d} frames · hover one to hold it", .{n}) catch "";
         dvui.labelNoFmt(@src(), text, .{}, .{ .font = font, .color_text = .{ .color = dim }, .gravity_x = 0, .gravity_y = 0 });
     }

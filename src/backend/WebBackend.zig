@@ -64,6 +64,11 @@ fn wasmFree(_: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ret_addr: us
     std.heap.wasm_allocator.rawFree(buf, alignment, ret_addr);
 }
 
+/// How long the last frame's `win.end` took: dvui's deferred drawing, and the frame's draws
+/// handed to WebGL — the part of a frame after the app's own, which the profiler cannot time
+/// from inside it (`core.profile.hostFrameBegin`).
+pub var last_submit_ns: u64 = 0;
+
 pub var win: dvui.Window = undefined;
 pub var win_ok = false;
 var arena: std.mem.Allocator = undefined;
@@ -1393,8 +1398,10 @@ fn update() !i32 {
 
     const res = try app.frameFn();
 
+    const submit_start = wasm.wasm_now();
     const end_micros = try win.end(.{});
     window_ended = true;
+    last_submit_ns = @intFromFloat(@max(0, wasm.wasm_now() - submit_start) * std.time.ns_per_ms);
 
     switch (res) {
         .ok => {},
