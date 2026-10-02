@@ -518,6 +518,7 @@ extern "c" fn fizzy_native_monitor_last_scroll_precise() c_int;
 extern "c" fn fizzy_native_disable_titlebar_separator(nswindow: *anyopaque) void;
 extern "c" fn fizzy_native_metal_drawable_size(nswindow: *anyopaque, out_w: *c_int, out_h: *c_int) c_int;
 extern "c" fn fizzy_native_in_live_resize(nswindow: *anyopaque) c_int;
+extern "c" fn fizzy_native_live_resize_next_frame(nswindow: *anyopaque, wait_s: f64, since_start_s: f64) void;
 
 fn cocoaWindow(window: *c.SDL_Window) ?*anyopaque {
     if (builtin.os.tag != .macos) return null;
@@ -531,6 +532,18 @@ fn inLiveResize(self: *SDLBackend) bool {
         if (cocoaWindow(self.window)) |nswindow| return fizzy_native_in_live_resize(nswindow) != 0;
     }
     return false;
+}
+
+/// Inside a live resize `appIterate` waits for nothing, and a frame comes only when AppKit
+/// displays the window: ask it for the next one when dvui wants it (`wait_micros`, from
+/// `waitTime`), so an animation keeps the display's rate while no resize step is drawing it
+/// (`fizzy_native_live_resize_next_frame` in `macos_monitor.m`).
+fn liveResizeNextFrame(self: *SDLBackend, win: *const dvui.Window, wait_micros: u32) void {
+    if (comptime builtin.os.tag != .macos) return;
+    const nswindow = cocoaWindow(self.window) orelse return;
+    const wait_s: f64 = if (wait_micros == std.math.maxInt(u32)) -1 else @as(f64, @floatFromInt(wait_micros)) / std.time.us_per_s;
+    const since_start_ns = @max(0, self.nanoTime() - win.frame_time_ns);
+    fizzy_native_live_resize_next_frame(nswindow, wait_s, @as(f64, @floatFromInt(since_start_ns)) / std.time.ns_per_s);
 }
 
 const SDL_ERROR = bool;
@@ -2216,6 +2229,9 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     const wait_event_micros = appState.win.waitTime(end_micros);
     if (trace) |t| live_resize_trace.end(t, &appState.back, wait_event_micros);
 
+    const in_live_resize = appState.back.inLiveResize();
+    if (in_live_resize) appState.back.liveResizeNextFrame(&appState.win, wait_event_micros);
+
     //std.debug.print("waitEventTimeout {d} {} resize {}\n", .{wait_event_micros, gno_wait, ghave_resize});
 
     // If a resize event happens we are likely in a callback.  If for any
@@ -2230,7 +2246,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     // say so, and a wait there takes the tracking loop's own mouse events.
     // NOTE: on iOS, SDL_WaitEventTimeout stalls in UITrackingRunLoopMode during a
     // touch, so we throttle via ios_next_frame_ns above instead of waiting here.
-    if (appState.no_wait or appState.have_resize or appState.back.inLiveResize() or builtin.target.os.tag == .ios) {
+    if (appState.no_wait or appState.have_resize or in_live_resize or builtin.target.os.tag == .ios) {
         appState.have_resize = false;
         if (builtin.target.os.tag == .ios) {
             appState.ios_next_frame_ns = appState.win.backend.nanoTime() + @as(i128, wait_event_micros) * 1000;

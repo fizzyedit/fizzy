@@ -163,6 +163,47 @@ upstream PR is a small rebase.
   `drawsLiveResizeInView:`, which only the patched SDL does). Turning it off was for the timer's
   vsync-blocking present; a present in the step waits only for the GPU to schedule it, and Zed
   runs its resize with display sync on. On an SDL without the patches, vsync goes off as before.
+- After each frame inside a live resize, `SDLBackend.appIterate` tells `macos_monitor.m`
+  (`fizzy_native_live_resize_next_frame`) when dvui wants the next one, and it asks AppKit to
+  display the Metal view then, at the display's rate, while no step does (see "Animating while no
+  step comes").
+
+## Animating while no step comes
+
+**The symptom.** Dragging the window down to its minimum size quickly, the app lagged as the
+explorer folded itself away, and only until the fold had finished.
+
+**Where it comes from (read from the code, not yet measured).** Inside the tracking loop a frame
+comes from AppKit's display of the Metal view, and nothing else: `appIterate` waits for no event
+there, so dvui's wait — 0 while something animates — goes unread. A step displays the view. Between
+steps, only SDL's 60 Hz timer asks for a display, on a tick where no frame has started for a whole
+tick (`sinceFrame < intervalNS` in fizzyedit/SDL's `windowWillStartLiveResize:`). The frame it asks for starts a
+little after its tick, so the next tick finds a little less than a tick since it and skips: as few
+as 30 frames a second, a quarter of a 120 Hz display's rate.
+
+No step comes while the pointer rests, or once the window is at its minimum size: AppKit leaves
+the frame as it is, and the view is not displayed. Neither shows when nothing moves. The explorer
+folds when the area beside the rail is narrower than `Region.InitOptions.collapse_below` (640 pt),
+a little above the window's minimum width (640 pt, `Constants.min_window_size`), so a fast drag to
+the minimum reaches it a few steps into the fold, and the rest of the 300 ms slide played on the
+timer's ticks. Once the slide ended there was nothing left to draw.
+
+**The fix.** After each frame in a live resize, `appIterate` passes dvui's wait to
+`fizzy_native_live_resize_next_frame` (`macos_monitor.m`), which arms a one-shot timer that marks
+the Metal view as needing display when that frame is due — no sooner than a display refresh
+(`NSScreen.maximumFramesPerSecond`) after this frame began, and two refreshes after a step, so a
+drag's own steps, about a refresh apart, are not each preceded by a frame of this one's. Any frame
+that comes first re-arms it; a wait for an event disarms it. The frame is drawn from the same
+display a step draws from, presented with its transaction like every other; SDL's timer, finding a
+frame inside its tick, asks for nothing. Only when SDL draws the resize (the listener answers
+`drawsLiveResizeInView:` for the view); on an SDL without the patches the timer draws every tick, as
+before.
+
+**Checking it.** `FIZZY_LIVE_RESIZE_TRACE=1`, drag fast down to the minimum width with the explorer
+open, and hold the button: the frames after the last `step` line are the slide. Before, their
+`since=` was about 33 ms; now it should be a display refresh (8.3 ms at 120 Hz), with `wait=0` on
+each until the slide ends. SDL's timer itself is unchanged: while the pointer rests it still asks
+for a display every other tick, wanted or not, but fizzy's animations no longer depend on it.
 
 ## Where it lives
 

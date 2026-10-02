@@ -53,15 +53,89 @@ int fizzy_native_in_live_resize(void *nswindow) {
     return ((__bridge NSWindow *)nswindow).inLiveResize ? 1 : 0;
 }
 
-/* The CAMetalLayer SDL_GPU presents into: the layer of the Metal view SDL adds under the
- * window's content view when the window is claimed. SDL keeps no public handle to it. */
-static CAMetalLayer *find_metal_layer(NSView *view) {
-    if ([view.layer isKindOfClass:[CAMetalLayer class]]) return (CAMetalLayer *)view.layer;
+/* The Metal view SDL adds under the window's content view when the window is claimed, whose
+ * CAMetalLayer SDL_GPU presents into. SDL keeps no public handle to either. */
+static NSView *find_metal_view(NSView *view) {
+    if ([view.layer isKindOfClass:[CAMetalLayer class]]) return view;
     for (NSView *sub in view.subviews) {
-        CAMetalLayer *found = find_metal_layer(sub);
+        NSView *found = find_metal_view(sub);
         if (found) return found;
     }
     return nil;
+}
+
+static CAMetalLayer *find_metal_layer(NSView *view) {
+    NSView *found = find_metal_view(view);
+    return found ? (CAMetalLayer *)found.layer : nil;
+}
+
+/* fizzyedit/SDL's window listener (the window's delegate), with its live-resize patches. */
+@protocol FizzySDLLiveResizeListener
+- (BOOL)drawsLiveResizeInView:(NSView *)view;
+@end
+
+/* The Metal view, when SDL draws this window's live resize from AppKit's display of it
+ * (`SDL_VIDEO_MAC_SYNC_LIVE_RESIZE` and fizzyedit/SDL's patches) and a live resize is running. */
+static NSView *live_resize_drawn_view(void *nswindow) {
+    if (!nswindow) return nil;
+    NSWindow *window = (__bridge NSWindow *)nswindow;
+    if (!window.inLiveResize || !window.contentView) return nil;
+    NSView *view = find_metal_view(window.contentView);
+    id delegate = window.delegate;
+    if (!view || ![delegate respondsToSelector:@selector(drawsLiveResizeInView:)]) return nil;
+    return [(id<FizzySDLLiveResizeListener>)delegate drawsLiveResizeInView:view] ? view : nil;
+}
+
+/* The next frame of a live resize when no resize step draws it (docs/MACOS_LIVE_RESIZE.md,
+ * "Animating while no step comes").
+ *
+ * Inside AppKit's tracking loop SDL draws a frame at each resize step, from the Metal view's
+ * display, and otherwise only from its 60 Hz timer, which asks for that display on a tick only
+ * when no frame has started for a whole tick. The frame it asks for starts just after the tick,
+ * so the next tick finds a little less than a tick since it and skips: as few as 30 frames a
+ * second while the pointer rests, or pushes past the window's minimum size, whatever the app
+ * wants. Nothing moves there, usually; but a fast drag to the minimum width folds the explorer
+ * away just before reaching it, and its whole slide played at a quarter of a ProMotion display's
+ * rate.
+ *
+ * So after each frame in a live resize the app says when it wants the next (`wait_s`, dvui's
+ * wait; negative for not until an event), and this asks AppKit to display the view then, no
+ * sooner than a display refresh after the frame began (`since_start_s` ago) — through the same
+ * display a step draws from, so the frame is presented with its transaction like every other.
+ * A frame that comes first (a step) re-arms it. After a step, the next one is given until a
+ * second refresh to come: a drag's steps arrive about a refresh apart, and drawing just ahead of
+ * each would double the frames the drag waits on. */
+static NSTimer *g_live_resize_frame_timer = nil;
+static NSSize g_live_resize_frame_size = {0, 0};
+
+void fizzy_native_live_resize_next_frame(void *nswindow, double wait_s, double since_start_s) {
+    [g_live_resize_frame_timer invalidate];
+    g_live_resize_frame_timer = nil;
+    NSView *view = live_resize_drawn_view(nswindow);
+    if (!view) return;
+
+    const NSSize size = view.bounds.size;
+    const BOOL stepped = !NSEqualSizes(size, g_live_resize_frame_size);
+    g_live_resize_frame_size = size;
+    if (wait_s < 0) return;
+
+    NSInteger fps = 60;
+    if (@available(macOS 12.0, *)) {
+        const NSInteger screen_fps = view.window.screen.maximumFramesPerSecond;
+        if (screen_fps > 0) fps = screen_fps;
+    }
+    const double refresh_s = 1.0 / (double)fps;
+    const double pace_s = stepped ? 2 * refresh_s : refresh_s;
+    const double delay_s = MAX(0.0, MAX(wait_s, pace_s - since_start_s));
+
+    g_live_resize_frame_timer = [NSTimer timerWithTimeInterval:delay_s
+                                                       repeats:NO
+                                                         block:^(NSTimer *timer) {
+        if (timer != g_live_resize_frame_timer) return;
+        g_live_resize_frame_timer = nil;
+        [live_resize_drawn_view(nswindow) setNeedsDisplay:YES];
+    }];
+    [[NSRunLoop mainRunLoop] addTimer:g_live_resize_frame_timer forMode:NSRunLoopCommonModes];
 }
 
 static CAMetalLayer *metal_layer_of(void *nswindow) {
