@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const icons = @import("icons");
+const caption_buttons = @import("caption_buttons.zig");
 const assets = @import("assets");
 const objc = @import("objc");
 
@@ -3794,105 +3794,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             }
         }
 
-        // Top-right overlay on Windows and Linux: minimize / maximize / close. Lives in a
-        // FloatingWidget (a subwindow) so it doesn't take any space in the vertical overall_box
-        // layout — the main UI below fills the entire window. Caption-button rects are pushed to
-        // the backend: on Windows WM_NCHITTEST returns HTMINBUTTON/HTMAXBUTTON/HTCLOSE for them
-        // (snap-layouts + the OS's click); on Linux the hit test leaves them to the app, which
-        // hovers and clicks them here.
+        // Top-right overlay on Windows and Linux: minimize / maximize / close, each in its
+        // desktop's style (`caption_buttons`). Floating, so it takes no space in overall_box's
+        // layout — the main UI below fills the entire window.
         if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
-            const button_w: f32 = 46;
-            const button_h = Constants.titlebar_height;
-            const overlay_w: f32 = button_w * 3;
-            const win_rect = dvui.windowRect();
-
-            var fw: dvui.FloatingWidget = undefined;
-            fw.init(@src(), .{ .mouse_events = true }, .{
-                .rect = .{ .x = win_rect.w - overlay_w, .y = 0, .w = overlay_w, .h = button_h },
-            });
-            defer fw.deinit();
-
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
-            defer row.deinit();
-
-            // Windows reports the hovered button from WM_NCMOUSEMOVE; on Linux the pointer is the
-            // app's, and the buttons sit at known places along the right edge.
-            const hovered = fizzy.backend.getHoveredTitleBarButton() orelse if (builtin.os.tag == .linux) blk: {
-                const m = dvui.currentWindow().mouse_pt.toNatural();
-                const left = win_rect.w - overlay_w;
-                if (m.y < 0 or m.y >= button_h or m.x < left or m.x >= win_rect.w) break :blk null;
-                break :blk switch (@as(u32, @intFromFloat((m.x - left) / button_w))) {
-                    0 => fizzy.backend.TitleBarButton.minimize,
-                    1 => .maximize,
-                    else => .close,
-                };
-            } else null;
-            const stroke = dvui.themeGet().color(.control, .text);
-            const hover_fill = dvui.themeGet().color(.control, .fill_hover).lighten(if (dvui.themeGet().dark) 3 else -3);
-            const close_hover_fill = dvui.Color{ .r = 232, .g = 17, .b = 35, .a = 255 };
-            const close_hover_stroke = dvui.Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
-
-            // minimize
-            {
-                const is_hover = hovered == .minimize;
-                var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .min_size_content = .{ .w = button_w, .h = button_h },
-                    .expand = .vertical,
-                    .background = is_hover,
-                    .color_fill = .{ .color = hover_fill },
-                });
-                defer b.deinit();
-                fizzy.backend.setTitleBarCaptionButtonRect(.minimize, b.data().rectScale().r);
-                if (builtin.os.tag == .linux and dvui.clicked(b.data(), .{ .hover_cursor = null })) fizzy.backend.performTitleBarButton(dvui.currentWindow(), .minimize);
-                core.icon.icon(@src(), "win_min", icons.tvg.feather.minus, .{ .stroke_color = .{ .color = stroke } }, .{
-                    .expand = .ratio,
-                    .padding = .all(7),
-                    .margin = .all(0),
-                    .gravity_x = 0.5,
-                });
-            }
-            // maximize / restore
-            {
-                const is_hover = hovered == .maximize;
-                var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .min_size_content = .{ .w = button_w, .h = button_h },
-                    .expand = .vertical,
-                    .background = is_hover,
-                    .color_fill = .{ .color = hover_fill },
-                });
-                defer b.deinit();
-                fizzy.backend.setTitleBarCaptionButtonRect(.maximize, b.data().rectScale().r);
-                if (builtin.os.tag == .linux and dvui.clicked(b.data(), .{ .hover_cursor = null })) fizzy.backend.performTitleBarButton(dvui.currentWindow(), .maximize);
-                core.icon.icon(@src(), "win_max", icons.tvg.lucide.square, .{ .stroke_color = .{ .color = stroke } }, .{
-                    .expand = .ratio,
-                    .padding = .all(9),
-                    .margin = .all(0),
-                    .gravity_x = 0.5,
-                });
-            }
-            // close
-            {
-                const is_hover = hovered == .close;
-                var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .min_size_content = .{ .w = button_w, .h = button_h },
-                    .expand = .vertical,
-                    .background = is_hover,
-                    .color_fill = .{ .color = close_hover_fill.opacity(0.5) },
-                    // In the window's corner: rounded with it on Linux (`overall_box`).
-                    .corners = if (linux_windowed) .{ .tr = .round(Constants.linux_window_radius) } else null,
-                });
-                defer b.deinit();
-                fizzy.backend.setTitleBarCaptionButtonRect(.close, b.data().rectScale().r);
-                if (builtin.os.tag == .linux and dvui.clicked(b.data(), .{ .hover_cursor = null })) fizzy.backend.performTitleBarButton(dvui.currentWindow(), .close);
-                core.icon.icon(@src(), "win_close", icons.tvg.heroicons.outline.@"x-mark", .{
-                    .stroke_color = .{ .color = if (is_hover) close_hover_stroke else stroke },
-                }, .{
-                    .expand = .ratio,
-                    .padding = .all(5),
-                    .margin = .all(0),
-                    .gravity_x = 0.5,
-                });
-            }
+            caption_buttons.draw(if (linux_windowed) Constants.linux_window_radius else null);
         }
 
         editor.pollPendingReveals();
