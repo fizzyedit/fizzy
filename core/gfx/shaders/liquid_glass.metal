@@ -1,8 +1,8 @@
 // `liquid_glass.glsl` in Metal, for fizzy's native backend (`src/backend/native`): the same
-// program line for line — change both together, and `LiquidField.sample` with them. To the
-// interface the native backend's programs take: entry point `main0`, the default vertex shader's
-// outputs as inputs, the draw's own texture (the frost) at 0, the sharp picture at 1, the
-// uniforms as buffer 0.
+// program line for line — change it, `liquid_glass.fragment.hlsl` and `LiquidField.sample`
+// together. To the interface the native backend's programs take: entry point `main0`, the
+// default vertex shader's outputs as inputs, the draw's own texture (the frost) at 0, the sharp
+// picture at 1, the uniforms as buffer 0.
 
 #include <metal_stdlib>
 using namespace metal;

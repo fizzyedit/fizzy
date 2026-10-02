@@ -9,6 +9,8 @@
 
 // The default vertex shader's outputs (dvui's `shared.hlsl`): position, then the vertex
 // colour (premultiplied, 0…1) and uv. SPIR-V locations 0 and 1; MSL user(locn0), user(locn1).
+// Read the colour and uv only: D3D12 links these to the vertex shader's outputs by register, and
+// an SV_POSITION read here lands on the instance output's — the pipeline is refused.
 struct PSInput
 {
     float4 position : SV_POSITION;

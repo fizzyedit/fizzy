@@ -2,7 +2,8 @@
 // frosted and refracting, in one pass at every pixel. Written against the program prelude
 // (`core/gfx/programs.zig`): VARYING, TEX, FRAG_COLOR, MAX_VEC4.
 //
-// Mirrors `LiquidField.sample` line for line; change both together.
+// Mirrors `LiquidField.sample` line for line, as `liquid_glass.metal` and
+// `liquid_glass.fragment.hlsl` (compiled to SPIR-V and DXIL) mirror it; change them all together.
 //
 // Each quad's vertex colour says what it draws: r the pass (0 punches the glass's coverage out
 // of what is there, 1 adds the glass), g and b the first of its shapes and how many.

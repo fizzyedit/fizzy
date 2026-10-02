@@ -215,9 +215,19 @@ const rim_line_width: f32 = 0.8;
 
 // ── Drawing ─────────────────────────────────────────────────────────────────────────────────────
 
+/// The program for the native backend on Vulkan and D3D12, compiled by shadercross from
+/// `shaders/liquid_glass.fragment.hlsl` (the commands are at its top). Copied out of the embed to
+/// be aligned: Vulkan takes SPIR-V as 32-bit words.
+const compiled = struct {
+    const spirv align(8) = @embedFile("shaders/compiled/spv/liquid_glass.fragment.spv").*;
+    const dxil align(8) = @embedFile("shaders/compiled/dxil/liquid_glass.fragment.dxil").*;
+};
+
 var program: programs.Program = .from(.{
     .glsl = @embedFile("shaders/liquid_glass.glsl"),
     .msl = @embedFile("shaders/liquid_glass.metal"),
+    .spirv = &compiled.spirv,
+    .dxil = &compiled.dxil,
 }, .{ .textures = 1, .uniform_vec4s = uniform_vec4s });
 
 /// Whether glass is drawn through the program at all — the app's switch (Settings → Debugging →
