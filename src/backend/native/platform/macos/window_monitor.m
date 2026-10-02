@@ -61,6 +61,11 @@ static BOOL sdl_draws_live_resize(NSWindow *window) {
     return delegate != nil && [delegate respondsToSelector:@selector(drawsLiveResizeInView:)];
 }
 
+int fizzy_macos_window_sdl_draws_live_resize(void *nswindow) {
+    if (!nswindow) return 0;
+    return sdl_draws_live_resize((__bridge NSWindow *)nswindow) ? 1 : 0;
+}
+
 static BOOL live_resize_active(void) {
     return g_space_transition || g_unzoom_animating || g_pump_frames > 0;
 }

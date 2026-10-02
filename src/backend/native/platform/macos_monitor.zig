@@ -19,6 +19,8 @@ const Backend = @import("backend");
 const c = Backend.c;
 const window_layout = @import("window_layout.zig");
 
+const log = std.log.scoped(.macos_monitor);
+
 extern fn fizzy_macos_window_titlebar_inset(cocoa_window: ?*anyopaque) f64;
 extern fn fizzy_macos_window_is_zoomed(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_in_fullscreen_space(cocoa_window: ?*anyopaque) c_int;
@@ -39,6 +41,7 @@ extern fn fizzy_macos_window_set_frame(cocoa_window: ?*anyopaque, x: f64, y: f64
 extern fn fizzy_macos_copy_screen_frames(out: [*]f64, max: c_int) c_int;
 extern fn fizzy_macos_window_sync_content_views(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_install_resize_observer(cocoa_window: ?*anyopaque) void;
+extern fn fizzy_macos_window_sdl_draws_live_resize(cocoa_window: ?*anyopaque) c_int;
 
 // SDL internals (linked but not in public headers) — the same hooks SDL uses
 // for macOS live resize while the window frame is animating.
@@ -263,6 +266,12 @@ pub fn install(win: *dvui.Window) void {
     // screen together (fizzyedit/SDL's live-resize patches, `docs/MACOS_LIVE_RESIZE.md`). By name,
     // not SDL's #define, so this builds against an SDL without them, which ignores it.
     _ = c.SDL_SetHint("SDL_VIDEO_MAC_SYNC_LIVE_RESIZE", "1");
+    // Which one this build has is otherwise invisible until a drag looks wrong.
+    if (fizzy_macos_window_sdl_draws_live_resize(cocoa) != 0) {
+        log.info("live resize: SDL draws each step in its transaction (fizzy's SDL patches)", .{});
+    } else {
+        log.info("live resize: timer-driven (this SDL has no live-resize patches, or SDL_VIDEO_MAC_SYNC_LIVE_RESIZE=0)", .{});
+    }
 }
 
 /// Called at the end of AppInit: allows the monitor's pump timer to start
