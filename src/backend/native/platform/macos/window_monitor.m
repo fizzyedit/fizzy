@@ -22,6 +22,7 @@ extern void fizzy_macos_window_request_clear_frames(int frames);
 extern void fizzy_macos_window_commit_steady_state(void);
 extern void fizzy_macos_window_live_resize_vsync(int active);
 extern bool SDL_GetHintBoolean(const char *name, bool default_value);
+extern void fizzy_live_resize_trace_step(void *nswindow);
 /* Pure window-frame decisions live in window_layout.zig (unit-tested); see
  * backend/backend_native.zig for the C-ABI wrappers. */
 extern int fizzy_macos_constrain_is_menu_bar_nudge(double rx, double ry, double rw, double rh,
@@ -642,6 +643,7 @@ void fizzy_macos_window_install_resize_observer(void *nswindow) {
             if (g_exit_origin_guard > 0) {
                 restore_pre_fullscreen_origin_if_nudged(w);
             }
+            if ([name isEqualToString:NSWindowDidResizeNotification]) fizzy_live_resize_trace_step(nswindow);
             if ([name isEqualToString:NSWindowWillStartLiveResizeNotification]) {
                 g_manual_live_resize = YES;
                 if (!sdl_draws_live_resize(w)) fizzy_macos_window_live_resize_vsync(1);
