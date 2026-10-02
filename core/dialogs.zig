@@ -186,6 +186,17 @@ pub fn carriedField(id: dvui.Id, field: widgets.LiquidField, scale: f32) bool {
     return true;
 }
 
+/// `carriedField`, whole from the first frame it is drawn. For glass that carries on a shape
+/// already on screen — a carried view turning from the drop of glass it was (merged, until then,
+/// into the drop zones' glass) into a tab — where forming in from nothing, as a pane that comes
+/// back does, blinked it out for the frames that took.
+pub fn carriedFieldWhole(id: dvui.Id, field: widgets.LiquidField, scale: f32) bool {
+    var pane = widgets.liquidFrost() orelse return false;
+    pane.form = 1;
+    widgets.BlurBackdrop.fieldPane(id, field, scale, pane);
+    return true;
+}
+
 /// Clear glass at the dialog style (`BlurBackdrop.Pane.clear`): its tint, lift and edge over what
 /// is behind, unblurred — glass for the blur off.
 pub fn clearFrost() widgets.BlurBackdrop.Pane {

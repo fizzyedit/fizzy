@@ -315,8 +315,11 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
             if (doc_opt != null and !overAnyStrip(dvui.currentWindow().mouse_pt)) {
                 runtime.workbench().dragging_surface = null;
                 dvui.dragEnd();
-                runtime.workbench().carried_tab_w = reorderable.data().borderRectScale().r.w;
-                runtime.host().beginViewDrag(surface.id, reorderable.data().borderRectScale().r);
+                runtime.workbench().carried_tab_w = frs.r.w;
+                // From the tab as it is drawn — floating under the pointer, its glass just laid at
+                // `frs` — not its slot: the view drag grows out of this rect, and from the slot
+                // its glass jumped to the strip's corner before forming.
+                runtime.host().beginViewDrag(surface.id, frs.r);
             }
         }
         hbox.drawBackground();
@@ -503,7 +506,9 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
 
                         e.handle(@src(), hbox.data());
                         dvui.captureMouse(hbox.data(), e.num);
-                        dvui.dragPreStart(me.button, me.p, .{ .size = reorderable.data().rectScale().r.size(), .offset = reorderable.data().rectScale().r.topLeft().diff(me.p) });
+                        // The hand from the press on: the app's view drag, which this becomes off the
+                        // strip, asks for the same (`ViewDrag.cursor`), so it does not change there.
+                        dvui.dragPreStart(me.button, me.p, .{ .size = reorderable.data().rectScale().r.size(), .offset = reorderable.data().rectScale().r.topLeft().diff(me.p), .cursor = .hand });
                     } else if (me.action == .release and me.button.pointer()) {
                         dvui.captureMouse(null, e.num);
                         dvui.dragEnd();

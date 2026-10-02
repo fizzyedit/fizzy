@@ -250,7 +250,7 @@ pub fn deinit(self: *Chooser) void {
                     // place shows, so show this first.
                     dvui.captureMouse(null, 0);
                     f.selectIn(&self.place, id);
-                    ViewDrag.begin(f, name, region.?.bounds);
+                    ViewDrag.begin(f, name, region.?.bounds, if (i < self.drawn_rects.items.len) self.drawn_rects.items[i] else b);
                 } else {
                     // Out of a shut place (a rail beside a closed sidebar): the place is not
                     // drawing to drive a drag, and cannot be dropped on. Carry the view loose,

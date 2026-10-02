@@ -457,7 +457,7 @@ pub const Region = struct {
     /// it each frame the strip draws. While a view is carried the strip is chrome: over it the
     /// drop is into this region (`RegionSpec.Drop.on_chooser`, with where along it), the view
     /// rides as a tab, not a preview, and the drop zones cover the region less the strip. True
-    /// while a carried view is over it: show where it would go in.
+    /// while a carried view this region can take is over it: show where it would go in.
     pub fn offerChooser(self: Region, bounds: dvui.Rect.Physical) bool {
         return if (self.host.fizzy_api) |a| a.offerRegionChooser(self.token, bounds) else false;
     }

@@ -26,6 +26,7 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const core = @import("core");
+const icons = @import("icons");
 const sdk = @import("fizzy_sdk");
 const Split = core.widgets.Split;
 const Layout = @import("Layout.zig");
@@ -35,6 +36,11 @@ const Drop = @import("Drop.zig");
 const DropZones = core.widgets.DropZones;
 
 const ViewDrag = @This();
+
+/// The pointer while a view is carried, from the press that lifts it — a tab, a place's corner
+/// button, a picker card (each passes it to `dvui.dragPreStart`) — to the release: the same
+/// whatever is under it. dvui has no closed "grabbing" hand; this is its hand.
+pub const cursor: dvui.enums.Cursor = .hand;
 
 /// Interned name of the place the view was lifted from. Empty when idle, so
 /// `active()` is the one question everything else asks first.
@@ -48,14 +54,19 @@ texture_rect: dvui.Rect.Physical = .{},
 start_ns: i128 = 0,
 /// Surface lifted from the source: what the card under the pointer shows, and what lands.
 moved_id: []const u8 = "",
-/// The card's size as last drawn, and the size and moment its current change of shape set out
-/// from: at lift from what was grabbed; over a chooser it becomes a tab and off one the preview
-/// again, each on the same growing motion (`drawFloat`).
-card_size: dvui.Size.Physical = .{},
-card_from: dvui.Size.Physical = .{},
+/// What the view is carried as this frame (`modeAt`), and what it was before its last change.
+mode: Mode = .preview,
+morph_from_mode: Mode = .preview,
+/// The carried shape as last drawn, whatever it was drawn as: its rect and corner radius,
+/// physical. A change of what the view is carried as grows the new shape out of this one —
+/// position, size and corners — so the lift from what was grabbed, the tab over a strip and the
+/// drop of glass off one are one shape changing, never one swapped for another.
+shape_rect: dvui.Rect.Physical = .{},
+shape_radius: f32 = 0,
+/// Where the current change set out from, and when (`morphProgress`).
+morph_rect: dvui.Rect.Physical = .{},
+morph_radius: f32 = 0,
 card_start_ns: i128 = 0,
-/// The card is a tab this frame: the pointer is over a chooser.
-card_tab: bool = false,
 /// The view carried as a drop of glass (`dropShapes`), where the glass program draws: its head
 /// following the pointer and its tail the head, each on a spring, so it stretches as it is
 /// dragged and swings when it stops. This frame's shapes, head then tail.
@@ -87,6 +98,21 @@ pending_frame: i128 = 0,
 /// Last frame's drops, for one still going after its place stopped asking for it (`drawOverlay`).
 last_pending: [max_offers]PendingDrop = undefined,
 last_pending_count: usize = 0,
+
+/// What the carried view is drawn as. `drop` where the glass program draws and the pointer is off
+/// every list, `tab` over a list (a tab strip, a rail), `preview` — a card of its photograph — off
+/// lists with no glass program.
+pub const Mode = enum {
+    preview,
+    tab,
+    drop,
+
+    /// Whether it shows the view's photograph (a tab shows its face instead), so a change between
+    /// two that both do keeps it in view rather than fading it back in.
+    fn photographs(m: Mode) bool {
+        return m != .tab;
+    }
+};
 
 /// A place's drop, queued while the place draws and drawn over everything once they all have
 /// (`drawOverlay`) — over the card riding the pointer too, which would otherwise sit on the
@@ -238,6 +264,21 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
     pic.stop();
 }
 
+/// The card's picture from the frame as last drawn — what the place showed a moment ago — rather
+/// than from a capture of this frame's draw. Inside a capture a frosted pane has nothing behind
+/// it to frost and draws dark, and that copy is what `keepShot` puts back on the screen: the
+/// place flashed dark for the frame it was lifted on. False where there is no last frame to copy
+/// (`FrameTarget.snapshot`: no targets, or a web frame nothing read); the caller captures then.
+pub fn photographFromFrame(l: *Layout, rect: dvui.Rect.Physical) bool {
+    const d = &l.state.view_drag;
+    const r = rect.intersect(dvui.windowRectPixels());
+    const tex = core.FrameTarget.snapshot(r) orelse return false;
+    if (d.texture) |old| dvui.Texture.destroyLater(old);
+    d.texture = backed(tex, r);
+    d.texture_rect = r;
+    return true;
+}
+
 /// The card's photograph, laid over the content fill once, at lift: a document paints no
 /// background of its own (the pane behind it does), and on bare glass its photograph was text
 /// floating in the frost. One opaque picture is what lets the card be drawn see-through: the fill
@@ -260,7 +301,7 @@ fn backed(tex: dvui.Texture, r: dvui.Rect.Physical) dvui.Texture {
 }
 
 /// Begin carrying the view out of `name`. The place keeps drawing it throughout.
-pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical) void {
+pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dvui.Rect.Physical) void {
     var d = &l.state.view_drag;
     d.drop_head = .{};
     d.drop_tail = .{};
@@ -270,12 +311,25 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical) void {
     d.name = l.state.internName(l.gpa, name);
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
-    d.card_from = d.from;
-    d.card_size = d.from;
-    d.card_start_ns = d.start_ns;
-    d.card_tab = false;
+    // The carried glass grows out of what was grabbed — the place's grid button, its tab or rail
+    // icon — with its photograph growing in it: not glass the size of the whole place shrinking
+    // into it, which drew the view whole for a moment before it was carried.
+    liftShape(d, grabbed);
     if (visibleId(l, name)) |id| d.moved_id = id;
     mapTargets(l, d);
+}
+
+/// The carried shape starts at `from` — what was grabbed: a tab, a card, a place's grid button —
+/// and grows from there into whatever it is first carried as.
+fn liftShape(d: *ViewDrag, from: dvui.Rect.Physical) void {
+    const radius = core.corners.scaled(core.corners.card) * dvui.currentWindow().natural_scale;
+    d.mode = .preview;
+    d.morph_from_mode = .preview;
+    d.shape_rect = from;
+    d.shape_radius = radius;
+    d.morph_rect = from;
+    d.morph_radius = radius;
+    d.card_start_ns = d.start_ns;
 }
 
 /// Begin carrying surface `id` from the picker. There is no source place,
@@ -293,10 +347,7 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     d.name = loose_source;
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
-    d.card_from = d.from;
-    d.card_size = d.from;
-    d.card_start_ns = d.start_ns;
-    d.card_tab = false;
+    liftShape(d, from);
     d.moved_id = s.id;
     d.texture = texture;
     d.texture_rect = from;
@@ -694,13 +745,14 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     d.drop_n = 0;
     const cw = dvui.currentWindow();
     const mouse = cw.mouse_pt;
-    if (!carriedAsDrop(l, mouse)) {
+    const now = cw.frame_time_ns;
+    noteMode(d, modeAt(l, mouse), now);
+    if (d.mode != .drop) {
         d.drop_ns = 0;
         d.drop_head = .{};
         d.drop_tail = .{};
         return d.drop_shapes[0..0];
     }
-    const now = cw.frame_time_ns;
     const scale = cw.natural_scale;
     const dt: f32 = if (d.drop_ns == 0) 0 else @as(f32, @floatFromInt(now - d.drop_ns)) / std.time.ns_per_s;
     d.drop_ns = now;
@@ -737,21 +789,15 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     }
     if (moving) dvui.refresh(null, @src(), null);
 
-    // From the view as it was lifted to the drop, on the card's own curve: the photograph's
-    // rounded rect closing into a circle round the head.
-    const t = cardProgress(d.*, now);
-    const off = dvui.dragOffset();
-    const inset = 8 * scale;
-    const from_tl: dvui.Point.Physical = .{
-        .x = mouse.x + std.math.clamp(off.x, -@max(0, d.card_from.w - inset), 0),
-        .y = mouse.y + std.math.clamp(off.y, -@max(0, d.card_from.h - inset), 0),
-    };
-    const from: dvui.Rect.Physical = dvui.Rect.Physical.fromPoint(from_tl).toSize(d.card_from);
+    // From the shape it was last drawn as — what was grabbed at the lift, the tab it was over a
+    // strip — to the drop, on the card's own curve: that rounded rect closing into a circle round
+    // the head.
+    const t = morphProgress(d.*, now);
     const to: dvui.Rect.Physical = .{ .x = d.drop_head.pos.x - R, .y = d.drop_head.pos.y - R, .w = 2 * R, .h = 2 * R };
-    const lerp = std.math.lerp;
-    const head: dvui.Rect.Physical = .{ .x = lerp(from.x, to.x, t), .y = lerp(from.y, to.y, t), .w = @max(1, lerp(from.w, to.w, t)), .h = @max(1, lerp(from.h, to.h, t)) };
-    const card_radius = core.corners.scaled(core.corners.card) * scale;
-    d.drop_radius = lerp(card_radius, R, std.math.clamp(t, 0, 1));
+    const head = lerpRect(d.morph_rect, to, t);
+    d.drop_radius = std.math.lerp(d.morph_radius, R, std.math.clamp(t, 0, 1));
+    d.shape_rect = head;
+    d.shape_radius = d.drop_radius;
     d.drop_shapes[0] = .{ .rect = head, .radii = @splat(d.drop_radius), .round = true };
     d.drop_n = 1;
     const tr = R * drop_tail_share * std.math.clamp(t, 0, 1);
@@ -762,9 +808,37 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
     return d.drop_shapes[0..d.drop_n];
 }
 
-/// How far the card has come from what was grabbed into what it is carried as: `motion.enter`
-/// over the dialogs' 300ms as written.
-fn cardProgress(d: ViewDrag, now: i128) f32 {
+/// What the view is carried as with the pointer at `mouse` (`Mode`).
+fn modeAt(l: *Layout, mouse: dvui.Point.Physical) Mode {
+    if (carriedAsDrop(l, mouse)) return .drop;
+    return if (chooserAt(l.state, mouse) != null) .tab else .preview;
+}
+
+/// A change of what the view is carried as: the new shape sets out from the one last drawn.
+fn noteMode(d: *ViewDrag, mode: Mode, now: i128) void {
+    if (mode == d.mode) return;
+    d.morph_from_mode = d.mode;
+    d.mode = mode;
+    d.morph_rect = d.shape_rect;
+    d.morph_radius = d.shape_radius;
+    d.card_start_ns = now;
+}
+
+/// How much the content of what it is carried as has come in: a change between two that both
+/// show the photograph keeps it; a change to or from a tab's face fades the new one in.
+fn contentIn(d: ViewDrag, t: f32) f32 {
+    return if (d.morph_from_mode.photographs() == d.mode.photographs()) 1 else std.math.clamp(t, 0, 1);
+}
+
+fn lerpRect(a: dvui.Rect.Physical, b: dvui.Rect.Physical, t: f32) dvui.Rect.Physical {
+    const lerp = std.math.lerp;
+    return .{ .x = lerp(a.x, b.x, t), .y = lerp(a.y, b.y, t), .w = @max(1, lerp(a.w, b.w, t)), .h = @max(1, lerp(a.h, b.h, t)) };
+}
+
+/// How far the carried shape has come from the one it set out from into what it is carried as:
+/// `motion.enter` over the dialogs' 300ms as written, past its size and back when motion is
+/// playful; at once when motion is off.
+fn morphProgress(d: ViewDrag, now: i128) f32 {
     const dur: f64 = core.motion.durationMs(300) * @as(f64, std.time.ns_per_ms);
     const elapsed: f64 = @floatFromInt(now - d.card_start_ns);
     return if (dur <= 0) 1 else core.motion.enter(@floatCast(std.math.clamp(elapsed / dur, 0, 1)));
@@ -778,7 +852,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
     if (!taken) {
         var field: core.LiquidField = .{ .merge_px = drop_r * 0.9 * scale };
         for (d.drop_shapes[0..d.drop_n]) |sh| field.add(sh);
-        _ = core.dialogs.carriedField(dvui.Id.update(.zero, "view_drag_drop"), field, scale);
+        _ = core.dialogs.carriedFieldWhole(dvui.Id.update(.zero, "view_drag_drop"), field, scale);
     }
     const tex = d.texture orelse return;
     const head = d.drop_shapes[0].rect;
@@ -801,7 +875,8 @@ fn drawDrop(l: *Layout, taken: bool) void {
         }
     }
     const radius = @max(0, d.drop_radius - pad) / scale;
-    dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo_opacity), .uv = uv }) catch {};
+    const shown = contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns));
+    dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo_opacity * shown), .uv = uv }) catch {};
 }
 
 /// Whether dropping the view lifted from `source` in the middle of `dest` joins them: the two
@@ -840,28 +915,20 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     if (d.drop_n > 0) {
         drawDrop(l, taken);
         // Frames while it is still turning from what was grabbed into the drop.
-        if (cardProgress(d.*, dvui.currentWindow().frame_time_ns) < 1) dvui.refresh(null, @src(), null);
+        if (morphProgress(d.*, dvui.currentWindow().frame_time_ns) < 1) dvui.refresh(null, @src(), null);
         return;
     }
     const mouse = dvui.currentWindow().mouse_pt;
     const now = dvui.currentWindow().frame_time_ns;
     // Over a chooser — a tab strip, a rail — the view is going into a list, and the card is a
-    // tab: the preview of a place is for the places' insides. Each change of shape grows from
-    // the card as it was, the way a dialog grows open.
-    const as_tab = chooserAt(l.state, mouse) != null;
-    if (as_tab != d.card_tab) {
-        d.card_tab = as_tab;
-        d.card_from = d.card_size;
-        d.card_start_ns = now;
-    }
-    // `motion.enter` over the dialogs' 300ms as written, past its size and back when motion is
-    // playful: instant when motion is off.
-    const dur: f64 = core.motion.durationMs(300) * @as(f64, std.time.ns_per_ms);
-    const elapsed: f64 = @floatFromInt(now - d.card_start_ns);
-    const t = if (dur <= 0) 1 else core.motion.enter(@floatCast(std.math.clamp(elapsed / dur, 0, 1)));
+    // tab: the preview of a place is for the places' insides. What it is carried as was settled
+    // this frame (`dropShapes`, `noteMode`); each change grows from the shape it was, the way a
+    // dialog grows open.
+    const as_tab = d.mode == .tab;
+    const t = morphProgress(d.*, now);
 
-    // From the size of what was grabbed to a card, keeping the grab point under the pointer, so
-    // the view appears to be picked up rather than replaced by an icon: a place shrinks into its
+    // Into a card the size of what it shows, keeping the grab point under the pointer, so the
+    // view appears to be picked up rather than replaced by an icon: a place shrinks into its
     // photograph, a tab grows into its document's (or, with none, into a pill of its own).
     const scale = dvui.currentWindow().natural_scale;
     const pad = card_padding * scale;
@@ -871,9 +938,6 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
         const f = floatTarget(d.texture_rect.size(), scale);
         break :blk .{ .w = f.w + 2 * pad, .h = f.h + 2 * pad };
     } else pillSize(l, d.*, title, scale);
-    const w = d.card_from.w + (target.w - d.card_from.w) * t;
-    const h = d.card_from.h + (target.h - d.card_from.h) * t;
-    d.card_size = .{ .w = w, .h = h };
     const off = dvui.dragOffset();
     // The pointer keeps its place on the card: the card's top left stays where it was from the
     // pointer when it was grabbed, and the card grows right and down from there into what it
@@ -882,44 +946,56 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     // pointer on the card: a place grabbed far from its corner shrinks to a card far smaller.
     const inset = 8 * scale;
     const tl: dvui.Point.Physical = .{
-        .x = mouse.x + std.math.clamp(off.x, -@max(0, w - inset), 0),
-        .y = mouse.y + std.math.clamp(off.y, -@max(0, h - inset), 0),
+        .x = mouse.x + std.math.clamp(off.x, -@max(0, target.w - inset), 0),
+        .y = mouse.y + std.math.clamp(off.y, -@max(0, target.h - inset), 0),
     };
-    const nat = dvui.Rect.Physical.fromPoint(tl).toSize(.{ .w = w, .h = h }).toNatural();
+    const to = dvui.Rect.Physical.fromPoint(tl).toSize(target);
+    const rect = lerpRect(d.morph_rect, to, t);
+    const radius = std.math.lerp(d.morph_radius, core.corners.scaled(core.corners.card) * scale, std.math.clamp(t, 0, 1));
+    d.shape_rect = rect;
+    d.shape_radius = radius;
+    const nat = rect.toNatural();
 
-    // Glass, like every floating surface: frosted over what it passes above (forming as it is
-    // lifted), its shadow a ring round it, what it carries on top.
-    const corners = core.corners.round(core.corners.card);
     // A box in the drag's own layer (`drawOverlay`), not a floating window of its own: the drops
     // go over it in the same layer, drawn after it.
     const fw = dvui.box(@src(), .{}, .{
         .rect = .{ .x = nat.x, .y = nat.y, .w = nat.w, .h = nat.h },
         // The photograph sits inset in its glass; a tab is the glass.
         .padding = if (show_photo) .all(card_padding) else .all(0),
-        .corners = corners,
+        .corners = .round(radius / scale),
         .background = false,
         .border = .all(0),
     });
     defer fw.deinit();
     {
-        // The carried look (`core.dialogs.carriedGlass`), the same a tab has while it is dragged
-        // along its strip.
+        // Glass, like every floating surface. Where the glass program draws it is the same glass
+        // the drop is (`drawDrop`), under one id, so a tab becoming the drop and back is one
+        // piece of glass changing shape; elsewhere the carried look (`core.dialogs.carriedGlass`),
+        // the same a tab has while it is dragged along its strip.
         const brs = fw.data().borderRectScale();
-        core.dialogs.carriedGlass(fw.data().id, brs.r, brs.s);
+        if (core.LiquidField.ready()) {
+            var field: core.LiquidField = .{ .merge_px = drop_r * 0.9 * scale };
+            field.add(.{ .rect = brs.r, .radii = @splat(radius), .round = true });
+            if (!core.dialogs.carriedFieldWhole(dvui.Id.update(.zero, "view_drag_drop"), field, scale))
+                core.dialogs.carriedGlass(fw.data().id, brs.r, brs.s);
+        } else core.dialogs.carriedGlass(fw.data().id, brs.r, brs.s);
     }
 
+    const shown = contentIn(d.*, t);
     if (if (show_photo) d.texture else null) |tex| {
         // The photograph (backed by the content fill, `backed`), inset in the glass, its corners
         // following the card's: at `photo_opacity`, so the glass — and what is under the card,
         // through it — shows as the card moves.
-        const inner = core.corners.round(@max(0, core.corners.scaled(core.corners.card) - card_padding));
-        dvui.renderTexture(tex, fw.data().contentRectScale(), .{ .corners = inner, .colormod = dvui.Color.white.opacity(photo_opacity) }) catch {};
+        const inner = dvui.CornerRect.round(@max(0, radius / scale - card_padding));
+        dvui.renderTexture(tex, fw.data().contentRectScale(), .{ .corners = inner, .colormod = dvui.Color.white.opacity(photo_opacity * shown) }) catch {};
     } else {
+        const prev_alpha = dvui.alpha(shown);
+        defer dvui.alphaSet(prev_alpha);
         drawTabFace(l, d.*, title);
     }
     // Frames only while the card is still changing into the one in the hand: after that it moves
     // when the pointer does, and the pointer moving is a frame anyway.
-    if (elapsed < dur) dvui.refresh(null, @src(), null);
+    if (t < 1) dvui.refresh(null, @src(), null);
 }
 
 /// Points between the card's glass and what it carries.
@@ -959,19 +1035,24 @@ fn pillSize(l: *Layout, d: ViewDrag, title: []const u8, scale: f32) dvui.Size.Ph
 
 /// What a tab shows, centred on the card: the file's icon, its title, the dirty dot.
 fn drawTabFace(l: *Layout, d: ViewDrag, title: []const u8) void {
-    const color = dvui.themeGet().color(.control, .text);
+    // As the strip draws the tab it was (`Workspace`'s tab row): the icon in the control colour,
+    // in the file tree's glyph slot, a plain file glyph where no plugin draws one; the title as a
+    // selected tab's — it is the tab in hand. The face drawn before the tab became glass is the
+    // strip's own, so anything else here changed on the way back.
+    const theme = dvui.themeGet();
+    const icon_color = theme.color(.control, .text);
+    const color = theme.color(.window, .text);
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5, .gravity_y = 0.5 });
     defer row.deinit();
     const doc = draggedDoc(l, d);
     if (doc) |dd| {
-        var slot = dvui.box(@src(), .{}, .{
-            .gravity_y = 0.5,
-            .min_size_content = .all(face_icon),
-            .max_size_content = .size(.all(face_icon)),
-            .margin = .{ .w = face_gap },
-        });
+        var slot = core.widgets.treeRowGlyph(@src(), .{ .gravity_y = 0.5, .margin = .{ .w = face_gap } });
         defer slot.deinit();
-        _ = l.host.drawFileIcon(std.fs.path.extension(dd.path), dd.path, color);
+        if (!l.host.drawFileIcon(std.fs.path.extension(dd.path), dd.path, icon_color)) {
+            core.icon.icon(@src(), "file_icon", icons.tvg.lucide.file, .{
+                .stroke_color = .{ .color = icon_color },
+            }, core.widgets.treeRowIconOptions(.{}));
+        }
     }
     dvui.labelNoFmt(@src(), title, .{}, .{ .gravity_y = 0.5, .color_text = .{ .color = color }, .padding = .{} });
     if (doc) |dd| if (dd.dirty) {

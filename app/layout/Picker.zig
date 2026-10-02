@@ -434,6 +434,7 @@ fn card(f: *Layout, s: *const sdk.Surface, on: bool, id_extra: usize) Hit {
                 .offset = tile_rect.topLeft().diff(me.p),
                 .size = tile_rect.size(),
                 .name = "fizzy_view",
+                .cursor = ViewDrag.cursor,
             });
             if (me.button.touch()) {
                 dvui.dataSet(null, id, "_touch_down", dvui.frameTimeNS());

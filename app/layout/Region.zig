@@ -636,15 +636,14 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     const picker_here = self.state.picker.is_open and std.mem.eql(u8, self.state.picker.region, opts.name);
     const filled = regionHasContent(self, opts, keywords);
     const dragging_this = self.state.view_drag.active() and std.mem.eql(u8, self.state.view_drag.name, opts.name);
-    const over = self.state.view_drag.active() and rs.r.contains(mouse);
-    // Null plan: the middle of the place the drag came from, which is not a
-    // drop at all. Every other reading of the pointer lands somewhere.
-    const drop_here = over and if (Drop.kindAt(rs.r, mouse, rs.s, ViewDrag.removable(self))) |k| Drop.plan(k, dragging_this, false) != null else false;
     const near = mouse.x >= rs.r.x + rs.r.w - corner_reach * rs.s and mouse.x <= rs.r.x + rs.r.w and
         mouse.y >= rs.r.y and mouse.y <= rs.r.y + corner_reach * rs.s;
     const pressing = dvui.dataGet(null, box.data().id, "_chooser_press", bool) orelse false;
     if (self.state.view_drag.active()) ViewDrag.tick(self);
-    const available = !filled or picker_here or near or dragging_this or drop_here or pressing;
+    // Not while a view is carried: the button is the way to pick or lift a view, and over a drag
+    // it came and went with every place the pointer crossed. (It still runs below — it is the
+    // handle the drag of this place is held by.)
+    const available = !self.state.view_drag.active() and (!filled or picker_here or near or pressing);
     const alpha = chooserFade(box.data().id, if (available) 1 else 0);
 
     if (alpha < 0.01 and !available and !dragging_this and !ViewDrag.zonesShowing(self, opts.name, box.data().id)) return;
@@ -661,7 +660,16 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     if (!filled) drawEmptyHatch(rs.r, rs.s);
     // In the same front-to-back pass as the contents' chrome: the glass lies on them.
     ViewDrag.drawZones(self, opts.name, box.data().id);
-    if (!drop_here and filled and !dragging_this and alpha > 0.01) {
+    // The ring says which place the chooser is for, so it has a fade of its own, driven only by
+    // what asks that: the pointer at the corner, the picker open here, the button held. It
+    // shared the button's, which a drag raises while it is over the place (`drop_here`) — and
+    // at the release the ring, held off only by the drag, came on at the button's full alpha
+    // for the frames that fade took to run down: a stroke flashed round the place a view landed in.
+    // Held for the whole of a drag out of this place, so the place being carried from stays
+    // marked — the only place a drag lights, and it goes out as the drag ends.
+    const ring_wanted = filled and (dragging_this or (!self.state.view_drag.active() and (picker_here or near or pressing)));
+    const ring_alpha = chooserFade(box.data().id.update("ring"), if (ring_wanted) 1 else 0);
+    if (ring_alpha > 0.01) {
         // Under the region's own border rect, not the content clip `cornerButton` runs inside:
         // the ring is on the border, in the padding, so a region with padding (every card but
         // the explorer's) clipped it away entirely — only the explorer ever showed which place
@@ -670,7 +678,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
         dvui.clipSet(rs.r);
         defer dvui.clipSet(prev_clip);
         const half: f32 = 1.0;
-        rs.r.insetAll(half).stroke(corners, .{ .color = .{ .color = theme.focus.opacity(alpha) }, .thickness = 2 * half });
+        rs.r.insetAll(half).stroke(corners, .{ .color = .{ .color = theme.focus.opacity(ring_alpha) }, .thickness = 2 * half });
     }
 
     if (alpha < 0.01 and !pressing and !dragging_this) return;
@@ -714,11 +722,12 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
                 .offset = rs.r.topLeft().diff(me.p),
                 .size = rs.r.size(),
                 .name = "fizzy_view",
+                .cursor = ViewDrag.cursor,
             });
         }
         if (me.action == .motion and (dvui.captured(bw.data().id) or pressing)) {
             if (dvui.dragging(me.p, "fizzy_view") != null) {
-                if (!self.state.view_drag.active()) ViewDrag.begin(self, opts.name, rs.r);
+                if (!self.state.view_drag.active()) ViewDrag.begin(self, opts.name, rs.r, bw.data().borderRectScale().r);
                 dragged = true;
                 dvui.refresh(null, @src(), null);
             }
@@ -739,7 +748,7 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
         }
     }
 
-    if ((alpha > 0.01 or dragged) and !dragged) {
+    if (alpha > 0.01 and !dragged and !self.state.view_drag.active()) {
         bw.drawBackground();
         core.icon.icon(@src(), "regions", dvui.entypo.grid, .{
             .fill_color = .{ .color = if (bw.hovered()) theme.color(.highlight, .fill) else theme.color(.control, .fill).lerp(theme.color(.control, .text), alpha) },
@@ -830,6 +839,12 @@ fn drawContentsPhotographed(
     rect: dvui.Rect.Physical,
     shot: ViewDrag.Shot,
 ) !void {
+    // The frame as last drawn, when there is one (`ViewDrag.photographFromFrame`): no capture,
+    // so the place draws as usual and does not flash.
+    if (shot.card and ViewDrag.photographFromFrame(self, rect)) {
+        _ = try drawContents(self, opts, keywords);
+        return;
+    }
     // No texture targets (web) or nothing to capture: the card goes without
     // its picture (it draws as a plain card), and the place draws as usual.
     var pic = core.anim.CrossFade.beginCapture(rect) orelse {

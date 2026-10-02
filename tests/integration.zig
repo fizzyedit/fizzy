@@ -2302,7 +2302,7 @@ test "a hide_when_empty panel stays while its view is dragged onto main" {
 
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
-    ViewDrag.begin(&layout, "Panel", .{ .x = 0, .y = 400, .w = 800, .h = 200 });
+    ViewDrag.begin(&layout, "Panel", .{ .x = 0, .y = 400, .w = 800, .h = 200 }, .{ .x = 0, .y = 400, .w = 800, .h = 200 });
     editor.app.layout.view_drag.moved_id = "test.output";
 
     // Its view rides the pointer, but it is still the panel's until the drop: the panel stands
@@ -2838,14 +2838,14 @@ test "split: the trash is offered out of a place of several, not out of a lone d
     try case.place("Center", "Center", .remove);
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     defer editor.app.layout.view_drag.discard();
-    VD.begin(&layout, "Center", .{ .w = 100, .h = 100 });
+    VD.begin(&layout, "Center", .{ .w = 100, .h = 100 }, .{ .w = 100, .h = 100 });
     try std.testing.expect(!VD.removable(&layout));
     editor.app.layout.view_drag.discard();
     // Showing several, the trash takes just the view carried.
     editor.app.layout.setShows(editor.app.gpa, "Center", .many);
     try dvui.testing.settle(EndlessFrame.frame);
     var layout2 = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
-    VD.begin(&layout2, "Center", .{ .w = 100, .h = 100 });
+    VD.begin(&layout2, "Center", .{ .w = 100, .h = 100 }, .{ .w = 100, .h = 100 });
     try std.testing.expect(VD.removable(&layout2));
 }
 
@@ -2856,7 +2856,7 @@ test "drag: a strip whose place cannot take the view is not a chooser for it" {
     const VD = fizzy.Editor.Layout.ViewDrag;
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     defer editor.app.layout.view_drag.discard();
-    VD.begin(&layout, "Center", .{ .w = 100, .h = 100 });
+    VD.begin(&layout, "Center", .{ .w = 100, .h = 100 }, .{ .w = 100, .h = 100 });
     const strip: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 30 };
     // A strip of a place the drag mapped no target for (a document pane, say) is passed over...
     VD.offerChooser(&layout, "Pane 9", strip, true);
@@ -3561,7 +3561,7 @@ test "a drop runs back together after the release, whatever happened to its plac
 
     {
         var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
-        fizzy.Editor.Layout.ViewDrag.begin(&layout, "Panel", panel_at);
+        fizzy.Editor.Layout.ViewDrag.begin(&layout, "Panel", panel_at, panel_at);
     }
     defer editor.app.layout.view_drag.discard();
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = main_at.center() });
@@ -3618,7 +3618,7 @@ test "a drag aims at the places that were there when it began" {
 
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
-    ViewDrag.begin(&layout, "Panel", panel_at);
+    ViewDrag.begin(&layout, "Panel", panel_at, panel_at);
     defer editor.app.layout.view_drag.discard();
 
     try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, middle, "Panel") orelse

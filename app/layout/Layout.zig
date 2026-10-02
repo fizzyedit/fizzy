@@ -230,7 +230,11 @@ pub const slot_keywords: []const []const u8 = &.{"slot"};
 // timing, because a sidebar and a document pane travelling at different speeds reads as broken
 // without ever looking wrong in a screenshot.
 
+/// A frame's layout. Made at the top of the frame, before any place draws — which is why a view
+/// being carried asks for its cursor here: dvui gives the cursor to the first to ask, and the
+/// text under the pointer asking for a caret comes later.
 pub fn init(host: *sdk.Host, state: *State, gpa: std.mem.Allocator, arena: std.mem.Allocator) Layout {
+    if (state.view_drag.active()) dvui.cursorSet(ViewDrag.cursor);
     return .{ .host = host, .state = state, .gpa = gpa, .arena = arena };
 }
 
@@ -967,6 +971,7 @@ pub fn drawPluginRegionContents(self: *Layout, token: sdk.RegionSpec.Token) !dvu
     // it, from this very draw and no other — as a region's card is (`Region.drawContentsPhotographed`).
     if (ViewDrag.previewWanted(self, s.id)) {
         const rect = dvui.parentGet().data().contentRectScale().r.intersect(dvui.clipGet());
+        if (ViewDrag.photographFromFrame(self, rect)) return self.drawSwapped(key, s, null, .none);
         if (core.anim.CrossFade.beginCapture(rect)) |pic_in| {
             var pic = pic_in;
             const res = self.drawSwapped(key, s, null, .none);
@@ -998,7 +1003,12 @@ pub fn offerPluginRegionChooser(self: *Layout, token: sdk.RegionSpec.Token, boun
     // Into the region even for the one the view came out of: back on its own strip it is being
     // reordered, which only the plugin can do (`RegionSpec.Drop.on_chooser`).
     ViewDrag.offerChooser(self, r.name, bounds, true);
-    return bounds.contains(dvui.currentWindow().mouse_pt);
+    // Over it, and it could take what is carried: the drag's own reading (`chooserAt`, which
+    // asks whether the place is one the view can land in). A place lifted out of the layout over
+    // a document pane's strip is over no chooser at all — the strip opening a slot for it said
+    // it could go in, and the drag, rightly, did not take it there.
+    const under = ViewDrag.chooserAt(self.state, dvui.currentWindow().mouse_pt) orelse return false;
+    return std.mem.eql(u8, under.name, r.name);
 }
 
 pub fn pluginRegionSelect(self: *Layout, token: sdk.RegionSpec.Token, id: []const u8) void {
