@@ -51,8 +51,9 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    the desktop or the Acrylic backdrop fizzy asks for (`win32_titlebar.zig`). `dcomp.dll` is loaded
    with the first transparent window; `dcomp.h` is C++-only, so the three interfaces it calls are
    declared by vtable slot. Resizes pass the window's pixel size; it never tears. Xbox and DXVK
-   still refuse. Compiled for x86, x64 and arm64 Windows; **not yet run on Windows 11**.
-   Upstream: worth proposing once it has been.
+   still refuse. Compiled for x86, x64 and arm64 Windows; run on Windows 11 on Arm (D3D12 on
+   WARP, in a VM): the window's alpha reaches DWM, Acrylic shows through. Upstream: worth
+   proposing.
 
 3. **Metal: present with the Core Animation transaction when the layer asks for it** (`5882e2b`).
    When a window's `CAMetalLayer` has `presentsWithTransaction` set, the GPU driver

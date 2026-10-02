@@ -77,11 +77,13 @@ pub const NativeBackend = enum {
     sdl3,
 };
 
-/// Windows stays on dvui's backend until fizzy's has been seen there: its D3D12 swapchain now
-/// composites the transparent window through DirectComposition (fizzyedit/SDL), which nothing has
-/// shown on a Windows 11 desktop yet. `-Dnative-backend=fizzy` builds it.
+/// Fizzy's own everywhere: on Windows its D3D12 swapchain composites the transparent window
+/// through DirectComposition (fizzyedit/SDL) over the Acrylic backdrop, and its custom programs
+/// (the liquid glass) run there as they do on Metal and Vulkan. `-Dnative-backend=sdl3` still
+/// builds dvui's.
 pub fn defaultNativeBackend(target: std.Build.ResolvedTarget) NativeBackend {
-    return if (target.result.os.tag == .windows) .sdl3 else .fizzy;
+    _ = target;
+    return .fizzy;
 }
 
 /// dvui as the executable links it, and the backend under it.
