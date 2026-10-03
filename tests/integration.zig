@@ -5222,3 +5222,179 @@ test "float: a document pane is under the pointer only where no float lies over 
     }
     try std.testing.expect(pane.uncoveredAt(beside orelse return error.TestExpectedEqual));
 }
+
+// -- rows carried out of a tree and back --------------------------------------------------------
+
+// A tree of two folders and two files, as the explorer draws one: `F` open with `c` inside it, `G`
+// shut, then `a` and `b`. Rows carried out of it as another drag and brought back are handed to it
+// each frame (`TreeWidget.carriedOver`), and whichever row then says it takes them is recorded.
+const CarriedTree = struct {
+    const TW = fizzy.core.widgets.TreeWidget;
+    const f: usize = 1;
+    const a: usize = 2;
+    const b: usize = 3;
+    const c: usize = 4;
+    const g: usize = 5;
+
+    const Carried = struct { primary: usize, p: dvui.Point.Physical, released: bool = false };
+    const Landed = struct { row: usize, into: bool };
+
+    var carried: ?Carried = null;
+    var selected: []const usize = &.{};
+    /// Put the tree's own drag down this frame (`TreeWidget.cancelDrag`).
+    var cancel = false;
+    var landed: ?Landed = null;
+    /// Whether the tree's own drag was under way as this frame began.
+    var dragging = false;
+    var headers: [6]dvui.Rect.Physical = @splat(.{});
+
+    fn reset() void {
+        carried = null;
+        selected = &.{};
+        cancel = false;
+        landed = null;
+        dragging = false;
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        var tree = TW.tree(@src(), .{ .enable_reordering = true, .drag_name = "test.row" }, .{ .expand = .both });
+        defer tree.deinit();
+        tree.selected_branch_ids = selected;
+        dragging = tree.reorderDragActive();
+        if (cancel) {
+            cancel = false;
+            tree.cancelDrag();
+        }
+        if (carried) |it| tree.carriedOver(it.primary, it.p, it.released);
+        row(tree, f, true, true);
+        row(tree, g, true, false);
+        row(tree, a, false, false);
+        row(tree, b, false, false);
+        return .ok;
+    }
+
+    fn row(tree: *TW, id: usize, folder: bool, open: bool) void {
+        const branch = tree.branch(@src(), .{
+            .expanded = open,
+            .animation_duration = 0,
+            .can_accept_children = folder,
+            .branch_id = id,
+        }, .{ .id_extra = id, .expand = .horizontal });
+        defer branch.deinit();
+        headers[id] = branch.button.data().borderRectScale().r;
+        if (branch.insertBefore()) landed = .{ .row = id, .into = false };
+        if (branch.dropInto()) landed = .{ .row = id, .into = true };
+        dvui.labelNoFmt(@src(), "row", .{}, .{ .id_extra = id, .min_size_content = .{ .w = 120, .h = 20 } });
+        if (folder and branch.expander(@src(), .{}, .{ .expand = .horizontal })) {
+            if (id == f) row(tree, c, false, false);
+        }
+    }
+};
+
+test "tree: a row carried back over it goes into the folder under the pointer when let go" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    CarriedTree.reset();
+    defer CarriedTree.reset();
+    try dvui.testing.settle(CarriedTree.frame);
+
+    // Over the shut folder: it would take the row, but nothing goes in until it is let go.
+    const over_g = CarriedTree.headers[CarriedTree.g].center();
+    CarriedTree.carried = .{ .primary = CarriedTree.a, .p = over_g };
+    _ = try dvui.testing.step(CarriedTree.frame);
+    try std.testing.expect(CarriedTree.landed == null);
+
+    CarriedTree.carried = .{ .primary = CarriedTree.a, .p = over_g, .released = true };
+    _ = try dvui.testing.step(CarriedTree.frame);
+    const landed = CarriedTree.landed orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(CarriedTree.g, landed.row);
+    try std.testing.expect(landed.into);
+
+    // Gone from the tree with the drag: the next frames are no drag of the tree's own, and so no
+    // drop of one either.
+    CarriedTree.carried = null;
+    CarriedTree.landed = null;
+    _ = try dvui.testing.step(CarriedTree.frame);
+    _ = try dvui.testing.step(CarriedTree.frame);
+    try std.testing.expect(!CarriedTree.dragging);
+    try std.testing.expect(CarriedTree.landed == null);
+}
+
+test "tree: rows carried back over it and taken elsewhere move nothing" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    CarriedTree.reset();
+    defer CarriedTree.reset();
+    try dvui.testing.settle(CarriedTree.frame);
+
+    // Over the folder, then off the tree — let go somewhere else, or the drag cancelled: whoever
+    // carries the row stops handing it to the tree, and the tree drops nothing.
+    CarriedTree.carried = .{ .primary = CarriedTree.a, .p = CarriedTree.headers[CarriedTree.g].center() };
+    _ = try dvui.testing.step(CarriedTree.frame);
+    CarriedTree.carried = null;
+    for (0..3) |_| _ = try dvui.testing.step(CarriedTree.frame);
+    try std.testing.expect(CarriedTree.landed == null);
+    try std.testing.expect(!CarriedTree.dragging);
+}
+
+test "tree: a carried selection, and the rows inside it, take no drop of it" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    CarriedTree.reset();
+    defer CarriedTree.reset();
+    try dvui.testing.settle(CarriedTree.frame);
+
+    // `a` carried out with `F` selected beside it: both are carried, as a drag of the selection
+    // would carry them, so neither `F` nor `c` inside it takes them — a folder cannot go into itself.
+    CarriedTree.selected = &.{ CarriedTree.f, CarriedTree.a };
+    for ([_]usize{ CarriedTree.f, CarriedTree.c, CarriedTree.a }) |over| {
+        CarriedTree.landed = null;
+        CarriedTree.carried = .{ .primary = CarriedTree.a, .p = CarriedTree.headers[over].center(), .released = true };
+        _ = try dvui.testing.step(CarriedTree.frame);
+        try std.testing.expect(CarriedTree.landed == null);
+    }
+
+    // Over `b`, a file: they go in before it.
+    CarriedTree.landed = null;
+    CarriedTree.carried = .{ .primary = CarriedTree.a, .p = CarriedTree.headers[CarriedTree.b].center(), .released = true };
+    _ = try dvui.testing.step(CarriedTree.frame);
+    const landed = CarriedTree.landed orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(CarriedTree.b, landed.row);
+    try std.testing.expect(!landed.into);
+}
+
+test "tree: a drag put down is not dropped where the pointer last was" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    CarriedTree.reset();
+    defer CarriedTree.reset();
+    try dvui.testing.settle(CarriedTree.frame);
+    const cw = dvui.currentWindow();
+
+    // `a` dragged up over the shut folder `G`, by the tree's own drag.
+    const from = CarriedTree.headers[CarriedTree.a].center();
+    const to = CarriedTree.headers[CarriedTree.g].center();
+    _ = try cw.addEventMouseMotion(.{ .pt = from });
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(CarriedTree.frame);
+    var y = from.y;
+    while (y > to.y) : (y -= 4) {
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = from.x, .y = y } });
+        _ = try dvui.testing.step(CarriedTree.frame);
+    }
+    _ = try cw.addEventMouseMotion(.{ .pt = to });
+    _ = try dvui.testing.step(CarriedTree.frame);
+    _ = try dvui.testing.step(CarriedTree.frame);
+    try std.testing.expect(CarriedTree.dragging);
+
+    // Taken out of the tree as another drag: put down, it lands nowhere — not on `G`, which the
+    // pointer is still over, as the end of a drag would.
+    CarriedTree.cancel = true;
+    _ = try dvui.testing.step(CarriedTree.frame);
+    _ = try dvui.testing.step(CarriedTree.frame);
+    try std.testing.expect(!CarriedTree.dragging);
+    try std.testing.expect(CarriedTree.landed == null);
+    _ = try cw.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(CarriedTree.frame);
+    try std.testing.expect(CarriedTree.landed == null);
+}
