@@ -6,6 +6,10 @@ expensive part to re-derive.
 
 ## Where it stands
 
+**Phase 2's spike is in, behind `FIZZY_POPOUT=1`:** a float taken out into an OS window of its own
+and back, with no dvui change — what it established, and what it changes below, is in "What P2
+found" at the end.
+
 **Phase 1 is built: in-window floats.** A view dropped on the middle of its own place floats into a
 glass window over the layout — a place of the framework's own (`Float N`), movable, resizable,
 re-dockable, closed home, remembered in `layout.zon`. The rule is in `app/layout/SPLITS.md`
@@ -218,3 +222,120 @@ Phase 1 left these for later, independent of the OS windows:
   (`plugins/workbench/src/Workspace.zig`) do not read float occlusion yet.
 - **Drop bubbles under a float.** Where a float covers part of a main-window place's drop wheel,
   those bubbles still draw but cannot be aimed at.
+
+## What P2 found
+
+The spike: with `FIZZY_POPOUT=1` on fizzy's backend, the command **Pop Out Float**
+(`fizzy.popOutFloat`) takes the topmost float out into an OS window of its own, and brings it back
+when run again or when the OS asks that window to close (`src/editor/Popout.zig`). Checked on macOS
+in a sandboxed fizzy, the Explorer floated by a demo tape and then popped out: the main window shows
+nothing of the float, the new window shows all of it, and input pushed at that window as SDL events
+(in-process; no OS events) hovered and expanded a folder in its tree, scrolled it, and dragged the
+float by its header — the window followed by exactly the 150×80 points the pointer moved, a frame
+behind it while held. Closed, the float was back in the main window with the folder still
+expanded: one `dvui.Window`, so widget state crosses the edge both ways untouched.
+
+### No dvui change is needed
+
+The replay hook proposed above for dvui-dev is not needed for this:
+
+- `Window.renderCommands` is public, and fizzy already runs dvui's end-of-frame replay itself
+  (`core.FrameTarget.end` calls `endRendering`). Just before it, `Popout.endFrame` takes the
+  float's subwindow's queued commands (`subwindows.get(id)`, its `render_cmds` and
+  `render_cmds_after`), leaves them empty so the replay into the main window draws nothing of it,
+  and replays them itself with the render target switched to a target of the viewport's own,
+  `offset` at its part of the frame. dvui offsets every vertex and clip at replay
+  (`renderTriangles`) and the frost reads the bound target through that offset
+  (`BlurBackdrop.deinitFromTarget`), so nothing the float draws knows where it is going.
+- The clip and clamp to the main window are fizzy's own `FloatingWindowWidget`'s
+  (`core/widgets/`), so they are lifted there: `detached` (no `placeOnScreen`, clipped to itself).
+- If it goes upstream, the shape is still a per-subwindow target honoured in the replay; for fizzy
+  it would only shorten `endFrame`.
+
+### Bands: routing without telling dvui anything
+
+A float out of the main window is drawn in a **band** of the frame far past its edge — the first at
+x = 100 000 physical pixels, each viewport its own (`src/backend/native/viewport_map.zig`, unit
+tested). dvui routes a pointer by what is drawn under it (`Subwindows.windowFor`), and nothing over
+the main window is ever under a point in a band, so no main-window pointer reaches a float that has
+left, and a pointer translated from the viewport's window lands on it — with no flag on the
+subwindow and nothing patched into dvui's events. (Taking the float out of hit-testing instead,
+`Subwindow.mouse_events`, and tagging the viewport's events by hand would not hold: at the start of
+every frame dvui tags the pointer's resting place against the subwindow stack again, so a pointer
+resting over the viewport would hover whatever of the main window lies at the same point.)
+
+Within its band the frame follows the desktop, `frame = band + (screen − anchor) · density`, the
+anchor being where the main window's top left was when the viewport opened, kept for its life — so
+the main window moving does not move the windows that left it (decision 2; checked: the main window
+moved by 60×20 and the popped-out window stayed put), and dvui's own drag code moves and resizes a
+float out there as in the main window, its window following it (`SDLBackend.viewportPlace`). A pointer over the window goes to
+`band + (window position + event position − anchor) · density`, read against where the window is
+at the time, as Dear ImGui's SDL3 backend reads its viewports. Two viewports' windows can overlap
+on the desktop; their floats never meet in the frame.
+
+### One renderer, N swapchains, as planned — without a second renderer
+
+`GpuRenderer.claimViewport` claims the new window on the main window's device. Each frame the
+float's part of the frame is replayed into its own target (above), and `presentInto` acquires the
+viewport's drawable on the frame's own command buffer and copies the target into it
+(`SDL_BlitGPUTexture`, transparent where the target is); the frame's one submission presents every
+window (SDL's Metal backend keeps a per-command-buffer list of them). The viewport presents
+IMMEDIATE (no display sync on Metal; MAILBOX where a driver has it), and its drawable is acquired
+without waiting (`SDL_AcquireGPUSwapchainTexture`): a drawable not ready skips that window for a
+frame rather than holding the main one. Minimized or covered, it is not acquired at all. Cost: one
+target per viewport and one copy a frame — the main window's own `FrameTarget` blit, again.
+Per-window renderers (`initWindowSecondary`) were not needed: they would share textures (one
+device) but not pipelines or program ids (`core.gfx.programs`), and two command buffers a frame
+would have to be ordered against each other's uploads.
+
+The window is created hidden, claimed, handed a frame, and shown after that frame is presented,
+without taking the keyboard from the main window (`SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN`); its first
+click acts (`SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH` — every window's, while a viewport is open). Keys
+and text from it go to the one dvui window, and text input starts in whichever window has the
+keyboard, its IME rect moved into that window's points (written, not exercised in the sandbox).
+
+### Surprises
+
+- **Glass reads the desktop as nothing.** The viewport's target is transparent, so the float's
+  frost reads transparent pixels and its glass came out clear: the Explorer's text floated over
+  whatever was behind the window. Until P4 gives the window a material to show through, the
+  float's window is backed by the chrome's colour, opaque (`Popout.backing`), and the glass over it
+  reads as a panel of the main window does. The backing must cover the window's margin too — the
+  frost's blur and bevel read past the glass's edge, and a transparent ring there faded every edge
+  to see-through; the four corners still fade a little, outside the backing's curve.
+- **The float's popups stay in the main window** (read from the code, not tried). Menus,
+  tooltips, the picker, a dialog, a view drag's drop zones: each is a subwindow of its own, placed
+  and clamped on the main window, and drawn there. Dear ImGui gives a popup its parent's viewport; fizzy will have to send such
+  subwindows into their float's viewport — taking their commands too, in stack order — and place
+  them in its band.
+- **A demo tape owns the pointer while it plays.** The player swallows real pointer motion while a
+  tape plays and takes a real press as the user diverging (pause, then a re-seek from a snapshot on
+  resume), and input from a viewport is real input to it: a run that pushed SDL events at the
+  viewport mid-tape seeked back to before the float existed, and the viewport went with its float.
+  A test of viewport input lets its tape end first.
+- `CGWindowListCopyWindowInfo` reports a sandbox's windows off screen while they are on another
+  Space; `screencapture -l` captures them anyway.
+
+### Not done
+
+- A view dragged out of a float that is out would not land in the main window (not tried): macOS
+  keeps sending a held pointer to the window it was pressed in, and its translation keeps it in
+  the band. The capture policy is next — while a button is held, place the pointer by the window
+  it is over (`SDL_GetGlobalMouseState`), so a drag crosses into the main window.
+- The window is moved and resized only by dvui (header, edges); the OS does neither, and there is
+  no OS shadow, rounded mask or material (P4).
+- One float out at a time in the spike (the backend holds eight). Out, a float is not remembered:
+  `layout.zon` keeps its in-window rect, and it comes back in on the next launch.
+- One density, the main window's, fixed when the viewport opens (P5).
+- macOS only so far; Windows, X11 and Wayland's in-window fallback not tried.
+
+### The next steps, revised
+
+1. The float's own popups follow it into its viewport (above) — before the gesture, or every
+   menu in a float that is out opens in the wrong window.
+2. Cross-window capture, so a view can be dragged out of a float that is out into the main window
+   and back ("Input and focus", above).
+3. P3 on top of this as it stands: split and merge are `Popout`'s open and close driven by the
+   float's rect against the main window's, with the conversion at the split exactly the one the
+   command already does (the in-window rect moved into a band) and the merge's its inverse.
+4. Persistence (`SavedRegion.Floating.os`), then P4's dressing replaces `Popout.backing`.
