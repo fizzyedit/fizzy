@@ -505,6 +505,10 @@ const Snapshot = struct {
     active: ?usize,
     explorer_closed: bool,
     branches: []const dvui.Id,
+    /// Whether the tree had opened its root on its own yet (`Workbench.file_tree_root_opened`),
+    /// put back with `branches`: a root shut because the tree had not been drawn yet would stay
+    /// shut, the tree believing it had already opened it.
+    root_opened: ?usize,
     settings: []const SavedSettings,
     focus: dvui.Id,
     focus_subwindow: dvui.Id,
@@ -530,6 +534,7 @@ fn capture(ctx: *anyopaque) ?*anyopaque {
         .active = null,
         .explorer_closed = editor.explorer.closed,
         .branches = &.{},
+        .root_opened = editor.workbench.file_tree_root_opened,
         .settings = &.{},
         .focus = dvui.focusedWidgetId() orelse .zero,
         .focus_subwindow = dvui.focusedSubwindowId(),
@@ -629,6 +634,7 @@ fn restore(ctx: *anyopaque, raw: *anyopaque) bool {
     }
     editor.explorer.open_branches.clearRetainingCapacity();
     for (snap.branches) |id| editor.explorer.open_branches.put(id, {}) catch {};
+    editor.workbench.file_tree_root_opened = snap.root_opened;
 
     for (snap.settings) |saved| {
         const schema = schemaFor(&editor.app.host, saved.owner) orelse continue;
