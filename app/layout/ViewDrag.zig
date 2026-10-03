@@ -59,6 +59,8 @@ moved_id: []const u8 = "",
 /// What the view is carried as this frame (`modeAt`), and what it was before its last change.
 mode: Mode = .preview,
 morph_from_mode: Mode = .preview,
+/// Not carried as anything yet: what it is first carried as is what was grabbed (`noteMode`).
+lifting: bool = false,
 /// The carried shape as last drawn, whatever it was drawn as: its rect and corner radius,
 /// physical. A change of what the view is carried as grows the new shape out of this one —
 /// position, size and corners — so the lift from what was grabbed, the tab over a strip and the
@@ -144,12 +146,23 @@ pub const Offer = struct {
     /// Interned place name.
     name: []const u8,
     bounds: dvui.Rect.Physical,
-    /// A release over it lands the view in its place. False for the app's own strip of the
-    /// place the view came out of, where dropping it back is no move; a plugin's strip always
-    /// takes it, since back on its own strip it is being reordered.
+    /// A release over it lands the view in its place.
     into: bool = true,
     /// The window it is drawn in (`Region.layer`).
     layer: u16 = 0,
+    /// Where along it the view goes in, for a chooser the app draws (`Chooser`): a release puts it
+    /// there in its place's list (`insertInto`) — back on the chooser it came off, a reorder. Null
+    /// for a plugin's chooser, which says where along it itself, from the release's point
+    /// (`RegionSpec.Drop.on_chooser`).
+    at: ?Insert = null,
+};
+
+/// Where in a place's list a view goes in: before one of its views, after one, or at the end.
+/// The views by their interned ids.
+pub const Insert = union(enum) {
+    before: []const u8,
+    after: []const u8,
+    end,
 };
 pub const max_offers = 16;
 
@@ -327,9 +340,10 @@ pub fn loose(self: ViewDrag) bool {
 }
 
 /// A chooser, drawing during a drag, offering itself as somewhere the view can go: into place
-/// `name`, as one of its views. Its place may sit elsewhere — a rail beside a sidebar — or the
-/// chooser inside it; either way over the chooser the drop is into the place, not a split of it.
-pub fn offerChooser(l: *Layout, name: []const u8, bounds: dvui.Rect.Physical, into: bool) void {
+/// `name`, as one of its views — at `at` in its list, when the chooser knows where along it the
+/// pointer is. Its place may sit elsewhere — a rail beside a sidebar — or the chooser inside it;
+/// either way over the chooser the drop is into the place, not a split of it.
+pub fn offerChooser(l: *Layout, name: []const u8, bounds: dvui.Rect.Physical, into: bool, at: ?Insert) void {
     const d = &l.state.view_drag;
     if (!d.active()) return;
     const now = dvui.currentWindow().frame_time_ns;
@@ -340,7 +354,12 @@ pub fn offerChooser(l: *Layout, name: []const u8, bounds: dvui.Rect.Physical, in
         d.offer_frame = now;
     }
     if (d.offer_count == max_offers) return;
-    d.offers[d.offer_count] = .{ .name = l.state.internName(l.gpa, name), .bounds = bounds, .into = into, .layer = l.state.layer_building };
+    const kept: ?Insert = if (at) |a| switch (a) {
+        .before => |id| .{ .before = l.state.internName(l.gpa, id) },
+        .after => |id| .{ .after = l.state.internName(l.gpa, id) },
+        .end => .end,
+    } else null;
+    d.offers[d.offer_count] = .{ .name = l.state.internName(l.gpa, name), .bounds = bounds, .into = into, .layer = l.state.layer_building, .at = kept };
     d.offer_count += 1;
 }
 
@@ -499,6 +518,7 @@ fn liftShape(d: *ViewDrag, from: dvui.Rect.Physical) void {
     d.morph_rect = from;
     d.morph_radius = radius;
     d.card_start_ns = d.start_ns;
+    d.lifting = true;
 }
 
 /// Begin carrying surface `id` from the picker, or from a plugin's own list (`Host.beginViewDrag`):
@@ -1176,9 +1196,15 @@ fn modeAt(l: *Layout, mouse: dvui.Point.Physical) Mode {
 }
 
 /// A change of what the view is carried as: the new shape sets out from the one last drawn.
+///
+/// The first, at the lift, is from what was grabbed, which already shows what it is carried as —
+/// a tab lifted along a strip is carried as the tab it was — so it grows into its shape with its
+/// face whole, rather than fading its own face back in.
 fn noteMode(d: *ViewDrag, mode: Mode, now: i128) void {
+    const first = d.lifting;
+    d.lifting = false;
     if (mode == d.mode) return;
-    d.morph_from_mode = d.mode;
+    d.morph_from_mode = if (first) mode else d.mode;
     d.mode = mode;
     d.morph_rect = d.shape_rect;
     d.morph_radius = d.shape_radius;
@@ -1523,7 +1549,10 @@ pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
     if (chooserAt(l.state, mouse)) |o| {
         if (!o.into) return;
         if (dropOnPluginChooser(l, source, o.name, mouse)) return;
-        // Its own place's strip, with no reorder of its own to take it: no move. Never a float —
+        // Where along it the chooser said: in the place's list there — on the chooser it came
+        // off, moved along it.
+        if (o.at) |at| return insertInto(l, source, o.name, at);
+        // Its own place's chooser, saying nothing of where along it: no move. Never a float —
         // that is the middle of the place, not its list.
         if (std.mem.eql(u8, o.name, source)) return;
         place(l, source, o.name, .swap);
@@ -1553,6 +1582,58 @@ fn dropOnPluginChooser(l: *Layout, source: []const u8, dest: []const u8, mouse: 
         dvui.refresh(null, @src(), null);
     }
     return true;
+}
+
+/// Put the view carried out of `source` into place `dest`'s list at `at`, and show it there — let
+/// go over a chooser the app drew (`Chooser`), where along it. Into the place it came out of, it
+/// moves along the list: the place's order, kept as its assignment when it has one, else as an
+/// order (`State.setOrder`) — never as a new assignment, which would freeze a place its keywords
+/// fill against views registered later. Into another place, it leaves the one it was in, as any
+/// drop into a place's middle does, and the list it goes into is written down. A place that shows
+/// one view at a time has a list all the same — the one its chooser picks from — and shows the view
+/// that went in.
+pub fn insertInto(l: *Layout, source: []const u8, dest: []const u8, at: Insert) void {
+    const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
+    if (l.host.surfaceById(moved) == null) return;
+    const r = regionNamed(l.state, dest) orelse return;
+    if (!accepts(r.*, keywordsOf(l, moved))) return;
+    if (!r.kind_slot and slottedId(l, moved)) return;
+    const assigned = l.state.assignment(dest);
+    const held = holding(l, dest);
+    const along = containsId(held, moved);
+    // The whole list it goes into: the assignment, ids of plugins not loaded now included so they
+    // keep their slots; or what the place shows by keyword, then — moving along an order —
+    // whatever an earlier order named that is not showing now.
+    var base: std.ArrayListUnmanaged([]const u8) = .empty;
+    base.appendSlice(l.arena, held) catch return;
+    if (assigned == null and along) if (l.state.order(dest)) |ids| for (ids) |id| {
+        if (!containsId(base.items, id)) base.append(l.arena, id) catch return;
+    };
+    var list: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (base.items) |id| if (!std.mem.eql(u8, id, moved)) list.append(l.arena, id) catch return;
+    const index = switch (at) {
+        .before => |id| indexOfId(list.items, id) orelse list.items.len,
+        .after => |id| if (indexOfId(list.items, id)) |i| i + 1 else list.items.len,
+        .end => list.items.len,
+    };
+    list.insert(l.arena, index, moved) catch return;
+    if (assigned == null and along) {
+        l.state.setOrder(l.gpa, dest, list.items) catch return;
+    } else {
+        l.state.assign(l.gpa, dest, list.items) catch return;
+    }
+    selectNamed(l, dest, moved);
+    if (!along) {
+        takeOut(l, source, moved, null);
+        shutIfEmptied(l, source);
+    }
+    l.state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
+fn indexOfId(ids: []const []const u8, id: []const u8) ?usize {
+    for (ids, 0..) |x, i| if (std.mem.eql(u8, x, id)) return i;
+    return null;
 }
 
 /// Move the visible surface of `source` onto `dest`. The picker's own moves

@@ -1021,7 +1021,7 @@ pub fn offerPluginRegionChooser(self: *Layout, token: sdk.RegionSpec.Token, boun
     if (!self.state.view_drag.active() or r.name.len == 0) return false;
     // Into the region even for the one the view came out of: back on its own strip it is being
     // reordered, which only the plugin can do (`RegionSpec.Drop.on_chooser`).
-    ViewDrag.offerChooser(self, r.name, bounds, true);
+    ViewDrag.offerChooser(self, r.name, bounds, true, null);
     // Over it, and it could take what is carried: the drag's own reading (`chooserAt`, which
     // asks whether the place is one the view can land in). A place lifted out of the layout over
     // a document pane's strip is over no chooser at all — the strip opening a slot for it said
@@ -1195,7 +1195,9 @@ pub fn beginViewDrag(f: *Layout, id: []const u8, from: dvui.Rect.Physical) void 
 /// selection. Nothing is drawn for a place with one view or none — a single Output is just Output.
 pub fn tabsIn(f: *Layout, r: *const Region) void {
     if (f.matchingIn(r).len <= 1) return;
-    var strip = Chooser.init(@src(), f, r.*, .{});
+    // Across the whole place, not just its tabs: a view carried anywhere along it goes in among
+    // them — past the last one, at the end.
+    var strip = Chooser.init(@src(), f, r.*, .{ .outer = .{ .expand = .horizontal } });
     defer strip.deinit();
     for (strip.views()) |view| {
         var it = strip.item(@src(), view, .{});

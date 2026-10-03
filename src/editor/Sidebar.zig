@@ -45,8 +45,9 @@ pub const Action = enum { none, open, close };
 /// makes a user's keyword override actually move an icon out of (or into) this rail.
 ///
 /// Two vertical `Layout.Chooser`s over the sidebar's place — the plugin views scrolling above,
-/// fizzy's own pinned below — so the rail picks, reorders (drag an icon along it) and hands a
-/// view to the view drag (drag it off) the same way every tab strip does. What is the rail's own
+/// fizzy's own pinned below — so the rail picks, and carries a dragged icon in the view drag,
+/// along the rail to reorder it or off it to another place, the same way every tab strip does.
+/// What is the rail's own
 /// is only how an icon looks and what picking the showing one means: it opens or closes the
 /// sidebar.
 pub fn draw(_: Sidebar, editor: *Editor, f: *Layout, keywords: []const []const u8) !Action {

@@ -2862,10 +2862,10 @@ test "drag: a strip whose place cannot take the view is not a chooser for it" {
     VD.begin(&layout, "Center", .{ .w = 100, .h = 100 }, .{ .w = 100, .h = 100 });
     const strip: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 30 };
     // A strip of a place the drag mapped no target for (a document pane, say) is passed over...
-    VD.offerChooser(&layout, "Pane 9", strip, true);
+    VD.offerChooser(&layout, "Pane 9", strip, true, null);
     try std.testing.expect(VD.chooserAt(&editor.app.layout, .{ .x = 10, .y = 10 }) == null);
     // ...and the place the view came out of always reads as one.
-    VD.offerChooser(&layout, "Center", strip, false);
+    VD.offerChooser(&layout, "Center", strip, false, null);
     const o = VD.chooserAt(&editor.app.layout, .{ .x = 10, .y = 10 }) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("Center", o.name);
 }
@@ -3241,6 +3241,98 @@ test "dragging a tab off a Multiple place's strip starts the view drag with it" 
     }
     try std.testing.expect(editor.app.layout.view_drag.active());
     try std.testing.expectEqualStrings("test.one", editor.app.layout.view_drag.moved_id);
+}
+
+test "a tab carried off a Multiple place's strip and back along it goes in where it is let go" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.view_drag.discard();
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    const center = try multiCenter(editor);
+    const cw = dvui.currentWindow();
+    const y = center.bounds.y + (MultiProbe.one_top - center.bounds.y) / 2;
+    const x0 = center.bounds.x + 16;
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = x0, .y = y } });
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    // Down off the strip, well into the place: the view drag, carrying `one`.
+    var dy: f32 = 0;
+    while (dy <= 120) : (dy += 20) {
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = x0, .y = y + dy } });
+        _ = try dvui.testing.step(EndlessFrame.frame);
+    }
+    try std.testing.expect(editor.app.layout.view_drag.active());
+    try std.testing.expect(fizzy.Editor.Layout.ViewDrag.chooserAt(&editor.app.layout, .{ .x = x0, .y = y + 120 }) == null);
+    // Back up onto the strip and along it past `two`: the strip is somewhere to go in, and says
+    // where along it.
+    var x = x0;
+    while (x < x0 + 170) : (x += 10) {
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = x, .y = y } });
+        _ = try dvui.testing.step(EndlessFrame.frame);
+    }
+    const o = fizzy.Editor.Layout.ViewDrag.chooserAt(&editor.app.layout, .{ .x = x, .y = y }) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("Center", o.name);
+    try std.testing.expect(o.at != null);
+    _ = try cw.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    try std.testing.expect(!editor.app.layout.view_drag.active());
+    const order = editor.app.layout.assignment("Center") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 2), order.len);
+    try std.testing.expectEqualStrings("test.two", order[0]);
+    try std.testing.expectEqualStrings("test.one", order[1]);
+}
+
+test "a view let go over another place's chooser goes into its list where along it, and is shown" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.view_drag.discard();
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    _ = try multiCenter(editor);
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    // In no place: Center's list is written down, and does not take it by keyword.
+    try editor.app.host.registerSurface(.{ .id = "test.three", .title = "Three", .keywords = fizzy.sdk.keywords.ide.main, .draw = draw });
+    try dvui.testing.settle(EndlessFrame.frame);
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.beginLoose(&layout, "test.three", .{ .w = 40, .h = 20 }, null);
+    try std.testing.expect(editor.app.layout.view_drag.active());
+    ViewDrag.insertInto(&layout, ViewDrag.loose_source, "Center", .{ .before = "test.two" });
+
+    const order = editor.app.layout.assignment("Center") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 3), order.len);
+    try std.testing.expectEqualStrings("test.one", order[0]);
+    try std.testing.expectEqualStrings("test.three", order[1]);
+    try std.testing.expectEqualStrings("test.two", order[2]);
+    try dvui.testing.settle(EndlessFrame.frame);
+    var center: fizzy.Editor.Layout.Region = undefined;
+    for (editor.app.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Center")) center = r;
+    }
+    const shown = layout.selectedIn(&center) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("test.three", shown.id);
 }
 
 test "a view-drag can split its own place" {
@@ -5530,7 +5622,7 @@ test "float: a strip a float lies over is no chooser where the float is, and is 
     // A strip across Main, drawn in the app's own window, running under the float's body — a tab
     // strip of a pane the float lies over, as a plugin offers one (`Host.Region.offerChooser`).
     const strip: dvui.Rect.Physical = .{ .x = 0, .y = 200, .w = 800, .h = 30 };
-    ViewDrag.offerChooser(&layout, "Main", strip, true);
+    ViewDrag.offerChooser(&layout, "Main", strip, true, null);
     // Where the float lies over it, the float is what the view is over: the strip opens no slot
     // there, and a release does not go into it.
     try std.testing.expect(ViewDrag.chooserAt(state, .{ .x = 350, .y = 215 }) == null);
