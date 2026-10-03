@@ -108,6 +108,10 @@ occluder_count: usize = 0,
 /// lies over, rather than its ghost. It starts firm — the drag lifts out of it — and stays so
 /// until the view is aimed off it.
 ghost_firm: bool = true,
+/// Where and when the view came to rest over the ghost (`settleGhost`), while a drop beneath lies
+/// under it; 0 when it is not resting over it.
+ghost_rest_at: dvui.Point.Physical = .{},
+ghost_rest_ns: i128 = 0,
 
 /// What the carried view is drawn as. `drop` where the glass program draws and the pointer is off
 /// every list, `tab` over a list (a tab strip, a rail), `preview` — a card of its photograph — off
@@ -188,7 +192,8 @@ fn under(state: *const Layout.State, p: dvui.Point.Physical) Under {
 }
 
 /// Whether `p`, aimed with a drop of radius `r`, is on the drop of the place under it in window
-/// `layer`, as that drop shows with the float the view is carried out of a ghost (`ghostZoneBounds`).
+/// `layer` (`zoneBounds`) — under the ghost of the float the view is carried out of, the one place it
+/// can be under a float and still be aimed at.
 fn onDropBeneath(state: *const Layout.State, layer: u16, p: dvui.Point.Physical, r: f32) bool {
     const d = &state.view_drag;
     var best: ?Target = null;
@@ -201,7 +206,7 @@ fn onDropBeneath(state: *const Layout.State, layer: u16, p: dvui.Point.Physical,
         best_area = area;
     }
     const t = best orelse return false;
-    const b = ghostZoneBounds(state, t.name) orelse return false;
+    const b = zoneBounds(state, t.name) orelse return false;
     return DropZones.atDisc(DropZones.wheel(b, dvui.currentWindow().natural_scale, removableIn(state)), p, r) != null;
 }
 
@@ -211,18 +216,28 @@ fn sourceOccluder(d: *const ViewDrag) ?Occluder {
     return null;
 }
 
+/// How long the view must rest over the ghost of the float it is carried out of before it firms
+/// up, while a drop beneath lies under it (`settleGhost`), in milliseconds as they pass — not
+/// motion, which can be off: it is the user saying they mean the float, not an animation.
+pub const ghost_rest_ms: i128 = 240;
+/// Points the view may drift and still be resting.
+const ghost_rest_slop: f32 = 10;
+
 /// Settle whether the float the view is carried out of is firm, for where the view is aimed now,
 /// and return it. False for a drag out of no float. Asked any number of times in a frame, it
 /// answers the same, so whatever reads the drag first in a frame settles it (`tick`).
 ///
 /// The float the view is carried out of is a ghost of itself (`Floats`) while the view is aimed off
 /// it: what it lies over shows through, and covers nothing (`under`). The drops of the places it
-/// lies over sit clear of it all the same, as they do of every float (`zoneBounds`), so a drop
-/// never moves as the ghost comes and goes. Aimed back over it, it firms up at once — the float
-/// again, with its own places' drops — and stays firm until the view is aimed off it, so its own
-/// middle and edges can be reached wherever they are. Only a place the float covers whole, with no
-/// room clear of it, keeps its drop under the ghost, and the view over that drop is aimed through
-/// the ghost at it rather than firming it.
+/// lies over sit clear of it where there is room for them (`zoneBounds`), the same firm or ghost,
+/// so a drop never moves as the ghost comes and goes. With every drop clear of it, aimed back over
+/// it, it firms up at once — the float again, with its own places' drops — and stays firm until the
+/// view is aimed off it, so its own middle and edges can be reached wherever they are.
+///
+/// A drop with too little room clear of it sits under the ghost instead, reached through it: the
+/// view over that drop is aimed at it, not the float. And while one does, the ghost firms only for
+/// a rest over it, off such a drop or on its header (`ghost_rest_ms`) — at once, it would firm as
+/// the view was carried across it to the drop, and that drop could never be reached.
 pub fn settleGhost(state: *Layout.State) bool {
     const d = &state.view_drag;
     const g = sourceOccluder(d) orelse {
@@ -232,6 +247,7 @@ pub fn settleGhost(state: *Layout.State) bool {
     const a = aimAt(state, dvui.currentWindow().mouse_pt);
     if (!g.bounds.contains(a.p)) {
         d.ghost_firm = false;
+        d.ghost_rest_ns = 0;
         return false;
     }
     if (d.ghost_firm) return true;
@@ -240,9 +256,49 @@ pub fn settleGhost(state: *Layout.State) bool {
     for (d.occluders[0..d.occluder_count]) |o| {
         if (!o.source and o.bounds.contains(a.p) and o.layer > below) below = o.layer;
     }
-    if (below > g.layer or onDropBeneath(state, below, a.p, a.r)) return false;
-    d.ghost_firm = true;
-    return true;
+    // On a drop beneath it the view is aimed at that drop, lit as one — never the float — except
+    // over the ghost's header, its handle: a drop under a ghost is its whole size, and over a small
+    // ghost it can leave nowhere else to rest.
+    const mouse = dvui.currentWindow().mouse_pt;
+    const on_header = g.header.contains(mouse);
+    if (below > g.layer or (!on_header and onDropBeneath(state, below, a.p, a.r))) {
+        d.ghost_rest_ns = 0;
+        return false;
+    }
+    if (!dropUnderGhost(state, g)) {
+        d.ghost_firm = true;
+        d.ghost_rest_ns = 0;
+        return true;
+    }
+    const cw = dvui.currentWindow();
+    const now = cw.frame_time_ns;
+    const slop = ghost_rest_slop * cw.natural_scale;
+    const dx = mouse.x - d.ghost_rest_at.x;
+    const dy = mouse.y - d.ghost_rest_at.y;
+    if (d.ghost_rest_ns == 0 or dx * dx + dy * dy > slop * slop) {
+        d.ghost_rest_at = mouse;
+        d.ghost_rest_ns = now;
+    } else if (now - d.ghost_rest_ns >= ghost_rest_ms * std.time.ns_per_ms) {
+        d.ghost_firm = true;
+        d.ghost_rest_ns = 0;
+        return true;
+    }
+    // Frames while it rests, with nothing else asking for them.
+    dvui.refresh(null, @src(), null);
+    return false;
+}
+
+/// Whether the drop of any place beneath the ghost `g` sits under it (`zoneBounds`): one with too
+/// little room clear of it, reached through the ghost.
+fn dropUnderGhost(state: *const Layout.State, g: Occluder) bool {
+    const d = &state.view_drag;
+    for (d.targets[0..d.target_count]) |t| {
+        if (t.layer >= g.layer) continue;
+        const b = zoneBounds(state, t.name) orelse continue;
+        const i = b.intersect(g.bounds);
+        if (i.w >= 1 and i.h >= 1) return true;
+    }
+    return false;
 }
 
 /// Whether float `name` is a ghost of itself: a view is carried out of it, aimed elsewhere.
@@ -642,26 +698,38 @@ pub fn interiorBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.P
 }
 
 /// The part of place `name` its drop sits in: its interior (`interiorBounds`) less every float over
-/// it — a float drawn in a window above the place's, as the drag mapped them (`mapOccluders`), the
-/// one the view is carried out of as well, ghost or not, so a drop does not move as the ghost comes
-/// and goes. A drop under a float could not be aimed at, so it goes where it can be: the middle of
-/// the part left clear, fitted there as a wheel or a strip as anywhere (`DropZones.uncovered`). A
-/// float's own places are in its window, so theirs are inside it. Null when floats cover all of
-/// it: that place has no drop — but for a place only the ghost covers whole, whose drop stays
-/// under the ghost while it is one, to be reached through it (`ghostZoneBounds`).
+/// it — a float drawn in a window above the place's, as the drag mapped them (`mapOccluders`). A
+/// drop under a float could not be aimed at, so it goes where it can be: the middle of the part
+/// left clear, fitted there as a wheel or a strip as anywhere (`DropZones.uncovered`). A float's
+/// own places are in its window, so theirs are inside it. Null when floats cover all of it: that
+/// place has no drop.
+///
+/// The float the view is carried out of is weighed differently, since as a ghost it can be aimed
+/// through (`settleGhost`): a drop stays clear of it only while that leaves the drop
+/// `ghost_min_share` or more of the size it would have with no ghost there. Squeezed smaller, or with nothing clear of it, the drop
+/// sits as if the ghost were not there, under it, whole, and is reached through it. Firm or ghost,
+/// it is the same rect, so no drop moves or changes size as the ghost comes and goes; firm, the
+/// float takes the pointer over it, so a drop under it is not aimed at until it fades again.
 ///
 /// Everything that reads or draws a place's drop reads this — its zones (`drawZones`), the release
 /// (`kindAt`), the self-split (`targetAtAim`) — so what shows is what a release takes.
 pub fn zoneBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
     if (!state.view_drag.active()) return interiorBounds(state, name);
-    return if (state.view_drag.ghost_firm) zoneBoundsAs(state, name, true) else ghostZoneBounds(state, name);
+    const clear = zoneBoundsAs(state, name, true);
+    if (sourceOccluder(&state.view_drag) == null) return clear;
+    const through = zoneBoundsAs(state, name, false) orelse return clear;
+    const c = clear orelse return through;
+    const scale = dvui.currentWindow().natural_scale;
+    const trash = removableIn(state);
+    const clear_unit = DropZones.wheel(c, scale, trash).unit;
+    const through_unit = DropZones.wheel(through, scale, trash).unit;
+    return if (clear_unit >= ghost_min_share * through_unit) c else through;
 }
 
-/// `zoneBounds` with the float the view is carried out of a ghost: clear of it where any of the
-/// place is, under it where none is.
-fn ghostZoneBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
-    return zoneBoundsAs(state, name, true) orelse zoneBoundsAs(state, name, false);
-}
+/// The least share of the size it would have with no ghost there that a drop shrinks to, to stay
+/// clear of the ghost of the float the view is carried out of (`zoneBounds`); any smaller, and it
+/// keeps that size, under the ghost.
+pub const ghost_min_share: f32 = 0.75;
 
 /// `zoneBounds` with the float the view is carried out of covering (`ghost`) or not.
 fn zoneBoundsAs(state: *const Layout.State, name: []const u8, ghost: bool) ?dvui.Rect.Physical {
@@ -944,6 +1012,7 @@ pub fn drawOverlay(l: *Layout) void {
         drops[n].look.hovered = null;
         n += 1;
     }
+    n = handOffDrops(drops[0..n]);
     d.last_pending = drops;
     d.last_pending_count = n;
     // Nothing to lay over the window.
@@ -990,6 +1059,36 @@ pub fn drawOverlay(l: *Layout) void {
         DropZones.drawIcons(p.key, scale);
     }
     dvui.clipSet(prev_clip);
+}
+
+/// A drop coming in where another is going — the place the view is aimed at now lying under the
+/// one it was, as a float's place does under the place beneath it when the float firms up from its
+/// ghost — takes over the going one's glass and changes into itself (`DropZones.handOff`), rather
+/// than coming in over it as it goes: both in one spot read as the drop opening and shutting twice.
+/// Returns how many of `drops` are left, the ones handed off taken out.
+fn handOffDrops(drops: []PendingDrop) usize {
+    var n = drops.len;
+    for (0..drops.len) |i| {
+        if (i >= n) break;
+        const p = drops[i];
+        if (!p.look.target or DropZones.showing(p.key)) continue;
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            const q = drops[j];
+            if (q.key == p.key or q.look.target) continue;
+            const shape = DropZones.shapeOf(q.key) orelse continue;
+            if (shape.unit <= 0) continue;
+            const reach = 2 * q.wheel.bubble(.center).r;
+            const dx = p.wheel.center.x - shape.center.x;
+            const dy = p.wheel.center.y - shape.center.y;
+            if (dx * dx + dy * dy > reach * reach) continue;
+            DropZones.handOff(q.key, p.key);
+            drops[j] = drops[n - 1];
+            n -= 1;
+            break;
+        }
+    }
+    return n;
 }
 
 /// Points: the radius of the view carried as a drop — the drop zones' middle bubble's, so what is

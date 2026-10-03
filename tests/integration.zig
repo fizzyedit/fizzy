@@ -5006,6 +5006,13 @@ const FloatOverMain = struct {
     const hidden_at: dvui.Rect.Physical = .{ .x = 240, .y = 180, .w = 200, .h = 140 };
 
     fn register(editor: *fizzy.Editor, hidden: bool) !void {
+        try registerAt(editor, hidden, window);
+    }
+
+    /// `register` with the float's window at `win`: its header the top 40 of it, its place the rest.
+    fn registerAt(editor: *fizzy.Editor, hidden: bool, win: dvui.Rect.Physical) !void {
+        const head: dvui.Rect.Physical = .{ .x = win.x, .y = win.y, .w = win.w, .h = 40 };
+        const place: dvui.Rect.Physical = .{ .x = win.x, .y = win.y + 40, .w = win.w, .h = win.h - 40 };
         const gpa = editor.app.gpa;
         const state = &editor.app.layout;
         state.registerRegion(gpa, .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main, .bounds = main_at, .size = .{ .w = 800, .h = 400 } });
@@ -5013,7 +5020,7 @@ const FloatOverMain = struct {
         if (hidden) state.registerRegion(gpa, .{ .name = "Main/r1", .keywords = fizzy.sdk.keywords.ide.main, .bounds = hidden_at });
         // The float's place, drawn in its window: layer 1.
         state.layer_building = 1;
-        state.registerRegion(gpa, .{ .name = "Float 1", .keywords = fizzy.Editor.Layout.slot_keywords, .by_name = true, .shows = .many, .bounds = body });
+        state.registerRegion(gpa, .{ .name = "Float 1", .keywords = fizzy.Editor.Layout.slot_keywords, .by_name = true, .shows = .many, .bounds = place });
         state.layer_building = 0;
         state.publishRegions();
         _ = try state.floats.add(gpa, .{
@@ -5022,8 +5029,8 @@ const FloatOverMain = struct {
             .home = "Panel",
             .fresh = false,
             .win_id = @enumFromInt(0xf10a7),
-            .bounds = window,
-            .header = header,
+            .bounds = win,
+            .header = head,
         });
     }
 };
@@ -5209,11 +5216,11 @@ test "float: the float a view is carried out of is a ghost while the view is aim
     // It still holds its view, and its place is still drawn: the drag is held by its corner button.
     try std.testing.expect(holds(case.shows("Float 1"), "test.output"));
 
-    // Carried back over it, off any drop beneath, it is still a ghost; rested on there, itself
-    // again, and what the view aims at.
+    // Carried back over it — every drop beneath clear of it — itself again at once, and what the
+    // view aims at.
     const body: dvui.Point.Physical = .{ .x = bounds.x + 12, .y = bounds.y + bounds.h - 12 };
     try pointTo(body, ManyPanelFrame.frame, 1);
-    try std.testing.expect(!editor.app.layout.view_drag.ghost_firm);
+    try std.testing.expect(editor.app.layout.view_drag.ghost_firm);
     try restOn(editor, body, ManyPanelFrame.frame);
     try std.testing.expect(editor.app.layout.view_drag.ghost_firm);
     try std.testing.expectEqual(@as(f32, 0), asideOf(editor, 0));
@@ -5228,7 +5235,7 @@ test "float: the float a view is carried out of is a ghost while the view is aim
     try std.testing.expectEqual(@as(f32, 0), asideOf(editor, 0));
 }
 
-test "float: its ghost firms up rested on, and is aimed through at what is beneath until it does" {
+test "float: the drops beneath a ghost sit clear of it, and it firms up as the view comes over it" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
     const editor = ctx.editor;
@@ -5239,7 +5246,11 @@ test "float: its ghost firms up rested on, and is aimed through at what is benea
     defer editor.app.layout.deinitExtents(gpa);
     defer editor.app.layout.deinitQualified(gpa);
     defer editor.app.layout.deinitAssignments(gpa);
-    try FloatOverMain.register(editor, false);
+    // A narrow float, Main roomy beside it.
+    const win: dvui.Rect.Physical = .{ .x = 200, .y = 100, .w = 180, .h = 260 };
+    const head: dvui.Rect.Physical = .{ .x = win.x, .y = win.y, .w = win.w, .h = 40 };
+    const place: dvui.Rect.Physical = .{ .x = win.x, .y = win.y + 40, .w = win.w, .h = win.h - 40 };
+    try FloatOverMain.registerAt(editor, false, win);
     const state = &editor.app.layout;
     const cw = dvui.currentWindow();
     const prev_mouse = cw.mouse_pt;
@@ -5247,26 +5258,80 @@ test "float: its ghost firms up rested on, and is aimed through at what is benea
 
     var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, cw.arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
-    cw.mouse_pt = FloatOverMain.body.center();
-    ViewDrag.begin(&layout, "Float 1", FloatOverMain.body, FloatOverMain.body);
+    cw.mouse_pt = place.center();
+    ViewDrag.begin(&layout, "Float 1", place, place);
+    defer state.view_drag.discard();
+
+    // Aimed off the float: a ghost, and beside it, what is beneath.
+    const beside: dvui.Point.Physical = .{ .x = 650, .y = 200 };
+    cw.mouse_pt = beside;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, beside, "Float 1") orelse return error.TestExpectedEqual);
+    // Main's drop is clear of the ghost, as of any float: there is room beside it.
+    const main_drop = ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual;
+    try std.testing.expect(!win.contains(main_drop.center));
+
+    // Carried over the ghost, it firms up at once — nothing beneath is under it to be reached
+    // through it — and the float's place is what the view aims at.
+    const corner: dvui.Point.Physical = .{ .x = place.x + 16, .y = place.y + place.h - 12 };
+    cw.mouse_pt = corner;
+    try std.testing.expect(ViewDrag.settleGhost(state));
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, corner, "Float 1") orelse return error.TestExpectedEqual);
+    // Main's drop has not moved for it.
+    try std.testing.expectEqual(main_drop.center, (ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual).center);
+    // Over its header, nothing: its handle.
+    try std.testing.expect(ViewDrag.targetAt(&layout, head.center(), "Float 1") == null);
+
+    // Off it again: a ghost, and Main's drop where it was.
+    cw.mouse_pt = beside;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    try std.testing.expectEqual(main_drop.center, (ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual).center);
+}
+
+test "float: a drop squeezed by the ghost stays whole under it, reached through it, and the ghost firms only for a rest off it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    // A float over nearly all of Main: what is left of Main round it is a thin frame.
+    const win: dvui.Rect.Physical = .{ .x = 24, .y = 20, .w = 752, .h = 360 };
+    const head: dvui.Rect.Physical = .{ .x = win.x, .y = win.y, .w = win.w, .h = 40 };
+    const place: dvui.Rect.Physical = .{ .x = win.x, .y = win.y + 40, .w = win.w, .h = win.h - 40 };
+    try FloatOverMain.registerAt(editor, false, win);
+    const state = &editor.app.layout;
+    const cw = dvui.currentWindow();
+    const prev_mouse = cw.mouse_pt;
+    defer cw.mouse_pt = prev_mouse;
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, cw.arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    cw.mouse_pt = place.center();
+    ViewDrag.begin(&layout, "Float 1", place, place);
     defer state.view_drag.discard();
 
     const prev_time = cw.frame_time_ns;
     defer cw.frame_time_ns = prev_time;
-    // Aimed off the float: a ghost.
-    const beside: dvui.Point.Physical = .{ .x = 650, .y = 200 };
+    // Aimed off the float, beside it in what is left of Main: a ghost.
+    const beside: dvui.Point.Physical = .{ .x = 10, .y = 200 };
     cw.mouse_pt = beside;
     try std.testing.expect(!ViewDrag.settleGhost(state));
-    // Beside it, what is beneath.
     try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, beside, "Float 1") orelse return error.TestExpectedEqual);
-    // With the ghost covering nothing, Main's drop is in its middle, under the ghost, and aimed
-    // at there through it the drop is Main's.
+    // Too little of Main is clear of it for its drop: the drop sits under the ghost, whole, and
+    // aimed at there through it, it is Main's.
     const main_drop = ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual;
-    try std.testing.expect(FloatOverMain.body.contains(main_drop.center));
+    try std.testing.expect(win.contains(main_drop.center));
+    try std.testing.expectEqual(DZ.wheel(ViewDrag.interiorBounds(state, "Main") orelse return error.TestExpectedEqual, cw.natural_scale, main_drop.remove).unit, main_drop.unit);
     try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, main_drop.center, "Float 1") orelse return error.TestExpectedEqual);
+
     // Carried across the ghost to that drop, it stays a ghost — over it off the drop, the view is
     // over Main and no bubble of it — and on the drop, it is a ghost however long it rests there.
-    const corner: dvui.Point.Physical = .{ .x = FloatOverMain.body.x + 16, .y = FloatOverMain.body.y + FloatOverMain.body.h - 12 };
+    const corner: dvui.Point.Physical = .{ .x = place.x + 16, .y = place.y + place.h - 12 };
     try std.testing.expect(DZ.at(main_drop, corner) == null);
     cw.mouse_pt = corner;
     try std.testing.expect(!ViewDrag.settleGhost(state));
@@ -5277,23 +5342,22 @@ test "float: its ghost firms up rested on, and is aimed through at what is benea
     try std.testing.expect(!ViewDrag.settleGhost(state));
 
     // Rested on off the drop, it firms up, and stays firm over it: the float's place is what the
-    // view aims at there, and at Main's middle, under it — Main's drop has gone out from under it.
+    // view aims at there and over Main's drop — which stays where it is, under it.
     cw.mouse_pt = corner;
     try std.testing.expect(!ViewDrag.settleGhost(state));
     cw.frame_time_ns += ViewDrag.ghost_rest_ms * std.time.ns_per_ms;
     try std.testing.expect(ViewDrag.settleGhost(state));
     try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, corner, "Float 1") orelse return error.TestExpectedEqual);
     try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, main_drop.center, "Float 1") orelse return error.TestExpectedEqual);
-    const clear = ViewDrag.zoneBounds(state, "Main") orelse return error.TestExpectedEqual;
-    try std.testing.expect(clear.intersect(FloatOverMain.window).w <= 0 or clear.intersect(FloatOverMain.window).h <= 0);
-    try std.testing.expect(!FloatOverMain.window.contains((ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual).center));
-    // Over its header, nothing: its handle.
-    try std.testing.expect(ViewDrag.targetAt(&layout, FloatOverMain.header.center(), "Float 1") == null);
+    try std.testing.expectEqual(main_drop.center, (ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual).center);
 
-    // Off it again: a ghost, and Main's drop back in its middle.
+    // Off it, and rested on its header: firm too, the header being its handle.
     cw.mouse_pt = beside;
     try std.testing.expect(!ViewDrag.settleGhost(state));
-    try std.testing.expectEqual(main_drop.center, (ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual).center);
+    cw.mouse_pt = head.center();
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    cw.frame_time_ns += ViewDrag.ghost_rest_ms * std.time.ns_per_ms;
+    try std.testing.expect(ViewDrag.settleGhost(state));
 }
 
 test "float: a float of two is a ghost too, and comes back without the view that landed elsewhere" {

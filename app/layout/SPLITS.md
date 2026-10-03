@@ -167,15 +167,20 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
 - **The float a view leaves is a ghost while the view is aimed elsewhere.** Carrying a view out of a
   float, the float fades to a faint, slightly blurred picture of itself once the view is aimed off
   it, and covers nothing: what it lies over shows through and can be aimed at, and is usually where
-  the view is going. The drops of the places beneath it sit clear of it all the same, as they do of
-  every float (above), so no drop moves as the ghost comes and goes. Aimed back over it, it firms up
-  at once, live: the float again, covering what it lies over, with its own places' drops, so the
-  view can go back in (its own middle, where it is alone, is no move), split it on an edge, or go
-  to another of its places. It stays firm until the view is aimed off it, so its own middle can be
-  reached wherever it lies. A place the float covers whole, with no room clear of it, is the one
-  exception: its drop stays under the ghost, and the view over that drop is aimed through the
-  ghost at it rather than firming it. (A rest over the ghost before it firmed, with every drop
-  beneath it under it until then, was tried first: the drop beneath shut and slid away as the
+  the view is going. The drops of the places beneath it sit clear of it where there is room, as
+  they do of every float (above) — but only while that leaves a drop three quarters or more of the
+  size it would have with no ghost there (`ViewDrag.ghost_min_share`): squeezed smaller, or with nothing clear of it, a drop sits
+  under the ghost at its whole size, and the view over it is aimed through the ghost at it. Either
+  way it is the same firm or ghost, so no drop moves as the ghost comes and goes. Aimed back over
+  the ghost, it firms up, live: the float again, covering what it lies over, with its own places'
+  drops, so the view can go back in (its own middle, where it is alone, is no move), split it on an
+  edge, or go to another of its places. It stays firm until the view is aimed off it, so its own
+  middle can be reached wherever it lies. With every drop beneath clear of it, it firms the moment
+  the view is over it. While a drop lies under it, it firms only for a rest over it of a quarter of
+  a second (`ViewDrag.ghost_rest_ms`), off that drop or on its header: at once, it would firm as
+  the view was carried across it to the drop, which could then never be reached. The header always
+  counts — over a small ghost, a drop beneath at its whole size can leave nowhere else to rest. (A rest before it firmed, with
+  every drop beneath it under it, was tried first: the drop beneath shut and slid away as the
   float's own opened in the same spot, and drops seemed to avoid floats only some of the time.)
   The ghost is a photograph of the float, taken from the frame at the lift, while
   the float itself goes on drawing its place clipped to nothing (its corner button holds the drag) —

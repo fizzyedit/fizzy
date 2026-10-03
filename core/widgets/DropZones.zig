@@ -1073,6 +1073,19 @@ pub fn forget(id: dvui.Id) void {
     dvui.dataRemove(null, id, "_drop_zones");
 }
 
+/// Hand the drop `from` is drawing over to `to`, which has none yet: `to` starts out as `from`'s
+/// glass, where it is and as big and as far in, and changes into its own shape and place from there
+/// as any drop given somewhere else does (`draw`) — one drop running into another rather than one
+/// going while the other comes over it. `from` is gone. Nothing lights until `to` says so.
+pub fn handOff(from: dvui.Id, to: dvui.Id) void {
+    const st = dvui.dataGetPtr(null, from, "_drop_zones", State) orelse return;
+    var next = st.*;
+    next.lit = @splat(0);
+    next.icon_n = 0;
+    dvui.dataSet(null, to, "_drop_zones", next);
+    forget(from);
+}
+
 /// Take `drawSingle`'s pane away at once rather than letting it fade: for a slot whose drop has
 /// landed, where the item now stands in it — a slot fading round the item that just arrived read
 /// as a bubble the item grew to fill.
