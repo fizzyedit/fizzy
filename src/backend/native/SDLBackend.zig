@@ -678,16 +678,19 @@ fn cocoaWindow(window: *c.SDL_Window) ?*anyopaque {
     return c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
 }
 
-/// Whether AppKit's live-resize tracking loop is running for this window, which a frame is then
-/// run from inside (`appIterate`).
+/// Whether the OS's live-resize loop is running for this window, which a frame is then run from
+/// inside (`appIterate`): AppKit's tracking loop on macOS; on Windows the modal move/size loop,
+/// where SDL runs frames from a timer and from each step (fizzyedit/SDL's live-resize patch).
 fn inLiveResize(self: *SDLBackend) bool {
     if (builtin.os.tag == .macos) {
         if (cocoaWindow(self.window)) |nswindow| return fizzy_native_in_live_resize(nswindow) != 0;
     }
-    // A popped-out float's window in the OS's move/size loop: SDL runs the frame from the loop's
-    // timer, where a wait for events would take the loop's own.
+    // The thread's move/size loop: any of fizzy's windows', the main one or a popped-out float's
+    // (`Viewport.win32_loop`), where SDL runs the frame from the loop's timer and from each step.
     if (builtin.os.tag == .windows) {
-        for (self.viewports) |v| if (v) |vp| if (vp.win32_loop.moving) return true;
+        var info = std.mem.zeroes(win32_gui.GUITHREADINFO);
+        info.cbSize = @sizeOf(win32_gui.GUITHREADINFO);
+        if (win32_gui.GetGUIThreadInfo(0, &info) != 0) return info.flags & win32_gui.GUI_INMOVESIZE != 0;
     }
     return false;
 }
@@ -704,6 +707,24 @@ fn liveResizeNextFrame(self: *SDLBackend, win: *const dvui.Window, wait_micros: 
     fizzy_native_live_resize_next_frame(nswindow, wait_s, @as(f64, @floatFromInt(since_start_ns)) / std.time.ns_per_s);
 }
 
+/// The one user32 call `inLiveResize` makes on Windows: whether this thread's GUI is in a move or
+/// size loop.
+const win32_gui = struct {
+    const GUI_INMOVESIZE: u32 = 0x00000002;
+    const RECT = extern struct { left: i32, top: i32, right: i32, bottom: i32 };
+    const GUITHREADINFO = extern struct {
+        cbSize: u32,
+        flags: u32,
+        hwndActive: ?*anyopaque,
+        hwndFocus: ?*anyopaque,
+        hwndCapture: ?*anyopaque,
+        hwndMenuOwner: ?*anyopaque,
+        hwndMoveSize: ?*anyopaque,
+        hwndCaret: ?*anyopaque,
+        rcCaret: RECT,
+    };
+    extern "user32" fn GetGUIThreadInfo(idThread: u32, pgui: *GUITHREADINFO) callconv(.winapi) i32;
+};
 const SDL_ERROR = bool;
 const SDL_SUCCESS: SDL_ERROR = true;
 inline fn toErr(res: SDL_ERROR, what: []const u8) !void {
@@ -1922,7 +1943,10 @@ pub fn renderPresent(self: *SDLBackend) void {
             map_empty[i] = true;
         }
     }
-    self.gpu.present(self.clear_window_on_begin);
+    // A frame inside a Windows live resize is drawn before the loop goes on: one queued behind
+    // others reaches the screen a composite or more after the size it was drawn for, as an edge
+    // with nothing on it or a frame cut off (docs/WINDOWS_LIVE_RESIZE.md).
+    self.gpu.present(self.clear_window_on_begin, builtin.os.tag == .windows and self.inLiveResize());
     // Shown once there is a frame in it (or empty, above). Not made key: the window it came out of
     // keeps the keyboard until the viewport is clicked.
     for (&self.viewports, first_frame, map_empty) |*slot, show, empty| {
@@ -3216,9 +3240,10 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     // During a callback we don't want to call SDL_WaitEvent or
     // SDL_WaitEventTimeout.  Otherwise all event handling gets screwed up and
     // either never recovers or recovers after many seconds.
-    // A frame inside a macOS live resize is always one: SDL's timer runs it from
-    // AppKit's tracking loop while the pointer rests, with no resize event to
-    // say so, and a wait there takes the tracking loop's own mouse events.
+    // A frame inside a live resize is always one: SDL's timer runs it from
+    // AppKit's tracking loop (or Windows' modal size loop) while the pointer
+    // rests, with no resize event to say so, and a wait there takes the loop's
+    // own mouse events.
     // NOTE: on iOS, SDL_WaitEventTimeout stalls in UITrackingRunLoopMode during a
     // touch, so we throttle via ios_next_frame_ns above instead of waiting here.
     if (appState.no_wait or appState.have_resize or in_live_resize or app_callback_frames or builtin.target.os.tag == .ios) {
