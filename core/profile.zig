@@ -22,8 +22,10 @@ const std = @import("std");
 const dvui = @import("dvui");
 const perf = @import("gfx/perf.zig");
 
-/// Bumped whenever `Profiler`'s layout changes.
-pub const abi: u32 = 2;
+/// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
+/// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
+/// `abi` field it would check sits wherever its own layout put it, which a reordered struct moves.
+pub const abi: u32 = 3;
 
 pub const max_entries = 1024;
 const max_depth = 48;
@@ -67,10 +69,17 @@ pub const FrameStats = struct {
     interval_ns: f64 = 0,
     /// Inside fizzy's frame (`hostFrameBegin` … `hostFrameEnd`): the work the profiler sees.
     work_ns: f64 = 0,
+    /// After fizzy's frame, the backend's end of it (`hostFrameBegin`'s `prev_submit_ns`):
+    /// dvui's deferred drawing, and the frame's draws handed to the GPU. Null where the backend
+    /// does not measure it.
+    submit_ns: ?f64 = null,
     /// The slowest frame's work in the window.
     worst_work_ns: u64 = 0,
     fps: f64 = 0,
     frames: u32 = 0,
+    /// Pointer moves (mouse or touch) the app was given, per second (`countInput`). Where frames
+    /// are drawn only when there is input, the frame rate can be no better than this.
+    inputs_per_s: f64 = 0,
 };
 
 pub const Profiler = struct {
@@ -81,8 +90,10 @@ pub const Profiler = struct {
     /// window sets it each frame it wants it.
     frozen: bool = false,
 
-    /// The last `history_len` frames: each one's work, and each entry's time and calls in it.
+    /// The last `history_len` frames: each one's work and submit, and each entry's time and
+    /// calls in it.
     history_work: [history_len]u32 = @splat(0),
+    history_submit: [history_len]u32 = @splat(0),
     history_ns: [history_len][max_entries]u32 = @splat(@splat(0)),
     history_calls: [history_len][max_entries]u16 = @splat(@splat(0)),
     history_head: usize = 0,
@@ -107,6 +118,14 @@ pub const Profiler = struct {
     win_interval_ns: u64 = 0,
     win_work_ns: u64 = 0,
     win_worst_work_ns: u64 = 0,
+    win_submit_ns: u64 = 0,
+    win_submit_frames: u32 = 0,
+    win_inputs: u64 = 0,
+    /// This frame's pointer moves (`countInput`).
+    frame_inputs: u32 = 0,
+    /// The history slot the last frame was recorded in, for its submit to land in when the
+    /// next frame begins. Null when it was not recorded (paused, frozen).
+    recorded_slot: ?usize = null,
     stats: FrameStats = .{},
 
     /// Forget every entry (the window's Reset).
@@ -119,20 +138,27 @@ pub const Profiler = struct {
         self.win_interval_ns = 0;
         self.win_work_ns = 0;
         self.win_worst_work_ns = 0;
+        self.win_submit_ns = 0;
+        self.win_submit_frames = 0;
+        self.win_inputs = 0;
+        self.frame_inputs = 0;
+        self.recorded_slot = null;
         self.stats = .{};
         self.history_head = 0;
         self.history_filled = 0;
         self.history_work = @splat(0);
+        self.history_submit = @splat(0);
         for (&self.history_ns) |*h| h.* = @splat(0);
         for (&self.history_calls) |*h| h.* = @splat(0);
     }
 
-    /// The frame `ago` frames back (0 the latest recorded): its work and entries' times and calls,
-    /// indexed as `slice`. Null past what the history holds.
-    pub fn historyFrame(self: *Profiler, ago: usize) ?struct { work_ns: u32, ns: []const u32, calls: []const u16 } {
+    /// The frame `ago` frames back (0 the latest recorded): its work, its submit (0 until the
+    /// next frame reports it), and entries' times and calls, indexed as `slice`. Null past what
+    /// the history holds.
+    pub fn historyFrame(self: *Profiler, ago: usize) ?struct { work_ns: u32, submit_ns: u32, ns: []const u32, calls: []const u16 } {
         if (ago >= self.history_filled) return null;
         const slot = (self.history_head + history_len - 1 - ago) % history_len;
-        return .{ .work_ns = self.history_work[slot], .ns = self.history_ns[slot][0..self.count], .calls = self.history_calls[slot][0..self.count] };
+        return .{ .work_ns = self.history_work[slot], .submit_ns = self.history_submit[slot], .ns = self.history_ns[slot][0..self.count], .calls = self.history_calls[slot][0..self.count] };
     }
 
     pub fn slice(self: *Profiler) []Entry {
@@ -199,13 +225,26 @@ pub const Profiler = struct {
         if (e.parent != none) self.entries[e.parent].frame_child_ns += elapsed;
     }
 
-    fn frameBegin(self: *Profiler) void {
+    /// Pointer moves this frame, for `FrameStats.inputs_per_s`.
+    pub fn countInput(self: *Profiler, n: u32) void {
+        self.frame_inputs +|= n;
+    }
+
+    fn frameBegin(self: *Profiler, prev_submit_ns: ?u64) void {
         const t = now();
         if (self.prev_frame_start != 0 and self.enabled and !self.paused) {
             self.win_interval_ns += @intCast(@max(0, t - self.prev_frame_start));
         }
+        // The last frame's submit only exists now that the backend has finished it.
+        if (self.recorded_slot) |slot| if (prev_submit_ns) |ns| {
+            self.history_submit[slot] = @intCast(@min(ns, std.math.maxInt(u32)));
+            self.win_submit_ns += ns;
+            self.win_submit_frames += 1;
+        };
+        self.recorded_slot = null;
         self.prev_frame_start = t;
         self.frame_start = t;
+        self.frame_inputs = 0;
         self.depth = 0;
     }
 
@@ -224,6 +263,8 @@ pub const Profiler = struct {
         {
             const slot = self.history_head;
             self.history_work[slot] = @intCast(@min(work, std.math.maxInt(u32)));
+            self.history_submit[slot] = 0;
+            self.recorded_slot = slot;
             for (self.slice(), 0..) |e, i| {
                 self.history_ns[slot][i] = @intCast(@min(e.frame_ns, std.math.maxInt(u32)));
                 self.history_calls[slot][i] = @intCast(@min(e.frame_calls, std.math.maxInt(u16)));
@@ -233,6 +274,7 @@ pub const Profiler = struct {
         }
         self.win_work_ns += work;
         self.win_worst_work_ns = @max(self.win_worst_work_ns, work);
+        self.win_inputs += self.frame_inputs;
         self.win_frames += 1;
         for (self.slice()) |*e| {
             e.win_ns += e.frame_ns;
@@ -251,9 +293,11 @@ pub const Profiler = struct {
         self.stats = .{
             .interval_ns = @as(f64, @floatFromInt(self.win_interval_ns)) / frames,
             .work_ns = @as(f64, @floatFromInt(self.win_work_ns)) / frames,
+            .submit_ns = if (self.win_submit_frames == 0) null else @as(f64, @floatFromInt(self.win_submit_ns)) / @as(f64, @floatFromInt(self.win_submit_frames)),
             .worst_work_ns = self.win_worst_work_ns,
             .fps = @as(f64, @floatFromInt(self.win_frames)) / (span / std.time.ns_per_s),
             .frames = self.win_frames,
+            .inputs_per_s = @as(f64, @floatFromInt(self.win_inputs)) / (span / std.time.ns_per_s),
         };
         for (self.slice()) |*e| {
             e.avg_ns = @as(f64, @floatFromInt(e.win_ns)) / frames;
@@ -270,6 +314,9 @@ pub const Profiler = struct {
         self.win_interval_ns = 0;
         self.win_work_ns = 0;
         self.win_worst_work_ns = 0;
+        self.win_submit_ns = 0;
+        self.win_submit_frames = 0;
+        self.win_inputs = 0;
     }
 };
 
@@ -282,7 +329,7 @@ var host_profiler: Profiler = .{};
 var is_host = false;
 
 const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_7970_7266); // "fizzyprf"
-const publish_key = "_profiler";
+const publish_key = std.fmt.comptimePrint("_profiler{d}", .{abi});
 
 /// The profiler to record into: the host's own in the host, the one it published in a plugin.
 /// Null when there is none, or it was built with another layout.
@@ -303,10 +350,12 @@ pub fn host() *Profiler {
 }
 
 /// Host only, at the start of every frame, before anything is timed: start the frame, and
-/// publish the profiler to the plugins through the shared window.
-pub fn hostFrameBegin() void {
+/// publish the profiler to the plugins through the shared window. `prev_submit_ns` is how long
+/// the backend took to end the last frame after fizzy's part of it (`FrameStats.submit_ns`),
+/// where the backend measures that.
+pub fn hostFrameBegin(prev_submit_ns: ?u64) void {
     is_host = true;
-    host_profiler.frameBegin();
+    host_profiler.frameBegin(prev_submit_ns);
     dvui.dataSet(null, publish_id, publish_key, @as(usize, @intFromPtr(&host_profiler)));
 }
 
@@ -346,7 +395,7 @@ pub fn section(name: []const u8) Scope {
 
 test "scopes nest, and a frame's time folds into the window's averages" {
     var p: Profiler = .{ .enabled = true };
-    p.frameBegin();
+    p.frameBegin(null);
     const a = p.open("pixi", "draw").?;
     const b = p.open("pixi", "bubbles").?;
     p.close(b);
@@ -364,9 +413,27 @@ test "scopes nest, and a frame's time folds into the window's averages" {
 
 test "a scope whose end was skipped does not strand the ones after it" {
     var p: Profiler = .{ .enabled = true };
-    p.frameBegin();
+    p.frameBegin(null);
     const a = p.open("fizzy", "frame").?;
     _ = p.open("x", "lost").?; // never closed
     p.close(a);
     try std.testing.expectEqual(@as(u8, 0), p.depth);
+}
+
+test "a frame's submit lands in its own slot when the next frame begins" {
+    var p: Profiler = .{ .enabled = true };
+    p.frameBegin(null);
+    p.countInput(3);
+    p.frameEnd();
+    try std.testing.expectEqual(@as(u32, 0), p.historyFrame(0).?.submit_ns);
+    p.frameBegin(5 * std.time.ns_per_ms);
+    try std.testing.expectEqual(@as(u32, 5 * std.time.ns_per_ms), p.historyFrame(0).?.submit_ns);
+    try std.testing.expectEqual(@as(u64, 3), p.win_inputs);
+    // Paused, a frame is not recorded and its submit goes nowhere.
+    p.frameEnd();
+    p.paused = true;
+    p.frameBegin(null);
+    p.frameEnd();
+    p.frameBegin(7 * std.time.ns_per_ms);
+    try std.testing.expectEqual(@as(u32, 0), p.historyFrame(0).?.submit_ns);
 }

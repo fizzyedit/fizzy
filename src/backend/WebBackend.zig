@@ -9,7 +9,65 @@ pub const Context = *WebBackend;
 
 const log = std.log.scoped(.WebBackend);
 
-pub var gpa: std.mem.Allocator = std.heap.wasm_allocator;
+pub var gpa: std.mem.Allocator = wasm_allocator;
+
+/// `std.heap.wasm_allocator`, less one resize it gets wrong. Everything on the web allocates
+/// through this: dvui's window (`gpa`), and the app, its plugins and anything else asking for
+/// `std.heap.page_allocator` (`src/web_main.zig` points it here).
+///
+/// The wasm allocator keeps blocks of up to 32 KiB in power-of-two slots carved from 64 KiB
+/// pages, and anything larger in whole pages, and it tells the two apart by length alone. Its
+/// `resize` lets a block of a page or more shrink in place below 32 KiB; `free` then reads the
+/// new length, files the page's address under a 32 KiB slot, and the page is never handed out
+/// as a page again — the next large request grows memory instead. dvui shrinks its frame arenas
+/// by a tenth on every frame they are under-used and grows them back when a frame needs it, so
+/// an arena near that boundary crossed it over and over: memory grew by a page every second or
+/// so of interaction, for as long as it went on, with nothing live to show for it. Refusing that
+/// one shrink is always allowed — the caller copies into a new block and frees the page whole.
+pub const wasm_allocator: std.mem.Allocator = .{ .ptr = undefined, .vtable = &wasm_vtable };
+
+const wasm_vtable: std.mem.Allocator.VTable = .{
+    .alloc = wasmAlloc,
+    .resize = wasmResize,
+    .remap = wasmRemap,
+    .free = wasmFree,
+};
+
+/// The largest block the wasm allocator keeps in a slot rather than in pages: half its 64 KiB
+/// page (`std.heap.BrkAllocator`'s private `bigpage_size`), counting the free-list word it adds.
+const largest_slotted = @max(64 * 1024, std.heap.page_size_max) / 2;
+
+fn slotted(len: usize, alignment: std.mem.Alignment) bool {
+    return @max(len +| @sizeOf(usize), alignment.toByteUnits()) <= largest_slotted;
+}
+
+/// A block in pages asked to become one that would be slotted.
+fn pagesToSlot(buf: []u8, alignment: std.mem.Alignment, new_len: usize) bool {
+    return !slotted(buf.len, alignment) and slotted(new_len, alignment);
+}
+
+fn wasmAlloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+    return std.heap.wasm_allocator.rawAlloc(len, alignment, ret_addr);
+}
+
+fn wasmResize(_: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+    if (pagesToSlot(buf, alignment, new_len)) return false;
+    return std.heap.wasm_allocator.rawResize(buf, alignment, new_len, ret_addr);
+}
+
+fn wasmRemap(_: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+    if (pagesToSlot(buf, alignment, new_len)) return null;
+    return std.heap.wasm_allocator.rawRemap(buf, alignment, new_len, ret_addr);
+}
+
+fn wasmFree(_: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+    std.heap.wasm_allocator.rawFree(buf, alignment, ret_addr);
+}
+
+/// How long the last frame's `win.end` took: dvui's deferred drawing, and the frame's draws
+/// handed to WebGL — the part of a frame after the app's own, which the profiler cannot time
+/// from inside it (`core.profile.hostFrameBegin`).
+pub var last_submit_ns: u64 = 0;
 
 pub var win: dvui.Window = undefined;
 pub var win_ok = false;
@@ -85,6 +143,10 @@ cursor_last: dvui.enums.Cursor = .wait,
 /// Added to the page's clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
+/// The frame running is one nobody will see — a demo catching up (`app.automation.Player.frames`):
+/// its draws to the canvas are dropped. Draws into render targets still run, since what is
+/// drawn there may be read back into the app's model.
+unseen: bool = false,
 force_new_window: bool = true,
 
 const EventTemp = struct {
@@ -687,7 +749,8 @@ pub fn contentScale(_: *WebBackend) f32 {
     return 1.0; // comes through windowSize/pixelSize
 }
 
-pub fn drawClippedTriangles(_: *WebBackend, texture: ?dvui.Texture, vtx: []const dvui.Vertex, idx: []const dvui.Vertex.Index, maybe_clipr: ?dvui.Rect.Physical) !void {
+pub fn drawClippedTriangles(self: *WebBackend, texture: ?dvui.Texture, vtx: []const dvui.Vertex, idx: []const dvui.Vertex.Index, maybe_clipr: ?dvui.Rect.Physical) !void {
+    if (self.unseen and !target_is_fb) return;
     if (batch.vtx.items.len + vtx.len > std.math.maxInt(dvui.Vertex.Index)) flushBatch();
 
     const same_texture = if (batch.texture) |bt| (if (texture) |t| bt.ptr == t.ptr else false) else texture == null;
@@ -772,7 +835,10 @@ fn flushBatch() void {
         // starts again in it.
         if (program != null) programMarker() catch {};
     }
-    if (batch.idx.items.len == 0) return;
+    // Sent even with nothing to draw: a stream of only target switches and clears still has to
+    // reach `web.js`, or what it has bound stops being what `target_is_fb` says — which a frame
+    // nobody sees (`unseen`), its draws to the window dropped, leaves behind often.
+    if (batch.cmds.items.len == 0) return;
 
     const index_slice = std.mem.sliceAsBytes(batch.idx.items);
     const vertex_slice = std.mem.sliceAsBytes(batch.vtx.items);
@@ -1340,8 +1406,10 @@ fn update() !i32 {
 
     const res = try app.frameFn();
 
+    const submit_start = wasm.wasm_now();
     const end_micros = try win.end(.{});
     window_ended = true;
+    last_submit_ns = @intFromFloat(@max(0, wasm.wasm_now() - submit_start) * std.time.ns_per_ms);
 
     switch (res) {
         .ok => {},

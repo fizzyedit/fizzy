@@ -373,7 +373,7 @@ pub fn AppDeinit(_: *dvui.Window) void {
 pub fn AppFrame() !dvui.App.Result {
     fizzy.core.hitch.frameBegin();
     defer fizzy.core.hitch.frameEnd();
-    fizzy.core.profile.hostFrameBegin();
+    fizzy.core.profile.hostFrameBegin(lastSubmitNs());
     defer fizzy.core.profile.hostFrameEnd();
     singleton.drainPending();
     // Once, or — while a demo is seeking — again and again unseen until it lands (`frames`).
@@ -382,8 +382,19 @@ pub fn AppFrame() !dvui.App.Result {
     return player.frames(win, frameOnce, automation.Player.backendClock(win));
 }
 
+/// How long the backend took to end the last frame after the app's part of it — its draws
+/// handed to the GPU — where the backend measures that (the web's does, `WebBackend`).
+fn lastSubmitNs() ?u64 {
+    if (comptime @hasDecl(dvui.backend, "last_submit_ns")) return dvui.backend.last_submit_ns;
+    return null;
+}
+
 /// One run of the app's frame.
 fn frameOnce() !dvui.App.Result {
+    // First, before anything reads `dvui.events()` or the frame target binds: a playing demo adds
+    // its input after the real input, takes the real input it owns, and says whether this run is
+    // seen (see `app.automation.Player.frame`).
+    fizzy.editor().demo.frame();
     // The whole frame draws into a texture — see `core.FrameTarget` for why.
     {
         const prof = fizzy.core.profile.begin("fizzy", "frame target: begin");

@@ -6,7 +6,8 @@
 //! app is told a demo is playing; that is the point — the demo shows the real app doing real work.
 //!
 //! An app calls `frame` once at the very start of its frame, before anything reads
-//! `dvui.events()` (it also tells widgets whether to publish their anchors, `core.anchor`), and
+//! `dvui.events()` (it also tells widgets whether to publish their anchors, `core.anchor`, and the
+//! frame whether it is seen, `core.FrameTarget.setUnseen`), and
 //! `overlay.draw` at the end, after everything else has drawn; and it runs its whole frame
 //! function through `frames`, which is what makes a seek silent. Between frames it drives the
 //! transport: `load`, `play`, `pause`, `seek`, `unload`.
@@ -16,7 +17,10 @@
 //! has to see land (a click, a key, a keyframe), and those frames are *silent*: `frames` runs the
 //! app's frame again and again inside one displayed frame, ending each unseen, until the seek
 //! arrives or a budget of wall time (`budget_ns`) is spent. A seek across a demo-sized tape lands
-//! in the frame it was asked for; a longer one carries on in the next.
+//! in the frame it was asked for; a longer one carries on in the next. Where the backend can drop
+//! a frame's drawing (an `unseen` switch, `core.FrameTarget.setUnseen`) the silent frames draw
+//! nothing, and one more run, drawn, ends the displayed frame — on a phone, drawing each in full
+//! had the GPU doing many frames' work per frame shown.
 //!
 //! **Snapshots** make the way back short. While the tape drives, at calm moments — nothing in
 //! flight, nothing held, the app idle — the player asks the stage for the app's model
@@ -77,6 +81,12 @@ ahead_ns: i128 = 0,
 /// The frame running now is one of `frames`' catch-up runs (after the first): its clock step is
 /// demo time, not the wall's.
 catching_up: bool = false,
+/// The run `frames` ends a catch-up with: drawn, though the seek may still be in flight.
+showing: bool = false,
+/// The run going now draws nothing (`frame`, `core.FrameTarget.setUnseen`): a seek is catching up
+/// in it, and a later run of the same displayed frame is the one shown. Never on a backend that
+/// draws every run.
+run_unseen: bool = false,
 /// The displayed frame's wall time, which `wallNs` keeps to through its catch-up runs.
 shown_wall_ns: i128 = 0,
 /// The seek in flight, or the last one: how long it took to land, for logs, tests and the
@@ -490,9 +500,13 @@ fn dropSnapshots(self: *Player) void {
     self.checked_cursor = null;
 }
 
-/// Once a frame, before anything reads `dvui.events()`: let the transport and the interrupt rule
-/// see real input, then advance the tape and add its input after the real.
+/// Once a frame, before anything reads `dvui.events()` (and before anything that asks whether the
+/// frame is seen, `core.FrameTarget.unseen`): let the transport and the interrupt rule see real
+/// input, then advance the tape and add its input after the real.
 pub fn frame(self: *Player) void {
+    // Whether this run is seen, once the seek it asks for (or lands) is known: a run while a seek
+    // catches up draws nothing, but the one `frames` ends it with.
+    defer self.run_unseen = core.FrameTarget.setUnseen((self.state == .seeking or self.catching_up) and !self.showing);
     // Widgets name themselves for the tape only while one is loaded (`core.anchor`).
     core.anchor.publish(self.owned != null);
     if (self.owned == null) return;
@@ -532,9 +546,12 @@ pub fn frame(self: *Player) void {
 }
 
 /// Run the app's frame function, `frame_fn`, as the player needs it: once, as it is — and while
-/// a seek is catching up, again and again inside the same displayed frame, each run but the
-/// last ended unseen (`Window.end` without presenting) and the next begun, until the seek
-/// arrives or `budget_ns` of wall time is spent. Only the last run is shown.
+/// a seek is catching up, again and again inside the same displayed frame, each run ended
+/// unseen (`Window.end` without presenting) and the next begun, until the seek arrives or
+/// `budget_ns` of wall time is spent. Where the backend has an `unseen` switch
+/// (`core.FrameTarget.setUnseen`), every run of the catch-up draws nothing — the first too, when
+/// the seek began in it (`frame`) — and one more run, drawn, is the one shown; elsewhere each
+/// draws over the last, and the last is shown.
 /// The app calls this from inside its frame function, in place of the frame itself: dvui has
 /// begun the frame and will end and present it, as ever.
 ///
@@ -548,8 +565,11 @@ pub fn frames(self: *Player, win: *dvui.Window, frame_fn: *const fn () anyerror!
     // Counted before the run, which may land the seek, and after it, which may have asked for one.
     const was_seeking = self.state == .seeking;
     if (was_seeking) self.seek_stats.shown += 1;
+    self.showing = false;
     var res = try frame_fn();
-    if (self.state != .seeking) return res;
+    // The first run began in a seek and drew nothing (`frame`): the frame ends with one that draws.
+    const show_last = self.run_unseen;
+    if (self.state != .seeking and !show_last) return res;
     if (!was_seeking) self.seek_stats.shown += 1;
     const start = win.backend.nanoTime();
     defer self.catching_up = false;
@@ -562,12 +582,20 @@ pub fn frames(self: *Player, win: *dvui.Window, frame_fn: *const fn () anyerror!
     // stops it. (Waits time out on the wall, which only displayed frames count.)
     while (res == .ok and self.state == .seeking) {
         if (win.backend.nanoTime() - start >= self.budget_ns) break;
-        const soonest = win.frame_time_ns + std.time.ns_per_us;
-        const at_ns = if (clock == null) soonest else @max(soonest, base_ns + msToNs(self.nextMoment() - base_ms));
         _ = try win.end(.{ .manage_backend = false });
-        try win.begin(at_ns);
+        try win.begin(self.runAt(win, clock, base_ns, base_ms));
         self.catching_up = true;
         self.seek_stats.silent += 1;
+        res = try frame_fn();
+    }
+    // The frame shown: where the catch-up got to — the moment the seek landed on, or as far as the
+    // budget went. Every run before it drew nothing, so it draws on a clean window, and the frame
+    // target still holds the last frame shown for it to read.
+    if (res == .ok and show_last) {
+        _ = try win.end(.{ .manage_backend = false });
+        try win.begin(self.runAt(win, clock, base_ns, base_ms));
+        self.catching_up = true;
+        self.showing = true;
         res = try frame_fn();
     }
     if (clock) |c| {
@@ -580,6 +608,14 @@ pub fn frames(self: *Player, win: *dvui.Window, frame_fn: *const fn () anyerror!
         }
     }
     return res;
+}
+
+/// When the next run of a displayed frame begins on the app's clock: at the demo moment of what it
+/// is about to do while a seek is in flight (see the file comment), else just after the last.
+fn runAt(self: *const Player, win: *dvui.Window, clock: ?*i128, base_ns: i128, base_ms: f64) i128 {
+    const soonest = win.frame_time_ns + std.time.ns_per_us;
+    if (clock == null or self.state != .seeking) return soonest;
+    return @max(soonest, base_ns + msToNs(self.nextMoment() - base_ms));
 }
 
 /// Wall time since the seek in flight was asked for, ns. Only valid while seeking.

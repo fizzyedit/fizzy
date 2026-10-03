@@ -62,6 +62,31 @@ const skip_unread = builtin.target.cpu.arch == .wasm32;
 /// should not flip it on and off, and glass coming back finds it still there.
 const linger_frames: u32 = 60;
 
+const unseen_id: dvui.Id = @enumFromInt(0x6669_7a7a_756e_736e); // "fizzunsn"
+const unseen_key = "_frame_unseen";
+
+/// Mark the frame running as one nobody will see — a demo catching up (`automation.Player.frames`)
+/// — or not. Only where the backend drops what such a frame draws to the window (an `unseen`
+/// switch, the web's): elsewhere every frame draws, and none is marked. Through the shared dvui
+/// window, so every image reads it (`unseen`), a plugin's glass as much as the host's. Returns
+/// whether the frame is unseen now.
+pub fn setUnseen(on: bool) bool {
+    const cw = dvui.currentWindow();
+    const impl = cw.backend.impl;
+    if (!@hasField(@TypeOf(impl.*), "unseen")) return false;
+    impl.unseen = on;
+    if (on) dvui.dataSet(null, unseen_id, unseen_key, true) else dvui.dataRemove(null, unseen_id, unseen_key);
+    return on;
+}
+
+/// The frame running is one nobody will see (`setUnseen`). What only a frame's picture needs can
+/// be left out of it: the frame target here, a frost's capture (`BlurBackdrop`), a cross-fade's
+/// (`anim.CrossFade`).
+pub fn unseen() bool {
+    if (dvui.current_window == null) return false;
+    return dvui.dataGet(null, unseen_id, unseen_key, bool) orelse false;
+}
+
 const want_id: dvui.Id = @enumFromInt(0x6669_7a7a_6672_6d77); // "fizzfrmw"
 const want_key = "_frame_target_wanted";
 
@@ -77,6 +102,15 @@ pub fn want() void {
 
 /// Bind a window-sized target, made fresh when the window's pixel size changes.
 pub fn begin(self: *FrameTarget) void {
+    if (unseen()) {
+        // Straight to the window, where the backend drops it, and neither target touched: they
+        // keep the last frame that was shown, for the next one shown to read. A want stays for
+        // that frame too — read, not taken: data no frame reads is dropped at its end.
+        if (skip_unread) _ = dvui.dataGet(null, want_id, want_key, bool);
+        self.target = null;
+        current = self;
+        return;
+    }
     if (skip_unread) {
         const wanted = dvui.dataGet(null, want_id, want_key, bool) orelse false;
         dvui.dataRemove(null, want_id, want_key);
@@ -181,9 +215,11 @@ pub fn deinit(self: *FrameTarget) void {
 /// of it. Null before a frame has been drawn, off the window, or on a backend without targets.
 pub fn snapshot(rect: dvui.Rect.Physical) ?dvui.Texture {
     const self = current orelse return null;
-    if (!self.bound) return null;
-    if (!self.fresh[self.index +% 1]) return null;
-    const prev = self.targets[self.index +% 1] orelse return null;
+    // The last frame shown: the other target while one is bound; in a frame nobody will see, the
+    // one bound last (`begin` leaves the targets as they were).
+    const last = if (self.bound) self.index +% 1 else if (unseen()) self.index else return null;
+    if (!self.fresh[last]) return null;
+    const prev = self.targets[last] orelse return null;
     const r = rect.intersect(dvui.windowRectPixels());
     if (r.w < 1 or r.h < 1) return null;
     const w: u32 = @intFromFloat(@round(r.w));
