@@ -1003,6 +1003,64 @@ fn drawDrop(l: *Layout, taken: bool) void {
     const radius = @max(0, d.drop_radius - pad) / scale;
     const shown = contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns));
     dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo_opacity * shown), .uv = uv }) catch {};
+    drawDropLabel(l, head, true, shown);
+}
+
+/// What the drop is carrying, named: a photograph of a view is not always enough to tell one
+/// from another, and an icon alone says only what kind of file it is.
+fn dropTitle(l: *Layout, d: ViewDrag) ?[]const u8 {
+    if (l.host.surfaceById(d.moved_id)) |s| return s.title;
+    const doc = draggedDoc(l, d) orelse return null;
+    return std.fs.path.basename(doc.path);
+}
+
+/// How far below the head's middle the label's line sits, as a share of the head's radius:
+/// inside the circle, clear of the icon or the photograph's middle.
+const drop_label_drop: f32 = 0.42;
+
+/// The drop's label: the view's title, or the file's name, low in the head, cut to fit its width
+/// with an ellipsis. Over a photograph it sits on a soft pill of the content fill, so it reads
+/// whatever the picture is behind it. `shown` fades it in with the drop's content.
+fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, on_photo: bool, shown: f32) void {
+    const d = &l.state.view_drag;
+    const title = dropTitle(l, d.*) orelse return;
+    if (title.len == 0 or shown <= 0.01) return;
+    const hn = head.toNatural();
+    const font = dvui.Font.theme(.body).larger(-2);
+    const line_h = font.lineHeight();
+    const max_w = hn.w * 0.72;
+    if (max_w < 16) return;
+    // Cut to fit, a character at a time, with an ellipsis: a long file name keeps its start.
+    var buf: [128]u8 = undefined;
+    var text: []const u8 = title;
+    if (font.textSize(text).w > max_w) {
+        var n: usize = @min(title.len, buf.len - 4);
+        while (n > 0) : (n -= 1) {
+            // Never split a UTF-8 sequence.
+            if (n < title.len and (title[n] & 0xC0) == 0x80) continue;
+            text = std.fmt.bufPrint(&buf, "{s}…", .{title[0..n]}) catch return;
+            if (font.textSize(text).w <= max_w) break;
+        }
+        if (n == 0) return;
+    }
+    const tw = font.textSize(text).w;
+    const cx = hn.x + hn.w / 2;
+    const cy = hn.y + hn.h / 2 + hn.h / 2 * drop_label_drop;
+    const prev_alpha = dvui.alpha(shown);
+    defer dvui.alphaSet(prev_alpha);
+    const theme = dvui.themeGet();
+    if (on_photo) {
+        const pad_x: f32 = 6;
+        const pill: dvui.Rect = .{ .x = cx - tw / 2 - pad_x, .y = cy - line_h / 2 - 1, .w = tw + 2 * pad_x, .h = line_h + 2 };
+        dvui.windowRectScale().rectToPhysical(pill).fill(.all(pill.h / 2 * dvui.currentWindow().natural_scale), .{ .color = .{ .color = theme.color(.content, .fill).opacity(0.82) } });
+    }
+    dvui.labelNoFmt(@src(), text, .{}, .{
+        .rect = .{ .x = cx - tw / 2, .y = cy - line_h / 2, .w = tw + 1, .h = line_h },
+        .padding = .{},
+        .margin = .{},
+        .font = font,
+        .color_text = .{ .color = theme.color(.window, .text) },
+    });
 }
 
 /// How much of a drop's diameter the icon of a document it has no photograph of takes.
@@ -1016,19 +1074,23 @@ fn drawDropIcon(l: *Layout) void {
     const head = d.drop_shapes[0].rect;
     const size = @min(head.w, head.h) * drop_icon_share;
     if (size < 2) return;
-    const c = head.center();
+    // Up a little, to leave the label its line below (`drawDropLabel`).
+    var c = head.center();
+    c.y -= head.h * 0.1;
     const nat = (dvui.Rect.Physical{ .x = c.x - size / 2, .y = c.y - size / 2, .w = size, .h = size }).toNatural();
     const prev_alpha = dvui.alpha(contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns)));
     defer dvui.alphaSet(prev_alpha);
     // The icons fill the slot they are given (`Host.drawFileIcon`), as in a tree row's.
     var slot = dvui.box(@src(), .{}, .{ .rect = .{ .x = nat.x, .y = nat.y, .w = nat.w, .h = nat.h } });
-    defer slot.deinit();
     const color = dvui.themeGet().color(.control, .text);
     if (!l.host.drawFileIcon(std.fs.path.extension(doc.path), doc.path, color)) {
         core.icon.icon(@src(), "drop_file_icon", icons.tvg.lucide.file, .{
             .stroke_color = .{ .color = color },
         }, core.widgets.treeRowIconOptions(.{}));
     }
+    slot.deinit();
+    // Already under the content's fade (`prev_alpha` above).
+    drawDropLabel(l, head, false, 1);
 }
 
 /// Whether dropping the view lifted from `source` in the middle of `dest` joins them: the two
