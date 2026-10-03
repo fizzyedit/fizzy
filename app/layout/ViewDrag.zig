@@ -240,8 +240,8 @@ const ghost_rest_slop: f32 = 10;
 /// and return it. False for a drag out of no float. Asked any number of times in a frame, it
 /// answers the same, so whatever reads the drag first in a frame settles it (`tick`).
 ///
-/// The float the view is carried out of is a ghost of itself (`Floats`) while the view is aimed off
-/// it: what it lies over shows through, and covers nothing (`under`). The drops of the places it
+/// The float the view is carried out of is a ghost of itself (`Floats`) while the pointer carrying
+/// the view is off it: what it lies over shows through, and covers nothing (`under`). The drops of the places it
 /// lies over sit clear of it where there is room for them (`zoneBounds`), the same firm or ghost,
 /// so a drop never moves as the ghost comes and goes. With every drop clear of it, aimed back over
 /// it, it firms up at once — the float again, with its own places' drops — and stays firm until the
@@ -257,8 +257,13 @@ pub fn settleGhost(state: *Layout.State) bool {
         d.ghost_firm = false;
         return false;
     };
-    const a = aimAt(state, dvui.currentWindow().mouse_pt);
-    if (!g.bounds.contains(a.p)) {
+    const mouse = dvui.currentWindow().mouse_pt;
+    const a = aimAt(state, mouse);
+    // Over the float by the pointer, not the drop it carries, which rides off to one side of it:
+    // lifted from the float's corner button, the drop started out past the float's edge, and the
+    // float went toward its ghost, firmed as the drop crossed back over it on the way out, and went
+    // again — a hitch in the middle of every drag out of a float.
+    if (!g.bounds.contains(mouse)) {
         d.ghost_firm = false;
         d.ghost_rest_ns = 0;
         return false;
@@ -272,7 +277,6 @@ pub fn settleGhost(state: *Layout.State) bool {
     // On a drop beneath it the view is aimed at that drop, lit as one — never the float — except
     // over the ghost's header, its handle: a drop under a ghost is its whole size, and over a small
     // ghost it can leave nowhere else to rest.
-    const mouse = dvui.currentWindow().mouse_pt;
     const on_header = g.header.contains(mouse);
     if (below > g.layer or (!on_header and onDropBeneath(state, below, a.p, a.r))) {
         d.ghost_rest_ns = 0;
