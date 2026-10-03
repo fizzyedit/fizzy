@@ -256,9 +256,11 @@ pub const CrossFade = struct {
     }
 
     pub fn discard(self: *CrossFade) void {
-        if (self.texture) |tex| dvui.Texture.destroyLater(tex);
+        // At teardown there is no window to destroy them with; the GPU goes with the process.
+        const live = dvui.current_window != null;
+        if (self.texture) |tex| if (live) dvui.Texture.destroyLater(tex);
         self.frost.drop();
-        if (self.incoming) |tex| dvui.Texture.destroyLater(tex);
+        if (self.incoming) |tex| if (live) dvui.Texture.destroyLater(tex);
         self.incoming_frost.drop();
         self.texture = null;
         self.incoming = null;
@@ -282,7 +284,7 @@ pub const Frost = struct {
     }
 
     pub fn drop(self: *Frost) void {
-        if (self.texture) |t| dvui.Texture.destroyLater(t);
+        if (self.texture) |t| if (dvui.current_window != null) dvui.Texture.destroyLater(t);
         self.* = .{};
     }
 };

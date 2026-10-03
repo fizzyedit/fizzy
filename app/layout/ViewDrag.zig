@@ -243,7 +243,9 @@ fn takes(d: *const ViewDrag, o: Offer) bool {
 }
 
 pub fn discard(self: *ViewDrag) void {
-    if (self.texture) |tex| dvui.Texture.destroyLater(tex);
+    // Destroyed with a frame, and only in one: discarded at teardown (quitting mid-drag) there is
+    // no window, and the GPU goes with the process.
+    if (self.texture) |tex| if (dvui.current_window != null) dvui.Texture.destroyLater(tex);
     // The drops still showing outlive the drag: they run back together where they were drawn
     // (`drawOverlay`), whatever the drop has just done to their places.
     const finishing = self.last_pending;
