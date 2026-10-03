@@ -512,16 +512,17 @@ pub const Branch = struct {
 
                 // Carried, a row is glass, as a tab carried along its strip is
                 // (`dialogs.carriedGlass`): the look a file keeps when it is carried out of the
-                // tree as the app's view drag. Only as tall as the row was: its width is what it
-                // shows — its icon and name — so it is carried as a tab, not as a strip of the
-                // tree.
+                // tree as the app's view drag. As big as the row was when it was lifted: it is
+                // held where it was grabbed (`dragOffset`), and sized to its name instead, a short
+                // name grabbed toward the row's right end floated off to the left of the pointer.
+                // Its rect, not a minimum: given no size, a floating widget takes its children's,
+                // and the row's button inside it is as wide as its name.
                 self.floating_widget = @as(dvui.FloatingWidget, undefined);
                 self.floating_widget.?.init(
                     @src(),
                     .{ .mouse_events = false },
                     .{
-                        .rect = Rect.fromPoint(.cast(npt)),
-                        .min_size_content = .{ .h = drag_min.h },
+                        .rect = .{ .x = npt.x, .y = npt.y, .w = drag_min.w, .h = drag_min.h },
                         .background = false,
                         .corners = corners.round(corners.card),
                     },
