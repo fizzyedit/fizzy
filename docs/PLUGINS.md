@@ -595,8 +595,9 @@ the assignment list read back.
 **Dragging a view onto a region is the app's gesture, everywhere.** While a view is dragged,
 the region under the pointer shows its drop (`core.widgets.DropZones`): a cluster of glass
 bubbles in its middle — the middle for into the place, one on each side for a split there, and a
-trash for taking the view out of the layout (a document closes) — which forms as one drop and
-splits apart as the pointer arrives. A release off the bubbles does nothing. A plugin's region
+trash for taking the view out of the layout (a document closes), round the middle or, in a long,
+skinny region, in a line along it — which forms as one drop and splits apart as the pointer
+arrives. A release off the bubbles does nothing. A plugin's region
 gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for drops of its own. Two pieces let a plugin take part:
 
 - `host.beginViewDrag(surface_id, from_rect)` hands something of yours to that drag — the

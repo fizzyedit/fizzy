@@ -74,6 +74,15 @@ and the view you are carrying — never as the view drawn in two places.
   (one view), add (several) or join (the other half of a split). The one under the pointer
   lights. The middle of the place the view came from shows a window: dropping there floats the
   view (below). Where the view cannot float it is bare glass, and dropping there does nothing.
+- **A long, skinny place shows them in a line.** Round the middle they are the size of pixi's
+  tool wheel, and a place too narrow for that — the bottom panel, a narrow sidebar — would shrink
+  every one to fit its short side. Where a line of them along the place keeps them markedly
+  bigger (`DropZones.strip_gain`), that is what it shows: the place's two ends at the ends of the
+  line, its other two sides either side of the middle, the trash past the end, each icon saying
+  which edge it is. Settled, it is one shape or the other, each zone a bubble of its own. A place
+  whose inside changes under the drop — a strip offering itself across its top — and so is given
+  the other shape does not cut to it: its bubbles run together into one bar of glass and pull
+  apart into the other shape, the glass's own merge doing the joining.
 - **A join shows the place it leaves.** Aimed at, the two halves' zones step back and one lit
   pane of the same glass lies across both — the single place the drop will make, the divider
   between them gone under it.
