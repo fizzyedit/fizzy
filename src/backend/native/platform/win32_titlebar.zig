@@ -42,6 +42,15 @@ pub fn applyChrome(win: *dvui.Window) void {
             // non-client area, rounded corners, and the black class brush.
             _ = win32.ui.shell.SetWindowSubclass(hwnd_h, win32MicaSubclassProc, win32_mica_subclass_id, 0);
 
+            // Draw each step of a live resize from inside it and let the compositor show it before
+            // the next, so the window's new size and the frame drawn for it reach the screen
+            // together (fizzyedit/SDL's Windows live-resize patch, docs/WINDOWS_LIVE_RESIZE.md).
+            // By name, not SDL's #define, so this builds against an SDL without it, which ignores
+            // it. `FIZZY_LIVE_RESIZE_TRACE` has SDL log each step; `SDL_VIDEO_WIN_SYNC_LIVE_RESIZE=0`
+            // in the environment turns the steps off.
+            const trace = c.SDL_getenv("FIZZY_LIVE_RESIZE_TRACE") != null;
+            _ = c.SDL_SetHint("SDL_VIDEO_WIN_SYNC_LIVE_RESIZE", if (trace) "2" else "1");
+
             _ = win32.graphics.dwm.DwmSetWindowAttribute(
                 hwnd_h,
                 @as(win32.graphics.dwm.DWMWINDOWATTRIBUTE, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE)),

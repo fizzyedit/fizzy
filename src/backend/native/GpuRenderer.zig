@@ -519,13 +519,19 @@ pub fn beginFrame(self: *GpuRenderer) void {
 
 /// End the frame: encode what waits and submit, presenting the window. A frame that drew
 /// nothing to the window presents a cleared one when `clear_if_empty`, else leaves the last.
-pub fn present(self: *GpuRenderer, clear_if_empty: bool) void {
+/// `finish`: wait until the GPU has drawn it before returning — a frame of a Windows live resize,
+/// which must not queue behind others, and whose step then waits for the compositor to show it.
+pub fn present(self: *GpuRenderer, clear_if_empty: bool, finish: bool) void {
     self.flush() catch |err| log.err("present: {any}", .{err});
     if (!self.window_cleared and clear_if_empty and self.swapchain_state == .none) {
         self.target = null;
         self.windowPass() catch |err| log.err("present clear: {any}", .{err});
     }
-    _ = self.submit(false);
+    if (finish) {
+        self.submitAndWait() catch |err| log.err("present: {any}", .{err});
+    } else {
+        _ = self.submit(false);
+    }
     self.target = null;
     self.window_cleared = false;
 }
