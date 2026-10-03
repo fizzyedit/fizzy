@@ -4023,6 +4023,62 @@ test "drop: a place with room for the wheel keeps it" {
     try std.testing.expect(near.shaped(1, .vertical).unit > near.unit);
 }
 
+const ShapeFrame = struct {
+    var wheel: DZ.Wheel = undefined;
+    const key: dvui.Id = @enumFromInt(0x5a_a9_e0_01);
+
+    fn frame() anyerror!dvui.App.Result {
+        _ = DZ.draw(key, wheel, 1, .{});
+        return .ok;
+    }
+
+    fn strip() !f32 {
+        return (DZ.shapeOf(key) orelse return error.TestUnexpectedResult).strip;
+    }
+};
+
+test "drop: a drop comes in in its shape, and changes into another over time" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 1000, .h = 1000 } });
+    defer t.deinit();
+    defer DZ.forget(ShapeFrame.key);
+
+    // Arriving over a bottom panel: a strip from the first frame, not a wheel turning into one.
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 800, .w = 1000, .h = 200 }, 1, true);
+    try std.testing.expectEqual(@as(f32, 1), ShapeFrame.wheel.strip);
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    try std.testing.expectEqual(@as(f32, 1), try ShapeFrame.strip());
+    try dvui.testing.settle(ShapeFrame.frame);
+
+    // The place grows tall enough for the wheel: the strip goes over to it over several frames
+    // (100ms each), not at once, and settles there.
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 400, .w = 1000, .h = 600 }, 1, true);
+    try std.testing.expectEqual(@as(f32, 0), ShapeFrame.wheel.strip);
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    const partway = try ShapeFrame.strip();
+    try std.testing.expect(partway > 0 and partway < 1);
+    try dvui.testing.settle(ShapeFrame.frame);
+    try std.testing.expectEqual(@as(f32, 0), try ShapeFrame.strip());
+
+    // A strip across given a strip down goes back through the wheel to turn.
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 800, .w = 1000, .h = 200 }, 1, true);
+    try dvui.testing.settle(ShapeFrame.frame);
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, DZ.shapeOf(ShapeFrame.key).?.dir);
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 0, .w = 200, .h = 1000 }, 1, true);
+    try std.testing.expectEqual(dvui.enums.Direction.vertical, ShapeFrame.wheel.dir);
+    var through_wheel = false;
+    for (0..40) |_| {
+        _ = try dvui.testing.step(ShapeFrame.frame);
+        const now = DZ.shapeOf(ShapeFrame.key).?;
+        if (now.strip == 0) through_wheel = true;
+        // Never running the new way before it has been the wheel.
+        if (!through_wheel) try std.testing.expectEqual(dvui.enums.Direction.horizontal, now.dir);
+    }
+    try std.testing.expect(through_wheel);
+    try std.testing.expectEqual(@as(f32, 1), try ShapeFrame.strip());
+    try std.testing.expectEqual(dvui.enums.Direction.vertical, DZ.shapeOf(ShapeFrame.key).?.dir);
+}
+
 test "drop: settled, as a wheel or a strip, no two bubbles are near enough to run together" {
     // Two bubbles closer than half the merge run together (`LiquidField`'s smooth minimum): at
     // rest each zone is a bubble of its own, whichever the shape and the way it runs, with the
