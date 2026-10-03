@@ -3970,6 +3970,80 @@ test "drop: a small place shows the whole of it" {
     try std.testing.expect(DZ.at(w, b.center()).?.eql(.center));
 }
 
+/// `w`'s bubbles lie in one line through the place's middle, in `order` along it, each reading as
+/// its own zone, all of them inside `place`.
+fn expectStrip(w: DZ.Wheel, place: dvui.Rect.Physical, order: []const DZ.Zone) !void {
+    const across = w.dir == .horizontal;
+    var last: f32 = -std.math.floatMax(f32);
+    for (order) |z| {
+        const b = w.bubble(z);
+        try std.testing.expectApproxEqAbs(if (across) place.center().y else place.center().x, if (across) b.c.y else b.c.x, 0.01);
+        const along = if (across) b.c.x else b.c.y;
+        try std.testing.expect(along > last);
+        last = along;
+        try std.testing.expect(DZ.at(w, b.c).?.eql(z));
+    }
+    try std.testing.expect(DZ.at(w, place.center()).?.eql(.center));
+    const r = w.rect();
+    try std.testing.expect(place.contains(r.topLeft()) and place.contains(r.bottomRight()));
+}
+
+test "drop: a long, skinny place lines its drop up along it, bigger than a wheel there" {
+    // A bottom panel, 1000 by 200: a wheel would be cut to 200 tall, a strip along it is not.
+    const panel: dvui.Rect.Physical = .{ .x = 0, .y = 400, .w = 1000, .h = 200 };
+    const across = DZ.wheel(panel, 1, true);
+    try std.testing.expectEqual(@as(f32, 1), across.strip);
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, across.dir);
+    try std.testing.expect(across.unit > across.shaped(0, across.dir).unit * DZ.strip_gain);
+    // The place's ends at the ends, its top and bottom either side of the middle, the trash past the end.
+    try expectStrip(across, panel, &.{ .{ .edge = .left }, .{ .edge = .top }, .center, .{ .edge = .bottom }, .{ .edge = .right }, .remove });
+    // Without the trash, the same line less it.
+    const plain = DZ.wheel(panel, 1, false);
+    try expectStrip(plain, panel, &.{ .{ .edge = .left }, .{ .edge = .top }, .center, .{ .edge = .bottom }, .{ .edge = .right } });
+    try std.testing.expect(DZ.at(plain, across.bubble(.remove).c) == null);
+
+    // A narrow sidebar, 260 by 800, on a display at twice the scale: down it.
+    const side: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 520, .h = 1600 };
+    const down = DZ.wheel(side, 2, true);
+    try std.testing.expectEqual(@as(f32, 1), down.strip);
+    try std.testing.expectEqual(dvui.enums.Direction.vertical, down.dir);
+    try std.testing.expect(down.unit > down.shaped(0, down.dir).unit * DZ.strip_gain);
+    try expectStrip(down, side, &.{ .{ .edge = .top }, .{ .edge = .left }, .center, .{ .edge = .right }, .{ .edge = .bottom }, .remove });
+}
+
+test "drop: a place with room for the wheel keeps it" {
+    // Roomy: the wheel at full size, and so would a strip be.
+    try std.testing.expectEqual(@as(f32, 0), DZ.wheel(.{ .x = 0, .y = 0, .w = 800, .h = 600 }, 1, true).strip);
+    try std.testing.expectEqual(@as(f32, 0), DZ.wheel(.{ .x = 0, .y = 0, .w = 600, .h = 2000 }, 1, true).strip);
+    // Small but not skinny: a strip would be smaller still.
+    try std.testing.expectEqual(@as(f32, 0), DZ.wheel(.{ .x = 0, .y = 0, .w = 200, .h = 200 }, 1, true).strip);
+    // Narrow, but a wheel there is all but as big as a strip would be.
+    const near = DZ.wheel(.{ .x = 0, .y = 0, .w = 310, .h = 1000 }, 1, true);
+    try std.testing.expectEqual(@as(f32, 0), near.strip);
+    try std.testing.expect(near.shaped(1, .vertical).unit > near.unit);
+}
+
+test "drop: settled, as a wheel or a strip, no two bubbles are near enough to run together" {
+    // Two bubbles closer than half the merge run together (`LiquidField`'s smooth minimum): at
+    // rest each zone is a bubble of its own, whichever the shape and the way it runs, with the
+    // trash and without. On the way from one shape to the other they may run together.
+    const room = DZ.wheel(.{ .x = 0, .y = 0, .w = 1e5, .h = 1e5 }, 1, true);
+    try std.testing.expectEqual(@as(f32, 1), room.unit);
+    for ([_]bool{ true, false }) |remove| for ([_]dvui.enums.Direction{ .horizontal, .vertical }) |dir| for ([_]f32{ 0, 1 }) |strip| {
+        var base = room;
+        base.remove = remove;
+        const w = base.shaped(strip, dir);
+        try std.testing.expectEqual(@as(f32, 1), w.unit);
+        for (DZ.all, 0..) |a, j| for (DZ.all[j + 1 ..]) |b| {
+            if ((a == .remove or b == .remove) and !remove) continue;
+            const p = w.bubble(a);
+            const q = w.bubble(b);
+            const d = @sqrt((p.c.x - q.c.x) * (p.c.x - q.c.x) + (p.c.y - q.c.y) * (p.c.y - q.c.y));
+            try std.testing.expect(d - p.r - q.r > DZ.merge / 2);
+        };
+    };
+}
+
 test "liquid blob: far apart it is its discs; close together it bridges them" {
     const LB = fizzy.core.liquid_blob;
     const two = [_]LB.Disc{ .{ .c = .{ .x = 0, .y = 0 }, .r = 10 }, .{ .c = .{ .x = 100, .y = 0 }, .r = 10 } };

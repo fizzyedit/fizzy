@@ -1,7 +1,7 @@
 //! The drop target over a place while something is dragged: a wheel in the place's middle — a
 //! circle for the place itself and a ring of four around it, one for each side it could split
-//! on. Only the place under the pointer shows one; moving to another place, the old wheel goes as
-//! the new one comes in.
+//! on — or, in a long, skinny place, the same circles in a strip along it. Only the place under
+//! the pointer shows one; moving to another place, the old wheel goes as the new one comes in.
 //!
 //! **One geometry, one look, for every drag.** A view dragged between places and a file or tab
 //! dragged onto a pane read the pointer against the same wheel (`wheel`, `at`) and draw the same
@@ -12,6 +12,13 @@
 //! the place, and sits in its middle — the place stays in view around it, and the choices are
 //! where the eye already is. A release off the wheel does nothing: every drop is one the wheel
 //! lit first.
+//!
+//! **A strip where a wheel would shrink.** A place too narrow for the wheel at its size — a bottom
+//! panel, a narrow sidebar — would shrink every bubble to fit its short side. Where a line of them
+//! along the place would be markedly bigger (`strip_gain`), that is what it shows: the place's two
+//! ends at the ends of the line, its other two sides either side of the middle, the trash past the
+//! end. The middle is still the place's middle, and each bubble as big as the place's length
+//! allows.
 //!
 //! **The look is liquid glass.** The wheel is one disc of the dialogs' own frost over what is
 //! under it, drawn through `core.liquid_glass`, its sides marked off by faint lines and each
@@ -56,62 +63,196 @@ pub const Disc = struct {
     r: f32,
 };
 
-/// The drop over one place, in physical pixels: a cluster of bubbles in its middle.
+/// The drop over one place, in physical pixels: a cluster of bubbles in its middle — a wheel, or
+/// a strip along a place too narrow for one.
 pub const Wheel = struct {
+    /// The middle bubble's centre: the place's.
     center: dvui.Point.Physical,
     /// Physical pixels per point of the layout below — the display scale, less if the place is
-    /// too small for the whole cluster.
+    /// too small for the whole cluster in its shape.
     unit: f32,
     /// Whether the trash is one of the bubbles.
     remove: bool = false,
+    /// 0…1: the cluster's shape — 0 the wheel, 1 the strip, and between them the way from one to
+    /// the other (`offset`).
+    strip: f32 = 0,
+    /// Which way a strip runs: along the place's longer side.
+    dir: dvui.enums.Direction = .horizontal,
+    /// What `unit` is fitted to (`shaped`): the place's size, physical, and the display scale.
+    room: dvui.Size.Physical = .{},
+    scale: f32 = 1,
 
     /// Where zone `z`'s bubble settles.
     pub fn bubble(self: Wheel, z: Zone) Disc {
-        const off: [2]f32, const r: f32 = switch (z) {
-            .center => .{ .{ 0, 0 }, center_r },
-            .edge => |sd| .{ switch (sd) {
-                .left => .{ -side_d, 0 },
-                .right => .{ side_d, 0 },
-                .top => .{ 0, -side_d },
-                .bottom => .{ 0, side_d },
-            }, side_r },
-            .remove => .{ .{ remove_d, remove_d }, remove_r },
-        };
-        return .{ .c = .{ .x = self.center.x + off[0] * self.unit, .y = self.center.y + off[1] * self.unit }, .r = r * self.unit };
+        const off = offset(z, self.strip, self.dir);
+        return .{ .c = .{ .x = self.center.x + off[0] * self.unit, .y = self.center.y + off[1] * self.unit }, .r = radiusOf(z) * self.unit };
     }
 
-    /// The square the settled cluster fits in.
+    /// The rect the settled cluster fits in: a square for the wheel, a long one for a strip —
+    /// longer on the trash's side when it is offered, since the middle stays in the middle.
     pub fn rect(self: Wheel) dvui.Rect.Physical {
-        const e = extent * self.unit;
-        return .{ .x = self.center.x - e, .y = self.center.y - e, .w = 2 * e, .h = 2 * e };
+        const s = extents(self.strip, self.dir, self.remove);
+        return .{ .x = self.center.x + s.x * self.unit, .y = self.center.y + s.y * self.unit, .w = s.w * self.unit, .h = s.h * self.unit };
+    }
+
+    /// The same drop in shape `strip`, running `dir`, in the same room. The wheel and the strip
+    /// are each fitted to it (`fitted`); between them the size goes from one's to the other's as
+    /// the bubbles move, rather than being fitted afresh to every arrangement on the way.
+    pub fn shaped(self: Wheel, strip: f32, dir: dvui.enums.Direction) Wheel {
+        var w = self;
+        w.strip = strip;
+        w.dir = dir;
+        const k = smooth(std.math.clamp(strip, 0, 1));
+        w.unit = if (k <= 0) self.fitted(0, dir) else if (k >= 1) self.fitted(1, dir) else std.math.lerp(self.fitted(0, dir), self.fitted(1, dir), k);
+        return w;
+    }
+
+    /// Physical pixels per point for shape `strip` running `dir` in this room: the cluster no more
+    /// than `fit` of the place either side of the middle, and no bigger than the display scale.
+    fn fitted(self: Wheel, strip: f32, dir: dvui.enums.Direction) f32 {
+        const s = extents(strip, dir, self.remove);
+        const half_w = @max(-s.x, s.x + s.w);
+        const half_h = @max(-s.y, s.y + s.h);
+        return @max(0, @min(self.scale, @min(self.room.w * fit / half_w, self.room.h * fit / half_h)));
     }
 };
 
 /// Every zone, in the order they are drawn and stored.
 pub const all = [_]Zone{ .center, .{ .edge = .left }, .{ .edge = .right }, .{ .edge = .top }, .{ .edge = .bottom }, .remove };
 
-/// Points: the bubbles' layout — the middle, the four sides at `side_d` from it, the trash on the
-/// diagonal between the right and the bottom — about 300 across: big enough to aim at without
-/// looking, small enough to leave the place in view round it.
+/// Points: the bubbles' layout as a wheel — the middle, the four sides at `side_d` from it, the
+/// trash on the diagonal between the right and the bottom — about 300 across: big enough to aim at
+/// without looking, small enough to leave the place in view round it.
 const center_r: f32 = 52;
 const side_r: f32 = 40;
 const side_d: f32 = 108;
 const remove_r: f32 = 30;
 const remove_d: f32 = 88;
+/// Points: as a strip, one line with the wheel's own gap between each bubble and the next — the
+/// two sides the place's ends are at `end_d`, the other two beside the middle at `side_d`, and the
+/// trash past the end on its side. Across a place: left, top, middle, bottom, right, trash; down
+/// one: top, left, middle, right, bottom, trash. The icons say which edge each is.
+const gap: f32 = side_d - center_r - side_r;
+const end_d: f32 = side_d + 2 * side_r + gap;
+const strip_remove_d: f32 = end_d + side_r + gap + remove_r;
 /// Points: a bubble's icon, as a share of its radius.
 const bubble_icon: f32 = 0.6;
-/// How far out from the centre the cluster reaches.
-const extent: f32 = side_d + side_r;
-/// At most this share of the place's shorter side, so a small place still shows all of it.
+/// How far the cluster may reach either side of the middle, as a share of the place's size that
+/// way: a small place still shows all of it.
 pub const fit: f32 = 0.45;
+/// How much bigger a strip must make the bubbles before a place shows one rather than the wheel.
+/// It is for a place long and narrow enough that the wheel would shrink well under its size — a
+/// bottom panel, a narrow sidebar — not one where the two would be about the same size, which
+/// keeps the wheel.
+pub const strip_gain: f32 = 1.15;
 /// How far past its edge a bubble still takes the pointer, as a share of its radius: a drop
 /// aimed at a bubble's rim is aimed at the bubble.
 const reach: f32 = 1.25;
 
-/// Where the drop sits over `bounds`: in its middle. `remove` offers the trash.
+/// Where the drop sits over `bounds`: in its middle, as a wheel — or, where a strip along the
+/// place would make the bubbles `strip_gain` bigger than a wheel fitted to it, as that strip.
+/// `remove` offers the trash.
+///
+/// A shape, not a blend: between the two the bubbles cross and run together (`offset`), which is
+/// for a drop changing shape — held still it would be a blob, not a target for each zone. A view
+/// drag reads each place as the rect it was at the lift, so a place on the line between the two
+/// cannot flicker from one to the other.
 pub fn wheel(bounds: dvui.Rect.Physical, scale: f32, remove: bool) Wheel {
-    const room = @min(bounds.w, bounds.h) * fit / extent;
-    return .{ .center = bounds.center(), .unit = @max(0, @min(scale, room)), .remove = remove };
+    const base: Wheel = .{
+        .center = bounds.center(),
+        .unit = 0,
+        .remove = remove,
+        .dir = if (bounds.w >= bounds.h) .horizontal else .vertical,
+        .room = .{ .w = bounds.w, .h = bounds.h },
+        .scale = scale,
+    };
+    const round = base.shaped(0, base.dir);
+    const strip = base.shaped(1, base.dir);
+    return if (strip.unit > round.unit * strip_gain) strip else round;
+}
+
+/// Points: zone `z`'s bubble's radius.
+fn radiusOf(z: Zone) f32 {
+    return switch (z) {
+        .center => center_r,
+        .edge => side_r,
+        .remove => remove_r,
+    };
+}
+
+/// Points: where zone `z`'s bubble sits from the middle, in shape `strip` (0 the wheel, 1 the
+/// strip) running `dir`. Between the two, each bubble is on the straight way from its place in
+/// one to its place in the other.
+fn offset(z: Zone, strip: f32, dir: dvui.enums.Direction) [2]f32 {
+    const from = wheelAt(z);
+    const to = stripAt(z, dir);
+    const k = smooth(std.math.clamp(strip, 0, 1));
+    return .{ std.math.lerp(from[0], to[0], k), std.math.lerp(from[1], to[1], k) };
+}
+
+/// Points: zone `z`'s place in the wheel, from its middle.
+fn wheelAt(z: Zone) [2]f32 {
+    return switch (z) {
+        .center => .{ 0, 0 },
+        .edge => |sd| switch (sd) {
+            .left => .{ -side_d, 0 },
+            .right => .{ side_d, 0 },
+            .top => .{ 0, -side_d },
+            .bottom => .{ 0, side_d },
+        },
+        .remove => .{ remove_d, remove_d },
+    };
+}
+
+/// Points: zone `z`'s place in a strip running `dir`, from its middle. A strip down a place is one
+/// across it turned over its diagonal.
+fn stripAt(z: Zone, dir: dvui.enums.Direction) [2]f32 {
+    const along: f32 = switch (if (dir == .horizontal) z else turned(z)) {
+        .center => 0,
+        .edge => |sd| switch (sd) {
+            .left => -end_d,
+            .top => -side_d,
+            .bottom => side_d,
+            .right => end_d,
+        },
+        .remove => strip_remove_d,
+    };
+    return if (dir == .horizontal) .{ along, 0 } else .{ 0, along };
+}
+
+/// The zone whose place in a strip across is `z`'s in a strip down: the top and left trade, the
+/// bottom and right.
+fn turned(z: Zone) Zone {
+    return switch (z) {
+        .edge => |sd| .{ .edge = switch (sd) {
+            .left => .top,
+            .top => .left,
+            .right => .bottom,
+            .bottom => .right,
+        } },
+        else => z,
+    };
+}
+
+/// Smoothstep: 0 to 1, easing out of 0 and into 1.
+fn smooth(t: f32) f32 {
+    return t * t * (3 - 2 * t);
+}
+
+/// Points: the rect the cluster covers in shape `strip`, running `dir`, from the middle.
+fn extents(strip: f32, dir: dvui.enums.Direction, remove: bool) dvui.Rect {
+    var lo: [2]f32 = .{ 0, 0 };
+    var hi: [2]f32 = .{ 0, 0 };
+    for (all) |z| {
+        if (z == .remove and !remove) continue;
+        const o = offset(z, strip, dir);
+        const r = radiusOf(z);
+        for (0..2) |i| {
+            lo[i] = @min(lo[i], o[i] - r);
+            hi[i] = @max(hi[i], o[i] + r);
+        }
+    }
+    return .{ .x = lo[0], .y = lo[1], .w = hi[0] - lo[0], .h = hi[1] - lo[1] };
 }
 
 /// The zone a point reads as: the bubble it is on (or near), and nothing off every bubble.
@@ -247,7 +388,7 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
     if (g > 0.01 and w.unit > 0) {
         // Each bubble is a glass orb of its own, where it settles: nothing moves. Each grows from
         // nothing to its size — past it and back when motion is playful (`grow`) — the middle
-        // first, then the others one after another round the circle; leaving is the same played
+        // first, then the others one after another (`growOrder`); leaving is the same played
         // backwards. Its refracting edge springs in with its size, its blur comes in from sharp
         // (`frost`), and its icon comes into focus with it. Separate panes over one capture of the
         // area they settle in: sizing them changes no capture, so it costs nothing, and nothing
@@ -273,8 +414,7 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
             times[n] = t;
             n += 1;
         }
-        // As far as a bubble swings past its place and its size, too.
-        took = glassCarrying(id, panes[0..n], w.rect().insetAll(-extent * motion.overshoot_max * w.unit), g, scale, merge * w.unit, look.carried);
+        took = glassCarrying(id, panes[0..n], swingRect(w), g, scale, merge * w.unit, look.carried);
         st.icon_n = 0;
         st.icon_frame = now;
         for (panes[0..n], zones[0..n], times[0..n]) |pane, i, t| {
@@ -326,7 +466,16 @@ pub const merge: f32 = 24;
 /// How far behind the one before each orb starts, as a share of `shown`.
 const stagger: f32 = 0.06;
 
-/// The bubbles in the order they grow: the middle, then the others round it clockwise from the top.
+/// Where `w`'s bubbles settle, and as far again as they swing past their places and their sizes
+/// when motion is playful (`grow`): what the glass under them reads.
+fn swingRect(w: Wheel) dvui.Rect.Physical {
+    const r = w.rect();
+    const k = 1 + motion.overshoot_max;
+    return .{ .x = w.center.x + (r.x - w.center.x) * k, .y = w.center.y + (r.y - w.center.y) * k, .w = r.w * k, .h = r.h * k };
+}
+
+/// The bubbles in the order they grow: the middle, then the others — round it clockwise from the
+/// top for a wheel, out from it for a strip, the nearer first and the left (or upper) of two.
 fn growOrder(w: Wheel, buf: *[all.len]usize) []const usize {
     buf[0] = 0; // `.center`
     var n: usize = 1;
@@ -335,19 +484,28 @@ fn growOrder(w: Wheel, buf: *[all.len]usize) []const usize {
         buf[n] = i;
         n += 1;
     }
-    const Angle = struct {
-        fn of(wh: Wheel, i: usize) f32 {
+    const Order = struct {
+        fn angle(wh: Wheel, i: usize) f32 {
             const b = wh.bubble(all[i]);
             // Screen y runs down, so this climbs clockwise from the top (−½π).
             var a = std.math.atan2(b.c.y - wh.center.y, b.c.x - wh.center.x);
             if (a < -std.math.pi / 2.0) a += 2 * std.math.pi;
             return a;
         }
+        /// Points along the strip from the middle.
+        fn along(wh: Wheel, i: usize) f32 {
+            const o = offset(all[i], wh.strip, wh.dir);
+            return if (wh.dir == .horizontal) o[0] else o[1];
+        }
         fn less(wh: Wheel, a: usize, b: usize) bool {
-            return of(wh, a) < of(wh, b);
+            if (wh.strip < 0.5) return angle(wh, a) < angle(wh, b);
+            const pa = along(wh, a);
+            const pb = along(wh, b);
+            if (@abs(@abs(pa) - @abs(pb)) > 1) return @abs(pa) < @abs(pb);
+            return pa < pb;
         }
     };
-    std.mem.sort(usize, buf[1..n], w, Angle.less);
+    std.mem.sort(usize, buf[1..n], w, Order.less);
     return buf[0..n];
 }
 
