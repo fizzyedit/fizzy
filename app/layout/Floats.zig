@@ -390,8 +390,9 @@ fn drawOne(l: *Layout, i: usize) bool {
     // Not drawn before: made this frame by a release inside the place it left, which has drawn
     // that view already this frame — or brought back from a saved layout before any place has
     // said it is not theirs. Its place goes in the registry, so from the next frame it claims the
-    // view away from where it was; the window, and the view in it, start then. Drawn now, the
-    // view would be drawn twice in one frame.
+    // view away from where it was; the view in it starts then. Drawn now, the view would be drawn
+    // twice in one frame.
+    var fresh = false;
     if (state.floats.items.items[i].fresh) {
         const f = &state.floats.items.items[i];
         f.fresh = false;
@@ -406,7 +407,13 @@ fn drawOne(l: *Layout, i: usize) bool {
             .shows = .many,
             .by_name = true,
         });
-        return true;
+        // Brought back, its window starts with its view, next frame. Landing, its window is the
+        // carried glass from this frame on — glass and photograph, the view not yet — so the drop
+        // let go never leaves a frame with nothing where it was. And the window's own first frame,
+        // which lays its header out from nothing and makes its glass, is this one, not one of the
+        // landing's.
+        if (f.landing == null) return true;
+        fresh = true;
     }
     // A ghost while a view carried out of it is aimed elsewhere: the drop is aimed at what it lies
     // over. Itself again when the view is aimed back over it, and when the drag ends.
@@ -515,9 +522,10 @@ fn drawOne(l: *Layout, i: usize) bool {
     };
 
     // A ghost, its header and place are drawn as ever — the place's corner button holds the drag —
-    // but clipped to nothing, so nothing of them shows however the view draws.
+    // but clipped to nothing, so nothing of them shows however the view draws. Fresh, the header
+    // too — laid out, for the next frame to draw it where it goes — and the place not at all.
     const prev_clip_live = dvui.clipGet();
-    if (hide_live) dvui.clipSet(.{});
+    if (hide_live or fresh) dvui.clipSet(.{});
     var open = true;
     const title = if (ViewDrag.visibleId(l, first.name)) |id| (if (l.host.surfaceById(id)) |s| s.title else first.name) else first.name;
     const header = dialogs.windowHeader(title, "", &open, .none);
@@ -525,7 +533,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     // the drop put it — nor while it is out of the way.
     win.dragAreaSet(if (landing or aside > 0) .{} else header);
 
-    {
+    if (!fresh) {
         // The view fades with the window round it: in over the photograph it grew out of as it
         // lands; in when the float comes back from a drag without the view that landed
         // elsewhere; out when it fades to its ghost with no photograph to fade as. It fades
