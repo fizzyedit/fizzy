@@ -167,16 +167,17 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
 - **The float a view leaves is a ghost while the view is aimed elsewhere.** Carrying a view out of a
   float, the float fades to a faint, slightly blurred picture of itself once the view is aimed off
   it, and covers nothing: what it lies over shows through and can be aimed at, and is usually where
-  the view is going. The drop of a place beneath it sits where it would with no float there, under
-  the ghost, and is reached through it. Rested on over the ghost, off such a drop, for a quarter of
-  a second (`ViewDrag.ghost_rest_ms`), it firms up, live: the float again, covering what it lies
-  over, with its own places' drops, so the view can go back in (its own middle, where it is alone,
-  is no move), split it on an edge, or go to another of its places — and the drops beneath slide out
-  from under it (above). It stays firm until the view is aimed off it, so its own middle can be
-  reached wherever it lies. It waits for a rest because a ghost over the middle of a place that
-  firmed up the moment the view crossed into it would take that place's drop away as the view was
-  carried across to it: carried across, the view reaches the drop beneath; held over the float, it
-  means the float. The ghost is a photograph of the float, taken from the frame at the lift, while
+  the view is going. The drops of the places beneath it sit clear of it all the same, as they do of
+  every float (above), so no drop moves as the ghost comes and goes. Aimed back over it, it firms up
+  at once, live: the float again, covering what it lies over, with its own places' drops, so the
+  view can go back in (its own middle, where it is alone, is no move), split it on an edge, or go
+  to another of its places. It stays firm until the view is aimed off it, so its own middle can be
+  reached wherever it lies. A place the float covers whole, with no room clear of it, is the one
+  exception: its drop stays under the ghost, and the view over that drop is aimed through the
+  ghost at it rather than firming it. (A rest over the ghost before it firmed, with every drop
+  beneath it under it until then, was tried first: the drop beneath shut and slid away as the
+  float's own opened in the same spot, and drops seemed to avoid floats only some of the time.)
+  The ghost is a photograph of the float, taken from the frame at the lift, while
   the float itself goes on drawing its place clipped to nothing (its corner button holds the drag) —
   a view may draw in ways no alpha reaches, and none of it may show. Let go over nothing and the
   photograph comes back into focus, then the float takes over from it. Land the view elsewhere and
