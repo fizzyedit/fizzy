@@ -33,6 +33,7 @@ const dvui = @import("dvui");
 const motion = @import("../motion.zig");
 const liquid_glass = @import("../gfx/liquid_glass.zig");
 const LiquidField = @import("../gfx/LiquidField.zig");
+const FrameTarget = @import("../gfx/FrameTarget.zig");
 
 const Rect = dvui.Rect;
 const Size = dvui.Size;
@@ -137,6 +138,8 @@ pub fn init(self: *BlurBackdrop, rect: Rect, witness: anytype) void {
     self.last_hash = h;
 
     if (!self.dirty) return;
+    // A frame nobody will see captures nothing; still dirty, the next one shown does.
+    if (FrameTarget.unseen()) return;
     // Readback wants the content *on the target* when `deinit` runs, so it must not defer.
     if (self.mode == .readback) return;
 
@@ -159,6 +162,8 @@ pub fn init(self: *BlurBackdrop, rect: Rect, witness: anytype) void {
 /// texture; see `releaseTexture` for that.
 pub fn deinit(self: *BlurBackdrop) void {
     if (!self.dirty) return;
+    // As `init` left it: nothing deferred, nothing to capture.
+    if (FrameTarget.unseen()) return;
     defer self.dirty = false;
     defer self.frostReplaces();
     if (self.mode == .readback) return self.deinitReadback();
@@ -365,7 +370,7 @@ fn releaseLevels(self: *BlurBackdrop) void {
 /// stands, uploads it, and runs the same pipeline `deinit` does on a replayed capture.
 fn deinitReadback(self: *BlurBackdrop) void {
     // Keep the frame in a texture for as long as frosts read it (`FrameTarget.want`).
-    @import("../gfx/FrameTarget.zig").want();
+    FrameTarget.want();
     if (self.deinitFromTarget()) return;
     if (!dvui.Backend.support_read_pixels) return;
     var r = self.rect;
