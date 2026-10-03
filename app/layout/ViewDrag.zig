@@ -1217,7 +1217,9 @@ fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, shown: f32) void {
     {
         const pad_x: f32 = 6;
         const pill: dvui.Rect = .{ .x = cx - tw / 2 - pad_x, .y = cy - line_h / 2 - 1, .w = tw + 2 * pad_x, .h = line_h + 2 };
-        dvui.windowRectScale().rectToPhysical(pill).fill(.all(pill.h / 2 * dvui.currentWindow().natural_scale), .{ .color = .{ .color = theme.color(.content, .fill).opacity(0.82) } });
+        // `.round`, not `.all`: `.all` takes the theme's corner kind, which may be square.
+        const phys = dvui.windowRectScale().rectToPhysical(pill);
+        phys.fill(.round(phys.h / 2), .{ .color = .{ .color = theme.color(.content, .fill).opacity(0.82) }, .fade = 1 });
     }
     dvui.labelNoFmt(@src(), text, .{}, .{
         .rect = .{ .x = cx - tw / 2, .y = cy - line_h / 2, .w = tw + 1, .h = line_h },
