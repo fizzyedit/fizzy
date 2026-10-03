@@ -130,6 +130,11 @@ pub const InitOptions = struct {
     /// centring, and no first frame drawn empty while it measures them. For a window something
     /// else places and sizes — a layout's float, which lands exactly where a drop put it.
     placed: bool = false,
+    /// Drawn for an OS window of its own rather than the main one (a float popped out,
+    /// `docs/POPOUT_WINDOWS_PLAN.md`): its rect lies wherever that window's part of the frame is,
+    /// usually past the main window's edge, so it is not held on the main window and is clipped
+    /// to itself rather than to it.
+    detached: bool = false,
     window_avoid: enum {
         none,
 
@@ -480,15 +485,18 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
             //std.debug.print("autopos to {}\n", .{self.data().rect});
         }
 
-        // always make sure we are on the screen
-        var screen = dvui.windowRect();
-        // okay if we are off the left or right but still see some
-        const offleft = self.wd.rect.w - 48;
-        screen.x -= offleft;
-        screen.w += offleft + offleft;
-        // okay if we are off the bottom but still see the top
-        screen.h += self.wd.rect.h - 24;
-        self.wd.rect = .cast(dvui.placeOnScreen(screen, .{}, .none, .cast(self.data().rect)));
+        // always make sure we are on the screen — the main window's, unless it has a window of
+        // its own
+        if (!self.init_options.detached) {
+            var screen = dvui.windowRect();
+            // okay if we are off the left or right but still see some
+            const offleft = self.wd.rect.w - 48;
+            screen.x -= offleft;
+            screen.w += offleft + offleft;
+            // okay if we are off the bottom but still see the top
+            screen.h += self.wd.rect.h - 24;
+            self.wd.rect = .cast(dvui.placeOnScreen(screen, .{}, .none, .cast(self.data().rect)));
+        }
     }
 
     self.data().register();
@@ -533,7 +541,7 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
     // - if modal fade everything below us
     // - gives us all mouse events
     self.prevClip = dvui.clipGet();
-    dvui.clipSet(dvui.windowRectPixels());
+    dvui.clipSet(self.windowClip());
 
     // Fade the window out along its close flight, so it is gone by the time it lands instead of
     // arriving intact and blinking out. Applies to every close: a shrink-to-centre gets the same
@@ -569,6 +577,13 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
             dvui.AccessKit.nodeClearModal(ak_node);
         dvui.AccessKit.nodeAddAction(ak_node, dvui.AccessKit.Action.focus);
     }
+}
+
+/// The OS window the window is drawn in, physical: the main one's, or — `detached` — the
+/// window's own rect, which is all of its OS window there is.
+fn windowClip(self: *FloatingWindowWidget) Rect.Physical {
+    if (self.init_options.detached) return self.data().rectScale().r;
+    return dvui.windowRectPixels();
 }
 
 pub fn drawBackground(self: *FloatingWindowWidget) void {
@@ -948,7 +963,7 @@ pub fn deinit(self: *FloatingWindowWidget) void {
     }
 
     if (self.init_options.process_events_in_deinit) {
-        dvui.clipSet(dvui.windowRectPixels());
+        dvui.clipSet(self.windowClip());
         self.processEventsAfter();
     }
 
