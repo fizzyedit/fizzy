@@ -1,9 +1,10 @@
 # Windows: a live resize whose frames fit the window
 
-**Status.** On test, not yet seen on hardware. The SDL patch is on fizzyedit/SDL
-`claude/windows-live-resize` (`ee721bf`), built by fizzyedit/sdl_zig `claude/windows-live-resize`
-(`8e88dba`), which fizzy's branch of the same name pins. Measured only in a Windows 11 on Arm VM
-(UTM, D3D12 on WARP), which cannot judge the half that matters most (see "What the VM showed").
+**Status.** Shipped, not yet seen on GPU hardware. The SDL patch is fizzyedit/SDL patch 7
+(`fizzy-3.4.16-5`), built by fizzyedit/sdl_zig `fizzy-1.0.3+3.4.16-5`, which fizzy pins
+(`docs/DEPENDENCIES.md`). Measured only in a Windows 11 on Arm VM (UTM, D3D12 on WARP), which
+cannot judge the half that matters most (see "What the VM showed"); "Checking it on Windows
+hardware" below is the check still owed.
 The macOS counterpart is [`MACOS_LIVE_RESIZE.md`](MACOS_LIVE_RESIZE.md).
 
 ## The symptom, and where it comes from

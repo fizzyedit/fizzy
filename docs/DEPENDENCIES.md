@@ -122,8 +122,16 @@ Fizzy adapts to two upstream behaviours rather than patching them:
    untouched. Fizzy draws its Linux window's shadow in them (`linux_titlebar.zig`). Upstream:
    worth proposing; a public API would want a setter as well.
 
+7. **Windows: draw each step of a live resize before the loop goes on** (`ee721bf`).
+   `SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE` (default off): inside the modal size loop,
+   `WM_WINDOWPOSCHANGED` runs the app's frame for a step that changed the client size, then waits
+   for the compositor (`DwmFlush`); the loop's timer draws only while the pointer rests. Fizzy
+   sets it (`win32_titlebar.zig`; why, and what it measured, in
+   [`docs/WINDOWS_LIVE_RESIZE.md`](WINDOWS_LIVE_RESIZE.md)). Measured only in a Windows on Arm VM
+   so far, not on GPU hardware. Upstream: worth proposing with the macOS pair (3–5).
+
 Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4.16-3` → `8455e58`;
-`fizzy-3.4.16-4` → `2d6efde`, what sdl_zig pins now.
+`fizzy-3.4.16-4` → `2d6efde`; `fizzy-3.4.16-5` → `ee721bf`, what sdl_zig pins now.
 
 ## fizzyedit/sdl_zig
 
@@ -143,9 +151,12 @@ Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4
    patches (3–5). Squash into 1 at the next rebase.
 5. **Build fizzyedit/SDL `fizzy-3.4.16-4`** (`58abe38`): the pin moves to SDL's Wayland frame
    insets (6). Squash into 1 at the next rebase.
+6. **Build fizzyedit/SDL `fizzy-3.4.16-5`** (`8e88dba`, first described as a test pin): the pin
+   moves to SDL's Windows live-resize steps (7). Squash into 1 at the next rebase.
 
 Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`;
-`fizzy-1.0.3+3.4.16-3` → `48468b7`; `fizzy-1.0.3+3.4.16-4` → `58abe38`, the commit fizzy pins now.
+`fizzy-1.0.3+3.4.16-3` → `48468b7`; `fizzy-1.0.3+3.4.16-4` → `58abe38`;
+`fizzy-1.0.3+3.4.16-5` → `8e88dba`, the commit fizzy pins now.
 
 ## Bumping
 
