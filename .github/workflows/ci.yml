@@ -92,9 +92,10 @@ jobs:
       # Fizzy consumed as a library by an outside package. This is the only check that can
       # catch a path resolving against the consumer's cwd instead of fizzy's build root — the
       # exact bug that broke this (`.cwd_relative = "src/App.zig"`) is invisible when fizzy
-      # builds itself, because then the two directories are the same.
+      # builds itself, because then the two directories are the same. Linux only: that bug is no
+      # platform's, and on macOS the four apps (each compiling its own SDL3) took most of the run.
       - name: Build external consumer apps (fizzy as a library)
-        if: matrix.name != 'Windows'
+        if: matrix.name == 'Linux'
         run: |
           for app in examples/hello-plugin examples/minimal-app examples/studio-app examples/endless-app; do
             echo "::group::$app"
@@ -109,7 +110,7 @@ jobs:
         run: bash scripts/ci-retry.sh zig build test-sdk-version --summary all
 
   # Fizzy's own backend on Windows — the default there too now (`build/exe.zig`'s
-  # `defaultNativeBackend`) — which nothing else here builds: the consumer apps above skip Windows.
+  # `defaultNativeBackend`) — which nothing else here builds: the consumer apps above run on Linux only.
   # Cross-compiled from Linux for the GNU ABI, which needs no MSVC SDK (release.yml's msvc
   # builds do). It shows the app compiles and links, not that it runs.
   windows-fizzy-backend:
