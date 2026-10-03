@@ -494,12 +494,13 @@ pub fn aimFor(l: *Layout, mouse: dvui.Point.Physical) Aim {
 }
 
 /// Whether the view is carried as a drop of glass at `mouse`: where the glass program draws, with
-/// something to show in it — its photograph, or for a document with none (not open yet, or open
-/// in no pane) its file's icon (`drawDropIcon`) — and not over a list (where it is a tab).
+/// a photograph to show in it, and not over a list (where it is a tab).
 fn carriedAsDrop(l: *Layout, mouse: dvui.Point.Physical) bool {
     const d = &l.state.view_drag;
-    const shows = d.texture != null or sdk.document.pathOfSurfaceId(d.moved_id) != null;
-    return core.LiquidField.ready() and shows and chooserAt(l.state, mouse) == null;
+    // A bubble only round a photograph. With none — a file not open yet, a document open in no pane
+    // — it is carried as its tab in glass, its icon and its name (`drawTabFace`): a bubble with an
+    // icon in it read as a thing of its own rather than the tab it is.
+    return core.LiquidField.ready() and d.texture != null and chooserAt(l.state, mouse) == null;
 }
 
 /// Where a drop of radius `r` rides for the pointer at `mouse`: below and right of a mouse; up
@@ -982,7 +983,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
         for (d.drop_shapes[0..d.drop_n]) |sh| field.add(sh);
         _ = core.dialogs.carriedFieldWhole(dvui.Id.update(.zero, "view_drag_drop"), field, scale);
     }
-    const tex = d.texture orelse return drawDropIcon(l);
+    const tex = d.texture orelse return;
     const head = d.drop_shapes[0].rect;
     const pad = card_padding * scale * 0.5;
     const r = head.insetAll(pad);
@@ -1005,7 +1006,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
     const radius = @max(0, d.drop_radius - pad) / scale;
     const shown = contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns));
     dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo_opacity * shown), .uv = uv }) catch {};
-    drawDropLabel(l, head, true, shown);
+    drawDropLabel(l, head, shown);
 }
 
 /// What the drop is carrying, named: a photograph of a view is not always enough to tell one
@@ -1017,13 +1018,13 @@ fn dropTitle(l: *Layout, d: ViewDrag) ?[]const u8 {
 }
 
 /// How far below the head's middle the label's line sits, as a share of the head's radius:
-/// inside the circle, clear of the icon or the photograph's middle.
+/// inside the circle, clear of the photograph's middle.
 const drop_label_drop: f32 = 0.42;
 
-/// The drop's label: the view's title, or the file's name, low in the head, cut to fit its width
-/// with an ellipsis. Over a photograph it sits on a soft pill of the content fill, so it reads
-/// whatever the picture is behind it. `shown` fades it in with the drop's content.
-fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, on_photo: bool, shown: f32) void {
+/// The drop's label: the view's title, or the document's name, low in the head, cut to fit its
+/// width with an ellipsis, on a soft pill of the content fill so it reads whatever the photograph
+/// is behind it. `shown` fades it in with the drop's content.
+fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, shown: f32) void {
     const d = &l.state.view_drag;
     const title = dropTitle(l, d.*) orelse return;
     if (title.len == 0 or shown <= 0.01) return;
@@ -1051,7 +1052,7 @@ fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, on_photo: bool, shown: f3
     const prev_alpha = dvui.alpha(shown);
     defer dvui.alphaSet(prev_alpha);
     const theme = dvui.themeGet();
-    if (on_photo) {
+    {
         const pad_x: f32 = 6;
         const pill: dvui.Rect = .{ .x = cx - tw / 2 - pad_x, .y = cy - line_h / 2 - 1, .w = tw + 2 * pad_x, .h = line_h + 2 };
         dvui.windowRectScale().rectToPhysical(pill).fill(.all(pill.h / 2 * dvui.currentWindow().natural_scale), .{ .color = .{ .color = theme.color(.content, .fill).opacity(0.82) } });
@@ -1063,36 +1064,6 @@ fn drawDropLabel(l: *Layout, head: dvui.Rect.Physical, on_photo: bool, shown: f3
         .font = font,
         .color_text = .{ .color = theme.color(.window, .text) },
     });
-}
-
-/// How much of a drop's diameter the icon of a document it has no photograph of takes.
-const drop_icon_share: f32 = 0.4;
-
-/// What the drop shows of a document it has no photograph of — one not open yet, or open in no
-/// pane: its file's icon, the glyph its tab wears, in the middle of the head.
-fn drawDropIcon(l: *Layout) void {
-    const d = &l.state.view_drag;
-    const doc = draggedDoc(l, d.*) orelse return;
-    const head = d.drop_shapes[0].rect;
-    const size = @min(head.w, head.h) * drop_icon_share;
-    if (size < 2) return;
-    // Up a little, to leave the label its line below (`drawDropLabel`).
-    var c = head.center();
-    c.y -= head.h * 0.1;
-    const nat = (dvui.Rect.Physical{ .x = c.x - size / 2, .y = c.y - size / 2, .w = size, .h = size }).toNatural();
-    const prev_alpha = dvui.alpha(contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns)));
-    defer dvui.alphaSet(prev_alpha);
-    // The icons fill the slot they are given (`Host.drawFileIcon`), as in a tree row's.
-    var slot = dvui.box(@src(), .{}, .{ .rect = .{ .x = nat.x, .y = nat.y, .w = nat.w, .h = nat.h } });
-    const color = dvui.themeGet().color(.control, .text);
-    if (!l.host.drawFileIcon(std.fs.path.extension(doc.path), doc.path, color)) {
-        core.icon.icon(@src(), "drop_file_icon", icons.tvg.lucide.file, .{
-            .stroke_color = .{ .color = color },
-        }, core.widgets.treeRowIconOptions(.{}));
-    }
-    slot.deinit();
-    // Already under the content's fade (`prev_alpha` above).
-    drawDropLabel(l, head, false, 1);
 }
 
 /// Whether dropping the view lifted from `source` in the middle of `dest` joins them: the two
