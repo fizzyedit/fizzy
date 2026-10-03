@@ -4949,6 +4949,53 @@ test "demo: real pointer motion does not move the tape's pointer while it plays"
     try std.testing.expectEqual(p.y, dvui.currentWindow().mouse_pt.y);
 }
 
+/// One frame, the next beginning `ms` later: a slow frame, or the app not drawing at all.
+fn stepDemoBy(ms: i128) !void {
+    const cw = dvui.currentWindow();
+    _ = try demoFrame();
+    _ = try cw.end(.{});
+    try cw.begin(cw.frame_time_ns + ms * std.time.ns_per_ms);
+}
+
+/// Ten seconds of nothing, then a ping.
+fn quietTape() !automation.Tape.Owned {
+    var s: automation.Script = .init(std.testing.allocator, "quiet", "Quiet");
+    errdefer s.deinit();
+    try s.keyframe(.{ .root = "demo://quiet", .files = &.{.{ .path = "field", .text = "> " }} });
+    s.pause(10_000);
+    try s.command("demo.ping");
+    return s.finish();
+}
+
+test "demo: a slow browser plays it at its pace, not in slow motion" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try quietTape(), .{});
+    try stepDemoUntil(.playing, 50);
+
+    // Frames 400 ms apart, two and a half a second: as much demo as wall. (The first of them
+    // follows an ordinary step's 100 ms.)
+    var before = demo_player.seq.now;
+    for (0..6) |_| try stepDemoBy(400);
+    try std.testing.expect(demo_player.seq.now - before >= 2000);
+
+    // Paused a long while: the first frame back plays a frame's worth, not the pause.
+    demo_player.pause();
+    try stepDemoBy(30_000);
+    demo_player.play();
+    before = demo_player.seq.now;
+    try stepDemoBy(16);
+    try std.testing.expect(demo_player.seq.now - before <= 100);
+
+    // Nothing drawn for half a minute while it plays (a hidden tab): no more than a second of it.
+    try stepDemoBy(30_000);
+    before = demo_player.seq.now;
+    try stepDemoBy(16);
+    try std.testing.expect(demo_player.seq.now - before <= automation.Player.max_frame_ms);
+    try std.testing.expectEqual(automation.Player.State.playing, demo_player.state);
+}
+
 test "demo: every bundled demo builds into a valid tape" {
     for (fizzy.Editor.Demo.catalog.entries) |e| {
         var s: automation.Script = .init(std.testing.allocator, e.name, e.title);
