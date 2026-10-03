@@ -4,7 +4,9 @@
 //! follows those animations by their notifications, pushes AppKit's live sizes into SDL as they
 //! change, and pumps frames from a timer while they run, so the app redraws through them; it also
 //! undoes AppKit's nudge of a full-size-content window under the menu bar, and turns vsync off for
-//! a live resize so the window keeps up with the pointer.
+//! a live resize so the window keeps up with the pointer. On an SDL with fizzy's live-resize
+//! patches (`docs/MACOS_LIVE_RESIZE.md`), `install` also has SDL draw each step of a live resize
+//! in the screen update that shows it.
 //!
 //! An app installs it once its window is styled (`install`) and lets its frames through once it
 //! is ready to draw them (`launchComplete`). It relies on two of SDL's own functions that are not
@@ -16,6 +18,8 @@ const dvui = @import("dvui");
 const Backend = @import("backend");
 const c = Backend.c;
 const window_layout = @import("window_layout.zig");
+
+const log = std.log.scoped(.macos_monitor);
 
 extern fn fizzy_macos_window_titlebar_inset(cocoa_window: ?*anyopaque) f64;
 extern fn fizzy_macos_window_is_zoomed(cocoa_window: ?*anyopaque) c_int;
@@ -37,6 +41,7 @@ extern fn fizzy_macos_window_set_frame(cocoa_window: ?*anyopaque, x: f64, y: f64
 extern fn fizzy_macos_copy_screen_frames(out: [*]f64, max: c_int) c_int;
 extern fn fizzy_macos_window_sync_content_views(cocoa_window: ?*anyopaque) void;
 extern fn fizzy_macos_window_install_resize_observer(cocoa_window: ?*anyopaque) void;
+extern fn fizzy_macos_window_sdl_draws_live_resize(cocoa_window: ?*anyopaque) c_int;
 
 // SDL internals (linked but not in public headers) — the same hooks SDL uses
 // for macOS live resize while the window frame is animating.
@@ -157,7 +162,9 @@ var macos_live_resize_saved_vsync: ?c_int = null;
 
 /// Frames during a manual live resize are paced by SDL's 60Hz timer inside AppKit's
 /// resize-tracking loop; a vsync-blocking present there only delays the tracker's next
-/// mouse event, so quick drags fall behind the pointer. Off for the drag, restored after.
+/// mouse event, so quick drags fall behind the pointer. Off for the drag, restored after —
+/// unless SDL draws the resize itself (`sdl_draws_live_resize` in `macos/window_monitor.m`),
+/// whose presents wait for no vsync.
 export fn fizzy_macos_window_live_resize_vsync(active: c_int) void {
     if (comptime builtin.os.tag != .macos) return;
     const window = macos_monitor_window orelse return;
@@ -254,6 +261,17 @@ pub fn install(win: *dvui.Window) void {
     macos_monitor_window = back.window;
     back.begin_hook = macosAppPreBeginSync;
     fizzy_macos_window_install_resize_observer(cocoa);
+    // Draw each step of a live resize from inside it, presented with the Core Animation
+    // transaction that resizes the window, so the new size and the frame drawn for it reach the
+    // screen together (fizzyedit/SDL's live-resize patches, `docs/MACOS_LIVE_RESIZE.md`). By name,
+    // not SDL's #define, so this builds against an SDL without them, which ignores it.
+    _ = c.SDL_SetHint("SDL_VIDEO_MAC_SYNC_LIVE_RESIZE", "1");
+    // Which one this build has is otherwise invisible until a drag looks wrong.
+    if (fizzy_macos_window_sdl_draws_live_resize(cocoa) != 0) {
+        log.info("live resize: SDL draws each step in its transaction (fizzy's SDL patches)", .{});
+    } else {
+        log.info("live resize: timer-driven (this SDL has no live-resize patches, or SDL_VIDEO_MAC_SYNC_LIVE_RESIZE=0)", .{});
+    }
 }
 
 /// Called at the end of AppInit: allows the monitor's pump timer to start

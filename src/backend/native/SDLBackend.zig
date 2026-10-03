@@ -473,10 +473,20 @@ extern "c" fn fizzy_native_monitor_install() void;
 extern "c" fn fizzy_native_monitor_last_scroll_precise() c_int;
 extern "c" fn fizzy_native_disable_titlebar_separator(nswindow: *anyopaque) void;
 extern "c" fn fizzy_native_metal_drawable_size(nswindow: *anyopaque, out_w: *c_int, out_h: *c_int) c_int;
+extern "c" fn fizzy_native_in_live_resize(nswindow: *anyopaque) c_int;
 
 fn cocoaWindow(window: *c.SDL_Window) ?*anyopaque {
     if (builtin.os.tag != .macos) return null;
     return c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
+}
+
+/// Whether AppKit's live-resize tracking loop is running for this window, which a frame is then
+/// run from inside (`appIterate`).
+fn inLiveResize(self: *SDLBackend) bool {
+    if (builtin.os.tag == .macos) {
+        if (cocoaWindow(self.window)) |nswindow| return fizzy_native_in_live_resize(nswindow) != 0;
+    }
+    return false;
 }
 
 const SDL_ERROR = bool;
@@ -1916,6 +1926,8 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
         appState.ios_event_pending = false;
     }
 
+    const trace = live_resize_trace.begin(&appState.back);
+
     // beginWait coordinates with waitTime below to run frames only when needed
     const nstime = appState.win.beginWait(appState.interrupted or appState.no_wait);
 
@@ -1930,6 +1942,8 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
         log.err("dvui.App.frameFn failed: {any}", .{err});
         return c.SDL_APP_FAILURE;
     };
+
+    live_resize_trace.overlay();
 
     const end_micros = appState.win.end(.{ .manage_backend = false }) catch |err| {
         log.err("dvui.Window.end failed: {any}", .{err});
@@ -1946,6 +1960,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     if (res != .ok) return c.SDL_APP_SUCCESS;
 
     const wait_event_micros = appState.win.waitTime(end_micros);
+    if (trace) |t| live_resize_trace.end(t, &appState.back, wait_event_micros);
 
     //std.debug.print("waitEventTimeout {d} {} resize {}\n", .{wait_event_micros, gno_wait, ghave_resize});
 
@@ -1956,9 +1971,12 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     // During a callback we don't want to call SDL_WaitEvent or
     // SDL_WaitEventTimeout.  Otherwise all event handling gets screwed up and
     // either never recovers or recovers after many seconds.
+    // A frame inside a macOS live resize is always one: SDL's timer runs it from
+    // AppKit's tracking loop while the pointer rests, with no resize event to
+    // say so, and a wait there takes the tracking loop's own mouse events.
     // NOTE: on iOS, SDL_WaitEventTimeout stalls in UITrackingRunLoopMode during a
     // touch, so we throttle via ios_next_frame_ns above instead of waiting here.
-    if (appState.no_wait or appState.have_resize or builtin.target.os.tag == .ios) {
+    if (appState.no_wait or appState.have_resize or appState.back.inLiveResize() or builtin.target.os.tag == .ios) {
         appState.have_resize = false;
         if (builtin.target.os.tag == .ios) {
             appState.ios_next_frame_ns = appState.win.backend.nanoTime() + @as(i128, wait_event_micros) * 1000;
@@ -1977,3 +1995,90 @@ test {
     //std.debug.print("{s} backend test\n", .{if (sdl3) "SDL3" else "SDL2"});
     std.testing.refAllDecls(@This());
 }
+
+/// What a frame inside a macOS live resize saw, with `FIZZY_LIVE_RESIZE_TRACE` set
+/// (`platform/macos/live_resize_trace.m`, `docs/MACOS_LIVE_RESIZE.md`): one line per frame, and a
+/// barcode of the frame's own number and drawable size on every frame, which a screen recording
+/// decodes (`scripts/live-resize/`) to tell which frame, drawn for which size, reached the screen
+/// at the window's size. `src=display` is a frame SDL drew from AppKit's display of the view,
+/// presented with the transaction that resizes the window; `src=timer` one from its timer.
+const live_resize_trace = struct {
+    extern "c" fn fizzy_live_resize_trace_enabled() c_int;
+    extern "c" fn fizzy_live_resize_now() f64;
+    extern "c" fn fizzy_live_resize_probe(nswindow: *anyopaque, out: *[8]f64) void;
+
+    var frame_number: u16 = 0;
+    var last_start: f64 = 0;
+    /// The frame's window rect, kept by `overlay` for `end`, which runs after the frame.
+    var frame_rect: dvui.Rect.Physical = .{};
+
+    const Start = struct { t: f64, probe: [8]f64 };
+
+    fn enabled() bool {
+        if (comptime builtin.os.tag != .macos) return false;
+        return fizzy_live_resize_trace_enabled() != 0;
+    }
+
+    fn begin(back: *SDLBackend) ?Start {
+        if (comptime builtin.os.tag != .macos) return null;
+        if (!enabled()) return null;
+        frame_number +%= 1;
+        const nswindow = cocoaWindow(back.window) orelse return null;
+        var p: [8]f64 = undefined;
+        fizzy_live_resize_probe(nswindow, &p);
+        if (p[7] == 0) return null;
+        return .{ .t = fizzy_live_resize_now(), .probe = p };
+    }
+
+    fn end(s: Start, back: *SDLBackend, wait_micros: u32) void {
+        if (comptime builtin.os.tag != .macos) return;
+        const now = fizzy_live_resize_now();
+        const r = frame_rect;
+        const p = s.probe;
+        std.debug.print("[lr] {d:.6} frame {d} src={s} since={d:.1}ms took={d:.1}ms win={d}x{d} layer={d}x{d} drawable={d}x{d} swap={d}x{d} rect={d}x{d} wait={d}us\n", .{
+            s.t,                                   frame_number,
+            if (p[6] != 0) "display" else "timer", (s.t - last_start) * 1000,
+            (now - s.t) * 1000,                    p[0],
+            p[1],                                  p[2],
+            p[3],                                  p[4],
+            p[5],                                  back.gpu.swapchain_w,
+            back.gpu.swapchain_h,                  r.w,
+            r.h,                                   wait_micros,
+        });
+        last_start = s.t;
+    }
+
+    /// 50 blocks, 8x16 physical px, from (24, 160): red, 16 bits of frame number, 16 of the
+    /// drawable's width, 16 of its height (MSB first, white 1, black 0), red. And 6 px bars on the
+    /// left (cyan), right (magenta), top and bottom (yellow) edges, which the layer's gravity keeps
+    /// at the window's edges whatever size the frame was drawn for.
+    fn overlay() void {
+        if (!enabled()) return;
+        const r = dvui.windowRectPixels();
+        frame_rect = r;
+        const bw: f32 = 8;
+        const bh: f32 = 16;
+        const x0: f32 = 24;
+        const y0: f32 = 160;
+        const red: dvui.Color = .{ .r = 255, .g = 0, .b = 0 };
+        const fields = [3]u16{ frame_number, @intFromFloat(r.w), @intFromFloat(r.h) };
+        var i: usize = 0;
+        while (i < 50) : (i += 1) {
+            const color: dvui.Color = if (i == 0 or i == 49) red else blk: {
+                const bit = i - 1;
+                const v = fields[bit / 16];
+                const on = (v >> @intCast(15 - bit % 16)) & 1 == 1;
+                break :blk if (on) .{ .r = 255, .g = 255, .b = 255 } else .{ .r = 0, .g = 0, .b = 0 };
+            };
+            const rect: dvui.Rect.Physical = .{ .x = x0 + @as(f32, @floatFromInt(i)) * bw, .y = y0, .w = bw, .h = bh };
+            rect.fill(.all(0), .{ .color = .{ .color = color } });
+        }
+        const cyan: dvui.Color = .{ .r = 0, .g = 255, .b = 255 };
+        const magenta: dvui.Color = .{ .r = 255, .g = 0, .b = 255 };
+        const yellow: dvui.Color = .{ .r = 255, .g = 255, .b = 0 };
+        (dvui.Rect.Physical{ .x = 0, .y = 100, .w = 6, .h = r.h - 200 }).fill(.all(0), .{ .color = .{ .color = cyan } });
+        (dvui.Rect.Physical{ .x = r.w - 6, .y = 100, .w = 6, .h = r.h - 200 }).fill(.all(0), .{ .color = .{ .color = magenta } });
+        (dvui.Rect.Physical{ .x = 200, .y = 0, .w = r.w - 400, .h = 6 }).fill(.all(0), .{ .color = .{ .color = yellow } });
+        (dvui.Rect.Physical{ .x = 200, .y = r.h - 6, .w = r.w - 400, .h = 6 }).fill(.all(0), .{ .color = .{ .color = yellow } });
+    }
+};

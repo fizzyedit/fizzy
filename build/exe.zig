@@ -480,6 +480,7 @@ pub fn addFizzyExecutableForTarget(
         exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/visual_effect_view.m") });
         exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/menu_target.m") });
         exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/window_monitor.m") });
+        exe.root_module.addCSourceFile(.{ .file = std.Build.path(b, "src/backend/native/platform/macos/live_resize_trace.m") });
         // The native backend's AppKit helpers, compiled here with fizzy's other Objective-C
         // (the root module is where the SDK's headers are found on a native build); the
         // backend module calls them by name.

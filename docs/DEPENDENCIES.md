@@ -54,7 +54,29 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
    still refuse. Compiled for x86, x64 and arm64 Windows; **not yet run on Windows 11**.
    Upstream: worth proposing once it has been.
 
-Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`, what sdl_zig pins now.
+3. **Metal: present with the Core Animation transaction when the layer asks for it** (`5882e2b`).
+   When a window's `CAMetalLayer` has `presentsWithTransaction` set, the GPU driver
+   (`METAL_Submit`) and the renderer (`METAL_RenderPresent`) commit the command buffer, wait until
+   it is scheduled and present the drawable on the calling thread, so it joins the Core Animation
+   transaction open there; otherwise exactly as before. SDL never sets the property itself.
+   Upstream: worth proposing with 4.
+
+4. **Cocoa: draw each step of a live resize in the transaction that commits it** (`80bdc7d`).
+   `SDL_HINT_VIDEO_MAC_SYNC_LIVE_RESIZE` (default off): for the length of a live resize the
+   window's Metal view gets the redraw policy `NSViewLayerContentsRedrawDuringViewResize`, and the
+   app's frame runs when AppKit displays the view at each step, presented with that step's
+   transaction (needs 3), so the window's new size and the frame drawn for it reach the screen
+   together. The 60 Hz timer only asks for a display while the pointer rests, and draws as before
+   if AppKit never displays the view. Fizzy turns it on in `macos_monitor.install`; the
+   measurements are in `docs/MACOS_LIVE_RESIZE.md`. Upstream: worth proposing once it has been run
+   on a range of Macs.
+
+5. **Cocoa: draw a live-resize step from the Metal view's `displayLayer:`, not `updateLayer`**
+   (`8455e58`). AppKit never calls `updateLayer` for a view whose layer is a `CAMetalLayer` it
+   makes itself, so 4 as first written never drew in a step. Squash into 4 at the next rebase.
+
+Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4.16-3` → `8455e58`,
+what sdl_zig pins now.
 
 ## fizzyedit/sdl_zig
 
@@ -70,9 +92,11 @@ Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`, what sdl_z
 
 3. **Build fizzyedit/SDL `fizzy-3.4.16-2`** (`5950760`): the pin moves to SDL's second patch.
    Squash into 1 at the next rebase.
+4. **Build fizzyedit/SDL `fizzy-3.4.16-3`** (`48468b7`): the pin moves to SDL's macOS live-resize
+   patches (3–5). Squash into 1 at the next rebase.
 
-Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`, the commit fizzy
-pins now.
+Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`;
+`fizzy-1.0.3+3.4.16-3` → `48468b7`, the commit fizzy pins now.
 
 ## Bumping
 
@@ -96,7 +120,11 @@ pins now.
 lives mostly in two functions of its own (`D3D12_INTERNAL_SetCompositionContent`,
 `D3D12_INTERNAL_ReleaseComposition`) and otherwise touches the D3D12 swapchain's create, resize,
 present and release paths in `src/gpu/d3d12/SDL_gpu_d3d12.c` — the code an upstream D3D12
-change is likeliest to move. After resolving, compile the file for Windows before pushing; it
+change is likeliest to move. Patch 3 touches `METAL_Submit`'s present loop and the tail of
+`METAL_RenderPresent`; 4 and 5 the window listener's live-resize notifications and the end of the
+Metal view (`SDL_cocoawindow.{h,m}`, `SDL_cocoametalview.m`, one hint in `SDL_hints.h`). For those,
+`clang -fsyntax-only -fobjc-arc` on the `.m` files with the macOS SDK is enough to push, and the
+real check is a drag on a Mac: `scripts/live-resize/run.sh` (`docs/MACOS_LIVE_RESIZE.md`). After resolving, compile the file for Windows before pushing; it
 needs no build of the rest of SDL:
 `zig cc -target x86_64-windows-gnu -Iinclude -Iinclude/build_config -Isrc -Isrc/video/khronos -c src/gpu/d3d12/SDL_gpu_d3d12.c -o /tmp/d3d12.o`.
 CI's Windows cross-build (`ci.yml`) then builds it into fizzy.
