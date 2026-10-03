@@ -79,6 +79,9 @@ ahead_ns: i128 = 0,
 catching_up: bool = false,
 /// The displayed frame's wall time, which `wallNs` keeps to through its catch-up runs.
 shown_wall_ns: i128 = 0,
+/// The last displayed frame drove the tape, so the app has been drawing since: the time to this
+/// one is a frame's, however slow, not however long the demo sat paused (`frame`).
+live: bool = false,
 /// The seek in flight, or the last one: how long it took to land, for logs, tests and the
 /// benchmark.
 seek_stats: SeekStats = .{},
@@ -185,6 +188,10 @@ pub const Transport = struct {
     }
 };
 
+/// The longest a frame may take and still count as one while the tape drives (`frame`): longer,
+/// and the app was not drawing at all.
+pub const max_frame_ms: f64 = 1000;
+
 pub fn init(gpa: std.mem.Allocator, stage: Stage) Player {
     return .{ .gpa = gpa, .stage = stage };
 }
@@ -253,6 +260,7 @@ pub fn unload(self: *Player) void {
     self.owned.?.deinit();
     self.owned = null;
     self.state = .idle;
+    self.live = false;
     self.last_press = null;
     self.transport = .{};
     dvui.refresh(null, @src(), null);
@@ -513,9 +521,16 @@ pub fn frame(self: *Player) void {
     }
     if (self.state == .playing or self.state == .seeking) self.keepSnapshot();
 
-    // Clamped: the first frame after a pause can report however long the app slept. A catch-up
-    // run's step is demo time, and no wall time passed for a wait to count.
-    const wall_ms: f64 = if (self.catching_up) 0 else @min(dvui.secondsSinceLastFrame() * 1000, 100);
+    // While the tape drives, a frame's wall time is all demo time, however slow the frame: a
+    // browser that slows to a few frames a second plays the demo at its pace, choppily, rather
+    // than in slow motion — a card meant to show for eight seconds up for a minute. Only waits
+    // slow a demo down. Clamped: the first frame after it stopped driving, which can report
+    // however long the demo sat paused, and a frame past `max_frame_ms`, the app not drawing at
+    // all (a hidden tab draws nothing). A catch-up run's step is demo time, and no wall time
+    // passed for a wait to count.
+    const since_ms = dvui.secondsSinceLastFrame() * 1000;
+    const wall_ms: f64 = if (self.catching_up) 0 else @min(since_ms, if (self.live) max_frame_ms else 100);
+    if (!self.catching_up) self.live = self.state == .playing or self.state == .seeking;
     switch (self.state) {
         .playing => {
             self.holdPointer();
