@@ -769,7 +769,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     }
 
     const sdk_module_test = sdk.wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), dvui_test_proxy_bridge, core_module_test, fizzy_test_module);
-    _ = workbench_plugin.addStaticModule(b, target, optimize, .{
+    const workbench_module_test = workbench_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
         .sdk = sdk_module_test,
@@ -838,6 +838,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // Same reasoning for the markdown preview: its block virtualization is a claim about what
     // gets *drawn*, which only a real headless frame can check.
     integration_module.addImport("markdown", markdown_module_test);
+    // And the workbench's panes: whether a float lies over one is a reading of the window's
+    // subwindows, which a headless frame with a float in it has.
+    integration_module.addImport("workbench", workbench_module_test);
     integration_module.addAnonymousImport("markdown_sample", .{ .root_source_file = b.path("docs/PLUGINS.md") });
     // The document with the 45KB table — the case table-row culling exists for, and the one it
     // could get wrong.

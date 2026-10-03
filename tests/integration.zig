@@ -5035,3 +5035,58 @@ test "float: one that stepped aside for its last view goes when the view lands, 
     try dvui.testing.settle(ManyPanelFrame.frame);
     try std.testing.expect(holds(case.shows("Panel"), "test.output"));
 }
+
+// ── What a plugin's own drags read of the floats ─────────────────────────────────────────────────
+// A plugin that hit-tests a drag of its own — the workbench, a file from its tree over its
+// document panes — reads whether a window lies over a pane from the window's subwindows, as dvui
+// reads where a release goes.
+
+const workbench = @import("workbench");
+
+/// `ManyPanelFrame` with the view drag's overlay over all of it, as fizzy's frame draws it last.
+const OverlaidFrame = struct {
+    /// The app's own window, as a pane drawn in it records it (`Workspace.subwindow_id`).
+    var base: dvui.Id = .zero;
+
+    fn frame() anyerror!dvui.App.Result {
+        base = dvui.subwindowCurrentId();
+        const result = try ManyPanelFrame.frame();
+        const e = ManyPanelFrame.editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        layout.drawDragOverlay();
+        return result;
+    }
+};
+
+test "float: a document pane is under the pointer only where no float lies over it, and the drag's own layer covers nothing" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const main = fizzy.Editor.Layout.ViewDrag.placeBounds(&editor.app.layout, "Main") orelse return error.TestExpectedEqual;
+
+    // A view carried meanwhile, so the drag's overlay is drawn too: a layer over every window,
+    // the float's included, that takes no pointer events.
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    fizzy.Editor.Layout.ViewDrag.begin(&layout, "Main", main, main);
+    defer editor.app.layout.view_drag.discard();
+    _ = try dvui.testing.step(OverlaidFrame.frame);
+    _ = try dvui.testing.step(OverlaidFrame.frame);
+    const float = editor.app.layout.floats.items.items[0];
+    try std.testing.expect(float.win_id != .zero);
+
+    // A document pane where Main is, drawn in the app's own window.
+    var pane = workbench.Workspace.init(1);
+    pane.subwindow_id = OverlaidFrame.base;
+    // Where the float lies over Main, the float is what the pointer is over, not the pane.
+    const over = float.bounds.intersect(main);
+    try std.testing.expect(over.w > 0 and over.h > 0);
+    try std.testing.expect(!pane.uncoveredAt(over.center()));
+    // Beside it, the pane, the drag's overlay over it all the same.
+    var beside: ?dvui.Point.Physical = null;
+    for ([_]dvui.Point.Physical{ main.topLeft(), main.topRight(), main.bottomLeft(), main.bottomRight() }) |corner| {
+        const p: dvui.Point.Physical = .{ .x = std.math.lerp(corner.x, main.center().x, 0.1), .y = std.math.lerp(corner.y, main.center().y, 0.1) };
+        if (!float.bounds.contains(p)) beside = p;
+    }
+    try std.testing.expect(pane.uncoveredAt(beside orelse return error.TestExpectedEqual));
+}

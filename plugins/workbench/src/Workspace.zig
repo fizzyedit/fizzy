@@ -44,6 +44,10 @@ canvas_rect_physical: ?dvui.Rect.Physical = null,
 /// The whole pane, tab strip included, as last drawn — what the host snapshots when this
 /// pane's last document closes.
 pane_rect_physical: ?dvui.Rect.Physical = null,
+/// The window the pane is drawn in (`dvui.subwindowCurrentId`): the app's own, or the float the
+/// documents were floated into. What the pane's own drags ask whether anything lies over it
+/// (`uncoveredAt`).
+subwindow_id: dvui.Id = .zero,
 /// The tab strip as last laid out — where a lifted tab can still be put back in a strip, before
 /// it becomes a view drag (`drawTabs`).
 strip_rect_physical: ?dvui.Rect.Physical = null,
@@ -54,6 +58,9 @@ tab_slot_count: usize = 0,
 /// Where in this pane's assignment a tab carried in the app's view drag would go in, while it is
 /// over the strip — last frame's reading, the gap this frame opens for it (`offerStrip`).
 strip_insert: ?usize = null,
+/// One of this pane's tabs was carried along the strips last frame, floating off its slot
+/// (`drawTabs`): the drag is this strip's own.
+lifting: bool = false,
 /// The gap drawn this frame: where it starts along the strip and how wide it is, physical.
 /// `insertIndexAt` reads the tabs as if it were not there, so the gap does not chase itself.
 gap_x: f32 = 0,
@@ -151,6 +158,7 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     self.active = if (selected) |s| documentOf(s) else null;
     const pane_r = pane_box.rectScale().r;
     self.pane_rect_physical = pane_r;
+    self.subwindow_id = dvui.subwindowCurrentId();
 
     if (tabs.len > 0) {
         self.dropSnapshot();
@@ -224,7 +232,16 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
     });
     defer scroll_area.deinit();
 
-    var reorder = dvui.reorder(@src(), .{ .drag_name = "tab_drag" }, .{
+    // A strip a window lies over where the pointer is (`uncoveredAt`) — a float over the
+    // documents — takes no part in a drag carried there: dvui's reorder opens its slot wherever
+    // the pointer is, over a window or not, and parted the tabs under the float for a release
+    // that is the float's. The strip a tab was lifted from keeps its part (`lifting`), for the
+    // frame that hands the tab to the app's view drag (`overAnyStrip`): that drag grows out of
+    // the tab where it floats, and only the reorder lays the tab out there. With no drag on, the
+    // name stays: it is what a tab lifted here starts the drag under.
+    const covered = dvui.dragName("tab_drag") and !self.uncoveredAt(dvui.currentWindow().mouse_pt) and !self.lifting;
+    self.lifting = false;
+    var reorder = dvui.reorder(@src(), .{ .drag_name = if (covered) null else "tab_drag" }, .{
         .expand = .none,
         .background = false,
     });
@@ -305,6 +322,7 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
         const tab_hovered = core.widgets.hovered(hbox.data());
 
         if (reorderable.floating()) {
+            self.lifting = true;
             runtime.workbench().dragging_surface = surface.id;
             // Dragging a tab is arranging it, and a tab someone is placing is not on loan.
             if (doc_opt) |doc| runtime.host().setDocumentPreview(doc.id, false);
@@ -758,14 +776,35 @@ pub fn insertTab(self: *Workspace, id: []const u8, index: usize) void {
 }
 
 /// Whether `p` is over some pane's tab strip, or near enough to it — within half a strip's
-/// height — that a lifted tab there is still being put back in a strip.
+/// height — that a lifted tab there is still being put back in a strip. Not a strip a window
+/// lies over there (`uncoveredAt`): over a float the tab is off every strip, and goes to the
+/// app's view drag, which knows what each float covers.
 fn overAnyStrip(p: dvui.Point.Physical) bool {
     for (runtime.workbench().workspaces.values()) |*ws| {
         const r = ws.strip_rect_physical orelse continue;
         const reach = r.h * 0.5;
-        if (p.x >= r.x and p.x <= r.x + r.w and p.y >= r.y - reach and p.y <= r.y + r.h + reach) return true;
+        if (p.x < r.x or p.x > r.x + r.w or p.y < r.y - reach or p.y > r.y + r.h + reach) continue;
+        if (ws.uncoveredAt(p)) return true;
     }
     return false;
+}
+
+/// Whether nothing lies over this pane at `p`: no window above the one it is drawn in — a float
+/// over the documents, a dialog — takes the pointer there. It is the reading dvui tags a pointer
+/// event with (`Subwindows.windowFor`), so what the pane shows for its own drags — its drop
+/// zones, a slot opening in its strip — agrees with where a release goes, and under a float it
+/// shows nothing: a release there is the float's.
+///
+/// A window that takes no pointer events covers nothing, here as for dvui: the app's drag
+/// overlay, which draws the drops and the carried view over every window, and what a drag
+/// carries — a tab floating off its strip, a row out of the tree. A float stepping aside for a
+/// view carried out of it is still a window, and covers. It steps aside only for the app's view
+/// drag, which reads the floats itself and sees past it (`Host.Region.offerChooser`,
+/// `RegionSpec.on_drop`), and the drags read here — a tab along the strips, a file from the
+/// tree — meet one only in the moment it takes to come back or go, when dvui hands it the
+/// release too.
+pub fn uncoveredAt(self: *const Workspace, p: dvui.Point.Physical) bool {
+    return dvui.currentWindow().subwindows.windowFor(p) == self.subwindow_id;
 }
 
 /// A document dropped on this pane through the app's view drag (`RegionSpec.on_drop`): the
@@ -810,9 +849,10 @@ fn paneSide(side: sdk.RegionSpec.Drop.Side) core.widgets.DockLayout.Side {
 /// over the same part of the pane: its inside, below the tab strip (`interiorRect`). The strip is
 /// chrome, as it is for a carried tab: over it the file goes in among the tabs, where the strip's
 /// own reorder shows it and takes the release (`processTabsDrag`). A tab dragged between panes
-/// is not read here: off its strip it is the app's view drag.
+/// is not read here: off its strip it is the app's view drag. Nothing under a window that lies
+/// over the pane at `p` (`uncoveredAt`): the file is over that window, not this pane.
 fn zoneAt(self: *const Workspace, zones: core.widgets.DropZones.Wheel, p: dvui.Point.Physical) ?core.widgets.DropZones.Zone {
-    _ = self;
+    if (!self.uncoveredAt(p)) return null;
     return core.widgets.DropZones.at(zones, p);
 }
 
@@ -837,9 +877,10 @@ pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
     const dragging = dvui.dragName("tab_drag") and wb.tab_drag_from_tree_path != null;
     if (!dvui.dragName("tab_drag")) wb.clearFileTreeTabDragDropState();
     // The pane under the pointer shows its zones, the one under the pointer lit, as a place does
-    // for a dragged view; left, or when the drag ends, they fade out.
+    // for a dragged view; left, or when the drag ends, they fade out. Under a float that lies
+    // over the pane there (`uncoveredAt`) the pointer is over the float: they fade as if left.
     const mouse = dvui.currentWindow().mouse_pt;
-    if (!dragging or !bounds.contains(mouse)) {
+    if (!dragging or !bounds.contains(mouse) or !self.uncoveredAt(mouse)) {
         if (DZ.showing(data.id)) _ = DZ.draw(data.id, zones, rs.s, .{ .target = false, .center = .add });
         if (!dragging) return;
     } else {
