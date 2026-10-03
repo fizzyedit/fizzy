@@ -32,6 +32,41 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
 4. **Upstream first.** A patch that upstream would take goes up as a PR; once merged it comes out
    empty at the next rebase and is abandoned.
 
+## foxnne/dvui-dev
+
+`fizzy-dev` = upstream `main` (`9b372ab`, 2026-10-02) plus:
+
+1. **render: a custom draw command (`deferRender`)** (`c703519`). A callback queued among a
+   subwindow's render commands, run when they replay. The frost and liquid glass read back what
+   the windows under them drew, which only exists at that point (`core/widgets/BlurBackdrop.zig`,
+   `DropZones.zig`, `core/gfx/programs.zig`). Upstream: david-vanderson/dvui#988, open.
+2. **Texture: precision option for render targets** (`f091da0`). `CreateOptions.precision =
+   .high` and `Backend.support_precise_targets`: float targets for the blur pyramid, which 8 bits
+   a channel steps into contour blobs. Upstream: david-vanderson/dvui#989, open.
+3. **render: dont output triangles for culled glyphs** (`4428108`). `renderText` numbers its
+   vertices with a u16 and panicked on a line of more than 16k glyphs even when nearly all were
+   off screen, which a text layout with `cache_layout` off draws as one run. Was part of
+   david-vanderson/dvui#945; upstream's own long-line work (#992) replaced the rest of that PR
+   but not this. Upstream: wants its own PR. Test: `zig build test-integration
+   -Dtest-filter="wider than the view"`.
+
+Tags: `fizzy-sdk-0.2.13` → `712f7f7` (the stack before this rebase, still what SDK ≤ 0.2.15
+builds); `fizzy-sdk-0.2.16` → `4428108`, what `sdk/build.zig.zon` pins now.
+
+Fizzy builds dvui in its `custom` backend mode on every target and links its own backends
+(`src/backend/native/`, `src/backend/WebBackend.zig` + `web/web.js`), so dvui's `sdl3` and `web`
+backends are only built by `-Dnative-backend=sdl3`. A dvui change to those backends is not a
+change to fizzy: anything fizzy wants from one is merged into its own by hand.
+
+Fizzy adapts to two upstream behaviours rather than patching them:
+
+- **Long lines** (#992): `TextLayoutWidget.cacheLayoutNext` hands out the byte regions a layout
+  actually runs, and `addText` counts and drops the rest. The text plugin queries tree-sitter
+  region by region (`TextEntryWidget.draw`).
+- **A text layout's first frame** (`f719b09`): a wrapping layout assumes it is 1000 wide on its
+  first frame, whatever width it was given. The markdown preview treats a block holding one as
+  not yet measured (`render_ast.Stats.fresh_text_layouts`).
+
 ## fizzyedit/SDL
 
 `fizzy-3.4` = `release-3.4.16` plus:
