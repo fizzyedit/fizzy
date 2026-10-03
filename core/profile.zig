@@ -22,7 +22,9 @@ const std = @import("std");
 const dvui = @import("dvui");
 const perf = @import("gfx/perf.zig");
 
-/// Bumped whenever `Profiler`'s layout changes.
+/// Bumped whenever `Profiler`'s layout changes. Part of the key the host publishes it under
+/// (`publish_key`), so a plugin built against another layout finds none and records nothing: the
+/// `abi` field it would check sits wherever its own layout put it, which a reordered struct moves.
 pub const abi: u32 = 3;
 
 pub const max_entries = 1024;
@@ -327,7 +329,7 @@ var host_profiler: Profiler = .{};
 var is_host = false;
 
 const publish_id: dvui.Id = @enumFromInt(0x6669_7a7a_7970_7266); // "fizzyprf"
-const publish_key = "_profiler";
+const publish_key = std.fmt.comptimePrint("_profiler{d}", .{abi});
 
 /// The profiler to record into: the host's own in the host, the one it published in a plugin.
 /// Null when there is none, or it was built with another layout.

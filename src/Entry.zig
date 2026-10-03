@@ -391,6 +391,10 @@ fn lastSubmitNs() ?u64 {
 
 /// One run of the app's frame.
 fn frameOnce() !dvui.App.Result {
+    // First, before anything reads `dvui.events()` or the frame target binds: a playing demo adds
+    // its input after the real input, takes the real input it owns, and says whether this run is
+    // seen (see `app.automation.Player.frame`).
+    fizzy.editor().demo.frame();
     // The whole frame draws into a texture — see `core.FrameTarget` for why.
     {
         const prof = fizzy.core.profile.begin("fizzy", "frame target: begin");

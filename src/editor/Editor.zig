@@ -3478,9 +3478,7 @@ const handle_size = 10;
 const handle_dist = 60;
 
 pub fn tick(editor: *Editor) !dvui.App.Result {
-    // First, before anything reads `dvui.events()`: a playing demo adds its input after the
-    // real input, and takes the real input it owns (see `app.automation.Player.frame`).
-    editor.demo.frame();
+    // (A playing demo has already had its turn: `Entry.frameOnce` runs `Demo.frame` first.)
     // Finger or mouse: how far a tap may drift, here and (through the context sync) in every
     // plugin — see `sdk.dvui_context.syncTouchInput`.
     sdk.dvui_context.syncTouchInput();

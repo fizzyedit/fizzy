@@ -62,12 +62,29 @@ const skip_unread = builtin.target.cpu.arch == .wasm32;
 /// should not flip it on and off, and glass coming back finds it still there.
 const linger_frames: u32 = 60;
 
-/// A frame nobody will see — a demo catching up (`automation.Player.frames`) — on a backend that
-/// drops what such a frame draws to the window (its `unseen`). What only a frame's picture needs
-/// can be left out of it: the frame target here, a frost's capture (`BlurBackdrop`).
+const unseen_id: dvui.Id = @enumFromInt(0x6669_7a7a_756e_736e); // "fizzunsn"
+const unseen_key = "_frame_unseen";
+
+/// Mark the frame running as one nobody will see — a demo catching up (`automation.Player.frames`)
+/// — or not. Only where the backend drops what such a frame draws to the window (an `unseen`
+/// switch, the web's): elsewhere every frame draws, and none is marked. Through the shared dvui
+/// window, so every image reads it (`unseen`), a plugin's glass as much as the host's. Returns
+/// whether the frame is unseen now.
+pub fn setUnseen(on: bool) bool {
+    const cw = dvui.currentWindow();
+    const impl = cw.backend.impl;
+    if (!@hasField(@TypeOf(impl.*), "unseen")) return false;
+    impl.unseen = on;
+    if (on) dvui.dataSet(null, unseen_id, unseen_key, true) else dvui.dataRemove(null, unseen_id, unseen_key);
+    return on;
+}
+
+/// The frame running is one nobody will see (`setUnseen`). What only a frame's picture needs can
+/// be left out of it: the frame target here, a frost's capture (`BlurBackdrop`), a cross-fade's
+/// (`anim.CrossFade`).
 pub fn unseen() bool {
-    const impl = dvui.currentWindow().backend.impl;
-    return @hasField(@TypeOf(impl.*), "unseen") and impl.unseen;
+    if (dvui.current_window == null) return false;
+    return dvui.dataGet(null, unseen_id, unseen_key, bool) orelse false;
 }
 
 const want_id: dvui.Id = @enumFromInt(0x6669_7a7a_6672_6d77); // "fizzfrmw"
@@ -198,9 +215,11 @@ pub fn deinit(self: *FrameTarget) void {
 /// of it. Null before a frame has been drawn, off the window, or on a backend without targets.
 pub fn snapshot(rect: dvui.Rect.Physical) ?dvui.Texture {
     const self = current orelse return null;
-    if (!self.bound) return null;
-    if (!self.fresh[self.index +% 1]) return null;
-    const prev = self.targets[self.index +% 1] orelse return null;
+    // The last frame shown: the other target while one is bound; in a frame nobody will see, the
+    // one bound last (`begin` leaves the targets as they were).
+    const last = if (self.bound) self.index +% 1 else if (unseen()) self.index else return null;
+    if (!self.fresh[last]) return null;
+    const prev = self.targets[last] orelse return null;
     const r = rect.intersect(dvui.windowRectPixels());
     if (r.w < 1 or r.h < 1) return null;
     const w: u32 = @intFromFloat(@round(r.w));

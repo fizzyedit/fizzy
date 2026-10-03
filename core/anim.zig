@@ -623,6 +623,8 @@ pub const Backdrop = struct {
 /// corners match the frame, so `blit`'s lerp is exact over them), else the `Backdrop` rebuilt
 /// from colours, which only `blitOpaque` blends correctly, else nothing.
 fn beginBackdropCapture(cf: *CrossFade, place: dvui.Rect.Physical, backdrop: ?Backdrop) ?dvui.Picture {
+    // Before the frame is copied: a frame nobody sees has no snapshot to take (`beginCapture`).
+    if (FrameTarget.unseen()) return null;
     // On the whole pixels `Picture.start` grows the snapshot to, not the place's fractional
     // rect: the frame pasted at the fractional one left the snapshot's left/top edge a
     // part-covered pixel — a 1px seam wherever the view drew nothing over it.
@@ -730,7 +732,11 @@ pub fn transition(state: *Transition, opts: TransitionOptions) TransitionFrame {
         state.cross_fade.opaque_snapshots = false;
         state.cross_fade.duration_ns = opts.duration_ns orelse crossfade.durationNs(kind);
         state.cross_fade.easing = opts.easing;
-        if (opts.draw_previous) |draw_prev| {
+        if (FrameTarget.unseen()) {
+            // Swapped in a frame nobody sees: nothing to fade from in the next one shown — and
+            // no fade left from before, which would play over the new view under its settings.
+            state.cross_fade.discard();
+        } else if (opts.draw_previous) |draw_prev| {
             if (beginBackdropCapture(&state.cross_fade, rect, opts.backdrop)) |captured| {
                 var pic = captured;
                 // The outgoing view draws where it lives: within `opts.rect` and the caller's

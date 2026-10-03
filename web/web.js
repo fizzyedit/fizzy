@@ -989,10 +989,14 @@ export class Dvui {
                 uniform_floats,
             ) => {
                 const uniforms = uniform_floats > 0 ? new Float32Array(this.instance.exports.memory.buffer, uniform_ptr, uniform_floats) : null;
-                const indices = new Uint16Array(this.instance.exports.memory.buffer, index_ptr, index_len / 2);
-                this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, indices, this.gl.DYNAMIC_DRAW);
-                this.gl.bufferData(this.gl.ARRAY_BUFFER, this.bytesFromPointer(vertex_ptr, vertex_len), this.gl.DYNAMIC_DRAW);
-                this.setLayout(sizeof_vertex, offset_pos, offset_col, offset_uv);
+                // A stream of only switches and clears has no geometry (and an empty slice's
+                // pointer is not one to make a view at).
+                if (index_len > 0) {
+                    const indices = new Uint16Array(this.instance.exports.memory.buffer, index_ptr, index_len / 2);
+                    this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, indices, this.gl.DYNAMIC_DRAW);
+                    this.gl.bufferData(this.gl.ARRAY_BUFFER, this.bytesFromPointer(vertex_ptr, vertex_len), this.gl.DYNAMIC_DRAW);
+                    this.setLayout(sizeof_vertex, offset_pos, offset_col, offset_uv);
+                }
 
                 const cmds = new Int32Array(this.instance.exports.memory.buffer, cmd_ptr, cmd_count * 8);
                 for (let i = 0; i < cmd_count; i += 1) {

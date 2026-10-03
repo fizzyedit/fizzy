@@ -55,9 +55,13 @@ whole of how a demo rewinds: cut to the keyframe, then replay the ops to the mom
 off. A replay costs a frame per op rather than per millisecond, and those frames are never shown.
 
 **Seeking is silent.** The app runs its frame through `Player.frames`, which, while a seek is
-catching up, runs the frame again and again inside one displayed frame — each run laid out,
-drawn into the frame's texture and dropped, never presented — until the seek lands or a budget of
-8 ms of wall time is spent; the displayed frame shows the last run. A seek within a scene lands in
+catching up, runs the frame again and again inside one displayed frame — each run laid out and
+never presented — until the seek lands or a budget of 8 ms of wall time is spent; the displayed
+frame shows where the catch-up got to. On a backend with an `unseen` switch (the web's), the runs
+draw nothing: the player marks each one (`core.FrameTarget.setUnseen`, read through the shared
+window by every image), the backend drops its draws to the window, the frame target, frosts and
+cross-fades leave themselves out, and one more run, drawn, ends the displayed frame. Elsewhere
+each run is drawn over the last, and the last is shown. A seek within a scene lands in
 the frame it was asked in; one across a long recording spreads over a few displayed frames, and
 only a seek that takes longer than 150 ms says "Catching up…". `zig build bench-replay`
 (ReleaseFast, the text editor's widget over a 400-line file): a frame costs about 0.9 ms, so
@@ -300,7 +304,10 @@ pub fn appFrame() !dvui.App.Result {
 
 `backendClock` finds a `clock_ahead_ns: i128` on the backend, which its `nanoTime` adds to the
 wall (fizzy's SDL and web backends have one); a backend without it still seeks silently, only
-with timers waiting for the wall. Snapshots are four more, optional, `Stage` hooks — `capture`,
+with timers waiting for the wall. An `unseen: bool` on the backend, dropping draws to the window
+while it is set, spares the GPU the runs nobody sees (see above). The player's `frame` runs before
+anything that asks whether a run is seen — in fizzy, first in `frameOnce`, ahead of the frame
+target. Snapshots are four more, optional, `Stage` hooks — `capture`,
 `restore`, `release`, `fingerprint` — over whatever the app's model is; without them seeks go back
 to keyframes. `src/editor/Demo.zig` and `src/Entry.zig` are the worked example.
 

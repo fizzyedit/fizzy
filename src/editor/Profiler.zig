@@ -82,8 +82,9 @@ pub fn draw() void {
 
     if (continuous) dvui.refresh(null, @src(), null);
     // Pointer moves this frame, mouse or touch: where the frame rate comes from while one
-    // drives it.
-    {
+    // drives it. Not in a run nobody sees — a demo catching up replays its own moves there, run
+    // after run, inside the one frame shown.
+    if (!core.FrameTarget.unseen()) {
         var moves: u32 = 0;
         for (dvui.events()) |*e| {
             if (e.evt == .mouse and e.evt.mouse.action == .motion) moves += 1;
@@ -238,7 +239,11 @@ fn drawGraph(p: *profile.Profiler, font: dvui.Font, dim: dvui.Color) ?usize {
         var label_buf: [128]u8 = undefined;
         const text = if (hovered) |h| blk: {
             const f = p.historyFrame(h).?;
-            break :blk std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms + submit {d:.2} ms — the table shows this frame", .{ h, ms(@floatFromInt(f.work_ns)), ms(@floatFromInt(f.submit_ns)) }) catch "";
+            // Submit only where the backend measures it (`FrameStats.submit_ns`).
+            break :blk if (p.stats.submit_ns != null)
+                std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms + submit {d:.2} ms — the table shows this frame", .{ h, ms(@floatFromInt(f.work_ns)), ms(@floatFromInt(f.submit_ns)) }) catch ""
+            else
+                std.fmt.bufPrint(&label_buf, "frame -{d}: {d:.2} ms — the table shows this frame", .{ h, ms(@floatFromInt(f.work_ns)) }) catch "";
         } else std.fmt.bufPrint(&label_buf, "last {d} frames · hover one to hold it", .{n}) catch "";
         dvui.labelNoFmt(@src(), text, .{}, .{ .font = font, .color_text = .{ .color = dim }, .gravity_x = 0, .gravity_y = 0 });
     }

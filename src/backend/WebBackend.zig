@@ -835,7 +835,10 @@ fn flushBatch() void {
         // starts again in it.
         if (program != null) programMarker() catch {};
     }
-    if (batch.idx.items.len == 0) return;
+    // Sent even with nothing to draw: a stream of only target switches and clears still has to
+    // reach `web.js`, or what it has bound stops being what `target_is_fb` says — which a frame
+    // nobody sees (`unseen`), its draws to the window dropped, leaves behind often.
+    if (batch.cmds.items.len == 0) return;
 
     const index_slice = std.mem.sliceAsBytes(batch.idx.items);
     const vertex_slice = std.mem.sliceAsBytes(batch.vtx.items);
