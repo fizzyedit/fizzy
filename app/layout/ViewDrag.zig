@@ -376,10 +376,11 @@ fn liftShape(d: *ViewDrag, from: dvui.Rect.Physical) void {
     d.card_start_ns = d.start_ns;
 }
 
-/// Begin carrying surface `id` from the picker. There is no source place,
-/// so nothing is photographed: the float starts at
-/// the card that was grabbed and shows the picture the card showed, which
-/// the caller hands over (`State.stealSnapshot`) and the drag destroys.
+/// Begin carrying surface `id` from the picker, or from a plugin's own list (`Host.beginViewDrag`):
+/// a tab off its strip, a file out of a tree — which may be a document not open yet, carried by
+/// the id it will have (`unopened`). There is no source place, so nothing is photographed: the
+/// float starts at the card that was grabbed and shows the picture the card showed, which the
+/// caller hands over (`State.stealSnapshot`) and the drag destroys.
 pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture: ?dvui.Texture) void {
     var d = &l.state.view_drag;
     d.drop_head = .{};
@@ -388,12 +389,14 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     d.drop_n = 0;
     d.drop_touch = false;
     d.overlay_gen +%= 1;
-    const s = l.host.surfaceById(id) orelse return;
+    // A surface's id is its registry's; a document not open yet has only the plugin's, which is
+    // its frame's, so it is interned to outlive the drag.
+    const moved = if (l.host.surfaceById(id)) |s| s.id else if (unopened(l, id)) l.state.internName(l.gpa, id) else return;
     d.name = loose_source;
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
     liftShape(d, from);
-    d.moved_id = s.id;
+    d.moved_id = moved;
     d.texture = texture;
     d.texture_rect = from;
     mapTargets(l, d);
@@ -411,7 +414,7 @@ fn mapTargets(l: *Layout, d: *ViewDrag) void {
     d.target_count = 0;
     const surface_kw = draggedKeywords(l);
     // A tab's content goes to a slot made for it, never a plain place (`Layout.slotted`).
-    const slotted = if (l.host.surfaceById(d.moved_id)) |s| l.slotted(s) else false;
+    const slotted = slottedId(l, d.moved_id);
     // Last frame's registry: complete, where this frame's is still being
     // filled in around the click that started the drag.
     const places = if (l.state.regions.items.len > 0)
@@ -497,10 +500,12 @@ pub fn aimFor(l: *Layout, mouse: dvui.Point.Physical) Aim {
 }
 
 /// Whether the view is carried as a drop of glass at `mouse`: where the glass program draws, with
-/// a photograph to show, and not over a list (where it is a tab).
+/// something to show in it — its photograph, or for a document with none (not open yet, or open
+/// in no pane) its file's icon (`drawDropIcon`) — and not over a list (where it is a tab).
 fn carriedAsDrop(l: *Layout, mouse: dvui.Point.Physical) bool {
     const d = &l.state.view_drag;
-    return core.LiquidField.ready() and d.texture != null and chooserAt(l.state, mouse) == null;
+    const shows = d.texture != null or sdk.document.pathOfSurfaceId(d.moved_id) != null;
+    return core.LiquidField.ready() and shows and chooserAt(l.state, mouse) == null;
 }
 
 /// Where a drop of radius `r` rides for the pointer at `mouse`: below and right of a mouse; up
@@ -616,8 +621,35 @@ fn layerOf(state: *const Layout.State, name: []const u8) u16 {
 fn draggedKeywords(l: *Layout) []const []const u8 {
     const id = l.state.view_drag.moved_id;
     if (id.len == 0) return &.{};
-    const s = l.host.surfaceById(id) orelse return &.{};
-    return s.keywords;
+    return keywordsOf(l, id);
+}
+
+/// Whether `id` is a document not open yet: a file carried out of a tree, by the id it will have
+/// (`sdk.document.surfaceId`), for which no surface is registered until it opens. It goes only to
+/// a slot made for documents, whose own drop opens it (`RegionSpec.on_drop`).
+fn unopened(l: *Layout, id: []const u8) bool {
+    return l.host.surfaceById(id) == null and sdk.document.pathOfSurfaceId(id) != null;
+}
+
+/// The keywords `id` is carried with: its surface's, or a document's while it is not open.
+fn keywordsOf(l: *Layout, id: []const u8) []const []const u8 {
+    if (l.host.surfaceById(id)) |s| return s.keywords;
+    return if (unopened(l, id)) sdk.document.keywords else &.{};
+}
+
+/// Whether `id` goes only to a slot made for its kind (`Layout.slotted`), as a document does,
+/// open or not.
+fn slottedId(l: *Layout, id: []const u8) bool {
+    if (l.host.surfaceById(id)) |s| return l.slotted(s);
+    return unopened(l, id);
+}
+
+/// What `id` is called on its tab: its surface's title, or a document's file name while it is
+/// not open.
+fn titleOf(l: *Layout, id: []const u8) []const u8 {
+    if (l.host.surfaceById(id)) |s| return s.title;
+    if (sdk.document.pathOfSurfaceId(id)) |path| return std.fs.path.basename(path);
+    return "view";
 }
 
 /// A shape place (Main, Panel, a leftover Center) can receive any surface.
@@ -954,7 +986,7 @@ fn drawDrop(l: *Layout, taken: bool) void {
         for (d.drop_shapes[0..d.drop_n]) |sh| field.add(sh);
         _ = core.dialogs.carriedFieldWhole(dvui.Id.update(.zero, "view_drag_drop"), field, scale);
     }
-    const tex = d.texture orelse return;
+    const tex = d.texture orelse return drawDropIcon(l);
     const head = d.drop_shapes[0].rect;
     const pad = card_padding * scale * 0.5;
     const r = head.insetAll(pad);
@@ -977,6 +1009,32 @@ fn drawDrop(l: *Layout, taken: bool) void {
     const radius = @max(0, d.drop_radius - pad) / scale;
     const shown = contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns));
     dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{ .corners = .round(radius), .colormod = dvui.Color.white.opacity(photo_opacity * shown), .uv = uv }) catch {};
+}
+
+/// How much of a drop's diameter the icon of a document it has no photograph of takes.
+const drop_icon_share: f32 = 0.4;
+
+/// What the drop shows of a document it has no photograph of — one not open yet, or open in no
+/// pane: its file's icon, the glyph its tab wears, in the middle of the head.
+fn drawDropIcon(l: *Layout) void {
+    const d = &l.state.view_drag;
+    const doc = draggedDoc(l, d.*) orelse return;
+    const head = d.drop_shapes[0].rect;
+    const size = @min(head.w, head.h) * drop_icon_share;
+    if (size < 2) return;
+    const c = head.center();
+    const nat = (dvui.Rect.Physical{ .x = c.x - size / 2, .y = c.y - size / 2, .w = size, .h = size }).toNatural();
+    const prev_alpha = dvui.alpha(contentIn(d.*, morphProgress(d.*, dvui.currentWindow().frame_time_ns)));
+    defer dvui.alphaSet(prev_alpha);
+    // The icons fill the slot they are given (`Host.drawFileIcon`), as in a tree row's.
+    var slot = dvui.box(@src(), .{}, .{ .rect = .{ .x = nat.x, .y = nat.y, .w = nat.w, .h = nat.h } });
+    defer slot.deinit();
+    const color = dvui.themeGet().color(.control, .text);
+    if (!l.host.drawFileIcon(std.fs.path.extension(doc.path), doc.path, color)) {
+        core.icon.icon(@src(), "drop_file_icon", icons.tvg.lucide.file, .{
+            .stroke_color = .{ .color = color },
+        }, core.widgets.treeRowIconOptions(.{}));
+    }
 }
 
 /// Whether dropping the view lifted from `source` in the middle of `dest` joins them: the two
@@ -1032,7 +1090,7 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
     // photograph, a tab grows into its document's (or, with none, into a pill of its own).
     const scale = dvui.currentWindow().natural_scale;
     const pad = card_padding * scale;
-    const title = if (l.host.surfaceById(d.moved_id)) |s| s.title else "view";
+    const title = titleOf(l, d.moved_id);
     const show_photo = d.texture != null and !as_tab;
     const target: dvui.Size.Physical = if (show_photo) blk: {
         const f = floatTarget(d.texture_rect.size(), scale);
@@ -1222,8 +1280,7 @@ fn dropOnPluginChooser(l: *Layout, source: []const u8, dest: []const u8, mouse: 
     const r = regionNamed(l.state, dest) orelse return false;
     const on_drop = r.on_drop orelse return false;
     const moved = ownId(l.arena, movedFrom(l, source) orelse return true) orelse return true;
-    const s = l.host.surfaceById(moved) orelse return true;
-    if (!accepts(r.*, s.keywords)) return true;
+    if (!accepts(r.*, keywordsOf(l, moved))) return true;
     if (on_drop(r.drop_ctx, .{ .surface_id = moved, .zone = .center, .point = mouse, .on_chooser = true })) {
         l.state.markDirty();
         dvui.refresh(null, @src(), null);
@@ -1257,10 +1314,13 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
         dvui.refresh(null, @src(), null);
         return;
     }
+    // A document not open yet has no surface to place: only a slot's own drop takes it, and
+    // opens it there (`unopened`).
+    const has_surface = l.host.surfaceById(moved) != null;
+    if (!has_surface and !unopened(l, moved)) return;
     if (regionNamed(l.state, dest)) |r| {
-        const s = l.host.surfaceById(moved) orelse return;
-        if (!accepts(r.*, s.keywords)) return;
-        if (!r.kind_slot and l.slotted(s)) return;
+        if (!accepts(r.*, keywordsOf(l, moved))) return;
+        if (!r.kind_slot and slottedId(l, moved)) return;
         // A plugin's region is asked first: it makes its own places, so a split of it is
         // something only it can do (`RegionSpec.on_drop`).
         if (r.on_drop) |on_drop| {
@@ -1285,6 +1345,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
             if (plan == .split and r.kind_slot) return;
         }
     }
+    if (!has_surface) return;
     switch (plan) {
         .swap => swap(l, source, dest, moved),
         .join => join(l, source, dest, moved),

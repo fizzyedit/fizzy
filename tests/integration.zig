@@ -3828,6 +3828,60 @@ test "a view dropped on a plugin's region goes to its on_drop, middle and edge a
     try std.testing.expectEqual(@as(usize, 1), still.len);
 }
 
+// A file carried out of the explorer that is not open yet has no surface: it is carried by the id
+// its document will have (`sdk.document.surfaceId`), and only a document's slot takes it — whose
+// own drop opens the file (the workbench's `paneDrop`).
+test "drag: a document not open yet goes only to a document's slot, whose drop gets the id it will have" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.view_drag.discard();
+
+    const state = &editor.app.layout;
+    const gpa = editor.app.gpa;
+    const main_at: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 800, .h = 400 };
+    const pane_at: dvui.Rect.Physical = .{ .x = 100, .y = 40, .w = 600, .h = 320 };
+    const panel_at: dvui.Rect.Physical = .{ .x = 0, .y = 400, .w = 800, .h = 200 };
+    const doc_kw: []const []const u8 = &.{"main.document"};
+    state.registerRegion(gpa, .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main, .bounds = main_at, .size = .{ .w = 800, .h = 400 } });
+    state.registerRegion(gpa, .{ .name = "Pane 0", .keywords = doc_kw, .by_name = true, .kind_slot = true, .shows = .many, .bounds = pane_at, .on_drop = DropProbe.onDrop });
+    state.registerRegion(gpa, .{ .name = "Panel", .keywords = fizzy.sdk.keywords.ide.panel, .shows = .many, .bounds = panel_at });
+    state.publishRegions();
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, dvui.currentWindow().arena());
+    const VD = fizzy.Editor.Layout.ViewDrag;
+    const id = "text.doc:/project/notes.md";
+    try std.testing.expect(editor.app.host.surfaceById(id) == null);
+    VD.beginLoose(&layout, id, .{ .x = 10, .y = 10, .w = 120, .h = 24 }, null);
+    try std.testing.expect(state.view_drag.active());
+    try std.testing.expectEqualStrings(id, state.view_drag.moved_id);
+
+    // Mapped: the document's slot, and no plain place.
+    try std.testing.expectEqual(@as(usize, 1), state.view_drag.target_count);
+    try std.testing.expectEqualStrings("Pane 0", state.view_drag.targets[0].name);
+    try std.testing.expectEqualStrings("Pane 0", VD.targetAt(&layout, .{ .x = 400, .y = 200 }, VD.loose_source) orelse
+        return error.TestExpectedEqual);
+    try std.testing.expect(VD.targetAt(&layout, .{ .x = 40, .y = 200 }, VD.loose_source) == null);
+    try std.testing.expect(VD.targetAt(&layout, .{ .x = 400, .y = 500 }, VD.loose_source) == null);
+
+    // Let go on the slot: its drop gets the id, to open the file by.
+    DropProbe.last = null;
+    VD.place(&layout, VD.loose_source, "Pane 0", .swap);
+    const got = DropProbe.last orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings(id, got.surface_id);
+    try std.testing.expect(got.zone == .center);
+    // On a plain place, nothing: no list there names a document it cannot show.
+    VD.place(&layout, VD.loose_source, "Main", .swap);
+    VD.place(&layout, VD.loose_source, "Panel", .swap);
+    try std.testing.expect(state.assignment("Main") == null);
+    try std.testing.expect(state.assignment("Panel") == null);
+}
+
 test "a region with no drop handler takes the middle by the app's default" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);

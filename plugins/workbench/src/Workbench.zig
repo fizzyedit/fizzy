@@ -50,7 +50,6 @@ dragging_surface: ?[]const u8 = null,
 /// Physical width of the tab handed to the app's view drag, when it was lifted off its strip:
 /// the gap a strip opens for it when it is carried back over one.
 carried_tab_w: f32 = 0,
-tab_drag_from_tree_path: ?[]u8 = null,
 file_tree_data_id: ?dvui.Id = null,
 /// Branch id of the last root the file tree opened by default. A new root starts expanded once;
 /// after that its open state is the user's (`files.drawRoot`). Instance state for the same
@@ -210,13 +209,6 @@ pub fn currentGroupingID(self: *Workbench) u64 {
 pub fn newGroupingID(self: *Workbench) u64 {
     self.grouping_id_counter += 1;
     return self.grouping_id_counter;
-}
-
-pub fn clearFileTreeTabDragDropState(self: *Workbench) void {
-    if (self.tab_drag_from_tree_path) |p| {
-        self.allocator.free(p);
-        self.tab_drag_from_tree_path = null;
-    }
 }
 
 pub fn clearFileTreeDataId(self: *Workbench) void {

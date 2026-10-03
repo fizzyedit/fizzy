@@ -189,7 +189,9 @@ anything nested inside, or a document filling it would make its edges unreachabl
 
 A place only accepts what it can show. A shape place takes anything the user puts there; a
 plugin's kind slot (a document pane) accepts only surfaces matching its keywords, so dropping
-a log on the canvas lands on the main area instead of becoming a document tab.
+a log on the canvas lands on the main area instead of becoming a document tab. A document can be
+carried before it is open — a file carried out of a tree, by the id its document will have, as
+its file's icon in the drop — and goes only to a document's slot, whose own drop opens it.
 
 ## Removing a split
 

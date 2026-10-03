@@ -584,18 +584,6 @@ fn processTabsDrag(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk
         return;
     }
 
-    // A file from the tree, let go over the strip: it opens here, as dropped on the pane's
-    // middle (`processTabDrag`, which never sees a release the strip took).
-    if (runtime.workbench().dragging_surface == null) {
-        if (runtime.workbench().tab_drag_from_tree_path) |path| {
-            const started = runtime.host().openFile(.{ .path = path, .grouping = self.grouping }) catch false;
-            _ = started;
-            runtime.workbench().clearFileTreeTabDragDropState();
-            dvui.refresh(null, @src(), null);
-        }
-        return;
-    }
-
     // From another pane: whichever one lifted the surface this frame.
     const id = runtime.workbench().dragging_surface orelse return;
     runtime.workbench().dragging_surface = null;
@@ -791,17 +779,16 @@ fn overAnyStrip(p: dvui.Point.Physical) bool {
 
 /// Whether nothing lies over this pane at `p`: no window above the one it is drawn in — a float
 /// over the documents, a dialog — takes the pointer there. It is the reading dvui tags a pointer
-/// event with (`Subwindows.windowFor`), so what the pane shows for its own drags — its drop
-/// zones, a slot opening in its strip — agrees with where a release goes, and under a float it
-/// shows nothing: a release there is the float's.
+/// event with (`Subwindows.windowFor`), so what the pane shows for its own drag — a slot opening
+/// in its strip for a tab carried along the strips — agrees with where a release goes, and under
+/// a float it shows nothing: a release there is the float's.
 ///
 /// A window that takes no pointer events covers nothing, here as for dvui: the app's drag
 /// overlay, which draws the drops and the carried view over every window, and what a drag
-/// carries — a tab floating off its strip, a row out of the tree. A float stepping aside for a
-/// view carried out of it is still a window, and covers. It steps aside only for the app's view
-/// drag, which reads the floats itself and sees past it (`Host.Region.offerChooser`,
-/// `RegionSpec.on_drop`), and the drags read here — a tab along the strips, a file from the
-/// tree — meet one only in the moment it takes to come back or go, when dvui hands it the
+/// carries — a tab floating off its strip. A float stepping aside for a view carried out of it is
+/// still a window, and covers. It steps aside only for the app's view drag, which reads the floats
+/// itself and sees past it (`Host.Region.offerChooser`, `RegionSpec.on_drop`), and a tab along
+/// the strips meets one only in the moment it takes to come back or go, when dvui hands it the
 /// release too.
 pub fn uncoveredAt(self: *const Workspace, p: dvui.Point.Physical) bool {
     return dvui.currentWindow().subwindows.windowFor(p) == self.subwindow_id;
@@ -809,7 +796,9 @@ pub fn uncoveredAt(self: *const Workspace, p: dvui.Point.Physical) bool {
 
 /// A document dropped on this pane through the app's view drag (`RegionSpec.on_drop`): the
 /// middle takes it as a tab, an edge opens a pane on that side with it. Taking it here takes it
-/// out of the pane it was in — an assignment lives in one place.
+/// out of the pane it was in — an assignment lives in one place. A file carried out of the tree
+/// that is not open yet comes by the id its document will have, with no surface behind it, and
+/// opens here (`openHere`).
 pub fn paneDrop(ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool {
     const grouping: u64 = @as(u64, @intFromPtr(ctx orelse return false)) - 1;
     const wb = runtime.workbench();
@@ -821,6 +810,11 @@ pub fn paneDrop(ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool {
             break :blk g;
         },
     };
+    if (runtime.host().surfaceById(drop.surface_id) == null) {
+        const path = sdk.document.pathOfSurfaceId(drop.surface_id) orelse return false;
+        const pane = wb.pane(target) catch return false;
+        return pane.openHere(drop.surface_id, path, if (drop.on_chooser) pane.insertIndexAt(drop.point.x, pane.tabCount()) else null);
+    }
     for (wb.workspaces.values()) |*other| {
         if (other.grouping != target) other.removeTab(drop.surface_id);
     }
@@ -835,6 +829,22 @@ pub fn paneDrop(ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool {
     return true;
 }
 
+/// Open the file at `path`, which is not open yet, as a tab of this pane — before tab `at`, or at
+/// the end as any open goes in — and show it. Between two tabs the slot is held by the id its
+/// document will have (`id`): the load's placeholder takes that slot, and the document takes it
+/// from the placeholder (`Openings.begin`, `land`), as with the slot a restored session kept for
+/// a document. False when no load started — it is loading already, or nothing can open it — and
+/// then the slot goes again, and a pane an edge opened for it has nothing to wait for.
+fn openHere(self: *Workspace, id: []const u8, path: []const u8, at: ?usize) bool {
+    if (at) |i| self.insertTab(id, i);
+    const started = runtime.host().openFile(.{ .path = path, .grouping = self.grouping }) catch false;
+    if (!started) {
+        if (at != null) self.removeTab(id);
+        self.expecting = false;
+    }
+    return started;
+}
+
 fn paneSide(side: sdk.RegionSpec.Drop.Side) core.widgets.DockLayout.Side {
     return switch (side) {
         .left => .left,
@@ -842,96 +852,6 @@ fn paneSide(side: sdk.RegionSpec.Drop.Side) core.widgets.DockLayout.Side {
         .top => .top,
         .bottom => .bottom,
     };
-}
-
-/// A file-tree row dropped on this pane: the same zones and reading as a dragged view
-/// (`core.widgets.DropZones`) — the middle opens it here, an edge in a new pane on that side —
-/// over the same part of the pane: its inside, below the tab strip (`interiorRect`). The strip is
-/// chrome, as it is for a carried tab: over it the file goes in among the tabs, where the strip's
-/// own reorder shows it and takes the release (`processTabsDrag`). A tab dragged between panes
-/// is not read here: off its strip it is the app's view drag. Nothing under a window that lies
-/// over the pane at `p` (`uncoveredAt`): the file is over that window, not this pane.
-fn zoneAt(self: *const Workspace, zones: core.widgets.DropZones.Wheel, p: dvui.Point.Physical) ?core.widgets.DropZones.Zone {
-    if (!self.uncoveredAt(p)) return null;
-    return core.widgets.DropZones.at(zones, p);
-}
-
-/// The pane less its tab strip: what its drop zones cover.
-fn interiorRect(self: *const Workspace) ?dvui.Rect.Physical {
-    const pane = self.pane_rect_physical orelse return null;
-    const strip = self.strip_rect_physical orelse return pane;
-    const top = strip.y + strip.h;
-    if (top <= pane.y or top >= pane.y + pane.h) return pane;
-    return .{ .x = pane.x, .y = top, .w = pane.w, .h = pane.y + pane.h - top };
-}
-
-pub fn processTabDrag(self: *Workspace, data: *dvui.WidgetData) void {
-    const DZ = core.widgets.DropZones;
-    const rs = data.rectScale();
-    // The pane less its strip, as the app reads a place for a carried view (`interiorBounds`),
-    // so a file dragged from the tree and a tab carried over the pane show the same wheel.
-    const bounds = self.interiorRect() orelse rs.r;
-    // No trash: a file from the tree is not in the layout to be taken out of it.
-    const zones = DZ.wheel(bounds, rs.s, false);
-    const wb = runtime.workbench();
-    const dragging = dvui.dragName("tab_drag") and wb.tab_drag_from_tree_path != null;
-    if (!dvui.dragName("tab_drag")) wb.clearFileTreeTabDragDropState();
-    // The pane under the pointer shows its zones, the one under the pointer lit, as a place does
-    // for a dragged view; left, or when the drag ends, they fade out. Under a float that lies
-    // over the pane there (`uncoveredAt`) the pointer is over the float: they fade as if left.
-    const mouse = dvui.currentWindow().mouse_pt;
-    if (!dragging or !bounds.contains(mouse) or !self.uncoveredAt(mouse)) {
-        if (DZ.showing(data.id)) _ = DZ.draw(data.id, zones, rs.s, .{ .target = false, .center = .add });
-        if (!dragging) return;
-    } else {
-        _ = DZ.draw(data.id, zones, rs.s, .{ .hovered = self.zoneAt(zones, mouse), .center = .add });
-    }
-    const path = wb.tab_drag_from_tree_path.?;
-
-    for (dvui.events()) |*e| {
-        if (!dvui.eventMatch(e, .{ .id = data.id, .r = bounds, .drag_name = "tab_drag" })) continue;
-        if (e.evt != .mouse) continue;
-        if (e.evt.mouse.action != .release or !e.evt.mouse.button.pointer()) continue;
-
-        e.handle(@src(), data);
-        dvui.dragEnd();
-        dvui.refresh(null, @src(), data.id);
-        wb.dragging_surface = null;
-        defer wb.clearFileTreeTabDragDropState();
-
-        // Off the wheel, no drop.
-        const zone = self.zoneAt(zones, e.evt.mouse.p) orelse continue;
-        const grouping = switch (zone) {
-            .center => self.grouping,
-            // Not offered for a file from the tree (`DZ.wheel(.., false)`).
-            .remove => continue,
-            .edge => |side| blk: {
-                const g = wb.newGroupingID();
-                wb.paneBeside(g, self.grouping, switch (side) {
-                    .left => .left,
-                    .right => .right,
-                    .top => .top,
-                    .bottom => .bottom,
-                }) catch continue;
-                break :blk g;
-            },
-        };
-        // Already open: it moves. Not yet: it loads into that pane and `rebuildWorkspaces`
-        // seats it when the load lands.
-        if (runtime.host().docFromPath(path)) |doc| {
-            const id = sdk.document.surfaceId(runtime.host().arena(), doc.owner.id, doc.owner.documentPath(doc)) catch continue;
-            for (wb.workspaces.values()) |*other| other.removeTab(id);
-            const pane = wb.pane(grouping) catch continue;
-            pane.addTab(id, true);
-        } else {
-            const started = runtime.host().openFile(.{ .path = path, .grouping = grouping }) catch false;
-            // Nothing is coming (it was already loading elsewhere, or could not start): a
-            // pane opened for it has nothing to wait for.
-            if (!started) if (wb.workspaces.getPtr(grouping)) |p| {
-                p.expecting = false;
-            };
-        }
-    }
 }
 
 fn drawCanvas(self: *Workspace, region: sdk.Host.Region, has_tabs: bool) !void {
@@ -944,7 +864,7 @@ fn drawCanvas(self: *Workspace, region: sdk.Host.Region, has_tabs: bool) !void {
     }
 
     // The document draws its own canvas box (the app's surface does); this one is the pane's
-    // frame around it, and the drop target for tabs.
+    // frame around it.
     var frame = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .id_extra = @intCast(self.grouping),
@@ -953,7 +873,6 @@ fn drawCanvas(self: *Workspace, region: sdk.Host.Region, has_tabs: bool) !void {
         self.canvas_rect_physical = frame.data().contentRectScale().r;
         frame.deinit();
     }
-    defer self.processTabDrag(frame.data());
 
     if (has_tabs) {
         _ = try region.drawContents();

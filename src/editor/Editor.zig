@@ -2673,10 +2673,10 @@ pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
     return editor.workbench.activeDoc();
 }
 
-/// Files sidebar inactive — drop tree dvui stash and tab-drag state.
+/// Files sidebar inactive — drop the tree's dvui stash id, which the tree sets again each frame
+/// it draws.
 pub fn resetFileTreeWhenFilesHidden(editor: *Editor) void {
     editor.workbench.clearFileTreeDataId();
-    editor.clearFileTreeTabDragDropState();
 }
 
 /// Draws whichever center provider is active, blur-fading when that changes.
@@ -4634,16 +4634,6 @@ pub fn openOrFocusFileAtGrouping(editor: *Editor, path: []const u8, grouping: u6
     return null;
 }
 
-/// After a workspace drop from the Files tree or when `tab_drag` ends; frees path and clears tree reorder stash.
-pub fn clearFileTreeTabDragDropState(editor: *Editor) void {
-    editor.workbench.clearFileTreeTabDragDropState();
-    if (editor.workbench.file_tree_data_id) |id| {
-        dvui.dataRemove(null, id, "removed_path");
-    }
-    // `file_tree_data_id` is reassigned each `drawFiles` frame; do not clear the id here so
-    // multiple workspace `processTabDrag` calls in one frame do not race.
-}
-
 /// Choke point for every file open (CLI argv, file tree, palette, drag-drop, SDK
 /// `Host.openFilePath`). Canonicalizes `path_in` once so `loading_jobs`, the document's stored
 /// path, and later `docFromPath` lookups all agree — otherwise `foo/./bar.zig` and `foo/bar.zig`
@@ -5595,8 +5585,6 @@ pub fn deinit(editor: *Editor) !void {
     }
     editor.doc_io.deinit();
     editor.openings.deinit();
-
-    editor.workbench.clearFileTreeTabDragDropState();
 
     if (editor.app.pending_save_as_path) |p| {
         editor.app.gpa.free(p);

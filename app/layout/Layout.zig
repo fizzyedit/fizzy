@@ -1174,11 +1174,13 @@ pub fn tabs(f: *Layout, keywords: []const []const u8) void {
     tabsIn(f, &place);
 }
 
-/// Carry surface `id` in the view drag, lifted from `from` (its tab, its card, its rail icon)
-/// rather than out of a place: the drop zones and the preview follow the pointer over every
-/// place, and the release lands it (`RegionSpec.on_drop` for a plugin's region). What a plugin's
-/// `Host.beginViewDrag` reaches, and a chooser beside a shut place. Driven, like a card lifted
-/// out of the picker, by the picker's loose drag each frame.
+/// Carry surface `id` in the view drag, lifted from `from` (its tab, its card, its rail icon, its
+/// row in a file tree) rather than out of a place: the drop zones and the preview follow the
+/// pointer over every place, and the release lands it (`RegionSpec.on_drop` for a plugin's
+/// region). `id` may be a document not open yet, by the id it will have (`sdk.document.surfaceId`):
+/// it goes only to a document's slot, whose drop opens it. What a plugin's `Host.beginViewDrag`
+/// reaches, and a chooser beside a shut place. Driven, like a card lifted out of the picker, by the
+/// picker's loose drag each frame.
 pub fn beginViewDrag(f: *Layout, id: []const u8, from: dvui.Rect.Physical) void {
     if (f.state.view_drag.active()) return;
     ViewDrag.beginLoose(f, id, from, null);

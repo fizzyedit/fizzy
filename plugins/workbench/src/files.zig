@@ -5,6 +5,7 @@ const dvui = @import("dvui");
 const fuzzy = @import("core").fuzzy;
 const FileTable = @import("core").FileTable;
 const palette = @import("core").palette;
+const sdk = @import("fizzy_sdk");
 const runtime = @import("runtime.zig");
 const icons = @import("icons");
 const Workspace = @import("Workspace.zig");
@@ -12,6 +13,14 @@ const Workspace = @import("Workspace.zig");
 pub var tree_removed_path: ?[]const u8 = null;
 pub var selected_id: ?usize = null;
 pub var edit_id: ?usize = null;
+
+/// The tree's own drag, a row moved among the others. A name of its own, so nothing else takes
+/// it: a file carried out of the tree is handed to the app's view drag first (`carryOut`).
+const tree_drag = "workbench.file_row";
+/// What of the tree is on screen this frame, and the window it is drawn in: a file carried past
+/// either has left the tree (`leftTree`).
+var tree_rect: dvui.Rect.Physical = .{};
+var tree_window: dvui.Id = .zero;
 
 /// Multi-selection for the file tree. Maps `id_extra` (hash of absolute path) to the heap-owned
 /// absolute path string. The primary `selected_id` is always a key here when set. Paths are
@@ -70,9 +79,10 @@ pub const Extension = enum {
 };
 
 pub fn draw() !void {
-    // `tab_drag` matches workspace tab strips so file rows can drop on the canvas like tabs (DVUI reorder_tree cross-widget pattern).
-    var tree = core.widgets.TreeWidget.tree(@src(), .{ .enable_reordering = true, .drag_name = "tab_drag" }, .{ .background = false, .expand = .both });
+    var tree = core.widgets.TreeWidget.tree(@src(), .{ .enable_reordering = true, .drag_name = tree_drag }, .{ .background = false, .expand = .both });
     defer tree.deinit();
+    tree_rect = tree.data().borderRectScale().r.intersect(dvui.clipGet());
+    tree_window = dvui.subwindowCurrentId();
 
     // Same as tools pane header: first frame after open (or after Files wasn't drawn last frame)
     // lacks published min sizes; clip until layout settles.
@@ -941,15 +951,9 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
                     if (dvui.dataGetSlice(null, inner_unique_id, "removed_path", []u8) == null)
                         dvui.dataSetSlice(null, inner_unique_id, "removed_path", abs_path);
 
+                    // Out of the tree, a file is carried as a document tab is off its strip.
                     if (entry.kind == .file and tree.id_branch == inner_id_extra.*) {
-                        if (runtime.workbench().tab_drag_from_tree_path) |old| {
-                            if (!std.mem.eql(u8, old, abs_path)) {
-                                runtime.allocator().free(old);
-                                runtime.workbench().tab_drag_from_tree_path = runtime.allocator().dupe(u8, abs_path) catch null;
-                            }
-                        } else {
-                            runtime.workbench().tab_drag_from_tree_path = runtime.allocator().dupe(u8, abs_path) catch null;
-                        }
+                        if (leftTree(dvui.currentWindow().mouse_pt)) carryOut(abs_path, branch.data().borderRectScale().r);
                     }
                 }
 
@@ -1438,6 +1442,32 @@ fn selectionBranchIdsForMultiDrag(arena: std.mem.Allocator) ![]const usize {
     const out = try arena.alloc(usize, tmp.items.len);
     for (tmp.items, 0..) |p, i| out[i] = p.id;
     return out;
+}
+
+/// Whether a row carried to `p` has left the tree: past what of it is on screen, or over a window
+/// that lies over it there — a float — which is not the tree's to take a drop for.
+fn leftTree(p: dvui.Point.Physical) bool {
+    return !tree_rect.contains(p) or dvui.currentWindow().subwindows.windowFor(p) != tree_window;
+}
+
+/// Hand the file at `path`, carried out of the tree, to the app's view drag, as a document tab is
+/// handed off its strip: the same drop over every document pane, the same bubble, the same tab
+/// over a strip, landing through the pane's drop (`Workspace.paneDrop`). Open, it is its document
+/// — the pane showing it photographs it for the drag. Not open, it is the id its document will
+/// have, from the plugin that will open it (`Host.pluginForExtension`): carried as its file's
+/// icon, and opened where it is let go. `from` is the row as it floats under the pointer, which
+/// the drag grows out of. A file nothing can open stays a row being moved in the tree.
+fn carryOut(path: []const u8, from: dvui.Rect.Physical) void {
+    const host = runtime.host();
+    const arena = host.arena();
+    const id = if (host.docFromPath(path)) |doc|
+        sdk.document.surfaceId(arena, doc.owner.id, doc.owner.documentPath(doc)) catch return
+    else if (host.pluginForExtension(std.fs.path.extension(path))) |owner|
+        sdk.document.surfaceId(arena, owner.id, path) catch return
+    else
+        return;
+    dvui.dragEnd();
+    host.beginViewDrag(id, from);
 }
 
 /// Move the drag source (and, for a multi-drag, every other selected path) into `target_dir`.
