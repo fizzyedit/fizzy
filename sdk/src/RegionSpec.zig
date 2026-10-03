@@ -42,7 +42,9 @@ pub const Shows = enum { one, many };
 /// A view dropped on this region: which surface, and on which of the region's drop zones (the
 /// middle, or an edge). See `on_drop`.
 pub const Drop = struct {
-    /// The dropped surface's id, as registered.
+    /// The dropped surface's id, as registered — or a document not open yet, by the id it will
+    /// have (`document.surfaceId`): a file carried out of a tree (`Host.beginViewDrag`), which
+    /// comes only to a region taking documents, for it to open.
     surface_id: []const u8,
     zone: Zone,
     /// Where it was let go, physical — for a region placing it among its own children (the tab

@@ -281,7 +281,7 @@ pub fn unload(self: *Player) void {
     self.state = .idle;
     self.last_press = null;
     self.transport = .{};
-    dvui.refresh(null, @src(), null);
+    if (dvui.current_window != null) dvui.refresh(null, @src(), null);
 }
 
 pub fn play(self: *Player) void {
@@ -786,9 +786,13 @@ fn holdPointer(self: *Player) void {
 }
 
 fn releaseHeld(self: *Player) void {
-    var it = self.held.iterator();
-    while (it.next()) |b| {
-        _ = dvui.currentWindow().addEventMouseButton(dvuiButton(b), .release) catch {};
+    // At teardown (quitting while a tape holds a button) there is no window to send them to, and
+    // nothing left to release them in.
+    if (dvui.current_window) |cw| {
+        var it = self.held.iterator();
+        while (it.next()) |b| {
+            _ = cw.addEventMouseButton(dvuiButton(b), .release) catch {};
+        }
     }
     self.held = .initEmpty();
 }

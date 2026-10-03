@@ -252,7 +252,10 @@ pub const VTable = struct {
     /// Start the app's view drag for surface `id`, from `from` (where its tab or card was): the
     /// drag every region shares — the drop zones, the live preview, the drop (`RegionSpec.on_drop`
     /// on a plugin's region). Call it when something of the plugin's is dragged off the place it
-    /// lives, as a document tab off its strip.
+    /// lives, as a document tab off its strip. `id` may name a document that is not open yet, by
+    /// the id it will have (`document.surfaceId`), as a file carried out of a tree is: it is
+    /// carried as its file's icon, and only a region taking documents takes it — its `on_drop`
+    /// gets the id, with no surface behind it, and opens the file.
     beginViewDrag: *const fn (ctx: *anyopaque, id: []const u8, from: dvui.Rect.Physical) void,
     /// The region's own chooser — the tab strip a plugin draws for it — is at `bounds` this
     /// frame. While a view is carried it is chrome, not content: over it the drop is into the

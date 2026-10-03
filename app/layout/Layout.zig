@@ -663,6 +663,21 @@ pub fn drawDragOverlay(self: *Layout) void {
     ViewDrag.drawOverlay(self);
 }
 
+/// The views floating over the window (`Floats`), each a glass window holding its place. The
+/// application calls this after its shape has run and before it publishes the shape's regions,
+/// from the base window — so a float's places are this frame's, like the shape's — and before
+/// `drawDragOverlay`, which goes over them.
+pub fn drawFloats(self: *Layout) void {
+    Floats.draw(self);
+}
+
+/// Close float `name`, every view in it going back to the place it floated out of — the picker's
+/// Remove, as the float's own close button does. Re-docking needs nothing of this: a view dragged
+/// out of a float by its corner button lands like any other, and the float shuts behind it.
+pub fn closeFloat(self: *Layout, name: []const u8) void {
+    Floats.close(self, name, .home);
+}
+
 /// Snapshot every surface that drew nowhere this frame, by drawing each once offscreen at a
 /// fixed size. Only while the picker is collecting and only for surfaces still missing a
 /// snapshot, so a frame with nothing to do costs a lookup. The application calls this after
@@ -836,6 +851,10 @@ pub const SplitTree = @import("SplitTree.zig");
 pub const Drop = @import("Drop.zig");
 /// Carrying a view from one place to another — the gesture `Drop` decides for.
 pub const ViewDrag = @import("ViewDrag.zig");
+/// The views floating over the window, each in a place of its own — see `Floats.zig`.
+pub const Floats = @import("Floats.zig");
+/// The rules a float follows, as values (std-only).
+pub const float_rules = @import("float_rules.zig");
 const Picker = @import("Picker.zig");
 /// The arrangement a shape starts from — see `Seed.zig`. `Layout.Seed` is the tree union.
 pub const Seed = @import("Seed.zig").Tree;
@@ -1002,7 +1021,7 @@ pub fn offerPluginRegionChooser(self: *Layout, token: sdk.RegionSpec.Token, boun
     if (!self.state.view_drag.active() or r.name.len == 0) return false;
     // Into the region even for the one the view came out of: back on its own strip it is being
     // reordered, which only the plugin can do (`RegionSpec.Drop.on_chooser`).
-    ViewDrag.offerChooser(self, r.name, bounds, true);
+    ViewDrag.offerChooser(self, r.name, bounds, true, null);
     // Over it, and it could take what is carried: the drag's own reading (`chooserAt`, which
     // asks whether the place is one the view can land in). A place lifted out of the layout over
     // a document pane's strip is over no chooser at all — the strip opening a slot for it said
@@ -1155,11 +1174,13 @@ pub fn tabs(f: *Layout, keywords: []const []const u8) void {
     tabsIn(f, &place);
 }
 
-/// Carry surface `id` in the view drag, lifted from `from` (its tab, its card, its rail icon)
-/// rather than out of a place: the drop zones and the preview follow the pointer over every
-/// place, and the release lands it (`RegionSpec.on_drop` for a plugin's region). What a plugin's
-/// `Host.beginViewDrag` reaches, and a chooser beside a shut place. Driven, like a card lifted
-/// out of the picker, by the picker's loose drag each frame.
+/// Carry surface `id` in the view drag, lifted from `from` (its tab, its card, its rail icon, its
+/// row in a file tree) rather than out of a place: the drop zones and the preview follow the
+/// pointer over every place, and the release lands it (`RegionSpec.on_drop` for a plugin's
+/// region). `id` may be a document not open yet, by the id it will have (`sdk.document.surfaceId`):
+/// it goes only to a document's slot, whose drop opens it. What a plugin's `Host.beginViewDrag`
+/// reaches, and a chooser beside a shut place. Driven, like a card lifted out of the picker, by the
+/// picker's loose drag each frame.
 pub fn beginViewDrag(f: *Layout, id: []const u8, from: dvui.Rect.Physical) void {
     if (f.state.view_drag.active()) return;
     ViewDrag.beginLoose(f, id, from, null);
@@ -1174,7 +1195,9 @@ pub fn beginViewDrag(f: *Layout, id: []const u8, from: dvui.Rect.Physical) void 
 /// selection. Nothing is drawn for a place with one view or none — a single Output is just Output.
 pub fn tabsIn(f: *Layout, r: *const Region) void {
     if (f.matchingIn(r).len <= 1) return;
-    var strip = Chooser.init(@src(), f, r.*, .{});
+    // Across the whole place, not just its tabs: a view carried anywhere along it goes in among
+    // them — past the last one, at the end.
+    var strip = Chooser.init(@src(), f, r.*, .{ .outer = .{ .expand = .horizontal } });
     defer strip.deinit();
     for (strip.views()) |view| {
         var it = strip.item(@src(), view, .{});

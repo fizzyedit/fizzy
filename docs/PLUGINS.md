@@ -595,12 +595,15 @@ the assignment list read back.
 **Dragging a view onto a region is the app's gesture, everywhere.** While a view is dragged,
 the region under the pointer shows its drop (`core.widgets.DropZones`): a cluster of glass
 bubbles in its middle — the middle for into the place, one on each side for a split there, and a
-trash for taking the view out of the layout (a document closes) — which forms as one drop and
-splits apart as the pointer arrives. A release off the bubbles does nothing. A plugin's region
+trash for taking the view out of the layout (a document closes), round the middle or, in a long,
+skinny region, in a line along it — which forms as one drop and splits apart as the pointer
+arrives. A release off the bubbles does nothing. A plugin's region
 gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for drops of its own. Two pieces let a plugin take part:
 
 - `host.beginViewDrag(surface_id, from_rect)` hands something of yours to that drag — the
-  workbench calls it when a document tab is dragged off its tab strip.
+  workbench calls it as soon as a document tab is dragged at all, so a tab moved along its own
+  strip, carried to another pane's, or out over the places and back is one drag from lift to
+  release, in one glass.
 - `RegionSpec.on_drop` (with `drop_ctx`) is asked what a drop on your region does:
   `Drop{ .surface_id, .zone = .center | .{ .edge = side } }`. Return true when you handled it.
   Unhandled, the middle takes the view by the app's default (added to what the region shows)
@@ -613,9 +616,11 @@ gets the same, and `DropZones.wheel`/`at`/`draw` give a plugin the same drop for
   it between your tabs (the region it came out of included: back on its own strip, it is a
   reorder). It returns true while a carried view is over the strip — show where it would go in.
   `host.viewDragSurface()` names the surface being carried: leave its tab off your strips while
-  it is in the hand, as a reorder leaves the tab it lifts.
-- The look is shared (`core.dialogs`): a carried thing is `carriedGlass` — frosted, rounded, a
-  ring shadow — and where it would go in among others is a `dropSlot`, seen blurred through it.
+  it is in the hand.
+- The look is shared (`core.dialogs`): what the view drag carries is drawn for you; anything you
+  carry yourself (a row dragged in your own list) is `carriedGlass` — frosted, rounded, a ring
+  shadow — and where a carried thing would go in among others is a `dropSlot`, seen blurred
+  through it.
 
 ### 3.2 The `Plugin` vtable — the universal editor protocol
 

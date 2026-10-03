@@ -86,6 +86,19 @@ pub fn draw(self: *Picker, f: *Layout) void {
 
     const contents = f.matchingIn(&region);
 
+    // A float's place opens its picker in the float's window: a popup shuts itself the moment the
+    // window it was opened from is not the focused one, and the press on the corner button that
+    // opened it focused the float — opened from the app's own window, it shut as it opened.
+    const float_win: ?dvui.Id = if (state.floatRoot(region.name)) |root| win: {
+        const i = state.floats.find(root) orelse break :win null;
+        const id = state.floats.items.items[i].win_id;
+        break :win if (id == .zero) null else id;
+    } else null;
+    const prev_subwindow = if (float_win) |id| dvui.subwindowCurrentSet(id, null) else null;
+    defer if (prev_subwindow) |prev| {
+        _ = dvui.subwindowCurrentSet(prev.id, prev.rect);
+    };
+
     // The one floating surface (`core.dialogs`): frosted, the dialogs' fill, corners and shadow
     // — what the command palette, the dialogs and every menu wear. It had its own card (an
     // opaque-ish content fill, no blur), so it read as a different kind of thing from them.
@@ -128,8 +141,9 @@ pub fn draw(self: *Picker, f: *Layout) void {
 
             const created = isCreated(state, region.name);
             // On the tree, any leaf with a sibling can go — a declared place's pin moves to the
-            // sibling. Off it, only a minted leaf can.
-            const removable = created or state.canRemove(region.name);
+            // sibling. Off it, only a minted leaf can. A float can always go: it closes, and what
+            // it holds goes home.
+            const removable = created or state.canRemove(region.name) or state.floats.find(region.name) != null;
             const assigned = state.assignment(region.name);
             const showing = if (assigned) |ids| ids.len > 0 else f.selectedIn(&region) != null;
 
@@ -649,19 +663,24 @@ fn clearRegion(f: *Layout, name: []const u8) void {
 /// be removed.
 fn removeRegion(f: *Layout, region: *const Layout.Region) void {
     const gpa = f.gpa;
+    // A float closes, and its views go back where it came from rather than being cleared.
+    if (f.state.floats.find(region.name) != null) return f.closeFloat(region.name);
     f.state.assign(gpa, region.name, &.{}) catch |err| {
         dvui.log.err("failed to clear '{s}': {t}", .{ region.name, err });
     };
-    if (f.state.dock) |*dock| {
-        const idx = dock.findPanel(region.name) orelse {
+    // A split of a float is the split forest's, whatever the shape is built from.
+    if (f.state.floatRoot(region.name) == null) {
+        if (f.state.dock) |*dock| {
+            const idx = dock.findPanel(region.name) orelse {
+                f.state.markDirty();
+                dvui.refresh(null, @src(), null);
+                return;
+            };
+            dock.closeLeaf(idx);
             f.state.markDirty();
             dvui.refresh(null, @src(), null);
             return;
-        };
-        dock.closeLeaf(idx);
-        f.state.markDirty();
-        dvui.refresh(null, @src(), null);
-        return;
+        }
     }
     const forget = region.forget_when_empty or f.state.splits.canForget(region.name);
     if (forget) {

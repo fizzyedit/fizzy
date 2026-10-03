@@ -19,11 +19,14 @@
 //! **What every chooser does**, with nothing written for it:
 //!
 //!   * a click (a tap, for a finger) selects the view in its place;
-//!   * dragging an item along the chooser reorders the place's views — kept as the place's
-//!     order (`State.order`), or its assignment's order when it has one, never as a new
-//!     assignment, which would freeze a keyword place against views installed later;
-//!   * dragging an item off the chooser starts the ordinary view drag with that view, so it can
-//!     land on another place or split one — the gesture the corner chooser starts;
+//!   * dragging an item lifts it into the ordinary view drag, the one drag a view is ever carried
+//!     in: along a chooser — this one, or another place's — it is carried as a tab in glass, and
+//!     the chooser under it opens a slot where it would go in (`ViewDrag.offerChooser` with where
+//!     along it); let go there it goes in (`ViewDrag.insertInto`), which back on its own chooser
+//!     moves it along the place's list — kept as the place's order (`State.order`), or its
+//!     assignment's order when it has one, never as a new assignment, which would freeze a keyword
+//!     place against views installed later. Off the choosers it is the view drag over the places,
+//!     to land on another place or split one — the gesture the corner chooser starts;
 //!   * a finger drag that moves on at once scrolls instead, and one held still first lifts
 //!     (`core.widgets.Tabs`).
 //!
@@ -68,60 +71,91 @@ pub const ItemOptions = struct {
 layout: *Layout,
 place: Region,
 opts: Options,
-info: *core.widgets.Tabs.TabInfo,
+kept: *Kept,
 strip: core.widgets.Tabs,
-/// The chooser's own rect, for telling a reorder from a drag off it.
+/// The chooser's own rect.
 bounds: dvui.Rect.Physical,
+/// The place's views, less the one the view drag is carrying (`carried`).
 all: []const *Layout.Surface,
 selected_id: ?[]const u8,
-/// Views in the order their items were drawn — what the strip's indices mean — and where each
-/// item was, for a drag that starts from one.
+/// Views in the order their items were drawn, and where each item was: where along the chooser a
+/// carried view goes in (`insertAt`), and what a lift carries.
 drawn: std.ArrayListUnmanaged([]const u8) = .empty,
 drawn_rects: std.ArrayListUnmanaged(dvui.Rect.Physical) = .empty,
 picked_id: ?[]const u8 = null,
 picked_again_id: ?[]const u8 = null,
+/// One of the place's views is in the view drag's hand: not on the chooser while it is carried,
+/// as a tab lifted off a strip leaves its place.
+carried: ?[]const u8 = null,
+/// The slot is open this frame (`openSlot`).
+slot_drawn: bool = false,
+/// An item lifted this frame, to carry once the chooser has drawn (`carryLifted`).
+lifted: ?Lift = null,
+
+const Lift = struct { id: []const u8, rect: dvui.Rect.Physical, event: u16 };
+
+/// What a chooser keeps between frames, in dvui's store under wherever it is drawn, so it lives
+/// as long as the chooser does and two never share one.
+const Kept = struct {
+    /// Where the slot opens: before the item drawn at this index, or past the last — read last
+    /// frame from where the carried view was over the chooser. Null when nothing carried is.
+    slot_at: ?usize = null,
+    /// How long, along the chooser, the item last lifted off it was, and which it was (a hash of
+    /// its view's id): the slot's length for it.
+    lifted_len: f32 = 0,
+    lifted_key: u64 = 0,
+    /// How long an item was along the chooser, last frame: the slot's length for a view carried
+    /// in from elsewhere.
+    item_len: f32 = 0,
+};
 
 /// A chooser for `place`: a declared region, or `.{ .keywords = … }` for the place with those
 /// keywords. Draw items with `item`, then `deinit`.
 pub fn init(src: std.builtin.SourceLocation, f: *Layout, place: Region, opts: Options) Chooser {
     const key = place.selectionKey();
-    // Per chooser, kept in dvui's store under wherever it is drawn, so it lives as long as the
-    // chooser does and two never share a drag.
-    const info = dvui.dataGetPtrDefault(null, dvui.parentGet().extendId(src, opts.id_extra ^ @as(usize, @truncate(key))), "_chooser_tabs", core.widgets.Tabs.TabInfo, .{});
-    // Which item is floating is this frame's news; the strip only ever sets it.
-    info.drag_index = null;
+    const id_extra = opts.id_extra ^ @as(usize, @truncate(key));
+    const kept = dvui.dataGetPtrDefault(null, dvui.parentGet().extendId(src, id_extra), "_chooser", Kept, .{});
+    const d = &f.state.view_drag;
+    if (!d.active()) kept.slot_at = null;
 
-    // A drag name per chooser, so one chooser's items are not drop targets for another's —
-    // moving a view between places is the view drag's job.
-    var name_buf: [64]u8 = undefined;
-    const drag_name = f.state.internName(f.gpa, std.fmt.bufPrint(&name_buf, "fizzy_chooser:{x}:{x}:{d}", .{
-        key,
-        opts.id_extra,
-        src.line,
-    }) catch "fizzy_chooser");
-
-    const strip: core.widgets.Tabs = .init(src, info, .{
-        .drag_name = drag_name,
-        .id_extra = opts.id_extra ^ @as(usize, @truncate(key)),
+    var strip: core.widgets.Tabs = .init(src, .{
+        .id_extra = id_extra,
         .scroll = opts.scroll,
         .dir = opts.dir,
         .outer = opts.outer,
         .scroll_shadows = opts.scroll_shadows,
     });
+    // Carried along the chooser near an end of it, it scrolls that way.
+    if (kept.slot_at != null) strip.scrollToward(dvui.currentWindow().mouse_pt);
+
     const sel = f.selectedIn(&place);
+    var all = f.matchingIn(&place);
+    var carried: ?[]const u8 = null;
+    if (d.active() and d.moved_id.len > 0) {
+        for (all) |s| if (std.mem.eql(u8, s.id, d.moved_id)) {
+            carried = s.id;
+        };
+        if (carried) |c| {
+            var rest: std.ArrayListUnmanaged(*Layout.Surface) = .empty;
+            for (all) |s| if (!std.mem.eql(u8, s.id, c)) rest.append(f.arena, s) catch {};
+            all = rest.items;
+        }
+    }
     return .{
         .layout = f,
         .place = place,
         .opts = opts,
-        .info = info,
+        .kept = kept,
         .strip = strip,
         .bounds = strip.outer.data().borderRectScale().r,
-        .all = f.matchingIn(&place),
+        .all = all,
         .selected_id = if (sel) |s| s.id else null,
+        .carried = carried,
     };
 }
 
-/// The place's views, in its order. Draw an item for whichever of them this chooser lists.
+/// The place's views, in its order — less the one the view drag is carrying, which is in the
+/// hand. Draw an item for whichever of them this chooser lists.
 pub fn views(self: *const Chooser) []const *Layout.Surface {
     return self.all;
 }
@@ -129,12 +163,16 @@ pub fn views(self: *const Chooser) []const *Layout.Surface {
 /// One item. Draw what it looks like between this and `Item.deinit`.
 pub fn item(self: *Chooser, src: std.builtin.SourceLocation, view: *const Layout.Surface, opts: ItemOptions) Item {
     const index = self.drawn.items.len;
+    if (self.kept.slot_at) |at| if (at == index) self.openSlot();
     self.drawn.append(self.layout.arena, view.id) catch {};
     const selected = if (self.selected_id) |id| std.mem.eql(u8, id, view.id) else false;
     return .{
         .chooser = self,
         .view = view,
-        .tab = self.strip.tab(src, index, selected),
+        // Keyed by the view, not its place in the list: an item lifted out of it, or a slot
+        // opening in it, moves the rest along, and keyed by index each would take on another's
+        // size for a frame.
+        .tab = self.strip.tab(src, @truncate(std.hash.Wyhash.hash(0, view.id)), selected),
         .selected = selected,
         .opts = opts,
         .index = index,
@@ -162,7 +200,8 @@ pub const Item = struct {
 
     pub fn deinit(self: *Item) void {
         const c = self.chooser;
-        c.drawn_rects.append(c.layout.arena, self.tab.box.data().borderRectScale().r) catch {};
+        const rect = self.tab.box.data().borderRectScale().r;
+        c.drawn_rects.append(c.layout.arena, rect) catch {};
         if (self.tab.clicked()) {
             if (self.selected) {
                 c.picked_again_id = self.view.id;
@@ -172,6 +211,7 @@ pub const Item = struct {
             }
             dvui.refresh(null, @src(), null);
         }
+        if (self.tab.lifted()) |event| c.lifted = .{ .id = self.view.id, .rect = rect, .event = event };
         if (self.opts.tooltip and !self.selected) self.drawTooltip();
         self.tab.deinit();
     }
@@ -206,93 +246,118 @@ pub fn reselected(self: *const Chooser) ?[]const u8 {
 }
 
 pub fn deinit(self: *Chooser) void {
-    const f = self.layout;
-    self.strip.finalSlot(self.drawn.items.len);
-    const strip_id = self.strip.outer.data().id;
+    // Past the last item.
+    if (!self.slot_drawn) if (self.kept.slot_at != null) self.openSlot();
     self.strip.deinit();
-    self.offerDrop(strip_id);
+    self.measureItems();
+    self.carryLifted();
+    self.offerDrop();
+}
 
-    // Reordered along the chooser.
-    if (self.info.removed_index) |removed| if (self.info.insert_before_index) |before| {
-        self.info.removed_index = null;
-        self.info.insert_before_index = null;
-        if (removed < self.drawn.items.len) {
-            const moved = self.drawn.items[removed];
-            // Before the item it was dropped in front of, or after this chooser's last item when
-            // dropped past the end — the place may hold views this chooser does not list.
-            const anchor: Anchor = if (before < self.drawn.items.len)
-                .{ .before = self.drawn.items[before] }
-            else
-                .{ .after = self.drawn.items[self.drawn.items.len - 1] };
-            reorder(f, &self.place, moved, anchor);
-        }
-    };
+/// The slot where a carried view would go in, before the next item drawn or past the last: as
+/// long as the item was if it was lifted off this chooser, as long as an item is otherwise.
+fn openSlot(self: *Chooser) void {
+    self.slot_drawn = true;
+    const k = self.kept;
+    const d = &self.layout.state.view_drag;
+    const lifted_here = d.moved_id.len > 0 and k.lifted_key == std.hash.Wyhash.hash(0, d.moved_id);
+    const s = dvui.currentWindow().natural_scale;
+    const len = if (lifted_here and k.lifted_len > 0) k.lifted_len else if (k.item_len > 0) k.item_len else default_slot * s;
+    self.strip.gap(@src(), len, 0);
+}
 
-    // Dragged off the chooser: hand the view to the view drag. Past half the chooser's
-    // thickness away, which a reorder along it never reaches.
-    if (self.info.drag_index) |i| if (i < self.drawn.items.len and !f.state.view_drag.active()) {
-        if (placeName(f, &self.place)) |name| {
-            const p = dvui.currentWindow().mouse_pt;
-            const b = self.bounds;
-            const off = switch (self.opts.dir) {
-                .horizontal => p.y < b.y - b.h * 0.5 or p.y > b.y + b.h * 1.5,
-                .vertical => p.x < b.x - b.w * 0.5 or p.x > b.x + b.w * 1.5,
-            };
-            if (off) {
-                self.info.* = .{};
-                dvui.dragEnd();
-                const id = self.drawn.items[i];
-                const region = regionOf(f, &self.place);
-                const open = if (region) |r| r.bounds.w > 1 and r.bounds.h > 1 and !r.isClosed() else false;
-                if (open) {
-                    // Out of an open place: the place's own drag, which it drives and which
-                    // knows a drop back onto the place is no move at all. It carries what the
-                    // place shows, so show this first.
-                    dvui.captureMouse(null, 0);
-                    f.selectIn(&self.place, id);
-                    ViewDrag.begin(f, name, region.?.bounds, if (i < self.drawn_rects.items.len) self.drawn_rects.items[i] else b);
-                } else {
-                    // Out of a shut place (a rail beside a closed sidebar): the place is not
-                    // drawing to drive a drag, and cannot be dropped on. Carry the view loose,
-                    // as a card lifted out of the picker is.
-                    f.beginViewDrag(id, if (i < self.drawn_rects.items.len) self.drawn_rects.items[i] else b);
-                }
-                dvui.refresh(null, @src(), null);
-            }
-        }
-    };
+/// Points: the slot's length when there is nothing to measure it by.
+const default_slot: f32 = 80;
+
+/// Whether the chooser runs across (a strip) rather than down (a rail).
+fn across(self: *const Chooser) bool {
+    return self.opts.dir == .horizontal;
+}
+
+/// How long an item is along the chooser, for the slot a view from elsewhere opens.
+fn measureItems(self: *Chooser) void {
+    var total: f32 = 0;
+    for (self.drawn_rects.items) |r| total += if (self.across()) r.w else r.h;
+    if (self.drawn_rects.items.len > 0) self.kept.item_len = total / @as(f32, @floatFromInt(self.drawn_rects.items.len));
+}
+
+/// An item lifted this frame (`Tabs.Tab.lifted`): carry it in the view drag, from where it stood.
+/// Out of an open place it is the place's own drag, which the place drives — it carries what the
+/// place shows, so it is shown first — and out of a shut one (a rail beside a closed sidebar) a
+/// view carried loose, as a card lifted out of the picker is: the place is not drawing to drive a
+/// drag. Either way the slot it leaves, if it is carried back along here, is its own length.
+fn carryLifted(self: *Chooser) void {
+    const lift = self.lifted orelse return;
+    const f = self.layout;
+    if (f.state.view_drag.active()) return;
+    const name = placeName(f, &self.place) orelse return;
+    dvui.dragEnd();
+    self.kept.lifted_len = if (self.across()) lift.rect.w else lift.rect.h;
+    self.kept.lifted_key = std.hash.Wyhash.hash(0, lift.id);
+    const region = regionOf(f, &self.place);
+    const open = if (region) |r| r.bounds.w > 1 and r.bounds.h > 1 and !r.isClosed() else false;
+    if (open) {
+        dvui.captureMouse(null, lift.event);
+        f.selectIn(&self.place, lift.id);
+        ViewDrag.begin(f, name, region.?.bounds, lift.rect);
+    } else {
+        f.beginViewDrag(lift.id, lift.rect);
+        // From the motion that lifted it on: a release in the same frame is the drag's too.
+        if (dvui.currentWindow().capture) |cm| dvui.captureMouseCustom(cm, lift.event);
+    }
+    self.carried = lift.id;
+    dvui.refresh(null, @src(), null);
 }
 
 /// While a view is carried, the chooser is somewhere it can go: into this chooser's place, as one
-/// of its views — a rail beside a sidebar as much as a strip inside a panel. It says so to the drag
-/// (`ViewDrag.offerChooser`), which lands a release over it there; and under the pointer it shows
-/// as one pane of the drop zones' glass across it, where the places' own zones step back. For the
-/// place the view came out of it is chrome only: dropping it back is no move.
-fn offerDrop(self: *Chooser, key: dvui.Id) void {
+/// of its views, where along it the pointer is — a rail beside a sidebar as much as a strip inside
+/// a panel, and the chooser it was lifted off as much as any other. It says so to the drag
+/// (`ViewDrag.offerChooser`), which lands a release over it there (`ViewDrag.insertInto`); and
+/// while it is the chooser the view is over, it opens a slot there next frame (`openSlot`). It
+/// reaches half its thickness past itself toward its place's inside — below a strip, right of a
+/// rail — so a hand drifting a little off it is still among its items.
+fn offerDrop(self: *Chooser) void {
     const f = self.layout;
-    const d = f.state.view_drag;
-    const name = placeName(f, &self.place);
-    var lit: ?dvui.Rect.Physical = null;
-    if (d.active()) if (name) |n| {
-        // Offered for the place the view came out of as well, as chrome: its zones stay off the
-        // strip and the card rides as a tab over it (`ViewDrag.interiorBounds`), but a release
-        // there lands nowhere — dropping it back is no move — and it does not light.
-        const into = !std.mem.eql(u8, n, d.name);
-        ViewDrag.offerChooser(f, n, self.bounds, into);
-        if (into and self.bounds.contains(dvui.currentWindow().mouse_pt)) lit = self.bounds;
-    };
-    const drop_key = key.update("_chooser_drop");
-    // A release over the chooser lands the view in it, which then shows there: the pane goes with
-    // the drag rather than fading round the view that just arrived. Off it, it fades as it leaves.
-    if (!d.active()) core.widgets.DropZones.forgetSingle(drop_key);
-    core.widgets.DropZones.drawSingle(drop_key, lit, dvui.currentWindow().natural_scale, .{
-        .inset = 2,
-        .icon = .add,
-        .radius = core.corners.scaled(core.corners.small),
-    });
+    self.kept.slot_at = null;
+    if (!f.state.view_drag.active()) return;
+    const name = placeName(f, &self.place) orelse return;
+    var bounds = self.bounds;
+    if (self.across()) bounds.h *= reach else bounds.w *= reach;
+    const p = dvui.currentWindow().mouse_pt;
+    const at = self.insertAt(p);
+    ViewDrag.offerChooser(f, name, bounds, true, at.insert);
+    // The chooser the view is over, and its place could take it — the drag's own reading, which
+    // asks which window is on top there and what the place accepts. Of two choosers over one
+    // place (the rail's list and footer), the one the view is over by its bounds.
+    const o = ViewDrag.chooserAt(f.state, p) orelse return;
+    if (!std.mem.eql(u8, o.name, name) or !std.meta.eql(o.bounds, bounds)) return;
+    self.kept.slot_at = at.index;
 }
 
-const Anchor = union(enum) { before: []const u8, after: []const u8 };
+/// How far a chooser reaches as somewhere to go in, in its own thickness (`offerDrop`).
+const reach: f32 = 1.5;
+
+/// Where a view let go at `p` goes in: before the first item (not the carried one) whose middle is
+/// past it along the chooser — read as if the open slot were not there, so the slot does not chase
+/// the pointer — else after this chooser's last item, which the place may follow with views this
+/// chooser does not list. `index` counts the items drawn before it, the carried one left out.
+fn insertAt(self: *const Chooser, p: dvui.Point.Physical) struct { index: usize, insert: ViewDrag.Insert } {
+    const a = if (self.across()) p.x else p.y;
+    var index: usize = 0;
+    var last: ?[]const u8 = null;
+    for (self.drawn.items, 0..) |id, i| {
+        if (self.carried) |c| if (std.mem.eql(u8, c, id)) continue;
+        if (i >= self.drawn_rects.items.len) break;
+        const r = self.drawn_rects.items[i];
+        var start = if (self.across()) r.x else r.y;
+        const len = if (self.across()) r.w else r.h;
+        if (self.slot_drawn and self.strip.gap_len > 0 and start >= self.strip.gap_at) start -= self.strip.gap_len;
+        if (a < start + len / 2) return .{ .index = index, .insert = .{ .before = id } };
+        index += 1;
+        last = id;
+    }
+    return .{ .index = index, .insert = if (last) |id| .{ .after = id } else .end };
+}
 
 /// The declared region a chooser's place is — by its own name, or the one with its keywords.
 fn regionOf(f: *Layout, place: *const Region) ?Region {
@@ -307,52 +372,6 @@ fn placeName(f: *Layout, place: *const Region) ?[]const u8 {
     if (place.name.len > 0) return place.name;
     const r = regionOf(f, place) orelse return null;
     return if (r.name.len > 0) r.name else null;
-}
-
-/// Move `moved` next to `anchor` in `place`'s list and keep it. A place the user filled keeps
-/// its assignment, reordered; a place its keywords fill keeps an order (`State.setOrder`) and
-/// stays open to views that arrive later.
-fn reorder(f: *Layout, place: *const Region, moved: []const u8, anchor: Anchor) void {
-    const name = placeName(f, place) orelse return;
-    const a = f.arena;
-    // The whole list to reorder: the assignment when there is one — ids of plugins not loaded
-    // now included, so they keep their slots — else what the place shows, then whatever an
-    // earlier order named that is not showing now.
-    var base: std.ArrayListUnmanaged([]const u8) = .empty;
-    const assigned = f.state.assignment(name);
-    if (assigned) |ids| {
-        base.appendSlice(a, ids) catch return;
-    } else {
-        for (f.matchingIn(place)) |s| base.append(a, s.id) catch return;
-        if (f.state.order(name)) |ids| for (ids) |id| {
-            if (!contains(base.items, id)) base.append(a, id) catch return;
-        };
-    }
-    var list: std.ArrayListUnmanaged([]const u8) = .empty;
-    for (base.items) |id| if (!std.mem.eql(u8, id, moved)) list.append(a, id) catch return;
-    const at = switch (anchor) {
-        .before => |id| indexOf(list.items, id) orelse list.items.len,
-        .after => |id| if (indexOf(list.items, id)) |i| i + 1 else list.items.len,
-    };
-    list.insert(a, at, moved) catch return;
-
-    if (assigned != null) {
-        f.state.assign(f.gpa, name, list.items) catch return;
-    } else {
-        f.state.setOrder(f.gpa, name, list.items) catch return;
-    }
-    f.selectIn(place, moved);
-    f.state.markDirty();
-    dvui.refresh(null, @src(), null);
-}
-
-fn indexOf(list: []const []const u8, id: []const u8) ?usize {
-    for (list, 0..) |x, i| if (std.mem.eql(u8, x, id)) return i;
-    return null;
-}
-
-fn contains(list: []const []const u8, id: []const u8) bool {
-    return indexOf(list, id) != null;
 }
 
 // ── The two stock looks ────────────────────────────────────────────────────────────────────────

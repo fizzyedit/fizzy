@@ -99,8 +99,8 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
         var panel = try f.region(@src(), .{
             .name = "Panel",
             .keywords = bottom,
-            // A Multiple place like any other: the generic strip, reorder, drag off to the view
-            // drag, and splitting it is the region Split every place has.
+            // A Multiple place like any other: the generic strip, a tab dragged along it or off
+            // it carried in the view drag, and splitting it is the region Split every place has.
             .shows = .many,
             .resize = true,
             .collapsible = true,

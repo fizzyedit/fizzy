@@ -46,6 +46,22 @@ pub const SavedRegion = struct {
     /// The order the user dragged this place's views into. Sorts only — which views the place
     /// holds is `surfaces` (or its keywords); views not named here follow in their usual order.
     order: ?[]const []const u8 = null,
+    /// A float's place (`app/layout/Floats.zig`): where its window is and what it floated out of.
+    /// Absent for every place a shape declares. A fizzy too old to know it reads past it, and the
+    /// view goes back where its keywords put it — the place it names is never declared there.
+    floating: ?Floating = null,
+
+    pub const Floating = struct {
+        /// The window, in points from the main window's top left.
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        /// Bottom to top among the floats.
+        z: u16 = 0,
+        /// The place it floated out of, where closing it sends its views.
+        home: []const u8 = "",
+    };
 };
 
 pub const SavedShows = enum { one, many };
@@ -177,7 +193,10 @@ pub fn loadRegions(gpa: std.mem.Allocator, dir: []const u8) []SavedRegion {
         const order: ?[]const []const u8 = if (r.order) |ids| dupeIds(gpa, ids) else null;
         const parent = if (r.parent) |p| gpa.dupe(u8, p) catch null else null;
         const from = if (r.from) |s| gpa.dupe(u8, s) catch null else null;
-        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces, .parent = parent, .from = from, .shows = r.shows, .order = order };
+        // A float whose home fails to copy floats still; closed, its view goes to its keywords.
+        var floating = r.floating;
+        if (floating) |*fl| fl.home = gpa.dupe(u8, fl.home) catch "";
+        out[n] = .{ .name = name, .extent = r.extent, .surfaces = surfaces, .parent = parent, .from = from, .shows = r.shows, .order = order, .floating = floating };
         n += 1;
     }
     return out[0..n];
@@ -211,6 +230,7 @@ pub fn freeRegions(gpa: std.mem.Allocator, regions: []SavedRegion) void {
         }
         if (r.parent) |p| gpa.free(p);
         if (r.from) |s| gpa.free(s);
+        if (r.floating) |fl| if (fl.home.len > 0) gpa.free(fl.home);
     }
     gpa.free(regions);
 }

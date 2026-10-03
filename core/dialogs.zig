@@ -925,10 +925,27 @@ pub fn windowHeaderCloseButtonOptions(over: dvui.Options) dvui.Options {
 fn windowHeaderPaintClose(openflag: ?*bool) void {
     if (openflag) |of| {
         const close_side = windowHeaderCloseInnerSide();
+        // Hovered, the button grows to fit its icon. It grows inside a footprint that does not:
+        // a box as big as the grown button, whose margins give back what it grows by, so at rest
+        // the button sits where it always did and hovered it grows into its own margins — the
+        // title beside it, centred in the room the button leaves, moved with it.
+        const hover_side = @max(close_side, dvui.Font.theme(.body).textHeight());
+        const give = (hover_side - close_side) / 2;
+        const m = window_header_close_margin;
+        var spot = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .min_size_content = .{ .w = hover_side, .h = hover_side },
+            .margin = .{ .x = @max(0, m.x - give), .y = @max(0, m.y - give), .w = @max(0, m.w - give), .h = @max(0, m.h - give) },
+            .padding = .{},
+            .gravity_y = 0.5,
+        });
+        defer spot.deinit();
+
         var button: dvui.ButtonWidget = undefined;
         button.init(@src(), .{}, windowHeaderCloseButtonOptions(.{
             .min_size_content = .{ .w = close_side, .h = close_side },
             .expand = .none,
+            .margin = .{},
+            .gravity_x = 0.5,
         }));
         defer button.deinit();
 
@@ -941,6 +958,7 @@ fn windowHeaderPaintClose(openflag: ?*bool) void {
                 .stroke_color = .{ .color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10) },
                 .fill_color = .{ .color = dvui.themeGet().color(.err, .fill).lighten(if (dvui.themeGet().dark) -10 else 10) },
             }, .{
+                .min_size_content = .{ .w = hover_side, .h = hover_side },
                 .expand = .ratio,
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,
