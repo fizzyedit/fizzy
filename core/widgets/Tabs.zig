@@ -26,7 +26,7 @@
 //! ```
 const std = @import("std");
 const dvui = @import("dvui");
-const DropZones = @import("DropZones.zig");
+const dialogs = @import("../dialogs.zig");
 const corners = @import("../corners.zig");
 
 const Tabs = @This();
@@ -68,7 +68,7 @@ outer: *dvui.BoxWidget,
 scroll_area: ?*dvui.ScrollAreaWidget,
 reorder: *dvui.ReorderWidget,
 inner: *dvui.BoxWidget,
-/// Where a dragged item would land this frame, for the slot's glass (`deinit`).
+/// Where a dragged item would land this frame, for its slot (`deinit`).
 slot: ?dvui.RectScale = null,
 
 pub fn init(src: std.builtin.SourceLocation, info: *TabInfo, opts: Options) Tabs {
@@ -239,8 +239,8 @@ pub fn tab(self: *Tabs, src: std.builtin.SourceLocation, index: usize, selected:
         // A rail's cell is its full width, so the whole row is the hit area.
         .expand = if (self.opts.dir == .vertical) .horizontal else .none,
         .border = dvui.Rect.all(0),
-        .background = floating,
-        .color_fill = .{ .color = if (floating) dvui.themeGet().color(.control, .fill) else .transparent },
+        .background = false,
+        .color_fill = .{ .color = .transparent },
         .corners = corners.all(corners.small),
         .id_extra = index,
         .padding = .{ .x = 2, .y = 2, .w = 2, .h = 2 },
@@ -249,7 +249,13 @@ pub fn tab(self: *Tabs, src: std.builtin.SourceLocation, index: usize, selected:
         .ninepatch_hover = &dvui.Ninepatch.none,
         .ninepatch_press = &dvui.Ninepatch.none,
     });
-    if (floating) box.drawBackground();
+    // Carried along the strip, it is glass (`dialogs.carriedGlass`), the slot it would land in
+    // showing through it — the look a tab carried along a document's strip has, and a view carried
+    // over the places.
+    if (floating) {
+        const frs = box.data().borderRectScale();
+        dialogs.carriedGlass(box.data().id, frs.r, frs.s);
+    }
 
     return .{ .reorderable = reorderable, .box = box, .floating = floating, .selected = selected };
 }
@@ -266,16 +272,10 @@ pub fn finalSlot(self: *Tabs, count: usize) void {
 }
 
 pub fn deinit(self: *Tabs) void {
-    // The slot a dragged item will land in: a pane of the drop zones' glass, rounded, moving
-    // with it along the strip and going when the drag does — the same target every drop shows.
-    const slot_key = self.outer.data().id.update("_tabs_slot");
-    // The drag over, the tab stands where the slot was: the slot goes with it, not after.
-    if (self.slot == null and !dvui.dragName(self.opts.drag_name)) DropZones.forgetSingle(slot_key);
-    const scale = if (self.slot) |rs| rs.s else dvui.currentWindow().natural_scale;
-    DropZones.drawSingle(slot_key, if (self.slot) |rs| rs.r else null, scale, .{
-        .inset = 1,
-        .radius = corners.scaled(corners.small),
-    });
+    // The slot a dragged item will land in: the highlight a document's strip opens for a tab
+    // (`dialogs.dropSlot`), seen through the glass of the item carried over it. It was a pane of
+    // glass itself, under an item drawn solid — the glass on the wrong one of the two.
+    if (self.slot) |rs| dialogs.dropSlot(rs.r, rs.s);
     self.inner.deinit();
     self.reorder.deinit();
     if (self.scroll_area) |sa| {
