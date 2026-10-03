@@ -4133,6 +4133,31 @@ test "drop: a drop comes in in its shape, and changes into another over time" {
     try std.testing.expectEqual(dvui.enums.Direction.vertical, DZ.shapeOf(ShapeFrame.key).?.dir);
 }
 
+test "drop: a drop given another middle slides there over time, and comes in where it is given" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 1000, .h = 1000 } });
+    defer t.deinit();
+    defer DZ.forget(ShapeFrame.key);
+
+    // Arriving: where it is given from the first frame, not sliding in from anywhere.
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 0, .w = 1000, .h = 1000 }, 1, true);
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    try std.testing.expectEqual(ShapeFrame.wheel.center, DZ.shapeOf(ShapeFrame.key).?.center);
+    try dvui.testing.settle(ShapeFrame.frame);
+
+    // The part of its place it sits in moves — a window over the place's middle came back — and
+    // it goes over several frames, through the points between, to settle at the new middle.
+    const from = ShapeFrame.wheel.center;
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 0, .w = 400, .h = 1000 }, 1, true);
+    const to = ShapeFrame.wheel.center;
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    const partway = DZ.shapeOf(ShapeFrame.key).?.center;
+    try std.testing.expect(partway.x < from.x and partway.x != to.x);
+    try dvui.testing.settle(ShapeFrame.frame);
+    try std.testing.expectEqual(to, DZ.shapeOf(ShapeFrame.key).?.center);
+    try std.testing.expectEqual(ShapeFrame.wheel.unit, DZ.shapeOf(ShapeFrame.key).?.unit);
+}
+
 test "drop: settled, as a wheel or a strip, no two bubbles are near enough to run together" {
     // Two bubbles closer than half the merge run together (`LiquidField`'s smooth minimum): at
     // rest each zone is a bubble of its own, whichever the shape and the way it runs, with the

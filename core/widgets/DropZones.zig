@@ -24,7 +24,10 @@
 //! itself across the place's top — may be given the other shape. It does not cut to it: over
 //! `reshape_ms` its bubbles run together into one bar of glass and pull apart into the other
 //! shape, the glass's own merge doing the joining. Settled, each zone is a bubble of its own
-//! again. A drop comes in already in its shape.
+//! again. A drop comes in already in its shape. So it is with where it is: a drop given another
+//! middle and size — the part of its place it sits in changed, a window over the place stepping
+//! aside or coming back — slides there over the same time, its bubbles drawn together on the way
+//! and apart where it settles.
 //!
 //! **The look is liquid glass.** The wheel is one disc of the dialogs' own frost over what is
 //! under it, drawn through `core.liquid_glass`, its sides marked off by faint lines and each
@@ -339,6 +342,16 @@ const State = struct {
     strip: f32 = 0,
     dir: dvui.enums.Direction = .horizontal,
     shaped: bool = false,
+    /// Where the drop is drawn and how big (`Wheel.center`, `Wheel.unit`) as of last frame, and
+    /// the slide it is on: from where it was drawn when it was given somewhere else (`from_at`,
+    /// `from_unit`) to that place (`to_at`, `to_unit`), `slide` of the way there, linear in time.
+    at: dvui.Point.Physical = .{},
+    unit: f32 = 0,
+    from_at: dvui.Point.Physical = .{},
+    from_unit: f32 = 0,
+    to_at: dvui.Point.Physical = .{},
+    to_unit: f32 = 0,
+    slide: f32 = 1,
     /// The icons `draw` laid out and left for `drawIcons` (`Look.icons = .later`), and the frame.
     icons: [all.len]IconAt = undefined,
     icon_n: usize = 0,
@@ -414,13 +427,44 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
     // runs makes no difference. It is drawn as it is now but read as it will be — `at`, and a
     // release, which keep no state: for the moment a change takes, what lights is the bubble
     // arriving under the pointer rather than the one leaving it.
-    if (!st.shaped) st.strip = w.strip;
+    if (!st.shaped) {
+        st.strip = w.strip;
+        st.to_at = w.center;
+        st.to_unit = w.unit;
+        st.at = w.center;
+        st.unit = w.unit;
+    }
     if (!st.shaped or st.strip == 0) st.dir = w.dir;
     st.shaped = true;
     st.strip = step(st.strip, if (st.dir == w.dir) w.strip else 0, dt_ms, motion.durationMs(reshape_ms));
     const reshaping = st.strip != w.strip or st.dir != w.dir;
     if (reshaping) moving = true;
-    const drawn = if (reshaping) w.shaped(st.strip, st.dir) else w;
+    var drawn = if (reshaping) w.shaped(st.strip, st.dir) else w;
+    // Given somewhere else in its place — the part of the place it sits in changed under it, a
+    // window over the place stepping aside or coming back — it slides there and takes the size it
+    // has there on the way, from wherever it is drawn now, on the motion every slide has: the
+    // bubbles drawn in toward the middle as they go, so they run together into one piece of glass
+    // and pull apart again where it settles. Read, like a change of shape, where it is going.
+    if (w.center.x != st.to_at.x or w.center.y != st.to_at.y or w.unit != st.to_unit) {
+        st.from_at = st.at;
+        st.from_unit = st.unit;
+        st.to_at = w.center;
+        st.to_unit = w.unit;
+        st.slide = 0;
+    }
+    st.slide = step(st.slide, 1, dt_ms, motion.durationMs(reshape_ms));
+    const sliding = st.slide < 1;
+    if (sliding) {
+        moving = true;
+        const k = motion.settle(st.slide);
+        drawn.center = .{ .x = std.math.lerp(st.from_at.x, w.center.x, k), .y = std.math.lerp(st.from_at.y, w.center.y, k) };
+        drawn.unit = @max(0, std.math.lerp(st.from_unit, drawn.unit, k));
+    }
+    st.at = drawn.center;
+    st.unit = drawn.unit;
+    // Drawn in most halfway through a slide and not at all at either end (`gather`, as a change
+    // of shape draws them).
+    const spread: f32 = if (sliding) 1 - gather * 4 * st.slide * (1 - st.slide) else 1;
 
     const g = frost(st.shown);
     var took = false;
@@ -448,7 +492,7 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
             // Out of the middle to where it settles, on the same curve as its size: each bubble
             // is born inside the drop and pinches off it on its way out (`merge`), past its place
             // and back when motion is playful; leaving, it is drawn back in and poured into it.
-            const c: dvui.Point.Physical = .{ .x = drawn.center.x + (b.c.x - drawn.center.x) * k, .y = drawn.center.y + (b.c.y - drawn.center.y) * k };
+            const c: dvui.Point.Physical = .{ .x = drawn.center.x + (b.c.x - drawn.center.x) * k * spread, .y = drawn.center.y + (b.c.y - drawn.center.y) * k * spread };
             panes[n] = .{ .r = .{ .x = c.x - r, .y = c.y - r, .w = 2 * r, .h = 2 * r }, .lit = st.lit[zi], .radii = liquid_glass.uniform(r), .lens = k };
             zones[n] = zi;
             times[n] = t;
@@ -456,7 +500,7 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
         }
         // Changing shape, what is read moves and grows with the bubbles: at a size kept while it
         // fits, as for the carried drop, so it is not new targets every frame of the change.
-        took = glassCarrying(id, panes[0..n], swingRect(drawn), g, scale, merge * drawn.unit, look.carried, reshaping);
+        took = glassCarrying(id, panes[0..n], swingRect(drawn), g, scale, merge * drawn.unit, look.carried, reshaping or sliding);
         st.icon_n = 0;
         st.icon_frame = now;
         for (panes[0..n], zones[0..n], times[0..n]) |pane, i, t| {
@@ -932,11 +976,12 @@ pub fn showing(id: dvui.Id) bool {
     return st.shown > 0;
 }
 
-/// The shape `id`'s drop is drawn in (`Wheel.strip`, `Wheel.dir`): the one it was given, or one on
-/// its way there (`reshape_ms`). Null with no drop.
-pub fn shapeOf(id: dvui.Id) ?struct { strip: f32, dir: dvui.enums.Direction } {
+/// The shape `id`'s drop is drawn in (`Wheel.strip`, `Wheel.dir`), and where and how big
+/// (`Wheel.center`, `Wheel.unit`): as it was given, or on its way there (`reshape_ms`). Null with
+/// no drop.
+pub fn shapeOf(id: dvui.Id) ?struct { strip: f32, dir: dvui.enums.Direction, center: dvui.Point.Physical, unit: f32 } {
     const st = dvui.dataGetPtr(null, id, "_drop_zones", State) orelse return null;
-    return .{ .strip = st.strip, .dir = st.dir };
+    return .{ .strip = st.strip, .dir = st.dir, .center = st.at, .unit = st.unit };
 }
 
 /// Drop `id`'s zones outright: the next time its place is the target they come in from nothing.
