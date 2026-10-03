@@ -90,6 +90,14 @@ backend and never link SDL, so an SDL bump is never an SDK release and never mov
 Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4.16-3` → `8455e58`;
 `fizzy-3.4.16-4` → `2d6efde`, what sdl_zig pins now.
 
+On test, not on `fizzy-3.4` yet: **Windows: draw each step of a live resize before the loop goes
+on** (`ee721bf`, branch `claude/windows-live-resize`). `SDL_HINT_VIDEO_WIN_SYNC_LIVE_RESIZE`
+(default off): inside the modal size loop, `WM_WINDOWPOSCHANGED` runs the app's frame for a step
+that changed the client size, then waits for the compositor (`DwmFlush`); the loop's timer draws
+only while the pointer rests. Fizzy sets it (`win32_titlebar.zig`; why and how it measured in
+[`docs/WINDOWS_LIVE_RESIZE.md`](WINDOWS_LIVE_RESIZE.md)). Once it is seen to work on hardware it
+becomes patch 7, tagged `fizzy-3.4.16-5`. Upstream: worth proposing with the macOS pair (3–5).
+
 ## fizzyedit/sdl_zig
 
 `fizzy` = upstream `main` (`0a9d5c3`) plus:
@@ -111,6 +119,9 @@ Tags: `fizzy-3.4.16-1` → `a4b021c`; `fizzy-3.4.16-2` → `3d6e802`; `fizzy-3.4
 
 Tags: `fizzy-1.0.3+3.4.16-1` → `60114a1`; `fizzy-1.0.3+3.4.16-2` → `5950760`;
 `fizzy-1.0.3+3.4.16-3` → `48468b7`; `fizzy-1.0.3+3.4.16-4` → `58abe38`, the commit fizzy pins now.
+
+On test: `claude/windows-live-resize` (`8e88dba`) pins SDL's test branch above; fizzy's branch of
+the same name pins it, and pins `58abe38` again once SDL's patch is tagged.
 
 ## Bumping
 
