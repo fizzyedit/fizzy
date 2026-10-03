@@ -55,10 +55,34 @@ pub const Float = struct {
     bounds: dvui.Rect.Physical = .{},
     /// Its header last frame, physical — the handle that moves it. Nothing is aimed at over it.
     header: dvui.Rect.Physical = .{},
-    /// Stepping aside while its last view is carried out of it (`ViewDrag.emptiesFloat`): 0 there,
-    /// 1 gone. It still draws its place — the drag is held by that place's corner button — but
+    /// Stepping aside while a view is carried out of it (`ViewDrag.carriedOutOf`): 0 there, 1
+    /// gone. It still draws its place — the drag is held by that place's corner button — but
     /// nothing of it shows.
     aside: Fade = .{},
+    /// The float as the drag found it — window, glass, view and shadow — photographed from the
+    /// frame at the lift (`liftedFrom`): what steps aside, blurring out of focus as it fades, and
+    /// what comes back into focus if the view is let go over nothing. A photograph, not the live
+    /// float under an alpha: a view may draw in ways no alpha reaches (its own triangles, an alpha
+    /// of its own), and none of it may show. Owned; dropped once the float is back, or gone.
+    aside_photo: ?Photo = null,
+    /// The view the drag carries out of it (interned). Still in the float when the drag ends,
+    /// the drop was cancelled and the photograph is still a true picture of it; gone, it landed
+    /// elsewhere, and the float comes back as it is now.
+    aside_view: []const u8 = "",
+};
+
+/// A picture of a float taken from the frame, with a blur of it made the first time it is drawn
+/// blurred (`core.anim.Frost`).
+pub const Photo = struct {
+    texture: dvui.Texture,
+    /// Where it was taken, physical: the float's window.
+    rect: dvui.Rect.Physical,
+    frost: core.anim.Frost = .{},
+
+    fn drop(self: *Photo) void {
+        if (dvui.current_window != null) dvui.Texture.destroyLater(self.texture);
+        self.frost.drop();
+    }
 };
 
 /// A value easing between 0 and 1 over `aside_ms` (`core.motion`), turning back from wherever it
@@ -84,8 +108,9 @@ pub const Fade = struct {
 };
 
 /// How long a float takes to step aside for a view carried out of it, and to come back, as
-/// written: quicker than the lift, so it is out of the way before the drop is aimed.
-const aside_ms: f32 = 160;
+/// written: long enough for the defocus to read (`core.anim.crossfade.Kind.frost`), short enough
+/// that it is out of the way before the drop is aimed.
+const aside_ms: f32 = 300;
 
 /// Bottom to top: the last is the float in front.
 items: std.ArrayListUnmanaged(Float) = .empty,
@@ -124,10 +149,16 @@ pub fn add(self: *Floats, gpa: std.mem.Allocator, f: Float) !*Float {
     return &self.items.items[self.items.items.len - 1];
 }
 
-/// Drop the float at `i`, and the photograph its landing still held.
+/// Drop the float at `i`, and the photographs it still held.
 pub fn removeAt(self: *Floats, i: usize) void {
     var f = self.items.orderedRemove(i);
     endLanding(&f);
+    dropAsidePhoto(&f);
+}
+
+fn dropAsidePhoto(f: *Float) void {
+    if (f.aside_photo) |*p| p.drop();
+    f.aside_photo = null;
 }
 
 /// The landing is over: the view is drawn, and the photograph it grew out of is not needed.
@@ -143,7 +174,10 @@ pub fn endLanding(f: *Float) void {
 
 /// Every float gone — Reset Layout.
 pub fn clear(self: *Floats) void {
-    for (self.items.items) |*f| endLanding(f);
+    for (self.items.items) |*f| {
+        endLanding(f);
+        dropAsidePhoto(f);
+    }
     self.items.clearRetainingCapacity();
 }
 
@@ -173,6 +207,70 @@ pub fn toRules(r: anytype) rules.Rect {
 
 pub fn fromRules(r: rules.Rect) dvui.Rect {
     return .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h };
+}
+
+// ── Stepping aside ──────────────────────────────────────────────────────────────────────────────
+
+/// A drag has just lifted `view` out of place `place`. When that place is a float's (or a split
+/// of one), photograph the float now, while the frame it was last drawn in shows it whole and
+/// nothing of the drag yet lies over it: the photograph is what steps aside (`draw`).
+pub fn liftedFrom(l: *Layout, place: []const u8, view: []const u8) void {
+    const root = l.state.floatRoot(place) orelse return;
+    const i = l.state.floats.find(root) orelse return;
+    const f = &l.state.floats.items.items[i];
+    if (f.closing or f.bounds.w <= 0 or f.bounds.h <= 0) return;
+    dropAsidePhoto(f);
+    f.aside_view = l.state.internName(l.gpa, view);
+    // The window alone: its shadow is drawn round the photograph as it goes (`drawAsidePhoto`), so
+    // nothing square of what was round it is in the picture to blur in.
+    const r = f.bounds.intersect(dvui.windowRectPixels());
+    // No picture where the frame cannot be read (no targets; the web before a frame is read): it
+    // fades under its alpha instead (`draw`).
+    if (core.FrameTarget.snapshot(r)) |tex| f.aside_photo = .{ .texture = tex, .rect = r };
+}
+
+/// The photograph of a float stepping aside, `blur` of the way to its frost and at `alpha`, in
+/// the window's own rounded shape with its shadow round it fading too. As `core.anim.blit` mixes
+/// a snapshot with its frost — the sharp picture over the frost, at what makes the two `alpha` of
+/// the mix between them — but cut to the window's corners, so the defocus stays the window's.
+fn drawAsidePhoto(photo: *Photo, blur: f32, alpha: f32) void {
+    const a = std.math.clamp(alpha, 0, 1);
+    if (a <= 0.001) return;
+    const scale = dvui.currentWindow().natural_scale;
+    const theme = dvui.themeGet();
+    const corners = dialogs.surfaceCorners().finalize(&theme);
+    {
+        // Round the window, outside the clip the window keeps to.
+        const bs = dialogs.surfaceShadow();
+        const reach = (bs.fade + @max(@abs(bs.offset.x), @abs(bs.offset.y))) * scale + 1;
+        const prev_clip = dvui.clipGet();
+        defer dvui.clipSet(prev_clip);
+        dvui.clipSet(photo.rect.outsetAll(reach).intersect(dvui.windowRectPixels()));
+        dialogs.glassShadow(photo.rect, corners, scale, bs, a);
+    }
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    dvui.clipSet(photo.rect.intersect(dvui.windowRectPixels()));
+    const m = std.math.clamp(blur, 0, 1);
+    if (m > 0.001) photo.frost.prepare(photo.texture);
+    const frost_tex: ?dvui.Texture = if (m > 0.001) photo.frost.texture else null;
+    const sharp_a = if (frost_tex != null) a * (1 - m) else a;
+    const frost_a = if (sharp_a >= 0.999) 0 else a * m / (1 - sharp_a);
+    const rs: dvui.RectScale = .{ .r = photo.rect, .s = scale };
+    if (frost_tex) |f| if (frost_a > 0.001) {
+        dvui.renderTexture(f, rs, .{ .corners = corners, .colormod = dvui.Color.white.opacity(frost_a) }) catch {};
+    };
+    if (sharp_a > 0.001) dvui.renderTexture(photo.texture, rs, .{ .corners = corners, .colormod = dvui.Color.white.opacity(sharp_a) }) catch {};
+}
+
+/// Whether one of float `name`'s places holds `view`.
+fn holdsView(l: *Layout, name: []const u8, view: []const u8) bool {
+    if (view.len == 0) return false;
+    for (l.state.splits.leavesUnder(l.arena, name)) |leaf| {
+        const ids = l.state.assignment(leaf) orelse continue;
+        for (ids) |id| if (std.mem.eql(u8, id, view)) return true;
+    }
+    return false;
 }
 
 // ── Closing ─────────────────────────────────────────────────────────────────────────────────────
@@ -284,18 +382,34 @@ fn drawOne(l: *Layout, i: usize) bool {
         });
         return true;
     }
-    // Out of the way while its last view is carried out of it: the drop is aimed at what it
-    // covered. Back if the view is let go over nothing.
+    // Out of the way while a view is carried out of it: the drop is aimed at what it covered.
+    // Back when the drag ends.
+    const carried_out = ViewDrag.carriedOutOf(l, state.floats.items.items[i].name);
     if (!state.floats.items.items[i].closing) {
-        state.floats.items.items[i].aside.toward(if (ViewDrag.emptiesFloat(l, state.floats.items.items[i].name)) 1 else 0, now);
+        const f = &state.floats.items.items[i];
+        f.aside.toward(if (carried_out) 1 else 0, now);
+        // The drag is over and the view is not in it any more — it landed elsewhere: the
+        // photograph is of what the float was, so it comes back as it is now, under its alpha.
+        if (!carried_out and f.aside_photo != null and !holdsView(l, f.name, f.aside_view)) dropAsidePhoto(f);
     }
     const first = state.floats.items.items[i];
-    // Closing while stepped aside — its last view landed somewhere: it is gone already, with no
-    // flight shut to draw.
-    if (first.closing and (first.aside.to > 0 or first.aside.at(now) > 0.01)) return false;
     const aside = first.aside.at(now);
     if (aside != first.aside.to) dvui.refresh(null, @src(), null);
-    const shown = 1 - aside;
+    // Closing having stepped aside — its last view landed elsewhere: what is left of its
+    // photograph finishes going, then so does it, with no flight shut.
+    const closing_aside = first.closing and (first.aside.to > 0 or aside > 0.01);
+    if (closing_aside and (first.aside_photo == null or aside >= 1)) return false;
+    // Stepping aside, coming back from a drop let go over nothing, or going: its photograph is
+    // what shows, and nothing of the live float. By where it is heading as well as where it is —
+    // the frame it sets off it has not moved yet.
+    const stepping = first.aside.to > 0 or aside > 0;
+    const as_photo = first.aside_photo != null and (closing_aside or stepping);
+    // Back: the live float again.
+    if (!as_photo and first.aside_photo != null) dropAsidePhoto(&state.floats.items.items[i]);
+    // With no photograph it fades under its alpha — what its view draws past an alpha shows until
+    // it is all the way aside, and then nothing of it does.
+    const shown = if (as_photo) 1 else 1 - aside;
+    const hide_live = as_photo or aside >= 1;
 
     // Where the window is this frame: on its way out of the carried glass, or where it was left.
     var rect = first.rect;
@@ -311,9 +425,10 @@ fn drawOne(l: *Layout, i: usize) bool {
     }
     const landing = state.floats.items.items[i].landing != null;
 
-    var frost = dialogs.dialogFrost();
     // The carried drop was glass already: the window takes over from it, whole, rather than
-    // forming a second time. Stepping aside, the glass dissolves as a closing window's does.
+    // forming a second time. Stepping aside under its alpha, the glass dissolves as a closing
+    // window's does; as a photograph, the window draws no glass at all.
+    var frost = if (as_photo) null else dialogs.dialogFrost();
     if (frost) |*fr| fr.form = shown;
     var shadow = dialogs.surfaceShadow();
     shadow.alpha *= shown;
@@ -325,6 +440,8 @@ fn drawOne(l: *Layout, i: usize) bool {
     // a last move and the release in one frame would otherwise read as not held, and snap back.
     const held_before = first.win_id != .zero and dvui.captured(first.win_id);
     var win_rect = rect;
+    // One window, one header and one place, whatever it is showing — the same widgets, so the
+    // float keeps its place among the others and its view keeps its state through a drag.
     var win = core.widgets.floatingWindow(@src(), .{
         .rect = &win_rect,
         .placed = true,
@@ -334,29 +451,41 @@ fn drawOne(l: *Layout, i: usize) bool {
     }, .{
         .id_extra = @intCast(first.serial),
         .corners = if (landing) dvui.CornerRect.all(corner_r) else dialogs.surfaceCorners(),
-        .box_shadow = shadow,
+        .box_shadow = if (as_photo) null else shadow,
+        .background = !as_photo,
         .color_fill = .{ .color = dialogs.dialogFill() },
         .border = .all(0),
     });
     const win_id = win.data().id;
     const bounds = win.data().rectScale().r;
 
-    // Flying shut: the glass alone, gone when it lands.
+    if (as_photo) {
+        // Out of focus as it fades (`core.anim.crossfade.Kind.frost`), over what it was in
+        // front of.
+        const s = core.anim.crossfade.sample(.frost, aside, false);
+        drawAsidePhoto(&state.floats.items.items[i].aside_photo.?, s.out_blur, s.out_alpha);
+    }
+
+    // Flying shut: the glass alone, gone when it lands — or, gone aside, its photograph alone.
     if (first.closing) {
         const flown = if (dvui.animationGet(win_id, "_close_x")) |a| a.done() else true;
         win.deinit();
-        return !flown;
+        return as_photo or !flown;
     }
 
     // A press anywhere in it brings it to the front, as a press on an OS window does; dvui
     // raises a window only from its header.
-    for (dvui.events()) |*e| {
+    if (!hide_live) for (dvui.events()) |*e| {
         if (e.evt != .mouse) continue;
         const me = e.evt.mouse;
         if (me.action != .press or !me.button.pointer()) continue;
         if (dvui.eventMatch(e, .{ .id = win_id, .r = bounds })) dvui.raiseSubwindow(win_id);
-    }
+    };
 
+    // Aside, its header and place are drawn as ever — the place's corner button holds the drag —
+    // but clipped to nothing, so nothing of them shows however the view draws.
+    const prev_clip_live = dvui.clipGet();
+    if (hide_live) dvui.clipSet(.{});
     var open = true;
     const title = if (ViewDrag.visibleId(l, first.name)) |id| (if (l.host.surfaceById(id)) |s| s.title else first.name) else first.name;
     const header = dialogs.windowHeader(title, "", &open, .none);
@@ -376,6 +505,7 @@ fn drawOne(l: *Layout, i: usize) bool {
         }, .{ .expand = .both }) catch null;
         if (region) |*r| r.deinit();
     }
+    dvui.clipSet(prev_clip_live);
     if (state.floats.items.items[i].landing) |land| {
         if (land.photo) |tex| drawPhoto(tex, land.photo_size, bounds, header, corner_r * scale, 1 - std.math.clamp(landed, 0, 1));
     }

@@ -358,6 +358,9 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     liftShape(d, grabbed);
     if (visibleId(l, name)) |id| d.moved_id = id;
     mapTargets(l, d);
+    // Carried out of a float, the float steps aside: photographed now, whole, before anything of
+    // the drag is drawn over it.
+    Floats.liftedFrom(l, name, d.moved_id);
 }
 
 /// The carried shape starts at `from` — what was grabbed: a tab, a card, a place's grid button —
@@ -433,27 +436,28 @@ fn mapTargets(l: *Layout, d: *ViewDrag) void {
 
 /// Photograph the floats with the places: each one's window and header, with the layer its places
 /// are drawn in (`Floats.draw`: the `n`th from the bottom is layer `n`). A float flying shut covers
-/// nothing, and neither does the one the view is being carried out of when that leaves it empty
-/// (`emptiesFloat`).
+/// nothing, and neither does the one the view is being carried out of (`carriedOutOf`).
 fn mapOccluders(l: *Layout, d: *ViewDrag) void {
     d.occluder_count = 0;
     for (l.state.floats.items.items, 0..) |f, i| {
         if (d.occluder_count == d.occluders.len) break;
         if (f.closing or f.bounds.w <= 0 or f.bounds.h <= 0) continue;
-        if (emptiesFloat(l, f.name)) continue;
+        if (carriedOutOf(l, f.name)) continue;
         d.occluders[d.occluder_count] = .{ .layer = @intCast(i + 1), .bounds = f.bounds, .header = f.header };
         d.occluder_count += 1;
     }
 }
 
-/// Whether the live drag is carrying the last view out of float `name`, one nobody split. The float
-/// closes on the drop, so meanwhile it is out of the way: it covers nothing (`mapOccluders`) and
-/// steps aside (`Floats.draw`), and what it was over is where the view can go. A float that keeps
-/// other views stays — it is still somewhere to drop, and still there after.
-pub fn emptiesFloat(l: *Layout, name: []const u8) bool {
+/// Whether the live drag is carrying a view out of float `name` — out of its place, or a place a
+/// split of it made. The float is out of the way meanwhile: it steps aside (`Floats.draw`) and
+/// covers nothing (`mapOccluders`), so what it was over — usually where the view is going — can be
+/// seen and aimed at. It comes back when the drag ends: as it was if the view is let go over
+/// nothing, without the view if it landed elsewhere, and not at all if that left it empty.
+pub fn carriedOutOf(l: *Layout, name: []const u8) bool {
     const d = &l.state.view_drag;
-    if (!d.active() or d.loose() or !std.mem.eql(u8, d.name, name)) return false;
-    return l.state.splits.root(name) == null and holding(l, name).len <= 1;
+    if (!d.active() or d.loose()) return false;
+    const root = l.state.floatRoot(d.name) orelse return false;
+    return std.mem.eql(u8, root, name);
 }
 
 /// What a place was when the drag began, or null if it was not one of the

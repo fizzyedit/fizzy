@@ -672,7 +672,10 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     // for the frames that fade took to run down: a stroke flashed round the place a view landed in.
     // Held for the whole of a drag out of this place, so the place being carried from stays
     // marked — the only place a drag lights, and it goes out as the drag ends.
-    const ring_wanted = filled and (dragging_this or (!self.state.view_drag.active() and (picker_here or near or pressing)));
+    // Not round a float stepping aside for the drag (`Floats`): nothing of it shows, and the
+    // ring is drawn past the clip that hides the rest.
+    const aside = if (self.state.floatRoot(opts.name)) |root| ViewDrag.carriedOutOf(self, root) else false;
+    const ring_wanted = filled and !aside and (dragging_this or (!self.state.view_drag.active() and (picker_here or near or pressing)));
     const ring_alpha = chooserFade(box.data().id.update("ring"), if (ring_wanted) 1 else 0);
     if (ring_alpha > 0.01) {
         // Under the region's own border rect, not the content clip `cornerButton` runs inside:

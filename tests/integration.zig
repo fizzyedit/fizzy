@@ -4850,7 +4850,7 @@ test "float: the float a view is carried out of steps aside, and comes back when
     try std.testing.expectEqual(@as(f32, 0), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
 }
 
-test "float: a float that keeps another view stays while one is carried out of it" {
+test "float: a float of two steps aside too, and comes back without the view that landed elsewhere" {
     var case = try ManyPanelCase.init();
     defer case.deinit();
     const editor = case.ctx.editor;
@@ -4862,14 +4862,26 @@ test "float: a float that keeps another view stays while one is carried out of i
     try std.testing.expectEqual(@as(usize, 2), case.shows("Float 1").len);
     const floats = &editor.app.layout.floats;
     const bounds = floats.items.items[0].bounds;
+    const carried = visibleIn(editor, "Float 1") orelse return error.TestExpectedEqual;
 
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
-    fizzy.Editor.Layout.ViewDrag.begin(&layout, "Float 1", bounds, bounds);
-    defer editor.app.layout.view_drag.discard();
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Float 1", bounds, bounds);
     for (0..4) |_| _ = try dvui.testing.step(ManyPanelFrame.frame);
-    // Still a place to drop on, and still there after: it stays, and covers what it covers.
+    // Out of the way while the view is carried: it covers nothing.
+    try std.testing.expectEqual(@as(f32, 1), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.view_drag.occluder_count);
+
+    // Landed in Panel, which takes it beside what it shows: the float comes back, holding the
+    // other.
+    ViewDrag.place(&layout, "Float 1", "Panel", .swap);
+    editor.app.layout.view_drag.discard();
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
     try std.testing.expectEqual(@as(f32, 0), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
-    try std.testing.expectEqual(@as(usize, 1), editor.app.layout.view_drag.occluder_count);
+    const left = case.shows("Float 1");
+    try std.testing.expectEqual(@as(usize, 1), left.len);
+    try std.testing.expect(!std.mem.eql(u8, left[0], carried));
 }
 
 test "float: one that stepped aside for its last view goes when the view lands, without flying shut" {
