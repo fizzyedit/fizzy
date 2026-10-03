@@ -785,10 +785,10 @@ fn overAnyStrip(p: dvui.Point.Physical) bool {
 ///
 /// A window that takes no pointer events covers nothing, here as for dvui: the app's drag
 /// overlay, which draws the drops and the carried view over every window, and what a drag
-/// carries — a tab floating off its strip. A float stepping aside for a view carried out of it is
-/// still a window, and covers. It steps aside only for the app's view drag, which reads the floats
-/// itself and sees past it (`Host.Region.offerChooser`, `RegionSpec.on_drop`), and a tab along
-/// the strips meets one only in the moment it takes to come back or go, when dvui hands it the
+/// carries — a tab floating off its strip. A float gone to a ghost for a view carried out of it is
+/// still a window, and covers. It is a ghost only for the app's view drag, which reads the floats
+/// itself and sees through it (`Host.Region.offerChooser`, `RegionSpec.on_drop`), and a tab along
+/// the strips meets one only in the moment it takes to fade or firm, when dvui hands it the
 /// release too.
 pub fn uncoveredAt(self: *const Workspace, p: dvui.Point.Physical) bool {
     return dvui.currentWindow().subwindows.windowFor(p) == self.subwindow_id;

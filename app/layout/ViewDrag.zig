@@ -458,8 +458,8 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     liftShape(d, grabbed);
     if (visibleId(l, name)) |id| d.moved_id = id;
     mapTargets(l, d);
-    // Carried out of a float, the float steps aside: photographed now, whole, before anything of
-    // the drag is drawn over it.
+    // Carried out of a float, the float goes to a ghost of itself: photographed now, whole, before
+    // anything of the drag is drawn over it.
     Floats.liftedFrom(l, name, d.moved_id);
 }
 
