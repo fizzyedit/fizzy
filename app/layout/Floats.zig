@@ -224,8 +224,8 @@ pub fn liftedFrom(l: *Layout, place: []const u8, view: []const u8) void {
     // The window alone: its shadow is drawn round the photograph as it goes (`drawAsidePhoto`), so
     // nothing square of what was round it is in the picture to blur in.
     const r = f.bounds.intersect(dvui.windowRectPixels());
-    // No picture where the frame cannot be read (no targets; the web before a frame is read): it
-    // fades under its alpha instead (`draw`).
+    // No picture where the frame cannot be read (no targets; the web before a frame is read): the
+    // live float fades instead (`draw`).
     if (core.FrameTarget.snapshot(r)) |tex| f.aside_photo = .{ .texture = tex, .rect = r };
 }
 
@@ -389,7 +389,8 @@ fn drawOne(l: *Layout, i: usize) bool {
         const f = &state.floats.items.items[i];
         f.aside.toward(if (carried_out) 1 else 0, now);
         // The drag is over and the view is not in it any more — it landed elsewhere: the
-        // photograph is of what the float was, so it comes back as it is now, under its alpha.
+        // photograph is of what the float was, so it comes back as it is now, the live float
+        // fading in.
         if (!carried_out and f.aside_photo != null and !holdsView(l, f.name, f.aside_view)) dropAsidePhoto(f);
     }
     const first = state.floats.items.items[i];
@@ -406,8 +407,8 @@ fn drawOne(l: *Layout, i: usize) bool {
     const as_photo = first.aside_photo != null and (closing_aside or stepping);
     // Back: the live float again.
     if (!as_photo and first.aside_photo != null) dropAsidePhoto(&state.floats.items.items[i]);
-    // With no photograph it fades under its alpha — what its view draws past an alpha shows until
-    // it is all the way aside, and then nothing of it does.
+    // With no photograph it is the live float that fades — its view whole, where it can be drawn
+    // into a picture of itself (`Whole`) — and all the way aside nothing of it shows.
     const shown = if (as_photo) 1 else 1 - aside;
     const hide_live = as_photo or aside >= 1;
 
@@ -494,9 +495,21 @@ fn drawOne(l: *Layout, i: usize) bool {
     win.dragAreaSet(if (landing or aside > 0) .{} else header);
 
     {
-        // The view fades in over the photograph it grew out of, which fades out above it.
-        const prev_alpha = dvui.alpha(std.math.clamp(landed, 0, 1));
-        defer dvui.alphaSet(prev_alpha);
+        // The view fades with the window round it: in over the photograph it grew out of as it
+        // lands; in when the float comes back from a drag without the view that landed
+        // elsewhere; out when it steps aside with no photograph to step aside as. It fades
+        // whole — drawn into a picture of itself, laid down at the fade (`Whole`) — since a view
+        // may draw where no alpha reaches (the workbench's home page sets its own; a view drawing
+        // its own triangles is handed alpha to apply itself), and under an alpha alone that much
+        // of it was there at once, ahead of its window. With nothing to draw into (no targets, a
+        // frame nobody sees) it fades under its alpha.
+        const view_fade = std.math.clamp(landed, 0, 1);
+        const top = header.y + header.h;
+        const body: dvui.Rect.Physical = .{ .x = bounds.x, .y = top, .w = bounds.w, .h = @max(0, bounds.y + bounds.h - top) };
+        var whole: ?Whole = if (!hide_live and view_fade * shown < 1) Whole.begin(body.intersect(dvui.clipGet())) else null;
+        // Drawn into the picture as it is when whole; the picture takes the fade.
+        const prev_alpha = if (whole != null) dvui.alpha(1) else dvui.alpha(view_fade);
+        if (whole != null) dvui.alphaSet(1);
         var region = l.region(@src(), .{
             .name = first.name,
             .keywords = Layout.slot_keywords,
@@ -504,6 +517,8 @@ fn drawOne(l: *Layout, i: usize) bool {
             .shows = .many,
         }, .{ .expand = .both }) catch null;
         if (region) |*r| r.deinit();
+        dvui.alphaSet(prev_alpha);
+        if (whole) |*w| w.end(view_fade);
     }
     dvui.clipSet(prev_clip_live);
     if (state.floats.items.items[i].landing) |land| {
@@ -531,6 +546,29 @@ fn drawOne(l: *Layout, i: usize) bool {
     }
     return true;
 }
+
+/// A float's view drawn into a picture of itself while it fades (`drawOne`): laid down at the
+/// fade, it fades whole, however the view draws.
+const Whole = struct {
+    pic: dvui.Picture,
+
+    /// Draw into a picture of `r`, physical, from here. Null where there is nothing to draw into
+    /// (`core.anim.CrossFade.beginCapture`: no texture targets, nothing in `r`, a frame nobody
+    /// sees).
+    fn begin(r: dvui.Rect.Physical) ?Whole {
+        return .{ .pic = core.anim.CrossFade.beginCapture(r) orelse return null };
+    }
+
+    /// Stop drawing into it, and lay it down where it was drawn, at `opacity` under the alpha in
+    /// effect.
+    fn end(self: *Whole, opacity: f32) void {
+        self.pic.stop();
+        const tex = dvui.textureFromTarget(self.pic.texture) catch return;
+        const rs: dvui.RectScale = .{ .r = self.pic.r, .s = dvui.currentWindow().natural_scale };
+        dvui.renderTexture(tex, rs, .{ .colormod = dvui.Color.white.opacity(opacity) }) catch {};
+        dvui.Texture.destroyLater(tex);
+    }
+};
 
 /// How far through its landing a float is, 0…1 on the clock; 1 at once when motion is off.
 fn landingFraction(start_ns: i128, now: i128) f32 {

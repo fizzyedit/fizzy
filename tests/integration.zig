@@ -5036,6 +5036,59 @@ test "float: one that stepped aside for its last view goes when the view lands, 
     try std.testing.expect(holds(case.shows("Panel"), "test.output"));
 }
 
+/// A view that counts its draws and keeps the alpha it was last drawn at.
+const FadeProbe = struct {
+    var draws: usize = 0;
+    var alpha: f32 = 0;
+
+    fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
+        draws += 1;
+        alpha = dvui.currentWindow().alpha;
+        return .ok;
+    }
+};
+
+// The view of a float coming back is drawn into a picture of itself and laid down at the fade,
+// so even what it draws past dvui's alpha fades with the window. dvui's testing backend has no
+// render targets, so here it is the fallback — the view under the window's alpha — that runs: it
+// still draws the view once a frame, and never ahead of the window round it.
+test "float: coming back without the view that landed elsewhere, it draws its view once a frame, never ahead of its window" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.probe", .title = "Probe", .keywords = fizzy.sdk.keywords.ide.panel, .draw = FadeProbe.draw });
+    editor.app.host.setSelectionFor(fizzy.sdk.keywords.ide.panel, "test.probe");
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqualStrings("test.probe", visibleIn(editor, "Panel") orelse return error.TestExpectedEqual);
+    // The probe floated, then Output beside it in the float, in front of it.
+    try case.place("Panel", "Panel", .swap);
+    try case.place("Panel", "Float 1", .swap);
+    try std.testing.expectEqualStrings("test.output", visibleIn(editor, "Float 1") orelse return error.TestExpectedEqual);
+    const floats = &editor.app.layout.floats;
+    const bounds = floats.items.items[0].bounds;
+
+    // Output carried out to Panel: the float steps aside, and comes back holding the probe.
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Float 1", bounds, bounds);
+    for (0..4) |_| _ = try dvui.testing.step(ManyPanelFrame.frame);
+    ViewDrag.place(&layout, "Float 1", "Panel", .swap);
+    editor.app.layout.view_drag.discard();
+
+    var faded = false;
+    for (0..8) |_| {
+        const before = FadeProbe.draws;
+        _ = try dvui.testing.step(ManyPanelFrame.frame);
+        try std.testing.expectEqual(before + 1, FadeProbe.draws);
+        const shown = 1 - floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns);
+        try std.testing.expect(FadeProbe.alpha <= shown + 0.001);
+        if (FadeProbe.alpha > 0.001 and FadeProbe.alpha < 0.999) faded = true;
+    }
+    try std.testing.expect(faded);
+    try std.testing.expectEqual(@as(f32, 1), FadeProbe.alpha);
+    try std.testing.expectEqualStrings("test.probe", visibleIn(editor, "Float 1") orelse return error.TestExpectedEqual);
+}
+
 // ── What a plugin's own drags read of the floats ─────────────────────────────────────────────────
 // A plugin that hit-tests a drag of its own — the workbench, a file from its tree over its
 // document panes — reads whether a window lies over a pane from the window's subwindows, as dvui

@@ -159,8 +159,9 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
   the frame at the lift, while the float itself goes on drawing its place clipped to nothing (its
   corner button holds the drag) — a view may draw in ways no alpha reaches, and none of it may
   show. Let go over nothing and the photograph comes back into focus, then the float takes over
-  from it. Land the view elsewhere and the float comes back as it now is, under its alpha — or,
-  if that was its last view, finishes fading and is gone, with no flight shut.
+  from it. Land the view elsewhere and the float comes back as it now is, fading in with its view
+  drawn into a picture of itself, so that too fades whole — or, if that was its last view,
+  finishes fading and is gone, with no flight shut.
 - **Moving and stacking.** A float moves by its header and resizes from its edges, no smaller than
   160×96. A press anywhere in it brings it to the front, as on an OS window.
 - **Back again.** Dragged out by its corner button, a view lands like any other, and a float its
