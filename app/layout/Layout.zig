@@ -853,6 +853,8 @@ pub const Drop = @import("Drop.zig");
 pub const ViewDrag = @import("ViewDrag.zig");
 /// The views floating over the window, each in a place of its own — see `Floats.zig`.
 pub const Floats = @import("Floats.zig");
+/// The rules a float follows, as values (std-only).
+pub const float_rules = @import("float_rules.zig");
 const Picker = @import("Picker.zig");
 /// The arrangement a shape starts from — see `Seed.zig`. `Layout.Seed` is the tree union.
 pub const Seed = @import("Seed.zig").Tree;

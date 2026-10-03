@@ -1334,7 +1334,6 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8) void {
         .name = name,
         .rect = Floats.fromRules(rect),
         .home = home,
-        .born_ns = cw.frame_time_ns,
         .landing = landing,
     }) catch {
         if (landing.photo) |tex| dvui.Texture.destroyLater(tex);

@@ -41,8 +41,11 @@ pub const Float = struct {
     /// The window's id extra: unique for as long as the app runs, so a closed float's window
     /// state (dvui forgets it a frame later) is never read by the next float of the same name.
     serial: u64 = 0,
-    /// The frame it was made on. That frame it registers its place and draws nothing (`draw`).
-    born_ns: i128 = 0,
+    /// Not drawn yet: the first frame it is drawn it only registers its place (`draw`).
+    fresh: bool = true,
+    /// Brought back from a saved layout: the window it comes back into may be smaller than the
+    /// one it was saved in, so its first draw holds it on screen (`float_rules.reachable`).
+    restored: bool = false,
     landing: ?Landing = null,
     /// Flying shut: drawn as glass only, and dropped when the flight ends.
     closing: bool = false,
@@ -229,21 +232,29 @@ fn drawOne(l: *Layout, i: usize) bool {
     const cw = dvui.currentWindow();
     const now = cw.frame_time_ns;
     const scale = cw.natural_scale;
-    const first = state.floats.items.items[i];
-    if (first.closing and first.win_id == .zero) return false;
-    // Made this frame — by a release inside the place it left, which has drawn that view already
-    // this frame. Its place goes in the registry, so from the next frame it claims the view away
-    // from where it was; the window, and the view in it, start then. Drawn now, the view would be
-    // drawn twice in one frame.
-    if (first.born_ns == now and !first.closing) {
+    if (state.floats.items.items[i].closing and state.floats.items.items[i].win_id == .zero) return false;
+    // Not drawn before: made this frame by a release inside the place it left, which has drawn
+    // that view already this frame — or brought back from a saved layout before any place has
+    // said it is not theirs. Its place goes in the registry, so from the next frame it claims the
+    // view away from where it was; the window, and the view in it, start then. Drawn now, the
+    // view would be drawn twice in one frame.
+    if (state.floats.items.items[i].fresh) {
+        const f = &state.floats.items.items[i];
+        f.fresh = false;
+        if (f.restored) {
+            f.rect = fromRules(rules.reachable(toRules(f.rect), toRules(dvui.windowRect())));
+            f.restored = false;
+        }
+        if (f.closing) return false;
         state.registerRegion(l.gpa, .{
-            .name = first.name,
+            .name = f.name,
             .keywords = Layout.slot_keywords,
             .shows = .many,
             .by_name = true,
         });
         return true;
     }
+    const first = state.floats.items.items[i];
 
     // Where the window is this frame: on its way out of the carried glass, or where it was left.
     var rect = first.rect;
@@ -263,6 +274,10 @@ fn drawOne(l: *Layout, i: usize) bool {
     // The carried drop was glass already: the window takes over from it, whole, rather than
     // forming a second time.
     if (frost) |*fr| fr.form = 1;
+    // Held by the pointer as the frame begins: the user is moving or resizing it. Read before the
+    // window runs, because it lets go of the pointer on the release while it handles its events —
+    // a last move and the release in one frame would otherwise read as not held, and snap back.
+    const held_before = first.win_id != .zero and dvui.captured(first.win_id);
     var win_rect = rect;
     var win = core.widgets.floatingWindow(@src(), .{
         .rect = &win_rect,
@@ -318,6 +333,8 @@ fn drawOne(l: *Layout, i: usize) bool {
     if (state.floats.items.items[i].landing) |land| {
         if (land.photo) |tex| drawPhoto(tex, land.photo_size, bounds, header, corner_r * scale, 1 - std.math.clamp(landed, 0, 1));
     }
+    // Or taken hold of this frame (a press lands in `deinit`; anything it moves is next frame's).
+    const held = held_before or dvui.captured(win_id);
     win.deinit();
 
     // Contents may have added a float, moving the list: read this one again.
@@ -329,8 +346,10 @@ fn drawOne(l: *Layout, i: usize) bool {
         close(l, f.name, .home);
         return true;
     }
-    // Moved or resized: remember where, no smaller than a float may be.
-    if (!landing and !f.closing and !win_rect.equals(f.rect)) {
+    // Moved or resized by the user: remember where, no smaller than a float may be. Only theirs —
+    // the window holds a float on screen when it shrinks (`FloatingWindowWidget`), and that is
+    // shown, not kept, so the float is back where they left it when the window grows again.
+    if (held and !landing and !f.closing and !win_rect.equals(f.rect)) {
         f.rect = fromRules(rules.resized(toRules(win_rect)));
         state.markDirty();
     }
