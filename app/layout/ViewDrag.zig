@@ -784,9 +784,14 @@ pub fn drawOverlay(l: *Layout) void {
     // Nothing to lay over the window.
     if (n == 0 and !d.active()) return;
     var layer: dvui.FloatingWidget = undefined;
-    // A new layer each drag (`overlay_gen`), so it is a new window on top: over every float.
     layer.init(@src(), .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false, .id_extra = d.overlay_gen });
     defer layer.deinit();
+    // Over every float. A floating widget keeps just above the window it was made in — the main
+    // window — so a float drawn after it lay over the drag: a drop zone on a float, or the view
+    // carried over one, went under the very window it was aimed at. Re-added as a window of its
+    // own and raised each frame, as the demo's overlay is (`automation.overlay`).
+    dvui.subwindowAdd(layer.data().id, layer.data().rect, layer.data().rectScale().r, false, null, false);
+    dvui.raiseSubwindow(layer.data().id);
     // The drops, then the card over them: one layer, so their order is the order drawn — the
     // card's glass showing the drop it is aimed at blurred through it, its top left just off the
     // pointer so the bubble under the pointer stays in view. (Two floating layers stack in the
