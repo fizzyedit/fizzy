@@ -15,6 +15,7 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 
 const GpuRenderer = @import("GpuRenderer.zig");
+pub const viewport_map = @import("viewport_map.zig");
 
 /// What an app gets from its window beyond drawing into it: native dialogs, files the OS hands
 /// over, trackpad gestures, the window's chrome and state (`src/backend/native/platform`).
@@ -58,6 +59,8 @@ last_pixel_size: dvui.Size.Physical = .{ .w = 800, .h = 600 },
 last_window_size: dvui.Size.Natural = .{ .w = 800, .h = 600 },
 cursor_last: dvui.enums.Cursor = .arrow,
 text_input_rect_last: ?dvui.Rect.Natural = null,
+/// The window text input was last started in (`textInputRect`): this one, or a viewport's.
+text_input_window: ?*c.SDL_Window = null,
 cursor_backing: [cursor_enum_count]?*c.SDL_Cursor = @splat(null),
 cursor_backing_tried: [cursor_enum_count]bool = @splat(false),
 
@@ -82,8 +85,42 @@ clock_ahead_ns: i128 = 0,
 window_geometry: WindowGeometry = .{},
 // Set by `initWindow` and `initWindowSecondary` for use by eventual child window.
 init_opts_save: ?InitOptions = null,
+/// The OS windows besides this one that show part of its frame (`Viewport`).
+viewports: [max_viewports]?Viewport = @splat(null),
 
 const cursor_enum_count = @typeInfo(dvui.enums.Cursor).@"enum".fields.len;
+
+/// The most viewports open at once.
+pub const max_viewports = 8;
+
+/// An OS window besides the main one that shows a part of the one frame: a float popped out of
+/// the main window (`docs/POPOUT_WINDOWS_PLAN.md`). There stays one `dvui.Window`. The part this
+/// window shows is a band of the frame past the main window's edge (`viewport_map`): the app
+/// draws the float there, replays its drawing into a target of its own and hands that over
+/// (`viewportPresent`), and the pointer over this window goes back to dvui where the window
+/// shows it in the frame (`addViewportEvent`). Drawn by the main window's renderer, on its
+/// command buffer (`GpuRenderer.presentInto`).
+pub const Viewport = struct {
+    window: *c.SDL_Window,
+    /// Where its band starts in the frame, physical pixels (`viewport_map.band`).
+    band: viewport_map.Point,
+    /// Where the main window's top left was on the desktop when it opened, and the main window's
+    /// pixels per point then: how its band lies on the desktop, for its whole life
+    /// (`viewport_map`).
+    anchor: viewport_map.Point,
+    density: f32,
+    /// Where its window was last put, whole points: moved or resized only when that changes.
+    screen: viewport_map.ScreenRect,
+    /// The part of the frame it shows, physical pixels (`viewport_map.place`).
+    frame: viewport_map.Rect,
+    /// Created hidden and shown once a frame has been presented into it, so it never shows
+    /// empty.
+    shown: bool = false,
+    /// The OS asked to close it (⌘W, the Window menu): the app takes its float back in.
+    close_requested: bool = false,
+    /// Its part of the frame, drawn this frame, for `renderPresent` to copy into it.
+    pending: ?dvui.TextureTarget = null,
+};
 
 pub const InitOptions = struct {
     /// Io backend and dvui should use, will be assigned to dvui.io.
@@ -646,6 +683,11 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
         _ = try self.addEvent(win, event.*);
         return true;
     }
+    // A viewport's window feeds the same dvui window as this one (fizzy's own).
+    if (self.viewportOf(target_win)) |vp| {
+        _ = try self.addViewportEvent(win, vp, event.*);
+        return true;
+    }
     var child_win_it = win.child_os_wins.iterator();
     // Use next_peek because the fact we had events since last frame
     // doesn't mean the child Os Window will still be used in the upcoming frame, we don't know that yet.
@@ -658,6 +700,148 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
         )) return true;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Viewports (fizzy's own; see `Viewport`)
+
+/// Open a viewport over `at` — physical pixels of the frame as the main window shows it — so its
+/// window opens on the desktop exactly over that part of the main window: the place a float
+/// popped out of was. Its own part of the frame is `at` moved into its band (`Viewport.frame`).
+/// Hidden until a frame is presented into it. Null when it cannot be made, or `max_viewports`
+/// are open.
+pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8) ?*Viewport {
+    const slot = for (self.viewports, 0..) |v, i| {
+        if (v == null) break i;
+    } else return null;
+    const b = viewport_map.band(slot);
+    const anchor = self.mainOnScreen();
+    const d = self.density();
+    const placed = viewport_map.place(b, anchor, d, .{ .x = b.x + at.x, .y = b.y + at.y, .w = at.w, .h = at.h });
+
+    // The first click on a viewport acts, as one on the main window's floats does, rather than
+    // only bringing the window forward. SDL's hint is every window's: the main window's first
+    // click acts too while a viewport is open (`viewportClose` puts it back).
+    _ = c.SDL_SetHint(c.SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
+
+    const props = c.SDL_CreateProperties();
+    defer c.SDL_DestroyProperties(props);
+    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_BORDERLESS | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    _ = c.SDL_SetStringProperty(props, c.SDL_PROP_WINDOW_CREATE_TITLE_STRING, title_text.ptr);
+    _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_X_NUMBER, placed.screen.x);
+    _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_Y_NUMBER, placed.screen.y);
+    _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, placed.screen.w);
+    _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, placed.screen.h);
+    _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER, @intCast(flags));
+    const window = c.SDL_CreateWindowWithProperties(props) orelse {
+        logErr("SDL_CreateWindowWithProperties (viewport)") catch {};
+        return null;
+    };
+    self.gpu.claimViewport(window) catch {
+        c.SDL_DestroyWindow(window);
+        return null;
+    };
+    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame };
+    return &self.viewports[slot].?;
+}
+
+/// Close a viewport: its window goes, and the slot (and band) with it.
+pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
+    for (&self.viewports) |*slot| {
+        if (slot.*) |*v| if (v == vp) {
+            self.gpu.releaseViewport(v.window);
+            c.SDL_DestroyWindow(v.window);
+            slot.* = null;
+            break;
+        };
+    }
+    for (self.viewports) |v| if (v != null) return;
+    _ = c.SDL_ResetHint(c.SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH);
+}
+
+/// Put `vp`'s window where it shows `frame` (physical pixels, in its band), on whole points;
+/// returns the part of the frame it then shows (`viewport_map.place`).
+pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) viewport_map.Rect {
+    const placed = viewport_map.place(vp.band, vp.anchor, vp.density, frame);
+    const was = vp.screen;
+    if (placed.screen.x != was.x or placed.screen.y != was.y) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
+    if (placed.screen.w != was.w or placed.screen.h != was.h) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
+    vp.screen = placed.screen;
+    vp.frame = placed.frame;
+    return placed.frame;
+}
+
+/// Hand `vp` its part of this frame, drawn into `target`, for `renderPresent` to copy into its
+/// window — or nothing, when there is no picture of it this frame (a target let go must not be
+/// copied from after the frame destroys it).
+pub fn viewportPresent(_: *SDLBackend, vp: *Viewport, target: ?dvui.TextureTarget) void {
+    vp.pending = target;
+}
+
+fn viewportOf(self: *SDLBackend, window: *c.SDL_Window) ?*Viewport {
+    for (&self.viewports) |*slot| {
+        if (slot.*) |*v| if (v.window == window) return v;
+    }
+    return null;
+}
+
+/// The main window's top left on the desktop, points.
+fn mainOnScreen(self: *SDLBackend) viewport_map.Point {
+    var x: c_int = 0;
+    var y: c_int = 0;
+    _ = c.SDL_GetWindowPosition(self.window, &x, &y);
+    return .{ .x = @floatFromInt(x), .y = @floatFromInt(y) };
+}
+
+/// The main window's pixels per point: every viewport draws at its scale for now (one
+/// `natural_scale`, `docs/POPOUT_WINDOWS_PLAN.md` on DPI).
+fn density(self: *SDLBackend) f32 {
+    const d = c.SDL_GetWindowPixelDensity(self.window);
+    return if (d > 0) d else 1;
+}
+
+/// Where in the frame a pointer at `local` (points, in `vp`'s window) is: the window's place on
+/// the desktop plus `local`, through the band (`viewport_map`). Read against where the window is
+/// now, as Dear ImGui's SDL backend reads its viewports.
+fn viewportPoint(vp: *const Viewport, local_x: f32, local_y: f32) dvui.Point.Physical {
+    var wx: c_int = 0;
+    var wy: c_int = 0;
+    _ = c.SDL_GetWindowPosition(vp.window, &wx, &wy);
+    const screen: viewport_map.Point = .{ .x = @as(f32, @floatFromInt(wx)) + local_x, .y = @as(f32, @floatFromInt(wy)) + local_y };
+    const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, screen);
+    return .{ .x = p.x, .y = p.y };
+}
+
+/// An event from a viewport's window, for the one dvui window: the pointer goes where the window
+/// shows it in the frame, keys go as they are, and a close asked of the window is kept for the
+/// app, which takes the float back in (`Viewport.close_requested`).
+fn addViewportEvent(self: *SDLBackend, win: *dvui.Window, vp: *Viewport, event: c.SDL_Event) !bool {
+    switch (event.type) {
+        c.SDL_EVENT_MOUSE_MOTION => {
+            if (event.motion.which == c.SDL_TOUCH_MOUSEID and !self.touch_mouse_events) return false;
+            return try win.addEventMouseMotion(.{ .pt = viewportPoint(vp, event.motion.x, event.motion.y) });
+        },
+        c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_WHEEL => {
+            // dvui presses and scrolls where the pointer last moved, which may have been over
+            // another window: it is moved here first.
+            const pt = if (event.type == c.SDL_EVENT_MOUSE_WHEEL)
+                viewportPoint(vp, event.wheel.mouse_x, event.wheel.mouse_y)
+            else
+                viewportPoint(vp, event.button.x, event.button.y);
+            if (pt.x != win.mouse_pt.x or pt.y != win.mouse_pt.y) _ = try win.addEventMouseMotion(.{ .pt = pt });
+            return try self.addEvent(win, event);
+        },
+        c.SDL_EVENT_KEY_DOWN, c.SDL_EVENT_KEY_UP, c.SDL_EVENT_TEXT_INPUT, c.SDL_EVENT_TEXT_EDITING => return try self.addEvent(win, event),
+        c.SDL_EVENT_WINDOW_MOUSE_LEAVE => {
+            try win.addEventWindow(.{ .action = .leave });
+            return false;
+        },
+        c.SDL_EVENT_WINDOW_CLOSE_REQUESTED => {
+            vp.close_requested = true;
+            return false;
+        },
+        else => return false,
+    }
 }
 
 pub fn setCursor(self: *SDLBackend, cursor: dvui.enums.Cursor) void {
@@ -705,14 +889,31 @@ pub fn setCursor(self: *SDLBackend, cursor: dvui.enums.Cursor) void {
 }
 
 pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
+    // Typed into whichever window has the keyboard: a viewport's, when one does — its text goes
+    // to the one dvui window like its keys (`addViewportEvent`), and its IME sits over its part
+    // of the frame.
+    const focus = c.SDL_GetKeyboardFocus();
+    const vp: ?*Viewport = if (focus) |w| self.viewportOf(w) else null;
+    const window = if (vp) |v| v.window else self.window;
     // SDL_StartTextInput unconditionally re-applies text input properties every
     // call, which on iOS tears the hidden UITextField out of the view hierarchy
     // and re-adds it (see UIKit_SetTextInputProperties), thrashing the on-screen
     // keyboard if called every frame. Only call through on an actual change.
-    if (std.meta.eql(rect, self.text_input_rect_last)) return;
+    if (std.meta.eql(rect, self.text_input_rect_last) and window == (self.text_input_window orelse self.window)) return;
+    if (self.text_input_window) |was| if (was != window and self.viewportOf(was) != null) {
+        _ = c.SDL_StopTextInput(was);
+    };
     defer self.text_input_rect_last = rect;
+    defer self.text_input_window = window;
 
-    if (rect) |r| {
+    if (rect) |rect_frame| {
+        var r = rect_frame;
+        if (vp) |v| {
+            // From the frame into the viewport's window: its band offset, in points.
+            const d = c.SDL_GetWindowPixelDensity(v.window);
+            r.x -= v.frame.x / (if (d > 0) d else 1);
+            r.y -= v.frame.y / (if (d > 0) d else 1);
+        }
         // This is the offset from r.x in window coords, supposed to be the
         // location of the cursor I think so that the IME window can be put
         // at the cursor location.  We will use 0 for now, might need to
@@ -721,7 +922,7 @@ pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
         const cursor = 0;
 
         toErr(c.SDL_SetTextInputArea(
-            self.window,
+            window,
             &c.SDL_Rect{
                 .x = @trunc(r.x),
                 .y = @trunc(r.y),
@@ -730,9 +931,9 @@ pub fn textInputRect(self: *SDLBackend, rect: ?dvui.Rect.Natural) void {
             },
             cursor,
         ), "SDL_SetTextInputArea in textInputRect") catch return;
-        toErr(c.SDL_StartTextInput(self.window), "SDL_StartTextInput in textInputRect") catch return;
+        toErr(c.SDL_StartTextInput(window), "SDL_StartTextInput in textInputRect") catch return;
     } else {
-        toErr(c.SDL_StopTextInput(self.window), "SDL_StopTextInput in textInputRect") catch return;
+        toErr(c.SDL_StopTextInput(window), "SDL_StopTextInput in textInputRect") catch return;
     }
     self.manage_backend_tracking.check(.textInputRect);
 }
@@ -747,6 +948,10 @@ pub fn deinit(self: *SDLBackend) void {
             self.trackGeometry();
             WindowGeometry.save(self);
         }
+        // Viewports are claimed on this window's device: given back before it goes.
+        for (&self.viewports) |*slot| {
+            if (slot.*) |*v| self.viewportClose(v);
+        }
         self.gpu.destroy();
         c.SDL_DestroyWindow(self.window);
         if (self.sdl_quit) {
@@ -757,7 +962,29 @@ pub fn deinit(self: *SDLBackend) void {
 }
 
 pub fn renderPresent(self: *SDLBackend) void {
+    // Each viewport's part of the frame goes in with the main window's, one submission for all.
+    var first_frame: [max_viewports]bool = @splat(false);
+    for (&self.viewports, 0..) |*slot, i| {
+        const vp = if (slot.*) |*v| v else continue;
+        const target = vp.pending orelse continue;
+        vp.pending = null;
+        // Nobody sees a minimized or covered window, and Metal can hold a drawable back from one
+        // for up to a second: skipped, once it has been shown (it is created hidden, and covered
+        // then by its own account).
+        if (vp.shown and c.SDL_GetWindowFlags(vp.window) & (c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_OCCLUDED) != 0) continue;
+        if (self.gpu.presentInto(vp.window, target) and !vp.shown) first_frame[i] = true;
+    }
     self.gpu.present(self.clear_window_on_begin);
+    // Shown once there is a frame in it. Not made key: the window it came out of keeps the
+    // keyboard until the viewport is clicked.
+    for (&self.viewports, first_frame) |*slot, show| {
+        if (!show) continue;
+        const vp = if (slot.*) |*v| v else continue;
+        _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
+        _ = c.SDL_ShowWindow(vp.window);
+        _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
+        vp.shown = true;
+    }
     self.manage_backend_tracking.check(.renderPresent);
 }
 

@@ -553,6 +553,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         .{ "fizzy-window-layout-tests", "src/backend/native/platform/window_layout.zig" },
         // The hit test Windows' WM_NCHITTEST and Linux's SDL hit test both answer from.
         .{ "fizzy-titlebar-tests", "src/backend/native/platform/titlebar.zig" },
+        // Where a viewport's OS window is on the desktop and where its part of the frame lies.
+        // std-only (see viewport_map.zig); `SDLBackend` applies it.
+        .{ "fizzy-viewport-map-tests", "src/backend/native/viewport_map.zig" },
         .{ "fizzy-plugin-store-tests", "app/store/registry/store.zig" },
         .{ "fizzy-paths-tests", "core/paths.zig" },
         // The credential store behind `Host.secrets`: a 0600 file, keyed, round-tripped.
