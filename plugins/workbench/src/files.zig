@@ -21,6 +21,10 @@ const tree_drag = "workbench.file_row";
 /// either has left the tree (`leftTree`).
 var tree_rect: dvui.Rect.Physical = .{};
 var tree_window: dvui.Id = .zero;
+/// The file carried out of the tree into the app's view drag (`carryOut`): its row's path, and the
+/// id it is carried by. While that drag lasts, the file brought back over the tree is a row again
+/// (`carryBack`). Heap-owned (`runtime.allocator`); null when nothing is carried out.
+var carried: ?struct { path: []u8, id: []u8 } = null;
 
 /// Multi-selection for the file tree. Maps `id_extra` (hash of absolute path) to the heap-owned
 /// absolute path string. The primary `selected_id` is always a key here when set. Paths are
@@ -214,6 +218,7 @@ fn drawRoot(path: []const u8, tree: *core.widgets.TreeWidget, filter_text: []con
         runtime.host().setExplorerBranchOpen(root_branch_id, true);
     }
 
+    carryBack(tree, unique_id);
     try recurseFiles(path, rootLabel(path), tree, unique_id, filter_text);
 
     // Fill the rest of the explorer so an empty project (or a short or collapsed tree) still has
@@ -953,7 +958,7 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
 
                     // Out of the tree, a file is carried as a document tab is off its strip.
                     if (entry.kind == .file and tree.id_branch == inner_id_extra.*) {
-                        if (leftTree(dvui.currentWindow().mouse_pt)) carryOut(abs_path, branch.data().borderRectScale().r);
+                        if (leftTree(dvui.currentWindow().mouse_pt)) carryOut(tree, abs_path, branch.data().borderRectScale().r);
                     }
                 }
 
@@ -1182,6 +1187,7 @@ pub fn isFileSelected(id: usize) bool {
 /// selection is left: the listing and path caches this used to tear down belong to the app now
 /// (see `table`), which is also why nothing here is per-copy any more.
 pub fn deinitCaches() void {
+    forgetCarried();
     selectionFreeAll();
     selected_paths.deinit(runtime.allocator());
 }
@@ -1457,8 +1463,13 @@ fn leftTree(p: dvui.Point.Physical) bool {
 /// have, from the plugin that will open it (`Host.pluginForExtension`): carried as its file's
 /// icon, and opened where it is let go. `from` is the row as it floats under the pointer, which
 /// the drag grows out of. A file nothing can open stays a row being moved in the tree.
-fn carryOut(path: []const u8, from: dvui.Rect.Physical) void {
+///
+/// The tree's own drag is put down, not ended (`TreeWidget.cancelDrag`): ended, the tree would
+/// drop the row next frame on whatever row was last under the pointer. Brought back over the tree
+/// while the view drag lasts, the file is a row again (`carryBack`).
+fn carryOut(tree: *core.widgets.TreeWidget, path: []const u8, from: dvui.Rect.Physical) void {
     const host = runtime.host();
+    if (host.viewDragSurface() != null) return;
     const arena = host.arena();
     const id = if (host.docFromPath(path)) |doc|
         sdk.document.surfaceId(arena, doc.owner.id, doc.owner.documentPath(doc)) catch return
@@ -1466,8 +1477,62 @@ fn carryOut(path: []const u8, from: dvui.Rect.Physical) void {
         sdk.document.surfaceId(arena, owner.id, path) catch return
     else
         return;
-    dvui.dragEnd();
+    tree.cancelDrag();
     host.beginViewDrag(id, from);
+    const live = host.viewDragSurface() orelse return;
+    forgetCarried();
+    const gpa = runtime.allocator();
+    const kept_path = gpa.dupe(u8, path) catch return;
+    const kept_id = gpa.dupe(u8, live) catch {
+        gpa.free(kept_path);
+        return;
+    };
+    carried = .{ .path = kept_path, .id = kept_id };
+}
+
+/// The file `carryOut` handed to the app's view drag, brought back over the tree: while it is over
+/// the rows — what of the tree is on screen, under no window lying over it (`leftTree`) — they read
+/// it as the tree's own drag of its row (`TreeWidget.carriedOver`), showing the folder it would go
+/// into or the line it would go in at, and let go there it moves as a row dragged in the tree
+/// does, the selection with it when it was carried out of one (`applyFileMove`). The view drag
+/// meanwhile has nowhere to land it — the tree is no place for a document — and lets it go too.
+/// Off the tree again it is the view drag's, as before. When the drag ends anywhere else, landed
+/// or let go over nothing, the tree forgets it, and nothing in it moves.
+///
+/// Read before the rows draw, from the release itself where there is one: the tree draws before
+/// the app reads the release that ends its view drag, so the frame it is let go in, the drag is
+/// still live here.
+fn carryBack(tree: *core.widgets.TreeWidget, unique_id: dvui.Id) void {
+    const it = carried orelse return;
+    const live = runtime.host().viewDragSurface() orelse return forgetCarried();
+    if (!std.mem.eql(u8, live, it.id)) return forgetCarried();
+    const released = releasePoint();
+    const p = released orelse dvui.currentWindow().mouse_pt;
+    if (leftTree(p)) {
+        if (released != null) forgetCarried();
+        return;
+    }
+    // What `applyFileMove` moves, as the floating row stashes it under the tree's own drag.
+    dvui.dataSetSlice(null, unique_id, "removed_path", it.path);
+    tree.carriedOver(dvui.Id.update(tree.data().id, it.path).asUsize(), p, released != null);
+    if (released != null) forgetCarried();
+}
+
+/// Where the pointer button came up this frame, if it did.
+fn releasePoint() ?dvui.Point.Physical {
+    for (dvui.events()) |*e| {
+        if (e.evt != .mouse) continue;
+        const me = e.evt.mouse;
+        if (me.action == .release and me.button.pointer()) return me.p;
+    }
+    return null;
+}
+
+fn forgetCarried() void {
+    const it = carried orelse return;
+    runtime.allocator().free(it.path);
+    runtime.allocator().free(it.id);
+    carried = null;
 }
 
 /// Move the drag source (and, for a multi-drag, every other selected path) into `target_dir`.
