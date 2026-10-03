@@ -1436,6 +1436,9 @@ fn draggedDoc(l: *Layout, d: ViewDrag) ?struct { path: []const u8, dirty: bool }
 }
 
 /// A card with no photograph: the tab's face in glass, tab-sized.
+/// Points: the widest a carried tab keeps the width it was lifted at (`pillSize`).
+const max_lifted_w: f32 = 480;
+
 fn pillSize(l: *Layout, d: ViewDrag, title: []const u8, scale: f32) dvui.Size.Physical {
     const text = dvui.Font.theme(.body).textSize(title);
     const doc = draggedDoc(l, d);
@@ -1445,6 +1448,11 @@ fn pillSize(l: *Layout, d: ViewDrag, title: []const u8, scale: f32) dvui.Size.Ph
         w += face_gap + face_dot;
     };
     const h = @max(face_icon, text.h) + 2 * face_pad_y;
+    // As wide as what it was lifted from, when that was wider than what it shows — an explorer row
+    // runs on past its name: it is held where it was grabbed (`drawFloat`), and narrowed to its
+    // name, a row grabbed toward its end was carried off to the side of the pointer. A loose drag
+    // only: one lifted from a place is that place's size, not a tab's.
+    if (d.loose()) w = @max(w, @min(d.from.w / scale, max_lifted_w));
     // Tab-sized, with no card padding round it: the same as a tab carried along its strip, which
     // is the tab itself in glass.
     return .{ .w = w * scale, .h = h * scale };
