@@ -11,7 +11,8 @@
 //! **Small, and in one place.** The wheel is the size of pixi's tool wheel, whatever the size of
 //! the place, and sits in its middle — the place stays in view around it, and the choices are
 //! where the eye already is. A release off the wheel does nothing: every drop is one the wheel
-//! lit first.
+//! lit first. Where windows lie over the place it sits in the middle of the part they leave clear
+//! (`uncovered`): a drop under a window could be neither seen whole nor aimed at.
 //!
 //! **A strip where a wheel would shrink.** A place too narrow for the wheel at its size — a bottom
 //! panel, a narrow sidebar — would shrink every bubble to fit its short side. Where a line of them
@@ -179,6 +180,79 @@ pub fn wheel(bounds: dvui.Rect.Physical, scale: f32, remove: bool) Wheel {
     const strip = base.shaped(1, base.dir);
     return if (strip.unit > round.unit * strip_gain) strip else round;
 }
+
+/// The part of `bounds` clear of every rect in `covers` that the drop sits in (`wheel`): of the
+/// rects that fit between them, the one where the drop is biggest, and the largest of those. Null
+/// when nothing of `bounds` is clear. `covers` are the windows over a place — a drop under one could
+/// not be aimed at — and `bounds` itself when none of them reaches it.
+///
+/// Every rect that cannot grow is bounded on each side by `bounds` or one of `covers`, so its left
+/// and right are among their edges: each pair of those is a band down `bounds`, and the gaps down
+/// it between the covers that cross it are the rects to weigh.
+pub fn uncovered(bounds: dvui.Rect.Physical, covers: []const dvui.Rect.Physical, scale: f32, remove: bool) ?dvui.Rect.Physical {
+    var cut: [max_covers]dvui.Rect.Physical = undefined;
+    var n: usize = 0;
+    for (covers) |c| {
+        if (n == max_covers) break;
+        const i = bounds.intersect(c);
+        if (i.w <= 0 or i.h <= 0) continue;
+        cut[n] = i;
+        n += 1;
+    }
+    if (n == 0) return bounds;
+    var xs: [2 + 2 * max_covers]f32 = undefined;
+    xs[0] = bounds.x;
+    xs[1] = bounds.x + bounds.w;
+    for (cut[0..n], 0..) |c, i| {
+        xs[2 + 2 * i] = c.x;
+        xs[3 + 2 * i] = c.x + c.w;
+    }
+    const edges = xs[0 .. 2 + 2 * n];
+    std.mem.sort(f32, edges, {}, std.sort.asc(f32));
+    var best: ?dvui.Rect.Physical = null;
+    var best_unit: f32 = 0;
+    var best_area: f32 = 0;
+    for (edges, 0..) |x0, i| for (edges[i + 1 ..]) |x1| {
+        if (x1 - x0 < 1) continue;
+        // The covers across this band, as spans down it, top first.
+        var spans: [max_covers][2]f32 = undefined;
+        var m: usize = 0;
+        for (cut[0..n]) |c| {
+            if (c.x >= x1 or c.x + c.w <= x0) continue;
+            spans[m] = .{ c.y, c.y + c.h };
+            m += 1;
+        }
+        std.mem.sort([2]f32, spans[0..m], {}, struct {
+            fn lt(_: void, a: [2]f32, b: [2]f32) bool {
+                return a[0] < b[0];
+            }
+        }.lt);
+        var y = bounds.y;
+        for (0..m + 1) |k| {
+            const top = if (k < m) spans[k][0] else bounds.y + bounds.h;
+            if (top - y >= 1) {
+                const r: dvui.Rect.Physical = .{ .x = x0, .y = y, .w = x1 - x0, .h = top - y };
+                const unit = wheel(r, scale, remove).unit;
+                const area = r.w * r.h;
+                // Bigger by more than a rounding: the drop is what is aimed at, so its size comes
+                // first, and between places it is as big in, the more of the place round it.
+                const bigger = unit > best_unit + 0.001 * scale;
+                const as_big = @abs(unit - best_unit) <= 0.001 * scale;
+                if (best == null or bigger or (as_big and area > best_area)) {
+                    best = r;
+                    best_unit = unit;
+                    best_area = area;
+                }
+            }
+            if (k < m) y = @max(y, spans[k][1]);
+        }
+    };
+    return best;
+}
+
+/// The most covers `uncovered` weighs; past this, the topmost windows over a place are the ones
+/// that count, and a place under so many has little left to drop on.
+pub const max_covers = 16;
 
 /// Points: zone `z`'s bubble's radius.
 fn radiusOf(z: Zone) f32 {
@@ -352,6 +426,8 @@ const State = struct {
     to_at: dvui.Point.Physical = .{},
     to_unit: f32 = 0,
     slide: f32 = 1,
+    /// The drop as it was last given (`given`).
+    given: Wheel = .{ .center = .{}, .unit = 0 },
     /// The icons `draw` laid out and left for `drawIcons` (`Look.icons = .later`), and the frame.
     icons: [all.len]IconAt = undefined,
     icon_n: usize = 0,
@@ -404,6 +480,7 @@ const icon_size: f32 = 18;
 /// drop covers has drawn. Gone, a place forgets its drop, so the next arrival comes in anew.
 pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
     const st = dvui.dataGetPtrDefault(null, id, "_drop_zones", State, .{});
+    st.given = w;
     const now = dvui.currentWindow().frame_time_ns;
     // Where it was is kept until it has gone (`forget`), however long between frames: a drag
     // held still asks for none, and treating the gap as a new visit replayed the entrance on the
@@ -982,6 +1059,13 @@ pub fn showing(id: dvui.Id) bool {
 pub fn shapeOf(id: dvui.Id) ?struct { strip: f32, dir: dvui.enums.Direction, center: dvui.Point.Physical, unit: f32 } {
     const st = dvui.dataGetPtr(null, id, "_drop_zones", State) orelse return null;
     return .{ .strip = st.strip, .dir = st.dir, .center = st.at, .unit = st.unit };
+}
+
+/// The drop `id` was last given to draw, while it is on screen: for one whose place has none to
+/// give it now, to finish going where it was.
+pub fn given(id: dvui.Id) ?Wheel {
+    const st = dvui.dataGetPtr(null, id, "_drop_zones", State) orelse return null;
+    return if (st.shown > 0) st.given else null;
 }
 
 /// Drop `id`'s zones outright: the next time its place is the target they come in from nothing.

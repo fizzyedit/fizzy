@@ -153,6 +153,14 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
 - **A float covers what is under it.** A drag reads the floats as it reads the places — frozen at
   lift — and aims only at the topmost window under the pointer: a place a float covers is not
   reached through it, and over a float's header, its handle, nothing is aimed at.
+- **A drop keeps out from under the floats.** A place's drop sits in the middle of the part of the
+  place no float lies over — of the parts left clear, the one where it is biggest, and the largest
+  of those — fitted there as a wheel or a strip as anywhere (`DropZones.uncovered`,
+  `ViewDrag.zoneBounds`). A float lying over the middle of a place no longer hides its drop, so a
+  view can be put exactly where it is meant to go, into the float or beside it. A float's own
+  places have theirs inside it; a place floats lie all over has none. The zones, the release and
+  the self-split all read that one rect. When the part left clear changes during a drag, the drop
+  slides to its new middle and size on the glass, its bubbles running together on the way.
 - **The float a view leaves steps aside.** Carrying a view out of a float, the float blurs out of
   focus and fades away as the drag lifts, and covers nothing: what it was over is where the view
   can go, and usually where it is going. What steps aside is a photograph of the float, taken from

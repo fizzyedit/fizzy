@@ -4158,6 +4158,25 @@ test "drop: a drop given another middle slides there over time, and comes in whe
     try std.testing.expectEqual(ShapeFrame.wheel.unit, DZ.shapeOf(ShapeFrame.key).?.unit);
 }
 
+test "drop: a place's drop sits in the part of it no window lies over, where it is biggest" {
+    const place: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 1000, .h = 600 };
+    // Nothing over it: the place itself.
+    try std.testing.expectEqual(place, DZ.uncovered(place, &.{}, 1, true).?);
+    // A window off the place covers none of it.
+    try std.testing.expectEqual(place, DZ.uncovered(place, &.{.{ .x = 1200, .y = 0, .w = 100, .h = 100 }}, 1, true).?);
+    // A window over its middle and right: the left of it, as tall as the place, where the whole
+    // wheel fits — not a strip along the top, which would shrink it.
+    const win: dvui.Rect.Physical = .{ .x = 450, .y = 150, .w = 600, .h = 300 };
+    const r = DZ.uncovered(place, &.{win}, 1, true).?;
+    try std.testing.expectEqual(dvui.Rect.Physical{ .x = 0, .y = 0, .w = 450, .h = 600 }, r);
+    try std.testing.expect(r.intersect(win).w <= 0);
+    // Two windows with a gap between them: the gap, if the drop is biggest there.
+    const two = DZ.uncovered(place, &.{ .{ .x = 0, .y = 0, .w = 300, .h = 600 }, .{ .x = 700, .y = 0, .w = 300, .h = 600 } }, 1, true).?;
+    try std.testing.expectEqual(dvui.Rect.Physical{ .x = 300, .y = 0, .w = 400, .h = 600 }, two);
+    // All of it covered: no drop.
+    try std.testing.expect(DZ.uncovered(place, &.{.{ .x = -10, .y = -10, .w = 1100, .h = 700 }}, 1, true) == null);
+}
+
 test "drop: settled, as a wheel or a strip, no two bubbles are near enough to run together" {
     // Two bubbles closer than half the merge run together (`LiquidField`'s smooth minimum): at
     // rest each zone is a bubble of its own, whichever the shape and the way it runs, with the
@@ -4973,6 +4992,99 @@ test "float: a drag aims at a float's place over it, at nothing over its header,
     // Beside it, Main as ever.
     try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, .{ .x = 650, .y = 200 }, "Panel") orelse
         return error.TestExpectedEqual);
+}
+
+/// Main, Panel and a float lying over Main's middle, registered as a frame would have them, for a
+/// drag to read: `drag_aims_*`.
+const FloatOverMain = struct {
+    const main_at: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 800, .h = 400 };
+    const panel_at: dvui.Rect.Physical = .{ .x = 0, .y = 400, .w = 800, .h = 200 };
+    const window: dvui.Rect.Physical = .{ .x = 200, .y = 100, .w = 300, .h = 260 };
+    const header: dvui.Rect.Physical = .{ .x = 200, .y = 100, .w = 300, .h = 40 };
+    const body: dvui.Rect.Physical = .{ .x = 200, .y = 140, .w = 300, .h = 220 };
+    /// A leaf a split of Main made, all of it under the float.
+    const hidden_at: dvui.Rect.Physical = .{ .x = 240, .y = 180, .w = 200, .h = 140 };
+
+    fn register(editor: *fizzy.Editor, hidden: bool) !void {
+        const gpa = editor.app.gpa;
+        const state = &editor.app.layout;
+        state.registerRegion(gpa, .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main, .bounds = main_at, .size = .{ .w = 800, .h = 400 } });
+        state.registerRegion(gpa, .{ .name = "Panel", .keywords = fizzy.sdk.keywords.ide.panel, .bounds = panel_at, .shows = .many });
+        if (hidden) state.registerRegion(gpa, .{ .name = "Main/r1", .keywords = fizzy.sdk.keywords.ide.main, .bounds = hidden_at });
+        // The float's place, drawn in its window: layer 1.
+        state.layer_building = 1;
+        state.registerRegion(gpa, .{ .name = "Float 1", .keywords = fizzy.Editor.Layout.slot_keywords, .by_name = true, .shows = .many, .bounds = body });
+        state.layer_building = 0;
+        state.publishRegions();
+        _ = try state.floats.add(gpa, .{
+            .name = "Float 1",
+            .rect = .{ .x = 100, .y = 50, .w = 150, .h = 130 },
+            .home = "Panel",
+            .fresh = false,
+            .win_id = @enumFromInt(0xf10a7),
+            .bounds = window,
+            .header = header,
+        });
+    }
+};
+
+test "float: a place a float lies over has its drop in the part left clear, where a release takes it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    try FloatOverMain.register(editor, false);
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Panel", FloatOverMain.panel_at, FloatOverMain.panel_at);
+    defer editor.app.layout.view_drag.discard();
+
+    // Main's middle is under the float: its drop is in Main, clear of the float, all of it.
+    const clear = ViewDrag.zoneBounds(&editor.app.layout, "Main") orelse return error.TestExpectedEqual;
+    const main_at = FloatOverMain.main_at;
+    try std.testing.expect(clear.x >= main_at.x and clear.y >= main_at.y and clear.x + clear.w <= main_at.x + main_at.w and clear.y + clear.h <= main_at.y + main_at.h);
+    try std.testing.expect(clear.intersect(FloatOverMain.window).w <= 0 or clear.intersect(FloatOverMain.window).h <= 0);
+    const w = ViewDrag.wheelOf(&editor.app.layout, "Main") orelse return error.TestExpectedEqual;
+    try std.testing.expect(!FloatOverMain.window.contains(w.center));
+    try std.testing.expect(clear.contains(w.center));
+    // Aimed at its middle bubble, the drop is Main's — the geometry drawn is the one read.
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, w.center, "Panel") orelse return error.TestExpectedEqual);
+    try std.testing.expect(DZ.at(w, w.center).?.eql(.center));
+    // The float's own place has its drop inside the float.
+    const fw = ViewDrag.wheelOf(&editor.app.layout, "Float 1") orelse return error.TestExpectedEqual;
+    try std.testing.expect(FloatOverMain.body.contains(fw.center));
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, fw.center, "Panel") orelse return error.TestExpectedEqual);
+}
+
+test "float: a place a float lies all over has no drop" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    try FloatOverMain.register(editor, true);
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Panel", FloatOverMain.panel_at, FloatOverMain.panel_at);
+    defer editor.app.layout.view_drag.discard();
+
+    try std.testing.expect(ViewDrag.zoneBounds(&editor.app.layout, "Main/r1") == null);
+    try std.testing.expect(ViewDrag.wheelOf(&editor.app.layout, "Main/r1") == null);
+    // Over where it is, the float.
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, FloatOverMain.hidden_at.center(), "Panel") orelse return error.TestExpectedEqual);
 }
 
 test "float: dragging a place's view onto its own middle floats it, over a seed tree too" {

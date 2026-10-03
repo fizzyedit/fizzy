@@ -470,7 +470,7 @@ fn frozen(state: *const Layout.State, name: []const u8) ?Target {
 
 /// What a release at `mouse` over `dest` does: its drop's reading, null off the drop.
 fn kindAt(l: *Layout, dest: []const u8, a: Aim, scale: f32) ?Drop.Kind {
-    const dest_b = interiorBounds(l.state, dest) orelse return null;
+    const dest_b = zoneBounds(l.state, dest) orelse return null;
     return Drop.kindAtDisc(dest_b, a.p, a.r, scale, removable(l));
 }
 
@@ -516,13 +516,17 @@ fn dropCenter(mouse: dvui.Point.Physical, r: f32, touch: bool) dvui.Point.Physic
 /// declared to show one, never split, offers none — the trash would only leave it empty. A view
 /// carried out of the picker is in no place to leave.
 pub fn removable(l: *Layout) bool {
-    const d = l.state.view_drag;
+    return removableIn(l.state);
+}
+
+fn removableIn(state: *const Layout.State) bool {
+    const d = state.view_drag;
     if (!d.active() or d.loose()) return false;
     // Out of a float, as out of a split the user made: the view leaves it, and a float its last
     // view leaves closes — the view, claimed by no place then, back where its keywords put it.
-    if (l.state.floatRoot(d.name) != null) return true;
-    if (l.state.userSplitPart(d.name)) return true;
-    const r = regionNamed(l.state, d.name) orelse return false;
+    if (state.floatRoot(d.name) != null) return true;
+    if (state.userSplitPart(d.name)) return true;
+    const r = regionNamed(state, d.name) orelse return false;
     return r.shows == .many;
 }
 
@@ -557,6 +561,36 @@ pub fn interiorBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.P
     return if (b.h >= 1 and b.w >= 1) b else whole;
 }
 
+/// The part of place `name` its drop sits in: its interior (`interiorBounds`) less every float over
+/// it — a float drawn in a window above the place's, as the drag mapped them (`mapOccluders`). A
+/// drop under a float could not be aimed at, so it goes where it can be: the middle of the part
+/// left clear, fitted there as a wheel or a strip as anywhere (`DropZones.uncovered`). A float's
+/// own places are in its window, so theirs are inside it. Null when floats cover all of it: that
+/// place has no drop.
+///
+/// Everything that reads or draws a place's drop reads this — its zones (`drawZones`), the release
+/// (`kindAt`), the self-split (`targetAtAim`) — so what shows is what a release takes.
+pub fn zoneBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
+    const inner = interiorBounds(state, name) orelse return null;
+    const d = &state.view_drag;
+    if (!d.active()) return inner;
+    const layer = layerOf(state, name);
+    var covers: [Floats.max]dvui.Rect.Physical = undefined;
+    var n: usize = 0;
+    for (d.occluders[0..d.occluder_count]) |o| {
+        if (o.layer <= layer) continue;
+        covers[n] = o.bounds;
+        n += 1;
+    }
+    return DropZones.uncovered(inner, covers[0..n], dvui.currentWindow().natural_scale, removableIn(state));
+}
+
+/// Place `name`'s drop, where it sits (`zoneBounds`); null where it has none.
+pub fn wheelOf(state: *const Layout.State, name: []const u8) ?DropZones.Wheel {
+    const b = zoneBounds(state, name) orelse return null;
+    return DropZones.wheel(b, dvui.currentWindow().natural_scale, removableIn(state));
+}
+
 /// The place a release at `mouse` would land on, for a view lifted from
 /// `source`. The smallest place containing the pointer wins, so a document
 /// pane beats the main area it sits in.
@@ -581,12 +615,12 @@ pub fn targetAtAim(l: *Layout, a: Aim, source: []const u8) ?[]const u8 {
     // and its own edges become unreachable.
     if (layerOf(state, source) == u.layer) {
         if (interiorBounds(state, source)) |bounds| {
-            if (bounds.contains(mouse)) {
-                if (Drop.kindAtDisc(bounds, mouse, a.r, dvui.currentWindow().natural_scale, removable(l))) |k| switch (k) {
+            if (bounds.contains(mouse)) if (zoneBounds(state, source)) |zb| {
+                if (Drop.kindAtDisc(zb, mouse, a.r, dvui.currentWindow().natural_scale, removable(l))) |k| switch (k) {
                     .split, .remove => return source,
                     .swap => {},
                 };
-            }
+            };
         }
     }
     var best: ?[]const u8 = null;
@@ -743,13 +777,18 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
     const target = aimed and isTarget(l, name);
     if (!target and !DropZones.showing(key)) return;
     // Over the place less its own strip (`interiorBounds`): the strip takes the view into the
-    // place's list, and the zones are for its content.
+    // place's list, and the zones are for its content — the part of it no float lies over
+    // (`zoneBounds`). All of it under floats, it has no drop: one still going finishes where it was.
     const whole = interiorBounds(l.state, name) orelse {
         DropZones.forget(key);
         return;
     };
-    const scale = dvui.currentWindow().natural_scale;
-    const zones = DropZones.wheel(whole, scale, removable(l));
+    const own = wheelOf(l.state, name);
+    const covered = own == null;
+    const zones = own orelse DropZones.given(key) orelse {
+        DropZones.forget(key);
+        return;
+    };
     const d = &l.state.view_drag;
     const center: DropZones.Center = if (std.mem.eql(u8, d.name, name))
         (if (canFloat(l, name)) .float else .none)
@@ -767,11 +806,11 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
         .key = key,
         .wheel = zones,
         .look = .{
-            .hovered = if (aimed) blk: {
+            .hovered = if (aimed and !covered) blk: {
                 const a = aim(l);
                 break :blk DropZones.atDisc(zones, a.p, a.r);
             } else null,
-            .target = target,
+            .target = target and !covered,
             .center = center,
         },
         .clip = whole,
