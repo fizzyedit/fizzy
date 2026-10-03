@@ -143,6 +143,10 @@ cursor_last: dvui.enums.Cursor = .wait,
 /// Added to the page's clock by `nanoTime`: how far a demo's silent frames have moved the app's
 /// clock on (`app.automation.Player.frames`). Only grows.
 clock_ahead_ns: i128 = 0,
+/// The frame running is one nobody will see — a demo catching up (`app.automation.Player.frames`):
+/// its draws to the canvas are dropped. Draws into render targets still run, since what is
+/// drawn there may be read back into the app's model.
+unseen: bool = false,
 force_new_window: bool = true,
 
 const EventTemp = struct {
@@ -745,7 +749,8 @@ pub fn contentScale(_: *WebBackend) f32 {
     return 1.0; // comes through windowSize/pixelSize
 }
 
-pub fn drawClippedTriangles(_: *WebBackend, texture: ?dvui.Texture, vtx: []const dvui.Vertex, idx: []const dvui.Vertex.Index, maybe_clipr: ?dvui.Rect.Physical) !void {
+pub fn drawClippedTriangles(self: *WebBackend, texture: ?dvui.Texture, vtx: []const dvui.Vertex, idx: []const dvui.Vertex.Index, maybe_clipr: ?dvui.Rect.Physical) !void {
+    if (self.unseen and !target_is_fb) return;
     if (batch.vtx.items.len + vtx.len > std.math.maxInt(dvui.Vertex.Index)) flushBatch();
 
     const same_texture = if (batch.texture) |bt| (if (texture) |t| bt.ptr == t.ptr else false) else texture == null;

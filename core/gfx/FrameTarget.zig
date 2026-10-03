@@ -62,6 +62,14 @@ const skip_unread = builtin.target.cpu.arch == .wasm32;
 /// should not flip it on and off, and glass coming back finds it still there.
 const linger_frames: u32 = 60;
 
+/// A frame nobody will see — a demo catching up (`automation.Player.frames`) — on a backend that
+/// drops what such a frame draws to the window (its `unseen`). What only a frame's picture needs
+/// can be left out of it: the frame target here, a frost's capture (`BlurBackdrop`).
+pub fn unseen() bool {
+    const impl = dvui.currentWindow().backend.impl;
+    return @hasField(@TypeOf(impl.*), "unseen") and impl.unseen;
+}
+
 const want_id: dvui.Id = @enumFromInt(0x6669_7a7a_6672_6d77); // "fizzfrmw"
 const want_key = "_frame_target_wanted";
 
@@ -77,6 +85,15 @@ pub fn want() void {
 
 /// Bind a window-sized target, made fresh when the window's pixel size changes.
 pub fn begin(self: *FrameTarget) void {
+    if (unseen()) {
+        // Straight to the window, where the backend drops it, and neither target touched: they
+        // keep the last frame that was shown, for the next one shown to read. A want stays for
+        // that frame too — read, not taken: data no frame reads is dropped at its end.
+        if (skip_unread) _ = dvui.dataGet(null, want_id, want_key, bool);
+        self.target = null;
+        current = self;
+        return;
+    }
     if (skip_unread) {
         const wanted = dvui.dataGet(null, want_id, want_key, bool) orelse false;
         dvui.dataRemove(null, want_id, want_key);

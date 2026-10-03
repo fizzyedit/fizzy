@@ -16,7 +16,9 @@
 //! has to see land (a click, a key, a keyframe), and those frames are *silent*: `frames` runs the
 //! app's frame again and again inside one displayed frame, ending each unseen, until the seek
 //! arrives or a budget of wall time (`budget_ns`) is spent. A seek across a demo-sized tape lands
-//! in the frame it was asked for; a longer one carries on in the next.
+//! in the frame it was asked for; a longer one carries on in the next. Where the backend can drop
+//! a frame's drawing (an `unseen` switch, `backendUnseen`) the silent frames draw nothing to the
+//! window — on a phone, drawing each in full had the GPU doing many frames' work per frame shown.
 //!
 //! **Snapshots** make the way back short. While the tape drives, at calm moments — nothing in
 //! flight, nothing held, the app idle — the player asks the stage for the app's model
@@ -532,9 +534,11 @@ pub fn frame(self: *Player) void {
 }
 
 /// Run the app's frame function, `frame_fn`, as the player needs it: once, as it is — and while
-/// a seek is catching up, again and again inside the same displayed frame, each run but the
-/// last ended unseen (`Window.end` without presenting) and the next begun, until the seek
-/// arrives or `budget_ns` of wall time is spent. Only the last run is shown.
+/// a seek is catching up, again and again inside the same displayed frame, each run ended
+/// unseen (`Window.end` without presenting) and the next begun, until the seek arrives or
+/// `budget_ns` of wall time is spent. Where the backend has an `unseen` switch
+/// (`backendUnseen`), the runs after the first draw nothing to the window and the first is the
+/// one shown; elsewhere each draws over the last, and the last is shown.
 /// The app calls this from inside its frame function, in place of the frame itself: dvui has
 /// begun the frame and will end and present it, as ever.
 ///
@@ -545,6 +549,9 @@ pub fn frame(self: *Player) void {
 /// goes on from — so the next frame carries on from there. Without one a silent run steps the
 /// clock the least dvui accepts, a microsecond, and timers wait for the wall.
 pub fn frames(self: *Player, win: *dvui.Window, frame_fn: *const fn () anyerror!dvui.App.Result, clock: ?*i128) anyerror!dvui.App.Result {
+    // The last displayed frame's silent runs, and its end, drew unseen; this one is shown.
+    const unseen = backendUnseen(win);
+    if (unseen) |u| u.* = false;
     // Counted before the run, which may land the seek, and after it, which may have asked for one.
     const was_seeking = self.state == .seeking;
     if (was_seeking) self.seek_stats.shown += 1;
@@ -566,6 +573,9 @@ pub fn frames(self: *Player, win: *dvui.Window, frame_fn: *const fn () anyerror!
         const at_ns = if (clock == null) soonest else @max(soonest, base_ns + msToNs(self.nextMoment() - base_ms));
         _ = try win.end(.{ .manage_backend = false });
         try win.begin(at_ns);
+        // Until the next displayed frame begins: the last run's `Window.end`, after this
+        // returns, still draws its subwindows.
+        if (unseen) |u| u.* = true;
         self.catching_up = true;
         self.seek_stats.silent += 1;
         res = try frame_fn();
@@ -605,6 +615,14 @@ fn wallClock(self: *const Player, win: *dvui.Window) i128 {
 pub fn backendClock(win: *dvui.Window) ?*i128 {
     const impl = win.backend.impl;
     if (@hasField(@TypeOf(impl.*), "clock_ahead_ns")) return &impl.clock_ahead_ns;
+    return null;
+}
+
+/// The backend's switch for a frame nobody will see, if it has one (`frames`): an `unseen` that,
+/// set, has it drop what the frame draws to the window (the web's, `WebBackend`).
+fn backendUnseen(win: *dvui.Window) ?*bool {
+    const impl = win.backend.impl;
+    if (@hasField(@TypeOf(impl.*), "unseen")) return &impl.unseen;
     return null;
 }
 

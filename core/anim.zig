@@ -17,6 +17,7 @@ const platform = @import("platform.zig");
 const reveal_phase = @import("reveal.zig");
 const BlurBackdrop = @import("widgets/BlurBackdrop.zig");
 const dialogs = @import("dialogs.zig");
+const FrameTarget = @import("gfx/FrameTarget.zig");
 pub const crossfade = @import("crossfade.zig");
 pub const Kind = crossfade.Kind;
 
@@ -162,9 +163,11 @@ pub const CrossFade = struct {
     have_incoming: bool = false,
 
     /// Begin recording instead of drawing to the screen. Null when the backend has no
-    /// texture targets (web) or the region is empty — callers then swap without a fade, which is
-    /// exactly the old behaviour rather than a broken one.
+    /// texture targets (web), the region is empty or the frame is unseen
+    /// (`FrameTarget.unseen`) — callers then swap without a fade, which is exactly the old
+    /// behaviour rather than a broken one.
     pub fn beginCapture(rect: dvui.Rect.Physical) ?dvui.Picture {
+        if (FrameTarget.unseen()) return null;
         var pic = dvui.Picture.start(rect) orelse return null;
         // `textureCreateTarget` claims to start transparent, but some backends leave
         // `textureClearTarget` unimplemented — clear explicitly so pixel-boundary padding
