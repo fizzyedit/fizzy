@@ -17,9 +17,9 @@
 //! | own edge       | that edge      | opposite edge     | empty        |
 //!
 //! A self-split cannot move the view onto the leaf: the view is *already* in
-//! the origin, and remounting a surface into a fresh slot tears down its
-//! state (fizzy's Workspace loses its document panes). So the origin keeps it
-//! and the leaf opens empty on the far side — which is also the only way the
+//! the origin, and remounting a surface into a fresh slot tears down every
+//! widget under it — scroll positions, sash sizes, focus. So the origin keeps
+//! it and the leaf opens empty on the far side — which is also the only way the
 //! view can stay under the pointer, where the user dropped it.
 const std = @import("std");
 const dvui = @import("dvui");

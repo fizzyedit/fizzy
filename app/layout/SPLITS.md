@@ -13,6 +13,7 @@ all of it without writing any of it, and a plugin that draws a surface never par
 | **assignment** | The user's answer to "what goes here", per place. Overrides keyword matching. An empty assignment is an answer too: *nothing*, deliberately. |
 | **origin** | The place that was split. Keeps its name, keywords and assignment. |
 | **minted leaf** | The place a split creates. Empty, removable, and gone again when it collapses. |
+| **float** | A place of the framework's own, `Float N`: a glass window over the layout holding the view floated into it (`Floats.zig`). |
 
 Places, keywords and assignments are framework. `Main`, `Sidebar` and `Panel` are fizzy's own
 shape (`src/editor/layout.zig`) and mean nothing here.
@@ -30,7 +31,7 @@ Everything else follows from that sentence, including the case that is easy to g
 | Middle of the *other half of its split*, carrying its last view | — | — | *(they join: one place, both views, as tabs)* |
 | Edge of another place | untouched | that edge | the dragged view |
 | Edge of its own place | that edge | the **opposite** edge | empty |
-| Middle of its own place | — | — | *(nothing happens)* |
+| Middle of its own place | loses the view (a place of several keeps the rest) | — | *(the view floats: a window of its own over the layout)* |
 
 The join row is the undo of a split, reached the same way the split was: by carrying a view.
 Only the two halves of one split join, and only when the view is the last one its place holds —
@@ -45,9 +46,11 @@ left. Minting on the right instead would push the view to the left and the split
 mirrored.
 
 A self-split also may not move the view onto the new leaf, even though that would put it on
-the correct side. Remounting a surface into a fresh place tears down every widget inside it;
-fizzy's Workspace would lose its open documents. The origin keeps the view, and the mint side
-is what puts it under the pointer.
+the correct side. Remounting a surface into a fresh place tears down every widget inside it —
+its scroll positions, sash sizes, what had focus — for a drop that was only meant to make room
+beside it. (What a plugin keeps in its own state survives: fizzy's Workspace keeps its documents
+and panes in the workbench, and floated or swapped it still has them.) The origin keeps the
+view, and the mint side is what puts it under the pointer.
 
 This table is `Drop.plan`, and it is about forty lines with no drawing and no state in it. The
 drop zones and the release both read the same geometry (`Drop.kindAt` over
@@ -69,8 +72,8 @@ and the view you are carrying — never as the view drawn in two places.
   They are the dialogs' frosted glass, the app's surface rounding, an even gap around each, and a
   faint icon saying what a drop there does: a pane opening on that side, or the middle's trade
   (one view), add (several) or join (the other half of a split). The one under the pointer
-  lights. The middle of the place the view came from is bare glass: dropping
-  there does nothing.
+  lights. The middle of the place the view came from shows a window: dropping there floats the
+  view (below). Where the view cannot float it is bare glass, and dropping there does nothing.
 - **A join shows the place it leaves.** Aimed at, the two halves' zones step back and one lit
   pane of the same glass lies across both — the single place the drop will make, the divider
   between them gone under it.
@@ -123,6 +126,41 @@ dropped moves nothing at all. Left whole, the two of them are some twenty-odd po
 smooth close hands back in one step at the very end — which is the only part of it anyone sees.
 A place merely *shut* keeps its sash: that is the handle you drag it back out by.
 
+## Floating a view
+
+Dropped on the middle of the place it was lifted from, a view floats: it leaves that place for a
+glass window of its own over the layout, which grows out of the glass it was carried in. The
+window is a place like any other — `Float 1`, `Float 2`, the smallest free number — so it has
+everything a place has without anything written for it: the corner button the view is dragged out
+by again, the drop zones, splits, the picker. A place of several views keeps the others.
+
+- **What cannot float.** A view carried out of the picker (it has no place to float out of), a
+  document (its place is the slot its plugin made for it), and a view already alone in a float
+  nobody split — floating it again would only move it, which its header already does. For those
+  the middle stays bare glass.
+- **Where it opens.** At 60% of the place it left, never under 360×240 nor over 90% of the window,
+  centred on where the view was and held 8pt inside the window; out of another float, a step down
+  and right of that one (`float_rules.zig`, unit-tested).
+- **A float covers what is under it.** A drag reads the floats as it reads the places — frozen at
+  lift — and aims only at the topmost window under the pointer: a place a float covers is not
+  reached through it, and over a float's header, its handle, nothing is aimed at. The float the
+  view is being carried out of, when that empties it, covers nothing: it closes on the drop, so
+  what it covers is where the view can go.
+- **Moving and stacking.** A float moves by its header and resizes from its edges, no smaller than
+  160×96. A press anywhere in it brings it to the front, as on an OS window.
+- **Back again.** Dragged out by its corner button, a view lands like any other, and a float its
+  last view leaves closes behind it. Closed from its header (or the picker's Remove), a float
+  sends each view home — into the list of the place it floated out of when the user had arranged
+  that place, otherwise let go for its keywords to place, which never freezes a place its keywords
+  fill. Every place a split of it made goes with it.
+- **Remembered.** `layout.zon` keeps each float's window, its place in the stack and its home. One
+  with nothing left to show is not brought back, and one saved on a bigger window comes back onto
+  the window it opens in. A float remembers only where the user put it: a window that shrinks shows
+  its floats held on screen, and gives them back their places when it grows.
+
+A float is a window inside fizzy's own window for now. Taking one out into an OS window of its
+own is the plan in `docs/POPOUT_WINDOWS_PLAN.md`.
+
 ## Edges and bands
 
 Near an edge is 64pt, or 22% of that side, whichever is smaller (`DropZones.band`). The
@@ -154,6 +192,8 @@ and assignment untouched throughout — a split and its undo are symmetric.
 | `SplitTree.zig` | The tree: split, collapse, persistence links. Geometry-free. |
 | `Region.zig` | Declaring a place and walking the tree to draw its leaves. |
 | `Picker.zig` | The menu on a place: assign, clear, remove, split. |
+| `Floats.zig` | The floats: their windows, landing, closing, stacking. |
+| `float_rules.zig` | Where a float opens, what keeps it reachable, its name, where a closed float's views go. std-only, unit-tested. |
 
 ## Settled, and not to be re-litigated
 
