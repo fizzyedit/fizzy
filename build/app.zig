@@ -609,6 +609,10 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
+        // Where a floating view's window opens, what keeps it reachable, its name, the floats'
+        // stacking and where a closed float's views go. std-only (see float_rules.zig);
+        // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
+        .{ "fizzy-float-rules-tests", "app/layout/float_rules.zig" },
         // Demo automation's std-only core (`sdk/tape/`): the tape format and its codecs, the
         // sequencer that replays it deterministically, and the script builder. The dvui half
         // (`app/automation/Player.zig`) is covered by `tests/integration.zig`.
