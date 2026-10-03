@@ -72,6 +72,10 @@ bounds: dvui.Rect.Physical = .{},
 /// What a view dropped here does, for a plugin's region — `sdk.RegionSpec.on_drop`.
 on_drop: ?*const fn (ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool = null,
 drop_ctx: ?*anyopaque = null,
+/// Which window it is drawn in: 0 the main window, `n` the `n`th float from the bottom
+/// (`Floats`). Stamped as it registers (`State.layer_building`); a drag aims only at the topmost
+/// layer under the pointer.
+layer: u16 = 0,
 
 /// The key this region's selection lives under in the host — see `Layout.selectedIn`.
 ///
@@ -1325,7 +1329,11 @@ pub fn splitNamed(self: *Layout, name: []const u8, axis: dvui.enums.Direction) v
 /// is too small or is not a leaf. A view-drag drop uses this so a left or
 /// top edge can open on that side, not only the trailing one.
 pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u8 {
-    if (self.state.dock) |*dock| return splitDock(self, dock, name, side);
+    // A float is no leaf of a shape's seed tree: its splits live in the split forest, whatever
+    // the shape below it is built from.
+    if (self.state.floatRoot(name) == null) {
+        if (self.state.dock) |*dock| return splitDock(self, dock, name, side);
+    }
 
     const size = ViewDrag.placeSize(self.state, name) orelse return null;
     const span = switch (SplitTree.axisOf(side)) {
