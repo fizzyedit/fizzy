@@ -603,6 +603,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // Fade / blur-fade timeline. std-only (see crossfade.zig) — pictures and the clock
         // live in core/anim.zig.
         .{ "fizzy-crossfade-tests", "core/crossfade.zig" },
+        // A motion's clock stepped by its frames, a long one held to a step. std-only (see
+        // FrameClock.zig); the floats' landing and ghost run on it.
+        .{ "fizzy-frame-clock-tests", "core/FrameClock.zig" },
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.
         .{ "fizzy-folder-events-tests", "app/watch/folder_events.zig" },

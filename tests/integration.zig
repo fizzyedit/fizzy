@@ -5263,7 +5263,7 @@ fn offFloat(bounds: dvui.Rect.Physical) !dvui.Point.Physical {
 
 /// Rest the pointer on `p`, drawing frames of `frame` until the ghost of the float the view is
 /// carried out of firms up there (`ViewDrag.ghost_rest_ms`, as the clock goes), or it plainly
-/// will not.
+/// will not — and then for the float to fade all the way back from its ghost.
 fn restOn(editor: *fizzy.Editor, p: dvui.Point.Physical, frame: fn () anyerror!dvui.App.Result) !void {
     _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = p });
     const start = dvui.currentWindow().frame_time_ns;
@@ -5271,13 +5271,19 @@ fn restOn(editor: *fizzy.Editor, p: dvui.Point.Physical, frame: fn () anyerror!d
     while (!editor.app.layout.view_drag.ghost_firm and dvui.currentWindow().frame_time_ns - start < enough) {
         _ = try dvui.testing.step(frame);
     }
-    for (0..4) |_| _ = try dvui.testing.step(frame);
+    for (0..ghost_frames) |_| _ = try dvui.testing.step(frame);
 }
 
 /// How far aside float `i` is now (`Floats.Float.aside`): 0 itself, 1 its ghost.
 fn asideOf(editor: *fizzy.Editor, i: usize) f32 {
-    return editor.app.layout.floats.items.items[i].aside.at(dvui.currentWindow().frame_time_ns);
+    return editor.app.layout.floats.items.items[i].aside.at();
 }
+
+/// Frames for a float to fade all the way to its ghost, and a couple more. Its fade runs on a clock
+/// its frames step, each by no more than `core.FrameClock.max_step_ns`, and the testing backend's
+/// frames are longer than that: each moves the fade on by one step, not by the frame.
+const ghost_frames: usize = @as(usize, @intFromFloat(@ceil(fizzy.Editor.Layout.Floats.aside_ms * std.time.ns_per_ms /
+    @as(f32, @floatFromInt(fizzy.core.FrameClock.max_step_ns))))) + 2;
 
 test "float: the float a view is carried out of is a ghost while the view is aimed off it, itself over it, and back when it is let go over nothing" {
     var case = try ManyPanelCase.init();
@@ -5302,7 +5308,7 @@ test "float: the float a view is carried out of is a ghost while the view is aim
     try std.testing.expectEqual(@as(f32, 0), asideOf(editor, 0));
 
     // Aimed off it: a ghost of itself.
-    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, 4);
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
     try std.testing.expect(!editor.app.layout.view_drag.ghost_firm);
     try std.testing.expectEqual(@as(f32, 1), asideOf(editor, 0));
     // It still holds its view, and its place is still drawn: the drag is held by its corner button.
@@ -5319,7 +5325,7 @@ test "float: the float a view is carried out of is a ghost while the view is aim
     try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, body, "Float 1") orelse return error.TestExpectedEqual);
 
     // Off it again, and let go over nothing: back as it was.
-    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, 4);
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
     try std.testing.expectEqual(@as(f32, 1), asideOf(editor, 0));
     editor.app.layout.view_drag.discard();
     try dvui.testing.settle(ManyPanelFrame.frame);
@@ -5470,8 +5476,8 @@ test "float: a float of two is a ghost too, and comes back without the view that
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Float 1", bounds, bounds);
     // A ghost while the view is aimed off it: it covers nothing.
-    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, 4);
-    try std.testing.expectEqual(@as(f32, 1), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
+    try std.testing.expectEqual(@as(f32, 1), floats.items.items[0].aside.at());
     try std.testing.expect(!editor.app.layout.view_drag.ghost_firm);
 
     // Landed in Panel, which takes it beside what it shows: the float comes back, holding the
@@ -5480,7 +5486,7 @@ test "float: a float of two is a ghost too, and comes back without the view that
     editor.app.layout.view_drag.discard();
     try dvui.testing.settle(ManyPanelFrame.frame);
     try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
-    try std.testing.expectEqual(@as(f32, 0), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
+    try std.testing.expectEqual(@as(f32, 0), floats.items.items[0].aside.at());
     const left = case.shows("Float 1");
     try std.testing.expectEqual(@as(usize, 1), left.len);
     try std.testing.expect(!std.mem.eql(u8, left[0], carried));
@@ -5497,7 +5503,7 @@ test "float: a ghost for its last view goes when the view lands, without flying 
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Float 1", bounds, bounds);
-    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, 4);
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
     // Released on Panel, as `apply` lands it, then the drag ends.
     ViewDrag.place(&layout, "Float 1", "Panel", .swap);
     editor.app.layout.view_drag.discard();
@@ -5544,16 +5550,16 @@ test "float: coming back without the view that landed elsewhere, it draws its vi
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Float 1", bounds, bounds);
-    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, 4);
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
     ViewDrag.place(&layout, "Float 1", "Panel", .swap);
     editor.app.layout.view_drag.discard();
 
     var faded = false;
-    for (0..8) |_| {
+    for (0..ghost_frames) |_| {
         const before = FadeProbe.draws;
         _ = try dvui.testing.step(ManyPanelFrame.frame);
         try std.testing.expectEqual(before + 1, FadeProbe.draws);
-        const shown = fizzy.Editor.Layout.Floats.ghostLook(floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns)).alpha;
+        const shown = fizzy.Editor.Layout.Floats.ghostLook(floats.items.items[0].aside.at()).alpha;
         try std.testing.expect(FadeProbe.alpha <= shown + 0.001);
         if (FadeProbe.alpha > 0.001 and FadeProbe.alpha < 0.999) faded = true;
     }

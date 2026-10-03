@@ -23,7 +23,8 @@ pub const Landing = struct {
     from: dvui.Rect.Physical,
     /// Its corner radius then, physical.
     radius: f32,
-    start_ns: i128,
+    /// How far it has got: stepped from the frame its window is first drawn, the release's.
+    clock: core.FrameClock = .{},
     /// The carried view's photograph, fading out as the view itself fades in over it. Owned:
     /// taken from the drag, destroyed when the landing ends or the float goes.
     photo: ?dvui.Texture = null,
@@ -88,31 +89,40 @@ pub const Photo = struct {
 };
 
 /// A value easing to where it is sent, a step of 1 over `aside_ms` (`core.motion`), turning back
-/// from wherever it is when sent elsewhere.
+/// from wherever it is when sent elsewhere. On a clock its frames step (`core.FrameClock`): the
+/// first frames of a float going to its ghost make the photograph's blur, and a long one holds the
+/// fade a moment rather than skipping it on.
 pub const Fade = struct {
     from: f32 = 0,
     to: f32 = 0,
-    start_ns: i128 = 0,
+    clock: core.FrameClock = .{},
 
-    pub fn at(self: Fade, now: i128) f32 {
-        const dur: f64 = core.motion.durationMs(aside_ms) * @abs(self.to - self.from) * @as(f64, std.time.ns_per_ms);
-        if (dur <= 0 or self.from == self.to) return self.to;
-        const t: f32 = @floatCast(std.math.clamp(@as(f64, @floatFromInt(now - self.start_ns)) / dur, 0, 1));
-        return std.math.lerp(self.from, self.to, t);
+    /// Where it is, as of the frame it was last stepped to (`step`).
+    pub fn at(self: Fade) f32 {
+        const span = @abs(self.to - self.from);
+        if (span == 0) return self.to;
+        return std.math.lerp(self.from, self.to, self.clock.fraction(core.motion.durationMs(aside_ms) * span));
     }
 
+    /// Move it on to frame time `now`. Once a frame, before it is read or sent anywhere.
+    pub fn step(self: *Fade, now: i128) void {
+        self.clock.step(now);
+    }
+
+    /// Send it toward `to` from where it is, setting off in the frame at `now`.
     pub fn toward(self: *Fade, to: f32, now: i128) void {
         if (self.to == to) return;
-        self.from = self.at(now);
+        self.from = self.at();
         self.to = to;
-        self.start_ns = now;
+        self.clock = .{};
+        self.clock.step(now);
     }
 };
 
 /// How long a float takes to fade to its ghost for a view carried out of it, and to firm up
 /// again, as written: long enough for the defocus to read, short enough that it is out of the way
 /// before the drop is aimed.
-const aside_ms: f32 = 300;
+pub const aside_ms: f32 = 300;
 
 /// A float's ghost: how much of it shows, and how far it is out of focus (0 sharp, 1 its whole
 /// frost) — enough to say where it is and that it is coming back, little enough that what it lies
@@ -421,20 +431,22 @@ fn drawOne(l: *Layout, i: usize) bool {
     const ghosted = carried_out and !ViewDrag.settleGhost(state);
     {
         const f = &state.floats.items.items[i];
+        f.aside.step(now);
+        if (f.landing) |*land| land.clock.step(now);
         if (!f.closing) {
             f.aside.toward(if (ghosted) 1 else 0, now);
             // The drag is over and the view is not in it any more — it landed elsewhere: the
             // photograph is of what the float was, so it comes back as it is now, the live float
             // fading in.
             if (!carried_out and f.aside_photo != null and !holdsView(l, f.name, f.aside_view)) dropAsidePhoto(f);
-        } else if (f.aside.to > 0 or f.aside.at(now) > 0.01) {
+        } else if (f.aside.to > 0 or f.aside.at() > 0.01) {
             // Closing as a ghost — its last view landed elsewhere: what is left of it finishes
             // going, then so does it, with no flight shut.
             f.aside.toward(gone, now);
         }
     }
     const first = state.floats.items.items[i];
-    const aside = first.aside.at(now);
+    const aside = first.aside.at();
     if (aside != first.aside.to) dvui.refresh(null, @src(), null);
     const closing_aside = first.closing and first.aside.to > 0;
     if (closing_aside and (first.aside_photo == null or aside >= gone)) return false;
@@ -456,7 +468,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     var corner_r = core.corners.scaled(core.corners.surface);
     var landed: f32 = 1;
     if (first.landing) |land| {
-        const frac = landingFraction(land.start_ns, now);
+        const frac = land.clock.fraction(core.motion.durationMs(landing_ms));
         landed = if (frac >= 1) 1 else core.motion.enter(frac);
         const from = land.from.toNatural();
         rect = fromRules(rules.lerp(toRules(from), toRules(first.rect), landed));
@@ -608,14 +620,6 @@ const Whole = struct {
         dvui.Texture.destroyLater(tex);
     }
 };
-
-/// How far through its landing a float is, 0…1 on the clock; 1 at once when motion is off.
-fn landingFraction(start_ns: i128, now: i128) f32 {
-    const dur: f64 = core.motion.durationMs(landing_ms) * @as(f64, std.time.ns_per_ms);
-    if (dur <= 0) return 1;
-    const elapsed: f64 = @floatFromInt(now - start_ns);
-    return @floatCast(std.math.clamp(elapsed / dur, 0, 1));
-}
 
 /// The photograph the float grew out of, over its body (below `header`), cropped to fill it, at
 /// `fade` of its carried opacity.

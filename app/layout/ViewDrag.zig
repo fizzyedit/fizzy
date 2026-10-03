@@ -1753,7 +1753,6 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8) void {
     var landing: Floats.Landing = .{
         .from = if (carried) d.shape_rect else src,
         .radius = if (carried) d.shape_radius else core.corners.scaled(core.corners.card) * scale,
-        .start_ns = cw.frame_time_ns,
     };
     if (carried) {
         // The float has the photograph now; the drag's discard must not destroy it.
