@@ -671,6 +671,13 @@ pub fn drawFloats(self: *Layout) void {
     Floats.draw(self);
 }
 
+/// Close float `name`, every view in it going back to the place it floated out of — the picker's
+/// Remove, as the float's own close button does. Re-docking needs nothing of this: a view dragged
+/// out of a float by its corner button lands like any other, and the float shuts behind it.
+pub fn closeFloat(self: *Layout, name: []const u8) void {
+    Floats.close(self, name, .home);
+}
+
 /// Snapshot every surface that drew nowhere this frame, by drawing each once offscreen at a
 /// fixed size. Only while the picker is collecting and only for surfaces still missing a
 /// snapshot, so a frame with nothing to do costs a lookup. The application calls this after
