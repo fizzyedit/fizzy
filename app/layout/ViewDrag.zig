@@ -941,7 +941,11 @@ fn drawDrop(l: *Layout, taken: bool) void {
     const d = &l.state.view_drag;
     const scale = dvui.currentWindow().natural_scale;
     if (!taken) {
-        var field: core.LiquidField = .{ .merge_px = drop_r * 0.9 * scale };
+        // At the merge it is drawn at inside a place's drop (`DropZones.merge`). Its head and tail
+        // overlap, and the join between them swells the outline by up to a quarter of the merge:
+        // drawn alone at a wider one, between two places — over the sash between them — the drop
+        // grew by some 8% of its radius, and shrank back as the pointer reached either side.
+        var field: core.LiquidField = .{ .merge_px = DropZones.merge * scale };
         for (d.drop_shapes[0..d.drop_n]) |sh| field.add(sh);
         _ = core.dialogs.carriedFieldWhole(dvui.Id.update(.zero, "view_drag_drop"), field, scale);
     }
@@ -1065,7 +1069,7 @@ pub fn drawFloat(l: *Layout, taken: bool) void {
         // the same a tab has while it is dragged along its strip.
         const brs = fw.data().borderRectScale();
         if (core.LiquidField.ready()) {
-            var field: core.LiquidField = .{ .merge_px = drop_r * 0.9 * scale };
+            var field: core.LiquidField = .{ .merge_px = DropZones.merge * scale };
             field.add(.{ .rect = brs.r, .radii = @splat(radius), .round = true });
             if (!core.dialogs.carriedFieldWhole(dvui.Id.update(.zero, "view_drag_drop"), field, scale))
                 core.dialogs.carriedGlass(fw.data().id, brs.r, brs.s);

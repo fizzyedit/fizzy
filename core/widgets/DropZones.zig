@@ -319,8 +319,9 @@ fn orbTime(shown: f32, j: usize, n: usize) f32 {
 
 /// Points: how far apart two bubbles still run together (`LiquidField.merge_px`) — about half a
 /// side bubble across, so one leaving the drop draws a neck out of it that thins and lets go well
-/// before it settles.
-const merge: f32 = 24;
+/// before it settles. A view carried as a drop is drawn at it too, over a place or between them
+/// (`ViewDrag`): a join's swell is part of a shape's size, so glass drawn at two merges is two sizes.
+pub const merge: f32 = 24;
 
 /// How far behind the one before each orb starts, as a share of `shown`.
 const stagger: f32 = 0.06;
