@@ -154,7 +154,8 @@ pub const Uniforms = extern struct {
     /// Dither amplitude.
     dither: [4]f32,
     /// 1 where the window is opaque behind its content (`publishOpaqueWindow`): the glass is
-    /// then opaque, whatever the alpha of the picture it covers.
+    /// then opaque, whatever the alpha of the picture it covers. The window's, not the field's:
+    /// `draw` sets it, in the frame; `pack` leaves it 0.
     backdrop: [4]f32 = @splat(0),
     shapes: [max_shapes][shape_vec4s][4]f32,
 
@@ -180,7 +181,8 @@ fn rimScale(self: *const LiquidField, depth_px: f32) f32 {
     return self.scale * f;
 }
 
-/// The uniforms for drawing over `frost`, a picture of `covered`, the shapes in `order`.
+/// The uniforms for drawing over `frost`, a picture of `covered`, the shapes in `order`: the
+/// field's own, so they are worked out with no window — what the window behind it is, `draw` adds.
 pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bool, order: []const u8) Uniforms {
     const s = self.scale;
     const tint: [4]f32 = if (self.tint) |t| blk: {
@@ -197,7 +199,6 @@ pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bo
         .tint = tint,
         .face = .{ std.math.clamp(self.mix, 0, 1), std.math.clamp(self.lift, 0, 1), if (self.tint != null) 1 else 0, if (has_sharp) 1 else 0 },
         .dither = .{ 1.0 / 255.0, 0, 0, 0 },
-        .backdrop = .{ if (opaqueWindow()) 1 else 0, 0, 0, 0 },
         .shapes = undefined,
     };
     @memset(std.mem.asBytes(&u.shapes), 0);
@@ -280,7 +281,9 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     const h = programs.hooks() orelse return false;
     const id = program.ready(h) orelse return false;
     const groups = self.clusters();
-    const u = self.pack(covered, sharp != null, groups.order[0..self.len]);
+    var u = self.pack(covered, sharp != null, groups.order[0..self.len]);
+    // The window behind the glass, published for this frame.
+    u.backdrop[0] = if (opaqueWindow()) 1 else 0;
     const textures = [_]?*anyopaque{programs.handle(sharp)};
     if (!h.begin(id, &textures, textures.len, u.vec4s(), uniform_vec4s)) return false;
     defer h.end();
