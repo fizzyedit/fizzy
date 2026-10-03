@@ -4459,6 +4459,37 @@ test "demo: the scrubber seeks as it is dragged" {
     try std.testing.expectEqual(@as(u32, 0), demo_player.mismatches);
 }
 
+test "demo: closed from its bar, the bar runs back together before the demo goes" {
+    var t = try demoCtx();
+    defer deinitDemo(&t);
+
+    demo_player.load(try demoTape(), .{});
+    try stepDemoUntil(.ended, 400);
+    // Ended, the bar is out and open.
+    for (0..20) |_| _ = try dvui.testing.step(demoFrame);
+    try std.testing.expect(demo_player.transport.openness > 0.99);
+
+    // A click on its close button, the way a backend adds it.
+    const close = demo_player.transport.close;
+    try std.testing.expect(close.w > 0);
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = close.center() });
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(demoFrame);
+    // Not gone under the pointer: still loaded, the bar on its way out.
+    try std.testing.expect(demo_player.tape() != null);
+    try std.testing.expect(demo_player.transport.closing);
+    _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+
+    // Gone once it has run back together, and not before it shut.
+    var frames: usize = 0;
+    while (demo_player.tape() != null and frames < 40) : (frames += 1) {
+        try std.testing.expect(demo_player.transport.openness > 0 or demo_player.transport.shut);
+        _ = try dvui.testing.step(demoFrame);
+    }
+    try std.testing.expect(demo_player.tape() == null);
+    try std.testing.expect(frames > 1);
+}
+
 test "demo: a replay that does not reach what playing did is caught" {
     var t = try demoCtx();
     defer deinitDemo(&t);

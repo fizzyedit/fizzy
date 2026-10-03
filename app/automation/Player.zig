@@ -186,6 +186,11 @@ pub const Transport = struct {
     wanted: bool = false,
     since_ns: ?i128 = null,
     openness: f32 = 0,
+    /// Closed from its own close button (`Player.close`): the bar runs its pieces back together
+    /// and goes, and the demo is let go only once it has (`shut`).
+    closing: bool = false,
+    /// Shut, having been closing — the overlay's word to `frame` that the demo can go now.
+    shut: bool = false,
 
     /// The demo time under physical x on the track.
     pub fn timeAt(self: Transport, x: f32, total_ms: u32) f64 {
@@ -251,6 +256,17 @@ pub fn load(self: *Player, owned: Tape.Owned, opts: LoadOptions) void {
     self.mismatches = 0;
     self.stage.begin(t);
     self.seekTo(0, if (opts.autoplay) .play else .pause);
+}
+
+/// Close the demo from its bar: the bar runs its pieces back together and goes, as it does when it
+/// gets out of the way of a playing demo, and only then is the demo let go (`frame` → `unload`).
+/// Unloaded at once, the bar vanished under the pointer that closed it. Paused meanwhile, where
+/// it is. A bar not showing has nothing to close: the demo goes at once.
+pub fn close(self: *Player) void {
+    if (self.transport.openness <= 0.001) return self.unload();
+    self.pause();
+    self.transport.closing = true;
+    dvui.refresh(null, @src(), null);
 }
 
 /// Stop and let go of the demo; the stage gives the user their session back.
@@ -510,8 +526,10 @@ pub fn frame(self: *Player) void {
     // Widgets name themselves for the tape only while one is loaded (`core.anchor`).
     core.anchor.publish(self.owned != null);
     if (self.owned == null) return;
+    // The bar has closed itself shut (`close`): the demo goes now.
+    if (self.transport.shut) return self.unload();
     self.takeRealInput();
-    if (self.owned == null) return; // the bar's close button
+    if (self.owned == null) return; // the bar's close button, with no bar showing
     self.claimCursor();
 
     // The scrubber held and moved: there, now, rather than when it is let go.
@@ -713,6 +731,11 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
     const bar = tr.bar orelse return false;
     if (!bar.contains(me.p)) return false;
     tr.stirred_ns = self.wallNs();
+    // Closing, the bar is on its way out: what is pressed on it on the way does nothing.
+    if (tr.closing) {
+        e.handle(@src(), wd);
+        return true;
+    }
     if (me.action == .press and me.button.pointer()) {
         if (tr.play.contains(me.p)) {
             self.toggle();
@@ -726,7 +749,7 @@ fn transportTakes(self: *Player, e: *dvui.Event, me: dvui.Event.Mouse) bool {
             self.stepChapter(1);
         } else if (tr.close.contains(me.p)) {
             e.handle(@src(), wd);
-            self.unload();
+            self.close();
             return true;
         }
     }

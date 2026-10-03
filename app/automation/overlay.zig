@@ -585,7 +585,8 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
     // player asks for every frame, so the linger runs out without a timer of its own.)
     const wall_ns = player.wallNs();
     const since_stirred: i128 = if (tr.stirred_ns) |ns| wall_ns - ns else std.math.maxInt(i64);
-    const p = barProgress(tr, wall_ns, player.state != .playing or tr.scrub != null or since_stirred < bar_linger_ns);
+    // Closed from its close button, it closes whatever else would keep it open (`Player.close`).
+    const p = barProgress(tr, wall_ns, !tr.closing and (player.state != .playing or tr.scrub != null or since_stirred < bar_linger_ns));
 
     const full_w = @min(640, win.w - 24);
     const center: dvui.Point = .{ .x = win.x + win.w / 2, .y = win.y + win.h - 12 - bar_h / 2 };
@@ -600,6 +601,11 @@ fn drawTransport(player: *Player, tape: *const Tape, win: dvui.Rect) f32 {
         tr.next = .{};
         tr.track = .{};
         tr.close = .{};
+        // Run back together and gone: the demo can go (`Player.frame`), on the next frame.
+        if (tr.closing and !tr.shut) {
+            tr.shut = true;
+            dvui.refresh(null, @src(), null);
+        }
         return 0;
     }
 
