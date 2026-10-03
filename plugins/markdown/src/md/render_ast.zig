@@ -64,6 +64,16 @@ pub const Stats = struct {
     /// deferred work stalls whenever a frame happens to change no widget's size: dvui only
     /// redraws when something asks it to, and a cached height asks for nothing by construction.
     pending_measure: u32 = 0,
+    /// Wrapping text layouts drawn on their first frame, which dvui lays out at an assumed width
+    /// (1000) rather than the one they were given — so that a layout squeezed narrow on its first
+    /// frame does not report a tall, mostly empty height. Here the width is never in doubt: a
+    /// block is laid out across the column from its first frame. So that frame's height is just
+    /// wrong, a paragraph in a narrower column coming back a line or two short, and a block
+    /// holding such a layout is measured again the next frame instead of believed
+    /// (`renderTopLevel`). Blocks leave the layout when they scroll out of view and an edit can
+    /// remount one, so this is every block that scrolls into view, not only a document's first
+    /// frame.
+    fresh_text_layouts: u32 = 0,
     /// Nanoseconds spent parsing + pre-scanning the document, **accumulated** — one-time work
     /// that lands entirely on the frame a document is opened on, which is the frame the user
     /// feels as a hitch. Kept separate from `render_ns` so the two can be told apart.
@@ -217,10 +227,12 @@ inline fn statBlock() void {
     stats.blocks += 1;
 }
 
-/// `dvui.textLayout` + the counter, so no call site can add one without the other.
+/// `dvui.textLayout` + the counters, so no call site can add one without the others.
 inline fn textLayout(src: std.builtin.SourceLocation, init_opts: dvui.TextLayoutWidget.InitOptions, opts: dvui.Options) *dvui.TextLayoutWidget {
     stats.text_layouts += 1;
-    return dvui.textLayout(src, init_opts, opts);
+    const tl = dvui.textLayout(src, init_opts, opts);
+    if (init_opts.break_lines and dvui.firstFrame(tl.data().id)) stats.fresh_text_layouts += 1;
+    return tl;
 }
 
 inline fn box(src: std.builtin.SourceLocation, init_opts: dvui.BoxWidget.InitOptions, opts: dvui.Options) *dvui.BoxWidget {
@@ -1968,6 +1980,7 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         const prof_t0 = if (block_profile == null) 0 else std.Io.Clock.boot.now(dvui.io).nanoseconds;
         const prof_tl = stats.text_layouts;
         const prof_bytes = stats.add_text_bytes;
+        const fresh_before = stats.fresh_text_layouts;
         ids.n = 0;
         rs.block_rows_pending = 0;
         rs.block_measure_exhausted = !(bh.Height{
@@ -2008,7 +2021,11 @@ fn renderTopLevel(doc_node: ast.Node, ids: *IdGen, ctx: RenderContext) void {
         // started reporting a real placeholder height, and by then the test had inverted: it
         // froze the *collapsed* first-frame measurement of a table the reader had never visited
         // and never revisited it, leaving the document ~1300px short per table.
-        const partial = rs.block_rows_pending > 0;
+        //
+        // A block with a text layout on its first frame is the same: dvui laid that text out at an
+        // assumed width, not the column's (`Stats.fresh_text_layouts`), so the height is not this
+        // block's at this width, and next frame's will be.
+        const partial = rs.block_rows_pending > 0 or stats.fresh_text_layouts != fresh_before;
         // A pinned block measured exactly what it was pinned to, which says nothing about what
         // it wants to be. Filing that would promote a first, still-settling measurement to
         // `.settled` at the lagged height — the freeze would then *persist* the very error it
