@@ -663,6 +663,14 @@ pub fn drawDragOverlay(self: *Layout) void {
     ViewDrag.drawOverlay(self);
 }
 
+/// The views floating over the window (`Floats`), each a glass window holding its place. The
+/// application calls this after its shape has run and before it publishes the shape's regions,
+/// from the base window — so a float's places are this frame's, like the shape's — and before
+/// `drawDragOverlay`, which goes over them.
+pub fn drawFloats(self: *Layout) void {
+    Floats.draw(self);
+}
+
 /// Snapshot every surface that drew nowhere this frame, by drawing each once offscreen at a
 /// fixed size. Only while the picker is collecting and only for surfaces still missing a
 /// snapshot, so a frame with nothing to do costs a lookup. The application calls this after
@@ -836,6 +844,8 @@ pub const SplitTree = @import("SplitTree.zig");
 pub const Drop = @import("Drop.zig");
 /// Carrying a view from one place to another — the gesture `Drop` decides for.
 pub const ViewDrag = @import("ViewDrag.zig");
+/// The views floating over the window, each in a place of its own — see `Floats.zig`.
+pub const Floats = @import("Floats.zig");
 const Picker = @import("Picker.zig");
 /// The arrangement a shape starts from — see `Seed.zig`. `Layout.Seed` is the tree union.
 pub const Seed = @import("Seed.zig").Tree;

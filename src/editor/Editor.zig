@@ -3844,6 +3844,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             else
                 fizzy_layout.layout(ctx, &layout);
 
+            // The views floating over the window: places of the framework's own, drawn after the
+            // shape and before its regions are published, so theirs are this frame's too.
+            layout.drawFloats();
             // The shape has finished declaring regions: publish them. Until this point
             // `regionFor` answered from the previous frame, which is what lets a command
             // dispatched between frames drive a region (see `Layout.State.regions`).

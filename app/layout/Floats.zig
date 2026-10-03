@@ -10,8 +10,10 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const rules = @import("float_rules.zig");
+const core = @import("core");
 const Layout = @import("Layout.zig");
 const ViewDrag = @import("ViewDrag.zig");
+const dialogs = core.dialogs;
 
 const Floats = @This();
 
@@ -165,11 +167,10 @@ pub fn close(l: *Layout, name: []const u8, how: Closing) void {
     state.splits.forget(l.gpa, name);
     const f = &state.floats.items.items[i];
     endLanding(f);
-    if (f.win_id == .zero or f.bounds.w <= 0) {
-        // Never drawn: nothing to fly shut.
-        state.floats.removeAt(i);
-    } else {
-        f.closing = true;
+    // Marked, not removed: `draw` may be walking the list, and drops it when it comes to it —
+    // at once if it never drew a window, after the flight shut if it did.
+    f.closing = true;
+    if (f.win_id != .zero and f.bounds.w > 0) {
         var to = f.bounds;
         to.x = to.center().x;
         to.y = to.center().y;
@@ -179,4 +180,194 @@ pub fn close(l: *Layout, name: []const u8, how: Closing) void {
     }
     state.markDirty();
     dvui.refresh(null, @src(), null);
+}
+
+// ── Drawing ─────────────────────────────────────────────────────────────────────────────────────
+
+/// How long a float takes to grow out of the carried glass into its window, as written — the
+/// card's own change of shape (`ViewDrag.morphProgress`) and a dialog's open.
+const landing_ms: f32 = 300;
+/// How opaque the landing photograph is at its start — the carried card's own (`ViewDrag`).
+const photo_opacity: f32 = 0.8;
+
+/// Draw every float, bottom to top: each a glass window holding its place. Called by the
+/// application after its shape has run and before it publishes the shape's regions, from the
+/// base window (`Layout.drawFloats`), so a float's places register this frame like any other's
+/// — each stamped with its float's layer, the `n`th from the bottom being `n`.
+pub fn draw(l: *Layout) void {
+    const floats = &l.state.floats;
+    if (floats.items.items.len == 0) return;
+    syncStack(l);
+    defer l.state.layer_building = 0;
+    // By index, re-read after each draw: a view floated out of one adds a float at the end (and
+    // may move the list), and one done flying shut goes from where it is.
+    var i: usize = 0;
+    while (i < floats.items.items.len) {
+        l.state.layer_building = @intCast(i + 1);
+        if (drawOne(l, i)) i += 1 else floats.removeAt(i);
+    }
+}
+
+/// The floats in the order dvui stacks their windows: a press raises one there
+/// (`float_rules.stackOrder`).
+fn syncStack(l: *Layout) void {
+    const floats = &l.state.floats;
+    const n = @min(floats.items.items.len, max);
+    var ids: [max]u64 = undefined;
+    for (floats.items.items[0..n], 0..) |f, i| ids[i] = @intFromEnum(f.win_id);
+    const stack = dvui.currentWindow().subwindows.stack.items;
+    const stack_ids = l.arena.alloc(u64, stack.len) catch return;
+    for (stack, 0..) |sw, i| stack_ids[i] = @intFromEnum(sw.id);
+    var order: [max]usize = undefined;
+    rules.stackOrder(order[0..n], ids[0..n], stack_ids);
+    floats.reorder(order[0..n]);
+}
+
+/// Draw the float at `i`. False when it is gone: flown shut, or closed before it ever drew.
+fn drawOne(l: *Layout, i: usize) bool {
+    const state = l.state;
+    const cw = dvui.currentWindow();
+    const now = cw.frame_time_ns;
+    const scale = cw.natural_scale;
+    const first = state.floats.items.items[i];
+    if (first.closing and first.win_id == .zero) return false;
+    // Made this frame — by a release inside the place it left, which has drawn that view already
+    // this frame. Its place goes in the registry, so from the next frame it claims the view away
+    // from where it was; the window, and the view in it, start then. Drawn now, the view would be
+    // drawn twice in one frame.
+    if (first.born_ns == now and !first.closing) {
+        state.registerRegion(l.gpa, .{
+            .name = first.name,
+            .keywords = Layout.slot_keywords,
+            .shows = .many,
+            .by_name = true,
+        });
+        return true;
+    }
+
+    // Where the window is this frame: on its way out of the carried glass, or where it was left.
+    var rect = first.rect;
+    var corner_r = core.corners.scaled(core.corners.surface);
+    var landed: f32 = 1;
+    if (first.landing) |land| {
+        const frac = landingFraction(land.start_ns, now);
+        landed = if (frac >= 1) 1 else core.motion.enter(frac);
+        const from = land.from.toNatural();
+        rect = fromRules(rules.lerp(toRules(from), toRules(first.rect), landed));
+        corner_r = std.math.lerp(land.radius / scale, corner_r, std.math.clamp(landed, 0, 1));
+        if (frac >= 1) endLanding(&state.floats.items.items[i]) else dvui.refresh(null, @src(), null);
+    }
+    const landing = state.floats.items.items[i].landing != null;
+
+    var frost = dialogs.dialogFrost();
+    // The carried drop was glass already: the window takes over from it, whole, rather than
+    // forming a second time.
+    if (frost) |*fr| fr.form = 1;
+    var win_rect = rect;
+    var win = core.widgets.floatingWindow(@src(), .{
+        .rect = &win_rect,
+        .placed = true,
+        .resize = if (landing or first.closing) .none else .all,
+        .window_avoid = .none,
+        .frost = frost,
+    }, .{
+        .id_extra = @intCast(first.serial),
+        .corners = if (landing) dvui.CornerRect.all(corner_r) else dialogs.surfaceCorners(),
+        .box_shadow = dialogs.surfaceShadow(),
+        .color_fill = .{ .color = dialogs.dialogFill() },
+        .border = .all(0),
+    });
+    const win_id = win.data().id;
+    const bounds = win.data().rectScale().r;
+
+    // Flying shut: the glass alone, gone when it lands.
+    if (first.closing) {
+        const flown = if (dvui.animationGet(win_id, "_close_x")) |a| a.done() else true;
+        win.deinit();
+        return !flown;
+    }
+
+    // A press anywhere in it brings it to the front, as a press on an OS window does; dvui
+    // raises a window only from its header.
+    for (dvui.events()) |*e| {
+        if (e.evt != .mouse) continue;
+        const me = e.evt.mouse;
+        if (me.action != .press or !me.button.pointer()) continue;
+        if (dvui.eventMatch(e, .{ .id = win_id, .r = bounds })) dvui.raiseSubwindow(win_id);
+    }
+
+    var open = true;
+    const title = if (ViewDrag.visibleId(l, first.name)) |id| (if (l.host.surfaceById(id)) |s| s.title else first.name) else first.name;
+    const header = dialogs.windowHeader(title, "", &open, .none);
+    // Moved by its header only: the rest is the view's. Not while it lands — it is going where
+    // the drop put it.
+    win.dragAreaSet(if (landing) .{} else header);
+
+    {
+        // The view fades in over the photograph it grew out of, which fades out above it.
+        const prev_alpha = dvui.alpha(std.math.clamp(landed, 0, 1));
+        defer dvui.alphaSet(prev_alpha);
+        var region = l.region(@src(), .{
+            .name = first.name,
+            .keywords = Layout.slot_keywords,
+            .by_name = true,
+            .shows = .many,
+        }, .{ .expand = .both }) catch null;
+        if (region) |*r| r.deinit();
+    }
+    if (state.floats.items.items[i].landing) |land| {
+        if (land.photo) |tex| drawPhoto(tex, land.photo_size, bounds, header, corner_r * scale, 1 - std.math.clamp(landed, 0, 1));
+    }
+    win.deinit();
+
+    // Contents may have added a float, moving the list: read this one again.
+    const f = &state.floats.items.items[i];
+    f.win_id = win_id;
+    f.bounds = bounds;
+    f.header = header;
+    if (!open) {
+        close(l, f.name, .home);
+        return true;
+    }
+    // Moved or resized: remember where, no smaller than a float may be.
+    if (!landing and !f.closing and !win_rect.equals(f.rect)) {
+        f.rect = fromRules(rules.resized(toRules(win_rect)));
+        state.markDirty();
+    }
+    return true;
+}
+
+/// How far through its landing a float is, 0…1 on the clock; 1 at once when motion is off.
+fn landingFraction(start_ns: i128, now: i128) f32 {
+    const dur: f64 = core.motion.durationMs(landing_ms) * @as(f64, std.time.ns_per_ms);
+    if (dur <= 0) return 1;
+    const elapsed: f64 = @floatFromInt(now - start_ns);
+    return @floatCast(std.math.clamp(elapsed / dur, 0, 1));
+}
+
+/// The photograph the float grew out of, over its body (below `header`), cropped to fill it, at
+/// `fade` of its carried opacity.
+fn drawPhoto(tex: dvui.Texture, size: dvui.Size.Physical, bounds: dvui.Rect.Physical, header: dvui.Rect.Physical, radius: f32, fade: f32) void {
+    if (fade <= 0.01) return;
+    const top = header.y + header.h;
+    const r: dvui.Rect.Physical = .{ .x = bounds.x, .y = top, .w = bounds.w, .h = bounds.y + bounds.h - top };
+    if (r.w < 2 or r.h < 2) return;
+    var uv: dvui.Rect = .{ .x = 0, .y = 0, .w = 1, .h = 1 };
+    if (size.w > 0 and size.h > 0) {
+        const a_img = size.w / size.h;
+        const a_box = r.w / r.h;
+        if (a_img > a_box) {
+            uv.w = a_box / a_img;
+            uv.x = (1 - uv.w) / 2;
+        } else {
+            uv.h = a_img / a_box;
+            uv.y = (1 - uv.h) / 2;
+        }
+    }
+    const scale = dvui.currentWindow().natural_scale;
+    dvui.renderTexture(tex, .{ .r = r, .s = scale }, .{
+        .corners = .round(radius / scale),
+        .colormod = dvui.Color.white.opacity(photo_opacity * fade),
+        .uv = uv,
+    }) catch {};
 }
