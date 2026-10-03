@@ -104,10 +104,6 @@ last_pending_count: usize = 0,
 /// place a float covers is not aimed at through it, and over a float's header nothing is.
 occluders: [Floats.max]Occluder = undefined,
 occluder_count: usize = 0,
-/// Bumped at every lift, as the id of the drag's own layer (`drawOverlay`). A new layer is a new
-/// window on top of dvui's stack, over every float; one kept from drag to drag stays where it
-/// first appeared, under any float made since.
-overlay_gen: u32 = 0,
 
 /// What the carried view is drawn as. `drop` where the glass program draws and the pointer is off
 /// every list, `tab` over a list (a tab strip, a rail), `preview` — a card of its photograph — off
@@ -252,11 +248,9 @@ pub fn discard(self: *ViewDrag) void {
     // (`drawOverlay`), whatever the drop has just done to their places.
     const finishing = self.last_pending;
     const finishing_count = self.last_pending_count;
-    const gen = self.overlay_gen;
     self.* = .{};
     self.last_pending = finishing;
     self.last_pending_count = finishing_count;
-    self.overlay_gen = gen;
 }
 
 pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
@@ -348,7 +342,6 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     d.drop_ns = 0;
     d.drop_n = 0;
     d.drop_touch = false;
-    d.overlay_gen +%= 1;
     d.name = l.state.internName(l.gpa, name);
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
@@ -388,7 +381,6 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     d.drop_ns = 0;
     d.drop_n = 0;
     d.drop_touch = false;
-    d.overlay_gen +%= 1;
     // A surface's id is its registry's; a document not open yet has only the plugin's, which is
     // its frame's, so it is interned to outlive the drag.
     const moved = if (l.host.surfaceById(id)) |s| s.id else if (unopened(l, id)) l.state.internName(l.gpa, id) else return;
@@ -785,7 +777,8 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
 }
 
 /// What a view drag draws over every place at once, after they have all drawn: the drops they
-/// queued (`drawZones`), and over them the card riding the pointer — in a layer of its own over the window.
+/// queued (`drawZones`), and over them the card riding the pointer — in a layer of its own over the
+/// window and every float on it.
 pub fn drawOverlay(l: *Layout) void {
     const d = &l.state.view_drag;
     const now = dvui.currentWindow().frame_time_ns;
@@ -816,18 +809,19 @@ pub fn drawOverlay(l: *Layout) void {
     // Nothing to lay over the window.
     if (n == 0 and !d.active()) return;
     var layer: dvui.FloatingWidget = undefined;
-    layer.init(@src(), .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false, .id_extra = d.overlay_gen });
+    layer.init(@src(), .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false });
     defer layer.deinit();
-    // Over every float. A floating widget keeps just above the window it was made in — the main
-    // window — so a float drawn after it lay over the drag: a drop zone on a float, or the view
-    // carried over one, went under the very window it was aimed at. Re-added as a window of its
-    // own and raised each frame, as the demo's overlay is (`automation.overlay`).
-    dvui.subwindowAdd(layer.data().id, layer.data().rect, layer.data().rectScale().r, false, null, false);
-    dvui.raiseSubwindow(layer.data().id);
+    // Over every float. A floating widget stays just above the window it was made in — this one
+    // the app's own, which every float is over, so the drops on a float's place and the view
+    // carried over a float were drawn under its glass — and is re-added as a window of its own
+    // and raised, as the demo overlay's layers are (`automation/overlay.zig`). It takes no pointer
+    // events: what is under it still takes them, the drag's hold on the pointer included.
+    const wd = layer.data();
+    dvui.subwindowAdd(wd.id, wd.rect, wd.rectScale().r, false, null, false);
+    dvui.raiseSubwindow(wd.id);
     // The drops, then the card over them: one layer, so their order is the order drawn — the
     // card's glass showing the drop it is aimed at blurred through it, its top left just off the
-    // pointer so the bubble under the pointer stays in view. (Two floating layers stack in the
-    // order they first appeared, and raising one breaks the drag's hold on the pointer.)
+    // pointer so the bubble under the pointer stays in view.
     const scale = dvui.currentWindow().natural_scale;
     const prev_clip = dvui.clipGet();
     const mouse = dvui.currentWindow().mouse_pt;

@@ -5165,6 +5165,31 @@ const OverlaidFrame = struct {
     }
 };
 
+test "float: a drag's own layer is over every float" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const main = fizzy.Editor.Layout.ViewDrag.placeBounds(&editor.app.layout, "Main") orelse return error.TestExpectedEqual;
+
+    // A view carried over the float: its drops and the card go over the float's glass, which a
+    // floating widget made in the app's own window would stay under.
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    fizzy.Editor.Layout.ViewDrag.begin(&layout, "Main", main, main);
+    defer editor.app.layout.view_drag.discard();
+    _ = try dvui.testing.step(OverlaidFrame.frame);
+    _ = try dvui.testing.step(OverlaidFrame.frame);
+    const float_id = editor.app.layout.floats.items.items[0].win_id;
+    const stack = dvui.currentWindow().subwindows.stack.items;
+    var float_at: ?usize = null;
+    for (stack, 0..) |sw, k| {
+        if (sw.id == float_id) float_at = k;
+    }
+    // The top of the stack: the drag's layer, taking no pointer events, over the float.
+    try std.testing.expect(float_at.? < stack.len - 1);
+    try std.testing.expect(!stack[stack.len - 1].mouse_events);
+}
+
 test "float: a document pane is under the pointer only where no float lies over it, and the drag's own layer covers nothing" {
     var case = try ManyPanelCase.init();
     defer case.deinit();
