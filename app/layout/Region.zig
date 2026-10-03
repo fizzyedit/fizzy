@@ -672,9 +672,10 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     // for the frames that fade took to run down: a stroke flashed round the place a view landed in.
     // Held for the whole of a drag out of this place, so the place being carried from stays
     // marked — the only place a drag lights, and it goes out as the drag ends.
-    // Not round a float stepping aside for the drag (`Floats`): nothing of it shows, and the
-    // ring is drawn past the clip that hides the rest.
-    const aside = if (self.state.floatRoot(opts.name)) |root| ViewDrag.carriedOutOf(self, root) else false;
+    // Not round a float that is a ghost of itself for the drag (`Floats`): nothing of the live
+    // float shows, and the ring is drawn past the clip that hides the rest. Firm again, under the
+    // view aimed back at it, it is marked as any place carried from is.
+    const aside = if (self.state.floatRoot(opts.name)) |root| ViewDrag.ghosted(self, root) else false;
     const ring_wanted = filled and !aside and (dragging_this or (!self.state.view_drag.active() and (picker_here or near or pressing)));
     const ring_alpha = chooserFade(box.data().id.update("ring"), if (ring_wanted) 1 else 0);
     if (ring_alpha > 0.01) {

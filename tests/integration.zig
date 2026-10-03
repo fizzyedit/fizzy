@@ -5146,32 +5146,157 @@ test "float: dragging a place's view onto its own middle floats it, over a seed 
     try std.testing.expectEqualStrings("test.view", shown[0]);
 }
 
-test "float: the float a view is carried out of steps aside, and comes back when it is let go over nothing" {
+/// Move the pointer to `p` and draw `frames` frames of `frame` there.
+fn pointTo(p: dvui.Point.Physical, frame: fn () anyerror!dvui.App.Result, frames: usize) !void {
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = p });
+    for (0..frames) |_| _ = try dvui.testing.step(frame);
+}
+
+/// A point in the window off the float `bounds`: one of the window's corners, a little in.
+fn offFloat(bounds: dvui.Rect.Physical) !dvui.Point.Physical {
+    const w = dvui.windowRectPixels();
+    for ([_]dvui.Point.Physical{ w.topLeft(), w.topRight(), w.bottomLeft(), w.bottomRight() }) |corner| {
+        const p: dvui.Point.Physical = .{ .x = std.math.lerp(corner.x, w.center().x, 0.05), .y = std.math.lerp(corner.y, w.center().y, 0.05) };
+        if (!bounds.contains(p)) return p;
+    }
+    return error.TestUnexpectedResult;
+}
+
+/// Rest the pointer on `p`, drawing frames of `frame` until the ghost of the float the view is
+/// carried out of firms up there (`ViewDrag.ghost_rest_ms`, as the clock goes), or it plainly
+/// will not.
+fn restOn(editor: *fizzy.Editor, p: dvui.Point.Physical, frame: fn () anyerror!dvui.App.Result) !void {
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = p });
+    const start = dvui.currentWindow().frame_time_ns;
+    const enough = 3 * fizzy.Editor.Layout.ViewDrag.ghost_rest_ms * std.time.ns_per_ms;
+    while (!editor.app.layout.view_drag.ghost_firm and dvui.currentWindow().frame_time_ns - start < enough) {
+        _ = try dvui.testing.step(frame);
+    }
+    for (0..4) |_| _ = try dvui.testing.step(frame);
+}
+
+/// How far aside float `i` is now (`Floats.Float.aside`): 0 itself, 1 its ghost.
+fn asideOf(editor: *fizzy.Editor, i: usize) f32 {
+    return editor.app.layout.floats.items.items[i].aside.at(dvui.currentWindow().frame_time_ns);
+}
+
+test "float: the float a view is carried out of is a ghost while the view is aimed off it, itself over it, and back when it is let go over nothing" {
     var case = try ManyPanelCase.init();
     defer case.deinit();
     const editor = case.ctx.editor;
     try case.place("Panel", "Panel", .swap);
     const floats = &editor.app.layout.floats;
     const bounds = floats.items.items[0].bounds;
+    const header = floats.items.items[0].header;
 
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
-    fizzy.Editor.Layout.ViewDrag.begin(&layout, "Float 1", bounds, bounds);
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    // Lifted from its corner button, over the float: it is still itself.
+    try pointTo(.{ .x = bounds.x + bounds.w - 16, .y = header.y + header.h + 16 }, ManyPanelFrame.frame, 1);
+    ViewDrag.begin(&layout, "Float 1", bounds, bounds);
     defer editor.app.layout.view_drag.discard();
-    // Its last view lifted: it covers nothing, and fades away.
-    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.view_drag.occluder_count);
-    for (0..4) |_| _ = try dvui.testing.step(ManyPanelFrame.frame);
-    try std.testing.expectEqual(@as(f32, 1), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
+    // Mapped with the others, marked as the one the view is carried out of.
+    try std.testing.expectEqual(@as(usize, 1), editor.app.layout.view_drag.occluder_count);
+    try std.testing.expect(editor.app.layout.view_drag.occluders[0].source);
+    _ = try dvui.testing.step(ManyPanelFrame.frame);
+    try std.testing.expect(editor.app.layout.view_drag.ghost_firm);
+    try std.testing.expectEqual(@as(f32, 0), asideOf(editor, 0));
+
+    // Aimed off it: a ghost of itself.
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, 4);
+    try std.testing.expect(!editor.app.layout.view_drag.ghost_firm);
+    try std.testing.expectEqual(@as(f32, 1), asideOf(editor, 0));
     // It still holds its view, and its place is still drawn: the drag is held by its corner button.
     try std.testing.expect(holds(case.shows("Float 1"), "test.output"));
 
-    // Let go over nothing: back as it was.
+    // Carried back over it, off any drop beneath, it is still a ghost; rested on there, itself
+    // again, and what the view aims at.
+    const body: dvui.Point.Physical = .{ .x = bounds.x + 12, .y = bounds.y + bounds.h - 12 };
+    try pointTo(body, ManyPanelFrame.frame, 1);
+    try std.testing.expect(!editor.app.layout.view_drag.ghost_firm);
+    try restOn(editor, body, ManyPanelFrame.frame);
+    try std.testing.expect(editor.app.layout.view_drag.ghost_firm);
+    try std.testing.expectEqual(@as(f32, 0), asideOf(editor, 0));
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, body, "Float 1") orelse return error.TestExpectedEqual);
+
+    // Off it again, and let go over nothing: back as it was.
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, 4);
+    try std.testing.expectEqual(@as(f32, 1), asideOf(editor, 0));
     editor.app.layout.view_drag.discard();
     try dvui.testing.settle(ManyPanelFrame.frame);
     try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
-    try std.testing.expectEqual(@as(f32, 0), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
+    try std.testing.expectEqual(@as(f32, 0), asideOf(editor, 0));
 }
 
-test "float: a float of two steps aside too, and comes back without the view that landed elsewhere" {
+test "float: its ghost firms up rested on, and is aimed through at what is beneath until it does" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    try FloatOverMain.register(editor, false);
+    const state = &editor.app.layout;
+    const cw = dvui.currentWindow();
+    const prev_mouse = cw.mouse_pt;
+    defer cw.mouse_pt = prev_mouse;
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, cw.arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    cw.mouse_pt = FloatOverMain.body.center();
+    ViewDrag.begin(&layout, "Float 1", FloatOverMain.body, FloatOverMain.body);
+    defer state.view_drag.discard();
+
+    const prev_time = cw.frame_time_ns;
+    defer cw.frame_time_ns = prev_time;
+    // Aimed off the float: a ghost.
+    const beside: dvui.Point.Physical = .{ .x = 650, .y = 200 };
+    cw.mouse_pt = beside;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    // Beside it, what is beneath.
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, beside, "Float 1") orelse return error.TestExpectedEqual);
+    // With the ghost covering nothing, Main's drop is in its middle, under the ghost, and aimed
+    // at there through it the drop is Main's.
+    const main_drop = ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual;
+    try std.testing.expect(FloatOverMain.body.contains(main_drop.center));
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, main_drop.center, "Float 1") orelse return error.TestExpectedEqual);
+    // Carried across the ghost to that drop, it stays a ghost — over it off the drop, the view is
+    // over Main and no bubble of it — and on the drop, it is a ghost however long it rests there.
+    const corner: dvui.Point.Physical = .{ .x = FloatOverMain.body.x + 16, .y = FloatOverMain.body.y + FloatOverMain.body.h - 12 };
+    try std.testing.expect(DZ.at(main_drop, corner) == null);
+    cw.mouse_pt = corner;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, corner, "Float 1") orelse return error.TestExpectedEqual);
+    cw.mouse_pt = main_drop.center;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    cw.frame_time_ns += 2 * ViewDrag.ghost_rest_ms * std.time.ns_per_ms;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+
+    // Rested on off the drop, it firms up, and stays firm over it: the float's place is what the
+    // view aims at there, and at Main's middle, under it — Main's drop has gone out from under it.
+    cw.mouse_pt = corner;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    cw.frame_time_ns += ViewDrag.ghost_rest_ms * std.time.ns_per_ms;
+    try std.testing.expect(ViewDrag.settleGhost(state));
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, corner, "Float 1") orelse return error.TestExpectedEqual);
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, main_drop.center, "Float 1") orelse return error.TestExpectedEqual);
+    const clear = ViewDrag.zoneBounds(state, "Main") orelse return error.TestExpectedEqual;
+    try std.testing.expect(clear.intersect(FloatOverMain.window).w <= 0 or clear.intersect(FloatOverMain.window).h <= 0);
+    try std.testing.expect(!FloatOverMain.window.contains((ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual).center));
+    // Over its header, nothing: its handle.
+    try std.testing.expect(ViewDrag.targetAt(&layout, FloatOverMain.header.center(), "Float 1") == null);
+
+    // Off it again: a ghost, and Main's drop back in its middle.
+    cw.mouse_pt = beside;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    try std.testing.expectEqual(main_drop.center, (ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual).center);
+}
+
+test "float: a float of two is a ghost too, and comes back without the view that landed elsewhere" {
     var case = try ManyPanelCase.init();
     defer case.deinit();
     const editor = case.ctx.editor;
@@ -5188,10 +5313,10 @@ test "float: a float of two steps aside too, and comes back without the view tha
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Float 1", bounds, bounds);
-    for (0..4) |_| _ = try dvui.testing.step(ManyPanelFrame.frame);
-    // Out of the way while the view is carried: it covers nothing.
+    // A ghost while the view is aimed off it: it covers nothing.
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, 4);
     try std.testing.expectEqual(@as(f32, 1), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
-    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.view_drag.occluder_count);
+    try std.testing.expect(!editor.app.layout.view_drag.ghost_firm);
 
     // Landed in Panel, which takes it beside what it shows: the float comes back, holding the
     // other.
@@ -5205,7 +5330,7 @@ test "float: a float of two steps aside too, and comes back without the view tha
     try std.testing.expect(!std.mem.eql(u8, left[0], carried));
 }
 
-test "float: one that stepped aside for its last view goes when the view lands, without flying shut" {
+test "float: a ghost for its last view goes when the view lands, without flying shut" {
     var case = try ManyPanelCase.init();
     defer case.deinit();
     const editor = case.ctx.editor;
@@ -5216,7 +5341,7 @@ test "float: one that stepped aside for its last view goes when the view lands, 
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Float 1", bounds, bounds);
-    for (0..4) |_| _ = try dvui.testing.step(ManyPanelFrame.frame);
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, 4);
     // Released on Panel, as `apply` lands it, then the drag ends.
     ViewDrag.place(&layout, "Float 1", "Panel", .swap);
     editor.app.layout.view_drag.discard();
@@ -5258,11 +5383,12 @@ test "float: coming back without the view that landed elsewhere, it draws its vi
     const floats = &editor.app.layout.floats;
     const bounds = floats.items.items[0].bounds;
 
-    // Output carried out to Panel: the float steps aside, and comes back holding the probe.
+    // Output carried out to Panel: the float is a ghost while it is aimed there, and comes back
+    // holding the probe.
     var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
     const ViewDrag = fizzy.Editor.Layout.ViewDrag;
     ViewDrag.begin(&layout, "Float 1", bounds, bounds);
-    for (0..4) |_| _ = try dvui.testing.step(ManyPanelFrame.frame);
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, 4);
     ViewDrag.place(&layout, "Float 1", "Panel", .swap);
     editor.app.layout.view_drag.discard();
 
@@ -5271,7 +5397,7 @@ test "float: coming back without the view that landed elsewhere, it draws its vi
         const before = FadeProbe.draws;
         _ = try dvui.testing.step(ManyPanelFrame.frame);
         try std.testing.expectEqual(before + 1, FadeProbe.draws);
-        const shown = 1 - floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns);
+        const shown = fizzy.Editor.Layout.Floats.ghostLook(floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns)).alpha;
         try std.testing.expect(FadeProbe.alpha <= shown + 0.001);
         if (FadeProbe.alpha > 0.001 and FadeProbe.alpha < 0.999) faded = true;
     }

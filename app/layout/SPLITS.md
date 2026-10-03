@@ -100,7 +100,9 @@ and the view you are carrying — never as the view drawn in two places.
 - **A drag does not change the map it is read against.** The places, and where they are, are
   photographed at lift, exactly like the view is. A place can still move during a drag — a split
   easing shut, a window resized — and a hit-test read against the live layout would chase it.
-  Frozen, it is a pure function of where the pointer is.
+  Frozen, it is a pure function of where the pointer is. The one part of it that is live is the
+  float a view is carried out of: whether it covers what it lies over follows where the view is
+  aimed (below).
 
 ## Where the view goes when a place is split
 
@@ -152,7 +154,8 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
   and right of that one (`float_rules.zig`, unit-tested).
 - **A float covers what is under it.** A drag reads the floats as it reads the places — frozen at
   lift — and aims only at the topmost window under the pointer: a place a float covers is not
-  reached through it, and over a float's header, its handle, nothing is aimed at.
+  reached through it, and over a float's header, its handle, nothing is aimed at. The float the
+  view is carried out of covers only while it is firm (below).
 - **A drop keeps out from under the floats.** A place's drop sits in the middle of the part of the
   place no float lies over — of the parts left clear, the one where it is biggest, and the largest
   of those — fitted there as a wheel or a strip as anywhere (`DropZones.uncovered`,
@@ -161,15 +164,25 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
   places have theirs inside it; a place floats lie all over has none. The zones, the release and
   the self-split all read that one rect. When the part left clear changes during a drag, the drop
   slides to its new middle and size on the glass, its bubbles running together on the way.
-- **The float a view leaves steps aside.** Carrying a view out of a float, the float blurs out of
-  focus and fades away as the drag lifts, and covers nothing: what it was over is where the view
-  can go, and usually where it is going. What steps aside is a photograph of the float, taken from
-  the frame at the lift, while the float itself goes on drawing its place clipped to nothing (its
-  corner button holds the drag) — a view may draw in ways no alpha reaches, and none of it may
-  show. Let go over nothing and the photograph comes back into focus, then the float takes over
-  from it. Land the view elsewhere and the float comes back as it now is, fading in with its view
-  drawn into a picture of itself, so that too fades whole — or, if that was its last view,
-  finishes fading and is gone, with no flight shut.
+- **The float a view leaves is a ghost while the view is aimed elsewhere.** Carrying a view out of a
+  float, the float fades to a faint, slightly blurred picture of itself once the view is aimed off
+  it, and covers nothing: what it lies over shows through and can be aimed at, and is usually where
+  the view is going. The drop of a place beneath it sits where it would with no float there, under
+  the ghost, and is reached through it. Rested on over the ghost, off such a drop, for a quarter of
+  a second (`ViewDrag.ghost_rest_ms`), it firms up, live: the float again, covering what it lies
+  over, with its own places' drops, so the view can go back in (its own middle, where it is alone,
+  is no move), split it on an edge, or go to another of its places — and the drops beneath slide out
+  from under it (above). It stays firm until the view is aimed off it, so its own middle can be
+  reached wherever it lies. It waits for a rest because a ghost over the middle of a place that
+  firmed up the moment the view crossed into it would take that place's drop away as the view was
+  carried across to it: carried across, the view reaches the drop beneath; held over the float, it
+  means the float. The ghost is a photograph of the float, taken from the frame at the lift, while
+  the float itself goes on drawing its place clipped to nothing (its corner button holds the drag) —
+  a view may draw in ways no alpha reaches, and none of it may show. Let go over nothing and the
+  photograph comes back into focus, then the float takes over from it. Land the view elsewhere and
+  the float comes back as it now is, fading in with its view drawn into a picture of itself, so that
+  too fades whole — or, if that was its last view, its ghost fades the rest of the way and is gone,
+  with no flight shut.
 - **Moving and stacking.** A float moves by its header and resizes from its edges, no smaller than
   160×96. A press anywhere in it brings it to the front, as on an OS window.
 - **Back again.** Dragged out by its corner button, a view lands like any other, and a float its

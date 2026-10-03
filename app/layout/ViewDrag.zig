@@ -104,6 +104,14 @@ last_pending_count: usize = 0,
 /// place a float covers is not aimed at through it, and over a float's header nothing is.
 occluders: [Floats.max]Occluder = undefined,
 occluder_count: usize = 0,
+/// Whether the float the view is carried out of is firm (`settleGhost`): itself, covering what it
+/// lies over, rather than its ghost. It starts firm — the drag lifts out of it — and stays so
+/// until the view is aimed off it.
+ghost_firm: bool = true,
+/// Where and when the view came to rest over the ghost (`settleGhost`); 0 when it is not resting
+/// over it.
+ghost_rest_at: dvui.Point.Physical = .{},
+ghost_rest_ns: i128 = 0,
 
 /// What the carried view is drawn as. `drop` where the glass program draws and the pointer is off
 /// every list, `tab` over a list (a tab strip, a rail), `preview` — a card of its photograph — off
@@ -162,19 +170,115 @@ pub const Occluder = struct {
     layer: u16,
     bounds: dvui.Rect.Physical,
     header: dvui.Rect.Physical,
+    /// The float the view is carried out of (`carriedOutOf`). It covers only while it is firm.
+    source: bool = false,
 };
 
 /// What lies under a point, as far as which window: the topmost float there (0, the main window,
 /// when none is), and whether the point is on that float's header — its handle, never a drop.
 const Under = struct { layer: u16 = 0, header: bool = false };
 
-fn under(d: *const ViewDrag, p: dvui.Point.Physical) Under {
+/// What lies under `p`: the topmost float there, the one the view is carried out of only while it
+/// is firm (`settleGhost`) — a ghost covers nothing.
+fn under(state: *const Layout.State, p: dvui.Point.Physical) Under {
+    const d = &state.view_drag;
     var out: Under = .{};
     for (d.occluders[0..d.occluder_count]) |o| {
         if (!o.bounds.contains(p) or o.layer < out.layer) continue;
+        if (o.source and !d.ghost_firm) continue;
         out = .{ .layer = o.layer, .header = o.header.contains(p) };
     }
     return out;
+}
+
+/// Whether `p`, aimed with a drop of radius `r`, is on the drop of the place under it in window
+/// `layer`, as that drop shows with the float the view is carried out of a ghost (`zoneBoundsAs`).
+fn onDropBeneath(state: *const Layout.State, layer: u16, p: dvui.Point.Physical, r: f32) bool {
+    const d = &state.view_drag;
+    var best: ?Target = null;
+    var best_area: f32 = std.math.floatMax(f32);
+    for (d.targets[0..d.target_count]) |t| {
+        if (t.layer != layer or !t.bounds.contains(p)) continue;
+        const area = t.bounds.w * t.bounds.h;
+        if (area >= best_area) continue;
+        best = t;
+        best_area = area;
+    }
+    const t = best orelse return false;
+    const b = zoneBoundsAs(state, t.name, false) orelse return false;
+    return DropZones.atDisc(DropZones.wheel(b, dvui.currentWindow().natural_scale, removableIn(state)), p, r) != null;
+}
+
+/// The float the view is carried out of, as the drag mapped it; null for a drag out of no float.
+fn sourceOccluder(d: *const ViewDrag) ?Occluder {
+    for (d.occluders[0..d.occluder_count]) |o| if (o.source) return o;
+    return null;
+}
+
+/// How long the view must rest over the ghost of the float it is carried out of, off the drop of
+/// the place beneath, before the ghost firms up, in milliseconds as they pass — not motion, which
+/// can be off: it is the user saying they mean the float, not an animation.
+pub const ghost_rest_ms: i128 = 240;
+/// Points the view may drift and still be resting.
+const ghost_rest_slop: f32 = 10;
+
+/// Settle whether the float the view is carried out of is firm, for where the view is aimed now,
+/// and return it. False for a drag out of no float. Asked any number of times in a frame, it
+/// answers the same, so whatever reads the drag first in a frame settles it (`tick`).
+///
+/// The float the view is carried out of is the one window whose covering is live. Aimed off it, it
+/// is a ghost of itself (`Floats`) and covers nothing (`under`): what it lies over shows through and
+/// can be aimed at — the drop of a place beneath it sits where it would with no float there,
+/// under the ghost, and is reached through it. Rested on over the ghost, off such a drop, for
+/// `ghost_rest_ms`, it firms up — the float again, covering what it lies over, its own places'
+/// drops showing and the drops beneath sliding out from under it (`zoneBounds`) — and stays firm
+/// until the view is aimed off it, so its own middle and edges can be reached wherever they are.
+/// Firm at once over it, a ghost over the middle of a place would take the place's drop away as
+/// the view was carried across the ghost to reach it, and the drop could never be reached; held
+/// for a rest, the view is carried across to the drop beneath, or rests over the float it means.
+pub fn settleGhost(state: *Layout.State) bool {
+    const d = &state.view_drag;
+    const g = sourceOccluder(d) orelse {
+        d.ghost_firm = false;
+        return false;
+    };
+    const a = aimAt(state, dvui.currentWindow().mouse_pt);
+    if (!g.bounds.contains(a.p)) {
+        d.ghost_firm = false;
+        d.ghost_rest_ns = 0;
+        return false;
+    }
+    if (d.ghost_firm) return true;
+    // Under another float over the ghost, the view is aimed at that one.
+    var below: u16 = 0;
+    for (d.occluders[0..d.occluder_count]) |o| {
+        if (!o.source and o.bounds.contains(a.p) and o.layer > below) below = o.layer;
+    }
+    if (below > g.layer or onDropBeneath(state, below, a.p, a.r)) {
+        d.ghost_rest_ns = 0;
+        return false;
+    }
+    const cw = dvui.currentWindow();
+    const now = cw.frame_time_ns;
+    const slop = ghost_rest_slop * cw.natural_scale;
+    const dx = a.p.x - d.ghost_rest_at.x;
+    const dy = a.p.y - d.ghost_rest_at.y;
+    if (d.ghost_rest_ns == 0 or dx * dx + dy * dy > slop * slop) {
+        d.ghost_rest_at = a.p;
+        d.ghost_rest_ns = now;
+    } else if (now - d.ghost_rest_ns >= ghost_rest_ms * std.time.ns_per_ms) {
+        d.ghost_firm = true;
+        d.ghost_rest_ns = 0;
+        return true;
+    }
+    // Frames while it rests, with nothing else asking for them.
+    dvui.refresh(null, @src(), null);
+    return false;
+}
+
+/// Whether float `name` is a ghost of itself: a view is carried out of it, aimed elsewhere.
+pub fn ghosted(l: *Layout, name: []const u8) bool {
+    return carriedOutOf(l, name) and !l.state.view_drag.ghost_firm;
 }
 
 /// Generous: a shape's places plus every pane a plugin opens inside them.
@@ -224,7 +328,7 @@ pub fn offerChooser(l: *Layout, name: []const u8, bounds: dvui.Rect.Physical, in
 pub fn chooserAt(state: *const Layout.State, p: dvui.Point.Physical) ?Offer {
     const d = &state.view_drag;
     if (!d.active()) return null;
-    const u = under(d, p);
+    const u = under(state, p);
     if (u.header) return null;
     const now = dvui.currentWindow().frame_time_ns;
     if (d.offer_frame == now) {
@@ -347,6 +451,7 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     d.name = l.state.internName(l.gpa, name);
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
+    d.ghost_firm = true;
     // The carried glass grows out of what was grabbed — the place's grid button, its tab or rail
     // icon — with its photograph growing in it: not glass the size of the whole place shrinking
     // into it, which drew the view whole for a moment before it was carried.
@@ -433,23 +538,25 @@ fn mapTargets(l: *Layout, d: *ViewDrag) void {
 
 /// Photograph the floats with the places: each one's window and header, with the layer its places
 /// are drawn in (`Floats.draw`: the `n`th from the bottom is layer `n`). A float flying shut covers
-/// nothing, and neither does the one the view is being carried out of (`carriedOutOf`).
+/// nothing. The one the view is being carried out of (`carriedOutOf`) is marked: it covers only
+/// while it is firm (`under`).
 fn mapOccluders(l: *Layout, d: *ViewDrag) void {
     d.occluder_count = 0;
     for (l.state.floats.items.items, 0..) |f, i| {
         if (d.occluder_count == d.occluders.len) break;
         if (f.closing or f.bounds.w <= 0 or f.bounds.h <= 0) continue;
-        if (carriedOutOf(l, f.name)) continue;
-        d.occluders[d.occluder_count] = .{ .layer = @intCast(i + 1), .bounds = f.bounds, .header = f.header };
+        d.occluders[d.occluder_count] = .{ .layer = @intCast(i + 1), .bounds = f.bounds, .header = f.header, .source = carriedOutOf(l, f.name) };
         d.occluder_count += 1;
     }
 }
 
 /// Whether the live drag is carrying a view out of float `name` — out of its place, or a place a
-/// split of it made. The float is out of the way meanwhile: it steps aside (`Floats.draw`) and
-/// covers nothing (`mapOccluders`), so what it was over — usually where the view is going — can be
-/// seen and aimed at. It comes back when the drag ends: as it was if the view is let go over
-/// nothing, without the view if it landed elsewhere, and not at all if that left it empty.
+/// split of it made. The float is a ghost of itself meanwhile while the view is aimed off it — it
+/// fades to a faint, blurred picture of itself (`Floats.draw`) and covers nothing (`under`), so
+/// what it lies over, usually where the view is going, can be seen and aimed at — and firms up
+/// again when the view is aimed back over it, to be dropped into. When the drag ends it comes back:
+/// as it was if the view is let go over nothing, without the view if it landed elsewhere, and not
+/// at all if that left it empty.
 pub fn carriedOutOf(l: *Layout, name: []const u8) bool {
     const d = &l.state.view_drag;
     if (!d.active() or d.loose()) return false;
@@ -486,21 +593,25 @@ pub fn aim(l: *Layout) Aim {
 
 /// `aim` for the pointer at `mouse` — a release's own point.
 pub fn aimFor(l: *Layout, mouse: dvui.Point.Physical) Aim {
-    const d = &l.state.view_drag;
+    return aimAt(l.state, mouse);
+}
+
+fn aimAt(state: *const Layout.State, mouse: dvui.Point.Physical) Aim {
+    const d = &state.view_drag;
     const cw = dvui.currentWindow();
-    if (!d.active() or !carriedAsDrop(l, mouse)) return .{ .p = mouse };
+    if (!d.active() or !carriedAsDrop(state, mouse)) return .{ .p = mouse };
     const R = drop_r * cw.natural_scale;
     return .{ .p = dropCenter(mouse, R, d.drop_touch), .r = R };
 }
 
 /// Whether the view is carried as a drop of glass at `mouse`: where the glass program draws, with
 /// a photograph to show in it, and not over a list (where it is a tab).
-fn carriedAsDrop(l: *Layout, mouse: dvui.Point.Physical) bool {
-    const d = &l.state.view_drag;
+fn carriedAsDrop(state: *const Layout.State, mouse: dvui.Point.Physical) bool {
+    const d = &state.view_drag;
     // A bubble only round a photograph. With none — a file not open yet, a document open in no pane
     // — it is carried as its tab in glass, its icon and its name (`drawTabFace`): a bubble with an
     // icon in it read as a thing of its own rather than the tab it is.
-    return core.LiquidField.ready() and d.texture != null and chooserAt(l.state, mouse) == null;
+    return core.LiquidField.ready() and d.texture != null and chooserAt(state, mouse) == null;
 }
 
 /// Where a drop of radius `r` rides for the pointer at `mouse`: below and right of a mouse; up
@@ -562,7 +673,9 @@ pub fn interiorBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.P
 }
 
 /// The part of place `name` its drop sits in: its interior (`interiorBounds`) less every float over
-/// it — a float drawn in a window above the place's, as the drag mapped them (`mapOccluders`). A
+/// it — a float drawn in a window above the place's, as the drag mapped them (`mapOccluders`), the
+/// one the view is carried out of only while it is firm (`settleGhost`), so the drop of a place
+/// under it slides out from under it as it firms up and back as it fades. A
 /// drop under a float could not be aimed at, so it goes where it can be: the middle of the part
 /// left clear, fitted there as a wheel or a strip as anywhere (`DropZones.uncovered`). A float's
 /// own places are in its window, so theirs are inside it. Null when floats cover all of it: that
@@ -571,6 +684,12 @@ pub fn interiorBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.P
 /// Everything that reads or draws a place's drop reads this — its zones (`drawZones`), the release
 /// (`kindAt`), the self-split (`targetAtAim`) — so what shows is what a release takes.
 pub fn zoneBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physical {
+    if (!state.view_drag.active()) return interiorBounds(state, name);
+    return zoneBoundsAs(state, name, state.view_drag.ghost_firm);
+}
+
+/// `zoneBounds` with the float the view is carried out of covering (`ghost`) or not.
+fn zoneBoundsAs(state: *const Layout.State, name: []const u8, ghost: bool) ?dvui.Rect.Physical {
     const inner = interiorBounds(state, name) orelse return null;
     const d = &state.view_drag;
     if (!d.active()) return inner;
@@ -578,7 +697,7 @@ pub fn zoneBounds(state: *const Layout.State, name: []const u8) ?dvui.Rect.Physi
     var covers: [Floats.max]dvui.Rect.Physical = undefined;
     var n: usize = 0;
     for (d.occluders[0..d.occluder_count]) |o| {
-        if (o.layer <= layer) continue;
+        if (o.layer <= layer or (o.source and !ghost)) continue;
         covers[n] = o.bounds;
         n += 1;
     }
@@ -605,7 +724,7 @@ pub fn targetAtAim(l: *Layout, a: Aim, source: []const u8) ?[]const u8 {
     const d = &state.view_drag;
     // Only the topmost window under the pointer is aimed at: a place a float covers is not
     // reached through it, and a float's header is its handle, no drop.
-    const u = under(d, mouse);
+    const u = under(state, mouse);
     if (u.header) return null;
     // Over a chooser, its place — as one of its views, never a split — or nowhere, over the
     // app's own strip of the place the view came out of.
@@ -743,6 +862,7 @@ pub fn visibleId(l: *Layout, name: []const u8) ?[]const u8 {
 pub fn tick(l: *Layout) void {
     var d = &l.state.view_drag;
     if (!d.active()) return;
+    _ = settleGhost(l.state);
     if (d.moved_id.len == 0) {
         if (visibleId(l, d.name)) |id| d.moved_id = id;
     }
@@ -828,6 +948,9 @@ pub fn drawOverlay(l: *Layout) void {
     // This frame's drops, and any from last frame still going that no place asked for this time —
     // the place a drop just landed on can be gone or changed by now, and its drop still has to run
     // back together and shrink away rather than vanish mid-way.
+    // Whether the float the view is carried out of is firm, kept for the frames after this one
+    // (`under`).
+    if (d.active()) _ = settleGhost(l.state);
     var drops: [max_offers]PendingDrop = undefined;
     var n: usize = 0;
     for (queued) |p| {
@@ -974,7 +1097,7 @@ fn dropShapes(l: *Layout, drops: []const PendingDrop) []const core.LiquidField.S
 
 /// What the view is carried as with the pointer at `mouse` (`Mode`).
 fn modeAt(l: *Layout, mouse: dvui.Point.Physical) Mode {
-    if (carriedAsDrop(l, mouse)) return .drop;
+    if (carriedAsDrop(l.state, mouse)) return .drop;
     return if (chooserAt(l.state, mouse) != null) .tab else .preview;
 }
 
