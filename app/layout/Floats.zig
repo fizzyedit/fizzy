@@ -10,6 +10,8 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const rules = @import("float_rules.zig");
+const Layout = @import("Layout.zig");
+const ViewDrag = @import("ViewDrag.zig");
 
 const Floats = @This();
 
@@ -23,6 +25,8 @@ pub const Landing = struct {
     /// The carried view's photograph, fading out as the view itself fades in over it. Owned:
     /// taken from the drag, destroyed when the landing ends or the float goes.
     photo: ?dvui.Texture = null,
+    /// The size it was taken at, physical, for its proportions.
+    photo_size: dvui.Size.Physical = .{},
 };
 
 pub const Float = struct {
@@ -126,3 +130,53 @@ pub fn reorder(self: *Floats, order: []const usize) void {
 /// More floats than this and the newest stop stacking with the rest; a layout holding this many
 /// windows over itself has bigger problems.
 pub const max = 32;
+
+/// A rect as `float_rules` takes it.
+pub fn toRules(r: anytype) rules.Rect {
+    return .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h };
+}
+
+pub fn fromRules(r: rules.Rect) dvui.Rect {
+    return .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h };
+}
+
+// ── Closing ─────────────────────────────────────────────────────────────────────────────────────
+
+pub const Closing = enum {
+    /// Its last view left it: there is nothing to send anywhere.
+    emptied,
+    /// The user closed it: every view in it goes back to the place it floated out of.
+    home,
+};
+
+/// Close float `name`: its views go home (`how`), every place a split of it made goes with it,
+/// and its window flies shut into its middle as a dialog's does (`core.dialogs.dialogWindow`),
+/// drawn as glass alone until it lands (`draw`).
+pub fn close(l: *Layout, name: []const u8, how: Closing) void {
+    const state = l.state;
+    const i = state.floats.find(name) orelse return;
+    if (state.floats.items.items[i].closing) return;
+    const home = state.floats.items.items[i].home;
+    const leaves = state.splits.leavesUnder(l.arena, name);
+    if (how == .home) ViewDrag.sendHome(l, leaves, home);
+    for (leaves) |leaf| {
+        if (state.forgetPlace(l.gpa, leaf)) l.extents_changed = true;
+    }
+    state.splits.forget(l.gpa, name);
+    const f = &state.floats.items.items[i];
+    endLanding(f);
+    if (f.win_id == .zero or f.bounds.w <= 0) {
+        // Never drawn: nothing to fly shut.
+        state.floats.removeAt(i);
+    } else {
+        f.closing = true;
+        var to = f.bounds;
+        to.x = to.center().x;
+        to.y = to.center().y;
+        to.w = 1;
+        to.h = 1;
+        dvui.dataSet(null, f.win_id, "_close_rect", to);
+    }
+    state.markDirty();
+    dvui.refresh(null, @src(), null);
+}

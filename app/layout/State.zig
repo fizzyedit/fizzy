@@ -579,6 +579,19 @@ pub fn unassign(self: *State, gpa: std.mem.Allocator, name: []const u8) void {
     gpa.free(kv.value);
 }
 
+/// Forget everything kept under place `name` — what it holds, their order, Single/Multiple and
+/// its extent — because the place itself is gone for good: a float closed, whose number the next
+/// float may reuse. Returns true when an extent went, which the app may want to save.
+pub fn forgetPlace(self: *State, gpa: std.mem.Allocator, name: []const u8) bool {
+    self.unassign(gpa, name);
+    if (self.orders.fetchRemove(name)) |kv| {
+        gpa.free(kv.key);
+        freeIds(gpa, kv.value);
+    }
+    if (self.shows.fetchRemove(name)) |kv| gpa.free(kv.key);
+    return self.clearExtent(gpa, name);
+}
+
 /// The debounce between a layout change and its write to disk. Long enough that dragging a
 /// split does not write every frame; short enough that a crash right after a change loses
 /// nothing a user would notice.

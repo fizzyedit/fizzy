@@ -33,6 +33,8 @@ const Layout = @import("Layout.zig");
 const Region = @import("Region.zig");
 const SplitTree = @import("SplitTree.zig");
 const Drop = @import("Drop.zig");
+const Floats = @import("Floats.zig");
+const float_rules = @import("float_rules.zig");
 const DropZones = core.widgets.DropZones;
 
 const ViewDrag = @This();
@@ -98,6 +100,14 @@ pending_frame: i128 = 0,
 /// Last frame's drops, for one still going after its place stopped asking for it (`drawOverlay`).
 last_pending: [max_offers]PendingDrop = undefined,
 last_pending_count: usize = 0,
+/// The floats over the window when the drag began (`Floats`), frozen like the places are: a
+/// place a float covers is not aimed at through it, and over a float's header nothing is.
+occluders: [Floats.max]Occluder = undefined,
+occluder_count: usize = 0,
+/// Bumped at every lift, as the id of the drag's own layer (`drawOverlay`). A new layer is a new
+/// window on top of dvui's stack, over every float; one kept from drag to drag stays where it
+/// first appeared, under any float made since.
+overlay_gen: u32 = 0,
 
 /// What the carried view is drawn as. `drop` where the glass program draws and the pointer is off
 /// every list, `tab` over a list (a tab strip, a rail), `preview` — a card of its photograph — off
@@ -134,6 +144,8 @@ pub const Offer = struct {
     /// place the view came out of, where dropping it back is no move; a plugin's strip always
     /// takes it, since back on its own strip it is being reordered.
     into: bool = true,
+    /// The window it is drawn in (`Region.layer`).
+    layer: u16 = 0,
 };
 pub const max_offers = 16;
 
@@ -144,7 +156,30 @@ pub const Target = struct {
     bounds: dvui.Rect.Physical,
     /// Content size in points, for the extent a landing split settles at.
     size: dvui.Size,
+    /// The window it is drawn in (`Region.layer`): 0 the main window, `n` the `n`th float.
+    layer: u16 = 0,
 };
+
+/// A float over the window, as a drag reads it: the layer its places are drawn in, where its
+/// window is and where its header is.
+pub const Occluder = struct {
+    layer: u16,
+    bounds: dvui.Rect.Physical,
+    header: dvui.Rect.Physical,
+};
+
+/// What lies under a point, as far as which window: the topmost float there (0, the main window,
+/// when none is), and whether the point is on that float's header — its handle, never a drop.
+const Under = struct { layer: u16 = 0, header: bool = false };
+
+fn under(d: *const ViewDrag, p: dvui.Point.Physical) Under {
+    var out: Under = .{};
+    for (d.occluders[0..d.occluder_count]) |o| {
+        if (!o.bounds.contains(p) or o.layer < out.layer) continue;
+        out = .{ .layer = o.layer, .header = o.header.contains(p) };
+    }
+    return out;
+}
 
 /// Generous: a shape's places plus every pane a plugin opens inside them.
 /// Past this the drag simply cannot aim at the newest places, which is a far
@@ -180,7 +215,7 @@ pub fn offerChooser(l: *Layout, name: []const u8, bounds: dvui.Rect.Physical, in
         d.offer_frame = now;
     }
     if (d.offer_count == max_offers) return;
-    d.offers[d.offer_count] = .{ .name = l.state.internName(l.gpa, name), .bounds = bounds, .into = into };
+    d.offers[d.offer_count] = .{ .name = l.state.internName(l.gpa, name), .bounds = bounds, .into = into, .layer = l.state.layer_building };
     d.offer_count += 1;
 }
 
@@ -189,14 +224,17 @@ pub fn offerChooser(l: *Layout, name: []const u8, bounds: dvui.Rect.Physical, in
 /// document — is no chooser for this drag: read as one, it hid every place's zones and turned the
 /// card into a tab over a strip it could never go into, so a split document area, a strip on every
 /// pane, was a maze to aim a view across. The strip of the place the view came out of always is.
+/// A strip a float covers is none either: only the topmost window under `p` is read (`under`).
 pub fn chooserAt(state: *const Layout.State, p: dvui.Point.Physical) ?Offer {
     const d = &state.view_drag;
     if (!d.active()) return null;
+    const u = under(d, p);
+    if (u.header) return null;
     const now = dvui.currentWindow().frame_time_ns;
     if (d.offer_frame == now) {
-        for (d.offers[0..d.offer_count]) |o| if (o.bounds.contains(p) and takes(d, o)) return o;
+        for (d.offers[0..d.offer_count]) |o| if (o.layer == u.layer and o.bounds.contains(p) and takes(d, o)) return o;
     }
-    for (d.last_offers[0..d.last_offer_count]) |o| if (o.bounds.contains(p) and takes(d, o)) return o;
+    for (d.last_offers[0..d.last_offer_count]) |o| if (o.layer == u.layer and o.bounds.contains(p) and takes(d, o)) return o;
     return null;
 }
 
@@ -214,9 +252,11 @@ pub fn discard(self: *ViewDrag) void {
     // (`drawOverlay`), whatever the drop has just done to their places.
     const finishing = self.last_pending;
     const finishing_count = self.last_pending_count;
+    const gen = self.overlay_gen;
     self.* = .{};
     self.last_pending = finishing;
     self.last_pending_count = finishing_count;
+    self.overlay_gen = gen;
 }
 
 pub fn takePicture(self: *ViewDrag, pic: *dvui.Picture) void {
@@ -308,6 +348,7 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     d.drop_ns = 0;
     d.drop_n = 0;
     d.drop_touch = false;
+    d.overlay_gen +%= 1;
     d.name = l.state.internName(l.gpa, name);
     d.from = from.size();
     d.start_ns = dvui.currentWindow().frame_time_ns;
@@ -343,6 +384,7 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     d.drop_ns = 0;
     d.drop_n = 0;
     d.drop_touch = false;
+    d.overlay_gen +%= 1;
     const s = l.host.surfaceById(id) orelse return;
     d.name = loose_source;
     d.from = from.size();
@@ -382,8 +424,26 @@ fn mapTargets(l: *Layout, d: *ViewDrag) void {
             .name = l.state.internName(l.gpa, r.name),
             .bounds = r.bounds,
             .size = r.size,
+            .layer = r.layer,
         };
         d.target_count += 1;
+    }
+    mapOccluders(l, d);
+}
+
+/// Photograph the floats with the places: each one's window and header, with the layer its places
+/// are drawn in (`Floats.draw`: the `n`th from the bottom is layer `n`). A float flying shut covers
+/// nothing, and neither does the one the view is being carried out of when that leaves it empty —
+/// it closes on the drop, so what it covers is where the view can go.
+fn mapOccluders(l: *Layout, d: *ViewDrag) void {
+    d.occluder_count = 0;
+    for (l.state.floats.items.items, 0..) |f, i| {
+        if (d.occluder_count == d.occluders.len) break;
+        if (f.closing or f.bounds.w <= 0 or f.bounds.h <= 0) continue;
+        const emptied = std.mem.eql(u8, f.name, d.name) and l.state.splits.root(f.name) == null and holding(l, f.name).len <= 1;
+        if (emptied) continue;
+        d.occluders[d.occluder_count] = .{ .layer = @intCast(i + 1), .bounds = f.bounds, .header = f.header };
+        d.occluder_count += 1;
     }
 }
 
@@ -445,6 +505,9 @@ fn dropCenter(mouse: dvui.Point.Physical, r: f32, touch: bool) dvui.Point.Physic
 pub fn removable(l: *Layout) bool {
     const d = l.state.view_drag;
     if (!d.active() or d.loose()) return false;
+    // Out of a float, as out of a split the user made: the view leaves it, and a float its last
+    // view leaves closes — the view, claimed by no place then, back where its keywords put it.
+    if (l.state.floatRoot(d.name) != null) return true;
     if (l.state.userSplitPart(d.name)) return true;
     const r = regionNamed(l.state, d.name) orelse return false;
     return r.shows == .many;
@@ -492,31 +555,45 @@ pub fn targetAt(l: *Layout, mouse: dvui.Point.Physical, source: []const u8) ?[]c
 pub fn targetAtAim(l: *Layout, a: Aim, source: []const u8) ?[]const u8 {
     const mouse = a.p;
     const state = l.state;
+    const d = &state.view_drag;
+    // Only the topmost window under the pointer is aimed at: a place a float covers is not
+    // reached through it, and a float's header is its handle, no drop.
+    const u = under(d, mouse);
+    if (u.header) return null;
     // Over a chooser, its place — as one of its views, never a split — or nowhere, over the
     // app's own strip of the place the view came out of.
     if (chooserAt(state, mouse)) |o| return if (o.into) o.name else null;
     // The source's own edge is a self-split, and it outranks any pane nested
     // inside it — otherwise a document filling the place always wins on area
     // and its own edges become unreachable.
-    if (interiorBounds(state, source)) |bounds| {
-        if (bounds.contains(mouse)) {
-            if (Drop.kindAtDisc(bounds, mouse, a.r, dvui.currentWindow().natural_scale, removable(l))) |k| switch (k) {
-                .split, .remove => return source,
-                .swap => {},
-            };
+    if (layerOf(state, source) == u.layer) {
+        if (interiorBounds(state, source)) |bounds| {
+            if (bounds.contains(mouse)) {
+                if (Drop.kindAtDisc(bounds, mouse, a.r, dvui.currentWindow().natural_scale, removable(l))) |k| switch (k) {
+                    .split, .remove => return source,
+                    .swap => {},
+                };
+            }
         }
     }
-    const d = &state.view_drag;
     var best: ?[]const u8 = null;
     var best_area: f32 = std.math.floatMax(f32);
     for (d.targets[0..d.target_count]) |t| {
-        if (!t.bounds.contains(mouse)) continue;
+        if (t.layer != u.layer or !t.bounds.contains(mouse)) continue;
         const area = t.bounds.w * t.bounds.h;
         if (area >= best_area) continue;
         best = t.name;
         best_area = area;
     }
     return best;
+}
+
+/// The window place `name` is drawn in (`Region.layer`), as the drag mapped it — or as it last
+/// registered, for a place the drag did not map.
+fn layerOf(state: *const Layout.State, name: []const u8) u16 {
+    if (frozen(state, name)) |t| return t.layer;
+    if (regionNamed(state, name)) |r| return r.layer;
+    return 0;
 }
 
 /// What the view being carried is, for deciding which places will take it.
@@ -635,7 +712,7 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
     const zones = DropZones.wheel(whole, scale, removable(l));
     const d = &l.state.view_drag;
     const center: DropZones.Center = if (std.mem.eql(u8, d.name, name))
-        .none
+        (if (canFloat(l, name)) .float else .none)
     else if (joins(l, d.name, name))
         .join
     else if (regionNamed(l.state, name)) |r| (if (r.shows == .many) .add else .replace) else .replace;
@@ -694,7 +771,8 @@ pub fn drawOverlay(l: *Layout) void {
     // Nothing to lay over the window.
     if (n == 0 and !d.active()) return;
     var layer: dvui.FloatingWidget = undefined;
-    layer.init(@src(), .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false });
+    // A new layer each drag (`overlay_gen`), so it is a new window on top: over every float.
+    layer.init(@src(), .{ .mouse_events = false }, .{ .rect = .cast(dvui.windowRect()), .background = false, .id_extra = d.overlay_gen });
     defer layer.deinit();
     // The drops, then the card over them: one layer, so their order is the order drawn — the
     // card's glass showing the drop it is aimed at blurred through it, its top left just off the
@@ -1098,6 +1176,9 @@ pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
     if (chooserAt(l.state, mouse)) |o| {
         if (!o.into) return;
         if (dropOnPluginChooser(l, source, o.name, mouse)) return;
+        // Its own place's strip, with no reorder of its own to take it: no move. Never a float —
+        // that is the middle of the place, not its list.
+        if (std.mem.eql(u8, o.name, source)) return;
         place(l, source, o.name, .swap);
         return;
     }
@@ -1141,10 +1222,19 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     // An empty place carried: it is the place that moves, not a view (`placeEmpty`).
     if (!std.mem.eql(u8, source, loose_source) and movedFrom(l, source) == null) return placeEmpty(l, source, dest, kind);
     const stays = same and (kind != .split or holding(l, source).len <= 1);
-    const plan = Drop.plan(kind, stays, joins(l, source, dest)) orelse return;
+    const plan = Drop.plan(kind, stays, joins(l, source, dest), same and canFloat(l, source)) orelse return;
     // The trash is about what is carried, not where it was let go.
     if (plan == .remove) return remove(l, source);
     const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
+    // Out of its own place into a window of its own: the framework's to do, not the place's —
+    // a plugin region's own drop is never asked.
+    if (plan == .float) {
+        floatOut(l, source, moved);
+        shutIfEmptied(l, source);
+        l.state.markDirty();
+        dvui.refresh(null, @src(), null);
+        return;
+    }
     if (regionNamed(l.state, dest)) |r| {
         const s = l.host.surfaceById(moved) orelse return;
         if (!accepts(r.*, s.keywords)) return;
@@ -1154,8 +1244,8 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
         if (r.on_drop) |on_drop| {
             const zone: sdk.RegionSpec.Drop.Zone = switch (plan) {
                 .swap, .join => .center,
-                // Handled before anything is asked of a place (`remove`).
-                .remove => unreachable,
+                // Handled before anything is asked of a place (`remove`, `floatOut`).
+                .remove, .float => unreachable,
                 .split => |sp| .{ .edge = switch (sp.landing) {
                     .left => .left,
                     .right => .right,
@@ -1176,7 +1266,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     switch (plan) {
         .swap => swap(l, source, dest, moved),
         .join => join(l, source, dest, moved),
-        .remove => unreachable,
+        .remove, .float => unreachable,
         .split => |s| {
             const new = Region.splitOn(l, dest, s.mint) orelse return;
             // A self-split leaves the view in the origin, which `mint` has
@@ -1192,6 +1282,97 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     shutIfEmptied(l, source);
     l.state.markDirty();
     dvui.refresh(null, @src(), null);
+}
+
+/// Whether the view carried out of `source` floats when it is dropped on the middle of `source`
+/// (`float_rules.canFloat`): not out of the picker, not a document — its place is the slot a
+/// plugin made for it — and not a view already alone in a float nobody split.
+fn canFloat(l: *Layout, source: []const u8) bool {
+    if (std.mem.eql(u8, source, loose_source)) return false;
+    const moved = movedFrom(l, source) orelse return false;
+    const s = l.host.surfaceById(moved) orelse return false;
+    const alone = l.state.floats.find(source) != null and l.state.splits.root(source) == null and holding(l, source).len <= 1;
+    return float_rules.canFloat(.{ .slotted = l.slotted(s), .alone_in_float = alone });
+}
+
+/// Float `moved` out of `source`: a new float (`Floats`) holding just it, where `float_rules`
+/// opens one — out of another float, a step down and right of that one — growing out of the glass
+/// it was carried in, with the photograph the drag took of it. The source loses the view; a place
+/// of several keeps the rest.
+fn floatOut(l: *Layout, source: []const u8, moved: []const u8) void {
+    const state = l.state;
+    const cw = dvui.currentWindow();
+    const scale = cw.natural_scale;
+    var buf: [32]u8 = undefined;
+    const name = state.internName(l.gpa, float_rules.nextName(&buf, state.floats.names(l.arena)));
+    const window = Floats.toRules(dvui.windowRect());
+    const src = placeBounds(state, source) orelse dvui.windowRectPixels();
+    const out_of: ?usize = if (state.floats.rootOf(source)) |root| state.floats.find(root) else null;
+    const rect = if (out_of) |i|
+        float_rules.nudged(Floats.toRules(state.floats.items.items[i].rect), window)
+    else
+        float_rules.initialRect(Floats.toRules(src.toNatural()), window);
+    // Out of a float, home is still where that float came from: the place it opened over is a
+    // float's, and goes with it.
+    const home = if (out_of) |i| state.floats.items.items[i].home else state.internName(l.gpa, source);
+    // The glass it was carried in, when a drag let go of it here; the place itself, when nothing
+    // was carried (the picker, a test).
+    const d = &state.view_drag;
+    const carried = d.active() and std.mem.eql(u8, d.name, source) and d.shape_rect.w > 0;
+    var landing: Floats.Landing = .{
+        .from = if (carried) d.shape_rect else src,
+        .radius = if (carried) d.shape_radius else core.corners.scaled(core.corners.card) * scale,
+        .start_ns = cw.frame_time_ns,
+    };
+    if (carried) {
+        // The float has the photograph now; the drag's discard must not destroy it.
+        landing.photo = d.texture;
+        landing.photo_size = d.texture_rect.size();
+        d.texture = null;
+    }
+    _ = state.floats.add(l.gpa, .{
+        .name = name,
+        .rect = Floats.fromRules(rect),
+        .home = home,
+        .born_ns = cw.frame_time_ns,
+        .landing = landing,
+    }) catch {
+        if (landing.photo) |tex| dvui.Texture.destroyLater(tex);
+        return;
+    };
+    state.assign(l.gpa, name, &.{moved}) catch {};
+    selectNamed(l, name, moved);
+    takeOut(l, source, moved, null);
+}
+
+/// Send the views of a closing float's places (`leaves`) back to `home`, the place the float came
+/// out of (`float_rules.goHome`): into its list when the user had arranged it, otherwise let go,
+/// for its keywords to place — which, for a place its keywords fill, is home again. Each is
+/// selected there, so the view the user had in front of them is in front of them again.
+pub fn sendHome(l: *Layout, leaves: []const []const u8, home: []const u8) void {
+    const state = l.state;
+    // No home (a saved float whose home was lost): every view is let go. Not looked up — an
+    // unnamed place would answer to "".
+    const r = if (home.len > 0) regionNamed(state, home) else null;
+    for (leaves) |leaf| {
+        // A copy: assigning a view home takes it out of the leaf's list, freeing the one read.
+        const ids = l.arena.dupe([]const u8, state.assignment(leaf) orelse continue) catch continue;
+        for (ids) |raw| {
+            const id = ownId(l.arena, raw) orelse continue;
+            const held = holding(l, home);
+            switch (float_rules.goHome(.{
+                .declared = r != null,
+                .assigned = state.assignment(home) != null,
+                .shows_many = if (r) |x| x.shows == .many else false,
+                .empty = held.len == 0,
+            })) {
+                .add => state.assign(l.gpa, home, idsWith(l.arena, held, id)) catch {},
+                .put => state.assign(l.gpa, home, &.{id}) catch {},
+                .keywords => {},
+            }
+            if (r != null) selectNamed(l, home, id);
+        }
+    }
 }
 
 /// An empty place carried somewhere — the place itself is what moves, there being nothing in it.
@@ -1432,6 +1613,11 @@ const Merged = struct { gone: []const u8, into: []const u8 };
 /// one place either way, under the name the shape knows. Returns that merge, when it was one.
 /// A place no user split made, or whose other half is split again, stays as it is.
 fn closeEmptied(l: *Layout, name: []const u8) ?Merged {
+    // A float nobody split, left with nothing to show, closes: it was the view's window.
+    if (l.state.floats.find(name) != null and l.state.splits.root(name) == null) {
+        Floats.close(l, name, .emptied);
+        return null;
+    }
     if (l.state.isMinted(name)) {
         closeMinted(l, name);
         return null;
@@ -1452,10 +1638,13 @@ fn closeEmptied(l: *Layout, name: []const u8) ?Merged {
 /// Close a minted place, whatever it holds — sliding its split shut where it was drawn.
 fn closeMinted(l: *Layout, name: []const u8) void {
     if (!l.state.isMinted(name)) return;
-    // A seed's dock tree closes its own leaves, easing the split shut over it.
-    if (l.state.dock) |*dock| {
-        if (dock.findPanel(name)) |idx| dock.closeLeaf(idx);
-        return;
+    // A seed's dock tree closes its own leaves, easing the split shut over it. A float's splits
+    // are the forest's, whatever the shape is built from.
+    if (l.state.floatRoot(name) == null) {
+        if (l.state.dock) |*dock| {
+            if (dock.findPanel(name)) |idx| dock.closeLeaf(idx);
+            return;
+        }
     }
     const r = regionNamed(l.state, name) orelse return;
     if (r.id != .zero and Split.sizeOf(r.id) > 0) {
