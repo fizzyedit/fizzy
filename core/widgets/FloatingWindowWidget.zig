@@ -99,6 +99,9 @@ pub const Frost = struct {
     /// frame, for a window that takes over from glass already on screen — a view's carried drop
     /// landing as a float — and must not form a second time.
     form: ?f32 = null,
+    /// The size the window is growing into, physical (`BlurBackdrop.Pane.reach`). Null for one
+    /// that is the size it is.
+    reach: ?dvui.Size.Physical = null,
 };
 
 pub const InitOptions = struct {
@@ -622,6 +625,7 @@ fn drawFrost(self: *FloatingWindowWidget, frost: Frost) void {
         .detail = frost.detail,
         .refraction = frost.refraction,
         .form = self.closingForm() orelse frost.form,
+        .reach = frost.reach,
     });
 }
 

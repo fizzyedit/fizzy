@@ -481,7 +481,15 @@ fn drawOne(l: *Layout, i: usize) bool {
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
     // window's does; as a photograph, the window draws no glass at all.
     var frost = if (as_photo) null else dialogs.dialogFrost();
-    if (frost) |*fr| fr.form = shown;
+    if (frost) |*fr| {
+        fr.form = shown;
+        // Landing, it grows into its window — past it and back, when motion is playful — and its
+        // glass is captured that size from the start.
+        if (landing) {
+            const grown = scale * (1 + core.motion.overshoot_max);
+            fr.reach = .{ .w = first.rect.w * grown, .h = first.rect.h * grown };
+        }
+    }
     var shadow = dialogs.surfaceShadow();
     shadow.alpha *= shown;
     // Everything else the window draws — its fill, header, the view — fades with it.
