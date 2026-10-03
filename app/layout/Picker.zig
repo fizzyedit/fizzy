@@ -86,6 +86,19 @@ pub fn draw(self: *Picker, f: *Layout) void {
 
     const contents = f.matchingIn(&region);
 
+    // A float's place opens its picker in the float's window: a popup shuts itself the moment the
+    // window it was opened from is not the focused one, and the press on the corner button that
+    // opened it focused the float — opened from the app's own window, it shut as it opened.
+    const float_win: ?dvui.Id = if (state.floatRoot(region.name)) |root| win: {
+        const i = state.floats.find(root) orelse break :win null;
+        const id = state.floats.items.items[i].win_id;
+        break :win if (id == .zero) null else id;
+    } else null;
+    const prev_subwindow = if (float_win) |id| dvui.subwindowCurrentSet(id, null) else null;
+    defer if (prev_subwindow) |prev| {
+        _ = dvui.subwindowCurrentSet(prev.id, prev.rect);
+    };
+
     // The one floating surface (`core.dialogs`): frosted, the dialogs' fill, corners and shadow
     // — what the command palette, the dialogs and every menu wear. It had its own card (an
     // opaque-ish content fill, no blur), so it read as a different kind of thing from them.
