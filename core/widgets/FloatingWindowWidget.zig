@@ -581,14 +581,17 @@ pub fn drawBackground(self: *FloatingWindowWidget) void {
     }
 
     // we are using BoxWidget to do border/background
+    // One box, frosted or not: everything in the window hangs off its id, so a window that goes
+    // without its frost for a while (a float shown as a photograph of itself) keeps its contents'
+    // state — with a box of its own per branch, they came back as new widgets when it returned.
+    var box_opts = self.options.override(.{ .expand = .both });
+    // Shadow, then frost, then fill. The box shadow is a filled, faded rect that covers the
+    // window's own interior too; drawn after the frost (as `borderAndBackground` would) it laid
+    // its black over the glass. The frost replaces what is under the window, so a shadow drawn
+    // first survives only outside it — where a shadow belongs.
+    if (self.init_options.frost != null) box_opts.box_shadow = null;
+    self.layout.init(@src(), .{ .dir = .vertical }, box_opts);
     if (self.init_options.frost) |frost| {
-        // Shadow, then frost, then fill. The box shadow is a filled, faded rect that covers the
-        // window's own interior too; drawn after the frost (as `borderAndBackground` would) it
-        // laid its black over the glass. The frost replaces what is under the window, so a
-        // shadow drawn first survives only outside it — where a shadow belongs.
-        var box_opts = self.options.override(.{ .expand = .both });
-        box_opts.box_shadow = null;
-        self.layout.init(@src(), .{ .dir = .vertical }, box_opts);
         self.drawFrost(frost);
         // The shadow as a ring round the glass, after it, so the glass never blurs it in
         // (`core.dialogs.glassShadow`) — a box shadow under glass darkened its middle and ringed
@@ -599,8 +602,6 @@ pub fn drawBackground(self: *FloatingWindowWidget) void {
         }
         // The tint *is* the fill; the box must not paint another over it.
         if (frost.tint != null) self.layout.data().options.background = false;
-    } else {
-        self.layout.init(@src(), .{ .dir = .vertical }, self.options.override(.{ .expand = .both }));
     }
     self.layout.drawBackground();
 
