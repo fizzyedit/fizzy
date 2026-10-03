@@ -440,6 +440,24 @@ pub fn registerCommands(editor: *Editor) !void {
             .icon = c.icon,
         });
     }
+    // Only with `FIZZY_POPOUT=1`: the spike is not in the palette otherwise.
+    if (Editor.Popout.enabled()) try editor.app.host.registerCommand(.{
+        .id = "fizzy.popOutFloat",
+        .owner = &fizzy_plugin,
+        .title = "Pop Out Float",
+        .run = cmdPopOutFloat,
+        .isEnabled = cmdPopOutFloatEnabled,
+        .icon = icons.tvg.lucide.@"app-window",
+    });
+}
+
+/// The topmost float out into an OS window of its own, or the one out back in (`Editor.Popout`).
+fn cmdPopOutFloat(_: *anyopaque) anyerror!void {
+    Editor.Popout.toggle();
+}
+
+fn cmdPopOutFloatEnabled(state: *anyopaque) bool {
+    return Editor.Popout.canToggle(&editorFromState(state).app.layout);
 }
 
 // ---- default profile ----------------------------------------------------------------------------
