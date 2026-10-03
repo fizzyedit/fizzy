@@ -958,7 +958,9 @@ pub fn recurseFiles(root_directory: []const u8, root_label: []const u8, outer_tr
 
                     // Out of the tree, a file is carried as a document tab is off its strip.
                     if (entry.kind == .file and tree.id_branch == inner_id_extra.*) {
-                        if (leftTree(dvui.currentWindow().mouse_pt)) carryOut(tree, abs_path, branch.data().borderRectScale().r);
+                        // From the row as it floats, its glass just laid, so the carried
+                        // glass grows out of it rather than out of the row's slot in the tree.
+                        if (leftTree(dvui.currentWindow().mouse_pt)) carryOut(tree, abs_path, branch.floatingRect() orelse branch.data().borderRectScale().r);
                     }
                 }
 

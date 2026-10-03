@@ -1,6 +1,8 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const motion = @import("../motion.zig");
+const corners = @import("../corners.zig");
+const dialogs = @import("../dialogs.zig");
 
 /// True when a primary-button release in `r` used shift/ctrl/cmd (selection modifiers).
 fn pointerReleaseInRectHasSelectionModifier(r: dvui.Rect.Physical) bool {
@@ -471,6 +473,13 @@ pub const Branch = struct {
         return self.floating_widget != null;
     }
 
+    /// Where the row floats under the pointer while it is dragged, its glass included: what a
+    /// drag carrying it on out of the tree grows out of. Null when it is not floating.
+    pub fn floatingRect(self: *Branch) ?dvui.Rect.Physical {
+        if (!self.floating()) return null;
+        return self.floating_widget.?.data().borderRectScale().r;
+    }
+
     pub fn install(self: *Branch) void {
         self.installed = true;
         var check_button_hovered: bool = false;
@@ -501,24 +510,25 @@ pub const Branch = struct {
                 var npt = dp.plus(dvui.dragOffset().plus(.{ .x = 5, .y = 5 })).toNatural();
                 npt.y += @as(f32, @floatFromInt(stack_i)) * (drag_min.h + row_gap);
 
+                // Carried, a row is glass, as a tab carried along its strip is
+                // (`dialogs.carriedGlass`): the look a file keeps when it is carried out of the
+                // tree as the app's view drag. Only as tall as the row was: its width is what it
+                // shows — its icon and name — so it is carried as a tab, not as a strip of the
+                // tree.
                 self.floating_widget = @as(dvui.FloatingWidget, undefined);
                 self.floating_widget.?.init(
                     @src(),
                     .{ .mouse_events = false },
                     .{
                         .rect = Rect.fromPoint(.cast(npt)),
-                        .min_size_content = drag_min,
-                        .background = true,
-                        .corners = @import("../corners.zig").all(8),
-                        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill).opacity(0.9) },
-                        .box_shadow = .{
-                            .fade = 8,
-                            .corners = @import("../corners.zig").all(8),
-                            .alpha = 0.25,
-                            .color = .black,
-                        },
+                        .min_size_content = .{ .h = drag_min.h },
+                        .background = false,
+                        .corners = corners.round(corners.card),
                     },
                 );
+                const fd = self.floating_widget.?.data();
+                const frs = fd.borderRectScale();
+                dialogs.carriedGlass(fd.id, frs.r, frs.s);
             } else if (source or self.tree.carried_depth > 0) {
                 // Carried back over the tree: the row stays in its place, faded, and neither it
                 // nor anything inside it takes the drop.
