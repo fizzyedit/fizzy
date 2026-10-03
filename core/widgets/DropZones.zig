@@ -183,9 +183,10 @@ const State = struct {
 const IconAt = struct { r: dvui.Rect.Physical, glyph: Glyph, g: f32, lit: f32, size: f32, rest: f32, focus: f32 };
 
 /// What dropping in the middle does, for its icon: trade places with the one view a place shows,
-/// add to the several it shows, join it with the place beside it into one — or nothing, the
-/// middle of the place a view was lifted from, which is bare glass.
-pub const Center = enum { replace, add, join, none };
+/// add to the several it shows, join it with the place beside it into one, float the view out of
+/// the place it was lifted from into a window of its own — or nothing, the middle of that place
+/// when the view cannot float, which is bare glass.
+pub const Center = enum { replace, add, join, float, none };
 
 /// How one place's zones are drawn this frame.
 pub const Look = struct {
@@ -697,13 +698,14 @@ const Glyph = struct {
     danger: bool = false,
 };
 
-/// What each zone's icon shows: a pane opening on that side, or the middle's trade, add or join.
+/// What each zone's icon shows: a pane opening on that side, or the middle's trade, add, join or float.
 fn iconFor(z: Zone, center: Center) Glyph {
     return switch (z) {
         .center => switch (center) {
             .replace => .{ .name = "drop_zone_replace", .tvg = icons.tvg.lucide.replace },
             .add => .{ .name = "drop_zone_add", .tvg = icons.tvg.lucide.@"square-plus" },
             .join, .none => .{ .name = "drop_zone_join", .tvg = icons.tvg.lucide.@"squares-unite" },
+            .float => .{ .name = "drop_zone_float", .tvg = icons.tvg.lucide.@"app-window" },
         },
         .edge => |side| switch (side) {
             .left => .{ .name = "drop_zone_left", .tvg = icons.tvg.lucide.@"panel-left" },

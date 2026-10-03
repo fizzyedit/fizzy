@@ -94,6 +94,11 @@ pub const Frost = struct {
     detail: f32 = 0,
     /// How far the glass's bevelled edge refracts, 0 (none) to 2 (`BlurBackdrop.Pane.refraction`).
     refraction: f32 = 1,
+    /// How formed the glass is while the window is not closing, 0…1. Null lets it form by itself
+    /// as the window first appears (`BlurBackdrop.Pane.form`); 1 has it whole from the first
+    /// frame, for a window that takes over from glass already on screen — a view's carried drop
+    /// landing as a float — and must not form a second time.
+    form: ?f32 = null,
 };
 
 pub const InitOptions = struct {
@@ -118,6 +123,10 @@ pub const InitOptions = struct {
     resize: Resize = .all,
     process_events_in_deinit: bool = true,
     stay_above_parent_window: bool = false,
+    /// The rect given is the window's from its first frame: no sizing to its contents, no
+    /// centring, and no first frame drawn empty while it measures them. For a window something
+    /// else places and sizes — a layout's float, which lands exactly where a drop put it.
+    placed: bool = false,
     window_avoid: enum {
         none,
 
@@ -226,18 +235,21 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
         }
     }
 
-    if (dvui.dataGet(null, self.wd.id, "_auto_size", @TypeOf(self.auto_size))) |as| {
-        self.auto_size = as;
-    } else {
-        if (self.data().rect.w == 0 and self.wd.rect.h == 0) {
-            self.autoSize();
+    // A placed window is neither sized to its contents nor centred: its rect is the answer.
+    if (!self.init_options.placed) {
+        if (dvui.dataGet(null, self.wd.id, "_auto_size", @TypeOf(self.auto_size))) |as| {
+            self.auto_size = as;
+        } else {
+            if (self.data().rect.w == 0 and self.wd.rect.h == 0) {
+                self.autoSize();
+            }
         }
-    }
 
-    if (dvui.dataGet(null, self.wd.id, "_auto_pos", @TypeOf(self.auto_pos))) |ap| {
-        self.auto_pos = ap;
-    } else {
-        self.auto_pos = (self.wd.rect.x == 0 and self.wd.rect.y == 0);
+        if (dvui.dataGet(null, self.wd.id, "_auto_pos", @TypeOf(self.auto_pos))) |ap| {
+            self.auto_pos = ap;
+        } else {
+            self.auto_pos = (self.wd.rect.x == 0 and self.wd.rect.y == 0);
+        }
     }
 
     if (dvui.dataGet(null, self.wd.id, "_close_rect", Rect.Physical)) |cr| {
@@ -489,13 +501,16 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
             ior.* = self.data().rect;
         }
 
-        // need a second frame to fit contents
-        dvui.refresh(null, @src(), self.data().id);
+        // A placed window has nothing to fit or move to: it draws where it is from the start.
+        if (!self.init_options.placed) {
+            // need a second frame to fit contents
+            dvui.refresh(null, @src(), self.data().id);
 
-        // hide our first frame so the user doesn't see an empty window or
-        // jump when we autopos/autosize
-        self.data().rect.w = 0;
-        self.data().rect.h = 0;
+            // hide our first frame so the user doesn't see an empty window or
+            // jump when we autopos/autosize
+            self.data().rect.w = 0;
+            self.data().rect.h = 0;
+        }
     }
 
     if (dvui.captured(self.data().id)) {
@@ -605,13 +620,13 @@ fn drawFrost(self: *FloatingWindowWidget, frost: Frost) void {
         .lift = frost.lift,
         .detail = frost.detail,
         .refraction = frost.refraction,
-        .form = self.closingForm(),
+        .form = self.closingForm() orelse frost.form,
     });
 }
 
 /// While the window closes, how formed its glass still is: whole when it sets off, gone when it
-/// arrives, on the same curve it travels by. Null otherwise — the glass forms by itself as the
-/// window opens (`BlurBackdrop.Pane.form`).
+/// arrives, on the same curve it travels by. Null otherwise — the glass is the caller's
+/// (`Frost.form`), or forms by itself as the window opens (`BlurBackdrop.Pane.form`).
 fn closingForm(self: *FloatingWindowWidget) ?f32 {
     const a = dvui.animationGet(self.data().id, "_close_x") orelse return null;
     const span = a.end_time - a.start_time;
