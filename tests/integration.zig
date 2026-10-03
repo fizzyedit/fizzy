@@ -4824,3 +4824,72 @@ test "float: dragging a place's view onto its own middle floats it, over a seed 
     try std.testing.expectEqual(@as(usize, 1), shown.len);
     try std.testing.expectEqualStrings("test.view", shown[0]);
 }
+
+test "float: the float a view is carried out of steps aside, and comes back when it is let go over nothing" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const floats = &editor.app.layout.floats;
+    const bounds = floats.items.items[0].bounds;
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    fizzy.Editor.Layout.ViewDrag.begin(&layout, "Float 1", bounds, bounds);
+    defer editor.app.layout.view_drag.discard();
+    // Its last view lifted: it covers nothing, and fades away.
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.view_drag.occluder_count);
+    for (0..4) |_| _ = try dvui.testing.step(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(f32, 1), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
+    // It still holds its view, and its place is still drawn: the drag is held by its corner button.
+    try std.testing.expect(holds(case.shows("Float 1"), "test.output"));
+
+    // Let go over nothing: back as it was.
+    editor.app.layout.view_drag.discard();
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
+    try std.testing.expectEqual(@as(f32, 0), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
+}
+
+test "float: a float that keeps another view stays while one is carried out of it" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.problems", .title = "Problems", .keywords = fizzy.sdk.keywords.ide.panel, .draw = ManyPanelFrame.draw });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try case.place("Panel", "Panel", .swap);
+    // The other panel view joins it: a float of two.
+    try case.place("Panel", "Float 1", .swap);
+    try std.testing.expectEqual(@as(usize, 2), case.shows("Float 1").len);
+    const floats = &editor.app.layout.floats;
+    const bounds = floats.items.items[0].bounds;
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    fizzy.Editor.Layout.ViewDrag.begin(&layout, "Float 1", bounds, bounds);
+    defer editor.app.layout.view_drag.discard();
+    for (0..4) |_| _ = try dvui.testing.step(ManyPanelFrame.frame);
+    // Still a place to drop on, and still there after: it stays, and covers what it covers.
+    try std.testing.expectEqual(@as(f32, 0), floats.items.items[0].aside.at(dvui.currentWindow().frame_time_ns));
+    try std.testing.expectEqual(@as(usize, 1), editor.app.layout.view_drag.occluder_count);
+}
+
+test "float: one that stepped aside for its last view goes when the view lands, without flying shut" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const floats = &editor.app.layout.floats;
+    const bounds = floats.items.items[0].bounds;
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Float 1", bounds, bounds);
+    for (0..4) |_| _ = try dvui.testing.step(ManyPanelFrame.frame);
+    // Released on Panel, as `apply` lands it, then the drag ends.
+    ViewDrag.place(&layout, "Float 1", "Panel", .swap);
+    editor.app.layout.view_drag.discard();
+    _ = try dvui.testing.step(ManyPanelFrame.frame);
+    // Gone on the next frame: no glass reappearing to fly shut.
+    try std.testing.expectEqual(@as(usize, 0), floats.items.items.len);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(holds(case.shows("Panel"), "test.output"));
+}

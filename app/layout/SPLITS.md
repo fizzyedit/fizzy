@@ -143,9 +143,12 @@ by again, the drop zones, splits, the picker. A place of several views keeps the
   and right of that one (`float_rules.zig`, unit-tested).
 - **A float covers what is under it.** A drag reads the floats as it reads the places — frozen at
   lift — and aims only at the topmost window under the pointer: a place a float covers is not
-  reached through it, and over a float's header, its handle, nothing is aimed at. The float the
-  view is being carried out of, when that empties it, covers nothing: it closes on the drop, so
-  what it covers is where the view can go.
+  reached through it, and over a float's header, its handle, nothing is aimed at.
+- **The float a view leaves steps aside.** Carrying a float's last view out of it, the float fades
+  away as the drag lifts and covers nothing — it closes on the drop anyway, so what it was over is
+  where the view can go, and that is usually where it is going. Let go over nothing and it comes
+  back; land the view and it is simply gone, with no flight shut. A float that keeps other views
+  stays: it is still somewhere to drop, and still there after.
 - **Moving and stacking.** A float moves by its header and resizes from its edges, no smaller than
   160×96. A press anywhere in it brings it to the front, as on an OS window.
 - **Back again.** Dragged out by its corner button, a view lands like any other, and a float its

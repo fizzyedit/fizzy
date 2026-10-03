@@ -55,7 +55,37 @@ pub const Float = struct {
     bounds: dvui.Rect.Physical = .{},
     /// Its header last frame, physical — the handle that moves it. Nothing is aimed at over it.
     header: dvui.Rect.Physical = .{},
+    /// Stepping aside while its last view is carried out of it (`ViewDrag.emptiesFloat`): 0 there,
+    /// 1 gone. It still draws its place — the drag is held by that place's corner button — but
+    /// nothing of it shows.
+    aside: Fade = .{},
 };
+
+/// A value easing between 0 and 1 over `aside_ms` (`core.motion`), turning back from wherever it
+/// is when asked for the other end.
+pub const Fade = struct {
+    from: f32 = 0,
+    to: f32 = 0,
+    start_ns: i128 = 0,
+
+    pub fn at(self: Fade, now: i128) f32 {
+        const dur: f64 = core.motion.durationMs(aside_ms) * @as(f64, std.time.ns_per_ms);
+        if (dur <= 0 or self.from == self.to) return self.to;
+        const t: f32 = @floatCast(std.math.clamp(@as(f64, @floatFromInt(now - self.start_ns)) / dur, 0, 1));
+        return std.math.lerp(self.from, self.to, t);
+    }
+
+    pub fn toward(self: *Fade, to: f32, now: i128) void {
+        if (self.to == to) return;
+        self.from = self.at(now);
+        self.to = to;
+        self.start_ns = now;
+    }
+};
+
+/// How long a float takes to step aside for a view carried out of it, and to come back, as
+/// written: quicker than the lift, so it is out of the way before the drop is aimed.
+const aside_ms: f32 = 160;
 
 /// Bottom to top: the last is the float in front.
 items: std.ArrayListUnmanaged(Float) = .empty,
@@ -171,9 +201,9 @@ pub fn close(l: *Layout, name: []const u8, how: Closing) void {
     const f = &state.floats.items.items[i];
     endLanding(f);
     // Marked, not removed: `draw` may be walking the list, and drops it when it comes to it —
-    // at once if it never drew a window, after the flight shut if it did.
+    // at once if it never drew a window or had stepped aside, after the flight shut if it did.
     f.closing = true;
-    if (f.win_id != .zero and f.bounds.w > 0) {
+    if (f.win_id != .zero and f.bounds.w > 0 and f.aside.to == 0) {
         var to = f.bounds;
         to.x = to.center().x;
         to.y = to.center().y;
@@ -254,7 +284,18 @@ fn drawOne(l: *Layout, i: usize) bool {
         });
         return true;
     }
+    // Out of the way while its last view is carried out of it: the drop is aimed at what it
+    // covered. Back if the view is let go over nothing.
+    if (!state.floats.items.items[i].closing) {
+        state.floats.items.items[i].aside.toward(if (ViewDrag.emptiesFloat(l, state.floats.items.items[i].name)) 1 else 0, now);
+    }
     const first = state.floats.items.items[i];
+    // Closing while stepped aside — its last view landed somewhere: it is gone already, with no
+    // flight shut to draw.
+    if (first.closing and (first.aside.to > 0 or first.aside.at(now) > 0.01)) return false;
+    const aside = first.aside.at(now);
+    if (aside != first.aside.to) dvui.refresh(null, @src(), null);
+    const shown = 1 - aside;
 
     // Where the window is this frame: on its way out of the carried glass, or where it was left.
     var rect = first.rect;
@@ -272,8 +313,13 @@ fn drawOne(l: *Layout, i: usize) bool {
 
     var frost = dialogs.dialogFrost();
     // The carried drop was glass already: the window takes over from it, whole, rather than
-    // forming a second time.
-    if (frost) |*fr| fr.form = 1;
+    // forming a second time. Stepping aside, the glass dissolves as a closing window's does.
+    if (frost) |*fr| fr.form = shown;
+    var shadow = dialogs.surfaceShadow();
+    shadow.alpha *= shown;
+    // Everything else the window draws — its fill, header, the view — fades with it.
+    const prev_alpha_window = dvui.alpha(shown);
+    defer dvui.alphaSet(prev_alpha_window);
     // Held by the pointer as the frame begins: the user is moving or resizing it. Read before the
     // window runs, because it lets go of the pointer on the release while it handles its events —
     // a last move and the release in one frame would otherwise read as not held, and snap back.
@@ -282,13 +328,13 @@ fn drawOne(l: *Layout, i: usize) bool {
     var win = core.widgets.floatingWindow(@src(), .{
         .rect = &win_rect,
         .placed = true,
-        .resize = if (landing or first.closing) .none else .all,
+        .resize = if (landing or first.closing or aside > 0) .none else .all,
         .window_avoid = .none,
         .frost = frost,
     }, .{
         .id_extra = @intCast(first.serial),
         .corners = if (landing) dvui.CornerRect.all(corner_r) else dialogs.surfaceCorners(),
-        .box_shadow = dialogs.surfaceShadow(),
+        .box_shadow = shadow,
         .color_fill = .{ .color = dialogs.dialogFill() },
         .border = .all(0),
     });
@@ -315,8 +361,8 @@ fn drawOne(l: *Layout, i: usize) bool {
     const title = if (ViewDrag.visibleId(l, first.name)) |id| (if (l.host.surfaceById(id)) |s| s.title else first.name) else first.name;
     const header = dialogs.windowHeader(title, "", &open, .none);
     // Moved by its header only: the rest is the view's. Not while it lands — it is going where
-    // the drop put it.
-    win.dragAreaSet(if (landing) .{} else header);
+    // the drop put it — nor while it is out of the way.
+    win.dragAreaSet(if (landing or aside > 0) .{} else header);
 
     {
         // The view fades in over the photograph it grew out of, which fades out above it.
