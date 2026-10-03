@@ -243,10 +243,11 @@ pub fn menuItem(src: std.builtin.SourceLocation, label_str: []const u8, init_opt
 
     dvui.labelNoFmt(@src(), label_str, .{}, label_opts);
 
-    // Register top-level menu items as interactive rects on Windows so clicks land on the item
-    // instead of dragging the window. We only push items that overlap the title bar strip — submenu
-    // items rendered inside floatingMenu are below the strip and don't need registering.
-    if (builtin.os.tag == .windows) {
+    // Register top-level menu items as interactive rects where fizzy draws its own title bar
+    // (Windows, Linux) so clicks land on the item instead of dragging the window. We only push
+    // items that overlap the title bar strip — submenus are floating windows, which the editor
+    // registers wholesale (`Editor.registerFloatingTitleBarRects`).
+    if (fizzy.backend.custom_titlebar) {
         const r = mi.data().rectScale().r;
         const strip_h = (Constants.titlebar_top_buffer + Constants.titlebar_height) * dvui.windowNaturalScale();
         if (r.y < strip_h) fizzy.backend.pushTitleBarInteractiveRect(r);

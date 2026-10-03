@@ -2,7 +2,8 @@
 // frosted and refracting, in one pass at every pixel. Written against the program prelude
 // (`core/gfx/programs.zig`): VARYING, TEX, FRAG_COLOR, MAX_VEC4.
 //
-// Mirrors `LiquidField.sample` line for line; change both together.
+// Mirrors `LiquidField.sample` line for line, as `liquid_glass.metal` and
+// `liquid_glass.fragment.hlsl` (compiled to SPIR-V and DXIL) mirror it; change them all together.
 //
 // Each quad's vertex colour says what it draws: r the pass (0 punches the glass's coverage out
 // of what is there, 1 adds the glass), g and b the first of its shapes and how many.
@@ -111,6 +112,15 @@ void main() {
     vec2 uv = clamp((p + outv * (g2.x * lens * steepR) - g0.xy) * g0.zw, 0.0, 1.0);
     vec4 frost = TEX(uSampler, uv);
     vec4 sharp = g4.w > 0.5 ? TEX(uTex1, uv) : frost;
+    // Worked out over an opaque picture of what the glass covers, then made exactly as
+    // see-through as that is (`under`): over a translucent window (vibrancy, Acrylic) the
+    // desktop's material shows through the glass as much as through the window round it. Laid
+    // over the translucent picture as it was, the rim — where the clear glass lies over the
+    // frost — came out more opaque than the face, and the material lit the face and not the rim.
+    // Opaque where the window is (`LiquidField.publishOpaqueWindow`): its alpha is only its shape.
+    float under = uData[6].x > 0.5 ? 1.0 : frost.a;
+    frost = vec4(frost.rgb / max(frost.a, 1e-4), 1.0);
+    sharp = vec4(sharp.rgb / max(sharp.a, 1e-4), 1.0);
 
     // The frost at its share of a frost / tint mix, the blur coming in from sharp.
     float mixv = g4.z > 0.5 ? g4.x * b : 0.0;
@@ -120,6 +130,9 @@ void main() {
     c = sharp * a + c * (1.0 - sharp.a * a);
     // The tint (`addTint`).
     c += g3 * mixv;
+    // A translucent tint lies over the frost, not over what is behind the window: the glass is
+    // opaque here, and `under` alone says how much of the desktop's material shows through it.
+    c += frost * (1.0 - c.a);
     // The lift and the rim's light (`drawLift`), brightest facing the top left.
     float facing = dot(outv, vec2(-0.70710678, -0.70710678));
     float toward = max(facing, 0.0);
@@ -131,5 +144,5 @@ void main() {
     c += vec4(clamp(lift + lens * g2.w * lit, 0.0, 1.0));
     c = clamp(c, 0.0, 1.0);
     c.rgb += (noise(gl_FragCoord.xy) - 0.5) * g5.x * c.a;
-    FRAG_COLOR = clamp(c, 0.0, 1.0) * cov;
+    FRAG_COLOR = clamp(c, 0.0, 1.0) * (under * cov);
 }

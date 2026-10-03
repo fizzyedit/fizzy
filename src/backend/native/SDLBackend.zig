@@ -122,6 +122,11 @@ pub const InitOptions = struct {
     pref_path: ?[:0]const u8 = null,
 };
 
+/// Called with a window's creation properties just before it is made, for an app's own
+/// `SDL_PROP_WINDOW_CREATE_*` — set before `initWindow`, as the platform's Linux chrome does
+/// (`platform.linux_titlebar.useClientDecorations`).
+pub var window_create_hook: ?*const fn (props: c.SDL_PropertiesID) void = null;
+
 /// SDL initialization for the all SDL app, i.e. common for all OS Windows
 /// This is expected to be called only once.
 pub fn initSDL() !void {
@@ -231,6 +236,8 @@ fn createWindowRenderer(options: InitOptions, share_device_of: ?*GpuRenderer) !s
         try toErr(c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, w), "SDL_SetNumberProperty in initWindow");
         try toErr(c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, h), "SDL_SetNumberProperty in initWindow");
         try toErr(c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER, @intCast(flags)), "SDL_SetNumberProperty in initWindow");
+
+        if (window_create_hook) |hook| hook(props);
 
         break :blk c.SDL_CreateWindowWithProperties(props) orelse return logErr("SDL_CreateWindowWithProperties in initWindow");
     };

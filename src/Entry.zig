@@ -56,7 +56,9 @@ const start_options_base: dvui.App.StartOptions = .{
     .min_size = .{ .w = Constants.min_window_size[0], .h = Constants.min_window_size[1] },
     .title = AppInfo.display_name_z,
     .icon = icon,
-    .transparent = if (builtin.os.tag == .macos or builtin.os.tag == .windows) true else false,
+    // Linux too, for the rounded corners outside the window's fill (`Editor`): Vulkan composites
+    // the swapchain's alpha on Wayland. Its fill stays opaque — nothing blurs behind it there.
+    .transparent = if (builtin.os.tag == .macos or builtin.os.tag == .windows or builtin.os.tag == .linux) true else false,
     // macOS: Cancel-leading dialog/footer order; other platforms: OK-leading (matches dialog header close vs icon).
     .window_init_options = .{
         .button_order = if (builtin.os.tag.isDarwin()) .cancel_ok else .ok_cancel,
@@ -111,6 +113,12 @@ fn startOptions() dvui.App.StartOptions {
         // The app's own name, version and id, before SDL starts: the macOS app menu is built
         // from them (About / Hide / Quit <name>), where the backend's defaults are an example's.
         fizzy.backend.setSdlAppMetadata(AppInfo.display_name_z, app_version_z, AppInfo.bundle_id_z);
+        // Linux: fizzy draws its own title bar and the window's shadow (`linux_titlebar`), which
+        // SDL has to know before the window is made.
+        if (comptime builtin.os.tag == .linux) {
+            const in = Constants.linux_window_shadow_insets;
+            fizzy.backend.useClientDecorations(.{ .left = in.left, .top = in.top, .right = in.right, .bottom = in.bottom });
+        }
     }
     return opts;
 }

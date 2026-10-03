@@ -13,6 +13,15 @@ pub const titlebar_height: f32 = 26.0;
 /// Empty strip below the top window edge (non-macOS), above the main title row (in-window menu, etc.).
 pub const titlebar_top_buffer: f32 = 10.0;
 
+/// The window's corner radius on Linux, where fizzy draws the window's shape itself (it is
+/// undecorated and transparent): GNOME's own.
+pub const linux_window_radius: f32 = 12.0;
+
+/// The margin round the window's frame on Linux where fizzy draws the drop shadow a desktop gives
+/// its own windows (`linux_titlebar.useClientDecorations`), in points; deeper below, where a
+/// shadow falls. The compositor takes the frame inside it for the window.
+pub const linux_window_shadow_insets = .{ .left = 20, .top = 14, .right = 20, .bottom = 26 };
+
 pub const initial_window_size: [2]f32 = .{ 1200, 800 };
 
 pub const min_window_size: [2]f32 = .{ 640, 480 };

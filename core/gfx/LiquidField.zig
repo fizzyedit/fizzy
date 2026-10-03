@@ -153,7 +153,10 @@ pub const Uniforms = extern struct {
     face: [4]f32,
     /// Dither amplitude.
     dither: [4]f32,
-    reserved: [4]f32 = @splat(0),
+    /// 1 where the window is opaque behind its content (`publishOpaqueWindow`): the glass is
+    /// then opaque, whatever the alpha of the picture it covers. The window's, not the field's:
+    /// `draw` sets it, in the frame; `pack` leaves it 0.
+    backdrop: [4]f32 = @splat(0),
     shapes: [max_shapes][shape_vec4s][4]f32,
 
     pub fn vec4s(self: *const Uniforms) [*]const [4]f32 {
@@ -178,7 +181,8 @@ fn rimScale(self: *const LiquidField, depth_px: f32) f32 {
     return self.scale * f;
 }
 
-/// The uniforms for drawing over `frost`, a picture of `covered`, the shapes in `order`.
+/// The uniforms for drawing over `frost`, a picture of `covered`, the shapes in `order`: the
+/// field's own, so they are worked out with no window — what the window behind it is, `draw` adds.
 pub fn pack(self: *const LiquidField, covered: dvui.Rect.Physical, has_sharp: bool, order: []const u8) Uniforms {
     const s = self.scale;
     const tint: [4]f32 = if (self.tint) |t| blk: {
@@ -215,9 +219,19 @@ const rim_line_width: f32 = 0.8;
 
 // ── Drawing ─────────────────────────────────────────────────────────────────────────────────────
 
+/// The program for the native backend on Vulkan and D3D12, compiled by shadercross from
+/// `shaders/liquid_glass.fragment.hlsl` (the commands are at its top). Copied out of the embed to
+/// be aligned: Vulkan takes SPIR-V as 32-bit words.
+const compiled = struct {
+    const spirv align(8) = @embedFile("shaders/compiled/spv/liquid_glass.fragment.spv").*;
+    const dxil align(8) = @embedFile("shaders/compiled/dxil/liquid_glass.fragment.dxil").*;
+};
+
 var program: programs.Program = .from(.{
     .glsl = @embedFile("shaders/liquid_glass.glsl"),
     .msl = @embedFile("shaders/liquid_glass.metal"),
+    .spirv = &compiled.spirv,
+    .dxil = &compiled.dxil,
 }, .{ .textures = 1, .uniform_vec4s = uniform_vec4s });
 
 /// Whether glass is drawn through the program at all — the app's switch (Settings → Debugging →
@@ -232,6 +246,21 @@ fn enabled() bool {
 }
 
 const enabled_id: dvui.Id = @enumFromInt(0x6c69_7166);
+
+/// Whether the window is opaque behind its content — no desktop material shows through it (Linux,
+/// the web) — published each frame by the app. The glass is as see-through as what it covers
+/// where the window is translucent over the desktop's material (macOS's vibrancy, Windows'
+/// Acrylic); where it is opaque, the alpha in its picture is only the window's shape — its
+/// rounded corners, the margin its shadow is drawn in — and glass near those edges, blurring that
+/// alpha in, let whatever is behind the window through. Opaque, the glass is opaque.
+pub fn publishOpaqueWindow(on: bool) void {
+    if (dvui.current_window == null) return;
+    dvui.dataSet(null, enabled_id, "_liquid_opaque_window", on);
+}
+
+fn opaqueWindow() bool {
+    return dvui.dataGet(null, enabled_id, "_liquid_opaque_window", bool) orelse false;
+}
 
 /// Whether `draw` would draw now: programs here, switched on, compiled.
 pub fn ready() bool {
@@ -252,7 +281,9 @@ pub fn draw(self: *const LiquidField, frost: dvui.Texture, covered: dvui.Rect.Ph
     const h = programs.hooks() orelse return false;
     const id = program.ready(h) orelse return false;
     const groups = self.clusters();
-    const u = self.pack(covered, sharp != null, groups.order[0..self.len]);
+    var u = self.pack(covered, sharp != null, groups.order[0..self.len]);
+    // The window behind the glass, published for this frame.
+    u.backdrop[0] = if (opaqueWindow()) 1 else 0;
     const textures = [_]?*anyopaque{programs.handle(sharp)};
     if (!h.begin(id, &textures, textures.len, u.vec4s(), uniform_vec4s)) return false;
     defer h.end();

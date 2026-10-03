@@ -25,6 +25,8 @@ pub const DialogFileFilter = extern struct {
 /// Back-compat alias: a few internal callers still use the SDL-style name.
 pub const SDL_DialogFileFilter = DialogFileFilter;
 
+pub const custom_titlebar = false;
+pub const titlebar_hit_tested = false;
 pub const TitleBarButton = enum { minimize, maximize, close };
 
 /// The web backend allocates nothing on the app's behalf — no native dialogs, no native menu.
@@ -51,6 +53,12 @@ pub fn setTitleBarStrip(_: f32, _: i32) void {}
 pub fn pushTitleBarInteractiveRect(_: dvui.Rect.Physical) void {}
 
 pub fn setTitleBarCaptionButtonRect(_: TitleBarButton, _: dvui.Rect.Physical) void {}
+
+pub fn performTitleBarButton(_: *dvui.Window, _: TitleBarButton) void {}
+
+pub fn frameInsets(_: *dvui.Window) dvui.Rect {
+    return .{};
+}
 
 pub fn getHoveredTitleBarButton() ?TitleBarButton {
     return null;

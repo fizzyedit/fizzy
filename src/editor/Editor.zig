@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const icons = @import("icons");
+const caption_buttons = @import("caption_buttons.zig");
 const assets = @import("assets");
 const objc = @import("objc");
 
@@ -3506,6 +3506,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     fizzy.core.motion.publish(editor.app.settings.motion, editor.app.settings.motion_speed, dvui.currentWindow().backend.prefersReducedMotion() or editor.demo.fast);
     fizzy.core.programs.publishHost();
     fizzy.core.LiquidField.publishEnabled(editor.app.settings.glass_shader);
+    // Translucent over the desktop's material on macOS and Windows; opaque elsewhere, where the
+    // window's alpha is only its shape (`LiquidField.publishOpaqueWindow`).
+    fizzy.core.LiquidField.publishOpaqueWindow(builtin.os.tag != .macos and builtin.os.tag != .windows);
     if (comptime builtin.target.cpu.arch == .wasm32) {
         // Plugins the page has finished linking since last frame register now.
         PluginLoader.pump();
@@ -3715,6 +3718,15 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             else => {},
         }
 
+        // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is
+        // this fill's — rounded while windowed, as the desktop rounds its own, with a hairline
+        // where the desktop would have drawn an edge. Square when maximized or full screen.
+        // And on Wayland the window's shadow is fizzy's too, drawn in a margin round the frame
+        // that the compositor knows is not the window (`frameInsets`, zero when maximized, tiled
+        // or full screen).
+        const linux_windowed = builtin.os.tag == .linux and !fizzy.backend.isMaximized(dvui.currentWindow());
+        const insets = fizzy.backend.frameInsets(dvui.currentWindow());
+        const shadowed = insets.x > 0 or insets.y > 0 or insets.w > 0 or insets.h > 0;
         var overall_box = dvui.box(
             @src(),
             .{ .dir = .vertical },
@@ -3722,6 +3734,12 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
                 .expand = .both,
                 .background = true,
                 .color_fill = .{ .color = window_color },
+                .margin = insets,
+                .corners = if (linux_windowed) .round(Constants.linux_window_radius) else null,
+                .border = if (linux_windowed) .all(1) else null,
+                .color_border = if (linux_windowed) .{ .color = dvui.themeGet().color(.control, .border).opacity(0.6) } else null,
+                // Deeper than a dialog's: a window over the desktop, its light from above.
+                .box_shadow = if (shadowed) .{ .color = .black, .fade = 14, .offset = .{ .x = 0, .y = 3 }, .alpha = 0.45, .corners = .round(Constants.linux_window_radius) } else null,
             },
         );
         defer overall_box.deinit();
@@ -3745,11 +3763,11 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
         // Title bar handling:
         //  - macOS (not maximized): render an empty horizontal strip so AppKit's traffic lights have visual
         //    breathing room at the top-left. AppKit handles dragging natively.
-        //  - Windows: the main UI (sidebar, menu) starts below `titlebar_top_buffer`. A floating overlay
-        //    at the top-right corner (y=0) hosts the min/max/close buttons; a drag rect is pushed across the top so
-        //    empty space (gaps between widgets) drags the window. Menu items and sidebar buttons push
-        //    themselves as interactive rects so clicks on them still reach DVUI.
-        if (builtin.os.tag == .windows) {
+        //  - Windows and Linux: the main UI (sidebar, menu) starts below `titlebar_top_buffer`. A floating
+        //    overlay at the top-right corner (y=0) hosts the min/max/close buttons; a drag rect is pushed
+        //    across the top so empty space (gaps between widgets) drags the window. Menu items and sidebar
+        //    buttons push themselves as interactive rects so clicks on them still reach DVUI.
+        if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
             fizzy.backend.resetTitleBarHints();
 
             const window_rect_natural = dvui.windowRect();
@@ -3759,13 +3777,17 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             // and the client width as it stood this frame so right-anchored caption buttons survive
             // a one-frame staleness window after a resize.
             fizzy.backend.setTitleBarStrip(
-                title_strip_h * scale,
+                (insets.y + title_strip_h) * scale,
                 @intFromFloat(window_rect_natural.w * scale),
             );
         } else if (builtin.os.tag == .macos) {
             // Collapse while zoomed/fullscreen (chrome overlays on hover); grow with
             // AppKit safe-area inset when restoring to a normal window.
             const title_strip_h = fizzy.backend.titlebarStripHeight(dvui.currentWindow());
+            // AppKit moves the window from its titlebar's region; what fizzy draws there and
+            // claims (`registerFloatingTitleBarRects`) is excluded from that.
+            fizzy.backend.resetTitleBarHints();
+            fizzy.backend.setTitleBarStrip(title_strip_h * dvui.windowNaturalScale(), @intFromFloat(dvui.windowRect().w * dvui.windowNaturalScale()));
             if (title_strip_h > 0) {
                 var titlebar_box = dvui.box(
                     @src(),
@@ -3781,87 +3803,13 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             }
         }
 
-        // Windows-only top-right overlay: minimize / maximize / close. Lives in a FloatingWidget
-        // (a subwindow) so it doesn't take any space in the vertical overall_box layout — the main
-        // UI below fills the entire window. Caption-button rects are pushed to the backend so
-        // WM_NCHITTEST returns HTMINBUTTON/HTMAXBUTTON/HTCLOSE for them (snap-layouts + click).
-        if (builtin.os.tag == .windows) {
-            const button_w: f32 = 46;
-            const button_h = Constants.titlebar_height;
-            const overlay_w: f32 = button_w * 3;
+        // Top-right overlay on Windows and Linux: minimize / maximize / close, each in its
+        // desktop's style (`caption_buttons`). Floating, so it takes no space in overall_box's
+        // layout — the main UI below fills the entire window.
+        if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
             const win_rect = dvui.windowRect();
-
-            var fw: dvui.FloatingWidget = undefined;
-            fw.init(@src(), .{ .mouse_events = true }, .{
-                .rect = .{ .x = win_rect.w - overlay_w, .y = 0, .w = overlay_w, .h = button_h },
-            });
-            defer fw.deinit();
-
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both });
-            defer row.deinit();
-
-            const hovered = fizzy.backend.getHoveredTitleBarButton();
-            const stroke = dvui.themeGet().color(.control, .text);
-            const hover_fill = dvui.themeGet().color(.control, .fill_hover).lighten(if (dvui.themeGet().dark) 3 else -3);
-            const close_hover_fill = dvui.Color{ .r = 232, .g = 17, .b = 35, .a = 255 };
-            const close_hover_stroke = dvui.Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
-
-            // minimize
-            {
-                const is_hover = hovered == .minimize;
-                var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .min_size_content = .{ .w = button_w, .h = button_h },
-                    .expand = .vertical,
-                    .background = is_hover,
-                    .color_fill = .{ .color = hover_fill },
-                });
-                defer b.deinit();
-                fizzy.backend.setTitleBarCaptionButtonRect(.minimize, b.data().rectScale().r);
-                core.icon.icon(@src(), "win_min", icons.tvg.feather.minus, .{ .stroke_color = .{ .color = stroke } }, .{
-                    .expand = .ratio,
-                    .padding = .all(7),
-                    .margin = .all(0),
-                    .gravity_x = 0.5,
-                });
-            }
-            // maximize / restore
-            {
-                const is_hover = hovered == .maximize;
-                var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .min_size_content = .{ .w = button_w, .h = button_h },
-                    .expand = .vertical,
-                    .background = is_hover,
-                    .color_fill = .{ .color = hover_fill },
-                });
-                defer b.deinit();
-                fizzy.backend.setTitleBarCaptionButtonRect(.maximize, b.data().rectScale().r);
-                core.icon.icon(@src(), "win_max", icons.tvg.lucide.square, .{ .stroke_color = .{ .color = stroke } }, .{
-                    .expand = .ratio,
-                    .padding = .all(9),
-                    .margin = .all(0),
-                    .gravity_x = 0.5,
-                });
-            }
-            // close
-            {
-                const is_hover = hovered == .close;
-                var b = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .min_size_content = .{ .w = button_w, .h = button_h },
-                    .expand = .vertical,
-                    .background = is_hover,
-                    .color_fill = .{ .color = close_hover_fill.opacity(0.5) },
-                });
-                defer b.deinit();
-                fizzy.backend.setTitleBarCaptionButtonRect(.close, b.data().rectScale().r);
-                core.icon.icon(@src(), "win_close", icons.tvg.heroicons.outline.@"x-mark", .{
-                    .stroke_color = .{ .color = if (is_hover) close_hover_stroke else stroke },
-                }, .{
-                    .expand = .ratio,
-                    .padding = .all(5),
-                    .margin = .all(0),
-                    .gravity_x = 0.5,
-                });
-            }
+            const frame: dvui.Rect = .{ .x = insets.x, .y = insets.y, .w = win_rect.w - insets.x - insets.w, .h = win_rect.h - insets.y - insets.h };
+            caption_buttons.draw(frame, if (linux_windowed) Constants.linux_window_radius else null);
         }
 
         editor.pollPendingReveals();
@@ -3965,6 +3913,7 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             update_notify.drawAbove(infobar_y_physical, 4.0);
         }
     }
+    registerFloatingTitleBarRects();
     hitch_draw.end();
 
     // look at demo() for examples of dvui widgets, shows in a floating window
@@ -4063,6 +4012,20 @@ pub fn handleNativeMenuAction(editor: *Editor, action: fizzy.backend.NativeMenuA
     run catch |err| {
         dvui.log.err("native menu command '{s}' failed: {s}", .{ id, @errorName(err) });
     };
+}
+
+/// Floating windows — open menus, dropdowns, dialogs, tooltips, the palette — are the app's to
+/// click wherever they reach into the title bar's region: registered as interactive, so the
+/// strip's drag (Windows, Linux) or AppKit's titlebar (macOS) never takes them. All of them, not
+/// only those over fizzy's strip: AppKit's region is its own height. Each where it stands on the
+/// stack: those drawn later this frame (dialogs land at the frame's end) are still last frame's,
+/// which is the frame the OS's hit test answers for; one closed since goes with the stack.
+fn registerFloatingTitleBarRects() void {
+    if (!fizzy.backend.titlebar_hit_tested) return;
+    // The first is the window itself.
+    for (dvui.currentWindow().subwindows.stack.items[1..]) |sub| {
+        fizzy.backend.pushTitleBarInteractiveRect(sub.rect_pixels);
+    }
 }
 
 pub fn setTitlebarColor(editor: *Editor) void {

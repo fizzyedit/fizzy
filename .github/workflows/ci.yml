@@ -108,8 +108,8 @@ jobs:
         shell: bash
         run: bash scripts/ci-retry.sh zig build test-sdk-version --summary all
 
-  # Fizzy's own backend on Windows, which nothing else builds: Windows still defaults to dvui's
-  # backend (`build/exe.zig`'s `defaultNativeBackend`) and the consumer apps above skip Windows.
+  # Fizzy's own backend on Windows — the default there too now (`build/exe.zig`'s
+  # `defaultNativeBackend`) — which nothing else here builds: the consumer apps above skip Windows.
   # Cross-compiled from Linux for the GNU ABI, which needs no MSVC SDK (release.yml's msvc
   # builds do). It shows the app compiles and links, not that it runs.
   windows-fizzy-backend:
