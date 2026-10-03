@@ -768,9 +768,8 @@ pub fn draw(self: *TextEntryWidget) void {
     };
     self.drawBeforeText();
 
-    // Rainbow nesting must run *after* `drawBeforeText` so `cache_layout_bytes` (and therefore
-    // `highlightByteRange`) is valid — otherwise the first frame with `cache_layout` on would
-    // colour the whole document instead of the viewport.
+    // Rainbow nesting is worked out over `highlightByteRange` — the viewport — rather than the
+    // whole document.
     var nest_buf: [512]tc.pairs.NestMark = undefined;
     self.bracket_nests = &.{};
     // No range yet (the first frame a view is drawn, before it has layout data): no colours for
@@ -962,62 +961,82 @@ pub fn draw(self: *TextEntryWidget) void {
             defer dvui.c.ts_query_cursor_delete(qc);
             dvui.c.ts_query_cursor_set_match_limit(qc, tree_sitter_match_limit);
 
-            // Restrict the capture walk to what's actually on screen — this is the dominant
-            // per-frame cost of a highlighted document, and it comes as several ranges rather
-            // than one (see `highlightRanges`). Text outside them still renders via the
-            // gap/leftover chunks below; it's just uncolored until scrolled into range.
-            var range_buf: [max_highlight_ranges]ByteRange = undefined;
-            var ranges = self.highlightRanges(&range_buf);
-            if (ranges.len == 0) {
-                range_buf[0] = .{ .start = 0, .end = self.len };
-                ranges = range_buf[0..1];
-            }
+            // Walk the captures region by region, as dvui lays the text out. `cacheLayoutNext`
+            // gives the bytes layout actually runs this frame — the visible lines, less the
+            // off-screen middles of lines wider than the view — and `addText` counts and drops
+            // everything else. Querying only those is what keeps a highlighted document's
+            // per-frame cost to what is on screen: one 200k-character line keeps all its syntax
+            // nodes in the middle nobody can see, and walking them cost the whole frame (36ms).
+            // Each region is narrowed further to `highlightByteRange`, because a region also
+            // stretches to take in an off-screen caret. Text outside a query still goes through
+            // `emitChunk`, uncolored: layout counts every byte, and skips what it does not need.
+            const window = self.highlightByteRange();
+            while (start < self.len) {
+                const region = self.textLayout.cacheLayoutNext();
+                if (region.start >= self.len) break; // past the last region
+                const region_end = @min(region.end, self.len);
 
-            for (ranges) |r| {
-                dvui.c.ts_query_cursor_exec(qc, ts_parser.query, root);
-                var iter = ts_parser.queryCursorCaptureIterator(qc.?, self.text);
-                iter.debug = ts.log_captures;
-                iter.setByteRange(r.start, r.end);
+                var query_start = region.start;
+                var query_end = region_end;
+                if (window) |w| {
+                    query_start = @max(query_start, w.start);
+                    query_end = @min(query_end, w.end);
+                }
 
-                while (true) {
-                    //const capture_start = perfBegin();
-                    const maybe_match = iter.next();
-                    //perfAccumCapture(capture_start);
-                    const match = maybe_match orelse break;
+                if (query_start < query_end) {
+                    dvui.c.ts_query_cursor_exec(qc, ts_parser.query, root);
+                    var iter = ts_parser.queryCursorCaptureIterator(qc.?, self.text);
+                    iter.debug = ts.log_captures;
+                    iter.setByteRange(query_start, query_end);
 
-                    const nstart = dvui.c.ts_node_start_byte(match.node);
-                    const nend = dvui.c.ts_node_end_byte(match.node);
-                    if (start < nstart) {
-                        // render non highlighted text up to this node
-                        //const shape_start = perfBegin();
-                        self.emitChunk(start, self.text[start..nstart], .{}, false, true);
-                        //perfAccumShape(shape_start);
-                    } else if (nstart < start) {
-                        // this match is inside (or overlapping) the previous match
-                        // maybe we could be smarter here, but for now drop it
-                        continue;
-                    }
+                    while (true) {
+                        //const capture_start = perfBegin();
+                        const maybe_match = iter.next();
+                        //perfAccumCapture(capture_start);
+                        const match = maybe_match orelse break;
 
-                    var opts: dvui.Options = .{};
-                    const capture_name = match.captureName();
-                    for (0..ts.highlights.len) |i| {
-                        const sh = ts.highlights[ts.highlights.len - i - 1];
-                        if (std.mem.startsWith(u8, capture_name, sh.name)) {
-                            opts = sh.opts;
-                            break;
+                        const nstart = dvui.c.ts_node_start_byte(match.node);
+                        const nend = dvui.c.ts_node_end_byte(match.node);
+                        if (start < nstart) {
+                            // render non highlighted text up to this node
+                            //const shape_start = perfBegin();
+                            self.emitChunk(start, self.text[start..nstart], .{}, false, true);
+                            //perfAccumShape(shape_start);
+                        } else if (nstart < start) {
+                            // this match is inside (or overlapping) the previous match
+                            // maybe we could be smarter here, but for now drop it
+                            continue;
                         }
+
+                        var opts: dvui.Options = .{};
+                        const capture_name = match.captureName();
+                        for (0..ts.highlights.len) |i| {
+                            const sh = ts.highlights[ts.highlights.len - i - 1];
+                            if (std.mem.startsWith(u8, capture_name, sh.name)) {
+                                opts = sh.opts;
+                                break;
+                            }
+                        }
+
+                        //const shape_start = perfBegin();
+                        self.emitChunk(nstart, self.text[nstart..nend], opts, true, captureAllowsRainbow(capture_name));
+                        //perfAccumShape(shape_start);
+
+                        start = nend;
                     }
+                }
 
-                    //const shape_start = perfBegin();
-                    self.emitChunk(nstart, self.text[nstart..nend], opts, true, captureAllowsRainbow(capture_name));
-                    //perfAccumShape(shape_start);
-
-                    start = nend;
+                // The rest of the region, uncolored, so the next `cacheLayoutNext` moves on from
+                // its end. A capture that ran past the end has already taken layout into a later
+                // region, and `start` is past this one.
+                if (start < region_end) {
+                    self.emitChunk(start, self.text[start..region_end], .{}, false, true);
+                    start = region_end;
                 }
             }
 
             if (start < self.len) {
-                // any leftover non highlighted text
+                // any leftover non highlighted text (past the last region: layout only counts it)
                 //const shape_start = perfBegin();
                 self.emitChunk(start, self.text[start..self.len], .{}, false, true);
                 //perfAccumShape(shape_start);
@@ -1043,113 +1062,63 @@ pub const ByteRange = struct { start: usize, end: usize };
 /// Carry a retained layout from the id it was kept under to the one its view has now. Only into
 /// an id with none of its own: that one is newer.
 ///
-/// The line heights are what spare the first frame from measuring everything. The per-line
+/// The line positions are what spare the first frame from measuring everything. The per-line
 /// ascents are not carried (dvui keeps their type private): they only record lines whose later
 /// text is taller than their start — mixed font sizes, which this editor never draws — and a
 /// view that had some re-records them as it lays those lines out.
 fn moveLayout(from: dvui.Id, to: dvui.Id) void {
-    const BH = []dvui.TextLayoutWidget.ByteHeight;
-    if (dvui.dataGetSlice(null, to, "_byte_heights", BH) == null) {
-        if (dvui.dataGetSlice(null, from, "_byte_heights", BH)) |bh| dvui.dataSetSlice(null, to, "_byte_heights", bh);
+    const BP = []dvui.TextLayoutWidget.BytePos;
+    if (dvui.dataGetSlice(null, to, byte_pos_key, BP) == null) {
+        if (dvui.dataGetSlice(null, from, byte_pos_key, BP)) |bp| dvui.dataSetSlice(null, to, byte_pos_key, bp);
     }
-    dvui.dataRemove(null, from, "_byte_heights");
+    dvui.dataRemove(null, from, byte_pos_key);
     dvui.dataRemove(null, from, "__line_ascents");
 }
 
-/// Byte range the tree-sitter capture walk should cover this frame: what the viewport shows,
-/// plus a screenful of headroom on each side so a scroll doesn't outrun the highlighting before
-/// the next frame recomputes it. Null means "don't restrict" (first frame, before any layout
-/// data exists, or `cache_layout` off).
+/// Where `TextLayoutWidget` keeps its `BytePos` list between frames (its `deinit`).
+const byte_pos_key = "__byte_pos";
+
+/// Byte range the tree-sitter capture walk may cover this frame: what the viewport shows, plus
+/// half a screen of headroom above and below so a scroll doesn't outrun the highlighting before
+/// the next frame recomputes it. Null means "don't restrict" (`cache_layout` off, or the first
+/// frame a view is drawn, before it has layout data).
 ///
-/// Deliberately *not* just `TextLayoutWidget.cache_layout_bytes`, which is what this used to
-/// pass straight through. That range answers a different question — which bytes does *layout*
-/// have to walk — and it is wrong for highlighting in two ways that both scale badly:
+/// It narrows dvui's layout regions (`TextLayoutWidget.cacheLayoutNext`, which `draw` queries
+/// region by region) rather than standing in for them. Those answer a different question — which
+/// bytes does *layout* have to walk — and stretch to take in the caret wherever it is, so
+/// scrolling away from the caret in a large file grew the queried range toward the whole
+/// document. Measured on a 3.4k-line file: 2,868 captures per frame while scrolling versus 1,231
+/// sitting still, for pixels that are identical either way. The headroom is sized from the
+/// viewport, not the document: a pad of `len / 20` queried ~13.6KB around a ~2KB viewport on
+/// that same file, which is why per-frame cost once tracked file size.
 ///
-///  1. It stretches to cover the caret whenever the caret is off screen (see `bytesNeeded`'s
-///     `include_cursor`), so scrolling away from the caret in a large file grew the queried
-///     range toward the whole document. Measured on a 3.4k-line file: 2,868 captures per frame
-///     while scrolling versus 1,231 sitting still, for pixels that are identical either way.
-///  2. The old pad around it was `len / 20` (capped at 8KB), i.e. proportional to the
-///     *document*. On that same file it queried ~13.6KB of padding around a ~2KB viewport —
-///     87% of the work thrown away — which is why per-frame cost tracked file size even
-///     though the visible line count never changed.
-///
-/// The result is intersected with the layout range because bytes outside that never get emitted
-/// this frame anyway, so querying them could only produce captures with nothing to color.
-///
-/// `byte_heights` is last frame's data, recorded every `ByteHeight.dist` logical pixels — the
-/// same source and staleness `bytesNeeded` itself works from, and the coarse spacing only ever
+/// `byte_heights` is last frame's `BytePos` list: the byte at the start of a line every
+/// `BytePos.y_sep` logical pixels down (`dist` is that height), and on lines wider than the
+/// view one every view-width across it (`dist` is minus that x — skipped here). It is the
+/// same source and staleness the layout regions work from, and the coarse spacing only ever
 /// makes the range a superset of what's visible.
 pub fn highlightByteRange(self: *TextEntryWidget) ?ByteRange {
-    const clb = self.textLayout.cache_layout_bytes orelse return null;
-    const heights = self.textLayout.byte_heights;
-    if (heights.len == 0) return .{ .start = clb.start, .end = clb.end };
+    if (!self.textLayout.cache_layout) return null;
+    const positions = self.textLayout.byte_heights;
+    if (positions.len == 0) return null;
 
     const viewport = self.scroll.si.viewport;
-    // Headroom on each side, sized from the viewport rather than the document: enough that a
-    // normal scroll stays colored between recomputes, without dragging in text nobody can see.
     const pad = viewport.h / 2;
     const top = viewport.y - pad;
     const bottom = viewport.y + viewport.h + pad;
 
     var start: usize = 0;
     var end: usize = self.len;
-    for (heights) |bh| {
-        if (bh.height <= top) start = bh.byte;
-        if (bh.height >= bottom) {
-            end = bh.byte;
+    for (positions) |bp| {
+        if (bp.dist < 0) continue;
+        if (bp.dist <= top) start = bp.byte;
+        if (bp.dist >= bottom) {
+            end = bp.byte;
             break;
         }
     }
 
-    return .{
-        .start = @max(start, clb.start),
-        .end = @min(@min(end, clb.end), self.len),
-    };
-}
-
-/// The most byte ranges `highlightRanges` will query in one frame. Every range costs another
-/// `ts_query_cursor_exec` and tree descent, and dvui reports at most
-/// `TextLayoutWidget.VisibleRanges.max` runs anyway.
-const max_highlight_ranges = dvui.TextLayoutWidget.VisibleRanges.max;
-
-/// `highlightByteRange` split into the runs actually worth querying, in increasing byte order.
-///
-/// The single interval isn't enough on its own: a line wider than the viewport is on screen at
-/// its left edge and again — as a different line — below it, so an interval covering both also
-/// covers the line's off-screen middle. That middle is where a pathological line keeps all of its
-/// syntax nodes, so querying it costs the whole frame (36ms for one 200k-character line) to color
-/// pixels that don't exist. dvui reports which bytes its layout actually put on screen last
-/// frame, gaps included; each run gets its own query pass, and the gaps between them come out as
-/// uncolored text nobody can see.
-///
-/// Each run is padded, and the result clipped back to `highlightByteRange`, for the same reason
-/// that range is padded: dvui's runs are a frame stale, so a scroll or edit has to be able to
-/// land inside them and still be colored.
-fn highlightRanges(self: *TextEntryWidget, buf: *[max_highlight_ranges]ByteRange) []const ByteRange {
-    const range = self.highlightByteRange() orelse return &.{};
-    const visible = self.textLayout.visibleBytesLastFrame();
-    if (visible.len == 0) {
-        buf[0] = range;
-        return buf[0..1];
-    }
-
-    var n: usize = 0;
-    for (visible) |vis| {
-        const headroom = @max(2 * (vis.end -| vis.start), 4096);
-        const start = @max(range.start, vis.start -| headroom);
-        const end = @min(range.end, vis.end +| headroom);
-        if (end <= start) continue;
-        // Padding can make neighbouring runs meet; two passes over one span would emit the same
-        // captures twice, which the emit loop reads as overlapping matches and drops.
-        if (n > 0 and start <= buf[n - 1].end) {
-            buf[n - 1].end = @max(buf[n - 1].end, end);
-        } else {
-            buf[n] = .{ .start = start, .end = end };
-            n += 1;
-        }
-    }
-    return buf[0..n];
+    return .{ .start = @min(start, self.len), .end = @min(end, self.len) };
 }
 
 /// One ghost-text splice resolved for this frame: `text` shown dimmed at byte offset `anchor`.
@@ -1367,26 +1336,29 @@ fn bracketStyle(mark: BracketMark) dvui.Options {
 /// Splices `text` into the layout at the current position, dimmed, without letting it count as
 /// real document bytes.
 ///
-/// `addTextEx` advances `TextLayoutWidget.bytes_seen` unconditionally, and that counter must
+/// `addText` advances `TextLayoutWidget.bytes_seen` unconditionally, and that counter must
 /// track only *real* document bytes for cursor/selection hit-testing (`cursor_rect`, click
 /// routing) to stay correct for every chunk emitted after this one — so it gets rewound by the
 /// ghost text's length. `bytes_seen` is a plain public field already reached into directly
-/// elsewhere in this codebase (e.g. `selection`, `cursor_rect` at `TextEditor.zig`), so this
-/// isn't reaching past an abstraction that wants to stay opaque — but the same call path also
-/// advances a *second*, independent counter (`cache_layout_bytes_seen`) whenever `cache_layout`
-/// is on, which `addTextDone` asserts stays equal to `bytes_seen`; rewinding only `bytes_seen`
-/// would desync that pair and trip the assert. Rewinding both in lockstep keeps `cache_layout`
-/// usable during a completion — needed now that tree-sitter-highlighted docs rely on it for
-/// viewport culling (see `TextEditor.zig`).
+/// elsewhere in this codebase (e.g. `selection`, `cursor_rect` at `TextEditor.zig`).
+///
+/// With `cache_layout` on, `addText` also lays out only the current layout region
+/// (`cacheLayoutNext`) and moves on to the next one when `bytes_seen` reaches its end — which
+/// the ghost's bytes must not do, since they are wound back: the region would have moved on at
+/// a document byte that isn't its end. So only as much of the ghost as fits before the region's
+/// end is laid out, and none of it when the caret is in bytes layout skips. (At the very end of
+/// the document that is none at all, as it was before regions: layout stops there.)
 fn emitGhost(self: *TextEntryWidget, text: []const u8) void {
     self.ghost_text_emitted = true;
-    self.textLayout.addText(text, .{
+    const region = self.textLayout.cacheLayoutNext();
+    const at = self.textLayout.bytes_seen;
+    if (at < region.start) return;
+    const shown = text[0..@min(text.len, region.end -| at)];
+    if (shown.len == 0) return;
+    self.textLayout.addText(shown, .{
         .color_text = self.textLayout.data().options.color(.text).opacity(0.5),
     });
-    self.textLayout.bytes_seen -= text.len;
-    if (self.textLayout.cache_layout) {
-        self.textLayout.cache_layout_bytes_seen -= text.len;
-    }
+    self.textLayout.bytes_seen -= shown.len;
 }
 
 pub fn drawBeforeText(self: *TextEntryWidget) void {
@@ -1400,7 +1372,7 @@ pub fn drawBeforeText(self: *TextEntryWidget) void {
     dvui.clipSet(self.textClip);
 
     if (self.init_opts.cache_layout) {
-        self.textLayout.cache_layout_bytes = self.textLayout.bytesNeeded(
+        self.textLayout.cacheLayoutEdit(
             self.text_changed_start,
             self.text_changed_end,
             self.text_changed_added,
@@ -2406,7 +2378,7 @@ pub fn deinit(self: *TextEntryWidget) void {
     // After `deinit`, which is what writes these: writing a key can replace its value, and the
     // retain goes with the old one.
     if (self.init_opts.retain_layout) |r| {
-        dvui.dataRetain(null, layout_id, "_byte_heights", r.token);
+        dvui.dataRetain(null, layout_id, byte_pos_key, r.token);
         dvui.dataRetain(null, layout_id, "__line_ascents", r.token);
     }
     self.scroll.deinit();

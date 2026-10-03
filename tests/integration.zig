@@ -148,6 +148,10 @@ fn textEntryFrame() !dvui.App.Result {
         const si = te.scroll.si;
         si.viewport.y = fraction * @max(0, si.virtual_size.h - si.viewport.h);
     }
+    if (te_scroll_x_to) |fraction| {
+        const si = te.scroll.si;
+        si.viewport.x = fraction * @max(0, si.virtual_size.w - si.viewport.w);
+    }
     te.draw();
     te_last_bracket_match = te.bracket_match;
     te_highlight_range = te.highlightByteRange();
@@ -311,9 +315,10 @@ test "typing an opener with a selection wraps it instead of replacing it" {
 /// landed vertically — enough to check the range against ground truth rather than against the
 /// same formula that produced it.
 var te_highlight_range: ?TextEntryWidget.ByteRange = null;
-var te_byte_heights: []const dvui.TextLayoutWidget.ByteHeight = &.{};
+var te_byte_heights: []const dvui.TextLayoutWidget.BytePos = &.{};
 var te_viewport: dvui.Rect = .{};
 var te_scroll_to: ?f32 = null;
+var te_scroll_x_to: ?f32 = null;
 
 test "the highlight query range covers every byte the viewport shows" {
     // A document tall enough that the viewport is a small fraction of it — the case where
@@ -342,18 +347,20 @@ test "the highlight query range covers every byte the viewport shows" {
         // Ground truth: dvui recorded, for real, which byte sits at which height. Every byte
         // whose recorded height falls inside the viewport must be inside the queried range, or
         // that text draws unhighlighted. Note the resolution limit — dvui records one entry per
-        // `ByteHeight.dist` (200) logical pixels, so this catches a range in the wrong
-        // coordinate space or off by a screenful, not one off by a few lines. The full-viewport
-        // pad is what covers that margin.
+        // `BytePos.y_sep` (200) logical pixels, so this catches a range in the wrong
+        // coordinate space or off by a screenful, not one off by a few lines. The half-screen
+        // pad is what covers that margin. (Entries with a negative `dist` are positions across a
+        // line wider than the view, which this document has none of.)
         var checked: usize = 0;
         for (te_byte_heights) |bh| {
-            if (bh.height < te_viewport.y or bh.height > te_viewport.y + te_viewport.h) continue;
+            if (bh.dist < 0) continue;
+            if (bh.dist < te_viewport.y or bh.dist > te_viewport.y + te_viewport.h) continue;
             checked += 1;
             if (bh.byte < range.start or bh.byte > range.end) {
                 std.debug.print(
                     "  visible byte {d} (height {d}) fell outside the queried range {d}..{d} " ++
                         "at scroll {d} (viewport y={d} h={d}) — that text would draw uncolored\n",
-                    .{ bh.byte, bh.height, range.start, range.end, fraction, te_viewport.y, te_viewport.h },
+                    .{ bh.byte, bh.dist, range.start, range.end, fraction, te_viewport.y, te_viewport.h },
                 );
             }
             try std.testing.expect(bh.byte >= range.start);
@@ -363,6 +370,65 @@ test "the highlight query range covers every byte the viewport shows" {
         try std.testing.expect(checked > 0);
     }
     te_scroll_to = null;
+}
+
+// -- a line far wider than the view -------------------------------------------------------------
+
+/// One line of `n` bytes of code-shaped text, with a short line either side of it.
+fn longLineDoc(n: usize) ![]u8 {
+    var doc: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer doc.deinit(std.testing.allocator);
+    try doc.appendSlice(std.testing.allocator, "const a = 1;\n");
+    const unit = "call(arg) + other[idx], ";
+    while (doc.items.len < n) try doc.appendSlice(std.testing.allocator, unit);
+    try doc.appendSlice(std.testing.allocator, "\nconst b = 2;\n");
+    return doc.toOwnedSlice(std.testing.allocator);
+}
+
+/// Scrolls the long line across, start to end, a few frames at each stop, checking it draws.
+fn scrollAcrossLongLine() !void {
+    for ([_]f32{ 0, 0.5, 1, 0.25 }) |fraction| {
+        te_scroll_x_to = fraction;
+        for (0..3) |_| _ = try dvui.testing.step(textEntryFrame);
+    }
+    te_scroll_x_to = null;
+}
+
+// A minified file's one line can be far longer than one draw can number vertices for
+// (`Vertex.Index` is u16 on every target, four vertices a glyph — 16k glyphs), and laying all of
+// it out each frame is what made such a file crawl. dvui lays out only the stretches of a line
+// near the view, recording positions across it as it goes, and each run it draws is about a
+// view wide.
+test "a line far wider than the view draws at every scroll position" {
+    const doc = try longLineDoc(60_000);
+    defer std.testing.allocator.free(doc);
+
+    var t = try textEntryCtx(doc, 0);
+    defer deinitTextEntry(&t);
+
+    try scrollAcrossLongLine();
+
+    var across: usize = 0;
+    for (te_byte_heights) |bp| {
+        if (bp.dist < 0) across += 1;
+    }
+    try std.testing.expect(across > 10);
+}
+
+// The frames where layout caching is off — the first after the document is replaced under the
+// editor (`Document.pending_sel`), or after an edit made outside it — lay the whole line out.
+// It still has to draw.
+test "a line far wider than the view draws with layout caching off" {
+    const doc = try longLineDoc(60_000);
+    defer std.testing.allocator.free(doc);
+
+    te_cache_layout = false;
+    defer te_cache_layout = true;
+
+    var t = try textEntryCtx(doc, 0);
+    defer deinitTextEntry(&t);
+
+    try scrollAcrossLongLine();
 }
 
 // -- content-swap reveal ------------------------------------------------------------------------

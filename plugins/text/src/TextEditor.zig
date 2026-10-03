@@ -279,18 +279,17 @@ fn drawEditor(doc: *Document, ext: []const u8, id_extra: u64, gpa: std.mem.Alloc
     te.init(@src(), .{
         .multiline = true,
         .break_lines = false,
-        // `TextLayoutWidget`'s cache_layout skip-ahead (`bytesNeeded`) jumps `insert_pt`/
-        // `bytes_seen` to the scrolled-to position as a side effect of `drawBeforeText`, so
-        // `cache_layout` must be decided once, here, before `drawBeforeText` runs — never
+        // `TextLayoutWidget`'s cache_layout skip-ahead (`cacheLayoutNext`) jumps `insert_pt`
+        // to the start of the visible region the first time layout is asked for it, so
+        // `cache_layout` must be decided once, here, before `TextEntryWidget.draw` runs — never
         // toggled mid-frame (that was the bug that used to force this off for highlighted
         // files: disabling it only inside the highlight path ran too late, after the jump had
         // already happened, leaving text rendering from byte 0 but pinned at the scrolled
         // y-offset). The tree-sitter highlight path's per-token `emitChunk` calls still feed
-        // the whole document every frame (`TextEntryWidget.draw`), but that's fine — cache_layout
-        // clips each call to the visible range internally; ghost-text splicing (completions/
-        // signature hints) rewinds `cache_layout_bytes_seen` in lockstep with `bytes_seen` to
-        // stay compatible (see `emitChunk`). Query/capture cost is separately bounded by
-        // restricting the tree-sitter query itself to (an estimate of) the visible byte range.
+        // the whole document every frame (`TextEntryWidget.draw`), but that's fine — layout
+        // counts and drops every byte outside its regions; ghost-text splicing (completions/
+        // signature hints) stays inside the current region (see `emitGhost`). Query/capture
+        // cost is bounded by querying tree-sitter region by region, narrowed to the viewport.
         .cache_layout = !out_of_band_edit,
         .scroll_horizontal = true,
         .focus_border = false,
