@@ -33,34 +33,22 @@ expecting: bool = false,
 /// frames. Read from the region during draw; never derived from the app's document array.
 active: ?sdk.DocHandle = null,
 
-/// Reorder bookkeeping for the frame: where a tab was lifted from and where it is about to land,
-/// as indices into this pane's tab list.
-tabs_removed_index: ?usize = null,
-tabs_insert_before_index: ?usize = null,
-
 /// Physical-pixel content rect of this pane's canvas, captured each frame. `null` until the pane
 /// has rendered once. The editor-level load/save toasts centre over it.
 canvas_rect_physical: ?dvui.Rect.Physical = null,
 /// The whole pane, tab strip included, as last drawn — what the host snapshots when this
 /// pane's last document closes.
 pane_rect_physical: ?dvui.Rect.Physical = null,
-/// The window the pane is drawn in (`dvui.subwindowCurrentId`): the app's own, or the float the
-/// documents were floated into. What the pane's own drags ask whether anything lies over it
-/// (`uncoveredAt`).
-subwindow_id: dvui.Id = .zero,
-/// The tab strip as last laid out — where a lifted tab can still be put back in a strip, before
-/// it becomes a view drag (`drawTabs`).
+/// The tab strip as last laid out, the pane's whole width: the chooser a carried tab goes into
+/// (`offerStrip`).
 strip_rect_physical: ?dvui.Rect.Physical = null,
 /// Where each tab was this frame, with its index in the pane's tab list: where a tab carried
-/// back over the strip goes in (`insertIndexAt`).
+/// over the strip goes in (`insertIndexAt`).
 tab_slots: [max_tab_slots]TabSlot = undefined,
 tab_slot_count: usize = 0,
 /// Where in this pane's assignment a tab carried in the app's view drag would go in, while it is
 /// over the strip — last frame's reading, the gap this frame opens for it (`offerStrip`).
 strip_insert: ?usize = null,
-/// One of this pane's tabs was carried along the strips last frame, floating off its slot
-/// (`drawTabs`): the drag is this strip's own.
-lifting: bool = false,
 /// The gap drawn this frame: where it starts along the strip and how wide it is, physical.
 /// `insertIndexAt` reads the tabs as if it were not there, so the gap does not chase itself.
 gap_x: f32 = 0,
@@ -158,7 +146,6 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     self.active = if (selected) |s| documentOf(s) else null;
     const pane_r = pane_box.rectScale().r;
     self.pane_rect_physical = pane_r;
-    self.subwindow_id = dvui.subwindowCurrentId();
 
     if (tabs.len > 0) {
         self.dropSnapshot();
@@ -191,9 +178,14 @@ pub fn draw(self: *Workspace) !dvui.App.Result {
     return .ok;
 }
 
+/// The pane's tabs, and what a tab dragged along them does: the app's view drag, from the moment
+/// it lifts. Along a strip — this one or another pane's — it is carried as a tab in glass, the
+/// strip under it opening a slot where it would go in (`offerStrip`, `drawGap`), and let go there
+/// it goes in (`paneDrop`), which back on its own strip is a reorder. Off the strips it is the
+/// view drag over any place: the drops every place shows, landing through the same `paneDrop`.
+/// One drag throughout, so a tab carried out and back is the same tab, in the same glass, going in
+/// the same way, wherever it went in between.
 fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surface, selected: ?*sdk.Surface) void {
-    defer self.processTabsDrag(region, tabs);
-
     var tabs_anim = dvui.animate(@src(), .{ .duration = core.motion.duration(500_000), .kind = .vertical, .easing = core.motion.enter }, .{});
     defer tabs_anim.deinit();
 
@@ -206,8 +198,8 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
         // has nothing to draw, and the strip — somewhere to put it back — stays.
         .min_size_content = .{ .h = runtime.workbench().tab_strip_h },
     });
-    // The strip's full width across the pane, not just its tabs: a tab put back anywhere along
-    // it is still being reordered.
+    // The strip's full width across the pane, not just its tabs: a tab carried anywhere along it
+    // goes in among them — past the last one, at the end.
     if (self.pane_rect_physical) |pr| {
         const tr = tabs_box.data().borderRectScale().r;
         self.strip_rect_physical = .{ .x = pr.x, .y = tr.y, .w = pr.w, .h = tr.h };
@@ -232,20 +224,13 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
     });
     defer scroll_area.deinit();
 
-    // A strip a window lies over where the pointer is (`uncoveredAt`) — a float over the
-    // documents — takes no part in a drag carried there: dvui's reorder opens its slot wherever
-    // the pointer is, over a window or not, and parted the tabs under the float for a release
-    // that is the float's. The strip a tab was lifted from keeps its part (`lifting`), for the
-    // frame that hands the tab to the app's view drag (`overAnyStrip`): that drag grows out of
-    // the tab where it floats, and only the reorder lays the tab out there. With no drag on, the
-    // name stays: it is what a tab lifted here starts the drag under.
-    const covered = dvui.dragName("tab_drag") and !self.uncoveredAt(dvui.currentWindow().mouse_pt) and !self.lifting;
-    self.lifting = false;
-    var reorder = dvui.reorder(@src(), .{ .drag_name = if (covered) null else "tab_drag" }, .{
-        .expand = .none,
-        .background = false,
+    // A tab carried along the strip near either end of it scrolls the strip, as far as there are
+    // tabs past that end.
+    const carried = runtime.host().viewDragSurface();
+    if (carried != null and self.strip_insert != null) dvui.scrollDrag(.{
+        .mouse_pt = dvui.currentWindow().mouse_pt,
+        .screen_rect = scroll_area.data().borderRectScale().r,
     });
-    defer reorder.deinit();
 
     var tabs_hbox = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .none,
@@ -262,9 +247,8 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
         break :blk null;
     };
 
-    // A tab carried in the app's view drag is in the hand, not on any strip — as a tab being
-    // reordered leaves its place — and over a strip, the strip opens a slot where it would go in.
-    const carried = runtime.host().viewDragSurface();
+    // A tab carried in the app's view drag is in the hand, not on any strip, and over a strip, the
+    // strip opens a slot where it would go in.
     self.gap_w = 0;
     var gap_drawn = false;
     for (tabs, 0..) |surface, i| {
@@ -284,21 +268,19 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
         // keyed by index, the frame after a reorder laid every tab out at the width of the one
         // that used to stand there — the tabs, and the active tab's line, snapped into place.
         const tab_key: usize = @truncate(std.hash.Wyhash.hash(0, surface.id));
-        var reorderable = reorder.reorderable(@src(), .{ .draw_target = false }, .{
+        // The tab's slot, the strip's height: what the active tab's line is drawn along.
+        var slot = dvui.box(@src(), .{}, .{
             .expand = .vertical,
             .id_extra = tab_key,
             .padding = dvui.Rect.all(0),
             .margin = dvui.Rect.all(0),
             .border = .all(0),
         });
-        defer reorderable.deinit();
-        // The slot a tab dragged along the strip would drop into: the carried look's drop slot,
-        // seen blurred through the glass of the tab over it (`core.dialogs.dropSlot`).
-        if (reorderable.targetRectScale()) |trs| core.dialogs.dropSlot(trs.r, trs.s);
+        defer slot.deinit();
         if (self.tab_slot_count < max_tab_slots) {
             // Its place in the assignment, which is what a drop rewrites — the list drawn here
             // leaves out entries that name nothing loadable, so its own index can be short.
-            self.tab_slots[self.tab_slot_count] = .{ .index = self.assignedIndexOf(surface.id) orelse i, .rect = reorderable.data().borderRectScale().r };
+            self.tab_slots[self.tab_slot_count] = .{ .index = self.assignedIndexOf(surface.id) orelse i, .rect = slot.data().borderRectScale().r };
             self.tab_slot_count += 1;
         }
 
@@ -319,46 +301,17 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
         defer hbox.deinit();
         if (sdk.document.pathOfSurfaceId(surface.id)) |path| core.anchor.mark(hbox.data(), "workbench.tab:{s}", .{path});
 
-        const tab_hovered = core.widgets.hovered(hbox.data());
+        // Not under a carried tab: what is under it is where it would go in, not a tab to close.
+        const tab_hovered = carried == null and core.widgets.hovered(hbox.data());
 
-        if (reorderable.floating()) {
-            self.lifting = true;
-            runtime.workbench().dragging_surface = surface.id;
-            // Dragging a tab is arranging it, and a tab someone is placing is not on loan.
-            if (doc_opt) |doc| runtime.host().setDocumentPreview(doc.id, false);
-            // Carried, it is glass — the look it keeps if it leaves the strip for the places and
-            // comes back (`core.dialogs.carriedGlass`) — with the slot it would drop into showing
-            // through it.
-            hbox.data().options.background = false;
-            const frs = hbox.data().borderRectScale();
-            core.dialogs.carriedGlass(hbox.data().id, frs.r, frs.s);
-            // Off every strip: no longer a reorder, a document on its way somewhere. Hand it to
-            // the app's view drag — the drop zones and live preview every place shows — and let
-            // `paneDrop` land it. Only a document: a loading placeholder has nothing to carry.
-            if (doc_opt != null and !overAnyStrip(dvui.currentWindow().mouse_pt)) {
-                runtime.workbench().dragging_surface = null;
-                dvui.dragEnd();
-                runtime.workbench().carried_tab_w = frs.r.w;
-                // From the tab as it is drawn — floating under the pointer, its glass just laid at
-                // `frs` — not its slot: the view drag grows out of this rect, and from the slot
-                // its glass jumped to the strip's corner before forming.
-                runtime.host().beginViewDrag(surface.id, frs.r);
-            }
-        }
         hbox.drawBackground();
 
-        if (!is_selected and pane_is_active and reorder.drag_point == null) {
+        if (!is_selected and pane_is_active and carried == null) {
             // Edge shadows between the active tab and its neighbours.
             if (selected_index) |si| {
                 if (i + 1 == si) core.draw.drawEdgeShadow(hbox.data().rectScale(), .right, .{});
                 if (i == si + 1) core.draw.drawEdgeShadow(hbox.data().rectScale(), .left, .{});
             }
-        }
-
-        if (reorderable.removed()) {
-            self.tabs_removed_index = i;
-        } else if (reorderable.insertBefore()) {
-            self.tabs_insert_before_index = i;
         }
 
         // Same fixed glyph slot as the file tree.
@@ -505,9 +458,9 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
             }
         }
 
-        if (is_selected and !reorderable.floating()) {
+        if (is_selected) {
             core.draw.drawTabActiveIndicator(
-                reorderable.data().borderRectScale(),
+                slot.data().borderRectScale(),
                 dvui.themeGet().color(.window, .text),
             );
         }
@@ -529,19 +482,26 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
 
                         e.handle(@src(), hbox.data());
                         dvui.captureMouse(hbox.data(), e.num);
-                        // The hand from the press on: the app's view drag, which this becomes off the
-                        // strip, asks for the same (`ViewDrag.cursor`), so it does not change there.
-                        dvui.dragPreStart(me.button, me.p, .{ .size = reorderable.data().rectScale().r.size(), .offset = reorderable.data().rectScale().r.topLeft().diff(me.p), .cursor = .hand });
+                        // The hand from the press on: the app's view drag, which this becomes, asks for
+                        // the same (`ViewDrag.cursor`), so it does not change as the tab lifts. The
+                        // offset is what keeps the tab where it was held as it is carried.
+                        const r = slot.data().borderRectScale().r;
+                        dvui.dragPreStart(me.button, me.p, .{ .size = r.size(), .offset = r.topLeft().diff(me.p), .cursor = .hand });
                     } else if (me.action == .release and me.button.pointer()) {
                         dvui.captureMouse(null, e.num);
                         dvui.dragEnd();
                     } else if (me.action == .motion) {
                         if (dvui.captured(hbox.data().id)) {
                             e.handle(@src(), hbox.data());
-                            if (dvui.dragging(me.p, null)) |_| {
-                                reorderable.reorder.dragStart(reorderable.data().id.asUsize(), me.p, 0); // reorder grabs capture
+                            // Moved far enough to be a drag: the tab lifts into the app's view drag.
+                            // Only a document: a loading placeholder has nothing to carry yet.
+                            if (dvui.dragging(me.p, null) != null) if (doc_opt) |doc| {
+                                // Dragging a tab is arranging it, and a tab someone is placing is
+                                // not on loan.
+                                runtime.host().setDocumentPreview(doc.id, false);
+                                lift(surface.id, slot.data().borderRectScale().r, e.num);
                                 break :loop;
-                            }
+                            };
                         }
                     }
                 },
@@ -551,49 +511,21 @@ fn drawTabs(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surfac
     }
     // Past the last tab.
     if (!gap_drawn and self.strip_insert != null) self.drawGap(tabs.len);
-    // The slot past the last tab, drawn as every other slot is. Not `reorder.finalSlot()`: that
-    // one paints dvui's own square target, a different slot at the end of the strip from the
-    // rounded one between tabs.
-    if (reorder.needFinalSlot()) {
-        var last = reorder.reorderable(@src(), .{ .last_slot = true, .draw_target = false }, .{});
-        defer last.deinit();
-        if (last.targetRectScale()) |trs| core.dialogs.dropSlot(trs.r, trs.s);
-        if (last.insertBefore()) self.tabs_insert_before_index = tabs.len;
-    }
 }
 
-/// A tab landed: within this pane (reorder) or from another (move). Either way the change is an
-/// assignment edit, and both panes' lists are written whole — this frame's `tabs` is the order
-/// the user saw when they let go.
-fn processTabsDrag(self: *Workspace, region: sdk.Host.Region, tabs: []const *sdk.Surface) void {
-    _ = region;
-    const insert_before = self.tabs_insert_before_index orelse return;
-    defer self.tabs_insert_before_index = null;
-    defer self.tabs_removed_index = null;
-
-    const arena = runtime.host().arena();
-    var ids = std.ArrayListUnmanaged([]const u8).initCapacity(arena, tabs.len + 1) catch return;
-    for (tabs) |t| ids.appendAssumeCapacity(t.id);
-
-    if (self.tabs_removed_index) |removed| {
-        if (removed >= ids.items.len) return;
-        const id = ids.orderedRemove(removed);
-        const at = if (removed < insert_before) insert_before - 1 else insert_before;
-        ids.insert(arena, @min(at, ids.items.len), id) catch return;
-        self.setTabs(ids.items, id);
-        return;
-    }
-
-    // From another pane: whichever one lifted the surface this frame.
-    const id = runtime.workbench().dragging_surface orelse return;
-    runtime.workbench().dragging_surface = null;
-    for (runtime.workbench().workspaces.values()) |*other| {
-        if (other.grouping == self.grouping) continue;
-        other.removeTab(id);
-        other.tabs_removed_index = null;
-    }
-    ids.insert(arena, @min(insert_before, ids.items.len), id) catch return;
-    self.setTabs(ids.items, id);
+/// Lift tab `id`, laid out at `from`, into the app's view drag: carried from there, as the tab it
+/// is over a strip and as whatever the drag carries a document as over the places
+/// (`Host.beginViewDrag`). dvui's own drag, which only measured how far the pointer had moved, is
+/// put down; the view drag holds the pointer from here to the release — from the motion that
+/// lifted it (`event_num`) on, so a release in the same frame is the drag's too, not lost.
+fn lift(id: []const u8, from: dvui.Rect.Physical, event_num: u16) void {
+    dvui.dragEnd();
+    const wb = runtime.workbench();
+    wb.carried_tab_w = from.w;
+    wb.carried_tab_key = std.hash.Wyhash.hash(0, id);
+    runtime.host().beginViewDrag(id, from);
+    if (runtime.host().viewDragSurface() == null) return;
+    if (dvui.currentWindow().capture) |cm| dvui.captureMouseCustom(cm, event_num);
 }
 
 /// Write this pane's tab list and make `focus` its active tab.
@@ -702,21 +634,31 @@ pub fn liveTabCount(self: *Workspace) usize {
 }
 
 /// The strip is this pane's chooser (`Host.Region.offerChooser`): a tab carried in the app's view
-/// drag back over it goes into the tabs rather than onto a drop zone — the zones and the preview
-/// are for the pane's inside — and while it is over, a bar shows where it would go in.
+/// drag over it — one of this pane's, lifted off it a moment ago or carried out and back, one of
+/// another pane's, a file out of the explorer — goes into the tabs rather than onto a drop zone
+/// (the zones are for the pane's inside), and while it is over, a slot opens where it would go in.
+/// Offered down past the strip by half its height, into the pane's own top: a tab carried along
+/// the strip by a hand that drifts a little low is still among the tabs, not over the document.
 fn offerStrip(self: *Workspace, region: sdk.Host.Region, tab_count: usize) void {
     self.strip_insert = null;
-    const strip = self.strip_rect_physical orelse return;
+    var strip = self.strip_rect_physical orelse return;
+    strip.h *= strip_reach;
     if (!region.offerChooser(strip)) return;
     // Read next frame, where the strip opens its slot (`drawGap`).
     self.strip_insert = self.insertIndexAt(dvui.currentWindow().mouse_pt.x, tab_count);
 }
 
-/// The slot a tab carried back over the strip would go into, before tab `id_extra`'s place: as
-/// wide as the tab was, a drop slot in it (`core.dialogs.dropSlot`).
+/// How far down a pane's strip reaches as a chooser, in strip heights (`offerStrip`).
+const strip_reach: f32 = 1.5;
+
+/// The slot a tab carried over the strip would go into, before tab `id_extra`'s place: as wide as
+/// the tab was when it was lifted off a strip, a drop slot in it (`core.dialogs.dropSlot`); a
+/// tab's width for anything else carried — a file out of the explorer.
 fn drawGap(self: *Workspace, id_extra: usize) void {
     const s = dvui.currentWindow().natural_scale;
-    const w = if (runtime.workbench().carried_tab_w > 0) runtime.workbench().carried_tab_w else 120 * s;
+    const wb = runtime.workbench();
+    const lifted = if (runtime.host().viewDragSurface()) |id| wb.carried_tab_key == std.hash.Wyhash.hash(0, id) else false;
+    const w = if (lifted and wb.carried_tab_w > 0) wb.carried_tab_w else 120 * s;
     var gap = dvui.box(@src(), .{}, .{
         .id_extra = id_extra,
         .expand = .vertical,
@@ -761,37 +703,6 @@ pub fn insertTab(self: *Workspace, id: []const u8, index: usize) void {
     }
     ids.insert(arena, @min(at, ids.items.len), id) catch return;
     self.setTabs(ids.items, id);
-}
-
-/// Whether `p` is over some pane's tab strip, or near enough to it — within half a strip's
-/// height — that a lifted tab there is still being put back in a strip. Not a strip a window
-/// lies over there (`uncoveredAt`): over a float the tab is off every strip, and goes to the
-/// app's view drag, which knows what each float covers.
-fn overAnyStrip(p: dvui.Point.Physical) bool {
-    for (runtime.workbench().workspaces.values()) |*ws| {
-        const r = ws.strip_rect_physical orelse continue;
-        const reach = r.h * 0.5;
-        if (p.x < r.x or p.x > r.x + r.w or p.y < r.y - reach or p.y > r.y + r.h + reach) continue;
-        if (ws.uncoveredAt(p)) return true;
-    }
-    return false;
-}
-
-/// Whether nothing lies over this pane at `p`: no window above the one it is drawn in — a float
-/// over the documents, a dialog — takes the pointer there. It is the reading dvui tags a pointer
-/// event with (`Subwindows.windowFor`), so what the pane shows for its own drag — a slot opening
-/// in its strip for a tab carried along the strips — agrees with where a release goes, and under
-/// a float it shows nothing: a release there is the float's.
-///
-/// A window that takes no pointer events covers nothing, here as for dvui: the app's drag
-/// overlay, which draws the drops and the carried view over every window, and what a drag
-/// carries — a tab floating off its strip. A float gone to a ghost for a view carried out of it is
-/// still a window, and covers. It is a ghost only for the app's view drag, which reads the floats
-/// itself and sees through it (`Host.Region.offerChooser`, `RegionSpec.on_drop`), and a tab along
-/// the strips meets one only in the moment it takes to fade or firm, when dvui hands it the
-/// release too.
-pub fn uncoveredAt(self: *const Workspace, p: dvui.Point.Physical) bool {
-    return dvui.currentWindow().subwindows.windowFor(p) == self.subwindow_id;
 }
 
 /// A document dropped on this pane through the app's view drag (`RegionSpec.on_drop`): the

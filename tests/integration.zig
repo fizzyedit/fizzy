@@ -5470,20 +5470,11 @@ test "float: coming back without the view that landed elsewhere, it draws its vi
     try std.testing.expectEqualStrings("test.probe", visibleIn(editor, "Float 1") orelse return error.TestExpectedEqual);
 }
 
-// ── What a plugin's own drags read of the floats ─────────────────────────────────────────────────
-// A plugin that hit-tests a drag of its own — the workbench, a file from its tree over its
-// document panes — reads whether a window lies over a pane from the window's subwindows, as dvui
-// reads where a release goes.
-
-const workbench = @import("workbench");
+// ── The drag over the floats ─────────────────────────────────────────────────────────────────────
 
 /// `ManyPanelFrame` with the view drag's overlay over all of it, as fizzy's frame draws it last.
 const OverlaidFrame = struct {
-    /// The app's own window, as a pane drawn in it records it (`Workspace.subwindow_id`).
-    var base: dvui.Id = .zero;
-
     fn frame() anyerror!dvui.App.Result {
-        base = dvui.subwindowCurrentId();
         const result = try ManyPanelFrame.frame();
         const e = ManyPanelFrame.editor.?;
         var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
@@ -5517,37 +5508,57 @@ test "float: a drag's own layer is over every float" {
     try std.testing.expect(!stack[stack.len - 1].mouse_events);
 }
 
-test "float: a document pane is under the pointer only where no float lies over it, and the drag's own layer covers nothing" {
-    var case = try ManyPanelCase.init();
-    defer case.deinit();
-    const editor = case.ctx.editor;
-    try case.place("Panel", "Panel", .swap);
-    const main = fizzy.Editor.Layout.ViewDrag.placeBounds(&editor.app.layout, "Main") orelse return error.TestExpectedEqual;
+test "float: a strip a float lies over is no chooser where the float is, and is one beside it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    try FloatOverMain.register(editor, false);
 
-    // A view carried meanwhile, so the drag's overlay is drawn too: a layer over every window,
-    // the float's included, that takes no pointer events.
-    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
-    fizzy.Editor.Layout.ViewDrag.begin(&layout, "Main", main, main);
-    defer editor.app.layout.view_drag.discard();
-    _ = try dvui.testing.step(OverlaidFrame.frame);
-    _ = try dvui.testing.step(OverlaidFrame.frame);
-    const float = editor.app.layout.floats.items.items[0];
-    try std.testing.expect(float.win_id != .zero);
+    const state = &editor.app.layout;
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Panel", FloatOverMain.panel_at, FloatOverMain.panel_at);
+    defer state.view_drag.discard();
 
-    // A document pane where Main is, drawn in the app's own window.
+    // A strip across Main, drawn in the app's own window, running under the float's body — a tab
+    // strip of a pane the float lies over, as a plugin offers one (`Host.Region.offerChooser`).
+    const strip: dvui.Rect.Physical = .{ .x = 0, .y = 200, .w = 800, .h = 30 };
+    ViewDrag.offerChooser(&layout, "Main", strip, true);
+    // Where the float lies over it, the float is what the view is over: the strip opens no slot
+    // there, and a release does not go into it.
+    try std.testing.expect(ViewDrag.chooserAt(state, .{ .x = 350, .y = 215 }) == null);
+    // Beside the float, the strip as ever.
+    const o = ViewDrag.chooserAt(state, .{ .x = 650, .y = 215 }) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("Main", o.name);
+}
+
+const workbench = @import("workbench");
+
+test "workbench: where a tab carried over a strip goes in is read as if its open slot were not there" {
+    // Three tabs, 100 wide, the middle one at index 1 in the pane's list; a slot 80 wide open
+    // before the third (`drawGap`), which has moved along by that much.
     var pane = workbench.Workspace.init(1);
-    pane.subwindow_id = OverlaidFrame.base;
-    // Where the float lies over Main, the float is what the pointer is over, not the pane.
-    const over = float.bounds.intersect(main);
-    try std.testing.expect(over.w > 0 and over.h > 0);
-    try std.testing.expect(!pane.uncoveredAt(over.center()));
-    // Beside it, the pane, the drag's overlay over it all the same.
-    var beside: ?dvui.Point.Physical = null;
-    for ([_]dvui.Point.Physical{ main.topLeft(), main.topRight(), main.bottomLeft(), main.bottomRight() }) |corner| {
-        const p: dvui.Point.Physical = .{ .x = std.math.lerp(corner.x, main.center().x, 0.1), .y = std.math.lerp(corner.y, main.center().y, 0.1) };
-        if (!float.bounds.contains(p)) beside = p;
-    }
-    try std.testing.expect(pane.uncoveredAt(beside orelse return error.TestExpectedEqual));
+    pane.tab_slots[0] = .{ .index = 0, .rect = .{ .x = 0, .y = 0, .w = 100, .h = 30 } };
+    pane.tab_slots[1] = .{ .index = 1, .rect = .{ .x = 100, .y = 0, .w = 100, .h = 30 } };
+    pane.tab_slots[2] = .{ .index = 2, .rect = .{ .x = 280, .y = 0, .w = 100, .h = 30 } };
+    pane.tab_slot_count = 3;
+    pane.gap_x = 200;
+    pane.gap_w = 80;
+    // Short of a tab's middle, before it; past the last one's, the end.
+    try std.testing.expectEqual(@as(usize, 0), pane.insertIndexAt(40, 3));
+    try std.testing.expectEqual(@as(usize, 1), pane.insertIndexAt(120, 3));
+    // Over the open slot itself, where the third tab stood before it opened: still before the
+    // third — the slot does not chase the pointer along the strip.
+    try std.testing.expectEqual(@as(usize, 2), pane.insertIndexAt(230, 3));
+    try std.testing.expectEqual(@as(usize, 3), pane.insertIndexAt(290, 3));
+    try std.testing.expectEqual(@as(usize, 3), pane.insertIndexAt(500, 3));
 }
 
 // -- rows carried out of a tree and back --------------------------------------------------------

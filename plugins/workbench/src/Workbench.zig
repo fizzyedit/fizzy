@@ -44,12 +44,10 @@ panes_dirty: bool = false,
 tab_strip_h: f32 = 0,
 open_workspace_grouping: u64 = 0,
 grouping_id_counter: u64 = 0,
-/// The tab being dragged this frame, by surface id, for the pane it lands in. Borrowed from the
-/// registry entry, which outlives a drag.
-dragging_surface: ?[]const u8 = null,
-/// Physical width of the tab handed to the app's view drag, when it was lifted off its strip:
-/// the gap a strip opens for it when it is carried back over one.
+/// Physical width of the tab last lifted off a strip into the app's view drag, and which tab that
+/// was (a hash of its surface id): the gap a strip opens for it while it is carried over one.
 carried_tab_w: f32 = 0,
+carried_tab_key: u64 = 0,
 file_tree_data_id: ?dvui.Id = null,
 /// Branch id of the last root the file tree opened by default. A new root starts expanded once;
 /// after that its open state is the user's (`files.drawRoot`). Instance state for the same
