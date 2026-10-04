@@ -174,13 +174,11 @@ pub fn endFrame(state: *State) void {
     viewports.present(o.viewport, target);
 }
 
-/// What the float's glass reads as behind it out here, until its window has a material of its own
-/// to show through (vibrancy, Acrylic: Phase 4). Its target is transparent, so the frost read
-/// nothing and the glass came out as clear as the desktop behind it, the float's text floating
-/// over whatever that was. Behind the glass instead: the chrome's colour, opaque, over the
-/// window's whole rect — its margin too, which the glass's blur and bevel read past its edge —
-/// with the glass's corners grown by that margin, so the glass over it reads as a panel of the
-/// main window does and the window stays round.
+/// What the float out here stands on, until its window has a material of its own to show through
+/// (vibrancy, Acrylic: Phase 4). Its target is transparent, and the float draws its fill alone out
+/// here (no frost, no shadow, no margin: `Floats.drawOne`), which over nothing came out as
+/// translucent as that fill. Behind it instead: the chrome's colour, opaque, in the window's own
+/// corners, so it reads as a panel of the main window does and the window stays round.
 fn backing(target: dvui.Rect.Physical, bounds: dvui.Rect.Physical) void {
     const cw = dvui.currentWindow();
     const prev_clip = dvui.clipGet();
@@ -191,9 +189,7 @@ fn backing(target: dvui.Rect.Physical, bounds: dvui.Rect.Physical) void {
     defer dvui.alphaSet(prev_alpha);
     var color = fizzy.core.dialogs.style().chromeColor();
     color.a = 255;
-    const margin = fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{};
-    const radius = fizzy.core.corners.scaled(fizzy.core.corners.surface) + margin.x;
     const theme = dvui.themeGet();
-    const corners = dvui.CornerRect.all(radius).finalize(&theme).scale(cw.natural_scale, dvui.CornerRect.Physical);
+    const corners = fizzy.core.dialogs.surfaceCorners().finalize(&theme).scale(cw.natural_scale, dvui.CornerRect.Physical);
     bounds.fill(corners, .{ .color = .{ .color = color } });
 }

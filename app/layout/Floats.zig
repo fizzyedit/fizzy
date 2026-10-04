@@ -498,7 +498,12 @@ fn drawOne(l: *Layout, i: usize) bool {
     // The carried drop was glass already: the window takes over from it, whole, rather than
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
     // window's does; as a photograph, the window draws no glass at all.
-    var frost = if (as_photo) null else dialogs.dialogFrost();
+    // Out of the main window (`viewport`), its OS window has nothing behind it for glass to read
+    // until it has a material of its own (Phase 4): no frost, whose refraction read past its rim
+    // into nothing and left the edges see-through, and no shadow or margin round it, drawn into
+    // the OS window's empty corners — the window is the panel alone, over the app's backing
+    // (`Popout.backing`).
+    var frost = if (as_photo or out) null else dialogs.dialogFrost();
     if (frost) |*fr| {
         fr.form = shown;
         // Landing, it grows into its window — past it and back, when motion is playful — and its
@@ -530,10 +535,11 @@ fn drawOne(l: *Layout, i: usize) bool {
     }, .{
         .id_extra = @intCast(first.serial),
         .corners = if (landing) dvui.CornerRect.all(corner_r) else dialogs.surfaceCorners(),
-        .box_shadow = if (as_photo) null else shadow,
+        .box_shadow = if (as_photo or out) null else shadow,
         .background = !as_photo,
         .color_fill = .{ .color = dialogs.dialogFill() },
         .border = .all(0),
+        .margin = if (out) dvui.Rect{} else null,
     });
     const win_id = win.data().id;
     const bounds = win.data().rectScale().r;
