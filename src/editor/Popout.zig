@@ -74,6 +74,9 @@ fn topmost(state: *const State) ?usize {
 pub fn beginFrame(state: *State) void {
     if (!enabled()) return;
     defer toggle_requested = false;
+    // Whatever happened, the screens floating things are placed on this frame: the window out,
+    // if there is one, besides the main window's (`core.screens`).
+    defer publishScreens();
     if (out) |*o| {
         const i = find(state, o.serial) orelse {
             // Closed, or Reset Layout: its window goes with it.
@@ -116,6 +119,15 @@ pub fn beginFrame(state: *State) void {
     dvui.refresh(null, @src(), null);
 }
 
+/// Its window's part of the frame, natural, as a screen menus, tooltips and popovers opened in the
+/// float are placed on and kept within (`core.screens`) — or none, with no float out.
+fn publishScreens() void {
+    const o = out orelse return fizzy.core.screens.clear();
+    const f = viewports.frameOf(o.viewport);
+    const s = dvui.windowNaturalScale();
+    fizzy.core.screens.publish(&.{.{ .x = f.x / s, .y = f.y / s, .w = f.w / s, .h = f.h / s }});
+}
+
 fn find(state: *const State, serial: u64) ?usize {
     for (state.floats.items.items, 0..) |f, i| {
         if (f.serial == serial) return i;
@@ -141,7 +153,7 @@ pub fn endFrame(state: *State) void {
     const f = &state.floats.items.items[i];
     if (f.viewport == null or f.win_id == .zero) return;
     const cw = dvui.currentWindow();
-    const sw = cw.subwindows.get(f.win_id) orelse return;
+    if (cw.subwindows.get(f.win_id) == null) return;
     // Where it was drawn this frame, on whole points: where its window goes, and the offset its
     // drawing is replayed at, so a pointer over the window lands on what it shows.
     const b = f.bounds;
@@ -155,11 +167,6 @@ pub fn endFrame(state: *State) void {
     if (o.target == null) o.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return;
     const target = o.target.?;
 
-    // Taken from its subwindow, so dvui's replay into the main window draws nothing of it.
-    const cmds = sw.render_cmds;
-    const after = sw.render_cmds_after;
-    sw.render_cmds = .empty;
-    sw.render_cmds_after = .empty;
     // Transparent where the float is not: past its corners.
     target.clear();
     var rt = cw.render_target;
@@ -169,8 +176,26 @@ pub fn endFrame(state: *State) void {
     const prev = dvui.renderTarget(rt);
     defer _ = dvui.renderTarget(prev);
     backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b);
-    cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying a float into its window", .{});
-    cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying a float into its window", .{});
+    // The float and everything opened in it — its menus, tooltips, popovers, placed on its
+    // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
+    // them, every one whose middle is in the window's part of the frame. Taken from each, so
+    // dvui's replay into the main window draws nothing of them.
+    const area: dvui.Rect.Physical = .{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h };
+    // And a layer drawn across every screen (`core.screens.markEverywhere`: a view drag's drops
+    // and carried glass) is copied in too, left in place for the main window's replay — what of
+    // it lies outside the window's part of the frame falls outside its target.
+    for (cw.subwindows.stack.items) |*sw| {
+        const mine = area.contains(sw.rect_pixels.center());
+        if (!mine and !fizzy.core.screens.isEverywhere(sw.id)) continue;
+        const cmds = sw.render_cmds;
+        const after = sw.render_cmds_after;
+        if (mine) {
+            sw.render_cmds = .empty;
+            sw.render_cmds_after = .empty;
+        }
+        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying a float into its window", .{});
+        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying a float into its window", .{});
+    }
     viewports.present(o.viewport, target);
 }
 

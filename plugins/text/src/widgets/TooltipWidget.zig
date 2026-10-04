@@ -225,7 +225,7 @@ pub fn shown(self: *TooltipWidget) bool {
     var r: dvui.Rect.Natural = undefined;
     if (dvui.dataGet(null, self.data().id, "_sticky_anchor", dvui.Rect.Natural)) |anchor| {
         const size: dvui.Size = self.data().rect.size();
-        const window_rect = dvui.windowRect();
+        const window_rect = core.screens.screenFor(anchor);
         // Prefer directly above the anchor, left edges flush, sitting right against its top
         // edge so the mouse never has to leave the term's span to reach the tooltip.
         const above = dvui.Rect.Natural{ .x = anchor.x, .y = anchor.y - size.h, .w = size.w, .h = size.h };
@@ -242,7 +242,8 @@ pub fn shown(self: *TooltipWidget) bool {
         r.x += 10;
         r.y -= r.h + 10;
     }
-    self.data().rect = .cast(dvui.placeOnScreen(dvui.windowRect(), .{}, .none, r));
+    // On the screen it opens on (`core.screens`): a float's own window, when that is out.
+    self.data().rect = .cast(dvui.placeOnScreen(core.screens.screenFor(r), .{}, .none, r));
 
     self.install();
 
@@ -272,7 +273,7 @@ pub fn install(self: *TooltipWidget) void {
         dvui.subwindowAdd(self.data().id, self.data().rect, rs.r, false, self.prev_windowInfo.id, true);
         dvui.captureMouseMaintain(.{ .id = self.data().id, .rect = rs.r, .subwindow_id = self.data().id });
         self.prevClip = dvui.clipGet();
-        dvui.clipSet(dvui.windowRectPixels()); // break out of whatever clipping we were in
+        dvui.clipSet(core.screens.pixelsFor(.cast(self.data().rect))); // break out of whatever clipping we were in, onto its screen
         self.prev_scroll = dvui.ScrollContainerWidget.scrollSet(null);
     }
 
