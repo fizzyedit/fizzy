@@ -4,6 +4,7 @@ const motion = @import("../motion.zig");
 
 const Event = dvui.Event;
 const BlurBackdrop = @import("BlurBackdrop.zig");
+const screens = @import("../screens.zig");
 const Options = dvui.Options;
 const Point = dvui.Point;
 const Rect = dvui.Rect;
@@ -391,7 +392,7 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
             self.auto_size_refresh_prev_value = dvui.currentWindow().extra_frames_needed;
             dvui.currentWindow().extra_frames_needed = 0;
 
-            const ms = Size.min(Size.max(min_size, self.options.min_sizeGet()), .cast(dvui.windowRect().size()));
+            const ms = Size.min(Size.max(min_size, self.options.min_sizeGet()), .cast(screens.screenFor(.cast(self.wd.rect)).size()));
 
             if (self.init_options.auto_size_axes.animatesWidth() and ms.w != self.wd.rect.w) {
                 if (dvui.animationGet(self.wd.id, "_auto_width")) |a| {
@@ -485,10 +486,10 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
             //std.debug.print("autopos to {}\n", .{self.data().rect});
         }
 
-        // always make sure we are on the screen — the main window's, unless it has a window of
-        // its own
+        // always make sure we are on the screen — the one it is on (`core.screens`: the main
+        // window's, or a popped-out float's), unless it has a window of its own
         if (!self.init_options.detached) {
-            var screen = dvui.windowRect();
+            var screen = screens.screenFor(.cast(self.wd.rect));
             // okay if we are off the left or right but still see some
             const offleft = self.wd.rect.w - 48;
             screen.x -= offleft;
@@ -579,11 +580,12 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
     }
 }
 
-/// The OS window the window is drawn in, physical: the main one's, or — `detached` — the
+/// The OS window the window is drawn in, physical: the screen it is on (`core.screens`: the main
+/// window's, or a popped-out float's — a popover or dialog opened in it), or — `detached` — the
 /// window's own rect, which is all of its OS window there is.
 fn windowClip(self: *FloatingWindowWidget) Rect.Physical {
     if (self.init_options.detached) return self.data().rectScale().r;
-    return dvui.windowRectPixels();
+    return screens.pixelsFor(.cast(self.data().rect));
 }
 
 pub fn drawBackground(self: *FloatingWindowWidget) void {

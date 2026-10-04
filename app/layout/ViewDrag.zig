@@ -1052,6 +1052,12 @@ pub fn drawOverlay(l: *Layout) void {
     const wd = layer.data();
     dvui.subwindowAdd(wd.id, wd.rect, wd.rectScale().r, false, null, false);
     dvui.raiseSubwindow(wd.id);
+    // On every screen (`core.screens`): a place in a float popped out into its own window has
+    // its drop drawn here, at that window's part of the frame, and so does the carried view
+    // when the pointer is there — clipped to the main window, both were dropped as they were
+    // drawn, and the app copies this layer into every such window as well as the main one.
+    core.screens.markEverywhere(wd.id);
+    dvui.clipSet(core.screens.allPixels());
     // The drops, then the card over them: one layer, so their order is the order drawn — the
     // card's glass showing the drop it is aimed at blurred through it, its top left just off the
     // pointer so the bubble under the pointer stays in view.
