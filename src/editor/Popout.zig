@@ -355,14 +355,15 @@ pub fn endFrame(state: *State) void {
         o.title_len = @intCast(title.len);
     }
     // Settled, where a press is the OS's: its header moves the window and its glass's edges resize
-    // it, so the OS snaps, tiles and maximizes it as any window. Split under a drag, all of it is
-    // the drag's.
+    // it, so the OS snaps, tiles and maximizes it as any window — where the OS moves it at all
+    // (`viewports.os_moves`; on macOS the float's own drag does, in step with what it shows).
+    // Split under a drag, all of it is the drag's.
     if (o.mode == .band) {
         const s = dvui.windowNaturalScale();
         const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
         const glass = f.bounds.insetAll(margin * s);
         viewports.hints(o.viewport, .{
-            .drag = .{ .x = f.header.x, .y = f.header.y, .w = f.header.w, .h = f.header.h },
+            .drag = if (viewports.os_moves) .{ .x = f.header.x, .y = f.header.y, .w = f.header.w, .h = f.header.h } else .{},
             .keep = .{ .x = f.header_close.x, .y = f.header_close.y, .w = f.header_close.w, .h = f.header_close.h },
             .glass = .{ .x = glass.x, .y = glass.y, .w = glass.w, .h = glass.h },
             .edge = resize_edge * s,
@@ -378,6 +379,23 @@ pub fn endFrame(state: *State) void {
     };
     if (o.target == null) o.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return;
     const target = o.target.?;
+
+    // Where the main window lies under its window, the main window shows what is behind it there
+    // — its material — through a hole in its picture, and the window's material is kept out of
+    // there: the float's glass shows through itself what it does in the main window, not the main
+    // window blurred again (`viewports.maskMain`). Once the window shows the float, not while the
+    // main window still draws it too.
+    {
+        const alone = viewports.shown(o.viewport);
+        if (viewports.maskMain(o.viewport, alone) and alone) {
+            const s = dvui.windowNaturalScale();
+            const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
+            const at = viewports.inMain(o.viewport);
+            const glass = (dvui.Rect.Physical{ .x = at.x, .y = at.y, .w = at.w, .h = at.h }).insetAll((reach() + margin) * s);
+            const theme = dvui.themeGet();
+            fizzy.core.FrameTarget.hole(glass, fizzy.core.dialogs.surfaceCorners().finalize(&theme), s);
+        }
+    }
 
     // Transparent where the float is not: past its corners.
     target.clear();

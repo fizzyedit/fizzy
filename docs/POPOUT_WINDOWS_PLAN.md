@@ -402,6 +402,14 @@ drag), so a rect moved into a band mid-drag sent the next motion across the fram
   it as it does in the main window (`Floats.Viewport.material`). Split under a drag, its frost
   still reads the main window's frame, so what is over the main window reads the app and what is
   past it reads the vibrancy.
+- **The main window's material through it.** Where the pop-out lies over the main window, its
+  glass shows through itself what it does in the main window: the main window leaves a hole in its
+  picture there once the pop-out shows the float (`core.FrameTarget.hole`, cut after the replay),
+  and the pop-out's material is masked out of there (`viewports.maskMain`). Before, the main window
+  still drew its own picture behind the pop-out, the pop-out's vibrancy blurred that again, and
+  the glass came out more opaque than in the main window — a pop as the float split out. The mask,
+  the hole, the window's place and both windows' pictures change in one transaction
+  (`SDLBackend.renderPresent`), so the hole moves with the window.
 - **Autorelease pools.** Objective-C called from the frame loop needs an autorelease pool of its
   own, because SDL wraps only its own calls. Without one, the subview arrays AppKit autoreleased
   kept the window SDL closed alive in the window server after every pop-in.
@@ -447,9 +455,14 @@ screen, maximized at the top, Win+arrows, macOS tiling.
 
 - **The hit test.** Each frame the float says where its header, its header's close button and its
   glass are (`viewports.hints`). SDL's hit test answers the OS from that (`viewport_map.hitTest`,
-  unit tested): the header moves the window, and the glass's edges resize it. SDL on macOS takes
-  only the move (AppKit's window-background drag), so the float's own edges resize it there. The
-  window is created resizable, since only a window the OS may resize snaps or tiles.
+  unit tested): the header moves the window, and the glass's edges resize it. The window is
+  created resizable, since only a window the OS may resize snaps or tiles.
+- **Not on macOS.** SDL there takes only the move (AppKit's window-background drag), and that
+  drag runs in the window server, telling the app where the window went after it has gone: what
+  the glass showed of the main window behind it trailed the window and caught up in steps. So the
+  float's own header drag and edges move and resize it there (`viewports.os_moves`), and the window
+  goes where the float is drawn in the transaction its picture is presented in. It does not take
+  part in macOS's drag tiling.
 - **The float follows its window.** When the OS moves or resizes the window, the float's rect
   follows it (`viewports.osPlaced`). The app's own placement, reported back, is told apart by
   comparing it with where the app last put the window. On X11, where placing a window is
