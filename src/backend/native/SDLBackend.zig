@@ -741,6 +741,12 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
         c.SDL_DestroyWindow(window);
         return null;
     };
+    // Kept over the main window, and hidden and minimized with it: owned by it, on Windows (and
+    // transient for it on X11). Without it, a press on the main window — or one the OS took as
+    // its own while the viewport was being resized — put the main window over it. Not on macOS,
+    // where SDL makes it a child window that moves with its parent, and the windows that left
+    // the main one stay where they are when it moves (`docs/POPOUT_WINDOWS_PLAN.md`, decision 2).
+    if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
     self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame };
     return &self.viewports[slot].?;
 }
@@ -764,8 +770,16 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
 pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) viewport_map.Rect {
     const placed = viewport_map.place(vp.band, vp.anchor, vp.density, frame);
     const was = vp.screen;
-    if (placed.screen.x != was.x or placed.screen.y != was.y) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
-    if (placed.screen.w != was.w or placed.screen.h != was.h) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
+    const moved = placed.screen.x != was.x or placed.screen.y != was.y;
+    const sized = placed.screen.w != was.w or placed.screen.h != was.h;
+    // Both at once — dragged by its left or top edge — in one step where the OS can
+    // (`platform.win32_titlebar.setWindowFrame`): as two, it showed moved and not yet sized, its
+    // far edge jumping.
+    const at_once = moved and sized and platform.win32_titlebar.setWindowFrame(vp.window, placed.screen.x, placed.screen.y, placed.screen.w, placed.screen.h);
+    if (!at_once) {
+        if (moved) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
+        if (sized) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
+    }
     vp.screen = placed.screen;
     vp.frame = placed.frame;
     return placed.frame;

@@ -147,6 +147,39 @@ fn performWindowButtonHwnd(hwnd_h: win32.foundation.HWND, button: TitleBarButton
     }
 }
 
+/// Move and size `window` in one step, to the place SDL's own coordinates name — the OS never
+/// shows it moved and not yet sized. Two calls (`SDL_SetWindowPosition`, then
+/// `SDL_SetWindowSize`) let a window dragged by its left or top edge show at its new place with
+/// its old width for a moment, its far edge jumping and back. In whatever units SDL counts in:
+/// the window measured both ways first and the change scaled across. False off Windows, or when
+/// the window cannot be measured; the caller makes the two calls then. For a borderless window,
+/// whose window rect is its client rect.
+pub fn setWindowFrame(window: *c.SDL_Window, x: c_int, y: c_int, w: c_int, h: c_int) bool {
+    if (comptime builtin.os.tag != .windows) return false;
+    const raw = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return false;
+    const hwnd: win32.foundation.HWND = @ptrCast(raw);
+    var r: win32.foundation.RECT = undefined;
+    if (win32.ui.windows_and_messaging.GetWindowRect(hwnd, &r) == 0) return false;
+    var sx: c_int = 0;
+    var sy: c_int = 0;
+    var sw: c_int = 0;
+    var sh: c_int = 0;
+    _ = c.SDL_GetWindowPosition(window, &sx, &sy);
+    _ = c.SDL_GetWindowSize(window, &sw, &sh);
+    if (sw <= 0 or sh <= 0) return false;
+    const kx = @as(f32, @floatFromInt(r.right - r.left)) / @as(f32, @floatFromInt(sw));
+    const ky = @as(f32, @floatFromInt(r.bottom - r.top)) / @as(f32, @floatFromInt(sh));
+    const nx = r.left + @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(x - sx)) * kx)));
+    const ny = r.top + @as(i32, @intFromFloat(@round(@as(f32, @floatFromInt(y - sy)) * ky)));
+    const nw: i32 = @intFromFloat(@max(1, @round(@as(f32, @floatFromInt(w)) * kx)));
+    const nh: i32 = @intFromFloat(@max(1, @round(@as(f32, @floatFromInt(h)) * ky)));
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_NOOWNERZORDER: u32 = 0x0200;
+    const flags = @as(win32.ui.windows_and_messaging.SET_WINDOW_POS_FLAGS, @bitCast(SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER));
+    return win32.ui.windows_and_messaging.SetWindowPos(hwnd, null, nx, ny, nw, nh, flags) != 0;
+}
+
 pub fn getWin32Hwnd(win: *dvui.Window) ?*anyopaque {
     const raw = c.SDL_GetPointerProperty(
         c.SDL_GetWindowProperties(win.backend.impl.window),
