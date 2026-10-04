@@ -209,105 +209,10 @@ void fizzy_native_viewport_transact(void *nswindow) {
     if (layer) layer.presentsWithTransaction = YES;
 }
 
-/* The main window's picture this frame in the open transaction too — it leaves a hole where a
- * popped-out float's window lies over it, which moves with that window. 1 when this turned it on
- * (and `fizzy_native_viewport_presented` must turn it off); 0 when it was on already (SDL's own
- * live-resize drawing has it) or there is no layer. */
-int fizzy_native_main_transact(void *nswindow) {
-    CAMetalLayer *layer = metal_layer_of(nswindow);
-    if (layer == nil || layer.presentsWithTransaction) return 0;
-    layer.presentsWithTransaction = YES;
-    return 1;
-}
 
 void fizzy_native_viewport_presented(void *nswindow) {
     CAMetalLayer *layer = metal_layer_of(nswindow);
     if (layer) layer.presentsWithTransaction = NO;
 }
 
-/* Where the window server has `nswindow` now, as SDL gives a window's place: its content's top left
- * in desktop points from the main display's top left. The window server moves a window dragged by
- * its title bar itself and tells the app where it went only a few times a second, so AppKit's
- * frame (and SDL's place, from it) runs behind it; this is where it is. 0 when it cannot be read,
- * or the window server shows the window transformed. */
-int fizzy_native_window_server_origin(void *nswindow, double *x, double *y) {
-    @autoreleasepool {
-        NSWindow *window = (__bridge NSWindow *)nswindow;
-        if (window == nil) return 0;
-        const CGWindowID wid = (CGWindowID)[window windowNumber];
-        if (wid == 0) return 0;
-        const void *ids[1] = {(const void *)(uintptr_t)wid};
-        CFArrayRef list = CFArrayCreate(NULL, ids, 1, NULL);
-        if (list == NULL) return 0;
-        CFArrayRef desc = CGWindowListCreateDescriptionFromArray(list);
-        CFRelease(list);
-        if (desc == NULL) return 0;
-        int ok = 0;
-        if (CFArrayGetCount(desc) > 0) {
-            CFDictionaryRef info = (CFDictionaryRef)CFArrayGetValueAtIndex(desc, 0);
-            CFDictionaryRef bounds = (CFDictionaryRef)CFDictionaryGetValue(info, kCGWindowBounds);
-            CGRect r;
-            const NSRect f = [window frame];
-            /* Not while the window server shows the window transformed — shrunk by Stage Manager or
-             * Mission Control, or into the background — where its bounds are not in the desktop's
-             * points: the size it reports is then not the frame's. */
-            if (bounds != NULL && CGRectMakeWithDictionaryRepresentation(bounds, &r) &&
-                fabs(r.size.width - f.size.width) < 0.5 && fabs(r.size.height - f.size.height) < 0.5) {
-                /* The window server's bounds are the frame; SDL's place is the content's. */
-                const NSRect content = [window contentRectForFrameRect:f];
-                *x = r.origin.x + (content.origin.x - f.origin.x);
-                *y = r.origin.y + ((f.origin.y + f.size.height) - (content.origin.y + content.size.height));
-                ok = 1;
-            }
-        }
-        CFRelease(desc);
-        return ok;
-    }
-}
 
-/* Whether `back` lies directly behind `front` where `front` is: no window in between, of another
- * app's or this one's, that overlaps it. A popped-out float's glass shows the main window's picture
- * behind it only then (`SDLBackend.viewportMainBehind`): with another app's window stacked between
- * the two, it showed the main window through that window. 0 when `back` is not on screen below
- * `front` at all. */
-int fizzy_native_directly_behind(void *front_ns, void *back_ns) {
-    @autoreleasepool {
-        NSWindow *front = (__bridge NSWindow *)front_ns;
-        NSWindow *back = (__bridge NSWindow *)back_ns;
-        if (front == nil || back == nil) return 0;
-        const CGWindowID fid = (CGWindowID)[front windowNumber];
-        const CGWindowID bid = (CGWindowID)[back windowNumber];
-        if (fid == 0 || bid == 0) return 0;
-        const NSRect f = [front frame];
-        const CGFloat top = (CGFloat)CGDisplayPixelsHigh(kCGDirectMainDisplay);
-        const CGRect fb = CGRectMake(f.origin.x, top - f.origin.y - f.size.height, f.size.width, f.size.height);
-        CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenBelowWindow | kCGWindowListExcludeDesktopElements, fid);
-        if (list == NULL) return 0;
-        int result = 0;
-        const CFIndex n = CFArrayGetCount(list);
-        for (CFIndex i = 0; i < n; i++) {
-            CFDictionaryRef info = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
-            CGWindowID wid = 0;
-            CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(info, kCGWindowNumber);
-            if (num == NULL || !CFNumberGetValue(num, kCFNumberSInt32Type, &wid)) continue;
-            if (wid == bid) {
-                result = 1;
-                break;
-            }
-            int layer = 0;
-            CFNumberRef layer_num = (CFNumberRef)CFDictionaryGetValue(info, kCGWindowLayer);
-            if (layer_num != NULL) CFNumberGetValue(layer_num, kCFNumberIntType, &layer);
-            if (layer != 0) continue;
-            double alpha = 1;
-            CFNumberRef alpha_num = (CFNumberRef)CFDictionaryGetValue(info, kCGWindowAlpha);
-            if (alpha_num != NULL) CFNumberGetValue(alpha_num, kCFNumberDoubleType, &alpha);
-            if (alpha <= 0) continue;
-            CFDictionaryRef bounds = (CFDictionaryRef)CFDictionaryGetValue(info, kCGWindowBounds);
-            CGRect b;
-            if (bounds == NULL || !CGRectMakeWithDictionaryRepresentation(bounds, &b)) continue;
-            if (CGRectIntersectsRect(b, fb)) break;
-        }
-        CFRelease(list);
-        return result;
-    }
-}

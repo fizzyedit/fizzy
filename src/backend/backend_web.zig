@@ -168,13 +168,6 @@ pub const viewports = struct {
     pub fn glass(_: *Viewport, _: f32, _: f32, _: bool) bool {
         return false;
     }
-    pub fn mainHole(_: *Viewport, _: bool) bool {
-        return false;
-    }
-    pub const shows_atomically = false;
-    pub fn mainBehind(_: *Viewport) bool {
-        return false;
-    }
     pub fn placeMain(_: *Viewport, frame: Rect) Rect {
         return frame;
     }

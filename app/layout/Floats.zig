@@ -553,12 +553,16 @@ fn drawOne(l: *Layout, i: usize) bool {
     // The carried drop was glass already: the window takes over from it, whole, rather than
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
     // window's does; as a photograph, the window draws no glass at all.
-    // Out of the main window (`viewport`), it looks as it does in it: its shadow in the
-    // clear margin round its OS window (`outReach`), and its glass reading what it reads in the
-    // main window — the main window's picture where that is under it, its base past its edge, the
-    // margin past the rim included (`Popout.behindGlass`) — so the rim bends and catches the light
-    // and the tint lies over it as in the main window.
-    var frost = if (as_photo) null else dialogs.dialogFrost();
+    // In an OS window the OS frames (`Viewport.os_frame`), it is a window as the main window is,
+    // drawn as it is: no glass and no shadow of its own — the window's base stands under it, its
+    // chrome at the window's opacity over the window's material (`Popout.backing`), and the OS
+    // draws the shadow. Imitating a glass window in the main window out there, its frost had to read
+    // the main window's picture behind it, which the OS moves the window over faster than fizzy can
+    // draw it: the blur trailed the window, and its rim streaked. Out of the main window in a window
+    // the float frames itself (X11), its shadow is in the clear margin round it (`outReach`), its
+    // glass over the base.
+    const plain = osFramed(first);
+    var frost = if (as_photo or plain) null else dialogs.dialogFrost();
     if (frost) |*fr| {
         fr.form = shown;
         // Landing, it grows into its window — past it and back, when motion is playful — and its
@@ -591,8 +595,8 @@ fn drawOne(l: *Layout, i: usize) bool {
     }, .{
         .id_extra = @intCast(first.serial),
         .corners = if (landing) dvui.CornerRect.all(corner_r) else dialogs.surfaceCorners(),
-        .box_shadow = if (as_photo) null else shadow,
-        .background = !as_photo,
+        .box_shadow = if (as_photo or plain) null else shadow,
+        .background = !as_photo and !plain,
         .color_fill = .{ .color = dialogs.dialogFill() },
         .border = .all(0),
     });

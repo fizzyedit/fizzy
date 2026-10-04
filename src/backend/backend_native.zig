@@ -231,29 +231,6 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius, dark);
     }
 
-    /// The main window leaves a hole in its picture under `vp`'s glass this frame
-    /// (`core.FrameTarget.hole`), and `vp`'s material is kept off the main window's interior there:
-    /// the float's glass shows through itself what is behind the main window — its own material —
-    /// as it does in the main window, not the main window's picture again, nor tinted twice. True
-    /// where that may be done (macOS: the hole, the material and the window change in one
-    /// transaction) — only then may the main window cut it.
-    pub fn mainHole(vp: *Viewport, on: bool) bool {
-        if (comptime !supported) return false;
-        return dvui.currentWindow().backend.impl.viewportMainHole(vp, on);
-    }
-
-    /// Whether the main window lies directly behind `vp`'s window — no other window stacked between
-    /// them over it: only then may its float's glass show the main window's picture, and the main
-    /// window leave a hole under it.
-    pub fn mainBehind(vp: *Viewport) bool {
-        if (comptime !supported) return false;
-        return dvui.currentWindow().backend.impl.viewportMainBehind(vp);
-    }
-
-    /// Whether a viewport's window comes up with its first picture, in one transaction with the
-    /// main window's (macOS): its float can leave the main window's picture on that very frame.
-    /// Elsewhere it stays in the main window's until its window has shown a frame.
-    pub const shows_atomically = supported and builtin.os.tag == .macos;
 
     /// The OS asked to close `vp`'s window.
     pub fn closeRequested(vp: *const Viewport) bool {
