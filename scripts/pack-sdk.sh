@@ -46,24 +46,40 @@ rm -rf "$pkg/core/.zig-cache" "$pkg/src/.zig-cache" 2>/dev/null || true
 rm -rf "$pkg/.zig-cache" "$pkg/zig-pkg" "$pkg/zig-out" 2>/dev/null || true
 
 # Tarball package must also hash the vendored `core/`; the in-repo sdk/build.zig.zon
-# cannot list it, because there it lives beside the package rather than inside it.
+# cannot list it, because there it lives beside the package rather than inside it. Zig
+# unpacks only what `.paths` lists, so a package without it builds nothing: `repoPath`
+# falls back to `<package>/../core` and every plugin fails. Appended as the list's last
+# entry, whatever that is — matching on the entry before it is how sdk-v0.2.16 shipped
+# without `core` once `tape` followed `src`.
 python3 - <<'PY' "$pkg/build.zig.zon" "$version"
 import sys, re
 path, version = sys.argv[1], sys.argv[2]
 text = open(path).read()
-if '"core"' not in text.split(".paths")[1].split("}")[0]:
-    text = text.replace(
-        '        "src",\n    },',
-        '        "src",\n        "core",\n    },',
-        1,
-    )
+paths = re.search(r'\.paths = \.\{\n(.*?)\n    \},', text, re.S)
+if not paths:
+    sys.exit("pack-sdk: no .paths list in the package's build.zig.zon")
+if '"core"' not in paths.group(1):
+    text = text[:paths.end(1)] + '\n        "core",' + text[paths.end(1):]
 text = re.sub(r'\.version = "[^"]*"', f'.version = "{version}"', text, count=1)
+paths = re.search(r'\.paths = \.\{\n(.*?)\n    \},', text, re.S)
+if '"core",' not in paths.group(1):
+    sys.exit("pack-sdk: could not add core to the package's .paths")
 open(path, "w").write(text)
 PY
 
 mkdir -p "$out_dir"
 archive="$out_dir/${pkg_name}.tar.gz"
-tar -czf "$archive" -C "$staging" "$pkg_name"
+# macOS's bsdtar adds an AppleDouble `._name` entry beside every file and stores xattrs
+# (com.apple.provenance) as pax headers. Zig unpacks the `._` files as files, so the archive
+# no longer has a single root to strip and the package has no build.zig.zon at its top:
+# `zig fetch` hashes it as an anonymous `N-V-…` blob. (bsdtar's own listing folds the `._`
+# entries back in, so `tar -t` does not show them.) GNU tar, which CI uses, writes neither.
+tar_flags=()
+if tar --version 2>/dev/null | grep -q bsdtar; then
+  export COPYFILE_DISABLE=1
+  tar_flags=(--no-xattrs --no-mac-metadata)
+fi
+tar "${tar_flags[@]}" -czf "$archive" -C "$staging" "$pkg_name"
 
 echo "Packed $tag -> $archive"
 url="https://github.com/fizzyedit/fizzy/releases/download/${tag}/${pkg_name}.tar.gz"
