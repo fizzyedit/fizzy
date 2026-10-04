@@ -78,9 +78,17 @@ pub const Placement = struct {
     frame: Rect,
 };
 
+/// `r` on whole pixels: what a float's rect, a pixel-snapped picture, is meant to be. A size that
+/// is an odd number of pixels is a half point, and float noise either side of it (678.9999,
+/// 679.0001) rounded to points one way, then the other: the window's edge flickered by a point as
+/// it moved. On whole pixels first, a half point always rounds the same way.
+fn wholePixels(r: Rect) Rect {
+    return .{ .x = @round(r.x), .y = @round(r.y), .w = @round(r.w), .h = @round(r.h) };
+}
+
 /// Where to put a window showing `frame` (band `b`): on whole points, the nearest to it.
 pub fn place(b: Point, anchor: Point, density: f32, frame: Rect) Placement {
-    const s = screenFromFrame(b, anchor, density, frame);
+    const s = screenFromFrame(b, anchor, density, wholePixels(frame));
     const screen: ScreenRect = .{
         .x = @intFromFloat(@round(s.x)),
         .y = @intFromFloat(@round(s.y)),
@@ -128,7 +136,7 @@ pub fn screenFromMain(main: Point, density: f32, frame: Rect) Rect {
 /// Where to put a window showing `frame` of the main window's frame (`screenFromMain`): on whole
 /// points, and the part of the frame it then shows.
 pub fn placeMain(main: Point, density: f32, frame: Rect) Placement {
-    const s = screenFromMain(main, density, frame);
+    const s = screenFromMain(main, density, wholePixels(frame));
     const screen: ScreenRect = .{
         .x = @intFromFloat(@round(s.x)),
         .y = @intFromFloat(@round(s.y)),
@@ -232,6 +240,19 @@ test "a window the OS moved shows the part of the band under it, and placing it 
     try testing.expectEqual(@as(f32, 760), frame.w);
     // Its float drawn there next frame puts its window exactly where the OS left it.
     try testing.expectEqual(moved, place(b, anchor, 2, frame).screen);
+}
+
+test "a float an odd number of pixels wide keeps one window size, whatever the noise in its rect" {
+    const main: Point = .{ .x = 300, .y = 200 };
+    // 679 physical pixels is 339.5 points; the float's rect comes out a hair either side of it.
+    const a = placeMain(main, 2, .{ .x = 100.0001, .y = 50, .w = 678.9999, .h = 400 });
+    const b2 = placeMain(main, 2, .{ .x = 99.9999, .y = 50, .w = 679.0001, .h = 400 });
+    try testing.expectEqual(a.screen.w, b2.screen.w);
+    try testing.expectEqual(a.screen.x, b2.screen.x);
+    const band0 = band(0);
+    const c = place(band0, main, 2, .{ .x = band0.x + 100.0001, .y = 50, .w = 678.9999, .h = 400 });
+    const d = place(band0, main, 2, .{ .x = band0.x + 99.9999, .y = 50, .w = 679.0001, .h = 400 });
+    try testing.expectEqual(c.screen.w, d.screen.w);
 }
 
 test "a press on a float's window: its edges and corners resize, its header moves, its close button and the rest are the app's" {

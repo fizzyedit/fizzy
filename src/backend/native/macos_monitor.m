@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <QuartzCore/CATransaction.h>
 
 /* macOS helpers for fizzy's native backend (`SDLBackend.zig`). Started as a copy of dvui's
  * `src/backends/macos_monitor.m`; the symbols carry fizzy's prefix so the two never collide.
@@ -168,4 +169,47 @@ int fizzy_native_metal_drawable_size(void *nswindow, int *out_w, int *out_h) {
     *out_w = (int)size.width;
     *out_h = (int)size.height;
     return 1;
+}
+
+/* A popped-out float's window put where its float is drawn this frame, in the Core Animation
+ * transaction its picture there is presented in (`SDLBackend.renderPresent`): the window's frame
+ * and the picture drawn for it change together. Moving and sizing it in two calls (SDL's position,
+ * then its size) showed it moved and not yet sized for a moment, and a picture presented on its own
+ * reached the screen a composite or more after the frame it was drawn for — both as jitter, worst
+ * on the slow frames a resize brings. `fizzy_native_transaction_begin` before, the frame with
+ * `fizzy_native_viewport_set_frame` (one `setFrame:`, SDL's top-left screen coordinates converted
+ * as SDL converts them), present, `fizzy_native_viewport_presented`, then
+ * `fizzy_native_transaction_commit`. SDL learns the window's new place and size from its own
+ * listener, as it does a move or resize by the user. */
+void fizzy_native_transaction_begin(void) {
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+}
+
+void fizzy_native_transaction_commit(void) {
+    [CATransaction commit];
+}
+
+void fizzy_native_viewport_transact(void *nswindow);
+
+void fizzy_native_viewport_set_frame(void *nswindow, double x, double y, double w, double h) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        const CGFloat top = (CGFloat)CGDisplayPixelsHigh(kCGDirectMainDisplay);
+        [window setFrame:NSMakeRect(x, top - y - h, w, h) display:NO animate:NO];
+        fizzy_native_viewport_transact(nswindow);
+    }
+}
+
+/* Its picture this frame presented in the open transaction, with whatever else changes about its
+ * window in it (shown, ordered): `fizzy_native_viewport_presented` puts it back. */
+void fizzy_native_viewport_transact(void *nswindow) {
+    CAMetalLayer *layer = metal_layer_of(nswindow);
+    if (layer) layer.presentsWithTransaction = YES;
+}
+
+void fizzy_native_viewport_presented(void *nswindow) {
+    CAMetalLayer *layer = metal_layer_of(nswindow);
+    if (layer) layer.presentsWithTransaction = NO;
 }

@@ -139,6 +139,9 @@ pub const Viewport = struct {
     app_placed_ns: u64 = 0,
     /// Windows: the OS's move/size loop for it (`win32_titlebar.viewportChrome`).
     win32_loop: platform.win32_titlebar.ViewportLoop = .{},
+    /// macOS: put somewhere new this frame (`screen`), applied with the frame's picture in one
+    /// Core Animation transaction (`renderPresent`).
+    frame_pending: bool = false,
 };
 
 pub const InitOptions = struct {
@@ -537,6 +540,11 @@ extern "c" fn fizzy_native_monitor_last_scroll_precise() c_int;
 extern "c" fn fizzy_native_disable_titlebar_separator(nswindow: *anyopaque) void;
 extern "c" fn fizzy_native_metal_drawable_size(nswindow: *anyopaque, out_w: *c_int, out_h: *c_int) c_int;
 extern "c" fn fizzy_native_in_live_resize(nswindow: *anyopaque) c_int;
+extern "c" fn fizzy_native_transaction_begin() void;
+extern "c" fn fizzy_native_transaction_commit() void;
+extern "c" fn fizzy_native_viewport_set_frame(nswindow: ?*anyopaque, x: f64, y: f64, w: f64, h: f64) void;
+extern "c" fn fizzy_native_viewport_transact(nswindow: ?*anyopaque) void;
+extern "c" fn fizzy_native_viewport_presented(nswindow: ?*anyopaque) void;
 extern "c" fn fizzy_native_live_resize_next_frame(nswindow: *anyopaque, wait_s: f64, since_start_s: f64) void;
 
 fn cocoaWindow(window: *c.SDL_Window) ?*anyopaque {
@@ -845,6 +853,20 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
     _ = c.SDL_ResetHint(c.SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH);
 }
 
+/// Move and size `vp`'s window to `to` (whole points), from where it was put last (`was`). On macOS
+/// it is put there with this frame's picture of it, in one transaction (`renderPresent`); elsewhere
+/// at once, through SDL.
+fn placeWindow(vp: *Viewport, to: viewport_map.ScreenRect, was: viewport_map.ScreenRect) void {
+    if (std.meta.eql(to, was)) return;
+    vp.app_placed_ns = c.SDL_GetTicksNS();
+    if (comptime builtin.os.tag == .macos) {
+        vp.frame_pending = true;
+        return;
+    }
+    if (to.x != was.x or to.y != was.y) _ = c.SDL_SetWindowPosition(vp.window, to.x, to.y);
+    if (to.w != was.w or to.h != was.h) _ = c.SDL_SetWindowSize(vp.window, to.w, to.h);
+}
+
 /// Put `vp`'s window where it shows `frame` (physical pixels, in its band), on whole points;
 /// returns the part of the frame it then shows (`viewport_map.place`).
 pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) viewport_map.Rect {
@@ -856,9 +878,7 @@ pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) vi
     // the old one (the picture cropped in a window grown round it) and its idea of the size goes
     // stale. The real fix is the OS doing the resizing (Phase 4: hit-testing the window's edges as
     // the main window's chrome does), not the app moving the window under it.
-    if (placed.screen.x != was.x or placed.screen.y != was.y) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
-    if (placed.screen.w != was.w or placed.screen.h != was.h) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
-    if (!std.meta.eql(placed.screen, was)) vp.app_placed_ns = c.SDL_GetTicksNS();
+    placeWindow(vp, placed.screen, was);
     vp.screen = placed.screen;
     vp.frame = placed.frame;
     return placed.frame;
@@ -881,9 +901,7 @@ pub const PointerPin = union(enum) {
 pub fn viewportPlaceMain(self: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) viewport_map.Rect {
     const placed = viewport_map.placeMain(self.mainOnScreen(), self.density(), frame);
     const was = vp.screen;
-    if (placed.screen.x != was.x or placed.screen.y != was.y) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
-    if (placed.screen.w != was.w or placed.screen.h != was.h) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
-    if (!std.meta.eql(placed.screen, was)) vp.app_placed_ns = c.SDL_GetTicksNS();
+    placeWindow(vp, placed.screen, was);
     vp.screen = placed.screen;
     return placed.frame;
 }
@@ -1326,6 +1344,37 @@ pub fn deinit(self: *SDLBackend) void {
 }
 
 pub fn renderPresent(self: *SDLBackend) void {
+    // macOS: a window put somewhere new this frame goes there in the transaction its picture is
+    // presented in, so the two change together (`placeWindow`). Before the pictures are copied
+    // into the windows, so a resized window's drawable is already its new size. A window's first
+    // picture too, with the window shown and ordered over the main one below: it comes up where its
+    // float is, with the picture drawn for it there. Shown on its own, it showed for a composite
+    // empty, then with a picture a frame of the drag away from it.
+    var transacted: [max_viewports]bool = @splat(false);
+    var any = false;
+    if (comptime builtin.os.tag == .macos) {
+        for (&self.viewports, 0..) |*slot, i| {
+            const vp = if (slot.*) |*v| v else continue;
+            const first = !vp.shown and vp.pending != null;
+            if (!vp.frame_pending and !first) continue;
+            if (!any) fizzy_native_transaction_begin();
+            any = true;
+            transacted[i] = true;
+            if (vp.frame_pending) {
+                vp.frame_pending = false;
+                const r = vp.screen;
+                fizzy_native_viewport_set_frame(cocoaWindow(vp.window), @floatFromInt(r.x), @floatFromInt(r.y), @floatFromInt(r.w), @floatFromInt(r.h));
+            } else fizzy_native_viewport_transact(cocoaWindow(vp.window));
+        }
+    }
+    defer if (comptime builtin.os.tag == .macos) if (any) {
+        for (&self.viewports, transacted) |*slot, t| {
+            if (!t) continue;
+            const vp = if (slot.*) |*v| v else continue;
+            fizzy_native_viewport_presented(cocoaWindow(vp.window));
+        }
+        fizzy_native_transaction_commit();
+    };
     // Each viewport's part of the frame goes in with the main window's, one submission for all.
     var first_frame: [max_viewports]bool = @splat(false);
     var map_empty: [max_viewports]bool = @splat(false);
