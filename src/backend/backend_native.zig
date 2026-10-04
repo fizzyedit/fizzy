@@ -152,6 +152,13 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportOpenCarry(at);
     }
 
+    /// A carry window's shape this frame (`openCarry`): what it carries fills it, rounded by
+    /// `radius` physical pixels — the OS's material and shadow in that shape.
+    pub fn carryShape(vp: *Viewport, radius: f32) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportCarryShape(vp, radius);
+    }
+
     /// Whether a carried view can be shown past every window (`openCarry`): macOS.
     pub const carries = supported and builtin.os.tag == .macos;
 

@@ -575,15 +575,17 @@ from the frame it is made in.
 
 - **Carrying a view outside every window (macOS).** While what a view is carried as lies past the
   main window, and over no float's window, a carry window shows it there (`Popout.carryFrame`,
-  `viewports.openCarry`): borderless and clear, the pointer passing through it, at a pop-up menu's
-  level above every window, in no window list. The drag's drawing, recorded in the main window's
-  frame past its edge (`core.screens.publishBeyond` lets it reach there), is copied into it over
-  the main window's base, for its glass to read; what of it lies over the main window is cleared,
-  where the main window shows it with its glass over the app. Let go over no window of the app's,
+  `viewports.openCarry`): a round window of its own, the shape of what is carried (a drop's head,
+  a card, a tab) — the main window's material masked to that shape and the OS's shadow round it
+  (`viewports.carryShape`, changed in the transaction its place and picture are) — the pointer
+  passing through it, at a pop-up menu's level above every window, in no window list. The drag's
+  drawing, recorded in the main window's frame past its edge (`core.screens.publishBeyond` lets it
+  reach there), is copied into it over the main window's base, as a float's window stands on it.
+  Once any of it is past the main window the carry window shows all of it, over the main window too.
+  A drop's tail stays in the drop's shape out there. Let go over no window of the app's,
   the view floats where it was let go (`ViewDrag.floatAway`, `State.floats_windowed`): a float of
   its size round the pointer, in a window of its own. An OS drag-and-drop session was the
-  alternative: its image glued to the cursor, but a still picture, no liquid glass. Not yet: a
-  material behind it (its glass is over an opaque base out there, where the desktop is), and
+  alternative: its image glued to the cursor, but a still picture, no liquid glass. Not yet:
   straddling a float window's edge it is cut at that edge.
 
 **Next:**

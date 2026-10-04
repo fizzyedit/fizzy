@@ -214,16 +214,16 @@ pub fn endFrame(state: *State) void {
     carryFrame(state);
 }
 
-/// How far round what a view is carried as its carry window reaches, natural units: its glass's
-/// edge and the light round it.
-const carry_reach: f32 = 24;
-
 /// A view carried past every window of the app's — out over the desktop, where letting go opens a
-/// float window (`ViewDrag.apply`) — is shown in a window of its own there (`viewports.openCarry`):
-/// the drag's drawing, in the main window's frame past its edge, copied into a clear window over
-/// where it is carried, above every window. While it is wholly inside the main window, or over a
-/// float's window (in its band, which that window shows), the window shows nothing; it goes when
-/// the drag does.
+/// float window (`ViewDrag.apply`) — is shown in a round window of its own there
+/// (`viewports.openCarry`): a window in the shape of what it is carried as, its glass on the main
+/// window's base over the OS's material and the OS's shadow round it (`viewports.carryShape`), so
+/// out there it is a window as the float it would open is. The drag's drawing, in the main window's
+/// frame past its edge, is copied into it. Once any of it is past the main window it shows all of
+/// it, over the main window too — the main window can show only what lies inside it; while it is
+/// wholly inside the main window, or over a float's window (in its band, which that window shows),
+/// the carry window shows nothing; it goes when the drag does. A drop's tail stays in the drop's
+/// own shape out there.
 fn carryFrame(state: *State) void {
     if (!viewports.carries) return;
     const d = &state.view_drag;
@@ -233,13 +233,8 @@ fn carryFrame(state: *State) void {
         return;
     }
     const cw = dvui.currentWindow();
-    const s = dvui.windowNaturalScale();
-    // What it is carried as: its glass, and a drop's tail.
-    var shape = d.shape_rect;
-    if (d.drop_n == 2) {
-        const tail = d.drop_shapes[1].rect;
-        shape = shape.unionWith(tail);
-    }
+    // What it is carried as: a drop's head, or the card or tab it is carried as.
+    const shape = d.shape_rect;
     const main_px = dvui.windowRectPixels();
     const inside = shape.x >= main_px.x and shape.y >= main_px.y and shape.x + shape.w <= main_px.x + main_px.w and shape.y + shape.h <= main_px.y + main_px.h;
     // Over a float's window it is in that window's band, far past the main window (`Floats.Viewport`).
@@ -249,16 +244,17 @@ fn carryFrame(state: *State) void {
         if (carry) |*c| if (c.target) |t| {
             t.clear();
             viewports.present(c.viewport, t);
+            viewports.carryShape(c.viewport, 0);
         };
         return;
     }
-    const r = shape.outsetAll(carry_reach * s);
     if (carry == null) {
-        const vp = viewports.openCarry(.{ .x = r.x, .y = r.y, .w = r.w, .h = r.h }) orelse return;
+        const vp = viewports.openCarry(.{ .x = shape.x, .y = shape.y, .w = shape.w, .h = shape.h }) orelse return;
         carry = .{ .viewport = vp };
     }
     const c = &carry.?;
-    const shown = viewports.placeMain(c.viewport, .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h });
+    const shown = viewports.placeMain(c.viewport, .{ .x = shape.x, .y = shape.y, .w = shape.w, .h = shape.h });
+    viewports.carryShape(c.viewport, d.shape_radius);
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
     const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
     if (c.target) |t| if (t.width != w or t.height != h) {
@@ -274,8 +270,8 @@ fn carryFrame(state: *State) void {
     rt.rendering = true;
     const prev = dvui.renderTarget(rt);
     defer _ = dvui.renderTarget(prev);
-    // The main window's base under it, for its glass to read: glass over the window's clear pixels
-    // draws nothing. Opaque — there is no material behind it to blur the desktop through it.
+    // The main window's base under it, over the window's material, for its glass to read — glass
+    // over the window's clear pixels draws nothing — as a float's window stands on it.
     {
         const prev_clip = dvui.clipGet();
         defer dvui.clipSet(prev_clip);
@@ -283,44 +279,16 @@ fn carryFrame(state: *State) void {
         const prev_alpha = cw.alpha;
         dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
-        d.shape_rect.fill(dvui.CornerRect.Physical.all(d.shape_radius), .{ .color = .{ .color = base(false) } });
-        if (d.drop_n == 2) {
-            const tail = d.drop_shapes[1].rect;
-            tail.fill(dvui.CornerRect.Physical.all(tail.w / 2), .{ .color = .{ .color = base(false) } });
-        }
+        shape.fill(dvui.CornerRect.Physical.all(d.shape_radius), .{ .color = .{ .color = base(true) } });
     }
     // What the drag draws across every screen (`core.screens.markEverywhere`), copied in, left for
-    // the main window's replay: what of it lies past the window's part of the frame falls outside.
+    // the main window's replay: what of it lies past the window falls outside.
     for (cw.subwindows.stack.items) |*sw| {
         if (!fizzy.core.screens.isEverywhere(sw.id)) continue;
         cw.renderCommands(sw.render_cmds.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into its window", .{});
         cw.renderCommands(sw.render_cmds_after.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into its window", .{});
     }
-    // Over the main window, the main window shows it, its glass over the app: the carry window, kept
-    // above every window, shows only what lies past it — over the main window it covered the
-    // glass the main window draws with what it draws over its own base.
-    clearOver(main_px.intersect(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }));
     viewports.present(c.viewport, target);
-}
-
-/// What `clearOver` writes nothing with: a copy blend under a clear colour.
-var clear_tex: ?dvui.Texture = null;
-
-/// `r` (physical, in the bound target's frame) of the bound target written clear.
-fn clearOver(r: dvui.Rect.Physical) void {
-    if (r.w < 1 or r.h < 1 or !dvui.Backend.support_texture_blend) return;
-    if (clear_tex == null) {
-        const px = [1]dvui.Color.PMA{.{ .r = 255, .g = 255, .b = 255, .a = 255 }};
-        clear_tex = dvui.textureCreate(&px, .{ .width = 1, .height = 1, .interpolation = .nearest }) catch return;
-    }
-    const tex = clear_tex.?;
-    const cw = dvui.currentWindow();
-    cw.backend.textureBlend(tex, .copy) catch return;
-    defer cw.backend.textureBlend(tex, .over) catch {};
-    const prev_clip = dvui.clipGet();
-    defer dvui.clipSet(prev_clip);
-    dvui.clipSet(r);
-    dvui.renderTexture(tex, .{ .r = r, .s = 1 }, .{ .colormod = .{ .r = 0, .g = 0, .b = 0, .a = 0 } }) catch {};
 }
 
 fn releaseCarry(c: *Carry) void {

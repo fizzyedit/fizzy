@@ -238,22 +238,72 @@ void fizzy_macos_viewport_windows_item(void *nswindow, const char *title) {
 
 /*
  * A window that carries a view past every window of the app's, over the desktop
- * (`SDLBackend.viewportOpenCarry`): clear, no shadow of AppKit's (the carried glass draws its own),
- * the pointer passing through it to what is under it, above every window — a pop-up menu's level —
- * on every Space, in no window list or switcher, and no OS animation.
+ * (`SDLBackend.viewportOpenCarry`): a round window of its own — the main window's material behind
+ * it, in the shape of what is carried (`fizzy_macos_viewport_carry_shape`), the OS's shadow round
+ * it — the pointer passing through it to what is under it, above every window (a pop-up menu's
+ * level), on every Space, in no window list or switcher, and no OS animation.
  */
-void fizzy_macos_viewport_carry(void *nswindow) {
+void fizzy_macos_viewport_carry(void *nswindow, void *main_nswindow, long material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil) return;
+        NSWindow *main = (__bridge NSWindow *)main_nswindow;
+        if (main != nil) [window setAppearance:[main appearance]];
         [window setOpaque:NO];
         [window setBackgroundColor:[NSColor clearColor]];
-        [window setHasShadow:NO];
+        /* The OS's shadow, round the material's shape (`fizzy_macos_viewport_carry_shape`). */
+        [window setHasShadow:YES];
+        NSView *content = [window contentView];
+        NSView *frame = [content superview];
+        if (content != nil && frame != nil) {
+            NSVisualEffectView *effect = [[FizzyViewportGlassView alloc] initWithFrame:[content frame]];
+            [effect setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
+            [effect setState:NSVisualEffectStateActive];
+            [effect setMaterial:(NSVisualEffectMaterial)material];
+            [effect setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            [frame addSubview:effect positioned:NSWindowBelow relativeTo:content];
+#if !__has_feature(objc_arc)
+            [effect release];
+#endif
+        }
         [window setIgnoresMouseEvents:YES];
         [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
         [window setLevel:NSPopUpMenuWindowLevel];
         [window setExcludedFromWindowsMenu:YES];
         [window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorTransient |
                                       NSWindowCollectionBehaviorIgnoresCycle | NSWindowCollectionBehaviorFullScreenAuxiliary];
+    }
+}
+
+/*
+ * The carry window's shape: its material masked to a rounded rect of `radius` points filling the
+ * window — a circle for a drop, a card for a tab — and its shadow made again round it. Called in the
+ * transaction the window's place and picture change in (`SDLBackend.renderPresent`), so the shape
+ * changes with them.
+ */
+void fizzy_macos_viewport_carry_shape(void *nswindow, double radius) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        NSView *frame = [[window contentView] superview];
+        if (frame == nil) return;
+        NSVisualEffectView *effect = nil;
+        for (NSView *v in [frame subviews]) {
+            if ([v isKindOfClass:[FizzyViewportGlassView class]]) effect = (NSVisualEffectView *)v;
+        }
+        if (effect == nil) return;
+        const CGFloat r = (CGFloat)radius;
+        NSImage *mask = [NSImage imageWithSize:NSMakeSize(r * 2 + 1, r * 2 + 1)
+                                       flipped:NO
+                                drawingHandler:^BOOL(NSRect dst) {
+                                    [[NSColor blackColor] set];
+                                    [[NSBezierPath bezierPathWithRoundedRect:dst xRadius:r yRadius:r] fill];
+                                    return YES;
+                                }];
+        [mask setCapInsets:NSEdgeInsetsMake(r, r, r, r)];
+        [mask setResizingMode:NSImageResizingModeStretch];
+        [effect setMaskImage:mask];
+        [effect displayIfNeeded];
+        [window invalidateShadow];
     }
 }

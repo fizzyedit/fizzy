@@ -146,6 +146,10 @@ pub const Viewport = struct {
     /// pointer is read against it, and it is kept above every window by its level, not ordered over
     /// the main one.
     passive: bool = false,
+    /// A carry window's shape: the corner radius, points, of its material filling it
+    /// (`viewportCarryShape`) — asked, and as last applied with its picture.
+    carry_radius: f32 = 0,
+    carry_radius_shown: f32 = -1,
 };
 
 pub const InitOptions = struct {
@@ -830,12 +834,19 @@ fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const 
     self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry };
     const vp = &self.viewports[slot].?;
     if (carry) {
-        if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_carry(cocoaWindow(window));
+        if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_carry(cocoaWindow(window), cocoaWindow(self.window), platform.window.ns_visual_effect_material);
         return vp;
     }
     // The slot holds it for the window's life, so SDL may keep the pointer.
     _ = c.SDL_SetWindowHitTest(window, viewportHitTest, vp);
     return vp;
+}
+
+/// A carry window's shape this frame: what it carries, filling it, rounded by `radius` physical
+/// pixels — its material masked so, and the OS's shadow round it, with its picture
+/// (`renderPresent`).
+pub fn viewportCarryShape(_: *SDLBackend, vp: *Viewport, radius: f32) void {
+    vp.carry_radius = @round(radius / vp.density);
 }
 
 /// Whether this run can open viewports at all: not on Wayland, where a client cannot put its
@@ -1030,7 +1041,8 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 }
 
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
-extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque, main: ?*anyopaque, material: c_long) void;
+extern fn fizzy_macos_viewport_carry_shape(nswindow: ?*anyopaque, radius: f64) void;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]const u8) void;
@@ -1385,7 +1397,8 @@ pub fn renderPresent(self: *SDLBackend) void {
         for (&self.viewports, 0..) |*slot, i| {
             const vp = if (slot.*) |*v| v else continue;
             const first = !vp.shown and vp.pending != null;
-            if (!vp.frame_pending and !first) continue;
+            const reshaped = vp.passive and vp.carry_radius != vp.carry_radius_shown;
+            if (!vp.frame_pending and !first and !reshaped) continue;
             if (!any) fizzy_native_transaction_begin();
             any = true;
             transacted[i] = true;
@@ -1395,6 +1408,10 @@ pub fn renderPresent(self: *SDLBackend) void {
                 const r = vp.screen;
                 fizzy_native_viewport_set_frame(ns, @floatFromInt(r.x), @floatFromInt(r.y), @floatFromInt(r.w), @floatFromInt(r.h));
             } else fizzy_native_viewport_transact(ns);
+            if (reshaped) {
+                vp.carry_radius_shown = vp.carry_radius;
+                fizzy_macos_viewport_carry_shape(ns, vp.carry_radius);
+            }
         }
     }
     defer if (comptime builtin.os.tag == .macos) if (any) {

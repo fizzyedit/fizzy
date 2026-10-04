@@ -148,6 +148,7 @@ pub const viewports = struct {
     pub const os_frame = false;
     pub const os_buttons = false;
     pub const carries = false;
+    pub fn carryShape(_: *Viewport, _: f32) void {}
     pub fn openCarry(_: Rect) ?*Viewport {
         return null;
     }
