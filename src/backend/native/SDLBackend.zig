@@ -800,15 +800,18 @@ fn density(self: *SDLBackend) f32 {
     return if (d > 0) d else 1;
 }
 
-/// Where in the frame a pointer at `local` (points, in `vp`'s window) is: the window's place on
-/// the desktop plus `local`, through the band (`viewport_map`). Read against where the window is
-/// now, as Dear ImGui's SDL backend reads its viewports.
-fn viewportPoint(vp: *const Viewport, local_x: f32, local_y: f32) dvui.Point.Physical {
-    var wx: c_int = 0;
-    var wy: c_int = 0;
-    _ = c.SDL_GetWindowPosition(vp.window, &wx, &wy);
-    const screen: viewport_map.Point = .{ .x = @as(f32, @floatFromInt(wx)) + local_x, .y = @as(f32, @floatFromInt(wy)) + local_y };
-    const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, screen);
+/// Where in the frame the pointer over `vp`'s window is: where it is on the desktop, through the
+/// band (`viewport_map`). From the desktop, not from the event's place in the window plus where
+/// the window is now — the window moves under a drag of its left or top edge, or its header, and
+/// an event queued before a move read against the window after it put the pointer off by the
+/// move: the edge overshot, was pulled back, and overshot again, shaking the window and what it
+/// shows. The plan's "while held, the window follows `SDL_GetGlobalMouseState`". Every event of a
+/// frame's burst reads the latest place, which is the one that matters.
+fn viewportPoint(vp: *const Viewport) dvui.Point.Physical {
+    var gx: f32 = 0;
+    var gy: f32 = 0;
+    _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, .{ .x = gx, .y = gy });
     return .{ .x = p.x, .y = p.y };
 }
 
@@ -819,15 +822,12 @@ fn addViewportEvent(self: *SDLBackend, win: *dvui.Window, vp: *Viewport, event: 
     switch (event.type) {
         c.SDL_EVENT_MOUSE_MOTION => {
             if (event.motion.which == c.SDL_TOUCH_MOUSEID and !self.touch_mouse_events) return false;
-            return try win.addEventMouseMotion(.{ .pt = viewportPoint(vp, event.motion.x, event.motion.y) });
+            return try win.addEventMouseMotion(.{ .pt = viewportPoint(vp) });
         },
         c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_MOUSE_BUTTON_UP, c.SDL_EVENT_MOUSE_WHEEL => {
             // dvui presses and scrolls where the pointer last moved, which may have been over
             // another window: it is moved here first.
-            const pt = if (event.type == c.SDL_EVENT_MOUSE_WHEEL)
-                viewportPoint(vp, event.wheel.mouse_x, event.wheel.mouse_y)
-            else
-                viewportPoint(vp, event.button.x, event.button.y);
+            const pt = viewportPoint(vp);
             if (pt.x != win.mouse_pt.x or pt.y != win.mouse_pt.y) _ = try win.addEventMouseMotion(.{ .pt = pt });
             return try self.addEvent(win, event);
         },
