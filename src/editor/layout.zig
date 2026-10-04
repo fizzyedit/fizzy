@@ -89,7 +89,7 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
     defer content.deinit();
 
     {
-        var main = try f.region(@src(), .{ .name = "Main", .keywords = main_area }, placeCard(editor, .{ .expand = .both }));
+        var main = try f.region(@src(), .{ .name = "Main", .keywords = main_area, .pane_cards = true }, placeCard(editor, .{ .expand = .both }));
         defer main.deinit();
     }
 
@@ -105,6 +105,7 @@ pub fn layout(ctx: ?*anyopaque, f: *Layout) !dvui.App.Result {
             .resize = true,
             .collapsible = true,
             .hide_when_empty = true,
+            .pane_cards = true,
         }, placeCard(editor, .{
             .min_size_content = .{ .h = 220 },
             .expand = .horizontal,

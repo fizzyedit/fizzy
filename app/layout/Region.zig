@@ -59,6 +59,8 @@ layout: ?*Layout = null,
 by_name: bool = false,
 /// See `InitOptions.kind_slot`.
 kind_slot: bool = false,
+/// See `InitOptions.pane_cards`: this region counts the panes opened in it, for next frame.
+pane_cards: bool = false,
 /// A tray the next split should keep targeting. Center and grouping boxes are not.
 resize: bool = false,
 /// An empty closed tray can disappear — a runtime split, an endless edge.
@@ -106,6 +108,8 @@ pub fn deinit(self: *Region) void {
     if (self.box) |b| {
         if (self.layout) |l| {
             std.debug.assert(l.depth > 0);
+            // How many panes this frame's view opened in it, for next frame's card (`pane_cards`).
+            if (self.pane_cards) dvui.dataSet(null, self.id, "_panes", l.containers[l.depth - 1].panes);
             l.depth -= 1;
             // A tray the next split should keep targeting is `resize`. Center and grouping
             // boxes are not: after they close, the following split sizes the region after
@@ -307,6 +311,13 @@ pub const InitOptions = struct {
     /// There is no threshold and nothing snaps — a split that jumps the last stretch is a split
     /// that fights you.
     collapsible: bool = false,
+    /// When the view in this region lays itself out as panes of its own (`Host.region`: the
+    /// workbench's document panes), each pane wears this region's card — its fill, corners and
+    /// padding from the `dvui.Options` — and the region wears none: the gap between two panes then
+    /// shows what is behind the region, as the gap between two places does, and the split there
+    /// reads as one. A region showing one pane, or none, keeps its card. Decided from the last
+    /// frame's panes, so a second pane opening wears its card a frame after it appears.
+    pane_cards: bool = false,
 };
 
 /// Declare a region: an area that hosts matching surfaces, holds other regions, or both.
@@ -544,6 +555,22 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         .drop_ctx = init_opts.drop_ctx,
     });
 
+    // Split into panes last frame, the region hands its card to them (`pane_cards`): no fill and
+    // no padding of its own, so the panes reach its edges and the gaps between them are clear.
+    var card: ?dvui.Options = null;
+    if (init_opts.pane_cards and (box_opts.background orelse false)) {
+        if ((dvui.dataGet(null, id, "_panes", u8) orelse 0) >= 2) {
+            card = .{
+                .background = true,
+                .color_fill = box_opts.color_fill,
+                .corners = box_opts.corners,
+                .padding = box_opts.padding,
+            };
+            box_opts.background = false;
+            box_opts.padding = .{};
+        }
+    }
+
     const box = dvui.box(src, .{ .dir = init_opts.dir }, box_opts);
     if (init_opts.resize) Split.recordEdges(id, box.data(), axis);
     if (init_opts.name.len > 0) {
@@ -558,6 +585,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         // own parent's name down unchanged. `slot` is a user tray, not a kind, so it does not
         // qualify the places inside it (`slot.slot` hid Clear/Remove).
         .prefix = placePrefix(keywords, if (parent) |p| p.prefix else ""),
+        .card = card,
     };
     self.depth += 1;
 
@@ -610,6 +638,7 @@ pub fn init(self: *Layout, src: std.builtin.SourceLocation, init_opts: InitOptio
         .by_name = init_opts.by_name,
         .kind_slot = init_opts.kind_slot,
         .resize = init_opts.resize,
+        .pane_cards = init_opts.pane_cards,
     };
 }
 
