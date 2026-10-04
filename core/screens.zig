@@ -47,6 +47,42 @@ pub fn screenFor(r: dvui.Rect.Natural) dvui.Rect.Natural {
     return dvui.windowRect();
 }
 
+/// A floating thing drawn across every screen this frame — a view drag's layer, whose drops and
+/// carried glass are wherever the places and the pointer are: the app copies its drawing into
+/// every screen's window, not just the main one. Each frame it is drawn (`isEverywhere`).
+pub fn markEverywhere(id: dvui.Id) void {
+    const now = dvui.currentWindow().frame_time_ns;
+    const e = dvui.dataGetPtrDefault(null, key_id, "_everywhere", Everywhere, .{});
+    if (e.frame != now) e.* = .{ .frame = now };
+    if (e.n < e.ids.len) {
+        e.ids[e.n] = id;
+        e.n += 1;
+    }
+}
+
+/// Whether `id` was marked as drawn across every screen this frame (`markEverywhere`).
+pub fn isEverywhere(id: dvui.Id) bool {
+    const e = dvui.dataGetPtr(null, key_id, "_everywhere", Everywhere) orelse return false;
+    if (e.frame != dvui.currentWindow().frame_time_ns) return false;
+    for (e.ids[0..e.n]) |i| if (i == id) return true;
+    return false;
+}
+
+const Everywhere = struct {
+    frame: i128 = 0,
+    n: u8 = 0,
+    ids: [8]dvui.Id = undefined,
+};
+
+/// Every screen at once, physical: what a floating thing drawn across all of them clips to.
+pub fn allPixels() dvui.Rect.Physical {
+    var r = dvui.windowRectPixels();
+    const p = dvui.dataGetPtr(null, key_id, key, Published) orelse return r;
+    const m = dvui.windowNaturalScale();
+    for (p.rects[0..p.n]) |s| r = r.unionWith(.{ .x = s.x * m, .y = s.y * m, .w = s.w * m, .h = s.h * m });
+    return r;
+}
+
 /// `screenFor`, physical: what a floating thing on that screen clips its drawing to.
 pub fn pixelsFor(r: dvui.Rect.Natural) dvui.Rect.Physical {
     const s = screenFor(r);

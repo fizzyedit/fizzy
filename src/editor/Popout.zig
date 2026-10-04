@@ -181,12 +181,18 @@ pub fn endFrame(state: *State) void {
     // them, every one whose middle is in the window's part of the frame. Taken from each, so
     // dvui's replay into the main window draws nothing of them.
     const area: dvui.Rect.Physical = .{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h };
+    // And a layer drawn across every screen (`core.screens.markEverywhere`: a view drag's drops
+    // and carried glass) is copied in too, left in place for the main window's replay — what of
+    // it lies outside the window's part of the frame falls outside its target.
     for (cw.subwindows.stack.items) |*sw| {
-        if (!area.contains(sw.rect_pixels.center())) continue;
+        const mine = area.contains(sw.rect_pixels.center());
+        if (!mine and !fizzy.core.screens.isEverywhere(sw.id)) continue;
         const cmds = sw.render_cmds;
         const after = sw.render_cmds_after;
-        sw.render_cmds = .empty;
-        sw.render_cmds_after = .empty;
+        if (mine) {
+            sw.render_cmds = .empty;
+            sw.render_cmds_after = .empty;
+        }
         cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying a float into its window", .{});
         cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying a float into its window", .{});
     }

@@ -679,6 +679,15 @@ pub fn addAllEvents(self: *SDLBackend, win: *dvui.Window) !void {
 /// Note that contrary to `addEvent`, this function return true if the event is sent based on the
 ///  SDL_Window handle (i.e. OS Window dispatch) and doesn't care about subwindows.
 fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Window, target_win: *c.SDL_Window) !bool {
+    // A held pointer, with a viewport open, goes where it is — whichever of fizzy's windows took
+    // the press (`heldPoint`).
+    if ((self.window == target_win or self.viewportOf(target_win) != null) and self.heldAcrossWindows(event.*)) {
+        const pt = self.heldPoint();
+        if (event.type == c.SDL_EVENT_MOUSE_MOTION) return try win.addEventMouseMotion(.{ .pt = pt });
+        if (pt.x != win.mouse_pt.x or pt.y != win.mouse_pt.y) _ = try win.addEventMouseMotion(.{ .pt = pt });
+        _ = try self.addEvent(win, event.*);
+        return true;
+    }
     if (self.window == target_win) {
         _ = try self.addEvent(win, event.*);
         return true;
@@ -818,6 +827,47 @@ fn mainOnScreen(self: *SDLBackend) viewport_map.Point {
 fn density(self: *SDLBackend) f32 {
     const d = c.SDL_GetWindowPixelDensity(self.window);
     return if (d > 0) d else 1;
+}
+
+/// A pointer event while a button is held — or the release that ends the hold — with a viewport
+/// open: placed by where the pointer is (`heldPoint`), not by the window the event came from. The
+/// OS keeps sending a held pointer to the window that took the press, so a view carried out of a
+/// float that is out went on landing in the float's part of the frame over the main window, and
+/// one carried from the main window never reached the float's window.
+fn heldAcrossWindows(self: *SDLBackend, event: c.SDL_Event) bool {
+    switch (event.type) {
+        c.SDL_EVENT_MOUSE_MOTION => if (event.motion.which == c.SDL_TOUCH_MOUSEID) return false,
+        c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_MOUSE_BUTTON_UP => if (event.button.which == c.SDL_TOUCH_MOUSEID) return false,
+        else => return false,
+    }
+    const any = for (self.viewports) |v| {
+        if (v != null) break true;
+    } else false;
+    if (!any) return false;
+    if (event.type == c.SDL_EVENT_MOUSE_BUTTON_UP) return true;
+    return c.SDL_GetGlobalMouseState(null, null) != 0;
+}
+
+/// Where in the frame the pointer is, by the window of fizzy's it is over on the desktop: a
+/// viewport's part of the frame over its window, the main window's own otherwise. Over both — a
+/// viewport is kept over the main window — the viewport's.
+fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
+    var gx: f32 = 0;
+    var gy: f32 = 0;
+    _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    for (&self.viewports) |*slot| {
+        const vp = if (slot.*) |*v| v else continue;
+        const s = vp.screen;
+        if (gx >= @as(f32, @floatFromInt(s.x)) and gy >= @as(f32, @floatFromInt(s.y)) and
+            gx < @as(f32, @floatFromInt(s.x + s.w)) and gy < @as(f32, @floatFromInt(s.y + s.h)))
+        {
+            const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, .{ .x = gx, .y = gy });
+            return .{ .x = p.x, .y = p.y };
+        }
+    }
+    const origin = self.mainOnScreen();
+    const d = self.density();
+    return .{ .x = (gx - origin.x) * d, .y = (gy - origin.y) * d };
 }
 
 /// Where in the frame the pointer over `vp`'s window is: where it is on the desktop, through the
