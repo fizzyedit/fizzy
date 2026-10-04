@@ -158,11 +158,13 @@ void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inse
     }
 }
 
-/* Undo `fizzy_macos_viewport_glass` before SDL destroys the window: the vibrancy view gone. */
+/* Undo `fizzy_macos_viewport_glass` before SDL destroys the window: the vibrancy view gone, and
+ * its Window menu item (`fizzy_macos_viewport_windows_item`). */
 void fizzy_macos_viewport_unglass(void *nswindow) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil) return;
+        [NSApp removeWindowsItem:window];
         NSView *frame = [[window contentView] superview];
         if (frame == nil) return;
         NSArray *views = [[frame subviews] copy];
@@ -192,5 +194,22 @@ void fizzy_macos_viewport_keep_above(void *nswindow, void *main_nswindow) {
         if (![window isVisible] || ![main isVisible] || [main isMiniaturized]) return;
         if ([window orderedIndex] < [main orderedIndex]) return;
         [window orderWindow:NSWindowAbove relativeTo:[main windowNumber]];
+    }
+}
+
+/*
+ * A popped-out float's window in the Window menu — and so in the Dock's menu for the app —
+ * called `title`, as a titled window is listed by itself: AppKit lists no borderless window
+ * unasked. Again whenever its title changes (the view it shows). `fizzy_macos_viewport_unglass`
+ * takes it out.
+ */
+void fizzy_macos_viewport_windows_item(void *nswindow, const char *title) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil || title == NULL) return;
+        NSString *t = [NSString stringWithUTF8String:title];
+        if (t == nil) return;
+        [window setExcludedFromWindowsMenu:NO];
+        [NSApp changeWindowsItem:window title:t filename:NO];
     }
 }

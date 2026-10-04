@@ -43,6 +43,9 @@ const Out = struct {
     mode: enum { band, held } = .band,
     /// Its window was being moved or resized last frame: a release now ends that drag.
     was_held: bool = false,
+    /// What its window is called now: the float's title, as its header says (`Floats.Float.titleText`).
+    title_buf: [96]u8 = undefined,
+    title_len: u8 = 0,
 };
 
 /// A window whose float has come back into the main window: let go a frame later, once the main
@@ -329,6 +332,14 @@ pub fn endFrame(state: *State) void {
         .held => viewports.placeMain(o.viewport, .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }),
     };
     const material = if (f.viewport) |vp| vp.material else if (f.split) |sp| sp.material else false;
+    // Called what its header says — the view it shows — in the taskbar, the Window menu, the
+    // window switcher.
+    const title = f.titleText();
+    if (title.len > 0 and !std.mem.eql(u8, title, o.title_buf[0..o.title_len])) {
+        viewports.setTitle(o.viewport, title);
+        @memcpy(o.title_buf[0..title.len], title);
+        o.title_len = @intCast(title.len);
+    }
     // Settled, where a press is the OS's: its header moves the window and its glass's edges resize
     // it, so the OS snaps, tiles and maximizes it as any window. Split under a drag, all of it is
     // the drag's.

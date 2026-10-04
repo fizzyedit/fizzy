@@ -944,6 +944,16 @@ pub fn viewportDragMove(_: *SDLBackend, vp: *Viewport) bool {
     return true;
 }
 
+/// What `vp`'s window is called — its float's title — where the OS lists windows: the taskbar
+/// (Windows: a button of its own, `win32_titlebar.viewportChrome`), the Window menu and the Dock's
+/// (macOS), the window switcher.
+pub fn viewportTitle(_: *SDLBackend, vp: *Viewport, text: []const u8) void {
+    var buf: [128]u8 = undefined;
+    const z = std.fmt.bufPrintZ(&buf, "{s}", .{text[0..@min(text.len, buf.len - 1)]}) catch return;
+    _ = c.SDL_SetWindowTitle(vp.window, z.ptr);
+    if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_windows_item(cocoaWindow(vp.window), z.ptr);
+}
+
 /// The least the OS may resize `vp`'s window to: `size` physical pixels of the frame, its float's
 /// least.
 pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
@@ -953,6 +963,7 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]const u8) void;
 
 /// Give `vp`'s window a material behind the float's glass, so the float's frost reads the desktop
 /// through it as it reads the app in the main window, in the app's light or dark (`dark`) as the
@@ -976,7 +987,8 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, 
         },
         .windows => {
             const hwnd = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return false;
-            return platform.win32_titlebar.viewportChrome(hwnd, dark, radius / vp.density, &vp.win32_loop);
+            const main_hwnd = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(self.window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null);
+            return platform.win32_titlebar.viewportChrome(hwnd, main_hwnd, dark, radius / vp.density, &vp.win32_loop);
         },
         else => return false,
     }

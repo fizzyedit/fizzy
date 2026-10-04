@@ -405,6 +405,18 @@ drag), so a rect moved into a band mid-drag sent the next motion across the fram
 - **Autorelease pools.** Objective-C called from the frame loop needs an autorelease pool of its
   own, because SDL wraps only its own calls. Without one, the subview arrays AppKit autoreleased
   kept the window SDL closed alive in the window server after every pop-in.
+- **No OS animation.** AppKit's show and close animations never finished under fizzy's frame loop.
+  The stand-in window they draw stayed on screen: shrunk while the float was out, and after the
+  pop-out window had gone, where it first opened. The animation is off
+  (`NSWindowAnimationBehaviorNone`).
+- **Over the main window.** SDL orders a window it shows without activating it below the key
+  window, the main one. The pop-out is ordered back above it, and again whenever it has fallen
+  behind (a press on the main window, a document opened from Finder raising it): the behaviour of
+  an owned window on Windows, without the child window AppKit would move with the main one.
+- **The glass out there.** It is made as see-through as what it reads, and out of the main window
+  it read the window's clear pixels: no rim, light or tint. Behind it now stands the main window's
+  base, its chrome at the window's opacity over the material (`Popout.backing`), and it reaches
+  for nothing past its rim, where the clear margin is.
 
 ### Not checked
 
@@ -484,5 +496,8 @@ Checked on Windows 11 on Arm in a VM, with real input inside the VM (`SendInput`
    that began the drag). On X11: the hit test's `_NET_WM_MOVERESIZE`, the clear margin with and
    without a compositor (without one it would show black), and a handoff through it.
 3. **Persistence** (`SavedRegion.Floating.os`).
-4. **P4's lifecycle.** Minimize, maximize and close with the main window, and a Dock or taskbar
-   entry of its own.
+4. **P4's lifecycle.** Minimize, maximize and close with the main window. Done of it: a pop-out
+   is called what its float's header says, has a taskbar button of its own on Windows (an owned
+   window with `WS_EX_APPWINDOW`, the main window's icon on it; checked in the VM, its thumbnail
+   beside the main window's), and is in the Window menu and the Dock's on macOS. On X11 it is
+   transient for the main window, which keeps it out of most taskbars.

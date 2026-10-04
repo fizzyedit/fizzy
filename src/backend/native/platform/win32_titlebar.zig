@@ -369,7 +369,7 @@ pub const ViewportLoop = struct {
 /// the glass's `radius_pt` (points) as DWM rounds — 8 points as designed, which is DWM's own; DWM's
 /// shadow; no border. True when DWM gives it the backdrop (Windows 11 22H2 on); false leaves the
 /// glass on the app's opaque backing.
-pub fn viewportChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32, loop: *ViewportLoop) bool {
+pub fn viewportChrome(hwnd: *anyopaque, main_hwnd: ?*anyopaque, dark: bool, radius_pt: f32, loop: *ViewportLoop) bool {
     if (builtin.os.tag != .windows) return false;
     const h: win32.foundation.HWND = @ptrCast(hwnd);
     const dwm = win32.graphics.dwm;
@@ -394,10 +394,23 @@ pub fn viewportChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32, loop: *Viewp
         const SWP_FRAMECHANGED: u32 = 0x0020;
         _ = wm.SetWindowPos(h, null, 0, 0, 0, 0, @bitCast(SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED));
     }
+    // A taskbar button of its own, though the main window owns it (owned windows have none):
+    // it is a window like any other, as VS Code's are. Set while it is still hidden, as the
+    // taskbar only reads it as a window shows. With the main window's icon on it.
+    const ex = wm.GetWindowLongPtrW(h, wm.GWL_EXSTYLE);
+    if (ex & viewport_ws_ex_appwindow == 0) _ = wm.SetWindowLongPtrW(h, wm.GWL_EXSTYLE, ex | viewport_ws_ex_appwindow);
+    if (main_hwnd) |m| {
+        const main_h: win32.foundation.HWND = @ptrCast(m);
+        for ([_]usize{ wm.ICON_BIG, wm.ICON_SMALL }) |kind| {
+            const icon = wm.SendMessageW(main_h, wm.WM_GETICON, kind, 0);
+            if (icon != 0) _ = wm.SendMessageW(h, wm.WM_SETICON, kind, icon);
+        }
+    }
     return applyViewportBackdrop(h);
 }
 
 const viewport_ws_sysmenu: isize = 0x00080000;
+const viewport_ws_ex_appwindow: isize = 0x00040000;
 
 /// The backdrop, and the frame extended over the whole window for it to show through — again on
 /// every activation, as DWM wants (and as `win32MicaSubclassProc` does for the main window).
@@ -474,6 +487,11 @@ fn viewportSubclassProc(
     if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_STYLE)) {
         const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
         ss.styleNew &= ~@as(u32, @intCast(viewport_ws_sysmenu));
+    }
+    // Nor its taskbar button.
+    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_EXSTYLE)) {
+        const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
+        ss.styleNew |= @as(u32, @intCast(viewport_ws_ex_appwindow));
     }
     // A subclass goes before its window does.
     if (uMsg == wm.WM_NCDESTROY) _ = win32.ui.shell.RemoveWindowSubclass(hWnd, viewportSubclassProc, viewport_subclass_id);

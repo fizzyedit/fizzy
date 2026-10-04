@@ -59,6 +59,10 @@ pub const Float = struct {
     /// Its header's close button last frame, physical: the part of the header that does not move
     /// it — what the OS leaves to the app when it moves a popped-out float's window by its header.
     header_close: dvui.Rect.Physical = .{},
+    /// Its title last frame — the view it shows, as its header says (`titleText`): what its OS
+    /// window is called, out of the main window.
+    title_buf: [96]u8 = undefined,
+    title_len: u8 = 0,
     /// A ghost of itself while a view carried out of it is aimed elsewhere (`ViewDrag.ghosted`): 0
     /// itself, 1 its ghost (`ghostLook`), and on to `gone` when it closes as one. As a ghost it
     /// still draws its place — the drag is held by that place's corner button — but nothing of the
@@ -85,6 +89,11 @@ pub const Float = struct {
     /// it is out: held on no window, its shadow in the clear margin round it, its frost by its
     /// window's material. Null otherwise.
     split: ?Split = null,
+
+    /// Its title last frame: the view it shows (`title_buf`).
+    pub fn titleText(self: *const Float) []const u8 {
+        return self.title_buf[0..self.title_len];
+    }
 };
 
 /// Where a float out of the main window is drawn in the frame. The application chooses it: a
@@ -657,6 +666,9 @@ fn drawOne(l: *Layout, i: usize) bool {
     f.bounds = bounds;
     f.header = header;
     f.header_close = header_close orelse .{};
+    const kept = title[0..@min(title.len, f.title_buf.len)];
+    @memcpy(f.title_buf[0..kept.len], kept);
+    f.title_len = @intCast(kept.len);
     if (!open) {
         close(l, f.name, .home);
         return true;

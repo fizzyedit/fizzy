@@ -253,6 +253,12 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportDragMove(vp);
     }
 
+    /// What `vp`'s window is called: in the taskbar, the Window menu, the window switcher.
+    pub fn setTitle(vp: *Viewport, text: []const u8) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportTitle(vp, text);
+    }
+
     /// The least the OS may resize `vp`'s window to, physical pixels.
     pub fn minSize(vp: *Viewport, w: f32, h: f32) void {
         if (comptime !supported) return;

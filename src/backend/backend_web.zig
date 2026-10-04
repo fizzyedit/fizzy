@@ -159,6 +159,7 @@ pub const viewports = struct {
         return false;
     }
     pub fn minSize(_: *Viewport, _: f32, _: f32) void {}
+    pub fn setTitle(_: *Viewport, _: []const u8) void {}
     pub fn glass(_: *Viewport, _: f32, _: f32, _: bool) bool {
         return false;
     }
