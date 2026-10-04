@@ -539,15 +539,12 @@ fn drawOne(l: *Layout, i: usize) bool {
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
     // window's does; as a photograph, the window draws no glass at all.
     // Out of the main window (`viewport`, `split`), it looks as it does in it: its shadow in the
-    // clear margin round its OS window (`outReach`), and its glass over what the main window's
-    // base is — its chrome, at the window's opacity over the window's material where it has one
-    // (`Popout.backing`) — so the rim catches the light and the tint lies over it as in the main
-    // window. Without that the glass read the window's clear pixels and drew nothing: it is made as
-    // see-through as what it reads. It reaches for nothing past its rim out there either: past it
-    // is the clear margin.
+    // clear margin round its OS window (`outReach`), and its glass reading what it reads in the
+    // main window — the main window's picture where that is under it, its base past its edge, the
+    // margin past the rim included (`Popout.behindGlass`) — so the rim bends and catches the light
+    // and the tint lies over it as in the main window.
     var frost = if (as_photo) null else dialogs.dialogFrost();
     if (frost) |*fr| {
-        if (out) fr.refraction = 0;
         fr.form = shown;
         // Landing, it grows into its window — past it and back, when motion is playful — and its
         // glass is captured that size from the start.
