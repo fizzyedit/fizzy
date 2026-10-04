@@ -810,6 +810,14 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
     }
     for (&self.viewports) |*slot| {
         if (slot.*) |*v| if (v == vp) {
+            // Holding the keyboard as it goes — a float that merged back into the main window, or
+            // came back on a command, while its window was the one in front — it hands it back to
+            // the main window, which the float is in now: without that, the OS left no window of
+            // fizzy's focused, and the first press on the main window only brought it forward.
+            const had_keyboard = c.SDL_GetWindowFlags(v.window) & c.SDL_WINDOW_INPUT_FOCUS != 0;
+            defer if (had_keyboard) {
+                _ = c.SDL_RaiseWindow(self.window);
+            };
             // The window as SDL made it, for SDL to destroy (`viewportGlass`).
             if (comptime builtin.os.tag == .macos) {
                 if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(v.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null)) |ns| fizzy_macos_viewport_unglass(ns);

@@ -339,6 +339,7 @@ fn win32MicaSubclassProc(
 // its shadow — and the frame extended over it shows the backdrop behind its transparent pixels, as
 // it does the main window's.
 
+const DWMWA_TRANSITIONS_FORCEDISABLED: u32 = 3;
 const DWMWCP_DONOTROUND: u32 = 1;
 const DWMWCP_ROUNDSMALL: u32 = 3;
 const viewport_subclass_id: usize = 0x50584932; // "PXI2"
@@ -379,6 +380,10 @@ pub fn viewportChrome(hwnd: *anyopaque, main_hwnd: ?*anyopaque, dark: bool, radi
     _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
     const dark_value: u32 = @intFromBool(dark);
     _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE), &dark_value, @sizeOf(u32));
+    // No DWM animation as it shows or closes: it appears and goes exactly where its float is drawn,
+    // in the frame it changes in (macOS: `NSWindowAnimationBehaviorNone`).
+    const no_transitions: u32 = 1;
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_TRANSITIONS_FORCEDISABLED), &no_transitions, @sizeOf(u32));
     _ = win32.ui.shell.SetWindowSubclass(h, viewportSubclassProc, viewport_subclass_id, @intFromPtr(loop));
     // No system menu: with the frame extended over the window, DWM draws the caption buttons
     // `WS_SYSMENU` brings, over the float's header (as `applyChrome` strips it from the main
