@@ -112,6 +112,10 @@ pub const Viewport = struct {
     os_buttons: bool = false,
     /// The OS asked to close its window (its close button, ⌘W): it closes as from its header.
     close_asked: bool = false,
+    /// Physical: from where the float is drawn in its band to where its window is over the main
+    /// window's frame, this frame (`Popout`) — for a drag to read the window where it lies over the
+    /// main window's places (`ViewDrag.mapOccluders`).
+    main_delta: dvui.Point.Physical = .{},
 };
 
 
@@ -495,9 +499,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     // A ghost while a view carried out of it is aimed elsewhere: the drop is aimed at what it lies
     // over. Itself again when the view is aimed back over it, and when the drag ends.
     const carried_out = ViewDrag.carriedOutOf(l, state.floats.items.items[i].name);
-    // Not a float in its own OS window: that window is in front of what lies under it whatever its
-    // float shows, and a window a view is carried out of stays as it is, as any app's does.
-    const ghosted = carried_out and state.floats.items.items[i].viewport == null and !ViewDrag.settleGhost(state);
+    const ghosted = carried_out and !ViewDrag.settleGhost(state);
     {
         const f = &state.floats.items.items[i];
         f.aside.step(now);
@@ -529,7 +531,9 @@ fn drawOne(l: *Layout, i: usize) bool {
     // With no photograph it is the live float that fades to its ghost — its view whole, where it
     // can be drawn into a picture of itself (`Whole`), though not out of focus — and gone, nothing
     // of it shows.
-    const shown = if (as_photo) 1 else ghostLook(aside).alpha;
+    // In an OS window of its own, the window fades whole, its material and all (`Popout`): its
+    // content stays as it is in it.
+    const shown = if (as_photo or first.viewport != null) 1 else ghostLook(aside).alpha;
     const hide_live = as_photo or aside >= gone;
 
     // Out of the main window it is wherever its OS window's part of the frame is, and lands

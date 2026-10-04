@@ -559,7 +559,17 @@ from the frame it is made in.
   float (`Popout.outs`, up to the backend's eight). The held drag, splitting at the main window's
   edge and merging back are gone, with `Float.split` and the "Pop Out Float" command: a float's
   views go back into the main window by being carried there, and an emptied float's window closes.
-  A window a view is carried out of stays as it is (no ghost).
+- **A window a view is carried out of goes to its ghost**, as a float in the main window does
+  (`ViewDrag.settleGhost`): the whole OS window fades to the ghost's alpha, material and shadow too
+  (`viewports.fade`, `SDL_SetWindowOpacity`), and while it is a ghost a held pointer over it is read
+  as over the main window beneath (`viewports.seeThrough`; `SDLBackend.heldPoint` skips it), so the
+  places it lies over can be seen and dropped on. The drag reads such a float in both frames
+  (`ViewDrag.Occluder.band_bounds`): its band, where it is drawn and the pointer is read while it is
+  firm, and where its window lies over the main window (`Floats.Viewport.main_delta`), where the
+  pointer is read while it is a ghost and where the main window's drops slide clear of it. It firms
+  by the same rules — at once with nothing under it, after a rest or on its header otherwise. Over
+  the ghost the carry window shows what is carried, which the main window's drawing would show only
+  faintly through it.
 - **Titled, as the main window is (macOS).** Created titled, not borderless
   (`SDLBackend.viewportOpen`), and dressed as the main window: content under a transparent title
   bar, the title's text hidden (the float's header shows it), the OS's traffic lights, shadow,

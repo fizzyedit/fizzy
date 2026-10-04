@@ -148,7 +148,9 @@ pub const viewports = struct {
     pub const os_frame = false;
     pub const os_buttons = false;
     pub const carries = false;
-    pub fn carryShape(_: *Viewport, _: f32) void {}
+    pub fn seeThrough(_: *Viewport, _: bool) void {}
+    pub fn fade(_: *Viewport, _: f32) void {}
+    pub fn carryShape(_: *Viewport, _: ?f32) void {}
     pub fn openCarry(_: Rect) ?*Viewport {
         return null;
     }

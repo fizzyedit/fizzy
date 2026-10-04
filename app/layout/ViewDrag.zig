@@ -188,6 +188,23 @@ pub const Occluder = struct {
     header: dvui.Rect.Physical,
     /// The float the view is carried out of (`carriedOutOf`). It covers only while it is firm.
     source: bool = false,
+    /// A float in an OS window of its own: `bounds` and `header` are where that window lies over
+    /// the main window's frame, and these where the float is drawn in the window's band — the
+    /// pointer is read in one or the other (`SDLBackend.heldPoint`), by whether the window lets it
+    /// through to the main window (a ghost does).
+    band_bounds: ?dvui.Rect.Physical = null,
+    band_header: dvui.Rect.Physical = .{},
+
+    /// Whether `p` is over its window, in either frame it is read in.
+    fn covers(self: Occluder, p: dvui.Point.Physical) bool {
+        if (self.bounds.contains(p)) return true;
+        return if (self.band_bounds) |b| b.contains(p) else false;
+    }
+
+    /// Whether `p` is over its header, in either frame.
+    fn onHeader(self: Occluder, p: dvui.Point.Physical) bool {
+        return self.header.contains(p) or (self.band_bounds != null and self.band_header.contains(p));
+    }
 };
 
 /// What lies under a point, as far as which window: the topmost float there (0, the main window,
@@ -200,9 +217,9 @@ fn under(state: *const Layout.State, p: dvui.Point.Physical) Under {
     const d = &state.view_drag;
     var out: Under = .{};
     for (d.occluders[0..d.occluder_count]) |o| {
-        if (!o.bounds.contains(p) or o.layer < out.layer) continue;
+        if (!o.covers(p) or o.layer < out.layer) continue;
         if (o.source and !d.ghost_firm) continue;
-        out = .{ .layer = o.layer, .header = o.header.contains(p) };
+        out = .{ .layer = o.layer, .header = o.onHeader(p) };
     }
     return out;
 }
@@ -266,7 +283,7 @@ pub fn settleGhost(state: *Layout.State) bool {
     // lifted from the float's corner button, the drop started out past the float's edge, and the
     // float went toward its ghost, firmed as the drop crossed back over it on the way out, and went
     // again — a hitch in the middle of every drag out of a float.
-    if (!g.bounds.contains(mouse)) {
+    if (!g.covers(mouse)) {
         d.ghost_firm = false;
         d.ghost_rest_ns = 0;
         return false;
@@ -275,12 +292,12 @@ pub fn settleGhost(state: *Layout.State) bool {
     // Under another float over the ghost, the view is aimed at that one.
     var below: u16 = 0;
     for (d.occluders[0..d.occluder_count]) |o| {
-        if (!o.source and o.bounds.contains(a.p) and o.layer > below) below = o.layer;
+        if (!o.source and o.covers(a.p) and o.layer > below) below = o.layer;
     }
     // On a drop beneath it the view is aimed at that drop, lit as one — never the float — except
     // over the ghost's header, its handle: a drop under a ghost is its whole size, and over a small
     // ghost it can leave nowhere else to rest.
-    const on_header = g.header.contains(mouse);
+    const on_header = g.onHeader(mouse);
     if (below > g.layer or (!on_header and onDropBeneath(state, below, a.p, a.r))) {
         d.ghost_rest_ns = 0;
         return false;
@@ -600,6 +617,15 @@ fn mapOccluders(l: *Layout, d: *ViewDrag) void {
         if (d.occluder_count == d.occluders.len) break;
         if (f.closing or f.bounds.w <= 0 or f.bounds.h <= 0) continue;
         d.occluders[d.occluder_count] = .{ .layer = @intCast(i + 1), .bounds = f.bounds, .header = f.header, .source = carriedOutOf(l, f.name) };
+        // In an OS window of its own: where that window lies over the main window's places, and
+        // where the float is drawn in its band besides (`Occluder.band_bounds`).
+        if (f.viewport) |vp| {
+            const o = &d.occluders[d.occluder_count];
+            o.band_bounds = f.bounds;
+            o.band_header = f.header;
+            o.bounds = f.bounds.offsetPoint(vp.main_delta);
+            o.header = f.header.offsetPoint(vp.main_delta);
+        }
         d.occluder_count += 1;
     }
 }

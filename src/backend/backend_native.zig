@@ -153,10 +153,23 @@ pub const viewports = struct {
     }
 
     /// A carry window's shape this frame (`openCarry`): what it carries fills it, rounded by
-    /// `radius` physical pixels — the OS's material and shadow in that shape.
-    pub fn carryShape(vp: *Viewport, radius: f32) void {
+    /// `radius` physical pixels — the OS's material and shadow in that shape. Null: hidden.
+    pub fn carryShape(vp: *Viewport, radius: ?f32) void {
         if (comptime !supported) return;
         dvui.currentWindow().backend.impl.viewportCarryShape(vp, radius);
+    }
+
+    /// A held pointer over `vp`'s window is read as over the main window beneath it while `on`: its
+    /// float gone to its ghost while a view is carried out of it, aimed at the places under it.
+    pub fn seeThrough(vp: *Viewport, on: bool) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportSeeThrough(vp, on);
+    }
+
+    /// `vp`'s window `alpha` opaque, all of it — its material too.
+    pub fn fade(vp: *Viewport, alpha: f32) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportFade(vp, alpha);
     }
 
     /// Whether a carried view can be shown past every window (`openCarry`): macOS.

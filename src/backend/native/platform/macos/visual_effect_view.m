@@ -127,6 +127,13 @@ void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inse
             [window setStyleMask:[window styleMask] | NSWindowStyleMaskFullSizeContentView];
             [window setTitlebarAppearsTransparent:YES];
             [window setTitleVisibility:NSWindowTitleHidden];
+            /* No full screen of its own: the green button zooms it, as an auxiliary window's does.
+             * Taken into a Space of its own it scaled up past its size and snapped, came back out
+             * scaled far down and snapped, and gained an opaque title bar — the main window has
+             * the machinery for that transition (`window_monitor.m`); a pop-out has none. */
+            NSWindowCollectionBehavior behavior = [window collectionBehavior];
+            behavior &= ~(NSWindowCollectionBehavior)(NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorFullScreenAuxiliary);
+            [window setCollectionBehavior:behavior | NSWindowCollectionBehaviorFullScreenNone];
         }
         [window setHasShadow:titled];
         /* No OS animation as it shows or closes: it appears and goes exactly where its float is
@@ -281,10 +288,16 @@ void fizzy_macos_viewport_carry(void *nswindow, void *main_nswindow, long materi
  * transaction the window's place and picture change in (`SDLBackend.renderPresent`), so the shape
  * changes with them.
  */
-void fizzy_macos_viewport_carry_shape(void *nswindow, double radius) {
+void fizzy_macos_viewport_carry_shape(void *nswindow, double radius, double w, double h) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil) return;
+        /* Hidden: nothing of it — its clear picture alone left its material showing, square. */
+        if (radius < 0) {
+            [window setAlphaValue:0];
+            return;
+        }
+        [window setAlphaValue:1];
         NSView *frame = [[window contentView] superview];
         if (frame == nil) return;
         NSVisualEffectView *effect = nil;
@@ -292,16 +305,17 @@ void fizzy_macos_viewport_carry_shape(void *nswindow, double radius) {
             if ([v isKindOfClass:[FizzyViewportGlassView class]]) effect = (NSVisualEffectView *)v;
         }
         if (effect == nil) return;
-        const CGFloat r = (CGFloat)radius;
-        NSImage *mask = [NSImage imageWithSize:NSMakeSize(r * 2 + 1, r * 2 + 1)
+        /* Drawn at the window's size, not stretched: a circle's corners are all of it, and a
+         * stretchable image's caps came to more than the window — no mask, the material square. */
+        const NSSize size = NSMakeSize(w, h);
+        const CGFloat r = (CGFloat)fmin(radius, fmin(w, h) / 2);
+        NSImage *mask = [NSImage imageWithSize:size
                                        flipped:NO
                                 drawingHandler:^BOOL(NSRect dst) {
                                     [[NSColor blackColor] set];
                                     [[NSBezierPath bezierPathWithRoundedRect:dst xRadius:r yRadius:r] fill];
                                     return YES;
                                 }];
-        [mask setCapInsets:NSEdgeInsetsMake(r, r, r, r)];
-        [mask setResizingMode:NSImageResizingModeStretch];
         [effect setMaskImage:mask];
         [effect displayIfNeeded];
         [window invalidateShadow];

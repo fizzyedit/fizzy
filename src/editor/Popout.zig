@@ -33,6 +33,10 @@ var outs: [max_out]?Out = @splat(null);
 /// The window a carried view is shown in past every window of the app's, for as long as a view
 /// drag goes on (`carryFrame`).
 var carry: ?Carry = null;
+/// Where a float's window gone to its ghost lies over the main window's frame this frame
+/// (`windowFrame`): the drag drawn there in the main window shows only faintly through it, so the
+/// carry window shows it over it instead (`carryFrame`).
+var ghost_over: ?viewports.Rect = null;
 
 const Carry = struct {
     viewport: *viewports.Viewport,
@@ -208,6 +212,7 @@ fn release(o: *Out) void {
 /// put where it was drawn, and handed the picture.
 pub fn endFrame(state: *State) void {
     if (!enabled()) return;
+    ghost_over = null;
     for (&outs) |*slot| {
         if (slot.*) |*o| windowFrame(state, o);
     }
@@ -220,10 +225,11 @@ pub fn endFrame(state: *State) void {
 /// window's base over the OS's material and the OS's shadow round it (`viewports.carryShape`), so
 /// out there it is a window as the float it would open is. The drag's drawing, in the main window's
 /// frame past its edge, is copied into it. Once any of it is past the main window it shows all of
-/// it, over the main window too — the main window can show only what lies inside it; while it is
-/// wholly inside the main window, or over a float's window (in its band, which that window shows),
-/// the carry window shows nothing; it goes when the drag does. A drop's tail stays in the drop's
-/// own shape out there.
+/// it, over the main window too — the main window can show only what lies inside it — and over a
+/// float's window gone to its ghost, which the main window's drawing shows only faintly through;
+/// while it is wholly inside the main window, or over a float's window (in its band, which that
+/// window shows), the carry window shows nothing; it goes when the drag does. A drop's tail stays
+/// in the drop's own shape out there.
 fn carryFrame(state: *State) void {
     if (!viewports.carries) return;
     const d = &state.view_drag;
@@ -239,12 +245,13 @@ fn carryFrame(state: *State) void {
     const inside = shape.x >= main_px.x and shape.y >= main_px.y and shape.x + shape.w <= main_px.x + main_px.w and shape.y + shape.h <= main_px.y + main_px.h;
     // Over a float's window it is in that window's band, far past the main window (`Floats.Viewport`).
     const banded = shape.x > main_px.x + main_px.w + 40000;
-    const want = shape.w > 0 and shape.h > 0 and !inside and !banded;
+    const under_ghost = if (ghost_over) |g| shape.x < g.x + g.w and g.x < shape.x + shape.w and shape.y < g.y + g.h and g.y < shape.y + shape.h else false;
+    const want = shape.w > 0 and shape.h > 0 and (!inside or under_ghost) and !banded;
     if (!want) {
         if (carry) |*c| if (c.target) |t| {
             t.clear();
             viewports.present(c.viewport, t);
-            viewports.carryShape(c.viewport, 0);
+            viewports.carryShape(c.viewport, null);
         };
         return;
     }
@@ -319,6 +326,24 @@ fn windowFrame(state: *State, o: *Out) void {
         viewports.setTitle(o.viewport, title);
         @memcpy(o.title_buf[0..title.len], title);
         o.title_len = @intCast(title.len);
+    }
+    // Where its window lies over the main window's frame, from where it is drawn in its band, for a
+    // drag to read it there (`Floats.Viewport.main_delta`).
+    {
+        const band = viewports.frameOf(o.viewport);
+        const at = viewports.inMain(o.viewport);
+        f.viewport.?.main_delta = .{ .x = at.x - band.x, .y = at.y - band.y };
+    }
+    // A view carried out of it: while it is its own ghost (`ViewDrag.settleGhost`), its window fades
+    // to the ghost, material and all, and a held pointer over it reads the main window beneath — the
+    // places it lies over can be seen and aimed at. Firm again, the pointer is the window's.
+    {
+        const d = &state.view_drag;
+        const carried_out = d.active() and !d.loose() and if (state.floatRoot(d.name)) |root| std.mem.eql(u8, root, f.name) else false;
+        const see_through = carried_out and !d.ghost_firm;
+        viewports.seeThrough(o.viewport, see_through);
+        if (see_through) ghost_over = viewports.inMain(o.viewport);
+        viewports.fade(o.viewport, Floats.ghostLook(f.aside.at()).alpha);
     }
     // Where a press is the OS's: its header moves the window and its glass's edges resize it, so
     // the OS snaps, tiles and maximizes it as any window.
