@@ -202,6 +202,17 @@ pub fn end(self: *FrameTarget) void {
     dvui.renderTexture(tex, .{ .r = dvui.windowRectPixels(), .s = 1 }, .{}) catch {};
 }
 
+/// This frame's picture as drawn so far — everything drawn straight into it, before `end` replays
+/// the deferred subwindows — as a texture to draw from, while the frame target is bound; null
+/// otherwise. What a popped-out float's window puts behind its glass where the main window lies
+/// under it, so the glass frosts there what it frosts in the main window (`Popout.behindGlass`).
+pub fn frameTexture() ?dvui.Texture {
+    const self = current orelse return null;
+    if (!self.bound) return null;
+    const t = self.target orelse return null;
+    return dvui.Texture.fromTargetTemp(t) catch null;
+}
+
 /// Drop the targets. Only valid between `Window.begin` and `Window.end`.
 pub fn deinit(self: *FrameTarget) void {
     for (self.targets) |slot| if (slot) |t| t.destroyLater();
