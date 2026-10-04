@@ -168,6 +168,14 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportInMain(vp);
     }
 
+    /// A material behind the float's glass in `vp`'s window — its rounded rect `inset` physical
+    /// pixels in from the window's edge, `radius` its corners — for the float's frost to read the
+    /// desktop through. False where the platform has none (yet).
+    pub fn glass(vp: *Viewport, inset: f32, radius: f32) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius);
+    }
+
     /// The OS asked to close `vp`'s window.
     pub fn closeRequested(vp: *const Viewport) bool {
         if (comptime !supported) return false;

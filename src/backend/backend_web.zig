@@ -142,6 +142,9 @@ pub const viewports = struct {
     pub fn inMain(_: *const Viewport) Rect {
         return .{};
     }
+    pub fn glass(_: *Viewport, _: f32, _: f32) bool {
+        return false;
+    }
     pub fn closeRequested(_: *const Viewport) bool {
         return false;
     }

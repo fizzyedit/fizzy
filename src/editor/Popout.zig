@@ -119,7 +119,12 @@ pub fn beginFrame(state: *State) void {
     const window = viewports.frameOf(vp);
     const frame = (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(Floats.outReach() * s0);
     const s = dvui.windowNaturalScale();
-    f.viewport = .{ .rect = .{ .x = frame.x / s, .y = frame.y / s, .w = frame.w / s, .h = frame.h / s } };
+    // A material behind its glass where the platform has one, so it looks there as it does in
+    // the main window (`Floats.Viewport.material`).
+    // The glass is the float's rect less its own margin, inside the clear one round it.
+    const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
+    const material = viewports.glass(vp, (Floats.outReach() + margin) * s, fizzy.core.corners.scaled(fizzy.core.corners.surface) * s);
+    f.viewport = .{ .rect = .{ .x = frame.x / s, .y = frame.y / s, .w = frame.w / s, .h = frame.h / s }, .material = material };
     out = .{ .serial = f.serial, .viewport = vp };
     dvui.refresh(null, @src(), null);
 }

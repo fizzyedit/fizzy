@@ -764,6 +764,10 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
 pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
     for (&self.viewports) |*slot| {
         if (slot.*) |*v| if (v == vp) {
+            // The window as SDL made it, for SDL to destroy (`viewportGlass`).
+            if (comptime builtin.os.tag == .macos) {
+                if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(v.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null)) |ns| fizzy_macos_viewport_unglass(ns);
+            }
             self.gpu.releaseViewport(v.window);
             c.SDL_DestroyWindow(v.window);
             slot.* = null;
@@ -790,6 +794,21 @@ pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) vi
     vp.screen = placed.screen;
     vp.frame = placed.frame;
     return placed.frame;
+}
+
+extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
+extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
+
+/// Give `vp`'s window a material behind the float's glass — its rounded rect `inset` physical
+/// pixels in from the window's edge, `radius` its corners — so the float's frost reads the desktop
+/// through it as it reads the app in the main window, and the clear margin round the glass, where
+/// its shadow is drawn, stays clear. True where the platform has one (macOS: the main window's
+/// vibrancy); false elsewhere, for now.
+pub fn viewportGlass(_: *SDLBackend, vp: *Viewport, inset: f32, radius: f32) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+    fizzy_macos_viewport_glass(ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
+    return true;
 }
 
 /// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the
