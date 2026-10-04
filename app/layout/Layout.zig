@@ -198,6 +198,11 @@ pub const Container = struct {
     /// (`hide_when_empty`). Drawing it eagerly left a handle with nothing behind it, still
     /// draggable, still resizing a region that was not there.
     pending_split: ?PendingSplit = null,
+    /// The card this region handed to the panes its view opens in it (`Region.InitOptions.pane_cards`):
+    /// what each of them wears. Null when it wears its own card, or has none.
+    card: ?dvui.Options = null,
+    /// The panes (`beginPluginRegion`) opened directly in this region so far this frame.
+    panes: u8 = 0,
     /// The most recent resizable child. A `split` drags *this* region's stored extent — the
     /// neighbour before it — which is the whole of the resize mechanism: there are no ratios and
     /// no boundary table, just one number per resizable region.
@@ -928,6 +933,25 @@ pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.To
         dvui.log.err("plugin regions nest deeper than {d}; \"{s}\" ignored", .{ max_nesting, spec.name });
         return null;
     }
+    // The region it opens in: it counts its panes, and may have handed them its card to wear.
+    const parent_card: ?dvui.Options = if (self.innermost()) |c| c.card else null;
+    if (self.innermost()) |c| c.panes +|= 1;
+    var opts: dvui.Options = .{
+        // Truncated because `id_extra` is a `usize`, which is 32 bits on wasm. A plugin's key is
+        // an id or a hash, so the low bits are the ones carrying the distinction.
+        .id_extra = @truncate(spec.key),
+        .expand = spec.expand,
+        .min_size_content = switch (if (self.innermost()) |c| c.dir else .horizontal) {
+            .horizontal => .{ .w = spec.min_extent },
+            .vertical => .{ .h = spec.min_extent },
+        },
+    };
+    if (parent_card) |card| {
+        opts.background = card.background;
+        opts.color_fill = card.color_fill;
+        opts.corners = card.corners;
+        opts.padding = card.padding;
+    }
     const r = Region.init(self, @src(), .{
         // A plugin formats its name per frame; everything that holds it holds it across frames.
         .name = self.state.internName(self.gpa, spec.name),
@@ -941,16 +965,7 @@ pub fn beginPluginRegion(self: *Layout, spec: sdk.RegionSpec) ?sdk.RegionSpec.To
         .kind_slot = true,
         .on_drop = spec.on_drop,
         .drop_ctx = spec.drop_ctx,
-    }, .{
-        // Truncated because `id_extra` is a `usize`, which is 32 bits on wasm. A plugin's key is
-        // an id or a hash, so the low bits are the ones carrying the distinction.
-        .id_extra = @truncate(spec.key),
-        .expand = spec.expand,
-        .min_size_content = switch (if (self.innermost()) |c| c.dir else .horizontal) {
-            .horizontal => .{ .w = spec.min_extent },
-            .vertical => .{ .h = spec.min_extent },
-        },
-    }) catch |err| {
+    }, opts) catch |err| {
         dvui.logError(@src(), err, "plugin region \"{s}\"", .{spec.name});
         return null;
     };
