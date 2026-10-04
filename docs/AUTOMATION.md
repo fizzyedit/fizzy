@@ -100,7 +100,11 @@ forgets its click count, rather than reading the next click on it as a double-cl
 
 **Demo time is not wall time.** A `wait` holds the clock until the app catches up (a file still
 loading, a pane still opening); every targeted action waits for its target first. A slow machine
-therefore plays the same demo slower, never a different demo.
+therefore plays the same demo slower, never a different demo. Only waits slow it, though: between
+them a frame's wall time is all demo time, however long the frame took, so a browser that drops to
+a few frames a second plays the demo at its pace, choppily, rather than in slow motion. (The first
+frame after a pause counts as a frame, not the pause; and a gap past a second — a hidden tab draws
+nothing — counts as a second.)
 
 **Demo time never runs ahead of what has been applied.** The sequencer yields — ends the frame —
 after any op the app must draw before the next can land: a button, a key, a command, a keyframe,
