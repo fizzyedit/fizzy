@@ -497,7 +497,8 @@ pub fn region(self: *Host, spec: RegionSpec) ?Region {
     return .{ .host = self, .token = token };
 }
 
-/// Start the app's view drag for surface `id`, from `from` — see `EditorAPI.beginViewDrag`.
+/// Start the app's view drag for surface `id` — or for a document not open yet, by the id it will
+/// have — from `from`: see `EditorAPI.beginViewDrag`.
 pub fn beginViewDrag(self: *Host, id: []const u8, from: dvui.Rect.Physical) void {
     if (self.fizzy_api) |a| a.beginViewDrag(id, from);
 }

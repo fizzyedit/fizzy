@@ -2,9 +2,10 @@
 //!
 //! One rule: **the edge you release on is where the dragged view ends up.**
 //! The middle of another place is a trade — or, when the two places are the
-//! halves of one split, a join: they are one place again, holding both. Both
-//! the drop zones and the commit read this file, so what lights under the
-//! pointer is what you get when you let go.
+//! halves of one split, a join: they are one place again, holding both. The
+//! middle of the place the view came out of floats it, into a window of its
+//! own over the layout (`Floats`). Both the drop zones and the commit read this
+//! file, so what lights under the pointer is what you get when you let go.
 //!
 //! A split mints one empty leaf and keeps the origin. Which of the two the
 //! dragged view occupies is the only thing that differs between dropping on
@@ -16,9 +17,9 @@
 //! | own edge       | that edge      | opposite edge     | empty        |
 //!
 //! A self-split cannot move the view onto the leaf: the view is *already* in
-//! the origin, and remounting a surface into a fresh slot tears down its
-//! state (fizzy's Workspace loses its document panes). So the origin keeps it
-//! and the leaf opens empty on the far side — which is also the only way the
+//! the origin, and remounting a surface into a fresh slot tears down every
+//! widget under it — scroll positions, sash sizes, focus. So the origin keeps
+//! it and the leaf opens empty on the far side — which is also the only way the
 //! view can stay under the pointer, where the user dropped it.
 const std = @import("std");
 const dvui = @import("dvui");
@@ -46,6 +47,8 @@ pub const Plan = union(enum) {
     split: Split,
     /// Out of the layout: a document closes, any other view leaves its place.
     remove,
+    /// Out of its place into a floating window of its own, over the layout (`Floats`).
+    float,
 
     pub const Split = struct {
         /// The edge the pointer chose — where the dragged view ends up.
@@ -85,12 +88,14 @@ pub fn kindAtDisc(bounds: dvui.Rect.Physical, c: dvui.Point.Physical, r: f32, sc
 }
 
 /// What `kind` means when the place under the pointer is (`self_drop`) or is
-/// not the place the view was lifted from, and whether the two are the halves
-/// of one split (`halves`, `SplitTree.Forest.joinable`). Null when nothing
-/// should happen: the middle of your own place is not a trade with yourself.
-pub fn plan(kind: Kind, self_drop: bool, halves: bool) ?Plan {
+/// not the place the view was lifted from, whether the two are the halves of
+/// one split (`halves`, `SplitTree.Forest.joinable`), and whether the view may
+/// float (`can_float`, `float_rules.canFloat`). The middle of your own place is
+/// not a trade with yourself: it floats the view, or — where it cannot float —
+/// does nothing, null.
+pub fn plan(kind: Kind, self_drop: bool, halves: bool, can_float: bool) ?Plan {
     return switch (kind) {
-        .swap => if (self_drop) null else if (halves) .join else .swap,
+        .swap => if (self_drop) (if (can_float) .float else null) else if (halves) .join else .swap,
         .remove => .remove,
         .split => |landing| .{ .split = .{
             .landing = landing,
@@ -126,14 +131,14 @@ test "a small place fits the whole drop" {
 
 test "the dropped edge is where the view lands, on any place" {
     // Another place: the leaf opens under the pointer and takes the view.
-    const away = plan(.{ .split = .right }, false, false).?.split;
+    const away = plan(.{ .split = .right }, false, false, false).?.split;
     try std.testing.expectEqual(Side.right, away.landing);
     try std.testing.expectEqual(Side.right, away.mint);
     try std.testing.expect(away.fills_mint);
 
     // Your own place: the origin is already the view, so it stays under the
     // pointer and the empty leaf opens on the far side.
-    const own = plan(.{ .split = .right }, true, false).?.split;
+    const own = plan(.{ .split = .right }, true, false, true).?.split;
     try std.testing.expectEqual(Side.right, own.landing);
     try std.testing.expectEqual(Side.left, own.mint);
     try std.testing.expect(!own.fills_mint);
@@ -142,7 +147,7 @@ test "the dropped edge is where the view lands, on any place" {
 test "every edge lands where it was dropped" {
     for (std.meta.tags(Side)) |side| {
         for ([_]bool{ true, false }) |self_drop| {
-            const s = plan(.{ .split = side }, self_drop, false).?.split;
+            const s = plan(.{ .split = side }, self_drop, false, true).?.split;
             try std.testing.expectEqual(side, s.landing);
             // The view is on `landing` either way: it fills the minted leaf,
             // or the origin keeps it and the leaf went to the other side.
@@ -155,13 +160,16 @@ test "every edge lands where it was dropped" {
     }
 }
 
-test "the middle of your own place does nothing" {
-    try std.testing.expect(plan(.swap, true, false) == null);
-    try std.testing.expectEqual(Plan.swap, plan(.swap, false, false).?);
+test "the middle of your own place floats the view, or does nothing where it cannot float" {
+    try std.testing.expectEqual(Plan.float, plan(.swap, true, false, true).?);
+    try std.testing.expect(plan(.swap, true, false, false) == null);
+    // Anywhere else the middle trades, whatever floating would allow.
+    try std.testing.expectEqual(Plan.swap, plan(.swap, false, false, true).?);
+    try std.testing.expectEqual(Plan.swap, plan(.swap, false, false, false).?);
 }
 
 test "the middle of the other half of a split joins, and its edges still split" {
-    try std.testing.expectEqual(Plan.join, plan(.swap, false, true).?);
-    const s = plan(.{ .split = .left }, false, true).?.split;
+    try std.testing.expectEqual(Plan.join, plan(.swap, false, true, true).?);
+    const s = plan(.{ .split = .left }, false, true, true).?.split;
     try std.testing.expect(s.fills_mint);
 }

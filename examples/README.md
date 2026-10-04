@@ -85,7 +85,7 @@ the build dies with `'src/App.zig' file_hash FileNotFound`.
 
 `b.path("src/Entry.zig")` resolves against fizzy's build root and is correct in both cases.
 
-CI builds all three examples on macOS and Linux for this reason.
+CI builds the examples on Linux for this reason (the bug is no platform's, so macOS and Windows skip them).
 
 ## Not yet covered
 

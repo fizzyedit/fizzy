@@ -266,6 +266,47 @@ pub const Forest = struct {
         }
     }
 
+    /// The place whose split `name` is a part of — the root its tree is keyed by — or `name`
+    /// itself when it was never split or is a root. Null when the forest has never heard of it.
+    pub fn rootOf(self: *const Forest, name: []const u8) ?[]const u8 {
+        var it = self.roots.iterator();
+        while (it.next()) |e| {
+            if (std.mem.eql(u8, e.key_ptr.*, name) or findIn(e.value_ptr.*, name) != null) return e.key_ptr.*;
+        }
+        return null;
+    }
+
+    /// Every single place `root` is divided into, in drawing order; `root` alone when it was never
+    /// split. Allocated in `arena`.
+    pub fn leavesUnder(self: *const Forest, arena: std.mem.Allocator, root_name: []const u8) []const []const u8 {
+        const node = self.root(root_name) orelse {
+            const one = arena.alloc([]const u8, 1) catch return &.{};
+            one[0] = root_name;
+            return one;
+        };
+        var out: std.ArrayListUnmanaged([]const u8) = .empty;
+        leavesIn(node, arena, &out);
+        return out.items;
+    }
+
+    fn leavesIn(node: *const Node, arena: std.mem.Allocator, out: *std.ArrayListUnmanaged([]const u8)) void {
+        switch (node.kind) {
+            .leaf => |n| out.append(arena, n) catch {},
+            .branch => |b| {
+                leavesIn(b.a, arena, out);
+                leavesIn(b.b, arena, out);
+            },
+        }
+    }
+
+    /// Drop `root`'s whole tree: the place is gone, and every split of it with it — a float
+    /// closing. Nothing to do for a place never split.
+    pub fn forget(self: *Forest, gpa: std.mem.Allocator, root_name: []const u8) void {
+        const kv = self.roots.fetchRemove(root_name) orelse return;
+        gpa.free(kv.key);
+        freeNode(gpa, kv.value);
+    }
+
     /// A leaf minted by a split, not a shape-declared root. The picker can Remove these.
     pub fn canForget(self: *const Forest, name: []const u8) bool {
         return self.root(name) == null and self.findLeaf(name) != null;
@@ -451,4 +492,28 @@ test "collectLinks keeps a nested parent link" {
     try std.testing.expectEqualStrings("Center/r1/t1", links[1].name);
     try std.testing.expectEqualStrings("Center/r1", links[1].parent);
     try std.testing.expectEqual(Side.top, links[1].side);
+}
+
+test "a split's places know their root, list as its leaves, and go with it" {
+    const gpa = std.testing.allocator;
+    var f: Forest = .{};
+    defer f.deinit(gpa);
+    try std.testing.expect(f.rootOf("Float 1") == null);
+    _ = f.split(gpa, internLiteral, "Float 1", .right, 80, "Float 1/r1").?;
+    _ = f.split(gpa, internLiteral, "Float 1/r1", .top, 40, "Float 1/r1/t1").?;
+    try std.testing.expectEqualStrings("Float 1", f.rootOf("Float 1/r1/t1").?);
+    try std.testing.expectEqualStrings("Float 1", f.rootOf("Float 1").?);
+
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const leaves = f.leavesUnder(arena.allocator(), "Float 1");
+    try std.testing.expectEqual(@as(usize, 3), leaves.len);
+    try std.testing.expectEqualStrings("Float 1", leaves[0]);
+    try std.testing.expectEqualStrings("Float 1/r1/t1", leaves[1]);
+    try std.testing.expectEqualStrings("Float 1/r1", leaves[2]);
+    try std.testing.expectEqual(@as(usize, 1), f.leavesUnder(arena.allocator(), "Main").len);
+
+    f.forget(gpa, "Float 1");
+    try std.testing.expect(f.root("Float 1") == null);
+    try std.testing.expect(f.rootOf("Float 1/r1") == null);
 }

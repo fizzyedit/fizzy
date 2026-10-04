@@ -2673,10 +2673,10 @@ pub fn activeDoc(editor: *Editor) ?sdk.DocHandle {
     return editor.workbench.activeDoc();
 }
 
-/// Files sidebar inactive — drop tree dvui stash and tab-drag state.
+/// Files sidebar inactive — drop the tree's dvui stash id, which the tree sets again each frame
+/// it draws.
 pub fn resetFileTreeWhenFilesHidden(editor: *Editor) void {
     editor.workbench.clearFileTreeDataId();
-    editor.clearFileTreeTabDragDropState();
 }
 
 /// Draws whichever center provider is active, blur-fading when that changes.
@@ -3844,6 +3844,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             else
                 fizzy_layout.layout(ctx, &layout);
 
+            // The views floating over the window: places of the framework's own, drawn after the
+            // shape and before its regions are published, so theirs are this frame's too.
+            layout.drawFloats();
             // The shape has finished declaring regions: publish them. Until this point
             // `regionFor` answered from the previous frame, which is what lets a command
             // dispatched between frames drive a region (see `Layout.State.regions`).
@@ -4049,12 +4052,29 @@ pub fn rebuildWorkspaces(editor: *Editor) !void {
 /// whichever half it has, so a region emptied on purpose is written as an empty list.
 fn saveRegions(editor: *Editor) void {
     const gpa = editor.app.gpa;
+    const regions = editor.collectSavedRegions(gpa);
+    defer gpa.free(regions);
+    fizzy.backend.saveRegions(editor.app.config_folder, regions);
+    if (editor.app.layout.dock) |*d| {
+        const snap = d.snapshot(gpa) catch return;
+        defer snap.deinit(gpa);
+        fizzy.backend.saveTree(editor.app.config_folder, snap);
+    } else if (editor.app.layout.tree_cleared) {
+        fizzy.backend.saveTree(editor.app.config_folder, null);
+        editor.app.layout.tree_cleared = false;
+    }
+}
+
+/// Every place `layout.zon` should remember, as it stands: extents, assignments, splits,
+/// Single/Multiple, orders and floats, one entry per place. The slice is `gpa`'s; every string in
+/// it is borrowed from the layout state, so use it before the layout changes again.
+pub fn collectSavedRegions(editor: *Editor, gpa: std.mem.Allocator) []fizzy.backend.SavedRegion {
     var by_name: std.StringArrayHashMapUnmanaged(fizzy.backend.SavedRegion) = .empty;
     defer by_name.deinit(gpa);
     {
         var it = editor.app.layout.extents.iterator();
         while (it.next()) |e| {
-            const gop = by_name.getOrPut(gpa, e.key_ptr.*) catch return;
+            const gop = by_name.getOrPut(gpa, e.key_ptr.*) catch return &.{};
             if (!gop.found_existing) gop.value_ptr.* = .{ .name = e.key_ptr.* };
             gop.value_ptr.extent = e.value_ptr.*;
         }
@@ -4062,7 +4082,7 @@ fn saveRegions(editor: *Editor) void {
     {
         var it = editor.app.layout.assignments.iterator();
         while (it.next()) |e| {
-            const gop = by_name.getOrPut(gpa, e.key_ptr.*) catch return;
+            const gop = by_name.getOrPut(gpa, e.key_ptr.*) catch return &.{};
             if (!gop.found_existing) gop.value_ptr.* = .{ .name = e.key_ptr.* };
             gop.value_ptr.surfaces = e.value_ptr.*;
         }
@@ -4096,15 +4116,15 @@ fn saveRegions(editor: *Editor) void {
             gop.value_ptr.order = e.value_ptr.*;
         }
     }
-    fizzy.backend.saveRegions(editor.app.config_folder, by_name.values());
-    if (editor.app.layout.dock) |*d| {
-        const snap = d.snapshot(gpa) catch return;
-        defer snap.deinit(gpa);
-        fizzy.backend.saveTree(editor.app.config_folder, snap);
-    } else if (editor.app.layout.tree_cleared) {
-        fizzy.backend.saveTree(editor.app.config_folder, null);
-        editor.app.layout.tree_cleared = false;
+    // The floats, bottom to top: where each window is and where it came from. One flying shut
+    // is already gone from the layout.
+    for (editor.app.layout.floats.items.items, 0..) |f, z| {
+        if (f.closing) continue;
+        const gop = by_name.getOrPut(gpa, f.name) catch continue;
+        if (!gop.found_existing) gop.value_ptr.* = .{ .name = f.name };
+        gop.value_ptr.floating = .{ .x = f.rect.x, .y = f.rect.y, .w = f.rect.w, .h = f.rect.h, .z = @intCast(z), .home = f.home };
     }
+    return gpa.dupe(fizzy.backend.SavedRegion, by_name.values()) catch &.{};
 }
 
 /// Apply what `layout.zon` remembers per region — its extent, and what the user put in it — on
@@ -4113,6 +4133,17 @@ pub fn loadSavedLayout(editor: *Editor) void {
     const gpa = editor.app.gpa;
     const saved = fizzy.backend.loadRegions(gpa, editor.app.config_folder);
     defer fizzy.backend.freeRegions(gpa, saved);
+    editor.applySavedRegions(saved);
+    if (fizzy.backend.loadTree(gpa, editor.app.config_folder)) |d| {
+        editor.app.layout.pending_dock = d;
+    }
+}
+
+/// Put what `saved` remembers per place on top of the layout as it stands: extents, what the user
+/// put in each place, orders, Single/Multiple, the splits, and the floats — bottom to top, each
+/// held on screen when it first draws. A float with nothing left to show is not brought back.
+pub fn applySavedRegions(editor: *Editor, saved: []const fizzy.backend.SavedRegion) void {
+    const gpa = editor.app.gpa;
     for (saved) |r| {
         if (r.extent) |e| _ = editor.app.layout.setExtent(gpa, r.name, e);
         if (r.surfaces) |ids| editor.app.layout.assign(gpa, r.name, ids) catch continue;
@@ -4123,8 +4154,38 @@ pub fn loadSavedLayout(editor: *Editor) void {
         });
     }
     loadRuntimeSplits(&editor.app.layout, gpa, saved);
-    if (fizzy.backend.loadTree(gpa, editor.app.config_folder)) |d| {
-        editor.app.layout.pending_dock = d;
+    loadFloats(&editor.app.layout, gpa, saved);
+}
+
+fn loadFloats(state: *Layout.State, gpa: std.mem.Allocator, saved: []const fizzy.backend.SavedRegion) void {
+    const order = gpa.alloc(fizzy.backend.SavedRegion, saved.len) catch return;
+    defer gpa.free(order);
+    var n: usize = 0;
+    for (saved) |r| {
+        if (r.floating == null or state.floats.find(r.name) != null) continue;
+        // Something to show: a view assigned to it, or to a place a split of it made.
+        const holds = for (saved) |p| {
+            if (!Layout.float_rules.isUnder(p.name, r.name)) continue;
+            if (p.surfaces) |ids| if (ids.len > 0) break true;
+        } else false;
+        if (!holds) continue;
+        order[n] = r;
+        n += 1;
+    }
+    std.mem.sort(fizzy.backend.SavedRegion, order[0..n], {}, struct {
+        fn less(_: void, a: fizzy.backend.SavedRegion, b: fizzy.backend.SavedRegion) bool {
+            return a.floating.?.z < b.floating.?.z;
+        }
+    }.less);
+    for (order[0..n]) |r| {
+        const fl = r.floating.?;
+        const home = if (fl.home.len > 0) state.internName(gpa, fl.home) else "";
+        _ = state.floats.add(gpa, .{
+            .name = state.internName(gpa, r.name),
+            .rect = .{ .x = fl.x, .y = fl.y, .w = fl.w, .h = fl.h },
+            .home = home,
+            .restored = true,
+        }) catch return;
     }
 }
 
@@ -4571,16 +4632,6 @@ pub fn openOrFocusFileAtGrouping(editor: *Editor, path: []const u8, grouping: u6
     }
     _ = try editor.openFilePath(path, grouping);
     return null;
-}
-
-/// After a workspace drop from the Files tree or when `tab_drag` ends; frees path and clears tree reorder stash.
-pub fn clearFileTreeTabDragDropState(editor: *Editor) void {
-    editor.workbench.clearFileTreeTabDragDropState();
-    if (editor.workbench.file_tree_data_id) |id| {
-        dvui.dataRemove(null, id, "removed_path");
-    }
-    // `file_tree_data_id` is reassigned each `drawFiles` frame; do not clear the id here so
-    // multiple workspace `processTabDrag` calls in one frame do not race.
 }
 
 /// Choke point for every file open (CLI argv, file tree, palette, drag-drop, SDK
@@ -5534,8 +5585,6 @@ pub fn deinit(editor: *Editor) !void {
     }
     editor.doc_io.deinit();
     editor.openings.deinit();
-
-    editor.workbench.clearFileTreeTabDragDropState();
 
     if (editor.app.pending_save_as_path) |p| {
         editor.app.gpa.free(p);

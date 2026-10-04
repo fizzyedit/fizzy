@@ -15,6 +15,7 @@ const Region = @import("Region.zig");
 const Picker = @import("Picker.zig");
 const Seed = @import("Seed.zig");
 pub const SplitTree = @import("SplitTree.zig");
+pub const Floats = @import("Floats.zig");
 
 const State = @This();
 
@@ -124,6 +125,11 @@ tree_cleared: bool = false,
 slide_open: []const u8 = "",
 /// A place's view being dragged to another place. Empty `name` when idle.
 view_drag: ViewDrag = .{},
+/// The views floating over the window, bottom to top (`Floats`).
+floats: Floats = .{},
+/// The window the regions registering now are drawn in: 0 the main window, `n` the `n`th float
+/// (`Region.layer`). Set by `Floats.draw` around each float's contents.
+layer_building: u16 = 0,
 /// Explorer/panel split ratios — "window shape" state persisted in `window.zon`, not
 /// `settings.zon` (dragging a splitter fires every frame; keeping it out of the settings file
 /// means normal window use never dirties a git-tracked settings.zon). Loaded once at startup
@@ -341,14 +347,22 @@ pub fn renamePlace(self: *State, gpa: std.mem.Allocator, from: []const u8, to: [
     self.markDirty();
 }
 
+/// The float place `name` is or lies in (`Float 1/r1` is in `Float 1`), or null for a place of
+/// the main window. A float's splits are always the split forest's, never a seed tree's.
+pub fn floatRoot(self: *const State, name: []const u8) ?[]const u8 {
+    return self.floats.rootOf(name);
+}
+
 /// A leaf the user minted (picker Split), not a seed-declared / pinned place.
 pub fn isMinted(self: *const State, name: []const u8) bool {
-    if (self.dock) |*d| {
-        const idx = d.findPanel(name) orelse return false;
-        return switch (d.nodes.items[idx]) {
-            .leaf => |l| !l.pinned,
-            else => false,
-        };
+    if (self.floatRoot(name) == null) {
+        if (self.dock) |*d| {
+            const idx = d.findPanel(name) orelse return false;
+            return switch (d.nodes.items[idx]) {
+                .leaf => |l| !l.pinned,
+                else => false,
+            };
+        }
     }
     return self.splits.canForget(name);
 }
@@ -357,18 +371,20 @@ pub fn isMinted(self: *const State, name: []const u8) bool {
 /// the place it would merge with. Null when `name` is no split's half, or its other half is
 /// split again.
 pub fn siblingLeaf(self: *const State, name: []const u8) ?[]const u8 {
-    if (self.dock) |*d| {
-        const idx = d.findPanel(name) orelse return null;
-        const parent = d.findParent(idx) orelse return null;
-        const split = switch (d.nodes.items[parent.idx]) {
-            .split => |sp| sp,
-            else => return null,
-        };
-        const other = if (parent.side == .first) split.second else split.first;
-        return switch (d.nodes.items[other]) {
-            .leaf => |lf| if (lf.tabs.items.len > 0) lf.tabs.items[0] else null,
-            else => null,
-        };
+    if (self.floatRoot(name) == null) {
+        if (self.dock) |*d| {
+            const idx = d.findPanel(name) orelse return null;
+            const parent = d.findParent(idx) orelse return null;
+            const split = switch (d.nodes.items[parent.idx]) {
+                .split => |sp| sp,
+                else => return null,
+            };
+            const other = if (parent.side == .first) split.second else split.first;
+            return switch (d.nodes.items[other]) {
+                .leaf => |lf| if (lf.tabs.items.len > 0) lf.tabs.items[0] else null,
+                else => null,
+            };
+        }
     }
     return self.splits.siblingLeaf(name);
 }
@@ -389,25 +405,27 @@ pub fn userSplitPart(self: *const State, name: []const u8) bool {
 /// (`SplitTree.Forest.joinable`).
 pub fn joinable(self: *const State, a: []const u8, b: []const u8) ?SplitTree.Forest.Pair {
     if (std.mem.eql(u8, a, b)) return null;
-    if (self.dock) |*d| {
-        const ia = d.findPanel(a) orelse return null;
-        const ib = d.findPanel(b) orelse return null;
-        if (ia == ib) return null;
-        const pa = d.findParent(ia) orelse return null;
-        const pb = d.findParent(ib) orelse return null;
-        if (pa.idx != pb.idx) return null;
-        const a_pinned = switch (d.nodes.items[ia]) {
-            .leaf => |l| l.pinned,
-            else => return null,
-        };
-        const b_pinned = switch (d.nodes.items[ib]) {
-            .leaf => |l| l.pinned,
-            else => return null,
-        };
-        if (a_pinned and b_pinned) return null;
-        // Neither declared: the first half stays, as the origin of a split does.
-        const keep_a = a_pinned or (!b_pinned and pa.side == .first);
-        return if (keep_a) .{ .keep = a, .drop = b } else .{ .keep = b, .drop = a };
+    if (self.floatRoot(a) == null and self.floatRoot(b) == null) {
+        if (self.dock) |*d| {
+            const ia = d.findPanel(a) orelse return null;
+            const ib = d.findPanel(b) orelse return null;
+            if (ia == ib) return null;
+            const pa = d.findParent(ia) orelse return null;
+            const pb = d.findParent(ib) orelse return null;
+            if (pa.idx != pb.idx) return null;
+            const a_pinned = switch (d.nodes.items[ia]) {
+                .leaf => |l| l.pinned,
+                else => return null,
+            };
+            const b_pinned = switch (d.nodes.items[ib]) {
+                .leaf => |l| l.pinned,
+                else => return null,
+            };
+            if (a_pinned and b_pinned) return null;
+            // Neither declared: the first half stays, as the origin of a split does.
+            const keep_a = a_pinned or (!b_pinned and pa.side == .first);
+            return if (keep_a) .{ .keep = a, .drop = b } else .{ .keep = b, .drop = a };
+        }
     }
     return self.splits.joinable(a, b);
 }
@@ -416,6 +434,7 @@ pub fn joinable(self: *const State, a: []const u8, b: []const u8) ?SplitTree.For
 /// `publishRegions` swaps into view when the shape finishes.
 pub fn registerRegion(self: *State, gpa: std.mem.Allocator, entry: Region) void {
     var r = entry;
+    r.layer = self.layer_building;
     if (r.name.len > 0) r.shows = self.showsOf(r.name, r.shows);
     self.regions_building.append(gpa, r) catch {};
 }
@@ -560,6 +579,19 @@ pub fn unassign(self: *State, gpa: std.mem.Allocator, name: []const u8) void {
     gpa.free(kv.value);
 }
 
+/// Forget everything kept under place `name` — what it holds, their order, Single/Multiple and
+/// its extent — because the place itself is gone for good: a float closed, whose number the next
+/// float may reuse. Returns true when an extent went, which the app may want to save.
+pub fn forgetPlace(self: *State, gpa: std.mem.Allocator, name: []const u8) bool {
+    self.unassign(gpa, name);
+    if (self.orders.fetchRemove(name)) |kv| {
+        gpa.free(kv.key);
+        freeIds(gpa, kv.value);
+    }
+    if (self.shows.fetchRemove(name)) |kv| gpa.free(kv.key);
+    return self.clearExtent(gpa, name);
+}
+
 /// The debounce between a layout change and its write to disk. Long enough that dragging a
 /// split does not write every frame; short enough that a crash right after a change loses
 /// nothing a user would notice.
@@ -650,6 +682,7 @@ pub fn deinitExtents(self: *State, gpa: std.mem.Allocator) void {
     self.extents.deinit(gpa);
     self.splits.deinit(gpa);
     self.deinitDock();
+    self.floats.deinit(gpa);
 }
 
 /// Drop every per-place overlay texture. Safe to call twice — the map is
@@ -734,6 +767,8 @@ pub fn resetLayout(self: *State, gpa: std.mem.Allocator) void {
     self.splits.deinit(gpa);
     self.splits = .{};
     self.clearDock();
+    // The floats' places went with the assignments and splits above; their windows go too.
+    self.floats.clear();
     self.slide_open = "";
     self.view_drag.discard();
     self.discardSwaps();

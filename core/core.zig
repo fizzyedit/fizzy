@@ -47,6 +47,8 @@ pub const widgets = @import("widgets.zig");
 pub const anim = @import("anim.zig");
 /// How things move: the one motion setting every animation reads (off, minimal, playful).
 pub const motion = @import("motion.zig");
+/// A motion's clock stepped by its frames, so a long frame holds it rather than skipping it on.
+pub const FrameClock = @import("FrameClock.zig");
 /// How round the app's corners are: the one Corner roundness setting every radius scales by.
 pub const corners = @import("corners.zig");
 /// Frosted glass that bends what it shows — lens at the rim, ripples through it.

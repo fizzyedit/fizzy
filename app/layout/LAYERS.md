@@ -20,6 +20,12 @@ There is also a concrete hazard. Reversing paint order does not reverse dvui's e
 which is front-to-back by widget order. Declaration order and hit-test order would stop agreeing,
 and the bugs that produces ("the click went to the pane behind") are the hardest kind to see.
 
+Floats (`Floats.zig`, `SPLITS.md`) are the layering that does work, and why: each is a dvui
+subwindow, so paint order and event routing are dvui's z-order and cannot disagree — a press
+goes to the topmost window under it. The one reader that is not dvui's event routing, a view
+drag's hit test, reads the floats explicitly: every place registers with the window it is drawn
+in (`Region.layer`), and the drag aims only at the topmost layer under the pointer.
+
 ## The shape to build: blur is a property of a region
 
 ```zig

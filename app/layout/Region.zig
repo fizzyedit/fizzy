@@ -72,6 +72,10 @@ bounds: dvui.Rect.Physical = .{},
 /// What a view dropped here does, for a plugin's region — `sdk.RegionSpec.on_drop`.
 on_drop: ?*const fn (ctx: ?*anyopaque, drop: sdk.RegionSpec.Drop) bool = null,
 drop_ctx: ?*anyopaque = null,
+/// Which window it is drawn in: 0 the main window, `n` the `n`th float from the bottom
+/// (`Floats`). Stamped as it registers (`State.layer_building`); a drag aims only at the topmost
+/// layer under the pointer.
+layer: u16 = 0,
 
 /// The key this region's selection lives under in the host — see `Layout.selectedIn`.
 ///
@@ -668,7 +672,11 @@ fn cornerButton(self: *Layout, opts: InitOptions, keywords: []const []const u8, 
     // for the frames that fade took to run down: a stroke flashed round the place a view landed in.
     // Held for the whole of a drag out of this place, so the place being carried from stays
     // marked — the only place a drag lights, and it goes out as the drag ends.
-    const ring_wanted = filled and (dragging_this or (!self.state.view_drag.active() and (picker_here or near or pressing)));
+    // Not round a float that is a ghost of itself for the drag (`Floats`): nothing of the live
+    // float shows, and the ring is drawn past the clip that hides the rest. Firm again, under the
+    // view aimed back at it, it is marked as any place carried from is.
+    const aside = if (self.state.floatRoot(opts.name)) |root| ViewDrag.ghosted(self, root) else false;
+    const ring_wanted = filled and !aside and (dragging_this or (!self.state.view_drag.active() and (picker_here or near or pressing)));
     const ring_alpha = chooserFade(box.data().id.update("ring"), if (ring_wanted) 1 else 0);
     if (ring_alpha > 0.01) {
         // Under the region's own border rect, not the content clip `cornerButton` runs inside:
@@ -1325,7 +1333,11 @@ pub fn splitNamed(self: *Layout, name: []const u8, axis: dvui.enums.Direction) v
 /// is too small or is not a leaf. A view-drag drop uses this so a left or
 /// top edge can open on that side, not only the trailing one.
 pub fn splitOn(self: *Layout, name: []const u8, side: SplitTree.Side) ?[]const u8 {
-    if (self.state.dock) |*dock| return splitDock(self, dock, name, side);
+    // A float is no leaf of a shape's seed tree: its splits live in the split forest, whatever
+    // the shape below it is built from.
+    if (self.state.floatRoot(name) == null) {
+        if (self.state.dock) |*dock| return splitDock(self, dock, name, side);
+    }
 
     const size = ViewDrag.placeSize(self.state, name) orelse return null;
     const span = switch (SplitTree.axisOf(side)) {

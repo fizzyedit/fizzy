@@ -966,6 +966,11 @@ pub const Pane = struct {
     /// for the blur turned off where the glass program draws (`LiquidField`), so liquid glass is
     /// still glass. Its capture runs at `min_blur`, for the picture before the blur.
     clear: bool = false,
+    /// The size the pane is growing into, physical: a window growing into place. Its capture is
+    /// made that size from the first frame (`captureSize`), so it has one set of targets for the
+    /// whole growth — growing from a drop to a window several times its size, it outgrew each
+    /// capture in turn and made a new pyramid for each, all in the motion's first frames.
+    reach: ?Size.Physical = null,
 };
 
 /// Physical pixels: the least blur a frost is drawn with (`frostPane`).
@@ -1038,7 +1043,11 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     // targets, for many frames, where an exact capture was a new pyramid every frame it moved.
     const need = rect.insetAll(-margin);
     const cap = dvui.dataGetPtrDefault(null, id, "_frost_cap", dvui.Size, .{});
-    cap.* = captureSize(cap.*, .{ .w = need.w, .h = need.h });
+    const want: dvui.Size = if (pane.reach) |r|
+        .{ .w = @max(need.w, r.w + 2 * margin), .h = @max(need.h, r.h + 2 * margin) }
+    else
+        .{ .w = need.w, .h = need.h };
+    cap.* = captureSize(cap.*, want);
     const captured: Rect.Physical = .{ .x = need.x, .y = need.y, .w = cap.w, .h = cap.h };
     // `init` takes a rect in *window* coordinates.
     const nat = dvui.windowRectScale().rectFromPhysical(captured);

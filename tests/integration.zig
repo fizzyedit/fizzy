@@ -2144,6 +2144,8 @@ const ManyPanelFrame = struct {
                 defer panel.deinit();
             }
         }
+        // As fizzy's frame does: the floats over the shape, before its regions are published.
+        layout.drawFloats();
         e.app.layout.publishRegions();
         return .ok;
     }
@@ -2432,6 +2434,7 @@ const EndlessFrame = struct {
         const e = editor.?;
         var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
         const result = try endless.layout(null, &layout);
+        layout.drawFloats();
         e.app.layout.publishRegions();
         // Over every place, as fizzy's frame does: the drops the places queued.
         layout.drawDragOverlay();
@@ -2859,10 +2862,10 @@ test "drag: a strip whose place cannot take the view is not a chooser for it" {
     VD.begin(&layout, "Center", .{ .w = 100, .h = 100 }, .{ .w = 100, .h = 100 });
     const strip: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 200, .h = 30 };
     // A strip of a place the drag mapped no target for (a document pane, say) is passed over...
-    VD.offerChooser(&layout, "Pane 9", strip, true);
+    VD.offerChooser(&layout, "Pane 9", strip, true, null);
     try std.testing.expect(VD.chooserAt(&editor.app.layout, .{ .x = 10, .y = 10 }) == null);
     // ...and the place the view came out of always reads as one.
-    VD.offerChooser(&layout, "Center", strip, false);
+    VD.offerChooser(&layout, "Center", strip, false, null);
     const o = VD.chooserAt(&editor.app.layout, .{ .x = 10, .y = 10 }) orelse return error.TestExpectedEqual;
     try std.testing.expectEqualStrings("Center", o.name);
 }
@@ -3238,6 +3241,98 @@ test "dragging a tab off a Multiple place's strip starts the view drag with it" 
     }
     try std.testing.expect(editor.app.layout.view_drag.active());
     try std.testing.expectEqualStrings("test.one", editor.app.layout.view_drag.moved_id);
+}
+
+test "a tab carried off a Multiple place's strip and back along it goes in where it is let go" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.view_drag.discard();
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    const center = try multiCenter(editor);
+    const cw = dvui.currentWindow();
+    const y = center.bounds.y + (MultiProbe.one_top - center.bounds.y) / 2;
+    const x0 = center.bounds.x + 16;
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = x0, .y = y } });
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    // Down off the strip, well into the place: the view drag, carrying `one`.
+    var dy: f32 = 0;
+    while (dy <= 120) : (dy += 20) {
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = x0, .y = y + dy } });
+        _ = try dvui.testing.step(EndlessFrame.frame);
+    }
+    try std.testing.expect(editor.app.layout.view_drag.active());
+    try std.testing.expect(fizzy.Editor.Layout.ViewDrag.chooserAt(&editor.app.layout, .{ .x = x0, .y = y + 120 }) == null);
+    // Back up onto the strip and along it past `two`: the strip is somewhere to go in, and says
+    // where along it.
+    var x = x0;
+    while (x < x0 + 170) : (x += 10) {
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = x, .y = y } });
+        _ = try dvui.testing.step(EndlessFrame.frame);
+    }
+    const o = fizzy.Editor.Layout.ViewDrag.chooserAt(&editor.app.layout, .{ .x = x, .y = y }) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("Center", o.name);
+    try std.testing.expect(o.at != null);
+    _ = try cw.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    try std.testing.expect(!editor.app.layout.view_drag.active());
+    const order = editor.app.layout.assignment("Center") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 2), order.len);
+    try std.testing.expectEqualStrings("test.two", order[0]);
+    try std.testing.expectEqualStrings("test.one", order[1]);
+}
+
+test "a view let go over another place's chooser goes into its list where along it, and is shown" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.view_drag.discard();
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    _ = try multiCenter(editor);
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    // In no place: Center's list is written down, and does not take it by keyword.
+    try editor.app.host.registerSurface(.{ .id = "test.three", .title = "Three", .keywords = fizzy.sdk.keywords.ide.main, .draw = draw });
+    try dvui.testing.settle(EndlessFrame.frame);
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.beginLoose(&layout, "test.three", .{ .w = 40, .h = 20 }, null);
+    try std.testing.expect(editor.app.layout.view_drag.active());
+    ViewDrag.insertInto(&layout, ViewDrag.loose_source, "Center", .{ .before = "test.two" });
+
+    const order = editor.app.layout.assignment("Center") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 3), order.len);
+    try std.testing.expectEqualStrings("test.one", order[0]);
+    try std.testing.expectEqualStrings("test.three", order[1]);
+    try std.testing.expectEqualStrings("test.two", order[2]);
+    try dvui.testing.settle(EndlessFrame.frame);
+    var center: fizzy.Editor.Layout.Region = undefined;
+    for (editor.app.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Center")) center = r;
+    }
+    const shown = layout.selectedIn(&center) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("test.three", shown.id);
 }
 
 test "a view-drag can split its own place" {
@@ -3825,6 +3920,60 @@ test "a view dropped on a plugin's region goes to its on_drop, middle and edge a
     try std.testing.expectEqual(@as(usize, 1), still.len);
 }
 
+// A file carried out of the explorer that is not open yet has no surface: it is carried by the id
+// its document will have (`sdk.document.surfaceId`), and only a document's slot takes it — whose
+// own drop opens the file (the workbench's `paneDrop`).
+test "drag: a document not open yet goes only to a document's slot, whose drop gets the id it will have" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.view_drag.discard();
+
+    const state = &editor.app.layout;
+    const gpa = editor.app.gpa;
+    const main_at: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 800, .h = 400 };
+    const pane_at: dvui.Rect.Physical = .{ .x = 100, .y = 40, .w = 600, .h = 320 };
+    const panel_at: dvui.Rect.Physical = .{ .x = 0, .y = 400, .w = 800, .h = 200 };
+    const doc_kw: []const []const u8 = &.{"main.document"};
+    state.registerRegion(gpa, .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main, .bounds = main_at, .size = .{ .w = 800, .h = 400 } });
+    state.registerRegion(gpa, .{ .name = "Pane 0", .keywords = doc_kw, .by_name = true, .kind_slot = true, .shows = .many, .bounds = pane_at, .on_drop = DropProbe.onDrop });
+    state.registerRegion(gpa, .{ .name = "Panel", .keywords = fizzy.sdk.keywords.ide.panel, .shows = .many, .bounds = panel_at });
+    state.publishRegions();
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, dvui.currentWindow().arena());
+    const VD = fizzy.Editor.Layout.ViewDrag;
+    const id = "text.doc:/project/notes.md";
+    try std.testing.expect(editor.app.host.surfaceById(id) == null);
+    VD.beginLoose(&layout, id, .{ .x = 10, .y = 10, .w = 120, .h = 24 }, null);
+    try std.testing.expect(state.view_drag.active());
+    try std.testing.expectEqualStrings(id, state.view_drag.moved_id);
+
+    // Mapped: the document's slot, and no plain place.
+    try std.testing.expectEqual(@as(usize, 1), state.view_drag.target_count);
+    try std.testing.expectEqualStrings("Pane 0", state.view_drag.targets[0].name);
+    try std.testing.expectEqualStrings("Pane 0", VD.targetAt(&layout, .{ .x = 400, .y = 200 }, VD.loose_source) orelse
+        return error.TestExpectedEqual);
+    try std.testing.expect(VD.targetAt(&layout, .{ .x = 40, .y = 200 }, VD.loose_source) == null);
+    try std.testing.expect(VD.targetAt(&layout, .{ .x = 400, .y = 500 }, VD.loose_source) == null);
+
+    // Let go on the slot: its drop gets the id, to open the file by.
+    DropProbe.last = null;
+    VD.place(&layout, VD.loose_source, "Pane 0", .swap);
+    const got = DropProbe.last orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings(id, got.surface_id);
+    try std.testing.expect(got.zone == .center);
+    // On a plain place, nothing: no list there names a document it cannot show.
+    VD.place(&layout, VD.loose_source, "Main", .swap);
+    VD.place(&layout, VD.loose_source, "Panel", .swap);
+    try std.testing.expect(state.assignment("Main") == null);
+    try std.testing.expect(state.assignment("Panel") == null);
+}
+
 test "a region with no drop handler takes the middle by the app's default" {
     var ctx = try shim.init(std.testing.allocator);
     defer ctx.deinit(std.testing.allocator);
@@ -3965,6 +4114,180 @@ test "drop: a small place shows the whole of it" {
     try std.testing.expect(b.contains(w.rect().topLeft()));
     try std.testing.expect(w.rect().h <= b.h);
     try std.testing.expect(DZ.at(w, b.center()).?.eql(.center));
+}
+
+/// `w`'s bubbles lie in one line through the place's middle, in `order` along it, each reading as
+/// its own zone, all of them inside `place`.
+fn expectStrip(w: DZ.Wheel, place: dvui.Rect.Physical, order: []const DZ.Zone) !void {
+    const across = w.dir == .horizontal;
+    var last: f32 = -std.math.floatMax(f32);
+    for (order) |z| {
+        const b = w.bubble(z);
+        try std.testing.expectApproxEqAbs(if (across) place.center().y else place.center().x, if (across) b.c.y else b.c.x, 0.01);
+        const along = if (across) b.c.x else b.c.y;
+        try std.testing.expect(along > last);
+        last = along;
+        try std.testing.expect(DZ.at(w, b.c).?.eql(z));
+    }
+    try std.testing.expect(DZ.at(w, place.center()).?.eql(.center));
+    const r = w.rect();
+    try std.testing.expect(place.contains(r.topLeft()) and place.contains(r.bottomRight()));
+}
+
+test "drop: a long, skinny place lines its drop up along it, bigger than a wheel there" {
+    // A bottom panel, 1000 by 200: a wheel would be cut to 200 tall, a strip along it is not.
+    const panel: dvui.Rect.Physical = .{ .x = 0, .y = 400, .w = 1000, .h = 200 };
+    const across = DZ.wheel(panel, 1, true);
+    try std.testing.expectEqual(@as(f32, 1), across.strip);
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, across.dir);
+    try std.testing.expect(across.unit > across.shaped(0, across.dir).unit * DZ.strip_gain);
+    // The place's ends at the ends, its top and bottom either side of the middle, the trash past the end.
+    try expectStrip(across, panel, &.{ .{ .edge = .left }, .{ .edge = .top }, .center, .{ .edge = .bottom }, .{ .edge = .right }, .remove });
+    // Without the trash, the same line less it.
+    const plain = DZ.wheel(panel, 1, false);
+    try expectStrip(plain, panel, &.{ .{ .edge = .left }, .{ .edge = .top }, .center, .{ .edge = .bottom }, .{ .edge = .right } });
+    try std.testing.expect(DZ.at(plain, across.bubble(.remove).c) == null);
+
+    // A narrow sidebar, 260 by 800, on a display at twice the scale: down it.
+    const side: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 520, .h = 1600 };
+    const down = DZ.wheel(side, 2, true);
+    try std.testing.expectEqual(@as(f32, 1), down.strip);
+    try std.testing.expectEqual(dvui.enums.Direction.vertical, down.dir);
+    try std.testing.expect(down.unit > down.shaped(0, down.dir).unit * DZ.strip_gain);
+    try expectStrip(down, side, &.{ .{ .edge = .top }, .{ .edge = .left }, .center, .{ .edge = .right }, .{ .edge = .bottom }, .remove });
+}
+
+test "drop: a place with room for the wheel keeps it" {
+    // Roomy: the wheel at full size, and so would a strip be.
+    try std.testing.expectEqual(@as(f32, 0), DZ.wheel(.{ .x = 0, .y = 0, .w = 800, .h = 600 }, 1, true).strip);
+    try std.testing.expectEqual(@as(f32, 0), DZ.wheel(.{ .x = 0, .y = 0, .w = 600, .h = 2000 }, 1, true).strip);
+    // Small but not skinny: a strip would be smaller still.
+    try std.testing.expectEqual(@as(f32, 0), DZ.wheel(.{ .x = 0, .y = 0, .w = 200, .h = 200 }, 1, true).strip);
+    // Narrow, but a wheel there is all but as big as a strip would be.
+    const near = DZ.wheel(.{ .x = 0, .y = 0, .w = 310, .h = 1000 }, 1, true);
+    try std.testing.expectEqual(@as(f32, 0), near.strip);
+    try std.testing.expect(near.shaped(1, .vertical).unit > near.unit);
+}
+
+const ShapeFrame = struct {
+    var wheel: DZ.Wheel = undefined;
+    const key: dvui.Id = @enumFromInt(0x5a_a9_e0_01);
+
+    fn frame() anyerror!dvui.App.Result {
+        _ = DZ.draw(key, wheel, 1, .{});
+        return .ok;
+    }
+
+    fn strip() !f32 {
+        return (DZ.shapeOf(key) orelse return error.TestUnexpectedResult).strip;
+    }
+};
+
+test "drop: a drop comes in in its shape, and changes into another over time" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 1000, .h = 1000 } });
+    defer t.deinit();
+    defer DZ.forget(ShapeFrame.key);
+
+    // Arriving over a bottom panel: a strip from the first frame, not a wheel turning into one.
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 800, .w = 1000, .h = 200 }, 1, true);
+    try std.testing.expectEqual(@as(f32, 1), ShapeFrame.wheel.strip);
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    try std.testing.expectEqual(@as(f32, 1), try ShapeFrame.strip());
+    try dvui.testing.settle(ShapeFrame.frame);
+
+    // The place grows tall enough for the wheel: the strip goes over to it over several frames
+    // (100ms each), not at once, and settles there.
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 400, .w = 1000, .h = 600 }, 1, true);
+    try std.testing.expectEqual(@as(f32, 0), ShapeFrame.wheel.strip);
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    const partway = try ShapeFrame.strip();
+    try std.testing.expect(partway > 0 and partway < 1);
+    try dvui.testing.settle(ShapeFrame.frame);
+    try std.testing.expectEqual(@as(f32, 0), try ShapeFrame.strip());
+
+    // A strip across given a strip down goes back through the wheel to turn.
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 800, .w = 1000, .h = 200 }, 1, true);
+    try dvui.testing.settle(ShapeFrame.frame);
+    try std.testing.expectEqual(dvui.enums.Direction.horizontal, DZ.shapeOf(ShapeFrame.key).?.dir);
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 0, .w = 200, .h = 1000 }, 1, true);
+    try std.testing.expectEqual(dvui.enums.Direction.vertical, ShapeFrame.wheel.dir);
+    var through_wheel = false;
+    for (0..40) |_| {
+        _ = try dvui.testing.step(ShapeFrame.frame);
+        const now = DZ.shapeOf(ShapeFrame.key).?;
+        if (now.strip == 0) through_wheel = true;
+        // Never running the new way before it has been the wheel.
+        if (!through_wheel) try std.testing.expectEqual(dvui.enums.Direction.horizontal, now.dir);
+    }
+    try std.testing.expect(through_wheel);
+    try std.testing.expectEqual(@as(f32, 1), try ShapeFrame.strip());
+    try std.testing.expectEqual(dvui.enums.Direction.vertical, DZ.shapeOf(ShapeFrame.key).?.dir);
+}
+
+test "drop: a drop given another middle slides there over time, and comes in where it is given" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 1000, .h = 1000 } });
+    defer t.deinit();
+    defer DZ.forget(ShapeFrame.key);
+
+    // Arriving: where it is given from the first frame, not sliding in from anywhere.
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 0, .w = 1000, .h = 1000 }, 1, true);
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    try std.testing.expectEqual(ShapeFrame.wheel.center, DZ.shapeOf(ShapeFrame.key).?.center);
+    try dvui.testing.settle(ShapeFrame.frame);
+
+    // The part of its place it sits in moves — a window over the place's middle came back — and
+    // it goes over several frames, through the points between, to settle at the new middle.
+    const from = ShapeFrame.wheel.center;
+    ShapeFrame.wheel = DZ.wheel(.{ .x = 0, .y = 0, .w = 400, .h = 1000 }, 1, true);
+    const to = ShapeFrame.wheel.center;
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    _ = try dvui.testing.step(ShapeFrame.frame);
+    const partway = DZ.shapeOf(ShapeFrame.key).?.center;
+    try std.testing.expect(partway.x < from.x and partway.x != to.x);
+    try dvui.testing.settle(ShapeFrame.frame);
+    try std.testing.expectEqual(to, DZ.shapeOf(ShapeFrame.key).?.center);
+    try std.testing.expectEqual(ShapeFrame.wheel.unit, DZ.shapeOf(ShapeFrame.key).?.unit);
+}
+
+test "drop: a place's drop sits in the part of it no window lies over, where it is biggest" {
+    const place: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 1000, .h = 600 };
+    // Nothing over it: the place itself.
+    try std.testing.expectEqual(place, DZ.uncovered(place, &.{}, 1, true).?);
+    // A window off the place covers none of it.
+    try std.testing.expectEqual(place, DZ.uncovered(place, &.{.{ .x = 1200, .y = 0, .w = 100, .h = 100 }}, 1, true).?);
+    // A window over its middle and right: the left of it, as tall as the place, where the whole
+    // wheel fits — not a strip along the top, which would shrink it.
+    const win: dvui.Rect.Physical = .{ .x = 450, .y = 150, .w = 600, .h = 300 };
+    const r = DZ.uncovered(place, &.{win}, 1, true).?;
+    try std.testing.expectEqual(dvui.Rect.Physical{ .x = 0, .y = 0, .w = 450, .h = 600 }, r);
+    try std.testing.expect(r.intersect(win).w <= 0);
+    // Two windows with a gap between them: the gap, if the drop is biggest there.
+    const two = DZ.uncovered(place, &.{ .{ .x = 0, .y = 0, .w = 300, .h = 600 }, .{ .x = 700, .y = 0, .w = 300, .h = 600 } }, 1, true).?;
+    try std.testing.expectEqual(dvui.Rect.Physical{ .x = 300, .y = 0, .w = 400, .h = 600 }, two);
+    // All of it covered: no drop.
+    try std.testing.expect(DZ.uncovered(place, &.{.{ .x = -10, .y = -10, .w = 1100, .h = 700 }}, 1, true) == null);
+}
+
+test "drop: settled, as a wheel or a strip, no two bubbles are near enough to run together" {
+    // Two bubbles closer than half the merge run together (`LiquidField`'s smooth minimum): at
+    // rest each zone is a bubble of its own, whichever the shape and the way it runs, with the
+    // trash and without. On the way from one shape to the other they may run together.
+    const room = DZ.wheel(.{ .x = 0, .y = 0, .w = 1e5, .h = 1e5 }, 1, true);
+    try std.testing.expectEqual(@as(f32, 1), room.unit);
+    for ([_]bool{ true, false }) |remove| for ([_]dvui.enums.Direction{ .horizontal, .vertical }) |dir| for ([_]f32{ 0, 1 }) |strip| {
+        var base = room;
+        base.remove = remove;
+        const w = base.shaped(strip, dir);
+        try std.testing.expectEqual(@as(f32, 1), w.unit);
+        for (DZ.all, 0..) |a, j| for (DZ.all[j + 1 ..]) |b| {
+            if ((a == .remove or b == .remove) and !remove) continue;
+            const p = w.bubble(a);
+            const q = w.bubble(b);
+            const d = @sqrt((p.c.x - q.c.x) * (p.c.x - q.c.x) + (p.c.y - q.c.y) * (p.c.y - q.c.y));
+            try std.testing.expect(d - p.r - q.r > DZ.merge / 2);
+        };
+    };
 }
 
 test "liquid blob: far apart it is its discs; close together it bridges them" {
@@ -4609,4 +4932,936 @@ test "demo: the hand-written sample tape parses and round-trips" {
     var from_binary = try automation.Tape.load(std.testing.allocator, bytes, automation.Player.check);
     defer from_binary.deinit();
     try std.testing.expectEqualDeep(loaded.tape, from_binary.tape);
+}
+
+// ── Floating a view ─────────────────────────────────────────────────────────────────────────────
+// The rules (where a float opens, its name, its stacking) are `app/layout/float_rules.zig`'s own
+// unit tests; these drive the layout.
+
+/// The view `name` is showing, as a drag would lift it.
+fn visibleIn(editor: *fizzy.Editor, name: []const u8) ?[]const u8 {
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    return fizzy.Editor.Layout.ViewDrag.visibleId(&layout, name);
+}
+
+/// Floats not flying shut.
+fn openFloats(editor: *fizzy.Editor) usize {
+    var n: usize = 0;
+    for (editor.app.layout.floats.items.items) |f| {
+        if (!f.closing) n += 1;
+    }
+    return n;
+}
+
+fn holds(ids: []const []const u8, id: []const u8) bool {
+    for (ids) |x| if (std.mem.eql(u8, x, id)) return true;
+    return false;
+}
+
+test "float: a view dropped on the middle of its own place floats, and the place keeps the rest" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.problems", .title = "Problems", .keywords = fizzy.sdk.keywords.ide.panel, .draw = ManyPanelFrame.draw });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 2), case.shows("Panel").len);
+    const lifted = visibleIn(editor, "Panel") orelse return error.TestExpectedEqual;
+
+    try case.place("Panel", "Panel", .swap);
+
+    const floats = editor.app.layout.floats.items.items;
+    try std.testing.expectEqual(@as(usize, 1), floats.len);
+    try std.testing.expectEqualStrings("Float 1", floats[0].name);
+    try std.testing.expectEqualStrings("Panel", floats[0].home);
+    // Its window has drawn, and its place holds just the view that was showing.
+    try std.testing.expect(floats[0].win_id != .zero);
+    const floated = case.shows("Float 1");
+    try std.testing.expectEqual(@as(usize, 1), floated.len);
+    try std.testing.expectEqualStrings(lifted, floated[0]);
+    const left = case.shows("Panel");
+    try std.testing.expectEqual(@as(usize, 1), left.len);
+    try std.testing.expect(!std.mem.eql(u8, left[0], lifted));
+}
+
+test "float: a view alone in a float does not float again" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    try std.testing.expectEqual(@as(usize, 1), editor.app.layout.floats.items.items.len);
+    try case.place("Float 1", "Float 1", .swap);
+    try std.testing.expectEqual(@as(usize, 1), editor.app.layout.floats.items.items.len);
+    try std.testing.expectEqual(@as(usize, 1), case.shows("Float 1").len);
+}
+
+test "float: its last view carried back to a place closes it" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
+    try std.testing.expectEqual(@as(usize, 0), case.shows("Panel").len);
+
+    try case.place("Float 1", "Panel", .swap);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 0), openFloats(editor));
+    // Flown shut and gone.
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+    try std.testing.expect(holds(case.shows("Panel"), "test.output"));
+}
+
+test "float: closing it sends its view home" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    try std.testing.expectEqual(@as(usize, 0), case.shows("Panel").len);
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    layout.closeFloat("Float 1");
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+    // Panel's keywords fill it, so the view is let go and they bring it back — Panel's list is
+    // not written down, which would freeze it against surfaces registered later.
+    try std.testing.expect(holds(case.shows("Panel"), "test.output"));
+    try std.testing.expect(editor.app.layout.assignment("Panel") == null);
+    try std.testing.expect(editor.app.layout.assignment("Float 1") == null);
+}
+
+test "float: the saved layout brings it back, and Reset Layout takes it away" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    const gpa = std.testing.allocator;
+    try case.place("Panel", "Panel", .swap);
+    const was = editor.app.layout.floats.items.items[0].rect;
+
+    // As `layout.zon` holds it: collected, written as ZON and read back — no disk.
+    const regions = editor.collectSavedRegions(gpa);
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try std.zon.stringify.serializeMaxDepth(regions, .{}, &out.writer, 64);
+    gpa.free(regions);
+    const text = try gpa.dupeZ(u8, out.written());
+    defer gpa.free(text);
+    const saved = try std.zon.parse.fromSliceAlloc([]fizzy.backend.SavedRegion, gpa, text, null, .{ .ignore_unknown_fields = true });
+    defer std.zon.parse.free(gpa, saved);
+
+    editor.app.layout.resetLayout(gpa);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 0), editor.app.layout.floats.items.items.len);
+    try std.testing.expect(holds(case.shows("Panel"), "test.output"));
+
+    editor.applySavedRegions(saved);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    const floats = editor.app.layout.floats.items.items;
+    try std.testing.expectEqual(@as(usize, 1), floats.len);
+    try std.testing.expectEqualStrings("Float 1", floats[0].name);
+    try std.testing.expectEqualStrings("Panel", floats[0].home);
+    try std.testing.expectEqual(was, floats[0].rect);
+    const floated = case.shows("Float 1");
+    try std.testing.expectEqual(@as(usize, 1), floated.len);
+    try std.testing.expectEqualStrings("test.output", floated[0]);
+    try std.testing.expectEqual(@as(usize, 0), case.shows("Panel").len);
+}
+
+test "float: a drag aims at a float's place over it, at nothing over its header, past it as before" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+
+    const main_at: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 800, .h = 400 };
+    const panel_at: dvui.Rect.Physical = .{ .x = 0, .y = 400, .w = 800, .h = 200 };
+    const window: dvui.Rect.Physical = .{ .x = 200, .y = 100, .w = 300, .h = 260 };
+    const header: dvui.Rect.Physical = .{ .x = 200, .y = 100, .w = 300, .h = 40 };
+    const body: dvui.Rect.Physical = .{ .x = 200, .y = 140, .w = 300, .h = 220 };
+    const state = &editor.app.layout;
+    state.registerRegion(gpa, .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main, .bounds = main_at, .size = .{ .w = 800, .h = 400 } });
+    state.registerRegion(gpa, .{ .name = "Panel", .keywords = fizzy.sdk.keywords.ide.panel, .bounds = panel_at, .shows = .many });
+    // The float's place, drawn in its window: layer 1.
+    state.layer_building = 1;
+    state.registerRegion(gpa, .{ .name = "Float 1", .keywords = fizzy.Editor.Layout.slot_keywords, .by_name = true, .shows = .many, .bounds = body });
+    state.layer_building = 0;
+    state.publishRegions();
+    _ = try state.floats.add(gpa, .{
+        .name = "Float 1",
+        .rect = .{ .x = 100, .y = 50, .w = 150, .h = 130 },
+        .home = "Panel",
+        .fresh = false,
+        .win_id = @enumFromInt(0xf10a7),
+        .bounds = window,
+        .header = header,
+    });
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Panel", panel_at, panel_at);
+    defer state.view_drag.discard();
+
+    // Over the float: its place, though Main is under it too.
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, .{ .x = 350, .y = 250 }, "Panel") orelse
+        return error.TestExpectedEqual);
+    // Over its header: nothing — it is the float's handle.
+    try std.testing.expect(ViewDrag.targetAt(&layout, .{ .x = 350, .y = 120 }, "Panel") == null);
+    // Beside it, Main as ever.
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, .{ .x = 650, .y = 200 }, "Panel") orelse
+        return error.TestExpectedEqual);
+}
+
+/// Main, Panel and a float lying over Main's middle, registered as a frame would have them, for a
+/// drag to read: `drag_aims_*`.
+const FloatOverMain = struct {
+    const main_at: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 800, .h = 400 };
+    const panel_at: dvui.Rect.Physical = .{ .x = 0, .y = 400, .w = 800, .h = 200 };
+    const window: dvui.Rect.Physical = .{ .x = 200, .y = 100, .w = 300, .h = 260 };
+    const header: dvui.Rect.Physical = .{ .x = 200, .y = 100, .w = 300, .h = 40 };
+    const body: dvui.Rect.Physical = .{ .x = 200, .y = 140, .w = 300, .h = 220 };
+    /// A leaf a split of Main made, all of it under the float.
+    const hidden_at: dvui.Rect.Physical = .{ .x = 240, .y = 180, .w = 200, .h = 140 };
+
+    fn register(editor: *fizzy.Editor, hidden: bool) !void {
+        try registerAt(editor, hidden, window);
+    }
+
+    /// `register` with the float's window at `win`: its header the top 40 of it, its place the rest.
+    fn registerAt(editor: *fizzy.Editor, hidden: bool, win: dvui.Rect.Physical) !void {
+        const head: dvui.Rect.Physical = .{ .x = win.x, .y = win.y, .w = win.w, .h = 40 };
+        const place: dvui.Rect.Physical = .{ .x = win.x, .y = win.y + 40, .w = win.w, .h = win.h - 40 };
+        const gpa = editor.app.gpa;
+        const state = &editor.app.layout;
+        state.registerRegion(gpa, .{ .name = "Main", .keywords = fizzy.sdk.keywords.ide.main, .bounds = main_at, .size = .{ .w = 800, .h = 400 } });
+        state.registerRegion(gpa, .{ .name = "Panel", .keywords = fizzy.sdk.keywords.ide.panel, .bounds = panel_at, .shows = .many });
+        if (hidden) state.registerRegion(gpa, .{ .name = "Main/r1", .keywords = fizzy.sdk.keywords.ide.main, .bounds = hidden_at });
+        // The float's place, drawn in its window: layer 1.
+        state.layer_building = 1;
+        state.registerRegion(gpa, .{ .name = "Float 1", .keywords = fizzy.Editor.Layout.slot_keywords, .by_name = true, .shows = .many, .bounds = place });
+        state.layer_building = 0;
+        state.publishRegions();
+        _ = try state.floats.add(gpa, .{
+            .name = "Float 1",
+            .rect = .{ .x = 100, .y = 50, .w = 150, .h = 130 },
+            .home = "Panel",
+            .fresh = false,
+            .win_id = @enumFromInt(0xf10a7),
+            .bounds = win,
+            .header = head,
+        });
+    }
+};
+
+test "float: a place a float lies over has its drop in the part left clear, where a release takes it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    try FloatOverMain.register(editor, false);
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Panel", FloatOverMain.panel_at, FloatOverMain.panel_at);
+    defer editor.app.layout.view_drag.discard();
+
+    // Main's middle is under the float: its drop is in Main, clear of the float, all of it.
+    const clear = ViewDrag.zoneBounds(&editor.app.layout, "Main") orelse return error.TestExpectedEqual;
+    const main_at = FloatOverMain.main_at;
+    try std.testing.expect(clear.x >= main_at.x and clear.y >= main_at.y and clear.x + clear.w <= main_at.x + main_at.w and clear.y + clear.h <= main_at.y + main_at.h);
+    try std.testing.expect(clear.intersect(FloatOverMain.window).w <= 0 or clear.intersect(FloatOverMain.window).h <= 0);
+    const w = ViewDrag.wheelOf(&editor.app.layout, "Main") orelse return error.TestExpectedEqual;
+    try std.testing.expect(!FloatOverMain.window.contains(w.center));
+    try std.testing.expect(clear.contains(w.center));
+    // Aimed at its middle bubble, the drop is Main's — the geometry drawn is the one read.
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, w.center, "Panel") orelse return error.TestExpectedEqual);
+    try std.testing.expect(DZ.at(w, w.center).?.eql(.center));
+    // The float's own place has its drop inside the float.
+    const fw = ViewDrag.wheelOf(&editor.app.layout, "Float 1") orelse return error.TestExpectedEqual;
+    try std.testing.expect(FloatOverMain.body.contains(fw.center));
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, fw.center, "Panel") orelse return error.TestExpectedEqual);
+}
+
+test "float: a place a float lies all over has no drop" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    try FloatOverMain.register(editor, true);
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Panel", FloatOverMain.panel_at, FloatOverMain.panel_at);
+    defer editor.app.layout.view_drag.discard();
+
+    try std.testing.expect(ViewDrag.zoneBounds(&editor.app.layout, "Main/r1") == null);
+    try std.testing.expect(ViewDrag.wheelOf(&editor.app.layout, "Main/r1") == null);
+    // Over where it is, the float.
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, FloatOverMain.hidden_at.center(), "Panel") orelse return error.TestExpectedEqual);
+}
+
+test "float: dragging a place's view onto its own middle floats it, over a seed tree too" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    editor.app.gpa = std.testing.allocator;
+    defer editor.app.layout.regions.deinit(editor.app.gpa);
+    defer editor.app.layout.regions_building.deinit(editor.app.gpa);
+    defer editor.app.layout.deinitExtents(editor.app.gpa);
+    defer editor.app.layout.deinitAssignments(editor.app.gpa);
+    defer editor.app.layout.deinitQualified(editor.app.gpa);
+    defer editor.app.layout.view_drag.discard();
+    EndlessFrame.editor = editor;
+    defer EndlessFrame.editor = null;
+
+    const draw = struct {
+        fn f(_: ?*anyopaque) anyerror!dvui.App.Result {
+            return .ok;
+        }
+    }.f;
+    try editor.app.host.registerSurface(.{ .id = "test.view", .title = "View", .keywords = &.{"slot"}, .draw = draw });
+    try dvui.testing.settle(EndlessFrame.frame);
+    var center: fizzy.Editor.Layout.Region = undefined;
+    for (editor.app.layout.regions.items) |r| {
+        if (std.mem.eql(u8, r.name, "Center")) center = r;
+    }
+
+    // From the corner button into the middle of the same place, and let go: the gesture a person
+    // makes, through dvui's own events.
+    const cw = dvui.currentWindow();
+    const button: dvui.Point.Physical = .{ .x = center.bounds.x + center.bounds.w - 16, .y = center.bounds.y + 16 };
+    _ = try cw.addEventMouseMotion(.{ .pt = button });
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(EndlessFrame.frame);
+    const mid = center.bounds.center();
+    var i: usize = 1;
+    while (i <= 12) : (i += 1) {
+        const t: f32 = @as(f32, @floatFromInt(i)) / 12;
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = button.x + (mid.x - button.x) * t, .y = button.y + (mid.y - button.y) * t } });
+        _ = try dvui.testing.step(EndlessFrame.frame);
+    }
+    for (0..6) |_| _ = try dvui.testing.step(EndlessFrame.frame);
+    _ = try cw.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(EndlessFrame.frame);
+
+    try std.testing.expect(!editor.app.layout.view_drag.active());
+    const floats = editor.app.layout.floats.items.items;
+    try std.testing.expectEqual(@as(usize, 1), floats.len);
+    try std.testing.expectEqualStrings("Float 1", floats[0].name);
+    try std.testing.expectEqualStrings("Center", floats[0].home);
+    // Landed: grown out of the carried glass and settled into its window.
+    try std.testing.expect(floats[0].landing == null);
+    try std.testing.expect(floats[0].win_id != .zero);
+    const shown = editor.app.layout.assignment("Float 1") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 1), shown.len);
+    try std.testing.expectEqualStrings("test.view", shown[0]);
+}
+
+/// Move the pointer to `p` and draw `frames` frames of `frame` there.
+fn pointTo(p: dvui.Point.Physical, frame: fn () anyerror!dvui.App.Result, frames: usize) !void {
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = p });
+    for (0..frames) |_| _ = try dvui.testing.step(frame);
+}
+
+/// A point in the window off the float `bounds`: one of the window's corners, a little in.
+fn offFloat(bounds: dvui.Rect.Physical) !dvui.Point.Physical {
+    const w = dvui.windowRectPixels();
+    for ([_]dvui.Point.Physical{ w.topLeft(), w.topRight(), w.bottomLeft(), w.bottomRight() }) |corner| {
+        const p: dvui.Point.Physical = .{ .x = std.math.lerp(corner.x, w.center().x, 0.05), .y = std.math.lerp(corner.y, w.center().y, 0.05) };
+        if (!bounds.contains(p)) return p;
+    }
+    return error.TestUnexpectedResult;
+}
+
+/// Rest the pointer on `p`, drawing frames of `frame` until the ghost of the float the view is
+/// carried out of firms up there (`ViewDrag.ghost_rest_ms`, as the clock goes), or it plainly
+/// will not — and then for the float to fade all the way back from its ghost.
+fn restOn(editor: *fizzy.Editor, p: dvui.Point.Physical, frame: fn () anyerror!dvui.App.Result) !void {
+    _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = p });
+    const start = dvui.currentWindow().frame_time_ns;
+    const enough = 3 * fizzy.Editor.Layout.ViewDrag.ghost_rest_ms * std.time.ns_per_ms;
+    while (!editor.app.layout.view_drag.ghost_firm and dvui.currentWindow().frame_time_ns - start < enough) {
+        _ = try dvui.testing.step(frame);
+    }
+    for (0..ghost_frames) |_| _ = try dvui.testing.step(frame);
+}
+
+/// How far aside float `i` is now (`Floats.Float.aside`): 0 itself, 1 its ghost.
+fn asideOf(editor: *fizzy.Editor, i: usize) f32 {
+    return editor.app.layout.floats.items.items[i].aside.at();
+}
+
+/// Frames for a float to fade all the way to its ghost, and a couple more. Its fade runs on a clock
+/// its frames step, each by no more than `core.FrameClock.max_step_ns`, and the testing backend's
+/// frames are longer than that: each moves the fade on by one step, not by the frame.
+const ghost_frames: usize = @as(usize, @intFromFloat(@ceil(fizzy.Editor.Layout.Floats.aside_ms * std.time.ns_per_ms /
+    @as(f32, @floatFromInt(fizzy.core.FrameClock.max_step_ns))))) + 2;
+
+test "float: the float a view is carried out of is a ghost while the view is aimed off it, itself over it, and back when it is let go over nothing" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const floats = &editor.app.layout.floats;
+    const bounds = floats.items.items[0].bounds;
+    const header = floats.items.items[0].header;
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    // Lifted from its corner button, over the float: it is still itself.
+    try pointTo(.{ .x = bounds.x + bounds.w - 16, .y = header.y + header.h + 16 }, ManyPanelFrame.frame, 1);
+    ViewDrag.begin(&layout, "Float 1", bounds, bounds);
+    defer editor.app.layout.view_drag.discard();
+    // Mapped with the others, marked as the one the view is carried out of.
+    try std.testing.expectEqual(@as(usize, 1), editor.app.layout.view_drag.occluder_count);
+    try std.testing.expect(editor.app.layout.view_drag.occluders[0].source);
+    _ = try dvui.testing.step(ManyPanelFrame.frame);
+    try std.testing.expect(editor.app.layout.view_drag.ghost_firm);
+    try std.testing.expectEqual(@as(f32, 0), asideOf(editor, 0));
+
+    // Aimed off it: a ghost of itself.
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
+    try std.testing.expect(!editor.app.layout.view_drag.ghost_firm);
+    try std.testing.expectEqual(@as(f32, 1), asideOf(editor, 0));
+    // It still holds its view, and its place is still drawn: the drag is held by its corner button.
+    try std.testing.expect(holds(case.shows("Float 1"), "test.output"));
+
+    // Carried back over it — every drop beneath clear of it — itself again at once, and what the
+    // view aims at.
+    const body: dvui.Point.Physical = .{ .x = bounds.x + 12, .y = bounds.y + bounds.h - 12 };
+    try pointTo(body, ManyPanelFrame.frame, 1);
+    try std.testing.expect(editor.app.layout.view_drag.ghost_firm);
+    try restOn(editor, body, ManyPanelFrame.frame);
+    try std.testing.expect(editor.app.layout.view_drag.ghost_firm);
+    try std.testing.expectEqual(@as(f32, 0), asideOf(editor, 0));
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, body, "Float 1") orelse return error.TestExpectedEqual);
+
+    // Off it again, and let go over nothing: back as it was.
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
+    try std.testing.expectEqual(@as(f32, 1), asideOf(editor, 0));
+    editor.app.layout.view_drag.discard();
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
+    try std.testing.expectEqual(@as(f32, 0), asideOf(editor, 0));
+}
+
+test "float: the drops beneath a ghost sit clear of it, and it firms up as the view comes over it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    // A narrow float, Main roomy beside it.
+    const win: dvui.Rect.Physical = .{ .x = 200, .y = 100, .w = 180, .h = 260 };
+    const head: dvui.Rect.Physical = .{ .x = win.x, .y = win.y, .w = win.w, .h = 40 };
+    const place: dvui.Rect.Physical = .{ .x = win.x, .y = win.y + 40, .w = win.w, .h = win.h - 40 };
+    try FloatOverMain.registerAt(editor, false, win);
+    const state = &editor.app.layout;
+    const cw = dvui.currentWindow();
+    const prev_mouse = cw.mouse_pt;
+    defer cw.mouse_pt = prev_mouse;
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, cw.arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    cw.mouse_pt = place.center();
+    ViewDrag.begin(&layout, "Float 1", place, place);
+    defer state.view_drag.discard();
+
+    // Aimed off the float: a ghost, and beside it, what is beneath.
+    const beside: dvui.Point.Physical = .{ .x = 650, .y = 200 };
+    cw.mouse_pt = beside;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, beside, "Float 1") orelse return error.TestExpectedEqual);
+    // Main's drop is clear of the ghost, as of any float: there is room beside it.
+    const main_drop = ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual;
+    try std.testing.expect(!win.contains(main_drop.center));
+
+    // Carried over the ghost, it firms up at once — nothing beneath is under it to be reached
+    // through it — and the float's place is what the view aims at.
+    const corner: dvui.Point.Physical = .{ .x = place.x + 16, .y = place.y + place.h - 12 };
+    cw.mouse_pt = corner;
+    try std.testing.expect(ViewDrag.settleGhost(state));
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, corner, "Float 1") orelse return error.TestExpectedEqual);
+    // Main's drop has not moved for it.
+    try std.testing.expectEqual(main_drop.center, (ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual).center);
+    // Over its header, nothing: its handle.
+    try std.testing.expect(ViewDrag.targetAt(&layout, head.center(), "Float 1") == null);
+
+    // Off it again: a ghost, and Main's drop where it was.
+    cw.mouse_pt = beside;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    try std.testing.expectEqual(main_drop.center, (ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual).center);
+}
+
+test "float: a drop squeezed by the ghost stays whole under it, reached through it, and the ghost firms only for a rest off it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    // A float over nearly all of Main: what is left of Main round it is a thin frame.
+    const win: dvui.Rect.Physical = .{ .x = 24, .y = 20, .w = 752, .h = 360 };
+    const head: dvui.Rect.Physical = .{ .x = win.x, .y = win.y, .w = win.w, .h = 40 };
+    const place: dvui.Rect.Physical = .{ .x = win.x, .y = win.y + 40, .w = win.w, .h = win.h - 40 };
+    try FloatOverMain.registerAt(editor, false, win);
+    const state = &editor.app.layout;
+    const cw = dvui.currentWindow();
+    const prev_mouse = cw.mouse_pt;
+    defer cw.mouse_pt = prev_mouse;
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, cw.arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    cw.mouse_pt = place.center();
+    ViewDrag.begin(&layout, "Float 1", place, place);
+    defer state.view_drag.discard();
+
+    const prev_time = cw.frame_time_ns;
+    defer cw.frame_time_ns = prev_time;
+    // Aimed off the float, beside it in what is left of Main: a ghost.
+    const beside: dvui.Point.Physical = .{ .x = 10, .y = 200 };
+    cw.mouse_pt = beside;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, beside, "Float 1") orelse return error.TestExpectedEqual);
+    // Too little of Main is clear of it for its drop: the drop sits under the ghost, whole, and
+    // aimed at there through it, it is Main's.
+    const main_drop = ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual;
+    try std.testing.expect(win.contains(main_drop.center));
+    try std.testing.expectEqual(DZ.wheel(ViewDrag.interiorBounds(state, "Main") orelse return error.TestExpectedEqual, cw.natural_scale, main_drop.remove).unit, main_drop.unit);
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, main_drop.center, "Float 1") orelse return error.TestExpectedEqual);
+
+    // Carried across the ghost to that drop, it stays a ghost — over it off the drop, the view is
+    // over Main and no bubble of it — and on the drop, it is a ghost however long it rests there.
+    const corner: dvui.Point.Physical = .{ .x = place.x + 16, .y = place.y + place.h - 12 };
+    try std.testing.expect(DZ.at(main_drop, corner) == null);
+    cw.mouse_pt = corner;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    try std.testing.expectEqualStrings("Main", ViewDrag.targetAt(&layout, corner, "Float 1") orelse return error.TestExpectedEqual);
+    cw.mouse_pt = main_drop.center;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    cw.frame_time_ns += 2 * ViewDrag.ghost_rest_ms * std.time.ns_per_ms;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+
+    // Rested on off the drop, it firms up, and stays firm over it: the float's place is what the
+    // view aims at there and over Main's drop — which stays where it is, under it.
+    cw.mouse_pt = corner;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    cw.frame_time_ns += ViewDrag.ghost_rest_ms * std.time.ns_per_ms;
+    try std.testing.expect(ViewDrag.settleGhost(state));
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, corner, "Float 1") orelse return error.TestExpectedEqual);
+    try std.testing.expectEqualStrings("Float 1", ViewDrag.targetAt(&layout, main_drop.center, "Float 1") orelse return error.TestExpectedEqual);
+    try std.testing.expectEqual(main_drop.center, (ViewDrag.wheelOf(state, "Main") orelse return error.TestExpectedEqual).center);
+
+    // Off it, and rested on its header: firm too, the header being its handle.
+    cw.mouse_pt = beside;
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    cw.mouse_pt = head.center();
+    try std.testing.expect(!ViewDrag.settleGhost(state));
+    cw.frame_time_ns += ViewDrag.ghost_rest_ms * std.time.ns_per_ms;
+    try std.testing.expect(ViewDrag.settleGhost(state));
+}
+
+test "float: a float of two is a ghost too, and comes back without the view that landed elsewhere" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.problems", .title = "Problems", .keywords = fizzy.sdk.keywords.ide.panel, .draw = ManyPanelFrame.draw });
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try case.place("Panel", "Panel", .swap);
+    // The other panel view joins it: a float of two.
+    try case.place("Panel", "Float 1", .swap);
+    try std.testing.expectEqual(@as(usize, 2), case.shows("Float 1").len);
+    const floats = &editor.app.layout.floats;
+    const bounds = floats.items.items[0].bounds;
+    const carried = visibleIn(editor, "Float 1") orelse return error.TestExpectedEqual;
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Float 1", bounds, bounds);
+    // A ghost while the view is aimed off it: it covers nothing.
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
+    try std.testing.expectEqual(@as(f32, 1), floats.items.items[0].aside.at());
+    try std.testing.expect(!editor.app.layout.view_drag.ghost_firm);
+
+    // Landed in Panel, which takes it beside what it shows: the float comes back, holding the
+    // other.
+    ViewDrag.place(&layout, "Float 1", "Panel", .swap);
+    editor.app.layout.view_drag.discard();
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqual(@as(usize, 1), openFloats(editor));
+    try std.testing.expectEqual(@as(f32, 0), floats.items.items[0].aside.at());
+    const left = case.shows("Float 1");
+    try std.testing.expectEqual(@as(usize, 1), left.len);
+    try std.testing.expect(!std.mem.eql(u8, left[0], carried));
+}
+
+test "float: a ghost for its last view goes when the view lands, without flying shut" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const floats = &editor.app.layout.floats;
+    const bounds = floats.items.items[0].bounds;
+
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Float 1", bounds, bounds);
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
+    // Released on Panel, as `apply` lands it, then the drag ends.
+    ViewDrag.place(&layout, "Float 1", "Panel", .swap);
+    editor.app.layout.view_drag.discard();
+    _ = try dvui.testing.step(ManyPanelFrame.frame);
+    // Gone on the next frame: no glass reappearing to fly shut.
+    try std.testing.expectEqual(@as(usize, 0), floats.items.items.len);
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expect(holds(case.shows("Panel"), "test.output"));
+}
+
+/// A view that counts its draws and keeps the alpha it was last drawn at.
+const FadeProbe = struct {
+    var draws: usize = 0;
+    var alpha: f32 = 0;
+
+    fn draw(_: ?*anyopaque) anyerror!dvui.App.Result {
+        draws += 1;
+        alpha = dvui.currentWindow().alpha;
+        return .ok;
+    }
+};
+
+// The view of a float coming back is drawn into a picture of itself and laid down at the fade,
+// so even what it draws past dvui's alpha fades with the window. dvui's testing backend has no
+// render targets, so here it is the fallback — the view under the window's alpha — that runs: it
+// still draws the view once a frame, and never ahead of the window round it.
+test "float: coming back without the view that landed elsewhere, it draws its view once a frame, never ahead of its window" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try editor.app.host.registerSurface(.{ .id = "test.probe", .title = "Probe", .keywords = fizzy.sdk.keywords.ide.panel, .draw = FadeProbe.draw });
+    editor.app.host.setSelectionFor(fizzy.sdk.keywords.ide.panel, "test.probe");
+    try dvui.testing.settle(ManyPanelFrame.frame);
+    try std.testing.expectEqualStrings("test.probe", visibleIn(editor, "Panel") orelse return error.TestExpectedEqual);
+    // The probe floated, then Output beside it in the float, in front of it.
+    try case.place("Panel", "Panel", .swap);
+    try case.place("Panel", "Float 1", .swap);
+    try std.testing.expectEqualStrings("test.output", visibleIn(editor, "Float 1") orelse return error.TestExpectedEqual);
+    const floats = &editor.app.layout.floats;
+    const bounds = floats.items.items[0].bounds;
+
+    // Output carried out to Panel: the float is a ghost while it is aimed there, and comes back
+    // holding the probe.
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Float 1", bounds, bounds);
+    try pointTo(try offFloat(bounds), ManyPanelFrame.frame, ghost_frames);
+    ViewDrag.place(&layout, "Float 1", "Panel", .swap);
+    editor.app.layout.view_drag.discard();
+
+    var faded = false;
+    for (0..ghost_frames) |_| {
+        const before = FadeProbe.draws;
+        _ = try dvui.testing.step(ManyPanelFrame.frame);
+        try std.testing.expectEqual(before + 1, FadeProbe.draws);
+        const shown = fizzy.Editor.Layout.Floats.ghostLook(floats.items.items[0].aside.at()).alpha;
+        try std.testing.expect(FadeProbe.alpha <= shown + 0.001);
+        if (FadeProbe.alpha > 0.001 and FadeProbe.alpha < 0.999) faded = true;
+    }
+    try std.testing.expect(faded);
+    try std.testing.expectEqual(@as(f32, 1), FadeProbe.alpha);
+    try std.testing.expectEqualStrings("test.probe", visibleIn(editor, "Float 1") orelse return error.TestExpectedEqual);
+}
+
+// ── The drag over the floats ─────────────────────────────────────────────────────────────────────
+
+/// `ManyPanelFrame` with the view drag's overlay over all of it, as fizzy's frame draws it last.
+const OverlaidFrame = struct {
+    fn frame() anyerror!dvui.App.Result {
+        const result = try ManyPanelFrame.frame();
+        const e = ManyPanelFrame.editor.?;
+        var layout = fizzy.Editor.Layout.init(&e.app.host, &e.app.layout, e.app.gpa, dvui.currentWindow().arena());
+        layout.drawDragOverlay();
+        return result;
+    }
+};
+
+test "float: a drag's own layer is over every float" {
+    var case = try ManyPanelCase.init();
+    defer case.deinit();
+    const editor = case.ctx.editor;
+    try case.place("Panel", "Panel", .swap);
+    const main = fizzy.Editor.Layout.ViewDrag.placeBounds(&editor.app.layout, "Main") orelse return error.TestExpectedEqual;
+
+    // A view carried over the float: its drops and the card go over the float's glass, which a
+    // floating widget made in the app's own window would stay under.
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, &editor.app.layout, editor.app.gpa, dvui.currentWindow().arena());
+    fizzy.Editor.Layout.ViewDrag.begin(&layout, "Main", main, main);
+    defer editor.app.layout.view_drag.discard();
+    _ = try dvui.testing.step(OverlaidFrame.frame);
+    _ = try dvui.testing.step(OverlaidFrame.frame);
+    const float_id = editor.app.layout.floats.items.items[0].win_id;
+    const stack = dvui.currentWindow().subwindows.stack.items;
+    var float_at: ?usize = null;
+    for (stack, 0..) |sw, k| {
+        if (sw.id == float_id) float_at = k;
+    }
+    // The top of the stack: the drag's layer, taking no pointer events, over the float.
+    try std.testing.expect(float_at.? < stack.len - 1);
+    try std.testing.expect(!stack[stack.len - 1].mouse_events);
+}
+
+test "float: a strip a float lies over is no chooser where the float is, and is one beside it" {
+    var ctx = try shim.init(std.testing.allocator);
+    defer ctx.deinit(std.testing.allocator);
+    const editor = ctx.editor;
+    const gpa = std.testing.allocator;
+    editor.app.gpa = gpa;
+    defer editor.app.layout.regions.deinit(gpa);
+    defer editor.app.layout.regions_building.deinit(gpa);
+    defer editor.app.layout.deinitExtents(gpa);
+    defer editor.app.layout.deinitQualified(gpa);
+    defer editor.app.layout.deinitAssignments(gpa);
+    try FloatOverMain.register(editor, false);
+
+    const state = &editor.app.layout;
+    var layout = fizzy.Editor.Layout.init(&editor.app.host, state, gpa, dvui.currentWindow().arena());
+    const ViewDrag = fizzy.Editor.Layout.ViewDrag;
+    ViewDrag.begin(&layout, "Panel", FloatOverMain.panel_at, FloatOverMain.panel_at);
+    defer state.view_drag.discard();
+
+    // A strip across Main, drawn in the app's own window, running under the float's body — a tab
+    // strip of a pane the float lies over, as a plugin offers one (`Host.Region.offerChooser`).
+    const strip: dvui.Rect.Physical = .{ .x = 0, .y = 200, .w = 800, .h = 30 };
+    ViewDrag.offerChooser(&layout, "Main", strip, true, null);
+    // Where the float lies over it, the float is what the view is over: the strip opens no slot
+    // there, and a release does not go into it.
+    try std.testing.expect(ViewDrag.chooserAt(state, .{ .x = 350, .y = 215 }) == null);
+    // Beside the float, the strip as ever.
+    const o = ViewDrag.chooserAt(state, .{ .x = 650, .y = 215 }) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("Main", o.name);
+}
+
+const workbench = @import("workbench");
+
+test "workbench: where a tab carried over a strip goes in is read as if its open slot were not there" {
+    // Three tabs, 100 wide, the middle one at index 1 in the pane's list; a slot 80 wide open
+    // before the third (`drawGap`), which has moved along by that much.
+    var pane = workbench.Workspace.init(1);
+    pane.tab_slots[0] = .{ .index = 0, .rect = .{ .x = 0, .y = 0, .w = 100, .h = 30 } };
+    pane.tab_slots[1] = .{ .index = 1, .rect = .{ .x = 100, .y = 0, .w = 100, .h = 30 } };
+    pane.tab_slots[2] = .{ .index = 2, .rect = .{ .x = 280, .y = 0, .w = 100, .h = 30 } };
+    pane.tab_slot_count = 3;
+    pane.gap_x = 200;
+    pane.gap_w = 80;
+    // Short of a tab's middle, before it; past the last one's, the end.
+    try std.testing.expectEqual(@as(usize, 0), pane.insertIndexAt(40, 3));
+    try std.testing.expectEqual(@as(usize, 1), pane.insertIndexAt(120, 3));
+    // Over the open slot itself, where the third tab stood before it opened: still before the
+    // third — the slot does not chase the pointer along the strip.
+    try std.testing.expectEqual(@as(usize, 2), pane.insertIndexAt(230, 3));
+    try std.testing.expectEqual(@as(usize, 3), pane.insertIndexAt(290, 3));
+    try std.testing.expectEqual(@as(usize, 3), pane.insertIndexAt(500, 3));
+}
+
+// -- rows carried out of a tree and back --------------------------------------------------------
+
+// A tree of two folders and two files, as the explorer draws one: `F` open with `c` inside it, `G`
+// shut, then `a` and `b`. Rows carried out of it as another drag and brought back are handed to it
+// each frame (`TreeWidget.carriedOver`), and whichever row then says it takes them is recorded.
+const CarriedTree = struct {
+    const TW = fizzy.core.widgets.TreeWidget;
+    const f: usize = 1;
+    const a: usize = 2;
+    const b: usize = 3;
+    const c: usize = 4;
+    const g: usize = 5;
+
+    const Carried = struct { primary: usize, p: dvui.Point.Physical, released: bool = false };
+    const Landed = struct { row: usize, into: bool };
+
+    var carried: ?Carried = null;
+    var selected: []const usize = &.{};
+    /// Put the tree's own drag down this frame (`TreeWidget.cancelDrag`).
+    var cancel = false;
+    var landed: ?Landed = null;
+    /// Whether the tree's own drag was under way as this frame began.
+    var dragging = false;
+    var headers: [6]dvui.Rect.Physical = @splat(.{});
+
+    fn reset() void {
+        carried = null;
+        selected = &.{};
+        cancel = false;
+        landed = null;
+        dragging = false;
+    }
+
+    fn frame() anyerror!dvui.App.Result {
+        var tree = TW.tree(@src(), .{ .enable_reordering = true, .drag_name = "test.row" }, .{ .expand = .both });
+        defer tree.deinit();
+        tree.selected_branch_ids = selected;
+        dragging = tree.reorderDragActive();
+        if (cancel) {
+            cancel = false;
+            tree.cancelDrag();
+        }
+        if (carried) |it| tree.carriedOver(it.primary, it.p, it.released);
+        row(tree, f, true, true);
+        row(tree, g, true, false);
+        row(tree, a, false, false);
+        row(tree, b, false, false);
+        return .ok;
+    }
+
+    fn row(tree: *TW, id: usize, folder: bool, open: bool) void {
+        const branch = tree.branch(@src(), .{
+            .expanded = open,
+            .animation_duration = 0,
+            .can_accept_children = folder,
+            .branch_id = id,
+        }, .{ .id_extra = id, .expand = .horizontal });
+        defer branch.deinit();
+        headers[id] = branch.button.data().borderRectScale().r;
+        if (branch.insertBefore()) landed = .{ .row = id, .into = false };
+        if (branch.dropInto()) landed = .{ .row = id, .into = true };
+        dvui.labelNoFmt(@src(), "row", .{}, .{ .id_extra = id, .min_size_content = .{ .w = 120, .h = 20 } });
+        if (folder and branch.expander(@src(), .{}, .{ .expand = .horizontal })) {
+            if (id == f) row(tree, c, false, false);
+        }
+    }
+};
+
+test "tree: a row carried back over it goes into the folder under the pointer when let go" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    CarriedTree.reset();
+    defer CarriedTree.reset();
+    try dvui.testing.settle(CarriedTree.frame);
+
+    // Over the shut folder: it would take the row, but nothing goes in until it is let go.
+    const over_g = CarriedTree.headers[CarriedTree.g].center();
+    CarriedTree.carried = .{ .primary = CarriedTree.a, .p = over_g };
+    _ = try dvui.testing.step(CarriedTree.frame);
+    try std.testing.expect(CarriedTree.landed == null);
+
+    CarriedTree.carried = .{ .primary = CarriedTree.a, .p = over_g, .released = true };
+    _ = try dvui.testing.step(CarriedTree.frame);
+    const landed = CarriedTree.landed orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(CarriedTree.g, landed.row);
+    try std.testing.expect(landed.into);
+
+    // Gone from the tree with the drag: the next frames are no drag of the tree's own, and so no
+    // drop of one either.
+    CarriedTree.carried = null;
+    CarriedTree.landed = null;
+    _ = try dvui.testing.step(CarriedTree.frame);
+    _ = try dvui.testing.step(CarriedTree.frame);
+    try std.testing.expect(!CarriedTree.dragging);
+    try std.testing.expect(CarriedTree.landed == null);
+}
+
+test "tree: rows carried back over it and taken elsewhere move nothing" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    CarriedTree.reset();
+    defer CarriedTree.reset();
+    try dvui.testing.settle(CarriedTree.frame);
+
+    // Over the folder, then off the tree — let go somewhere else, or the drag cancelled: whoever
+    // carries the row stops handing it to the tree, and the tree drops nothing.
+    CarriedTree.carried = .{ .primary = CarriedTree.a, .p = CarriedTree.headers[CarriedTree.g].center() };
+    _ = try dvui.testing.step(CarriedTree.frame);
+    CarriedTree.carried = null;
+    for (0..3) |_| _ = try dvui.testing.step(CarriedTree.frame);
+    try std.testing.expect(CarriedTree.landed == null);
+    try std.testing.expect(!CarriedTree.dragging);
+}
+
+test "tree: a carried selection, and the rows inside it, take no drop of it" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    CarriedTree.reset();
+    defer CarriedTree.reset();
+    try dvui.testing.settle(CarriedTree.frame);
+
+    // `a` carried out with `F` selected beside it: both are carried, as a drag of the selection
+    // would carry them, so neither `F` nor `c` inside it takes them — a folder cannot go into itself.
+    CarriedTree.selected = &.{ CarriedTree.f, CarriedTree.a };
+    for ([_]usize{ CarriedTree.f, CarriedTree.c, CarriedTree.a }) |over| {
+        CarriedTree.landed = null;
+        CarriedTree.carried = .{ .primary = CarriedTree.a, .p = CarriedTree.headers[over].center(), .released = true };
+        _ = try dvui.testing.step(CarriedTree.frame);
+        try std.testing.expect(CarriedTree.landed == null);
+    }
+
+    // Over `b`, a file: they go in before it.
+    CarriedTree.landed = null;
+    CarriedTree.carried = .{ .primary = CarriedTree.a, .p = CarriedTree.headers[CarriedTree.b].center(), .released = true };
+    _ = try dvui.testing.step(CarriedTree.frame);
+    const landed = CarriedTree.landed orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(CarriedTree.b, landed.row);
+    try std.testing.expect(!landed.into);
+}
+
+test "tree: a drag put down is not dropped where the pointer last was" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator });
+    defer t.deinit();
+    CarriedTree.reset();
+    defer CarriedTree.reset();
+    try dvui.testing.settle(CarriedTree.frame);
+    const cw = dvui.currentWindow();
+
+    // `a` dragged up over the shut folder `G`, by the tree's own drag.
+    const from = CarriedTree.headers[CarriedTree.a].center();
+    const to = CarriedTree.headers[CarriedTree.g].center();
+    _ = try cw.addEventMouseMotion(.{ .pt = from });
+    _ = try cw.addEventMouseButton(.left, .press);
+    _ = try dvui.testing.step(CarriedTree.frame);
+    var y = from.y;
+    while (y > to.y) : (y -= 4) {
+        _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = from.x, .y = y } });
+        _ = try dvui.testing.step(CarriedTree.frame);
+    }
+    _ = try cw.addEventMouseMotion(.{ .pt = to });
+    _ = try dvui.testing.step(CarriedTree.frame);
+    _ = try dvui.testing.step(CarriedTree.frame);
+    try std.testing.expect(CarriedTree.dragging);
+
+    // Taken out of the tree as another drag: put down, it lands nowhere — not on `G`, which the
+    // pointer is still over, as the end of a drag would.
+    CarriedTree.cancel = true;
+    _ = try dvui.testing.step(CarriedTree.frame);
+    _ = try dvui.testing.step(CarriedTree.frame);
+    try std.testing.expect(!CarriedTree.dragging);
+    try std.testing.expect(CarriedTree.landed == null);
+    _ = try cw.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(CarriedTree.frame);
+    try std.testing.expect(CarriedTree.landed == null);
 }

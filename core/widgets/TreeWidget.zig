@@ -1,6 +1,8 @@
 const std = @import("std");
 const dvui = @import("dvui");
 const motion = @import("../motion.zig");
+const corners = @import("../corners.zig");
+const dialogs = @import("../dialogs.zig");
 
 /// True when a primary-button release in `r` used shift/ctrl/cmd (selection modifiers).
 fn pointerReleaseInRectHasSelectionModifier(r: dvui.Rect.Physical) bool {
@@ -57,6 +59,12 @@ drag_row_size: ?Size = null,
 /// tree upgrades to a multi-item drag with this exact set. Lifetime: must remain valid for the
 /// duration of this frame (not stored across frames by the tree).
 selected_branch_ids: ?[]const usize = null,
+/// This frame's drag is not the tree's own but rows carried out of it as another drag and brought
+/// back over it (`carriedOver`). Never kept across frames: whoever carries them says so each frame.
+carried: bool = false,
+/// How many carried rows the branch being drawn is inside: a row inside one is being carried too,
+/// and takes no drop — a folder cannot go into itself.
+carried_depth: u32 = 0,
 
 pub const InitOptions = struct {
     enable_reordering: bool = true,
@@ -203,12 +211,14 @@ pub fn deinit(self: *TreeWidget) void {
         }
     }
 
-    if (self.drag_ending) {
+    // Rows carried back over the tree are read for this frame only: kept, the tree would take
+    // them for a drag of its own next frame, and that drag's end for a drop.
+    if (self.drag_ending or self.carried) {
         self.id_branch = null;
         self.drag_point = null;
         self.drag_row_size = null;
         self.drag_branch_ids = null;
-        dvui.refresh(null, @src(), self.data().id);
+        if (self.drag_ending) dvui.refresh(null, @src(), self.data().id);
     }
 
     if (self.id_branch) |idr| {
@@ -257,6 +267,51 @@ pub fn dragStart(self: *TreeWidget, branch_id: usize, button: dvui.enums.Button,
         dvui.dragStart(button, p, .{ .name = dn, .offset = dvui.dragOffset() });
         dvui.captureMouse(null, 0);
     }
+}
+
+/// Put the tree's own drag down without dropping it: the rows were taken somewhere else — carried
+/// out of the tree as another drag — so where the pointer is over the tree means nothing. Ended
+/// the ordinary way, the next frame would read the end as a drop on the row last under the
+/// pointer, which may be one scrolled out of sight or under a window lying over the tree.
+pub fn cancelDrag(self: *TreeWidget) void {
+    if (self.init_options.drag_name) |dn| {
+        if (dvui.dragName(dn)) dvui.dragEnd();
+    }
+    if (dvui.captured(self.data().id)) dvui.captureMouse(null, 0);
+    self.id_branch = null;
+    self.drag_point = null;
+    self.drag_row_size = null;
+    self.drag_branch_ids = null;
+    self.drag_ending = false;
+}
+
+/// Rows carried out of the tree as another drag — a file in the app's view drag — and brought back
+/// over it, the pointer at `p`: for this frame they are read as the tree's own drag would be. The
+/// row under the pointer shows where they would go, into a folder or before a row, and on the
+/// frame they are let go (`released`) that row's `insertBefore` or `dropInto` says so. `primary`
+/// is the row they were carried out of; when it is one of `selected_branch_ids` (set first), the
+/// whole selection is carried, as a drag starting from it in the tree would be. The carried rows
+/// stay where they are, faded, rather than float: what carries them draws them in the hand. Call
+/// it every frame they are over the tree, after the tree is made and before its branches.
+pub fn carriedOver(self: *TreeWidget, primary: usize, p: dvui.Point.Physical, released: bool) void {
+    // The tree's own drag is under way: it already reads the pointer.
+    if (self.id_branch != null and !self.carried) return;
+    self.carried = true;
+    self.id_branch = primary;
+    self.drag_point = p;
+    self.drag_ending = released;
+    self.drag_branch_ids = null;
+    if (self.selected_branch_ids) |ids| {
+        const in_selection = for (ids) |id| {
+            if (id == primary) break true;
+        } else false;
+        if (in_selection and ids.len > 1) {
+            dvui.dataSetSlice(null, self.wd.id, "_drag_branch_ids", ids);
+            self.drag_branch_ids = dvui.dataGetSlice(null, self.wd.id, "_drag_branch_ids", []usize);
+        }
+    }
+    // Near an edge the tree scrolls, as it does under its own drag.
+    if (!released) dvui.scrollDrag(.{ .mouse_pt = p, .screen_rect = self.wd.rectScale().r });
 }
 
 /// Multi-row drag. `primary_branch_id` is the one rendered as the floating ghost; `branch_ids` is the
@@ -366,6 +421,9 @@ pub const Branch = struct {
     installed: bool = false,
     floating_widget: ?dvui.FloatingWidget = null,
     drag_alpha_restore: ?f32 = null,
+    /// One of the rows carried back over the tree (`TreeWidget.carriedOver`): the rows drawn
+    /// inside it are carried with it.
+    carried_source: bool = false,
     expanded: bool = false,
     can_expand: bool = false,
     anim: ?*dvui.AnimateWidget = null,
@@ -415,12 +473,20 @@ pub const Branch = struct {
         return self.floating_widget != null;
     }
 
+    /// Where the row floats under the pointer while it is dragged, its glass included: what a
+    /// drag carrying it on out of the tree grows out of. Null when it is not floating.
+    pub fn floatingRect(self: *Branch) ?dvui.Rect.Physical {
+        if (!self.floating()) return null;
+        return self.floating_widget.?.data().borderRectScale().r;
+    }
+
     pub fn install(self: *Branch) void {
         self.installed = true;
         var check_button_hovered: bool = false;
         const branch_id = self.init_options.branch_id orelse self.data().id.asUsize();
         if (self.tree.drag_point) |dp| {
-            if (self.tree.isDragSource(branch_id)) {
+            const source = self.tree.isDragSource(branch_id);
+            if (source and !self.tree.carried) {
                 const drag_min = self.tree.drag_row_size orelse self.tree.branch_size;
                 const stack_i = self.tree.multiDragStackIndex(branch_id);
                 const row_gap: f32 = 2.0;
@@ -444,24 +510,37 @@ pub const Branch = struct {
                 var npt = dp.plus(dvui.dragOffset().plus(.{ .x = 5, .y = 5 })).toNatural();
                 npt.y += @as(f32, @floatFromInt(stack_i)) * (drag_min.h + row_gap);
 
+                // Carried, a row is glass, as a tab carried along its strip is
+                // (`dialogs.carriedGlass`): the look a file keeps when it is carried out of the
+                // tree as the app's view drag. As big as the row was when it was lifted: it is
+                // held where it was grabbed (`dragOffset`), and sized to its name instead, a short
+                // name grabbed toward the row's right end floated off to the left of the pointer.
+                // Its rect, not a minimum: given no size, a floating widget takes its children's,
+                // and the row's button inside it is as wide as its name.
                 self.floating_widget = @as(dvui.FloatingWidget, undefined);
                 self.floating_widget.?.init(
                     @src(),
                     .{ .mouse_events = false },
                     .{
-                        .rect = Rect.fromPoint(.cast(npt)),
-                        .min_size_content = drag_min,
-                        .background = true,
-                        .corners = @import("../corners.zig").all(8),
-                        .color_fill = .{ .color = dvui.themeGet().color(.content, .fill).opacity(0.9) },
-                        .box_shadow = .{
-                            .fade = 8,
-                            .corners = @import("../corners.zig").all(8),
-                            .alpha = 0.25,
-                            .color = .black,
-                        },
+                        .rect = .{ .x = npt.x, .y = npt.y, .w = drag_min.w, .h = drag_min.h },
+                        .background = false,
+                        .corners = corners.round(corners.card),
                     },
                 );
+                const fd = self.floating_widget.?.data();
+                const frs = fd.borderRectScale();
+                dialogs.carriedGlass(fd.id, frs.r, frs.s);
+            } else if (source or self.tree.carried_depth > 0) {
+                // Carried back over the tree: the row stays in its place, faded, and neither it
+                // nor anything inside it takes the drop.
+                self.wd = WidgetData.init(self.wd.src, .{}, wrapOuter(self.options));
+                self.wd.register();
+                dvui.parentSet(self.widget());
+                if (source) {
+                    self.carried_source = true;
+                    self.tree.carried_depth += 1;
+                    self.drag_alpha_restore = dvui.alpha(0.5);
+                }
             } else {
                 self.wd = WidgetData.init(self.wd.src, .{}, wrapOuter(self.options));
                 self.wd.register();
@@ -796,6 +875,7 @@ pub const Branch = struct {
         if (self.drag_alpha_restore) |a| {
             dvui.alphaSet(a);
         }
+        if (self.carried_source) self.tree.carried_depth -= 1;
 
         if (self.can_expand) {
             if (self.expanded) {

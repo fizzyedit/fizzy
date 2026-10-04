@@ -168,6 +168,10 @@ CI builds plugins for all 6 host targets by cross-compiling with `-Dtarget=` (se
   script are the `tape` library in `sdk/tape/` (std-only); the player and overlay in
   `app/automation/`; fizzy's stage and bundled demos in `src/editor/Demo.zig` +
   `src/editor/demos/`.
+- Floating views (a view dropped on its own place's middle floats into a glass window: the rule,
+  occlusion, close-home, persistence) → `app/layout/SPLITS.md` "Floating a view"; taking floats out
+  into OS windows (ImGui-style viewports, per-OS dressing, the dvui-dev replay hook) →
+  [`docs/POPOUT_WINDOWS_PLAN.md`](docs/POPOUT_WINDOWS_PLAN.md).
 - Full plugin contract + lifecycle/hook tables → `docs/PLUGINS.md`
 - The forks fizzy builds on (dvui-dev, SDL, sdl_zig): what each patches, where each is pinned, how to bump → [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)
 - Living reshape plan (identity `plugin.zig.zon`, comptime `settings.Schema`, ZON user config, no sidecars) → [`docs/PLUGIN_MANIFEST_PLAN.md`](docs/PLUGIN_MANIFEST_PLAN.md)

@@ -603,12 +603,19 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
         // Fade / blur-fade timeline. std-only (see crossfade.zig) — pictures and the clock
         // live in core/anim.zig.
         .{ "fizzy-crossfade-tests", "core/crossfade.zig" },
+        // A motion's clock stepped by its frames, a long one held to a step. std-only (see
+        // FrameClock.zig); the floats' landing and ghost run on it.
+        .{ "fizzy-frame-clock-tests", "core/FrameClock.zig" },
         // Ring buffering and dot-segment filtering for the folder watcher. std-only so it can
         // be tested here; FolderWatcher.zig itself needs a live editor.
         .{ "fizzy-folder-events-tests", "app/watch/folder_events.zig" },
         // The command palette's recently used commands: order, re-use, the cap. std-only
         // (see RecentCommands.zig); `Recents` holds it and stores it in recents.zon.
         .{ "fizzy-recent-commands-tests", "app/RecentCommands.zig" },
+        // Where a floating view's window opens, what keeps it reachable, its name, the floats'
+        // stacking and where a closed float's views go. std-only (see float_rules.zig);
+        // `Floats.zig` and `ViewDrag.zig` apply it, covered by `tests/integration.zig`.
+        .{ "fizzy-float-rules-tests", "app/layout/float_rules.zig" },
         // Demo automation's std-only core (`sdk/tape/`): the tape format and its codecs, the
         // sequencer that replays it deterministically, and the script builder. The dvui half
         // (`app/automation/Player.zig`) is covered by `tests/integration.zig`.
@@ -765,7 +772,7 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     }
 
     const sdk_module_test = sdk.wireSdkModule(b, target, optimize, dvui_testing_dep.module("dvui_testing"), dvui_test_proxy_bridge, core_module_test, fizzy_test_module);
-    _ = workbench_plugin.addStaticModule(b, target, optimize, .{
+    const workbench_module_test = workbench_plugin.addStaticModule(b, target, optimize, .{
         .dvui = dvui_testing_dep.module("dvui_testing"),
         .core = core_module_test,
         .sdk = sdk_module_test,
@@ -834,6 +841,9 @@ pub fn construct(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.
     // Same reasoning for the markdown preview: its block virtualization is a claim about what
     // gets *drawn*, which only a real headless frame can check.
     integration_module.addImport("markdown", markdown_module_test);
+    // And the workbench's panes: whether a float lies over one is a reading of the window's
+    // subwindows, which a headless frame with a float in it has.
+    integration_module.addImport("workbench", workbench_module_test);
     integration_module.addAnonymousImport("markdown_sample", .{ .root_source_file = b.path("docs/PLUGINS.md") });
     // The document with the 45KB table — the case table-row culling exists for, and the one it
     // could get wrong.
