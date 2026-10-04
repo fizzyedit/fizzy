@@ -96,9 +96,9 @@ pub const Viewport = struct {
     /// Natural units, in the main window's frame: the float's window rect, as it would be in the
     /// main window. Its OS window is that grown by `outReach`.
     rect: dvui.Rect,
-    /// Its OS window shows the desktop through a material behind the glass (vibrancy): the
-    /// float's frost reads it, as it reads the app in the main window. Without one, the app
-    /// stands an opaque backing behind the glass (`Popout.backing`) and the float draws no frost.
+    /// Its OS window shows the desktop through a material behind the glass (vibrancy, Acrylic):
+    /// what stands behind the glass (`Popout.backing`) is the main window's base over it, as
+    /// translucent as the main window. Without one, that is opaque.
     material: bool = false,
 };
 
@@ -529,14 +529,16 @@ fn drawOne(l: *Layout, i: usize) bool {
     // The carried drop was glass already: the window takes over from it, whole, rather than
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
     // window's does; as a photograph, the window draws no glass at all.
-    // Out of the main window (`viewport`), it looks as it does in it: its shadow in the clear
-    // margin round its OS window (`outReach`), and its frost where the window has a material
-    // behind the glass to read (`Viewport.material`). Without one there is nothing behind the
-    // glass for frost to read — its refraction read past its rim into nothing and left the edges
-    // see-through — so it draws its fill alone, over the app's backing (`Popout.backing`).
-    const no_frost = if (first.viewport) |vp| !vp.material else if (first.split) |sp| !sp.material else false;
-    var frost = if (as_photo or no_frost) null else dialogs.dialogFrost();
+    // Out of the main window (`viewport`, `split`), it looks as it does in it: its shadow in the
+    // clear margin round its OS window (`outReach`), and its glass over what the main window's
+    // base is — its chrome, at the window's opacity over the window's material where it has one
+    // (`Popout.backing`) — so the rim catches the light and the tint lies over it as in the main
+    // window. Without that the glass read the window's clear pixels and drew nothing: it is made as
+    // see-through as what it reads. It reaches for nothing past its rim out there either: past it
+    // is the clear margin.
+    var frost = if (as_photo) null else dialogs.dialogFrost();
     if (frost) |*fr| {
+        if (out) fr.refraction = 0;
         fr.form = shown;
         // Landing, it grows into its window — past it and back, when motion is playful — and its
         // glass is captured that size from the start.

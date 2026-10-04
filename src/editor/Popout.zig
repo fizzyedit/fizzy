@@ -360,7 +360,7 @@ pub fn endFrame(state: *State) void {
     rt.rendering = true;
     const prev = dvui.renderTarget(rt);
     defer _ = dvui.renderTarget(prev);
-    if (!material) backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b);
+    backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, material);
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
     // them, every one whose middle is in the window's part of the frame. Taken from each, so
@@ -393,12 +393,13 @@ pub fn endFrame(state: *State) void {
     viewports.present(o.viewport, target);
 }
 
-/// What the float out here stands on where its window has no material behind its glass
-/// (`Floats.Viewport.material`): it draws its fill alone then, no frost, which over nothing came
-/// out as translucent as that fill. Behind its glass instead — inside the margin its shadow is
-/// drawn in — the chrome's colour, opaque, in the glass's own corners, so it reads as a panel of
-/// the main window does.
-fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical) void {
+/// What the float out here stands on: what the main window's base is under a float in it — its
+/// chrome, at the window's opacity over the window's material (vibrancy, Acrylic) where it has one,
+/// opaque where it has none — behind its glass, inside the margin its shadow is drawn in, in the
+/// glass's own corners. Its frost reads this, as it reads the app in the main window: glass is made
+/// as see-through as what it reads, and over the window's clear pixels it drew nothing at all,
+/// neither its tint nor the light on its rim.
+fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, material: bool) void {
     const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
     const bounds = window.insetAll((reach() + margin) * dvui.windowNaturalScale());
     const cw = dvui.currentWindow();
@@ -409,7 +410,9 @@ fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical) void {
     dvui.alphaSet(1);
     defer dvui.alphaSet(prev_alpha);
     var color = fizzy.core.dialogs.style().chromeColor();
-    color.a = 255;
+    // The window's opacity as it is windowed (`Editor.window_opacity`), not the main window's
+    // eased one, which goes opaque while the main window is maximized: out here it is windowed.
+    color.a = if (material) @intFromFloat(@round(255 * std.math.clamp(fizzy.editor().window_opacity, 0, 1))) else 255;
     const theme = dvui.themeGet();
     const corners = fizzy.core.dialogs.surfaceCorners().finalize(&theme).scale(cw.natural_scale, dvui.CornerRect.Physical);
     bounds.fill(corners, .{ .color = .{ .color = color } });

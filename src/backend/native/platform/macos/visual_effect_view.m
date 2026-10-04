@@ -117,6 +117,11 @@ void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inse
         [window setOpaque:NO];
         [window setBackgroundColor:[NSColor clearColor]];
         [window setHasShadow:NO];
+        /* No OS animation as it shows or closes: it appears and goes exactly where its float is
+         * drawn, in the frame it changes in. AppKit's show and close animations never finished
+         * under fizzy's frame loop, and the window they stood in for stayed on screen — shrunk
+         * while the float was out, and after it had gone, where it first opened. */
+        [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
         NSView *content = [window contentView];
         NSView *frame = [content superview];
         if (content == nil || frame == nil) return;
@@ -167,5 +172,25 @@ void fizzy_macos_viewport_unglass(void *nswindow) {
 #if !__has_feature(objc_arc)
         [views release];
 #endif
+    }
+}
+
+/*
+ * A popped-out float's window stays over the main window, as a window the main one owns does on
+ * Windows — without being made its child window, which AppKit would move with it (the pop-out
+ * plan's decision 2: the main window moving leaves the windows that came out of it where they
+ * are). SDL orders a window it shows without activating it *below* the key window, the main one:
+ * this orders it back above, and again whenever the main window has come in front of it (a press
+ * on the main window brings it forward). Cheap when nothing is out of order: one comparison of the
+ * app's window order. Other apps' windows still go over it, as over the main window.
+ */
+void fizzy_macos_viewport_keep_above(void *nswindow, void *main_nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        NSWindow *main = (__bridge NSWindow *)main_nswindow;
+        if (window == nil || main == nil) return;
+        if (![window isVisible] || ![main isVisible] || [main isMiniaturized]) return;
+        if ([window orderedIndex] < [main orderedIndex]) return;
+        [window orderWindow:NSWindowAbove relativeTo:[main windowNumber]];
     }
 }

@@ -952,6 +952,7 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
 
 /// Give `vp`'s window a material behind the float's glass, so the float's frost reads the desktop
 /// through it as it reads the app in the main window, in the app's light or dark (`dark`) as the
@@ -1323,6 +1324,16 @@ pub fn renderPresent(self: *SDLBackend) void {
             vp.mapped = true;
         }
         if (show) vp.shown = true;
+    }
+    // Over the main window, as on Windows, where it is owned by it (`viewportOpen`): SDL showed it
+    // below the key window, and a press on the main window brings that forward.
+    if (comptime builtin.os.tag == .macos) {
+        const main_ns = cocoaWindow(self.window);
+        for (&self.viewports) |*slot| {
+            const vp = if (slot.*) |*v| v else continue;
+            if (!vp.mapped) continue;
+            fizzy_macos_viewport_keep_above(cocoaWindow(vp.window), main_ns);
+        }
     }
     self.manage_backend_tracking.check(.renderPresent);
 }
