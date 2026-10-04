@@ -76,6 +76,12 @@ pub const Float = struct {
     /// while it is in the main window. The application that owns the OS windows sets and clears
     /// it, replays the float's drawing into its window and routes that window's pointer back.
     viewport: ?Viewport = null,
+    /// Split out of the main window under a drag of its header or edges, not let go yet: shown in
+    /// an OS window of its own (the application's, as `viewport` is) while still drawn in the main
+    /// window's frame, where the drag goes on — its coordinates never change under a drag. Drawn as
+    /// it is out: held on no window, its shadow in the clear margin round it, its frost by its
+    /// window's material. Null otherwise.
+    split: ?Split = null,
 };
 
 /// Where a float out of the main window is drawn in the frame. The application chooses it: a
@@ -90,6 +96,12 @@ pub const Viewport = struct {
     /// Its OS window shows the desktop through a material behind the glass (vibrancy): the
     /// float's frost reads it, as it reads the app in the main window. Without one, the app
     /// stands an opaque backing behind the glass (`Popout.backing`) and the float draws no frost.
+    material: bool = false,
+};
+
+/// See `Float.split`.
+pub const Split = struct {
+    /// As `Viewport.material`.
     material: bool = false,
 };
 
@@ -495,7 +507,7 @@ fn drawOne(l: *Layout, i: usize) bool {
 
     // Out of the main window it is wherever its OS window's part of the frame is, and lands
     // nowhere: the window it would grow in is gone.
-    const out = first.viewport != null;
+    const out = first.viewport != null or first.split != null;
     if (out) endLanding(&state.floats.items.items[i]);
     // Where the window is this frame: on its way out of the carried glass, or where it was left.
     var rect = if (first.viewport) |vp| vp.rect else first.rect;
@@ -519,7 +531,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     // behind the glass to read (`Viewport.material`). Without one there is nothing behind the
     // glass for frost to read — its refraction read past its rim into nothing and left the edges
     // see-through — so it draws its fill alone, over the app's backing (`Popout.backing`).
-    const no_frost = if (first.viewport) |vp| !vp.material else false;
+    const no_frost = if (first.viewport) |vp| !vp.material else if (first.split) |sp| !sp.material else false;
     var frost = if (as_photo or no_frost) null else dialogs.dialogFrost();
     if (frost) |*fr| {
         fr.form = shown;
@@ -653,7 +665,9 @@ fn drawOne(l: *Layout, i: usize) bool {
     // shown, not kept, so the float is back where they left it when the window grows again.
     if (held and !landing and !f.closing and !win_rect.equals(f.rect)) {
         f.rect = fromRules(rules.resized(toRules(win_rect)));
-        state.markDirty();
+        // Split out under the drag, it may be off the window altogether: kept when it is let go —
+        // settled out, or merged back in.
+        if (f.split == null) state.markDirty();
     }
     return true;
 }

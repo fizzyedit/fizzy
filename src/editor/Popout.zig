@@ -1,7 +1,8 @@
-//! Phase 2 of `docs/POPOUT_WINDOWS_PLAN.md`, a spike behind `FIZZY_POPOUT=1` on fizzy's native
-//! backend: "Pop Out Float" takes the topmost float out of the main window into an OS window of
-//! its own (a viewport, `fizzy.backend.viewports`), and brings it back when run again or when the
-//! OS asks that window to close.
+//! The pop-out plan's viewports (`docs/POPOUT_WINDOWS_PLAN.md`), behind `FIZZY_POPOUT=1` on
+//! fizzy's native backend. A float dragged past the main window's edge splits out into an OS window
+//! of its own (a viewport, `fizzy.backend.viewports`), and merges back let go wholly inside it, as
+//! Dear ImGui's viewports do. "Pop Out Float" takes the topmost float out, or brings the one out
+//! back, and so does the OS asking that window to close.
 //!
 //! There stays one `dvui.Window`. Out, the float is drawn in its viewport's band of the frame,
 //! past the main window's edge (`Floats.Viewport`), where no pointer over the main window reaches
@@ -35,7 +36,18 @@ const Out = struct {
     viewport: *viewports.Viewport,
     /// Its part of the frame, drawn every frame for its window.
     target: ?dvui.Texture.Target = null,
+    /// Where the float is drawn while its window shows it: settled into the viewport's band
+    /// (`Floats.Float.viewport`), or split out of the main window under a drag of its header or
+    /// edges and not let go yet — still in the main window's frame, where the drag goes on
+    /// (`Floats.Float.split`), so its coordinates never change under the drag.
+    mode: enum { band, held } = .band,
+    /// Its window was being moved or resized last frame: a release now ends that drag.
+    was_held: bool = false,
 };
+
+/// A window whose float has come back into the main window: let go a frame later, once the main
+/// window has drawn the float — so it is never on screen in neither, nor blinks out between them.
+var closing: ?Out = null;
 
 /// `FIZZY_POPOUT=1`, on a backend with viewports.
 pub fn enabled() bool {
@@ -71,13 +83,23 @@ fn topmost(state: *const State) ?usize {
 }
 
 /// Before the frame draws anything: a float asked out goes out, the one asked back — or whose
-/// window the OS asked to close — comes back, and a window whose float has gone goes too.
+/// window the OS asked to close — comes back, and a window whose float has gone goes too. And,
+/// as Dear ImGui's viewports do, a float dragged past the main window's edge splits out into a
+/// window of its own, and one let go wholly inside the main window merges back into it — with
+/// no transition: its window shows it exactly where it was drawn, before and after.
 pub fn beginFrame(state: *State) void {
     if (!enabled()) return;
     defer toggle_requested = false;
     // Whatever happened, the screens floating things are placed on this frame: the window out,
     // if there is one, besides the main window's (`core.screens`).
     defer publishScreens();
+    // And where a held pointer is read: pinned while the float out is being moved or resized.
+    defer pinPointer(state);
+    // Back in the main window since last frame, and drawn there: its window can go.
+    if (closing) |*c| {
+        release(c);
+        closing = null;
+    }
     if (out) |*o| {
         const i = find(state, o.serial) orelse {
             // Closed, or Reset Layout: its window goes with it.
@@ -85,54 +107,145 @@ pub fn beginFrame(state: *State) void {
             out = null;
             return;
         };
-        if (toggle_requested or viewports.closeRequested(o.viewport)) {
-            // Back where its window is now, mapped into the main window and held on it
-            // (`float_rules.reachable`) — not where it left from: it was moved out there.
-            const f = &state.floats.items.items[i];
-            const window = viewports.inMain(o.viewport);
-            const s = dvui.windowNaturalScale();
-            if (window.w > 0 and window.h > 0) {
-                const rules = @import("app").layout.Layout.float_rules;
-                // Its rect, inside the clear margin round it out there.
-                const at: dvui.Rect.Physical = (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(Floats.outReach() * s);
-                const back: dvui.Rect = .{ .x = at.x / s, .y = at.y / s, .w = at.w / s, .h = at.h / s };
-                f.rect = Floats.fromRules(rules.reachable(Floats.toRules(back), Floats.toRules(dvui.windowRect())));
-            }
-            f.viewport = null;
-            release(o);
-            out = null;
-            dvui.refresh(null, @src(), null);
+        const f = &state.floats.items.items[i];
+        const held = f.win_id != .zero and dvui.captured(f.win_id);
+        const released = o.was_held and !held;
+        o.was_held = held;
+        switch (o.mode) {
+            .held => {
+                if (held) return;
+                // Let go. Wholly inside the main window it merges back in — drawn there already,
+                // in its frame — and out of it settles into its band, at the same place.
+                if (insideMain(f.bounds)) {
+                    f.split = null;
+                    closeAfterFrame();
+                } else settle(f, o);
+                dvui.refresh(null, @src(), null);
+            },
+            .band => {
+                if (toggle_requested or viewports.closeRequested(o.viewport) or (released and insideMain(inMainRect(o)))) {
+                    comeBack(f, o);
+                    dvui.refresh(null, @src(), null);
+                }
+            },
         }
         return;
     }
-    if (!toggle_requested) return;
-    const i = topmost(state) orelse return;
-    const f = &state.floats.items.items[i];
+    if (toggle_requested) {
+        const i = topmost(state) orelse return;
+        popOut(&state.floats.items.items[i], .band);
+        return;
+    }
+    // A float held — being moved or resized — past the main window's edge, or with the pointer
+    // gone past it (a float is held on the main window by all but a strip of itself, so a drag
+    // up out of it shows only in where the pointer is): split out, where it is.
+    var i = state.floats.items.items.len;
+    while (i > 0) : (i -= 1) {
+        const f = &state.floats.items.items[i - 1];
+        if (f.closing or f.fresh or f.landing != null or f.aside.to > 0 or f.win_id == .zero) continue;
+        if (!dvui.captured(f.win_id)) continue;
+        if (insideMain(f.bounds) and dvui.windowRectPixels().contains(dvui.currentWindow().mouse_pt)) break;
+        popOut(f, .held);
+        break;
+    }
+}
+
+/// Take `f` out into a window of its own, opening over the place it is drawn in the main window,
+/// grown by the clear margin its shadow is drawn in out there (`Floats.outReach`). `.band`: into
+/// the viewport's band at the same place (the command). `.held`: left in the main window's frame,
+/// split, while the drag that took it out goes on.
+fn popOut(f: *Floats.Float, mode: @FieldType(Out, "mode")) void {
     var title_buf: [96]u8 = undefined;
     const title = std.fmt.bufPrintZ(&title_buf, "{s}", .{f.name}) catch "Fizzy";
-    // Its window opens over the place it was in the main window, grown by the clear margin its
-    // shadow is drawn in out there (`Floats.outReach`); the float goes to the same place in the
-    // viewport's band, so it does not move on screen.
-    const s0 = dvui.windowNaturalScale();
-    const b = f.bounds.outsetAll(Floats.outReach() * s0);
-    const vp = viewports.open(.{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }, title) orelse return;
-    const window = viewports.frameOf(vp);
-    const frame = (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(Floats.outReach() * s0);
     const s = dvui.windowNaturalScale();
+    const b = f.bounds.outsetAll(Floats.outReach() * s);
+    const vp = viewports.open(.{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }, title) orelse return;
     // A material behind its glass where the platform has one, so it looks there as it does in
-    // the main window (`Floats.Viewport.material`).
-    // The glass is the float's rect less its own margin, inside the clear one round it.
+    // the main window (`Floats.Viewport.material`). The glass is the float's rect less its own
+    // margin, inside the clear one round it.
     const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
     const material = viewports.glass(vp, (Floats.outReach() + margin) * s, fizzy.core.corners.scaled(fizzy.core.corners.surface) * s);
-    f.viewport = .{ .rect = .{ .x = frame.x / s, .y = frame.y / s, .w = frame.w / s, .h = frame.h / s }, .material = material };
-    out = .{ .serial = f.serial, .viewport = vp };
+    switch (mode) {
+        .band => {
+            const window = viewports.frameOf(vp);
+            const frame = (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(Floats.outReach() * s);
+            f.viewport = .{ .rect = .{ .x = frame.x / s, .y = frame.y / s, .w = frame.w / s, .h = frame.h / s }, .material = material };
+        },
+        .held => f.split = .{ .material = material },
+    }
+    out = .{ .serial = f.serial, .viewport = vp, .mode = mode, .was_held = mode == .held };
     dvui.refresh(null, @src(), null);
+}
+
+/// A float split out under a drag, let go out of the main window: into the viewport's band at the
+/// same place on the desktop, its window unmoved.
+fn settle(f: *Floats.Float, o: *Out) void {
+    const s = dvui.windowNaturalScale();
+    const r = f.bounds;
+    const band = viewports.bandFromMain(o.viewport, .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h });
+    f.viewport = .{ .rect = .{ .x = band.x / s, .y = band.y / s, .w = band.w / s, .h = band.h / s }, .material = if (f.split) |sp| sp.material else false };
+    f.split = null;
+    o.mode = .band;
+}
+
+/// The float out, back in the main window where its window is now — mapped into the main window
+/// and held on it (`float_rules.reachable`), not where it left from: it was moved out there. Its
+/// window goes a frame later (`closeAfterFrame`).
+fn comeBack(f: *Floats.Float, o: *Out) void {
+    const s = dvui.windowNaturalScale();
+    const at = inMainRect(o);
+    if (at.w > 0 and at.h > 0) {
+        const rules = @import("app").layout.Layout.float_rules;
+        const back: dvui.Rect = .{ .x = at.x / s, .y = at.y / s, .w = at.w / s, .h = at.h / s };
+        f.rect = Floats.fromRules(rules.reachable(Floats.toRules(back), Floats.toRules(dvui.windowRect())));
+    }
+    f.viewport = null;
+    closeAfterFrame();
+}
+
+/// The float out has come back: its window stays for this frame, showing what it showed, and goes
+/// at the start of the next, once the main window has drawn it (`closing`).
+fn closeAfterFrame() void {
+    const o = out orelse return;
+    if (closing) |*c| release(c);
+    closing = o;
+    out = null;
+}
+
+/// Where the float out is, as a rect of the main window's frame: its window now, less the clear
+/// margin round it (physical).
+fn inMainRect(o: *const Out) dvui.Rect.Physical {
+    const window = viewports.inMain(o.viewport);
+    return (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(Floats.outReach() * dvui.windowNaturalScale());
+}
+
+/// Whether a float's window rect `r` (physical, the main window's frame) is wholly inside the main
+/// window: where it merges back into it, let go.
+fn insideMain(r: dvui.Rect.Physical) bool {
+    const w = dvui.windowRectPixels();
+    return r.x >= w.x and r.y >= w.y and r.x + r.w <= w.x + w.w and r.y + r.h <= w.y + w.h;
+}
+
+/// A held pointer, pinned to the frame the float out is drawn in while its window is being moved
+/// or resized — the main window's, split under the drag; its band, settled — and read by where it
+/// is otherwise (a view carried between windows).
+fn pinPointer(state: *const State) void {
+    const o = out orelse return viewports.pinPointer(.none);
+    const i = find(state, o.serial) orelse return viewports.pinPointer(.none);
+    const f = state.floats.items.items[i];
+    if (f.win_id == .zero or !dvui.captured(f.win_id)) return viewports.pinPointer(.none);
+    viewports.pinPointer(switch (o.mode) {
+        .held => .main,
+        .band => .{ .viewport = o.viewport },
+    });
 }
 
 /// Its window's part of the frame, natural, as a screen menus, tooltips and popovers opened in the
 /// float are placed on and kept within (`core.screens`) — or none, with no float out.
 fn publishScreens() void {
     const o = out orelse return fizzy.core.screens.clear();
+    // Split under a drag, it is still in the main window's frame: nothing opens from it meanwhile.
+    if (o.mode == .held) return fizzy.core.screens.clear();
     const f = viewports.frameOf(o.viewport);
     const s = dvui.windowNaturalScale();
     fizzy.core.screens.publish(&.{.{ .x = f.x / s, .y = f.y / s, .w = f.w / s, .h = f.h / s }});
@@ -161,14 +274,19 @@ pub fn endFrame(state: *State) void {
     viewports.present(o.viewport, null);
     const i = find(state, o.serial) orelse return;
     const f = &state.floats.items.items[i];
-    if (f.viewport == null or f.win_id == .zero) return;
+    if ((f.viewport == null and f.split == null) or f.win_id == .zero) return;
     const cw = dvui.currentWindow();
     if (cw.subwindows.get(f.win_id) == null) return;
     // Where it was drawn this frame, on whole points: where its window goes, and the offset its
-    // drawing is replayed at, so a pointer over the window lands on what it shows.
-    // Its window holds the clear margin round it its shadow is drawn in (`Floats.outReach`).
+    // drawing is replayed at, so a pointer over the window lands on what it shows. Its window
+    // holds the clear margin round it its shadow is drawn in (`Floats.outReach`). Split under a
+    // drag, that is in the main window's frame, which runs on past its edge across the desktop.
     const b = f.bounds.outsetAll(Floats.outReach() * dvui.windowNaturalScale());
-    const shown = viewports.place(o.viewport, .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h });
+    const shown = switch (o.mode) {
+        .band => viewports.place(o.viewport, .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }),
+        .held => viewports.placeMain(o.viewport, .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }),
+    };
+    const material = if (f.viewport) |vp| vp.material else if (f.split) |sp| sp.material else false;
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
     const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
     if (o.target) |t| if (t.width != w or t.height != h) {
@@ -186,7 +304,7 @@ pub fn endFrame(state: *State) void {
     rt.rendering = true;
     const prev = dvui.renderTarget(rt);
     defer _ = dvui.renderTarget(prev);
-    if (!f.viewport.?.material) backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b);
+    if (!material) backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b);
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
     // them, every one whose middle is in the window's part of the frame. Taken from each, so
@@ -195,12 +313,21 @@ pub fn endFrame(state: *State) void {
     // And a layer drawn across every screen (`core.screens.markEverywhere`: a view drag's drops
     // and carried glass) is copied in too, left in place for the main window's replay — what of
     // it lies outside the window's part of the frame falls outside its target.
+    //
+    // Split under a drag, it is in the main window's frame, and what else is there is the main
+    // window's: only the float itself is its window's. And until its window has shown a frame, the
+    // float stays in the main window's replay too (copied, not taken) — so it is never on screen in
+    // neither while its window comes up.
+    const keep = o.mode == .held and !viewports.shown(o.viewport);
     for (cw.subwindows.stack.items) |*sw| {
-        const mine = area.contains(sw.rect_pixels.center());
+        const mine = switch (o.mode) {
+            .band => area.contains(sw.rect_pixels.center()),
+            .held => sw.id == f.win_id,
+        };
         if (!mine and !fizzy.core.screens.isEverywhere(sw.id)) continue;
         const cmds = sw.render_cmds;
         const after = sw.render_cmds_after;
-        if (mine) {
+        if (mine and !keep) {
             sw.render_cmds = .empty;
             sw.render_cmds_after = .empty;
         }

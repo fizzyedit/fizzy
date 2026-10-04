@@ -87,6 +87,8 @@ window_geometry: WindowGeometry = .{},
 init_opts_save: ?InitOptions = null,
 /// The OS windows besides this one that show part of its frame (`Viewport`).
 viewports: [max_viewports]?Viewport = @splat(null),
+/// Where a held pointer is read while one is held (`PointerPin`, `heldPoint`).
+pointer_pin: PointerPin = .none,
 
 const cursor_enum_count = @typeInfo(dvui.enums.Cursor).@"enum".fields.len;
 
@@ -762,6 +764,13 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
 
 /// Close a viewport: its window goes, and the slot (and band) with it.
 pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
+    // A pin to it goes with it: it would point at an empty slot.
+    switch (self.pointer_pin) {
+        .viewport => |p| if (p == vp) {
+            self.pointer_pin = .none;
+        },
+        else => {},
+    }
     for (&self.viewports) |*slot| {
         if (slot.*) |*v| if (v == vp) {
             // The window as SDL made it, for SDL to destroy (`viewportGlass`).
@@ -794,6 +803,48 @@ pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) vi
     vp.screen = placed.screen;
     vp.frame = placed.frame;
     return placed.frame;
+}
+
+/// Where a held pointer is read, while one is held (`heldPoint`): by the window it is over (a view
+/// carried between windows), or pinned to one frame of reference for a window being moved or
+/// resized — the main window's, for a float split out of it under the drag, or a viewport's band,
+/// for a float out of it — so the drag's coordinates never change under it, wherever the pointer
+/// goes.
+pub const PointerPin = union(enum) {
+    none,
+    main,
+    viewport: *Viewport,
+};
+
+/// Put `vp`'s window where it shows `frame` of the main window's frame — past its edge, for a
+/// float split out of it under a drag, still in that frame — on whole points; the part of the
+/// frame it then shows.
+pub fn viewportPlaceMain(self: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) viewport_map.Rect {
+    const placed = viewport_map.placeMain(self.mainOnScreen(), self.density(), frame);
+    const was = vp.screen;
+    if (placed.screen.x != was.x or placed.screen.y != was.y) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
+    if (placed.screen.w != was.w or placed.screen.h != was.h) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
+    vp.screen = placed.screen;
+    return placed.frame;
+}
+
+/// `frame` of the main window's frame, as the same place on the desktop in `vp`'s band: a float
+/// split out under a drag, let go out there, settling into its band where it is.
+pub fn viewportBandFromMain(self: *SDLBackend, vp: *const Viewport, frame: viewport_map.Rect) viewport_map.Rect {
+    const at = viewport_map.screenFromMain(self.mainOnScreen(), self.density(), frame);
+    const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, .{ .x = at.x, .y = at.y });
+    return .{ .x = p.x, .y = p.y, .w = frame.w, .h = frame.h };
+}
+
+/// Whether `vp`'s window has shown a frame yet: until it has, what it is to show is still drawn
+/// in the main window too, so a float splitting out never vanishes for a frame.
+pub fn viewportShown(_: *SDLBackend, vp: *const Viewport) bool {
+    return vp.shown;
+}
+
+/// Pin a held pointer to a frame of reference, or not (`PointerPin`).
+pub fn viewportPinPointer(self: *SDLBackend, pin: PointerPin) void {
+    self.pointer_pin = pin;
 }
 
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
@@ -874,6 +925,18 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
     var gx: f32 = 0;
     var gy: f32 = 0;
     _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    switch (self.pointer_pin) {
+        .none => {},
+        .main => {
+            const origin = self.mainOnScreen();
+            const d = self.density();
+            return .{ .x = (gx - origin.x) * d, .y = (gy - origin.y) * d };
+        },
+        .viewport => |vp| {
+            const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, .{ .x = gx, .y = gy });
+            return .{ .x = p.x, .y = p.y };
+        },
+    }
     for (&self.viewports) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         const s = vp.screen;

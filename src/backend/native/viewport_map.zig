@@ -112,7 +112,58 @@ pub fn mainFromScreen(main: Point, density: f32, screen: ScreenRect) Rect {
     };
 }
 
+/// Where a part of the main window's frame — `frame`, physical pixels, which may lie past its edge,
+/// the frame running on across the desktop — is on the desktop, the main window at `main` with
+/// `density` pixels per point: a window split out of the main one under a drag, still in the main
+/// window's frame while the drag goes on.
+pub fn screenFromMain(main: Point, density: f32, frame: Rect) Rect {
+    return .{
+        .x = main.x + frame.x / density,
+        .y = main.y + frame.y / density,
+        .w = frame.w / density,
+        .h = frame.h / density,
+    };
+}
+
+/// Where to put a window showing `frame` of the main window's frame (`screenFromMain`): on whole
+/// points, and the part of the frame it then shows.
+pub fn placeMain(main: Point, density: f32, frame: Rect) Placement {
+    const s = screenFromMain(main, density, frame);
+    const screen: ScreenRect = .{
+        .x = @intFromFloat(@round(s.x)),
+        .y = @intFromFloat(@round(s.y)),
+        .w = @intFromFloat(@max(1, @round(s.w))),
+        .h = @intFromFloat(@max(1, @round(s.h))),
+    };
+    return .{ .screen = screen, .frame = mainFromScreen(main, density, screen) };
+}
+
 const testing = std.testing;
+
+test "the main window's frame runs on across the desktop: past its edge is where a split window goes" {
+    const main: Point = .{ .x = 100, .y = 50 };
+    const r = screenFromMain(main, 2, .{ .x = 1000, .y = -40, .w = 300, .h = 200 });
+    try testing.expectEqual(@as(f32, 600), r.x);
+    try testing.expectEqual(@as(f32, 30), r.y);
+    try testing.expectEqual(@as(f32, 150), r.w);
+    // Placed on whole points, and back: the same part of the frame.
+    const p = placeMain(main, 2, .{ .x = 1000, .y = -40, .w = 300, .h = 200 });
+    try testing.expectEqual(@as(i32, 600), p.screen.x);
+    try testing.expectEqual(@as(f32, 1000), p.frame.x);
+    try testing.expectEqual(@as(f32, -40), p.frame.y);
+}
+
+test "a window split out of the main one is the same place on the desktop in its band" {
+    // Split under a drag in the main window's frame, then settled into band 0: the frame of the
+    // band, read back to the desktop, is where the window was.
+    const main: Point = .{ .x = 300, .y = 120 };
+    const at = screenFromMain(main, 2, .{ .x = 2500, .y = 200, .w = 400, .h = 300 });
+    const b = band(0);
+    const in_band = frameFromScreen(b, main, 2, .{ .x = at.x, .y = at.y });
+    const back = screenFromFrame(b, main, 2, .{ .x = in_band.x, .y = in_band.y, .w = 400, .h = 300 });
+    try testing.expectApproxEqAbs(at.x, back.x, 0.001);
+    try testing.expectApproxEqAbs(at.y, back.y, 0.001);
+}
 
 test "a window on the desktop lies in the main window's frame from the main window's top left, at its density" {
     const r = mainFromScreen(.{ .x = 100, .y = 50 }, 2, .{ .x = 160, .y = 80, .w = 300, .h = 200 });

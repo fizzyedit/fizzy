@@ -145,6 +145,17 @@ pub const viewports = struct {
     pub fn glass(_: *Viewport, _: f32, _: f32) bool {
         return false;
     }
+    pub fn placeMain(_: *Viewport, frame: Rect) Rect {
+        return frame;
+    }
+    pub fn bandFromMain(_: *const Viewport, frame: Rect) Rect {
+        return frame;
+    }
+    pub fn shown(_: *const Viewport) bool {
+        return false;
+    }
+    pub const Pin = union(enum) { none, main, viewport: *Viewport };
+    pub fn pinPointer(_: Pin) void {}
     pub fn closeRequested(_: *const Viewport) bool {
         return false;
     }

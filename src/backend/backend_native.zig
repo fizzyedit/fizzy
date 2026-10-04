@@ -168,6 +168,33 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportInMain(vp);
     }
 
+    /// Put `vp`'s window where it shows `frame` of the main window's frame (past its edge, for a
+    /// float split out under a drag); the part of the frame it then shows.
+    pub fn placeMain(vp: *Viewport, frame: Rect) Rect {
+        if (comptime !supported) return frame;
+        return dvui.currentWindow().backend.impl.viewportPlaceMain(vp, frame);
+    }
+
+    /// `frame` of the main window's frame as the same desktop place in `vp`'s band.
+    pub fn bandFromMain(vp: *const Viewport, frame: Rect) Rect {
+        if (comptime !supported) return frame;
+        return dvui.currentWindow().backend.impl.viewportBandFromMain(vp, frame);
+    }
+
+    /// Whether `vp`'s window has shown a frame yet.
+    pub fn shown(vp: *const Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportShown(vp);
+    }
+
+    /// Where a held pointer is read: by the window it is over, or pinned to the main window's
+    /// frame or a viewport's band while a window is moved or resized.
+    pub const Pin = if (supported) Impl.PointerPin else union(enum) { none, main, viewport: *Viewport };
+    pub fn pinPointer(pin: Pin) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportPinPointer(pin);
+    }
+
     /// A material behind the float's glass in `vp`'s window — its rounded rect `inset` physical
     /// pixels in from the window's edge, `radius` its corners — for the float's frost to read the
     /// desktop through. False where the platform has none (yet).
