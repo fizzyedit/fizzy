@@ -5734,6 +5734,43 @@ test "float: a strip a float lies over is no chooser where the float is, and is 
     try std.testing.expectEqualStrings("Main", o.name);
 }
 
+/// What `canvasPointerInputSuppressed` answered last frame, asked from the main window and from
+/// inside a floating window over it (`canvasGateFrame`).
+var canvas_gate_main: ?bool = null;
+var canvas_gate_float: ?bool = null;
+const canvas_gate_rect: dvui.Rect = .{ .x = 200, .y = 150, .w = 300, .h = 200 };
+
+fn canvasGateFrame() anyerror!dvui.App.Result {
+    canvas_gate_main = fizzy.core.dialogs.canvasPointerInputSuppressed();
+    var rect = canvas_gate_rect;
+    const win = fizzy.core.widgets.floatingWindow(@src(), .{ .rect = &rect, .placed = true, .window_avoid = .none }, .{});
+    defer win.deinit();
+    canvas_gate_float = fizzy.core.dialogs.canvasPointerInputSuppressed();
+    return .ok;
+}
+
+test "float: a document canvas in a float takes the pointer, and one under it does not" {
+    var t = try dvui.testing.init(.{ .allocator = std.testing.allocator, .window_size = .{ .w = 800, .h = 600 } });
+    defer t.deinit();
+    const cw = dvui.currentWindow();
+
+    // Pointer positions are physical pixels.
+    const s = cw.natural_scale;
+    const over = canvas_gate_rect.center().scale(s, dvui.Point.Physical);
+    // Over the float: a canvas drawn in it takes the pointer (it used to be blocked, as though
+    // the float were a dialog over the main window's canvas), and the main window's does not.
+    _ = try cw.addEventMouseMotion(.{ .pt = over });
+    try dvui.testing.settle(canvasGateFrame);
+    try std.testing.expectEqual(false, canvas_gate_float.?);
+    try std.testing.expectEqual(true, canvas_gate_main.?);
+
+    // Beside it, the other way round.
+    _ = try cw.addEventMouseMotion(.{ .pt = .{ .x = 50 * s, .y = 50 * s } });
+    try dvui.testing.settle(canvasGateFrame);
+    try std.testing.expectEqual(true, canvas_gate_float.?);
+    try std.testing.expectEqual(false, canvas_gate_main.?);
+}
+
 const workbench = @import("workbench");
 
 test "workbench: where a tab carried over a strip goes in is read as if its open slot were not there" {

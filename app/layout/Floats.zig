@@ -594,12 +594,16 @@ fn drawOne(l: *Layout, i: usize) bool {
         // Drawn into the picture as it is when whole; the picture takes the fade.
         const prev_alpha = if (whole != null) dvui.alpha(1) else dvui.alpha(view_fade);
         if (whole != null) dvui.alphaSet(1);
+        // Inset from the glass's sides and foot by its corner radius, as a place's card insets
+        // its view: a view that draws to its edges — a document's canvas and rulers — would
+        // otherwise run flush to the glass and under its rounded corners. The header is its top.
+        const inset = core.corners.scaled(core.corners.surface);
         var region = l.region(@src(), .{
             .name = first.name,
             .keywords = Layout.slot_keywords,
             .by_name = true,
             .shows = .many,
-        }, .{ .expand = .both }) catch null;
+        }, .{ .expand = .both, .padding = .{ .x = inset, .w = inset, .h = inset } }) catch null;
         if (region) |*r| r.deinit();
         dvui.alphaSet(prev_alpha);
         if (whole) |*w| w.end(view_fade);

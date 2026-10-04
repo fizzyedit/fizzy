@@ -597,18 +597,21 @@ pub fn defaultDialogCallAfter(id: dvui.Id, response: dvui.enums.DialogResponse) 
     }
 }
 
-/// True when the main workspace canvas should not hide the OS cursor, draw tool cursors, or
-/// consume pointer events.
-/// - Modal dialogs: always block the editor canvas (not in-dialog previews).
-/// - Non-modal floating windows (e.g. Export): block only while the cursor is over that window.
+/// True when a document canvas should not hide the OS cursor, draw tool cursors, or consume
+/// pointer events. Asked while the canvas draws, of the subwindow it draws in: the main window's,
+/// or a float's (`app/layout/Floats.zig`), whose canvas takes the pointer as one in the main
+/// window does.
+/// - Modal dialogs: always block the canvas (not in-dialog previews).
+/// - Any other window over the pointer — a non-modal dialog (e.g. Export), a menu, a float over
+///   the canvas's own — blocks it only while the pointer is over that window.
 pub fn canvasPointerInputSuppressed() bool {
     const cw = dvui.currentWindow();
-    const main_id = cw.data().id;
+    const here = dvui.subwindowCurrentId();
     for (cw.subwindows.stack.items[1..]) |sub| {
-        if (sub.modal) return true;
+        if (sub.modal and sub.id != here) return true;
     }
     const target = cw.subwindows.windowFor(cw.mouse_pt);
-    return target != .zero and target != main_id;
+    return target != .zero and target != here;
 }
 
 /// In-dialog preview canvases (Grid Layout): allow pan/zoom while the pointer is over the
