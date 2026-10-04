@@ -67,7 +67,7 @@ window's draw lists. Fizzy's natural hook is the same — dvui's deferred subwin
 | **P2** (built, flag) | Viewport infrastructure: a float rendered into a second SDL window, input routed back. A debug command "Pop Out Float" | a flag |
 | **P3** (built, flag) | The gesture: a float split out as it crosses the main window's edge, merged back when let go fully inside | the flag |
 | **P4** | Per-OS dressing, parenting, minimize / maximize / close with the main window | — (flag off) |
-| **P5** | Hybrid frost, mixed DPI, Wayland | — |
+| **P5** | Hybrid frost (built), mixed DPI, Wayland | — |
 
 ## The viewport model
 
@@ -414,9 +414,9 @@ drag), so a rect moved into a band mid-drag sent the next motion across the fram
   behind (a press on the main window, a document opened from Finder raising it): the behaviour of
   an owned window on Windows, without the child window AppKit would move with the main one.
 - **The glass out there.** It is made as see-through as what it reads, and out of the main window
-  it read the window's clear pixels: no rim, light or tint. Behind it now stands the main window's
-  base, its chrome at the window's opacity over the material (`Popout.backing`), and it reaches
-  for nothing past its rim, where the clear margin is.
+  it read the window's clear pixels: no rim, light or tint. It reads what it reads in the main
+  window now — the main window's picture where that is under it, its base past its edge, the
+  margin past the rim included ("Hybrid frost", below).
 
 ### Not checked
 
@@ -486,6 +486,41 @@ Checked on Windows 11 on Arm in a VM, with real input inside the VM (`SendInput`
   Vulkan on llvmpipe, by the tapes, with the window's position sampled as it moved.
 - **Wayland.** A client cannot place its windows, so viewports are off there
   (`viewports.available`), and floats stay in the main window.
+
+### Hybrid frost: the same glass in and out
+
+A float's glass is made as see-through as what it reads, and frosts and refracts it. In the main
+window it reads the app; out of it, its window's own pixels. With nothing there it drew nothing;
+with the main window's base stood behind it (`Popout.backing`) it drew a tinted pane. That pane
+was right over the desktop but not over the main window, where in-window the glass had frosted
+the app under it, so the look changed the moment a float split out. (At a window opacity of 0 the
+two looked nearly the same: a pop-out's vibrancy blurs whatever is behind its window, and over the
+main window that is the main window, which is what the frost does in it.)
+
+Fizzy draws the main window every frame, so where a float's window lies over the main window it
+has the picture behind it. The glass's frost reads that instead of its window's pixels: while the
+float's drawing replays into its window's target, `BlurBackdrop.behind` names the float's pane, and
+its capture comes from `Popout.behindGlass` rather than the target. That builds, over exactly the
+rect the frost captures (the margin past the rim included), the main window's picture where the
+main window lies under the float's window (`FrameTarget.frameTexture`: the frame drawn so far,
+before the deferred subwindows replay; its place in the main window's frame is the window's part
+of the frame while split under a drag, and where its window is, `viewports.inMain`, once settled),
+and the main window's base past its edge, where the desktop is and nothing of fizzy's sees. The
+picture is never shown. The glass then frosts, bends and lights exactly what it does in the main
+window, its rim included: past the rim it reads the picture too, where its window holds only the
+clear margin its shadow is drawn in. Read from the window's own pixels, the rim bent nothing in
+and the glass looked a flat blur.
+
+Checked on macOS with frame dumps. On the frame a float splits out it is drawn twice, in the main
+window and in its own, and the two pictures of its glass differ by under 1/255 on average: the same
+blur, glows, rim light, and the same text bent at its left rim. Settled straddling the main
+window's right edge, the panel's green "All" button shows blurred behind its glass and bent at its
+rim exactly where the button is in the main window, and the base past the edge.
+
+What it does not do yet:
+
+- **Deferred subwindows under it.** The picture is the frame before dialogs and other floats
+  replay, so a float out over another float frosts the layout, not that float.
 
 ## Next steps
 

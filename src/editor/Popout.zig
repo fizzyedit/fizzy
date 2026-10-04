@@ -20,6 +20,7 @@ const fizzy = @import("../fizzy.zig");
 const State = @import("app").layout.State;
 
 const viewports = fizzy.backend.viewports;
+const Frost = fizzy.core.widgets.BlurBackdrop;
 const Floats = @import("app").layout.Layout.Floats;
 
 /// The float out of the main window, while one is. One at a time, in the spike.
@@ -46,6 +47,12 @@ const Out = struct {
     /// What its window is called now: the float's title, as its header says (`Floats.Float.titleText`).
     title_buf: [96]u8 = undefined,
     title_len: u8 = 0,
+    /// What stands behind its glass, for its frost to read (`behindGlass`): made as the frost asks.
+    behind: ?dvui.Texture.Target = null,
+    /// This frame's part of the frame its window shows, and whether its window has a material:
+    /// for `behindGlass`, called from the replay.
+    area: dvui.Rect.Physical = .{},
+    material: bool = false,
 };
 
 /// A window whose float has come back into the main window: let go a frame later, once the main
@@ -312,6 +319,8 @@ fn release(o: *Out) void {
     viewports.close(o.viewport);
     if (o.target) |t| t.destroyLater();
     o.target = null;
+    if (o.behind) |t| t.destroyLater();
+    o.behind = null;
 }
 
 /// After the frame has drawn and before dvui replays the subwindows into the main window's frame
@@ -379,6 +388,11 @@ pub fn endFrame(state: *State) void {
     const prev = dvui.renderTarget(rt);
     defer _ = dvui.renderTarget(prev);
     backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, material);
+    // Its glass reads what stands behind it in the main window, not this target (`behindGlass`).
+    o.area = .{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h };
+    o.material = material;
+    Frost.behind = .{ .id = f.win_id, .ctx = o, .picture = behindGlass };
+    defer Frost.behind = null;
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
     // them, every one whose middle is in the window's part of the frame. Taken from each, so
@@ -411,12 +425,73 @@ pub fn endFrame(state: *State) void {
     viewports.present(o.viewport, target);
 }
 
-/// What the float out here stands on: what the main window's base is under a float in it — its
-/// chrome, at the window's opacity over the window's material (vibrancy, Acrylic) where it has one,
-/// opaque where it has none — behind its glass, inside the margin its shadow is drawn in, in the
-/// glass's own corners. Its frost reads this, as it reads the app in the main window: glass is made
-/// as see-through as what it reads, and over the window's clear pixels it drew nothing at all,
-/// neither its tint nor the light on its rim.
+/// Hybrid frost (`docs/POPOUT_WINDOWS_PLAN.md`): what the float's glass reads out here
+/// (`Frost.Behind`) — what it reads in the main window. Where the main window lies under the
+/// float's window, the main window's own picture of this frame; past the main window's edge, where
+/// the desktop is and nothing of fizzy's can see it, the main window's base as it would be there
+/// (`base`). Over `rect` whole, the margin past the glass's rim included, so the rim bends and
+/// lights what lies beyond it as it does in the main window — this target holds the window's clear
+/// margin there, and glass reading it drew a flat blur, its rim bent into nothing. Never shown.
+///
+/// The picture is the frame drawn so far — the layout, its places and views — not the deferred
+/// subwindows (another float, a dialog) under this one.
+fn behindGlass(ctx: ?*anyopaque, rect: dvui.Rect.Physical) ?Frost.Behind.Picture {
+    const o: *Out = @ptrCast(@alignCast(ctx orelse return null));
+    const cw = dvui.currentWindow();
+    const w: u32 = @intFromFloat(@max(1, @round(rect.w)));
+    const h: u32 = @intFromFloat(@max(1, @round(rect.h)));
+    if (o.behind) |t| if (t.width != w or t.height != h) {
+        t.destroyLater();
+        o.behind = null;
+    };
+    if (o.behind == null) o.behind = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return null;
+    const target = o.behind.?;
+    var rt = cw.render_target;
+    rt.texture = target;
+    rt.offset = rect.topLeft();
+    rt.rendering = true;
+    const prev = dvui.renderTarget(rt);
+    defer _ = dvui.renderTarget(prev);
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    dvui.clipSet(rect);
+    const prev_alpha = cw.alpha;
+    dvui.alphaSet(1);
+    defer dvui.alphaSet(prev_alpha);
+
+    target.clear();
+    rect.fill(.{}, .{ .color = .{ .color = base(o.material) } });
+    mainPicture: {
+        const tex = fizzy.core.FrameTarget.frameTexture() orelse break :mainPicture;
+        // Where the window's part of the frame is over the main window, in the main window's frame.
+        const at_main: dvui.Rect.Physical = switch (o.mode) {
+            .held => o.area,
+            .band => blk: {
+                const r = viewports.inMain(o.viewport);
+                break :blk .{ .x = r.x, .y = r.y, .w = r.w, .h = r.h };
+            },
+        };
+        // The main window, in the frame the window's part is in: shifted by where that part is.
+        const main_px = dvui.windowRectPixels();
+        const main_here: dvui.Rect.Physical = .{ .x = main_px.x + o.area.x - at_main.x, .y = main_px.y + o.area.y - at_main.y, .w = main_px.w, .h = main_px.h };
+        const clip = rect.intersect(main_here);
+        if (clip.w < 1 or clip.h < 1) break :mainPicture;
+        dvui.clipSet(clip);
+        // A copy, not a blend: the picture already holds the main window's base, as see-through
+        // as the main window is.
+        const copy = if (dvui.Backend.support_texture_blend) blk: {
+            cw.backend.textureBlend(tex, .copy) catch break :blk false;
+            break :blk true;
+        } else false;
+        defer if (copy) cw.backend.textureBlend(tex, .over) catch {};
+        dvui.renderTexture(tex, .{ .r = main_here, .s = 1 }, .{}) catch {};
+    }
+    return .{ .texture = dvui.Texture.fromTargetTemp(target) catch return null, .origin = rect.topLeft() };
+}
+
+/// What the float out here stands on: the main window's base (`base`) behind its glass, inside the
+/// margin its shadow is drawn in, in the glass's own corners — what the glass's frost, which
+/// replaces what it covers, lies over at its rim's one-pixel fade. The frost reads `behindGlass`.
 fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, material: bool) void {
     const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
     const bounds = window.insetAll((reach() + margin) * dvui.windowNaturalScale());
@@ -427,11 +502,17 @@ fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, material: boo
     const prev_alpha = cw.alpha;
     dvui.alphaSet(1);
     defer dvui.alphaSet(prev_alpha);
+    const theme = dvui.themeGet();
+    const corners = fizzy.core.dialogs.surfaceCorners().finalize(&theme).scale(cw.natural_scale, dvui.CornerRect.Physical);
+    bounds.fill(corners, .{ .color = .{ .color = base(material) } });
+}
+
+/// The main window's base: its chrome, at the window's opacity over the window's material where it
+/// has one, opaque where it has none.
+fn base(material: bool) dvui.Color {
     var color = fizzy.core.dialogs.style().chromeColor();
     // The window's opacity as it is windowed (`Editor.window_opacity`), not the main window's
     // eased one, which goes opaque while the main window is maximized: out here it is windowed.
     color.a = if (material) @intFromFloat(@round(255 * std.math.clamp(fizzy.editor().window_opacity, 0, 1))) else 255;
-    const theme = dvui.themeGet();
-    const corners = fizzy.core.dialogs.surfaceCorners().finalize(&theme).scale(cw.natural_scale, dvui.CornerRect.Physical);
-    bounds.fill(corners, .{ .color = .{ .color = color } });
+    return color;
 }

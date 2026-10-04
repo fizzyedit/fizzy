@@ -95,6 +95,30 @@ form: f32 = 1,
 
 pub const Mode = enum { replay, readback };
 
+/// Fizzy addition: what lies behind one pane, given by whoever knows better than the target it is
+/// drawn on — a float out of the main window (`fizzy`'s `Popout`), drawn on its own window's target
+/// where its glass would read the window's clear margin, reads the main window's picture instead,
+/// as it does in the main window. Set for the replay that draws the pane (`frostPane`); while it
+/// is, the pane keyed `id` captures from `picture`, and every other pane from its target as ever.
+pub const Behind = struct {
+    /// The pane's key (`frostPane`'s `id`).
+    id: dvui.Id,
+    ctx: ?*anyopaque = null,
+    /// What lies behind the pane over `rect` (physical, in the frame), and where in the frame that
+    /// picture lies. Called with the pane's target bound, which it leaves bound. Null: the target.
+    picture: *const fn (ctx: ?*anyopaque, rect: Rect.Physical) ?Picture,
+
+    pub const Picture = struct {
+        texture: Texture,
+        origin: dvui.Point.Physical,
+    };
+};
+
+/// See `Behind`.
+pub var behind: ?Behind = null;
+/// The pane capturing now (`FrostJob.draw`), for `behind` to know it.
+var capturing: ?dvui.Id = null;
+
 /// Enough for a 16k-pixel rect at radius 2^11, in both directions.
 const max_levels = 24;
 
@@ -237,7 +261,6 @@ pub fn deinit(self: *BlurBackdrop) void {
 fn deinitFromTarget(self: *BlurBackdrop) bool {
     const cw = dvui.currentWindow();
     const bound = cw.render_target.texture orelse return false;
-    const src = dvui.Texture.fromTargetTemp(bound) catch return false;
     var r = self.rect;
     if (r.empty()) return true;
     r.x = @floor(r.x);
@@ -245,6 +268,12 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
     r.w = @round(r.w);
     r.h = @round(r.h);
     if (r.w < 1 or r.h < 1) return true;
+    // What is behind the pane, from whoever gives it (`Behind`), or the target it is drawn on.
+    const given: ?Behind.Picture = if (behind) |b|
+        (if (capturing == b.id) b.picture(b.ctx, r) else null)
+    else
+        null;
+    const src = if (given) |g| g.texture else dvui.Texture.fromTargetTemp(bound) catch return false;
     // At any real radius the copy is taken at half size: the first halving is the largest
     // pass of the pyramid and the blur that follows swallows what decimating loses, so it is
     // folded into the copy. The result stops at half size on the way back up for the same
@@ -265,7 +294,7 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
     const step = self.level(0, w, h) orelse return false;
     self.covered = .{ .x = r.x, .y = r.y, .w = @floatFromInt(w * shrink), .h = @floatFromInt(h * shrink) };
     var rt = cw.render_target;
-    const off = rt.offset;
+    const off = if (given) |g| g.origin else rt.offset;
     rt.texture = step;
     rt.offset = .{};
     const prev = dvui.renderTarget(rt);
@@ -274,7 +303,8 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
         defer dvui.clipSet(prev_clip);
         const dest: dvui.Rect.Physical = .{ .w = @floatFromInt(w), .h = @floatFromInt(h) };
         dvui.clipSet(dest);
-        // `rect` is in window pixels; the bound target may sit at an offset in the window.
+        // `rect` is in window pixels; the bound target (or the given picture) may sit at an
+        // offset in the window.
         const sw: f32 = @floatFromInt(src.width);
         const sh: f32 = @floatFromInt(src.height);
         // Copy, not over: the level holds the last capture, and the source's alpha (a
@@ -1062,6 +1092,7 @@ fn queuePane(id: dvui.Id, rect: Rect.Physical, corners: dvui.CornerRect, scale: 
     backdrop.init(nat, .{ captured, tick, @round(radius) });
 
     job.* = .{
+        .id = id,
         .backdrop = backdrop,
         .corners = corners,
         .scale = scale,
@@ -1116,6 +1147,8 @@ fn selfForm(id: dvui.Id, now: i128) f32 {
 /// What `frostPane` hands to the replay. Lives in the data store under the owner's id, so the
 /// pointer is good until the frame ends.
 const FrostJob = struct {
+    /// The pane's key (`frostPane`), for `behind`.
+    id: dvui.Id = .zero,
     backdrop: *BlurBackdrop = undefined,
     corners: dvui.CornerRect = .{},
     scale: f32 = 1,
@@ -1146,7 +1179,9 @@ const FrostJob = struct {
         dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
         // The capture, now that everything below this pane is on the target.
+        capturing = self.id;
         self.backdrop.deinit();
+        capturing = null;
         // Through the glass program where there is one: the same pane in one pass a pixel.
         if (self.field) |field| {
             const tex = self.backdrop.small orelse return;
