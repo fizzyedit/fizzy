@@ -214,6 +214,44 @@ pub const viewports = struct {
         if (comptime !supported) return false;
         return vp.close_requested;
     }
+
+    /// Where a press on `vp`'s window is the OS's, from its float this frame (physical pixels of
+    /// the frame): `drag` its header, less `keep` (its close button), moves the window; `edge` in
+    /// from `glass`'s sides resizes it. Null: all of it is the app's.
+    pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32 };
+    pub fn hints(vp: *Viewport, h: ?Hints) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportHints(vp, if (h) |x| .{ .drag = x.drag, .keep = x.keep, .glass = x.glass, .edge = x.edge } else null);
+    }
+
+    /// Where `vp`'s window shows in the frame now, when the OS has moved or resized it since the
+    /// last ask — where its float goes.
+    pub fn osPlaced(vp: *Viewport) ?Rect {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportOsPlaced(vp);
+    }
+
+    /// The press the OS took to move or resize `vp`'s window was let go; `resized` unless the
+    /// window was only moved.
+    pub const MoveEnd = struct { resized: bool };
+    pub fn osMoveEnded(vp: *Viewport) ?MoveEnd {
+        if (comptime !supported) return null;
+        const e = dvui.currentWindow().backend.impl.viewportOsMoveEnded(vp) orelse return null;
+        return .{ .resized = e.resized };
+    }
+
+    /// Hand the drag under way to the OS, which moves `vp`'s window from then on. False where it
+    /// is not done: the app goes on moving it.
+    pub fn dragMove(vp: *Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportDragMove(vp);
+    }
+
+    /// The least the OS may resize `vp`'s window to, physical pixels.
+    pub fn minSize(vp: *Viewport, w: f32, h: f32) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportMinSize(vp, w, h);
+    }
 };
 
 /// Fizzy keeps the window's geometry in `layout.zon`, beside its regions — one file for where the

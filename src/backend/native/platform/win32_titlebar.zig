@@ -342,13 +342,34 @@ fn win32MicaSubclassProc(
 const DWMWCP_DONOTROUND: u32 = 1;
 const DWMWCP_ROUNDSMALL: u32 = 3;
 const viewport_subclass_id: usize = 0x50584932; // "PXI2"
+/// Posted by `viewportDragMove`: the drag under way becomes the OS's move of the window.
+const WM_FIZZY_DRAG_MOVE: u32 = 0x8000 + 0x46; // WM_APP + 'F'
+
+/// A popped-out float's window being moved or resized by the OS, in its modal move/size loop
+/// (`WM_ENTERSIZEMOVE` … `WM_EXITSIZEMOVE`): the backend's, per viewport, at an address that holds
+/// for the window's life (the subclass keeps a pointer to it).
+pub const ViewportLoop = struct {
+    /// In the loop now: a frame then must not wait for events (SDL runs it from the loop's timer).
+    moving: bool = false,
+    /// The loop ended since the app last asked: a press the OS took was let go.
+    ended: bool = false,
+    /// It left the window another size than it moved it at: a resize from an edge, or a move that
+    /// snapped or maximized it as it was let go. Not the size a snapped window takes back as it is
+    /// dragged off its snap, which it is then moved at (and which Windows sends as `WM_SIZING`).
+    resized: bool = false,
+    /// What it is — a resize (`SC_SIZE`, from the `WM_SYSCOMMAND` that starts it), not a move —
+    /// and the size it last moved the window at.
+    sizing: bool = false,
+    moved_w: i32 = 0,
+    moved_h: i32 = 0,
+};
 
 /// Dress a popped-out float's window, which is exactly the float's glass: Acrylic behind it, as
 /// behind the main window, in the app's light or dark (`dark`); its corners rounded by DWM as near
 /// the glass's `radius_pt` (points) as DWM rounds — 8 points as designed, which is DWM's own; DWM's
 /// shadow; no border. True when DWM gives it the backdrop (Windows 11 22H2 on); false leaves the
 /// glass on the app's opaque backing.
-pub fn viewportChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32) bool {
+pub fn viewportChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32, loop: *ViewportLoop) bool {
     if (builtin.os.tag != .windows) return false;
     const h: win32.foundation.HWND = @ptrCast(hwnd);
     const dwm = win32.graphics.dwm;
@@ -358,7 +379,7 @@ pub fn viewportChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32) bool {
     _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
     const dark_value: u32 = @intFromBool(dark);
     _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE), &dark_value, @sizeOf(u32));
-    _ = win32.ui.shell.SetWindowSubclass(h, viewportSubclassProc, viewport_subclass_id, 0);
+    _ = win32.ui.shell.SetWindowSubclass(h, viewportSubclassProc, viewport_subclass_id, @intFromPtr(loop));
     // No system menu: with the frame extended over the window, DWM draws the caption buttons
     // `WS_SYSMENU` brings, over the float's header (as `applyChrome` strips it from the main
     // window). Kept off by the subclass whenever the style is set again (`WM_STYLECHANGING`).
@@ -387,6 +408,22 @@ fn applyViewportBackdrop(h: win32.foundation.HWND) bool {
     return hr >= 0;
 }
 
+/// Hand the drag under way — a float's header held since the main window, the float split out
+/// into this window under it — to the OS: from the next message pump the OS moves the window
+/// (Aero Snap, half the screen, maximized at the top) until the button is let go, as it would
+/// from a press on a title bar. Posted, not sent: sent, the OS's move loop would run inside the
+/// frame that asked.
+pub fn viewportDragMove(hwnd: *anyopaque) void {
+    if (builtin.os.tag != .windows) return;
+    _ = win32.ui.windows_and_messaging.PostMessageW(@ptrCast(hwnd), WM_FIZZY_DRAG_MOVE, 0, 0);
+}
+
+fn windowSize(h: win32.foundation.HWND) struct { w: i32, h: i32 } {
+    var r: win32.foundation.RECT = undefined;
+    if (win32.ui.windows_and_messaging.GetWindowRect(h, &r) == 0) return .{ .w = 0, .h = 0 };
+    return .{ .w = r.right - r.left, .h = r.bottom - r.top };
+}
+
 fn viewportSubclassProc(
     hWnd: ?win32.foundation.HWND,
     uMsg: u32,
@@ -396,8 +433,40 @@ fn viewportSubclassProc(
     dwRefData: usize,
 ) callconv(.winapi) win32.foundation.LRESULT {
     _ = uIdSubclass;
-    _ = dwRefData;
     const wm = win32.ui.windows_and_messaging;
+    const loop: ?*ViewportLoop = if (dwRefData != 0) @ptrFromInt(dwRefData) else null;
+    // A press on an edge starts a resize, one on the caption a move: the command comes first.
+    if (uMsg == wm.WM_SYSCOMMAND) if (loop) |l| {
+        const SC_SIZE: usize = 0xF000;
+        const SC_MOVE: usize = 0xF010;
+        const cmd = wParam & 0xFFF0;
+        if (cmd == SC_SIZE or cmd == SC_MOVE) l.sizing = cmd == SC_SIZE;
+    };
+    if (uMsg == wm.WM_ENTERSIZEMOVE) if (loop) |l| if (hWnd) |h| {
+        const size = windowSize(h);
+        l.* = .{ .moving = true, .sizing = l.sizing, .moved_w = size.w, .moved_h = size.h };
+    };
+    if (uMsg == wm.WM_MOVING) if (loop) |l| {
+        const r: *const win32.foundation.RECT = @ptrFromInt(@as(usize, @bitCast(lParam)));
+        l.moved_w = r.right - r.left;
+        l.moved_h = r.bottom - r.top;
+    };
+    if (uMsg == wm.WM_EXITSIZEMOVE) if (loop) |l| if (hWnd) |h| {
+        const size = windowSize(h);
+        l.moving = false;
+        l.ended = true;
+        l.resized = l.sizing or size.w != l.moved_w or size.h != l.moved_h;
+    };
+    if (uMsg == WM_FIZZY_DRAG_MOVE) {
+        // The main window holds the pointer's capture from the press: let it go, and press the
+        // window's caption where the pointer is. SDL takes it from there as a title bar press
+        // (`WM_NCLBUTTONDOWN`), and the OS runs its move loop while the button stays down.
+        _ = win32.ui.input.keyboard_and_mouse.ReleaseCapture();
+        var pt: win32.foundation.POINT = undefined;
+        if (wm.GetCursorPos(&pt) == 0) return 0;
+        const lp: isize = @as(isize, @as(u16, @bitCast(@as(i16, @truncate(pt.x))))) | (@as(isize, @as(u16, @bitCast(@as(i16, @truncate(pt.y))))) << 16);
+        return win32.ui.shell.DefSubclassProc(hWnd, wm.WM_NCLBUTTONDOWN, @intCast(HTCAPTION), lp);
+    }
     if (uMsg == wm.WM_ACTIVATE or uMsg == wm.WM_DWMCOMPOSITIONCHANGED) {
         if (hWnd) |h| _ = applyViewportBackdrop(h);
     }

@@ -113,7 +113,21 @@ pub fn beginFrame(state: *State) void {
         o.was_held = held;
         switch (o.mode) {
             .held => {
-                if (held) return;
+                if (held) {
+                    // Its window up, a move of it — not a resize — goes on as the OS's own, as a
+                    // press on a title bar would: it snaps to half the screen, maximizes at the top.
+                    // The float settles where it is, and follows its window from here
+                    // (`viewports.osPlaced`); dvui's drag of it ends, the OS holding the press.
+                    const resizing = fizzy.core.widgets.FloatingWindowWidget.DragPart.isResizeDrag(f.win_id);
+                    if (viewports.shown(o.viewport) and !resizing and viewports.dragMove(o.viewport)) {
+                        dvui.captureMouse(null, 0);
+                        dvui.dragEnd();
+                        settle(f, o);
+                        o.was_held = false;
+                        dvui.refresh(null, @src(), null);
+                    }
+                    return;
+                }
                 // Let go. Wholly inside the main window it merges back in — drawn there already,
                 // in its frame — and out of it settles into its band, at the same place.
                 if (insideMain(f.bounds)) {
@@ -123,7 +137,19 @@ pub fn beginFrame(state: *State) void {
                 dvui.refresh(null, @src(), null);
             },
             .band => {
-                if (toggle_requested or viewports.closeRequested(o.viewport) or (released and insideMain(inMainRect(o)))) {
+                // The OS moved or resized its window — by its header or edges, a snap, maximized:
+                // the float follows it.
+                if (viewports.osPlaced(o.viewport)) |frame| if (f.viewport) |*vpr| {
+                    const s = dvui.windowNaturalScale();
+                    const r = (dvui.Rect.Physical{ .x = frame.x, .y = frame.y, .w = frame.w, .h = frame.h }).insetAll(reach() * s);
+                    vpr.rect = .{ .x = r.x / s, .y = r.y / s, .w = r.w / s, .h = r.h / s };
+                    dvui.refresh(null, @src(), null);
+                };
+                // A move of the OS's let go, as one of dvui's: wholly inside the main window it
+                // comes back. Not one that left the window another size — resized, snapped to
+                // half the screen, maximized: that put it where it is to stay.
+                const os_released = if (viewports.osMoveEnded(o.viewport)) |end| !end.resized else false;
+                if (toggle_requested or viewports.closeRequested(o.viewport) or ((released or os_released) and insideMain(inMainRect(o)))) {
                     comeBack(f, o);
                     dvui.refresh(null, @src(), null);
                 }
@@ -149,6 +175,10 @@ pub fn beginFrame(state: *State) void {
         break;
     }
 }
+
+/// How far in from its glass's sides a press resizes a float's window, natural units — where the
+/// OS resizes it (`viewports.hints`).
+const resize_edge: f32 = 6;
 
 /// Natural units a float's OS window reaches past its rect (`Floats.Float.bounds`): out to the
 /// clear margin round its glass that its shadow is drawn in (`Floats.outReach`) — or in to the
@@ -182,6 +212,9 @@ fn popOut(f: *Floats.Float, mode: @FieldType(Out, "mode")) void {
         },
         .held => f.split = .{ .material = material },
     }
+    // The OS resizes it no smaller than its float may be.
+    const rules = @import("app").layout.Layout.float_rules;
+    viewports.minSize(vp, (rules.resize_min_w + 2 * reach()) * s, (rules.resize_min_h + 2 * reach()) * s);
     out = .{ .serial = f.serial, .viewport = vp, .mode = mode, .was_held = mode == .held };
     dvui.refresh(null, @src(), null);
 }
@@ -296,6 +329,20 @@ pub fn endFrame(state: *State) void {
         .held => viewports.placeMain(o.viewport, .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }),
     };
     const material = if (f.viewport) |vp| vp.material else if (f.split) |sp| sp.material else false;
+    // Settled, where a press is the OS's: its header moves the window and its glass's edges resize
+    // it, so the OS snaps, tiles and maximizes it as any window. Split under a drag, all of it is
+    // the drag's.
+    if (o.mode == .band) {
+        const s = dvui.windowNaturalScale();
+        const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
+        const glass = f.bounds.insetAll(margin * s);
+        viewports.hints(o.viewport, .{
+            .drag = .{ .x = f.header.x, .y = f.header.y, .w = f.header.w, .h = f.header.h },
+            .keep = .{ .x = f.header_close.x, .y = f.header_close.y, .w = f.header_close.w, .h = f.header_close.h },
+            .glass = .{ .x = glass.x, .y = glass.y, .w = glass.w, .h = glass.h },
+            .edge = resize_edge * s,
+        });
+    } else viewports.hints(o.viewport, null);
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
     const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
     if (o.target) |t| if (t.width != w or t.height != h) {

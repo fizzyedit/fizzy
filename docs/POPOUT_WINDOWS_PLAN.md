@@ -9,8 +9,8 @@ expensive part to re-derive.
 **Phases 2 and 3 are in, behind `FIZZY_POPOUT=1`, with no dvui change.** A float dragged past the
 main window's edge splits out into an OS window of its own, and merges back when let go wholly
 inside it. Its popups and a view drag follow it across. On macOS its window wears vibrancy behind
-its glass, so it looks the same out as in. Windows and Linux build the same gesture, but it stands
-on an opaque backing there and has not been tried. What P2 established, and what it changes
+its glass, and on Windows Acrylic, so it looks the same out as in, and the OS moves, resizes and
+snaps its window as any other. Linux builds the same gesture over an opaque backing, untried. What P2 established, and what it changes
 below, is in "What P2 found" at the end. What P3 changed is in "What P3 found", after it.
 
 **Phase 1 is built: in-window floats.** A view dropped on the middle of its own place floats into a
@@ -413,15 +413,65 @@ drag), so a rect moved into a band mid-drag sent the next motion across the fram
   `screencapture -l` could not take them.
 - **`NSGlassEffectView`** (macOS 26).
 
+### Windows: the window is the glass
+
+A DWM backdrop fills the whole window, so the clear margin macOS keeps for fizzy's own shadow would
+come out frosted. On Windows the window is exactly the float's glass (`viewports.os_frame`), and
+DWM dresses it as it does the main window (`win32_titlebar.viewportChrome`):
+
+- **Material.** Acrylic, through the frame extended over the whole window.
+- **Corners and shadow.** DWM rounds its corners to 8 points, fizzy's surface radius as designed,
+  and draws its shadow.
+- **No border, no system menu.** With the frame extended, DWM drew the caption buttons of SDL's
+  `WS_SYSMENU` over the float's header.
+
+On either OS the material follows the app's light or dark theme, not the system's.
+
+### The OS moves and resizes the window
+
+A settled float's window is moved and resized by the OS, as any window is: Aero Snap, half the
+screen, maximized at the top, Win+arrows, macOS tiling.
+
+- **The hit test.** Each frame the float says where its header, its header's close button and its
+  glass are (`viewports.hints`). SDL's hit test answers the OS from that (`viewport_map.hitTest`,
+  unit tested): the header moves the window, and the glass's edges resize it. SDL on macOS takes
+  only the move (AppKit's window-background drag), so the float's own edges resize it there. The
+  window is created resizable, since only a window the OS may resize snaps or tiles.
+- **The float follows its window.** When the OS moves or resizes the window, the float's rect
+  follows it (`viewports.osPlaced`). The app's own placement, reported back, is told apart by
+  comparing it with where the app last put the window. On X11, where placing a window is
+  asynchronous, reports that come soon after the app's own placement are ignored too.
+- **Merge after an OS move.** A move the OS made, let go wholly inside the main window, merges as
+  one of dvui's does (`viewports.osMoveEnded`). A resize does not, nor a move that snapped or
+  maximized the window as it was let go. On Windows the `WM_SYSCOMMAND` that starts the loop says
+  which it was: Windows sends `WM_SIZING` when a snapped window takes back its size as it is
+  dragged off its snap, though that is a move. Elsewhere the size before and after decides.
+- **The handoff.** The drag that splits a float out began as dvui's, in the main window, before
+  its window existed. On Windows, once the new window has shown a frame, that drag is handed to
+  the OS (`viewports.dragMove`): dvui's capture ends, the float settles where it is, and the window
+  takes a caption press where the pointer is, so the OS's move loop carries on from there. Frames
+  go on during the loop: SDL runs them from the loop's timer (fizzy uses SDL's main callbacks on
+  Windows), and a frame in the loop does not wait for events (`SDLBackend.inLiveResize`).
+  Elsewhere the app moves the window until the release, and the OS from the next press.
+
+Checked on Windows 11 on Arm in a VM, with real input inside the VM (`SendInput`):
+
+- the Explorer's float dragged past the main window's edge split out, and its window went on
+  following the pointer under the OS;
+- dragged on to the screen's left edge, Windows showed its snap preview, and let go there the
+  window took the left half, the float laid out to it;
+- dragged off the snap, it took back its size, and let go over the main window it merged;
+- pulled by its left edge, the OS resized it with its right edge still.
+
 ## Next steps
 
-1. **Windows: the same look out as in.** The material is Acrylic, the main window's through
-   DirectComposition. But a DWM backdrop fills the whole window, the clear margin too. So either
-   the window is exactly the glass, with DWM's rounded corners and shadow (and the float's own
-   matched to them in the main window), or it keeps the backing. Also, the OS should resize it
-   from its edges (`WM_NCHITTEST`) rather than the app moving it under SDL (P2's "Not done").
-2. **Linux.** On X11 with a compositor the window can be clear, with the shadow in its margin.
-   Without a compositor, and on Wayland, the float stays in-window.
+1. **The look on Windows with a GPU.** The VM draws Acrylic as its solid fallback, and its rounded
+   corners only partly.
+2. **macOS and X11 with a real pointer.** On macOS: the AppKit drag of the header, tiling, and
+   whether a handoff at the split can be done there (`performWindowDragWithEvent:` takes the press
+   that began the drag). On X11: the hit test's `_NET_WM_MOVERESIZE`, the compositor's clear
+   margin, and a handoff through it. Without a compositor, and on Wayland, the float stays
+   in-window.
 3. **Persistence** (`SavedRegion.Floating.os`).
 4. **P4's lifecycle.** Minimize, maximize and close with the main window, and a Dock or taskbar
    entry of its own.

@@ -143,6 +143,19 @@ pub const viewports = struct {
         return .{};
     }
     pub const os_frame = false;
+    pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32 };
+    pub fn hints(_: *Viewport, _: ?Hints) void {}
+    pub fn osPlaced(_: *Viewport) ?Rect {
+        return null;
+    }
+    pub const MoveEnd = struct { resized: bool };
+    pub fn osMoveEnded(_: *Viewport) ?MoveEnd {
+        return null;
+    }
+    pub fn dragMove(_: *Viewport) bool {
+        return false;
+    }
+    pub fn minSize(_: *Viewport, _: f32, _: f32) void {}
     pub fn glass(_: *Viewport, _: f32, _: f32, _: bool) bool {
         return false;
     }

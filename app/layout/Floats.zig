@@ -56,6 +56,9 @@ pub const Float = struct {
     bounds: dvui.Rect.Physical = .{},
     /// Its header last frame, physical — the handle that moves it. Nothing is aimed at over it.
     header: dvui.Rect.Physical = .{},
+    /// Its header's close button last frame, physical: the part of the header that does not move
+    /// it — what the OS leaves to the app when it moves a popped-out float's window by its header.
+    header_close: dvui.Rect.Physical = .{},
     /// A ghost of itself while a view carried out of it is aimed elsewhere (`ViewDrag.ghosted`): 0
     /// itself, 1 its ghost (`ghostLook`), and on to `gone` when it closes as one. As a ghost it
     /// still draws its place — the drag is held by that place's corner button — but nothing of the
@@ -603,6 +606,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     var open = true;
     const title = if (ViewDrag.visibleId(l, first.name)) |id| (if (l.host.surfaceById(id)) |s| s.title else first.name) else first.name;
     const header = dialogs.windowHeader(title, "", &open, .none);
+    const header_close = dialogs.windowHeaderCloseRect();
     // Moved by its header only: the rest is the view's. Not while it lands — it is going where
     // the drop put it — nor while it is out of the way.
     win.dragAreaSet(if (landing or aside > 0) .{} else header);
@@ -650,6 +654,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     f.win_id = win_id;
     f.bounds = bounds;
     f.header = header;
+    f.header_close = header_close orelse .{};
     if (!open) {
         close(l, f.name, .home);
         return true;
