@@ -142,6 +142,14 @@ pub const Viewport = struct {
     /// macOS: put somewhere new this frame (`screen`), applied with the frame's picture in one
     /// Core Animation transaction (`renderPresent`).
     frame_pending: bool = false,
+    /// macOS: its material's rounded rect, points in from the window's edge and its corners'
+    /// radius (`viewportGlass`), and the part of the window it is kept out of because the main
+    /// window lies there (`viewportMaskMain`, window points from its top left), as last applied.
+    glass_inset: f32 = 0,
+    glass_radius: f32 = 0,
+    /// Keep the material out of where the main window lies under the window, this frame.
+    mask_main: bool = false,
+    masked: viewport_map.ScreenRect = .{},
 };
 
 pub const InitOptions = struct {
@@ -544,6 +552,7 @@ extern "c" fn fizzy_native_transaction_begin() void;
 extern "c" fn fizzy_native_transaction_commit() void;
 extern "c" fn fizzy_native_viewport_set_frame(nswindow: ?*anyopaque, x: f64, y: f64, w: f64, h: f64) void;
 extern "c" fn fizzy_native_viewport_transact(nswindow: ?*anyopaque) void;
+extern "c" fn fizzy_native_main_transact(nswindow: ?*anyopaque) c_int;
 extern "c" fn fizzy_native_viewport_presented(nswindow: ?*anyopaque) void;
 extern "c" fn fizzy_native_live_resize_next_frame(nswindow: *anyopaque, wait_s: f64, since_start_s: f64) void;
 
@@ -1003,6 +1012,7 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 }
 
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
+extern fn fizzy_macos_viewport_glass_mask(nswindow: ?*anyopaque, inset: f64, radius: f64, ex: f64, ey: f64, ew: f64, eh: f64) void;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]const u8) void;
@@ -1024,7 +1034,10 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, 
         .macos => {
             const ns = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
             const main_ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(self.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
-            fizzy_macos_viewport_glass(ns, main_ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
+            vp.glass_inset = inset / vp.density;
+            vp.glass_radius = radius / vp.density;
+            vp.masked = .{};
+            fizzy_macos_viewport_glass(ns, main_ns, vp.glass_inset, vp.glass_radius, platform.window.ns_visual_effect_material);
             return true;
         },
         .windows => {
@@ -1034,6 +1047,34 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, 
         },
         else => return false,
     }
+}
+
+/// Where the main window lies under `vp`'s window, window points from its top left, when its
+/// material is kept out of there this frame (`viewportMaskMain`); empty otherwise.
+fn viewportMainMask(self: *SDLBackend, vp: *const Viewport) viewport_map.ScreenRect {
+    if (!vp.mask_main) return .{};
+    var mx: c_int = 0;
+    var my: c_int = 0;
+    var mw: c_int = 0;
+    var mh: c_int = 0;
+    _ = c.SDL_GetWindowPosition(self.window, &mx, &my);
+    _ = c.SDL_GetWindowSize(self.window, &mw, &mh);
+    const s = vp.screen;
+    const x0 = @max(mx, s.x);
+    const y0 = @max(my, s.y);
+    const x1 = @min(mx + mw, s.x + s.w);
+    const y1 = @min(my + mh, s.y + s.h);
+    if (x1 <= x0 or y1 <= y0) return .{};
+    return .{ .x = x0 - s.x, .y = y0 - s.y, .w = x1 - x0, .h = y1 - y0 };
+}
+
+/// Keep `vp`'s material out of where the main window lies under its window this frame, the main
+/// window showing its own there (`core.FrameTarget.hole`). True where that is done (macOS); the
+/// material is applied in `renderPresent`, with the window's place and picture.
+pub fn viewportMaskMain(_: *SDLBackend, vp: *Viewport, on: bool) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    vp.mask_main = on;
+    return true;
 }
 
 /// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the
@@ -1350,22 +1391,36 @@ pub fn renderPresent(self: *SDLBackend) void {
     // picture too, with the window shown and ordered over the main one below: it comes up where its
     // float is, with the picture drawn for it there. Shown on its own, it showed for a composite
     // empty, then with a picture a frame of the drag away from it.
+    //
+    // The material kept out of where the main window lies under it changes in the same transaction
+    // (`viewportMaskMain`), and the main window's own picture goes in it too: that is where it
+    // leaves a hole for the window over it (`core.FrameTarget.hole`), which must move with it.
     var transacted: [max_viewports]bool = @splat(false);
     var any = false;
+    var main_transacted = false;
     if (comptime builtin.os.tag == .macos) {
+        const main_ns = cocoaWindow(self.window);
         for (&self.viewports, 0..) |*slot, i| {
             const vp = if (slot.*) |*v| v else continue;
             const first = !vp.shown and vp.pending != null;
-            if (!vp.frame_pending and !first) continue;
+            const mask = self.viewportMainMask(vp);
+            const mask_changed = !std.meta.eql(mask, vp.masked);
+            if (!vp.frame_pending and !first and !mask_changed) continue;
             if (!any) fizzy_native_transaction_begin();
             any = true;
             transacted[i] = true;
+            const ns = cocoaWindow(vp.window);
             if (vp.frame_pending) {
                 vp.frame_pending = false;
                 const r = vp.screen;
-                fizzy_native_viewport_set_frame(cocoaWindow(vp.window), @floatFromInt(r.x), @floatFromInt(r.y), @floatFromInt(r.w), @floatFromInt(r.h));
-            } else fizzy_native_viewport_transact(cocoaWindow(vp.window));
+                fizzy_native_viewport_set_frame(ns, @floatFromInt(r.x), @floatFromInt(r.y), @floatFromInt(r.w), @floatFromInt(r.h));
+            } else fizzy_native_viewport_transact(ns);
+            if (mask_changed) {
+                vp.masked = mask;
+                fizzy_macos_viewport_glass_mask(ns, vp.glass_inset, vp.glass_radius, @floatFromInt(mask.x), @floatFromInt(mask.y), @floatFromInt(mask.w), @floatFromInt(mask.h));
+            }
         }
+        if (any) main_transacted = fizzy_native_main_transact(main_ns) != 0;
     }
     defer if (comptime builtin.os.tag == .macos) if (any) {
         for (&self.viewports, transacted) |*slot, t| {
@@ -1373,6 +1428,7 @@ pub fn renderPresent(self: *SDLBackend) void {
             const vp = if (slot.*) |*v| v else continue;
             fizzy_native_viewport_presented(cocoaWindow(vp.window));
         }
+        if (main_transacted) fizzy_native_viewport_presented(cocoaWindow(self.window));
         fizzy_native_transaction_commit();
     };
     // Each viewport's part of the frame goes in with the main window's, one submission for all.

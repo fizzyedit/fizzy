@@ -163,6 +163,10 @@ pub const viewports = struct {
     pub fn glass(_: *Viewport, _: f32, _: f32, _: bool) bool {
         return false;
     }
+    pub fn maskMain(_: *Viewport, _: bool) bool {
+        return false;
+    }
+    pub const os_moves = false;
     pub fn placeMain(_: *Viewport, frame: Rect) Rect {
         return frame;
     }

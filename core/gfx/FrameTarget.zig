@@ -100,6 +100,51 @@ pub fn want() void {
     dvui.dataSet(null, want_id, want_key, true);
 }
 
+/// Fizzy addition: a part of the window another window stands over and shows instead, this frame
+/// — a float out of the main window lying over it (fizzy's `Popout`). Cleared to nothing once the
+/// frame has replayed (`end`), so behind the other window there is what is behind this one where
+/// it is see-through: its material, the desktop blurred. The other window's glass is made as
+/// see-through as what it reads and shows that through itself, as a float in this window does.
+/// Left drawn, it showed this window's own picture there, blurred again by the other window's
+/// material — the glass came out more opaque than in this window. Rounded with `corners` (natural
+/// units, at `scale`; resolved against the theme — a theme corner unresolved cuts square). Only on
+/// a frame drawn into a target: straight to the window, nothing is cut.
+pub fn hole(r: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32) void {
+    if (hole_count == holes.len) return;
+    holes[hole_count] = .{ .r = r, .corners = corners, .scale = scale };
+    hole_count += 1;
+}
+
+const Hole = struct { r: dvui.Rect.Physical, corners: dvui.CornerRect, scale: f32 };
+var holes: [4]Hole = undefined;
+var hole_count: usize = 0;
+/// What a hole is drawn with: written with a copy blend, under a clear colour, so it lands as
+/// nothing (`clearHoles`).
+var hole_tex: ?dvui.Texture = null;
+
+fn clearHoles() void {
+    defer hole_count = 0;
+    if (hole_count == 0 or !dvui.Backend.support_texture_blend) return;
+    if (hole_tex == null) {
+        const px = [1]dvui.Color.PMA{.{ .r = 255, .g = 255, .b = 255, .a = 255 }};
+        hole_tex = dvui.textureCreate(&px, .{ .width = 1, .height = 1, .interpolation = .nearest }) catch return;
+    }
+    const tex = hole_tex.?;
+    const cw = dvui.currentWindow();
+    cw.backend.textureBlend(tex, .copy) catch return;
+    defer cw.backend.textureBlend(tex, .over) catch {};
+    const prev_rendering = dvui.renderingSet(true);
+    defer _ = dvui.renderingSet(prev_rendering);
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    dvui.clipSet(dvui.windowRectPixels());
+    const prev_alpha = dvui.alpha(1);
+    defer dvui.alphaSet(prev_alpha);
+    for (holes[0..hole_count]) |h| {
+        dvui.renderTexture(tex, .{ .r = h.r, .s = h.scale }, .{ .corners = h.corners, .colormod = .{ .r = 0, .g = 0, .b = 0, .a = 0 } }) catch {};
+    }
+}
+
 /// Bind a window-sized target, made fresh when the window's pixel size changes.
 pub fn begin(self: *FrameTarget) void {
     if (unseen()) {
@@ -159,7 +204,10 @@ pub fn begin(self: *FrameTarget) void {
 
 /// Finish dvui's rendering into the target, then draw the target over the window.
 pub fn end(self: *FrameTarget) void {
-    if (!self.bound) return;
+    if (!self.bound) {
+        hole_count = 0;
+        return;
+    }
     self.bound = false;
     const cw = dvui.currentWindow();
     // Deferred subwindows and toasts render here, still into the target. `Window.end` sees
@@ -169,6 +217,8 @@ pub fn end(self: *FrameTarget) void {
         defer prof.end();
         cw.endRendering(.{});
     }
+    // Then what other windows show instead, everything under them drawn (`hole`).
+    clearHoles();
 
     {
         // On Metal the window's first draw of the frame acquires its drawable: this waits here

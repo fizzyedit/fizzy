@@ -215,6 +215,21 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius, dark);
     }
 
+    /// Keep `vp`'s material out of where the main window lies under its window this frame, the
+    /// main window showing its own there through a hole in its picture (`core.FrameTarget.hole`):
+    /// then the float's glass shows through itself what it shows in the main window. True where
+    /// that is done (macOS) — and only then may the main window leave the hole.
+    pub fn maskMain(vp: *Viewport, on: bool) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportMaskMain(vp, on);
+    }
+
+    /// Whether the OS moves a viewport's window by its float's header (`hints`). Not on macOS,
+    /// where the app does, as it resizes it there: AppKit's window drag runs in the window server
+    /// and tells the app where the window went after it has gone, so what the glass showed of the
+    /// main window behind it trailed the window, caught up, and trailed again.
+    pub const os_moves = supported and builtin.os.tag != .macos;
+
     /// The OS asked to close `vp`'s window.
     pub fn closeRequested(vp: *const Viewport) bool {
         if (comptime !supported) return false;
