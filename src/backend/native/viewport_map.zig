@@ -166,6 +166,12 @@ pub const Hints = struct {
     /// has no resize regions, or the window is maximized).
     glass: Rect = .{},
     edge: f32 = 0,
+    /// Where the OS resizes nothing from a hit test (macOS): how far in from the glass's sides,
+    /// and along them from its corners, a press is the app's however it lies over the header —
+    /// the float's own resize zones (`FloatingWindowWidget`), so a press on the header's corner
+    /// resizes the float, as it does in the main window, rather than moving its window.
+    app_side: f32 = 0,
+    app_corner: f32 = 0,
 };
 
 pub const Hit = enum { app, drag, top_left, top, top_right, right, bottom_right, bottom, bottom_left, left };
@@ -195,6 +201,16 @@ pub fn hitTest(h: Hints, p: Point) Hit {
             if (near_l) return .left;
             return .right;
         }
+    }
+    if (h.app_side > 0 or h.app_corner > 0) {
+        const g = h.glass;
+        const in_x = p.x >= g.x and p.x < g.x + g.w;
+        const in_y = p.y >= g.y and p.y < g.y + g.h;
+        const side = (in_y and (p.x < g.x + h.app_side or p.x >= g.x + g.w - h.app_side)) or
+            (in_x and (p.y < g.y + h.app_side or p.y >= g.y + g.h - h.app_side));
+        const near_x = p.x < g.x + h.app_corner or p.x >= g.x + g.w - h.app_corner;
+        const near_y = p.y < g.y + h.app_corner or p.y >= g.y + g.h - h.app_corner;
+        if (side or (in_x and in_y and near_x and near_y)) return .app;
     }
     if (contains(h.drag, p) and !contains(h.keep, p)) return .drag;
     return .app;
@@ -237,6 +253,22 @@ test "a press on a float's window: its edges and corners resize, its header move
     var no_edges = h;
     no_edges.edge = 0;
     try testing.expectEqual(Hit.drag, hitTest(no_edges, .{ .x = 150, .y = 1 }));
+}
+
+test "where the OS resizes nothing, the float's own corners and edges stay the app's over the header" {
+    const h: Hints = .{
+        .drag = .{ .x = 0, .y = 0, .w = 300, .h = 32 },
+        .glass = .{ .x = 0, .y = 0, .w = 300, .h = 200 },
+        .app_side = 4,
+        .app_corner = 15,
+    };
+    // The header's corners and top edge: the float resizes.
+    try testing.expectEqual(Hit.app, hitTest(h, .{ .x = 5, .y = 5 }));
+    try testing.expectEqual(Hit.app, hitTest(h, .{ .x = 295, .y = 10 }));
+    try testing.expectEqual(Hit.app, hitTest(h, .{ .x = 150, .y = 2 }));
+    // Its middle moves the window.
+    try testing.expectEqual(Hit.drag, hitTest(h, .{ .x = 150, .y = 16 }));
+    try testing.expectEqual(Hit.drag, hitTest(h, .{ .x = 20, .y = 16 }));
 }
 
 test "a press in the clear margin round the glass resizes from the nearest edge" {

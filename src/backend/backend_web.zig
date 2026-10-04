@@ -146,7 +146,7 @@ pub const viewports = struct {
         return .{};
     }
     pub const os_frame = false;
-    pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32 };
+    pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32, app_side: f32 = 0, app_corner: f32 = 0 };
     pub fn hints(_: *Viewport, _: ?Hints) void {}
     pub fn osPlaced(_: *Viewport) ?Rect {
         return null;

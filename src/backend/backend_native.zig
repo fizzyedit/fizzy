@@ -224,10 +224,12 @@ pub const viewports = struct {
     /// Where a press on `vp`'s window is the OS's, from its float this frame (physical pixels of
     /// the frame): `drag` its header, less `keep` (its close button), moves the window; `edge` in
     /// from `glass`'s sides resizes it. Null: all of it is the app's.
-    pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32 };
+    /// `app_side` / `app_corner`: the float's own resize zones, the app's over its header where
+    /// the OS resizes from no edge (macOS).
+    pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32, app_side: f32 = 0, app_corner: f32 = 0 };
     pub fn hints(vp: *Viewport, h: ?Hints) void {
         if (comptime !supported) return;
-        dvui.currentWindow().backend.impl.viewportHints(vp, if (h) |x| .{ .drag = x.drag, .keep = x.keep, .glass = x.glass, .edge = x.edge } else null);
+        dvui.currentWindow().backend.impl.viewportHints(vp, if (h) |x| .{ .drag = x.drag, .keep = x.keep, .glass = x.glass, .edge = x.edge, .app_side = x.app_side, .app_corner = x.app_corner } else null);
     }
 
     /// Where `vp`'s window shows in the frame now, when the OS has moved or resized it since the

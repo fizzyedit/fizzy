@@ -899,7 +899,7 @@ pub fn viewportPinPointer(self: *SDLBackend, pin: PointerPin) void {
 /// the frame, in `vp`'s part of it. None (all the app's) while its float is split under a drag,
 /// still in the main window's frame. Its edges resize only where SDL lets the OS resize from a
 /// hit test (not macOS), and not while the window is maximized.
-pub fn viewportHints(_: *SDLBackend, vp: *Viewport, hints: ?struct { drag: viewport_map.Rect, keep: viewport_map.Rect, glass: viewport_map.Rect, edge: f32 }) void {
+pub fn viewportHints(_: *SDLBackend, vp: *Viewport, hints: ?struct { drag: viewport_map.Rect, keep: viewport_map.Rect, glass: viewport_map.Rect, edge: f32, app_side: f32, app_corner: f32 }) void {
     const h = hints orelse {
         vp.hints = .{};
         return;
@@ -917,6 +917,9 @@ pub fn viewportHints(_: *SDLBackend, vp: *Viewport, hints: ?struct { drag: viewp
         .keep = win.of(h.keep, o, d),
         .glass = win.of(h.glass, o, d),
         .edge = if (builtin.os.tag == .macos or maximized) 0 else h.edge / d,
+        // Where the OS resizes from no edge (macOS), the float's own resize zones stay its own.
+        .app_side = if (builtin.os.tag == .macos) h.app_side / d else 0,
+        .app_corner = if (builtin.os.tag == .macos) h.app_corner / d else 0,
     };
 }
 

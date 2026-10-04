@@ -182,6 +182,11 @@ pub fn beginFrame(state: *State) void {
 /// How far in from its glass's sides a press resizes a float's window, natural units — where the
 /// OS resizes it (`viewports.hints`).
 const resize_edge: f32 = 6;
+/// The float's own resize zones (`FloatingWindowWidget`'s, for a mouse): how far in from its
+/// sides, and along them from its corners, a press resizes it — kept the app's over its header
+/// where the OS resizes the window from no edge (`viewports.hints`).
+const float_side: f32 = 4;
+const float_corner: f32 = 15;
 
 /// Natural units a float's OS window reaches past its rect (`Floats.Float.bounds`): out to the
 /// clear margin round its glass that its shadow is drawn in (`Floats.outReach`) — or in to the
@@ -352,6 +357,8 @@ pub fn endFrame(state: *State) void {
             .keep = .{ .x = f.header_close.x, .y = f.header_close.y, .w = f.header_close.w, .h = f.header_close.h },
             .glass = .{ .x = glass.x, .y = glass.y, .w = glass.w, .h = glass.h },
             .edge = resize_edge * s,
+            .app_side = float_side * s,
+            .app_corner = float_corner * s,
         });
     } else viewports.hints(o.viewport, null);
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
