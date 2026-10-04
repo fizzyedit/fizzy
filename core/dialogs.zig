@@ -450,14 +450,17 @@ pub fn tooltipBegin(wd: *dvui.WidgetData, duration_us: i32) f32 {
     return dvui.alpha(t);
 }
 
-/// `tooltipBegin` for a `core.widgets.FloatingTooltipWidget`. A tooltip with a `delay` is "shown" from
+/// `tooltipBegin` for a floating tooltip widget: `core.widgets.FloatingTooltipWidget` (the one that
+/// opens on the screen of the window it is in: a popped-out float's) or dvui's own, which a plugin
+/// built before core had one passes — the same `animate` and `data()`, so either compiles, and a
+/// plugin repinned to a newer SDK keeps building unchanged. A tooltip with a `delay` is "shown" from
 /// the moment the pointer arrives and hides its contents behind its own alpha animation (nothing
 /// for 80% of the delay, then a quick fade): the glass waits for that to begin — so it does not
 /// form, dark tint and all, while the text still waits out the delay — and then opens on the
 /// menus' clock like any other tooltip, rather than riding the widget's fade, which runs over a
 /// fifth of the delay and played the whole grow in a blink. Returns the alpha to restore after
 /// the contents, as `tooltipBegin` does.
-pub fn tooltipBeginFor(tt: *widgets.FloatingTooltipWidget, duration_us: i32) f32 {
+pub fn tooltipBeginFor(tt: anytype, duration_us: i32) f32 {
     if (tt.animate) |fade_in| {
         // Still waiting out the delay: nothing, and no showing begun yet.
         if ((fade_in.val orelse 1) <= 0.01) return dvui.alpha(1);
