@@ -118,7 +118,17 @@ void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inse
         if (main != nil) [window setAppearance:[main appearance]];
         [window setOpaque:NO];
         [window setBackgroundColor:[NSColor clearColor]];
-        [window setHasShadow:NO];
+        /* Titled (`SDLBackend.viewportOpen`): dressed as the main window is — its content under a
+         * transparent title bar, the title's text hidden (the float's header shows it), the OS's
+         * shadow and corners. Borderless: no AppKit shadow; the float draws its own in the clear
+         * margin round its glass. */
+        const BOOL titled = ([window styleMask] & NSWindowStyleMaskTitled) != 0;
+        if (titled) {
+            [window setStyleMask:[window styleMask] | NSWindowStyleMaskFullSizeContentView];
+            [window setTitlebarAppearsTransparent:YES];
+            [window setTitleVisibility:NSWindowTitleHidden];
+        }
+        [window setHasShadow:titled];
         /* No OS animation as it shows or closes: it appears and goes exactly where its float is
          * drawn, in the frame it changes in. AppKit's show and close animations never finished
          * under fizzy's frame loop, and the window they stood in for stayed on screen — shrunk
@@ -151,6 +161,8 @@ void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inse
 /* The glass's rounded rect, `inset` points in from the window's edge with `radius` corners, as a
  * mask that stretches with the window. */
 static NSImage *glassMask(double inset, double radius) {
+    /* The glass is the whole window, framed by the OS, which rounds its corners: all of it. */
+    if (inset <= 0) return nil;
     const CGFloat in = (CGFloat)inset;
     const CGFloat r = (CGFloat)radius;
     const CGFloat edge = in + r;
@@ -203,7 +215,7 @@ void fizzy_macos_viewport_glass_mask(void *nswindow, double inset, double radius
             NSImage *mask = [NSImage imageWithSize:size
                                            flipped:NO
                                     drawingHandler:^BOOL(NSRect dst) {
-                                        NSBezierPath *glass = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(dst, in, in) xRadius:r yRadius:r];
+                                        NSBezierPath *glass = in <= 0 ? [NSBezierPath bezierPathWithRect:dst] : [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(dst, in, in) xRadius:r yRadius:r];
                                         [[NSColor blackColor] set];
                                         [glass fill];
                                         [[NSGraphicsContext currentContext] saveGraphicsState];

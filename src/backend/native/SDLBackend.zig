@@ -815,7 +815,12 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
     defer c.SDL_DestroyProperties(props);
     // Resizable, for the OS to resize it from its edges and snap or tile it — which only a window
     // it may resize takes part in (`viewportHitTest`).
-    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_BORDERLESS | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | c.SDL_WINDOW_RESIZABLE;
+    // macOS: titled, as the main window is — the OS's traffic lights, shadow, corners and resizing
+    // from every edge, its title bar made transparent over the float's own header
+    // (`fizzy_macos_viewport_glass`). Elsewhere borderless, framed by the OS (Windows: DWM) or by
+    // the float (X11).
+    const frame_flag: c.SDL_WindowFlags = if (comptime builtin.os.tag == .macos) 0 else c.SDL_WINDOW_BORDERLESS;
+    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | frame_flag | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | c.SDL_WINDOW_RESIZABLE;
     _ = c.SDL_SetStringProperty(props, c.SDL_PROP_WINDOW_CREATE_TITLE_STRING, title_text.ptr);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_X_NUMBER, placed.screen.x);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_Y_NUMBER, placed.screen.y);

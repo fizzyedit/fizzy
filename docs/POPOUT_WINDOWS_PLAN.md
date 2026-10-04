@@ -6,6 +6,15 @@ expensive part to re-derive.
 
 ## Where it stands
 
+**P6, floats are windows, is under way (2026-10-04), behind `FIZZY_POPOUT=1`.** After testing the
+P3 gesture, the user's call: "we want native os windows where we can have them" — a float that is a
+window from the frame it is made in, as VS Code's floating windows are, rather than one that splits
+out at the main window's edge. Nearly everything that went wrong in P3's polish lived in that
+crossing (the held drag, the frame the float is in neither window, the glass's look changing as it
+crosses), and a window that is a window from birth never makes it. See "P6: floats are windows"
+below. In-window floats stay where there are no OS windows to have (the web, Wayland): "faked"
+there.
+
 **Phases 2 and 3 are in, behind `FIZZY_POPOUT=1`, with no dvui change.** A float dragged past the
 main window's edge splits out into an OS window of its own, and merges back when let go wholly
 inside it. Its popups and a view drag follow it across. On macOS its window wears vibrancy behind
@@ -68,6 +77,7 @@ window's draw lists. Fizzy's natural hook is the same — dvui's deferred subwin
 | **P3** (built, flag) | The gesture: a float split out as it crosses the main window's edge, merged back when let go fully inside | the flag |
 | **P4** | Per-OS dressing, parenting, minimize / maximize / close with the main window | — (flag off) |
 | **P5** | Hybrid frost (built), mixed DPI, Wayland | — |
+| **P6** (in progress, flag) | Floats are windows: born as native, titled OS windows; the edge crossing gone | the flag |
 
 ## The viewport model
 
@@ -553,6 +563,42 @@ What it does not do yet:
 
 - **Deferred subwindows under it.** The picture is the frame before dialogs and other floats
   replay, so a float out over another float frosts the layout, not that float.
+
+## P6: floats are windows
+
+Where the platform has OS windows (`viewports.available`: macOS, Windows, X11), every float is one,
+from the frame it is made in.
+
+**Built (first step, macOS):**
+
+- **Born as a window.** A float made by a drop on a view's own middle, or brought back from a saved
+  layout, goes into a window of its own before it is ever drawn in the main window
+  (`Popout.beginFrame`), at its whole rect (not the carried glass it lands from). One window per
+  float (`Popout.outs`, up to the backend's eight). The held drag, splitting at the main window's
+  edge and merging back are gone, with `Float.split` and the "Pop Out Float" command: a float's
+  views go back into the main window by being carried there, and an emptied float's window closes.
+  A window a view is carried out of stays as it is (no ghost).
+- **Titled, as the main window is (macOS).** Created titled, not borderless
+  (`SDLBackend.viewportOpen`), and dressed as the main window: content under a transparent title
+  bar, the title's text hidden (the float's header shows it), the OS's traffic lights, shadow,
+  corners and resizing from every edge (`fizzy_macos_viewport_glass`). The window is the glass
+  (`viewports.os_frame`): no clear margin, no shadow of fizzy's, and the float resizes nothing
+  itself. Its header draws no close button beside the traffic lights (`viewports.os_buttons`); the
+  red one closes the float, its views going home (`Floats.Viewport.close_asked`), at once, as any
+  window closes — no fly-shut.
+
+**Next:**
+
+1. **Carrying a view outside every window.** A small transparent OS window follows the pointer with
+   the carried glass in it, a material behind it; let go there, a float window opens where it is,
+   growing out of the glass. Over a fizzy window, drops work as now. (An OS drag-and-drop session
+   was the alternative: its image glued to the cursor, but a still picture, no liquid glass.)
+2. **Growing out of the carried glass.** The window's frame from the drop to its rect, in step
+   with its picture (the transaction moves and resizes already use).
+3. **Windows and X11 chrome.** Windows: the float's header draws caption buttons, as the main
+   window's does (`caption_buttons.zig`). X11: client-side decorations, as the main window's.
+4. **Persistence of where the windows are** (`SavedRegion.Floating.os`): a saved float comes back
+   in its window where it was on the desktop, not where it would be over the main window.
 
 ## Next steps
 

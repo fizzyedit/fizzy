@@ -201,10 +201,15 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportPinPointer(pin);
     }
 
-    /// Whether the OS frames a viewport's window itself — its corners and its shadow (Windows:
-    /// DWM) — so the window is exactly the float's glass. Otherwise it is the glass with a clear
+    /// Whether the OS frames a viewport's window itself — its corners, its shadow, resizing from its
+    /// edges (Windows: DWM; macOS: a titled window, as the main window is) — so the window is
+    /// exactly the float's glass. Otherwise it is the glass with a clear
     /// margin round it, which the float draws its own shadow in.
-    pub const os_frame = supported and builtin.os.tag == .windows;
+    pub const os_frame = supported and (builtin.os.tag == .windows or builtin.os.tag == .macos);
+
+    /// Whether a viewport's window has the OS's own buttons to close, minimize and zoom it — macOS's
+    /// traffic lights, a titled window's — so its float draws no close button of its own.
+    pub const os_buttons = supported and builtin.os.tag == .macos;
 
     /// A material behind the float's glass in `vp`'s window — its rounded rect `inset` physical
     /// pixels in from the window's edge, `radius` its corners — for the float's frost to read the

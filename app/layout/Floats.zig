@@ -83,12 +83,6 @@ pub const Float = struct {
     /// while it is in the main window. The application that owns the OS windows sets and clears
     /// it, replays the float's drawing into its window and routes that window's pointer back.
     viewport: ?Viewport = null,
-    /// Split out of the main window under a drag of its header or edges, not let go yet: shown in
-    /// an OS window of its own (the application's, as `viewport` is) while still drawn in the main
-    /// window's frame, where the drag goes on — its coordinates never change under a drag. Drawn as
-    /// it is out: held on no window, its shadow in the clear margin round it, its frost by its
-    /// window's material. Null otherwise.
-    split: ?Split = null,
 
     /// Its title last frame: the view it shows (`title_buf`).
     pub fn titleText(self: *const Float) []const u8 {
@@ -109,13 +103,29 @@ pub const Viewport = struct {
     /// what stands behind the glass (`Popout.backing`) is the main window's base over it, as
     /// translucent as the main window. Without one, that is opaque.
     material: bool = false,
+    /// Its OS window is framed by the OS — its corners, shadow and resizing from its edges (macOS's
+    /// titled window, DWM on Windows): the window is the float's glass, and the float resizes
+    /// nothing itself.
+    os_frame: bool = false,
+    /// Its OS window has the OS's own buttons for close, minimize and zoom (macOS's traffic lights):
+    /// the float's header draws no close button of its own.
+    os_buttons: bool = false,
+    /// The OS asked to close its window (its close button, ⌘W): it closes as from its header.
+    close_asked: bool = false,
 };
 
-/// See `Float.split`.
-pub const Split = struct {
-    /// As `Viewport.material`.
-    material: bool = false,
-};
+
+/// Out of the main window in an OS window the OS frames (`Viewport.os_frame`).
+fn osFramed(f: Float) bool {
+    if (f.viewport) |vp| return vp.os_frame;
+    return false;
+}
+
+/// Out of the main window in an OS window with the OS's own buttons (`Viewport.os_buttons`).
+fn osButtons(f: Float) bool {
+    if (f.viewport) |vp| return vp.os_buttons;
+    return false;
+}
 
 /// Natural units a float out of the main window draws past its window rect — its shadow's reach,
 /// less the margin its rect already holds — and its OS window holds round it, clear: the float
@@ -308,7 +318,7 @@ pub fn liftedFrom(l: *Layout, place: []const u8, view: []const u8) void {
     const root = l.state.floatRoot(place) orelse return;
     const i = l.state.floats.find(root) orelse return;
     const f = &l.state.floats.items.items[i];
-    if (f.closing or f.bounds.w <= 0 or f.bounds.h <= 0) return;
+    if (f.closing or f.viewport != null or f.bounds.w <= 0 or f.bounds.h <= 0) return;
     dropAsidePhoto(f);
     f.aside_view = l.state.internName(l.gpa, view);
     // The window alone: its shadow is drawn round the photograph as it goes (`drawAsidePhoto`), so
@@ -391,7 +401,10 @@ pub fn close(l: *Layout, name: []const u8, how: Closing) void {
     // Marked, not removed: `draw` may be walking the list, and drops it when it comes to it —
     // at once if it never drew a window or was a ghost, after the flight shut if it did.
     f.closing = true;
-    if (f.win_id != .zero and f.bounds.w > 0 and f.aside.to == 0) {
+    // Out of the main window, its OS window just goes, as any window does when closed: the
+    // fly-shut is the main window's picture of a window closing in it.
+    const out = f.viewport != null;
+    if (!out and f.win_id != .zero and f.bounds.w > 0 and f.aside.to == 0) {
         var to = f.bounds;
         to.x = to.center().x;
         to.y = to.center().y;
@@ -482,7 +495,9 @@ fn drawOne(l: *Layout, i: usize) bool {
     // A ghost while a view carried out of it is aimed elsewhere: the drop is aimed at what it lies
     // over. Itself again when the view is aimed back over it, and when the drag ends.
     const carried_out = ViewDrag.carriedOutOf(l, state.floats.items.items[i].name);
-    const ghosted = carried_out and !ViewDrag.settleGhost(state);
+    // Not a float in its own OS window: that window is in front of what lies under it whatever its
+    // float shows, and a window a view is carried out of stays as it is, as any app's does.
+    const ghosted = carried_out and state.floats.items.items[i].viewport == null and !ViewDrag.settleGhost(state);
     {
         const f = &state.floats.items.items[i];
         f.aside.step(now);
@@ -519,7 +534,7 @@ fn drawOne(l: *Layout, i: usize) bool {
 
     // Out of the main window it is wherever its OS window's part of the frame is, and lands
     // nowhere: the window it would grow in is gone.
-    const out = first.viewport != null or first.split != null;
+    const out = first.viewport != null;
     if (out) endLanding(&state.floats.items.items[i]);
     // Where the window is this frame: on its way out of the carried glass, or where it was left.
     var rect = if (first.viewport) |vp| vp.rect else first.rect;
@@ -538,7 +553,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     // The carried drop was glass already: the window takes over from it, whole, rather than
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
     // window's does; as a photograph, the window draws no glass at all.
-    // Out of the main window (`viewport`, `split`), it looks as it does in it: its shadow in the
+    // Out of the main window (`viewport`), it looks as it does in it: its shadow in the
     // clear margin round its OS window (`outReach`), and its glass reading what it reads in the
     // main window — the main window's picture where that is under it, its base past its edge, the
     // margin past the rim included (`Popout.behindGlass`) — so the rim bends and catches the light
@@ -568,7 +583,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     var win = core.widgets.floatingWindow(@src(), .{
         .rect = &win_rect,
         .placed = true,
-        .resize = if (landing or first.closing or aside > 0) .none else .all,
+        .resize = if (landing or first.closing or aside > 0 or osFramed(first)) .none else .all,
         .window_avoid = .none,
         .frost = frost,
         .detached = out,
@@ -617,7 +632,9 @@ fn drawOne(l: *Layout, i: usize) bool {
     if (hide_live or fresh) dvui.clipSet(.{});
     var open = true;
     const title = if (ViewDrag.visibleId(l, first.name)) |id| (if (l.host.surfaceById(id)) |s| s.title else first.name) else first.name;
-    const header = dialogs.windowHeader(title, "", &open, .none);
+    // Its OS window's own buttons close it out of the main window (macOS's traffic lights): no
+    // close button of its own beside them.
+    const header = dialogs.windowHeader(title, "", if (osButtons(first)) null else &open, .none);
     const header_close = dialogs.windowHeaderCloseRect();
     // For demo tapes (`docs/AUTOMATION.md`): its header, to move it by, and its close button.
     core.anchor.markRect(win_id, header, true, "float-header:{s}", .{first.name});
@@ -673,7 +690,8 @@ fn drawOne(l: *Layout, i: usize) bool {
     const kept = title[0..@min(title.len, f.title_buf.len)];
     @memcpy(f.title_buf[0..kept.len], kept);
     f.title_len = @intCast(kept.len);
-    if (!open) {
+    const asked = if (f.viewport) |vp| vp.close_asked else false;
+    if (!open or asked) {
         close(l, f.name, .home);
         return true;
     }
@@ -688,9 +706,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     // shown, not kept, so the float is back where they left it when the window grows again.
     if (held and !landing and !f.closing and !win_rect.equals(f.rect)) {
         f.rect = fromRules(rules.resized(toRules(win_rect)));
-        // Split out under the drag, it may be off the window altogether: kept when it is let go —
-        // settled out, or merged back in.
-        if (f.split == null) state.markDirty();
+        state.markDirty();
     }
     return true;
 }
