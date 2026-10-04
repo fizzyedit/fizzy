@@ -19,6 +19,7 @@ const fizzy = @import("../fizzy.zig");
 const State = @import("app").layout.State;
 
 const viewports = fizzy.backend.viewports;
+const Floats = @import("app").layout.Layout.Floats;
 
 /// The float out of the main window, while one is. One at a time, in the spike.
 var out: ?Out = null;
@@ -88,11 +89,12 @@ pub fn beginFrame(state: *State) void {
             // Back where its window is now, mapped into the main window and held on it
             // (`float_rules.reachable`) — not where it left from: it was moved out there.
             const f = &state.floats.items.items[i];
-            const at = viewports.inMain(o.viewport);
+            const window = viewports.inMain(o.viewport);
             const s = dvui.windowNaturalScale();
-            if (at.w > 0 and at.h > 0) {
-                const Floats = @import("app").layout.Layout.Floats;
+            if (window.w > 0 and window.h > 0) {
                 const rules = @import("app").layout.Layout.float_rules;
+                // Its rect, inside the clear margin round it out there.
+                const at: dvui.Rect.Physical = (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(Floats.outReach() * s);
                 const back: dvui.Rect = .{ .x = at.x / s, .y = at.y / s, .w = at.w / s, .h = at.h / s };
                 f.rect = Floats.fromRules(rules.reachable(Floats.toRules(back), Floats.toRules(dvui.windowRect())));
             }
@@ -108,11 +110,14 @@ pub fn beginFrame(state: *State) void {
     const f = &state.floats.items.items[i];
     var title_buf: [96]u8 = undefined;
     const title = std.fmt.bufPrintZ(&title_buf, "{s}", .{f.name}) catch "Fizzy";
-    // Its window opens over the place it was in the main window; the float goes to the same
-    // place in the viewport's band, so it does not move on screen.
-    const b = f.bounds;
+    // Its window opens over the place it was in the main window, grown by the clear margin its
+    // shadow is drawn in out there (`Floats.outReach`); the float goes to the same place in the
+    // viewport's band, so it does not move on screen.
+    const s0 = dvui.windowNaturalScale();
+    const b = f.bounds.outsetAll(Floats.outReach() * s0);
     const vp = viewports.open(.{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }, title) orelse return;
-    const frame = viewports.frameOf(vp);
+    const window = viewports.frameOf(vp);
+    const frame = (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(Floats.outReach() * s0);
     const s = dvui.windowNaturalScale();
     f.viewport = .{ .rect = .{ .x = frame.x / s, .y = frame.y / s, .w = frame.w / s, .h = frame.h / s } };
     out = .{ .serial = f.serial, .viewport = vp };
@@ -156,7 +161,8 @@ pub fn endFrame(state: *State) void {
     if (cw.subwindows.get(f.win_id) == null) return;
     // Where it was drawn this frame, on whole points: where its window goes, and the offset its
     // drawing is replayed at, so a pointer over the window lands on what it shows.
-    const b = f.bounds;
+    // Its window holds the clear margin round it its shadow is drawn in (`Floats.outReach`).
+    const b = f.bounds.outsetAll(Floats.outReach() * dvui.windowNaturalScale());
     const shown = viewports.place(o.viewport, .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h });
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
     const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
@@ -175,7 +181,7 @@ pub fn endFrame(state: *State) void {
     rt.rendering = true;
     const prev = dvui.renderTarget(rt);
     defer _ = dvui.renderTarget(prev);
-    backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b);
+    if (!f.viewport.?.material) backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b);
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
     // them, every one whose middle is in the window's part of the frame. Taken from each, so
@@ -199,12 +205,14 @@ pub fn endFrame(state: *State) void {
     viewports.present(o.viewport, target);
 }
 
-/// What the float out here stands on, until its window has a material of its own to show through
-/// (vibrancy, Acrylic: Phase 4). Its target is transparent, and the float draws its fill alone out
-/// here (no frost, no shadow, no margin: `Floats.drawOne`), which over nothing came out as
-/// translucent as that fill. Behind it instead: the chrome's colour, opaque, in the window's own
-/// corners, so it reads as a panel of the main window does and the window stays round.
-fn backing(target: dvui.Rect.Physical, bounds: dvui.Rect.Physical) void {
+/// What the float out here stands on where its window has no material behind its glass
+/// (`Floats.Viewport.material`): it draws its fill alone then, no frost, which over nothing came
+/// out as translucent as that fill. Behind its glass instead — inside the margin its shadow is
+/// drawn in — the chrome's colour, opaque, in the glass's own corners, so it reads as a panel of
+/// the main window does.
+fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical) void {
+    const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
+    const bounds = window.insetAll((Floats.outReach() + margin) * dvui.windowNaturalScale());
     const cw = dvui.currentWindow();
     const prev_clip = dvui.clipGet();
     defer dvui.clipSet(prev_clip);

@@ -84,9 +84,25 @@ pub const Float = struct {
 /// resized there by the user as it would be in the main window, it is `rect` that changes; the
 /// float's own `rect` is kept, where it comes back to.
 pub const Viewport = struct {
-    /// Natural units, in the main window's frame.
+    /// Natural units, in the main window's frame: the float's window rect, as it would be in the
+    /// main window. Its OS window is that grown by `outReach`.
     rect: dvui.Rect,
+    /// Its OS window shows the desktop through a material behind the glass (vibrancy): the
+    /// float's frost reads it, as it reads the app in the main window. Without one, the app
+    /// stands an opaque backing behind the glass (`Popout.backing`) and the float draws no frost.
+    material: bool = false,
 };
+
+/// Natural units a float out of the main window draws past its window rect — its shadow's reach,
+/// less the margin its rect already holds — and its OS window holds round it, clear: the float
+/// draws the shadow it draws round its glass in the main window, and looks the same in either.
+/// Its rect is the same size out as in, so going out and coming back moves it and nothing else.
+pub fn outReach() f32 {
+    const bs = dialogs.surfaceShadow();
+    const shadow = @ceil(bs.fade + @max(@abs(bs.offset.x), @abs(bs.offset.y))) + 1;
+    const margin = (core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
+    return @max(0, shadow - margin);
+}
 
 /// A picture of a float taken from the frame, with a blur of it made the first time it is drawn
 /// blurred (`core.anim.Frost`).
@@ -498,12 +514,13 @@ fn drawOne(l: *Layout, i: usize) bool {
     // The carried drop was glass already: the window takes over from it, whole, rather than
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
     // window's does; as a photograph, the window draws no glass at all.
-    // Out of the main window (`viewport`), its OS window has nothing behind it for glass to read
-    // until it has a material of its own (Phase 4): no frost, whose refraction read past its rim
-    // into nothing and left the edges see-through, and no shadow or margin round it, drawn into
-    // the OS window's empty corners — the window is the panel alone, over the app's backing
-    // (`Popout.backing`).
-    var frost = if (as_photo or out) null else dialogs.dialogFrost();
+    // Out of the main window (`viewport`), it looks as it does in it: its shadow in the clear
+    // margin round its OS window (`outReach`), and its frost where the window has a material
+    // behind the glass to read (`Viewport.material`). Without one there is nothing behind the
+    // glass for frost to read — its refraction read past its rim into nothing and left the edges
+    // see-through — so it draws its fill alone, over the app's backing (`Popout.backing`).
+    const no_frost = if (first.viewport) |vp| !vp.material else false;
+    var frost = if (as_photo or no_frost) null else dialogs.dialogFrost();
     if (frost) |*fr| {
         fr.form = shown;
         // Landing, it grows into its window — past it and back, when motion is playful — and its
@@ -532,14 +549,14 @@ fn drawOne(l: *Layout, i: usize) bool {
         .window_avoid = .none,
         .frost = frost,
         .detached = out,
+        .detached_reach = if (out) outReach() else 0,
     }, .{
         .id_extra = @intCast(first.serial),
         .corners = if (landing) dvui.CornerRect.all(corner_r) else dialogs.surfaceCorners(),
-        .box_shadow = if (as_photo or out) null else shadow,
+        .box_shadow = if (as_photo) null else shadow,
         .background = !as_photo,
         .color_fill = .{ .color = dialogs.dialogFill() },
         .border = .all(0),
-        .margin = if (out) dvui.Rect{} else null,
     });
     const win_id = win.data().id;
     const bounds = win.data().rectScale().r;
