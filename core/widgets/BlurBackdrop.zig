@@ -221,6 +221,7 @@ pub fn deinit(self: *BlurBackdrop) void {
     r.y = y_start;
     r.h = @round(y_end - y_start);
     if (r.w < 1 or r.h < 1) return;
+    r = within(r, dvui.windowRectPixels()) orelse return;
 
     // The rest of this function renders into offscreen targets (the full-res
     // capture, then each downsample/upsample pass) and must happen
@@ -268,6 +269,8 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
     r.w = @round(r.w);
     r.h = @round(r.h);
     if (r.w < 1 or r.h < 1) return true;
+    // Never more than the picture it reads (`within`): the bound target's own part of the frame.
+    r = within(r, .{ .x = cw.render_target.offset.x, .y = cw.render_target.offset.y, .w = @floatFromInt(bound.width), .h = @floatFromInt(bound.height) }) orelse return true;
     // What is behind the pane, from whoever gives it (`Behind`), or the target it is drawn on.
     const given: ?Behind.Picture = if (behind) |b|
         (if (capturing == b.id) b.picture(b.ctx, r) else null)
@@ -352,6 +355,24 @@ fn deinitFromTarget(self: *BlurBackdrop) bool {
     return true;
 }
 
+/// Fizzy addition: `r` (whole pixels) as a capture of what lies in `span` may take it: `r` itself
+/// while it is no larger than `span` either way — a pane partly off the window keeps its whole
+/// rect, and so its capture size (`captureSize`) — else cut to `span`. Null when nothing is left.
+/// A pane spanning places in two windows' parts of the frame (a view drag's drop zones, drawn
+/// across every screen, with a float out of the main window: `core.screens.markEverywhere`) asked
+/// for a capture the size of the gap between them, 46424 pixels wide, and Metal aborts at a
+/// texture past 32768.
+pub fn within(r: Rect.Physical, span: Rect.Physical) ?Rect.Physical {
+    if (r.w <= span.w and r.h <= span.h) return r;
+    var c = r.intersect(span);
+    c.x = @floor(c.x);
+    c.y = @floor(c.y);
+    c.w = @floor(c.w);
+    c.h = @floor(c.h);
+    if (c.w < 1 or c.h < 1) return null;
+    return c;
+}
+
 /// How much smaller than the rect the copy the blur starts from is: for the pyramid, 2 at a
 /// radius it blurs; for a `stable` blur, 2 once `fineShrink` wants any shrinking (the copy's
 /// 2×2 box average is the first halving), else 1.
@@ -410,6 +431,7 @@ fn deinitReadback(self: *BlurBackdrop) void {
     r.w = @round(r.w);
     r.h = @round(r.h);
     if (r.w < 1 or r.h < 1) return;
+    r = within(r, dvui.windowRectPixels()) orelse return;
     const w: u32 = @intFromFloat(r.w);
     const h: u32 = @intFromFloat(r.h);
 
