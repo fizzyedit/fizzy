@@ -122,6 +122,31 @@ pub const loadTree = layout_file.loadTree;
 /// Symmetric with the native API: no AppKit pump on web.
 pub fn macosLaunchComplete() void {}
 
+/// Symmetric with the native API: a page has one canvas, so a float never leaves it.
+pub const viewports = struct {
+    pub const supported = false;
+    pub const Viewport = struct {};
+    pub const Rect = struct { x: f32 = 0, y: f32 = 0, w: f32 = 0, h: f32 = 0 };
+
+    pub fn open(_: Rect, _: [:0]const u8) ?*Viewport {
+        return null;
+    }
+    pub fn close(_: *Viewport) void {}
+    pub fn frameOf(_: *const Viewport) Rect {
+        return .{};
+    }
+    pub fn place(_: *Viewport, frame: Rect) Rect {
+        return frame;
+    }
+    pub fn present(_: *Viewport, _: ?dvui.TextureTarget) void {}
+    pub fn inMain(_: *const Viewport) Rect {
+        return .{};
+    }
+    pub fn closeRequested(_: *const Viewport) bool {
+        return false;
+    }
+};
+
 pub fn titlebarStripHeight(_: *dvui.Window) f32 {
     return 0;
 }

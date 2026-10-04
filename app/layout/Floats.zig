@@ -72,6 +72,20 @@ pub const Float = struct {
     /// the drop was cancelled and the photograph is still a true picture of it; gone, it landed
     /// elsewhere, and the float comes back as it is now.
     aside_view: []const u8 = "",
+    /// Out of the main window, in an OS window of its own (`docs/POPOUT_WINDOWS_PLAN.md`); null
+    /// while it is in the main window. The application that owns the OS windows sets and clears
+    /// it, replays the float's drawing into its window and routes that window's pointer back.
+    viewport: ?Viewport = null,
+};
+
+/// Where a float out of the main window is drawn in the frame. The application chooses it: a
+/// part of the frame past the main window's edge, which no pointer over the main window reaches,
+/// so the only pointer the float sees is the one translated from its own OS window. Moved and
+/// resized there by the user as it would be in the main window, it is `rect` that changes; the
+/// float's own `rect` is kept, where it comes back to.
+pub const Viewport = struct {
+    /// Natural units, in the main window's frame.
+    rect: dvui.Rect,
 };
 
 /// A picture of a float taken from the frame, with a blur of it made the first time it is drawn
@@ -463,11 +477,15 @@ fn drawOne(l: *Layout, i: usize) bool {
     const shown = if (as_photo) 1 else ghostLook(aside).alpha;
     const hide_live = as_photo or aside >= gone;
 
+    // Out of the main window it is wherever its OS window's part of the frame is, and lands
+    // nowhere: the window it would grow in is gone.
+    const out = first.viewport != null;
+    if (out) endLanding(&state.floats.items.items[i]);
     // Where the window is this frame: on its way out of the carried glass, or where it was left.
-    var rect = first.rect;
+    var rect = if (first.viewport) |vp| vp.rect else first.rect;
     var corner_r = core.corners.scaled(core.corners.surface);
     var landed: f32 = 1;
-    if (first.landing) |land| {
+    if (state.floats.items.items[i].landing) |land| {
         const frac = land.clock.fraction(core.motion.durationMs(landing_ms));
         landed = if (frac >= 1) 1 else core.motion.enter(frac);
         const from = land.from.toNatural();
@@ -480,7 +498,12 @@ fn drawOne(l: *Layout, i: usize) bool {
     // The carried drop was glass already: the window takes over from it, whole, rather than
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
     // window's does; as a photograph, the window draws no glass at all.
-    var frost = if (as_photo) null else dialogs.dialogFrost();
+    // Out of the main window (`viewport`), its OS window has nothing behind it for glass to read
+    // until it has a material of its own (Phase 4): no frost, whose refraction read past its rim
+    // into nothing and left the edges see-through, and no shadow or margin round it, drawn into
+    // the OS window's empty corners — the window is the panel alone, over the app's backing
+    // (`Popout.backing`).
+    var frost = if (as_photo or out) null else dialogs.dialogFrost();
     if (frost) |*fr| {
         fr.form = shown;
         // Landing, it grows into its window — past it and back, when motion is playful — and its
@@ -508,13 +531,15 @@ fn drawOne(l: *Layout, i: usize) bool {
         .resize = if (landing or first.closing or aside > 0) .none else .all,
         .window_avoid = .none,
         .frost = frost,
+        .detached = out,
     }, .{
         .id_extra = @intCast(first.serial),
         .corners = if (landing) dvui.CornerRect.all(corner_r) else dialogs.surfaceCorners(),
-        .box_shadow = if (as_photo) null else shadow,
+        .box_shadow = if (as_photo or out) null else shadow,
         .background = !as_photo,
         .color_fill = .{ .color = dialogs.dialogFill() },
         .border = .all(0),
+        .margin = if (out) dvui.Rect{} else null,
     });
     const win_id = win.data().id;
     const bounds = win.data().rectScale().r;
@@ -594,6 +619,12 @@ fn drawOne(l: *Layout, i: usize) bool {
     f.header = header;
     if (!open) {
         close(l, f.name, .home);
+        return true;
+    }
+    // Out of the main window, moved or resized: that is its OS window's, which follows it, and
+    // nothing the layout keeps.
+    if (f.viewport) |*vp| {
+        if (held and !f.closing and !win_rect.equals(vp.rect)) vp.rect = fromRules(rules.resized(toRules(win_rect)));
         return true;
     }
     // Moved or resized by the user: remember where, no smaller than a float may be. Only theirs —

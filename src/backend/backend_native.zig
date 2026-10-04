@@ -120,6 +120,61 @@ pub fn saveWindowGeometry(win: *dvui.Window) void {
 /// Called at the end of AppInit: the monitor may drive frames through window animations now.
 pub const macosLaunchComplete = platform.macos_monitor.launchComplete;
 
+/// OS windows besides the main one, each showing a part of the one frame — a float popped out
+/// (`docs/POPOUT_WINDOWS_PLAN.md`, the backend's `Viewport`). Fizzy's own backend only: on dvui's
+/// SDL3 backend (`-Dnative-backend=sdl3`) there are none, as on the web, and floats stay in.
+pub const viewports = struct {
+    const Impl = @import("backend");
+    pub const supported = @hasDecl(Impl, "viewportOpen");
+    pub const Viewport = if (supported) Impl.Viewport else struct {};
+    /// Physical pixels of the frame.
+    pub const Rect = if (supported) Impl.viewport_map.Rect else struct { x: f32 = 0, y: f32 = 0, w: f32 = 0, h: f32 = 0 };
+
+    /// A viewport over `at` (the frame as the main window shows it), its window opening over that
+    /// place on the desktop, hidden until a frame is presented into it. Its own part of the frame
+    /// is `frameOf`.
+    pub fn open(at: Rect, title: [:0]const u8) ?*Viewport {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportOpen(at, title);
+    }
+
+    pub fn close(vp: *Viewport) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportClose(vp);
+    }
+
+    /// The part of the frame `vp` shows, physical pixels: in its band, past the main window.
+    pub fn frameOf(vp: *const Viewport) Rect {
+        if (comptime !supported) return .{};
+        return vp.frame;
+    }
+
+    /// Put `vp`'s window where it shows `frame`; the part of the frame it then shows.
+    pub fn place(vp: *Viewport, frame: Rect) Rect {
+        if (comptime !supported) return frame;
+        return dvui.currentWindow().backend.impl.viewportPlace(vp, frame);
+    }
+
+    /// Hand `vp` this frame's picture of its part of the frame, drawn into `target`, or nothing.
+    pub fn present(vp: *Viewport, target: ?dvui.TextureTarget) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportPresent(vp, target);
+    }
+
+    /// Where `vp`'s window is now, in the main window's part of the frame (physical pixels from
+    /// its top left): where its float goes when it comes back.
+    pub fn inMain(vp: *const Viewport) Rect {
+        if (comptime !supported) return .{};
+        return dvui.currentWindow().backend.impl.viewportInMain(vp);
+    }
+
+    /// The OS asked to close `vp`'s window.
+    pub fn closeRequested(vp: *const Viewport) bool {
+        if (comptime !supported) return false;
+        return vp.close_requested;
+    }
+};
+
 /// Fizzy keeps the window's geometry in `layout.zon`, beside its regions — one file for where the
 /// window and everything in it were left, and the file it has always kept the frame in.
 var layout_store_dir: []const u8 = "";

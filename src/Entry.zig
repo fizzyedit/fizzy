@@ -403,6 +403,9 @@ fn frameOnce() !dvui.App.Result {
     // its input after the real input, takes the real input it owns, and says whether this run is
     // seen (see `app.automation.Player.frame`).
     fizzy.editor().demo.frame();
+    // A float asked out of the main window, or back into it, goes before anything is drawn
+    // (`Editor.Popout`, behind `FIZZY_POPOUT`).
+    Editor.Popout.beginFrame(&fizzy.editor().app.layout);
     // The whole frame draws into a texture — see `core.FrameTarget` for why.
     {
         const prof = fizzy.core.profile.begin("fizzy", "frame target: begin");
@@ -414,6 +417,9 @@ fn frameOnce() !dvui.App.Result {
         defer prof.end();
         frame_target.end();
     }
+    // Before that replays the subwindows into the frame: a float out of the main window is
+    // replayed into its own window instead.
+    defer Editor.Popout.endFrame(&fizzy.editor().app.layout);
     const prof_tick = fizzy.core.profile.begin("fizzy", "tick");
     defer prof_tick.end();
     return try fizzy.editor().tick();

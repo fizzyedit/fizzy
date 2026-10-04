@@ -92,6 +92,9 @@ pub const sdk = fizzy.sdk;
 pub const Profiler = @import("Profiler.zig");
 /// Demo automation: fizzy's stage for `app.automation`, and the demos it ships with.
 pub const Demo = @import("Demo.zig");
+/// A float taken out of the main window into an OS window of its own: the spike behind
+/// `FIZZY_POPOUT=1` (`docs/POPOUT_WINDOWS_PLAN.md`).
+pub const Popout = @import("Popout.zig");
 pub const Host = sdk.Host;
 
 /// Workbench: the file-management home — file tree, open/load flow, and the

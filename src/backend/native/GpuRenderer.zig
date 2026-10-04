@@ -31,6 +31,9 @@
 //! * **Precise targets** (`precision = .high`) are 16-bit float.
 //! * **Reads** (`readPixels`, `textureReadTarget`) download through a fence: a sync, as on any
 //!   backend.
+//! * **Viewports.** More windows can be claimed on the device (`claimViewport`), each handed
+//!   its part of the frame from a target, copied into its drawable on the frame's own command
+//!   buffer (`presentInto`): one frame, one submission, whatever the number of windows.
 const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -554,6 +557,73 @@ fn acquireSwapchain(self: *GpuRenderer) !bool {
     self.swapchain_w = w;
     self.swapchain_h = h;
     self.swapchain_state = .acquired;
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Viewports: more windows on this renderer's device and command buffer
+
+/// Claim `window` on this renderer's device, to present into alongside the main window (a
+/// viewport, `SDLBackend.Viewport`): one renderer, one command buffer and one submission for
+/// every window, so every texture and program is valid in all of them. Its swapchain does not
+/// wait for the display — IMMEDIATE where the device has it (Metal without display sync), else
+/// MAILBOX — so a second window never holds the main one's frame back.
+pub fn claimViewport(self: *GpuRenderer, window: *c.SDL_Window) !void {
+    if (!c.SDL_ClaimWindowForGPUDevice(self.device, window)) {
+        log.err("SDL_ClaimWindowForGPUDevice (viewport) failed: {s}", .{c.SDL_GetError()});
+        return error.GpuClaimWindow;
+    }
+    const mode: c.SDL_GPUPresentMode = if (c.SDL_WindowSupportsGPUPresentMode(self.device, window, c.SDL_GPU_PRESENTMODE_IMMEDIATE))
+        c.SDL_GPU_PRESENTMODE_IMMEDIATE
+    else if (c.SDL_WindowSupportsGPUPresentMode(self.device, window, c.SDL_GPU_PRESENTMODE_MAILBOX))
+        c.SDL_GPU_PRESENTMODE_MAILBOX
+    else
+        c.SDL_GPU_PRESENTMODE_VSYNC;
+    if (!c.SDL_SetGPUSwapchainParameters(self.device, window, c.SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode)) {
+        log.err("SDL_SetGPUSwapchainParameters (viewport) failed: {s}", .{c.SDL_GetError()});
+    }
+    prepareLayer(window);
+}
+
+/// Give `window` back. SDL waits out what is still in flight to it.
+pub fn releaseViewport(self: *GpuRenderer, window: *c.SDL_Window) void {
+    c.SDL_ReleaseWindowFromGPUDevice(self.device, window);
+}
+
+/// Copy `target` into `window`'s next drawable — a viewport's part of the frame, drawn there
+/// already — presented with this frame's submission (`present`). Transparent wherever the target
+/// is. Never waits: a drawable not ready (minimized, occluded, or its last frame still in flight)
+/// skips this frame for that window. True when there was one.
+pub fn presentInto(self: *GpuRenderer, window: *c.SDL_Window, target: dvui.TextureTarget) bool {
+    const tex: *Tex = @ptrCast(@alignCast(target.ptr));
+    const cmd = self.ensureCmd() catch return false;
+    self.endCopy();
+    // A target nothing drew into still owes its clear.
+    if (tex.needs_clear) self.clearPass(tex) catch return false;
+    var swap: ?*c.SDL_GPUTexture = null;
+    var w: u32 = 0;
+    var h: u32 = 0;
+    if (!c.SDL_AcquireGPUSwapchainTexture(cmd, window, &swap, &w, &h)) {
+        log.err("SDL_AcquireGPUSwapchainTexture (viewport) failed: {s}", .{c.SDL_GetError()});
+        return false;
+    }
+    const dest = swap orelse return false;
+    // The window and its part of the frame are the same size but for a resize in flight; the
+    // overlap is copied as it is, never scaled.
+    const bw = @min(w, tex.width);
+    const bh = @min(h, tex.height);
+    if (bw == 0 or bh == 0) return false;
+    var info = std.mem.zeroes(c.SDL_GPUBlitInfo);
+    info.source.texture = tex.texture;
+    info.source.w = bw;
+    info.source.h = bh;
+    info.destination.texture = dest;
+    info.destination.w = bw;
+    info.destination.h = bh;
+    info.load_op = c.SDL_GPU_LOADOP_CLEAR;
+    info.clear_color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    info.filter = c.SDL_GPU_FILTER_NEAREST;
+    c.SDL_BlitGPUTexture(cmd, &info);
     return true;
 }
 
