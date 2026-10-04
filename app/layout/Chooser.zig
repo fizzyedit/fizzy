@@ -217,7 +217,7 @@ pub const Item = struct {
     }
 
     fn drawTooltip(self: *Item) void {
-        var tip: dvui.FloatingTooltipWidget = undefined;
+        var tip: core.widgets.FloatingTooltipWidget = undefined;
         tip.init(@src(), .{
             .active_rect = self.tab.box.data().rectScale().r,
             .delay = 350_000,

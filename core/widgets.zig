@@ -27,6 +27,8 @@ const icon_tex = @import("gfx/icon.zig");
 pub const CanvasWidget = @import("widgets/CanvasWidget.zig");
 pub const ReorderWidget = @import("widgets/ReorderWidget.zig");
 pub const FloatingWindowWidget = @import("widgets/FloatingWindowWidget.zig");
+/// A tooltip placed on the screen its anchor is on (`core.screens`): fizzy's copy of dvui's.
+pub const FloatingTooltipWidget = @import("widgets/FloatingTooltipWidget.zig");
 pub const TreeWidget = @import("widgets/TreeWidget.zig");
 pub const TreeSelection = @import("widgets/TreeSelection.zig");
 /// Local copies of upstream dvui's `DockingWidget` (+ its `DockLayout` tree) and `BlurBackdrop`,
@@ -88,8 +90,8 @@ pub fn floatingMenu(src: std.builtin.SourceLocation, init_opts: FloatingMenuWidg
 /// `dvui.tooltip` drawn as fizzy's floating surface (`dialogs.tooltipSurface`): a line of text
 /// in a frosted, rounded, shadowed card like the dialogs and menus, rather than dvui's opaque box.
 /// Same arguments; `opts` styles the text.
-pub fn tooltip(src: std.builtin.SourceLocation, init_opts: dvui.FloatingTooltipWidget.InitOptions, comptime fmt: []const u8, fmt_args: anytype, opts: dvui.Options) void {
-    var tt: dvui.FloatingTooltipWidget = undefined;
+pub fn tooltip(src: std.builtin.SourceLocation, init_opts: FloatingTooltipWidget.InitOptions, comptime fmt: []const u8, fmt_args: anytype, opts: dvui.Options) void {
+    var tt: FloatingTooltipWidget = undefined;
     const defaults: dvui.Options = .{ .role = .tooltip, .padding = dvui.Rect.all(6) };
     tt.init(src, init_opts, defaults.override(dialogs.tooltipOptions(0)).override(opts));
     defer tt.deinit();

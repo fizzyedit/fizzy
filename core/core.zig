@@ -66,6 +66,8 @@ pub const keycaps = @import("keycaps.zig");
 /// Names for what a demo points at — `dvui.tag` with a name built from data (a file's row, its
 /// editor), free unless a demo is loaded.
 pub const anchor = @import("anchor.zig");
+/// The screens floating things are placed on: the main window's, and a popped-out float's.
+pub const screens = @import("screens.zig");
 
 /// Generic momentum/fling helper (pan, scrub, cover-flow).
 pub const Fling = @import("Fling.zig");

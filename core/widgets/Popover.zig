@@ -16,6 +16,7 @@ const dvui = @import("dvui");
 const dialogs = @import("../dialogs.zig");
 const widgets = @import("../widgets.zig");
 const FloatingWindowWidget = @import("FloatingWindowWidget.zig");
+const screens = @import("../screens.zig");
 
 const Popover = @This();
 
@@ -66,7 +67,8 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: InitOptions) Popover {
     // window's auto-size will read them), never the size it has mid-animation: judged from the
     // half-grown size, a popover near an edge fits at first, runs off-screen as it grows, and
     // only then flips or moves back — a frame late every frame, which reads as a pop.
-    const window = dvui.windowRect();
+    // The screen it opens on (`core.screens`): a float's own window, when that is out.
+    const window = screens.screenFor(.fromPoint(init_opts.anchor));
     const r = init_opts.rect;
     const id = dvui.parentGet().extendId(src, init_opts.id_extra);
     const target: dvui.Size = if (dvui.minSizeGet(id)) |ms|
@@ -121,7 +123,7 @@ pub fn init(src: std.builtin.SourceLocation, init_opts: InitOptions) Popover {
     // back on whenever last frame's rows no longer match the size; it grows (or shrinks) with
     // the same animation it opened with.
     if (dvui.minSizeGet(win.data().id)) |ms| {
-        const want = dvui.Size.min(ms, .cast(dvui.windowRect().size()));
+        const want = dvui.Size.min(ms, .cast(window.size()));
         if (@abs(want.w - r.w) > 0.5 or @abs(want.h - r.h) > 0.5) win.autoSize();
     }
     return .{ .win = win, .rect = win.data().borderRectScale().r, .keep = init_opts.keep };

@@ -16,6 +16,7 @@ const dvui = @import("dvui");
 const motion = @import("../../motion.zig");
 const dialogs = @import("../../dialogs.zig");
 const BlurBackdrop = @import("../BlurBackdrop.zig");
+const screens = @import("../../screens.zig");
 
 const Event = dvui.Event;
 const Options = dvui.Options;
@@ -156,12 +157,13 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
     }
 
     if (init_opts.from) |fr| {
-        self.data().rect = .cast(dvui.placeOnScreen(dvui.windowRect(), fr, avoid, .cast(self.data().rect)));
+        // On the screen it opens from (`core.screens`): a float's own window, when that is out.
+        self.data().rect = .cast(dvui.placeOnScreen(screens.screenFor(fr), fr, avoid, .cast(self.data().rect)));
     } else {
         const centering: Rect.Natural = dvui.currentWindow().subwindows.current_rect;
         self.wd.rect.x = centering.x + (centering.w - self.wd.rect.w) / 2;
         self.wd.rect.y = centering.y + (centering.h - self.wd.rect.h) / 2;
-        self.wd.rect = .cast(dvui.placeOnScreen(dvui.windowRect(), .{}, .none, .cast(self.data().rect)));
+        self.wd.rect = .cast(dvui.placeOnScreen(screens.screenFor(centering), .{}, .none, .cast(self.data().rect)));
     }
 
     if (dvui.snapToPixels()) {
@@ -183,7 +185,9 @@ pub fn init(self: *FloatingMenu, src: std.builtin.SourceLocation, init_opts: Ini
         dvui.subwindowAdd(self.data().id, self.data().rect, rs.r, self.style == .popup, null, true);
         dvui.captureMouseMaintain(.{ .id = self.data().id, .rect = rs.r, .subwindow_id = self.data().id });
         self.prevClip = dvui.clipGet();
-        dvui.clipSet(dvui.windowRectPixels()); // break out of whatever clipping we were in
+        // Break out of whatever clipping we were in — onto its screen (`core.screens`): clipped to
+        // the main window, a menu in a float that is out drew nothing.
+        dvui.clipSet(screens.pixelsFor(.cast(self.data().rect)));
         self.prev_scroll = dvui.ScrollContainerWidget.scrollSet(null);
     }
 
