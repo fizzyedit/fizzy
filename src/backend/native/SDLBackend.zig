@@ -120,6 +120,10 @@ pub const Viewport = struct {
     close_requested: bool = false,
     /// Its part of the frame, drawn this frame, for `renderPresent` to copy into it.
     pending: ?dvui.TextureTarget = null,
+    /// Where its window's place in SDL's units lies on the desktop, measured once when it opened,
+    /// for moving and sizing it in one step (`platform.win32_titlebar.setWindowFrame`). Windows
+    /// only; null elsewhere.
+    frame_map: ?platform.win32_titlebar.FrameMap = null,
 };
 
 pub const InitOptions = struct {
@@ -747,7 +751,14 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
     // where SDL makes it a child window that moves with its parent, and the windows that left
     // the main one stay where they are when it moves (`docs/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
-    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame };
+    // Measured now, while SDL's numbers for it are its own (`Viewport.frame_map`).
+    var sx: c_int = placed.screen.x;
+    var sy: c_int = placed.screen.y;
+    var sw: c_int = placed.screen.w;
+    _ = c.SDL_GetWindowPosition(window, &sx, &sy);
+    _ = c.SDL_GetWindowSize(window, &sw, null);
+    const frame_map = platform.win32_titlebar.frameMap(window, sx, sy, sw);
+    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .frame_map = frame_map };
     return &self.viewports[slot].?;
 }
 
@@ -775,7 +786,7 @@ pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) vi
     // Both at once — dragged by its left or top edge — in one step where the OS can
     // (`platform.win32_titlebar.setWindowFrame`): as two, it showed moved and not yet sized, its
     // far edge jumping.
-    const at_once = moved and sized and platform.win32_titlebar.setWindowFrame(vp.window, placed.screen.x, placed.screen.y, placed.screen.w, placed.screen.h);
+    const at_once = moved and sized and if (vp.frame_map) |m| platform.win32_titlebar.setWindowFrame(vp.window, m, placed.screen.x, placed.screen.y, placed.screen.w, placed.screen.h) else false;
     if (!at_once) {
         if (moved) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
         if (sized) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
@@ -788,13 +799,9 @@ pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) vi
 /// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the
 /// main window's top left, wherever either window has been moved since it opened.
 pub fn viewportInMain(self: *SDLBackend, vp: *const Viewport) viewport_map.Rect {
-    var x: c_int = 0;
-    var y: c_int = 0;
-    var w: c_int = 0;
-    var h: c_int = 0;
-    _ = c.SDL_GetWindowPosition(vp.window, &x, &y);
-    _ = c.SDL_GetWindowSize(vp.window, &w, &h);
-    return viewport_map.mainFromScreen(self.mainOnScreen(), self.density(), .{ .x = x, .y = y, .w = w, .h = h });
+    // Where it was last put, not SDL's idea of it: on Windows it may have been moved in one step
+    // behind SDL's back (`viewportPlace`), and only the app moves it.
+    return viewport_map.mainFromScreen(self.mainOnScreen(), self.density(), vp.screen);
 }
 
 /// Hand `vp` its part of this frame, drawn into `target`, for `renderPresent` to copy into its
