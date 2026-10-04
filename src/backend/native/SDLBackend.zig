@@ -148,10 +148,29 @@ pub const Viewport = struct {
     /// Core Animation transaction (`renderPresent`).
     frame_pending: bool = false,
     /// macOS: the main window leaves a hole in its picture under this window's glass this frame
-    /// (`viewportMainHole`), and where the main window lay under the window when its picture last
-    /// went into a transaction (window points from its top left): a hole that moves goes in one.
+    /// (`viewportMainHole`), and, as last applied with the window's picture, where its material is
+    /// kept out of because the main window's interior lies there and where it is kept all the same
+    /// over the main window's traffic lights (window points from its top left: `viewportMainMask`).
     main_hole: bool = false,
-    holed: viewport_map.ScreenRect = .{},
+    holed: MainMask = .{},
+    /// macOS: its material's rounded rect, points in from the window's edge, and its corners'
+    /// radius (`viewportGlass`).
+    glass_inset: f32 = 0,
+    glass_radius: f32 = 0,
+    /// Whether the main window is directly behind it, as last asked of the window server, and
+    /// when (`viewportMainBehind`).
+    main_behind: bool = true,
+    main_behind_ns: u64 = 0,
+    /// Where the main window was from it when its mask was last worked out (screen points), for
+    /// the part kept out to stay out of where the main window is leaving (`viewportMainMask`).
+    mask_rel: ?viewport_map.Point = null,
+};
+
+/// macOS: what of a viewport's material is kept out of over the main window, and kept all the same
+/// (`viewportMainMask`).
+const MainMask = struct {
+    cut: viewport_map.ScreenRect = .{},
+    keep: viewport_map.ScreenRect = .{},
 };
 
 pub const InitOptions = struct {
@@ -556,6 +575,7 @@ extern "c" fn fizzy_native_viewport_set_frame(nswindow: ?*anyopaque, x: f64, y: 
 extern "c" fn fizzy_native_viewport_transact(nswindow: ?*anyopaque) void;
 extern "c" fn fizzy_native_main_transact(nswindow: ?*anyopaque) c_int;
 extern "c" fn fizzy_native_window_server_origin(nswindow: ?*anyopaque, x: *f64, y: *f64) c_int;
+extern "c" fn fizzy_native_directly_behind(front: ?*anyopaque, back: ?*anyopaque) c_int;
 extern "c" fn fizzy_native_viewport_presented(nswindow: ?*anyopaque) void;
 extern "c" fn fizzy_native_live_resize_next_frame(nswindow: *anyopaque, wait_s: f64, since_start_s: f64) void;
 
@@ -969,6 +989,11 @@ pub fn viewportHints(_: *SDLBackend, vp: *Viewport, hints: ?struct { drag: viewp
 /// Where `vp`'s window now shows in the frame, when the OS moved or resized it since the last
 /// ask: where its float goes, to follow it. Null when it has not.
 pub fn viewportOsPlaced(_: *SDLBackend, vp: *Viewport) ?viewport_map.Rect {
+    // macOS: while the window server carries it, where it has it now, each frame — the moves SDL
+    // hears of come a few times a second (`viewportFollowServer`).
+    if (comptime builtin.os.tag == .macos) {
+        if (vp.os_moving and c.SDL_GetGlobalMouseState(null, null) != 0) _ = viewportFollowServer(vp);
+    }
     if (!vp.os_placed) return null;
     vp.os_placed = false;
     return vp.frame;
@@ -1015,6 +1040,8 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 }
 
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
+extern fn fizzy_macos_viewport_glass_mask(nswindow: ?*anyopaque, inset: f64, radius: f64, ex: f64, ey: f64, ew: f64, eh: f64, er: f64, kx: f64, ky: f64, kw: f64, kh: f64) void;
+extern fn fizzy_macos_window_buttons(nswindow: ?*anyopaque, x: *f64, y: *f64, w: *f64, h: *f64) c_int;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]const u8) void;
@@ -1036,7 +1063,10 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, 
         .macos => {
             const ns = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
             const main_ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(self.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
-            fizzy_macos_viewport_glass(ns, main_ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
+            vp.glass_inset = inset / vp.density;
+            vp.glass_radius = radius / vp.density;
+            vp.holed = .{};
+            fizzy_macos_viewport_glass(ns, main_ns, vp.glass_inset, vp.glass_radius, platform.window.ns_visual_effect_material);
             return true;
         },
         .windows => {
@@ -1048,25 +1078,81 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, 
     }
 }
 
-/// Where the main window lies under `vp`'s window, window points from its top left, while the main
-/// window leaves a hole there (`viewportMainHole`); empty otherwise.
-fn viewportUnderMain(self: *SDLBackend, vp: *const Viewport) viewport_map.ScreenRect {
-    if (!vp.main_hole) return .{};
-    var mx: c_int = 0;
-    var my: c_int = 0;
+/// How far in from the main window's edges a viewport's material is kept over it, points: AppKit's
+/// edge round the main window, which the hole it leaves does not take away, is blurred through the
+/// glass rather than sharp (`viewportMainMask`).
+const main_mask_edge: i32 = 6;
+/// The corners of what of the material is kept out over the main window, points: inside the main
+/// window's own, so what lies past its rounded corners is blurred too.
+const main_mask_corner: f64 = 12;
+
+/// macOS, while the main window leaves a hole under `vp`'s glass (`viewportMainHole`): what of the
+/// window's material is kept out over the main window — its interior, `main_mask_edge` in from its
+/// edges — and kept all the same over its traffic lights, window points from the window's top left.
+/// Empty otherwise.
+fn viewportMainMask(self: *SDLBackend, vp: *Viewport) MainMask {
+    if (!vp.main_hole) {
+        vp.mask_rel = null;
+        return .{};
+    }
     var mw: c_int = 0;
     var mh: c_int = 0;
-    const m = self.mainOnScreen();
-    mx = @intFromFloat(m.x);
-    my = @intFromFloat(m.y);
     _ = c.SDL_GetWindowSize(self.window, &mw, &mh);
+    const m = self.mainOnScreen();
+    const mx: i32 = @intFromFloat(@round(m.x));
+    const my: i32 = @intFromFloat(@round(m.y));
     const s = vp.screen;
-    const x0 = @max(mx, s.x);
-    const y0 = @max(my, s.y);
-    const x1 = @min(mx + mw, s.x + s.w);
-    const y1 = @min(my + mh, s.y + s.h);
-    if (x1 <= x0 or y1 <= y0) return .{};
-    return .{ .x = x0 - s.x, .y = y0 - s.y, .w = x1 - x0, .h = y1 - y0 };
+    const Local = struct {
+        fn of(win: viewport_map.ScreenRect, x0: i32, y0: i32, x1: i32, y1: i32) viewport_map.ScreenRect {
+            const l = @max(x0, win.x);
+            const t = @max(y0, win.y);
+            const r = @min(x1, win.x + win.w);
+            const b = @min(y1, win.y + win.h);
+            if (r <= l or b <= t) return .{};
+            return .{ .x = l - win.x, .y = t - win.y, .w = r - l, .h = b - t };
+        }
+    };
+    const e = main_mask_edge;
+    // While the main window moves under it (dragged by its title bar), or it under the main window
+    // (by its header), the mask reaches the screen a frame or two after where they were read: it is
+    // cut in from the side the main window is moving away from by twice the last move, so no strip
+    // of the window is left without its material where the main window has gone.
+    const rel: viewport_map.Point = .{ .x = m.x - @as(f32, @floatFromInt(s.x)), .y = m.y - @as(f32, @floatFromInt(s.y)) };
+    var lead: [4]i32 = .{ 0, 0, 0, 0 }; // left, top, right, bottom
+    if (vp.mask_rel) |was| {
+        const dx: i32 = @intFromFloat(@round(rel.x - was.x));
+        const dy: i32 = @intFromFloat(@round(rel.y - was.y));
+        lead = .{ @max(0, dx) * 2, @max(0, dy) * 2, @max(0, -dx) * 2, @max(0, -dy) * 2 };
+    }
+    vp.mask_rel = rel;
+    const cut = Local.of(s, mx + e + lead[0], my + e + lead[1], mx + mw - e - lead[2], my + mh - e - lead[3]);
+    if (cut.w <= 0) return .{};
+    var keep: viewport_map.ScreenRect = .{};
+    var bx: f64 = 0;
+    var by: f64 = 0;
+    var bw: f64 = 0;
+    var bh: f64 = 0;
+    if (fizzy_macos_window_buttons(cocoaWindow(self.window), &bx, &by, &bw, &bh) != 0) {
+        const x0 = mx + @as(i32, @intFromFloat(@floor(bx))) - e;
+        const y0 = my + @as(i32, @intFromFloat(@floor(by))) - e;
+        keep = Local.of(s, x0, y0, x0 + @as(i32, @intFromFloat(@ceil(bw))) + 2 * e, y0 + @as(i32, @intFromFloat(@ceil(bh))) + 2 * e);
+    }
+    return .{ .cut = cut, .keep = keep };
+}
+
+/// Whether the main window lies directly behind `vp`'s window where it is: no other window stacked
+/// between them over it (macOS: asked of the window server at most every 100 ms — the stacking
+/// changes when a window is brought forward, rarely). Only then is what the float's glass shows of
+/// the main window its picture (`Popout.behindGlass`), and the hole and mask under it right: with
+/// another app's window between, the glass showed the main window through it. True elsewhere.
+pub fn viewportMainBehind(self: *SDLBackend, vp: *Viewport) bool {
+    if (comptime builtin.os.tag != .macos) return true;
+    const now = c.SDL_GetTicksNS();
+    if (vp.main_behind_ns == 0 or now -% vp.main_behind_ns > 100 * std.time.ns_per_ms) {
+        vp.main_behind = fizzy_native_directly_behind(cocoaWindow(vp.window), cocoaWindow(self.window)) != 0;
+        vp.main_behind_ns = now;
+    }
+    return vp.main_behind;
 }
 
 /// The main window leaves a hole in its picture under `vp`'s glass this frame
@@ -1107,7 +1193,7 @@ fn viewportOf(self: *SDLBackend, window: *c.SDL_Window) ?*Viewport {
 /// tells the app where it went only a few times a second: what a popped-out float's glass showed
 /// of the main window behind it, and the hole the main window leaves under it, were placed by
 /// that and caught up in steps. Read at most every couple of milliseconds, and while it is moving
-/// the frames go on (`mainMoving`).
+/// the frames go on (`serverMoving`).
 fn mainOnScreen(self: *SDLBackend) viewport_map.Point {
     var x: c_int = 0;
     var y: c_int = 0;
@@ -1140,12 +1226,15 @@ fn anyViewport(self: *const SDLBackend) bool {
     return false;
 }
 
-/// macOS: the main window is being moved under a held press (by the window server, from its title
-/// bar) with a viewport open: frames go on, each placing what the viewports show of it where it
-/// is now (`mainOnScreen`), rather than waiting for the few events the move sends.
-fn mainMoving(self: *SDLBackend) bool {
+/// macOS: the window server is moving a window under a held press — the main window by its title
+/// bar with a viewport open, or a viewport by its float's header: frames go on, each placing what
+/// the viewports show where the windows are now (`mainOnScreen`, `viewportOsPlaced`), rather than
+/// waiting for the few events the move sends.
+fn serverMoving(self: *SDLBackend) bool {
     if (comptime builtin.os.tag != .macos) return false;
-    if (self.main_seen == null or c.SDL_GetGlobalMouseState(null, null) == 0) return false;
+    if (c.SDL_GetGlobalMouseState(null, null) == 0) return false;
+    for (self.viewports) |slot| if (slot) |v| if (v.os_moving) return true;
+    if (self.main_seen == null) return false;
     _ = self.mainOnScreen();
     return c.SDL_GetTicksNS() -% self.main_moved_ns < 500 * std.time.ns_per_ms;
 }
@@ -1284,9 +1373,31 @@ fn viewportFollowWindow(vp: *Viewport) void {
             vp.os_start = vp.screen;
         }
     }
+    // macOS: a move the window server is making goes by where it has the window now. What SDL
+    // heard is where AppKit last heard it was, behind where it is: taken over the window server's
+    // place it pulled the window's float back for a frame.
+    if (comptime builtin.os.tag == .macos) {
+        if (vp.os_moving and w == vp.screen.w and h == vp.screen.h and viewportFollowServer(vp)) return;
+    }
     vp.screen = now;
     vp.frame = viewport_map.frameOfScreen(vp.band, vp.anchor, vp.density, now);
     vp.os_placed = true;
+}
+
+/// macOS: where the window server has `vp`'s window now, when it moved it since it was last put —
+/// a move it makes itself (dragged by its float's header), which it tells the app of only a few
+/// times a second. Its part of the frame and its float follow (`viewportOsPlaced`). False when the
+/// window server cannot say (or shows the window transformed: `fizzy_native_window_server_origin`).
+fn viewportFollowServer(vp: *Viewport) bool {
+    var sx: f64 = 0;
+    var sy: f64 = 0;
+    if (fizzy_native_window_server_origin(cocoaWindow(vp.window), &sx, &sy) == 0) return false;
+    const now: viewport_map.ScreenRect = .{ .x = @intFromFloat(@round(sx)), .y = @intFromFloat(@round(sy)), .w = vp.screen.w, .h = vp.screen.h };
+    if (std.meta.eql(now, vp.screen)) return true;
+    vp.screen = now;
+    vp.frame = viewport_map.frameOfScreen(vp.band, vp.anchor, vp.density, now);
+    vp.os_placed = true;
+    return true;
 }
 
 /// SDL's hit test for a viewport's window, from what its float said this frame (`viewportHints`):
@@ -1294,11 +1405,22 @@ fn viewportFollowWindow(vp: *Viewport) void {
 /// window snaps, tiles and maximizes as any window does. SDL on macOS takes only the move (AppKit's
 /// window-background drag); the float's own edges resize it there.
 fn viewportHitTest(_: ?*c.SDL_Window, area: [*c]const c.SDL_Point, data: ?*anyopaque) callconv(.c) c.SDL_HitTestResult {
-    const vp: *const Viewport = @ptrCast(@alignCast(data orelse return c.SDL_HITTEST_NORMAL));
+    const vp: *Viewport = @ptrCast(@alignCast(data orelse return c.SDL_HITTEST_NORMAL));
     const p: viewport_map.Point = .{ .x = @floatFromInt(area.*.x), .y = @floatFromInt(area.*.y) };
     return switch (viewport_map.hitTest(vp.hints, p)) {
         .app => c.SDL_HITTEST_NORMAL,
-        .drag => c.SDL_HITTEST_DRAGGABLE,
+        .drag => blk: {
+            // macOS: a press on the header is the window server's to move the window by, from
+            // now: followed from the window server each frame (`viewportOsPlaced`), rather than
+            // from the first move SDL hears of, a good part of a second in.
+            if (comptime builtin.os.tag == .macos) {
+                if (!vp.os_moving and c.SDL_GetGlobalMouseState(null, null) != 0) {
+                    vp.os_moving = true;
+                    vp.os_start = vp.screen;
+                }
+            }
+            break :blk c.SDL_HITTEST_DRAGGABLE;
+        },
         .top_left => c.SDL_HITTEST_RESIZE_TOPLEFT,
         .top => c.SDL_HITTEST_RESIZE_TOP,
         .top_right => c.SDL_HITTEST_RESIZE_TOPRIGHT,
@@ -1445,8 +1567,8 @@ pub fn renderPresent(self: *SDLBackend) void {
         for (&self.viewports, 0..) |*slot, i| {
             const vp = if (slot.*) |*v| v else continue;
             const first = !vp.shown and vp.pending != null;
-            const under = self.viewportUnderMain(vp);
-            const hole_moved = !std.meta.eql(under, vp.holed);
+            const mask = self.viewportMainMask(vp);
+            const hole_moved = !std.meta.eql(mask, vp.holed);
             if (!vp.frame_pending and !first and !hole_moved) continue;
             if (!any) fizzy_native_transaction_begin();
             any = true;
@@ -1457,7 +1579,12 @@ pub fn renderPresent(self: *SDLBackend) void {
                 const r = vp.screen;
                 fizzy_native_viewport_set_frame(ns, @floatFromInt(r.x), @floatFromInt(r.y), @floatFromInt(r.w), @floatFromInt(r.h));
             } else fizzy_native_viewport_transact(ns);
-            vp.holed = under;
+            if (hole_moved) {
+                vp.holed = mask;
+                const cut = mask.cut;
+                const keep = mask.keep;
+                fizzy_macos_viewport_glass_mask(ns, vp.glass_inset, vp.glass_radius, @floatFromInt(cut.x), @floatFromInt(cut.y), @floatFromInt(cut.w), @floatFromInt(cut.h), main_mask_corner, @floatFromInt(keep.x), @floatFromInt(keep.y), @floatFromInt(keep.w), @floatFromInt(keep.h));
+            }
         }
         if (any) main_transacted = fizzy_native_main_transact(main_ns) != 0;
     }
@@ -2728,9 +2855,10 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
 
     const in_live_resize = appState.back.inLiveResize();
     if (in_live_resize) appState.back.liveResizeNextFrame(&appState.win, wait_event_micros);
-    // The main window carried by the window server, with a popped-out float over or beside it:
-    // a frame each refresh, so what the float's glass shows of it keeps up (`mainMoving`).
-    const main_moving = appState.back.mainMoving();
+    // A window carried by the window server — the main window with a popped-out float over or
+    // beside it, or the float's own: a frame each refresh, so what the float's glass shows of the
+    // main window keeps up (`serverMoving`).
+    const server_moving = appState.back.serverMoving();
 
     //std.debug.print("waitEventTimeout {d} {} resize {}\n", .{wait_event_micros, gno_wait, ghave_resize});
 
@@ -2746,7 +2874,7 @@ fn appIterate(_: ?*anyopaque) callconv(.c) c.SDL_AppResult {
     // say so, and a wait there takes the tracking loop's own mouse events.
     // NOTE: on iOS, SDL_WaitEventTimeout stalls in UITrackingRunLoopMode during a
     // touch, so we throttle via ios_next_frame_ns above instead of waiting here.
-    if (appState.no_wait or appState.have_resize or in_live_resize or main_moving or builtin.target.os.tag == .ios) {
+    if (appState.no_wait or appState.have_resize or in_live_resize or server_moving or builtin.target.os.tag == .ios) {
         appState.have_resize = false;
         if (builtin.target.os.tag == .ios) {
             appState.ios_next_frame_ns = appState.win.backend.nanoTime() + @as(i128, wait_event_micros) * 1000;

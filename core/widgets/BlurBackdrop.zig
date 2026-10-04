@@ -61,6 +61,10 @@ small: ?Texture = null,
 levels: [max_levels]?Texture.Target = @splat(null),
 /// True until the next `deinit` runs a real capture.
 dirty: bool = true,
+/// Fizzy addition: the target the frost was last drawn into, and in which frame (`FrostJob.draw`):
+/// a pane replayed into a second target in one frame captures again from that one.
+drawn_on: usize = 0,
+drawn_frame: i128 = 0,
 /// Hash of the last `init`'s `rect` + `witness`, for auto-dirty.
 last_hash: u64 = 0,
 
@@ -1200,6 +1204,17 @@ const FrostJob = struct {
         const prev_alpha = dvui.currentWindow().alpha;
         dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
+        // Drawn into another target already this frame — a layer drawn across every screen (a view
+        // drag's drop zones) replayed into a float's window, then into the main window — it is
+        // captured again from this one. Its capture held the first target's part of the frame, and
+        // its glass drew nothing where the second's shapes were: drop zones without their glass.
+        {
+            const cw = dvui.currentWindow();
+            const on: usize = if (cw.render_target.texture) |t| @intFromPtr(t.ptr) else 0;
+            if (self.backdrop.drawn_frame == cw.frame_time_ns and self.backdrop.drawn_on != on) self.backdrop.dirty = true;
+            self.backdrop.drawn_frame = cw.frame_time_ns;
+            self.backdrop.drawn_on = on;
+        }
         // The capture, now that everything below this pane is on the target.
         capturing = self.id;
         self.backdrop.deinit();

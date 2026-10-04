@@ -53,6 +53,12 @@ const Out = struct {
     /// for `behindGlass`, called from the replay.
     area: dvui.Rect.Physical = .{},
     material: bool = false,
+    /// Where its window was over the main window last frame (`viewports.inMain`), for the hole
+    /// under its glass to keep out of where the window is leaving (`endFrame`).
+    last_at: ?dvui.Rect.Physical = null,
+    /// The main window directly behind its window this frame: nothing stacked between them over it
+    /// (`viewports.mainBehind`). Only then does its glass read the main window's picture.
+    main_behind: bool = true,
 };
 
 /// A window whose float has come back into the main window: let go a frame later, once the main
@@ -355,15 +361,14 @@ pub fn endFrame(state: *State) void {
         o.title_len = @intCast(title.len);
     }
     // Settled, where a press is the OS's: its header moves the window and its glass's edges resize
-    // it, so the OS snaps, tiles and maximizes it as any window — where the OS moves it at all
-    // (`viewports.os_moves`; on macOS the float's own drag does, in step with what it shows).
-    // Split under a drag, all of it is the drag's.
+    // it, so the OS snaps, tiles and maximizes it as any window. Split under a drag, all of it is
+    // the drag's.
     if (o.mode == .band) {
         const s = dvui.windowNaturalScale();
         const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
         const glass = f.bounds.insetAll(margin * s);
         viewports.hints(o.viewport, .{
-            .drag = if (viewports.os_moves) .{ .x = f.header.x, .y = f.header.y, .w = f.header.w, .h = f.header.h } else .{},
+            .drag = .{ .x = f.header.x, .y = f.header.y, .w = f.header.w, .h = f.header.h },
             .keep = .{ .x = f.header_close.x, .y = f.header_close.y, .w = f.header_close.w, .h = f.header_close.h },
             .glass = .{ .x = glass.x, .y = glass.y, .w = glass.w, .h = glass.h },
             .edge = resize_edge * s,
@@ -386,18 +391,48 @@ pub fn endFrame(state: *State) void {
     // blinks out; where the window comes up atomically, that copy of it in the main window showed
     // through its window's glass for a frame, blurred by its material.
     const alone = viewports.shown(o.viewport) or viewports.shows_atomically;
+    // With another window stacked between the main window and this one over it, what lies behind
+    // the glass is that window, which nothing of fizzy's sees: the window's material shows it, and
+    // the glass reads no picture of the main window, nor does the main window leave a hole —
+    // reading it showed the main window through the window in between.
+    o.main_behind = viewports.mainBehind(o.viewport);
     // Where the main window lies under its window, the main window leaves a hole in its picture
-    // under the glass (`viewports.mainHole`): the float's glass, and its window's material over
-    // the hole, show what is behind the main window there — its own material, the desktop
-    // blurred — as the glass does in the main window, rather than the main window's picture again.
+    // under the glass, and its window's material is kept off it (`viewports.mainHole`): the
+    // float's glass shows through itself what is behind the main window there — its own material,
+    // the desktop blurred — as the glass does in the main window, rather than the main window's
+    // picture again, or its material tinted twice.
     {
-        if (viewports.mainHole(o.viewport, alone) and alone) {
+        const cut = alone and o.main_behind;
+        if (viewports.mainHole(o.viewport, cut) and cut) {
             const s = dvui.windowNaturalScale();
             const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
-            const at = viewports.inMain(o.viewport);
-            const glass = (dvui.Rect.Physical{ .x = at.x, .y = at.y, .w = at.w, .h = at.h }).insetAll((reach() + margin) * s);
-            const theme = dvui.themeGet();
-            fizzy.core.FrameTarget.hole(glass, fizzy.core.dialogs.surfaceCorners().finalize(&theme), s);
+            const at_v = viewports.inMain(o.viewport);
+            const at: dvui.Rect.Physical = .{ .x = at_v.x, .y = at_v.y, .w = at_v.w, .h = at_v.h };
+            var hole = at.insetAll((reach() + margin) * s);
+            // Settled, the OS moves its window (by its header, a snap) and the window server
+            // moves the main window under it: the window is where it is when this frame reaches the
+            // screen, a frame or two after where it was read, and a hole the size of its glass
+            // trailed it by a sliver of nothing. Cut in from the side it is moving away from, by
+            // twice what it moved since last frame; whole again once it rests. Split under a drag
+            // the app moves it, with this frame's picture (`viewports.shows_atomically`).
+            if (o.mode == .band) if (o.last_at) |was| {
+                const dx = at.x - was.x;
+                const dy = at.y - was.y;
+                const left = @max(0, dx) * 2;
+                const right = @max(0, -dx) * 2;
+                const top = @max(0, dy) * 2;
+                const bottom = @max(0, -dy) * 2;
+                hole.x += left;
+                hole.w -= left + right;
+                hole.y += top;
+                hole.h -= top + bottom;
+                if (dx != 0 or dy != 0) dvui.refresh(null, @src(), null);
+            };
+            o.last_at = at;
+            if (hole.w > 0 and hole.h > 0) {
+                const theme = dvui.themeGet();
+                fizzy.core.FrameTarget.hole(hole, fizzy.core.dialogs.surfaceCorners().finalize(&theme), s);
+            }
         }
     }
 
@@ -484,6 +519,7 @@ fn behindGlass(ctx: ?*anyopaque, rect: dvui.Rect.Physical) ?Frost.Behind.Picture
     target.clear();
     rect.fill(.{}, .{ .color = .{ .color = base(o.material) } });
     mainPicture: {
+        if (!o.main_behind) break :mainPicture;
         const tex = fizzy.core.FrameTarget.frameTexture() orelse break :mainPicture;
         // Where the window's part of the frame is over the main window, in the main window's frame.
         const at_main: dvui.Rect.Physical = switch (o.mode) {

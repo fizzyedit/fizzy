@@ -106,6 +106,8 @@ void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at
  * their own, what AppKit autoreleases here (the subview arrays among it) was never released, and
  * the window SDL closed stayed alive in the window server.
  */
+static NSImage *glassMask(double inset, double radius);
+
 void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inset, double radius, long material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
@@ -142,19 +144,112 @@ void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inse
         }
         [effect setFrame:[content frame]];
         [effect setMaterial:(NSVisualEffectMaterial)material];
-        const CGFloat in = (CGFloat)inset;
-        const CGFloat r = (CGFloat)radius;
-        const CGFloat edge = in + r;
-        NSImage *mask = [NSImage imageWithSize:NSMakeSize(edge * 2 + 1, edge * 2 + 1)
-                                       flipped:NO
-                                drawingHandler:^BOOL(NSRect dst) {
-                                    [[NSColor blackColor] set];
-                                    [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(dst, in, in) xRadius:r yRadius:r] fill];
-                                    return YES;
-                                }];
-        [mask setCapInsets:NSEdgeInsetsMake(edge, edge, edge, edge)];
-        [mask setResizingMode:NSImageResizingModeStretch];
-        [effect setMaskImage:mask];
+        [effect setMaskImage:glassMask(inset, radius)];
+    }
+}
+
+/* The glass's rounded rect, `inset` points in from the window's edge with `radius` corners, as a
+ * mask that stretches with the window. */
+static NSImage *glassMask(double inset, double radius) {
+    const CGFloat in = (CGFloat)inset;
+    const CGFloat r = (CGFloat)radius;
+    const CGFloat edge = in + r;
+    NSImage *mask = [NSImage imageWithSize:NSMakeSize(edge * 2 + 1, edge * 2 + 1)
+                                   flipped:NO
+                            drawingHandler:^BOOL(NSRect dst) {
+                                [[NSColor blackColor] set];
+                                [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(dst, in, in) xRadius:r yRadius:r] fill];
+                                return YES;
+                            }];
+    [mask setCapInsets:NSEdgeInsetsMake(edge, edge, edge, edge)];
+    [mask setResizingMode:NSImageResizingModeStretch];
+    return mask;
+}
+
+/*
+ * The material behind a popped-out float's glass kept out of `ex, ey, ew, eh` (window points from
+ * its top left, a rounded rect of radius `er`): the main window's interior under the window. The
+ * main window shows its own material there through a hole it leaves in its picture
+ * (`core.FrameTarget.hole`), so the glass shows through itself exactly what it does in the main
+ * window; the window's own, over it, tinted it a second time — a step in colour as the float split
+ * out. Kept over `kx, ky, kw, kh` all the same — the main window's traffic lights — and, as the
+ * caller leaves it out of the rect, a strip along the main window's edges: what AppKit draws there,
+ * which the hole does not take away, is blurred rather than sharp through the glass. An empty rect:
+ * the whole glass, as `fizzy_macos_viewport_glass` set it. Called inside the transaction the
+ * window's place and picture change in (`SDLBackend.renderPresent`), and drawn now, so they change
+ * together.
+ */
+void fizzy_macos_viewport_glass_mask(void *nswindow, double inset, double radius, double ex, double ey, double ew, double eh, double er, double kx, double ky, double kw, double kh) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        NSView *frame = [[window contentView] superview];
+        if (frame == nil) return;
+        NSVisualEffectView *effect = nil;
+        for (NSView *v in [frame subviews]) {
+            if ([v isKindOfClass:[FizzyViewportGlassView class]]) effect = (NSVisualEffectView *)v;
+        }
+        if (effect == nil) return;
+        if (ew <= 0 || eh <= 0) {
+            [effect setMaskImage:glassMask(inset, radius)];
+        } else {
+            const NSSize size = [effect bounds].size;
+            const CGFloat in = (CGFloat)inset;
+            const CGFloat r = (CGFloat)radius;
+            /* The image's origin is its bottom left; the rects came from the top left. */
+            const NSRect cut = NSMakeRect(ex, size.height - ey - eh, ew, eh);
+            const NSRect keep = NSMakeRect(kx, size.height - ky - kh, kw, kh);
+            const CGFloat cut_r = (CGFloat)er;
+            NSImage *mask = [NSImage imageWithSize:size
+                                           flipped:NO
+                                    drawingHandler:^BOOL(NSRect dst) {
+                                        NSBezierPath *glass = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(dst, in, in) xRadius:r yRadius:r];
+                                        [[NSColor blackColor] set];
+                                        [glass fill];
+                                        [[NSGraphicsContext currentContext] saveGraphicsState];
+                                        [[NSGraphicsContext currentContext] setCompositingOperation:NSCompositingOperationClear];
+                                        [[NSBezierPath bezierPathWithRoundedRect:cut xRadius:cut_r yRadius:cut_r] fill];
+                                        [[NSGraphicsContext currentContext] restoreGraphicsState];
+                                        if (keep.size.width > 0 && keep.size.height > 0) {
+                                            [glass addClip];
+                                            [[NSColor blackColor] set];
+                                            NSRectFill(keep);
+                                        }
+                                        return YES;
+                                    }];
+            [effect setMaskImage:mask];
+        }
+        [effect displayIfNeeded];
+    }
+}
+
+/*
+ * Where `nswindow`'s traffic lights are, together: window points from its content's top left (SDL's
+ * place for the window). 0 when it has none showing.
+ */
+int fizzy_macos_window_buttons(void *nswindow, double *x, double *y, double *w, double *h) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return 0;
+        NSRect all = NSZeroRect;
+        const NSWindowButton kinds[3] = {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton};
+        for (int i = 0; i < 3; i++) {
+            NSButton *b = [window standardWindowButton:kinds[i]];
+            if (b == nil || [b isHidden] || [b superview] == nil) continue;
+            const NSRect r = [b convertRect:[b bounds] toView:nil];
+            all = NSIsEmptyRect(all) ? r : NSUnionRect(all, r);
+        }
+        if (NSIsEmptyRect(all)) return 0;
+        /* Window coordinates run from the frame's bottom left; SDL's place is the content's top left. */
+        const NSRect f = [window frame];
+        NSRect content = [window contentRectForFrameRect:f];
+        content.origin.x -= f.origin.x;
+        content.origin.y -= f.origin.y;
+        *x = all.origin.x - content.origin.x;
+        *y = (content.origin.y + content.size.height) - (all.origin.y + all.size.height);
+        *w = all.size.width;
+        *h = all.size.height;
+        return 1;
     }
 }
 

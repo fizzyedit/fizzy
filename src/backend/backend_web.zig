@@ -167,7 +167,9 @@ pub const viewports = struct {
         return false;
     }
     pub const shows_atomically = false;
-    pub const os_moves = false;
+    pub fn mainBehind(_: *Viewport) bool {
+        return false;
+    }
     pub fn placeMain(_: *Viewport, frame: Rect) Rect {
         return frame;
     }

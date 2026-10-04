@@ -1,5 +1,6 @@
 const std = @import("std");
 const dvui = @import("dvui");
+const screens = @import("../screens.zig");
 
 const Options = dvui.Options;
 const Rect = dvui.Rect;
@@ -344,6 +345,9 @@ pub const Reorderable = struct {
                         .corners = self.data().options.cornersGet(),
                     },
                 });
+                // Onto the screen it is carried over (`screens`), not dvui's clip to the main
+                // window: in a float popped out of it, it was clipped away.
+                dvui.clipSet(screens.pixelsFor(.cast(self.floating_widget.?.data().rect)));
             } else {
                 if (self.init_options.last_slot) {
                     self.wd = WidgetData.init(self.data().src, .{}, self.options.override(.{ .min_size_content = self.reorder.reorderable_size }));

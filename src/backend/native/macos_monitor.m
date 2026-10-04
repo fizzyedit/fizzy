@@ -264,3 +264,50 @@ int fizzy_native_window_server_origin(void *nswindow, double *x, double *y) {
         return ok;
     }
 }
+
+/* Whether `back` lies directly behind `front` where `front` is: no window in between, of another
+ * app's or this one's, that overlaps it. A popped-out float's glass shows the main window's picture
+ * behind it only then (`SDLBackend.viewportMainBehind`): with another app's window stacked between
+ * the two, it showed the main window through that window. 0 when `back` is not on screen below
+ * `front` at all. */
+int fizzy_native_directly_behind(void *front_ns, void *back_ns) {
+    @autoreleasepool {
+        NSWindow *front = (__bridge NSWindow *)front_ns;
+        NSWindow *back = (__bridge NSWindow *)back_ns;
+        if (front == nil || back == nil) return 0;
+        const CGWindowID fid = (CGWindowID)[front windowNumber];
+        const CGWindowID bid = (CGWindowID)[back windowNumber];
+        if (fid == 0 || bid == 0) return 0;
+        const NSRect f = [front frame];
+        const CGFloat top = (CGFloat)CGDisplayPixelsHigh(kCGDirectMainDisplay);
+        const CGRect fb = CGRectMake(f.origin.x, top - f.origin.y - f.size.height, f.size.width, f.size.height);
+        CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenBelowWindow | kCGWindowListExcludeDesktopElements, fid);
+        if (list == NULL) return 0;
+        int result = 0;
+        const CFIndex n = CFArrayGetCount(list);
+        for (CFIndex i = 0; i < n; i++) {
+            CFDictionaryRef info = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
+            CGWindowID wid = 0;
+            CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(info, kCGWindowNumber);
+            if (num == NULL || !CFNumberGetValue(num, kCFNumberSInt32Type, &wid)) continue;
+            if (wid == bid) {
+                result = 1;
+                break;
+            }
+            int layer = 0;
+            CFNumberRef layer_num = (CFNumberRef)CFDictionaryGetValue(info, kCGWindowLayer);
+            if (layer_num != NULL) CFNumberGetValue(layer_num, kCFNumberIntType, &layer);
+            if (layer != 0) continue;
+            double alpha = 1;
+            CFNumberRef alpha_num = (CFNumberRef)CFDictionaryGetValue(info, kCGWindowAlpha);
+            if (alpha_num != NULL) CFNumberGetValue(alpha_num, kCFNumberDoubleType, &alpha);
+            if (alpha <= 0) continue;
+            CFDictionaryRef bounds = (CFDictionaryRef)CFDictionaryGetValue(info, kCGWindowBounds);
+            CGRect b;
+            if (bounds == NULL || !CGRectMakeWithDictionaryRepresentation(bounds, &b)) continue;
+            if (CGRectIntersectsRect(b, fb)) break;
+        }
+        CFRelease(list);
+        return result;
+    }
+}

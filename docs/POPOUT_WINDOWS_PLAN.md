@@ -404,21 +404,26 @@ drag), so a rect moved into a band mid-drag sent the next motion across the fram
   past it reads the vibrancy.
 - **Over the main window.** Where the pop-out lies over the main window, the main window leaves a
   hole in its picture under the glass (`core.FrameTarget.hole`, cut after the replay;
-  `viewports.mainHole`). The pop-out's vibrancy over it then blurs what is behind the main window
-  there — its own material — rather than the main window's picture, which the glass already frosts:
-  drawn there too, the main window was counted twice and the glass came out more opaque than in the
-  main window, a pop as the float split out. The material is not masked off the main window: with
-  nothing to blur them, the main window's traffic lights and edge showed sharp through the glass.
-  The hole, the window's place and both windows' pictures change in one transaction
-  (`SDLBackend.renderPresent`), so the hole moves with the window.
+  `viewports.mainHole`), and the pop-out's vibrancy is masked off the main window's interior
+  (`SDLBackend.viewportMainMask`). The glass then shows through itself what it does in the main
+  window: the main window's material. Drawn there too, the main window's picture was counted twice
+  and the glass came out more opaque, a pop as the float split out. Under the pop-out's vibrancy,
+  the main window's material was tinted twice, a step in colour. Masked off the whole main window,
+  AppKit's traffic lights and the window's edge, which the hole does not take away, showed sharp
+  through the glass: the vibrancy is kept over them, 6 points in from the main window's edges and
+  round its traffic lights. The hole, the mask, the window's place and both windows' pictures change
+  in one transaction (`SDLBackend.renderPresent`), so the hole moves with the window.
 - **From its first frame.** The window comes up with its first picture in that transaction
   (`viewports.shows_atomically`), so the float leaves the main window's picture on that very frame.
   Kept in it for a frame, as elsewhere, its copy showed through the pop-out's glass, blurred.
 - **The main window moved under it.** Dragged by its title bar, the main window is moved by the
   window server, which tells the app where it went only a few times a second. While a viewport is
   open, where it is comes from the window server instead (`SDLBackend.mainOnScreen`), and while it
-  is being moved the frames go on (`mainMoving`), so the hole and what the glass shows of it keep
-  up rather than catching up in steps.
+  is being moved the frames go on (`serverMoving`), so the hole and what the glass shows of it keep
+  up rather than catching up in steps. While the window server moves either window, the hole is
+  placed from where it read them, a frame or two before the picture reaches the screen: it is cut
+  in from the side the window is moving away from by twice the last frame's move, so no sliver of
+  it trails the window.
 - **Closing.** A float out of the main window shuts in place, and its window shuts with it: the
   float's rect follows its glass as it shrinks, and its window is placed from it.
 - **Autorelease pools.** Objective-C called from the frame loop needs an autorelease pool of its
@@ -468,12 +473,15 @@ screen, maximized at the top, Win+arrows, macOS tiling.
   glass are (`viewports.hints`). SDL's hit test answers the OS from that (`viewport_map.hitTest`,
   unit tested): the header moves the window, and the glass's edges resize it. The window is
   created resizable, since only a window the OS may resize snaps or tiles.
-- **Not on macOS.** SDL there takes only the move (AppKit's window-background drag), and that
-  drag runs in the window server, telling the app where the window went after it has gone: what
-  the glass showed of the main window behind it trailed the window and caught up in steps. So the
-  float's own header drag and edges move and resize it there (`viewports.os_moves`), and the window
-  goes where the float is drawn in the transaction its picture is presented in. It does not take
-  part in macOS's drag tiling.
+- **macOS: followed from the window server.** SDL there takes only the move (AppKit's
+  window-background drag), so the float's own edges resize the window. The move runs in the window
+  server, which tells the app where the window went only a few times a second: what the glass
+  showed of the main window behind it trailed the window and caught up in steps. From the press on
+  the header (`viewportHitTest`) until the release, the window's place is read from the window
+  server each frame (`viewportFollowServer`) and the frames go on (`SDLBackend.serverMoving`), so
+  it trails by a frame at most, and the window still tiles. Having the app move the window instead
+  (in the transaction its picture is presented in) was tried: in step, but no tiling, and the
+  window lagged the pointer by the app's frame.
 - **The float follows its window.** When the OS moves or resizes the window, the float's rect
   follows it (`viewports.osPlaced`). The app's own placement, reported back, is told apart by
   comparing it with where the app last put the window. On X11, where placing a window is

@@ -3,6 +3,7 @@ const dvui = @import("dvui");
 const motion = @import("../motion.zig");
 const corners = @import("../corners.zig");
 const dialogs = @import("../dialogs.zig");
+const screens = @import("../screens.zig");
 
 /// True when a primary-button release in `r` used shift/ctrl/cmd (selection modifiers).
 fn pointerReleaseInRectHasSelectionModifier(r: dvui.Rect.Physical) bool {
@@ -528,6 +529,9 @@ pub const Branch = struct {
                     },
                 );
                 const fd = self.floating_widget.?.data();
+                // Onto the screen it is carried over (`screens`), not dvui's clip to the main
+                // window: carried in a float popped out of it, it was clipped away.
+                dvui.clipSet(screens.pixelsFor(.cast(fd.rect)));
                 const frs = fd.borderRectScale();
                 dialogs.carriedGlass(fd.id, frs.r, frs.s);
             } else if (source or self.tree.carried_depth > 0) {

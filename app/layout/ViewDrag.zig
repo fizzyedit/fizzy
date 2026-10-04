@@ -76,6 +76,9 @@ card_start_ns: i128 = 0,
 /// dragged and swings when it stops. This frame's shapes, head then tail.
 drop_head: core.Spring = .{},
 drop_tail: core.Spring = .{},
+/// Where the pointer was last frame, for a jump from one window's part of the frame to another's
+/// (`followAcross`).
+last_mouse: ?dvui.Point.Physical = null,
 drop_ns: i128 = 0,
 drop_shapes: [2]core.LiquidField.Shape = undefined,
 drop_n: usize = 0,
@@ -493,6 +496,7 @@ pub fn begin(l: *Layout, name: []const u8, from: dvui.Rect.Physical, grabbed: dv
     var d = &l.state.view_drag;
     d.drop_head = .{};
     d.drop_tail = .{};
+    d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
     d.drop_touch = false;
@@ -534,6 +538,7 @@ pub fn beginLoose(l: *Layout, id: []const u8, from: dvui.Rect.Physical, texture:
     var d = &l.state.view_drag;
     d.drop_head = .{};
     d.drop_tail = .{};
+    d.last_mouse = null;
     d.drop_ns = 0;
     d.drop_n = 0;
     d.drop_touch = false;
@@ -1011,6 +1016,7 @@ pub fn drawZones(l: *Layout, name: []const u8, key: dvui.Id) void {
 pub fn drawOverlay(l: *Layout) void {
     const d = &l.state.view_drag;
     const now = dvui.currentWindow().frame_time_ns;
+    if (d.active()) followAcross(d, dvui.currentWindow().mouse_pt);
     const queued = if (d.pending_frame == now) d.pending[0..d.pending_count] else d.pending[0..0];
     // This frame's drops, and any from last frame still going that no place asked for this time —
     // the place a drop just landed on can be gone or changed by now, and its drop still has to run
@@ -1128,6 +1134,31 @@ const drop_r: f32 = 52;
 const drop_tail_share: f32 = 0.62;
 /// How far toward the bubble it is aimed at the drop is drawn, so the two run together.
 const drop_pull: f32 = 0.45;
+
+/// The farthest the pointer moves in a frame within one window's part of the frame, physical
+/// pixels: past it, it went from one window to another — a float out of the main window is drawn
+/// in a band 100000 pixels on (`Floats.Viewport`).
+const across_jump: f32 = 30000;
+
+/// The pointer gone from one window's part of the frame to another's in one frame — out of a
+/// float's window over the main window, or back — the carried view goes with it as it is: its
+/// springs and the shape it is changing from move by the same jump. Left, they swept back across
+/// the band and the view showed for a frame or two in the window it had left.
+fn followAcross(d: *ViewDrag, mouse: dvui.Point.Physical) void {
+    defer d.last_mouse = mouse;
+    const was = d.last_mouse orelse return;
+    const dx = mouse.x - was.x;
+    const dy = mouse.y - was.y;
+    if (@abs(dx) < across_jump and @abs(dy) < across_jump) return;
+    for ([_]*core.Spring{ &d.drop_head, &d.drop_tail }) |sp| {
+        sp.pos.x += dx;
+        sp.pos.y += dy;
+    }
+    d.morph_rect.x += dx;
+    d.morph_rect.y += dy;
+    d.shape_rect.x += dx;
+    d.shape_rect.y += dy;
+}
 
 /// The view carried as a drop this frame — its head and tail, stepped on their springs — or none
 /// where it is carried as a card (`drawFloat`): no glass program, no photograph, or over a list.
