@@ -106,8 +106,6 @@ void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at
  * their own, what AppKit autoreleases here (the subview arrays among it) was never released, and
  * the window SDL closed stayed alive in the window server.
  */
-static NSImage *glassMask(double inset, double radius);
-
 void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inset, double radius, long material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
@@ -144,67 +142,19 @@ void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inse
         }
         [effect setFrame:[content frame]];
         [effect setMaterial:(NSVisualEffectMaterial)material];
-        [effect setMaskImage:glassMask(inset, radius)];
-    }
-}
-
-/* The glass's rounded rect, `inset` points in from the window's edge with `radius` corners, as a
- * mask that stretches with the window. */
-static NSImage *glassMask(double inset, double radius) {
-    const CGFloat in = (CGFloat)inset;
-    const CGFloat r = (CGFloat)radius;
-    const CGFloat edge = in + r;
-    NSImage *mask = [NSImage imageWithSize:NSMakeSize(edge * 2 + 1, edge * 2 + 1)
-                                   flipped:NO
-                            drawingHandler:^BOOL(NSRect dst) {
-                                [[NSColor blackColor] set];
-                                [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(dst, in, in) xRadius:r yRadius:r] fill];
-                                return YES;
-                            }];
-    [mask setCapInsets:NSEdgeInsetsMake(edge, edge, edge, edge)];
-    [mask setResizingMode:NSImageResizingModeStretch];
-    return mask;
-}
-
-/*
- * The material behind a popped-out float's glass kept out of `ex, ey, ew, eh` (window points from
- * its top left): where the main window lies under the window. The main window shows its own
- * material there, through a hole it leaves in its picture (`core.FrameTarget.hole`); the window's
- * own, over it, blurred the main window again and the glass came out more opaque than in the main
- * window. An empty rect: the whole glass, as `fizzy_macos_viewport_glass` set it. Called inside the
- * transaction the window's place and picture change in (`SDLBackend.renderPresent`), and drawn now,
- * so the three change together.
- */
-void fizzy_macos_viewport_glass_mask(void *nswindow, double inset, double radius, double ex, double ey, double ew, double eh) {
-    @autoreleasepool {
-        NSWindow *window = (__bridge NSWindow *)nswindow;
-        if (window == nil) return;
-        NSView *frame = [[window contentView] superview];
-        if (frame == nil) return;
-        NSVisualEffectView *effect = nil;
-        for (NSView *v in [frame subviews]) {
-            if ([v isKindOfClass:[FizzyViewportGlassView class]]) effect = (NSVisualEffectView *)v;
-        }
-        if (effect == nil) return;
-        if (ew <= 0 || eh <= 0) {
-            [effect setMaskImage:glassMask(inset, radius)];
-        } else {
-            const NSSize size = [effect bounds].size;
-            const CGFloat in = (CGFloat)inset;
-            const CGFloat r = (CGFloat)radius;
-            /* The image's origin is its bottom left; the rect came from the top left. */
-            const NSRect cut = NSMakeRect(ex, size.height - ey - eh, ew, eh);
-            NSImage *mask = [NSImage imageWithSize:size
-                                           flipped:NO
-                                    drawingHandler:^BOOL(NSRect dst) {
-                                        [[NSColor blackColor] set];
-                                        [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(dst, in, in) xRadius:r yRadius:r] fill];
-                                        NSRectFillUsingOperation(cut, NSCompositingOperationClear);
-                                        return YES;
-                                    }];
-            [effect setMaskImage:mask];
-        }
-        [effect displayIfNeeded];
+        const CGFloat in = (CGFloat)inset;
+        const CGFloat r = (CGFloat)radius;
+        const CGFloat edge = in + r;
+        NSImage *mask = [NSImage imageWithSize:NSMakeSize(edge * 2 + 1, edge * 2 + 1)
+                                       flipped:NO
+                                drawingHandler:^BOOL(NSRect dst) {
+                                    [[NSColor blackColor] set];
+                                    [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(dst, in, in) xRadius:r yRadius:r] fill];
+                                    return YES;
+                                }];
+        [mask setCapInsets:NSEdgeInsetsMake(edge, edge, edge, edge)];
+        [mask setResizingMode:NSImageResizingModeStretch];
+        [effect setMaskImage:mask];
     }
 }
 

@@ -215,14 +215,20 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius, dark);
     }
 
-    /// Keep `vp`'s material out of where the main window lies under its window this frame, the
-    /// main window showing its own there through a hole in its picture (`core.FrameTarget.hole`):
-    /// then the float's glass shows through itself what it shows in the main window. True where
-    /// that is done (macOS) — and only then may the main window leave the hole.
-    pub fn maskMain(vp: *Viewport, on: bool) bool {
+    /// The main window leaves a hole in its picture under `vp`'s glass this frame
+    /// (`core.FrameTarget.hole`), so the float's glass and the window's material over it show
+    /// what is behind the main window there rather than its picture again. True where that may be
+    /// done (macOS: the hole and the window change in one transaction) — only then may the main
+    /// window cut it.
+    pub fn mainHole(vp: *Viewport, on: bool) bool {
         if (comptime !supported) return false;
-        return dvui.currentWindow().backend.impl.viewportMaskMain(vp, on);
+        return dvui.currentWindow().backend.impl.viewportMainHole(vp, on);
     }
+
+    /// Whether a viewport's window comes up with its first picture, in one transaction with the
+    /// main window's (macOS): its float can leave the main window's picture on that very frame.
+    /// Elsewhere it stays in the main window's until its window has shown a frame.
+    pub const shows_atomically = supported and builtin.os.tag == .macos;
 
     /// Whether the OS moves a viewport's window by its float's header (`hints`). Not on macOS,
     /// where the app does, as it resizes it there: AppKit's window drag runs in the window server

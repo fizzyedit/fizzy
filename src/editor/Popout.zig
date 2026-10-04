@@ -380,14 +380,18 @@ pub fn endFrame(state: *State) void {
     if (o.target == null) o.target = dvui.textureCreateTarget(.{ .width = w, .height = h, .interpolation = .nearest }) catch return;
     const target = o.target.?;
 
-    // Where the main window lies under its window, the main window shows what is behind it there
-    // — its material — through a hole in its picture, and the window's material is kept out of
-    // there: the float's glass shows through itself what it does in the main window, not the main
-    // window blurred again (`viewports.maskMain`). Once the window shows the float, not while the
-    // main window still draws it too.
+    // The float in its window alone: once its window has shown a frame — or from the frame it comes
+    // up in, where it comes up with its first picture in one transaction with the main window's
+    // (`viewports.shows_atomically`: macOS). Until then the main window draws it too, so it never
+    // blinks out; where the window comes up atomically, that copy of it in the main window showed
+    // through its window's glass for a frame, blurred by its material.
+    const alone = viewports.shown(o.viewport) or viewports.shows_atomically;
+    // Where the main window lies under its window, the main window leaves a hole in its picture
+    // under the glass (`viewports.mainHole`): the float's glass, and its window's material over
+    // the hole, show what is behind the main window there — its own material, the desktop
+    // blurred — as the glass does in the main window, rather than the main window's picture again.
     {
-        const alone = viewports.shown(o.viewport);
-        if (viewports.maskMain(o.viewport, alone) and alone) {
+        if (viewports.mainHole(o.viewport, alone) and alone) {
             const s = dvui.windowNaturalScale();
             const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
             const at = viewports.inMain(o.viewport);
@@ -421,10 +425,10 @@ pub fn endFrame(state: *State) void {
     // it lies outside the window's part of the frame falls outside its target.
     //
     // Split under a drag, it is in the main window's frame, and what else is there is the main
-    // window's: only the float itself is its window's. And until its window has shown a frame, the
-    // float stays in the main window's replay too (copied, not taken) — so it is never on screen in
+    // window's: only the float itself is its window's. And until it is in its window alone (`alone`),
+    // it stays in the main window's replay too (copied, not taken) — so it is never on screen in
     // neither while its window comes up.
-    const keep = o.mode == .held and !viewports.shown(o.viewport);
+    const keep = o.mode == .held and !alone;
     for (cw.subwindows.stack.items) |*sw| {
         const mine = switch (o.mode) {
             .band => area.contains(sw.rect_pixels.center()),

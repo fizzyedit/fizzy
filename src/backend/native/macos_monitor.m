@@ -224,3 +224,43 @@ void fizzy_native_viewport_presented(void *nswindow) {
     CAMetalLayer *layer = metal_layer_of(nswindow);
     if (layer) layer.presentsWithTransaction = NO;
 }
+
+/* Where the window server has `nswindow` now, as SDL gives a window's place: its content's top left
+ * in desktop points from the main display's top left. The window server moves a window dragged by
+ * its title bar itself and tells the app where it went only a few times a second, so AppKit's
+ * frame (and SDL's place, from it) runs behind it; this is where it is. 0 when it cannot be read,
+ * or the window server shows the window transformed. */
+int fizzy_native_window_server_origin(void *nswindow, double *x, double *y) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return 0;
+        const CGWindowID wid = (CGWindowID)[window windowNumber];
+        if (wid == 0) return 0;
+        const void *ids[1] = {(const void *)(uintptr_t)wid};
+        CFArrayRef list = CFArrayCreate(NULL, ids, 1, NULL);
+        if (list == NULL) return 0;
+        CFArrayRef desc = CGWindowListCreateDescriptionFromArray(list);
+        CFRelease(list);
+        if (desc == NULL) return 0;
+        int ok = 0;
+        if (CFArrayGetCount(desc) > 0) {
+            CFDictionaryRef info = (CFDictionaryRef)CFArrayGetValueAtIndex(desc, 0);
+            CFDictionaryRef bounds = (CFDictionaryRef)CFDictionaryGetValue(info, kCGWindowBounds);
+            CGRect r;
+            const NSRect f = [window frame];
+            /* Not while the window server shows the window transformed — shrunk by Stage Manager or
+             * Mission Control, or into the background — where its bounds are not in the desktop's
+             * points: the size it reports is then not the frame's. */
+            if (bounds != NULL && CGRectMakeWithDictionaryRepresentation(bounds, &r) &&
+                fabs(r.size.width - f.size.width) < 0.5 && fabs(r.size.height - f.size.height) < 0.5) {
+                /* The window server's bounds are the frame; SDL's place is the content's. */
+                const NSRect content = [window contentRectForFrameRect:f];
+                *x = r.origin.x + (content.origin.x - f.origin.x);
+                *y = r.origin.y + ((f.origin.y + f.size.height) - (content.origin.y + content.size.height));
+                ok = 1;
+            }
+        }
+        CFRelease(desc);
+        return ok;
+    }
+}

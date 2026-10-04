@@ -593,6 +593,10 @@ fn drawOne(l: *Layout, i: usize) bool {
     // Flying shut: the glass alone, gone when it lands — or, a ghost, its photograph alone.
     if (first.closing) {
         const flown = if (dvui.animationGet(win_id, "_close_x")) |a| a.done() else true;
+        // Out of the main window, its OS window shuts with it, placed from its rect as ever
+        // (`Popout`): kept at the size it had, the glass shrank inside a window whose material, base
+        // and the hole under it in the main window stood still until it went.
+        if (out) state.floats.items.items[i].bounds = bounds;
         win.deinit();
         return as_photo or !flown;
     }
@@ -615,6 +619,9 @@ fn drawOne(l: *Layout, i: usize) bool {
     const title = if (ViewDrag.visibleId(l, first.name)) |id| (if (l.host.surfaceById(id)) |s| s.title else first.name) else first.name;
     const header = dialogs.windowHeader(title, "", &open, .none);
     const header_close = dialogs.windowHeaderCloseRect();
+    // For demo tapes (`docs/AUTOMATION.md`): its header, to move it by, and its close button.
+    core.anchor.markRect(win_id, header, true, "float-header:{s}", .{first.name});
+    if (header_close) |r| core.anchor.markRect(win_id, r, true, "float-close:{s}", .{first.name});
     // Moved by its header only: the rest is the view's. Not while it lands — it is going where
     // the drop put it — nor while it is out of the way.
     win.dragAreaSet(if (landing or aside > 0) .{} else header);

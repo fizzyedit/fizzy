@@ -402,14 +402,25 @@ drag), so a rect moved into a band mid-drag sent the next motion across the fram
   it as it does in the main window (`Floats.Viewport.material`). Split under a drag, its frost
   still reads the main window's frame, so what is over the main window reads the app and what is
   past it reads the vibrancy.
-- **The main window's material through it.** Where the pop-out lies over the main window, its
-  glass shows through itself what it does in the main window: the main window leaves a hole in its
-  picture there once the pop-out shows the float (`core.FrameTarget.hole`, cut after the replay),
-  and the pop-out's material is masked out of there (`viewports.maskMain`). Before, the main window
-  still drew its own picture behind the pop-out, the pop-out's vibrancy blurred that again, and
-  the glass came out more opaque than in the main window — a pop as the float split out. The mask,
-  the hole, the window's place and both windows' pictures change in one transaction
+- **Over the main window.** Where the pop-out lies over the main window, the main window leaves a
+  hole in its picture under the glass (`core.FrameTarget.hole`, cut after the replay;
+  `viewports.mainHole`). The pop-out's vibrancy over it then blurs what is behind the main window
+  there — its own material — rather than the main window's picture, which the glass already frosts:
+  drawn there too, the main window was counted twice and the glass came out more opaque than in the
+  main window, a pop as the float split out. The material is not masked off the main window: with
+  nothing to blur them, the main window's traffic lights and edge showed sharp through the glass.
+  The hole, the window's place and both windows' pictures change in one transaction
   (`SDLBackend.renderPresent`), so the hole moves with the window.
+- **From its first frame.** The window comes up with its first picture in that transaction
+  (`viewports.shows_atomically`), so the float leaves the main window's picture on that very frame.
+  Kept in it for a frame, as elsewhere, its copy showed through the pop-out's glass, blurred.
+- **The main window moved under it.** Dragged by its title bar, the main window is moved by the
+  window server, which tells the app where it went only a few times a second. While a viewport is
+  open, where it is comes from the window server instead (`SDLBackend.mainOnScreen`), and while it
+  is being moved the frames go on (`mainMoving`), so the hole and what the glass shows of it keep
+  up rather than catching up in steps.
+- **Closing.** A float out of the main window shuts in place, and its window shuts with it: the
+  float's rect follows its glass as it shrinks, and its window is placed from it.
 - **Autorelease pools.** Objective-C called from the frame loop needs an autorelease pool of its
   own, because SDL wraps only its own calls. Without one, the subview arrays AppKit autoreleased
   kept the window SDL closed alive in the window server after every pop-in.
