@@ -1005,6 +1005,8 @@ pub fn processEvents(self: *CanvasWidget) void {
         // up; its release/close is handled in Editor.drawRadialMenu, so just drop our
         // pending gesture state here.
         self.empty = .idle;
+        // The scroll range is layout, not input: it keeps up all the same.
+        self.panSlack();
         return;
     }
 
@@ -1270,6 +1272,16 @@ pub fn processEvents(self: *CanvasWidget) void {
         dvui.refresh(null, @src(), self.scroll_container.data().id);
     }
 
+    self.panSlack();
+}
+
+/// The scroll range the canvas pans in: its viewport padded round, and the artwork's rect, so
+/// the user can pan past the artwork's edge and the range follows the zoom. Layout, not input:
+/// it runs every frame, the pointer over the canvas or not — a canvas whose pointer another
+/// window holds (a menu over it; a float its pointer gate took for one, before
+/// `dialogs.canvasPointerInputSuppressed` asked of the window the canvas draws in) froze its
+/// range where it was, and a scroll stopped at the old edge.
+fn panSlack(self: *CanvasWidget) void {
     // // don't mess with scrolling if we aren't being shown (prevents weirdness
     // // when starting out)
     //
