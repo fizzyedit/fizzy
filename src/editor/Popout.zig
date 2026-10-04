@@ -150,25 +150,34 @@ pub fn beginFrame(state: *State) void {
     }
 }
 
-/// Take `f` out into a window of its own, opening over the place it is drawn in the main window,
-/// grown by the clear margin its shadow is drawn in out there (`Floats.outReach`). `.band`: into
+/// Natural units a float's OS window reaches past its rect (`Floats.Float.bounds`): out to the
+/// clear margin round its glass that its shadow is drawn in (`Floats.outReach`) — or in to the
+/// glass, where the OS frames the window and its corners and shadow are the OS's
+/// (`viewports.os_frame`: Windows).
+fn reach() f32 {
+    const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
+    return if (viewports.os_frame) -margin else Floats.outReach();
+}
+
+/// Take `f` out into a window of its own, opening over the place it is drawn in the main window
+/// (grown or shrunk by `reach`). `.band`: into
 /// the viewport's band at the same place (the command). `.held`: left in the main window's frame,
 /// split, while the drag that took it out goes on.
 fn popOut(f: *Floats.Float, mode: @FieldType(Out, "mode")) void {
     var title_buf: [96]u8 = undefined;
     const title = std.fmt.bufPrintZ(&title_buf, "{s}", .{f.name}) catch "Fizzy";
     const s = dvui.windowNaturalScale();
-    const b = f.bounds.outsetAll(Floats.outReach() * s);
+    const b = f.bounds.outsetAll(reach() * s);
     const vp = viewports.open(.{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }, title) orelse return;
     // A material behind its glass where the platform has one, so it looks there as it does in
     // the main window (`Floats.Viewport.material`). The glass is the float's rect less its own
-    // margin, inside the clear one round it.
+    // margin: inside the clear one round it, or all of the window the OS frames.
     const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
-    const material = viewports.glass(vp, (Floats.outReach() + margin) * s, fizzy.core.corners.scaled(fizzy.core.corners.surface) * s);
+    const material = viewports.glass(vp, (reach() + margin) * s, fizzy.core.corners.scaled(fizzy.core.corners.surface) * s, dvui.themeGet().dark);
     switch (mode) {
         .band => {
             const window = viewports.frameOf(vp);
-            const frame = (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(Floats.outReach() * s);
+            const frame = (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(reach() * s);
             f.viewport = .{ .rect = .{ .x = frame.x / s, .y = frame.y / s, .w = frame.w / s, .h = frame.h / s }, .material = material };
         },
         .held => f.split = .{ .material = material },
@@ -212,11 +221,11 @@ fn closeAfterFrame() void {
     out = null;
 }
 
-/// Where the float out is, as a rect of the main window's frame: its window now, less the clear
-/// margin round it (physical).
+/// Where the float out is, as a rect of the main window's frame: its window now, less `reach`
+/// (physical).
 fn inMainRect(o: *const Out) dvui.Rect.Physical {
     const window = viewports.inMain(o.viewport);
-    return (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(Floats.outReach() * dvui.windowNaturalScale());
+    return (dvui.Rect.Physical{ .x = window.x, .y = window.y, .w = window.w, .h = window.h }).insetAll(reach() * dvui.windowNaturalScale());
 }
 
 /// Whether a float's window rect `r` (physical, the main window's frame) is wholly inside the main
@@ -278,10 +287,10 @@ pub fn endFrame(state: *State) void {
     const cw = dvui.currentWindow();
     if (cw.subwindows.get(f.win_id) == null) return;
     // Where it was drawn this frame, on whole points: where its window goes, and the offset its
-    // drawing is replayed at, so a pointer over the window lands on what it shows. Its window
-    // holds the clear margin round it its shadow is drawn in (`Floats.outReach`). Split under a
-    // drag, that is in the main window's frame, which runs on past its edge across the desktop.
-    const b = f.bounds.outsetAll(Floats.outReach() * dvui.windowNaturalScale());
+    // drawing is replayed at, so a pointer over the window lands on what it shows — grown or
+    // shrunk by `reach`. Split under a drag, that is in the main window's frame, which runs on
+    // past its edge across the desktop.
+    const b = f.bounds.outsetAll(reach() * dvui.windowNaturalScale());
     const shown = switch (o.mode) {
         .band => viewports.place(o.viewport, .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }),
         .held => viewports.placeMain(o.viewport, .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h }),
@@ -344,7 +353,7 @@ pub fn endFrame(state: *State) void {
 /// the main window does.
 fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical) void {
     const margin = (fizzy.core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
-    const bounds = window.insetAll((Floats.outReach() + margin) * dvui.windowNaturalScale());
+    const bounds = window.insetAll((reach() + margin) * dvui.windowNaturalScale());
     const cw = dvui.currentWindow();
     const prev_clip = dvui.clipGet();
     defer dvui.clipSet(prev_clip);

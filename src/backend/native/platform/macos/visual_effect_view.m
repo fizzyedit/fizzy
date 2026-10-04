@@ -106,10 +106,14 @@ void fizzy_macos_titlebar_hit_test_install(void *nswindow, bool (*interactive_at
  * their own, what AppKit autoreleases here (the subview arrays among it) was never released, and
  * the window SDL closed stayed alive in the window server.
  */
-void fizzy_macos_viewport_glass(void *nswindow, double inset, double radius, long material) {
+void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inset, double radius, long material) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
         if (window == nil) return;
+        /* The vibrancy reads light or dark by the window's appearance: the main window's, which
+         * follows the app's theme, not the system's. */
+        NSWindow *main = (__bridge NSWindow *)main_nswindow;
+        if (main != nil) [window setAppearance:[main appearance]];
         [window setOpaque:NO];
         [window setBackgroundColor:[NSColor clearColor]];
         [window setHasShadow:NO];

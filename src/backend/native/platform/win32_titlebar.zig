@@ -330,3 +330,83 @@ fn win32MicaSubclassProc(
 
     return win32.ui.shell.DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
+
+// ---- a float popped out of the main window ------------------------------------------------
+//
+// fizzy's viewports (`docs/POPOUT_WINDOWS_PLAN.md`): a float out of the main window, in a borderless
+// window of its own. SDL styles a borderless window with a caption it takes away again
+// (`WM_NCCALCSIZE`), so DWM still treats it as a framed window — it rounds its corners and draws
+// its shadow — and the frame extended over it shows the backdrop behind its transparent pixels, as
+// it does the main window's.
+
+const DWMWCP_DONOTROUND: u32 = 1;
+const DWMWCP_ROUNDSMALL: u32 = 3;
+const viewport_subclass_id: usize = 0x50584932; // "PXI2"
+
+/// Dress a popped-out float's window, which is exactly the float's glass: Acrylic behind it, as
+/// behind the main window, in the app's light or dark (`dark`); its corners rounded by DWM as near
+/// the glass's `radius_pt` (points) as DWM rounds — 8 points as designed, which is DWM's own; DWM's
+/// shadow; no border. True when DWM gives it the backdrop (Windows 11 22H2 on); false leaves the
+/// glass on the app's opaque backing.
+pub fn viewportChrome(hwnd: *anyopaque, dark: bool, radius_pt: f32) bool {
+    if (builtin.os.tag != .windows) return false;
+    const h: win32.foundation.HWND = @ptrCast(hwnd);
+    const dwm = win32.graphics.dwm;
+    const corner: u32 = if (radius_pt < 1) DWMWCP_DONOTROUND else if (radius_pt < 6) DWMWCP_ROUNDSMALL else DWMWCP_ROUND;
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE), &corner, @sizeOf(u32));
+    const none: u32 = dwm.DWMWA_COLOR_NONE;
+    _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
+    const dark_value: u32 = @intFromBool(dark);
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE), &dark_value, @sizeOf(u32));
+    _ = win32.ui.shell.SetWindowSubclass(h, viewportSubclassProc, viewport_subclass_id, 0);
+    // No system menu: with the frame extended over the window, DWM draws the caption buttons
+    // `WS_SYSMENU` brings, over the float's header (as `applyChrome` strips it from the main
+    // window). Kept off by the subclass whenever the style is set again (`WM_STYLECHANGING`).
+    const wm = win32.ui.windows_and_messaging;
+    const style = wm.GetWindowLongPtrW(h, wm.GWL_STYLE);
+    if (style & viewport_ws_sysmenu != 0) {
+        _ = wm.SetWindowLongPtrW(h, wm.GWL_STYLE, style & ~viewport_ws_sysmenu);
+        const SWP_NOSIZE: u32 = 0x0001;
+        const SWP_NOMOVE: u32 = 0x0002;
+        const SWP_NOZORDER: u32 = 0x0004;
+        const SWP_NOACTIVATE: u32 = 0x0010;
+        const SWP_FRAMECHANGED: u32 = 0x0020;
+        _ = wm.SetWindowPos(h, null, 0, 0, 0, 0, @bitCast(SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED));
+    }
+    return applyViewportBackdrop(h);
+}
+
+const viewport_ws_sysmenu: isize = 0x00080000;
+
+/// The backdrop, and the frame extended over the whole window for it to show through — again on
+/// every activation, as DWM wants (and as `win32MicaSubclassProc` does for the main window).
+fn applyViewportBackdrop(h: win32.foundation.HWND) bool {
+    const backdrop_type: u32 = DWMSBT_TRANSIENTWINDOW;
+    const hr = win32.graphics.dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_SYSTEMBACKDROP_TYPE), &backdrop_type, @sizeOf(u32));
+    _ = win32.graphics.dwm.DwmExtendFrameIntoClientArea(h, &win32_mica_margins);
+    return hr >= 0;
+}
+
+fn viewportSubclassProc(
+    hWnd: ?win32.foundation.HWND,
+    uMsg: u32,
+    wParam: win32.foundation.WPARAM,
+    lParam: win32.foundation.LPARAM,
+    uIdSubclass: usize,
+    dwRefData: usize,
+) callconv(.winapi) win32.foundation.LRESULT {
+    _ = uIdSubclass;
+    _ = dwRefData;
+    const wm = win32.ui.windows_and_messaging;
+    if (uMsg == wm.WM_ACTIVATE or uMsg == wm.WM_DWMCOMPOSITIONCHANGED) {
+        if (hWnd) |h| _ = applyViewportBackdrop(h);
+    }
+    // SDL sets the window's style again as it likes (`viewportChrome`): never the system menu.
+    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_STYLE)) {
+        const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
+        ss.styleNew &= ~@as(u32, @intCast(viewport_ws_sysmenu));
+    }
+    // A subclass goes before its window does.
+    if (uMsg == wm.WM_NCDESTROY) _ = win32.ui.shell.RemoveWindowSubclass(hWnd, viewportSubclassProc, viewport_subclass_id);
+    return win32.ui.shell.DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}

@@ -847,19 +847,35 @@ pub fn viewportPinPointer(self: *SDLBackend, pin: PointerPin) void {
     self.pointer_pin = pin;
 }
 
-extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
+extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
 
-/// Give `vp`'s window a material behind the float's glass — its rounded rect `inset` physical
-/// pixels in from the window's edge, `radius` its corners — so the float's frost reads the desktop
-/// through it as it reads the app in the main window, and the clear margin round the glass, where
-/// its shadow is drawn, stays clear. True where the platform has one (macOS: the main window's
-/// vibrancy); false elsewhere, for now.
-pub fn viewportGlass(_: *SDLBackend, vp: *Viewport, inset: f32, radius: f32) bool {
-    if (comptime builtin.os.tag != .macos) return false;
-    const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
-    fizzy_macos_viewport_glass(ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
-    return true;
+/// Give `vp`'s window a material behind the float's glass, so the float's frost reads the desktop
+/// through it as it reads the app in the main window, in the app's light or dark (`dark`) as the
+/// main window's is. The glass is its rounded rect `inset` physical pixels in from the window's
+/// edge, `radius` its corners. True where the platform has one:
+///
+/// - macOS: the main window's vibrancy behind the glass, the clear margin round it — where the
+///   float draws its shadow — left clear.
+/// - Windows: the window is the glass (`viewports.os_frame`, `inset` 0), and DWM dresses it as it
+///   does the main window — Acrylic, its own rounded corners and shadow
+///   (`win32_titlebar.viewportChrome`). False on a Windows without the backdrop.
+/// - Elsewhere: none, for now.
+pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, dark: bool) bool {
+    const props = c.SDL_GetWindowProperties(vp.window);
+    switch (comptime builtin.os.tag) {
+        .macos => {
+            const ns = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+            const main_ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(self.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
+            fizzy_macos_viewport_glass(ns, main_ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
+            return true;
+        },
+        .windows => {
+            const hwnd = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return false;
+            return platform.win32_titlebar.viewportChrome(hwnd, dark, radius / vp.density);
+        },
+        else => return false,
+    }
 }
 
 /// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the

@@ -142,7 +142,8 @@ pub const viewports = struct {
     pub fn inMain(_: *const Viewport) Rect {
         return .{};
     }
-    pub fn glass(_: *Viewport, _: f32, _: f32) bool {
+    pub const os_frame = false;
+    pub fn glass(_: *Viewport, _: f32, _: f32, _: bool) bool {
         return false;
     }
     pub fn placeMain(_: *Viewport, frame: Rect) Rect {

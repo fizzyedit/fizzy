@@ -195,12 +195,18 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportPinPointer(pin);
     }
 
+    /// Whether the OS frames a viewport's window itself — its corners and its shadow (Windows:
+    /// DWM) — so the window is exactly the float's glass. Otherwise it is the glass with a clear
+    /// margin round it, which the float draws its own shadow in.
+    pub const os_frame = supported and builtin.os.tag == .windows;
+
     /// A material behind the float's glass in `vp`'s window — its rounded rect `inset` physical
     /// pixels in from the window's edge, `radius` its corners — for the float's frost to read the
-    /// desktop through. False where the platform has none (yet).
-    pub fn glass(vp: *Viewport, inset: f32, radius: f32) bool {
+    /// desktop through, in the app's light or dark (`dark`). False where the platform has none
+    /// (yet).
+    pub fn glass(vp: *Viewport, inset: f32, radius: f32, dark: bool) bool {
         if (comptime !supported) return false;
-        return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius);
+        return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius, dark);
     }
 
     /// The OS asked to close `vp`'s window.
