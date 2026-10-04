@@ -99,7 +99,32 @@ pub fn place(b: Point, anchor: Point, density: f32, frame: Rect) Placement {
     };
 }
 
+/// Where a window at `screen` (desktop points) lies in the main window's part of the frame,
+/// physical pixels from its top left — the main window now at `main` on the desktop, with
+/// `density` pixels per point. For a float coming back from its window into the main one: it
+/// comes back where its window is.
+pub fn mainFromScreen(main: Point, density: f32, screen: ScreenRect) Rect {
+    return .{
+        .x = (@as(f32, @floatFromInt(screen.x)) - main.x) * density,
+        .y = (@as(f32, @floatFromInt(screen.y)) - main.y) * density,
+        .w = @as(f32, @floatFromInt(screen.w)) * density,
+        .h = @as(f32, @floatFromInt(screen.h)) * density,
+    };
+}
+
 const testing = std.testing;
+
+test "a window on the desktop lies in the main window's frame from the main window's top left, at its density" {
+    const r = mainFromScreen(.{ .x = 100, .y = 50 }, 2, .{ .x = 160, .y = 80, .w = 300, .h = 200 });
+    try testing.expectEqual(@as(f32, 120), r.x);
+    try testing.expectEqual(@as(f32, 60), r.y);
+    try testing.expectEqual(@as(f32, 600), r.w);
+    try testing.expectEqual(@as(f32, 400), r.h);
+    // Left of and above the main window: negative, for the caller to bring back onto it.
+    const off = mainFromScreen(.{ .x = 100, .y = 50 }, 1, .{ .x = 20, .y = 10, .w = 10, .h = 10 });
+    try testing.expectEqual(@as(f32, -80), off.x);
+    try testing.expectEqual(@as(f32, -40), off.y);
+}
 
 test "the anchor — the main window's top left when the viewport opened — is where its band starts" {
     const b = band(0);

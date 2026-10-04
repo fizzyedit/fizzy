@@ -82,8 +82,18 @@ pub fn beginFrame(state: *State) void {
             return;
         };
         if (toggle_requested or viewports.closeRequested(o.viewport)) {
-            // Back where it was in the main window: its own rect was kept while it was out.
-            state.floats.items.items[i].viewport = null;
+            // Back where its window is now, mapped into the main window and held on it
+            // (`float_rules.reachable`) — not where it left from: it was moved out there.
+            const f = &state.floats.items.items[i];
+            const at = viewports.inMain(o.viewport);
+            const s = dvui.windowNaturalScale();
+            if (at.w > 0 and at.h > 0) {
+                const Floats = @import("app").layout.Layout.Floats;
+                const rules = @import("app").layout.Layout.float_rules;
+                const back: dvui.Rect = .{ .x = at.x / s, .y = at.y / s, .w = at.w / s, .h = at.h / s };
+                f.rect = Floats.fromRules(rules.reachable(Floats.toRules(back), Floats.toRules(dvui.windowRect())));
+            }
+            f.viewport = null;
             release(o);
             out = null;
             dvui.refresh(null, @src(), null);

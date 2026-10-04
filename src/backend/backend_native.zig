@@ -161,6 +161,13 @@ pub const viewports = struct {
         dvui.currentWindow().backend.impl.viewportPresent(vp, target);
     }
 
+    /// Where `vp`'s window is now, in the main window's part of the frame (physical pixels from
+    /// its top left): where its float goes when it comes back.
+    pub fn inMain(vp: *const Viewport) Rect {
+        if (comptime !supported) return .{};
+        return dvui.currentWindow().backend.impl.viewportInMain(vp);
+    }
+
     /// The OS asked to close `vp`'s window.
     pub fn closeRequested(vp: *const Viewport) bool {
         if (comptime !supported) return false;

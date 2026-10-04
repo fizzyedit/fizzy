@@ -139,6 +139,9 @@ pub const viewports = struct {
         return frame;
     }
     pub fn present(_: *Viewport, _: ?dvui.TextureTarget) void {}
+    pub fn inMain(_: *const Viewport) Rect {
+        return .{};
+    }
     pub fn closeRequested(_: *const Viewport) bool {
         return false;
     }

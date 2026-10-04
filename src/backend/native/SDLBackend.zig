@@ -771,6 +771,18 @@ pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) vi
     return placed.frame;
 }
 
+/// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the
+/// main window's top left, wherever either window has been moved since it opened.
+pub fn viewportInMain(self: *SDLBackend, vp: *const Viewport) viewport_map.Rect {
+    var x: c_int = 0;
+    var y: c_int = 0;
+    var w: c_int = 0;
+    var h: c_int = 0;
+    _ = c.SDL_GetWindowPosition(vp.window, &x, &y);
+    _ = c.SDL_GetWindowSize(vp.window, &w, &h);
+    return viewport_map.mainFromScreen(self.mainOnScreen(), self.density(), .{ .x = x, .y = y, .w = w, .h = h });
+}
+
 /// Hand `vp` its part of this frame, drawn into `target`, for `renderPresent` to copy into its
 /// window — or nothing, when there is no picture of it this frame (a target let go must not be
 /// copied from after the frame destroys it).
