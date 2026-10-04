@@ -125,6 +125,9 @@ pub fn macosLaunchComplete() void {}
 /// Symmetric with the native API: a page has one canvas, so a float never leaves it.
 pub const viewports = struct {
     pub const supported = false;
+    pub fn available() bool {
+        return false;
+    }
     pub const Viewport = struct {};
     pub const Rect = struct { x: f32 = 0, y: f32 = 0, w: f32 = 0, h: f32 = 0 };
 

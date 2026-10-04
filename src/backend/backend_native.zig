@@ -130,6 +130,12 @@ pub const viewports = struct {
     /// Physical pixels of the frame.
     pub const Rect = if (supported) Impl.viewport_map.Rect else struct { x: f32 = 0, y: f32 = 0, w: f32 = 0, h: f32 = 0 };
 
+    /// Whether this run can open viewports: not on Wayland, where a window cannot be placed.
+    pub fn available() bool {
+        if (comptime !supported) return false;
+        return Impl.viewportsAvailable();
+    }
+
     /// A viewport over `at` (the frame as the main window shows it), its window opening over that
     /// place on the desktop, hidden until a frame is presented into it. Its own part of the frame
     /// is `frameOf`.

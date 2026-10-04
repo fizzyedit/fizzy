@@ -49,12 +49,12 @@ const Out = struct {
 /// window has drawn the float — so it is never on screen in neither, nor blinks out between them.
 var closing: ?Out = null;
 
-/// `FIZZY_POPOUT=1`, on a backend with viewports.
+/// `FIZZY_POPOUT=1`, on a backend with viewports, where this run can open them (not Wayland).
 pub fn enabled() bool {
     if (comptime builtin.target.cpu.arch == .wasm32 or !viewports.supported) return false;
     if (env_on == null) {
         const raw = std.c.getenv("FIZZY_POPOUT");
-        env_on = if (raw) |r| !std.mem.eql(u8, std.mem.span(r), "0") else false;
+        env_on = if (raw) |r| !std.mem.eql(u8, std.mem.span(r), "0") and viewports.available() else false;
     }
     return env_on.?;
 }

@@ -10,7 +10,8 @@ expensive part to re-derive.
 main window's edge splits out into an OS window of its own, and merges back when let go wholly
 inside it. Its popups and a view drag follow it across. On macOS its window wears vibrancy behind
 its glass, and on Windows Acrylic, so it looks the same out as in, and the OS moves, resizes and
-snaps its window as any other. Linux builds the same gesture over an opaque backing, untried. What P2 established, and what it changes
+snaps its window as any other. On X11 the same gesture runs over an opaque backing, and on
+Wayland floats stay in the main window. What P2 established, and what it changes
 below, is in "What P2 found" at the end. What P3 changed is in "What P3 found", after it.
 
 **Phase 1 is built: in-window floats.** A view dropped on the middle of its own place floats into a
@@ -463,15 +464,25 @@ Checked on Windows 11 on Arm in a VM, with real input inside the VM (`SendInput`
 - dragged off the snap, it took back its size, and let go over the main window it merged;
 - pulled by its left edge, the OS resized it with its right edge still.
 
+### Linux
+
+- **X11.** The split, the settle and the merge run as on the other two. One difference: Vulkan
+  hands a window no swapchain image while it is hidden, so a viewport's window would never get the
+  first frame it waits for to show. There, the window is shown empty, which is clear, and drawn
+  into from the next frame (`Viewport.mapped`). The float stays in the main window's picture until
+  its window has shown a frame, so it never blinks. Checked on Ubuntu in a VM through XWayland,
+  Vulkan on llvmpipe, by the tapes, with the window's position sampled as it moved.
+- **Wayland.** A client cannot place its windows, so viewports are off there
+  (`viewports.available`), and floats stay in the main window.
+
 ## Next steps
 
 1. **The look on Windows with a GPU.** The VM draws Acrylic as its solid fallback, and its rounded
    corners only partly.
 2. **macOS and X11 with a real pointer.** On macOS: the AppKit drag of the header, tiling, and
    whether a handoff at the split can be done there (`performWindowDragWithEvent:` takes the press
-   that began the drag). On X11: the hit test's `_NET_WM_MOVERESIZE`, the compositor's clear
-   margin, and a handoff through it. Without a compositor, and on Wayland, the float stays
-   in-window.
+   that began the drag). On X11: the hit test's `_NET_WM_MOVERESIZE`, the clear margin with and
+   without a compositor (without one it would show black), and a handoff through it.
 3. **Persistence** (`SavedRegion.Floating.os`).
 4. **P4's lifecycle.** Minimize, maximize and close with the main window, and a Dock or taskbar
    entry of its own.

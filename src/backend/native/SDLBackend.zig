@@ -116,8 +116,11 @@ pub const Viewport = struct {
     /// The part of the frame it shows, physical pixels (`viewport_map.place`).
     frame: viewport_map.Rect,
     /// Created hidden and shown once a frame has been presented into it, so it never shows
-    /// empty.
+    /// empty: `shown` once it is on screen with a frame in it.
     shown: bool = false,
+    /// Shown before any frame was in it, where the driver gives a hidden window nothing to draw
+    /// into (Vulkan on X11): it is clear, so it shows nothing until its first frame.
+    mapped: bool = false,
     /// The OS asked to close it (⌘W, the Window menu): the app takes its float back in.
     close_requested: bool = false,
     /// Its part of the frame, drawn this frame, for `renderPresent` to copy into it.
@@ -741,6 +744,7 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
 /// Hidden until a frame is presented into it. Null when it cannot be made, or `max_viewports`
 /// are open.
 pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8) ?*Viewport {
+    if (!viewportsAvailable()) return null;
     const slot = for (self.viewports, 0..) |v, i| {
         if (v == null) break i;
     } else return null;
@@ -784,6 +788,15 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
     // The slot holds it for the window's life, so SDL may keep the pointer.
     _ = c.SDL_SetWindowHitTest(window, viewportHitTest, vp);
     return vp;
+}
+
+/// Whether this run can open viewports at all: not on Wayland, where a client cannot put its
+/// windows anywhere — a window split out of the main one would open where the compositor likes, and
+/// none could follow a drag (`docs/POPOUT_WINDOWS_PLAN.md`). Floats stay in the main window there.
+pub fn viewportsAvailable() bool {
+    if (comptime builtin.os.tag != .linux) return true;
+    const driver = c.SDL_GetCurrentVideoDriver() orelse return false;
+    return !std.mem.eql(u8, std.mem.span(driver), "wayland");
 }
 
 /// Close a viewport: its window goes, and the slot (and band) with it.
@@ -1278,6 +1291,7 @@ pub fn deinit(self: *SDLBackend) void {
 pub fn renderPresent(self: *SDLBackend) void {
     // Each viewport's part of the frame goes in with the main window's, one submission for all.
     var first_frame: [max_viewports]bool = @splat(false);
+    var map_empty: [max_viewports]bool = @splat(false);
     for (&self.viewports, 0..) |*slot, i| {
         const vp = if (slot.*) |*v| v else continue;
         const target = vp.pending orelse continue;
@@ -1286,18 +1300,29 @@ pub fn renderPresent(self: *SDLBackend) void {
         // for up to a second: skipped, once it has been shown (it is created hidden, and covered
         // then by its own account).
         if (vp.shown and c.SDL_GetWindowFlags(vp.window) & (c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_OCCLUDED) != 0) continue;
-        if (self.gpu.presentInto(vp.window, target) and !vp.shown) first_frame[i] = true;
+        const presented = self.gpu.presentInto(vp.window, target);
+        if (vp.shown) continue;
+        if (presented) {
+            first_frame[i] = true;
+        } else if (!vp.mapped) {
+            // Nothing to draw into while it is hidden (Vulkan on X11 hands a hidden window no
+            // image): shown empty, which is clear, and drawn into from the next frame.
+            map_empty[i] = true;
+        }
     }
     self.gpu.present(self.clear_window_on_begin);
-    // Shown once there is a frame in it. Not made key: the window it came out of keeps the
-    // keyboard until the viewport is clicked.
-    for (&self.viewports, first_frame) |*slot, show| {
-        if (!show) continue;
+    // Shown once there is a frame in it (or empty, above). Not made key: the window it came out of
+    // keeps the keyboard until the viewport is clicked.
+    for (&self.viewports, first_frame, map_empty) |*slot, show, empty| {
+        if (!show and !empty) continue;
         const vp = if (slot.*) |*v| v else continue;
-        _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
-        _ = c.SDL_ShowWindow(vp.window);
-        _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
-        vp.shown = true;
+        if (!vp.mapped) {
+            _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
+            _ = c.SDL_ShowWindow(vp.window);
+            _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
+            vp.mapped = true;
+        }
+        if (show) vp.shown = true;
     }
     self.manage_backend_tracking.check(.renderPresent);
 }
