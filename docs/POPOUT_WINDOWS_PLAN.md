@@ -323,7 +323,21 @@ keyboard, its IME rect moved into that window's points (written, not exercised i
   the band. The capture policy is next — while a button is held, place the pointer by the window
   it is over (`SDL_GetGlobalMouseState`), so a drag crosses into the main window.
 - The window is moved and resized only by dvui (header, edges); the OS does neither, and there is
-  no OS shadow, rounded mask or material (P4).
+  no OS shadow, rounded mask or material (P4). Tried on Windows 11 (hardware GPU): the right and
+  bottom edges resize steadily, but the left and top edges change the window's place and size in
+  two SDL calls, and it shows moved and not yet sized for a moment between them. Doing both in one
+  `SetWindowPos` behind SDL's back is worse: SDL never learns the new size, its swapchain stays the
+  old one (the picture cropped in a bigger window) and its idea of the size goes stale. The fix is
+  the OS resizing the window — its edges hit-tested (`WM_NCHITTEST`), as the main window's chrome
+  is (`win32_titlebar.zig`) — not the app moving it under SDL.
+- A popped-out window's pointer is read from the desktop (`SDL_GetGlobalMouseState`), not from
+  the event plus where the window is: the window moves under an edge or header drag, and an event
+  queued before a move, read against the window after it, set the edge oscillating.
+- On Windows the window is owned by the main window (`SDL_SetWindowParent`), so it stays over it
+  and hides and minimizes with it — but has no taskbar button of its own yet (P4). Not on macOS,
+  where SDL's child window would move with the main one (decision 2).
+- Out, the float draws no frost, shadow or margin (they read and drew into the transparent
+  window's empty edges and corners): its panel alone on the opaque backing, until P4's material.
 - One float out at a time in the spike (the backend holds eight). Out, a float is not remembered:
   `layout.zon` keeps its in-window rect, and it comes back in on the next launch.
 - One density, the main window's, fixed when the viewport opens (P5).

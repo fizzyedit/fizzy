@@ -120,10 +120,6 @@ pub const Viewport = struct {
     close_requested: bool = false,
     /// Its part of the frame, drawn this frame, for `renderPresent` to copy into it.
     pending: ?dvui.TextureTarget = null,
-    /// Where its window's place in SDL's units lies on the desktop, measured once when it opened,
-    /// for moving and sizing it in one step (`platform.win32_titlebar.setWindowFrame`). Windows
-    /// only; null elsewhere.
-    frame_map: ?platform.win32_titlebar.FrameMap = null,
 };
 
 pub const InitOptions = struct {
@@ -751,14 +747,7 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
     // where SDL makes it a child window that moves with its parent, and the windows that left
     // the main one stay where they are when it moves (`docs/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
-    // Measured now, while SDL's numbers for it are its own (`Viewport.frame_map`).
-    var sx: c_int = placed.screen.x;
-    var sy: c_int = placed.screen.y;
-    var sw: c_int = placed.screen.w;
-    _ = c.SDL_GetWindowPosition(window, &sx, &sy);
-    _ = c.SDL_GetWindowSize(window, &sw, null);
-    const frame_map = platform.win32_titlebar.frameMap(window, sx, sy, sw);
-    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .frame_map = frame_map };
+    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame };
     return &self.viewports[slot].?;
 }
 
@@ -781,16 +770,14 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
 pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) viewport_map.Rect {
     const placed = viewport_map.place(vp.band, vp.anchor, vp.density, frame);
     const was = vp.screen;
-    const moved = placed.screen.x != was.x or placed.screen.y != was.y;
-    const sized = placed.screen.w != was.w or placed.screen.h != was.h;
-    // Both at once — dragged by its left or top edge — in one step where the OS can
-    // (`platform.win32_titlebar.setWindowFrame`): as two, it showed moved and not yet sized, its
-    // far edge jumping.
-    const at_once = moved and sized and if (vp.frame_map) |m| platform.win32_titlebar.setWindowFrame(vp.window, m, placed.screen.x, placed.screen.y, placed.screen.w, placed.screen.h) else false;
-    if (!at_once) {
-        if (moved) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
-        if (sized) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
-    }
+    // Through SDL, as two calls: a window dragged by its left or top edge shows moved and not
+    // yet sized for a moment, its far edge jumping. Moving it in one `SetWindowPos` behind SDL's
+    // back was tried and is worse — SDL never learns the window's new size, so its swapchain stays
+    // the old one (the picture cropped in a window grown round it) and its idea of the size goes
+    // stale. The real fix is the OS doing the resizing (Phase 4: hit-testing the window's edges as
+    // the main window's chrome does), not the app moving the window under it.
+    if (placed.screen.x != was.x or placed.screen.y != was.y) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
+    if (placed.screen.w != was.w or placed.screen.h != was.h) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
     vp.screen = placed.screen;
     vp.frame = placed.frame;
     return placed.frame;
