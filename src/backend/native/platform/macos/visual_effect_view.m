@@ -320,3 +320,25 @@ void fizzy_macos_viewport_windows_item(void *nswindow, const char *title) {
         [NSApp changeWindowsItem:window title:t filename:NO];
     }
 }
+
+/*
+ * A window that carries a view past every window of the app's, over the desktop
+ * (`SDLBackend.viewportOpenCarry`): clear, no shadow of AppKit's (the carried glass draws its own),
+ * the pointer passing through it to what is under it, above every window — a pop-up menu's level —
+ * on every Space, in no window list or switcher, and no OS animation.
+ */
+void fizzy_macos_viewport_carry(void *nswindow) {
+    @autoreleasepool {
+        NSWindow *window = (__bridge NSWindow *)nswindow;
+        if (window == nil) return;
+        [window setOpaque:NO];
+        [window setBackgroundColor:[NSColor clearColor]];
+        [window setHasShadow:NO];
+        [window setIgnoresMouseEvents:YES];
+        [window setAnimationBehavior:NSWindowAnimationBehaviorNone];
+        [window setLevel:NSPopUpMenuWindowLevel];
+        [window setExcludedFromWindowsMenu:YES];
+        [window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorTransient |
+                                      NSWindowCollectionBehaviorIgnoresCycle | NSWindowCollectionBehaviorFullScreenAuxiliary];
+    }
+}

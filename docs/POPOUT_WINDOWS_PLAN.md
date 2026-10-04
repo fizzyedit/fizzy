@@ -587,17 +587,27 @@ from the frame it is made in.
   red one closes the float, its views going home (`Floats.Viewport.close_asked`), at once, as any
   window closes — no fly-shut.
 
+- **Carrying a view outside every window (macOS).** While what a view is carried as lies past the
+  main window, and over no float's window, a carry window shows it there (`Popout.carryFrame`,
+  `viewports.openCarry`): borderless and clear, the pointer passing through it, at a pop-up menu's
+  level above every window, in no window list. The drag's drawing, recorded in the main window's
+  frame past its edge (`core.screens.publishBeyond` lets it reach there), is copied into it over
+  the main window's base, for its glass to read; what of it lies over the main window is cleared,
+  where the main window shows it with its glass over the app. Let go over no window of the app's,
+  the view floats where it was let go (`ViewDrag.floatAway`, `State.floats_windowed`): a float of
+  its size round the pointer, in a window of its own. An OS drag-and-drop session was the
+  alternative: its image glued to the cursor, but a still picture, no liquid glass. Not yet: a
+  material behind it (its glass is over an opaque base out there, where the desktop is), and
+  straddling a float window's edge it is cut at that edge.
+
 **Next:**
 
-1. **Carrying a view outside every window.** A small transparent OS window follows the pointer with
-   the carried glass in it, a material behind it; let go there, a float window opens where it is,
-   growing out of the glass. Over a fizzy window, drops work as now. (An OS drag-and-drop session
-   was the alternative: its image glued to the cursor, but a still picture, no liquid glass.)
-2. **Growing out of the carried glass.** The window's frame from the drop to its rect, in step
+1. **Growing out of the carried glass.** The window's frame from the drop to its rect, in step
    with its picture (the transaction moves and resizes already use).
-3. **Windows and X11 chrome.** Windows: the float's header draws caption buttons, as the main
-   window's does (`caption_buttons.zig`). X11: client-side decorations, as the main window's.
-4. **Persistence of where the windows are** (`SavedRegion.Floating.os`): a saved float comes back
+2. **Windows and X11 chrome.** Windows: the float's header draws caption buttons, as the main
+   window's does (`caption_buttons.zig`). X11: client-side decorations, as the main window's. And
+   the carry window there.
+3. **Persistence of where the windows are** (`SavedRegion.Floating.os`): a saved float comes back
    in its window where it was on the desktop, not where it would be over the main window.
 
 ## Next steps

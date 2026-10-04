@@ -147,6 +147,10 @@ pub const Viewport = struct {
     /// macOS: put somewhere new this frame (`screen`), applied with the frame's picture in one
     /// Core Animation transaction (`renderPresent`).
     frame_pending: bool = false,
+    /// A window that only shows (`viewportOpenCarry`): the pointer passes through it, so no held
+    /// pointer is read against it, and it is kept above every window by its level, not ordered over
+    /// the main one.
+    passive: bool = false,
     /// macOS: the main window leaves a hole in its picture under this window's glass this frame
     /// (`viewportMainHole`), and, as last applied with the window's picture, where its material is
     /// kept out of because the main window's interior lies there and where it is kept all the same
@@ -797,6 +801,18 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
 /// Hidden until a frame is presented into it. Null when it cannot be made, or `max_viewports`
 /// are open.
 pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8) ?*Viewport {
+    return self.openViewport(at, title_text, false);
+}
+
+/// A window that carries a view past every window of the app's, over the desktop (`Popout`'s carry
+/// window): borderless and clear, the pointer passing through it to what is under, kept above every
+/// window, in no window list, never focused. macOS. Placed and drawn as any viewport.
+pub fn viewportOpenCarry(self: *SDLBackend, at: viewport_map.Rect) ?*Viewport {
+    if (comptime builtin.os.tag != .macos) return null;
+    return self.openViewport(at, "", true);
+}
+
+fn openViewport(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8, carry: bool) ?*Viewport {
     if (!viewportsAvailable()) return null;
     const slot = for (self.viewports, 0..) |v, i| {
         if (v == null) break i;
@@ -819,8 +835,10 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
     // from every edge, its title bar made transparent over the float's own header
     // (`fizzy_macos_viewport_glass`). Elsewhere borderless, framed by the OS (Windows: DWM) or by
     // the float (X11).
-    const frame_flag: c.SDL_WindowFlags = if (comptime builtin.os.tag == .macos) 0 else c.SDL_WINDOW_BORDERLESS;
-    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | frame_flag | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | c.SDL_WINDOW_RESIZABLE;
+    // A carry window is neither: borderless, and not resizable — the app puts it where the view is.
+    const frame_flag: c.SDL_WindowFlags = if (builtin.os.tag == .macos and !carry) 0 else c.SDL_WINDOW_BORDERLESS;
+    const size_flag: c.SDL_WindowFlags = if (carry) 0 else c.SDL_WINDOW_RESIZABLE;
+    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | frame_flag | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | size_flag;
     _ = c.SDL_SetStringProperty(props, c.SDL_PROP_WINDOW_CREATE_TITLE_STRING, title_text.ptr);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_X_NUMBER, placed.screen.x);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_Y_NUMBER, placed.screen.y);
@@ -841,8 +859,12 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
     // where SDL makes it a child window that moves with its parent, and the windows that left
     // the main one stay where they are when it moves (`docs/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
-    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame };
+    self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame, .passive = carry };
     const vp = &self.viewports[slot].?;
+    if (carry) {
+        if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_carry(cocoaWindow(window));
+        return vp;
+    }
     // The slot holds it for the window's life, so SDL may keep the pointer.
     _ = c.SDL_SetWindowHitTest(window, viewportHitTest, vp);
     return vp;
@@ -1045,6 +1067,7 @@ pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
 }
 
 extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
+extern fn fizzy_macos_viewport_carry(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_glass_mask(nswindow: ?*anyopaque, inset: f64, radius: f64, ex: f64, ey: f64, ew: f64, eh: f64, er: f64, kx: f64, ky: f64, kw: f64, kh: f64) void;
 extern fn fizzy_macos_window_buttons(nswindow: ?*anyopaque, x: *f64, y: *f64, w: *f64, h: *f64) c_int;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
@@ -1291,6 +1314,7 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
     }
     for (&self.viewports) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
+        if (vp.passive) continue;
         const s = vp.screen;
         if (gx >= @as(f32, @floatFromInt(s.x)) and gy >= @as(f32, @floatFromInt(s.y)) and
             gx < @as(f32, @floatFromInt(s.x + s.w)) and gy < @as(f32, @floatFromInt(s.y + s.h)))
@@ -1643,7 +1667,7 @@ pub fn renderPresent(self: *SDLBackend) void {
         const main_ns = cocoaWindow(self.window);
         for (&self.viewports) |*slot| {
             const vp = if (slot.*) |*v| v else continue;
-            if (!vp.mapped) continue;
+            if (!vp.mapped or vp.passive) continue;
             fizzy_macos_viewport_keep_above(cocoaWindow(vp.window), main_ns);
         }
     }

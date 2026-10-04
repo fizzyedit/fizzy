@@ -1587,6 +1587,10 @@ fn floatTarget(from: dvui.Size.Physical, scale: f32) dvui.Size.Physical {
 /// Release at `mouse`. Does nothing unless the pointer is somewhere a drop
 /// means something, so letting go over the window frame cancels.
 pub fn apply(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
+    // Let go over no window of the app's, where floats are OS windows of their own: a float opens
+    // there, in a window of its own, with the view in it — as a tab torn off onto the desktop opens
+    // a window where it lands.
+    if (l.state.floats_windowed and overNoWindow(mouse)) return floatAway(l, source, mouse);
     if (chooserAt(l.state, mouse)) |o| {
         if (!o.into) return;
         if (dropOnPluginChooser(l, source, o.name, mouse)) return;
@@ -1697,7 +1701,7 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
     // Out of its own place into a window of its own: the framework's to do, not the place's —
     // a plugin region's own drop is never asked.
     if (plan == .float) {
-        floatOut(l, source, moved);
+        floatOut(l, source, moved, null);
         shutIfEmptied(l, source);
         l.state.markDirty();
         dvui.refresh(null, @src(), null);
@@ -1759,6 +1763,31 @@ pub fn place(l: *Layout, source: []const u8, dest: []const u8, kind: Drop.Kind) 
 /// Whether the view carried out of `source` floats when it is dropped on the middle of `source`
 /// (`float_rules.canFloat`): not out of the picker, not a document — its place is the slot a
 /// plugin made for it — and not a view already alone in a float nobody split.
+/// Over no window of the app's: past the main window, and on no screen a float's window shows
+/// (`core.screens`) — the pointer is read in the main window's frame there (`SDLBackend.heldPoint`).
+fn overNoWindow(mouse: dvui.Point.Physical) bool {
+    if (dvui.windowRectPixels().contains(mouse)) return false;
+    const s = dvui.windowNaturalScale();
+    const screen = core.screens.screenFor(.{ .x = mouse.x / s, .y = mouse.y / s });
+    const main = dvui.windowRect();
+    return screen.x == main.x and screen.y == main.y and screen.w == main.w and screen.h == main.h;
+}
+
+/// The view carried out of `source`, let go over no window of the app's (`apply`): a float of its
+/// own opens round where it was let go (`floatOut`), which the application puts in an OS window of
+/// its own. Any view that may float — a view alone in a float's window too: its window closes, and
+/// one opens where it was let go.
+fn floatAway(l: *Layout, source: []const u8, mouse: dvui.Point.Physical) void {
+    if (std.mem.eql(u8, source, loose_source)) return;
+    const moved = ownId(l.arena, movedFrom(l, source) orelse return) orelse return;
+    const s = l.host.surfaceById(moved) orelse return;
+    if (!float_rules.canFloat(.{ .slotted = l.slotted(s), .alone_in_float = false })) return;
+    floatOut(l, source, moved, mouse);
+    shutIfEmptied(l, source);
+    l.state.markDirty();
+    dvui.refresh(null, @src(), null);
+}
+
 fn canFloat(l: *Layout, source: []const u8) bool {
     if (std.mem.eql(u8, source, loose_source)) return false;
     const moved = movedFrom(l, source) orelse return false;
@@ -1771,7 +1800,7 @@ fn canFloat(l: *Layout, source: []const u8) bool {
 /// opens one — out of another float, a step down and right of that one — growing out of the glass
 /// it was carried in, with the photograph the drag took of it. The source loses the view; a place
 /// of several keeps the rest.
-fn floatOut(l: *Layout, source: []const u8, moved: []const u8) void {
+fn floatOut(l: *Layout, source: []const u8, moved: []const u8, at: ?dvui.Point.Physical) void {
     const state = l.state;
     const cw = dvui.currentWindow();
     const scale = cw.natural_scale;
@@ -1780,10 +1809,16 @@ fn floatOut(l: *Layout, source: []const u8, moved: []const u8) void {
     const window = Floats.toRules(dvui.windowRect());
     const src = placeBounds(state, source) orelse dvui.windowRectPixels();
     const out_of: ?usize = if (state.floats.rootOf(source)) |root| state.floats.find(root) else null;
-    const rect = if (out_of) |i|
+    var rect = if (out_of) |i|
         float_rules.nudged(Floats.toRules(state.floats.items.items[i].rect), window)
     else
         float_rules.initialRect(Floats.toRules(src.toNatural()), window);
+    // Let go over no window of the app's (`floatAway`): its size, round where it was let go, out
+    // there — not held on the main window.
+    if (at) |p| {
+        rect.x = p.x / scale - rect.w / 2;
+        rect.y = p.y / scale - rect.h / 2;
+    }
     // Out of a float, home is still where that float came from: the place it opened over is a
     // float's, and goes with it.
     const home = if (out_of) |i| state.floats.items.items[i].home else state.internName(l.gpa, source);

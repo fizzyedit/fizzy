@@ -144,6 +144,17 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportOpen(at, title);
     }
 
+    /// A window to carry a view past every window of the app's, over the desktop: clear, the pointer
+    /// passing through it, above every window, placed and drawn as any viewport (`placeMain`,
+    /// `present`). Where it can be made (`carries`).
+    pub fn openCarry(at: Rect) ?*Viewport {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportOpenCarry(at);
+    }
+
+    /// Whether a carried view can be shown past every window (`openCarry`): macOS.
+    pub const carries = supported and builtin.os.tag == .macos;
+
     pub fn close(vp: *Viewport) void {
         if (comptime !supported) return;
         dvui.currentWindow().backend.impl.viewportClose(vp);
