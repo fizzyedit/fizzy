@@ -88,13 +88,7 @@ fn wholePixels(r: Rect) Rect {
 
 /// Where to put a window showing `frame` (band `b`): on whole points, the nearest to it.
 pub fn place(b: Point, anchor: Point, density: f32, frame: Rect) Placement {
-    const s = screenFromFrame(b, anchor, density, wholePixels(frame));
-    const screen: ScreenRect = .{
-        .x = @intFromFloat(@round(s.x)),
-        .y = @intFromFloat(@round(s.y)),
-        .w = @intFromFloat(@max(1, @round(s.w))),
-        .h = @intFromFloat(@max(1, @round(s.h))),
-    };
+    const screen = wholePoints(screenFromFrame(b, anchor, density, wholePixels(frame)));
     const at = frameFromScreen(b, anchor, density, .{ .x = @floatFromInt(screen.x), .y = @floatFromInt(screen.y) });
     return .{
         .screen = screen,
@@ -136,14 +130,31 @@ pub fn screenFromMain(main: Point, density: f32, frame: Rect) Rect {
 /// Where to put a window showing `frame` of the main window's frame (`screenFromMain`): on whole
 /// points, and the part of the frame it then shows.
 pub fn placeMain(main: Point, density: f32, frame: Rect) Placement {
-    const s = screenFromMain(main, density, wholePixels(frame));
-    const screen: ScreenRect = .{
-        .x = @intFromFloat(@round(s.x)),
-        .y = @intFromFloat(@round(s.y)),
-        .w = @intFromFloat(@max(1, @round(s.w))),
-        .h = @intFromFloat(@max(1, @round(s.h))),
-    };
+    const screen = wholePoints(screenFromMain(main, density, wholePixels(frame)));
     return .{ .screen = screen, .frame = mainFromScreen(main, density, screen) };
+}
+
+/// The farthest a window is ever put from the desktop's origin, points, each way. Past about
+/// 46340, SDL's search for the display a window is on squares the distance as an `int` and
+/// overflows (`GetDisplayForRect`): a panic in Debug, garbage after. A window that far from any
+/// display is lost to the user anyway.
+pub const screen_limit: f32 = 16384;
+
+/// `s` (desktop points) on whole points, within `screen_limit` — and a rect gone NaN, which a float
+/// cast to an integer cannot be, at the origin.
+pub fn wholePoints(s: Rect) ScreenRect {
+    const Sane = struct {
+        fn of(v: f32, lo: f32) f32 {
+            if (std.math.isNan(v)) return lo;
+            return std.math.clamp(@round(v), lo, screen_limit);
+        }
+    };
+    return .{
+        .x = @intFromFloat(Sane.of(s.x, -screen_limit)),
+        .y = @intFromFloat(Sane.of(s.y, -screen_limit)),
+        .w = @intFromFloat(Sane.of(s.w, 1)),
+        .h = @intFromFloat(Sane.of(s.h, 1)),
+    };
 }
 
 /// The part of the frame, physical pixels, a window the OS moved or resized to `screen` (desktop
@@ -229,6 +240,17 @@ fn contains(r: Rect, p: Point) bool {
 }
 
 const testing = std.testing;
+
+test "a window is never put where SDL's display search overflows" {
+    const far = place(.{ .x = 100000, .y = 0 }, .{ .x = 300, .y = 200 }, 2, .{ .x = -1e9, .y = 3e9, .w = 1e9, .h = 10 });
+    try std.testing.expectEqual(@as(i32, -16384), far.screen.x);
+    try std.testing.expectEqual(@as(i32, 16384), far.screen.y);
+    try std.testing.expectEqual(@as(i32, 16384), far.screen.w);
+    const nan = placeMain(.{ .x = 300, .y = 200 }, 2, .{ .x = std.math.nan(f32), .y = 0, .w = std.math.nan(f32), .h = 40 });
+    try std.testing.expectEqual(@as(i32, -16384), nan.screen.x);
+    try std.testing.expectEqual(@as(i32, 1), nan.screen.w);
+    try std.testing.expectEqual(@as(i32, 20), nan.screen.h);
+}
 
 test "a window the OS moved shows the part of the band under it, and placing it there leaves it be" {
     const b = band(0);
