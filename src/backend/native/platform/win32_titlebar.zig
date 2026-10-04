@@ -330,3 +330,175 @@ fn win32MicaSubclassProc(
 
     return win32.ui.shell.DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
+
+// ---- a float popped out of the main window ------------------------------------------------
+//
+// fizzy's viewports (`docs/POPOUT_WINDOWS_PLAN.md`): a float out of the main window, in a borderless
+// window of its own. SDL styles a borderless window with a caption it takes away again
+// (`WM_NCCALCSIZE`), so DWM still treats it as a framed window — it rounds its corners and draws
+// its shadow — and the frame extended over it shows the backdrop behind its transparent pixels, as
+// it does the main window's.
+
+const DWMWA_TRANSITIONS_FORCEDISABLED: u32 = 3;
+const DWMWCP_DONOTROUND: u32 = 1;
+const DWMWCP_ROUNDSMALL: u32 = 3;
+const viewport_subclass_id: usize = 0x50584932; // "PXI2"
+/// Posted by `viewportDragMove`: the drag under way becomes the OS's move of the window.
+const WM_FIZZY_DRAG_MOVE: u32 = 0x8000 + 0x46; // WM_APP + 'F'
+
+/// A popped-out float's window being moved or resized by the OS, in its modal move/size loop
+/// (`WM_ENTERSIZEMOVE` … `WM_EXITSIZEMOVE`): the backend's, per viewport, at an address that holds
+/// for the window's life (the subclass keeps a pointer to it).
+pub const ViewportLoop = struct {
+    /// In the loop now: a frame then must not wait for events (SDL runs it from the loop's timer).
+    moving: bool = false,
+    /// The loop ended since the app last asked: a press the OS took was let go.
+    ended: bool = false,
+    /// It left the window another size than it moved it at: a resize from an edge, or a move that
+    /// snapped or maximized it as it was let go. Not the size a snapped window takes back as it is
+    /// dragged off its snap, which it is then moved at (and which Windows sends as `WM_SIZING`).
+    resized: bool = false,
+    /// What it is — a resize (`SC_SIZE`, from the `WM_SYSCOMMAND` that starts it), not a move —
+    /// and the size it last moved the window at.
+    sizing: bool = false,
+    moved_w: i32 = 0,
+    moved_h: i32 = 0,
+};
+
+/// Dress a popped-out float's window, which is exactly the float's glass: Acrylic behind it, as
+/// behind the main window, in the app's light or dark (`dark`); its corners rounded by DWM as near
+/// the glass's `radius_pt` (points) as DWM rounds — 8 points as designed, which is DWM's own; DWM's
+/// shadow; no border. True when DWM gives it the backdrop (Windows 11 22H2 on); false leaves the
+/// glass on the app's opaque backing.
+pub fn viewportChrome(hwnd: *anyopaque, main_hwnd: ?*anyopaque, dark: bool, radius_pt: f32, loop: *ViewportLoop) bool {
+    if (builtin.os.tag != .windows) return false;
+    const h: win32.foundation.HWND = @ptrCast(hwnd);
+    const dwm = win32.graphics.dwm;
+    const corner: u32 = if (radius_pt < 1) DWMWCP_DONOTROUND else if (radius_pt < 6) DWMWCP_ROUNDSMALL else DWMWCP_ROUND;
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_WINDOW_CORNER_PREFERENCE), &corner, @sizeOf(u32));
+    const none: u32 = dwm.DWMWA_COLOR_NONE;
+    _ = dwm.DwmSetWindowAttribute(h, dwm.DWMWA_BORDER_COLOR, &none, @sizeOf(u32));
+    const dark_value: u32 = @intFromBool(dark);
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_USE_IMMERSIVE_DARK_MODE), &dark_value, @sizeOf(u32));
+    // No DWM animation as it shows or closes: it appears and goes exactly where its float is drawn,
+    // in the frame it changes in (macOS: `NSWindowAnimationBehaviorNone`).
+    const no_transitions: u32 = 1;
+    _ = dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_TRANSITIONS_FORCEDISABLED), &no_transitions, @sizeOf(u32));
+    _ = win32.ui.shell.SetWindowSubclass(h, viewportSubclassProc, viewport_subclass_id, @intFromPtr(loop));
+    // No system menu: with the frame extended over the window, DWM draws the caption buttons
+    // `WS_SYSMENU` brings, over the float's header (as `applyChrome` strips it from the main
+    // window). Kept off by the subclass whenever the style is set again (`WM_STYLECHANGING`).
+    const wm = win32.ui.windows_and_messaging;
+    const style = wm.GetWindowLongPtrW(h, wm.GWL_STYLE);
+    if (style & viewport_ws_sysmenu != 0) {
+        _ = wm.SetWindowLongPtrW(h, wm.GWL_STYLE, style & ~viewport_ws_sysmenu);
+        const SWP_NOSIZE: u32 = 0x0001;
+        const SWP_NOMOVE: u32 = 0x0002;
+        const SWP_NOZORDER: u32 = 0x0004;
+        const SWP_NOACTIVATE: u32 = 0x0010;
+        const SWP_FRAMECHANGED: u32 = 0x0020;
+        _ = wm.SetWindowPos(h, null, 0, 0, 0, 0, @bitCast(SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED));
+    }
+    // A taskbar button of its own, though the main window owns it (owned windows have none):
+    // it is a window like any other, as VS Code's are. Set while it is still hidden, as the
+    // taskbar only reads it as a window shows. With the main window's icon on it.
+    const ex = wm.GetWindowLongPtrW(h, wm.GWL_EXSTYLE);
+    if (ex & viewport_ws_ex_appwindow == 0) _ = wm.SetWindowLongPtrW(h, wm.GWL_EXSTYLE, ex | viewport_ws_ex_appwindow);
+    if (main_hwnd) |m| {
+        const main_h: win32.foundation.HWND = @ptrCast(m);
+        for ([_]usize{ wm.ICON_BIG, wm.ICON_SMALL }) |kind| {
+            const icon = wm.SendMessageW(main_h, wm.WM_GETICON, kind, 0);
+            if (icon != 0) _ = wm.SendMessageW(h, wm.WM_SETICON, kind, icon);
+        }
+    }
+    return applyViewportBackdrop(h);
+}
+
+const viewport_ws_sysmenu: isize = 0x00080000;
+const viewport_ws_ex_appwindow: isize = 0x00040000;
+
+/// The backdrop, and the frame extended over the whole window for it to show through — again on
+/// every activation, as DWM wants (and as `win32MicaSubclassProc` does for the main window).
+fn applyViewportBackdrop(h: win32.foundation.HWND) bool {
+    const backdrop_type: u32 = DWMSBT_TRANSIENTWINDOW;
+    const hr = win32.graphics.dwm.DwmSetWindowAttribute(h, @enumFromInt(DWMWA_SYSTEMBACKDROP_TYPE), &backdrop_type, @sizeOf(u32));
+    _ = win32.graphics.dwm.DwmExtendFrameIntoClientArea(h, &win32_mica_margins);
+    return hr >= 0;
+}
+
+/// Hand the drag under way — a float's header held since the main window, the float split out
+/// into this window under it — to the OS: from the next message pump the OS moves the window
+/// (Aero Snap, half the screen, maximized at the top) until the button is let go, as it would
+/// from a press on a title bar. Posted, not sent: sent, the OS's move loop would run inside the
+/// frame that asked.
+pub fn viewportDragMove(hwnd: *anyopaque) void {
+    if (builtin.os.tag != .windows) return;
+    _ = win32.ui.windows_and_messaging.PostMessageW(@ptrCast(hwnd), WM_FIZZY_DRAG_MOVE, 0, 0);
+}
+
+fn windowSize(h: win32.foundation.HWND) struct { w: i32, h: i32 } {
+    var r: win32.foundation.RECT = undefined;
+    if (win32.ui.windows_and_messaging.GetWindowRect(h, &r) == 0) return .{ .w = 0, .h = 0 };
+    return .{ .w = r.right - r.left, .h = r.bottom - r.top };
+}
+
+fn viewportSubclassProc(
+    hWnd: ?win32.foundation.HWND,
+    uMsg: u32,
+    wParam: win32.foundation.WPARAM,
+    lParam: win32.foundation.LPARAM,
+    uIdSubclass: usize,
+    dwRefData: usize,
+) callconv(.winapi) win32.foundation.LRESULT {
+    _ = uIdSubclass;
+    const wm = win32.ui.windows_and_messaging;
+    const loop: ?*ViewportLoop = if (dwRefData != 0) @ptrFromInt(dwRefData) else null;
+    // A press on an edge starts a resize, one on the caption a move: the command comes first.
+    if (uMsg == wm.WM_SYSCOMMAND) if (loop) |l| {
+        const SC_SIZE: usize = 0xF000;
+        const SC_MOVE: usize = 0xF010;
+        const cmd = wParam & 0xFFF0;
+        if (cmd == SC_SIZE or cmd == SC_MOVE) l.sizing = cmd == SC_SIZE;
+    };
+    if (uMsg == wm.WM_ENTERSIZEMOVE) if (loop) |l| if (hWnd) |h| {
+        const size = windowSize(h);
+        l.* = .{ .moving = true, .sizing = l.sizing, .moved_w = size.w, .moved_h = size.h };
+    };
+    if (uMsg == wm.WM_MOVING) if (loop) |l| {
+        const r: *const win32.foundation.RECT = @ptrFromInt(@as(usize, @bitCast(lParam)));
+        l.moved_w = r.right - r.left;
+        l.moved_h = r.bottom - r.top;
+    };
+    if (uMsg == wm.WM_EXITSIZEMOVE) if (loop) |l| if (hWnd) |h| {
+        const size = windowSize(h);
+        l.moving = false;
+        l.ended = true;
+        l.resized = l.sizing or size.w != l.moved_w or size.h != l.moved_h;
+    };
+    if (uMsg == WM_FIZZY_DRAG_MOVE) {
+        // The main window holds the pointer's capture from the press: let it go, and press the
+        // window's caption where the pointer is. SDL takes it from there as a title bar press
+        // (`WM_NCLBUTTONDOWN`), and the OS runs its move loop while the button stays down.
+        _ = win32.ui.input.keyboard_and_mouse.ReleaseCapture();
+        var pt: win32.foundation.POINT = undefined;
+        if (wm.GetCursorPos(&pt) == 0) return 0;
+        const lp: isize = @as(isize, @as(u16, @bitCast(@as(i16, @truncate(pt.x))))) | (@as(isize, @as(u16, @bitCast(@as(i16, @truncate(pt.y))))) << 16);
+        return win32.ui.shell.DefSubclassProc(hWnd, wm.WM_NCLBUTTONDOWN, @intCast(HTCAPTION), lp);
+    }
+    if (uMsg == wm.WM_ACTIVATE or uMsg == wm.WM_DWMCOMPOSITIONCHANGED) {
+        if (hWnd) |h| _ = applyViewportBackdrop(h);
+    }
+    // SDL sets the window's style again as it likes (`viewportChrome`): never the system menu.
+    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_STYLE)) {
+        const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
+        ss.styleNew &= ~@as(u32, @intCast(viewport_ws_sysmenu));
+    }
+    // Nor its taskbar button.
+    if (uMsg == wm.WM_STYLECHANGING and @as(isize, @bitCast(wParam)) == @intFromEnum(wm.GWL_EXSTYLE)) {
+        const ss: *wm.STYLESTRUCT = @ptrFromInt(@as(usize, @bitCast(lParam)));
+        ss.styleNew |= @as(u32, @intCast(viewport_ws_ex_appwindow));
+    }
+    // A subclass goes before its window does.
+    if (uMsg == wm.WM_NCDESTROY) _ = win32.ui.shell.RemoveWindowSubclass(hWnd, viewportSubclassProc, viewport_subclass_id);
+    return win32.ui.shell.DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}

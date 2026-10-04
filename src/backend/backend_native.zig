@@ -130,6 +130,12 @@ pub const viewports = struct {
     /// Physical pixels of the frame.
     pub const Rect = if (supported) Impl.viewport_map.Rect else struct { x: f32 = 0, y: f32 = 0, w: f32 = 0, h: f32 = 0 };
 
+    /// Whether this run can open viewports: not on Wayland, where a window cannot be placed.
+    pub fn available() bool {
+        if (comptime !supported) return false;
+        return Impl.viewportsAvailable();
+    }
+
     /// A viewport over `at` (the frame as the main window shows it), its window opening over that
     /// place on the desktop, hidden until a frame is presented into it. Its own part of the frame
     /// is `frameOf`.
@@ -168,10 +174,97 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportInMain(vp);
     }
 
+    /// Put `vp`'s window where it shows `frame` of the main window's frame (past its edge, for a
+    /// float split out under a drag); the part of the frame it then shows.
+    pub fn placeMain(vp: *Viewport, frame: Rect) Rect {
+        if (comptime !supported) return frame;
+        return dvui.currentWindow().backend.impl.viewportPlaceMain(vp, frame);
+    }
+
+    /// `frame` of the main window's frame as the same desktop place in `vp`'s band.
+    pub fn bandFromMain(vp: *const Viewport, frame: Rect) Rect {
+        if (comptime !supported) return frame;
+        return dvui.currentWindow().backend.impl.viewportBandFromMain(vp, frame);
+    }
+
+    /// Whether `vp`'s window has shown a frame yet.
+    pub fn shown(vp: *const Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportShown(vp);
+    }
+
+    /// Where a held pointer is read: by the window it is over, or pinned to the main window's
+    /// frame or a viewport's band while a window is moved or resized.
+    pub const Pin = if (supported) Impl.PointerPin else union(enum) { none, main, viewport: *Viewport };
+    pub fn pinPointer(pin: Pin) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportPinPointer(pin);
+    }
+
+    /// Whether the OS frames a viewport's window itself — its corners and its shadow (Windows:
+    /// DWM) — so the window is exactly the float's glass. Otherwise it is the glass with a clear
+    /// margin round it, which the float draws its own shadow in.
+    pub const os_frame = supported and builtin.os.tag == .windows;
+
+    /// A material behind the float's glass in `vp`'s window — its rounded rect `inset` physical
+    /// pixels in from the window's edge, `radius` its corners — for the float's frost to read the
+    /// desktop through, in the app's light or dark (`dark`). False where the platform has none
+    /// (yet).
+    pub fn glass(vp: *Viewport, inset: f32, radius: f32, dark: bool) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportGlass(vp, inset, radius, dark);
+    }
+
     /// The OS asked to close `vp`'s window.
     pub fn closeRequested(vp: *const Viewport) bool {
         if (comptime !supported) return false;
         return vp.close_requested;
+    }
+
+    /// Where a press on `vp`'s window is the OS's, from its float this frame (physical pixels of
+    /// the frame): `drag` its header, less `keep` (its close button), moves the window; `edge` in
+    /// from `glass`'s sides resizes it. Null: all of it is the app's.
+    /// `app_side` / `app_corner`: the float's own resize zones, the app's over its header where
+    /// the OS resizes from no edge (macOS).
+    pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32, app_side: f32 = 0, app_corner: f32 = 0 };
+    pub fn hints(vp: *Viewport, h: ?Hints) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportHints(vp, if (h) |x| .{ .drag = x.drag, .keep = x.keep, .glass = x.glass, .edge = x.edge, .app_side = x.app_side, .app_corner = x.app_corner } else null);
+    }
+
+    /// Where `vp`'s window shows in the frame now, when the OS has moved or resized it since the
+    /// last ask — where its float goes.
+    pub fn osPlaced(vp: *Viewport) ?Rect {
+        if (comptime !supported) return null;
+        return dvui.currentWindow().backend.impl.viewportOsPlaced(vp);
+    }
+
+    /// The press the OS took to move or resize `vp`'s window was let go; `resized` unless the
+    /// window was only moved.
+    pub const MoveEnd = struct { resized: bool };
+    pub fn osMoveEnded(vp: *Viewport) ?MoveEnd {
+        if (comptime !supported) return null;
+        const e = dvui.currentWindow().backend.impl.viewportOsMoveEnded(vp) orelse return null;
+        return .{ .resized = e.resized };
+    }
+
+    /// Hand the drag under way to the OS, which moves `vp`'s window from then on. False where it
+    /// is not done: the app goes on moving it.
+    pub fn dragMove(vp: *Viewport) bool {
+        if (comptime !supported) return false;
+        return dvui.currentWindow().backend.impl.viewportDragMove(vp);
+    }
+
+    /// What `vp`'s window is called: in the taskbar, the Window menu, the window switcher.
+    pub fn setTitle(vp: *Viewport, text: []const u8) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportTitle(vp, text);
+    }
+
+    /// The least the OS may resize `vp`'s window to, physical pixels.
+    pub fn minSize(vp: *Viewport, w: f32, h: f32) void {
+        if (comptime !supported) return;
+        dvui.currentWindow().backend.impl.viewportMinSize(vp, w, h);
     }
 };
 

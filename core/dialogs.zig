@@ -925,6 +925,15 @@ pub fn windowHeaderCloseButtonOptions(over: dvui.Options) dvui.Options {
     return base.override(over);
 }
 
+/// Where the last `windowHeader` drew its close button, physical pixels (`windowHeaderCloseRect`).
+var header_close: ?dvui.Rect.Physical = null;
+
+/// Where the `windowHeader` just drawn has its close button, physical pixels — null without one.
+/// What a header the OS drags its window by leaves to the app (a popped-out float's).
+pub fn windowHeaderCloseRect() ?dvui.Rect.Physical {
+    return header_close;
+}
+
 fn windowHeaderPaintClose(openflag: ?*bool) void {
     if (openflag) |of| {
         const close_side = windowHeaderCloseInnerSide();
@@ -942,6 +951,7 @@ fn windowHeaderPaintClose(openflag: ?*bool) void {
             .gravity_y = 0.5,
         });
         defer spot.deinit();
+        header_close = spot.data().borderRectScale().r;
 
         var button: dvui.ButtonWidget = undefined;
         button.init(@src(), .{}, windowHeaderCloseButtonOptions(.{
@@ -1010,6 +1020,7 @@ pub fn windowHeader(str: []const u8, right_str: []const u8, openflag: ?*bool, he
         .cancel_ok => true,
         .ok_cancel => false,
     };
+    header_close = null;
 
     // No fill of its own: the window's frost and tint run under the header the same as under
     // the body, so a dialog is one pane of glass, not a lid on a box.

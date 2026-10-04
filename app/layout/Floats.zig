@@ -56,6 +56,13 @@ pub const Float = struct {
     bounds: dvui.Rect.Physical = .{},
     /// Its header last frame, physical — the handle that moves it. Nothing is aimed at over it.
     header: dvui.Rect.Physical = .{},
+    /// Its header's close button last frame, physical: the part of the header that does not move
+    /// it — what the OS leaves to the app when it moves a popped-out float's window by its header.
+    header_close: dvui.Rect.Physical = .{},
+    /// Its title last frame — the view it shows, as its header says (`titleText`): what its OS
+    /// window is called, out of the main window.
+    title_buf: [96]u8 = undefined,
+    title_len: u8 = 0,
     /// A ghost of itself while a view carried out of it is aimed elsewhere (`ViewDrag.ghosted`): 0
     /// itself, 1 its ghost (`ghostLook`), and on to `gone` when it closes as one. As a ghost it
     /// still draws its place — the drag is held by that place's corner button — but nothing of the
@@ -76,6 +83,17 @@ pub const Float = struct {
     /// while it is in the main window. The application that owns the OS windows sets and clears
     /// it, replays the float's drawing into its window and routes that window's pointer back.
     viewport: ?Viewport = null,
+    /// Split out of the main window under a drag of its header or edges, not let go yet: shown in
+    /// an OS window of its own (the application's, as `viewport` is) while still drawn in the main
+    /// window's frame, where the drag goes on — its coordinates never change under a drag. Drawn as
+    /// it is out: held on no window, its shadow in the clear margin round it, its frost by its
+    /// window's material. Null otherwise.
+    split: ?Split = null,
+
+    /// Its title last frame: the view it shows (`title_buf`).
+    pub fn titleText(self: *const Float) []const u8 {
+        return self.title_buf[0..self.title_len];
+    }
 };
 
 /// Where a float out of the main window is drawn in the frame. The application chooses it: a
@@ -84,9 +102,31 @@ pub const Float = struct {
 /// resized there by the user as it would be in the main window, it is `rect` that changes; the
 /// float's own `rect` is kept, where it comes back to.
 pub const Viewport = struct {
-    /// Natural units, in the main window's frame.
+    /// Natural units, in the main window's frame: the float's window rect, as it would be in the
+    /// main window. Its OS window is that grown by `outReach`.
     rect: dvui.Rect,
+    /// Its OS window shows the desktop through a material behind the glass (vibrancy, Acrylic):
+    /// what stands behind the glass (`Popout.backing`) is the main window's base over it, as
+    /// translucent as the main window. Without one, that is opaque.
+    material: bool = false,
 };
+
+/// See `Float.split`.
+pub const Split = struct {
+    /// As `Viewport.material`.
+    material: bool = false,
+};
+
+/// Natural units a float out of the main window draws past its window rect — its shadow's reach,
+/// less the margin its rect already holds — and its OS window holds round it, clear: the float
+/// draws the shadow it draws round its glass in the main window, and looks the same in either.
+/// Its rect is the same size out as in, so going out and coming back moves it and nothing else.
+pub fn outReach() f32 {
+    const bs = dialogs.surfaceShadow();
+    const shadow = @ceil(bs.fade + @max(@abs(bs.offset.x), @abs(bs.offset.y))) + 1;
+    const margin = (core.widgets.FloatingWindowWidget.defaults.margin orelse dvui.Rect{}).x;
+    return @max(0, shadow - margin);
+}
 
 /// A picture of a float taken from the frame, with a blur of it made the first time it is drawn
 /// blurred (`core.anim.Frost`).
@@ -479,7 +519,7 @@ fn drawOne(l: *Layout, i: usize) bool {
 
     // Out of the main window it is wherever its OS window's part of the frame is, and lands
     // nowhere: the window it would grow in is gone.
-    const out = first.viewport != null;
+    const out = first.viewport != null or first.split != null;
     if (out) endLanding(&state.floats.items.items[i]);
     // Where the window is this frame: on its way out of the carried glass, or where it was left.
     var rect = if (first.viewport) |vp| vp.rect else first.rect;
@@ -498,13 +538,16 @@ fn drawOne(l: *Layout, i: usize) bool {
     // The carried drop was glass already: the window takes over from it, whole, rather than
     // forming a second time. Fading to its ghost under its alpha, the glass dissolves as a closing
     // window's does; as a photograph, the window draws no glass at all.
-    // Out of the main window (`viewport`), its OS window has nothing behind it for glass to read
-    // until it has a material of its own (Phase 4): no frost, whose refraction read past its rim
-    // into nothing and left the edges see-through, and no shadow or margin round it, drawn into
-    // the OS window's empty corners — the window is the panel alone, over the app's backing
-    // (`Popout.backing`).
-    var frost = if (as_photo or out) null else dialogs.dialogFrost();
+    // Out of the main window (`viewport`, `split`), it looks as it does in it: its shadow in the
+    // clear margin round its OS window (`outReach`), and its glass over what the main window's
+    // base is — its chrome, at the window's opacity over the window's material where it has one
+    // (`Popout.backing`) — so the rim catches the light and the tint lies over it as in the main
+    // window. Without that the glass read the window's clear pixels and drew nothing: it is made as
+    // see-through as what it reads. It reaches for nothing past its rim out there either: past it
+    // is the clear margin.
+    var frost = if (as_photo) null else dialogs.dialogFrost();
     if (frost) |*fr| {
+        if (out) fr.refraction = 0;
         fr.form = shown;
         // Landing, it grows into its window — past it and back, when motion is playful — and its
         // glass is captured that size from the start.
@@ -532,14 +575,14 @@ fn drawOne(l: *Layout, i: usize) bool {
         .window_avoid = .none,
         .frost = frost,
         .detached = out,
+        .detached_reach = if (out) outReach() else 0,
     }, .{
         .id_extra = @intCast(first.serial),
         .corners = if (landing) dvui.CornerRect.all(corner_r) else dialogs.surfaceCorners(),
-        .box_shadow = if (as_photo or out) null else shadow,
+        .box_shadow = if (as_photo) null else shadow,
         .background = !as_photo,
         .color_fill = .{ .color = dialogs.dialogFill() },
         .border = .all(0),
-        .margin = if (out) dvui.Rect{} else null,
     });
     const win_id = win.data().id;
     const bounds = win.data().rectScale().r;
@@ -574,6 +617,7 @@ fn drawOne(l: *Layout, i: usize) bool {
     var open = true;
     const title = if (ViewDrag.visibleId(l, first.name)) |id| (if (l.host.surfaceById(id)) |s| s.title else first.name) else first.name;
     const header = dialogs.windowHeader(title, "", &open, .none);
+    const header_close = dialogs.windowHeaderCloseRect();
     // Moved by its header only: the rest is the view's. Not while it lands — it is going where
     // the drop put it — nor while it is out of the way.
     win.dragAreaSet(if (landing or aside > 0) .{} else header);
@@ -621,6 +665,10 @@ fn drawOne(l: *Layout, i: usize) bool {
     f.win_id = win_id;
     f.bounds = bounds;
     f.header = header;
+    f.header_close = header_close orelse .{};
+    const kept = title[0..@min(title.len, f.title_buf.len)];
+    @memcpy(f.title_buf[0..kept.len], kept);
+    f.title_len = @intCast(kept.len);
     if (!open) {
         close(l, f.name, .home);
         return true;
@@ -636,7 +684,9 @@ fn drawOne(l: *Layout, i: usize) bool {
     // shown, not kept, so the float is back where they left it when the window grows again.
     if (held and !landing and !f.closing and !win_rect.equals(f.rect)) {
         f.rect = fromRules(rules.resized(toRules(win_rect)));
-        state.markDirty();
+        // Split out under the drag, it may be off the window altogether: kept when it is let go —
+        // settled out, or merged back in.
+        if (f.split == null) state.markDirty();
     }
     return true;
 }

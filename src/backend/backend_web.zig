@@ -125,6 +125,9 @@ pub fn macosLaunchComplete() void {}
 /// Symmetric with the native API: a page has one canvas, so a float never leaves it.
 pub const viewports = struct {
     pub const supported = false;
+    pub fn available() bool {
+        return false;
+    }
     pub const Viewport = struct {};
     pub const Rect = struct { x: f32 = 0, y: f32 = 0, w: f32 = 0, h: f32 = 0 };
 
@@ -142,6 +145,35 @@ pub const viewports = struct {
     pub fn inMain(_: *const Viewport) Rect {
         return .{};
     }
+    pub const os_frame = false;
+    pub const Hints = struct { drag: Rect, keep: Rect, glass: Rect, edge: f32, app_side: f32 = 0, app_corner: f32 = 0 };
+    pub fn hints(_: *Viewport, _: ?Hints) void {}
+    pub fn osPlaced(_: *Viewport) ?Rect {
+        return null;
+    }
+    pub const MoveEnd = struct { resized: bool };
+    pub fn osMoveEnded(_: *Viewport) ?MoveEnd {
+        return null;
+    }
+    pub fn dragMove(_: *Viewport) bool {
+        return false;
+    }
+    pub fn minSize(_: *Viewport, _: f32, _: f32) void {}
+    pub fn setTitle(_: *Viewport, _: []const u8) void {}
+    pub fn glass(_: *Viewport, _: f32, _: f32, _: bool) bool {
+        return false;
+    }
+    pub fn placeMain(_: *Viewport, frame: Rect) Rect {
+        return frame;
+    }
+    pub fn bandFromMain(_: *const Viewport, frame: Rect) Rect {
+        return frame;
+    }
+    pub fn shown(_: *const Viewport) bool {
+        return false;
+    }
+    pub const Pin = union(enum) { none, main, viewport: *Viewport };
+    pub fn pinPointer(_: Pin) void {}
     pub fn closeRequested(_: *const Viewport) bool {
         return false;
     }

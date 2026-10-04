@@ -136,6 +136,9 @@ pub const InitOptions = struct {
     /// usually past the main window's edge, so it is not held on the main window and is clipped
     /// to itself rather than to it.
     detached: bool = false,
+    /// Natural units a `detached` window draws past its own rect: its shadow's reach, which its OS
+    /// window holds round it (a clear margin), so it is drawn as it is in the main window.
+    detached_reach: f32 = 0,
     window_avoid: enum {
         none,
 
@@ -584,7 +587,10 @@ pub fn init(self: *FloatingWindowWidget, src: std.builtin.SourceLocation, init_o
 /// window's, or a popped-out float's — a popover or dialog opened in it), or — `detached` — the
 /// window's own rect, which is all of its OS window there is.
 fn windowClip(self: *FloatingWindowWidget) Rect.Physical {
-    if (self.init_options.detached) return self.data().rectScale().r;
+    if (self.init_options.detached) {
+        const rs = self.data().rectScale();
+        return rs.r.outsetAll(self.init_options.detached_reach * rs.s);
+    }
     return screens.pixelsFor(.cast(self.data().rect));
 }
 

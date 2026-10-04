@@ -112,7 +112,195 @@ pub fn mainFromScreen(main: Point, density: f32, screen: ScreenRect) Rect {
     };
 }
 
+/// Where a part of the main window's frame — `frame`, physical pixels, which may lie past its edge,
+/// the frame running on across the desktop — is on the desktop, the main window at `main` with
+/// `density` pixels per point: a window split out of the main one under a drag, still in the main
+/// window's frame while the drag goes on.
+pub fn screenFromMain(main: Point, density: f32, frame: Rect) Rect {
+    return .{
+        .x = main.x + frame.x / density,
+        .y = main.y + frame.y / density,
+        .w = frame.w / density,
+        .h = frame.h / density,
+    };
+}
+
+/// Where to put a window showing `frame` of the main window's frame (`screenFromMain`): on whole
+/// points, and the part of the frame it then shows.
+pub fn placeMain(main: Point, density: f32, frame: Rect) Placement {
+    const s = screenFromMain(main, density, frame);
+    const screen: ScreenRect = .{
+        .x = @intFromFloat(@round(s.x)),
+        .y = @intFromFloat(@round(s.y)),
+        .w = @intFromFloat(@max(1, @round(s.w))),
+        .h = @intFromFloat(@max(1, @round(s.h))),
+    };
+    return .{ .screen = screen, .frame = mainFromScreen(main, density, screen) };
+}
+
+/// The part of the frame, physical pixels, a window the OS moved or resized to `screen` (desktop
+/// points) shows in the band starting at `b`: where its float goes, so it follows its window.
+pub fn frameOfScreen(b: Point, anchor: Point, density: f32, screen: ScreenRect) Rect {
+    const at = frameFromScreen(b, anchor, density, .{ .x = @floatFromInt(screen.x), .y = @floatFromInt(screen.y) });
+    return .{
+        .x = at.x,
+        .y = at.y,
+        .w = @as(f32, @floatFromInt(screen.w)) * density,
+        .h = @as(f32, @floatFromInt(screen.h)) * density,
+    };
+}
+
+// ---- A press on a viewport's window, for the OS ------------------------------------------------
+//
+// The OS moves and resizes a float's window itself, as it does any window — so it snaps, tiles,
+// maximizes — from what the float says each frame of where its header and edges are. Window
+// coordinates throughout: SDL's, from the window's top left.
+
+pub const Hints = struct {
+    /// The float's header: a press there is the OS's to move the window by.
+    drag: Rect = .{},
+    /// Inside `drag`, the app's all the same: the header's close button.
+    keep: Rect = .{},
+    /// The float's glass, whose edges resize the window — `edge` in from each side, and anything
+    /// of the window outside it — where the OS resizes it. Zero `edge`: it does not (the platform
+    /// has no resize regions, or the window is maximized).
+    glass: Rect = .{},
+    edge: f32 = 0,
+    /// Where the OS resizes nothing from a hit test (macOS): how far in from the glass's sides,
+    /// and along them from its corners, a press is the app's however it lies over the header —
+    /// the float's own resize zones (`FloatingWindowWidget`), so a press on the header's corner
+    /// resizes the float, as it does in the main window, rather than moving its window.
+    app_side: f32 = 0,
+    app_corner: f32 = 0,
+};
+
+pub const Hit = enum { app, drag, top_left, top, top_right, right, bottom_right, bottom, bottom_left, left };
+
+/// What a press at `p` is: the OS's to resize the window from an edge or corner, the OS's to move
+/// it by, or the app's.
+pub fn hitTest(h: Hints, p: Point) Hit {
+    if (h.edge > 0) {
+        const g = h.glass;
+        const near_l = p.x < g.x + h.edge;
+        const near_r = p.x >= g.x + g.w - h.edge;
+        const near_t = p.y < g.y + h.edge;
+        const near_b = p.y >= g.y + g.h - h.edge;
+        if (near_l or near_r or near_t or near_b) {
+            // A corner reaches further along each side than an edge is deep, as a window's does.
+            const reach = h.edge * 3;
+            const top = p.y < g.y + reach;
+            const bottom = p.y >= g.y + g.h - reach;
+            const left = p.x < g.x + reach;
+            const right = p.x >= g.x + g.w - reach;
+            if (top and left) return .top_left;
+            if (top and right) return .top_right;
+            if (bottom and left) return .bottom_left;
+            if (bottom and right) return .bottom_right;
+            if (near_t) return .top;
+            if (near_b) return .bottom;
+            if (near_l) return .left;
+            return .right;
+        }
+    }
+    if (h.app_side > 0 or h.app_corner > 0) {
+        const g = h.glass;
+        const in_x = p.x >= g.x and p.x < g.x + g.w;
+        const in_y = p.y >= g.y and p.y < g.y + g.h;
+        const side = (in_y and (p.x < g.x + h.app_side or p.x >= g.x + g.w - h.app_side)) or
+            (in_x and (p.y < g.y + h.app_side or p.y >= g.y + g.h - h.app_side));
+        const near_x = p.x < g.x + h.app_corner or p.x >= g.x + g.w - h.app_corner;
+        const near_y = p.y < g.y + h.app_corner or p.y >= g.y + g.h - h.app_corner;
+        if (side or (in_x and in_y and near_x and near_y)) return .app;
+    }
+    if (contains(h.drag, p) and !contains(h.keep, p)) return .drag;
+    return .app;
+}
+
+fn contains(r: Rect, p: Point) bool {
+    return p.x >= r.x and p.y >= r.y and p.x < r.x + r.w and p.y < r.y + r.h;
+}
+
 const testing = std.testing;
+
+test "a window the OS moved shows the part of the band under it, and placing it there leaves it be" {
+    const b = band(0);
+    const anchor: Point = .{ .x = 100, .y = 50 };
+    const moved: ScreenRect = .{ .x = 700, .y = 420, .w = 380, .h = 460 };
+    const frame = frameOfScreen(b, anchor, 2, moved);
+    try testing.expectEqual(@as(f32, b.x + 1200), frame.x);
+    try testing.expectEqual(@as(f32, 740), frame.y);
+    try testing.expectEqual(@as(f32, 760), frame.w);
+    // Its float drawn there next frame puts its window exactly where the OS left it.
+    try testing.expectEqual(moved, place(b, anchor, 2, frame).screen);
+}
+
+test "a press on a float's window: its edges and corners resize, its header moves, its close button and the rest are the app's" {
+    const h: Hints = .{
+        .drag = .{ .x = 0, .y = 0, .w = 300, .h = 32 },
+        .keep = .{ .x = 268, .y = 0, .w = 32, .h = 32 },
+        .glass = .{ .x = 0, .y = 0, .w = 300, .h = 200 },
+        .edge = 4,
+    };
+    try testing.expectEqual(Hit.drag, hitTest(h, .{ .x = 150, .y = 16 }));
+    try testing.expectEqual(Hit.app, hitTest(h, .{ .x = 280, .y = 16 }));
+    try testing.expectEqual(Hit.app, hitTest(h, .{ .x = 150, .y = 100 }));
+    try testing.expectEqual(Hit.top, hitTest(h, .{ .x = 150, .y = 1 }));
+    try testing.expectEqual(Hit.left, hitTest(h, .{ .x = 1, .y = 100 }));
+    try testing.expectEqual(Hit.bottom_right, hitTest(h, .{ .x = 299, .y = 199 }));
+    // A corner reaches along the side further than the edge is deep.
+    try testing.expectEqual(Hit.top_left, hitTest(h, .{ .x = 1, .y = 10 }));
+    // No resize edges: the header's top moves the window.
+    var no_edges = h;
+    no_edges.edge = 0;
+    try testing.expectEqual(Hit.drag, hitTest(no_edges, .{ .x = 150, .y = 1 }));
+}
+
+test "where the OS resizes nothing, the float's own corners and edges stay the app's over the header" {
+    const h: Hints = .{
+        .drag = .{ .x = 0, .y = 0, .w = 300, .h = 32 },
+        .glass = .{ .x = 0, .y = 0, .w = 300, .h = 200 },
+        .app_side = 4,
+        .app_corner = 15,
+    };
+    // The header's corners and top edge: the float resizes.
+    try testing.expectEqual(Hit.app, hitTest(h, .{ .x = 5, .y = 5 }));
+    try testing.expectEqual(Hit.app, hitTest(h, .{ .x = 295, .y = 10 }));
+    try testing.expectEqual(Hit.app, hitTest(h, .{ .x = 150, .y = 2 }));
+    // Its middle moves the window.
+    try testing.expectEqual(Hit.drag, hitTest(h, .{ .x = 150, .y = 16 }));
+    try testing.expectEqual(Hit.drag, hitTest(h, .{ .x = 20, .y = 16 }));
+}
+
+test "a press in the clear margin round the glass resizes from the nearest edge" {
+    const h: Hints = .{ .glass = .{ .x = 10, .y = 10, .w = 300, .h = 200 }, .edge = 4 };
+    try testing.expectEqual(Hit.left, hitTest(h, .{ .x = 3, .y = 100 }));
+    try testing.expectEqual(Hit.bottom, hitTest(h, .{ .x = 150, .y = 215 }));
+}
+
+test "the main window's frame runs on across the desktop: past its edge is where a split window goes" {
+    const main: Point = .{ .x = 100, .y = 50 };
+    const r = screenFromMain(main, 2, .{ .x = 1000, .y = -40, .w = 300, .h = 200 });
+    try testing.expectEqual(@as(f32, 600), r.x);
+    try testing.expectEqual(@as(f32, 30), r.y);
+    try testing.expectEqual(@as(f32, 150), r.w);
+    // Placed on whole points, and back: the same part of the frame.
+    const p = placeMain(main, 2, .{ .x = 1000, .y = -40, .w = 300, .h = 200 });
+    try testing.expectEqual(@as(i32, 600), p.screen.x);
+    try testing.expectEqual(@as(f32, 1000), p.frame.x);
+    try testing.expectEqual(@as(f32, -40), p.frame.y);
+}
+
+test "a window split out of the main one is the same place on the desktop in its band" {
+    // Split under a drag in the main window's frame, then settled into band 0: the frame of the
+    // band, read back to the desktop, is where the window was.
+    const main: Point = .{ .x = 300, .y = 120 };
+    const at = screenFromMain(main, 2, .{ .x = 2500, .y = 200, .w = 400, .h = 300 });
+    const b = band(0);
+    const in_band = frameFromScreen(b, main, 2, .{ .x = at.x, .y = at.y });
+    const back = screenFromFrame(b, main, 2, .{ .x = in_band.x, .y = in_band.y, .w = 400, .h = 300 });
+    try testing.expectApproxEqAbs(at.x, back.x, 0.001);
+    try testing.expectApproxEqAbs(at.y, back.y, 0.001);
+}
 
 test "a window on the desktop lies in the main window's frame from the main window's top left, at its density" {
     const r = mainFromScreen(.{ .x = 100, .y = 50 }, 2, .{ .x = 160, .y = 80, .w = 300, .h = 200 });

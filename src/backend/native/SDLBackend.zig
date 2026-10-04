@@ -87,6 +87,8 @@ window_geometry: WindowGeometry = .{},
 init_opts_save: ?InitOptions = null,
 /// The OS windows besides this one that show part of its frame (`Viewport`).
 viewports: [max_viewports]?Viewport = @splat(null),
+/// Where a held pointer is read while one is held (`PointerPin`, `heldPoint`).
+pointer_pin: PointerPin = .none,
 
 const cursor_enum_count = @typeInfo(dvui.enums.Cursor).@"enum".fields.len;
 
@@ -114,12 +116,29 @@ pub const Viewport = struct {
     /// The part of the frame it shows, physical pixels (`viewport_map.place`).
     frame: viewport_map.Rect,
     /// Created hidden and shown once a frame has been presented into it, so it never shows
-    /// empty.
+    /// empty: `shown` once it is on screen with a frame in it.
     shown: bool = false,
+    /// Shown before any frame was in it, where the driver gives a hidden window nothing to draw
+    /// into (Vulkan on X11): it is clear, so it shows nothing until its first frame.
+    mapped: bool = false,
     /// The OS asked to close it (⌘W, the Window menu): the app takes its float back in.
     close_requested: bool = false,
     /// Its part of the frame, drawn this frame, for `renderPresent` to copy into it.
     pending: ?dvui.TextureTarget = null,
+    /// What its float says of a press on it, which SDL's hit test answers the OS from
+    /// (`viewportHitTest`): the OS moves and resizes the window itself, as any window.
+    hints: viewport_map.Hints = .{},
+    /// The OS moved or resized it since the app last asked (`viewportOsPlaced`).
+    os_placed: bool = false,
+    /// The OS is moving or resizing it under a held press (where there is no move loop to say so:
+    /// not Windows), and its size when it began (`viewportOsMoveEnded`).
+    os_moving: bool = false,
+    os_start: viewport_map.ScreenRect = .{},
+    /// When the app last put it somewhere: where placing a window is asynchronous (X11), what the
+    /// window says of itself just after is still on its way there, not the OS's doing.
+    app_placed_ns: u64 = 0,
+    /// Windows: the OS's move/size loop for it (`win32_titlebar.viewportChrome`).
+    win32_loop: platform.win32_titlebar.ViewportLoop = .{},
 };
 
 pub const InitOptions = struct {
@@ -531,6 +550,11 @@ fn inLiveResize(self: *SDLBackend) bool {
     if (builtin.os.tag == .macos) {
         if (cocoaWindow(self.window)) |nswindow| return fizzy_native_in_live_resize(nswindow) != 0;
     }
+    // A popped-out float's window in the OS's move/size loop: SDL runs the frame from the loop's
+    // timer, where a wait for events would take the loop's own.
+    if (builtin.os.tag == .windows) {
+        for (self.viewports) |v| if (v) |vp| if (vp.win32_loop.moving) return true;
+    }
     return false;
 }
 
@@ -733,6 +757,7 @@ fn addEventWinRecursive(self: *SDLBackend, event: *c.SDL_Event, win: *dvui.Windo
 /// Hidden until a frame is presented into it. Null when it cannot be made, or `max_viewports`
 /// are open.
 pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]const u8) ?*Viewport {
+    if (!viewportsAvailable()) return null;
     const slot = for (self.viewports, 0..) |v, i| {
         if (v == null) break i;
     } else return null;
@@ -748,7 +773,9 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
 
     const props = c.SDL_CreateProperties();
     defer c.SDL_DestroyProperties(props);
-    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_BORDERLESS | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    // Resizable, for the OS to resize it from its edges and snap or tile it — which only a window
+    // it may resize takes part in (`viewportHitTest`).
+    const flags: c.SDL_WindowFlags = c.SDL_WINDOW_HIDDEN | c.SDL_WINDOW_BORDERLESS | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | c.SDL_WINDOW_RESIZABLE;
     _ = c.SDL_SetStringProperty(props, c.SDL_PROP_WINDOW_CREATE_TITLE_STRING, title_text.ptr);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_X_NUMBER, placed.screen.x);
     _ = c.SDL_SetNumberProperty(props, c.SDL_PROP_WINDOW_CREATE_Y_NUMBER, placed.screen.y);
@@ -770,13 +797,44 @@ pub fn viewportOpen(self: *SDLBackend, at: viewport_map.Rect, title_text: [:0]co
     // the main one stay where they are when it moves (`docs/POPOUT_WINDOWS_PLAN.md`, decision 2).
     if (comptime builtin.os.tag != .macos) _ = c.SDL_SetWindowParent(window, self.window);
     self.viewports[slot] = .{ .window = window, .band = b, .anchor = anchor, .density = d, .screen = placed.screen, .frame = placed.frame };
-    return &self.viewports[slot].?;
+    const vp = &self.viewports[slot].?;
+    // The slot holds it for the window's life, so SDL may keep the pointer.
+    _ = c.SDL_SetWindowHitTest(window, viewportHitTest, vp);
+    return vp;
+}
+
+/// Whether this run can open viewports at all: not on Wayland, where a client cannot put its
+/// windows anywhere — a window split out of the main one would open where the compositor likes, and
+/// none could follow a drag (`docs/POPOUT_WINDOWS_PLAN.md`). Floats stay in the main window there.
+pub fn viewportsAvailable() bool {
+    if (comptime builtin.os.tag != .linux) return true;
+    const driver = c.SDL_GetCurrentVideoDriver() orelse return false;
+    return !std.mem.eql(u8, std.mem.span(driver), "wayland");
 }
 
 /// Close a viewport: its window goes, and the slot (and band) with it.
 pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
+    // A pin to it goes with it: it would point at an empty slot.
+    switch (self.pointer_pin) {
+        .viewport => |p| if (p == vp) {
+            self.pointer_pin = .none;
+        },
+        else => {},
+    }
     for (&self.viewports) |*slot| {
         if (slot.*) |*v| if (v == vp) {
+            // Holding the keyboard as it goes — a float that merged back into the main window, or
+            // came back on a command, while its window was the one in front — it hands it back to
+            // the main window, which the float is in now: without that, the OS left no window of
+            // fizzy's focused, and the first press on the main window only brought it forward.
+            const had_keyboard = c.SDL_GetWindowFlags(v.window) & c.SDL_WINDOW_INPUT_FOCUS != 0;
+            defer if (had_keyboard) {
+                _ = c.SDL_RaiseWindow(self.window);
+            };
+            // The window as SDL made it, for SDL to destroy (`viewportGlass`).
+            if (comptime builtin.os.tag == .macos) {
+                if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(v.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null)) |ns| fizzy_macos_viewport_unglass(ns);
+            }
             self.gpu.releaseViewport(v.window);
             c.SDL_DestroyWindow(v.window);
             slot.* = null;
@@ -800,9 +858,164 @@ pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) vi
     // the main window's chrome does), not the app moving the window under it.
     if (placed.screen.x != was.x or placed.screen.y != was.y) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
     if (placed.screen.w != was.w or placed.screen.h != was.h) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
+    if (!std.meta.eql(placed.screen, was)) vp.app_placed_ns = c.SDL_GetTicksNS();
     vp.screen = placed.screen;
     vp.frame = placed.frame;
     return placed.frame;
+}
+
+/// Where a held pointer is read, while one is held (`heldPoint`): by the window it is over (a view
+/// carried between windows), or pinned to one frame of reference for a window being moved or
+/// resized — the main window's, for a float split out of it under the drag, or a viewport's band,
+/// for a float out of it — so the drag's coordinates never change under it, wherever the pointer
+/// goes.
+pub const PointerPin = union(enum) {
+    none,
+    main,
+    viewport: *Viewport,
+};
+
+/// Put `vp`'s window where it shows `frame` of the main window's frame — past its edge, for a
+/// float split out of it under a drag, still in that frame — on whole points; the part of the
+/// frame it then shows.
+pub fn viewportPlaceMain(self: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) viewport_map.Rect {
+    const placed = viewport_map.placeMain(self.mainOnScreen(), self.density(), frame);
+    const was = vp.screen;
+    if (placed.screen.x != was.x or placed.screen.y != was.y) _ = c.SDL_SetWindowPosition(vp.window, placed.screen.x, placed.screen.y);
+    if (placed.screen.w != was.w or placed.screen.h != was.h) _ = c.SDL_SetWindowSize(vp.window, placed.screen.w, placed.screen.h);
+    if (!std.meta.eql(placed.screen, was)) vp.app_placed_ns = c.SDL_GetTicksNS();
+    vp.screen = placed.screen;
+    return placed.frame;
+}
+
+/// `frame` of the main window's frame, as the same place on the desktop in `vp`'s band: a float
+/// split out under a drag, let go out there, settling into its band where it is.
+pub fn viewportBandFromMain(self: *SDLBackend, vp: *const Viewport, frame: viewport_map.Rect) viewport_map.Rect {
+    const at = viewport_map.screenFromMain(self.mainOnScreen(), self.density(), frame);
+    const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, .{ .x = at.x, .y = at.y });
+    return .{ .x = p.x, .y = p.y, .w = frame.w, .h = frame.h };
+}
+
+/// Whether `vp`'s window has shown a frame yet: until it has, what it is to show is still drawn
+/// in the main window too, so a float splitting out never vanishes for a frame.
+pub fn viewportShown(_: *SDLBackend, vp: *const Viewport) bool {
+    return vp.shown;
+}
+
+/// Pin a held pointer to a frame of reference, or not (`PointerPin`).
+pub fn viewportPinPointer(self: *SDLBackend, pin: PointerPin) void {
+    self.pointer_pin = pin;
+}
+
+/// Where a press on `vp`'s window is the OS's to move or resize it by, from its float this frame:
+/// `drag` its header and `keep` its close button, `glass` the float's glass — physical pixels of
+/// the frame, in `vp`'s part of it. None (all the app's) while its float is split under a drag,
+/// still in the main window's frame. Its edges resize only where SDL lets the OS resize from a
+/// hit test (not macOS), and not while the window is maximized.
+pub fn viewportHints(_: *SDLBackend, vp: *Viewport, hints: ?struct { drag: viewport_map.Rect, keep: viewport_map.Rect, glass: viewport_map.Rect, edge: f32, app_side: f32, app_corner: f32 }) void {
+    const h = hints orelse {
+        vp.hints = .{};
+        return;
+    };
+    const d = vp.density;
+    const o = vp.frame;
+    const win = struct {
+        fn of(r: viewport_map.Rect, origin: viewport_map.Rect, per_point: f32) viewport_map.Rect {
+            return .{ .x = (r.x - origin.x) / per_point, .y = (r.y - origin.y) / per_point, .w = r.w / per_point, .h = r.h / per_point };
+        }
+    };
+    const maximized = c.SDL_GetWindowFlags(vp.window) & c.SDL_WINDOW_MAXIMIZED != 0;
+    vp.hints = .{
+        .drag = win.of(h.drag, o, d),
+        .keep = win.of(h.keep, o, d),
+        .glass = win.of(h.glass, o, d),
+        .edge = if (builtin.os.tag == .macos or maximized) 0 else h.edge / d,
+        // Where the OS resizes from no edge (macOS), the float's own resize zones stay its own.
+        .app_side = if (builtin.os.tag == .macos) h.app_side / d else 0,
+        .app_corner = if (builtin.os.tag == .macos) h.app_corner / d else 0,
+    };
+}
+
+/// Where `vp`'s window now shows in the frame, when the OS moved or resized it since the last
+/// ask: where its float goes, to follow it. Null when it has not.
+pub fn viewportOsPlaced(_: *SDLBackend, vp: *Viewport) ?viewport_map.Rect {
+    if (!vp.os_placed) return null;
+    vp.os_placed = false;
+    return vp.frame;
+}
+
+/// The press the OS took to move or resize `vp`'s window was let go since the last ask; `resized`
+/// when the window is no longer the size it was (resized, snapped or maximized), not just moved.
+/// Null otherwise — and for a window the OS moved with no press (a keyboard snap).
+pub fn viewportOsMoveEnded(_: *SDLBackend, vp: *Viewport) ?struct { resized: bool } {
+    if (comptime builtin.os.tag == .windows) {
+        if (!vp.win32_loop.ended) return null;
+        vp.win32_loop.ended = false;
+        return .{ .resized = vp.win32_loop.resized };
+    }
+    if (!vp.os_moving or c.SDL_GetGlobalMouseState(null, null) != 0) return null;
+    vp.os_moving = false;
+    return .{ .resized = vp.screen.w != vp.os_start.w or vp.screen.h != vp.os_start.h };
+}
+
+/// Hand the drag under way to the OS: from the next message pump it moves `vp`'s window itself,
+/// snapping and all, until the button is let go (`win32_titlebar.viewportDragMove`). False where
+/// that is not done (not Windows): the app goes on moving the window until the release.
+pub fn viewportDragMove(_: *SDLBackend, vp: *Viewport) bool {
+    if (comptime builtin.os.tag != .windows) return false;
+    const hwnd = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return false;
+    platform.win32_titlebar.viewportDragMove(hwnd);
+    return true;
+}
+
+/// What `vp`'s window is called — its float's title — where the OS lists windows: the taskbar
+/// (Windows: a button of its own, `win32_titlebar.viewportChrome`), the Window menu and the Dock's
+/// (macOS), the window switcher.
+pub fn viewportTitle(_: *SDLBackend, vp: *Viewport, text: []const u8) void {
+    var buf: [128]u8 = undefined;
+    const z = std.fmt.bufPrintZ(&buf, "{s}", .{text[0..@min(text.len, buf.len - 1)]}) catch return;
+    _ = c.SDL_SetWindowTitle(vp.window, z.ptr);
+    if (comptime builtin.os.tag == .macos) fizzy_macos_viewport_windows_item(cocoaWindow(vp.window), z.ptr);
+}
+
+/// The least the OS may resize `vp`'s window to: `size` physical pixels of the frame, its float's
+/// least.
+pub fn viewportMinSize(_: *SDLBackend, vp: *Viewport, w: f32, h: f32) void {
+    _ = c.SDL_SetWindowMinimumSize(vp.window, @intFromFloat(@ceil(w / vp.density)), @intFromFloat(@ceil(h / vp.density)));
+}
+
+extern fn fizzy_macos_viewport_glass(nswindow: ?*anyopaque, main: ?*anyopaque, inset: f64, radius: f64, material: c_long) void;
+extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
+extern fn fizzy_macos_viewport_windows_item(nswindow: ?*anyopaque, title: [*:0]const u8) void;
+
+/// Give `vp`'s window a material behind the float's glass, so the float's frost reads the desktop
+/// through it as it reads the app in the main window, in the app's light or dark (`dark`) as the
+/// main window's is. The glass is its rounded rect `inset` physical pixels in from the window's
+/// edge, `radius` its corners. True where the platform has one:
+///
+/// - macOS: the main window's vibrancy behind the glass, the clear margin round it — where the
+///   float draws its shadow — left clear.
+/// - Windows: the window is the glass (`viewports.os_frame`, `inset` 0), and DWM dresses it as it
+///   does the main window — Acrylic, its own rounded corners and shadow
+///   (`win32_titlebar.viewportChrome`). False on a Windows without the backdrop.
+/// - Elsewhere: none, for now.
+pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, dark: bool) bool {
+    const props = c.SDL_GetWindowProperties(vp.window);
+    switch (comptime builtin.os.tag) {
+        .macos => {
+            const ns = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
+            const main_ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(self.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
+            fizzy_macos_viewport_glass(ns, main_ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
+            return true;
+        },
+        .windows => {
+            const hwnd = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null) orelse return false;
+            const main_hwnd = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(self.window), c.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null);
+            return platform.win32_titlebar.viewportChrome(hwnd, main_hwnd, dark, radius / vp.density, &vp.win32_loop);
+        },
+        else => return false,
+    }
 }
 
 /// Where `vp`'s window is now, in the main window's part of the frame: physical pixels from the
@@ -868,6 +1081,18 @@ fn heldPoint(self: *SDLBackend) dvui.Point.Physical {
     var gx: f32 = 0;
     var gy: f32 = 0;
     _ = c.SDL_GetGlobalMouseState(&gx, &gy);
+    switch (self.pointer_pin) {
+        .none => {},
+        .main => {
+            const origin = self.mainOnScreen();
+            const d = self.density();
+            return .{ .x = (gx - origin.x) * d, .y = (gy - origin.y) * d };
+        },
+        .viewport => |vp| {
+            const p = viewport_map.frameFromScreen(vp.band, vp.anchor, vp.density, .{ .x = gx, .y = gy });
+            return .{ .x = p.x, .y = p.y };
+        },
+    }
     for (&self.viewports) |*slot| {
         const vp = if (slot.*) |*v| v else continue;
         const s = vp.screen;
@@ -923,8 +1148,64 @@ fn addViewportEvent(self: *SDLBackend, win: *dvui.Window, vp: *Viewport, event: 
             vp.close_requested = true;
             return false;
         },
+        c.SDL_EVENT_WINDOW_MOVED, c.SDL_EVENT_WINDOW_RESIZED => {
+            viewportFollowWindow(vp);
+            return false;
+        },
         else => return false,
     }
+}
+
+/// The OS moved or resized `vp`'s window — dragged by its header or edges, snapped, tiled,
+/// maximized — rather than the app putting it there: its part of the frame goes with it, and its
+/// float follows (`viewportOsPlaced`).
+fn viewportFollowWindow(vp: *Viewport) void {
+    var x: c_int = 0;
+    var y: c_int = 0;
+    var w: c_int = 0;
+    var h: c_int = 0;
+    _ = c.SDL_GetWindowPosition(vp.window, &x, &y);
+    _ = c.SDL_GetWindowSize(vp.window, &w, &h);
+    const now: viewport_map.ScreenRect = .{ .x = x, .y = y, .w = w, .h = h };
+    // Where the app put it: its own doing, reported back.
+    if (std.meta.eql(now, vp.screen)) return;
+    // Placing a window is asynchronous on X11: just after the app put it somewhere, what it says
+    // of itself is still on its way there.
+    if (comptime builtin.os.tag == .linux) {
+        if (c.SDL_GetTicksNS() -% vp.app_placed_ns < 250 * std.time.ns_per_ms) return;
+    }
+    // Under a held press, and no move loop to say when it ends (not Windows): the OS is moving it
+    // until the press is let go.
+    if (comptime builtin.os.tag != .windows) {
+        if (!vp.os_moving and c.SDL_GetGlobalMouseState(null, null) != 0) {
+            vp.os_moving = true;
+            vp.os_start = vp.screen;
+        }
+    }
+    vp.screen = now;
+    vp.frame = viewport_map.frameOfScreen(vp.band, vp.anchor, vp.density, now);
+    vp.os_placed = true;
+}
+
+/// SDL's hit test for a viewport's window, from what its float said this frame (`viewportHints`):
+/// its header moves the window and its edges resize it — the OS's own move and resize, so the
+/// window snaps, tiles and maximizes as any window does. SDL on macOS takes only the move (AppKit's
+/// window-background drag); the float's own edges resize it there.
+fn viewportHitTest(_: ?*c.SDL_Window, area: [*c]const c.SDL_Point, data: ?*anyopaque) callconv(.c) c.SDL_HitTestResult {
+    const vp: *const Viewport = @ptrCast(@alignCast(data orelse return c.SDL_HITTEST_NORMAL));
+    const p: viewport_map.Point = .{ .x = @floatFromInt(area.*.x), .y = @floatFromInt(area.*.y) };
+    return switch (viewport_map.hitTest(vp.hints, p)) {
+        .app => c.SDL_HITTEST_NORMAL,
+        .drag => c.SDL_HITTEST_DRAGGABLE,
+        .top_left => c.SDL_HITTEST_RESIZE_TOPLEFT,
+        .top => c.SDL_HITTEST_RESIZE_TOP,
+        .top_right => c.SDL_HITTEST_RESIZE_TOPRIGHT,
+        .right => c.SDL_HITTEST_RESIZE_RIGHT,
+        .bottom_right => c.SDL_HITTEST_RESIZE_BOTTOMRIGHT,
+        .bottom => c.SDL_HITTEST_RESIZE_BOTTOM,
+        .bottom_left => c.SDL_HITTEST_RESIZE_BOTTOMLEFT,
+        .left => c.SDL_HITTEST_RESIZE_LEFT,
+    };
 }
 
 pub fn setCursor(self: *SDLBackend, cursor: dvui.enums.Cursor) void {
@@ -1047,6 +1328,7 @@ pub fn deinit(self: *SDLBackend) void {
 pub fn renderPresent(self: *SDLBackend) void {
     // Each viewport's part of the frame goes in with the main window's, one submission for all.
     var first_frame: [max_viewports]bool = @splat(false);
+    var map_empty: [max_viewports]bool = @splat(false);
     for (&self.viewports, 0..) |*slot, i| {
         const vp = if (slot.*) |*v| v else continue;
         const target = vp.pending orelse continue;
@@ -1055,18 +1337,39 @@ pub fn renderPresent(self: *SDLBackend) void {
         // for up to a second: skipped, once it has been shown (it is created hidden, and covered
         // then by its own account).
         if (vp.shown and c.SDL_GetWindowFlags(vp.window) & (c.SDL_WINDOW_MINIMIZED | c.SDL_WINDOW_OCCLUDED) != 0) continue;
-        if (self.gpu.presentInto(vp.window, target) and !vp.shown) first_frame[i] = true;
+        const presented = self.gpu.presentInto(vp.window, target);
+        if (vp.shown) continue;
+        if (presented) {
+            first_frame[i] = true;
+        } else if (!vp.mapped) {
+            // Nothing to draw into while it is hidden (Vulkan on X11 hands a hidden window no
+            // image): shown empty, which is clear, and drawn into from the next frame.
+            map_empty[i] = true;
+        }
     }
     self.gpu.present(self.clear_window_on_begin);
-    // Shown once there is a frame in it. Not made key: the window it came out of keeps the
-    // keyboard until the viewport is clicked.
-    for (&self.viewports, first_frame) |*slot, show| {
-        if (!show) continue;
+    // Shown once there is a frame in it (or empty, above). Not made key: the window it came out of
+    // keeps the keyboard until the viewport is clicked.
+    for (&self.viewports, first_frame, map_empty) |*slot, show, empty| {
+        if (!show and !empty) continue;
         const vp = if (slot.*) |*v| v else continue;
-        _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
-        _ = c.SDL_ShowWindow(vp.window);
-        _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
-        vp.shown = true;
+        if (!vp.mapped) {
+            _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
+            _ = c.SDL_ShowWindow(vp.window);
+            _ = c.SDL_ResetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN);
+            vp.mapped = true;
+        }
+        if (show) vp.shown = true;
+    }
+    // Over the main window, as on Windows, where it is owned by it (`viewportOpen`): SDL showed it
+    // below the key window, and a press on the main window brings that forward.
+    if (comptime builtin.os.tag == .macos) {
+        const main_ns = cocoaWindow(self.window);
+        for (&self.viewports) |*slot| {
+            const vp = if (slot.*) |*v| v else continue;
+            if (!vp.mapped) continue;
+            fizzy_macos_viewport_keep_above(cocoaWindow(vp.window), main_ns);
+        }
     }
     self.manage_backend_tracking.check(.renderPresent);
 }

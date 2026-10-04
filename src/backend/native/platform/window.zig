@@ -15,7 +15,8 @@ const NSRect = extern struct { origin: NSPoint, size: NSSize };
 
 // NSWindowStyleMaskFullSizeContentView = 1 << 15 — content view extends under titlebar so vibrancy can cover it.
 const NSWindowStyleMaskFullSizeContentView: c_ulong = 1 << 15;
-const ns_visual_effect_material: c_long = 15;
+/// The vibrancy material fizzy's windows wear on macOS: the main window's, and a popped-out float's.
+pub const ns_visual_effect_material: c_long = 15;
 
 // The window monitor (`FizzyWindowMonitor.m`), which follows the window through Spaces and zooms.
 extern fn fizzy_macos_window_is_zoomed(cocoa_window: ?*anyopaque) c_int;
