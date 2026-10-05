@@ -464,7 +464,11 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
     if (shot.card) {
         d.takePicture(pic);
         if (d.texture) |tex| {
-            core.anim.blit(tex, null, d.texture_rect, 0, 1);
+            // Over what the frame already has under the place, as its draw would have gone: the
+            // capture is clear where the place draws nothing — the window's base shows there — and
+            // put back as a dissolve (`blit`) it replaced that base with nothing, the window
+            // see-through under the place for the frame it was lifted on.
+            core.anim.blitOpaque(tex, null, d.texture_rect, 0, 1);
             // Carried in a window of its own, it is the view's content over that window's
             // material, which shows through between: not laid over an opaque fill.
             if (!core.dialogs.carry_windows) d.texture = backed(tex, d.texture_rect);
