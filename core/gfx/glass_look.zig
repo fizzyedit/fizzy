@@ -95,22 +95,26 @@ pub fn native(t: f32) Native {
 
 /// A window of the OS's glass at `t` — the main window, a float's own. A window is read through,
 /// not looked at, so its slider starts where a drop's is half way (`window_from`), frosted already:
-/// below that a window was all but clear glass. Its body takes the plain blur behind the window
-/// (the vibrancy fizzy's windows wore before) and frost over the lens, both fading out across its
-/// clearing bevel (`band`), so the layers in it stand apart from what is behind while its edge
-/// stays the lens; the window's colour is one wash over all of it, under the lens, so at the top
-/// nothing anywhere lets the desktop through.
+/// below that a window was all but clear glass. Over the lens its body takes frost, the plain blur
+/// behind the window (the vibrancy fizzy's windows wore before) over that, and the window's colour
+/// over both — all fading out across its clearing bevel (`band`), so the layers in it stand apart
+/// from what is behind while its edge stays the clear lens, bending the desktop. The frost is under
+/// the blur and the colour: over them its light lifted the whole window. The colour covers the
+/// bevel too only as the glass goes at the very top (`top_fill`), so at 1 nothing anywhere lets the
+/// desktop through; colour under the lens all along read as a dark band round the edge.
 pub const Window = struct {
     under: Material,
     over: Material,
     /// Glass frost over the lens, in the body.
     frost: f32,
-    /// The plain blur under the colour, in the body.
+    /// The plain blur over the frost, in the body.
     blur: f32,
-    /// The window's colour, all of it.
+    /// The window's colour over the blur, in the body.
     fill: f32,
     /// The glass itself, 1 until near the top, 0 there.
     glass: f32,
+    /// The window's colour over all of it, the bevel too, as the glass goes.
+    top_fill: f32,
 };
 
 /// Where on a drop's way a window's slider starts.
@@ -128,6 +132,7 @@ pub fn window(t: f32) Window {
         .blur = smoothstep(std.math.clamp((o - 0.25) / 0.55, 0, 1)),
         .fill = tint,
         .glass = w.shine,
+        .top_fill = 1 - w.shine,
     };
 }
 
@@ -253,7 +258,10 @@ test "a window starts frosted, and is opaque all over at the top" {
     try std.testing.expectEqual(@as(f32, 1), low.glass);
     const top = window(1);
     try std.testing.expectEqual(@as(f32, 1), top.fill);
+    try std.testing.expectEqual(@as(f32, 1), top.top_fill);
     try std.testing.expectEqual(@as(f32, 0), top.glass);
+    // The bevel stays clear glass until the glass starts going.
+    try std.testing.expectEqual(@as(f32, 0), window(0.8).top_fill);
 }
 
 test "a window only gains frost, blur and colour along the way" {
@@ -264,6 +272,7 @@ test "a window only gains frost, blur and colour along the way" {
         try std.testing.expect(w.frost >= prev.frost);
         try std.testing.expect(w.blur >= prev.blur);
         try std.testing.expect(w.fill >= prev.fill);
+        try std.testing.expect(w.top_fill >= prev.top_fill);
         try std.testing.expect(w.glass <= prev.glass);
         prev = w;
     }

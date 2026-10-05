@@ -3550,6 +3550,7 @@ pub fn windowGlassLook(opacity: f32, size: dvui.Size.Natural) fizzy.backend.Wind
         .glass = look.glass,
         .fill = dvui.themeGet().color(.content, .fill),
         .fill_opacity = look.fill,
+        .top_fill = look.top_fill,
         .radius = fizzy.backend.viewports.windowRadius(),
         .clear = band.clear,
         .feather = band.feather,

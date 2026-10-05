@@ -133,7 +133,10 @@ pub const WindowGlassLook = struct {
     blur: f32,
     glass: f32,
     fill: dvui.Color,
+    /// The colour's opacity in the body…
     fill_opacity: f32,
+    /// …and over all of it, the bevel too.
+    top_fill: f32,
     /// Points, each.
     radius: f32,
     clear: f32,
@@ -149,6 +152,7 @@ pub const WindowGlassLook = struct {
             .blur = self.blur,
             .glass = self.glass,
             .fill = .{ @as(f64, @floatFromInt(self.fill.r)) / 255, @as(f64, @floatFromInt(self.fill.g)) / 255, @as(f64, @floatFromInt(self.fill.b)) / 255, self.fill_opacity },
+            .top_fill = self.top_fill,
             .radius = self.radius,
             .clear = self.clear,
             .feather = self.feather,

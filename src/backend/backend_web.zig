@@ -242,6 +242,7 @@ pub const WindowGlassLook = struct {
     glass: f32,
     fill: dvui.Color,
     fill_opacity: f32,
+    top_fill: f32,
     radius: f32,
     clear: f32,
     feather: f32,

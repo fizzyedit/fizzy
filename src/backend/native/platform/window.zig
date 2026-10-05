@@ -30,10 +30,10 @@ extern fn fizzy_macos_window_has_liquid_glass(cocoa_window: ?*anyopaque) c_int;
 extern fn fizzy_macos_window_liquid_glass_look(cocoa_window: ?*anyopaque, look: *const WindowGlass) void;
 
 /// A window's Liquid Glass this frame (`liquidGlassLook`), as `fizzy_macos_window_liquid_glass_look`
-/// reads it (`core.glass_look.Window`): each glass layer's variant and style; the body's frost over
-/// the lens and the plain blur under the colour; how much glass there is; the window's colour
-/// (0…1 each, its opacity last); the window's corner radius, and its clearing bevel — clear, then
-/// the body coming in over the feather — in points.
+/// reads it (`core.glass_look.Window`): each glass layer's variant and style; the body's frost and
+/// plain blur; how much glass there is; the window's colour (0…1 each, its opacity in the body
+/// last) and its opacity over all of it; the window's corner radius, and its clearing bevel —
+/// clear, then the body coming in over the feather — in points.
 pub const WindowGlass = extern struct {
     under_variant: c_long,
     under_style: c_long,
@@ -43,15 +43,17 @@ pub const WindowGlass = extern struct {
     blur: f64,
     glass: f64,
     fill: [4]f64,
+    top_fill: f64,
     radius: f64,
     clear: f64,
     feather: f64,
 };
 
-/// Make one of fizzy's titled windows (`raw_ptr`, its `NSWindow`) a window of Liquid Glass — a body
-/// of the plain blur (the vibrancy it wore before, `ns_visual_effect_material`) and frost fading
-/// into a clearing bevel along its edge, the window's colour over all of it under the lens, a
-/// compact toolbar's corners — where the OS has it (macOS 26). Once per window. Whether it is.
+/// Make one of fizzy's titled windows (`raw_ptr`, its `NSWindow`) a window of Liquid Glass — over
+/// the clear lens a body of frost, the plain blur (the vibrancy it wore before,
+/// `ns_visual_effect_material`) and the window's colour, fading out across a clearing bevel along
+/// its edge, a compact toolbar's corners — where the OS has it (macOS 26). Once per window.
+/// Whether it is.
 pub fn liquidGlass(raw_ptr: *anyopaque) bool {
     if (comptime builtin.os.tag != .macos) return false;
     return fizzy_macos_window_liquid_glass(raw_ptr, ns_visual_effect_material) != 0;
