@@ -426,8 +426,11 @@ coming back into a window. So fizzy tiles it itself, the way the OS does:
 4. **`WindowChrome`** for the main window, then floats, carry and overlay: one hit test (std-only,
    unit-tested first), one Win32 subclass, no file-level state; materials and native layers on it.
 5. **The materials library** (above), in this order:
-   - `core/gfx/glass_look.zig` with the native and in-app mappings;
-   - the in-app glass tuned to Apple's (the shader change), on the slider;
+   - **built (#227):** `core/gfx/glass_look.zig` with the native and in-app mappings, and the
+     in-app glass tuned to Apple's (the inward lens in GLSL, Metal and HLSL), on the slider. Still
+     to do: rebuild the SPIR-V and DXIL with shadercross, so Vulkan and D3D12 draw it too; skip the
+     blur pyramid for a clear lens, and the outward capture margin once the old programs are gone;
+     the separate dialog glass settings as advanced overrides;
    - macOS: float windows and the main window on Liquid Glass, `NSMenu` for context menus;
    - Windows: the DWM mapping, roles and policy probe;
    - Linux: the blur region and the portal.
