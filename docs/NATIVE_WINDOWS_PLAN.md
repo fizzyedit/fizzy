@@ -10,8 +10,15 @@ its windows more closely than SDL alone lets it. This plan covers three things:
 - how fizzy's backend grows into the layer between SDL and dvui that owns its windows, while still
   taking SDL's releases.
 
+**The principle (the user's, 2026-10-05):** where the OS has Liquid Glass, fizzy uses it as much as
+it can, safely. Private API is acceptable when it has proved stable and is built to fall back
+gracefully when it is missing. Every platform gets as close to that glass as it can. Underneath,
+fizzy supports the whole range from opaque through blurred to glass, takes each platform's newest
+features optionally, and breaks nothing where they are missing.
+
 Related: [`POPOUT_WINDOWS_PLAN.md`](POPOUT_WINDOWS_PLAN.md) (viewports, bands, per-OS dressing) and
-[`DEPENDENCIES.md`](DEPENDENCIES.md) (the SDL, sdl_zig and dvui-dev forks and their patches).
+[`DEPENDENCIES.md`](DEPENDENCIES.md) (the SDL, sdl_zig and dvui-dev forks and their patches). The
+backend review of 2026-10-04 is folded in at the end ("From the 2026-10-04 review").
 
 ## Where it stands
 
@@ -73,16 +80,24 @@ What this means:
 
 ## The drag's glass on macOS 26: one overlay of Liquid Glass
 
+**Built** (the prototype after #224, on by default where Liquid Glass exists; `FIZZY_NATIVE_GLASS=0`
+keeps the app's glass). One display only so far: the main window's.
+
 During a view drag, one transparent overlay window lies over each screen the drag can reach. It is
 the carry window grown to its screen: passive, at the pop-up menu level, joining full-screen Spaces.
 In it:
 - **An `NSGlassEffectContainerView` holding a pool of glass views.** These are the carried view
   (the drop's head and its tail, or a card or tab) and every drop-zone bubble that is showing,
   whether over the main window's places or over float windows. Each is placed every frame from the
-  shapes the frame already computes (`ViewDrag.drop_shapes`, `DropZones` shapes). The container's
-  `spacing` is the drop zones' merge distance, so the head pulled toward the bubble it is aimed at
-  bridges into it as Liquid Glass. The head and its springy tail, as two glass views, merge into
-  the wobbling drop.
+  shapes the frame already computes, which draw nothing in the app while the OS draws them: they
+  are declared to `core.native_glass` instead (`DropZones.draw`, `ViewDrag.drawDrop`). The
+  container's `spacing` is the drop zones' merge distance (24 points), past the 16-point gap
+  between a wheel's bubbles, so they run partly together (the user's choice), the head pulled
+  toward the bubble it is aimed at bridges into it, and the head and its springy tail merge into
+  the wobbling drop. The aimed bubble takes the glass's pressed look (`_interactionState` 1).
+- **Their whole life is the OS's glass:** growing out of the drop and pinching off, and running
+  back together after the drag. The overlay stays until the last bubble has gone; handing the
+  going back to the app's glass showed them switch material as they left.
 - **SDL's Metal view above the glass**, as in today's carry window. It shows what only fizzy draws:
   the carried photograph and the drop zones' icons.
 - **Placement and picture in one transaction.** The glass views' frames are set inside the Core
@@ -139,34 +154,44 @@ backend reconciles it with the platform, as dvui does with widgets:
 does, in dvui's data), so plugins drawing drop zones or dialogs reach native glass with no SDK
 change.
 
-**Fizzy makes its own native windows, and SDL adopts them.** SDL3 takes a window it didn't create:
-- the creation properties are `SDL_PROP_WINDOW_CREATE_COCOA_WINDOW_POINTER` / `_COCOA_VIEW_POINTER`,
-  `_WIN32_HWND_POINTER`, `_X11_WINDOW_NUMBER` and `_WAYLAND_WL_SURFACE_POINTER`;
-- SDL marks such a window `SDL_WINDOW_EXTERNAL`, installs its event listener, and adds its Metal
-  view as a subview of the view it was given (`SDL_cocoawindow.m`, `SDL_cocoametalview.m`).
+**One `WindowChrome` per OS window** (from the review). The main window, a float's window, the
+carry window and the overlay each want a hit test, corners, a material, a shadow and a title bar
+policy. Today the main window's state is file-level globals and a float's is `Viewport` fields; on
+Windows they have two subclass procs, and two hit tests answer one question
+(`titlebar.hitTest`, `viewport_map.hitTest`). One `platform.Chrome` per window holds all of it —
+one SDL hit-test callback with the `Chrome` as its data, one Win32 subclass with it as
+`dwRefData`, per-window Objective-C state as an associated object on the `NSWindow` — and the
+native layers (above) are the `Chrome`'s too: a window's material and its glass are one thing. The
+macOS half is partly done: #223 gave the main window and floats one monitor, one style and one skin.
 
-So fizzy can create its own `NSWindow` subclass and content view and hand them over. The view
-hierarchy, title bar behaviour and live resize would then be fizzy's code, not runtime replacements
-of SDL's methods or patches to SDL:
-- **Title bar drag regions.** Today they are answered from a runtime-replaced method
-  (`fizzy_mouseDownCanMoveWindow`), from the cursor's position when AppKit asks. Fizzy's view would
-  decide per press and start window drags itself (`performWindowDragWithEvent:`), as Chromium does.
-  This is where the reported "float dragged over the main title bar" misbehaviour lives.
-- **Live resize** (SDL patches 4 and 5) becomes `displayLayer:` in fizzy's own view, so two patches
-  leave SDL.
-- **Glass, vibrancy and the overlay's container** are subviews fizzy places, not views slipped in
-  beside SDL's.
-- **On Windows,** an HWND fizzy creates can carry its DirectComposition visuals. Patch 2 may then
-  be able to leave SDL too, which needs checking against SDL_GPU's D3D12 swapchain.
-
-What adopting a window costs has to be measured first. An external window loses some of what SDL
-does for windows it made (full screen, its own `NSWindow` subclass's event handling). The
-prototype lists each difference, and fizzy's window code covers what it needs.
+**Where SDL owns the code path, fix it in SDL; where it is policy, do it in fizzy over native
+handles** (the review's rule, which this plan takes in place of its first draft). The first draft
+had fizzy create its own `NSWindow` and view for SDL to adopt (SDL3 does take one:
+`SDL_PROP_WINDOW_CREATE_COCOA_WINDOW_POINTER` / `_VIEW_POINTER`, `_WIN32_HWND_POINTER`, … — SDL
+marks it `SDL_WINDOW_EXTERNAL` and adds its Metal view inside the view given). That stays the
+fallback for a behaviour neither way can reach. The patches that earn their place:
+- **Cocoa: resize and pixel-size events during Space and zoom animations.** SDL holds them back;
+  that is why `window_monitor.m` runs a 60 Hz pump and `macos_monitor.zig` calls two private SDL
+  functions (`SDL_SendWindowEvent`, `SDL_OnWindowLiveResizeUpdate` — a rename breaks the build, a
+  change of meaning breaks it silently). Reads as a bug fix upstream.
+- **Cocoa: the window's hit test decides `-mouseDownCanMoveWindow`** for full-size-content windows,
+  in place of fizzy replacing that method on SDL's view class at runtime
+  (`fizzy_macos_titlebar_hit_test_install`). Today it answers from where the cursor is when AppKit
+  asks, which is where the reported "float dragged over the main title bar" misbehaviour lives.
+- **Win32: a "client area is the whole window" creation property, with caption-button hit-test
+  results** (`HTMINBUTTON`, `HTMAXBUTTON`, `HTCLOSE`), and SDL leaving `WS_SYSMENU` alone. The
+  subclass shrinks to backdrop attributes and hover tracking.
+- **Wayland and X11: double-click on a draggable region toggles maximize** (only SDL sees the
+  clicks).
+- **Wayland: a blur-region property** (`ext-background-effect-v1`), next to the frame insets
+  already carried — once compositors support it.
+Materials, glass views, vibrancy, DWM attributes stay fizzy's: stable OS API over native handles,
+where a C patch would be rebase cost for nothing.
 
 **Keeping up with SDL.**
-- **Fewer patches.** Each patch that moves into fizzy's code, through foreign windows, properties
-  and hints, is one less to rebase. The goal is patches only where SDL has no seam, and each of those
-  proposed upstream (DEPENDENCIES.md rule 4).
+- **Patches only where SDL owns the path,** each proposed upstream (DEPENDENCIES.md rule 4). The
+  first to propose is patch 1 (a transparent window's claim): one moved check that every other
+  transparent-window patch sits on.
 - **A standing check.** A scheduled CI job rebases fizzy's SDL patch stack onto SDL's latest
   release and builds fizzy against it. A conflict or a break shows up the week it happens, not at
   the next bump. Less often, the same job runs against SDL's `main`.
@@ -176,31 +201,129 @@ prototype lists each difference, and fizzy's window code covers what it needs.
 - **A cadence.** Fizzy takes each SDL point release within a few weeks, tagging each step
   `fizzy-<sdl version>-<n>`, as now.
 
+## Materials: opaque to glass
+
+What stands behind a window, a float, a dialog or a carried view is one setting with a range, not
+a per-platform accident. From most to least:
+
+| Material | macOS 26 | macOS before 26 | Windows 11 | Windows 10 | Linux |
+| --- | --- | --- | --- | --- | --- |
+| glass (lens) | Liquid Glass, variant 11 | vibrancy | Acrylic | opaque | app glass over a translucent window where composited |
+| glass (frost) | Liquid Glass, Clear | vibrancy | Acrylic / Mica | opaque | as above |
+| blurred | vibrancy | vibrancy | Acrylic | opaque | translucent (KWin blur where offered) |
+| opaque | base fill | base fill | base fill | base fill | base fill |
+
+- **The window opacity slider runs across it:** the window's base drawn over the material at the
+  slider's opacity (`Editor.windowBase`, `easeWindowOpacity`), as now.
+- **The main window takes the same material** where Liquid Glass exists (the user's ask): an
+  `NSGlassEffectView` behind SDL's view in place of the vibrancy view, the base over it at the
+  slider's opacity. A float's window, the carry window and the overlay already sit beside SDL's
+  view the same way, so the main window moves to the float's view structure (the review's advice
+  too: no responder-chain repair).
+- **The carried view stands on a fifth of the base** (#224), so its picture reads over the clear
+  lens; it follows the slider once the main window's material does.
+- **Accessibility wins over looks.** macOS "Reduce transparency" (`accessibilityDisplayShouldReduceTransparency`)
+  and Windows "Transparency effects" off take every material to opaque; "Reduce motion"
+  (`accessibilityDisplayShouldReduceMotion`, `SPI_GETCLIENTAREAANIMATION`, the GTK setting) turns
+  the glass's growth, merging and wobble to fades. Natively `SDLBackend.prefersReducedMotion`
+  returns false today (the review).
+- **Capabilities, not platform names:** a backend declares what it can (`fizzy_ext`, below):
+  `liquid_glass`, `lens`, `merge`, `carry_windows`, materials offered. The app chooses the best
+  offered and falls back without breaking.
+
+## Screen-edge tiling for a carried view
+
+The user asked for a carried view dragged to a screen's side or top to tile as a window would. The
+OS tiles only a window the window server itself is dragging — a title bar drag — and the carry
+window is placed by fizzy each frame, so the OS never offers it. Handing the drag to the OS
+(`performWindowDragWithEvent:` on a real window) would cost fizzy the pointer: no drop zones, no
+coming back into a window. So fizzy tiles it itself, the way the OS does:
+- **Zones at the screen's edges and corners** — left/right halves, top fill, the four quarters —
+  read against the display's usable frame (below the menu bar, beside the Dock), with the system's
+  "tiled windows have margins" setting on macOS and Snap's layout on Windows.
+- **A preview in glass:** the zone's rect as one more piece of the overlay's glass, the carried
+  drop running into it as into a drop zone.
+- **Let go there,** the float opens at that frame, growing out of the drop into it as now. From
+  then it is an ordinary window, and the OS's own tiling works on it.
+
 ## Steps
 
-1. **Done in #224:** the carried bubble is a window of Liquid Glass on macOS 26, as a lens. The
-   float window shows only once the glass it grows out of is its size.
-2. **Prototype the overlay** on macOS 26, behind `FIZZY_NATIVE_GLASS=1`: one screen-sized overlay
-   with a pool of glass views in a container, holding the bubble's head and tail and the drop
-   zones. Measure the frame cost, merging at 120 Hz and the transaction sync, and match Control
-   Center's material.
-3. **Native layers in the backend:** the Zig interface, the macOS implementation from the
-   prototype, and `ViewDrag`/`DropZones` publishing their shapes through `core`. Where layers
-   draw, the app's glass doesn't.
-4. **The other platforms' path:** where native glass can't merge, the bubble is the app's glass
-   over a window and a carry window outside them.
-5. **Fizzy's own windows on macOS:** a fizzy `NSWindow` and view handed to SDL. Title bar drags
-   move into it (fixing the title bar case), then live resize, and SDL patches 4 and 5 are dropped.
-   Then Windows (an HWND with DComp visuals).
-6. **The SDL path:** the scheduled rebase-and-build job, upstream PRs for the patches that remain,
-   and each patch's acceptance test in DEPENDENCIES.md.
+1. **Done in #224:** the carried bubble is a window of Liquid Glass on macOS 26, a lens on a fifth
+   of the base; a float's window grows out of it from its top left and shows only once the glass
+   is its size; the lifted place keeps its base; no move cursor over a float's traffic lights.
+2. **Built, after #224:** the drag's glass as one overlay of Liquid Glass (above), on by default
+   where the OS has it. Next on it: several displays, measuring its frame cost and merging at
+   120 Hz, matching Control Center's material, screen-edge tiling.
+3. **Clean the backend first** (the review's steps 1–2, no behaviour change): delete
+   `SDLBackend.zig`'s dead SDL2 arms, `initWindowSecondary`, `WindowGeometry`; split it by job
+   (backend, events, viewports, app main, live-resize trace); break the `platform`/`backend` import
+   cycle and have `platform` take `*SDL_Window`; one `native.cocoa(window)` / `native.hwnd(window)`;
+   declare `fizzy_ext` in place of `@hasField` probing; `Viewport` methods with one null type in
+   place of the forwarders in `backend_native.viewports` (the prototype added six more); `zig fmt
+   --check` in CI.
+4. **`WindowChrome`** for the main window, then floats, carry and overlay: one hit test (std-only,
+   unit-tested first), one Win32 subclass, no file-level state; materials and native layers on it.
+5. **Native layers as the backend's interface,** from the overlay: the drag's glass, then the main
+   window's material, dialogs and menus where the OS draws them better.
+6. **The other platforms' path:** where native glass can't merge, the bubble is the app's glass over
+   a window and a carry window outside them.
+7. **The SDL patches above,** then deleting the 60 Hz pump and the private symbols; the scheduled
+   rebase-and-build job; upstream PRs.
+8. **Peer or palette** (open question), then window-local coordinates for settled viewports — which
+   also gives Wayland settled floats and mixed DPI a path.
+9. **Packages** (the review's shape): `tape` alone, `replay`, `window` (backend, renderer, platform,
+   viewports), `app` (layout, floats, pop-out orchestration and the glass overlay — `Popout` moves
+   out of `src/editor/`), with an app's own `main`.
 
 ## Open questions
 
-- **Private API.** Is a private glass variant acceptable for fizzy's look at all? The plan gates
-  it on a measured macOS version and on the setter being there, and keeps the public style as the
-  fallback.
+- **Private API: answered.** Acceptable while stable and built to fall back (the user, 2026-10-05):
+  gated on a measured macOS version and on each setter, with the public style behind it.
+- **Peer or palette.** The review recommends floats as peer windows by default (the main window can
+  come in front, each has its own Dock/Alt-Tab entry, as VS Code's and browsers' tear-offs) with a
+  per-float "Keep on top" done natively. Today a float is kept over the main window (#224 restored
+  that after the user saw one behind it at launch).
+- **Colour.** The Metal layer is untagged (`layer.colorspace = nil`), so on a P3 display sRGB values
+  stretch to the panel's gamut and colours differ from colour-managed apps — for a pixel-art host.
+  Tagging sRGB is a one-time visible shift.
 - **Control Center's material:** which variant, subvariant or tint it is.
 - **Adopting windows:** what SDL stops doing for an external window, and whether SDL_GPU claims one
   as it does its own.
 - **Several screens:** one overlay per screen, and the bubble crossing between them.
+
+## From the 2026-10-04 review
+
+Fable's review of the backend and windowing (at #220) is folded in above where it shapes this plan.
+What else it found, and where each stands:
+
+**Done since (#222–#224):** floats' macOS windows titled like the main window (the OS's corners,
+shadow, resizing, tiling, Window menu); float windows wait for vsync on macOS; full-screen
+auxiliary collection behaviour; one window machinery for the main window and floats on macOS.
+
+**Correctness backlog** (the window layer, not glass, but on the way):
+- no message when SDL_GPU finds no device (old GPUs, VMs, RDP) — show `SDL_ShowSimpleMessageBox`
+  before quitting;
+- a failed pipeline recompiles every draw (cache the failure); programs are never released (a
+  reloaded plugin leaks its shader);
+- Windows: DPI-blind resize border (`GetSystemMetricsForDpi`), no system menu (Alt+Space,
+  right-click caption), maximized under an auto-hide taskbar;
+- X11's 250 ms blind spot after an app placement (`SDL_SyncWindow`);
+- frame pacing with the main window hidden while a float animates (Windows/X11 present without
+  vsync);
+- bands at 100 000 px a slot cost `f32` precision by slot 6: a 32 768 stride keeps eight slots at
+  1/32 px (the 40 000 "is it banded" thresholds in `Popout`/`ViewDrag` move with it — one constant);
+- small ones: UTF-8-safe title truncation, clearing the clipboard, the main window's subclass never
+  removed, `GCLP_HBRBACKGROUND` changing SDL's whole window class, the click-through hint flipping
+  mid-session.
+
+**Performance to profile, not guess:** pointer motion walking the view tree for the Metal layer
+(cache per window), window-sized targets reallocated each live-resize step (bucket them), vertices
+copied twice, the stream ring cycling, per-event display-mode reads.
+
+**Elsewhere:** dvui internals — `Popout` empties subwindows' `render_cmds` (now in four places);
+dvui's per-subwindow target PR would end that. File drops carry no position; AccessKit sees only the
+main window. Web: one shared host module for `index.html` and the worker, WebGL context-loss
+handling, the loader's import check across every module, reclaiming plugin memory. Workflow: a
+`zig build shaders` step and `fizzy.plugin.addProgram` for one shader source on every backend,
+running the Windows backend on WARP in CI, tapes as the windowing regression suite in CI (the
+sandbox tapes this work used), `docs/BACKEND.md` for the backend's contract.
