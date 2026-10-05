@@ -150,6 +150,9 @@ pub const viewports = struct {
     pub const carries = false;
     pub fn seeThrough(_: *Viewport, _: bool) void {}
     pub fn fade(_: *Viewport, _: f32) void {}
+    pub fn fullScreen(_: *const Viewport) bool {
+        return false;
+    }
     pub fn carryShape(_: *Viewport, _: ?f32, _: f32) void {}
     pub fn windowRadius() f32 {
         return 0;

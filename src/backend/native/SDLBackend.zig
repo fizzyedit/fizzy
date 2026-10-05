@@ -95,6 +95,9 @@ pointer_pin: PointerPin = .none,
 /// window server — 2 ms a frame on average, 10 at worst, asked every frame — so it is asked only
 /// then.
 order_pending: bool = false,
+/// The main window's skin, as last set (`platform.window.setBackground`): each float's own window
+/// is skinned so as it opens (`viewportGlass`).
+window_skin: ?dvui.Color = null,
 
 const cursor_enum_count = @typeInfo(dvui.enums.Cursor).@"enum".fields.len;
 
@@ -878,6 +881,12 @@ pub fn windowCornerRadius(_: *SDLBackend) f32 {
     return @floatCast(fizzy_macos_window_corner_radius());
 }
 
+/// Whether `vp`'s window is in a fullscreen Space of its own (macOS), or on its way into one.
+pub fn viewportFullScreen(_: *SDLBackend, vp: *const Viewport) bool {
+    if (comptime builtin.os.tag != .macos) return false;
+    return platform.macos_monitor.fullScreen(vp.window);
+}
+
 /// A held pointer over `vp`'s window is read as over the main window beneath it while `on`
 /// (`heldPoint`): its float gone to its ghost, a view carried out of it aimed at the places under it.
 pub fn viewportSeeThrough(_: *SDLBackend, vp: *Viewport, on: bool) void {
@@ -922,6 +931,7 @@ pub fn viewportClose(self: *SDLBackend, vp: *Viewport) void {
             };
             // The window as SDL made it, for SDL to destroy (`viewportGlass`).
             if (comptime builtin.os.tag == .macos) {
+                platform.macos_monitor.unwatch(v.window);
                 if (c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(v.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null)) |ns| fizzy_macos_viewport_unglass(ns);
             }
             self.gpu.releaseViewport(v.window);
@@ -951,6 +961,12 @@ fn placeWindow(vp: *Viewport, to: viewport_map.ScreenRect, was: viewport_map.Scr
 /// Put `vp`'s window where it shows `frame` (physical pixels, in its band), on whole points;
 /// returns the part of the frame it then shows (`viewport_map.place`).
 pub fn viewportPlace(_: *SDLBackend, vp: *Viewport, frame: viewport_map.Rect) viewport_map.Rect {
+    // In a fullscreen Space, or on its way into or out of one, its frame is AppKit's: the float
+    // follows the window (`viewportFollowWindow`), never the other way. A window put somewhere in
+    // a Space is taken out of it.
+    if (comptime builtin.os.tag == .macos) {
+        if (platform.macos_monitor.osOwnsFrame(vp.window)) return vp.frame;
+    }
     const placed = viewport_map.place(vp.band, vp.anchor, vp.density, frame);
     const was = vp.screen;
     // Through SDL, as two calls: a window dragged by its left or top edge shows moved and not
@@ -1109,6 +1125,10 @@ pub fn viewportGlass(self: *SDLBackend, vp: *Viewport, inset: f32, radius: f32, 
             const ns = c.SDL_GetPointerProperty(props, c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse return false;
             const main_ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(self.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null);
             fizzy_macos_viewport_glass(ns, main_ns, inset / vp.density, radius / vp.density, platform.window.ns_visual_effect_material);
+            // Skinned as the main window is (`platform.window.skin`).
+            if (self.window_skin) |color| platform.window.skin(ns, color, dark);
+            // Through Spaces, zooms and live resizes as the main window goes (`macos_monitor`).
+            platform.macos_monitor.watch(vp.window);
             return true;
         },
         .windows => {

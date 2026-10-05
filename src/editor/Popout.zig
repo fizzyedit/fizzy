@@ -496,7 +496,8 @@ fn windowFrame(state: *State, o: *Out) void {
     rt.rendering = true;
     const prev = dvui.renderTarget(rt);
     defer _ = dvui.renderTarget(prev);
-    backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, material);
+    // In a fullscreen Space there is no desktop behind it: opaque, as the main window goes there.
+    backing(.{ .x = shown.x, .y = shown.y, .w = shown.w, .h = shown.h }, b, material and !viewports.fullScreen(o.viewport));
     // The float and everything opened in it — its menus, tooltips, popovers, placed on its
     // window's screen (`core.screens`), each a subwindow of its own — in the order dvui stacks
     // them, every one whose middle is in the window's part of the frame. Taken from each, so

@@ -127,13 +127,8 @@ void fizzy_macos_viewport_glass(void *nswindow, void *main_nswindow, double inse
             [window setStyleMask:[window styleMask] | NSWindowStyleMaskFullSizeContentView];
             [window setTitlebarAppearsTransparent:YES];
             [window setTitleVisibility:NSWindowTitleHidden];
-            /* No full screen of its own: the green button zooms it, as an auxiliary window's does.
-             * Taken into a Space of its own it scaled up past its size and snapped, came back out
-             * scaled far down and snapped, and gained an opaque title bar — the main window has
-             * the machinery for that transition (`window_monitor.m`); a pop-out has none. */
-            NSWindowCollectionBehavior behavior = [window collectionBehavior];
-            behavior &= ~(NSWindowCollectionBehavior)(NSWindowCollectionBehaviorFullScreenPrimary | NSWindowCollectionBehaviorFullScreenAuxiliary);
-            [window setCollectionBehavior:behavior | NSWindowCollectionBehaviorFullScreenNone];
+            /* Full screen in a Space of its own, as the main window goes: the main window's monitor
+             * follows it there and back (`macos_monitor.watch`, `window_monitor.m`). */
         }
         [window setHasShadow:titled];
         /* No OS animation as it shows or closes: it appears and goes exactly where its float is
@@ -221,6 +216,9 @@ void fizzy_macos_viewport_keep_above(void *nswindow, void *main_nswindow) {
         NSWindow *main = (__bridge NSWindow *)main_nswindow;
         if (window == nil || main == nil) return;
         if (![window isVisible] || ![main isVisible] || [main isMiniaturized]) return;
+        /* Either in a fullscreen Space of its own: the two are on different Spaces, and ordering
+         * one against the other would pull it across. */
+        if ((([window styleMask] | [main styleMask]) & NSWindowStyleMaskFullScreen) != 0) return;
         if ([window orderedIndex] < [main orderedIndex]) return;
         [window orderWindow:NSWindowAbove relativeTo:[main windowNumber]];
     }

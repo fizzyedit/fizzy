@@ -178,6 +178,42 @@ pub fn performTitleBarButton(win: *dvui.Window, button: titlebar.TitleBarButton)
     }
 }
 
+/// A window of fizzy's skinned as the app is: its background — what AppKit draws its title bar
+/// with, the one a fullscreen window reveals at the top among them — `color`, and its appearance
+/// light or dark by the app's theme, not the system's, so its title bar, traffic lights and
+/// vibrancy read as the app does. The main window's and every float's own window's alike
+/// (`setBackground`, `SDLBackend.viewportGlass`).
+pub fn skin(raw_ptr: *anyopaque, color: dvui.Color, dark: bool) void {
+    if (comptime builtin.os.tag != .macos) return;
+    const window = objc.Object.fromId(raw_ptr);
+    const NSColor = objc.getClass("NSColor").?;
+    const new_color = NSColor.msgSend(objc.Object, "colorWithRed:green:blue:alpha:", .{
+        @as(f64, @floatFromInt(color.r)) / 255.0,
+        @as(f64, @floatFromInt(color.g)) / 255.0,
+        @as(f64, @floatFromInt(color.b)) / 255.0,
+        @as(f64, @floatFromInt(color.a)) / 255.0,
+    });
+    // This sets both the titlebar and the window background color.
+    window.msgSend(void, "setBackgroundColor:", .{new_color.value});
+
+    // Set window NSAppearance so the app (title bar, traffic lights, vibrancy) matches dvui theme.
+    if (objc.getClass("NSAppearance")) |NSAppearance| {
+        if (objc.getClass("NSString")) |NSString| {
+            const name_c: [*c]const u8 = if (dark)
+                "NSAppearanceNameVibrantDark"
+            else
+                "NSAppearanceNameVibrantLight";
+            const name_obj = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{name_c});
+            if (name_obj.value != 0) {
+                const appearance = NSAppearance.msgSend(objc.Object, "appearanceNamed:", .{name_obj.value});
+                if (appearance.value != 0) {
+                    window.msgSend(void, "setAppearance:", .{appearance.value});
+                }
+            }
+        }
+    }
+}
+
 pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
     if (builtin.os.tag == .macos) {
         const raw_ptr = c.SDL_GetPointerProperty(
@@ -193,31 +229,15 @@ pub fn setBackground(win: *dvui.Window, color: dvui.Color) void {
             // Wrap content view in NSVisualEffectView once for vibrancy (blur behind window).
             wrapContentViewWithVibrancy(window);
 
-            const NSColor = objc.getClass("NSColor").?;
-            const new_color = NSColor.msgSend(objc.Object, "colorWithRed:green:blue:alpha:", .{
-                @as(f64, @floatFromInt(color.r)) / 255.0,
-                @as(f64, @floatFromInt(color.g)) / 255.0,
-                @as(f64, @floatFromInt(color.b)) / 255.0,
-                @as(f64, @floatFromInt(color.a)) / 255.0,
-            });
-            // This sets both the titlebar and the window background color.
-            window.msgSend(void, "setBackgroundColor:", .{new_color.value});
-
-            // Set window NSAppearance so the app (title bar, traffic lights, vibrancy) matches dvui theme.
-            if (objc.getClass("NSAppearance")) |NSAppearance| {
-                if (objc.getClass("NSString")) |NSString| {
-                    const name_c: [*c]const u8 = if (dvui.themeGet().dark)
-                        "NSAppearanceNameVibrantDark"
-                    else
-                        "NSAppearanceNameVibrantLight";
-                    const name_obj = NSString.msgSend(objc.Object, "stringWithUTF8String:", .{name_c});
-                    if (name_obj.value != 0) {
-                        const appearance = NSAppearance.msgSend(objc.Object, "appearanceNamed:", .{name_obj.value});
-                        if (appearance.value != 0) {
-                            window.msgSend(void, "setAppearance:", .{appearance.value});
-                        }
-                    }
-                }
+            skin(raw_ptr.?, color, dvui.themeGet().dark);
+            // Every float's own window too, and each opened from now on (`SDLBackend.viewportGlass`):
+            // side by side, and each in a Space of its own, they are one app's windows.
+            win.backend.impl.window_skin = color;
+            for (&win.backend.impl.viewports) |*slot| {
+                const vp = if (slot.*) |*v| v else continue;
+                if (vp.passive) continue;
+                const ns = c.SDL_GetPointerProperty(c.SDL_GetWindowProperties(vp.window), c.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, null) orelse continue;
+                skin(ns, color, dvui.themeGet().dark);
             }
 
             // SDL3 currently removes the shadow when the transparency flag for the window is set. This brings it back.

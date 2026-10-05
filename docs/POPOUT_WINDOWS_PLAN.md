@@ -236,7 +236,8 @@ in a sandboxed fizzy driven by a demo tape where it can be (`docs/AUTOMATION.md`
 - **AccessKit** is per OS window; one `dvui.Window` across several needs a tree per viewport.
 - **OS drag and drop** into a secondary window (a file dropped on a popped-out explorer).
 - **Spaces and fullscreen** on macOS: a popped-out window on another Space, the main window going
-  fullscreen.
+  fullscreen. (P6: a float's window goes full screen in a Space of its own through the main window's
+  monitor — `macos_monitor.watch`.)
 - **Focus stealing** when a split creates a window under a held drag.
 - **D3D12 on hardware GPUs**: fizzy's backend has run on Windows only on WARP so far.
 
@@ -607,6 +608,18 @@ from the frame it is made in.
   alternative: its image glued to the cursor, but a still picture, no liquid glass. Not yet:
   straddling a float window's edge it is cut at that edge.
 
+- **One window machinery for every window (macOS).** A float's own window is dressed and followed
+  as the main window is, not by a copy of it: one base colour (`Editor.windowBase`), one skin — its
+  background, the title bar AppKit draws, and its light or dark appearance (`platform.window.skin`,
+  re-applied to every float window when the theme changes) — and one monitor through Spaces, zooms
+  and live resizes (`macos/window_monitor.m`, `macos_monitor.zig`), its state per window instead
+  of one window's globals, with one pump for all of them. So a float's window goes full screen in
+  a Space of its own as the main window does, several at once: the monitor feeds its live size
+  and place into SDL through the animation (`macos_monitor.watch`), the float follows the window
+  there and back, nothing places it meanwhile (`osOwnsFrame`), it is drawn opaque there as the main
+  window is, and it is not ordered against the main window across Spaces. A plain un-zoom used to
+  leave the monitor's pump, and every frame of the app, running for good; its flag now ends with
+  its frames.
 - **Growing out of the carried glass (macOS).** A float a drop makes opens as one in the main
   window lands (`Floats.Landing`): its window shows nothing while a carry window — the drag's own
   when it had one (`Popout.spare`), already at the drop — grows from the drop to the window's frame
