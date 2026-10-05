@@ -367,10 +367,19 @@ fn nativeGlass() bool {
 /// The drag's overlay of the OS's glass (`overlayFrame`), while a view is carried.
 var overlay: ?Carry = null;
 
-/// Points within which the overlay's glass runs together (`NSGlassEffectContainerView`'s spacing):
-/// the app's own merge distance (`DropZones.merge`), past the gap between a drop's bubbles (16
-/// points at their size), so they run partly together and the carried drop into them readily.
+/// Points within which the overlay's glass runs together (`NSGlassEffectContainerView`'s spacing),
+/// where the frame says nothing else: the app's own merge distance (`DropZones.merge`). A drop's
+/// bubbles rest just inside half of it from each other, so they rest joined by a thin neck, as the
+/// app's glass draws them; a drop fitted smaller to a small place says its own, smaller
+/// (`overlaySpacing`).
 const overlay_spacing: f32 = fizzy.core.widgets.DropZones.merge;
+
+/// Points within which the overlay's glass runs together this frame: what the frame declared
+/// with its glass (`core.native_glass.mergeWithin`, physical), else `overlay_spacing`.
+fn overlaySpacing(s: f32) f32 {
+    const m = fizzy.core.native_glass.merge() orelse return overlay_spacing;
+    return m / s;
+}
 
 /// A view drag's glass as the OS's (`nativeGlass`): an overlay window over the main window's display
 /// (`viewports.openOverlay`) holds a piece of Liquid Glass for each piece the frame declared in
@@ -423,7 +432,8 @@ fn overlayFrame(state: *State) void {
     const look = glassLook(std.math.clamp(fizzy.editor().window_opacity, 0, 1));
     const window_colour = base(false);
     const lit_toward = if (dvui.themeGet().dark) dvui.Color.white else dvui.Color.black;
-    viewports.overlayGlass(o.viewport, glass[0..n], overlay_spacing, .{
+    const spacing = overlaySpacing(s);
+    viewports.overlayGlass(o.viewport, glass[0..n], spacing, .{
         .under = .{ .variant = look.under.variant, .style = look.under.style },
         .over = .{ .variant = look.over.variant, .style = look.over.style },
         .over_share = look.over_share,
@@ -455,7 +465,7 @@ fn overlayFrame(state: *State) void {
     rt.offset = .{ .x = shown.x, .y = shown.y };
     rt.rendering = true;
     const prev = dvui.renderTarget(rt);
-    glassBase(placed_shapes[0..n], shown, s, look.top_fill);
+    glassBase(placed_shapes[0..n], shown, s, spacing, look.top_fill);
     var offsets: [max_out + 1]dvui.Point.Physical = undefined;
     offsets[0] = .{ .x = shown.x, .y = shown.y };
     var n_off: usize = 1;
@@ -487,7 +497,7 @@ fn overlayFrame(state: *State) void {
 /// in a little from their edges, where the OS's glass bends and lights its rim. The bubble a carried
 /// view is aimed at lights in it, as a hovered bubble does — not by the glass's pressed look, which
 /// the OS will not run together with its neighbours. `area` is the overlay's part of the frame.
-fn glassBase(shapes: []const fizzy.core.native_glass.Shape, area: dvui.Rect.Physical, s: f32, fill: f32) void {
+fn glassBase(shapes: []const fizzy.core.native_glass.Shape, area: dvui.Rect.Physical, s: f32, spacing: f32, fill: f32) void {
     if (shapes.len == 0 or fill <= 0.002) return;
     const prev_clip = dvui.clipGet();
     defer dvui.clipSet(prev_clip);
@@ -515,7 +525,7 @@ fn glassBase(shapes: []const fizzy.core.native_glass.Shape, area: dvui.Rect.Phys
             r.insetAll(inset).fill(.all(@max(0, sh.radius - inset)), .{ .color = .{ .color = c } });
         }
     }
-    fizzy.core.liquid_blob.fill(discs[0..nd], overlay_spacing * s, s, color, 0, .white);
+    fizzy.core.liquid_blob.fill(discs[0..nd], spacing * s, s, color, 0, .white);
 }
 
 /// What the OS's glass is at the window's opacity (`Editor.window_opacity`): the one mapping every

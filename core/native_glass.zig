@@ -32,6 +32,8 @@ const Frame = struct {
     on: bool = false,
     n: u8 = 0,
     shapes: [max_shapes]Shape = undefined,
+    /// Physical pixels; 0 while nothing has said.
+    merge_px: f32 = 0,
 };
 
 fn current() *Frame {
@@ -58,6 +60,22 @@ pub fn add(s: Shape) void {
     if (f.n >= max_shapes) return;
     f.shapes[f.n] = s;
     f.n += 1;
+}
+
+/// How far apart the pieces declared with it still run together, physical pixels: the merge the
+/// app's own glass would have drawn them at — a drop's, which shrinks with its bubbles where a
+/// small place fits them smaller (`DropZones`). The OS runs every piece together at one distance;
+/// the smallest said this frame is it.
+pub fn mergeWithin(px: f32) void {
+    const f = current();
+    if (px > 0 and (f.merge_px == 0 or px < f.merge_px)) f.merge_px = px;
+}
+
+/// This frame's merge distance (`mergeWithin`), physical pixels; null while nothing has said.
+pub fn merge() ?f32 {
+    const f = dvui.dataGetPtr(null, key_id, "_frame", Frame) orelse return null;
+    if (f.frame != dvui.currentWindow().frame_time_ns or f.merge_px <= 0) return null;
+    return f.merge_px;
 }
 
 /// This frame's glass, as declared so far (`add`).

@@ -4335,10 +4335,11 @@ test "drop: a place's drop sits in the part of it no window lies over, where it 
     try std.testing.expect(DZ.uncovered(place, &.{.{ .x = -10, .y = -10, .w = 1100, .h = 700 }}, 1, true) == null);
 }
 
-test "drop: settled, as a wheel or a strip, no two bubbles are near enough to run together" {
-    // Two bubbles closer than half the merge run together (`LiquidField`'s smooth minimum): at
-    // rest each zone is a bubble of its own, whichever the shape and the way it runs, with the
-    // trash and without. On the way from one shape to the other they may run together.
+test "drop: settled, every bubble rests joined to one beside it, and none overlaps another" {
+    // Two bubbles closer than half the merge run together (`LiquidField`'s smooth minimum, and the
+    // OS's glass container alike): at rest each bubble is joined by a neck to one beside it — the
+    // middle, or its neighbour along a strip — so the drop reads as one glass about to split,
+    // whichever the shape and the way it runs, with the trash and without. None overlaps another.
     const room = DZ.wheel(.{ .x = 0, .y = 0, .w = 1e5, .h = 1e5 }, 1, true);
     try std.testing.expectEqual(@as(f32, 1), room.unit);
     for ([_]bool{ true, false }) |remove| for ([_]dvui.enums.Direction{ .horizontal, .vertical }) |dir| for ([_]f32{ 0, 1 }) |strip| {
@@ -4346,13 +4347,20 @@ test "drop: settled, as a wheel or a strip, no two bubbles are near enough to ru
         base.remove = remove;
         const w = base.shaped(strip, dir);
         try std.testing.expectEqual(@as(f32, 1), w.unit);
-        for (DZ.all, 0..) |a, j| for (DZ.all[j + 1 ..]) |b| {
-            if ((a == .remove or b == .remove) and !remove) continue;
-            const p = w.bubble(a);
-            const q = w.bubble(b);
-            const d = @sqrt((p.c.x - q.c.x) * (p.c.x - q.c.x) + (p.c.y - q.c.y) * (p.c.y - q.c.y));
-            try std.testing.expect(d - p.r - q.r > DZ.merge / 2);
-        };
+        for (DZ.all, 0..) |a, i| {
+            if (a == .remove and !remove) continue;
+            var joined = false;
+            for (DZ.all, 0..) |b, j| {
+                if (i == j or (b == .remove and !remove)) continue;
+                const p = w.bubble(a);
+                const q = w.bubble(b);
+                const d = @sqrt((p.c.x - q.c.x) * (p.c.x - q.c.x) + (p.c.y - q.c.y) * (p.c.y - q.c.y));
+                const gap = d - p.r - q.r;
+                try std.testing.expect(gap > 0);
+                if (gap < DZ.merge / 2) joined = true;
+            }
+            try std.testing.expect(joined);
+        }
     };
 }
 

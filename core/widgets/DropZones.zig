@@ -131,19 +131,30 @@ pub const Wheel = struct {
 /// Every zone, in the order they are drawn and stored.
 pub const all = [_]Zone{ .center, .{ .edge = .left }, .{ .edge = .right }, .{ .edge = .top }, .{ .edge = .bottom }, .remove };
 
-/// Points: the bubbles' layout as a wheel — the middle, the four sides at `side_d` from it, the
-/// trash on the diagonal between the right and the bottom — about 300 across: big enough to aim at
-/// without looking, small enough to leave the place in view round it.
+/// Points: the bubbles' layout as a wheel — the middle, the four sides round it, the trash in the
+/// crook between the right and the bottom — about 290 across: big enough to aim at without
+/// looking, small enough to leave the place in view round it. Each bubble rests `gap` from the
+/// ones beside it.
 const center_r: f32 = 52;
 const side_r: f32 = 40;
-const side_d: f32 = 108;
 const remove_r: f32 = 30;
-const remove_d: f32 = 88;
+/// Points between a bubble and the ones beside it, at rest: well inside where two run together
+/// (half of `merge`, for the glass's smooth union and the OS's container alike, measured), so the
+/// drop rests as one glass, a full neck to each bubble — and splits as they swing past their places
+/// when motion is playful (`grow`), settling back joined. At 16 they rested apart; just inside
+/// half the merge, the necks were a thread.
+const gap: f32 = merge * 0.3;
+const side_d: f32 = center_r + side_r + gap;
+/// The trash on the diagonal, `gap` from the right and the bottom: |(side_d − x, x)| is
+/// d = side_r + remove_r + gap at x = (side_d + √(2·d² − side_d²)) / 2, the root out from the middle.
+const remove_d: f32 = blk: {
+    const d = side_r + remove_r + gap;
+    break :blk (side_d + @sqrt(2 * d * d - side_d * side_d)) / 2;
+};
 /// Points: as a strip, one line with the wheel's own gap between each bubble and the next — the
 /// two sides the place's ends are at `end_d`, the other two beside the middle at `side_d`, and the
 /// trash past the end on its side. Across a place: left, top, middle, bottom, right, trash; down
 /// one: top, left, middle, right, bottom, trash. The icons say which edge each is.
-const gap: f32 = side_d - center_r - side_r;
 const end_d: f32 = side_d + 2 * side_r + gap;
 const strip_remove_d: f32 = end_d + side_r + gap + remove_r;
 /// Points: a bubble's icon, as a share of its radius.
@@ -582,6 +593,7 @@ pub fn draw(id: dvui.Id, w: Wheel, scale: f32, look: Look) bool {
         // instead: its glass runs them together, and into the carried drop, itself.
         took = if (native_glass.on()) native: {
             for (panes[0..n]) |pane| native_glass.add(.{ .rect = pane.r, .radius = pane.r.w / 2, .lit = pane.lit, .alpha = g });
+            native_glass.mergeWithin(merge * drawn.unit);
             break :native false;
         } else glassCarrying(id, panes[0..n], swingRect(drawn), g, scale, merge * drawn.unit, look.carried, reshaping or sliding);
         st.icon_n = 0;
@@ -626,11 +638,12 @@ fn orbTime(shown: f32, j: usize, n: usize) f32 {
     return std.math.clamp((shown - stagger * @as(f32, @floatFromInt(j))) / span, 0, 1);
 }
 
-/// Points: how far apart two bubbles still run together (`LiquidField.merge_px`) — about half a
-/// side bubble across, so one leaving the drop draws a neck out of it that thins and lets go well
-/// before it settles. A view carried as a drop is drawn at it too, over a place or between them
-/// (`ViewDrag`): a join's swell is part of a shape's size, so glass drawn at two merges is two sizes.
-pub const merge: f32 = 24;
+/// Points: how far apart two shapes of glass start to run together (`LiquidField.merge_px`; they
+/// join below half of it) — a side bubble's radius or so, so the carried drop reaches for a bubble
+/// from well off and one leaving the drop draws a long neck out of it. A view carried as a drop is
+/// drawn at it too, over a place or between them (`ViewDrag`): a join's swell is part of a shape's
+/// size, so glass drawn at two merges is two sizes.
+pub const merge: f32 = 36;
 
 /// How far behind the one before each orb starts, as a share of `shown`.
 const stagger: f32 = 0.06;
