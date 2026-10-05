@@ -956,9 +956,16 @@ void fizzy_macos_window_liquid_glass_look(void *nswindow, const FizzyWindowGlass
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         const NSRect content = [[window contentView] frame];
+        BOOL moved = NO;
         for (int k = 0; k < window_glass_parts; k++) {
-            if (!NSEqualRects([parts[k] frame], content)) [parts[k] setFrame:content];
+            if (!NSEqualRects([parts[k] frame], content)) {
+                [parts[k] setFrame:content];
+                moved = YES;
+            }
         }
+        /* A clear window's shadow and edge are the OS's reading of what it showed: read again,
+         * or a float's kept the shape its glass had a title bar out of place. */
+        if (moved) [window invalidateShadow];
         CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
         const double fills[2] = {g->fill[3], g->top_fill};
         NSView *colored[2] = {parts[window_glass_fill], parts[window_glass_top]};
