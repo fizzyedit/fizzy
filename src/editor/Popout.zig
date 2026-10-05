@@ -84,10 +84,6 @@ const Out = struct {
 
 const Grow = struct {
     carry: Carry,
-    /// Its corner radius, physical, as last shaped.
-    radius: f32 = 0,
-    /// How opaque it is, as last shown: it fades as the window it grows into comes in.
-    alpha: f32 = 1,
     /// Landed: when the window it grew into began to show under it, and it to fade off it.
     landed_ns: ?i128 = null,
 };
@@ -411,12 +407,18 @@ fn releaseCarry(c: *Carry) void {
 /// A float made by a drop grows out of the carried glass into its window, as it grows into its
 /// glass in the main window (`Floats.Landing`): its window shows nothing while the carried glass —
 /// a carry window (`viewports.openCarry`), the drag's own when it had one, already where the drop
-/// is — grows from the drop to the window's frame and rounds to its corners, the carried view's
-/// photograph fading out in it. Landed, the window shows under it, and it fades off the window and
-/// goes. Whether the window shows nothing yet. Where there are no carry windows, the window shows
-/// at once.
+/// is — grows from the drop to the window's frame and rounds to its corners. What it carries comes
+/// in as it grows: the carried view's photograph goes, and the float's own picture — what its window
+/// will show, last frame's — arrives in its place, scaled to the glass, and the window's base with
+/// it. Landed, the glass is the window's size and shows what the window does: the window shows under
+/// it at once, and it fades off the window and goes. The window showing while it still grew — past
+/// the window's frame and back, when motion is playful — showed two sizes of one window at once.
+/// How much of the window shows. Where there are no carry windows, the window shows at once.
 fn growFrame(o: *Out, f: *const Floats.Float) f32 {
     if (!viewports.carries) return 1;
+    const into = viewports.inMain(o.viewport);
+    const to: dvui.Rect.Physical = .{ .x = into.x, .y = into.y, .w = into.w, .h = into.h };
+    const window_radius = viewports.windowRadius() * dvui.windowNaturalScale();
     if (f.landing) |land| {
         if (o.grow == null) {
             const c = if (spare) |sp| blk: {
@@ -430,8 +432,6 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
         }
         const g = &o.grow.?;
         const t = Floats.landedAt(land);
-        const into = viewports.inMain(o.viewport);
-        const to: dvui.Rect.Physical = .{ .x = into.x, .y = into.y, .w = into.w, .h = into.h };
         const from = land.from;
         const rect: dvui.Rect.Physical = .{
             .x = std.math.lerp(from.x, to.x, t),
@@ -439,39 +439,59 @@ fn growFrame(o: *Out, f: *const Floats.Float) f32 {
             .w = @max(1, std.math.lerp(from.w, to.w, t)),
             .h = @max(1, std.math.lerp(from.h, to.h, t)),
         };
-        g.radius = std.math.lerp(land.radius, viewports.windowRadius() * dvui.windowNaturalScale(), std.math.clamp(t, 0, 1));
-        // Over the second half of the growth the window comes in under it and it goes, one into
-        // the other — the window's content arriving as the glass grows into it, not after.
-        const reveal = smoothstep(std.math.clamp((Floats.landingFraction(land) - 0.5) / 0.5, 0, 1));
-        g.alpha = 1 - reveal;
-        // The base comes in as it grows, from the carried glass's none to the window's own by the
-        // time the window shows under it: the window forms out of the glass.
-        const drawing = carryBegin(&g.carry, rect, rect, g.radius, g.alpha, std.math.clamp(t, 0, 1)) orelse return 1;
-        defer carryEnd(&g.carry, drawing);
-        if (land.photo) |tex| {
-            const prev_clip = dvui.clipGet();
-            defer dvui.clipSet(prev_clip);
-            dvui.clipSet(drawing.shown);
-            Floats.drawPhoto(tex, land.photo_size, rect, .{ .x = rect.x, .y = rect.y, .w = rect.w }, g.radius, 1);
-        }
-        return reveal;
+        const radius = std.math.lerp(land.radius, window_radius, std.math.clamp(t, 0, 1));
+        // The float's picture arrives over the middle of the growth, the photograph going as it does.
+        const arrive = smoothstep(std.math.clamp((Floats.landingFraction(land) - 0.3) / 0.5, 0, 1));
+        // The base comes in as it grows, from the carried glass's none, and hands over to the
+        // picture's own as that arrives: the window forms out of the glass.
+        if (!drawGrow(o, g, rect, radius, 1, std.math.clamp(t, 0, 1) * (1 - arrive), arrive, if (land.photo) |tex| .{ .tex = tex, .size = land.photo_size, .fade = 1 - arrive } else null)) return 1;
+        return 0;
     }
     const g = if (o.grow) |*g| g else return 1;
-    // Landed: what is left of it fades off the window it grew into, and goes.
+    // Landed: at the window's frame, showing what the window shows, it fades off the window, which
+    // shows under it, and goes.
     const now = dvui.currentWindow().frame_time_ns;
     const start = g.landed_ns orelse now;
     g.landed_ns = start;
     const dur = fizzy.core.motion.durationMs(grow_fade_ms);
     const frac: f32 = if (dur <= 0) 1 else @as(f32, @floatFromInt(now - start)) / (dur * std.time.ns_per_ms);
-    if (frac >= 1 or g.alpha <= 0.01) {
+    if (frac >= 1) {
         releaseCarry(&g.carry);
         o.grow = null;
         return 1;
     }
-    viewports.carryShape(g.carry.viewport, g.radius, g.alpha * (1 - frac));
-    if (g.carry.target) |t| viewports.present(g.carry.viewport, t);
+    _ = drawGrow(o, g, to, window_radius, 1 - frac, 0, 1, null);
     dvui.refresh(null, @src(), null);
     return 1;
+}
+
+/// A photograph a growing glass carries (`drawGrow`): the carried view's, at `fade`.
+const GrowPhoto = struct {
+    tex: dvui.Texture,
+    size: dvui.Size.Physical,
+    fade: f32,
+};
+
+/// `g`'s window at `rect` (physical, in the main window's frame) in `radius` corners, `alpha`
+/// opaque: `fill` of the window's base over its material, the photograph, and `picture` (0…1) of
+/// the float's own picture (`Out.target`, last frame's) scaled to it. False with nothing to draw
+/// into.
+fn drawGrow(o: *Out, g: *Grow, rect: dvui.Rect.Physical, radius: f32, alpha: f32, fill: f32, picture: f32, photo: ?GrowPhoto) bool {
+    const drawing = carryBegin(&g.carry, rect, rect, radius, alpha, fill) orelse return false;
+    defer carryEnd(&g.carry, drawing);
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    dvui.clipSet(drawing.shown);
+    if (photo) |p| Floats.drawPhoto(p.tex, p.size, rect, .{ .x = rect.x, .y = rect.y, .w = rect.w }, radius, p.fade);
+    if (picture > 0.01) if (o.target) |target| {
+        const tex = dvui.Texture.fromTargetTemp(target) catch return true;
+        const scale = dvui.windowNaturalScale();
+        dvui.renderTexture(tex, .{ .r = rect, .s = scale }, .{
+            .corners = .round(radius / scale),
+            .colormod = dvui.Color.white.opacity(picture),
+        }) catch {};
+    };
+    return true;
 }
 
 fn smoothstep(x: f32) f32 {
