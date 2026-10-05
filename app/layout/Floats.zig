@@ -428,8 +428,12 @@ const landing_ms: f32 = 300;
 /// How opaque the landing photograph is at its start — the carried card's own (`ViewDrag`).
 const photo_opacity: f32 = 0.8;
 
-/// How far a landing has got, on the arrival curve: 0 at the release, 1 in its window — past it
-/// and back on the way, when motion is playful.
+/// How far a landing has got in time: 0 at the release, 1 in its window.
+pub fn landingFraction(land: Landing) f32 {
+    return std.math.clamp(land.clock.fraction(core.motion.durationMs(landing_ms)), 0, 1);
+}
+
+/// `landingFraction` on the arrival curve, past 1 and back on the way when motion is playful.
 pub fn landedAt(land: Landing) f32 {
     const frac = land.clock.fraction(core.motion.durationMs(landing_ms));
     return if (frac >= 1) 1 else core.motion.enter(frac);

@@ -465,7 +465,9 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
         d.takePicture(pic);
         if (d.texture) |tex| {
             core.anim.blit(tex, null, d.texture_rect, 0, 1);
-            d.texture = backed(tex, d.texture_rect);
+            // Carried in a window of its own, it is the view's content over that window's
+            // material, which shows through between: not laid over an opaque fill.
+            if (!core.dialogs.carry_windows) d.texture = backed(tex, d.texture_rect);
         }
         return;
     }
@@ -478,6 +480,10 @@ pub fn keepShot(l: *Layout, shot: Shot, pic: *dvui.Picture) void {
 /// place flashed dark for the frame it was lifted on. False where there is no last frame to copy
 /// (`FrameTarget.snapshot`: no targets, or a web frame nothing read); the caller captures then.
 pub fn photographFromFrame(l: *Layout, rect: dvui.Rect.Physical) bool {
+    // The frame as drawn has the place's background in it, and the window's under that: carried in
+    // a window of its own, the view is captured alone instead (`keepShot`), its content over that
+    // window's material. A frosted pane in it draws dark in that capture.
+    if (core.dialogs.carry_windows) return false;
     const d = &l.state.view_drag;
     const r = rect.intersect(dvui.windowRectPixels());
     const tex = core.FrameTarget.snapshot(r) orelse return false;

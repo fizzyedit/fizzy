@@ -86,6 +86,8 @@ const Grow = struct {
     carry: Carry,
     /// Its corner radius, physical, as last shaped.
     radius: f32 = 0,
+    /// How opaque it is, as last shown: it fades as the window it grows into comes in.
+    alpha: f32 = 1,
     /// Landed: when the window it grew into began to show under it, and it to fade off it.
     landed_ns: ?i128 = null,
 };
@@ -109,6 +111,9 @@ pub fn beginFrame(state: *State) void {
     // A view let go over no window of the app's opens a float there (`ViewDrag.apply`), and what a
     // view drag draws reaches past every window, for the carry window (`carryFrame`).
     state.floats_windowed = true;
+    // Carried things are windows of their own here (`carryFrame`): photographed without their
+    // place's background (`ViewDrag.photographFromFrame`).
+    fizzy.core.dialogs.carry_windows = viewports.carries;
     fizzy.core.screens.publishBeyond(viewports.carries and state.view_drag.active());
     // Whatever happened, the screens floating things are placed on this frame: each window's,
     // besides the main window's (`core.screens`).
@@ -406,15 +411,15 @@ fn releaseCarry(c: *Carry) void {
 /// photograph fading out in it. Landed, the window shows under it, and it fades off the window and
 /// goes. Whether the window shows nothing yet. Where there are no carry windows, the window shows
 /// at once.
-fn growFrame(o: *Out, f: *const Floats.Float) bool {
-    if (!viewports.carries) return false;
+fn growFrame(o: *Out, f: *const Floats.Float) f32 {
+    if (!viewports.carries) return 1;
     if (f.landing) |land| {
         if (o.grow == null) {
             const c = if (spare) |sp| blk: {
                 spare = null;
                 break :blk sp;
             } else blk: {
-                const vp = viewports.openCarry(.{ .x = land.from.x, .y = land.from.y, .w = land.from.w, .h = land.from.h }) orelse return false;
+                const vp = viewports.openCarry(.{ .x = land.from.x, .y = land.from.y, .w = land.from.w, .h = land.from.h }) orelse return 1;
                 break :blk Carry{ .viewport = vp };
             };
             o.grow = .{ .carry = c };
@@ -431,33 +436,42 @@ fn growFrame(o: *Out, f: *const Floats.Float) bool {
             .h = @max(1, std.math.lerp(from.h, to.h, t)),
         };
         g.radius = std.math.lerp(land.radius, viewports.windowRadius() * dvui.windowNaturalScale(), std.math.clamp(t, 0, 1));
+        // Over the second half of the growth the window comes in under it and it goes, one into
+        // the other — the window's content arriving as the glass grows into it, not after.
+        const reveal = smoothstep(std.math.clamp((Floats.landingFraction(land) - 0.5) / 0.5, 0, 1));
+        g.alpha = 1 - reveal;
         // The base comes in as it grows, from the carried glass's none to the window's own by the
         // time the window shows under it: the window forms out of the glass.
-        const drawing = carryBegin(&g.carry, rect, rect, g.radius, 1, std.math.clamp(t, 0, 1)) orelse return false;
+        const drawing = carryBegin(&g.carry, rect, rect, g.radius, g.alpha, std.math.clamp(t, 0, 1)) orelse return 1;
         defer carryEnd(&g.carry, drawing);
         if (land.photo) |tex| {
             const prev_clip = dvui.clipGet();
             defer dvui.clipSet(prev_clip);
             dvui.clipSet(drawing.shown);
-            Floats.drawPhoto(tex, land.photo_size, rect, .{ .x = rect.x, .y = rect.y, .w = rect.w }, g.radius, 1 - std.math.clamp(t, 0, 1));
+            Floats.drawPhoto(tex, land.photo_size, rect, .{ .x = rect.x, .y = rect.y, .w = rect.w }, g.radius, 1);
         }
-        return true;
+        return reveal;
     }
-    const g = if (o.grow) |*g| g else return false;
+    const g = if (o.grow) |*g| g else return 1;
+    // Landed: what is left of it fades off the window it grew into, and goes.
     const now = dvui.currentWindow().frame_time_ns;
     const start = g.landed_ns orelse now;
     g.landed_ns = start;
     const dur = fizzy.core.motion.durationMs(grow_fade_ms);
     const frac: f32 = if (dur <= 0) 1 else @as(f32, @floatFromInt(now - start)) / (dur * std.time.ns_per_ms);
-    if (frac >= 1) {
+    if (frac >= 1 or g.alpha <= 0.01) {
         releaseCarry(&g.carry);
         o.grow = null;
-        return false;
+        return 1;
     }
-    viewports.carryShape(g.carry.viewport, g.radius, 1 - frac);
+    viewports.carryShape(g.carry.viewport, g.radius, g.alpha * (1 - frac));
     if (g.carry.target) |t| viewports.present(g.carry.viewport, t);
     dvui.refresh(null, @src(), null);
-    return false;
+    return 1;
+}
+
+fn smoothstep(x: f32) f32 {
+    return x * x * (3 - 2 * x);
 }
 
 fn windowFrame(state: *State, o: *Out) void {
@@ -508,9 +522,9 @@ fn windowFrame(state: *State, o: *Out) void {
             };
             cover_count += 1;
         }
-        // Nothing of it while it grows out of the carried glass (`growFrame`).
-        const growing = growFrame(o, f);
-        viewports.fade(o.viewport, if (growing) 0 else Floats.ghostLook(f.aside.at()).alpha);
+        // Coming in under the carried glass as that grows into it (`growFrame`).
+        const shown_share = growFrame(o, f);
+        viewports.fade(o.viewport, shown_share * Floats.ghostLook(f.aside.at()).alpha);
     }
     // Where a press is the OS's: its header moves the window and its glass's edges resize it, so
     // the OS snaps, tiles and maximizes it as any window.
