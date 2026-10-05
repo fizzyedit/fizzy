@@ -1346,15 +1346,18 @@ fn drawDrop(l: *Layout, taken: bool) void {
     const d = &l.state.view_drag;
     const scale = dvui.currentWindow().natural_scale;
     // In a window of its own (`ownWindowLayer`), its photograph is all the app draws of it. Where
-    // the OS draws the drag's glass (`core.native_glass`), its head is the OS's, run together with
-    // the drop it is aimed at. Not its tail: in the app's glass the tail runs into the head and
-    // wobbles it, but as a piece of the OS's glass of its own — with the window's colour under it —
-    // it read as a smaller circle trailing and jiggling under the bubble (the user).
+    // the OS draws the drag's glass (`core.native_glass`), its head and tail are the OS's, run
+    // together into one wobbling drop, and into the bubble it is aimed at. (The window's colour
+    // under them is drawn once for the union of them: drawn for each, the tail read as a darker
+    // circle trailing inside the head.)
     var own_layer: dvui.FloatingWidget = undefined;
     const own_window = ownWindowLayer(&own_layer, @src());
     defer if (own_window) own_layer.deinit();
-    if (own_window and core.native_glass.on() and d.drop_n > 0) {
-        core.native_glass.add(.{ .rect = d.drop_shapes[0].rect, .radius = d.drop_radius });
+    if (own_window and core.native_glass.on()) {
+        for (d.drop_shapes[0..d.drop_n], 0..) |sh, i| core.native_glass.add(.{
+            .rect = sh.rect,
+            .radius = if (i == 0) d.drop_radius else @min(sh.rect.w, sh.rect.h) / 2,
+        });
     }
     if (!taken and !own_window) {
         // At the merge it is drawn at inside a place's drop (`DropZones.merge`). Its head and tail

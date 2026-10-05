@@ -487,17 +487,21 @@ typedef struct {
 } FizzyGlassLook;
 
 /*
- * The window's colour under the overlay's glass: a shape layer per piece, in its shape, lit pieces
- * toward `lit_toward`. Under the glass, not over it: over it, the colour muted the glass's shine
- * all the way up the slider. Nothing between pieces where the glass bridges them: a neck drawn
- * there showed past the glass's bridge as a dark bar (the user's capture).
+ * The window's colour under the overlay's glass: one shape layer for the union of every piece that
+ * is all there (the first), so where pieces overlap — the carried drop's head and tail, the drop
+ * snapped onto a bubble — the colour is drawn once, as the glass above runs them into one; a layer
+ * of its own for a piece still coming or going (its opacity its own), and for a lit piece, its
+ * light over the union toward `lit_toward`. A layer per piece drew overlaps twice: the tail read as
+ * a darker circle inside the head (the user). Under the glass, not over it: over it, the colour
+ * muted the glass's shine all the way up the slider. Nothing between pieces where the glass
+ * bridges them: a neck drawn there showed past the bridge as a dark bar.
  */
 static void overlayFill(NSView *holder, const FizzyGlassShape *shapes, long n, double spacing, const FizzyGlassLook *look) {
+    (void)spacing;
     CALayer *root = [holder layer];
     if (root == nil) return;
     [root setGeometryFlipped:YES];
     NSMutableArray<CALayer *> *pool = [NSMutableArray arrayWithArray:[root sublayers] ?: @[]];
-    /* The first is unused (it held the necks). */
     while ([pool count] < (NSUInteger)(n + 1)) {
         CAShapeLayer *layer = [CAShapeLayer layer];
         [root addSublayer:layer];
@@ -506,29 +510,52 @@ static void overlayFill(NSView *holder, const FizzyGlassShape *shapes, long n, d
     const double opacity = fmin(fmax(look->fill[3], 0), 1);
     const double lit_amount = fmin(fmax(look->lit_toward[3], 0), 1);
     CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGMutablePathRef whole = CGPathCreateMutable();
     for (long i = 0; i < n; i++) {
         const FizzyGlassShape a = shapes[i];
         const double ra = fmin(a.radius, fmin(a.w, a.h) / 2);
+        const CGRect rect = CGRectMake(a.x, a.y, a.w, a.h);
         CAShapeLayer *layer = (CAShapeLayer *)pool[(NSUInteger)i + 1];
         const double mix = lit_amount * fmin(fmax(a.lit, 0), 1);
-        const double alpha = opacity + mix * (1 - opacity);
+        const BOOL coming = a.alpha < 0.99;
+        if (!coming && a.alpha > 0.01) CGPathAddRoundedRect(whole, NULL, rect, ra, ra);
+        double alpha = 0;
+        CGFloat comps[4] = {0, 0, 0, 0};
+        if (coming) {
+            /* Its own colour, at its own opacity, lit as it is. */
+            alpha = opacity + mix * (1 - opacity);
+            comps[0] = (CGFloat)(look->fill[0] + (look->lit_toward[0] - look->fill[0]) * mix);
+            comps[1] = (CGFloat)(look->fill[1] + (look->lit_toward[1] - look->fill[1]) * mix);
+            comps[2] = (CGFloat)(look->fill[2] + (look->lit_toward[2] - look->fill[2]) * mix);
+        } else if (mix > 0.004) {
+            /* Its light, over the union's colour. */
+            alpha = mix;
+            comps[0] = (CGFloat)look->lit_toward[0];
+            comps[1] = (CGFloat)look->lit_toward[1];
+            comps[2] = (CGFloat)look->lit_toward[2];
+        }
+        comps[3] = (CGFloat)alpha;
         [layer setHidden:alpha <= 0.004 || a.alpha <= 0.01];
+        if ([layer isHidden]) continue;
         [layer setFrame:[root bounds]];
-        CGPathRef path = CGPathCreateWithRoundedRect(CGRectMake(a.x, a.y, a.w, a.h), ra, ra, NULL);
+        CGPathRef path = CGPathCreateWithRoundedRect(rect, ra, ra, NULL);
         [layer setPath:path];
         CGPathRelease(path);
-        const CGFloat comps[4] = {
-            (CGFloat)(look->fill[0] + (look->lit_toward[0] - look->fill[0]) * mix),
-            (CGFloat)(look->fill[1] + (look->lit_toward[1] - look->fill[1]) * mix),
-            (CGFloat)(look->fill[2] + (look->lit_toward[2] - look->fill[2]) * mix),
-            (CGFloat)alpha,
-        };
         CGColorRef color = CGColorCreate(srgb, comps);
         [layer setFillColor:color];
         CGColorRelease(color);
-        [layer setOpacity:(float)fmin(fmax(a.alpha, 0), 1)];
+        [layer setOpacity:coming ? (float)fmin(fmax(a.alpha, 0), 1) : 1];
     }
-    [pool[0] setHidden:YES];
+    CAShapeLayer *union_layer = (CAShapeLayer *)pool[0];
+    [union_layer setFrame:[root bounds]];
+    [union_layer setPath:whole];
+    [union_layer setFillRule:kCAFillRuleNonZero];
+    [union_layer setHidden:opacity <= 0.004];
+    const CGFloat union_comps[4] = {(CGFloat)look->fill[0], (CGFloat)look->fill[1], (CGFloat)look->fill[2], (CGFloat)opacity};
+    CGColorRef union_color = CGColorCreate(srgb, union_comps);
+    [union_layer setFillColor:union_color];
+    CGColorRelease(union_color);
+    CGPathRelease(whole);
     CGColorSpaceRelease(srgb);
     for (NSUInteger i = (NSUInteger)n + 1; i < [pool count]; i++) [pool[i] setHidden:YES];
 }
