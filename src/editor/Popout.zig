@@ -263,9 +263,9 @@ pub fn endFrame(state: *State) void {
 }
 
 /// A carried view is shown in a round window of its own (`viewports.openCarry`) for the whole of
-/// the drag, wherever it is: a window in the shape of what it is carried as, its glass on the main
-/// window's base over the OS's material and the OS's shadow round it (`viewports.carryShape`) —
-/// a window as the float it would open is. The drag's drawing — in the main window's frame, past
+/// the drag, wherever it is: a window in the shape of what it is carried as, the OS's material in
+/// it with no base over it — lighter than a window, which dialogs and float windows keep — and the
+/// OS's shadow round it (`viewports.carryShape`). The drag's drawing — in the main window's frame, past
 /// its edge too, or in the band of the float's window it is over — is copied into it. Floats being
 /// windows, it was drawn in whichever window it was over until it crossed an edge: cut off at a
 /// float window's edge, under a float's window from the main one, and its glass turned from
@@ -325,7 +325,9 @@ fn carryFrame(state: *State) void {
         carry = .{ .viewport = vp };
     }
     const c = &carry.?;
-    const drawing = carryBegin(c, place, shape, d.shape_radius, 1) orelse return;
+    // No base under it: carried, it is the OS's material and what it carries, lighter than a
+    // window — dialogs and float windows keep theirs.
+    const drawing = carryBegin(c, place, shape, d.shape_radius, 1, 0) orelse return;
     defer carryEnd(c, drawing);
     // What the drag draws across every screen (`core.screens.markEverywhere`), copied in, left for
     // the main window's replay: what of it lies past the window falls outside.
@@ -345,10 +347,11 @@ const CarryDrawing = struct {
 
 /// Put `c`'s window where it shows `place` of the main window's frame, in its shape (`radius`,
 /// physical), `alpha` opaque, and start its picture, read from `shape` of the frame (the same rect,
-/// or the band of a float's window it lies over): the main window's base under it, over the
-/// window's material, for glass to read — glass over the window's clear pixels draws nothing — as a
-/// float's window stands on it. Drawn into it until `carryEnd`; null with nothing to draw into.
-fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, radius: f32, alpha: f32) ?CarryDrawing {
+/// or the band of a float's window it lies over): `fill` (0…1) of the main window's base under it,
+/// over the window's material, as a float's window stands on it — none, and it is the material
+/// alone, which glass in it reads as nothing. Drawn into it until `carryEnd`; null with nothing to
+/// draw into.
+fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, radius: f32, alpha: f32, fill: f32) ?CarryDrawing {
     const cw = dvui.currentWindow();
     const placed = viewports.placeMain(c.viewport, .{ .x = place.x, .y = place.y, .w = place.w, .h = place.h });
     // The part of the frame it shows: where it was put, read from where its picture is drawn.
@@ -375,7 +378,11 @@ fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, r
         const prev_alpha = cw.alpha;
         dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
-        shape.fill(dvui.CornerRect.Physical.all(radius), .{ .color = .{ .color = base(true) } });
+        if (fill > 0) {
+            var color = base(true);
+            color.a = @intFromFloat(@round(@as(f32, @floatFromInt(color.a)) * std.math.clamp(fill, 0, 1)));
+            shape.fill(dvui.CornerRect.Physical.all(radius), .{ .color = .{ .color = color } });
+        }
     }
     return .{ .prev = prev, .shown = shown };
 }
@@ -424,7 +431,9 @@ fn growFrame(o: *Out, f: *const Floats.Float) bool {
             .h = @max(1, std.math.lerp(from.h, to.h, t)),
         };
         g.radius = std.math.lerp(land.radius, viewports.windowRadius() * dvui.windowNaturalScale(), std.math.clamp(t, 0, 1));
-        const drawing = carryBegin(&g.carry, rect, rect, g.radius, 1) orelse return false;
+        // The base comes in as it grows, from the carried glass's none to the window's own by the
+        // time the window shows under it: the window forms out of the glass.
+        const drawing = carryBegin(&g.carry, rect, rect, g.radius, 1, std.math.clamp(t, 0, 1)) orelse return false;
         defer carryEnd(&g.carry, drawing);
         if (land.photo) |tex| {
             const prev_clip = dvui.clipGet();
