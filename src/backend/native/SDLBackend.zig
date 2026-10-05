@@ -175,6 +175,7 @@ pub const Viewport = struct {
     glass: [max_glass]GlassShape = undefined,
     glass_n: usize = 0,
     glass_spacing: f32 = 0,
+    glass_look: GlassLook = .{},
     glass_dirty: bool = false,
 };
 
@@ -192,6 +193,23 @@ pub const GlassShape = extern struct {
 
 /// The most pieces of glass an overlay holds.
 pub const max_glass = 48;
+
+/// What an overlay's glass is (`viewportOverlayGlass`): two layers of the same pieces, each its own
+/// Liquid Glass variant and style, crossfaded by `over_share`. As
+/// `fizzy_macos_viewport_overlay_glass` reads it.
+pub const GlassLook = extern struct {
+    under_variant: c_long = 2,
+    under_style: c_long = 1,
+    over_variant: c_long = 2,
+    over_style: c_long = 1,
+    over_share: f64 = 0,
+    /// How much of the glass there is, both layers.
+    glass: f64 = 1,
+    /// The window's colour under the glass (0…1 each), its opacity the last.
+    fill: [4]f64 = .{ 0, 0, 0, 0 },
+    /// What a lit piece's colour goes toward, and how far (the last).
+    lit_toward: [4]f64 = .{ 1, 1, 1, 0 },
+};
 
 pub const InitOptions = struct {
     /// Io backend and dvui should use, will be assigned to dvui.io.
@@ -858,13 +876,16 @@ pub fn liquidGlassAvailable() bool {
 }
 
 /// The OS's glass in overlay `vp` (`viewportOpenOverlay`) this frame, applied with its picture: each
-/// a rounded rect, points from the window's top left, run together within `spacing` points.
-pub fn viewportOverlayGlass(_: *SDLBackend, vp: *Viewport, shapes: []const GlassShape, spacing: f32) void {
+/// a rounded rect, points from the window's top left, run together within `spacing` points, as
+/// `look`.
+pub fn viewportOverlayGlass(_: *SDLBackend, vp: *Viewport, shapes: []const GlassShape, spacing: f32, look: GlassLook) void {
     const n = @min(shapes.len, max_glass);
-    if (n == vp.glass_n and spacing == vp.glass_spacing and std.mem.eql(u8, std.mem.sliceAsBytes(vp.glass[0..n]), std.mem.sliceAsBytes(shapes[0..n]))) return;
+    if (n == vp.glass_n and spacing == vp.glass_spacing and std.meta.eql(look, vp.glass_look) and
+        std.mem.eql(u8, std.mem.sliceAsBytes(vp.glass[0..n]), std.mem.sliceAsBytes(shapes[0..n]))) return;
     @memcpy(vp.glass[0..n], shapes[0..n]);
     vp.glass_n = n;
     vp.glass_spacing = spacing;
+    vp.glass_look = look;
     vp.glass_dirty = true;
 }
 
@@ -1202,7 +1223,7 @@ extern fn fizzy_macos_viewport_carry_lens(nswindow: ?*anyopaque, lens: c_int) vo
 extern fn fizzy_macos_window_buttons_width(nswindow: ?*anyopaque) f64;
 extern fn fizzy_macos_liquid_glass_available() c_int;
 extern fn fizzy_macos_viewport_overlay(nswindow: ?*anyopaque, main: ?*anyopaque) void;
-extern fn fizzy_macos_viewport_overlay_glass(nswindow: ?*anyopaque, shapes: [*]const GlassShape, n: c_long, spacing: f64) void;
+extern fn fizzy_macos_viewport_overlay_glass(nswindow: ?*anyopaque, shapes: [*]const GlassShape, n: c_long, spacing: f64, look: *const GlassLook) void;
 extern fn fizzy_macos_window_corner_radius() f64;
 extern fn fizzy_macos_viewport_unglass(nswindow: ?*anyopaque) void;
 extern fn fizzy_macos_viewport_keep_above(nswindow: ?*anyopaque, main_nswindow: ?*anyopaque) void;
@@ -1582,7 +1603,7 @@ pub fn renderPresent(self: *SDLBackend) void {
             }
             if (reglassed) {
                 vp.glass_dirty = false;
-                fizzy_macos_viewport_overlay_glass(ns, &vp.glass, @intCast(vp.glass_n), vp.glass_spacing);
+                fizzy_macos_viewport_overlay_glass(ns, &vp.glass, @intCast(vp.glass_n), vp.glass_spacing, &vp.glass_look);
             }
         }
     }

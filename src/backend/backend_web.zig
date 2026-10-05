@@ -171,7 +171,18 @@ pub const viewports = struct {
     pub fn openOverlay(_: Rect) ?*Viewport {
         return null;
     }
-    pub fn overlayGlass(_: *Viewport, _: []const GlassShape, _: f32) void {}
+    pub const GlassMaterial = struct { variant: i32, style: i32 };
+    pub const GlassLook = struct {
+        under: GlassMaterial,
+        over: GlassMaterial,
+        over_share: f32,
+        glass: f32 = 1,
+        fill: dvui.Color = .black,
+        fill_opacity: f32 = 0,
+        lit_toward: dvui.Color = .white,
+        lit_amount: f32 = 0,
+    };
+    pub fn overlayGlass(_: *Viewport, _: []const GlassShape, _: f32, _: GlassLook) void {}
     pub fn displayInMain() Rect {
         return .{};
     }

@@ -79,19 +79,29 @@ const Everywhere = struct {
 /// the app's own windows draw none of it. A copy left in them, under the carry window, was drawn
 /// at a different moment from it — the window server moves the carry window, the app presents its
 /// windows — and trailed behind it as it moved.
+/// Several a frame: the carried view, and what goes over the OS's glass with it (a drop's icons).
 pub fn markCarried(id: dvui.Id) void {
-    dvui.dataSet(null, key_id, "_carried", Carried{ .frame = dvui.currentWindow().frame_time_ns, .id = id });
+    const now = dvui.currentWindow().frame_time_ns;
+    const c = dvui.dataGetPtrDefault(null, key_id, "_carried", Carried, .{});
+    if (c.frame != now) c.* = .{ .frame = now };
+    if (c.n < c.ids.len) {
+        c.ids[c.n] = id;
+        c.n += 1;
+    }
 }
 
-/// Whether `id` is what is carried this frame (`markCarried`).
+/// Whether `id` is carried this frame (`markCarried`).
 pub fn isCarried(id: dvui.Id) bool {
-    const c = dvui.dataGet(null, key_id, "_carried", Carried) orelse return false;
-    return c.frame == dvui.currentWindow().frame_time_ns and c.id == id;
+    const c = dvui.dataGetPtr(null, key_id, "_carried", Carried) orelse return false;
+    if (c.frame != dvui.currentWindow().frame_time_ns) return false;
+    for (c.ids[0..c.n]) |i| if (i == id) return true;
+    return false;
 }
 
 const Carried = struct {
-    frame: i128,
-    id: dvui.Id,
+    frame: i128 = 0,
+    n: u8 = 0,
+    ids: [4]dvui.Id = undefined,
 };
 
 /// While something drawn across every screen may be carried past every window of the app's — a

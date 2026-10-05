@@ -170,10 +170,40 @@ pub const viewports = struct {
         return dvui.currentWindow().backend.impl.viewportOpenOverlay(at);
     }
 
-    /// Overlay `vp`'s glass this frame (`openOverlay`), run together within `spacing` points.
-    pub fn overlayGlass(vp: *Viewport, shapes: []const GlassShape, spacing: f32) void {
+    /// One of Liquid Glass's materials: its variant and style.
+    pub const GlassMaterial = struct { variant: i32, style: i32 };
+    /// What an overlay's glass is: two layers of the same pieces, `under` and `over`, crossfaded by
+    /// `over_share` — each layer's pieces alike, for the OS to run them together.
+    pub const GlassLook = struct {
+        under: GlassMaterial,
+        over: GlassMaterial,
+        over_share: f32,
+        /// How much of the glass there is.
+        glass: f32 = 1,
+        /// The window's colour under the glass, each piece's shape, `fill_opacity` opaque; a lit
+        /// piece's lit by `lit_amount` toward `lit_toward`.
+        fill: dvui.Color = .black,
+        fill_opacity: f32 = 0,
+        lit_toward: dvui.Color = .white,
+        lit_amount: f32 = 0,
+    };
+
+    /// Overlay `vp`'s glass this frame (`openOverlay`), run together within `spacing` points, as
+    /// `look`.
+    pub fn overlayGlass(vp: *Viewport, shapes: []const GlassShape, spacing: f32, look: GlassLook) void {
         if (comptime !supported) return;
-        dvui.currentWindow().backend.impl.viewportOverlayGlass(vp, shapes, spacing);
+        const f = look.fill;
+        const t = look.lit_toward;
+        dvui.currentWindow().backend.impl.viewportOverlayGlass(vp, shapes, spacing, .{
+            .under_variant = look.under.variant,
+            .under_style = look.under.style,
+            .over_variant = look.over.variant,
+            .over_style = look.over.style,
+            .over_share = look.over_share,
+            .glass = look.glass,
+            .fill = .{ @as(f64, @floatFromInt(f.r)) / 255, @as(f64, @floatFromInt(f.g)) / 255, @as(f64, @floatFromInt(f.b)) / 255, look.fill_opacity },
+            .lit_toward = .{ @as(f64, @floatFromInt(t.r)) / 255, @as(f64, @floatFromInt(t.g)) / 255, @as(f64, @floatFromInt(t.b)) / 255, look.lit_amount },
+        });
     }
 
     /// The display the main window is on, in its frame (physical pixels from its top left).

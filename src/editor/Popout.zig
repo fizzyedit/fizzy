@@ -400,11 +400,15 @@ fn overlayFrame(state: *State) void {
     const main_px = dvui.windowRectPixels();
     const s = dvui.windowNaturalScale();
 
-    // The glass, in the overlay window's points.
+    // The glass, in the overlay window's points — and where it lies over the main window's frame,
+    // for the base over it.
     var glass: [fizzy.core.native_glass.max_shapes]viewports.GlassShape = undefined;
+    var placed_shapes: [fizzy.core.native_glass.max_shapes]fizzy.core.native_glass.Shape = undefined;
     var n: usize = 0;
     for (fizzy.core.native_glass.shapes()) |sh| {
         const r = inMainFrame(sh.rect, main_px) orelse continue;
+        placed_shapes[n] = sh;
+        placed_shapes[n].rect = r;
         glass[n] = .{
             .x = (r.x - shown.x) / s,
             .y = (r.y - shown.y) / s,
@@ -416,14 +420,24 @@ fn overlayFrame(state: *State) void {
         };
         n += 1;
     }
-    viewports.overlayGlass(o.viewport, glass[0..n], overlay_spacing);
+    const look = glassLook(std.math.clamp(fizzy.editor().window_opacity, 0, 1));
+    const window_colour = base(false);
+    const lit_toward = if (dvui.themeGet().dark) dvui.Color.white else dvui.Color.black;
+    viewports.overlayGlass(o.viewport, glass[0..n], overlay_spacing, .{
+        .under = .{ .variant = look.under.variant, .style = look.under.style },
+        .over = .{ .variant = look.over.variant, .style = look.over.style },
+        .over_share = look.over_share,
+        .glass = look.glass,
+        .fill = window_colour,
+        .fill_opacity = look.under_fill,
+        .lit_toward = lit_toward,
+        .lit_amount = glass_lit,
+    });
 
-    // The picture: the carried view's layer, drawn where the carried view is — in the band of the
-    // float's window it is over, read from there. After the drag, none.
-    const band_delta: dvui.Point.Physical = if (d.active()) delta: {
-        const at = inMainFrame(d.shape_rect, main_px) orelse d.shape_rect;
-        break :delta .{ .x = d.shape_rect.x - at.x, .y = d.shape_rect.y - at.y };
-    } else .{};
+    // The picture: what goes over the glass — the carried view, the drops' icons — each layer of it
+    // (`core.screens.markCarried`) taken from the frame and replayed at the main window's part of it
+    // and at each float window's band, where it lies over the main window: what is drawn in one of
+    // them lands in the overlay, the rest outside it.
     const w: u32 = @intFromFloat(@max(1, @round(shown.w)));
     const h: u32 = @intFromFloat(@max(1, @round(shown.h)));
     if (o.target) |t| if (t.width != w or t.height != h) {
@@ -435,21 +449,124 @@ fn overlayFrame(state: *State) void {
     target.clear();
     var rt = cw.render_target;
     rt.texture = target;
-    rt.offset = .{ .x = shown.x + band_delta.x, .y = shown.y + band_delta.y };
+    rt.offset = .{ .x = shown.x, .y = shown.y };
     rt.rendering = true;
     const prev = dvui.renderTarget(rt);
+    glassBase(placed_shapes[0..n], shown, s, look.top_fill);
+    var offsets: [max_out + 1]dvui.Point.Physical = undefined;
+    offsets[0] = .{ .x = shown.x, .y = shown.y };
+    var n_off: usize = 1;
+    for (covers[0..cover_count]) |cv| {
+        offsets[n_off] = .{ .x = shown.x + (cv.band.x - cv.in_main.x), .y = shown.y + (cv.band.y - cv.in_main.y) };
+        n_off += 1;
+    }
     for (cw.subwindows.stack.items) |*sw| {
         if (!fizzy.core.screens.isCarried(sw.id)) continue;
         const cmds = sw.render_cmds;
         const after = sw.render_cmds_after;
         sw.render_cmds = .empty;
         sw.render_cmds_after = .empty;
-        cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into the overlay", .{});
-        cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying a carried view into the overlay", .{});
+        for (offsets[0..n_off]) |off| {
+            rt.offset = off;
+            _ = dvui.renderTarget(rt);
+            cw.renderCommands(cmds.items) catch |err| dvui.logError(@src(), err, "replaying over the overlay's glass", .{});
+            cw.renderCommands(after.items) catch |err| dvui.logError(@src(), err, "replaying over the overlay's glass", .{});
+        }
     }
     _ = dvui.renderTarget(prev);
     viewports.present(o.viewport, target);
 }
+
+/// The window's colour over the OS's glass, in its shape, `fill` opaque (`glassLook`): only at the
+/// very top of the slider, as the glass hands over to flat opaque colour — below that the colour
+/// is under the glass, which bends and lights it (`viewports.overlayGlass`). In the shape the
+/// pieces run together in (`core.liquid_blob.fill`, its smooth union over the overlay's spacing) and
+/// in a little from their edges, where the OS's glass bends and lights its rim. The bubble a carried
+/// view is aimed at lights in it, as a hovered bubble does — not by the glass's pressed look, which
+/// the OS will not run together with its neighbours. `area` is the overlay's part of the frame.
+fn glassBase(shapes: []const fizzy.core.native_glass.Shape, area: dvui.Rect.Physical, s: f32, fill: f32) void {
+    if (shapes.len == 0 or fill <= 0.002) return;
+    const prev_clip = dvui.clipGet();
+    defer dvui.clipSet(prev_clip);
+    dvui.clipSet(area);
+    const prev_alpha = dvui.alpha(1);
+    defer dvui.alphaSet(prev_alpha);
+    var color = base(false);
+    color.a = @intFromFloat(@round(255 * std.math.clamp(fill, 0, 1)));
+    // In from the glass's edge while there is glass to light it, out to it as the glass goes.
+    const inset = glass_rim * s * (1 - std.math.clamp(fill, 0, 1));
+    var discs: [fizzy.core.native_glass.max_shapes]fizzy.core.liquid_blob.Disc = undefined;
+    var nd: usize = 0;
+    for (shapes) |sh| {
+        const r = sh.rect;
+        const half = @min(r.w, r.h) / 2;
+        var c = color;
+        c.a = @intFromFloat(@round(@as(f32, @floatFromInt(c.a)) * std.math.clamp(sh.alpha, 0, 1)));
+        if (sh.radius >= half - 0.5) {
+            // Round: a disc of the union.
+            if (half - inset <= 0) continue;
+            discs[nd] = .{ .c = .{ .x = r.x + r.w / 2, .y = r.y + r.h / 2 }, .r = half - inset, .lit = sh.lit };
+            nd += 1;
+        } else if (c.a > 0) {
+            // A card or a tab: a rounded rect of its own, nothing to run into.
+            r.insetAll(inset).fill(.all(@max(0, sh.radius - inset)), .{ .color = .{ .color = c } });
+        }
+    }
+    fizzy.core.liquid_blob.fill(discs[0..nd], overlay_spacing * s, s, color, 0, .white);
+}
+
+/// What the OS's glass is at the window's opacity (`Editor.window_opacity`): one slider from clear to
+/// opaque, the way along it smooth — from the clear lens (what is behind bent through it,
+/// unblurred) into frost and heavier frost, the window's colour tinting in with the blur until, at
+/// the top, it is opaque in the window's colour (`glassBase`). Liquid Glass has no blur to turn, only variants; two of them are blended by
+/// two layers of the same glass crossfaded (`viewports.overlayGlass`'s `over_share`: measured, the
+/// blend is smooth and the two layers' outlines stay one), the next pair along the way at a time.
+const GlassLook = struct {
+    const Material = struct {
+        /// `_variant`: 11 the lens, 2 the glass's own frost (`visual_effect_view.m`).
+        variant: i32,
+        /// `NSGlassEffectViewStyle`: 1 Clear (light frost), 0 Regular (heavier).
+        style: i32,
+    };
+    under: Material,
+    over: Material,
+    /// How much of `over` there is, crossfaded with `under` (0…1).
+    over_share: f32,
+    /// How opaque the window's colour is under the glass, which bends and lights it (0…1).
+    under_fill: f32,
+    /// How much of the glass there is (0…1): all of it until the very top of the slider.
+    glass: f32,
+    /// How opaque the window's colour is over everything, in the glass's shape (`glassBase`): the
+    /// glass handing over to flat opaque colour at the top.
+    top_fill: f32,
+};
+
+const lens_material: GlassLook.Material = .{ .variant = 11, .style = 1 };
+const frost_material: GlassLook.Material = .{ .variant = 2, .style = 1 };
+
+/// Along the slider: the window's colour comes in under the glass from `tint_start` — the
+/// background, the glass's lens bending what of the desktop still shows through it and lighting
+/// its rim over it — opaque by `shine_end`; the lens turns to the glass's light frost only from
+/// `frost_start`, and from `shine_end` the glass itself goes, handing over to the colour flat and
+/// opaque. Frost most of the way, and heavier frost past it, blurred everything at every point
+/// (the user): the colour is what makes it opaque, not blur.
+fn glassLook(opacity: f32) GlassLook {
+    const o = std.math.clamp(opacity, 0, 1);
+    const tint = std.math.pow(f32, std.math.clamp((o - tint_start) / (shine_end - tint_start), 0, 1), 1.2);
+    const frost = smoothstep(std.math.clamp((o - frost_start) / (shine_end - frost_start), 0, 1));
+    const end = smoothstep(std.math.clamp((o - shine_end) / (1 - shine_end), 0, 1));
+    return .{ .under = lens_material, .over = frost_material, .over_share = frost, .under_fill = tint, .glass = 1 - end, .top_fill = end };
+}
+
+const tint_start: f32 = 0.15;
+const frost_start: f32 = 0.6;
+const shine_end: f32 = 0.92;
+
+/// Points in from the OS's glass's edge the window's base stops (`glassBase`): its bent, lit rim.
+const glass_rim: f32 = 2;
+/// How much the bubble a carried view is aimed at lights, under the glass: lighter on a dark theme,
+/// darker on a light one, as a hovered fill.
+const glass_lit: f32 = 0.12;
 
 /// `r` (physical, in the frame) where it lies over the main window's frame: as it is, or — drawn in
 /// the band of a float's window, past the main window — where that part of the band lies, by the

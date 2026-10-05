@@ -1109,16 +1109,28 @@ pub fn drawOverlay(l: *Layout) void {
         // bubble it is aimed at lights, as one under a pointer does (`ownWindowLayer`).
         if (!taken and over and !core.dialogs.carry_windows) look.carried = carried;
         // The icons go over the carried view, which is laid on the drop after it: the bubble it
-        // is about to be dropped in says what it does through it.
-        if (d.active()) look.icons = .later;
+        // is about to be dropped in says what it does through it. Where the OS draws the glass,
+        // over its glass too — after the drag as well, while the drops go (below).
+        if (d.active() or core.native_glass.on()) look.icons = .later;
         // Carrying the view, the drop is not held to its place: the carried drop reaches past it.
         clips[i] = if (look.carried.len > 0) prev_clip else p.clip;
         dvui.clipSet(clips[i]);
         if (DropZones.draw(p.key, p.wheel, scale, look) and look.carried.len > 0) taken = true;
     }
     dvui.clipSet(prev_clip);
-    if (!d.active()) return;
-    drawFloat(l, taken);
+    const native = core.native_glass.on();
+    if (!d.active() and !native) return;
+    if (d.active()) drawFloat(l, taken);
+    // Where the OS draws the glass (`core.native_glass`), its glass is over everything the app's
+    // windows draw: the icons go in a layer of their own that its overlay takes, over its glass, as
+    // it takes the carried view (`core.screens.markCarried`). Under it they were seen only
+    // through the glass, blurred.
+    var icon_layer: dvui.FloatingWidget = undefined;
+    if (native) {
+        layerOver(&icon_layer, @src());
+        core.screens.markCarried(icon_layer.data().id);
+    }
+    defer if (native) icon_layer.deinit();
     for (drops[0..n], clips[0..n]) |p, clip| {
         dvui.clipSet(clip);
         DropZones.drawIcons(p.key, scale);

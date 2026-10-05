@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <QuartzCore/CAShapeLayer.h>
 #import <QuartzCore/CATransaction.h>
 
 /**
@@ -405,7 +406,10 @@ void fizzy_macos_viewport_carry_lens(void *nswindow, int lens) {
 }
 @end
 
-static NSString *const overlay_glass_id = @"fizzy.overlay.glass";
+/* The overlay's two layers of glass, under and over (`fizzy_macos_viewport_overlay_glass`), and
+ * the window's colour beneath them both. */
+static NSString *const overlay_glass_ids[2] = {@"fizzy.overlay.glass.under", @"fizzy.overlay.glass.over"};
+static NSString *const overlay_fill_id = @"fizzy.overlay.fill";
 
 /* Whether the OS has Liquid Glass, and the container that merges it: macOS 26. */
 int fizzy_macos_liquid_glass_available(void) {
@@ -428,9 +432,23 @@ void fizzy_macos_viewport_overlay(void *nswindow, void *main_nswindow) {
         NSView *content = [window contentView];
         NSView *frame = [content superview];
         Class container_class = NSClassFromString(@"NSGlassEffectContainerView");
-        if (content != nil && frame != nil && container_class != nil) {
+        /* The window's colour first, under the glass: what the glass bends and lights, as it does
+         * whatever is behind it. */
+        if (content != nil && frame != nil) {
+            FizzyOverlayGlassHolder *fill = [[FizzyOverlayGlassHolder alloc] initWithFrame:[content frame]];
+            [fill setIdentifier:overlay_fill_id];
+            [fill setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            [fill setWantsLayer:YES];
+            [frame addSubview:fill positioned:NSWindowBelow relativeTo:content];
+#if !__has_feature(objc_arc)
+            [fill release];
+#endif
+        }
+        /* Two layers of the same glass, the over one above the under, crossfaded to blend two of
+         * the glass's materials (`fizzy_macos_viewport_overlay_glass`). */
+        for (int k = 0; k < 2 && content != nil && frame != nil && container_class != nil; k++) {
             NSView *container = [[container_class alloc] initWithFrame:[content frame]];
-            [container setIdentifier:overlay_glass_id];
+            [container setIdentifier:overlay_glass_ids[k]];
             [container setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
             FizzyOverlayGlassHolder *holder = [[FizzyOverlayGlassHolder alloc] initWithFrame:[container bounds]];
             [holder setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
@@ -456,52 +474,131 @@ typedef struct {
     double x, y, w, h, radius, lit, alpha;
 } FizzyGlassShape;
 
+/* What the overlay's glass is, as `SDLBackend.GlassLook` lays it out: each layer's variant and
+ * style, how much of the over one there is, how much glass there is at all, the window's colour
+ * under it (its opacity last), and what a lit piece goes toward (how far last). */
+typedef struct {
+    long under_variant, under_style, over_variant, over_style;
+    double over_share;
+    double glass;
+    double fill[4];
+    double lit_toward[4];
+} FizzyGlassLook;
+
 /*
- * The overlay's glass this frame: one glass view for each shape, made as needed and kept for the
- * next, the rest hidden. Lit, a piece takes the glass's pressed look, brighter (`_interactionState`
- * 1, measured on macOS 26.5; set only there). Called in the transaction the window's picture is
- * presented in (`SDLBackend.renderPresent`), with implicit animations off, so glass and picture
- * change together.
+ * The window's colour under the overlay's glass: a shape layer per piece, in its shape, lit pieces
+ * toward `lit_toward`. Under the glass, not over it: over it, the colour muted the glass's shine
+ * all the way up the slider. Nothing between pieces where the glass bridges them: a neck drawn
+ * there showed past the glass's bridge as a dark bar (the user's capture).
  */
-void fizzy_macos_viewport_overlay_glass(void *nswindow, const FizzyGlassShape *shapes, long n, double spacing) {
+static void overlayFill(NSView *holder, const FizzyGlassShape *shapes, long n, double spacing, const FizzyGlassLook *look) {
+    CALayer *root = [holder layer];
+    if (root == nil) return;
+    [root setGeometryFlipped:YES];
+    NSMutableArray<CALayer *> *pool = [NSMutableArray arrayWithArray:[root sublayers] ?: @[]];
+    /* The first is unused (it held the necks). */
+    while ([pool count] < (NSUInteger)(n + 1)) {
+        CAShapeLayer *layer = [CAShapeLayer layer];
+        [root addSublayer:layer];
+        [pool addObject:layer];
+    }
+    const double opacity = fmin(fmax(look->fill[3], 0), 1);
+    const double lit_amount = fmin(fmax(look->lit_toward[3], 0), 1);
+    CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    for (long i = 0; i < n; i++) {
+        const FizzyGlassShape a = shapes[i];
+        const double ra = fmin(a.radius, fmin(a.w, a.h) / 2);
+        CAShapeLayer *layer = (CAShapeLayer *)pool[(NSUInteger)i + 1];
+        const double mix = lit_amount * fmin(fmax(a.lit, 0), 1);
+        const double alpha = opacity + mix * (1 - opacity);
+        [layer setHidden:alpha <= 0.004 || a.alpha <= 0.01];
+        [layer setFrame:[root bounds]];
+        CGPathRef path = CGPathCreateWithRoundedRect(CGRectMake(a.x, a.y, a.w, a.h), ra, ra, NULL);
+        [layer setPath:path];
+        CGPathRelease(path);
+        const CGFloat comps[4] = {
+            (CGFloat)(look->fill[0] + (look->lit_toward[0] - look->fill[0]) * mix),
+            (CGFloat)(look->fill[1] + (look->lit_toward[1] - look->fill[1]) * mix),
+            (CGFloat)(look->fill[2] + (look->lit_toward[2] - look->fill[2]) * mix),
+            (CGFloat)alpha,
+        };
+        CGColorRef color = CGColorCreate(srgb, comps);
+        [layer setFillColor:color];
+        CGColorRelease(color);
+        [layer setOpacity:(float)fmin(fmax(a.alpha, 0), 1)];
+    }
+    [pool[0] setHidden:YES];
+    CGColorSpaceRelease(srgb);
+    for (NSUInteger i = (NSUInteger)n + 1; i < [pool count]; i++) [pool[i] setHidden:YES];
+}
+
+/* One layer of the overlay's glass: a view per shape in `container`'s holder, made as needed and
+ * kept for the next frame, the rest hidden; all of them `variant` and `style`. */
+static void overlayGlassLayer(NSView *container, const FizzyGlassShape *shapes, long n, double spacing, long variant, long style) {
+    NSView *holder = [container valueForKey:@"contentView"];
+    if (holder == nil) return;
+    ((void (*)(id, SEL, CGFloat))objc_msgSend)(container, sel_registerName("setSpacing:"), (CGFloat)spacing);
+    NSArray<NSView *> *pool = [[holder subviews] copy];
+    const SEL set_radius = sel_registerName("setCornerRadius:");
+    const SEL get_variant = sel_registerName("_variant");
+    for (long i = 0; i < n; i++) {
+        NSView *glass = (NSUInteger)i < [pool count] ? pool[(NSUInteger)i] : nil;
+        if (glass == nil) {
+            glass = carryLiquidGlass(NSZeroRect);
+            if (glass == nil) break;
+            [glass setAutoresizingMask:NSViewNotSizable];
+            [holder addSubview:glass];
+        }
+        const FizzyGlassShape sh = shapes[i];
+        [glass setHidden:sh.alpha <= 0.01];
+        [glass setFrame:NSMakeRect(sh.x, sh.y, sh.w, sh.h)];
+        ((void (*)(id, SEL, CGFloat))objc_msgSend)(glass, set_radius, (CGFloat)fmin(sh.radius, fmin(sh.w, sh.h) / 2));
+        [glass setAlphaValue:(CGFloat)sh.alpha];
+        if ([[glass valueForKey:@"style"] longValue] != style) [glass setValue:@(style) forKey:@"style"];
+        if (![glass respondsToSelector:get_variant] || ((long (*)(id, SEL))objc_msgSend)(glass, get_variant) != variant)
+            carryGlassVariant(glass, variant);
+    }
+    for (NSUInteger i = (NSUInteger)(n < 0 ? 0 : n); i < [pool count]; i++) [pool[i] setHidden:YES];
+}
+
+/*
+ * The overlay's glass this frame: two layers of the same pieces (`overlayGlassLayer`), the under
+ * one `look`'s under material and the over one its over material, crossfaded by its share — the
+ * glass has no blur to turn, so the way from the clear lens to heavy frost is a blend of the two
+ * materials either side (`Popout.glassLook`); a layer with nothing to show is hidden, costing
+ * nothing. Each layer's pieces alike — the container runs together only glass that is: a piece
+ * in the glass's pressed look (`_interactionState`) never merged with its neighbours, so a lit
+ * piece is lit in fizzy's picture over it instead (`Popout.glassBase`). Called in the transaction
+ * the window's picture is presented in (`SDLBackend.renderPresent`), with implicit animations off,
+ * so glass and picture change together.
+ */
+void fizzy_macos_viewport_overlay_glass(void *nswindow, const FizzyGlassShape *shapes, long n, double spacing, const FizzyGlassLook *look) {
     @autoreleasepool {
         NSWindow *window = (__bridge NSWindow *)nswindow;
-        if (window == nil) return;
+        if (window == nil || look == NULL) return;
         NSView *frame = [[window contentView] superview];
-        NSView *container = nil;
+        NSView *layers[2] = {nil, nil};
+        NSView *fill = nil;
         for (NSView *v in [frame subviews]) {
-            if ([[v identifier] isEqualToString:overlay_glass_id]) container = v;
+            for (int k = 0; k < 2; k++) {
+                if ([[v identifier] isEqualToString:overlay_glass_ids[k]]) layers[k] = v;
+            }
+            if ([[v identifier] isEqualToString:overlay_fill_id]) fill = v;
         }
-        if (container == nil) return;
-        NSView *holder = [container valueForKey:@"contentView"];
-        if (holder == nil) return;
         [CATransaction setDisableActions:YES];
-        ((void (*)(id, SEL, CGFloat))objc_msgSend)(container, sel_registerName("setSpacing:"), (CGFloat)spacing);
-        NSArray<NSView *> *pool = [[holder subviews] copy];
-        const SEL set_radius = sel_registerName("setCornerRadius:");
-        const SEL get_interaction = sel_registerName("_interactionState");
-        const SEL set_interaction = sel_registerName("set_interactionState:");
-        const BOOL measured = [[NSProcessInfo processInfo] operatingSystemVersion].majorVersion == 26;
-        for (long i = 0; i < n; i++) {
-            NSView *glass = (NSUInteger)i < [pool count] ? pool[(NSUInteger)i] : nil;
-            if (glass == nil) {
-                glass = carryLiquidGlass(NSZeroRect);
-                if (glass == nil) break;
-                [glass setAutoresizingMask:NSViewNotSizable];
-                [holder addSubview:glass];
-            }
-            const FizzyGlassShape s = shapes[i];
-            [glass setHidden:s.alpha <= 0.01];
-            [glass setFrame:NSMakeRect(s.x, s.y, s.w, s.h)];
-            ((void (*)(id, SEL, CGFloat))objc_msgSend)(glass, set_radius, (CGFloat)fmin(s.radius, fmin(s.w, s.h) / 2));
-            [glass setAlphaValue:(CGFloat)s.alpha];
-            if (measured && [glass respondsToSelector:set_interaction] && [glass respondsToSelector:get_interaction]) {
-                const long want = s.lit > 0.5 ? 1 : 0;
-                if (((long (*)(id, SEL))objc_msgSend)(glass, get_interaction) != want)
-                    ((void (*)(id, SEL, long))objc_msgSend)(glass, set_interaction, want);
-            }
+        if (fill != nil) overlayFill(fill, shapes, n, spacing, look);
+        const double share = fmin(fmax(look->over_share, 0), 1);
+        const double glass = fmin(fmax(look->glass, 0), 1);
+        const double alphas[2] = {(1 - share) * glass, share * glass};
+        const long variants[2] = {look->under_variant, look->over_variant};
+        const long styles[2] = {look->under_style, look->over_style};
+        for (int k = 0; k < 2; k++) {
+            if (layers[k] == nil) continue;
+            const BOOL shows = alphas[k] > 0.01;
+            [layers[k] setHidden:!shows];
+            [layers[k] setAlphaValue:(CGFloat)alphas[k]];
+            overlayGlassLayer(layers[k], shapes, shows ? n : 0, spacing, variants[k], styles[k]);
         }
-        for (NSUInteger i = (NSUInteger)(n < 0 ? 0 : n); i < [pool count]; i++) [pool[i] setHidden:YES];
     }
 }
 
