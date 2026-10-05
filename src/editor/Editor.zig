@@ -3532,6 +3532,10 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
             .has_chrome = true,
         });
         fizzy.core.dialogs.publishRefraction(editor.app.settings.dialog_refraction);
+        // Every glass the app draws, on the one slider — the window opacity as the user set it,
+        // not as it eases to opaque when maximized (`core.glass_look`).
+        const slider = if (dvui.themeGet().dark) editor.app.settings.window_opacity_dark else editor.app.settings.window_opacity_light;
+        fizzy.core.LiquidField.publishLook(fizzy.core.glass_look.inApp(slider));
         fizzy.core.corners.publish(editor.app.settings.corner_roundness);
     }
     // How things move this frame, for every animation here and in every plugin (`core.motion`).

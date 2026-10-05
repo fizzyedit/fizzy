@@ -1234,6 +1234,9 @@ const FrostJob = struct {
             .mix = self.mix,
             .lift = self.lift,
             .refraction = self.refraction,
+            // A pane is a dialog's, a menu's, a popover's: it carries text, and keeps some frost
+            // over a clear lens to read (`glass_look.forText`).
+            .text = true,
         };
         field.add(.{
             .rect = self.rect,

@@ -515,52 +515,9 @@ fn glassBase(shapes: []const fizzy.core.native_glass.Shape, area: dvui.Rect.Phys
     fizzy.core.liquid_blob.fill(discs[0..nd], overlay_spacing * s, s, color, 0, .white);
 }
 
-/// What the OS's glass is at the window's opacity (`Editor.window_opacity`): one slider from clear to
-/// opaque, the way along it smooth — from the clear lens (what is behind bent through it,
-/// unblurred) into frost and heavier frost, the window's colour tinting in with the blur until, at
-/// the top, it is opaque in the window's colour (`glassBase`). Liquid Glass has no blur to turn, only variants; two of them are blended by
-/// two layers of the same glass crossfaded (`viewports.overlayGlass`'s `over_share`: measured, the
-/// blend is smooth and the two layers' outlines stay one), the next pair along the way at a time.
-const GlassLook = struct {
-    const Material = struct {
-        /// `_variant`: 11 the lens, 2 the glass's own frost (`visual_effect_view.m`).
-        variant: i32,
-        /// `NSGlassEffectViewStyle`: 1 Clear (light frost), 0 Regular (heavier).
-        style: i32,
-    };
-    under: Material,
-    over: Material,
-    /// How much of `over` there is, crossfaded with `under` (0…1).
-    over_share: f32,
-    /// How opaque the window's colour is under the glass, which bends and lights it (0…1).
-    under_fill: f32,
-    /// How much of the glass there is (0…1): all of it until the very top of the slider.
-    glass: f32,
-    /// How opaque the window's colour is over everything, in the glass's shape (`glassBase`): the
-    /// glass handing over to flat opaque colour at the top.
-    top_fill: f32,
-};
-
-const lens_material: GlassLook.Material = .{ .variant = 11, .style = 1 };
-const frost_material: GlassLook.Material = .{ .variant = 2, .style = 1 };
-
-/// Along the slider: the window's colour comes in under the glass from `tint_start` — the
-/// background, the glass's lens bending what of the desktop still shows through it and lighting
-/// its rim over it — opaque by `shine_end`; the lens turns to the glass's light frost only from
-/// `frost_start`, and from `shine_end` the glass itself goes, handing over to the colour flat and
-/// opaque. Frost most of the way, and heavier frost past it, blurred everything at every point
-/// (the user): the colour is what makes it opaque, not blur.
-fn glassLook(opacity: f32) GlassLook {
-    const o = std.math.clamp(opacity, 0, 1);
-    const tint = std.math.pow(f32, std.math.clamp((o - tint_start) / (shine_end - tint_start), 0, 1), 1.2);
-    const frost = smoothstep(std.math.clamp((o - frost_start) / (shine_end - frost_start), 0, 1));
-    const end = smoothstep(std.math.clamp((o - shine_end) / (1 - shine_end), 0, 1));
-    return .{ .under = lens_material, .over = frost_material, .over_share = frost, .under_fill = tint, .glass = 1 - end, .top_fill = end };
-}
-
-const tint_start: f32 = 0.15;
-const frost_start: f32 = 0.6;
-const shine_end: f32 = 0.92;
+/// What the OS's glass is at the window's opacity (`Editor.window_opacity`): the one mapping every
+/// glass reads (`core.glass_look`), the app's own glass on the same breakpoints.
+const glassLook = fizzy.core.glass_look.native;
 
 /// Points in from the OS's glass's edge the window's base stops (`glassBase`): its bent, lit rim.
 const glass_rim: f32 = 2;
