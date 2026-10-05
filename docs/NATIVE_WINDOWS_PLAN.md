@@ -471,7 +471,10 @@ coming back into a window. So fizzy tiles it itself, the way the OS does:
      to do: rebuild the SPIR-V and DXIL with shadercross, so Vulkan and D3D12 draw it too; skip the
      blur pyramid for a clear lens, and the outward capture margin once the old programs are gone;
      the separate dialog glass settings as advanced overrides;
-   - macOS: float windows and the main window on Liquid Glass, `NSMenu` for context menus;
+   - macOS: **built (#227)** the main window and float windows on Liquid Glass (the colour under
+     the lens and frost, beside SDL's view, on the slider) with a compact toolbar's 20-point
+     corners (measured: none 17, compact 20.5, unified 27 — the user chose compact); still to do,
+     `NSMenu` for context menus;
    - Windows: the DWM mapping, roles and policy probe;
    - Linux: the blur region and the portal.
 6. **Native layers as the backend's interface,** from the overlay: the drag's glass, then every
