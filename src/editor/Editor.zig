@@ -3480,6 +3480,18 @@ pub fn flushSettings(editor: *Editor) void {
 const handle_size = 10;
 const handle_dist = 60;
 
+/// A window's base at `opacity`: the theme's content fill over the OS's material where the window
+/// has one (macOS, Windows), lightened as it goes see-through so the material behind reads as the
+/// same tone; opaque where there is none. Every window fizzy draws stands on it — the main window,
+/// a float's own window, the carry window (`Popout.base`) — so side by side they are one colour.
+pub fn windowBase(opacity: f32) dvui.Color {
+    const fill = dvui.themeGet().color(.content, .fill);
+    return switch (builtin.os.tag) {
+        .macos, .windows => fill.opacity(opacity).lighten((1.0 - opacity) * 4.0),
+        else => fill,
+    };
+}
+
 pub fn tick(editor: *Editor) !dvui.App.Result {
     // (A playing demo has already had its turn: `Entry.frameOnce` runs `Demo.frame` first.)
     // Finger or mouse: how far a tap may drift, here and (through the context sync) in every
@@ -3708,18 +3720,9 @@ pub fn tick(editor: *Editor) !dvui.App.Result {
     const hitch_draw = fizzy.core.hitch.begin(.draw);
     {
 
-        // First, window color is set to the opaque color.
-        var window_color = dvui.themeGet().color(.content, .fill);
-
-        switch (builtin.os.tag) {
-            // `window_opacity_anim` eases between the windowed opacity and 1.0
-            // (opaque) across fullscreen transitions; at 1.0 this is a no-op and
-            // matches the old maximized branch exactly.
-            .macos, .windows => {
-                window_color = window_color.opacity(editor.window_opacity_anim).lighten((1.0 - editor.window_opacity_anim) * 4.0);
-            },
-            else => {},
-        }
+        // `window_opacity_anim` eases between the windowed opacity and 1.0 (opaque) across
+        // fullscreen transitions; at 1.0 the base is the opaque fill.
+        const window_color = windowBase(editor.window_opacity_anim);
 
         // Linux: the window is transparent and undecorated (`linux_titlebar`), so its shape is
         // this fill's — rounded while windowed, as the desktop rounds its own, with a hairline

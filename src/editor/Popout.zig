@@ -19,6 +19,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const fizzy = @import("../fizzy.zig");
+const Editor = @import("Editor.zig");
 const State = @import("app").layout.State;
 
 const viewports = fizzy.backend.viewports;
@@ -538,12 +539,10 @@ fn backing(target: dvui.Rect.Physical, window: dvui.Rect.Physical, material: boo
     bounds.fill(corners, .{ .color = .{ .color = base(material) } });
 }
 
-/// The main window's base: its chrome, at the window's opacity over the window's material where it
-/// has one, opaque where it has none.
+/// The main window's base (`Editor.windowBase`) at the window's opacity where it has a material,
+/// opaque where it has none — the same colour as the main window's, side by side. The opacity as it
+/// is windowed (`Editor.window_opacity`), not the main window's eased one, which goes opaque while
+/// the main window is maximized: out here it is windowed.
 fn base(material: bool) dvui.Color {
-    var color = fizzy.core.dialogs.style().chromeColor();
-    // The window's opacity as it is windowed (`Editor.window_opacity`), not the main window's
-    // eased one, which goes opaque while the main window is maximized: out here it is windowed.
-    color.a = if (material) @intFromFloat(@round(255 * std.math.clamp(fizzy.editor().window_opacity, 0, 1))) else 255;
-    return color;
+    return Editor.windowBase(if (material) std.math.clamp(fizzy.editor().window_opacity, 0, 1) else 1);
 }
