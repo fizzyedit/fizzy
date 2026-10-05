@@ -320,9 +320,10 @@ fn carryFrame(state: *State) void {
         carry = .{ .viewport = vp };
     }
     const c = &carry.?;
-    // No base under it: carried, it is the OS's material and what it carries, lighter than a
-    // window — dialogs and float windows keep theirs.
-    const drawing = carryBegin(c, place, shape, d.shape_radius, 1, 0) orelse return;
+    // A little of the window's base under what it carries (`carried_backing`): its glass is clear
+    // (the lens), and the view's picture alone, over whatever the bubble passes, did not read.
+    // Lighter than a window still — dialogs and float windows keep their own.
+    const drawing = carryBegin(c, place, shape, d.shape_radius, 1, carried_backing) orelse return;
     defer carryEnd(c, drawing);
     // The carried view's own layer (`core.screens.markCarried`), taken from it: dvui's replay into the main
     // window, and the float windows' (`windowFrame`), draw nothing of it.
@@ -337,6 +338,9 @@ fn carryFrame(state: *State) void {
     }
 }
 
+/// How opaque the window's base is under a carried view (`carryFrame`).
+const carried_backing: f32 = 0.2;
+
 /// A carry window's picture under way (`carryBegin`): the frame's own target to go back to, and
 /// the part of the frame the window shows.
 const CarryDrawing = struct {
@@ -346,10 +350,9 @@ const CarryDrawing = struct {
 
 /// Put `c`'s window where it shows `place` of the main window's frame, in its shape (`radius`,
 /// physical), `alpha` opaque, and start its picture, read from `shape` of the frame (the same rect,
-/// or the band of a float's window it lies over): `fill` (0…1) of the main window's base under it,
-/// over the window's material, as a float's window stands on it — none, and it is the material
-/// alone, which glass in it reads as nothing. Drawn into it until `carryEnd`; null with nothing to
-/// draw into.
+/// or the band of a float's window it lies over): the main window's base under it `fill` (0…1)
+/// opaque, over the window's material — none, and it is the material alone, which glass in it
+/// reads as nothing. Drawn into it until `carryEnd`; null with nothing to draw into.
 fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, radius: f32, alpha: f32, fill: f32) ?CarryDrawing {
     const cw = dvui.currentWindow();
     const placed = viewports.placeMain(c.viewport, .{ .x = place.x, .y = place.y, .w = place.w, .h = place.h });
@@ -378,8 +381,8 @@ fn carryBegin(c: *Carry, place: dvui.Rect.Physical, shape: dvui.Rect.Physical, r
         dvui.alphaSet(1);
         defer dvui.alphaSet(prev_alpha);
         if (fill > 0) {
-            var color = base(true);
-            color.a = @intFromFloat(@round(@as(f32, @floatFromInt(color.a)) * std.math.clamp(fill, 0, 1)));
+            var color = base(false);
+            color.a = @intFromFloat(@round(255 * std.math.clamp(fill, 0, 1)));
             shape.fill(dvui.CornerRect.Physical.all(radius), .{ .color = .{ .color = color } });
         }
     }
